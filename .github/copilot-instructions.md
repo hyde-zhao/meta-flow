@@ -24,6 +24,8 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | `scenario-expansion` | 展开场景、生成场景、测试场景、场景扩展 |
 | `scope-normalization` | 归一化需求、去重、合并需求、范围整理 |
 | `solution-designer` | 方案设计、架构设计、复杂度判定、设计方案 |
+| `claude-agent-writer` | 写 Claude Agent、创建 Claude 子代理、Claude subagent |
+| `copilot-agent-writer` | 写 Copilot Agent、创建自定义 Agent、Copilot CLI Agent |
 | `phase-designer` | 阶段划分、设计阶段、Phase 设计、执行顺序 |
 | `wave-planner` | 并行分组、Wave 划分、并行计划、任务编排 |
 | `dependency-mapper` | 依赖关系、DAG、任务依赖、前置依赖 |
