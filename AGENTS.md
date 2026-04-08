@@ -15,22 +15,24 @@
 | 始终激活 | 是 |
 
 meta-po 的职责：
-- **项目初始化**：创建 `.workflow-meta/` 目录及所有信息流转文件（STATE.md、REQUEST.md 等）
+- **项目初始化**：创建 `.workflow-meta/` 工作目录及所有信息流转文件
 - 初始化 `.workflow-meta/STATE.md` 并维护全程状态
+- **先理解，后行动**：退出条件先验、上下文先行、追问优先于假设、状态一致性校验
 - 发起人工检查点（共 4 个：需求确认、方案选择确认、Story 计划确认、终验）
-- 唤醒和收敛下游功能 Agent
-- 受理变更请求，创建 `changes/CR-*.md`
+- 唤醒和收敛下游功能 Agent（机器可验证退出条件）
+- 受理变更请求，创建 `changes/CR-*.md`，执行五维度影响分析
+- **失败模式识别**：识别需求循环、方案僵局、开发卡顿等常见失败信号
 
 ## 功能 Agent（按需唤醒，由 meta-po 调度）
 
 | Agent | 提示词文件 | 职责 | 唤醒条件 |
 |-------|-----------|------|---------|
-| **meta-pm** | `.agents/agents/meta-pm.md` | 场景发现（USE-CASES.md）+ 需求澄清与结构化（REQUIREMENTS.md） | 新请求进入、需求模糊、需求变更后重整 |
-| **meta-se** | `.agents/agents/meta-se.md` | 多方案设计（≥2 个方案 + Mermaid 流程图）+ Story 拆解与并行计划 | REQUIREMENTS.md 已确认（solution-design 和 story-planning 两个阶段均由 meta-se 执行） |
+| **meta-pm** | `.agents/agents/meta-pm.md` | 快速调研（阶段零）+ 场景发现（USE-CASES.md，含画像/指标）+ 需求结构化（REQUIREMENTS.md，含风险/里程碑）+ 完整性自检 | 新请求进入、需求模糊、需求变更后重整 |
+| **meta-se** | `.agents/agents/meta-se.md` | 多方案设计（≥2 方案 + 5 层架构 Mermaid 图 + 技术选型理由）+ Story 拆解（含文件布局 + TASK-ID 任务清单）+ 开发计划（含完成准则） | REQUIREMENTS.md 已确认（solution-design 和 story-planning 两阶段均由 meta-se 执行） |
 | ~~**meta-dm**~~ | ~~`.agents/agents/meta-dm.md`~~ | ~~Story 拆解与并行计划~~ | ⚠️ **已废弃**，职责合并至 meta-se |
-| **meta-dev** | `.agents/agents/meta-dev.md` | Agent/Skill 文件实现 | 存在已批准且可执行的 Story |
-| **meta-qa** | `.agents/agents/meta-qa.md` | Story 验证与平台打包 | Story 进入 ready-for-verification + VALIDATION-ENV.yaml 已就绪 |
-| **meta-doc** | `.agents/agents/meta-doc.md` | README 与 USER-MANUAL 输出 | 核心产物已验证且包清单稳定 |
+| **meta-dev** | `.agents/agents/meta-dev.md` | 就绪检查 + Agent/Skill 文件实现 + TASK-ID 增量追踪 + 偏差记录 | 存在已批准且可执行的 Story |
+| **meta-qa** | `.agents/agents/meta-qa.md` | TEST-STRATEGY.md 输出（ISTQB/ISO 25010）+ 8 维度验收 + 质量门控 + 平台打包 | Story 进入 ready-for-verification + VALIDATION-ENV.yaml 已就绪 |
+| **meta-doc** | `.agents/agents/meta-doc.md` | README（含架构概览 + 用户旅程）+ USER-MANUAL（含故障排除）+ 严重度分级文档缺口 | 核心产物已验证且包清单稳定 |
 
 ## 工作流阶段与 Agent 对应关系
 
@@ -59,7 +61,8 @@ init（meta-po）
 | `.workflow-meta/SOLUTION-DESIGN.md` | 选定方案描述（meta-se 产出） |
 | `.workflow-meta/ARCHITECTURE-DECISION.md` | 架构决策（meta-se 产出） |
 | `.workflow-meta/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
-| `.workflow-meta/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出） |
+| `.workflow-meta/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
+| `.workflow-meta/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
 | `.workflow-meta/templates/` | 所有对象的标准模板 |
 | `.workflow-meta/stories/` | Story 卡片（STORY-*.md） |
 | `.workflow-meta/changes/` | 变更单（CR-*.md） |
@@ -75,6 +78,10 @@ init（meta-po）
 - **变更规则**：需求或方案变动必须先创建 `CR-*.md` 再修改正式对象
 - **人工检查点**：所有人工确认统一由 meta-po 发起，通过 `ask_user` 工具触发
 - **上下文预算**：meta-po 持有的上下文不超过总窗口的 30%
+- **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
+- **确定性语言**：meta-se 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
+- **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查
+- **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 
 ## 防火墙测试工作流（现有，独立运行）
 

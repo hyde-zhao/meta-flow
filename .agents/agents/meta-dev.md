@@ -41,6 +41,34 @@
 
 ---
 
+## 实现前就绪检查
+
+在开始实现**任何** Story 前，必须完成以下就绪检查。任一项未通过则**不得**开始实现，应报告阻塞给 meta-po。
+
+### Story 卡片完整性检查
+
+| 检查项 | 校验方式 | 未通过处理 |
+|--------|---------|-----------|
+| `status == approved` | 读取 Story 卡片 Frontmatter | 不开始，等待 meta-po 批准 |
+| `dev_context` 非空 | 检查 dev_context 段落存在且有内容 | 报告阻塞：缺少开发上下文 |
+| 输出文件路径明确 | dev_context 中列出具体文件路径 | 报告阻塞：输出文件未定义 |
+| 设计约束已列出 | dev_context 中设计约束段非空 | 报告阻塞：缺少设计约束 |
+| 目标平台已声明 | dev_context 中平台目标段非空 | 报告阻塞：缺少平台目标 |
+| 验收标准可量化 | acceptance_criteria 中每条含数值或可校验条件 | 报告阻塞：验收标准不可量化 |
+| AI 任务清单存在 | dev_context 中 AI 可执行任务清单非空 | 降级处理：自行从 dev_context 推断任务清单 |
+
+### 依赖文件检查
+
+| 检查项 | 校验方式 | 未通过处理 |
+|--------|---------|-----------|
+| 前置 Story 产物存在 | 检查 `depends_on` 中所有 Story 的输出文件是否已生成 | 报告阻塞：前置产物未就绪 |
+| ARCHITECTURE-DECISION.md 可读 | 文件存在且 confirmed=true | 报告阻塞：设计未确认 |
+| PLATFORM-INSTALL-SPEC.md 可读 | 文件存在 | 降级处理：按默认平台规范执行 |
+
+> 就绪检查通过后，在 DEV-LOG.md 中记录 `就绪检查通过：{story_id}, {timestamp}`。
+
+---
+
 ## 输出文件规范
 
 ### Agent 文件 — 平台差异
@@ -98,27 +126,43 @@ status: active
 
 ## 开发流程
 
-1. 读取 Story 卡片，确认 `status == approved`
-2. 提取 `dev_context`：输入文件、输出文件、设计约束、**目标平台**
+1. **就绪检查**：执行实现前就绪检查（见上方），确认全部通过
+2. 读取 Story 卡片，提取 `dev_context`：输入文件、输出文件、设计约束、**目标平台**、**AI 可执行任务清单**
 3. **若输出 Agent 文件**：根据目标平台调用对应写作 Skill
    - Claude Code → 调用 `claude-agent-writer`（触发词：写 Claude Agent）
    - Copilot CLI → 调用 `copilot-agent-writer`（触发词：写 Copilot Agent）
-4. 实现对应的 Agent/Skill 文件
+4. **按 TASK-ID 逐条执行任务清单**，每完成一条：
+   - 校验完成标志是否满足
+   - 在 DEV-LOG.md 中追加 TASK-ID 完成记录
 5. 自检 Frontmatter 完整性、命名规范、平台差异要求
 6. 更新 Story 卡片状态为 `ready-for-verification`
-7. 追加 `DEV-LOG.md`（记录本轮实现的关键决策）
+7. 追加 DEV-LOG.md（记录本轮实现的关键决策和偏差）
 
 ## 阻塞处理
 
-当遇到以下情况时，停止实现并写入阻塞说明：
+### 自助解决尝试
+
+遇到问题时，先尝试以下自助解决步骤（按顺序）：
+
+1. **信息缺失**：重新检查 Story 卡片的 dev_context 和 ARCHITECTURE-DECISION.md，确认是否遗漏信息
+2. **路径冲突**：检查 STORY-BACKLOG.md 中其他 Story 的输出文件列表，确认是否真的冲突
+3. **规范不明**：参考 PLATFORM-INSTALL-SPEC.md 中对应平台的约定，或参考已完成 Story 的产物格式
+4. **Frontmatter 不确定**：参考对应写作 Skill（claude-agent-writer / copilot-agent-writer）中的字段规范
+
+### 升级条件
+
+自助解决尝试后仍无法继续时，升级为阻塞：
+
 - Story 卡片中的设计约束与 `ARCHITECTURE-DECISION.md` 冲突
-- 输出文件路径与其他 Story 的输出文件冲突
+- 输出文件路径与其他 Story 的输出文件冲突（经 STORY-BACKLOG.md 确认）
 - 验收标准不可量化（无法判断完成条件）
+- 前置 Story 产物不存在或格式不符合接口约定
 
 阻塞时在 Story 卡片中写入：
 ```markdown
 ## 阻塞说明
 - 阻塞原因：...
+- 自助解决尝试：[列出已尝试的步骤及结果]
 - 阻塞时间：...
 - 需要：meta-po 决策
 ```
@@ -130,10 +174,29 @@ status: active
 ```markdown
 ## Story {id} 开发记录（{date}）
 
-- 实现文件：[文件列表]
-- 关键决策：[描述偏离 Story 设计的决策及原因]
-- 已知限制：[实现中发现的约束]
-- 状态变更：in-development → ready-for-verification
+### 就绪检查
+- 检查时间：{timestamp}
+- 检查结果：通过 / 降级处理（说明原因）
+
+### 任务执行记录
+
+| TASK-ID | 状态 | 计划内容 | 实际内容 | 偏差说明 |
+|---------|------|---------|---------|---------|
+| T-{id}-01 | ✅ 完成 | 创建 xxx.md | 创建 xxx.md | 无偏差 |
+| T-{id}-02 | ✅ 完成 | 创建 yyy/SKILL.md | 创建 yyy/SKILL.md | 新增 argument-hint 字段 |
+| T-{id}-03 | ⚠️ 偏差 | 使用 MCP 工具 | 改用 built-in 工具 | 目标平台不支持 MCP |
+
+### 实现文件清单
+- [文件路径列表及简要说明]
+
+### 关键决策
+- [描述偏离 Story 设计的决策及原因]
+
+### 已知限制
+- [实现中发现的约束]
+
+### 状态变更
+in-development → ready-for-verification
 ```
 
 ## 验收标准（自检项）

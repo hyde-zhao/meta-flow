@@ -7,7 +7,7 @@
 ## 角色与编排
 
 - **主编排器**：`meta-po`（元工作流产品负责人），负责状态管理、阶段推进、人工检查点控制
-- **功能 Agent**（按需启用）：`meta-pm`、`meta-se`、`meta-dm`、`meta-dev`、`meta-qa`、`meta-doc`
+- **功能 Agent**（按需启用）：`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`
 - **所有任务均通过 meta-po 发起**，功能 Agent 不直接响应用户，由 meta-po 唤醒和收敛
 
 ## Skill 发现路径
@@ -66,6 +66,10 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 5. **文档锁**：未完成验证和打包，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
 6. **禁止越级改写**：`meta-dev` 不修改 REQUIREMENTS.md；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
 7. **上下文预算**：meta-po 持有上下文不超过总窗口 30%；功能 Agent 只加载本次任务必要对象文件
+8. **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
+9. **确定性语言**：meta-se 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
+10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查
+11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 
 ## 人工检查点（共 5 个）
 

@@ -5,6 +5,7 @@ status: "draft"
 priority: "P0"
 wave: "W1"
 depends_on: []
+task_count: 0
 created_at: ""
 updated_at: ""
 ---
@@ -20,6 +21,36 @@ updated_at: ""
 - **设计约束**：
 - **命名规范**：kebab-case，文件名符合 `^[a-z][a-z0-9-]+\.md$`，必须包含 title/version/description Frontmatter
 - **平台目标**：
+
+### 文件系统布局
+
+> 预期创建/修改的文件列表（含完整路径）。
+
+```
+<root>/
+├── .agents/skills/<skill-name>/
+│   └── SKILL.md           ← 新建
+├── .agents/agents/
+│   └── <agent-name>.md    ← 新建 / 修改
+└── ...
+```
+
+### 关键 Frontmatter 字段
+
+| 文件 | 字段 | 类型 | 必填 | 说明 / 取值范围 |
+|------|------|------|------|----------------|
+| SKILL.md | title | string | ✅ | Skill 显示名称 |
+| SKILL.md | version | string | ✅ | 语义化版本号 |
+| SKILL.md | description | string | ✅ | 一句话描述 |
+
+### AI 可执行任务清单
+
+> 使用 TASK-ID 前缀 + 确定性动词（创建/修改/删除）的原子任务。
+
+| TASK-ID | 动作 | 目标文件 | 描述 |
+|---------|------|---------|------|
+| T1 | 创建 | `.agents/skills/<name>/SKILL.md` | |
+| T2 | 修改 | | |
 
 ## 验证上下文（validation_context）
 

@@ -51,6 +51,50 @@
 - 复杂度取向（simple/standard/complex）
 - 扩展性与维护成本权衡
 
+### 5 层架构图标准
+
+每个备选方案的 Mermaid 流程图**必须**覆盖以下 5 个层次：
+
+| 层次 | 内容 | 图中表示 |
+|------|------|---------|
+| **用户交互层** | 用户触发方式（命令行、触发词、文件事件）、输入格式 | 顶部，使用圆角矩形 `([...])` |
+| **编排层** | Agent 间调度关系、状态流转、检查点 | 第二层，使用子图 `subgraph` |
+| **能力层** | Skill 执行逻辑、Tool 调用、MCP 接入 | 第三层，使用矩形 `[...]` |
+| **数据层** | 文件系统交互（读/写哪些 .md/.yaml）、状态文件 | 第四层，使用圆柱形 `[(...)  ]` |
+| **平台适配层** | 各平台差异处理、安装包结构差异 | 底部，使用六角形 `{{...}}` |
+
+**Mermaid 图模板**：
+
+```mermaid
+flowchart TD
+    subgraph 用户交互层
+        User([用户]) -->|"触发词/命令"| Entry[入口 Agent]
+    end
+
+    subgraph 编排层
+        Entry -->|调度| AgentA[agent-a]
+        Entry -->|调度| AgentB[agent-b]
+    end
+
+    subgraph 能力层
+        AgentA -->|调用| SkillX[skill-x]
+        AgentB -->|调用| SkillY[skill-y]
+        SkillY -->|Tool 调用| ToolZ[tool-z]
+    end
+
+    subgraph 数据层
+        SkillX -->|写入| FileA[(config.md)]
+        SkillY -->|读取| FileB[(state.yaml)]
+    end
+
+    subgraph 平台适配层
+        FileA --> PkgCopilot{{GitHub Copilot 包}}
+        FileA --> PkgClaude{{Claude Code 包}}
+    end
+```
+
+> 轻量方案（simple 模式）可合并编排层和能力层；但用户交互层和数据层不可省略。
+
 ### SOLUTION-OPTIONS.md 结构规范
 
 ```markdown
@@ -127,6 +171,14 @@ flowchart TD
     AgentB -->|结果文件| AgentA
     AgentA -->|最终输出| User
 ```
+
+### 技术选型理由
+
+| 技术决策 | 选择 | 选择原因 | 排除的替代方案 | 排除原因 |
+|---------|------|---------|-------------|---------|
+| 编排方式 | 提示词驱动 / 工具调用 / MCP | ... | ... | ... |
+| 状态管理 | 文件系统 / 内存 / 数据库 | ... | ... | ... |
+| 平台适配 | 模板转换 / 条件分支 / 独立实现 | ... | ... | ... |
 
 ### 优点
 - ...
@@ -205,6 +257,26 @@ confirmed_at: ""
 
 > **前置条件**：`ARCHITECTURE-DECISION.md` 的 `confirmed = true`
 
+### 确定性语言规范
+
+Story 卡片和 DEVELOPMENT-PLAN.yaml 中的描述必须遵循以下规范，确保 AI Agent 可无歧义地执行：
+
+**动词规范**：
+- ✅ 使用：`创建`、`修改`、`删除`、`读取`、`校验`、`追加`
+- ❌ 避免：`考虑`、`可以`、`建议`、`如有需要`、`适当地`
+
+**路径规范**：
+- ✅ 使用完整路径：`.agents/agents/my-agent.md`
+- ❌ 避免模糊引用：`相应的 Agent 文件`、`对应目录`
+
+**条件规范**：
+- ✅ 使用可校验条件：`当 STORY-001 status=verified 时`
+- ❌ 避免主观判断：`当准备就绪时`、`当合适时`
+
+**量化规范**：
+- ✅ 使用具体数值：`产物文件数量 >= 3`
+- ❌ 避免模糊量词：`足够的文件`、`若干个`
+
 ### Story 拆解原则
 
 1. **单一职责**：每个 Story 只实现一个 Agent 或一组紧密相关的 Skill
@@ -248,6 +320,35 @@ confirmed_at: ""
 
 ### 命名规范
 <本 Story 产物的命名要求>
+
+### 文件系统布局
+
+预期本 Story 完成后的文件创建/修改列表：
+
+| 操作 | 文件路径 | 说明 |
+|------|---------|------|
+| CREATE | .agents/agents/xxx.md | Agent 提示词文件 |
+| CREATE | .agents/skills/xxx/SKILL.md | Skill 定义文件 |
+| MODIFY | .workflow-meta/stories/STORY-{id}.md | 状态更新 |
+
+### 关键 Frontmatter 字段
+
+每个产物文件的必填 Frontmatter 字段及取值范围：
+
+| 文件 | 字段 | 类型 | 必填 | 取值范围/示例 |
+|------|------|------|------|-------------|
+| Agent .md | name | string | 是 | kebab-case，如 `my-agent` |
+| Agent .md | description | string | 是 | 含触发词的完整描述 |
+| SKILL.md | status | string | 是 | `active` / `deprecated` |
+
+### AI 可执行任务清单
+
+> 使用确定性动词、具体文件路径、零歧义描述。每条任务可被 AI Agent 独立执行。
+
+| TASK-ID | 操作 | 目标文件 | 具体内容 | 完成标志 |
+|---------|------|---------|---------|---------|
+| T-{id}-01 | 创建 | .agents/agents/xxx.md | 创建 Agent 文件，包含 [具体字段列表] | 文件存在且 Frontmatter 完整 |
+| T-{id}-02 | 创建 | .agents/skills/xxx/SKILL.md | 创建 Skill 文件，包含 [具体内容要求] | 文件存在且 name/description 非空 |
 
 ### 平台目标
 <需要支持的平台及各平台的差异说明>
@@ -357,19 +458,26 @@ waves:
   - wave: W1
     parallel: true
     description: "基础组件实现"
+    completion_criteria: "所有 Story 状态为 verified"
+    validation_strategy: "逐 Story 验证：完整性 + 安全扫描 + 平台适配"
     stories:
       - story_id: STORY-001
         priority: P0
         assignee: meta-dev
         depends_on: []
         estimated_files: N
+        task_count: N
   - wave: W2
     parallel: false
     description: "集成与编排层"
+    completion_criteria: "所有 Story 状态为 verified 且跨 Story 接口验证通过"
+    validation_strategy: "集成验证：组件间接口兼容性 + 端到端流程测试"
     stories:
       - story_id: STORY-003
         priority: P0
         depends_on: [STORY-001, STORY-002]
+        estimated_files: N
+        task_count: N
 ```
 
 ---
@@ -394,6 +502,8 @@ waves:
 **阶段一（solution-design）：**
 - `SOLUTION-OPTIONS.md` 包含 ≥2 个备选方案，每个方案有 Mermaid 流程图
 - 每个方案有完整的组件清单（Agent/Skill/Tool/MCP）和组件关系说明
+- 每个方案的 Mermaid 图覆盖 5 层架构标准（用户交互/编排/能力/数据/平台适配）
+- 每个方案包含技术选型理由表
 - 方案对比表覆盖关键维度
 - `ARCHITECTURE-DECISION.md` 包含至少 1 个设计确认点，`confirmed` 字段初始为 false
 - `PLATFORM-INSTALL-SPEC.md` 覆盖所有声明的目标平台
@@ -402,6 +512,9 @@ waves:
 **阶段二（story-planning）：**
 - 每张 Story 卡片包含完整三件套（dev_context + validation_context + acceptance_criteria）
 - `dev_context` 自给自足：包含背景说明、输入/输出文件规范（含示例）、接口约定、设计约束
+- 每张 Story 卡片的 dev_context 包含文件系统布局和 AI 可执行任务清单
+- DEVELOPMENT-PLAN.yaml 每个 Wave 包含 completion_criteria 和 validation_strategy
+- 所有 Story 描述符合确定性语言规范
 - `STORY-BACKLOG.md` 列出所有 Story 及优先级
 - `DEVELOPMENT-PLAN.yaml` 通过 `dag-validator` 校验无循环依赖
 - 并行 Story 的输出文件无冲突

@@ -23,6 +23,15 @@
 - 修改功能 Agent 的产物内容
 - 做安全审计判断（这是 meta-qa 的职责）
 
+## 核心原则 — 先理解，后行动
+
+1. **退出条件先验**：在推进任何阶段前，先确认当前阶段的退出条件已被量化验证——逐项检查退出条件清单，全部通过后才执行状态推进
+2. **上下文先行**：在唤醒功能 Agent 前，先用 `context-handoff` Skill 装配完整上下文，避免功能 Agent 因缺失信息而返工
+3. **追问优先于假设**：当用户输入模糊时，优先使用 `ask_user` 工具追问，而非假设默认值——错误假设的返工成本远高于一次追问
+4. **状态一致性校验**：每次状态推进前，回读 `STATE.md` 确认文件中的状态与实际阶段产物一致，防止状态漂移
+
+---
+
 ## 上下文预算
 
 你的上下文占用**不超过总 token 的 30%**。只加载以下文件：
@@ -112,13 +121,13 @@ story-execution
 
 | 当前状态 | 退出条件 | 下一状态 | 唤醒 Agent | 检查点 |
 |---------|---------|---------|-----------|--------|
-| `init` | REQUEST.md 已填写 | `requirement-clarification` | meta-pm | — |
-| `requirement-clarification` | USE-CASES.md 已确认 + REQUIREMENTS.md confirmed=true + 无 BLOCKING 未决项 | `solution-design` | meta-se | **①需求确认** |
-| `solution-design` | SOLUTION-OPTIONS.md 输出完成（≥2 个方案） | — | — | **②方案选择确认**（用户选定 1 个方案后继续） |
-| `solution-design`（方案已选定） | ARCHITECTURE-DECISION.md confirmed=true | `story-planning` | meta-se | — |
-| `story-planning` | STORY-BACKLOG.md + DEVELOPMENT-PLAN.yaml 输出完成 | `story-execution` | meta-dev | **③Story 计划确认** |
-| `story-execution` | 当前 Wave 内所有 Story = `verified`（每个 Story 经历 dev→qa 串行） | 下一 Wave 或 `documentation` | meta-dev（下一 Wave）/ meta-doc | — |
-| `documentation` | README.md + USER-MANUAL.md 生成 | `delivered` | — | **④终验** |
+| `init` | REQUEST.md 已填写（`goal` 字段非空） | `requirement-clarification` | meta-pm | — |
+| `requirement-clarification` | USE-CASES.md frontmatter `status=confirmed` AND REQUIREMENTS.md frontmatter `confirmed=true` AND CLARIFICATION-LOG.md 中 BLOCKING 级别 `open_count=0` | `solution-design` | meta-se | **①需求确认** |
+| `solution-design` | SOLUTION-OPTIONS.md 含 ≥2 个方案（每个方案含 Mermaid 流程图 + 优劣分析） | — | — | **②方案选择确认**（用户选定 1 个方案后继续） |
+| `solution-design`（方案已选定） | ARCHITECTURE-DECISION.md frontmatter `confirmed=true` AND PLATFORM-INSTALL-SPEC.md 已更新（`last_updated` 时间戳 ≥ 方案确认时间） | `story-planning` | meta-se | — |
+| `story-planning` | STORY-BACKLOG.md `total_stories > 0` AND DEVELOPMENT-PLAN.yaml 通过 `dag-validator` 校验（无循环依赖、无无效引用） AND 所有 Story 卡片含完整三件套（dev_context + acceptance_criteria + validation_context） | `story-execution` | meta-dev | **③Story 计划确认** |
+| `story-execution` | 当前 Wave 内所有 Story `status=verified`（每个 Story 经历 dev→qa 串行） AND VERIFICATION-REPORT.md 已生成 | 下一 Wave 或 `documentation` | meta-dev（下一 Wave）/ meta-doc | — |
+| `documentation` | README.md + USER-MANUAL.md 已生成 AND PACKAGE-MANIFEST.yaml 中所有平台包 `build_status=success` | `delivered` | — | **④终验** |
 
 ### Story 生命周期（状态流转）
 
@@ -172,6 +181,20 @@ draft → approved → in-development（meta-dev）→ ready-for-verification �
 
 ---
 
+## 失败模式识别
+
+在容错处理之前，meta-po 应主动识别以下失败模式并执行对应自动处理：
+
+| 失败信号 | 触发条件 | 自动处理 |
+|---------|---------|---------|
+| 需求循环 | meta-pm 连续 3 轮未能将 BLOCKING 未决项降为 0 | 暂停澄清，提示用户直接提供决策 |
+| 方案僵局 | 用户对所有方案均不满意，连续 2 次要求重新设计 | 回退到 requirement-clarification，追加场景讨论 |
+| 开发卡顿 | 同一 Story 连续 2 轮 meta-dev 报告阻塞 | 创建 ISSUE 工单，升级为人工决策 |
+| 验证死循环 | 同一 Story meta-qa 打回 meta-dev 超过 3 次 | 暂停该 Story，标记 blocked，继续其他 Story |
+| 上下文溢出 | 单次加载文件超过 token 预算 30% | 裁剪历史文件，只保留当前阶段必要上下文 |
+
+---
+
 ## 容错规则
 
 | 层级 | 触发条件 | 处理方式 |
@@ -187,7 +210,15 @@ draft → approved → in-development（meta-dev）→ ready-for-verification �
 收到变更请求时：
 1. 暂停当前阶段
 2. 创建 `changes/CR-*.md`（使用 `.workflow-meta/templates/CR-TEMPLATE.md`）
-3. 执行五维度影响分析（需求层、设计层、Story 层、安全层、交付层）
+3. 执行五维度影响分析：
+
+| 维度 | 检查项 |
+|------|--------|
+| 需求层 | 哪些 R-F/R-C/R-NF 条目受影响？USE-CASES.md 中哪些场景需更新？ |
+| 设计层 | ARCHITECTURE-DECISION.md 的组件清单是否需变更？Mermaid 流程图是否需重绘？ |
+| Story 层 | 哪些 Story 的 dev_context/validation_context 需更新？是否需要新增/删除 Story？ |
+| 安全层 | 变更是否引入新的权限需求或外部服务调用？dangerous-command-scan 范围是否需扩展？ |
+| 交付层 | 哪些平台安装包需重新构建？PACKAGE-MANIFEST.yaml 是否需更新？ |
 4. 判定局部影响（回退到最小受影响阶段）或全局影响（回退到 solution-design）
 5. 更新 `STATE.md`
 
