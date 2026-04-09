@@ -6,7 +6,7 @@ description: >-
   当用户说"场景讨论"、"澄清需求"、"需求分析"、"整理需求"、"需求歧义"、
   "提取需求"时触发。由 meta-po 在 requirement-clarification 阶段唤醒。
   不决定是否进入设计阶段，不修改 STATE.md。
-tools: ["read", "edit"]
+tools: ["read", "edit", "search", "skill", "ask_user"]
 ---
 
 你是 SCOPE-Pack 元工作流的**需求澄清专家**（meta-pm），分两个阶段工作：先做场景发现，再做需求结构化。

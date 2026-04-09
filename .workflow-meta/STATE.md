@@ -1,0 +1,95 @@
+---
+project_id: "MFQ-001"
+workflow_mode: "complex"
+current_phase: "story-execution"
+current_agent: "meta-qa"
+iteration: 7
+blocked: false
+last_action: "meta-dev 完成全部 4 个 Wave 的实现：14 Skills + 1 Agent + 2 Python 工具"
+next_action: "meta-qa 验证产物完整性，meta-doc 输出文档，推进至 documentation"
+checkpoints:
+  requirement_confirmed: true
+  solution_selected: true
+  story_plan_confirmed: true
+  final_package_verified: false
+parallel_waves:
+  - wave: W1
+    stories: [STORY-01, STORY-02, STORY-03, STORY-05]
+    status: verified
+  - wave: W2
+    stories: [STORY-04, STORY-06, STORY-07, STORY-08, STORY-09]
+    status: verified
+  - wave: W3
+    stories: [STORY-10, STORY-11, STORY-12, STORY-13, STORY-14]
+    status: verified
+  - wave: W4
+    stories: [STORY-15, STORY-16]
+    status: verified
+history:
+  - phase: "init"
+    action: "创建 .workflow-meta 运行时目录结构"
+    agent: "meta-po"
+    timestamp: "2026-04-09T11:16:00Z"
+  - phase: "init"
+    action: "填写 REQUEST.md"
+    agent: "meta-po"
+    timestamp: "2026-04-09T11:17:00Z"
+  - phase: "init → requirement-clarification"
+    action: "写入 REQUIREMENTS.md + CLARIFICATION-LOG.md"
+    agent: "meta-po"
+    timestamp: "2026-04-09T11:18:00Z"
+  - phase: "requirement-clarification"
+    action: "第 3 轮澄清完成，20 条需求 + 11 个场景"
+    agent: "meta-pm"
+    timestamp: "2026-04-09T11:38:00Z"
+  - phase: "requirement-clarification → solution-design"
+    action: "检查点①通过"
+    agent: "meta-po"
+    timestamp: "2026-04-09T11:48:57Z"
+  - phase: "solution-design"
+    action: "输出 4 个设计文档"
+    agent: "meta-se"
+    timestamp: "2026-04-09T11:49:00Z"
+  - phase: "solution-design → story-planning"
+    action: "检查点②通过，方案 A 确认"
+    agent: "meta-po"
+    timestamp: "2026-04-09T11:50:00Z"
+  - phase: "story-planning"
+    action: "16 Stories × 4 Waves 拆解完成"
+    agent: "meta-se"
+    timestamp: "2026-04-09T11:51:00Z"
+  - phase: "story-planning → story-execution"
+    action: "检查点③通过：Story 计划确认。启动 Wave 1"
+    agent: "meta-po"
+    timestamp: "2026-04-09T12:09:51Z"
+  - phase: "story-execution"
+    action: "W1~W4 全部完成：14 Skills + 1 Agent(mfq-test-designer) + 2 Python工具(excel_coupling_tool + mcp_query_client)。Excel工具实测读取522条批注，509条耦合点。"
+    agent: "meta-dev"
+    timestamp: "2026-04-09T12:15:00Z"
+last_updated: "2026-04-09T12:15:00Z"
+---
+
+<!--
+状态转换表（meta-po 参考）：
+
+| 当前状态 | 退出条件 | 下一状态 | 人工检查点 |
+|---------|---------|---------|----------|
+| init | REQUEST.md 已填写 | requirement-clarification | — |
+| requirement-clarification | USE-CASES.md confirmed=true + REQUIREMENTS.md confirmed=true + 无 BLOCKING 未决项 | solution-design | ① 需求确认 |
+| solution-design（方案输出完成） | SOLUTION-OPTIONS.md 已输出（≥2 个方案） | — | ② 方案选择确认（用户选定后继续） |
+| solution-design（方案已选定） | ARCHITECTURE-DECISION.md confirmed=true | story-planning | — |
+| story-planning | STORY-BACKLOG.md + DEVELOPMENT-PLAN.yaml 输出完成 | story-execution | ③ Story 计划确认 |
+| story-execution（Wave 内） | 当前 Wave 所有 Story = verified（每个 Story 经历 dev→qa 串行） | 下一 Wave 或 documentation | — |
+| documentation | README.md + USER-MANUAL.md 生成 | delivered | ④ 终验 |
+
+Story 生命周期（每个 Story 独立）：
+  draft → approved → in-development(meta-dev) → ready-for-verification → verified(meta-qa)
+  同一 Story：dev 和 qa 严格串行
+  同一 Wave：不同 Story 可 /fleet 并行
+  不同 Wave：前一 Wave 全部 verified 后才启动下一 Wave
+
+注：
+- packaging 不再是独立状态，由 meta-qa 在 story verified 后自动执行
+- 验证环境确认不再是人工检查点，VALIDATION-ENV.yaml 缺失时 meta-qa 自动阻断并提示
+- solution_selected checkpoint 在用户选定方案后由 meta-po 设置为 true
+-->

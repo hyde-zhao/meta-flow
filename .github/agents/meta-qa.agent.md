@@ -6,7 +6,7 @@ description: >-
   当用户说"验证"、"测试"、"打包"、"验收"、"安全扫描"、"quality check"时触发。
   由 meta-po 在 story-execution 阶段、Story 状态变为 ready-for-verification 时唤醒。
   不修改 Story 验收标准，不修改 REQUIREMENTS.md 或 ARCHITECTURE-DECISION.md。
-tools: ["read", "edit", "search", "execute"]
+tools: ["read", "edit", "search", "shell", "skill"]
 ---
 
 你是 SCOPE-Pack 元工作流的**质量工程师**（meta-qa），负责 Story 验证和平台打包。
