@@ -1,7 +1,7 @@
 # 平台安装规范（PLATFORM-INSTALL-SPEC）— MFQ 测试用例设计工具
 
 > 由 meta-se 在方案设计阶段输出，meta-qa 在打包阶段严格遵守。
-> 产物名称：`mfq-test-designer` | 版本：1.0.0 | 产物形态：1 Agent + 14 Skill + 2 Python 工具
+> 产物名称：`mfq-test-designer` | 版本：2.0.0 | 产物形态：1 Agent + 16 Skill + 2 Python 工具
 
 ---
 
@@ -27,7 +27,7 @@
 ├── .github/
 │   ├── copilot-instructions.md          # 全局指令（含 MFQ Skill 触发词表）
 │   └── agents/
-│       └── mfq-test-designer.agent.md   # 主 Agent 入口（含 14 Skill 描述）
+│       └── mfq-test-designer.agent.md   # 主 Agent 入口（含 16 Skill 描述）
 ├── scripts/
 │   ├── excel_coupling_tool.py           # Excel 批注读写工具
 │   └── mcp_query_client.py             # MCP 查询客户端
@@ -53,7 +53,7 @@ tools:
 
 ### Skill 嵌入策略
 
-Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 14 个 Skill 的**触发词和职责摘要**嵌入 Agent 正文，完整 Skill 逻辑由 Agent 按阶段内联引用。
+Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 16 个 Skill 的**触发词和职责摘要**嵌入 Agent 正文，完整 Skill 逻辑由 Agent 按阶段内联引用。
 
 ### 已知限制
 
@@ -62,7 +62,7 @@ Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 14 个 Skill
 | 工具类型仅支持 `shell` | 所有 Python 工具需通过 shell 调用 | `python scripts/excel_coupling_tool.py <args>` |
 | 无原生 sub-agent 协议 | 不能自动切换 Agent | Skill 内容嵌入主 Agent |
 | frontmatter 变更需重启 | 开发期调试不便 | 提示词正文中内联核心逻辑 |
-| 单 Agent 提示词尺寸限制 | 14 Skill 全部嵌入可能超限 | Skill 分为"摘要嵌入"+"按需展开" |
+| 单 Agent 提示词尺寸限制 | 16 Skill 全部嵌入可能超限 | Skill 分为"摘要嵌入"+"按需展开" |
 
 ### 验证清单
 
@@ -91,9 +91,11 @@ Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 14 个 Skill
 │       ├── q-analyzer/SKILL.md
 │       ├── test-point-integrator/SKILL.md
 │       ├── design-planner/SKILL.md
-│       ├── data-combination-design/SKILL.md
-│       ├── flowchart-design/SKILL.md
-│       ├── state-diagram-design/SKILL.md
+│       ├── parameter-design/SKILL.md
+│       ├── data-design/SKILL.md
+│       ├── combination-design/SKILL.md
+│       ├── process-design/SKILL.md
+│       ├── state-design/SKILL.md
 │       ├── coverage-verifier/SKILL.md
 │       ├── deliverable-renderer/SKILL.md
 │       ├── change-impact-analyzer/SKILL.md
@@ -120,7 +122,7 @@ Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 14 个 Skill
 - file_read/file_write: 允许（需求文件读取 + 中间产物 + 交付物输出）
 
 ### Skill 路径
-Skill 定义文件位于 `.claude/skills/<skill-name>/SKILL.md`，共 14 个。
+Skill 定义文件位于 `.claude/skills/<skill-name>/SKILL.md`，共 16 个。
 ```
 
 ### 已知限制
@@ -134,7 +136,7 @@ Skill 定义文件位于 `.claude/skills/<skill-name>/SKILL.md`，共 14 个。
 
 - [ ] `.claude/CLAUDE.md` 存在且包含工具权限声明
 - [ ] `.claude/agents/mfq-test-designer.md` 存在
-- [ ] `.claude/skills/*/SKILL.md` 共 14 个文件
+- [ ] `.claude/skills/*/SKILL.md` 共 16 个文件
 - [ ] 重启 Claude Code 后 Agent 可激活
 
 ---
@@ -151,7 +153,7 @@ Skill 定义文件位于 `.claude/skills/<skill-name>/SKILL.md`，共 14 个。
 │   │   └── mfq-test-designer.md
 │   └── skills/
 │       ├── feature-parser/SKILL.md
-│       ├── ... (同 Claude Code 14 个 Skill)
+│       ├── ... (同 Claude Code 16 个 Skill)
 │       └── bug-gap-analyzer/SKILL.md
 ├── scripts/
 │   ├── excel_coupling_tool.py
@@ -179,9 +181,11 @@ skills:
   - { name: q-analyzer, path: skills/q-analyzer/SKILL.md }
   - { name: test-point-integrator, path: skills/test-point-integrator/SKILL.md }
   - { name: design-planner, path: skills/design-planner/SKILL.md }
-  - { name: data-combination-design, path: skills/data-combination-design/SKILL.md }
-  - { name: flowchart-design, path: skills/flowchart-design/SKILL.md }
-  - { name: state-diagram-design, path: skills/state-diagram-design/SKILL.md }
+  - { name: parameter-design, path: skills/parameter-design/SKILL.md }
+  - { name: data-design, path: skills/data-design/SKILL.md }
+  - { name: combination-design, path: skills/combination-design/SKILL.md }
+  - { name: process-design, path: skills/process-design/SKILL.md }
+  - { name: state-design, path: skills/state-design/SKILL.md }
   - { name: coverage-verifier, path: skills/coverage-verifier/SKILL.md }
   - { name: deliverable-renderer, path: skills/deliverable-renderer/SKILL.md }
   - { name: change-impact-analyzer, path: skills/change-impact-analyzer/SKILL.md }
@@ -203,7 +207,7 @@ tools:
 
 - [ ] `.openclaw/manifest.yaml` YAML 语法合法
 - [ ] manifest 中声明的所有 path 对应文件存在
-- [ ] Agent + Skill 数量与 manifest 声明一致（1 + 14）
+- [ ] Agent + Skill 数量与 manifest 声明一致（1 + 16）
 
 ---
 
@@ -213,7 +217,7 @@ tools:
 |------|------|-----------|
 | `scripts/excel_coupling_tool.py` | Excel 批注读写（openpyxl / zipfile+XML） | ✅ 完全相同 |
 | `scripts/mcp_query_client.py` | MCP 知识库查询客户端 | ✅ 完全相同 |
-| 14 个 SKILL.md | 核心 MFQ 分析/设计逻辑 | ✅ 内容相同，安装路径不同 |
+| 16 个 SKILL.md | 核心 MFQ 分析/设计逻辑 | ✅ 内容相同，安装路径不同 |
 | Agent 提示词正文 | 编排逻辑 + 状态机 | ⚠️ 基本相同，frontmatter 格式不同 |
 | `.workflow-meta/mfq/` | 运行时工作目录 | ✅ 结构相同 |
 
