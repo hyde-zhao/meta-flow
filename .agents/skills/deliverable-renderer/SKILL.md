@@ -11,14 +11,14 @@ status: active
 
 ## 目标
 
-读取 `.mfq-work/` 目录下的所有中间产物，
+读取 `.workflow-meta/mfq/` 目录下的所有中间产物，
 渲染输出两个最终交付文档：`xx特性测试方案.md` 和 `xx特性测试用例.md`。
 
 ## 适用范围
 
 - 适用阶段：MFQ 的 delivery 阶段
-- 输入：`.mfq-work/` 下所有中间产物
-- 输出：`.mfq-work/delivery/` 目录下的交付文档
+- 输入：`.workflow-meta/mfq/` 下所有中间产物
+- 输出：`.workflow-meta/mfq/delivery/` 目录下的交付文档
 
 ## 前置条件
 
@@ -159,4 +159,4 @@ status: active
 - [ ] `<特性名>特性测试用例.md` 按五级目录组织
 - [ ] 每个逻辑用例包含完整四步设计过程
 - [ ] 物理用例含优先级和测试类型，不含自动化字段
-- [ ] 交付文档写入 `.mfq-work/delivery/`
+- [ ] 交付文档写入 `.workflow-meta/mfq/delivery/`

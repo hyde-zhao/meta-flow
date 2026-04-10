@@ -32,8 +32,8 @@ C-Combination 是 PPDCS 五特征之一：
 ## 适用范围
 
 - 适用阶段：MFQ 的 design 阶段
-- 输入：`.mfq-work/integration/design-plan.md`（PPDCS=C-Combination 的 LC）
-- 输出：`.mfq-work/design/<module>/<sub-module>/` 目录下的设计文件
+- 输入：`.workflow-meta/mfq/integration/design-plan.md`（PPDCS=C-Combination 的 LC）
+- 输出：`.workflow-meta/mfq/design/<module>/<sub-module>/` 目录下的设计文件
 
 ## 前置条件
 
@@ -125,7 +125,7 @@ C-Combination 是 PPDCS 五特征之一：
 ## 输出目录结构
 
 ```
-.mfq-work/design/<module>/<sub-module>/
+.workflow-meta/mfq/design/<module>/<sub-module>/
 ├── ppdcs-profile.md      # C-Combination 特征详情
 ├── design-process.md      # 四步设计过程（含因子表、组合表）
 └── physical-cases.md      # 物理用例列表
@@ -175,4 +175,4 @@ C-Combination 是 PPDCS 五特征之一：
 - [ ] Pairwise 覆盖性：任意两因子取值对至少出现 1 次
 - [ ] 物理用例包含优先级和测试类型
 - [ ] `ppdcs-profile.md` 已创建
-- [ ] 设计过程文档写入 `.mfq-work/design/<module>/<sub>/`
+- [ ] 设计过程文档写入 `.workflow-meta/mfq/design/<module>/<sub>/`

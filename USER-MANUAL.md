@@ -120,7 +120,7 @@ tools:
 ### 3.1 Step 1 — 特性文件解析（feature-parser）
 
 **输入**：特性需求文件  
-**输出**：`.mfq-work/feature-input/raw-requirements.md` + `directory-structure.md`  
+**输出**：`.workflow-meta/mfq/feature-input/raw-requirements.md` + `directory-structure.md`
 **确认点**：目录结构
 
 提取的需求字段：
@@ -132,7 +132,7 @@ tools:
 ### 3.2 Step 2 — 场景分析（scenario-discovery）
 
 **输入**：特性名称  
-**输出**：`.mfq-work/scenarios/confirmed-scenarios.md`  
+**输出**：`.workflow-meta/mfq/scenarios/confirmed-scenarios.md`
 **确认点**：场景列表
 
 搜索策略优先级：
@@ -143,7 +143,7 @@ tools:
 ### 3.3 Step 3 — M 分析（m-analyzer）
 
 **输入**：需求 + 目录 + 场景  
-**输出**：`.mfq-work/m-analysis/test-points.md`
+**输出**：`.workflow-meta/mfq/m-analysis/test-points.md`
 
 按五级目录逐模块分析，每个功能点生成测试点。测试点标注：
 - TP-ID、模块、子模块、描述、关联需求、关联场景、来源、类型
@@ -151,7 +151,7 @@ tools:
 ### 3.4 Step 4 — F 分析（f-analyzer）
 
 **输入**：M 分析结果 + 耦合矩阵 Excel  
-**输出**：`.mfq-work/f-analysis/` 目录
+**输出**：`.workflow-meta/mfq/f-analysis/` 目录
 
 三源耦合分析：
 
@@ -165,10 +165,10 @@ Excel 工具使用方法：
 
 ```bash
 # 读取耦合矩阵
-python scripts/excel_coupling_tool.py read "耦合矩阵.xlsx" --output ".mfq-work/f-analysis/coupling-graph.json"
+python scripts/excel_coupling_tool.py read "耦合矩阵.xlsx" --output ".workflow-meta/mfq/f-analysis/coupling-graph.json"
 
 # 查询某特性的耦合点
-python scripts/excel_coupling_tool.py query ".mfq-work/f-analysis/coupling-graph.json" --feature "日志"
+python scripts/excel_coupling_tool.py query ".workflow-meta/mfq/f-analysis/coupling-graph.json" --feature "日志"
 
 # 回写新耦合点
 python scripts/excel_coupling_tool.py write "耦合矩阵.xlsx" --source "new-coupling.json"
@@ -177,7 +177,7 @@ python scripts/excel_coupling_tool.py write "耦合矩阵.xlsx" --source "new-co
 ### 3.5 Step 5 — Q 分析（q-analyzer）
 
 **输入**：M 分析结果 + 场景  
-**输出**：`.mfq-work/q-analysis/quality-test-points.md`
+**输出**：`.workflow-meta/mfq/q-analysis/quality-test-points.md`
 
 HTSM 维度评估：
 
@@ -192,7 +192,7 @@ HTSM 维度评估：
 ### 3.6 Step 6 — 测试点整合（test-point-integrator）
 
 **输入**：M + F + Q 测试点  
-**输出**：`.mfq-work/integration/` 目录
+**输出**：`.workflow-meta/mfq/integration/` 目录
 
 核心操作：
 1. 按模块归集所有测试点
@@ -208,7 +208,7 @@ HTSM 维度评估：
 ### 3.7 Step 7 — 设计计划（design-planner）
 
 **输入**：逻辑用例列表 + PPDCS 特征标注  
-**输出**：`.mfq-work/integration/design-plan.md`  
+**输出**：`.workflow-meta/mfq/integration/design-plan.md`
 **确认点**：每个逻辑用例的 PPDCS 设计方法
 
 PPDCS 五特征匹配规则：
@@ -227,7 +227,7 @@ PPDCS 五特征匹配规则：
 
 ### 3.9 Step 9 — 覆盖验证（coverage-verifier）
 
-**输出**：`.mfq-work/coverage/` 目录  
+**输出**：`.workflow-meta/mfq/coverage/` 目录
 **确认点**：覆盖率报告
 
 | 检查维度 | 目标 |
@@ -237,7 +237,7 @@ PPDCS 五特征匹配规则：
 
 ### 3.10 Step 10 — 交付（deliverable-renderer）
 
-**输出**：`.mfq-work/delivery/` 目录
+**输出**：`.workflow-meta/mfq/delivery/` 目录
 
 | 文档 | 内容 |
 |------|------|
@@ -453,18 +453,18 @@ pip install openpyxl
 2. 查看覆盖报告中的 "补充建议"
 3. 回到对应分析阶段补充测试点
 
-### 8.5 `.mfq-work/` 目录异常
+### 8.5 `.workflow-meta/mfq/` 目录异常
 
 **症状**：分析中断后重新启动报错
 
 **排查**：
-1. 检查 `.mfq-work/STATE.yaml` 中的当前步骤
+1. 检查 `.workflow-meta/mfq/STATE.yaml` 中的当前步骤
 2. 工具支持从中断点恢复
 
 **重置**：
 ```bash
 # 完全重置（删除所有中间产物）
-rm -rf .mfq-work/
+rm -rf .workflow-meta/mfq/
 ```
 
 ### 8.6 文件转换失败

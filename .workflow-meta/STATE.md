@@ -2,11 +2,11 @@
 project_id: "MFQ-001"
 workflow_mode: "complex"
 current_phase: "documentation"
-current_agent: "meta-doc"
-iteration: 12
+current_agent: "meta-po"
+iteration: 13
 blocked: false
-last_action: "CR-001 PPDCS 集成 — 8个受影响 Story 实现完成（v2）"
-next_action: "meta-doc 更新文档 → 终验检查点④"
+last_action: "v2.1 整改：meta-se/meta-dev 状态机增强 + 工作目录迁移 .mfq-work → .workflow-meta/mfq/"
+next_action: "终验检查点④"
 checkpoints:
   requirement_confirmed: true
   solution_selected: true
@@ -82,7 +82,11 @@ history:
     action: "CR-001 v2 实现完成：8 Stories（STORY-01,04,09,10→combination,11→process,12→state 修改 + STORY-17 parameter-design,STORY-18 data-design 新增）。Agent 升级到 12步+16 Skills+PPDCS。旧 Skills 删除。README+Copilot入口已更新。"
     agent: "meta-dev"
     timestamp: "2026-04-10T03:30:00Z"
-last_updated: "2026-04-10T03:30:00Z"
+  - phase: "documentation"
+    action: "v2.1 整改：(1) meta-se 增加状态机门控（problem-definition→solution-design→waiting→story-planning→blocked）+ 统一系统设计原则（Prompt/Skill/Tool/Doc 四层）+ Skill 编排合约；(2) meta-dev 增加状态机（ready-check→implementing→self-review→handoff→blocked）+ Tool/MCP 接口约束 + 自检与交接摘要规范；(3) 工作目录迁移 .mfq-work/ → .workflow-meta/mfq/（涉及 Agent+16 Skills+Python 工具+全部设计文档）；(4) Copilot CLI 入口 meta-se.agent.md/meta-dev.agent.md 同步重写。"
+    agent: "meta-po"
+    timestamp: "2026-04-10T04:17:00Z"
+last_updated: "2026-04-10T04:17:00Z"
 ---
 
 <!--

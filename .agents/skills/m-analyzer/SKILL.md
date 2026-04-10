@@ -40,14 +40,14 @@ M 分析即 MFQ 框架中的 **MD（Model-based Discrete Function）**：
 ## 适用范围
 
 - 适用阶段：MFQ 分析的 m-analysis 阶段
-- 输入：`.mfq-work/feature-input/` + `.mfq-work/scenarios/`
-- 输出：`.mfq-work/m-analysis/test-points.md` + `.mfq-work/m-analysis/ppdcs-annotation.md`
+- 输入：`.workflow-meta/mfq/feature-input/` + `.workflow-meta/mfq/scenarios/`
+- 输出：`.workflow-meta/mfq/m-analysis/test-points.md` + `.workflow-meta/mfq/m-analysis/ppdcs-annotation.md`
 
 ## 前置条件
 
-- [ ] `.mfq-work/feature-input/raw-requirements.md` 存在
-- [ ] `.mfq-work/feature-input/directory-structure.md` 存在（用户已确认）
-- [ ] `.mfq-work/scenarios/confirmed-scenarios.md` 存在（用户已确认）
+- [ ] `.workflow-meta/mfq/feature-input/raw-requirements.md` 存在
+- [ ] `.workflow-meta/mfq/feature-input/directory-structure.md` 存在（用户已确认）
+- [ ] `.workflow-meta/mfq/scenarios/confirmed-scenarios.md` 存在（用户已确认）
 
 ## 执行流程
 
@@ -114,9 +114,9 @@ M 分析即 MFQ 框架中的 **MD（Model-based Discrete Function）**：
 
 写入两个文件：
 
-**`.mfq-work/m-analysis/test-points.md`**（与 v1 格式一致）
+**`.workflow-meta/mfq/m-analysis/test-points.md`**（与 v1 格式一致）
 
-**`.mfq-work/m-analysis/ppdcs-annotation.md`**（v2 新增）：
+**`.workflow-meta/mfq/m-analysis/ppdcs-annotation.md`**（v2 新增）：
 
 ```markdown
 # <特性名> — PPDCS 特征标注表
@@ -165,4 +165,4 @@ M 分析即 MFQ 框架中的 **MD（Model-based Discrete Function）**：
 - [ ] **每个五级目录节点均有 PPDCS 主特征标注和判定依据**
 - [ ] 需求覆盖初检已执行，未覆盖项已标记
 - [ ] 输出 `test-points.md` 和 `ppdcs-annotation.md`
-- [ ] `.mfq-work/STATE.yaml` 更新为 m-analysis 完成
+- [ ] `.workflow-meta/mfq/STATE.yaml` 更新为 m-analysis 完成

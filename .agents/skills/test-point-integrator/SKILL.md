@@ -19,8 +19,8 @@ status: active
 ## 适用范围
 
 - 适用阶段：MFQ 分析的 integration 阶段
-- 输入：`.mfq-work/m-analysis/` + `.mfq-work/f-analysis/` + `.mfq-work/q-analysis/`
-- 输出：`.mfq-work/integration/` 目录下多个文件
+- 输入：`.workflow-meta/mfq/m-analysis/` + `.workflow-meta/mfq/f-analysis/` + `.workflow-meta/mfq/q-analysis/`
+- 输出：`.workflow-meta/mfq/integration/` 目录下多个文件
 
 ## 前置条件
 
@@ -104,7 +104,7 @@ status: active
 
 ### 步骤 6：输出
 
-写入 `.mfq-work/integration/` 目录：
+写入 `.workflow-meta/mfq/integration/` 目录：
 
 | 文件 | 内容 |
 |------|------|
@@ -151,4 +151,4 @@ status: active
 - [ ] 逻辑用例合并后无重复测试逻辑
 - [ ] 每个逻辑用例至少 1 组测试数据
 - [ ] 追踪矩阵 SR→TP→LC→TD 链路完整
-- [ ] 输出文件写入 `.mfq-work/integration/`
+- [ ] 输出文件写入 `.workflow-meta/mfq/integration/`

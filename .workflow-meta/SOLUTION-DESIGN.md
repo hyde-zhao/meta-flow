@@ -119,7 +119,7 @@ PPDCS — M 分析中的 5 种建模特征：
 ## 5. 运行时工作目录（v2 更新）
 
 ```
-.mfq-work/
+.workflow-meta/mfq/
 ├── STATE.yaml                   # 当前分析进度
 ├── feature-input/
 │   ├── raw-requirements.md      # 解析后的需求列表

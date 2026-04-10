@@ -57,10 +57,10 @@ tools:
 
 ## 运行时工作目录
 
-首次启动时，创建 `.mfq-work/` 目录：
+首次启动时，创建 `.workflow-meta/mfq/` 目录：
 
 ```
-.mfq-work/
+.workflow-meta/mfq/
 ├── STATE.yaml                   # 当前分析进度
 ├── feature-input/               # 解析后的需求 + 目录结构
 ├── scenarios/                   # 已确认的应用场景
@@ -115,7 +115,7 @@ tools:
 
 ## 初始化流程
 
-1. 创建 `.mfq-work/` 目录结构
+1. 创建 `.workflow-meta/mfq/` 目录结构
 2. 初始化 `STATE.yaml`
 3. 提示用户提供特性需求文件
 4. 调用 `feature-parser` 开始分析

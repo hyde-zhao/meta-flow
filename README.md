@@ -165,10 +165,10 @@ scripts/*.py
 
 ## 运行时目录
 
-工具运行时在 `.mfq-work/` 目录存储中间产物：
+工具运行时在 `.workflow-meta/mfq/` 目录存储中间产物：
 
 ```
-.mfq-work/
+.workflow-meta/mfq/
 ├── STATE.yaml              # 分析进度
 ├── feature-input/           # 需求 + 目录结构
 ├── scenarios/               # 应用场景

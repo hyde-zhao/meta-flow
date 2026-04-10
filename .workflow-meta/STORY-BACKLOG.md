@@ -65,7 +65,7 @@ confirmed_at: "2026-04-10T02:50:00Z"
 **新增任务**：
 - [ ] TASK-04-06: 实现 PPDCS 五特征识别规则（P-Process / P-Parameter / D-Data / C-Combination / S-State）
 - [ ] TASK-04-07: 实现特征区分规则嵌入（Process vs State, Parameter vs Data, Data vs Combination）
-- [ ] TASK-04-08: 实现 PPDCS 标注输出格式（`.mfq-work/m-analysis/ppdcs-annotation.md`）
+- [ ] TASK-04-08: 实现 PPDCS 标注输出格式（`.workflow-meta/mfq/m-analysis/ppdcs-annotation.md`）
 - [ ] TASK-04-09: 实现混合特征处理（主特征 + 辅特征标注）
 
 **完成准则增量**：
@@ -87,7 +87,7 @@ confirmed_at: "2026-04-10T02:50:00Z"
   - C-Combination → combination-design
   - D-Data → data-design
   - 混合特征 → 主方法 + 辅方法
-- [ ] TASK-09-05: 实现 PPDCS 标注读取（从 `.mfq-work/m-analysis/ppdcs-annotation.md`）
+- [ ] TASK-09-05: 实现 PPDCS 标注读取（从 `.workflow-meta/mfq/m-analysis/ppdcs-annotation.md`）
 - [ ] TASK-09-06: 实现设计计划表新增 PPDCS 特征列
 
 **完成准则增量**：

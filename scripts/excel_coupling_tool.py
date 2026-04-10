@@ -290,7 +290,7 @@ def main():
     # read 子命令
     read_parser = subparsers.add_parser("read", help="读取 Excel 耦合矩阵")
     read_parser.add_argument("excel_path", help="Excel 文件路径")
-    read_parser.add_argument("--output", "-o", default=None, help="输出图模型文件路径（默认 .mfq-work/f-analysis/coupling-graph.json）")
+    read_parser.add_argument("--output", "-o", default=None, help="输出图模型文件路径（默认 .workflow-meta/mfq/f-analysis/coupling-graph.json）")
 
     # write 子命令
     write_parser = subparsers.add_parser("write", help="将新耦合点写回 Excel")
@@ -306,7 +306,7 @@ def main():
 
     if args.command == "read":
         graph = read_coupling_matrix(args.excel_path)
-        output = args.output or ".mfq-work/f-analysis/coupling-graph.json"
+        output = args.output or ".workflow-meta/mfq/f-analysis/coupling-graph.json"
         os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
         save_graph(graph, output)
 

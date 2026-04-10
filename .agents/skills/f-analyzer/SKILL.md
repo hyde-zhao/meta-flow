@@ -18,12 +18,12 @@ status: active
 ## 适用范围
 
 - 适用阶段：MFQ 分析的 f-analysis 阶段
-- 输入：`.mfq-work/m-analysis/` + 耦合矩阵 Excel + 场景文档
-- 输出：`.mfq-work/f-analysis/` 目录下多个文件
+- 输入：`.workflow-meta/mfq/m-analysis/` + 耦合矩阵 Excel + 场景文档
+- 输出：`.workflow-meta/mfq/f-analysis/` 目录下多个文件
 
 ## 前置条件
 
-- [ ] M 分析已完成（`.mfq-work/m-analysis/test-points.md` 存在）
+- [ ] M 分析已完成（`.workflow-meta/mfq/m-analysis/test-points.md` 存在）
 - [ ] `scripts/excel_coupling_tool.py` 可用
 
 ## 三源数据模型
@@ -33,20 +33,20 @@ status: active
 调用 Excel 工具读取耦合矩阵：
 
 ```bash
-python scripts/excel_coupling_tool.py read "<excel_path>" --output ".mfq-work/f-analysis/coupling-graph.json"
+python scripts/excel_coupling_tool.py read "<excel_path>" --output ".workflow-meta/mfq/f-analysis/coupling-graph.json"
 ```
 
 从中提取当前特性相关的耦合关系：
 
 ```bash
-python scripts/excel_coupling_tool.py query ".mfq-work/f-analysis/coupling-graph.json" --feature "<特性名>"
+python scripts/excel_coupling_tool.py query ".workflow-meta/mfq/f-analysis/coupling-graph.json" --feature "<特性名>"
 ```
 
 ### 源 2：场景耦合推理
 
 从已确认的应用场景中推理功能交互：
 
-1. 读取 `.mfq-work/scenarios/confirmed-scenarios.md`
+1. 读取 `.workflow-meta/mfq/scenarios/confirmed-scenarios.md`
 2. 分析每个场景涉及的功能点组合
 3. 如果一个场景跨越多个模块/特性，则这些模块/特性之间存在场景耦合
 
@@ -91,7 +91,7 @@ python scripts/excel_coupling_tool.py query ".mfq-work/f-analysis/coupling-graph
 2. 相同功能点对的多源耦合合并，保留所有来源标注
 3. 耦合强度取最高值（strong > normal > weak）
 
-输出合并后的图模型到 `.mfq-work/f-analysis/coupling-graph.yaml`
+输出合并后的图模型到 `.workflow-meta/mfq/f-analysis/coupling-graph.yaml`
 
 ### 步骤 5：候选耦合点确认
 
@@ -125,7 +125,7 @@ python scripts/excel_coupling_tool.py query ".mfq-work/f-analysis/coupling-graph
 如果用户确认了新耦合点并同意回写：
 
 ```bash
-python scripts/excel_coupling_tool.py write "<excel_path>" --source ".mfq-work/f-analysis/new-coupling-points.json"
+python scripts/excel_coupling_tool.py write "<excel_path>" --source ".workflow-meta/mfq/f-analysis/new-coupling-points.json"
 ```
 
 ## 输出文件
@@ -167,4 +167,4 @@ python scripts/excel_coupling_tool.py write "<excel_path>" --source ".mfq-work/f
 - [ ] 三源合并后无重复耦合边
 - [ ] 新耦合点已呈现给用户并获得确认
 - [ ] 耦合测试点包含完整标注（TP-ID/描述/来源/强度）
-- [ ] 输出文件写入 `.mfq-work/f-analysis/`
+- [ ] 输出文件写入 `.workflow-meta/mfq/f-analysis/`

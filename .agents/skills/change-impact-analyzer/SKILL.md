@@ -21,13 +21,13 @@ status: active
 ## 适用范围
 
 - 适用阶段：MFQ 扩展分支（已完成首次用例设计后）
-- 输入：变更需求描述 + 已有 `.mfq-work/` 全量数据
+- 输入：变更需求描述 + 已有 `.workflow-meta/mfq/` 全量数据
 - 输出：增量修改的用例 + 更新的覆盖报告
 
 ## 前置条件
 
 - [ ] 首次 MFQ 分析和用例设计已完成
-- [ ] 交付物已生成（`.mfq-work/delivery/` 存在）
+- [ ] 交付物已生成（`.workflow-meta/mfq/delivery/` 存在）
 
 ## 执行流程
 
@@ -99,7 +99,7 @@ status: active
 
 ## 变更审计记录
 
-每次变更在 `.mfq-work/` 中记录：
+每次变更在 `.workflow-meta/mfq/` 中记录：
 
 ```markdown
 ## 变更记录

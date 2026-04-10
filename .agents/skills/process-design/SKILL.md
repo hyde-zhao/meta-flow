@@ -29,8 +29,8 @@ P-Process 是 PPDCS 五特征之一：
 ## 适用范围
 
 - 适用阶段：MFQ 的 design 阶段
-- 输入：`.mfq-work/integration/design-plan.md`（PPDCS=P-Process 的 LC）
-- 输出：`.mfq-work/design/<module>/<sub-module>/` 目录下的设计文件
+- 输入：`.workflow-meta/mfq/integration/design-plan.md`（PPDCS=P-Process 的 LC）
+- 输出：`.workflow-meta/mfq/design/<module>/<sub-module>/` 目录下的设计文件
 
 ## 前置条件
 
@@ -133,7 +133,7 @@ flowchart TD
 ## 输出目录结构
 
 ```
-.mfq-work/design/<module>/<sub-module>/
+.workflow-meta/mfq/design/<module>/<sub-module>/
 ├── ppdcs-profile.md      # P-Process 特征详情
 ├── design-process.md      # 四步设计过程（含流程图、路径枚举、路径数据）
 └── physical-cases.md      # 物理用例列表
@@ -183,4 +183,4 @@ flowchart TD
 - [ ] 每条路径有具体的测试数据
 - [ ] 物理用例包含优先级和测试类型
 - [ ] `ppdcs-profile.md` 已创建
-- [ ] 设计过程文档写入 `.mfq-work/design/<module>/<sub>/`
+- [ ] 设计过程文档写入 `.workflow-meta/mfq/design/<module>/<sub>/`
