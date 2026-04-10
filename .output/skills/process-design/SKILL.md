@@ -145,7 +145,7 @@ flowchart TD
 # PPDCS 特征详情
 
 - **主特征**：P-Process
-- **判定依据**：<从 ppdcs-annotation.md 引用>
+- **判定依据**：<从 .output/m-analysis/ppdcs-annotation.md 引用>
 - **辅特征**：<如有>
 - **流程节点数**：N
 - **判断分支数**：M

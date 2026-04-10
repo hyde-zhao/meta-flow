@@ -36,7 +36,7 @@ status: active
 （从 Web 搜索/MCP/用户资料获取的特性技术描述）
 
 ## 2. 应用场景分析
-（从 confirmed-scenarios.md 渲染）
+（从 .output/scenarios/confirmed-scenarios.md 渲染）
 
 ### 2.1 场景列表
 | 编号 | 场景名称 | 分类 | 描述 |
@@ -45,7 +45,7 @@ status: active
 （每个场景的详细描述）
 
 ## 3. 需求分析
-（从 raw-requirements.md 渲染）
+（从 .output/feature-input/raw-requirements.md 渲染）
 
 ### 3.1 系统需求列表
 | SR编号 | 所属模块 | SR名称 | 描述 |
@@ -54,7 +54,7 @@ status: active
 （三~五级目录树）
 
 ## 4. M 分析 — 功能测试点
-（从 m-analysis/test-points.md 渲染）
+（从 .output/m-analysis/test-points.md 渲染）
 
 ### 4.1 测试点按模块分布
 （按四/五级目录组织的测试点表）
@@ -94,7 +94,7 @@ status: active
 # <特性名> 特性测试用例
 
 ## 测试点分析表
-（汇总 all-test-points.md 的内容，含覆盖判定）
+（汇总 .output/integration/all-test-points.md 的内容，含覆盖判定）
 
 | 编号 | 所属模块 | 子模块 | 描述 | 关联SR | 覆盖判定 | 归属LC |
 |------|---------|--------|------|--------|---------|--------|
@@ -110,10 +110,10 @@ status: active
 ##### 设计方法：数据组合法
 
 **第一步：等价类划分表**
-（从 design/<module>/<sub>/design-process.md 提取）
+（从 .output/design/<module>/<sub>/design-process.md 提取）
 
 **第二步：数据组合分析表**
-（从 design/<module>/<sub>/design-process.md 提取）
+（从 .output/design/<module>/<sub>/design-process.md 提取）
 
 **第三步：逻辑用例设计**
 （逻辑用例详情）

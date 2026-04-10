@@ -45,7 +45,7 @@ status: active
 ### 主规则：特征驱动匹配
 
 ```
-逻辑用例 LC → 所属子模块 → 查 ppdcs-annotation.md 获取 PPDCS 主特征
+逻辑用例 LC → 所属子模块 → 查 .output/m-analysis/ppdcs-annotation.md 获取 PPDCS 主特征
   │
   ├── P-Process   → process-design（流程图法）
   ├── P-Parameter → parameter-design（判定表法）
@@ -83,8 +83,8 @@ status: active
 
 ### 步骤 1：加载输入
 
-1. 读取 `logic-cases.md` 获取逻辑用例列表
-2. 读取 `ppdcs-annotation.md` 获取 PPDCS 特征标注
+1. 读取 `.output/integration/logic-cases.md` 获取逻辑用例列表
+2. 读取 `.output/m-analysis/ppdcs-annotation.md` 获取 PPDCS 特征标注
 3. 建立 LC → 子模块 → PPDCS 特征的映射
 
 ### 步骤 2：逐条匹配
@@ -126,7 +126,7 @@ status: active
 ## 自检项
 - [ ] 每个 LC 都有推荐方法
 - [ ] 直接设计法占比 < 5%
-- [ ] PPDCS 特征与 ppdcs-annotation.md 一致
+- [ ] PPDCS 特征与 `.output/m-analysis/ppdcs-annotation.md` 一致
 ```
 
 ### 步骤 5：用户确认

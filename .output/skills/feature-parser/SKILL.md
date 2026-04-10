@@ -132,6 +132,7 @@ status: active
 
 ## Gotchas
 
+- **⚠️ 输出路径必须是 `.output/feature-input/`**，不是 `feature-input/`。缺少 `.output/` 前缀会导致文件写入项目根目录，这是错误的
 - Excel 转换后可能出现 `NaN`、`Unnamed` 等伪值，需清洗
 - 合并单元格转换后模块归属可能丢失，需从上下文推断
 - 部分需求文件没有明确的模块分类，需通过功能语义聚合

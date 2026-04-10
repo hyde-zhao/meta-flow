@@ -132,10 +132,10 @@ python scripts/excel_coupling_tool.py write "<excel_path>" --source ".output/f-a
 
 | 文件 | 说明 |
 |------|------|
-| `coupling-graph.json` | 完整图模型（所有源合并后） |
-| `matrix-baseline.yaml` | Excel 矩阵基线摘要 |
-| `coupling-test-points.md` | F 分析产出的耦合测试点 |
-| `new-coupling-points.json` | 新发现的耦合点（用于回写） |
+| `.output/f-analysis/coupling-graph.json` | 完整图模型（所有源合并后） |
+| `.output/f-analysis/matrix-baseline.yaml` | Excel 矩阵基线摘要 |
+| `.output/f-analysis/coupling-test-points.md` | F 分析产出的耦合测试点 |
+| `.output/f-analysis/new-coupling-points.json` | 新发现的耦合点（用于回写） |
 
 ## 耦合分析维度
 

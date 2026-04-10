@@ -24,9 +24,9 @@ status: active
 
 ## 前置条件
 
-- [ ] M 分析完成（`m-analysis/test-points.md` 存在）
-- [ ] F 分析完成（`f-analysis/coupling-test-points.md` 存在）
-- [ ] Q 分析完成（`q-analysis/quality-test-points.md` 存在）
+- [ ] M 分析完成（`.output/m-analysis/test-points.md` 存在）
+- [ ] F 分析完成（`.output/f-analysis/coupling-test-points.md` 存在）
+- [ ] Q 分析完成（`.output/q-analysis/quality-test-points.md` 存在）
 
 ## 执行流程
 

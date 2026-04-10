@@ -53,9 +53,9 @@ M 分析即 MFQ 框架中的 **MD（Model-based Discrete Function）**：
 
 ### 步骤 1：加载输入
 
-1. 读取 `raw-requirements.md` 获取需求条目列表
-2. 读取 `directory-structure.md` 获取目录层级
-3. 读取 `confirmed-scenarios.md` 获取应用场景
+1. 读取 `.output/feature-input/raw-requirements.md` 获取需求条目列表
+2. 读取 `.output/feature-input/directory-structure.md` 获取目录层级
+3. 读取 `.output/scenarios/confirmed-scenarios.md` 获取应用场景
 
 ### 步骤 2：逐模块功能分析
 

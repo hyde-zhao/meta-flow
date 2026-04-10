@@ -30,8 +30,15 @@
 
 | 目录 | 用途 | Git 跟踪 |
 |------|------|----------|
-| `.input/` | 用户放置特性需求文件、耦合矩阵 Excel 等输入材料 | ❌ gitignored |
+| `.input/` | 用户放置特性需求文件、耦合矩阵 Excel 等输入材料（只读） | ❌ gitignored |
 | `.output/` | 工具生成的分析中间产物和最终交付物 | ❌ gitignored |
+
+### ⚠️ 路径规则（CRITICAL）
+
+- **所有生成文件必须写入 `.output/` 子目录**，禁止在项目根目录直接创建 `feature-input/`、`scenarios/`、`m-analysis/` 等目录
+- ✅ 正确：`.output/feature-input/raw-requirements.md`
+- ❌ 错误：`feature-input/raw-requirements.md`
+- 读 `.input/`，写 `.output/`，永远不在项目根目录创建分析产物
 
 ## 权限
 

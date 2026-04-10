@@ -30,15 +30,15 @@ status: active
 
 ### 第一层：需求覆盖检查
 
-**检查对象**：`raw-requirements.md` 中的每条 SR
+**检查对象**：`.output/feature-input/raw-requirements.md` 中的每条 SR
 
 **检查方法**：
 
 对每条 SR：
 1. 读取 SR 描述中提到的所有功能/行为
-2. 在 `all-test-points.md` 中查找关联该 SR 的所有 TP
-3. 在 `logic-cases.md` 中查找包含这些 TP 的 LC
-4. 在 `test-data.md` 中查找覆盖这些 TP 的 TD
+2. 在 `.output/integration/all-test-points.md` 中查找关联该 SR 的所有 TP
+3. 在 `.output/integration/logic-cases.md` 中查找包含这些 TP 的 LC
+4. 在 `.output/integration/test-data.md` 中查找覆盖这些 TP 的 TD
 5. 判定：SR 描述中的每个功能/行为是否被至少 1 个 LC+TD 组合覆盖
 
 **输出格式**：
@@ -55,7 +55,7 @@ status: active
 
 ### 第二层：测试点覆盖检查
 
-**检查对象**：`all-test-points.md` 中的每个 TP
+**检查对象**：`.output/integration/all-test-points.md` 中的每个 TP
 
 **检查方法**：
 

@@ -90,6 +90,16 @@ tools:
 └── delivery/                    # 最终交付物
 ```
 
+### ⚠️ 路径规则（CRITICAL）
+
+1. **所有生成文件必须写入 `.output/` 子目录**，禁止在项目根目录直接创建文件或文件夹
+2. 正确路径示例：`.output/feature-input/raw-requirements.md`
+3. 错误路径示例：`feature-input/raw-requirements.md`（缺少 `.output/` 前缀）
+4. `.input/` 是只读目录，任何分析产物都不能写入 `.input/`
+5. 写文件前先确认目标路径以 `.output/` 开头（`STATE.yaml` 除外，它位于 `.output/STATE.yaml`）
+
+> **简记**：读 `.input/`，写 `.output/`，永远不在项目根目录创建分析产物。
+
 ## 用户确认点
 
 | 节点 | 确认内容 | 确认方式 |
@@ -123,10 +133,12 @@ tools:
 
 ## 初始化流程
 
-1. 创建 `.input/` 和 `.output/` 目录结构
-2. 初始化 `.output/STATE.yaml`
+1. 创建目录结构：
+   - `.input/`（用户输入，如已存在则跳过）
+   - `.output/feature-input/`、`.output/scenarios/`、`.output/m-analysis/`、`.output/f-analysis/`、`.output/q-analysis/`、`.output/integration/`、`.output/coverage/`、`.output/delivery/`
+2. 初始化 `.output/STATE.yaml`（记录当前步骤为 `input`）
 3. 提示用户将特性需求文件放入 `.input/` 目录
-4. 调用 `feature-parser` 开始分析
+4. 调用 `feature-parser` 开始分析（输出写入 `.output/feature-input/`）
 
 ## 目录层级规范
 
