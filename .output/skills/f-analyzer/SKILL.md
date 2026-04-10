@@ -95,7 +95,7 @@ python scripts/excel_coupling_tool.py query ".output/f-analysis/coupling-graph.j
 
 ### 步骤 5：候选耦合点确认
 
-将新发现的耦合点（不在矩阵基线中的）呈现给用户确认：
+将新发现的耦合点（不在矩阵基线中的）呈现给用户，使用 `ask_user` 工具发起结构化确认：
 
 ```
 ## 新发现的耦合关系
@@ -104,9 +104,12 @@ python scripts/excel_coupling_tool.py query ".output/f-analysis/coupling-graph.j
 |---|------------|---------|---------|------|------|
 | 1 | ... | ... | 场景耦合 | SCN-001 | ... |
 | 2 | ... | ... | 代码依赖 | 用户输入 | ... |
-
-请确认以上耦合关系是否成立？确认后可回写到耦合矩阵。
 ```
+
+**ask_user 选项**：
+1. ✅ 全部确认成立 — 所有新耦合关系有效，继续生成耦合测试点，并询问是否回写矩阵
+2. ✏️ 部分确认 — 请指出不成立的耦合关系编号，其余确认成立
+3. ❌ 全部不成立 — 新发现的耦合关系均不成立，跳过回写，仅使用基线矩阵
 
 ### 步骤 6：耦合测试点生成
 
@@ -122,7 +125,13 @@ python scripts/excel_coupling_tool.py query ".output/f-analysis/coupling-graph.j
 
 ### 步骤 7：可选回写
 
-如果用户确认了新耦合点并同意回写：
+若步骤 5 中用户选择了"全部确认成立"或"部分确认"，使用 `ask_user` 询问是否回写矩阵：
+
+**ask_user 选项**：
+1. ✅ 同意回写 — 将已确认的新耦合点写入 Excel 耦合矩阵
+2. ❌ 暂不回写 — 本次仅用于测试点生成，不更新矩阵基线
+
+若用户同意回写，执行：
 
 ```bash
 python scripts/excel_coupling_tool.py write "<excel_path>" --source ".output/f-analysis/new-coupling-points.json"
