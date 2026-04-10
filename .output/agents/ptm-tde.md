@@ -57,46 +57,61 @@ tools:
 
 ## 运行时工作目录
 
-首次启动时，创建 `.input/` 和 `.output/` 两个工作目录：
+首次启动时，在当前工作目录（cwd）下创建 `.input/` 和 `.output/` 两个子目录：
 
 - **`.input/`** — 用户输入目录：存放特性需求文件、耦合矩阵 Excel、参考文档等原始材料
-- **`.output/`** — 工具输出目录：存放所有分析中间产物和最终交付物
+- **`.output/`** — 工具输出目录：存放所有分析中间产物和最终交付物（是 cwd 的子目录，不是 cwd 本身）
 
 ```
-.input/                          # 用户放置原始输入材料
-├── <特性需求文件>.md            # 特性需求文档
-├── <耦合矩阵>.xlsx             # 耦合矩阵 Excel（含批注）
-└── <其他参考文档>/              # 其他参考资料
-
-.output/                         # ptm-tde 生成的所有产物
-├── STATE.yaml                   # 当前分析进度
-├── feature-input/               # 解析后的需求 + 目录结构
-├── scenarios/                   # 已确认的应用场景
-├── m-analysis/
-│   ├── test-points.md           # 测试点清单
-│   └── ppdcs-annotation.md      # PPDCS 特征标注表
-├── f-analysis/                  # 耦合矩阵基线 + 图模型 + 耦合测试点
-├── q-analysis/                  # 质量属性测试点
-├── integration/
-│   ├── all-test-points.md       # M+F+Q 整合测试点
-│   ├── logic-cases.md           # 逻辑用例
-│   ├── test-data.md             # 测试数据
-│   └── design-plan.md           # PPDCS 匹配设计计划（含特征列）
-├── design/<module>/<sub>/
-│   ├── ppdcs-profile.md         # 子模块 PPDCS 特征详情
-│   ├── design-process.md        # 四步设计过程
-│   └── physical-cases.md        # 物理用例
-├── coverage/                    # 覆盖率报告
-└── delivery/                    # 最终交付物
+<cwd>/                               # 项目根目录（你的工作目录）
+├── .input/                          # 用户放置原始输入材料
+│   ├── <特性需求文件>.md            # 特性需求文档
+│   ├── <耦合矩阵>.xlsx             # 耦合矩阵 Excel（含批注）
+│   └── <其他参考文档>/              # 其他参考资料
+│
+├── .output/                         # ptm-tde 生成的所有产物（cwd 的子目录）
+│   ├── STATE.yaml                   # 当前分析进度
+│   ├── feature-input/               # 解析后的需求 + 目录结构
+│   ├── scenarios/                   # 已确认的应用场景
+│   ├── m-analysis/
+│   │   ├── test-points.md           # 测试点清单
+│   │   └── ppdcs-annotation.md      # PPDCS 特征标注表
+│   ├── f-analysis/                  # 耦合矩阵基线 + 图模型 + 耦合测试点
+│   ├── q-analysis/                  # 质量属性测试点
+│   ├── integration/
+│   │   ├── all-test-points.md       # M+F+Q 整合测试点
+│   │   ├── logic-cases.md           # 逻辑用例
+│   │   ├── test-data.md             # 测试数据
+│   │   └── design-plan.md           # PPDCS 匹配设计计划（含特征列）
+│   ├── design/<module>/<sub>/
+│   │   ├── ppdcs-profile.md         # 子模块 PPDCS 特征详情
+│   │   ├── design-process.md        # 四步设计过程
+│   │   └── physical-cases.md        # 物理用例
+│   ├── coverage/                    # 覆盖率报告
+│   └── delivery/                    # 最终交付物
+│
+├── agents/                          # Agent 定义（只读）
+├── skills/                          # Skill 定义（只读）
+└── scripts/                         # 工具脚本（只读）
 ```
 
 ### ⚠️ 路径规则（CRITICAL）
 
+> `.output/` 是项目根目录下的**运行时子目录**，不是项目根目录本身。
+> 即使你的工作目录（cwd）碰巧也叫 `.output`，仍然必须在 cwd 下创建 `.output/` 子目录来存放产物。
+
 1. **所有生成文件必须写入 `.output/` 子目录**，禁止在项目根目录直接创建文件或文件夹
-2. 正确路径示例：`.output/feature-input/raw-requirements.md`
-3. 错误路径示例：`feature-input/raw-requirements.md`（缺少 `.output/` 前缀）
+2. 正确路径示例：`.output/feature-input/raw-requirements.md`（相对于 cwd）
+3. 错误路径示例：`feature-input/raw-requirements.md`（缺少 `.output/` 前缀，会写到项目根目录）
 4. `.input/` 是只读目录，任何分析产物都不能写入 `.input/`
 5. 写文件前先确认目标路径以 `.output/` 开头（`STATE.yaml` 除外，它位于 `.output/STATE.yaml`）
+
+**绝对路径示例**（假设 cwd = `D:\workspace\myproject`）：
+
+```
+✅ 正确：D:\workspace\myproject\.output\feature-input\raw-requirements.md
+❌ 错误：D:\workspace\myproject\feature-input\raw-requirements.md
+```
 
 > **简记**：读 `.input/`，写 `.output/`，永远不在项目根目录创建分析产物。
 

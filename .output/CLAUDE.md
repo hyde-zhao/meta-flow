@@ -36,9 +36,14 @@
 ### ⚠️ 路径规则（CRITICAL）
 
 - **所有生成文件必须写入 `.output/` 子目录**，禁止在项目根目录直接创建 `feature-input/`、`scenarios/`、`m-analysis/` 等目录
-- ✅ 正确：`.output/feature-input/raw-requirements.md`
-- ❌ 错误：`feature-input/raw-requirements.md`
+- `.output/` 是项目根目录下的**子目录**，不是项目根目录本身（即使项目根目录碰巧也叫 `.output`）
+- ✅ 正确：`<cwd>/.output/feature-input/raw-requirements.md`
+- ❌ 错误：`<cwd>/feature-input/raw-requirements.md`（缺少 `.output/` 层级）
 - 读 `.input/`，写 `.output/`，永远不在项目根目录创建分析产物
+
+**绝对路径示例**（假设 cwd = `D:\project`）：
+- ✅ `D:\project\.output\feature-input\raw-requirements.md`
+- ❌ `D:\project\feature-input\raw-requirements.md`
 
 ## 权限
 

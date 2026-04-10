@@ -34,7 +34,7 @@ tools: ['shell', 'read', 'search', 'edit', 'task', 'skill', 'web_search', 'web_f
 - **`.input/`** — 用户输入目录（只读，放置特性需求文件、耦合矩阵 Excel 等）
 - **`.output/`** — 工具输出目录（分析产物和交付物，自动创建）
 
-> **⚠️ 路径规则**：所有生成文件必须写入 `.output/` 子目录（如 `.output/feature-input/`），禁止在项目根目录直接创建分析产物目录。
+> **⚠️ 路径规则**：`.output/` 是项目根目录下的运行时子目录，不是项目根目录本身。所有生成文件必须写入 `.output/` 子目录（如 `<cwd>/.output/feature-input/`），禁止在项目根目录直接创建 `feature-input/`、`scenarios/` 等目录。
 
 ## 快速启动
 
