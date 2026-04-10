@@ -13,7 +13,7 @@ confirmed_at: "2026-04-10T02:50:00Z"
 # Story Backlog v2 — MFQ&PPDCS 测试用例设计工具
 
 > 基于 CR-001（PPDCS 理论体系集成）更新。
-> 产物：1 Agent（`mfq-test-designer`）+ 16 Skill + 2~3 Python 工具
+> 产物：1 Agent（`ptm-tde`）+ 16 Skill + 2~3 Python 工具
 
 ---
 

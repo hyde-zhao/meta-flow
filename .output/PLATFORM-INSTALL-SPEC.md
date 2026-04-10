@@ -1,7 +1,7 @@
 # 平台安装规范（PLATFORM-INSTALL-SPEC）— MFQ 测试用例设计工具
 
 > 由 meta-se 在方案设计阶段输出，meta-qa 在打包阶段严格遵守。
-> 产物名称：`mfq-test-designer` | 版本：2.0.0 | 产物形态：1 Agent + 16 Skill + 2 Python 工具
+> 产物名称：`ptm-tde` | 版本：2.0.0 | 产物形态：1 Agent + 16 Skill + 2 Python 工具
 
 ---
 
@@ -10,10 +10,10 @@
 | 维度 | GitHub Copilot CLI | Claude Code | OpenClaw |
 |------|-------------------|-------------|---------|
 | 安装根目录 | `.github/` | `.claude/` | `.openclaw/` |
-| Agent 路径 | `agents/mfq-test-designer.agent.md` | `agents/mfq-test-designer.md` | `agents/mfq-test-designer.md` |
+| Agent 路径 | `agents/ptm-tde.agent.md` | `agents/ptm-tde.md` | `agents/ptm-tde.md` |
 | Skill 路径 | 嵌入 Agent 或 `copilot/skills/` | `skills/<name>/SKILL.md` | `skills/<name>/SKILL.md` |
 | 工具声明 | `tools: [shell]` | CLAUDE.md 权限声明 | `manifest.yaml` tools 节 |
-| 入口 | `@mfq-test-designer` | 对话激活 | 对话激活 |
+| 入口 | `@ptm-tde` | 对话激活 | 对话激活 |
 | Python 工具 | `scripts/*.py`（shell 调用） | `scripts/*.py` | `scripts/*.py` |
 
 ---
@@ -27,7 +27,7 @@
 ├── .github/
 │   ├── copilot-instructions.md          # 全局指令（含 MFQ Skill 触发词表）
 │   └── agents/
-│       └── mfq-test-designer.agent.md   # 主 Agent 入口（含 16 Skill 描述）
+│       └── ptm-tde.agent.md   # 主 Agent 入口（含 16 Skill 描述）
 ├── scripts/
 │   ├── excel_coupling_tool.py           # Excel 批注读写工具
 │   └── mcp_query_client.py             # MCP 查询客户端
@@ -36,7 +36,7 @@
 
 ### 主入口文件
 
-- **路径**：`.github/agents/mfq-test-designer.agent.md`
+- **路径**：`.github/agents/ptm-tde.agent.md`
 - **格式**：Markdown + YAML frontmatter
 - **工具声明**：`tools: [shell]`（v1.0.21 仅支持 shell 工具类型）
 
@@ -44,7 +44,7 @@
 
 ```yaml
 ---
-name: mfq-test-designer
+name: ptm-tde
 description: "MFQ 测试用例设计工具 — 从特性需求到测试用例的完整分析流程"
 tools:
   - shell
@@ -66,10 +66,10 @@ Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 16 个 Skill
 
 ### 验证清单
 
-- [ ] `.github/agents/mfq-test-designer.agent.md` 存在且 frontmatter 合法
+- [ ] `.github/agents/ptm-tde.agent.md` 存在且 frontmatter 合法
 - [ ] `.github/copilot-instructions.md` 包含 MFQ 触发词声明
 - [ ] `scripts/excel_coupling_tool.py` 可通过 `python scripts/excel_coupling_tool.py --help` 执行
-- [ ] 在 Copilot CLI 中输入 `@mfq-test-designer` 可激活 Agent
+- [ ] 在 Copilot CLI 中输入 `@ptm-tde` 可激活 Agent
 
 ---
 
@@ -82,7 +82,7 @@ Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 16 个 Skill
 ├── .claude/
 │   ├── CLAUDE.md                        # 全局配置（含工具权限 + Skill 路径）
 │   ├── agents/
-│   │   └── mfq-test-designer.md         # 主 Agent 入口
+│   │   └── ptm-tde.md         # 主 Agent 入口
 │   └── skills/
 │       ├── feature-parser/SKILL.md
 │       ├── scenario-discovery/SKILL.md
@@ -108,7 +108,7 @@ Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 16 个 Skill
 
 ### 主入口文件
 
-- **路径**：`.claude/agents/mfq-test-designer.md`
+- **路径**：`.claude/agents/ptm-tde.md`
 - **格式**：Markdown（无强制 frontmatter）
 - **工具声明**：在 CLAUDE.md 中通过全局配置
 
@@ -135,7 +135,7 @@ Skill 定义文件位于 `.claude/skills/<skill-name>/SKILL.md`，共 16 个。
 ### 验证清单
 
 - [ ] `.claude/CLAUDE.md` 存在且包含工具权限声明
-- [ ] `.claude/agents/mfq-test-designer.md` 存在
+- [ ] `.claude/agents/ptm-tde.md` 存在
 - [ ] `.claude/skills/*/SKILL.md` 共 16 个文件
 - [ ] 重启 Claude Code 后 Agent 可激活
 
@@ -150,7 +150,7 @@ Skill 定义文件位于 `.claude/skills/<skill-name>/SKILL.md`，共 16 个。
 ├── .openclaw/
 │   ├── manifest.yaml                    # 清单文件（Agent/Skill/Tool 全注册）
 │   ├── agents/
-│   │   └── mfq-test-designer.md
+│   │   └── ptm-tde.md
 │   └── skills/
 │       ├── feature-parser/SKILL.md
 │       ├── ... (同 Claude Code 16 个 Skill)
@@ -164,13 +164,13 @@ Skill 定义文件位于 `.claude/skills/<skill-name>/SKILL.md`，共 16 个。
 ### manifest.yaml 规范
 
 ```yaml
-name: mfq-test-designer
+name: ptm-tde
 version: "1.0.0"
 description: "MFQ 测试用例设计工具 — 从特性需求到测试用例的完整分析流程"
 
 agents:
-  - name: mfq-test-designer
-    path: agents/mfq-test-designer.md
+  - name: ptm-tde
+    path: agents/ptm-tde.md
     entry: true
 
 skills:
@@ -225,7 +225,7 @@ tools:
 
 ```
 skills/<name>/SKILL.md    ──┬──→ packages/copilot/   (嵌入 Agent)
-agents/mfq-test-designer.md ├──→ packages/claude-code/ (.claude/skills/)
+agents/ptm-tde.md ├──→ packages/claude-code/ (.claude/skills/)
 scripts/*.py                        └──→ packages/openclaw/   (.openclaw/skills/)
                                      ↑
                            scripts/build_packages.py（打包脚本）

@@ -14,8 +14,8 @@ requirements: []
 
 ## 完成准则
 
-- [x] `agents/mfq-test-designer.md` 创建，包含完整状态机定义
-- [x] `.github/agents/mfq-test-designer.agent.md` 创建（Copilot CLI 入口）
+- [x] `agents/ptm-tde.md` 创建，包含完整状态机定义
+- [x] `.github/agents/ptm-tde.agent.md` 创建（Copilot CLI 入口）
 - [x] 10 步主流程 + 2 扩展分支定义完整
 - [x] Skill 触发词映射表完整
 - [x] `mfq/` 目录结构定义完整
@@ -25,8 +25,8 @@ requirements: []
 
 | 文件 | 状态 |
 |------|------|
-| `agents/mfq-test-designer.md` | ✅ 已创建 |
-| `.github/agents/mfq-test-designer.agent.md` | ✅ 已创建 |
+| `agents/ptm-tde.md` | ✅ 已创建 |
+| `.github/agents/ptm-tde.agent.md` | ✅ 已创建 |
 
 ## 验证结果
 

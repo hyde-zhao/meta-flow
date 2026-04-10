@@ -36,7 +36,7 @@
 测试时可在 `.output/` 目录中独立启动 Agent 加载产物文件：
 
 ```bash
-cd .output && copilot @mfq-test-designer
+cd .output && copilot @ptm-tde
 ```
 
 ## 快速开始

@@ -70,7 +70,7 @@ PPDCS — M 分析中的 5 种建模特征：
 
 | 产物类型 | 数量 | 清单 | v1→v2 变化 |
 |---------|------|------|-----------|
-| **Agent** | 1 | `mfq-test-designer`（主编排器） | 12步状态机（+2步） |
+| **Agent** | 1 | `ptm-tde`（主编排器） | 12步状态机（+2步） |
 | **Skill** | 16 | 见下方 Skill 清单 | +2（parameter-design, data-design） |
 | **Python 工具** | 2~3 | `excel_coupling_tool.py`、`mcp_query_client.py`、`pict_wrapper.py`(可选) | +1可选 |
 | **平台安装包** | 3 | Copilot CLI / Claude Code / OpenClaw | 不变 |
@@ -112,9 +112,9 @@ PPDCS — M 分析中的 5 种建模特征：
 
 | 平台 | Agent 格式 | Skill 格式 | 工具声明 | 入口 |
 |------|-----------|-----------|---------|------|
-| Copilot CLI | `.github/agents/mfq-test-designer.agent.md` | Skill 内容嵌入 Agent | `tools: [shell]` | `@mfq-test-designer` |
-| Claude Code | `.claude/agents/mfq-test-designer.md` | `.claude/skills/<name>/SKILL.md` | CLAUDE.md 中声明 | 对话激活 |
-| OpenClaw | `.openclaw/agents/mfq-test-designer.md` | `.openclaw/skills/<name>/SKILL.md` | `manifest.yaml` | 对话激活 |
+| Copilot CLI | `.github/agents/ptm-tde.agent.md` | Skill 内容嵌入 Agent | `tools: [shell]` | `@ptm-tde` |
+| Claude Code | `.claude/agents/ptm-tde.md` | `.claude/skills/<name>/SKILL.md` | CLAUDE.md 中声明 | 对话激活 |
+| OpenClaw | `.openclaw/agents/ptm-tde.md` | `.openclaw/skills/<name>/SKILL.md` | `manifest.yaml` | 对话激活 |
 
 ## 5. 运行时工作目录（v2 更新）
 

@@ -47,7 +47,7 @@ waves:
         status: draft
 
     completion_criteria:
-      - "Agent 骨架可在 Copilot CLI 中激活（@mfq-test-designer）"
+      - "Agent 骨架可在 Copilot CLI 中激活（@ptm-tde）"
       - "feature-parser 能解析参考需求文件并输出三~五级目录"
       - "scenario-discovery 能通过 Web 搜索获取华为防火墙特性场景"
       - "excel_coupling_tool.py 能正确读取参考矩阵的批注"

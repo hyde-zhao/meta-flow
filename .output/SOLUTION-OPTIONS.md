@@ -142,7 +142,7 @@ Q  (质量属性分析)            ──→   q-analyzer (HTSM)
 
 | Agent 名称 | 职责 | 触发方式 |
 |-----------|------|---------|
-| mfq-test-designer | 主编排器：12 步状态机 + 2 扩展分支 | `@mfq-test-designer` |
+| ptm-tde | 主编排器：12 步状态机 + 2 扩展分支 | `@ptm-tde` |
 
 **Skills（16 个）：**
 
@@ -223,14 +223,14 @@ Q  (质量属性分析)            ──→   q-analyzer (HTSM)
 ```mermaid
 graph TB
     subgraph L1["用户交互层"]
-        CLI(["@mfq-test-designer"])
+        CLI(["@ptm-tde"])
         FileIn["特性文件<br/>(MD/Word/Excel/PDF)"]
         FileOut["交付物<br/>(方案.md + 用例.md)"]
         Confirm["用户确认点<br/>(目录/场景/PPDCS方法/覆盖)"]
     end
 
     subgraph L2["编排层 — MFQ&PPDCS 状态机"]
-        Agent["mfq-test-designer<br/>12步主流程 + 2扩展"]
+        Agent["ptm-tde<br/>12步主流程 + 2扩展"]
         SM["KYM→TCO→M(PPDCS)→F→Q→整合→设计→覆盖→交付"]
     end
 

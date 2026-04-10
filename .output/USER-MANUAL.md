@@ -39,20 +39,20 @@ pip install markitdown[all]
 ### 1.2 Copilot CLI 安装
 
 1. 确保仓库根目录包含：
-   - `.github/agents/mfq-test-designer.agent.md`
-   - `agents/mfq-test-designer.md`
+   - `.github/agents/ptm-tde.agent.md`
+   - `agents/ptm-tde.md`
    - `skills/*/SKILL.md`（16 个 Skill）
    - `scripts/excel_coupling_tool.py`
    - `scripts/mcp_query_client.py`
 
 2. 重启 Copilot CLI（Agent frontmatter 变更需要重启生效）
 
-3. 使用 `@mfq-test-designer` 触发
+3. 使用 `@ptm-tde` 触发
 
 ### 1.3 Claude Code 安装
 
 将以下文件复制到对应的 Claude Code 目录：
-- `agents/mfq-test-designer.md` → `.claude/agents/mfq-test-designer.md`
+- `agents/ptm-tde.md` → `.claude/agents/ptm-tde.md`
 - `skills/<name>/SKILL.md` → `.claude/skills/<name>/SKILL.md`
 - `scripts/*.py` → `scripts/*.py`
 
@@ -61,10 +61,10 @@ pip install markitdown[all]
 将文件复制到 `.openclaw/` 目录，并创建 `manifest.yaml`：
 
 ```yaml
-name: mfq-test-designer
+name: ptm-tde
 version: 1.0.0
 agents:
-  - agents/mfq-test-designer.md
+  - agents/ptm-tde.md
 skills:
   - skills/*/SKILL.md
 tools:
@@ -79,7 +79,7 @@ tools:
 ### 2.1 启动 MFQ 分析
 
 ```
-@mfq-test-designer 我要分析"日志中心"特性的测试用例
+@ptm-tde 我要分析"日志中心"特性的测试用例
 ```
 
 ### 2.2 提供输入文件
@@ -336,7 +336,7 @@ PPDCS 五特征匹配规则：
 当特性需求发生变更时：
 
 ```
-@mfq-test-designer 需求变更：日志服务器支持的最大数量从 8 调整为 16
+@ptm-tde 需求变更：日志服务器支持的最大数量从 8 调整为 16
 ```
 
 工具会：
@@ -354,7 +354,7 @@ PPDCS 五特征匹配规则：
 发现缺陷后：
 
 ```
-@mfq-test-designer 分析问题单：BUG-001 日志服务器配置删除后残留过滤规则
+@ptm-tde 分析问题单：BUG-001 日志服务器配置删除后残留过滤规则
 ```
 
 工具会：
@@ -430,10 +430,10 @@ pip install openpyxl
 
 ### 8.2 Agent 无法触发
 
-**症状**：输入 `@mfq-test-designer` 无响应
+**症状**：输入 `@ptm-tde` 无响应
 
 **排查**：
-1. 确认 `.github/agents/mfq-test-designer.agent.md` 存在
+1. 确认 `.github/agents/ptm-tde.agent.md` 存在
 2. 确认 Copilot CLI 版本 ≥ 1.0.21
 3. **重启 Copilot CLI**（Agent frontmatter 变更需要重启生效）
 
@@ -531,9 +531,9 @@ rm -rf mfq/
 
 | 文件 | 说明 |
 |------|------|
-| `agents/mfq-test-designer.md` | Agent 核心提示词 |
+| `agents/ptm-tde.md` | Agent 核心提示词 |
 | `skills/<name>/SKILL.md` × 14 | 14 个 Skill 定义 |
-| `.github/agents/mfq-test-designer.agent.md` | Copilot CLI 入口 |
+| `.github/agents/ptm-tde.agent.md` | Copilot CLI 入口 |
 | `scripts/excel_coupling_tool.py` | Excel 耦合矩阵读写 |
 | `scripts/mcp_query_client.py` | MCP 知识库查询 |
 | `scripts/file_to_markdown.py` | 文件批量转 MD |

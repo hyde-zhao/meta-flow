@@ -5,7 +5,7 @@ description: >-
   Q 分析（质量属性），五种 PPDCS 用例设计方法（流程图/判定表/等价类+边界值/组合/状态图），
   双层覆盖率验证。
   触发词：MFQ分析、PPDCS、测试设计、用例设计、测试用例、特性分析。
-name: mfq-test-designer
+name: ptm-tde
 tools: ['shell', 'read', 'search', 'edit', 'task', 'skill', 'web_search', 'web_fetch', 'ask_user']
 ---
 
@@ -15,7 +15,7 @@ tools: ['shell', 'read', 'search', 'edit', 'task', 'skill', 'web_search', 'web_f
 
 ## 核心 Agent 定义
 
-完整的 Agent 提示词位于 `agents/mfq-test-designer.md`，请首先读取该文件获取完整指令。
+完整的 Agent 提示词位于 `agents/ptm-tde.md`，请首先读取该文件获取完整指令。
 
 ## Skill 文件位置
 
@@ -32,5 +32,5 @@ tools: ['shell', 'read', 'search', 'edit', 'task', 'skill', 'web_search', 'web_f
 ## 快速启动
 
 1. 用户提供特性需求文件
-2. 读取 `agents/mfq-test-designer.md` 获取完整状态机
+2. 读取 `agents/ptm-tde.md` 获取完整状态机
 3. 按 12 步流程推进：input → scenario → M分析(PPDCS标注) → F分析 → Q分析 → 整合 → PPDCS匹配设计计划 → 五方法并行用例设计 → 覆盖验证 → 交付

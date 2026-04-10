@@ -1,4 +1,4 @@
-# MFQ&PPDCS 测试用例设计工具（mfq-test-designer）
+# MFQ&PPDCS 测试用例设计工具（ptm-tde）
 
 > 基于《海盗派测试分析: MFQ&PPDCS》方法论，从特性需求到测试用例的系统化设计工具。  
 > 支持 Copilot CLI / Claude Code / OpenClaw 三平台安装使用。
@@ -42,7 +42,7 @@ MFQ&PPDCS 测试用例设计工具帮助测试架构师和测试工程师，通�
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              mfq-test-designer Agent                     │
+│              ptm-tde Agent                     │
 │           (12 步状态机 + 2 扩展分支)                      │
 ├─────────┬──────────┬──────────┬──────────┬──────────────┤
 │  input  │ scenario │ M/F/Q    │ PPDCS    │  delivery    │
@@ -88,19 +88,19 @@ MFQ&PPDCS 测试用例设计工具帮助测试架构师和测试工程师，通�
 确保项目根目录包含以下文件（已随仓库提供）：
 
 ```
-.github/agents/mfq-test-designer.agent.md    # Agent 入口
-agents/mfq-test-designer.md           # Agent 完整提示词
+.github/agents/ptm-tde.agent.md    # Agent 入口
+agents/ptm-tde.md           # Agent 完整提示词
 skills/*/SKILL.md                     # 16 个 Skill
 scripts/excel_coupling_tool.py                # Excel 工具
 scripts/mcp_query_client.py                   # MCP 客户端
 ```
 
-在 Copilot CLI 中输入 `@mfq-test-designer` 即可启动。
+在 Copilot CLI 中输入 `@ptm-tde` 即可启动。
 
 ### Claude Code 安装
 
 ```
-.claude/agents/mfq-test-designer.md
+.claude/agents/ptm-tde.md
 .claude/skills/<name>/SKILL.md
 scripts/*.py
 ```
@@ -108,7 +108,7 @@ scripts/*.py
 ### OpenClaw 安装
 
 ```
-.openclaw/agents/mfq-test-designer.md
+.openclaw/agents/ptm-tde.md
 .openclaw/skills/<name>/SKILL.md
 .openclaw/manifest.yaml
 scripts/*.py
@@ -119,7 +119,7 @@ scripts/*.py
 ### 1. 启动分析
 
 ```
-@mfq-test-designer 分析特性 "日志中心"
+@ptm-tde 分析特性 "日志中心"
 ```
 
 提供特性需求文件（支持 Markdown/Word/Excel/PDF），工具会：
@@ -232,7 +232,7 @@ SR（系统需求）→ TP（测试点）→ LC（逻辑用例）→ TD（测试
 myflow/
 ├── .agents/
 │   ├── agents/
-│   │   └── mfq-test-designer.md        # Agent 核心提示词
+│   │   └── ptm-tde.md        # Agent 核心提示词
 │   └── skills/
 │       ├── feature-parser/SKILL.md
 │       ├── scenario-discovery/SKILL.md
@@ -251,7 +251,7 @@ myflow/
 │       ├── change-impact-analyzer/SKILL.md
 │       └── bug-gap-analyzer/SKILL.md
 ├── .github/agents/
-│   └── mfq-test-designer.agent.md      # Copilot CLI 入口
+│   └── ptm-tde.agent.md      # Copilot CLI 入口
 ├── scripts/
 │   ├── excel_coupling_tool.py           # Excel 耦合矩阵工具
 │   ├── mcp_query_client.py              # MCP 查询客户端

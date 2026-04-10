@@ -63,7 +63,7 @@ history:
     agent: "meta-po"
     timestamp: "2026-04-09T12:09:51Z"
   - phase: "story-execution"
-    action: "W1~W4 全部完成：14 Skills + 1 Agent(mfq-test-designer) + 2 Python工具(excel_coupling_tool + mcp_query_client)。Excel工具实测读取522条批注，509条耦合点。"
+    action: "W1~W4 全部完成：14 Skills + 1 Agent(ptm-tde) + 2 Python工具(excel_coupling_tool + mcp_query_client)。Excel工具实测读取522条批注，509条耦合点。"
     agent: "meta-dev"
     timestamp: "2026-04-09T12:15:00Z"
   - phase: "story-execution → documentation"
