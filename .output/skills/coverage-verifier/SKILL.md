@@ -18,12 +18,12 @@ status: active
 ## 适用范围
 
 - 适用阶段：MFQ 的 coverage 阶段
-- 输入：`mfq/` 下所有中间产物
-- 输出：`mfq/coverage/` 目录下的覆盖率报告
+- 输入：`.output/` 下所有中间产物
+- 输出：`.output/coverage/` 目录下的覆盖率报告
 
 ## 前置条件
 
-- [ ] 所有逻辑用例的设计已完成（`mfq/design/` 目录有内容）
+- [ ] 所有逻辑用例的设计已完成（`.output/design/` 目录有内容）
 - [ ] 追踪链 SR→TP→LC→TD→PC 数据完整
 
 ## 执行流程
@@ -141,5 +141,5 @@ status: active
 - [ ] 需求覆盖率 = 100%
 - [ ] 测试点覆盖率 ≥ 95%
 - [ ] 未覆盖项有明确的补充建议
-- [ ] 覆盖报告写入 `mfq/coverage/`
+- [ ] 覆盖报告写入 `.output/coverage/`
 - [ ] 用户确认覆盖报告

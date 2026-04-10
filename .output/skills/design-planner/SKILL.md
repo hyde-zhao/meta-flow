@@ -31,14 +31,14 @@ status: active
 ## 适用范围
 
 - 适用阶段：MFQ 分析的 plan 阶段
-- 输入：`mfq/integration/logic-cases.md` + `mfq/m-analysis/ppdcs-annotation.md`
-- 输出：`mfq/integration/design-plan.md`
+- 输入：`.output/integration/logic-cases.md` + `.output/m-analysis/ppdcs-annotation.md`
+- 输出：`.output/integration/design-plan.md`
 
 ## 前置条件
 
-- [ ] 测试点整合完成（`mfq/integration/logic-cases.md` 存在）
-- [ ] 测试数据已分配（`mfq/integration/test-data.md` 存在）
-- [ ] PPDCS 特征标注已完成（`mfq/m-analysis/ppdcs-annotation.md` 存在）
+- [ ] 测试点整合完成（`.output/integration/logic-cases.md` 存在）
+- [ ] 测试数据已分配（`.output/integration/test-data.md` 存在）
+- [ ] PPDCS 特征标注已完成（`.output/m-analysis/ppdcs-annotation.md` 存在）
 
 ## PPDCS 匹配规则
 
@@ -140,7 +140,7 @@ status: active
 
 ### 步骤 6：输出
 
-写入 `mfq/integration/design-plan.md`（含 PPDCS 特征列）。
+写入 `.output/integration/design-plan.md`（含 PPDCS 特征列）。
 
 ## Gotchas
 
@@ -156,5 +156,5 @@ status: active
 - [ ] 直接设计法占比 < 5%
 - [ ] 设计计划表包含 PPDCS 特征列
 - [ ] 用户已确认设计计划
-- [ ] 输出文件写入 `mfq/integration/design-plan.md`
-- [ ] `mfq/STATE.yaml` 更新
+- [ ] 输出文件写入 `.output/integration/design-plan.md`
+- [ ] `.output/STATE.yaml` 更新

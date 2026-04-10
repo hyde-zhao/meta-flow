@@ -18,11 +18,11 @@ status: active
 
 - 适用阶段：MFQ 分析的 scenario 阶段
 - 输入：特性名称 + 基本描述（来自 feature-parser 输出）
-- 输出：`mfq/scenarios/confirmed-scenarios.md`
+- 输出：`.output/scenarios/confirmed-scenarios.md`
 
 ## 前置条件
 
-- [ ] feature-parser 已完成，`mfq/feature-input/` 目录存在
+- [ ] feature-parser 已完成，`.output/feature-input/` 目录存在
 - [ ] 特性名称和基本描述已确定
 
 ## 搜索策略
@@ -62,7 +62,7 @@ python scripts/mcp_query_client.py --query "<特性名称> 应用场景" --type 
 
 ### 步骤 1：信息收集
 
-1. 读取 `mfq/feature-input/raw-requirements.md` 获取特性概况
+1. 读取 `.output/feature-input/raw-requirements.md` 获取特性概况
 2. 尝试 MCP 查询 → 无结果则 Web 搜索
 3. 提取候选场景列表
 
@@ -109,7 +109,7 @@ python scripts/mcp_query_client.py --query "<特性名称> 应用场景" --type 
 
 ### 步骤 4：输出持久化
 
-将确认后的场景写入 `mfq/scenarios/confirmed-scenarios.md`：
+将确认后的场景写入 `.output/scenarios/confirmed-scenarios.md`：
 
 ```markdown
 # <特性名> — 已确认应用场景
@@ -160,5 +160,5 @@ python scripts/mcp_query_client.py --query "<特性名称> 应用场景" --type 
 - [ ] 每个场景包含完整的 7 字段（编号/名称/分类/描述/触发/处理/异常）
 - [ ] 场景关联到四/五级目录模块
 - [ ] 用户已确认场景列表
-- [ ] `confirmed-scenarios.md` 已写入 `mfq/scenarios/`
-- [ ] `mfq/STATE.yaml` 更新
+- [ ] `confirmed-scenarios.md` 已写入 `.output/scenarios/`
+- [ ] `.output/STATE.yaml` 更新

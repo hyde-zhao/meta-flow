@@ -29,8 +29,13 @@ tools: ['shell', 'read', 'search', 'edit', 'task', 'skill', 'web_search', 'web_f
 | `scripts/mcp_query_client.py` | MCP 知识库查询客户端 |
 | `scripts/file_to_markdown.py` | 文件批量转 Markdown |
 
+## 工作目录
+
+- **`.input/`** — 用户输入目录（放置特性需求文件、耦合矩阵 Excel 等）
+- **`.output/`** — 工具输出目录（分析产物和交付物，自动创建）
+
 ## 快速启动
 
-1. 用户提供特性需求文件
+1. 将特性需求文件放入 `.input/` 目录
 2. 读取 `agents/ptm-tde.md` 获取完整状态机
 3. 按 12 步流程推进：input → scenario → M分析(PPDCS标注) → F分析 → Q分析 → 整合 → PPDCS匹配设计计划 → 五方法并行用例设计 → 覆盖验证 → 交付

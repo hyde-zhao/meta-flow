@@ -31,7 +31,8 @@
 ├── scripts/
 │   ├── excel_coupling_tool.py           # Excel 批注读写工具
 │   └── mcp_query_client.py             # MCP 查询客户端
-└── mfq/                           # 运行时工作目录（Agent 自动创建）
+├── .input/                            # 用户输入目录（gitignored）
+└── .output/                           # 工具生成产物目录（gitignored）
 ```
 
 ### 主入口文件
@@ -103,7 +104,8 @@ Copilot CLI 当前不支持独立 Skill 文件动态加载，因此 16 个 Skill
 ├── scripts/
 │   ├── excel_coupling_tool.py
 │   └── mcp_query_client.py
-└── mfq/
+├── .input/                            # 用户输入目录（gitignored）
+└── .output/                           # 工具生成产物目录（gitignored）
 ```
 
 ### 主入口文件
@@ -158,7 +160,8 @@ Skill 定义文件位于 `.claude/skills/<skill-name>/SKILL.md`，共 16 个。
 ├── scripts/
 │   ├── excel_coupling_tool.py
 │   └── mcp_query_client.py
-└── mfq/
+├── .input/                            # 用户输入目录（gitignored）
+└── .output/                           # 工具生成产物目录（gitignored）
 ```
 
 ### manifest.yaml 规范
@@ -219,7 +222,7 @@ tools:
 | `scripts/mcp_query_client.py` | MCP 知识库查询客户端 | ✅ 完全相同 |
 | 16 个 SKILL.md | 核心 MFQ 分析/设计逻辑 | ✅ 内容相同，安装路径不同 |
 | Agent 提示词正文 | 编排逻辑 + 状态机 | ⚠️ 基本相同，frontmatter 格式不同 |
-| `mfq/` | 运行时工作目录 | ✅ 结构相同 |
+| `.input/` + `.output/` | 运行时输入/输出目录 | ✅ 结构相同 |
 
 ## 打包流程
 

@@ -19,12 +19,12 @@ status: active
 ## 适用范围
 
 - 适用阶段：MFQ 分析的 q-analysis 阶段
-- 输入：`mfq/m-analysis/test-points.md` + 场景文档
-- 输出：`mfq/q-analysis/quality-test-points.md`
+- 输入：`.output/m-analysis/test-points.md` + 场景文档
+- 输出：`.output/q-analysis/quality-test-points.md`
 
 ## 前置条件
 
-- [ ] M 分析已完成（`mfq/m-analysis/test-points.md` 存在）
+- [ ] M 分析已完成（`.output/m-analysis/test-points.md` 存在）
 - [ ] 场景文档已确认
 
 ## HTSM 质量属性维度
@@ -87,7 +87,7 @@ status: active
 
 ### 步骤 4：输出
 
-写入 `mfq/q-analysis/quality-test-points.md`：
+写入 `.output/q-analysis/quality-test-points.md`：
 
 ```markdown
 # <特性名> — Q 分析测试点
@@ -131,4 +131,4 @@ status: active
 - [ ] 每个强相关/弱相关维度至少 1 个测试点
 - [ ] 不相关维度明确标注"不适用"
 - [ ] 测试点包含完整标注（TP-ID/维度/描述/关联模块）
-- [ ] 输出文件写入 `mfq/q-analysis/quality-test-points.md`
+- [ ] 输出文件写入 `.output/q-analysis/quality-test-points.md`

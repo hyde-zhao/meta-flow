@@ -33,8 +33,8 @@ D-Data 是 PPDCS 五特征之一：
 ## 适用范围
 
 - 适用阶段：MFQ 的 design 阶段
-- 输入：`mfq/integration/design-plan.md`（PPDCS=D-Data 的 LC）
-- 输出：`mfq/design/<module>/<sub-module>/` 目录下的设计文件
+- 输入：`.output/integration/design-plan.md`（PPDCS=D-Data 的 LC）
+- 输出：`.output/design/<module>/<sub-module>/` 目录下的设计文件
 
 ## 前置条件
 
@@ -143,7 +143,7 @@ D-Data 是 PPDCS 五特征之一：
 ## 输出目录结构
 
 ```
-mfq/design/<module>/<sub-module>/
+.output/design/<module>/<sub-module>/
 ├── ppdcs-profile.md      # D-Data 特征详情
 ├── design-process.md      # 四步设计过程（含等价类表、边界值表）
 └── physical-cases.md      # 物理用例列表
@@ -198,4 +198,4 @@ mfq/design/<module>/<sub-module>/
 - [ ] 有效等价类用例可组合，无效等价类用例已隔离
 - [ ] 物理用例包含优先级和测试类型
 - [ ] `ppdcs-profile.md` 已创建
-- [ ] 设计过程文档写入 `mfq/design/<module>/<sub>/`
+- [ ] 设计过程文档写入 `.output/design/<module>/<sub>/`

@@ -40,14 +40,14 @@ M 分析即 MFQ 框架中的 **MD（Model-based Discrete Function）**：
 ## 适用范围
 
 - 适用阶段：MFQ 分析的 m-analysis 阶段
-- 输入：`mfq/feature-input/` + `mfq/scenarios/`
-- 输出：`mfq/m-analysis/test-points.md` + `mfq/m-analysis/ppdcs-annotation.md`
+- 输入：`.output/feature-input/` + `.output/scenarios/`
+- 输出：`.output/m-analysis/test-points.md` + `.output/m-analysis/ppdcs-annotation.md`
 
 ## 前置条件
 
-- [ ] `mfq/feature-input/raw-requirements.md` 存在
-- [ ] `mfq/feature-input/directory-structure.md` 存在（用户已确认）
-- [ ] `mfq/scenarios/confirmed-scenarios.md` 存在（用户已确认）
+- [ ] `.output/feature-input/raw-requirements.md` 存在
+- [ ] `.output/feature-input/directory-structure.md` 存在（用户已确认）
+- [ ] `.output/scenarios/confirmed-scenarios.md` 存在（用户已确认）
 
 ## 执行流程
 
@@ -114,9 +114,9 @@ M 分析即 MFQ 框架中的 **MD（Model-based Discrete Function）**：
 
 写入两个文件：
 
-**`mfq/m-analysis/test-points.md`**（与 v1 格式一致）
+**`.output/m-analysis/test-points.md`**（与 v1 格式一致）
 
-**`mfq/m-analysis/ppdcs-annotation.md`**（v2 新增）：
+**`.output/m-analysis/ppdcs-annotation.md`**（v2 新增）：
 
 ```markdown
 # <特性名> — PPDCS 特征标注表
@@ -165,4 +165,4 @@ M 分析即 MFQ 框架中的 **MD（Model-based Discrete Function）**：
 - [ ] **每个五级目录节点均有 PPDCS 主特征标注和判定依据**
 - [ ] 需求覆盖初检已执行，未覆盖项已标记
 - [ ] 输出 `test-points.md` 和 `ppdcs-annotation.md`
-- [ ] `mfq/STATE.yaml` 更新为 m-analysis 完成
+- [ ] `.output/STATE.yaml` 更新为 m-analysis 完成

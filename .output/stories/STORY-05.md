@@ -34,5 +34,5 @@ requirements: [R4, R7]
   - 总批注数：522
   - 识别为耦合点：509（已过滤审阅类批注）
 - 查询 "日志" 返回 43 条相关耦合点
-- 图模型已保存为 `mfq/f-analysis/coupling-graph.json`
+- 图模型已保存为 `.output/f-analysis/coupling-graph.json`
 - 支持强度推断（strong/weak/normal）

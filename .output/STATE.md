@@ -83,7 +83,7 @@ history:
     agent: "meta-dev"
     timestamp: "2026-04-10T03:30:00Z"
   - phase: "documentation"
-    action: "v2.1 整改：(1) meta-se 增加状态机门控（problem-definition→solution-design→waiting→story-planning→blocked）+ 统一系统设计原则（Prompt/Skill/Tool/Doc 四层）+ Skill 编排合约；(2) meta-dev 增加状态机（ready-check→implementing→self-review→handoff→blocked）+ Tool/MCP 接口约束 + 自检与交接摘要规范；(3) 工作目录迁移 .mfq-work/ → mfq/（涉及 Agent+16 Skills+Python 工具+全部设计文档）；(4) Copilot CLI 入口 meta-se.agent.md/meta-dev.agent.md 同步重写。"
+    action: "v2.1 整改：(1) meta-se 增加状态机门控（problem-definition→solution-design→waiting→story-planning→blocked）+ 统一系统设计原则（Prompt/Skill/Tool/Doc 四层）+ Skill 编排合约；(2) meta-dev 增加状态机（ready-check→implementing→self-review→handoff→blocked）+ Tool/MCP 接口约束 + 自检与交接摘要规范；(3) 工作目录迁移 .mfq-work/ → .output/（涉及 Agent+16 Skills+Python 工具+全部设计文档）；(4) Copilot CLI 入口 meta-se.agent.md/meta-dev.agent.md 同步重写。"
     agent: "meta-po"
     timestamp: "2026-04-10T04:17:00Z"
 last_updated: "2026-04-10T04:17:00Z"

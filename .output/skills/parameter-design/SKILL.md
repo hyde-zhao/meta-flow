@@ -34,8 +34,8 @@ P-Parameter 是 PPDCS 五特征之一：
 ## 适用范围
 
 - 适用阶段：MFQ 的 design 阶段
-- 输入：`mfq/integration/design-plan.md`（PPDCS=P-Parameter 的 LC）
-- 输出：`mfq/design/<module>/<sub-module>/` 目录下的设计文件
+- 输入：`.output/integration/design-plan.md`（PPDCS=P-Parameter 的 LC）
+- 输出：`.output/design/<module>/<sub-module>/` 目录下的设计文件
 
 ## 前置条件
 
@@ -186,7 +186,7 @@ graph TD
 ## 输出目录结构
 
 ```
-mfq/design/<module>/<sub-module>/
+.output/design/<module>/<sub-module>/
 ├── ppdcs-profile.md      # P-Parameter 特征详情
 ├── design-process.md      # 四步设计过程（含判定表/因果图/决策树）
 └── physical-cases.md      # 物理用例列表
@@ -248,4 +248,4 @@ mfq/design/<module>/<sub-module>/
 - [ ] 逻辑用例覆盖所有判定规则
 - [ ] 物理用例包含优先级和测试类型
 - [ ] `ppdcs-profile.md` 已创建
-- [ ] 设计过程文档写入 `mfq/design/<module>/<sub>/`
+- [ ] 设计过程文档写入 `.output/design/<module>/<sub>/`

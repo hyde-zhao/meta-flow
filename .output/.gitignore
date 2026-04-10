@@ -1,0 +1,12 @@
+# ptm-tde 运行时目录
+.input/
+.output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

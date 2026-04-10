@@ -18,7 +18,7 @@ requirements: []
 - [x] `.github/agents/ptm-tde.agent.md` 创建（Copilot CLI 入口）
 - [x] 10 步主流程 + 2 扩展分支定义完整
 - [x] Skill 触发词映射表完整
-- [x] `mfq/` 目录结构定义完整
+- [x] `.output/` 目录结构定义完整
 - [x] 用户确认点定义（4 个节点）
 
 ## 产出物

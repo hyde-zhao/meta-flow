@@ -65,7 +65,7 @@ confirmed_at: "2026-04-10T02:45:00Z"
 1. **PPDCS 特征标注**（m-analyzer 输出）：
    - 为每个五级目录节点（单功能）标注 PPDCS 主特征和辅特征
    - 标注格式：`{ feature_id, ppdcs_primary: "P-Process|P-Parameter|D-Data|C-Combination|S-State", ppdcs_secondary: "...|null", rationale: "..." }`
-   - 输出到 `mfq/m-analysis/ppdcs-annotation.md`
+   - 输出到 `.output/m-analysis/ppdcs-annotation.md`
 
 2. **特征匹配**（design-planner 输出）：
    - 读取 PPDCS 标注，为每个逻辑用例推荐设计 Skill
@@ -122,7 +122,7 @@ confirmed_at: "2026-04-10T02:45:00Z"
 
 ## ADR-5: 运行时工作目录结构（v2 增加 PPDCS 文件）
 
-**决策**：使用 `mfq/` 目录，v2 增加 `ppdcs-annotation.md` 和 `ppdcs-profile.md`
+**决策**：使用 `.output/` 目录，v2 增加 `ppdcs-annotation.md` 和 `ppdcs-profile.md`
 
 **v1→v2 变化**：
 - `m-analysis/` 新增 `ppdcs-annotation.md`（PPDCS 特征标注）

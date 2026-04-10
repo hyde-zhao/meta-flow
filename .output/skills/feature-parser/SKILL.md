@@ -18,7 +18,7 @@ status: active
 
 - 适用阶段：MFQ 分析的 input 阶段
 - 输入：特性需求文件（Markdown/Word/Excel/PDF）
-- 输出：`mfq/feature-input/` 目录下的结构化文件
+- 输出：`.output/feature-input/` 目录下的结构化文件
 
 ## 支持的输入格式
 
@@ -32,7 +32,7 @@ status: active
 ## 前置条件
 
 - [ ] 用户已提供特性需求文件路径
-- [ ] `mfq/` 目录已初始化
+- [ ] `.output/` 目录已初始化
 - [ ] `file-to-markdown` Skill 可用（用于非 MD 格式的预转换）
 
 ## 执行流程
@@ -102,7 +102,7 @@ status: active
 
 ### 步骤 5：输出持久化
 
-将结果写入 `mfq/feature-input/`：
+将结果写入 `.output/feature-input/`：
 
 #### raw-requirements.md 格式
 
@@ -142,5 +142,5 @@ status: active
 - [ ] 所有需求条目均被提取（编号/模块/名称/描述 四字段完整）
 - [ ] 目录结构包含三级/四级/五级三个层级
 - [ ] 用户已确认目录结构
-- [ ] `raw-requirements.md` 和 `directory-structure.md` 已写入 `mfq/feature-input/`
-- [ ] 更新 `mfq/STATE.yaml` 的 `current_step` 为下一步
+- [ ] `raw-requirements.md` 和 `directory-structure.md` 已写入 `.output/feature-input/`
+- [ ] 更新 `.output/STATE.yaml` 的 `current_step` 为下一步
