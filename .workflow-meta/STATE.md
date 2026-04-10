@@ -5,8 +5,8 @@ current_phase: "documentation"
 current_agent: "meta-po"
 iteration: 13
 blocked: false
-last_action: "v2.1 整改：meta-se/meta-dev 状态机增强 + 工作目录迁移 .mfq-work → .workflow-meta/mfq/"
-next_action: "终验检查点④"
+last_action: "v2.1 整改完成并提交（532e636 + 8288c6a）— 等待用户终验确认"
+next_action: "用户确认检查点④后标记 delivered"
 checkpoints:
   requirement_confirmed: true
   solution_selected: true
