@@ -101,6 +101,19 @@
 
 ## 输出文件规范
 
+### 产物内路径引用规则（CRITICAL）
+
+产物文件（Agent、Skill、Tool 脚本）中引用运行时路径时，必须遵守：
+
+1. **全路径引用**：所有文件引用必须包含完整相对路径前缀，禁止使用裸文件名
+   - ✅ `读取 .output/feature-input/raw-requirements.md`
+   - ❌ `读取 raw-requirements.md`
+2. **全段落一致**：同一文件的"前置条件"、"执行步骤"、"输出文件"、"验收标准"中，路径写法必须完全一致
+3. **目录树从 cwd 开始**：产物中的目录结构图必须从 `<cwd>/` 开始展示，明确 `.input/` 和 `.output/` 是 cwd 的子目录而非 cwd 本身
+4. **同名消歧**：若产物的安装目录名与运行时输出目录名相同（如均叫 `.output`），必须在提示词中包含绝对路径 ✅/❌ 对比示例
+
+> **教训**：AI Agent 会基于"我已经在 X 目录中"的推理省略路径前缀。裸文件名（如 `raw-requirements.md`）会被写入错误目录。这在"前置条件"写了全路径但"执行步骤"漏掉时尤其容易发生。
+
 ### Agent 文件 — 平台差异
 
 **源文件**（`.output/agents/<name>.md`）用于 Claude Code / Codex / OpenClaw 打包，遵循 Claude Code Sub-agent 规范：
@@ -270,6 +283,13 @@ Skill 正文必须体现**模块边界**，至少包含：
 - [ ] 未修改 `REQUIREMENTS.md` 或 `ARCHITECTURE-DECISION.md`
 - [ ] `DEV-LOG.md` 已追加本轮记录
 - [ ] 当前 Story 的交接信息足以让 meta-qa 独立验证
+
+**路径引用一致性检查（CRITICAL）：**
+- [ ] 产物中所有运行时路径引用在"前置条件"、"执行步骤"、"输出文件"、"验收标准"、"Gotchas"各段落保持一致
+- [ ] 不存在裸文件名引用（如 `raw-requirements.md`），必须带完整相对路径前缀（如 `.output/feature-input/raw-requirements.md`）
+- [ ] 产物的目录树以 `<cwd>/` 开头展示完整层级，明确 `.input/` 和 `.output/` 是 cwd 的子目录
+- [ ] 若产物的安装目录名与运行时输出目录名相同（如都叫 `.output`），已在提示词中用绝对路径示例消除歧义
+- [ ] 所有 Skill 的"执行步骤"中引用其他 Skill 产物时使用完整路径（如 `.output/m-analysis/ppdcs-annotation.md`，非 `ppdcs-annotation.md`）
 
 **Agent 文件检查：**
 - [ ] `description` 包含触发条件、能力边界和不适用范围
