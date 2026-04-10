@@ -1,47 +1,45 @@
 ---
 status: confirmed
-version: "1.0"
+version: "2.0"
 confirmed: true
-confirmed_by: "user (auto-approved: recommended option)"
-confirmed_at: "2026-04-09T11:50:00Z"
+change_request: "CR-001"
+confirmed_by: "user (auto-approved: recommended option A)"
+confirmed_at: "2026-04-10T02:45:00Z"
 ---
 
-# 架构决策记录：MFQ 测试用例设计工具
+# 架构决策记录 v2：MFQ&PPDCS 测试用例设计工具
 
-> 本文档记录所有关键架构决策，待用户在检查点②确认后生效。
+> 本文档记录所有关键架构决策。v2 基于 MFQ&PPDCS 理论体系更新。
 
 ---
 
-## ADR-1: Agent 架构模式
+## ADR-1: Agent 架构模式（v2 确认）
 
-**决策**：采用方案 A — 单编排 Agent + 14 Skill + 2 Python 工具
+**决策**：采用方案 A — 单编排 Agent + 16 Skill + 2~3 Python 工具
 
 **背景**：
-- 需求复杂度为 complex（20 条需求，3 角色，10 步主流程 + 2 扩展分支）
-- 首版聚焦华为防火墙试点，产品成熟度为 MVP
-- 三平台（Copilot CLI / Claude Code / OpenClaw）均原生支持"1 Agent + N Skill"
+- 需求复杂度为 complex（20 条需求，3 角色，12 步主流程 + 2 扩展分支）
+- PPDCS 集成使 Skill 数量从 14 增加到 16（设计 Skill 从 3→5）
+- 首版聚焦华为防火墙试点，三平台均原生支持"1 Agent + N Skill"
 
-**考虑的备选**：
-- 方案 B：4 Agent 流水线（上下文隔离好，但 Copilot CLI 适配困难，首版开发量增加 ~40%）
+**v1→v2 变化**：Skill 数量 14→16，主流程步骤 10→12
 
 **后果**：
 - ✅ 用户单一入口，三平台无缝兼容
-- ✅ 首版开发量可控
-- ⚠️ 大型特性上下文压力需通过 Skill 按需加载 + 文件持久化缓解
-- ⚠️ V2 可能需要拆分为多 Agent（但 Skill 自包含设计已预留拆分接口）
+- ✅ PPDCS 五特征完整覆盖
+- ⚠️ 16 Skill 上下文压力略增（通过按需加载缓解）
 
-**状态**：🔲 待确认
+**状态**：✅ 已确认
 
 ---
 
-## ADR-2: F 分析数据底座
+## ADR-2: F 分析数据底座（v1 不变）
 
 **决策**：Excel 直读 + 内存图模型（首版不引入 Neo4j）
 
 **背景**：
 - 耦合矩阵当前以 Excel 形式维护（4 sheets，522 条批注）
 - 引入 Neo4j 增加部署复杂度和学习成本
-- 首版试点特性规模有限（预计耦合点 < 500）
 
 **方案细节**：
 - 读取：`openpyxl` 解析 Excel 批注（首选），`zipfile + comments.xml` 解析（回退）
@@ -49,137 +47,116 @@ confirmed_at: "2026-04-09T11:50:00Z"
 - 查询：支持按功能点查询直接/间接耦合点
 - 回写：`openpyxl` 写入新批注到 Excel
 
-**后果**：
-- ✅ 零额外依赖（除 openpyxl）
-- ✅ 用户无需安装数据库
-- ⚠️ 大规模矩阵（> 1000 特性节点）时性能可能下降
-- ⚠️ 不支持图遍历算法（如传递闭包），需手动实现
-
-**状态**：🔲 待确认
+**状态**：✅ 已确认
 
 ---
 
-## ADR-3: 用例设计过程标准化
+## ADR-3: PPDCS 五特征建模框架（v2 新增 ⭐）
 
-**决策**：三种设计方法统一为四步结构，每个逻辑用例按五级目录独立输出设计过程
+**决策**：M 分析阶段为每个单功能标注 PPDCS 主特征，设计计划阶段基于特征匹配选择方法
 
 **背景**：
-- 参考文档（日志中心特性测试用例）按五级目录的 sheet 页组织，每个逻辑用例有完整的设计过程
-- 三种方法的步骤 3（逻辑用例）和步骤 4（物理用例）格式相同
-- 用户要求输出设计过程以供审计和复盘
+- 《海盗派测试分析》明确提出：选择测试设计技术应基于被测对象内在逻辑特征与技术特征的匹配
+- v1 仅有 3 种设计方法（数据组合/流程图/状态图），将 P-Parameter/D-Data/C-Combination 混为一体
+- PPDCS 是 MFQ 方法论中 M 维度的核心建模指导
 
 **方案细节**：
 
-| 步骤 | 数据组合法输出 | 流程图法输出 | 状态图法输出 |
-|------|-------------|------------|------------|
-| 1 - 分析 | 等价类划分表（数据/有效类/无效类/选取策略/结果） | 流程图（Mermaid flowchart） | 状态图（Mermaid stateDiagram） |
-| 2 - 组合/路径 | 数据组合表（数据/取值/组合分析/约束/结果） | 路径枚举表（路径号/覆盖分支/触发数据） | 状态转换表（当前/事件/目标/守卫） |
-| 3 - 逻辑用例 | 逻辑用例表（编号/描述/数据/选取结果） | 逻辑用例表（编号/路径/数据） | 逻辑用例表（编号/迁移路径/数据） |
-| 4 - 物理用例 | 物理用例（编号/标题/数据/预置/步骤/预期/优先级/类型） | 同左 | 同左 |
+1. **PPDCS 特征标注**（m-analyzer 输出）：
+   - 为每个五级目录节点（单功能）标注 PPDCS 主特征和辅特征
+   - 标注格式：`{ feature_id, ppdcs_primary: "P-Process|P-Parameter|D-Data|C-Combination|S-State", ppdcs_secondary: "...|null", rationale: "..." }`
+   - 输出到 `.mfq-work/m-analysis/ppdcs-annotation.md`
+
+2. **特征匹配**（design-planner 输出）：
+   - 读取 PPDCS 标注，为每个逻辑用例推荐设计 Skill
+   - 优先级：S-State > P-Process > P-Parameter > C-Combination > D-Data
+   - 混合特征：主特征决定主方法，辅特征生成补充用例
+
+3. **五种设计 Skill 对齐**：
+   | PPDCS | Skill | 建模输出 | 建模工具 |
+   |-------|-------|---------|---------|
+   | P-Process | process-design | 流程图 + 路径覆盖 | Mermaid flowchart |
+   | P-Parameter | parameter-design | 判定表 + 规则列表 | Markdown 表格 |
+   | D-Data | data-design | 等价类表 + 边界值 | Markdown 表格 |
+   | C-Combination | combination-design | 因子表 + Pairwise | PICT/手动 |
+   | S-State | state-design | 状态图 + 转换表 | Mermaid stateDiagram |
+
+**关键区分规则**（嵌入 design-planner 提示词）：
+- Process vs State → 流程能否回退？不能=Process，能=State
+- Parameter vs Data → 参数间有业务规则？有=Parameter，无=Data
+- Data vs Combination → 因子独立验证够？够=Data，需组合=Combination
 
 **后果**：
+- ✅ 测试设计技术选择有理论依据，从"经验驱动"升级为"特征匹配驱动"
+- ✅ 覆盖 MFQ 理论的完整 PPDCS 维度
+- ⚠️ PPDCS 特征识别依赖 LLM 语义理解，混合特征需人工辅助
+- ⚠️ P-Parameter（判定表/因果图）建模是 5 种中最复杂的
+
+**状态**：✅ 已确认
+
+---
+
+## ADR-4: 用例设计统一四步过程（v2 扩展为 5 种方法）
+
+**决策**：五种设计方法统一为四步结构，每个逻辑用例按五级目录独立输出设计过程
+
+**v1→v2 变化**：从 3 种方法扩展为 5 种，增加 P-Parameter 和 D-Data
+
+**方案细节**：
+
+| 步骤 | P-Process | P-Parameter | D-Data | C-Combination | S-State |
+|------|-----------|-------------|--------|---------------|---------|
+| 1-建模 | 流程图(Mermaid) | 判定表/因果图 | 等价类划分表 | 因子-状态表 | 状态图(Mermaid) |
+| 2-推导 | 路径枚举 | 规则提取 | 边界值识别 | Pairwise 生成 | 转换表 |
+| 3-逻辑用例 | 路径→LC | 规则→LC | 等价类→LC | 组合→LC | 转换→LC |
+| 4-物理用例 | LC→PC(P0~P4) | LC→PC | LC→PC | LC→PC | LC→PC |
+
+**后果**：
+- ✅ 5 种方法输出格式统一，简化覆盖检查
 - ✅ 设计过程可追溯、可审计
-- ✅ 三种方法输出格式统一，简化覆盖检查
-- ⚠️ 输出文件体积较大（每个逻辑用例 4 个表格）
+- ⚠️ P-Parameter 的步骤1（判定表构建）对 LLM 推理要求较高
 
-**状态**：🔲 待确认
-
----
-
-## ADR-4: 运行时工作目录结构
-
-**决策**：使用 `.mfq-work/` 目录存储运行时中间产物
-
-**背景**：
-- Agent 上下文窗口有限，需将中间产物持久化到文件系统
-- 不同 Skill 间通过文件交换数据，降低耦合
-- 变更分析和问题单分析需要访问历史产物
-
-**方案细节**：
-- 根目录 `.mfq-work/` 与交付物目录分离
-- 按阶段建子目录：`feature-input/`、`scenarios/`、`m-analysis/`、`f-analysis/`、`q-analysis/`、`integration/`、`design/`、`coverage/`、`delivery/`
-- `design/` 下按四级/五级目录组织：`design/<module>/<sub-module>/`
-- `STATE.yaml` 记录当前分析进度，支持断点续做
-
-**后果**：
-- ✅ 中间产物可检查、可回溯
-- ✅ 支持断点续做（重启后从 STATE.yaml 恢复）
-- ✅ 变更分析可精确定位受影响目录
-- ⚠️ 用户需理解目录结构（可通过 Agent 提示引导）
-
-**状态**：🔲 待确认
+**状态**：✅ 已确认
 
 ---
 
-## ADR-5: 平台适配策略
+## ADR-5: 运行时工作目录结构（v2 增加 PPDCS 文件）
+
+**决策**：使用 `.mfq-work/` 目录，v2 增加 `ppdcs-annotation.md` 和 `ppdcs-profile.md`
+
+**v1→v2 变化**：
+- `m-analysis/` 新增 `ppdcs-annotation.md`（PPDCS 特征标注）
+- `design/<module>/<sub-module>/` 新增 `ppdcs-profile.md`（子模块特征详情）
+- `integration/design-plan.md` 增加 PPDCS 特征列
+
+**状态**：✅ 已确认
+
+---
+
+## ADR-6: 平台适配策略（v1 不变）
 
 **决策**：核心 Skill 平台无关，打包脚本自动转换为平台特定格式
 
-**背景**：
-- 三个目标平台的 Agent/Skill 格式差异：
-  - Copilot CLI：`.github/agents/*.agent.md`，工具声明用 `tools: [shell]`
-  - Claude Code：`.claude/agents/*.md`，CLAUDE.md 全局配置
-  - OpenClaw：`.openclaw/`，`manifest.yaml` 清单
-
-**方案细节**：
-- 核心 Skill 统一存储在 `.agents/skills/<name>/SKILL.md`
-- Agent 提示词统一存储在 `.agents/agents/mfq-test-designer.md`
-- 打包脚本（`scripts/build_packages.py`）：
-  1. 读取核心 Agent + Skill
-  2. 按目标平台模板转换 frontmatter 和目录结构
-  3. 输出到 `packages/<platform>/`
-  4. 生成校验和文件
-
-**后果**：
-- ✅ 核心逻辑只维护一份
-- ✅ 新平台只需新增转换模板
-- ⚠️ 平台特有功能（如 Copilot 的 `tools` 声明）需手动适配
-
-**状态**：🔲 待确认
+**状态**：✅ 已确认
 
 ---
 
-## ADR-6: 覆盖率追踪链设计
+## ADR-7: 覆盖率追踪链（v1 不变）
 
-**决策**：建立五级追踪链 `SR → TP → LC → TD → PC`，每级持有上下游引用
+**决策**：五级追踪链 `SR → TP → LC → TD → PC`，双向查询
 
-**背景**：
-- 用户要求需求层+测试点层的双层覆盖检查（R15）
-- 覆盖判定规则：新增用例（必须设计）、合并（纳入另一逻辑用例）、不设计用例（极少出现）
-- 变更分析和问题单分析需反向追踪
-
-**方案细节**：
-- ID 编码规则：
-  - SR: `SR-<特性>-NNN`
-  - TP: `TP-<模块>-<子模块>-NNN`
-  - LC: `LC-<模块>-<子模块>-NNN`
-  - TD: `TD-<LC_ID>-NNN`
-  - PC: `PC-<LC_ID>-NNN`
-- 正向追踪：SR.test_points → TP.logic_cases → LC.test_data → TD.physical_cases
-- 反向追踪：PC.logic_case → LC.test_points → TP.requirement
-- 覆盖检查算法：
-  1. 遍历所有 SR → 检查每个 TP 至少关联 1 个 LC
-  2. 遍历所有 TP → 检查至少被 1 个 PC 覆盖
-  3. 输出未覆盖项列表
-
-**后果**：
-- ✅ 双向追踪，支持覆盖验证和影响分析
-- ✅ ID 编码自带层级信息，便于定位
-- ⚠️ ID 管理需自动化（由 Skill 自动分配和维护）
-
-**状态**：🔲 待确认
+**状态**：✅ 已确认
 
 ---
 
 ## 人工确认清单
 
-> 以下决策需要用户在检查点②确认：
-
 | # | 决策 | 确认项 | 确认状态 |
 |---|------|-------|---------|
-| 1 | ADR-1 | 是否采用方案 A（单 Agent + 多 Skill）？ | ✅ 已确认 |
-| 2 | ADR-2 | F 分析是否采用 Excel 直读 + 内存图模型？ | ✅ 已确认 |
-| 3 | ADR-3 | 三种设计方法是否统一为四步结构？ | ✅ 已确认 |
-| 4 | ADR-4 | 运行时工作目录是否使用 `.mfq-work/`？ | ✅ 已确认 |
-| 5 | ADR-5 | 平台适配是否采用"核心共享 + 打包转换"策略？ | ✅ 已确认 |
-| 6 | ADR-6 | 覆盖率追踪链是否采用五级 ID 编码？ | ✅ 已确认 |
+| 1 | ADR-1 | 单 Agent + 16 Skill（v2）？ | ✅ 已确认 |
+| 2 | ADR-2 | F 分析 Excel 直读 + 内存图模型？ | ✅ 已确认 |
+| 3 | ADR-3 | **PPDCS 五特征建模框架？** | ✅ 已确认 |
+| 4 | ADR-4 | 五种设计方法统一四步结构？ | ✅ 已确认 |
+| 5 | ADR-5 | 运行时工作目录（含 PPDCS 文件）？ | ✅ 已确认 |
+| 6 | ADR-6 | 平台适配策略？ | ✅ 已确认 |
+| 7 | ADR-7 | 覆盖率追踪链？ | ✅ 已确认 |

@@ -1,9 +1,10 @@
 ---
-name: flowchart-design
+name: process-design
 description: >-
-  流程图法用例设计：四步完成流程图建模→路径枚举→路径数据→物理用例。
-  触发词包括：流程图、流程图法、路径分析、分支覆盖。
-  适用场景：MFQ 设计阶段，逻辑用例推荐方法为"流程图法"时。
+  P-Process 流程图法用例设计：四步完成流程图建模→路径枚举→路径数据→物理用例。
+  基于 PPDCS 中 P-Process 特征：多步骤有前后约束的业务流程。
+  触发词包括：流程图、流程图法、路径分析、分支覆盖、P-Process。
+  适用场景：MFQ 设计阶段，PPDCS 特征为 P-Process 的逻辑用例。
 argument-hint: "逻辑用例 ID（如 LC-002）"
 user-invokable: true
 status: active
@@ -11,19 +12,30 @@ status: active
 
 ## 目标
 
-对设计计划中标记为"流程图法"的逻辑用例，执行四步设计过程，
+对设计计划中 PPDCS 特征为 **P-Process** 的逻辑用例，执行四步设计过程，
 建模业务流程→枚举路径→分配数据→输出物理用例。
+
+## 理论基础
+
+P-Process 是 PPDCS 五特征之一：
+> 被测功能有"多步骤、有前后约束"的业务流程含义，
+> 流程不可回退（区别于 S-State），步骤间有确定的顺序约束。
+
+**识别条件**：需求描述包含"先...再..."、"如果...则..."、"流程"等词，
+且流程不存在状态回退（回退则应使用 S-State）。
+
+**建模工具**：流程图（flowchart）/ 活动图（activity diagram）
 
 ## 适用范围
 
 - 适用阶段：MFQ 的 design 阶段
-- 输入：`.mfq-work/integration/design-plan.md`（方法=流程图法的 LC）
+- 输入：`.mfq-work/integration/design-plan.md`（PPDCS=P-Process 的 LC）
 - 输出：`.mfq-work/design/<module>/<sub-module>/` 目录下的设计文件
 
 ## 前置条件
 
 - [ ] 设计计划已确认
-- [ ] 当前逻辑用例的推荐方法为"流程图法"
+- [ ] 当前逻辑用例的 PPDCS 特征为 P-Process
 
 ## 四步设计过程
 
@@ -118,6 +130,28 @@ flowchart TD
 | 5 | 查看规则列表 | rule_new 显示在列表中 |
 ```
 
+## 输出目录结构
+
+```
+.mfq-work/design/<module>/<sub-module>/
+├── ppdcs-profile.md      # P-Process 特征详情
+├── design-process.md      # 四步设计过程（含流程图、路径枚举、路径数据）
+└── physical-cases.md      # 物理用例列表
+```
+
+### ppdcs-profile.md 内容
+
+```markdown
+# PPDCS 特征详情
+
+- **主特征**：P-Process
+- **判定依据**：<从 ppdcs-annotation.md 引用>
+- **辅特征**：<如有>
+- **流程节点数**：N
+- **判断分支数**：M
+- **预估路径数**：K
+```
+
 ## 优先级分配规则
 
 | 路径类型 | 优先级 |
@@ -140,6 +174,7 @@ flowchart TD
 - 隐式的异常路径也要建模（如超时、网络断开）
 - 循环需要设定终止条件
 - 路径描述中注明经过哪些判断分支的哪个方向
+- **P-Process vs S-State 区分**：流程不可回退 = Process；可回退 = State
 
 ## 验收标准
 
@@ -147,4 +182,5 @@ flowchart TD
 - [ ] 所有判断分支均被至少一条路径覆盖
 - [ ] 每条路径有具体的测试数据
 - [ ] 物理用例包含优先级和测试类型
+- [ ] `ppdcs-profile.md` 已创建
 - [ ] 设计过程文档写入 `.mfq-work/design/<module>/<sub>/`

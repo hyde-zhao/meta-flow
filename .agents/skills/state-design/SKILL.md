@@ -1,9 +1,10 @@
 ---
-name: state-diagram-design
+name: state-design
 description: >-
-  状态图法用例设计：四步完成状态图建模→状态转换表→迁移路径数据→物理用例。
-  触发词包括：状态图、状态机、状态图法、状态迁移。
-  适用场景：MFQ 设计阶段，逻辑用例推荐方法为"状态图法"时。
+  S-State 状态图法用例设计：四步完成状态图建模→状态转换表→迁移路径数据→物理用例。
+  基于 PPDCS 中 S-State 特征：对象有多状态可互转，存在状态生命周期。
+  触发词包括：状态图、状态机、状态迁移、S-State。
+  适用场景：MFQ 设计阶段，PPDCS 特征为 S-State 的逻辑用例。
 argument-hint: "逻辑用例 ID（如 LC-003）"
 user-invokable: true
 status: active
@@ -11,19 +12,32 @@ status: active
 
 ## 目标
 
-对设计计划中标记为"状态图法"的逻辑用例，执行四步设计过程，
+对设计计划中 PPDCS 特征为 **S-State** 的逻辑用例，执行四步设计过程，
 建模状态图→状态转换表→迁移路径数据→输出物理用例。
+
+## 理论基础
+
+S-State 是 PPDCS 五特征之一：
+> 被测对象有多种状态，状态间可双向迁移（区别于 P-Process 的单向流程），
+> 存在状态生命周期，事件驱动状态转换。
+
+**识别条件**：对象有"启用/禁用"、"创建/销毁"、"运行/暂停/停止"等多状态，
+且状态间存在回退能力。
+
+**关键区分**：P-Process vs S-State — 流程能否回退？不能=Process，可以=State
+
+**建模工具**：状态图（stateDiagram）/ 状态转换表
 
 ## 适用范围
 
 - 适用阶段：MFQ 的 design 阶段
-- 输入：`.mfq-work/integration/design-plan.md`（方法=状态图法的 LC）
+- 输入：`.mfq-work/integration/design-plan.md`（PPDCS=S-State 的 LC）
 - 输出：`.mfq-work/design/<module>/<sub-module>/` 目录下的设计文件
 
 ## 前置条件
 
 - [ ] 设计计划已确认
-- [ ] 当前逻辑用例的推荐方法为"状态图法"
+- [ ] 当前逻辑用例的 PPDCS 特征为 S-State
 
 ## 四步设计过程
 
@@ -123,6 +137,29 @@ stateDiagram-v2
 | 5 | 删除日志服务器 | 状态变为"未配置" |
 ```
 
+## 输出目录结构
+
+```
+.mfq-work/design/<module>/<sub-module>/
+├── ppdcs-profile.md      # S-State 特征详情
+├── design-process.md      # 四步设计过程（含状态图、转换表、路径数据）
+└── physical-cases.md      # 物理用例列表
+```
+
+### ppdcs-profile.md 内容
+
+```markdown
+# PPDCS 特征详情
+
+- **主特征**：S-State
+- **判定依据**：<对象有多状态可双向迁移>
+- **辅特征**：<如有>
+- **状态数**：N
+- **合法转换数**：M
+- **非法转换数**：K
+- **预估路径数**：L
+```
+
 ## 优先级分配规则
 
 | 路径类型 | 优先级 |
@@ -149,6 +186,7 @@ stateDiagram-v2
 - 注意"死状态"：不应存在进入后无法离开的状态（除终止状态外）
 - 并发状态（如果有）需要特殊处理
 - 守卫条件要明确，避免歧义
+- **S-State vs P-Process 区分**：可回退 = State；不可回退 = Process
 
 ## 验收标准
 
@@ -157,4 +195,5 @@ stateDiagram-v2
 - [ ] 迁移路径覆盖所有合法转换
 - [ ] 包含至少 1 个非法转换的负面测试
 - [ ] 物理用例包含优先级和测试类型
+- [ ] `ppdcs-profile.md` 已创建
 - [ ] 设计过程文档写入 `.mfq-work/design/<module>/<sub>/`

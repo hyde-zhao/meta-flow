@@ -1,42 +1,58 @@
-# MFQ 测试用例设计工具（mfq-test-designer）
+# MFQ&PPDCS 测试用例设计工具（mfq-test-designer）
 
-> 基于 MFQ 方法论，从特性需求到测试用例的系统化设计工具。  
+> 基于《海盗派测试分析: MFQ&PPDCS》方法论，从特性需求到测试用例的系统化设计工具。  
 > 支持 Copilot CLI / Claude Code / OpenClaw 三平台安装使用。
 
 ---
 
 ## 概述
 
-MFQ 测试用例设计工具帮助测试架构师和测试工程师，通过 **M 分析**（模块/功能点）→ **F 分析**（耦合关系）→ **Q 分析**（质量属性）的系统化流程，从特性需求出发输出完整的测试方案和测试用例。
+MFQ&PPDCS 测试用例设计工具帮助测试架构师和测试工程师，通过 **M 分析**（基于 PPDCS 模型的单功能分析）→ **F 分析**（耦合关系）→ **Q 分析**（质量属性）的系统化流程，从特性需求出发输出完整的测试方案和测试用例。
 
+**理论基础**：《海盗派测试分析: MFQ&PPDCS》（邰晓梅著）  
 **首版试点**：华为防火墙设备（TGFW/NGFW）
 
 ## 核心特性
 
 | 特性 | 说明 |
 |------|------|
-| 📋 **MFQ 分析链** | M → F → Q 三维测试点分析，确保全面覆盖 |
+| 📋 **MFQ&PPDCS 分析链** | M(PPDCS) → F → Q 三维测试点分析 + PPDCS 特征标注 |
 | 🔗 **耦合矩阵引擎** | 直读 Excel 批注（含 openpyxl + zipfile 双路径），内存图模型 |
-| 🧪 **三种设计方法** | 数据组合法、流程图法、状态图法，统一四步设计过程 |
+| 🧪 **五种 PPDCS 设计方法** | 流程图法(P)、判定表法(P)、等价类+边界值法(D)、组合法(C)、状态图法(S) |
 | ✅ **双层覆盖验证** | 需求层（SR→TP→LC）+ 测试点层（TP→PC）自动检查 |
 | 🔄 **变更增量分析** | 需求变更仅影响相关模块，不改动无关用例 |
 | 🐛 **问题单回溯** | 定位覆盖盲区、遗漏环节，输出流程优化建议 |
+
+## PPDCS 五特征
+
+| 特征 | 含义 | 识别条件 | 设计方法 |
+|------|------|---------|---------|
+| **P-Process** | 流程 | 多步骤有序约束，不可回退 | 流程图/活动图 |
+| **P-Parameter** | 参数 | 参数间有业务规则依赖 | 判定表/因果图 |
+| **D-Data** | 数据 | 数据有取值范围，各项独立 | 等价类+边界值 |
+| **C-Combination** | 组合 | 多因子组合爆炸 | Pairwise/正交 |
+| **S-State** | 状态 | 多状态可互转，有生命周期 | 状态图/转换表 |
+
+**关键区分**：
+- Process vs State → 流程能否回退？不能=Process，可以=State
+- Parameter vs Data → 参数间有规则？有=Parameter，无=Data
+- Data vs Combination → 独立验证够？够=Data，需组合=Combination
 
 ## 架构概览
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                 mfq-test-designer Agent                  │
-│              (10 步状态机 + 2 扩展分支)                    │
+│              mfq-test-designer Agent                     │
+│           (12 步状态机 + 2 扩展分支)                      │
 ├─────────┬──────────┬──────────┬──────────┬──────────────┤
-│  input  │ scenario │ M/F/Q    │ design   │  delivery    │
-│         │          │ analysis │          │              │
+│  input  │ scenario │ M/F/Q    │ PPDCS    │  delivery    │
+│         │          │ analysis │ design   │              │
 ├─────────┴──────────┴──────────┴──────────┴──────────────┤
-│                     14 Skills                            │
+│                     16 Skills                            │
 │  feature-parser · scenario-discovery · m-analyzer        │
 │  f-analyzer · q-analyzer · test-point-integrator         │
-│  design-planner · data-combination-design                │
-│  flowchart-design · state-diagram-design                 │
+│  design-planner · process-design · parameter-design      │
+│  data-design · combination-design · state-design         │
 │  coverage-verifier · deliverable-renderer                │
 │  change-impact-analyzer · bug-gap-analyzer               │
 ├─────────────────────────────────────────────────────────┤
@@ -45,24 +61,24 @@ MFQ 测试用例设计工具帮助测试架构师和测试工程师，通过 **M
 └─────────────────────────────────────────────────────────┘
 ```
 
-## 10 步主流程
+## 12 步主流程
 
 ```
-1. input       特性文件解析 + 三~五级目录确认
-2. scenario    应用场景分析 + 用户确认
-3. m-analysis  模块/功能点拆分 + 测试点生成
-4. f-analysis  耦合关系分析（Excel矩阵 + 场景推理 + 代码依赖）
-5. q-analysis  质量属性分析（HTSM 维度评估）
-6. integration 测试点归集 + 覆盖检查 + 逻辑合并
-7. plan        设计方法推荐 + 用户确认
-8. design      并行用例设计（数据组合 / 流程图 / 状态图）
-9. coverage    双层覆盖率验证
-10. delivery   交付物生成（测试方案.md + 测试用例.md）
+ 1. input        特性文件解析 + 三~五级目录确认           (KYM)
+ 2. scenario     应用场景分析 + 用户确认                   (KYM)
+ 3. m-analysis   单功能拆分 + PPDCS特征标注 + 测试点      (M+TCO)
+ 4. f-analysis   耦合关系分析（Excel矩阵 + 场景 + 代码） (F)
+ 5. q-analysis   质量属性分析（HTSM 维度评估）            (Q)
+ 6. integration  M+F+Q测试点归集 + 覆盖检查 + 逻辑合并
+ 7. plan         PPDCS五特征匹配推荐 + 用户确认            (PPDCS)
+ 8. design       并行用例设计（5种PPDCS方法选择执行）      (TD)
+ 9. coverage     双层覆盖率验证
+10. delivery     交付物生成（测试方案.md + 测试用例.md）
 ```
 
 ### 扩展分支
 
-- **需求变更**：变更需求 → 影响分析 → 增量 MFQ → 增量设计 → 覆盖验证
+- **需求变更**：变更需求 → 影响分析 → 增量 MFQ(PPDCS) → 增量设计 → 覆盖验证
 - **问题单分析**：问题单 → 覆盖回溯 → 遗漏定位 → 用例补充 → 流程优化
 
 ## 快速开始
@@ -74,7 +90,7 @@ MFQ 测试用例设计工具帮助测试架构师和测试工程师，通过 **M
 ```
 .github/agents/mfq-test-designer.agent.md    # Agent 入口
 .agents/agents/mfq-test-designer.md           # Agent 完整提示词
-.agents/skills/*/SKILL.md                     # 14 个 Skill
+.agents/skills/*/SKILL.md                     # 16 个 Skill
 scripts/excel_coupling_tool.py                # Excel 工具
 scripts/mcp_query_client.py                   # MCP 客户端
 ```
@@ -115,24 +131,26 @@ scripts/*.py
 
 工具通过 MCP 或 Web 搜索获取典型应用场景，以交互方式与你确认。
 
-### 3. MFQ 分析
+### 3. MFQ(PPDCS) 分析
 
-自动执行 M → F → Q 三维分析。F 分析需要提供耦合矩阵 Excel 文件。
+自动执行 M(PPDCS 标注) → F → Q 三维分析。M 分析会为每个子模块标注 PPDCS 主特征。F 分析需要提供耦合矩阵 Excel 文件。
 
 ### 4. 用例设计
 
-工具推荐设计方法后需你确认。确认后并行执行三种设计方法：
+工具基于 PPDCS 特征匹配推荐设计方法后需你确认。确认后并行执行五种设计方法：
 
-| 方法 | 适用场景 | 四步产出 |
-|------|---------|---------|
-| 数据组合法 | 多参数输入/输出 | 等价类表 → 组合表 → 逻辑用例 → 物理用例 |
-| 流程图法 | 业务流程有分支 | 流程图 → 路径表 → 路径数据 → 物理用例 |
-| 状态图法 | 对象有状态变迁 | 状态图 → 转换表 → 迁移数据 → 物理用例 |
+| PPDCS | 方法 | 适用场景 | 四步产出 |
+|-------|------|---------|---------|
+| P-Process | 流程图法 | 多步骤业务流程 | 流程图 → 路径表 → 路径数据 → 物理用例 |
+| P-Parameter | 判定表法 | 参数有规则依赖 | 规则提取 → 判定表 → 逻辑用例 → 物理用例 |
+| D-Data | 等价类+边界值 | 独立数据验证 | 等价类表 → 边界值表 → 逻辑用例 → 物理用例 |
+| C-Combination | 组合法 | 多因子组合爆炸 | 因子表 → Pairwise → 逻辑用例 → 物理用例 |
+| S-State | 状态图法 | 状态生命周期 | 状态图 → 转换表 → 迁移数据 → 物理用例 |
 
 ### 5. 交付
 
 输出两个 Markdown 文档：
-- **`<特性名>特性测试方案.md`**：特性概述 + 场景分析 + MFQ 分析 + 整合
+- **`<特性名>特性测试方案.md`**：特性概述 + 场景分析 + MFQ(PPDCS) 分析 + 整合
 - **`<特性名>特性测试用例.md`**：测试点表 + 按五级目录组织的设计过程
 
 ## 用户确认点
@@ -141,7 +159,8 @@ scripts/*.py
 |------|---------|
 | input 完成 | 三~五级目录结构 |
 | scenario 完成 | 应用场景列表 |
-| plan 完成 | 每个逻辑用例的设计方法 |
+| m-analysis 完成 | PPDCS 特征标注 |
+| plan 完成 | 每个逻辑用例的 PPDCS 设计方法 |
 | coverage 完成 | 覆盖率报告 |
 
 ## 运行时目录
@@ -153,11 +172,16 @@ scripts/*.py
 ├── STATE.yaml              # 分析进度
 ├── feature-input/           # 需求 + 目录结构
 ├── scenarios/               # 应用场景
-├── m-analysis/              # M 分析测试点
+├── m-analysis/
+│   ├── test-points.md       # M 分析测试点
+│   └── ppdcs-annotation.md  # PPDCS 特征标注表
 ├── f-analysis/              # 耦合图模型 + 耦合测试点
 ├── q-analysis/              # 质量属性测试点
-├── integration/             # 整合后的逻辑用例 + 测试数据
-├── design/<module>/<sub>/   # 按五级目录的设计过程
+├── integration/             # 整合后的逻辑用例 + 测试数据 + PPDCS 设计计划
+├── design/<module>/<sub>/
+│   ├── ppdcs-profile.md     # PPDCS 特征详情
+│   ├── design-process.md    # 四步设计过程
+│   └── physical-cases.md    # 物理用例
 ├── coverage/                # 覆盖率报告
 └── delivery/                # 最终交付物
 ```
@@ -202,16 +226,6 @@ SR（系统需求）→ TP（测试点）→ LC（逻辑用例）→ TD（测试
 | P3 | 一般功能 | ~25% |
 | P4 | 生僻场景 | ~5% |
 
-## 设计方法选择规则
-
-```
-逻辑用例 → 分析特征
-    ├── 存在状态变迁？ → 状态图法
-    ├── 存在流程分支？ → 流程图法
-    ├── 多参数组合？   → 数据组合法
-    └── 极简场景？     → 直接设计法（尽量避免）
-```
-
 ## 项目结构
 
 ```
@@ -227,9 +241,11 @@ myflow/
 │       ├── q-analyzer/SKILL.md
 │       ├── test-point-integrator/SKILL.md
 │       ├── design-planner/SKILL.md
-│       ├── data-combination-design/SKILL.md
-│       ├── flowchart-design/SKILL.md
-│       ├── state-diagram-design/SKILL.md
+│       ├── process-design/SKILL.md        # P-Process
+│       ├── parameter-design/SKILL.md      # P-Parameter
+│       ├── data-design/SKILL.md           # D-Data
+│       ├── combination-design/SKILL.md    # C-Combination
+│       ├── state-design/SKILL.md          # S-State
 │       ├── coverage-verifier/SKILL.md
 │       ├── deliverable-renderer/SKILL.md
 │       ├── change-impact-analyzer/SKILL.md
@@ -247,8 +263,9 @@ myflow/
 
 | 字段 | 值 |
 |------|------|
-| 版本 | 1.0.0 |
-| 架构 | 1 Agent + 14 Skills + 2 Python 工具 |
+| 版本 | 2.0.0 |
+| 理论基础 | MFQ&PPDCS（《海盗派测试分析》） |
+| 架构 | 1 Agent + 16 Skills + 2 Python 工具 |
 | 试点产品 | 华为防火墙（TGFW/NGFW） |
 | 目标平台 | Copilot CLI / Claude Code / OpenClaw |
 

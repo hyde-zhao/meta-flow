@@ -1,17 +1,17 @@
 ---
 project_id: "MFQ-001"
 workflow_mode: "complex"
-current_phase: "delivered"
-current_agent: "meta-po"
-iteration: 9
+current_phase: "documentation"
+current_agent: "meta-doc"
+iteration: 12
 blocked: false
-last_action: "meta-doc 完成 README.md + USER-MANUAL.md，检查点④已发起（待用户确认）"
-next_action: "等待用户确认交付或提出修改意见"
+last_action: "CR-001 PPDCS 集成 — 8个受影响 Story 实现完成（v2）"
+next_action: "meta-doc 更新文档 → 终验检查点④"
 checkpoints:
   requirement_confirmed: true
   solution_selected: true
   story_plan_confirmed: true
-  final_package_verified: pending
+  final_package_verified: false
 parallel_waves:
   - wave: W1
     stories: [STORY-01, STORY-02, STORY-03, STORY-05]
@@ -20,7 +20,7 @@ parallel_waves:
     stories: [STORY-04, STORY-06, STORY-07, STORY-08, STORY-09]
     status: verified
   - wave: W3
-    stories: [STORY-10, STORY-11, STORY-12, STORY-13, STORY-14]
+    stories: [STORY-10, STORY-11, STORY-12, STORY-13, STORY-14, STORY-17, STORY-18]
     status: verified
   - wave: W4
     stories: [STORY-15, STORY-16]
@@ -70,7 +70,19 @@ history:
     action: "所有 Wave verified，推进至 documentation 阶段，唤醒 meta-doc。"
     agent: "meta-po"
     timestamp: "2026-04-10T01:02:33Z"
-last_updated: "2026-04-10T01:02:33Z"
+  - phase: "documentation → delivered"
+    action: "README.md + USER-MANUAL.md 生成完成"
+    agent: "meta-doc"
+    timestamp: "2026-04-10T02:17:00Z"
+  - phase: "delivered → solution-design (CR-001)"
+    action: "用户上传 MFQ&PPDCS 理论书籍，发现 PPDCS 建模框架缺失。CR-001 批准，回退至 solution-design 重新输出方案。"
+    agent: "meta-po"
+    timestamp: "2026-04-10T02:35:00Z"
+  - phase: "story-execution (CR-001)"
+    action: "CR-001 v2 实现完成：8 Stories（STORY-01,04,09,10→combination,11→process,12→state 修改 + STORY-17 parameter-design,STORY-18 data-design 新增）。Agent 升级到 12步+16 Skills+PPDCS。旧 Skills 删除。README+Copilot入口已更新。"
+    agent: "meta-dev"
+    timestamp: "2026-04-10T03:30:00Z"
+last_updated: "2026-04-10T03:30:00Z"
 ---
 
 <!--
