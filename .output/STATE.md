@@ -3,10 +3,10 @@ project_id: "MFQ-001"
 workflow_mode: "complex"
 current_phase: "documentation"
 current_agent: "meta-po"
-iteration: 14
+iteration: 16
 blocked: false
-last_action: "v2.2 目录重构：.workflow-meta → .output，产物与元工作流隔离"
-next_action: "用户确认检查点④后标记 delivered"
+last_action: "v2.3 .input/.output 目录约定 + Claude Code 测试环境搭建"
+next_action: "触发检查点④（终验）"
 checkpoints:
   requirement_confirmed: true
   solution_selected: true
@@ -86,7 +86,19 @@ history:
     action: "v2.1 整改：(1) meta-se 增加状态机门控（problem-definition→solution-design→waiting→story-planning→blocked）+ 统一系统设计原则（Prompt/Skill/Tool/Doc 四层）+ Skill 编排合约；(2) meta-dev 增加状态机（ready-check→implementing→self-review→handoff→blocked）+ Tool/MCP 接口约束 + 自检与交接摘要规范；(3) 工作目录迁移 .mfq-work/ → .output/（涉及 Agent+16 Skills+Python 工具+全部设计文档）；(4) Copilot CLI 入口 meta-se.agent.md/meta-dev.agent.md 同步重写。"
     agent: "meta-po"
     timestamp: "2026-04-10T04:17:00Z"
-last_updated: "2026-04-10T04:17:00Z"
+  - phase: "documentation"
+    action: "v2.2 output isolation: .workflow-meta → .output，产物目录与元工作流隔离。产物文件使用相对路径，支持独立测试。"
+    agent: "meta-dev"
+    timestamp: "2026-04-10T05:30:00Z"
+  - phase: "documentation"
+    action: "rename: mfq-test-designer → ptm-tde，更新 2 个文件名 + 59 处引用。"
+    agent: "meta-dev"
+    timestamp: "2026-04-10T05:45:00Z"
+  - phase: "documentation"
+    action: "v2.3 .input/.output 目录约定：运行时工作目录从 mfq/ 拆分为 .input/（用户输入）+ .output/（工具输出），创建 CLAUDE.md + .gitignore，初始化独立 git 仓库。27 个文件路径批量更新。"
+    agent: "meta-po"
+    timestamp: "2026-04-10T06:34:00Z"
+last_updated: "2026-04-10T06:34:00Z"
 ---
 
 <!--
