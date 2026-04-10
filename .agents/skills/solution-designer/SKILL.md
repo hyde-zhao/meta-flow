@@ -30,8 +30,8 @@ status: active
 
 ## 前置条件
 
-- [ ] `.workflow-meta/REQUIREMENTS.md` 存在且 `status: confirmed`
-- [ ] `.workflow-meta/USE-CASES.md` 存在且 `status: confirmed`
+- [ ] `.output/REQUIREMENTS.md` 存在且 `status: confirmed`
+- [ ] `.output/USE-CASES.md` 存在且 `status: confirmed`
 - [ ] 已知目标平台（至少声明一个）
 
 ## 复杂度判定规则
@@ -99,10 +99,10 @@ status: active
 
 | 文件 | 路径 | 输出时机 | 必填 |
 |------|------|---------|------|
-| 方案备选 | `.workflow-meta/SOLUTION-OPTIONS.md` | Phase 1-3 完成后 | 是 |
-| 方案设计 | `.workflow-meta/SOLUTION-DESIGN.md` | Phase 5（人工确认后） | 是 |
-| 架构决策 | `.workflow-meta/ARCHITECTURE-DECISION.md` | Phase 5（人工确认后） | 是 |
-| 平台安装规范 | `.workflow-meta/PLATFORM-INSTALL-SPEC.md` | Phase 5（人工确认后） | 是 |
+| 方案备选 | `.output/SOLUTION-OPTIONS.md` | Phase 1-3 完成后 | 是 |
+| 方案设计 | `.output/SOLUTION-DESIGN.md` | Phase 5（人工确认后） | 是 |
+| 架构决策 | `.output/ARCHITECTURE-DECISION.md` | Phase 5（人工确认后） | 是 |
+| 平台安装规范 | `.output/PLATFORM-INSTALL-SPEC.md` | Phase 5（人工确认后） | 是 |
 
 ## 验收标准
 

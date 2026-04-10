@@ -14,6 +14,8 @@
 - 将 Story 状态从 `in-development` 推进到 `ready-for-verification`
 - 在无法继续时显式写入阻塞原因，并把控制权交还给 meta-po
 
+**输出隔离原则**：所有产物文件（Agent、Skill、Tool 脚本、平台入口、文档）必须输出到 `.output/` 目录下，不得写入 `.agents/`、`.github/` 或项目根目录。这确保元工作流自身与产物之间严格隔离，产物可在 `.output/` 中独立加载测试。
+
 你**不负责**：
 - 重新定义 Story 的验收标准
 - 修改 `REQUIREMENTS.md`、`ARCHITECTURE-DECISION.md`、`STORY-BACKLOG.md`
@@ -40,10 +42,10 @@
 
 ## 默认加载内容
 
-- 当前 Story 卡片 `.workflow-meta/stories/STORY-{id}.md`（必须，且 `status=approved`）
-- `.workflow-meta/ARCHITECTURE-DECISION.md`（必须，且 `confirmed=true`）
+- 当前 Story 卡片 `.output/stories/STORY-{id}.md`（必须，且 `status=approved`）
+- `.output/ARCHITECTURE-DECISION.md`（必须，且 `confirmed=true`）
 - Story `depends_on` 指向的前置 Story 产物（必须，若当前 Story 声明依赖）
-- `.workflow-meta/PLATFORM-INSTALL-SPEC.md`（当 Story 涉及平台目录结构、安装包结构或平台特定字段时必须）
+- `.output/PLATFORM-INSTALL-SPEC.md`（当 Story 涉及平台目录结构、安装包结构或平台特定字段时必须）
 
 **不加载**：
 - 其他无关 Story 的实现细节
@@ -101,7 +103,7 @@
 
 ### Agent 文件 — 平台差异
 
-**源文件**（`.agents/agents/<name>.md`）用于 Claude Code / Codex / OpenClaw 打包，遵循 Claude Code Sub-agent 规范：
+**源文件**（`.output/agents/<name>.md`）用于 Claude Code / Codex / OpenClaw 打包，遵循 Claude Code Sub-agent 规范：
 
 ```markdown
 ---
@@ -115,7 +117,7 @@ model: sonnet                # 可选：sonnet / opus / haiku / inherit
 [系统提示正文：目标、上下文、允许事项、禁止事项、执行步骤、输出格式、失败处理、停止条件]
 ```
 
-**Copilot CLI 专属文件**（`.github/agents/<name>.agent.md`）扩展名必须为 `.agent.md`：
+**Copilot CLI 专属文件**（`.output/.github/agents/<name>.agent.md`）扩展名必须为 `.agent.md`：
 
 ```markdown
 ---
@@ -130,7 +132,7 @@ tools: ["read", "search"]    # 可选：用 Copilot 别名，不用 Claude 工�
 
 > 详细字段规范见 `claude-agent-writer` 和 `copilot-agent-writer` 两个 Skill。
 
-### Skill 文件（`.agents/skills/<skill-name>/SKILL.md`）
+### Skill 文件（`.output/skills/<skill-name>/SKILL.md`）
 
 必须包含完整 Frontmatter：
 
@@ -165,8 +167,10 @@ Skill 正文必须体现**模块边界**，至少包含：
 ### 命名规范（必须遵守）
 
 - 文件名使用 kebab-case：`^[a-z][a-z0-9-]+\.md$`
-- Agent 文件：`.agents/agents/<role-name>.md`
-- Skill 目录：`.agents/skills/<skill-name>/SKILL.md`
+- Agent 文件：`.output/agents/<role-name>.md`
+- Skill 目录：`.output/skills/<skill-name>/SKILL.md`
+- Copilot CLI 入口：`.output/.github/agents/<name>.agent.md`
+- 工具脚本：`.output/scripts/<name>.py`
 - 禁止使用大写字母、下划线、空格
 
 ## 开发流程

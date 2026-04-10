@@ -4,9 +4,9 @@ SCOPE-Pack Platform Package Builder
 将已验证的 Agent/Skill 产物打包为各平台安装包。
 
 用法：
-  python scripts/package_builder.py --manifest .workflow-meta/PACKAGE-MANIFEST.yaml
-  python scripts/package_builder.py --manifest .workflow-meta/PACKAGE-MANIFEST.yaml --targets copilot,claude-code
-  python scripts/package_builder.py --manifest .workflow-meta/PACKAGE-MANIFEST.yaml --dry-run
+  python scripts/package_builder.py --manifest .output/PACKAGE-MANIFEST.yaml
+  python scripts/package_builder.py --manifest .output/PACKAGE-MANIFEST.yaml --targets copilot,claude-code
+  python scripts/package_builder.py --manifest .output/PACKAGE-MANIFEST.yaml --dry-run
 """
 
 import argparse
@@ -236,10 +236,10 @@ def build_platform(
 
 def main():
     parser = argparse.ArgumentParser(description="SCOPE-Pack Platform Package Builder")
-    parser.add_argument("--manifest", default=".workflow-meta/PACKAGE-MANIFEST.yaml", help="PACKAGE-MANIFEST.yaml 路径")
+    parser.add_argument("--manifest", default=".output/PACKAGE-MANIFEST.yaml", help="PACKAGE-MANIFEST.yaml 路径")
     parser.add_argument("--targets", default="copilot,claude-code,codex,openclaw", help="目标平台，逗号分隔")
-    parser.add_argument("--agents-dir", default=".agents/agents", help="Agent 源文件目录")
-    parser.add_argument("--skills-dir", default=".agents/skills", help="Skill 源文件目录")
+    parser.add_argument("--agents-dir", default=".output/agents", help="Agent 产物源文件目录")
+    parser.add_argument("--skills-dir", default=".output/skills", help="Skill 产物源文件目录")
     parser.add_argument("--entry-file", default=".github/copilot-instructions.md", help="Copilot 主入口文件")
     parser.add_argument("--output", default="packages", help="输出目录")
     parser.add_argument("--dry-run", action="store_true", help="仅校验，不写文件")

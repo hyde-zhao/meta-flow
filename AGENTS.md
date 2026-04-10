@@ -15,8 +15,8 @@
 | 始终激活 | 是 |
 
 meta-po 的职责：
-- **项目初始化**：创建 `.workflow-meta/` 工作目录及所有信息流转文件
-- 初始化 `.workflow-meta/STATE.md` 并维护全程状态
+- **项目初始化**：创建 `.output/` 工作目录及所有信息流转文件
+- 初始化 `.output/STATE.md` 并维护全程状态
 - **先理解，后行动**：退出条件先验、上下文先行、追问优先于假设、状态一致性校验
 - 发起人工检查点（共 4 个：需求确认、方案选择确认、Story 计划确认、终验）
 - 唤醒和收敛下游功能 Agent（机器可验证退出条件）
@@ -52,23 +52,35 @@ init（meta-po）
 
 | 目录 / 文件 | 用途 |
 |------------|------|
-| `.workflow-meta/` | 运行时对象文件 |
-| `.workflow-meta/STATE.md` | 工作流运行时状态（meta-po 维护） |
-| `.workflow-meta/REQUEST.md` | 用户原始请求 |
-| `.workflow-meta/USE-CASES.md` | 场景文档（meta-pm 产出） |
-| `.workflow-meta/REQUIREMENTS.md` | 结构化需求（meta-pm 产出） |
-| `.workflow-meta/SOLUTION-OPTIONS.md` | 多方案对比（meta-se 产出） |
-| `.workflow-meta/SOLUTION-DESIGN.md` | 选定方案描述（meta-se 产出） |
-| `.workflow-meta/ARCHITECTURE-DECISION.md` | 架构决策（meta-se 产出） |
-| `.workflow-meta/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
-| `.workflow-meta/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
-| `.workflow-meta/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
-| `.workflow-meta/templates/` | 所有对象的标准模板 |
-| `.workflow-meta/stories/` | Story 卡片（STORY-*.md） |
-| `.workflow-meta/changes/` | 变更单（CR-*.md） |
-| `.workflow-meta/packages/` | 各平台安装包输出 |
-| `.agents/agents/` | Agent 提示词文件 |
-| `.agents/skills/` | Skill 定义文件 |
+| **`.output/`** | **产物输出 + 工作流运行时状态（统一输出目录）** |
+| `.output/STATE.md` | 工作流运行时状态（meta-po 维护） |
+| `.output/REQUEST.md` | 用户原始请求 |
+| `.output/USE-CASES.md` | 场景文档（meta-pm 产出） |
+| `.output/REQUIREMENTS.md` | 结构化需求（meta-pm 产出） |
+| `.output/SOLUTION-OPTIONS.md` | 多方案对比（meta-se 产出） |
+| `.output/SOLUTION-DESIGN.md` | 选定方案描述（meta-se 产出） |
+| `.output/ARCHITECTURE-DECISION.md` | 架构决策（meta-se 产出） |
+| `.output/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
+| `.output/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
+| `.output/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
+| `.output/templates/` | 所有对象的标准模板 |
+| `.output/stories/` | Story 卡片（STORY-*.md） |
+| `.output/changes/` | 变更单（CR-*.md） |
+| `.output/packages/` | 各平台安装包输出 |
+| `.output/agents/` | **产物 Agent 提示词文件**（meta-dev 产出） |
+| `.output/skills/` | **产物 Skill 定义文件**（meta-dev 产出） |
+| `.output/scripts/` | **产物工具脚本**（meta-dev 产出） |
+| `.output/.github/agents/` | **产物 Copilot CLI 入口**（meta-dev 产出） |
+| `.output/README.md` | 产物 README（meta-doc 产出） |
+| `.output/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
+| `.agents/agents/` | 元工作流 Agent 提示词文件（meta-po/pm/se/dev/qa/doc） |
+| `.agents/skills/` | 元工作流 Skill 定义文件（SCOPE-Pack 内置） |
+
+### 输出隔离原则
+
+> **所有由元工作流产生的产物必须输出到 `.output/` 目录。**
+> `.agents/` 和 `.github/` 仅存放元工作流自身的定义文件，不得被产物污染。
+> 测试时可在 `.output/` 目录中独立启动 Agent 加载产物文件验证。
 
 ## 协议约定
 

@@ -15,13 +15,13 @@ tools: ["read", "edit", "search", "shell", "skill"]
 
 **进入前必须检查：**
 ```yaml
-# .workflow-meta/VALIDATION-ENV.yaml 必须满足
+# .output/VALIDATION-ENV.yaml 必须满足
 approval:
   confirmed: true
 ```
 
 如文件不存在或 `confirmed != true`，立即暂停并提示：
-> 验证已暂停。请提供 `.workflow-meta/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
+> 验证已暂停。请提供 `.output/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
 
 ## 8 维度验收矩阵
 

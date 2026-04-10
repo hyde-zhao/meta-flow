@@ -67,14 +67,16 @@
 ## 默认加载内容
 
 **步骤零 + 步骤一**：
-- `.workflow-meta/USE-CASES.md`（必须，且 status=confirmed）
-- `.workflow-meta/REQUIREMENTS.md`（必须，且 status=confirmed）
-- `.workflow-meta/PLATFORM-INSTALL-SPEC.md`（若已存在，参考更新）
+- `.output/REQUEST.md`（建议加载，用于问题陈述和目标来源）
+- `.output/USE-CASES.md`（必须，且 status=confirmed）
+- `.output/REQUIREMENTS.md`（必须，且 status=confirmed）
+- `.output/INPUT-INDEX.md`（若存在，作为原始需求/原始数据/参考资料索引）
+- `.output/PLATFORM-INSTALL-SPEC.md`（若已存在，参考更新）
 
 **步骤二**：
-- `.workflow-meta/ARCHITECTURE-DECISION.md`（必须，且 confirmed=true）
-- `.workflow-meta/SOLUTION-DESIGN.md`（参考选定方案）
-- `.workflow-meta/templates/STORY-TEMPLATE.md`（Story 卡片格式）
+- `.output/ARCHITECTURE-DECISION.md`（必须，且 confirmed=true）
+- `.output/SOLUTION-DESIGN.md`（参考选定方案）
+- `.output/templates/STORY-TEMPLATE.md`（Story 卡片格式）
 
 **不加载**：需求澄清历史、开发日志、验证报告。
 
@@ -105,18 +107,19 @@
 
 | 字段 | 说明 | 来源 |
 |------|------|------|
-| **问题陈述** | 一段话描述要解决的核心问题 | 从 REQUEST.md + REQUIREMENTS.md 提炼 |
+| **问题陈述** | 一段话描述要解决的核心问题 | 从 REQUEST.md + REQUIREMENTS.md + INPUT-INDEX.md 提炼 |
 | **目标** | 3~5 条量化目标（可度量、可验收） | 从 REQUIREMENTS.md 里程碑提炼 |
-| **已知约束** | 技术约束、平台约束、合规约束 | 从 REQUIREMENTS.md + USE-CASES.md 提炼 |
+| **已知约束** | 技术约束、平台约束、合规约束 | 从 REQUIREMENTS.md + USE-CASES.md + INPUT-INDEX.md 提炼 |
 | **非目标** | 明确不做的内容 | 从 REQUIREMENTS.md "排除项" 提炼 |
 | **关键假设** | 设计依赖的前提条件 | 从 REQUIREMENTS.md "默认假设" + 自行推理 |
 | **成功标准** | 如何判断方案成功 | 从 REQUIREMENTS.md 里程碑 + USE-CASES.md 指标 |
-| **缺失信息** | 信息不足无法做决策的项目 | 自行识别，标注 BLOCKING / NICE-TO-HAVE |
+| **缺失信息** | 信息不足无法做决策的项目 | 结合 INPUT-INDEX.md 与正式需求对象对比后识别，标注 BLOCKING / NICE-TO-HAVE |
 
 **关键规则**：
 - 若存在 **BLOCKING 级别缺失信息**，必须暂停方案设计，由 meta-po 发起澄清
 - 非目标不可为空 — 明确边界比扩大范围更重要
 - 关键假设必须标注验证方式（"如何确认该假设成立"）
+- 若 `INPUT-INDEX.md` 中存在原始需求或原始数据，必须先核对其是否已在 REQUIREMENTS.md / USE-CASES.md 中得到吸收，再判定为“缺失信息”
 
 ---
 
@@ -488,7 +491,7 @@ Story 卡片和 DEVELOPMENT-PLAN.yaml 中的描述必须遵循以下规范，确
 - ❌ 避免：`考虑`、`可以`、`建议`、`如有需要`、`适当地`
 
 **路径规范**：
-- ✅ 使用完整路径：`.agents/agents/my-agent.md`
+- ✅ 使用完整路径：`.output/agents/my-agent.md`
 - ❌ 避免模糊引用：`相应的 Agent 文件`、`对应目录`
 
 **条件规范**：
@@ -522,12 +525,12 @@ Story 卡片和 DEVELOPMENT-PLAN.yaml 中的描述必须遵循以下规范，确
 ### 输入文件
 | 文件路径 | 提供方（前置 Story 或外部） | 关键字段说明 |
 |---------|--------------------------|------------|
-| .workflow-meta/xxx.md | STORY-001 产出 | `field_a`：含义；`field_b`：格式 |
+| .output/xxx.md | STORY-001 产出 | `field_a`：含义；`field_b`：格式 |
 
 ### 输出文件
 | 文件路径 | 接收方（后续 Story 或用户） | 完整结构规范 |
 |---------|--------------------------|------------|
-| .agents/agents/xxx.md | meta-dev 消费 | 见下方结构示例 |
+| .output/agents/xxx.md | meta-dev 消费 | 见下方结构示例 |
 
 **输出文件结构示例：**
 ```
@@ -550,9 +553,9 @@ Story 卡片和 DEVELOPMENT-PLAN.yaml 中的描述必须遵循以下规范，确
 
 | 操作 | 文件路径 | 说明 |
 |------|---------|------|
-| CREATE | .agents/agents/xxx.md | Agent 提示词文件 |
-| CREATE | .agents/skills/xxx/SKILL.md | Skill 定义文件 |
-| MODIFY | .workflow-meta/stories/STORY-{id}.md | 状态更新 |
+| CREATE | .output/agents/xxx.md | Agent 提示词文件 |
+| CREATE | .output/skills/xxx/SKILL.md | Skill 定义文件 |
+| MODIFY | .output/stories/STORY-{id}.md | 状态更新 |
 
 ### 关键 Frontmatter 字段
 
@@ -570,8 +573,8 @@ Story 卡片和 DEVELOPMENT-PLAN.yaml 中的描述必须遵循以下规范，确
 
 | TASK-ID | 操作 | 目标文件 | 具体内容 | 完成标志 |
 |---------|------|---------|---------|---------|
-| T-{id}-01 | 创建 | .agents/agents/xxx.md | 创建 Agent 文件，包含 [具体字段列表] | 文件存在且 Frontmatter 完整 |
-| T-{id}-02 | 创建 | .agents/skills/xxx/SKILL.md | 创建 Skill 文件，包含 [具体内容要求] | 文件存在且 name/description 非空 |
+| T-{id}-01 | 创建 | .output/agents/xxx.md | 创建 Agent 文件，包含 [具体字段列表] | 文件存在且 Frontmatter 完整 |
+| T-{id}-02 | 创建 | .output/skills/xxx/SKILL.md | 创建 Skill 文件，包含 [具体内容要求] | 文件存在且 name/description 非空 |
 
 ### 平台目标
 <需要支持的平台及各平台的差异说明>

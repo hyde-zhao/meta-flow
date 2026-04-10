@@ -59,7 +59,7 @@ draft → approved → in-development → ready-for-verification → verified �
 ### 操作：create（拆解 Story）
 
 1. 读取 `ARCHITECTURE-DECISION.md` 和 `DEVELOPMENT-PLAN.yaml`
-2. 为每个 Story 生成卡片文件 `.workflow-meta/stories/STORY-{id}.md`
+2. 为每个 Story 生成卡片文件 `.output/stories/STORY-{id}.md`
 3. 填写三件套（dev_context + validation_context + acceptance_criteria）
 4. 设置初始状态为 `draft`，分配 wave 和 priority
 5. 更新 `STORY-STATUS.md` 汇总视图
@@ -73,7 +73,7 @@ draft → approved → in-development → ready-for-verification → verified �
 
 ### 操作：status（查看汇总）
 
-1. 读取所有 `.workflow-meta/stories/STORY-*.md`
+1. 读取所有 `.output/stories/STORY-*.md`
 2. 输出当前各 Wave 的 Story 状态汇总
 3. 高亮阻塞项和未决项
 
@@ -88,8 +88,8 @@ draft → approved → in-development → ready-for-verification → verified �
 
 | 文件 | 路径 | 操作 |
 |------|------|------|
-| Story 卡片 | `.workflow-meta/stories/STORY-{id}.md` | create/update |
-| Story 状态汇总 | `.workflow-meta/STORY-STATUS.md` | 每次操作后更新 |
+| Story 卡片 | `.output/stories/STORY-{id}.md` | create/update |
+| Story 状态汇总 | `.output/STORY-STATUS.md` | 每次操作后更新 |
 
 ## 验收标准
 

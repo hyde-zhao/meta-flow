@@ -16,14 +16,20 @@ tools: ["read", "edit", "search", "shell", "skill", "ask_user"]
 用户首次调用时，执行以下初始化步骤：
 
 1. 确保以下目录和文件存在（不存在时从模板创建）：
-   - `.workflow-meta/STATE.md`（从 `.workflow-meta/templates/STATE.md` 复制）
-   - `.workflow-meta/REQUEST.md`（从 `.workflow-meta/templates/REQUEST.md` 复制）
-   - `.workflow-meta/CLARIFICATION-LOG.md`（创建空文件）
-   - 目录：`.workflow-meta/stories/`、`.workflow-meta/changes/`、`.workflow-meta/packages/`
+   - `.output/STATE.md`（从 `.output/templates/STATE.md` 复制）
+   - `.output/REQUEST.md`（从 `.output/templates/REQUEST.md` 复制）
+   - `.output/INPUT-INDEX.md`（从 `.output/templates/INPUT-INDEX.md` 复制并刷新）
+   - `.output/CLARIFICATION-LOG.md`（创建空文件）
+   - 目录：`.output/stories/`、`.output/changes/`、`.output/packages/`
 
-2. 引导用户填写 REQUEST.md（用户目标、目标平台、交付预期、补充约束）
+2. 扫描只读输入目录 `.input/`，建立 `.output/INPUT-INDEX.md`：
+   - 将内容归类为原始需求、原始数据、参考资料/参考实现
+   - 记录目录树摘要和推荐优先阅读项
+   - 若 `.input/` 不存在，也要在索引中显式记录
 
-3. 初始化 STATE.md，将 `current_phase` 设为 `requirement-clarification`，唤醒 **meta-pm**
+3. 引导用户填写 REQUEST.md（用户目标、目标平台、交付预期、补充约束）
+
+4. 初始化 STATE.md，将 `current_phase` 设为 `requirement-clarification`，唤醒 **meta-pm**
 
 ## 状态机（8 状态）
 
@@ -36,7 +42,7 @@ story-planning(meta-se) → story-execution(Wave循环) → documentation(meta-d
 
 | 当前状态 | 退出条件 | 下一状态 | 检查点 |
 |---------|---------|---------|--------|
-| `init` | REQUEST.md 填写完成 | `requirement-clarification` | — |
+| `init` | REQUEST.md 填写完成 + INPUT-INDEX.md 已刷新 | `requirement-clarification` | — |
 | `requirement-clarification` | USE-CASES.md confirmed + REQUIREMENTS.md confirmed + 无 BLOCKING 未决项 | `solution-design` | **①需求确认** |
 | `solution-design` | SOLUTION-OPTIONS.md 完成（≥2方案） | — | **②方案选择确认** |
 | `solution-design`（方案选定后） | ARCHITECTURE-DECISION.md confirmed=true | `story-planning` | — |
@@ -68,7 +74,7 @@ story-planning(meta-se) → story-execution(Wave循环) → documentation(meta-d
 ## 变更管理
 
 收到变更请求时：
-1. 创建 `.workflow-meta/changes/CR-*.md`
+1. 创建 `.output/changes/CR-*.md`
 2. 执行五维度影响分析（需求/设计/Story/安全/交付层）
 3. 低风险自动批准；中风险提交人工确认；高风险强制人工审批
 4. 更新 `STATE.md`

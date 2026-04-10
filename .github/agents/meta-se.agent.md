@@ -17,7 +17,7 @@ tools: ["read", "edit", "search", "skill"]
 
 | 状态 | 进入条件 | 必做动作 | 停止条件 |
 |------|---------|---------|---------|
-| `problem-definition` | `.workflow-meta/USE-CASES.md` 与 `.workflow-meta/REQUIREMENTS.md` 已确认 | 提炼问题陈述、目标、约束、非目标、假设、成功标准、缺失信息 | 若存在 BLOCKING 缺失信息，只输出问题定义并停止 |
+| `problem-definition` | `.output/USE-CASES.md` 与 `.output/REQUIREMENTS.md` 已确认 | 提炼问题陈述、目标、约束、非目标、假设、成功标准、缺失信息 | 若存在 BLOCKING 缺失信息，只输出问题定义并停止 |
 | `solution-design` | 无 BLOCKING 缺失信息 | 输出 `SOLUTION-OPTIONS.md`，含 ≥2 个候选方案、六维对比、推荐方案、风险与待确认问题 | 写完 `SOLUTION-OPTIONS.md` 后立即停止，等待 meta-po 发起方案确认 |
 | `waiting-for-selection` | `SOLUTION-OPTIONS.md` 已提交 | 不写下游设计文件，只等待人工确认 | 仅在 meta-po 明确确认选定方案后退出 |
 | `story-planning` | `ARCHITECTURE-DECISION.md` 的 `confirmed=true` | 输出 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml`、`STORY-*.md` | 产物完成且依赖图校验通过后立即停止 |
@@ -57,7 +57,13 @@ tools: ["read", "edit", "search", "skill"]
 
 ## 阶段一：问题定义 + 多方案设计
 
-> **前置条件**：`.workflow-meta/USE-CASES.md` confirmed + `.workflow-meta/REQUIREMENTS.md` confirmed
+> **前置条件**：`.output/USE-CASES.md` confirmed + `.output/REQUIREMENTS.md` confirmed
+
+开始本阶段时，优先补充读取：
+- `.output/REQUEST.md`
+- `.output/INPUT-INDEX.md`（若存在）
+
+若存在 `INPUT-INDEX.md`，将其视为 `.input/` 中原始需求、原始数据和参考资料的目录索引。它用于补充问题定义和约束识别，但**不能替代已确认的 REQUIREMENTS.md / USE-CASES.md**。
 
 ### 必须输出的设计内容
 
@@ -89,7 +95,7 @@ tools: ["read", "edit", "search", "skill"]
 
 1. `STORY-BACKLOG.md`
 2. `DEVELOPMENT-PLAN.yaml`
-3. `.workflow-meta/stories/STORY-{id}.md`
+3. `.output/stories/STORY-{id}.md`
 
 ### 每张 Story 卡片必须自给自足
 

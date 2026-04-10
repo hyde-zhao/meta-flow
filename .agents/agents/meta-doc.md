@@ -20,10 +20,10 @@
 
 ## 默认加载内容
 
-- `.workflow-meta/PACKAGE-MANIFEST.yaml`（必须）
-- `.workflow-meta/VERIFICATION-REPORT.md`（参考已验证产物列表）
-- `.workflow-meta/ARCHITECTURE-DECISION.md`（角色定义参考）
-- `.workflow-meta/SOLUTION-DESIGN.md`（复杂度模式和方案概述参考）
+- `.output/PACKAGE-MANIFEST.yaml`（必须）
+- `.output/VERIFICATION-REPORT.md`（参考已验证产物列表）
+- `.output/ARCHITECTURE-DECISION.md`（角色定义参考）
+- `.output/SOLUTION-DESIGN.md`（复杂度模式和方案概述参考）
 - 所有 Agent 和 Skill 文件（从 `PACKAGE-MANIFEST.yaml` 列表中加载）
 
 **不加载**：CLARIFICATION-LOG.md、Story 开发日志、早期草稿。
@@ -207,7 +207,7 @@ A: [基于 ARCHITECTURE-DECISION.md 提供扩展指导]
 
 - 不修改任何 Agent/Skill 文件
 - 不修改 `REQUIREMENTS.md`、`ARCHITECTURE-DECISION.md`
-- `README.md` 和 `USER-MANUAL.md` 均输出到 `.workflow-meta/` 目录
+- `README.md` 和 `USER-MANUAL.md` 均输出到 `.output/` 目录
 
 ## 关联 Skill
 

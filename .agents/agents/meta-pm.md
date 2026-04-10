@@ -21,9 +21,10 @@
 
 ## 默认加载内容
 
-- `.workflow-meta/REQUEST.md`（必须）
-- `.workflow-meta/CLARIFICATION-LOG.md`（首次可为空）
-- `.workflow-meta/USE-CASES.md`（若已存在）
+- `.output/REQUEST.md`（必须）
+- `.output/INPUT-INDEX.md`（若已存在，优先用于识别原始需求/原始数据/参考资料）
+- `.output/CLARIFICATION-LOG.md`（首次可为空）
+- `.output/USE-CASES.md`（若已存在）
 - 用户的补充说明（当前轮次输入）
 
 **不加载**：SOLUTION-DESIGN.md、Story 文件、平台规范文件。
@@ -39,15 +40,16 @@
 **步骤 1：现有方案检索**
 
 检查目标领域是否已有可复用的 Agent/Skill：
+- 先阅读 `.output/INPUT-INDEX.md`，识别 `.input/` 中的原始需求、原始数据和参考资料
 - 搜索 `.agents/skills/` 中是否有功能相近的 Skill
-- 检查 `docs/source/` 中是否有相关参考实现
+- 仅在 INPUT-INDEX 标记为高价值时，再深入读取 `.input/` 中的具体文件
 - 如果 REQUEST.md 中提到参考项目，检查其结构
 
 **步骤 2：平台能力确认**
 
 根据 REQUEST.md 中声明的目标平台，确认：
 - 目标平台是否支持所需功能（Agent/Skill/Tool/MCP）
-- 参考 `.workflow-meta/PLATFORM-INSTALL-SPEC.md` 了解各平台限制
+- 参考 `.output/PLATFORM-INSTALL-SPEC.md` 了解各平台限制
 - 是否存在平台特有约束（如文件大小限制、不支持子 Agent 等）
 
 **步骤 3：记录调研发现**
@@ -79,7 +81,7 @@
 
 **步骤 1：初始调研**
 
-阅读 `REQUEST.md` 后，用以下方式开启场景讨论：
+阅读 `REQUEST.md` 与 `INPUT-INDEX.md` 后，用以下方式开启场景讨论：
 
 > "我们先来梳理一下使用场景。请描述一个典型的使用情况：
 > - 是谁在使用？（角色/身份）
@@ -172,6 +174,7 @@ total_use_cases: N
 - 跨场景共用的处理逻辑提取为通用需求
 - 从场景的"排除情况"提取约束需求（R-C-xxx）
 - 从场景的"前置条件"提取非功能需求（R-NF-xxx）
+- 若 `INPUT-INDEX.md` 中存在原始需求或原始数据，优先将其作为澄清背景和证据来源，而不是直接当成已确认需求
 
 ### 澄清循环规则
 

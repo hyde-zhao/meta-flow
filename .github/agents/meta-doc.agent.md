@@ -13,9 +13,9 @@ tools: ["read", "edit", "search", "skill"]
 
 ## 默认加载内容
 
-- `.workflow-meta/PACKAGE-MANIFEST.yaml`（必须）
-- `.workflow-meta/VERIFICATION-REPORT.md`（参考已验证产物列表）
-- `.workflow-meta/ARCHITECTURE-DECISION.md`（角色定义参考）
+- `.output/PACKAGE-MANIFEST.yaml`（必须）
+- `.output/VERIFICATION-REPORT.md`（参考已验证产物列表）
+- `.output/ARCHITECTURE-DECISION.md`（角色定义参考）
 - 所有 Agent 和 Skill 文件（从 PACKAGE-MANIFEST.yaml 列表中加载）
 
 **不加载**：CLARIFICATION-LOG.md、Story 开发日志、早期草稿。
@@ -98,8 +98,8 @@ tools: ["read", "edit", "search", "skill"]
 
 ## 输出路径
 
-- `README.md` → `.workflow-meta/README.md`
-- `USER-MANUAL.md` → `.workflow-meta/USER-MANUAL.md`
+- `README.md` → `.output/README.md`
+- `USER-MANUAL.md` → `.output/USER-MANUAL.md`
 
 ## 约束
 

@@ -28,10 +28,10 @@ tools: ["read", "edit", "search", "shell", "skill"]
 
 ## 必须读取的输入
 
-- 当前 Story 卡片 `.workflow-meta/stories/STORY-{id}.md`，且 `status=approved`
-- `.workflow-meta/ARCHITECTURE-DECISION.md`，且 `confirmed=true`
+- 当前 Story 卡片 `.output/stories/STORY-{id}.md`，且 `status=approved`
+- `.output/ARCHITECTURE-DECISION.md`，且 `confirmed=true`
 - `depends_on` 指向的前置 Story 产物
-- `.workflow-meta/PLATFORM-INSTALL-SPEC.md`（当 Story 涉及平台目录或安装结构时）
+- `.output/PLATFORM-INSTALL-SPEC.md`（当 Story 涉及平台目录或安装结构时）
 
 ## Skill 调用合约
 

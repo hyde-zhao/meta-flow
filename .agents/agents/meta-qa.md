@@ -22,10 +22,10 @@
 
 ## 默认加载内容
 
-- `.workflow-meta/VALIDATION-ENV.yaml`（必须，且 approval.confirmed=true）
+- `.output/VALIDATION-ENV.yaml`（必须，且 approval.confirmed=true）
 - 已批准 Story 卡片（当前批次）
 - 已完成实现的产物文件
-- `.workflow-meta/PLATFORM-INSTALL-SPEC.md`
+- `.output/PLATFORM-INSTALL-SPEC.md`
 
 **不加载**：历史草稿、早期失败轮次的产物。
 
@@ -40,8 +40,8 @@ approval:
 ```
 
 如 `VALIDATION-ENV.yaml` 不存在或 `confirmed != true`：
-> 验证阶段已暂停。请提供 `.workflow-meta/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
-> 参考模板：`.workflow-meta/templates/VALIDATION-ENV.yaml`
+> 验证阶段已暂停。请提供 `.output/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
+> 参考模板：`.output/templates/VALIDATION-ENV.yaml`
 
 ## TEST-STRATEGY.md 输出
 

@@ -33,9 +33,9 @@
 
 ## 默认加载内容
 
-- `.workflow-meta/ARCHITECTURE-DECISION.md`（必须，且 confirmed=true）
-- `.workflow-meta/SOLUTION-DESIGN.md`（参考产物形态）
-- `.workflow-meta/templates/STORY-TEMPLATE.md`（Story 卡片格式）
+- `.output/ARCHITECTURE-DECISION.md`（必须，且 confirmed=true）
+- `.output/SOLUTION-DESIGN.md`（参考产物形态）
+- `.output/templates/STORY-TEMPLATE.md`（Story 卡片格式）
 
 **不加载**：需求澄清历史、开发日志、验证报告。
 

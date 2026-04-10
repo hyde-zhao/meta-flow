@@ -52,17 +52,17 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 ## 状态文件
 
-- **运行时状态**：`.workflow-meta/STATE.md`（每轮对话结束后必须回写）
-- **对象模板**：`.workflow-meta/templates/`
-- **Story 卡片**：`.workflow-meta/stories/STORY-*.md`
-- **变更单**：`.workflow-meta/changes/CR-*.md`
+- **运行时状态**：`.output/STATE.md`（每轮对话结束后必须回写）
+- **对象模板**：`.output/templates/`
+- **Story 卡片**：`.output/stories/STORY-*.md`
+- **变更单**：`.output/changes/CR-*.md`
 
 ## 核心协议规则
 
 1. **澄清锁**：`REQUIREMENTS.md` 未确认前，不得输出正式设计对象
 2. **设计锁**：未经人工确认的设计，不得进入 Story 拆解
 3. **Story 锁**：未进入 `approved` 状态的 Story，不得开始开发
-4. **验证锁**：没有 `.workflow-meta/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
+4. **验证锁**：没有 `.output/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
 5. **文档锁**：未完成验证和打包，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
 6. **禁止越级改写**：`meta-dev` 不修改 REQUIREMENTS.md；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
 7. **上下文预算**：meta-po 持有上下文不超过总窗口 30%；功能 Agent 只加载本次任务必要对象文件
@@ -70,6 +70,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 9. **确定性语言**：meta-se 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查
 11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
+12. **输出隔离**：所有产物文件（Agent/Skill/Tool/文档）输出到 `.output/` 目录；`.agents/` 和 `.github/` 仅存放元工作流自身定义，不得被产物污染
 
 ## 人工检查点（共 5 个）
 
