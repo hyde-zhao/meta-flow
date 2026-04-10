@@ -1,12 +1,12 @@
 ---
 project_id: "MFQ-001"
 workflow_mode: "complex"
-current_phase: "story-execution"
-current_agent: "meta-qa"
-iteration: 7
+current_phase: "documentation"
+current_agent: "meta-doc"
+iteration: 8
 blocked: false
-last_action: "meta-dev 完成全部 4 个 Wave 的实现：14 Skills + 1 Agent + 2 Python 工具"
-next_action: "meta-qa 验证产物完整性，meta-doc 输出文档，推进至 documentation"
+last_action: "meta-po 推进至 documentation 阶段，唤醒 meta-doc 生成 README.md + USER-MANUAL.md"
+next_action: "meta-doc 输出 README.md（架构概览+用户旅程）和 USER-MANUAL.md（使用手册+故障排除），完成后发起检查点④终验"
 checkpoints:
   requirement_confirmed: true
   solution_selected: true
@@ -66,7 +66,11 @@ history:
     action: "W1~W4 全部完成：14 Skills + 1 Agent(mfq-test-designer) + 2 Python工具(excel_coupling_tool + mcp_query_client)。Excel工具实测读取522条批注，509条耦合点。"
     agent: "meta-dev"
     timestamp: "2026-04-09T12:15:00Z"
-last_updated: "2026-04-09T12:15:00Z"
+  - phase: "story-execution → documentation"
+    action: "所有 Wave verified，推进至 documentation 阶段，唤醒 meta-doc。"
+    agent: "meta-po"
+    timestamp: "2026-04-10T01:02:33Z"
+last_updated: "2026-04-10T01:02:33Z"
 ---
 
 <!--
