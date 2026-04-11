@@ -113,13 +113,16 @@ python scripts/excel_coupling_tool.py query ".output/f-analysis/coupling-graph.j
 
 ### 步骤 6：耦合测试点生成
 
-对每个已确认的耦合关系，生成耦合测试点：
+对每个已确认的耦合关系，生成 CAE 格式的耦合测试点：
 
 | 字段 | 说明 |
 |------|------|
-| TP-ID | `TP-F-<源模块>-<目标>-NNN` |
-| 耦合描述 | 具体的耦合交互场景 |
-| 测试验证点 | 需要验证的耦合行为 |
+| TP-ID | `TP-F-<源模块缩写>-<目标缩写>-NNN` |
+| 所属模块 | 四级目录（归属当前特性的模块） |
+| 所属子模块 | 五级目录 |
+| C 条件 | 触发耦合交互的前置状态和环境条件（多个用"；"分隔） |
+| A 动作 | 施加的操作（操作当前特性，触发耦合效果） |
+| E 预期 | 可观测的耦合行为预期（包含对耦合目标的影响） |
 | 来源 | matrix-baseline / scenario-coupling / code-dependency |
 | 耦合强度 | strong / normal / weak |
 
@@ -143,8 +146,22 @@ python scripts/excel_coupling_tool.py write "<excel_path>" --source ".output/f-a
 |------|------|
 | `.output/f-analysis/coupling-graph.json` | 完整图模型（所有源合并后） |
 | `.output/f-analysis/matrix-baseline.yaml` | Excel 矩阵基线摘要 |
-| `.output/f-analysis/coupling-test-points.md` | F 分析产出的耦合测试点 |
+| `.output/f-analysis/coupling-test-points.md` | F 分析产出的耦合测试点（CAE格式，按四/五级目录分节） |
 | `.output/f-analysis/new-coupling-points.json` | 新发现的耦合点（用于回写） |
+
+**`coupling-test-points.md` 输出格式**：
+
+```markdown
+# <特性名> — F 分析耦合测试点
+
+## <四级目录>
+
+### <五级目录>
+
+| TP-ID | C 条件 | A 动作 | E 预期 | 来源 | 耦合强度 |
+|-------|--------|--------|--------|------|---------|
+| TP-F-CFG-BCK-001 | 日志归并功能已开启；日志服务器已配置 | 删除已配置的日志服务器 | 日志归并功能不受影响；归并日志继续正常记录 | matrix-baseline | strong |
+```
 
 ## 耦合分析维度
 
@@ -175,5 +192,6 @@ python scripts/excel_coupling_tool.py write "<excel_path>" --source ".output/f-a
 - [ ] 场景耦合推理已执行
 - [ ] 三源合并后无重复耦合边
 - [ ] 新耦合点已呈现给用户并获得确认
-- [ ] 耦合测试点包含完整标注（TP-ID/描述/来源/强度）
+- [ ] 耦合测试点包含完整 CAE 三字段（C/A/E 均不为空）
+- [ ] 输出文件按四/五级目录分节，格式符合规范
 - [ ] 输出文件写入 `.output/f-analysis/`

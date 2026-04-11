@@ -98,7 +98,11 @@ history:
     action: "v2.3 .input/.output 目录约定：运行时工作目录从 mfq/ 拆分为 .input/（用户输入）+ .output/（工具输出），创建 CLAUDE.md + .gitignore，初始化独立 git 仓库。27 个文件路径批量更新。"
     agent: "meta-po"
     timestamp: "2026-04-10T06:34:00Z"
-last_updated: "2026-04-10T06:34:00Z"
+  - phase: "documentation"
+    action: "CR-002 实现完成（S-CAE-A~E）：(1) m/f/q-analyzer 测试点格式升级为 CAE 三元组 + 四/五级目录分节输出；(2) test-point-integrator 整合逻辑重写为 CAE 聚合规则 + 因子-取值表 + 动作路径的逻辑用例格式；(3) design-planner 新增 CAE→PPDCS 推断规则表；(4) 5个设计Skill四步过程升级为五步过程（各方法特化：process=流程分支路径、parameter=判定表约束、data=等价类隔离、combination=Pairwise、state=状态路径枚举）；(5) ptm-tde.md 追踪链更新为 SR→TP(C/A/E)→LC→组合→PC。共修改11个文件。"
+    agent: "meta-dev"
+    timestamp: "2026-04-10T10:15:00Z"
+last_updated: "2026-04-10T10:15:00Z"
 ---
 
 <!--

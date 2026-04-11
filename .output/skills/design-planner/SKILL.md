@@ -70,6 +70,20 @@ status: active
 | Data vs Combination | 因子独立验证够？ | 够=Data，不够=Combination |
 | Parameter vs Combination | 规则是确定的判定逻辑？ | 确定=Parameter，需组合探索=Combination |
 
+### CAE → PPDCS 推断规则
+
+在逻辑用例的 CAE 结构中，若 PPDCS 特征标注不明确，可从 CAE 特征推断：
+
+| CAE 特征 | 推断 PPDCS 特征 | 推断依据 |
+|---------|---------------|---------|
+| C 条件中包含多个参数，且参数间有业务规则依赖 | **P-Parameter** | 规则确定性 + 参数关联 |
+| C 条件中参数独立，只需验证各自取值范围 | **D-Data** | 参数独立性 + 取值范围 |
+| C 条件中参数独立但因子数 ≥ 4，需多因子组合覆盖 | **C-Combination** | 组合爆炸 + 参数独立 |
+| A 动作是多步骤有序流程，含分支，不可回退 | **P-Process** | 步骤有序性 + 不可逆 |
+| C 条件中包含对象的当前状态，E 预期中包含状态迁移 | **S-State** | 状态变迁双向性 |
+
+> 该推断规则仅用于辅助判定，最终以 `.output/m-analysis/ppdcs-annotation.md` 中的标注为准。若推断结果与标注冲突，需在设计计划表中标注差异原因。
+
 ### 直接设计法回退
 
 仅在以下**全部**条件满足时允许直接设计：
