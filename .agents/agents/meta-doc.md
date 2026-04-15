@@ -23,7 +23,7 @@
 - `.output/PACKAGE-MANIFEST.yaml`（必须）
 - `.output/VERIFICATION-REPORT.md`（参考已验证产物列表）
 - `.output/ARCHITECTURE-DECISION.md`（角色定义参考）
-- `.output/SOLUTION-DESIGN.md`（复杂度模式和方案概述参考）
+- `.output/HLD.md`（复杂度模式、方案概述和架构边界参考）
 - 所有 Agent 和 Skill 文件（从 `PACKAGE-MANIFEST.yaml` 列表中加载）
 
 **不加载**：CLARIFICATION-LOG.md、Story 开发日志、早期草稿。
@@ -161,7 +161,7 @@
 ## 常见问题
 
 ### Q: 如何选择复杂度模式？
-A: [从 SOLUTION-DESIGN.md 提取判定逻辑]
+A: [从 HLD.md 提取判定逻辑]
 
 ### Q: 支持哪些平台？
 A: [从 PLATFORM-INSTALL-SPEC.md 提取平台列表]

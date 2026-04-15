@@ -21,8 +21,8 @@ status: active
 
 ## 前置条件
 
-- [ ] `.workflow-meta/REQUEST.md` 已存在（用户原始目标）
-- [ ] `.workflow-meta/CLARIFICATION-LOG.md` 已存在（首次可从模板初始化）
+- [ ] `.output/REQUEST.md` 已存在（用户原始目标）
+- [ ] `.output/CLARIFICATION-LOG.md` 已存在（首次可从模板初始化）
 
 ## 歧义识别维度
 

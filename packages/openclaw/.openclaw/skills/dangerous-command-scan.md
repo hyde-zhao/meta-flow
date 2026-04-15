@@ -25,7 +25,7 @@ status: active
 ## 前置条件
 
 - [ ] 扫描目标文件已存在
-- [ ] SCOPE-Pack 模式：`.workflow-meta/PLATFORM-INSTALL-SPEC.md` 已存在
+- [ ] SCOPE-Pack 模式：`.output/PLATFORM-INSTALL-SPEC.md` 已存在
 
 ## 执行约束
 

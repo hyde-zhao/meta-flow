@@ -116,4 +116,4 @@ source_use_cases: [UC-01, ...]
 
 - 不修改 STATE.md（这是 meta-po 的职责）
 - 不决定是否进入设计阶段
-- 不加载 SOLUTION-DESIGN.md 或 Story 文件
+- 不加载 HLD.md 或 Story 文件

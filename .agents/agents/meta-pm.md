@@ -27,7 +27,7 @@
 - `.output/USE-CASES.md`（若已存在）
 - 用户的补充说明（当前轮次输入）
 
-**不加载**：SOLUTION-DESIGN.md、Story 文件、平台规范文件。
+**不加载**：HLD.md、Story 文件、平台规范文件。
 
 ---
 

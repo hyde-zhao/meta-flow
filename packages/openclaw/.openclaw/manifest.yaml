@@ -16,10 +16,14 @@ agents:
 skills:
 - file: skills/change-impact-analysis.md
   name: change-impact-analysis
+- file: skills/claude-agent-writer.md
+  name: claude-agent-writer
 - file: skills/context-handoff.md
   name: context-handoff
 - file: skills/context-manifest-builder.md
   name: context-manifest-builder
+- file: skills/copilot-agent-writer.md
+  name: copilot-agent-writer
 - file: skills/coverage-checker.md
   name: coverage-checker
 - file: skills/dag-validator.md
@@ -28,10 +32,16 @@ skills:
   name: dangerous-command-scan
 - file: skills/dependency-mapper.md
   name: dependency-mapper
+- file: skills/file-to-markdown.md
+  name: file-to-markdown
+- file: skills/hld-designer.md
+  name: hld-designer
 - file: skills/issue-drafter.md
   name: issue-drafter
 - file: skills/issue-routing.md
   name: issue-routing
+- file: skills/lld-designer.md
+  name: lld-designer
 - file: skills/package-builder.md
   name: package-builder
 - file: skills/permission-boundary-check.md

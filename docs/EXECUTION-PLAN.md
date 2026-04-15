@@ -1,5 +1,8 @@
 # SCOPE-Pack Copilot CLI 实施执行计划
 
+> ⚠️ 历史文档：本文件记录早期实施计划和旧版 `.workflow-meta` 设计，不作为当前使用说明。
+> 当前对外使用文档请以 `docs/USER_GUIDE.md`、`docs/AGENT-SKILL-REFERENCE.md`、`README.md` 和 `AGENTS.md` 为准。
+
 > 文档状态：🔄 执行中
 > 最后更新：2026-04-04
 > 对应设计文档：`docs/20260403_防火墙测试元工作流融合设计方案.md`

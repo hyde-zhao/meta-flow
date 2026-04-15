@@ -21,9 +21,9 @@ status: active
 
 ## 前置条件
 
-- [ ] `.workflow-meta/VERIFICATION-REPORT.md` 存在且无 BLOCKING 未通过项
-- [ ] `.workflow-meta/PACKAGE-MANIFEST.yaml` 已生成（列出所有产物文件）
-- [ ] `.workflow-meta/PLATFORM-INSTALL-SPEC.md` 已存在（含各平台规范）
+- [ ] `.output/VERIFICATION-REPORT.md` 存在且无 BLOCKING 未通过项
+- [ ] `.output/PACKAGE-MANIFEST.yaml` 已生成（列出所有产物文件）
+- [ ] `.output/PLATFORM-INSTALL-SPEC.md` 已存在（含各平台规范）
 
 ## 4 平台构建规则
 
@@ -98,7 +98,7 @@ instructions: |
 
 - 不允许在 `VERIFICATION-REPORT.md` 存在 BLOCKING 未通过项时执行打包
 - SHA256 哈希必须在复制完成后计算（不能使用源文件哈希）
-- 打包目录中不得包含 `.workflow-meta/` 的中间过程文件
+- 打包目录中不得包含 `.output/` 的中间过程文件
 
 ## 输出文件
 
