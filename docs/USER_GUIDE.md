@@ -1,6 +1,6 @@
 # 跨平台 Agent/Skill 元工作流系统 — 使用与安装指南
 
-本指南说明如何把本项目作为“可安装工作流生产系统”使用。系统目标不是只生成文档，而是把需求澄清、HLD 设计、Story 规划、Story 级 LLD 设计、实现、验证和打包整合成一个可持续运行的元工作流，并最终产出可安装到 Claude Code、Codex、Copilot、OpenClaw 的 Agent/Skill 包。
+本指南说明如何把本项目作为“可安装工作流生产系统”使用。系统目标不是只生成文档，而是把需求澄清、HLD 设计、Story 规划、Story 级 LLD 设计、实现、验证和安装脚本交付整合成一个可持续运行的元工作流，并最终产出可安装到 Claude Code、Codex、Copilot、OpenClaw 的 Agent/Skill 产物。
 
 ---
 
@@ -25,7 +25,7 @@
 - Story 拆解与开发计划编排
 - 每个 Story 在开发前先输出 LLD 并人工确认
 - 基于人工提供环境配置的验证
-- 面向多个平台的安装包生成
+- 面向多个平台的安装脚本生成
 - 项目结束后输出 `README.md` 和 `USER-MANUAL.md` 两份交付文档
 
 系统支持三种交付模式：
@@ -34,7 +34,7 @@
 |------|----------|------|
 | `simple` | 简单需求，只需一个能力模块 | 单一 `SKILL.md` |
 | `standard` | 需要一个稳定角色和若干能力 | 1 个 Agent + 多个 Skill |
-| `complex` | 复杂协作、Story 并行、多平台打包 | 多 Agent 工作流包 |
+| `complex` | 复杂协作、Story 并行、多平台安装 | 多 Agent 工作流 |
 
 系统中的核心角色命名如下：
 
@@ -45,80 +45,84 @@
 | `meta-se` | 元工作流架构设计师，负责 HLD 设计、架构决策和 Story 拆解 |
 | `meta-dm` | 保留的兼容占位 Agent，已废弃，职责并入 `meta-se` |
 | `meta-dev` | 元工作流开发工程师，负责 Story 级 LLD、实现 Agent/Skill/脚本等产物 |
-| `meta-qa` | 质量工程师，负责验证、打包和安装可用性校验 |
+| `meta-qa` | 质量工程师，负责验证、安装脚本交付和安装可用性校验 |
 | `meta-doc` | 文档工程师，负责输出 `README.md` 和 `USER-MANUAL.md` |
 
-当前仓库的内置元工作流会打包：
+当前仓库的内置元工作流会交付：
 
 - **7 个 Agent 文件**（其中 `meta-dm` 为兼容占位）
 - **30 个通用 Skill**
+- **3 类规则文件**（`AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md`）
 
 ---
 
 ## 二、环境准备
 
-本系统依赖 `Python >= 3.9` 和 `PyYAML`。打包脚本通过 `python` 执行。
+本系统依赖 `Python >= 3.9`。安装脚本通过 `python` 执行。
 
-```bash
-pip install pyyaml
-```
+无需额外安装 `PyYAML`。
 
 ---
 
 ## 三、多平台安装说明
 
-### 3.1 构建安装包
+### 3.1 使用安装脚本
 
-`scripts/package_builder.py` 默认打包 `.output/agents` 和 `.output/skills` 中的**工作流产物**。
-如果要打包当前仓库内置的 SCOPE-Pack 元工作流定义，需要显式指定 `.agents/` 作为源目录。
+当前仓库通过 `scripts/install.py`、`scripts/install.ps1`、`scripts/install.sh` 直接安装产物，不再先生成平台包。安装脚本默认从根目录的 `agents/`、`skills/`、`rules/` 读取交付件。
 
-#### 打包当前仓库内置元工作流
-
-```bash
-# 模拟构建（不写文件，仅验证）
-python scripts/package_builder.py --agents-dir .agents/agents --skills-dir .agents/skills --dry-run
-
-# 构建全部平台包
-python scripts/package_builder.py --agents-dir .agents/agents --skills-dir .agents/skills
-
-# 只构建指定平台
-python scripts/package_builder.py --agents-dir .agents/agents --skills-dir .agents/skills --targets copilot,claude-code
-```
-
-#### 打包一次工作流运行生成的产物
+#### 安装当前仓库内置元工作流
 
 ```bash
-python scripts/package_builder.py
+# 默认安装到当前项目目录
+python scripts/install.py --platform claude-code
+
+# 指定项目目录
+python scripts/install.py --platform codex --project-dir /path/to/your-project
+
+# 用户级安装，仅安装 skills
+python scripts/install.py --platform copilot --scope user --content skills
+
+# 仅安装规则文件
+python scripts/install.py --platform claude-code --content rules
+
+# DryRun
+python scripts/install.py --platform openclaw --dry-run
 ```
 
-构建产物输出到 `packages/` 目录：
+#### 平台包装器脚本
 
-| 平台 | 构建产物目录 | 核心入口文件 |
-|------|-------------|-------------|
-| Copilot CLI | `packages/copilot/.github/copilot/` | `copilot-instructions.md` |
-| Claude Code | `packages/claude-code/.claude/` | `CLAUDE.md` |
-| Codex | `packages/codex/.codex/` | —（仅 agents + skills） |
-| OpenClaw | `packages/openclaw/.openclaw/` | `manifest.yaml` |
-
-### 3.2 安装到目标项目
-
-将对应平台的构建产物目录复制到目标项目根目录下：
+```powershell
+scripts\install.ps1 --platform codex --content agents --agent meta-po --dry-run
+```
 
 ```bash
-# Copilot CLI
-cp -r packages/copilot/.github  /path/to/your-project/
-
-# Claude Code
-cp -r packages/claude-code/.claude  /path/to/your-project/
-
-# Codex
-cp -r packages/codex/.codex  /path/to/your-project/
-
-# OpenClaw
-cp -r packages/openclaw/.openclaw  /path/to/your-project/
+bash scripts/install.sh --platform copilot --scope user --content skills --skill state-router --dry-run
 ```
 
-### 3.3 安装验证方法
+### 3.2 默认安装位置
+
+| 平台 | 项目级默认目录 | 用户级默认目录 |
+|------|---------------|----------------|
+| Copilot CLI | `<project>/.github/` | `~/.copilot/` |
+| Claude Code | `<project>/.claude/` | `~/.claude/` |
+| Codex | `<project>/.codex/` | `~/.codex/` |
+| OpenClaw | `<project>/.openclaw/` | `~/.openclaw/` |
+
+### 3.3 源目录与命名规则
+
+| 源目录 | 内容 | 规则 |
+|--------|------|------|
+| `agents/` | Canonical Agent 文件 | 源文件统一为 `<name>.md` |
+| `skills/` | Canonical Skill 目录 | 结构固定为 `skills/<name>/SKILL.md` |
+| `rules/` | 规则文件 | 如 `AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md` |
+
+安装时的命名规则：
+
+- Copilot：Agent 目标文件名为 `<name>.agent.md`
+- Claude Code / OpenClaw：Agent 目标文件名保持 `<name>.md`
+- Codex：Agent 目标文件自动转换为 `<name>.yaml`
+
+### 3.4 安装验证方法
 
 安装完成后，可按以下方式验证：
 
@@ -138,9 +142,11 @@ gh copilot
 # 期望：meta-po 响应，提示初始化 STATE.md 或读取当前状态
 
 # 4. 验证文件结构
+ls .github/agents/ | wc -l
+# 期望：约 7，且后缀为 .agent.md
 ls .github/copilot/skills/ | wc -l
 # 期望：约 30
-ls .github/copilot/copilot-instructions.md
+ls .github/copilot-instructions.md
 # 期望：存在
 ```
 
@@ -159,9 +165,9 @@ ls .claude/skills/   # 应有约 30 个 .md 文件
 # 输入：请输出 HLD
 # 期望：hld-designer / meta-se 路径被正确使用
 
-# 4. SHA256 完整性校验
-sha256sum -c packages/INSTALL-CHECKSUMS.sha256 2>&1 | grep -v OK
-# 期望：无输出（全部通过）
+# 4. DryRun 校验
+python scripts/install.py --platform claude-code --dry-run
+# 期望：输出默认安装路径和将写入的文件
 ```
 
 #### ✅ Codex 验证
@@ -226,7 +232,7 @@ print('All manifest entries exist')
 4. `meta-dev` 为每个 Story 先输出 `STORY-{id}-LLD.md`，由人工确认后再开始实现。
 5. Story 开发可并行，但同一 Story 必须按 `LLD 起草 → LLD 确认 → 实现 → 验证` 顺序推进。
 6. 验证前由人工提供或确认环境配置。
-7. 验证通过后再生成平台安装包。
+7. 验证通过后再生成平台安装脚本。
 8. 项目结束时由 `meta-doc` 输出 `README.md` 和 `USER-MANUAL.md`。
 
 ### 4.2 场景一：简单需求，生成单 Skill
@@ -265,14 +271,14 @@ print('All manifest entries exist')
 - `README.md`
 - `USER-MANUAL.md`
 
-### 4.4 场景三：复杂需求，生成多 Agent 工作流包
+### 4.4 场景三：复杂需求，生成多 Agent 工作流
 
 适用于存在多个阶段和多个职责边界的场景，例如：
 
 - 需要 `meta-pm` 负责需求分析
 - 需要 `meta-se` 负责 HLD 与 Story 规划
 - 需要 `meta-dev` 负责 Story 级 LLD 与实现
-- 需要 `meta-qa` 负责平台打包与验证
+- 需要 `meta-qa` 负责平台安装脚本交付与验证
 - 需要 `meta-doc` 负责输出项目文档
 
 ```text
@@ -325,4 +331,4 @@ A: HLD 用来确认系统边界、架构决策和 Story 划分；LLD 用来确�
 A: 因为一旦允许并行开发，没有 Story 状态就无法判断哪些已完成、哪些阻塞、哪些可以进入验证。
 
 **Q: 最终交付的最小集合是什么？**  
-A: 至少包括 Agent/Skill 产物、`PACKAGE-MANIFEST.yaml`、`VERIFICATION-REPORT.md`、`README.md`、`USER-MANUAL.md`，以及目标平台安装目录结构。
+A: 至少包括 Agent/Skill 产物、`INSTALL-MANIFEST.yaml`、`VERIFICATION-REPORT.md`、`README.md`、`USER-MANUAL.md`，以及目标平台安装脚本。

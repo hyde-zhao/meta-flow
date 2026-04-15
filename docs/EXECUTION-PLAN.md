@@ -1,7 +1,8 @@
 # SCOPE-Pack Copilot CLI 实施执行计划
 
-> ⚠️ 历史文档：本文件记录早期实施计划和旧版 `.workflow-meta` 设计，不作为当前使用说明。
+> ⚠️ 历史文档：本文件记录早期实施计划和旧版 `.workflow-meta` / `packages/` 设计，不作为当前使用说明。
 > 当前对外使用文档请以 `docs/USER_GUIDE.md`、`docs/AGENT-SKILL-REFERENCE.md`、`README.md` 和 `AGENTS.md` 为准。
+> 当前交付源目录为根目录 `agents/`、`skills/`、`rules/`，`packages/` 已移除。
 
 > 文档状态：🔄 执行中
 > 最后更新：2026-04-04
@@ -19,7 +20,7 @@
 | P3 | Skill 补全 | ✅ 已完成 | P1 |
 | P4 | 对象模板层 | ✅ 已完成 | P2 |
 | P5 | 质量门与安全 | ✅ 已完成 | P3 |
-| P6 | 平台打包交付 | ✅ 已完成 | P4 + P5 |
+| P6 | 平台安装脚本交付 | ✅ 已完成 | P4 + P5 |
 | P7 | 端到端验证 | ✅ 已完成（自动化部分） | P6 |
 
 ---
@@ -35,7 +36,7 @@
 |---------|---------|-------|-------|-------|
 | Agent | 7 | 0（定位均为防火墙测试） | 5 | 2（meta-dev、meta-doc） |
 | Skill | 31 | 21 | 1（dangerous-command-scan） | 5 |
-| 脚本 | 6 | 5 | 1（install.py） | 1（package_builder.py） |
+| 脚本 | 6 | 5 | 1（install.py） | 1（跨平台安装脚本） |
 | 对象模板 | 0 | — | — | 14 |
 
 ---
@@ -101,7 +102,7 @@
 - [x] **T2.3** 创建 `meta-se.md`（新建，方案设计）→ 三档复杂度判定
 - [x] **T2.4** 创建 `meta-dm.md`（升级自 workflow-planner）→ Story 拆解、Wave 设计
 - [x] **T2.5** 创建 `meta-dev.md`（新建，Story 实现）→ 文件输出规范、阻塞处理
-- [x] **T2.6** 创建 `meta-qa.md`（整合 delivery-agent + safety-reviewer）→ 8 维度验收 + 打包
+- [x] **T2.6** 创建 `meta-qa.md`（整合 delivery-agent + safety-reviewer）→ 8 维度验收 + 安装脚本交付
 - [x] **T2.7** 创建 `meta-doc.md`（新建，文档输出）→ README + USER-MANUAL
 
 **产物**：`.agents/agents/meta-po/pm/se/dm/dev/qa/doc.md`（7 个文件）✅
@@ -133,8 +134,8 @@ init
 
 - [x] **T3.1** 创建 `solution-designer` Skill → 复杂度判定 + 3 输出文件
 - [x] **T3.2** 创建 `story-manager` Skill → Story 生命周期 + 三件套模板
-- [x] **T3.3** 创建 `package-builder` Skill → 4 平台安装包构建
-- [x] **T3.4** 创建 `platform-validator` Skill → 5 维度安装目录校验
+- [x] **T3.3** 创建 `package-builder` Skill → 4 平台安装脚本生成
+- [x] **T3.4** 创建 `platform-validator` Skill → 5 维度安装目标校验
 - [x] **T3.5** 创建 `requirement-clarifier` Skill → 多轮澄清 + 阻断等级
 - [x] **T3.6** 升级 `dangerous-command-scan` → 扩展 Prompt 注入检测（4 层扫描）
 
@@ -148,7 +149,7 @@ init
 
 ### 任务清单
 
-- [x] **T4.1** 创建目录 `.workflow-meta/templates/`（含 stories/、changes/、packages/）
+- [x] **T4.1** 创建目录 `.workflow-meta/templates/`（含 stories/、changes/、scripts/）
 - [x] **T4.2** `STATE.md` 模板（含 10 状态转换表注释）
 - [x] **T4.3** `REQUEST.md` 模板
 - [x] **T4.4** `CLARIFICATION-LOG.md` 模板（多轮追加格式）
@@ -161,7 +162,7 @@ init
 - [x] **T4.11** `STORY-TEMPLATE.md`（三件套 + 8 维度验收标准）
 - [x] **T4.12** `VALIDATION-ENV.yaml` 模板
 - [x] **T4.13** `VERIFICATION-REPORT.md` 模板
-- [x] **T4.14** `PACKAGE-MANIFEST.yaml` 模板
+- [x] **T4.14** `INSTALL-MANIFEST.yaml` 模板
 - [x] **T4.15** `CR-TEMPLATE.md` 模板
 - [x] **T4.16** `.workflow-meta/PLATFORM-INSTALL-SPEC.md`（4 平台完整规范）
 
@@ -184,21 +185,21 @@ init
 
 ---
 
-## Phase 6：平台打包交付 ✅
+## Phase 6：平台安装脚本交付 ✅
 
-**目标**：`scripts/package_builder.py` 可生成 4 个平台的完整安装包。
+**目标**：`scripts/install.py` 可覆盖 4 个平台的项目级与用户级安装。
 
 ### 任务清单
 
-- [x] **T6.1** 创建 `scripts/package_builder.py`（含 DryRun 模式）
-- [x] **T6.2** 实现 GitHub Copilot 包结构（`.github/copilot/`）
-- [x] **T6.3** 实现 Claude Code 包结构（`.claude/`）
-- [x] **T6.4** 实现 Codex 包结构（`.codex/`，YAML 格式自动转换）
-- [x] **T6.5** 实现 OpenClaw 包结构（`.openclaw/` + 自动生成 manifest.yaml）
-- [x] **T6.6** SHA256 哈希校验清单生成（`INSTALL-CHECKSUMS.sha256`）
-- [x] **T6.7** Frontmatter / 命名规范自动校验
+- [x] **T6.1** 创建 `scripts/install.py`（含 DryRun 模式）
+- [x] **T6.2** 实现 GitHub Copilot 安装目标（`.github/` 或 `~/.copilot/`）
+- [x] **T6.3** 实现 Claude Code 安装目标（`.claude/` 或 `~/.claude/`）
+- [x] **T6.4** 实现 Codex 安装目标（`.codex/` 或 `~/.codex/`，YAML 格式自动转换）
+- [x] **T6.5** 实现 OpenClaw 安装目标（`.openclaw/` 或 `~/.openclaw/` + 自动生成 manifest.yaml）
+- [x] **T6.6** 提供 `install.ps1` / `install.sh` 包装脚本
+- [x] **T6.7** DryRun、命名规范与入口文件校验
 
-**验证**：`python scripts/package_builder.py --dry-run --targets copilot,claude-code,codex,openclaw` → All platforms built successfully ✅
+**验证**：`python scripts/install.py --platform claude-code --dry-run`、`python scripts/install.py --platform openclaw --scope user --dry-run` ✅
 
 ---
 
@@ -208,7 +209,7 @@ init
 
 ### 任务清单
 
-- [x] **T7.1** 生成实际 4 平台安装包（package_builder.py 正式构建，162 个文件 SHA256 校验）
+- [x] **T7.1** 生成实际 4 平台安装脚本并完成 DryRun 验证
 - [x] **T7.2** 创建 Simple 模式示例 STATE.md（`.workflow-meta/demo-simple-STATE.md`）演示完整 10 状态流转
 - [x] **T7.3** 最终验收：P1~P7 所有 PASS 项自动化验证通过
 - [ ] **T7.4** Standard 模式真实 Copilot CLI 对话（需人工在 CLI 中操作）
@@ -221,7 +222,7 @@ init
 [P2] Agent 文件（7个）           meta-po/pm/se/dm/dev/qa/doc 全部 PASS
 [P3] Skill（5新建+1升级）        全部 PASS
 [P4] 对象模板（14个+规范文档）    14/14 PASS + PLATFORM-INSTALL-SPEC.md PASS
-[P6] 打包脚本与4平台包           全部 PASS，SHA256 162 条记录
+[P6] 安装脚本与4平台安装目标      全部 PASS，DryRun 行为通过
 ```
 
 ### 剩余人工验证步骤（上线前）
@@ -237,7 +238,7 @@ init
 | STATE.md 状态转换完整 | ✓ | ✓ | ✓ |
 | 人工检查点触发 | 1 次 | 3 次 | 5 次 |
 | 安全扫描通过 | ✓ | ✓ | ✓ |
-| 平台包生成 | 1 平台 | 2 平台 | 4 平台 |
+| 安装脚本验证 | 1 平台 | 2 平台 | 4 平台 |
 | Story 并行（/fleet） | — | — | ✓ |
 
 ---
@@ -273,10 +274,10 @@ AGENTS.md
 .workflow-meta/templates/STORY-TEMPLATE.md
 .workflow-meta/templates/VALIDATION-ENV.yaml
 .workflow-meta/templates/VERIFICATION-REPORT.md
-.workflow-meta/templates/PACKAGE-MANIFEST.yaml
+.workflow-meta/templates/INSTALL-MANIFEST.yaml
 .workflow-meta/templates/CR-TEMPLATE.md
 .workflow-meta/PLATFORM-INSTALL-SPEC.md
-scripts/package_builder.py
+scripts/install.py
 ```
 
 ### 升级文件（保留原文件）

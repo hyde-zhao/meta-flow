@@ -15,8 +15,8 @@ tools: ["read", "edit", "search", "skill"]
 
 | 状态 | 进入条件 | 必做动作 | 停止条件 |
 |------|---------|---------|---------|
-| `problem-definition` | `.output/USE-CASES.md` 与 `.output/REQUIREMENTS.md` 已确认 | 提炼问题陈述、目标、约束、非目标、假设、成功标准、缺失信息 | 若存在 BLOCKING 缺失信息，只输出问题定义并停止 |
-| `hld-design` | 无 BLOCKING 缺失信息 | 调用 `hld-designer`，输出 `.output/HLD.md` | 写完 `HLD.md` 后立即停止，等待 meta-po 发起 HLD 确认 |
+| `problem-definition` | `.output/doc/USE-CASES.md` 与 `.output/doc/REQUIREMENTS.md` 已确认 | 提炼问题陈述、目标、约束、非目标、假设、成功标准、缺失信息 | 若存在 BLOCKING 缺失信息，只输出问题定义并停止 |
+| `hld-design` | 无 BLOCKING 缺失信息 | 调用 `hld-designer`，输出 `.output/doc/HLD.md` | 写完 `HLD.md` 后立即停止，等待 meta-po 发起 HLD 确认 |
 | `waiting-for-hld-approval` | `HLD.md` 已提交 | 不写下游规划文件，只等待人工确认 | 仅在 `HLD.md confirmed=true` 后退出 |
 | `story-planning` | `HLD.md confirmed=true` | 输出 `ARCHITECTURE-DECISION.md`、`PLATFORM-INSTALL-SPEC.md`、`STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml`、`STORY-*.md` | 产物完成且依赖图校验通过后立即停止 |
 | `blocked` | 输入缺失、约束冲突、依赖图无效、文件冲突 | 记录阻塞原因、影响范围、需要的决策 | 写完阻塞说明后立即停止 |
@@ -39,7 +39,7 @@ tools: ["read", "edit", "search", "skill"]
 
 ### HLD 阶段
 
-`.output/HLD.md` 必须包含：
+`.output/doc/HLD.md` 必须包含：
 
 1. 问题定义
 2. 候选架构方案对比（至少 2 个）

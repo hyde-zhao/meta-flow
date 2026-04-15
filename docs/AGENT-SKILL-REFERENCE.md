@@ -17,7 +17,7 @@
 
 ## 一、Agent 使用参考
 
-当前仓库中有 **7 个 Agent 文件**，其中 `meta-dm` 已废弃，仅作为兼容占位保留。实际主流程由 `meta-po / meta-pm / meta-se / meta-dev / meta-qa / meta-doc` 协作完成。
+当前仓库中有 **7 个交付 Agent 文件**，位于根目录 `agents/`。其中 `meta-dm` 已废弃，仅作为兼容占位保留。实际主流程由 `meta-po / meta-pm / meta-se / meta-dev / meta-qa / meta-doc` 协作完成。
 
 ### `meta-po` — 主编排器
 
@@ -49,7 +49,7 @@
 |------|------|
 | 状态 | 已废弃 |
 | 现状 | 职责已合并进 `meta-se` |
-| 说明 | 平台包中可能仍保留该文件用于兼容旧安装结构 |
+| 说明 | 安装时可能仍保留该文件用于兼容旧结构 |
 
 ### `meta-dev` — 开发工程师
 
@@ -63,9 +63,9 @@
 
 | 项目 | 说明 |
 |------|------|
-| 职责 | 输出测试策略、执行验证、生成包清单与安装包 |
+| 职责 | 输出测试策略、执行验证、生成安装清单与安装脚本 |
 | 触发条件 | Story 进入 `ready-for-verification` 且验证环境可用 |
-| 输出 | `TEST-STRATEGY.md`、`VERIFICATION-REPORT.md`、`PACKAGE-MANIFEST.yaml` |
+| 输出 | `TEST-STRATEGY.md`、`VERIFICATION-REPORT.md`、`INSTALL-MANIFEST.yaml` |
 
 ### `meta-doc` — 文档工程师
 
@@ -73,13 +73,13 @@
 |------|------|
 | 职责 | 在验证通过后整理 README 与用户手册 |
 | 触发阶段 | `documentation` |
-| 输出 | `.output/README.md`、`.output/USER-MANUAL.md` |
+| 输出 | `.output/README.md`、`.output/doc/USER-MANUAL.md` |
 
 ---
 
 ## 二、Skill 使用参考
 
-当前仓库内共有 **30 个通用 Skill**。它们统一位于 `.agents/skills/<skill-name>/SKILL.md`，由触发词自动激活。
+当前仓库内共有 **30 个通用 Skill**。交付源目录位于 `skills/<skill-name>/SKILL.md`；内部实现定义仍保留在 `.agents/skills/`。
 
 ### 1. 需求分析类
 
@@ -110,8 +110,8 @@
 | `claude-agent-writer` | 写 Claude Agent、创建 Claude 子代理 | 输出 Claude Agent 规范 |
 | `copilot-agent-writer` | 写 Copilot Agent、创建自定义 Agent | 输出 Copilot Agent 规范 |
 | `file-to-markdown` | 转换文件、转为MD、文件转换 | 将外部文件转成 Markdown |
-| `package-builder` | 打包、生成安装包、平台打包 | 生成平台安装包 |
-| `platform-validator` | 校验安装包、平台验证、结构校验 | 检查安装包目录结构 |
+| `package-builder` | 安装脚本、安装到项目、用户级安装 | 生成平台安装脚本 |
+| `platform-validator` | 校验安装目标、平台验证、结构校验 | 检查安装目标目录和 DryRun |
 | `workflow-renderer` | 渲染工作流、生成文档、交付文档 | 将工作流产物渲染为文档 |
 | `context-handoff` | 上下文交接、装配上下文、阶段切换 | 为下游 Agent 准备最小上下文 |
 | `context-manifest-builder` | 上下文清单、执行上下文、CONTEXT-MANIFEST | 生成上下文清单 |
@@ -161,12 +161,20 @@ init
 | HLD 确认 | `HLD.md` 完成后 | 高层设计是否允许进入 Story 规划 |
 | Story 计划确认 | `STORY-BACKLOG.md` 完成后 | Story 边界、优先级、Wave 分组 |
 | Story LLD 确认 | `STORY-{id}-LLD.md` 完成后 | 当前 Story 是否允许进入实现 |
-| 终验 | 文档与平台包齐备后 | 交付范围是否完整 |
+| 终验 | 文档与安装脚本齐备后 | 交付范围是否完整 |
 
 ### Story 生命周期
 
 ```text
 draft → approved → ready-for-lld-review → lld-approved → in-development → ready-for-verification → verified → done
+```
+
+### 安装源目录
+
+```text
+agents/   # Canonical Agent 源文件（.md）
+skills/   # Canonical Skill 源文件（skills/<name>/SKILL.md）
+rules/    # Canonical 规则文件（AGENTS.md / CLAUDE.md / copilot-instructions.md）
 ```
 
 ### 直接对话示例
@@ -201,23 +209,26 @@ meta-po：[检查点5] 请终验。
 
 ```text
 .output/
-├── STATE.md
-├── REQUEST.md
-├── USE-CASES.md
-├── REQUIREMENTS.md
-├── HLD.md
-├── ARCHITECTURE-DECISION.md
-├── STORY-BACKLOG.md
-├── DEVELOPMENT-PLAN.yaml
-├── TEST-STRATEGY.md
-├── VERIFICATION-REPORT.md
-├── PACKAGE-MANIFEST.yaml
+├── README.md
+├── doc/
+│   ├── STATE.md
+│   ├── REQUEST.md
+│   ├── USE-CASES.md
+│   ├── REQUIREMENTS.md
+│   ├── HLD.md
+│   ├── ARCHITECTURE-DECISION.md
+│   ├── STORY-BACKLOG.md
+│   ├── DEVELOPMENT-PLAN.yaml
+│   ├── TEST-STRATEGY.md
+│   ├── VERIFICATION-REPORT.md
+│   └── INSTALL-MANIFEST.yaml
+├── rules/
 ├── stories/
 │   ├── STORY-001.md
 │   ├── STORY-001-LLD.md
 │   └── ...
 ├── changes/
-└── packages/
+└── scripts/
 ```
 
 ### 关键文件说明
@@ -235,7 +246,7 @@ meta-po：[检查点5] 请终验。
 | `stories/STORY-*-LLD.md` | meta-dev | Story 级 LLD | 是 |
 | `TEST-STRATEGY.md` | meta-qa | 测试策略 | 否 |
 | `VERIFICATION-REPORT.md` | meta-qa | 验证报告 | 否 |
-| `PACKAGE-MANIFEST.yaml` | meta-qa | 打包清单 | 否 |
+| `INSTALL-MANIFEST.yaml` | meta-qa | 安装清单 | 否 |
 
 ### `STATE.md` 中最重要的字段
 
@@ -252,4 +263,4 @@ meta-po：[检查点5] 请终验。
 2. `HLD.md` 未确认，不进入 Story 拆解
 3. `STORY-{id}-LLD.md` 未确认，不进入该 Story 的实现
 4. 验证环境未准备好，meta-qa 不开始验证
-5. 验证和打包未完成，meta-doc 不输出最终交付文档
+5. 验证和安装脚本未完成，meta-doc 不输出最终交付文档

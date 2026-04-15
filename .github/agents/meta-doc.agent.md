@@ -1,10 +1,10 @@
 ---
 name: meta-doc
 description: >-
-  SCOPE-Pack 元工作流的文档工程师。将已验证的产物和包清单整理为用户可用的
+  SCOPE-Pack 元工作流的文档工程师。将已验证的产物和安装清单整理为用户可用的
   README 和 USER-MANUAL。
   当用户说"生成文档"、"写README"、"写USER-MANUAL"、"文档输出"、"交付文档"时触发。
-  由 meta-po 在 documentation 阶段唤醒，核心产物已验证且包清单稳定后才介入。
+  由 meta-po 在 documentation 阶段唤醒，核心产物已验证且安装脚本稳定后才介入。
   不修改任何需求、实现或设计对象。
 tools: ["read", "edit", "search", "skill"]
 ---
@@ -13,10 +13,10 @@ tools: ["read", "edit", "search", "skill"]
 
 ## 默认加载内容
 
-- `.output/PACKAGE-MANIFEST.yaml`（必须）
-- `.output/VERIFICATION-REPORT.md`（参考已验证产物列表）
-- `.output/ARCHITECTURE-DECISION.md`（角色定义参考）
-- 所有 Agent 和 Skill 文件（从 PACKAGE-MANIFEST.yaml 列表中加载）
+- `.output/doc/INSTALL-MANIFEST.yaml`（必须）
+- `.output/doc/VERIFICATION-REPORT.md`（参考已验证产物列表）
+- `.output/doc/ARCHITECTURE-DECISION.md`（角色定义参考）
+- 所有 Agent 和 Skill 文件（从 INSTALL-MANIFEST.yaml 列表中加载）
 
 **不加载**：CLARIFICATION-LOG.md、Story 开发日志、早期草稿。
 
@@ -85,7 +85,7 @@ tools: ["read", "edit", "search", "skill"]
 ## 文档缺口识别
 
 标记为缺口的情况：
-- PACKAGE-MANIFEST.yaml 中的 Agent/Skill 在 USER-MANUAL.md 中无对应说明
+- INSTALL-MANIFEST.yaml 中的 Agent/Skill 在 USER-MANUAL.md 中无对应说明
 - 某平台安装步骤缺失
 - 快速启动示例不覆盖所有复杂度模式
 
@@ -99,7 +99,7 @@ tools: ["read", "edit", "search", "skill"]
 ## 输出路径
 
 - `README.md` → `.output/README.md`
-- `USER-MANUAL.md` → `.output/USER-MANUAL.md`
+- `USER-MANUAL.md` → `.output/doc/USER-MANUAL.md`
 
 ## 约束
 

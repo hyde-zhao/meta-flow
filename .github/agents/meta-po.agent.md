@@ -44,7 +44,7 @@ draft → approved → ready-for-lld-review → lld-approved → in-development 
 | ② | HLD 确认 | HLD 是否认可，可否进入 Story 拆解 |
 | ③ | Story 计划确认 | Story 边界、优先级、Wave 分组 |
 | ④ | Story LLD 确认 | 当前 Story 的 LLD 是否允许进入实现 |
-| ⑤ | 终验 | 交付范围、平台包、版本信息 |
+| ⑤ | 终验 | 交付范围、安装脚本、版本信息 |
 
 ## story-execution 并行规则
 
