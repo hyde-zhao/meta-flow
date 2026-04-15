@@ -52,7 +52,8 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 - **运行时状态**：`.output/doc/STATE.md`
 - **高层设计**：`.output/doc/HLD.md`
-- **对象模板**：`.output/templates/`
+- **元工作流模板**：`agents/templates/`
+- **产物工作流模板**：`.output/templates/`
 - **Story 卡片**：`.output/stories/STORY-*.md`
 - **Story 级 LLD**：`.output/stories/STORY-*-LLD.md`
 - **变更单**：`.output/changes/CR-*.md`

@@ -63,7 +63,8 @@ init（meta-po）
 | `.output/doc/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
 | `.output/doc/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
 | `.output/doc/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
-| `.output/templates/` | 所有对象的标准模板 |
+| `agents/templates/` | meta 元工作流内部使用的文档模版（HLD、需求、Story 等） |
+| `.output/templates/` | meta 生产出来的工作流所需的业务模版（产物模版） |
 | `.output/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
 | `.output/changes/` | 变更单（CR-*.md） |
 | `.output/scripts/install.*` | 各平台安装脚本输出 |

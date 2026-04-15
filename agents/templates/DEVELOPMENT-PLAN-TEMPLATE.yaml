@@ -1,0 +1,14 @@
+project_id: ""
+version: "1.0"
+created_at: ""
+waves:
+  - wave: W1
+    parallel: true
+    stories:
+      - story_id: STORY-001
+        title: ""
+        priority: P0
+        assignee: meta-dev
+        depends_on: []
+        status: draft
+        output_files: []

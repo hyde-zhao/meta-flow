@@ -41,7 +41,7 @@ approval:
 
 如 `VALIDATION-ENV.yaml` 不存在或 `confirmed != true`：
 > 验证阶段已暂停。请提供 `.output/doc/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
-> 参考模板：`.output/templates/VALIDATION-ENV.yaml`
+> 参考模板：`agents/templates/VALIDATION-ENV-TEMPLATE.yaml`
 
 ## TEST-STRATEGY.md 输出
 
