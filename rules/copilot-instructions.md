@@ -58,6 +58,17 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 - **Story 级 LLD**：`.output/stories/STORY-*-LLD.md`
 - **变更单**：`.output/changes/CR-*.md`
 
+## Python 环境与依赖管理（uv）
+
+若项目包含 Python 代码、脚本、验证工具或 MCP 服务，必须遵循以下约束：
+
+1. 统一使用 `uv` 管理 Python 解释器、虚拟环境和依赖。
+2. 存在项目级 Python 依赖时，以 `pyproject.toml` 为唯一依赖声明来源，以 `uv.lock` 为唯一锁定结果；禁止提交 `.venv/`。
+3. 所有开发、测试、构建和脚本执行统一通过 `uv run` 触发；一次性工具统一优先使用 `uvx`。
+4. 禁止将裸 `pip install`、系统 Python 或未入库依赖作为日常工作流默认入口。
+5. 若项目尚未建立 `pyproject.toml` / `uv.lock`，仍必须使用 `uv` 管理解释器，并以 `uv run --python <version> python <script>` 作为 Python 命令入口。
+6. README、USER-MANUAL 及平台规则文件中的 Python 示例必须与上述约束保持一致。
+
 ## 核心协议规则
 
 1. **澄清锁**：`REQUIREMENTS.md` 未确认前，不得输出正式设计对象

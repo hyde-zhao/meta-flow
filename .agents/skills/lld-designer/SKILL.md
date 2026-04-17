@@ -1,4 +1,4 @@
----
+﻿---
 name: lld-designer
 description: >-
   当某个已批准 Story 在开发前需要落地为 Low-Level Design（LLD）时使用。
@@ -20,6 +20,7 @@ status: active
 3. **边界完整**：显式说明异常路径、安全、性能、幂等性、一致性和回滚策略
 4. **与 Story 对齐**：不得超出当前 Story 的范围，不得擅自扩容需求
 5. **人工门控**：LLD 输出后必须停下，等待 meta-po 发起确认
+6. **图示强制**：功能性 Story（涉及执行流程、状态变迁、多模块交互）必须输出 Mermaid 流程图或时序图；纯配置/纯文档类 Story 可豁免，但须在 LLD 中显式说明豁免理由
 
 ## 前置条件
 
@@ -60,7 +61,7 @@ status: active
 4. 代码结构与文件影响范围
 5. 数据模型与持久化设计（若无则显式说明）
 6. API / Interface 设计
-7. 核心处理流程
+7. 核心处理流程（功能性 Story 必须含 Mermaid 流程图或时序图）
 8. 技术设计细节
 9. 安全与性能设计
 10. 测试设计
@@ -89,6 +90,7 @@ status: active
 
 - [ ] LLD 文档覆盖 14 个规定章节
 - [ ] 文件影响范围、接口、测试、实施步骤和 DoD 可直接指导编码
+- [ ] 功能性 Story 的第7章包含至少一张 Mermaid 流程图（lowchart）或时序图（sequenceDiagram）；纯配置/纯文档类 Story 在 LLD 中说明豁免理由
 - [ ] 明确异常路径、安全、性能、回滚和发布策略
 - [ ] 不超出当前 Story 范围
 - [ ] `confirmed=false` 时不进入实现

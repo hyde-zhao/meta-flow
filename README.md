@@ -44,6 +44,22 @@
 cd .output && copilot @ptm-tde
 ```
 
+## Python 环境规范（uv）
+
+当前仓库对 Python 运行环境采用 `uv` 作为统一工具链，但仓库当前**尚未**内置 `pyproject.toml` / `uv.lock`。因此本阶段的执行约束是：
+
+1. 使用 `uv` 安装和选择 Python 解释器，不以系统 Python 作为默认入口。
+2. 运行仓库内 Python 脚本时，优先使用 `uv run --python <version> python <script>`。
+3. 一次性工具与临时依赖优先使用 `uvx` 或 `uv run --with <package>`，不把裸 `pip install` 作为日常流程。
+4. 安装到目标项目的 uv 规范统一通过 `rules/AGENTS.md`、`rules/CLAUDE.md`、`rules/copilot-instructions.md` 传播。
+
+示例：
+
+```bash
+uv python install 3.11
+uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
+```
+
 ## 开发节奏
 
 1. `meta-pm` 输出需求与场景

@@ -58,9 +58,18 @@
 
 ## 二、环境准备
 
-本系统依赖 `Python >= 3.9`。安装脚本通过 `python` 执行。
+本系统依赖 `Python >= 3.9`，并统一使用 `uv` 管理 Python 解释器与命令入口。
 
-无需额外安装 `PyYAML`。
+当前仓库尚未内置 `pyproject.toml` / `uv.lock`，因此本阶段采用“`uv` 管理解释器 + `uv run` 执行脚本”的约束，而不是裸 `python` / `pip install`。
+
+推荐准备方式：
+
+1. 安装 `uv`
+2. 执行 `uv python install 3.11`
+3. 运行仓库脚本时使用 `uv run --python 3.11 python <script>`
+4. 一次性工具优先使用 `uvx`；带临时依赖的命令优先使用 `uv run --with <package>`
+
+`scripts/install.py` 本身无需额外安装 `PyYAML`。
 
 ---
 
@@ -74,19 +83,19 @@
 
 ```bash
 # 默认安装到当前项目目录
-python scripts/install.py --platform claude-code
+uv run --python 3.11 python scripts/install.py --platform claude-code
 
 # 指定项目目录
-python scripts/install.py --platform codex --project-dir /path/to/your-project
+uv run --python 3.11 python scripts/install.py --platform codex --project-dir /path/to/your-project
 
 # 用户级安装，仅安装 skills
-python scripts/install.py --platform copilot --scope user --content skills
+uv run --python 3.11 python scripts/install.py --platform copilot --scope user --content skills
 
 # 仅安装规则文件
-python scripts/install.py --platform claude-code --content rules
+uv run --python 3.11 python scripts/install.py --platform claude-code --content rules
 
 # DryRun
-python scripts/install.py --platform openclaw --dry-run
+uv run --python 3.11 python scripts/install.py --platform openclaw --dry-run
 ```
 
 #### 平台包装器脚本
@@ -166,7 +175,7 @@ ls .claude/skills/   # 应有约 30 个 .md 文件
 # 期望：hld-designer / meta-se 路径被正确使用
 
 # 4. DryRun 校验
-python scripts/install.py --platform claude-code --dry-run
+uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
 # 期望：输出默认安装路径和将写入的文件
 ```
 
@@ -177,7 +186,7 @@ python scripts/install.py --platform claude-code --dry-run
 ls .codex/agents/   # 应有 7 个 .yaml 文件
 
 # 2. 验证 YAML 语法合法
-python -c "
+uv run --with pyyaml --python 3.11 python -c "
 import yaml, pathlib
 for f in pathlib.Path('.codex/agents').glob('*.yaml'):
     yaml.safe_load(f.read_text())
@@ -185,7 +194,7 @@ for f in pathlib.Path('.codex/agents').glob('*.yaml'):
 "
 
 # 3. 检查必填字段
-python -c "
+uv run --with pyyaml --python 3.11 python -c "
 import yaml, pathlib
 for f in pathlib.Path('.codex/agents').glob('*.yaml'):
     d = yaml.safe_load(f.read_text())
@@ -199,7 +208,7 @@ print('All agents valid')
 
 ```bash
 # 1. 验证 manifest.yaml 存在且结构正确
-python -c "
+uv run --with pyyaml --python 3.11 python -c "
 import yaml
 m = yaml.safe_load(open('.openclaw/manifest.yaml').read())
 print('agents:', len(m['agents']))   # 期望：7
@@ -207,7 +216,7 @@ print('skills:', len(m['skills']))   # 期望：约 30
 "
 
 # 2. 检查所有 manifest 引用的文件均存在
-python -c "
+uv run --with pyyaml --python 3.11 python -c "
 import yaml, pathlib
 m = yaml.safe_load(open('.openclaw/manifest.yaml').read())
 base = pathlib.Path('.openclaw')
