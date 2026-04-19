@@ -287,11 +287,11 @@ scripts/install.py
 scripts/install.py                               ← 新增 scope-pack 模式
 ```
 
-### 保留不动（防火墙测试资产）
+### 保留不动（防火墙测试资产 / 历史迁移说明）
 
 ```
 .fw-meta/                           ← 完整保留
-.agents/agents/meta-orchestrator.md
+.agents/agents/meta-po.md                 ← 现行主编排入口（原 meta-orchestrator 已升级）
 .agents/agents/requirement-analyst.md
 .agents/agents/vendor-adapter.md
 .agents/agents/workflow-planner.md
