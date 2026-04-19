@@ -6,50 +6,62 @@ description: >-
   适用场景：工作流计划设计的第一步。
 argument-hint: "REQUIREMENTS.md 和 SCENARIOS.yaml 路径"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-根据需求和场景的类型、风险级别和依赖关系，将测试活动组织为有序的执行阶段（Phase），每个阶段有明确的目标和进入/退出条件。
+根据需求、场景、风险和依赖关系，将执行活动组织为有序阶段（Phase），供后续 Wave 规划消费。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：计划设计阶段（plan-design）
-- 输入：`REQUIREMENTS.md`、`SCENARIOS.yaml`
-- 输出：`WORKFLOW-PLAN.yaml` 中的 phases 结构
+- Story / 工作流计划设计的第一步
+- 需要决定阶段边界、顺序与进入 / 退出条件
 
 ## 前置条件
 
-- [ ] `REQUIREMENTS.md` 状态为 confirmed
+- [ ] `REQUIREMENTS.md` 已确认
 - [ ] `SCENARIOS.yaml` 已生成
-- [ ] `VENDOR-CONSTRAINTS.yaml` 已生成
 
-## 执行约束
+## 必须读取的输入
 
-- 标准阶段模板按以下顺序排列：precheck → positive → negative → edge → cleanup
-- 可根据实际需求裁剪（如无边界场景则省略 edge 阶段）
-- 每个阶段必须有至少一个 Wave
-- cleanup 阶段是强制的——即使测试成功也必须清理
-- 阶段之间是串行关系，阶段内的 Wave 可以并行
+- `.output/doc/REQUIREMENTS.md`
+- `.output/doc/SCENARIOS.yaml`
+- 相关约束或平台限制（若存在）
 
-## 阶段设计决策指南
+## 知识来源
 
-| 决策点 | 规则 |
-|--------|------|
-| 前置检查放在哪里 | 永远是第一个阶段，任何检查失败则整体终止 |
-| 正向和负向是否分阶段 | 推荐分开——先正向验证功能正常，再负向验证阻断正确，避免污染会话状态 |
-| 修改配置的任务放在哪里 | 如果需要临时修改配置进行验证，应在 positive/negative 中处理，但配置恢复放在 cleanup |
-| 高风险任务放在哪里 | 放在独立 Wave 中，不与其他任务并行 |
+- 需求优先级、场景类型与依赖关系
+- 现有阶段设计规则：前置检查优先、清理阶段兜底
 
-## Gotchas
+## 执行步骤
 
-- 不要把 cleanup 放在 positive 或 negative 阶段之间——如果中间阶段失败跳转到 cleanup，可能会跳过后续必要的验证
-- precheck 阶段不应包含任何配置修改操作，它只做"看"不做"改"
+1. 按目标、风险和依赖关系划分阶段。
+2. 为每个阶段定义目标、顺序和进入 / 退出条件。
+3. 将阶段结构写入计划对象，供 Wave 设计继续细化。
+
+## 输出文件 / 输出模板
+
+输出为 `.output/doc/DEVELOPMENT-PLAN.yaml` 中的阶段结构；不直接依赖模板文件。
+
+## 约束
+
+- 阶段间串行，阶段内任务可交给后续 Wave 规划决定
+- 清理 / 收尾阶段不得省略
+- 依赖需求与场景内容契约，而非模板可用性
 
 ## 验收标准
 
-- 每个阶段有明确的 id、name、description 和 order
-- 阶段顺序合理（precheck 最先，cleanup 最后）
-- cleanup 阶段存在
-- 每个场景至少被分配到一个阶段的任务中
+- [ ] 每个阶段有明确目标与顺序
+- [ ] 阶段边界合理，清理阶段存在
+- [ ] 全部场景被纳入至少一个阶段
+
+## 不适用边界
+
+- 当前任务只需生成测试场景，不需要阶段设计
+- 需求与场景尚未收敛
+
+## Gotchas
+
+- 阶段设计过细会导致后续 Wave 规划碎片化
+- 把高风险任务和普通任务混在同一阶段会削弱隔离效果

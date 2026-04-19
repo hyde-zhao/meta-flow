@@ -6,6 +6,7 @@ Installs workflow assets from the canonical delivery directories:
   - agents/
   - skills/
   - rules/
+  - skills/<skill-name>/templates/ (private, when present)
 
 Examples:
   python scripts/install.py --platform claude-code
@@ -38,7 +39,6 @@ class SourceLayout:
     agents_dir: Path
     skills_dir: Path
     rules_dir: Path | None
-    templates_dir: Path | None
     agents_rule: Path | None
     copilot_rule: Path | None
     claude_rule: Path | None
@@ -85,13 +85,11 @@ def detect_source_layout(root: Path) -> SourceLayout:
     legacy_skills = root / ".agents" / "skills"
 
     if canonical_agents.is_dir() and canonical_skills.is_dir():
-        templates_dir = canonical_agents / "templates"
         return SourceLayout(
             root=root,
             agents_dir=canonical_agents,
             skills_dir=canonical_skills,
             rules_dir=canonical_rules if canonical_rules.is_dir() else None,
-            templates_dir=templates_dir if templates_dir.is_dir() else None,
             agents_rule=choose_existing(canonical_rules / "AGENTS.md", root / "AGENTS.md"),
             copilot_rule=choose_existing(
                 canonical_rules / "copilot-instructions.md",
@@ -105,13 +103,11 @@ def detect_source_layout(root: Path) -> SourceLayout:
         )
 
     if legacy_agents.is_dir() and legacy_skills.is_dir():
-        templates_dir = legacy_agents / "templates"
         return SourceLayout(
             root=root,
             agents_dir=legacy_agents,
             skills_dir=legacy_skills,
             rules_dir=canonical_rules if canonical_rules.is_dir() else None,
-            templates_dir=templates_dir if templates_dir.is_dir() else None,
             agents_rule=choose_existing(root / "AGENTS.md"),
             copilot_rule=choose_existing(root / ".github" / "copilot-instructions.md"),
             claude_rule=choose_existing(root / "CLAUDE.md", root / ".claude" / "CLAUDE.md"),
@@ -250,23 +246,20 @@ def write_text(dest: Path, content: str, dry_run: bool, installed: list[Path]) -
     installed.append(dest)
 
 
-def install_templates(
+def install_skill_private_templates(
     target_root: Path,
-    templates_dir: Path,
+    skill_dir: Path,
     dry_run: bool,
     installed: list[Path],
 ) -> None:
-    """Install agent templates to {target_root}/agents/templates/.
+    private_templates_dir = skill_dir / "templates"
+    if not private_templates_dir.is_dir():
+        return
 
-    Templates are referenced by agents with relative paths like
-    ``agents/templates/STORY-TEMPLATE.md``, resolved from the project root.
-    They must therefore always land at ``{target_root}/agents/templates/``
-    regardless of platform or scope.
-    """
-    dest_base = target_root / "agents" / "templates"
-    for src in sorted(templates_dir.iterdir()):
+    dest_base = target_root / "skills" / skill_dir.name / "templates"
+    for src in sorted(private_templates_dir.rglob("*")):
         if src.is_file():
-            copy_file(src, dest_base / src.name, dry_run, installed)
+            copy_file(src, dest_base / src.relative_to(private_templates_dir), dry_run, installed)
 
 
 def install_rules(
@@ -351,6 +344,7 @@ def install_skills(
             src = skill_dir / "SKILL.md"
             dest = base_dir / skill_dir.name / "SKILL.md"
             copy_file(src, dest, dry_run, installed)
+            install_skill_private_templates(target_root, skill_dir, dry_run, installed)
             rel = dest.relative_to(target_root).as_posix()
             manifest_entries.append((skill_dir.name, rel))
         return manifest_entries
@@ -366,6 +360,7 @@ def install_skills(
         src = skill_dir / "SKILL.md"
         dest = base_dir / f"{skill_dir.name}.md"
         copy_file(src, dest, dry_run, installed)
+        install_skill_private_templates(target_root, skill_dir, dry_run, installed)
         rel = dest.relative_to(target_root).as_posix()
         manifest_entries.append((skill_dir.name, rel))
     return manifest_entries
@@ -469,9 +464,6 @@ def main() -> None:
             dry_run=args.dry_run,
             installed=installed,
         )
-        if layout.templates_dir:
-            install_templates(target_root, layout.templates_dir, args.dry_run, installed)
-
     skill_entries: list[tuple[str, str]] = []
     if install_skills_enabled:
         skill_entries = install_skills(

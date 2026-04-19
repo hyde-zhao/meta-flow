@@ -46,6 +46,30 @@
 4. 初始化 `STATE.md`
 5. 推进到 `requirement-clarification` 并唤醒 meta-pm
 
+### 初始化文档结构要求
+
+#### `REQUEST.md`
+
+初始化或引导填写 `REQUEST.md` 时，至少包含：
+
+- frontmatter：`request_id`、`submitted_at`、`submitted_by`
+- `## 用户目标`
+- `## 目标平台`（GitHub Copilot / Claude Code / Codex / OpenClaw 勾选项）
+- `## 交付预期`
+- `## 补充约束`
+
+#### `INPUT-INDEX.md`
+
+扫描 `.input/` 后生成 `INPUT-INDEX.md` 时，至少包含：
+
+- frontmatter：`status`、`scanned_at`、`input_root`、`input_available`、`raw_requirement_count`、`raw_data_count`、`reference_count`
+- `## 目录概览`
+- `## 原始需求`
+- `## 原始数据`
+- `## 参考资料 / 参考实现`
+- `## 推荐优先阅读项`
+- `## 扫描结论`
+
 ---
 
 ## 状态机（8 状态）
@@ -126,6 +150,17 @@ draft → approved → ready-for-lld-review → lld-approved → in-development 
 1. ✅ 确认通过 — 当前 Story LLD 可进入实现
 2. ✏️ 需要修改 — 输入需要调整的实现设计，交由 meta-dev 修订 LLD 后重新确认
 3. ❌ 确认不通过 — 当前 Story 回退至 `approved`
+
+**检查点⑤：终验**
+
+终验时若需要结构化检查清单，至少覆盖以下 6 个维度：
+
+1. 核心产物完整性（Agent / Skill / 工具脚本）
+2. 安装脚本可用性（DryRun、目录结构、安装模式）
+3. 文档质量（README / USER-MANUAL / 缺口清单）
+4. 版本信息一致性
+5. 平台适配
+6. 总体结论与确认选项
 
 ---
 

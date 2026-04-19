@@ -4,43 +4,66 @@ description: >-
   当需要将已批准的工作流计划渲染为人类可读的交付文档时使用。
   触发词包括：渲染工作流、生成文档、交付文档、输出工作流。
   适用场景：交付阶段。
-argument-hint: "WORKFLOW-PLAN.yaml 路径"
+argument-hint: "DEVELOPMENT-PLAN.yaml 或工作流计划路径"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-将已批准的 `WORKFLOW-PLAN.yaml` 转换为结构化的 Markdown 交付文档，包含 6 个标准模块。
+将已批准的工作流计划渲染为结构化 Markdown 交付文档，供用户或执行者阅读与执行。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：交付阶段（delivery）
-- 输入：已批准的 WORKFLOW-PLAN.yaml + 校验结论 + 安全结论
-- 输出：`OUTPUT/[workflow-name].md`
+- 交付阶段需要把结构化计划转换为人类可读文档
+- 需要按 Phase / Wave / Task 组织最终交付说明
 
 ## 前置条件
 
-- [ ] WORKFLOW-PLAN.yaml 已通过 Plan Checker 校验
-- [ ] WORKFLOW-PLAN.yaml 已通过 Safety Reviewer 审计
-- [ ] `VENDOR-CONSTRAINTS.yaml` 可用（风险提示参考）
+- [ ] 计划已确认
+- [ ] 与执行相关的风险 / 约束结论可读取
 
-## 执行约束
+## 必须读取的输入
 
-- 输出格式遵循 `.fw-meta/templates/OUTPUT-TEMPLATE.md` 的 6 模块结构
-- Phase → Wave → Task 按计划顺序展开为表格
-- 禁止事项来源：SAFETY-REPORT 中的 BLOCKING 发现 + VENDOR-CONSTRAINTS 中的 forbidden_commands
-- 需人工批准的操作根据 task 的 `require_confirmation: true` 标记
-- 不遗漏 SAFETY-REPORT 的任何 HIGH 及以上级别发现
+- 已批准的计划文件（如 `.output/doc/DEVELOPMENT-PLAN.yaml`）
+- 相关风险、验证或约束结论
+- 需要出现在交付文档中的人工确认点与回滚信息
 
-## Gotchas
+## 知识来源
 
-- 渲染时命令中的变量占位符应保留（如 `{interface_name}`），不替换为实际值——实际值由执行时注入
-- 回滚策略模块容易被敷衍处理（只写"手动恢复"），应从 task 的 rollback_action 字段提取具体的回滚命令
+- `skills/workflow-renderer/templates/OUTPUT-TEMPLATE.md`
+- 当前计划内容与上游约束文档
+
+## 执行步骤
+
+1. 提取工作流概览、Phase / Wave 结构和 Task 明细。
+2. 汇总执行约束、风险提示、禁止事项与人工确认点。
+3. 按 6 个标准模块渲染为交付文档。
+
+## 输出文件 / 输出模板
+
+| 文件 | 路径 | 模板 |
+|---|---|---|
+| 交付工作流文档 | `OUTPUT/[workflow-name].md` | `skills/workflow-renderer/templates/OUTPUT-TEMPLATE.md` |
+
+## 约束
+
+- 输出必须遵循 `OUTPUT-TEMPLATE.md` 的 6 模块结构
+- Phase / Wave / Task 顺序必须与已批准计划一致
+- 渲染输出必须复用当前私有模板
 
 ## 验收标准
 
-- 文档包含全部 6 个模块
-- 所有 Phase 和 Task 均已展开
-- 风险提示完整覆盖安全审计发现
-- 禁止事项清单不为空
+- [ ] 文档包含 6 个标准模块
+- [ ] Phase、Wave 与 Task 均已展开
+- [ ] 风险提示与回滚信息已纳入
+
+## 不适用边界
+
+- 当前任务只需机器可读计划，不需要渲染为阅读文档
+- 计划尚未确认，仍处于设计阶段
+
+## Gotchas
+
+- 渲染时不要擅自替换变量占位符，应保留执行时注入的动态值
+- 回滚与人工确认点最容易遗漏，必须与计划中的高风险动作一一对齐

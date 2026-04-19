@@ -23,8 +23,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | `requirement-clarifier` | 澄清需求、需求问题、未决问题、需求歧义 |
 | `scenario-expansion` | 展开场景、生成场景、测试场景、场景扩展 |
 | `scope-normalization` | 归一化需求、去重、合并需求、范围整理 |
-| `solution-designer` | 方案设计、架构设计、复杂度判定、设计方案 |
-| `hld-designer` | HLD、高层设计、架构评审、架构方案 |
+| `hld-designer` | HLD、高层设计、架构评审、架构方案、方案设计、架构设计、复杂度判定、设计方案、simple/standard/complex 判断 |
 | `lld-designer` | LLD、详细设计、实现设计、Story 设计 |
 | `claude-agent-writer` | 写 Claude Agent、创建 Claude 子代理、Claude subagent |
 | `copilot-agent-writer` | 写 Copilot Agent、创建自定义 Agent、Copilot CLI Agent |
@@ -52,7 +51,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 - **运行时状态**：`.output/doc/STATE.md`
 - **高层设计**：`.output/doc/HLD.md`
-- **元工作流模板**：`agents/templates/`
+- **Skill 私有模板**：`skills/<skill-name>/templates/`
 - **产物工作流模板**：`.output/templates/`
 - **Story 卡片**：`.output/stories/STORY-*.md`
 - **Story 级 LLD**：`.output/stories/STORY-*-LLD.md`
@@ -83,6 +82,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
 11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 12. **输出隔离**：所有产物文件输出到 `.output/` 目录；`.agents/` 和 `.github/` 仅存放元工作流自身定义
+13. **Agent/Skill 关系维护**：开发或修改 Agent、Skill 时，若影响调用、适用或归属关系，必须同步更新 `skills/README.md`
 
 ## 人工检查点（5 类）
 

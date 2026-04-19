@@ -1,0 +1,23 @@
+version: ""
+workflow_id: ""
+generated_at: ""
+generated_by: context-manifest-builder
+design_decisions:
+  - decision: ""
+    rationale: ""
+    impacted_phase: ""
+execution_constraints:
+  tools: []
+  permissions: []
+  network: []
+  environment: []
+observability_points:
+  - phase: ""
+    check: ""
+    signal: ""
+    location: ""
+linked_artifacts:
+  workflow_plan: ""
+  plan_check_report: ""
+  safety_report: ""
+  rendered_output: ""

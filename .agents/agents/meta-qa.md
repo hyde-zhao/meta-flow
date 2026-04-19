@@ -41,7 +41,26 @@ approval:
 
 如 `VALIDATION-ENV.yaml` 不存在或 `confirmed != true`：
 > 验证阶段已暂停。请提供 `.output/doc/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
-> 参考模板：`agents/templates/VALIDATION-ENV-TEMPLATE.yaml`
+
+`VALIDATION-ENV.yaml` 至少包含以下字段：
+
+```yaml
+environment_id: ""
+provided_by: human
+targets: []
+runtime:
+  python: ""
+  node: ""
+  required_paths: []
+credentials:
+  provided: false
+  notes: ""
+notes: []
+approval:
+  confirmed: false
+  confirmed_by: ""
+  confirmed_at: ""
+```
 
 ## TEST-STRATEGY.md 输出
 
@@ -215,6 +234,28 @@ created_at: ""
 3. 要求脚本支持平台选择、当前项目默认安装、指定项目目录、用户级 agent/skill 安装
 4. 调用 `platform-validator` 校验默认安装路径与 DryRun 输出
 5. 在 `VERIFICATION-REPORT.md` 中记录安装脚本验证结论
+
+`INSTALL-MANIFEST.yaml` 至少包含以下字段：
+
+```yaml
+name: ""
+version: ""
+default_scope: project
+supported_platforms:
+  - copilot
+  - claude-code
+  - codex
+  - openclaw
+installers:
+  - .output/scripts/install.py
+  - .output/scripts/install.ps1
+  - .output/scripts/install.sh
+rules: []
+contents:
+  agents: []
+  skills: []
+  tools: []
+```
 
 ## 关联 Skill
 

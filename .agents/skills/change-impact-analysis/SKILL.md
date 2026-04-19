@@ -6,61 +6,71 @@ description: >-
   适用场景：元工作流任意阶段的变更管理。
 argument-hint: "变更原因、变更类型（add/modify/delete）、影响范围描述"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-受理变更请求，创建标准化的变更单 `CR-XXX.md`，执行五维度影响分析，判定回退阶段和审批要求，并更新 `STATE.md` 和 `CHANGELOG.md`。
+受理变更请求，创建标准化 `CR-*.md`，执行五维度影响分析，判定 `rollback_to` 与审批要求，并同步更新当前工作流状态。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：元工作流全部阶段（init 除外）
-- 变更来源：用户直接提交、执行反馈驱动、问题工单升级
-- 输出对象：`changes/CR-XXX.md`
+- 用户直接提出需求变更
+- ISSUE 升级为结构性变更
+- 执行反馈触发需求、设计或验证口径调整
 
 ## 前置条件
 
-- [ ] `STATE.md` 已存在且当前阶段明确
-- [ ] 变更原因和范围已由用户提供或可从 ISSUE/RUN-EXEC 推断
-- [ ] `.fw-meta/templates/CR-TEMPLATE.md` 可用
+- [ ] `.output/doc/STATE.md` 已存在且当前阶段明确
+- [ ] 变更原因和影响范围已提供，或可从 ISSUE / RUN-EXEC 推断
 
-## 执行约束
+## 必须读取的输入
 
-- 受理变更时必须先暂停当前阶段（设置 STATE.md 的 pending_action）
-- 禁止跳过影响分析直接进入修改
-- 影响分析必须覆盖全部五个维度
-- CR 编号递增，不复用已有编号
-- 同一高风险对象在一次交付窗口内只允许一次结构性变更（冷却机制）
-- 同一 REQ-* 连续变更超过 3 轮时必须升级人工决策
+- `.output/doc/STATE.md`
+- 当前变更描述
+- 相关 ISSUE / RUN-EXEC / 上游文档（若存在）
+- 受影响的正式对象（如 `REQUIREMENTS.md`、`HLD.md`、`DEVELOPMENT-PLAN.yaml` 等）
 
-## 五维度影响评估规则
+## 知识来源
 
-| 维度 | 评估问题 | 影响时更新 |
-|------|----------|-----------|
-| 需求层 | 是否新增、删除或重定义 REQ-* | REQUIREMENTS.md |
-| 场景层 | 是否改变测试矩阵覆盖范围 | SCENARIOS.yaml, TEST-MATRIX.md |
-| 计划层 | 是否改变 Phase、Wave、任务依赖 | WORKFLOW-PLAN.yaml |
-| 安全层 | 是否引入新的高风险动作或权限要求 | 需重新进入 Safety Reviewer |
-| 交付层 | 是否需要重新生成交付物或回归子集 | OUTPUT/*.md, REGRESSION-TEST-SUBSET.yaml |
+- `skills/change-impact-analysis/templates/CR-TEMPLATE.md`：CR 结构基线
+- 当前工作流状态与正式文档：影响分析的事实来源
+- `AGENTS.md`：阶段、门控与回退语义
 
-## 审批矩阵
+## 执行步骤
 
-| 风险级别 | 判定标准 | 处理方式 |
-|----------|---------|---------|
-| 低风险 | 文案修订、说明补充、非关键参数调整 | Orchestrator 自动批准 |
-| 中风险 | 新增测试场景、调整执行顺序、修改验证标准 | 提交人工确认 |
-| 高风险 | 修改安全边界、引入新权限、改变回滚策略 | 强制人工审批并重走安全审计 |
+1. 冻结当前推进动作，记录 `pending_action` 或等价待处理动作。
+2. 生成新的 `CR-*.md` 编号并初始化模板。
+3. 从需求层、场景层、计划层、安全层、交付层五个维度进行影响分析。
+4. 给出 `impact_level`、`rollback_to` 和审批结论。
+5. 将活跃变更单写回状态对象，并明确后续收敛路径。
 
-## Gotchas
+## 输出文件 / 输出模板
 
-- 变更单创建后必须先完成影响分析，给出 `impact_level: local/global` 和 `rollback_to` 结论，才能允许进入修改流程。过早放行会导致局部修改后上下游不一致
-- 执行反馈驱动的变更（source 为 RUN-EXEC）通常需要同时更新 linked_issues 字段，确保 ISSUE 和 CR 双向关联
+| 文件 | 路径 | 模板 |
+|---|---|---|
+| 变更单 | `.output/changes/CR-{id}.md` | `skills/change-impact-analysis/templates/CR-TEMPLATE.md` |
+
+## 约束
+
+- 必须先完成五维度分析，再允许修改正式对象
+- CR 编号递增，不复用
+- `impact_level`、`rollback_to`、审批结论必须显式落地
+- CR 必须统一复用 `skills/change-impact-analysis/templates/CR-TEMPLATE.md` 口径
 
 ## 验收标准
 
-- `changes/CR-XXX.md` 的 frontmatter 全部字段填写完整
-- `impact_analysis` 五个维度都有 true/false 结论
-- `rollback_to` 字段指向明确的阶段
-- `STATE.md` 已更新 `active_change_requests` 列表
-- `CHANGELOG.md` 已追加变更记录
+- [ ] `CR-*.md` frontmatter 完整
+- [ ] 五个维度均有明确结论
+- [ ] `rollback_to` 与审批结论已填写
+- [ ] 当前状态已记录活跃变更单
+
+## 不适用边界
+
+- 只是修正文案或拼写且不影响正式对象
+- 当前请求只要求问题分类，不要求进入变更管理
+
+## Gotchas
+
+- 执行反馈驱动的变更经常同时影响验证和交付层，不能只分析需求层
+- 若变更触发回退，不得跳过人工检查点直接继续下游阶段

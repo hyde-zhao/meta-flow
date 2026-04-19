@@ -1,4 +1,4 @@
-﻿---
+---
 name: lld-designer
 description: >-
   当某个已批准 Story 在开发前需要落地为 Low-Level Design（LLD）时使用。
@@ -11,92 +11,61 @@ status: active
 
 ## 目标
 
-基于已批准的 Story、已确认的 HLD 和架构约束，输出一份**可直接指导编码与评审**的 `.output/stories/STORY-{id}-LLD.md`。该文档必须在人工确认后，才能作为实现入口。
+基于已批准的 Story、已确认的 HLD 和架构约束，输出一份可直接指导编码与评审的 Story 级 LLD。
 
-## 核心原则
+## 适用场景
 
-1. **实现导向**：聚焦“如何实现”，不重复 HLD 的宏观论证
-2. **确定性**：对模块、接口、文件影响、测试和步骤给出可执行描述
-3. **边界完整**：显式说明异常路径、安全、性能、幂等性、一致性和回滚策略
-4. **与 Story 对齐**：不得超出当前 Story 的范围，不得擅自扩容需求
-5. **人工门控**：LLD 输出后必须停下，等待 meta-po 发起确认
-6. **图示强制**：功能性 Story（涉及执行流程、状态变迁、多模块交互）必须输出 Mermaid 流程图或时序图；纯配置/纯文档类 Story 可豁免，但须在 LLD 中显式说明豁免理由
+- Story 已批准，准备进入实现前的详细设计
+- 需要形成可评审的 Story 级实现蓝图
 
 ## 前置条件
 
-- [ ] `.output/stories/STORY-{id}.md` 存在且 `status=approved`
-- [ ] `.output/doc/HLD.md` 存在且 `confirmed=true`
-- [ ] `.output/doc/ARCHITECTURE-DECISION.md` 存在且 `confirmed=true`
+- [ ] `.output/stories/STORY-{id}.md` 已批准
+- [ ] `.output/doc/HLD.md` 与 `.output/doc/ARCHITECTURE-DECISION.md` 已确认
 
 ## 必须读取的输入
 
-- 当前 Story 卡片 `.output/stories/STORY-{id}.md`
+- `.output/stories/STORY-{id}.md`
 - `.output/doc/HLD.md`
 - `.output/doc/ARCHITECTURE-DECISION.md`
-- Story `depends_on` 指向的前置产物（若存在）
-- `.output/doc/PLATFORM-INSTALL-SPEC.md`（当 Story 涉及平台目录或安装结构时）
+- 相关前置 Story 或平台约束（若存在）
+
+## 知识来源
+
+- `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md`
+- Story 卡片中的验收标准与设计约束
+- 上游 HLD / ADR 约束
 
 ## 执行步骤
 
-### 步骤 1：范围澄清
+1. 提炼 Story 范围、输出文件、平台目标和约束。
+2. 按 14 个规定章节完成 LLD 设计。
+3. 写入 `.output/stories/STORY-{id}-LLD.md` 并停在人工确认前。
 
-从 Story 中提炼：
+## 输出文件 / 输出模板
 
-- 本次交付目标
-- 验收标准
-- 输出文件
-- 平台目标
-- 设计约束
-- 与前置 Story 的接口边界
+| 文件 | 路径 | 模板 |
+|---|---|---|
+| Story LLD | `.output/stories/STORY-{id}-LLD.md` | `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` |
 
-若发现 Story 缺少实现所需关键信息，停止并报告阻塞。
+## 约束
 
-### 步骤 2：LLD 主体设计
-
-`STORY-{id}-LLD.md` 必须严格包含以下章节：
-
-1. Goal
-2. Requirements（Functional / Non-Functional）
-3. 模块拆分与职责
-4. 代码结构与文件影响范围
-5. 数据模型与持久化设计（若无则显式说明）
-6. API / Interface 设计
-7. 核心处理流程（功能性 Story 必须含 Mermaid 流程图或时序图）
-8. 技术设计细节
-9. 安全与性能设计
-10. 测试设计
-11. 实施步骤
-12. 风险、难点与预研建议
-13. 回滚与发布策略
-14. Definition of Done
-
-### 步骤 3：评审门控
-
-完成 `.output/stories/STORY-{id}-LLD.md` 后：
-
-- 在 Frontmatter 中设置 `story_id: STORY-{id}`
-- 在 Frontmatter 中设置 `status: ready-for-review`
-- 在 Frontmatter 中设置 `confirmed: false`
-- 说明“需要 meta-po 发起人工确认”
-- **立即停止**，不得开始实现产物文件
-
-## 输出文件
-
-| 文件 | 路径 | 说明 |
-|------|------|------|
-| Story LLD | `.output/stories/STORY-{id}-LLD.md` | 当前 Story 的详细设计文档 |
+- 14 个章节必须与 `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` 一一对应
+- `confirmed=false` 时不得进入实现
+- 不超出当前 Story 范围
 
 ## 验收标准
 
-- [ ] LLD 文档覆盖 14 个规定章节
-- [ ] 文件影响范围、接口、测试、实施步骤和 DoD 可直接指导编码
-- [ ] 功能性 Story 的第7章包含至少一张 Mermaid 流程图（lowchart）或时序图（sequenceDiagram）；纯配置/纯文档类 Story 在 LLD 中说明豁免理由
-- [ ] 明确异常路径、安全、性能、回滚和发布策略
-- [ ] 不超出当前 Story 范围
-- [ ] `confirmed=false` 时不进入实现
+- [ ] LLD 覆盖 14 个规定章节
+- [ ] 文件影响范围、接口、测试与实施步骤可直接指导编码
+- [ ] 回滚与发布策略明确
 
 ## 不适用边界
 
-- 当前任务仍处于需求澄清或 HLD 设计阶段
-- Story 尚未批准，或 HLD / 架构决策尚未确认
-- 当前请求只需要高层方案评审，不需要实现级设计
+- 当前任务还处于需求或 HLD 设计阶段
+- Story 尚未批准
+
+## Gotchas
+
+- 若模板章节与说明口径不一致，应以模板契约为准同步修正，不允许双轨并存
+- 详细设计不是实现日志，必须保持“可实施”而不是“已完成”

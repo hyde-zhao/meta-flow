@@ -7,7 +7,7 @@
 | 目录 | 用途 |
 |------|------|
 | `agents/` | **交付 Agent 源目录**（安装脚本默认从此读取，文件名为 `<name>.md`） |
-| `skills/` | **交付 Skill 源目录**（安装脚本默认从此读取，结构为 `skills/<name>/SKILL.md`） |
+| `skills/` | **交付 Skill 源目录**（安装脚本默认从此读取，结构为 `skills/<name>/SKILL.md`；如有模板，位于 `skills/<name>/templates/`） |
 | `rules/` | **交付规则源目录**（如 `AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md`） |
 | `.agents/agents/` | 元工作流内部 Agent 定义（保留） |
 | `.agents/skills/` | 元工作流内部 Skill 定义（保留） |
@@ -75,6 +75,10 @@ uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
 - `agents/`
 - `skills/`
 - `rules/`
+
+其中：
+
+- Skill 私有模板随 `skills/<skill-name>/templates/` 一并安装
 
 命名规则：
 

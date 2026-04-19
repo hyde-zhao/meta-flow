@@ -6,49 +6,65 @@ description: >-
   适用场景：执行反馈产生问题时。
 argument-hint: "RUN-EXEC 记录路径或问题描述"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-从 RUN-EXEC 记录或用户描述中提取问题，起草标准化的 ISSUE 工单。
+从 RUN-EXEC 记录或用户问题描述中提取事实，起草标准化 ISSUE 工单。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：执行反馈的问题处理
-- 输入：`runs/RUN-EXEC-*.md`（failed_tasks 部分）或用户直接描述
-- 输出：`issues/ISSUE-NNN.md`
+- 执行反馈中暴露了独立问题，需要进入 ISSUE 流转
+- 用户描述了可归档的问题现象，需要形成结构化工单
 
 ## 前置条件
 
 - [ ] 问题现象已明确（有 RUN-EXEC 记录或用户描述）
-- [ ] `.fw-meta/templates/ISSUE-TEMPLATE.md` 可用
 
-## 执行约束
+## 必须读取的输入
 
-- ISSUE 编号格式：`ISSUE-NNN`，递增不复用
-- 必须填写 category（design-flaw / impl-bug / env-issue / doc-defect）
-- 必须填写 severity（BLOCKING / HIGH / MEDIUM / LOW）
-- affected_artifacts 字段必须指向受影响的具体文件
-- 初步根因分析至少提供假设和支撑证据
+- RUN-EXEC 记录（若存在）
+- 用户问题描述
+- 与问题直接相关的日志、命令输出或证据
 
-## 分类判定指南
+## 知识来源
 
-| 现象 | 建议 category |
-|------|-------------|
-| 需求遗漏或理解错误 | design-flaw |
-| 命令语法错误或参数错误 | impl-bug |
-| 设备不可达或版本不兼容 | env-issue |
-| 文档表述不清或证据不足 | doc-defect |
+- `skills/issue-drafter/templates/ISSUE-TEMPLATE.md`
+- 运行反馈与证据文件
+- 当前交付对象的实际行为
 
-## Gotchas
+## 执行步骤
 
-- 一次执行可能产生多个独立问题，应为每个独立原因创建单独的 ISSUE，不要合并不同原因的问题到一个工单
-- ISSUE 创建后不直接路由——提交给 Orchestrator 通过 issue-routing skill 做分类路由
+1. 提炼现象、影响范围、复现条件与期望结果。
+2. 判定 `category` 与 `severity`。
+3. 整理证据、初步根因假设与受影响产物。
+4. 按模板生成 ISSUE 草稿。
+
+## 输出文件 / 输出模板
+
+| 文件 | 路径 | 模板 |
+|---|---|---|
+| ISSUE 草稿 | `issues/ISSUE-{id}.md` | `skills/issue-drafter/templates/ISSUE-TEMPLATE.md` |
+
+## 约束
+
+- ISSUE 编号递增，不复用
+- `category`、`severity`、`affected_artifacts` 必填
+- ISSUE 草稿必须复用当前私有模板
 
 ## 验收标准
 
-- ISSUE 文件 frontmatter 全部字段完整
-- category 和 severity 判定合理
-- affected_artifacts 不为空
-- 初步根因分析包含假设和证据
+- [ ] ISSUE frontmatter 完整
+- [ ] 分类、严重度与影响对象明确
+- [ ] 证据与初步根因分析已填写
+
+## 不适用边界
+
+- 当前请求只是问题分流，不需要新建 ISSUE
+- 现象尚不明确，无法形成最小问题单元
+
+## Gotchas
+
+- 一次执行可能暴露多个独立问题，应拆成多个 ISSUE，而不是强行合并
+- 证据不足时要写明“待补证据”，不能把猜测包装成事实

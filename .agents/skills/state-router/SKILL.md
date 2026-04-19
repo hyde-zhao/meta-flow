@@ -4,60 +4,109 @@ description: >-
   当需要推进工作流状态、回退到上一阶段、查询当前进度、或判断下一步应调用哪个 Agent 时使用。
   触发词包括：推进、下一步、当前状态、回退、状态查询、继续。
   适用场景：元工作流全流程的状态管理。
-argument-hint: "可选：指定目标状态或要查询的字段"
+argument-hint: "可选：指定目标阶段、查询字段或回退原因"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-读取 `STATE.md`，根据当前阶段的退出条件判断是否可以推进，输出下一步应调用的 Agent 和需要加载的上下文，并更新 `STATE.md`。
+读取并更新 `.output/doc/STATE.md`，根据当前阶段的退出条件判断是否可推进、是否需要回退、下一步应唤醒哪个 Agent，并保持状态机与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：元工作流全部 9 个状态阶段
-- 接入方式：读写 `.fw-meta/STATE.md`（运行时）或参考 `.fw-meta/templates/STATE.md`（模板）
-- 触发时机：每次阶段切换、用户主动查询、异常恢复
+- 元工作流阶段推进、阶段回退、状态查询
+- `meta-po` 在每个阶段完成后进行退出条件判定
+- Story 执行阶段内的 Wave / Story 收敛判断
 
 ## 前置条件
 
-- [ ] `.fw-meta/STATE.md` 已存在（首次使用时从模板初始化）
-- [ ] 当前阶段的主要产物文件已确认存在或不存在
+- [ ] `.output/doc/STATE.md` 已存在，或允许由 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化
+- [ ] 当前阶段相关产物的存在性和确认状态可被检查
 
-## 执行约束
+## 必须读取的输入
 
-- 只做状态判断和推进决策，不做任何内容生成
-- 推进前必须检查当前阶段的退出条件是否全部满足
-- 回退时必须在 `history` 中记录回退原因
-- 每次操作都必须回写 `STATE.md` 并更新 `last_updated`
-- 当 `blocked=true` 时，拒绝推进并说明阻塞原因
+- `.output/doc/STATE.md`（若已存在）
+- `skills/state-router/templates/STATE-TEMPLATE.md`
+- 与当前阶段直接相关的上游文档：
+  - `REQUEST.md`
+  - `USE-CASES.md`
+  - `REQUIREMENTS.md`
+  - `HLD.md`
+  - `ARCHITECTURE-DECISION.md`
+  - `STORY-BACKLOG.md`
+  - `DEVELOPMENT-PLAN.yaml`
+  - `TEST-STRATEGY.md`
+  - `README.md`
+  - `USER-MANUAL.md`
+- Story 执行阶段需要读取 `.output/stories/STORY-*.md`
 
-## 状态转换判断规则
+## 知识来源
 
-根据 `current_phase` 值，检查以下退出条件：
+- `skills/state-router/templates/STATE-TEMPLATE.md`：状态对象结构与阶段机基线
+- `AGENTS.md` / `rules/AGENTS.md`：阶段定义、人工检查点与角色职责
+- 各阶段产物 frontmatter 与文件存在性：退出条件的事实来源
 
-| 当前阶段 | 退出条件 | 下一阶段 | 需通知 Agent |
-|----------|----------|----------|-------------|
-| init | STATE.md 已初始化、input_spec.yaml 已录入 | requirement 或 vendor | Requirement Analyst 或 Vendor Adapter |
-| requirement | REQUIREMENTS.md + SCENARIOS.yaml 已生成且 requirement_confirmed=true | plan-design | Workflow Planner |
-| vendor | VENDOR-CONSTRAINTS.yaml 已生成 | plan-design | Workflow Planner |
-| plan-design | WORKFLOW-PLAN.yaml 已生成 | plan-check | Plan Checker |
-| plan-check | PLAN-CHECK-REPORT.md 结论为 pass | safety-review | Safety Reviewer |
-| plan-check (failed) | PLAN-CHECK-REPORT.md 结论为 fail | plan-design | Workflow Planner（quality_check 轮次 +1） |
-| safety-review | SAFETY-REPORT.md verdict 为 approved | delivery | Delivery Agent |
-| safety-review (failed) | SAFETY-REPORT.md verdict 为 blocked | plan-design | Workflow Planner（safety_check 轮次 +1） |
-| delivery | OUTPUT/*.md + CONTEXT-MANIFEST.yaml 已生成 | human-review | 人工评审者 |
-| human-review | 用户批准 | delivered | 流程结束 |
+## 执行步骤
 
-## Gotchas
+### 1. 初始化或读取状态
 
-- 回退到 plan-design 时，必须检查 quality_check 或 safety_check 轮次是否已达上限（3 轮 / 2 轮），达到上限时应升级为 L3 人工接管而非继续回退
-- requirement 和 vendor 可以并行推进（两者无强依赖），但 plan-design 需要两者都完成
-- 首次初始化时 STATE.md 可能不存在，需要从模板复制并填充 project_id
+1. 若 `.output/doc/STATE.md` 不存在，则以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化。
+2. 读取 `current_phase`、`current_agent`、`blocked`、`checkpoints`、`history`。
+3. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
+
+### 2. 按阶段检查退出条件
+
+| 当前阶段 | 退出条件 | 下一阶段 | 默认唤醒 Agent |
+|---|---|---|---|
+| `init` | `REQUEST.md` 已初始化且请求已登记 | `requirement-clarification` | `meta-pm` |
+| `requirement-clarification` | `USE-CASES.md` 与 `REQUIREMENTS.md` 已确认，且无 `BLOCKING` 未决项 | `solution-design` | `meta-se` |
+| `solution-design` | `HLD.md` 已确认 | `story-planning` | `meta-se` |
+| `story-planning` | `STORY-BACKLOG.md` 与 `DEVELOPMENT-PLAN.yaml` 已确认 | `story-execution` | `meta-dev` |
+| `story-execution` | 当前 Wave 内所有 Story 已到达 `verified`，且验证输出已收敛 | 下一 Wave 或 `documentation` | `meta-dev` / `meta-qa` / `meta-doc` |
+| `documentation` | `README.md` 与 `USER-MANUAL.md` 已完成终验范围 | `delivered` | `meta-po` |
+| `delivered` | 只读归档 | — | — |
+
+### 3. 处理回退
+
+1. 记录回退原因与目标阶段。
+2. 将回退动作写入 `history`。
+3. 只回退到最近仍可恢复的稳定阶段，不跨越未收敛变更单。
+
+### 4. 回写状态
+
+1. 更新 `current_phase`、`current_agent`、`last_action`、`next_action`、`last_updated`。
+2. 推进或回退时追加 `history` 记录。
+3. 查询状态时不改变业务内容，但允许刷新 `next_action`。
+
+## 输出文件 / 输出模板
+
+| 对象 | 路径 | 用途 |
+|---|---|---|
+| 运行时状态 | `.output/doc/STATE.md` | 当前状态机实例 |
+| 状态模板 | `skills/state-router/templates/STATE-TEMPLATE.md` | 初始化与结构基线 |
+
+## 约束
+
+- 只负责状态判断、推进决策与状态回写，不生成需求/设计/实现内容
+- 推进前必须验证当前阶段退出条件，不能用“默认通过”代替检查
+- 回退必须记录原因、发起方和目标阶段
+- 仅使用当前 `.output/doc/STATE.md` 与 `skills/state-router/templates/STATE-TEMPLATE.md` 契约
 
 ## 验收标准
 
-- 推进后 `STATE.md` 的 `current_phase` 和 `current_agent` 正确更新
-- `history` 数组新增一条记录且 timestamp 为当前时间
-- 回退操时 `round` 计数正确递增
-- 阻塞状态下调用时返回阻塞原因而非静默忽略
+- [ ] `STATE.md` 的阶段与下一步动作与实际产物状态一致
+- [ ] 初始化时结构与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致
+- [ ] 推进 / 回退操作均追加 `history`
+- [ ] 阻塞状态下返回明确阻塞原因
+
+## 不适用边界
+
+- 任务要求生成需求、设计、代码或文档本体
+- 当前请求仅需要查看某个单独文件内容，不涉及状态推进
+
+## Gotchas
+
+- `story-execution` 是阶段状态，不替代单个 Story 的生命周期；Story 状态仍以 `story-manager` 维护的卡片为准
+- 当存在活跃 `CR-*` 时，应优先收敛变更影响，再判断是否允许推进
+- 首次初始化时只允许从 `skills/state-router/templates/STATE-TEMPLATE.md` 复制，不允许凭空脑补字段

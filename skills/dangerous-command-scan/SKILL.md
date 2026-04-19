@@ -11,68 +11,57 @@ status: active
 
 ## 目标
 
-对两类目标执行危险命令扫描：
-1. **工作流计划层**（防火墙测试）：扫描 `WORKFLOW-PLAN.yaml` 中的命令
-2. **产物层**（SCOPE-Pack）：扫描 Agent/Skill 文件中的危险命令和 Prompt 注入模式
+扫描工作流计划、安装器以及 Agent / Skill 产物中的危险命令和 Prompt 注入模式，并输出风险结论。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：
-  - 防火墙测试：安全审计阶段（safety-review）
-  - SCOPE-Pack：Story 开发完成后、验证前（verification 前置步骤）
-- 判定影响：匹配 critical 级别时直接触发 blocked，Story 退回 `in-development`
+- Story 验证前的安全合规检查
+- 安装脚本交付前的命令风险扫描
+- 规划层安全审计
 
 ## 前置条件
 
 - [ ] 扫描目标文件已存在
-- [ ] SCOPE-Pack 模式：`.output/doc/PLATFORM-INSTALL-SPEC.md` 已存在
 
-## 执行约束
+## 必须读取的输入
 
-- 使用内置基线 + 可选自定义基线
-- 匹配模式：文件文本中包含基线模式字符串（不区分大小写）
-- 每个匹配结果标注 risk_level 和 category
-- 可调用辅助脚本 `scripts/scan_dangerous_commands.py` 进行自动扫描
+- 待扫描文件或目录
+- 相关 Story / 验证上下文（若存在）
 
-## 扫描层次
+## 知识来源
 
-| 层次 | 扫描目标 | 触发时机 |
-|------|---------|---------|
-| 产物层 | Agent/Skill .md 文件 | Story 开发完成后、验证前 |
-| 安装层 | install.py / install.ps1 / install.sh | 平台安装脚本交付阶段 |
-| 输入层（可选）| Story 卡片中的 Prompt 内容 | Story 下发开发前 |
-| 规划层 | WORKFLOW-PLAN.yaml 中的命令 | 防火墙测试安全审计 |
+- 内置危险命令与 Prompt 注入基线
+- `VERIFICATION-REPORT.md` 的安全合规写入位置（若存在）
 
-## 危险基线分类
+## 执行步骤
 
-### A. 系统命令（防火墙测试 + 产物层通用）
+1. 按扫描层次读取目标文件。
+2. 基于危险基线检测匹配项。
+3. 计算总体风险等级并输出明细。
+4. 若处于验证阶段，将结论写入 `VERIFICATION-REPORT.md` 对应安全维度。
 
-| 类别 | 示例模式 | 风险级别 |
-|------|---------|---------|
-| 破坏性配置 | `format`, `reset saved-configuration`, `delete policy all` | critical |
-| 系统破坏 | `rm -rf`, `reboot`, `debugging all` | high ~ critical |
-| 数据破坏 | `DROP DATABASE`, `delete audit`, `chmod 777` | critical |
-| 失控流量 | `flood`, `stress test` | high |
-| 代码注入 | `curl \| bash`, `eval`, `exec` | critical |
+## 输出文件 / 输出模板
 
-### B. Prompt 注入模式（SCOPE-Pack 产物层专用）
+输出为风险清单；仅在验证阶段回写 `VERIFICATION-REPORT.md` 指定字段位置，不拥有独立模板。
 
-| 类别 | 示例模式 | 风险级别 |
-|------|---------|---------|
-| 指令覆盖 | `ignore previous instructions`, `disregard the above` | critical |
-| 角色劫持 | `act as`, `pretend you are`, `you are now` | high |
-| 越狱尝试 | `jailbreak`, `DAN`, `developer mode` | critical |
-| 系统提示泄露 | `repeat your instructions`, `print your system prompt` | high |
+## 约束
 
-## Gotchas
-
-- `shutdown` 在接口级别是合理操作，仅作 medium 级别告警
-- `undo` 命令暂不列入 critical，但作为告警关注
-- Prompt 注入检测针对 Agent/Skill 文件正文，不扫描注释和示例代码块（以 ` ``` ` 包裹的内容降级为 info）
+- 扫描目标以实际产物内容为准，不依赖模板文件
+- 匹配结果必须包含文件路径、位置、模式和风险级别
+- `critical` 风险项存在时不得放行验证
 
 ## 验收标准
 
-- 输出扫描结果列表（含文件路径、行号、匹配模式、风险级别）
-- 计算总体风险级别（critical > high > medium > info）
-- critical 风险项数量 == 0 时才允许 Story 进入 `verified`
-- SCOPE-Pack 模式：结论写入 `VERIFICATION-REPORT.md` 对应 Story 的安全合规维度
+- [ ] 风险清单完整
+- [ ] 总体风险级别计算正确
+- [ ] 验证阶段的安全结论已回写
+
+## 不适用边界
+
+- 当前任务只是普通文本校对，不涉及命令或提示词安全
+- 没有可扫描的目标文件
+
+## Gotchas
+
+- 示例代码块中的危险命令要降级处理，但不能完全忽略其上下文意义
+- Prompt 注入模式常以自然语言伪装，不能只扫 shell 命令

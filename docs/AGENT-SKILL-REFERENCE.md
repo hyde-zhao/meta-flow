@@ -3,6 +3,7 @@
 本文档是 SCOPE-Pack 元工作流系统中 Agent 与 Skill 的当前参考说明。
 
 > 📖 安装方法见 [`USER_GUIDE.md`](./USER_GUIDE.md)
+> 📌 Agent 与 Skill 的**当前调用/适用关系**以 [`../skills/README.md`](../skills/README.md) 为准。
 
 ---
 
@@ -79,7 +80,9 @@
 
 ## 二、Skill 使用参考
 
-当前仓库内共有 **30 个通用 Skill**。交付源目录位于 `skills/<skill-name>/SKILL.md`；内部实现定义仍保留在 `.agents/skills/`。
+当前仓库内共有 **30 个通用 Skill**（含 1 个已废弃兼容入口）。交付源目录位于 `skills/<skill-name>/SKILL.md`；内部实现定义仍保留在 `.agents/skills/`。
+
+> 说明：本节只统计 **`skills/` 目录中实际交付的 Skill**。若个别 Agent 提示词中仍出现历史占位或未交付 Skill 名称（例如 `vendor-profile-loader`、`constraint-normalizer`），不计入当前正式清单。
 
 ### 1. 需求分析类
 
@@ -94,7 +97,7 @@
 
 | Skill | 触发词 | 用途 |
 |------|--------|------|
-| `solution-designer` | 方案设计、架构设计、复杂度判定、设计方案 | 历史兼容入口，现统一落到 HLD 方案比较 |
+| `solution-designer` | 方案设计、架构设计、复杂度判定、设计方案 | **deprecated**；仅保留历史兼容，正式能力已并入 `hld-designer` |
 | `hld-designer` | HLD、高层设计、架构评审、架构方案 | 生成可评审的 `HLD.md` |
 | `lld-designer` | LLD、详细设计、实现设计、Story 设计 | 为单个 Story 生成 `STORY-{id}-LLD.md` |
 | `phase-designer` | 阶段划分、设计阶段、Phase 设计、执行顺序 | 划分执行阶段 |

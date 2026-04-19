@@ -11,79 +11,62 @@ status: active
 
 ## 目标
 
-分析 `REQUIREMENTS.md` 或用户原始输入中的歧义项和未决问题，生成结构化澄清问题列表，更新 `CLARIFICATION-LOG.md`，并判断需求是否已足够清晰可进入下一阶段。
+识别需求中的歧义、缺口和未决项，生成结构化澄清问题列表，更新 `CLARIFICATION-LOG.md`，并判断是否已具备进入设计阶段的条件。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：`requirement-clarification`
-- 触发时机：每轮用户回答澄清问题后，或首次分析用户需求时
-- 输出消费方：meta-po（判断是否可进入 solution-design）
+- requirement-clarification 阶段的首次分析与多轮迭代
+- 用户回答部分问题后，需要重新判断剩余阻塞项
 
 ## 前置条件
 
-- [ ] `.output/doc/REQUEST.md` 已存在（用户原始目标）
-- [ ] `.output/doc/CLARIFICATION-LOG.md` 已存在（首次可从模板初始化）
+- [ ] `.output/doc/REQUEST.md` 已存在
+- [ ] 已有需求草稿、用户补充说明或历史澄清记录之一
 
-## 歧义识别维度
+## 必须读取的输入
 
-| 维度 | 检查内容 | 示例歧义 |
-|------|---------|---------|
-| 目标边界 | 需求范围是否明确 | "支持多个平台"——哪几个平台？ |
-| 角色定义 | 是否有未定义的角色 | "用 AI 帮我做"——哪个 AI，什么能力？ |
-| 验收条件 | 是否有量化的完成标准 | "好用"——如何验证好用？ |
-| 平台约束 | 目标平台是否明确 | 未声明目标平台 |
-| 优先级 | 多需求时是否有优先级 | 5 条需求，无优先级说明 |
-| 冲突项 | 需求之间是否有矛盾 | 需求 A 要自动，需求 B 要人工确认 |
+- `.output/doc/REQUEST.md`
+- `.output/doc/REQUIREMENTS.md`（若存在）
+- `.output/doc/CLARIFICATION-LOG.md`（若存在）
+- 用户本轮新增回复
+
+## 知识来源
+
+- 用户输入与已有需求文档：唯一事实来源
+- `skills/requirement-clarifier/templates/CLARIFICATION-LOG-TEMPLATE.md`：日志结构基线
+- `docs/SKILL-DEVELOPMENT-STANDARD.md`：`BLOCKING / REQUIRED / OPTIONAL` 语义
 
 ## 执行步骤
 
-1. 读取 `REQUEST.md` 和已有 `CLARIFICATION-LOG.md`
-2. 识别歧义项，按维度分类
-3. 生成结构化问题列表（每条问题需包含：问题描述、所属维度、阻断等级）
-4. 更新 `CLARIFICATION-LOG.md`（追加本轮问题，不覆盖历史记录）
-5. 判断未决问题数量：
-   - 0 个 BLOCKING 未决项 → 输出 `ready_for_design: true`
-   - 存在 BLOCKING 未决项 → 输出待用户回答的问题列表
+1. 识别目标边界、角色、验收条件、平台约束、优先级和冲突项中的歧义。
+2. 将问题按 `BLOCKING / REQUIRED / OPTIONAL` 分级。
+3. 生成本轮问题列表并追加到 `CLARIFICATION-LOG.md`。
+4. 统计剩余阻塞项，输出 `ready_for_design` 判断。
 
-## 问题阻断等级
+## 输出文件 / 输出模板
 
-| 等级 | 说明 | 是否阻断推进 |
-|------|------|------------|
-| BLOCKING | 缺少此信息无法设计 | 是 |
-| REQUIRED | 建议澄清，但有默认值可用 | 否（记录默认假设）|
-| OPTIONAL | 锦上添花，可跳过 | 否 |
+| 文件 | 路径 | 模板 |
+|---|---|---|
+| 澄清日志 | `.output/doc/CLARIFICATION-LOG.md` | `skills/requirement-clarifier/templates/CLARIFICATION-LOG-TEMPLATE.md` |
 
-## 输出格式（CLARIFICATION-LOG.md 追加内容）
+## 约束
 
-```markdown
-## 第 N 轮澄清（{date}）
-
-### 本轮识别的歧义项
-
-| ID | 维度 | 问题描述 | 阻断等级 | 状态 |
-|----|------|---------|---------|------|
-| Q1 | 目标边界 | ... | BLOCKING | 待回答 |
-
-### 用户回答记录
-
-| Q-ID | 答复内容 | 记录时间 |
-|------|---------|---------|
-| Q1 | ... | {date} |
-
-### 本轮结论
-
-- 剩余 BLOCKING 未决项：N 条
-- ready_for_design：true / false
-```
-
-## 执行约束
-
-- 不允许在未决 BLOCKING 项存在时标记 `ready_for_design: true`
-- 历史澄清记录只追加，不修改
-- 每轮至多提出 5 个问题（避免用户疲劳），按阻断等级优先排序
+- 每轮最多提出 5 个问题，按阻断级别排序
+- 只追加澄清记录，不覆盖历史轮次
+- `REQUEST.md` 只作为输入内容来源，不作为模板路径依赖
 
 ## 验收标准
 
-- [ ] `CLARIFICATION-LOG.md` 已追加本轮记录
-- [ ] 每条问题标注了阻断等级
-- [ ] 当 BLOCKING 项为 0 时，`ready_for_design` 正确标记为 `true`
+- [ ] 澄清问题已分级并追加写入日志
+- [ ] `ready_for_design` 判断与剩余阻塞项一致
+- [ ] 历史记录未被覆盖
+
+## 不适用边界
+
+- 已确认需求完整无歧义，当前任务应转入设计阶段
+- 当前任务只要求生成正式需求文档，不要求提问清单
+
+## Gotchas
+
+- 澄清不是“把所有想问的都问一遍”，而是先收敛阻塞设计的问题
+- 对 `REQUIRED` 级别项可记录默认假设，但必须显式写出假设内容

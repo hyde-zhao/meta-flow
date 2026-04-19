@@ -6,66 +6,64 @@ description: >-
   适用场景：元工作流需求分析阶段，需求提取之后。
 argument-hint: "REQUIREMENTS.md 路径"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-为 `REQUIREMENTS.md` 中的每条需求生成对应的测试场景（正向、负向、边界），输出为 `SCENARIOS.yaml` 和 `TEST-MATRIX.md`。
+为 `REQUIREMENTS.md` 中的每条需求生成对应测试场景，并输出 `SCENARIOS.yaml` 与 `TEST-MATRIX.md`。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：需求分析阶段，在 requirement-extraction 之后
-- 输入：`REQUIREMENTS.md`
-- 输出：`SCENARIOS.yaml`、`TEST-MATRIX.md`
+- 需求已结构化，需要展开测试覆盖面
+- 需要为后续计划与验证建立需求到场景的回链
 
 ## 前置条件
 
-- [ ] `REQUIREMENTS.md` 已生成且 `status` 不为空
-- [ ] 需求条目均有 REQ-ID 和优先级
+- [ ] `REQUIREMENTS.md` 已生成且条目完整
+- [ ] 每条需求有编号与优先级
 
-## 执行约束
+## 必须读取的输入
 
-- 场景编号使用 `TC-NNN`，三位数字递增
-- 每个场景必须 `linked_requirements` 回链到至少一条 REQ
-- 场景类型（type）只允许：`positive`、`negative`、`edge-case`、`precheck`
-- 高优先级需求展开规则：
+- `.output/doc/REQUIREMENTS.md`
+- 与需求相关的澄清结论（若存在）
 
-  | 需求优先级 | 最低场景要求 |
-  |-----------|------------|
-  | HIGH | ≥ 1 positive + ≥ 1 negative |
-  | MEDIUM | ≥ 1 positive |
-  | LOW | ≥ 1 positive |
+## 知识来源
 
-- 每个场景必须填写 `preconditions`、`test_action`、`expected_result`、`evidence_type`
-- `expected_result` 必须是可用自动化或人工判定的明确结果（如返回码、日志关键字、状态值）
+- `REQUIREMENTS.md` 的需求条目、优先级和验收条件
+- 现有覆盖规则：`HIGH` 至少包含正向 + 负向
 
-## 场景种类指导
+## 执行步骤
 
-| 类型 | 目标 | 示例 |
-|------|------|------|
-| positive | 验证功能正常放行/生效 | ACL 规则允许的流量可正常通过 |
-| negative | 验证功能正确拒绝/阻断 | ACL 规则拒绝的流量被阻断且日志记录 |
-| edge-case | 验证边界条件处理 | 同时多条 ACL 匹配时优先级是否正确 |
-| precheck | 验证执行前置条件 | 设备 SSH 可达、管理权限可用 |
+1. 按需求逐条生成正向、负向、边界和前置检查场景。
+2. 为每个场景填写前置条件、测试动作、期望结果、证据类型。
+3. 生成 `TEST-MATRIX.md` 记录 REQ 与场景的覆盖关系。
 
-## 测试矩阵生成规则
+## 输出文件 / 输出模板
 
-- 行 = REQ-ID，列 = TC-ID
-- 交叉点标记覆盖关系（✅ 或空）
-- 统计覆盖率 = 已覆盖需求数 / 总需求数
-- 列出未覆盖需求清单
+| 文件 | 路径 | 说明 |
+|---|---|---|
+| 场景清单 | `.output/doc/SCENARIOS.yaml` | 结构化场景集合 |
+| 覆盖矩阵 | `.output/doc/TEST-MATRIX.md` | 需求-场景覆盖关系 |
 
-## Gotchas
+## 约束
 
-- 不要只生成"能通过"的正向场景而忽略负向场景——防火墙测试中，验证阻断是否生效往往比验证放行更重要
-- 边界场景容易被遗漏，如：规则匹配优先级冲突、会话超时后的行为、并发连接场景
-- precheck 类场景虽然不是核心测试，但缺少它会导致执行阶段出现大量 env-issue
+- 依赖 `REQUIREMENTS.md` 的内容契约，而不是模板文件存在性
+- 每个场景必须回链至少一条需求
+- `HIGH` 优先级需求必须覆盖正向与负向
 
 ## 验收标准
 
-- 每条 HIGH 级 REQ 至少有 1 positive + 1 negative 场景
-- 全部场景都有 `linked_requirements` 回链
-- `TEST-MATRIX.md` 的覆盖率统计正确
-- 未覆盖需求清单无遗漏
-- `SCENARIOS.yaml` 格式符合模板规范
+- [ ] 全部场景具备回链
+- [ ] `HIGH` 级需求覆盖满足最低要求
+- [ ] 覆盖矩阵统计正确
+
+## 不适用边界
+
+- 当前没有正式需求文档
+- 当前任务是做阶段设计，不是生成测试场景
+
+## Gotchas
+
+- 只生成正向场景会导致覆盖失真，尤其是安全与阻断类需求
+- 边界场景和 precheck 场景常被忽略，但它们直接影响执行阶段稳定性

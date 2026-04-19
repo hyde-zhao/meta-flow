@@ -35,7 +35,7 @@
 
 - `.output/doc/ARCHITECTURE-DECISION.md`（必须，且 confirmed=true）
 - `.output/doc/HLD.md`（参考高层设计形态）
-- `agents/templates/STORY-TEMPLATE.md`（Story 卡片格式）
+- Story 卡片结构要求（见下方“Story 卡片必填字段”）
 
 **不加载**：需求澄清历史、开发日志、验证报告。
 

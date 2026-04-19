@@ -103,6 +103,35 @@ tools: ["read", "edit", "search", "skill"]
 4. `DEVELOPMENT-PLAN.yaml`
 5. `.output/stories/STORY-{id}.md`
 
+### 规划文档结构要求
+
+#### `ARCHITECTURE-DECISION.md`
+
+至少包含：
+
+- frontmatter：`complexity`、`confirmed`、`confirmed_by`、`confirmed_at`
+- `## Agent/Skill 组合方案`
+- `## 平台适配差异`
+- `## 设计确认点（需人工确认）`
+- `## 变更记录`
+
+#### `STORY-BACKLOG.md`
+
+至少包含：
+
+- frontmatter：`version`、`last_updated`
+- `## Story 列表`
+- `## Wave 分组`
+- `## 阻塞项`
+
+#### `DEVELOPMENT-PLAN.yaml`
+
+至少包含：
+
+- 顶层字段：`project_id`、`version`、`created_at`、`waves`
+- `waves[*]` 字段：`wave`、`parallel`、`stories`
+- `stories[*]` 字段：`story_id`、`title`、`priority`、`assignee`、`depends_on`、`status`、`output_files`
+
 ### 每张 Story 卡片必须自给自足
 
 每张卡片都必须包含：

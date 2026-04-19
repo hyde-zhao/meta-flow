@@ -6,57 +6,64 @@ description: >-
   适用场景：执行反馈产生 ISSUE 后的分流决策。
 argument-hint: "ISSUE 工单 ID 或问题描述"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-读取 ISSUE 工单，根据问题分类（category）将其路由到正确的责任 Agent，必要时判断是否需要升级为结构性变更（CR）。
+读取 ISSUE 工单，根据问题分类将其路由到正确责任角色，并判断是否需要升级为 CR。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：交付后的问题处理阶段
-- 输入：`issues/ISSUE-*.md`
-- 输出：路由决策（目标 Agent + 处理建议）、必要时生成 `changes/CR-*.md`
+- 执行反馈后的问题分流
+- 需要决定由谁处理、是否进入变更管理
 
 ## 前置条件
 
-- [ ] `issues/ISSUE-*.md` 已存在且 `category` 和 `severity` 字段已填写
-- [ ] `STATE.md` 可用
+- [ ] ISSUE 工单已存在且基础字段完整
+- [ ] 当前状态对象可读取
 
-## 执行约束
+## 必须读取的输入
+
+- ISSUE 工单
+- `.output/doc/STATE.md`
+- 相关 `CR-*` 或 RUN-EXEC（若存在）
+
+## 知识来源
+
+- ISSUE 的 `category`、`severity`、影响对象
+- 当前阶段状态与变更规则
+- `CR-*.md` 的字段语义与变更结论口径（仅在需要升级为 CR 时参考）
+
+## 执行步骤
+
+1. 判定 ISSUE 的类别、严重度与影响范围。
+2. 选择责任角色或人工接管路径。
+3. 若问题影响正式对象或安全边界，则升级为 CR。
+4. 回写路由结论与关联对象。
+
+## 输出文件 / 输出模板
+
+输出为路由决策；当需要升级为变更时，复用统一 `CR` 契约，不拥有独立模板。
+
+## 约束
 
 - 只做分类和路由，不做修复
-- 路由前必须确认 ISSUE 的 `status` 为 `open` 或 `triaged`
-- 如果问题属于 `env-issue`，必须升级为人工接管而非路由给 Agent
-- 如果判定为结构性问题（需要修改需求或安全边界），必须同时生成 CR
-
-## 路由规则
-
-| 问题分类 (category) | 路由目标 | 典型场景 |
-|---------------------|---------|---------|
-| `design-flaw` | Requirement Analyst 或 Workflow Planner | 需求、场景或计划设计有误 |
-| `impl-bug` | Workflow Planner | 任务编排、命令、变量映射有误 |
-| `doc-defect` | Delivery Agent | 文档表达不清、证据不足 |
-| `env-issue` | 人工接管 | 环境不满足、设备版本不兼容 |
-
-## 升级为 CR 的判定标准
-
-| 条件 | 动作 |
-|------|------|
-| ISSUE 影响到 REQ-* 定义 | 生成 CR（type=modify） |
-| ISSUE 需要修改安全边界 | 生成 CR（type=modify）+ 标记 high risk |
-| ISSUE 影响到多个 artifact | 生成 CR + 全局影响分析 |
-| ISSUE 仅影响单个任务的参数 | 不生成 CR，直接路由修复 |
-
-## Gotchas
-
-- `env-issue` 类问题不能路由给任何 Agent 自动修复，因为通常涉及物理设备、网络配置或权限变更，必须人工介入
-- 路由前要检查是否存在相同 `symptom` 的已有 ISSUE，避免重复工单。如果存在，应关联而非新建
+- `env-issue` 必须交人工接管
+- 升级为变更时必须复用统一 CR 模板口径
 
 ## 验收标准
 
-- ISSUE 的 `status` 更新为 `triaged`
-- ISSUE 的 `owner` 字段填写了路由目标
-- 如果升级为 CR，`linked_changes` 字段已回填
-- 路由决策包含目标 Agent 名称和处理建议
+- [ ] 路由目标明确
+- [ ] ISSUE 状态与 owner 已更新
+- [ ] 需要升级时已关联 CR
+
+## 不适用边界
+
+- 当前还没有正式 ISSUE 工单
+- 问题只是草拟，不需要分流
+
+## Gotchas
+
+- 同症状重复 ISSUE 需要先去重或关联，避免多单并行污染路由结论
+- `doc-defect` 不代表低优先级，若影响执行仍可能升级为 CR

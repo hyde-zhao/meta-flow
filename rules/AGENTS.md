@@ -63,7 +63,7 @@ init（meta-po）
 | `.output/doc/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
 | `.output/doc/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
 | `.output/doc/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
-| `agents/templates/` | meta 元工作流内部使用的文档模版（HLD、需求、Story 等） |
+| `skills/<skill-name>/templates/` | Skill 私有模板目录（仅单个 Skill 内部初始化 / 渲染使用） |
 | `.output/templates/` | meta 生产出来的工作流所需的业务模版（产物模版） |
 | `.output/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
 | `.output/changes/` | 变更单（CR-*.md） |
@@ -107,6 +107,7 @@ init（meta-po）
 - **人工检查点**：所有人工确认统一由 meta-po 发起，通过 `ask_user` 工具触发
 - **HLD 门控**：`HLD.md` 未确认前，不得进入 Story 拆解
 - **LLD 门控**：`STORY-{id}-LLD.md` 未确认前，不得开始对应 Story 的实现
+- **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `skills/README.md`
 - **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 - **确定性语言**：meta-se 与 meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 - **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
@@ -114,5 +115,5 @@ init（meta-po）
 
 ## 防火墙测试工作流（现有，独立运行）
 
-> 本项目同时保留原有防火墙测试元工作流（`.fw-meta/`），两套系统并行存在，互不干扰。
-> 防火墙测试工作流入口：`.agents/agents/meta-orchestrator.md`
+> 本项目同时保留原有防火墙测试元工作流说明，两套系统并行存在，互不干扰。
+> 当前统一编排入口：`.agents/agents/meta-po.md`

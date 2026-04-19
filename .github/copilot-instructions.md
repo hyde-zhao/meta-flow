@@ -23,8 +23,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | `requirement-clarifier` | 澄清需求、需求问题、未决问题、需求歧义 |
 | `scenario-expansion` | 展开场景、生成场景、测试场景、场景扩展 |
 | `scope-normalization` | 归一化需求、去重、合并需求、范围整理 |
-| `solution-designer` | 方案设计、架构设计、复杂度判定、设计方案 |
-| `hld-designer` | HLD、高层设计、架构评审、架构方案 |
+| `hld-designer` | HLD、高层设计、架构评审、架构方案、方案设计、架构设计、复杂度判定、设计方案、simple/standard/complex 判断 |
 | `lld-designer` | LLD、详细设计、实现设计、Story 设计 |
 | `claude-agent-writer` | 写 Claude Agent、创建 Claude 子代理、Claude subagent |
 | `copilot-agent-writer` | 写 Copilot Agent、创建自定义 Agent、Copilot CLI Agent |
@@ -52,7 +51,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 - **运行时状态**：`.output/doc/STATE.md`
 - **高层设计**：`.output/doc/HLD.md`
-- **元工作流模板**：`agents/templates/`
+- **Skill 私有模板**：`skills/<skill-name>/templates/`
 - **产物工作流模板**：`.output/templates/`
 - **Story 卡片**：`.output/stories/STORY-*.md`
 - **Story 级 LLD**：`.output/stories/STORY-*-LLD.md`

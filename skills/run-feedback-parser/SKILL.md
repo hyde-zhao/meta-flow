@@ -6,39 +6,65 @@ description: >-
   适用场景：执行反馈阶段。
 argument-hint: "执行反馈的自然语言描述或结构化数据"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-将用户提交的执行反馈（自然语言或结构化数据）解析并固化为标准的 `RUN-EXEC-*.md` 记录文件。
+将用户提交的执行反馈解析并固化为标准 `RUN-EXEC-*.md` 记录。
 
-## 适用范围
+## 适用场景
 
-- 适用阶段：交付后的执行反馈阶段
-- 输入：用户的执行反馈
-- 输出：`runs/RUN-EXEC-[timestamp].md`
+- 用户提交测试执行结果、失败现象或验证回执
+- 需要把自然语言反馈转成结构化运行记录
 
 ## 前置条件
 
-- [ ] 已有交付文档（执行反馈需对应某个已交付的工作流）
-- [ ] `.fw-meta/templates/RUN-EXEC-TEMPLATE.md` 可用
+- [ ] 已有对应的执行上下文或交付对象
 
-## 执行约束
+## 必须读取的输入
 
-- RUN-EXEC 编号格式：`RUN-EXEC-YYYYMMDD-NNN`
-- 必须填写环境快照、任务执行结果、证据引用
-- 失败任务必须填写 error_message 和 actual_result
-- 异常与偏差部分不能为空——至少填"无异常"
+- 用户执行反馈
+- 相关命令、日志、截图或结构化结果
+- 对应工作流 / Story / 交付对象标识（若已知）
 
-## Gotchas
+## 知识来源
 
-- 用户的反馈可能是非结构化的自然语言（如"ACL 测试通过了但日志没出来"），需要解析为结构化字段
-- 用户可能只报告失败，忽略成功的任务——需主动询问全部任务的结果
+- `skills/run-feedback-parser/templates/RUN-EXEC-TEMPLATE.md`
+- 用户提供的事实性执行证据
+
+## 执行步骤
+
+1. 提取执行环境、操作步骤、结果与证据。
+2. 将每个任务结果归一为 `pass / fail / blocked / skipped`。
+3. 对失败项补写 `actual_result` 与 `error_message`。
+4. 按模板输出 RUN-EXEC 记录。
+
+## 输出文件 / 输出模板
+
+| 文件 | 路径 | 模板 |
+|---|---|---|
+| 执行记录 | `runs/RUN-EXEC-YYYYMMDD-NNN.md` | `skills/run-feedback-parser/templates/RUN-EXEC-TEMPLATE.md` |
+
+## 约束
+
+- RUN-EXEC 编号必须唯一
+- 环境快照、任务结果、证据引用必填
+- RUN-EXEC 记录必须复用当前私有模板
 
 ## 验收标准
 
-- 输出的 RUN-EXEC 文件 frontmatter 完整
-- 每个任务都有执行结果记录
-- 失败任务有详细的错误信息
-- 异常与偏差部分已填写
+- [ ] RUN-EXEC frontmatter 完整
+- [ ] 每个任务有结构化结果
+- [ ] 失败项含错误信息与实际结果
+- [ ] 异常与偏差部分不为空
+
+## 不适用边界
+
+- 当前请求只要求口头总结，不需要固化为记录文件
+- 没有任何可提炼的执行事实
+
+## Gotchas
+
+- 用户常只描述失败项，遗漏成功项；应尽量把执行全貌补齐
+- 非结构化自然语言要先规范化再落表，不能原样堆进模板
