@@ -26,7 +26,7 @@ status: active
 ## 必须读取的输入
 
 - ISSUE 工单
-- `.output/doc/STATE.md`
+- `.meta-workflow/process/STATE.md`
 - 相关 `CR-*` 或 RUN-EXEC（若存在）
 
 ## 知识来源
@@ -67,3 +67,4 @@ status: active
 
 - 同症状重复 ISSUE 需要先去重或关联，避免多单并行污染路由结论
 - `doc-defect` 不代表低优先级，若影响执行仍可能升级为 CR
+

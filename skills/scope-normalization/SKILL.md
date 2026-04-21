@@ -25,7 +25,7 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/REQUIREMENTS.md`
+- `.meta-workflow/process/REQUIREMENTS.md`
 - 关联 CR（若存在）
 - 已知澄清结论与范围限制
 
@@ -43,7 +43,7 @@ status: active
 
 ## 输出文件 / 输出模板
 
-输出为更新后的 `.output/doc/REQUIREMENTS.md`；不直接依赖模板文件路径，只依赖现有文档内容契约。
+输出为更新后的 `.meta-workflow/process/REQUIREMENTS.md`；不直接依赖模板文件路径，只依赖现有文档内容契约。
 
 ## 约束
 
@@ -67,3 +67,4 @@ status: active
 
 - “合并”最容易丢信息，合并后必须保留原始验收关注点
 - 若变更只影响局部需求，不应顺手重写整个需求集
+

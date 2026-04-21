@@ -16,8 +16,8 @@
 
 meta-po 的职责：
 
-- **项目初始化**：创建 `.output/` 工作目录及所有信息流转文件
-- 初始化 `.output/doc/STATE.md` 并维护全程状态
+- **项目初始化**：创建 `.meta-workflow/` 工作目录及所有信息流转文件
+- 初始化 `.meta-workflow/process/STATE.md` 并维护全程状态
 - **先理解，后行动**：退出条件先验、上下文先行、追问优先于假设、状态一致性校验
 - 发起人工检查点（共 5 类：需求确认、HLD 确认、Story 计划确认、Story LLD 确认、终验）
 - 唤醒和收敛下游功能 Agent（机器可验证退出条件）
@@ -53,39 +53,50 @@ init（meta-po）
 
 | 目录 / 文件 | 用途 |
 |------------|------|
-| **`.output/`** | **产物输出 + 工作流运行时状态（统一输出目录）** |
-| `.output/doc/STATE.md` | 工作流运行时状态（meta-po 维护） |
-| `.output/doc/REQUEST.md` | 用户原始请求 |
-| `.output/doc/USE-CASES.md` | 场景文档（meta-pm 产出） |
-| `.output/doc/REQUIREMENTS.md` | 结构化需求（meta-pm 产出） |
-| `.output/doc/HLD.md` | 高层设计文档（meta-se 产出，需人工确认） |
-| `.output/doc/ARCHITECTURE-DECISION.md` | 架构决策（meta-se 产出） |
-| `.output/doc/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
-| `.output/doc/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
-| `.output/doc/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
+| **`.meta-workflow/`** | **工作流运行根目录（process/checkpoints/delivery）** |
+| `.meta-workflow/process/STATE.md` | 工作流运行时状态（meta-po 维护） |
+| `.meta-workflow/process/REQUEST.md` | 用户原始请求 |
+| `.meta-workflow/process/USE-CASES.md` | 场景文档（meta-pm 产出） |
+| `.meta-workflow/process/REQUIREMENTS.md` | 结构化需求（meta-pm 产出） |
+| `.meta-workflow/process/HLD.md` | 高层设计过程稿（meta-se 产出） |
+| `.meta-workflow/process/ARCHITECTURE-DECISION.md` | 架构决策（meta-se 产出） |
+| `.meta-workflow/process/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
+| `.meta-workflow/process/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
+| `.meta-workflow/process/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
 | `skills/<skill-name>/templates/` | Skill 私有模板目录（仅单个 Skill 内部初始化 / 渲染使用） |
-| `.output/templates/` | meta 生产出来的工作流所需的业务模版（产物模版） |
-| `.output/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
-| `.output/changes/` | 变更单（CR-*.md） |
-| `.output/scripts/install.*` | 各平台安装脚本输出 |
-| `.output/rules/` | 各平台规则文件输出 |
-| `.output/agents/` | **产物 Agent 提示词文件**（meta-dev 产出） |
-| `.output/skills/` | **产物 Skill 定义文件**（meta-dev 产出） |
+| `.meta-workflow/checkpoints/` | 人工确认稿（REQUIREMENTS/HLD/STORY-PLAN/STORY-LLD） |
+| `.meta-workflow/process/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
+| `.meta-workflow/process/changes/` | 变更单（CR-*.md） |
+| `.meta-workflow/delivery/scripts/install.*` | 各平台安装脚本输出 |
+| `.meta-workflow/delivery/rules/` | 各平台规则文件输出 |
+| `.meta-workflow/delivery/agents/` | **产物 Agent 提示词文件**（meta-dev 产出） |
+| `.meta-workflow/delivery/skills/` | **产物 Skill 定义文件**（meta-dev 产出） |
 | `agents/` | 根目录交付 Agent 源目录 |
 | `skills/` | 根目录交付 Skill 源目录 |
 | `rules/` | 根目录交付规则源目录 |
-| `.output/scripts/*.py` | **产物工具脚本**（meta-dev 产出） |
-| `.output/.github/agents/` | **产物 Copilot CLI 入口**（meta-dev 产出） |
-| `.output/README.md` | 产物 README（meta-doc 产出） |
-| `.output/doc/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
+| `.meta-workflow/delivery/scripts/*.py` | **产物工具脚本**（meta-dev 产出） |
+| `.meta-workflow/delivery/.github/agents/` | **产物 Copilot CLI 入口**（meta-dev 产出） |
+| `.meta-workflow/delivery/README.md` | 产物 README（meta-doc 产出） |
+| `.meta-workflow/delivery/doc/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
 | `.agents/agents/` | 元工作流 Agent 提示词文件（meta-po/pm/se/dev/qa/doc） |
 | `.agents/skills/` | 元工作流 Skill 定义文件（SCOPE-Pack 内置） |
 
 ### 输出隔离原则
 
-> **所有由元工作流产生的产物必须输出到 `.output/` 目录。**
+> **所有由元工作流产生的文件必须输出到 `.meta-workflow/`，并按 process/checkpoints/delivery 分层。**
 > 根目录 `agents/`、`skills/`、`rules/` 为交付源目录；`.agents/` 和 `.github/` 仍保留元工作流自身定义。
-> 测试时可在 `.output/` 目录中独立启动 Agent 加载产物文件验证。
+> 测试时可在 `.meta-workflow/delivery/` 目录中独立启动 Agent 加载产物文件验证。
+
+## 方案编写与修订规则
+
+1. **先核对事实，再写方案**：平台路径、发现面、配置位置和行为约束，必须以当前仓库实现与官方文档为准；发现旧假设错误时，先修正事实判断，再扩展方案。
+2. **优先最简方案**：默认选择能满足目标的最小设计，避免为“统一”额外引入新抽象层、共享运行时或重复形态；若必须保留备选方案，应说明何时切换。
+3. **废弃内容要彻底删除**：已确认废弃的目录、路径变量、章节、实施步骤和验收项，不得只标注“废弃”而保留残余引用。
+4. **问题必须状态化**：阻塞问题、遗留问题和开放问题必须逐项标注状态（如已解答、部分解答、待整改），并在方案修订时同步刷新。
+5. **主选与备选并存**：已确认主选方案时，实施文档应同时记录主选值、备选方案和切换条件，避免后续重复讨论同一决策。
+6. **问题描述必须完整**：方案中的问题条目不能只有标题，至少应说明背景、触发条件、影响范围、为何是问题以及需要谁决策。
+7. **目录设计要分层**：过程文档、人工检查点文档、交付文档应分区描述，避免把运行态、检查态和交付态混写为同一输出面。
+8. **稳定偏好才能升格为共享规则**：只有已经稳定、适合团队复用的偏好才能进入仓库共享规范；明显属于个人工作习惯的内容不应直接写入共享规则。
 
 ## 协议约定
 
@@ -101,8 +112,11 @@ init（meta-po）
 - **确定性语言**：meta-se 与 meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 - **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
 - **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
+- **方案收敛优先**：涉及方案设计、整改规划或跨平台治理时，默认优先最简方案与内联策略；除非事实或验收要求证明不足，不新增共享模板体系或多余抽象层
+- **精确匹配优先**：涉及对象定位、版本对齐、规则命中或平台路径判定时，默认采用 exact 语义，不使用模糊匹配作为默认行为
 
 ## 防火墙测试工作流（现有，独立运行）
 
 > 本项目同时保留原有防火墙测试元工作流说明，两套系统并行存在，互不干扰。
 > 当前统一编排入口：`.agents/agents/meta-po.md`
+

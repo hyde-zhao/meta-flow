@@ -4,9 +4,9 @@ SCOPE-Pack Platform Package Builder
 将已验证的 Agent/Skill 产物打包为各平台安装包。
 
 用法：
-  python scripts/package_builder.py --manifest .output/PACKAGE-MANIFEST.yaml
-  python scripts/package_builder.py --manifest .output/PACKAGE-MANIFEST.yaml --targets copilot,claude-code
-  python scripts/package_builder.py --manifest .output/PACKAGE-MANIFEST.yaml --dry-run
+  uv run --python 3.11 python scripts/package_builder.py --manifest .meta-workflow/delivery/doc/PACKAGE-MANIFEST.yaml
+  uv run --python 3.11 python scripts/package_builder.py --manifest .meta-workflow/delivery/doc/PACKAGE-MANIFEST.yaml --targets copilot,claude-code
+  uv run --python 3.11 python scripts/package_builder.py --manifest .meta-workflow/delivery/doc/PACKAGE-MANIFEST.yaml --dry-run
 """
 
 import argparse
@@ -38,10 +38,10 @@ PLATFORM_CONFIGS = {
     },
     "codex": {
         "root": ".codex",
-        "entry_file": None,
+        "entry_file": "AGENTS.md",
         "agents_dir": "agents",
-        "skills_dir": "skills",
-        "agent_format": "yaml",
+        "skills_dir": None,
+        "agent_format": "toml",
     },
     "openclaw": {
         "root": ".openclaw",
@@ -52,7 +52,7 @@ PLATFORM_CONFIGS = {
     },
 }
 
-KEBAB_CASE_RE = re.compile(r"^[a-z][a-z0-9-]+\.(md|yaml)$")
+KEBAB_CASE_RE = re.compile(r"^[a-z][a-z0-9-]+\.(md|toml)$")
 
 # SCOPE-Pack 打包白名单：仅打包这 7 个 Agent，排除防火墙测试专属 Agent
 SCOPE_PACK_AGENTS = {
@@ -97,8 +97,8 @@ def validate_frontmatter(content: str, file_path: Path) -> list[str]:
     return issues
 
 
-def convert_md_to_yaml(md_path: Path, agent_name: str) -> str:
-    """将 Markdown Agent 文件转换为 Codex YAML 格式。"""
+def convert_md_to_toml(md_path: Path, agent_name: str) -> str:
+    """将 Markdown Agent 文件转换为 Codex TOML 格式。"""
     content = md_path.read_text(encoding="utf-8")
     version = "1.0.0"
     description = ""
@@ -112,13 +112,13 @@ def convert_md_to_yaml(md_path: Path, agent_name: str) -> str:
                 if line.startswith("description:"):
                     description = line.split(":", 1)[1].strip()
             content = content[end + 3:].strip()
-    data = {
-        "name": agent_name,
-        "description": description or f"SCOPE-Pack Agent: {agent_name}",
-        "version": version,
-        "instructions": content,
-    }
-    return yaml.dump(data, allow_unicode=True, default_flow_style=False)
+    description = description or f"SCOPE-Pack Agent: {agent_name}"
+    instructions = content.replace('"""', '\\"""')
+    return (
+        f'name = "{agent_name}"\n'
+        f'description = """\n{description}\n"""\n'
+        f'developer_instructions = """\n{instructions}\n"""\n'
+    )
 
 
 def build_openclaw_manifest(agents_dir: Path, skills_dir: Path) -> str:
@@ -180,13 +180,13 @@ def build_platform(
             if content.startswith("---"):
                 fm_issues = validate_frontmatter(content, agent_file)
                 issues.extend(fm_issues)
-            if config["agent_format"] == "yaml" and platform == "codex":
-                dest = agents_dest / (agent_file.stem + ".yaml")
+            if config["agent_format"] == "toml" and platform == "codex":
+                dest = agents_dest / (agent_file.stem + ".toml")
                 if not dry_run:
-                    dest.write_text(convert_md_to_yaml(agent_file, agent_file.stem), encoding="utf-8")
+                    dest.write_text(convert_md_to_toml(agent_file, agent_file.stem), encoding="utf-8")
                     checksums.append(f"{sha256_file(dest)}  {dest.relative_to(output_root)}")
                 else:
-                    print(f"  [DryRun] 转换 YAML: {agent_file} → {dest}")
+                    print(f"  [DryRun] 转换 TOML: {agent_file} → {dest}")
             else:
                 dest = agents_dest / agent_file.name
                 if not dry_run:
@@ -236,10 +236,10 @@ def build_platform(
 
 def main():
     parser = argparse.ArgumentParser(description="SCOPE-Pack Platform Package Builder")
-    parser.add_argument("--manifest", default=".output/PACKAGE-MANIFEST.yaml", help="PACKAGE-MANIFEST.yaml 路径")
+    parser.add_argument("--manifest", default=".meta-workflow/delivery/doc/PACKAGE-MANIFEST.yaml", help="PACKAGE-MANIFEST.yaml 路径")
     parser.add_argument("--targets", default="copilot,claude-code,codex,openclaw", help="目标平台，逗号分隔")
-    parser.add_argument("--agents-dir", default=".output/agents", help="Agent 产物源文件目录")
-    parser.add_argument("--skills-dir", default=".output/skills", help="Skill 产物源文件目录")
+    parser.add_argument("--agents-dir", default=".meta-workflow/delivery/agents", help="Agent 产物源文件目录")
+    parser.add_argument("--skills-dir", default=".meta-workflow/delivery/skills", help="Skill 产物源文件目录")
     parser.add_argument("--entry-file", default=".github/copilot-instructions.md", help="Copilot 主入口文件")
     parser.add_argument("--output", default="packages", help="输出目录")
     parser.add_argument("--dry-run", action="store_true", help="仅校验，不写文件")

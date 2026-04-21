@@ -15,7 +15,7 @@ status: deprecated
 ## 重定向
 
 1. 正式能力统一收敛到 `hld-designer`。
-2. 正式输出仍为 `.output/doc/HLD.md`。
+2. 正式输出仍为 `.meta-workflow/process/HLD.md`。
 3. 模板、输入、约束、验收标准全部以 `hld-designer` 为准。
 
 ## 兼容规则
@@ -31,3 +31,4 @@ status: deprecated
 ## Gotchas
 
 - 若发现 `solution-designer` 与 `hld-designer` 重新分叉，优先收敛到 `hld-designer`，不要恢复双轨维护。
+

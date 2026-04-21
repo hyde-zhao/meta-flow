@@ -20,14 +20,14 @@ status: active
 
 ## 前置条件
 
-- [ ] `.output/stories/STORY-{id}.md` 已批准
-- [ ] `.output/doc/HLD.md` 与 `.output/doc/ARCHITECTURE-DECISION.md` 已确认
+- [ ] `.meta-workflow/process/stories/STORY-{id}.md` 已批准
+- [ ] `.meta-workflow/process/HLD.md` 与 `.meta-workflow/process/ARCHITECTURE-DECISION.md` 已确认
 
 ## 必须读取的输入
 
-- `.output/stories/STORY-{id}.md`
-- `.output/doc/HLD.md`
-- `.output/doc/ARCHITECTURE-DECISION.md`
+- `.meta-workflow/process/stories/STORY-{id}.md`
+- `.meta-workflow/process/HLD.md`
+- `.meta-workflow/process/ARCHITECTURE-DECISION.md`
 - 相关前置 Story 或平台约束（若存在）
 
 ## 知识来源
@@ -40,13 +40,13 @@ status: active
 
 1. 提炼 Story 范围、输出文件、平台目标和约束。
 2. 按 14 个规定章节完成 LLD 设计。
-3. 写入 `.output/stories/STORY-{id}-LLD.md` 并停在人工确认前。
+3. 写入 `.meta-workflow/process/stories/STORY-{id}-LLD.md` 并停在人工确认前。
 
 ## 输出文件 / 输出模板
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| Story LLD | `.output/stories/STORY-{id}-LLD.md` | `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` |
+| Story LLD | `.meta-workflow/process/stories/STORY-{id}-LLD.md` | `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` |
 
 ## 约束
 
@@ -69,3 +69,5 @@ status: active
 
 - 若模板章节与说明口径不一致，应以模板契约为准同步修正，不允许双轨并存
 - 详细设计不是实现日志，必须保持“可实施”而不是“已完成”
+
+

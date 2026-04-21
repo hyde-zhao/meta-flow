@@ -49,13 +49,13 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 ## 状态文件
 
-- **运行时状态**：`.output/doc/STATE.md`
-- **高层设计**：`.output/doc/HLD.md`
+- **运行时状态**：`.meta-workflow/process/STATE.md`
+- **高层设计**：`.meta-workflow/process/HLD.md`
 - **Skill 私有模板**：`skills/<skill-name>/templates/`
-- **产物工作流模板**：`.output/templates/`
-- **Story 卡片**：`.output/stories/STORY-*.md`
-- **Story 级 LLD**：`.output/stories/STORY-*-LLD.md`
-- **变更单**：`.output/changes/CR-*.md`
+- **人工确认稿**：`.meta-workflow/checkpoints/`
+- **Story 卡片**：`.meta-workflow/process/stories/STORY-*.md`
+- **Story 级 LLD**：`.meta-workflow/process/stories/STORY-*-LLD.md`
+- **变更单**：`.meta-workflow/process/changes/CR-*.md`
 
 ## Python 环境与依赖管理（uv）
 
@@ -74,14 +74,14 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 2. **HLD 锁**：`HLD.md` 未经人工确认，不得进入 Story 拆解
 3. **Story 锁**：未进入 `approved` 状态的 Story，不得开始 LLD 设计
 4. **LLD 锁**：`STORY-{id}-LLD.md` 未确认前，不得开始该 Story 实现
-5. **验证锁**：没有 `.output/doc/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
+5. **验证锁**：没有 `.meta-workflow/process/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
 6. **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
 7. **禁止越级改写**：`meta-dev` 不修改 REQUIREMENTS.md、HLD.md；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
 8. **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 9. **确定性语言**：meta-se / meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
 11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
-12. **输出隔离**：所有产物文件输出到 `.output/` 目录；`.agents/` 和 `.github/` 仅存放元工作流自身定义
+12. **输出隔离**：运行态写入 `.meta-workflow/process/`，确认稿写入 `.meta-workflow/checkpoints/`，交付物写入 `.meta-workflow/delivery/`；`.agents/` 和 `.github/` 仅存放元工作流自身定义
 13. **Agent/Skill 关系维护**：开发或修改 Agent、Skill 时，若影响调用、适用或归属关系，必须同步更新 `skills/README.md`
 
 ## 人工检查点（5 类）
@@ -101,3 +101,4 @@ Complex 模式下，同一 Wave 内的 Story 支持并行执行，但同一 Stor
 `LLD 起草 → LLD 确认 → 开发实现 → 验证`
 
 顺序推进。
+

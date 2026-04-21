@@ -27,7 +27,7 @@ status: active
 ## 必须读取的输入
 
 - 用户自然语言需求
-- `.output/doc/REQUEST.md`（若存在）
+- `.meta-workflow/process/REQUEST.md`（若存在）
 - `input_spec.yaml`（兼容旧输入方式，若存在）
 - 已知的目标平台、约束、验收线索
 
@@ -49,7 +49,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 结构化需求 | `.output/doc/REQUIREMENTS.md` | `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md` |
+| 结构化需求 | `.meta-workflow/process/REQUIREMENTS.md` | `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md` |
 
 ## 约束
 
@@ -75,3 +75,4 @@ status: active
 
 - 一个自然语言句子往往包含多条需求，不能机械地“一句一条”
 - 约束信息也可能衍生出独立需求，例如安全边界、平台限制和交付方式
+

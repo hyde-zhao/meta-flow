@@ -25,9 +25,9 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/ARCHITECTURE-DECISION.md`
-- `.output/doc/DEVELOPMENT-PLAN.yaml`
-- 现有 `.output/stories/STORY-*.md`（update / status 时）
+- `.meta-workflow/process/ARCHITECTURE-DECISION.md`
+- `.meta-workflow/process/DEVELOPMENT-PLAN.yaml`
+- 现有 `.meta-workflow/process/stories/STORY-*.md`（update / status 时）
 
 ## 知识来源
 
@@ -46,8 +46,8 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| Story 卡片 | `.output/stories/STORY-{id}.md` | `skills/story-manager/templates/STORY-TEMPLATE.md` |
-| Story 状态汇总 | `.output/STORY-STATUS.md` | `skills/story-manager/templates/STORY-STATUS-TEMPLATE.md` |
+| Story 卡片 | `.meta-workflow/process/stories/STORY-{id}.md` | `skills/story-manager/templates/STORY-TEMPLATE.md` |
+| Story 状态汇总 | `.meta-workflow/process/STORY-STATUS.md` | `skills/story-manager/templates/STORY-STATUS-TEMPLATE.md` |
 
 ## 约束
 
@@ -70,3 +70,4 @@ status: active
 
 - `verified` 是验证完成，不等于最终归档；只有收敛后才进入 `done`
 - 批量更新状态时最容易漏掉 `STORY-STATUS.md`，必须同步回写
+

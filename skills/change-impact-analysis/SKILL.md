@@ -21,12 +21,12 @@ status: active
 
 ## 前置条件
 
-- [ ] `.output/doc/STATE.md` 已存在且当前阶段明确
+- [ ] `.meta-workflow/process/STATE.md` 已存在且当前阶段明确
 - [ ] 变更原因和影响范围已提供，或可从 ISSUE / RUN-EXEC 推断
 
 ## 必须读取的输入
 
-- `.output/doc/STATE.md`
+- `.meta-workflow/process/STATE.md`
 - 当前变更描述
 - 相关 ISSUE / RUN-EXEC / 上游文档（若存在）
 - 受影响的正式对象（如 `REQUIREMENTS.md`、`HLD.md`、`DEVELOPMENT-PLAN.yaml` 等）
@@ -49,7 +49,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 变更单 | `.output/changes/CR-{id}.md` | `skills/change-impact-analysis/templates/CR-TEMPLATE.md` |
+| 变更单 | `.meta-workflow/process/changes/CR-{id}.md` | `skills/change-impact-analysis/templates/CR-TEMPLATE.md` |
 
 ## 约束
 
@@ -74,3 +74,4 @@ status: active
 
 - 执行反馈驱动的变更经常同时影响验证和交付层，不能只分析需求层
 - 若变更触发回退，不得跳过人工检查点直接继续下游阶段
+

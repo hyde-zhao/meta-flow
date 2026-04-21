@@ -25,7 +25,7 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/REQUIREMENTS.md`
+- `.meta-workflow/process/REQUIREMENTS.md`
 - 与需求相关的澄清结论（若存在）
 
 ## 知识来源
@@ -43,8 +43,8 @@ status: active
 
 | 文件 | 路径 | 说明 |
 |---|---|---|
-| 场景清单 | `.output/doc/SCENARIOS.yaml` | 结构化场景集合 |
-| 覆盖矩阵 | `.output/doc/TEST-MATRIX.md` | 需求-场景覆盖关系 |
+| 场景清单 | `.meta-workflow/process/SCENARIOS.yaml` | 结构化场景集合 |
+| 覆盖矩阵 | `.meta-workflow/process/TEST-MATRIX.md` | 需求-场景覆盖关系 |
 
 ## 约束
 
@@ -67,3 +67,5 @@ status: active
 
 - 只生成正向场景会导致覆盖失真，尤其是安全与阻断类需求
 - 边界场景和 precheck 场景常被忽略，但它们直接影响执行阶段稳定性
+
+

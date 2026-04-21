@@ -28,7 +28,7 @@ status: active
 |------|----------------------|----------------------|
 | copilot | `.github/copilot-instructions.md`，`.github/agents/` 或 `.github/copilot/skills/` | `~/.copilot/agents/` 或 `~/.copilot/skills/` |
 | claude-code | `.claude/CLAUDE.md`，`.claude/agents/`，`.claude/skills/` | `~/.claude/CLAUDE.md`，`~/.claude/agents/`，`~/.claude/skills/` |
-| codex | `.codex/agents/`，`.codex/skills/` | `~/.codex/agents/`，`~/.codex/skills/` |
+| codex | `AGENTS.md`，`.codex/agents/`，`.agents/skills/` | `~/.codex/AGENTS.md`，`~/.codex/agents/`，`~/.agents/skills/` |
 | openclaw | `.openclaw/manifest.yaml`，`.openclaw/agents/`，`.openclaw/skills/` | `~/.openclaw/manifest.yaml`，`~/.openclaw/agents/`，`~/.openclaw/skills/` |
 
 ### 维度 2：主入口文件（BLOCKING）
@@ -37,6 +37,7 @@ status: active
 
 - Copilot：`copilot-instructions.md`
 - Claude Code：`CLAUDE.md`
+- Codex：`AGENTS.md`
 - OpenClaw：`manifest.yaml`
 
 ### 维度 3：命名规范（REQUIRED）
@@ -45,7 +46,7 @@ status: active
 
 - Agent / Skill：kebab-case
 - Copilot Agent：允许 `.agent.md`
-- Codex Agent：允许 `.yaml`
+- Codex Agent：允许 `.toml`
 - 安装脚本：`install.py`、`install.ps1`、`install.sh`
 
 ### 维度 4：DryRun 一致性（REQUIRED）
@@ -98,3 +99,5 @@ status: active
 - [ ] 所有 BLOCKING 维度校验结果有明确通过/未通过记录
 - [ ] 未通过项有具体路径和修复建议
 - [ ] 已检查安装脚本 DryRun 行为
+
+

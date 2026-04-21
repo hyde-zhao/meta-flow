@@ -20,14 +20,14 @@ status: active
 
 ## 前置条件
 
-- [ ] `.output/doc/REQUEST.md` 已存在
+- [ ] `.meta-workflow/process/REQUEST.md` 已存在
 - [ ] 已有需求草稿、用户补充说明或历史澄清记录之一
 
 ## 必须读取的输入
 
-- `.output/doc/REQUEST.md`
-- `.output/doc/REQUIREMENTS.md`（若存在）
-- `.output/doc/CLARIFICATION-LOG.md`（若存在）
+- `.meta-workflow/process/REQUEST.md`
+- `.meta-workflow/process/REQUIREMENTS.md`（若存在）
+- `.meta-workflow/process/CLARIFICATION-LOG.md`（若存在）
 - 用户本轮新增回复
 
 ## 知识来源
@@ -47,7 +47,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 澄清日志 | `.output/doc/CLARIFICATION-LOG.md` | `skills/requirement-clarifier/templates/CLARIFICATION-LOG-TEMPLATE.md` |
+| 澄清日志 | `.meta-workflow/process/CLARIFICATION-LOG.md` | `skills/requirement-clarifier/templates/CLARIFICATION-LOG-TEMPLATE.md` |
 
 ## 约束
 
@@ -70,3 +70,4 @@ status: active
 
 - 澄清不是“把所有想问的都问一遍”，而是先收敛阻塞设计的问题
 - 对 `REQUIRED` 级别项可记录默认假设，但必须显式写出假设内容
+

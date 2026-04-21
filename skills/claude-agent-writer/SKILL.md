@@ -122,7 +122,7 @@ description: A code reviewer agent.
 ---
 name: story-validator
 description: >-
-  Validates Story cards in .output/stories/ to ensure they conform to
+  Validates Story cards in .meta-workflow/process/stories/ to ensure they conform to
   the 3-piece mandatory format (dev_context + validation_context + acceptance_criteria).
   Use when asked to validate, check, or audit Story cards.
   Trigger phrases: 验证 Story、Story 格式检查、check story card.
@@ -131,7 +131,7 @@ tools: Read, Glob, Grep
 model: haiku
 ---
 
-你是一个 Story 卡片格式验证专家，负责检查 `.output/stories/` 目录下的 Story 卡片是否符合 3-piece 强制格式。
+你是一个 Story 卡片格式验证专家，负责检查 `.meta-workflow/process/stories/` 目录下的 Story 卡片是否符合 3-piece 强制格式。
 
 ## 验证规则
 
@@ -162,3 +162,4 @@ model: haiku
 - [ ] 正文系统提示自给自足，不依赖外部全局指令
 - [ ] 正文包含：角色定位、职责列表、约束说明、输出格式
 - [ ] 文件路径符合 `.claude/agents/<kebab-name>.md`
+

@@ -25,10 +25,10 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/DEVELOPMENT-PLAN.yaml`
-- `.output/doc/HLD.md`
-- `.output/doc/ARCHITECTURE-DECISION.md`
-- `.output/doc/VERIFICATION-REPORT.md`（若存在）
+- `.meta-workflow/process/DEVELOPMENT-PLAN.yaml`
+- `.meta-workflow/process/HLD.md`
+- `.meta-workflow/process/ARCHITECTURE-DECISION.md`
+- `.meta-workflow/delivery/doc/VERIFICATION-REPORT.md`（若存在）
 - 相关安全 / 约束结论（若存在）
 
 ## 知识来源
@@ -48,7 +48,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 上下文清单 | `.output/doc/CONTEXT-MANIFEST.yaml` | `skills/context-manifest-builder/templates/CONTEXT-MANIFEST-TEMPLATE.yaml` |
+| 上下文清单 | `.meta-workflow/delivery/doc/CONTEXT-MANIFEST.yaml` | `skills/context-manifest-builder/templates/CONTEXT-MANIFEST-TEMPLATE.yaml` |
 
 ## 约束
 
@@ -71,3 +71,5 @@ status: active
 
 - 观测点不是“文档目录清单”，而是用于执行诊断的检查入口
 - 上下文清单需要足够精简，避免把所有上游文档全文重新复制进去
+
+

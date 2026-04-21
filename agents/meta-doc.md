@@ -1,3 +1,8 @@
+---
+name: meta-doc
+description: "SCOPE-Pack 元工作流的文档工程师。将已验证产物和安装清单整理为 README 与 USER-MANUAL。"
+---
+
 # meta-doc — 元工作流文档工程师
 
 > 你是 SCOPE-Pack 元工作流的**文档输出专家**（meta-doc，元工作流文档工程师）。
@@ -20,13 +25,13 @@
 
 ## 默认加载内容
 
-- `.output/agents/<主Agent>.md`（**必须**，工具的完整行为定义来源）
-- `.output/doc/HLD.md`（**必须**，架构概览、核心概念、设计决策参考）
-- `.output/doc/REQUIREMENTS.md`（**必须**，功能范围边界和验收标准）
-- `.output/doc/INSTALL-MANIFEST.yaml`（若存在，从中提取 Skill/工具清单）
-- `.output/doc/VERIFICATION-REPORT.md`（若存在，提取已验证产物和失败模式）
-- `.output/doc/ARCHITECTURE-DECISION.md`（若存在，角色定义和技术选型参考）
-- 所有 Skill 文件（从 `INSTALL-MANIFEST.yaml` 列表或 `.output/skills/` 目录加载）
+- `.meta-workflow/delivery/agents/<主Agent>.md`（**必须**，工具的完整行为定义来源）
+- `.meta-workflow/delivery/doc/HLD.md`（**必须**，架构概览、核心概念、设计决策参考）
+- `.meta-workflow/process/REQUIREMENTS.md`（**必须**，功能范围边界和验收标准）
+- `.meta-workflow/delivery/doc/INSTALL-MANIFEST.yaml`（若存在，从中提取 Skill/工具清单）
+- `.meta-workflow/delivery/doc/VERIFICATION-REPORT.md`（若存在，提取已验证产物和失败模式）
+- `.meta-workflow/process/ARCHITECTURE-DECISION.md`（若存在，角色定义和技术选型参考）
+- 所有 Skill 文件（从 `INSTALL-MANIFEST.yaml` 列表或 `.meta-workflow/delivery/skills/` 目录加载）
 
 **不加载**：CLARIFICATION-LOG.md、Story 开发日志、LLD 文件、早期草稿。
 
@@ -378,7 +383,7 @@
 
 - 不修改任何 Agent/Skill 文件
 - 不修改 `REQUIREMENTS.md`、`ARCHITECTURE-DECISION.md`
-- `README.md` 和 `USER-MANUAL.md` 均输出到 `.output/` 目录
+- `README.md` 和 `USER-MANUAL.md` 均输出到 `.meta-workflow/delivery/` 目录
 
 ## 关联 Skill
 
@@ -402,3 +407,5 @@
 - **【工作流型】** `USER-MANUAL.md` 必须包含每个检查点的操作指南（示例输出 + 回复模板）
 - 文档缺口清单已输出（即使缺口为 0 也需明确声明），按严重程度分级
 - 未修改任何产物文件、设计文件或需求文件
+
+

@@ -13,35 +13,48 @@
 | `.agents/skills/` | 元工作流内部 Skill 定义（保留） |
 | `.github/agents/` | Copilot CLI 入口（元工作流 Agent） |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
-| `.output/` | **统一输出目录** — 工作流状态 + 产物文件 |
+| `.meta-workflow/` | **工作流运行根目录** — `process/`、`checkpoints/`、`delivery/` 三层输出面 |
 | `docs/` | 参考文档和源材料 |
 | `scripts/` | 元工作流工具脚本与安装脚本 |
 
 ## 输出隔离原则
 
-所有由元工作流产生的产物（Agent、Skill、Tool、文档、安装脚本）统一输出到 `.output/` 目录：
+所有由元工作流产生的运行时文档、人工确认稿与最终交付物统一输出到 `.meta-workflow/`：
 
 ```
-.output/
-├── agents/              # 产物 Agent 文件
-├── skills/              # 产物 Skill 文件
-├── rules/               # 产物规则文件
-├── scripts/             # 产物工具脚本与安装脚本
-├── .github/agents/      # 产物 Copilot CLI 入口
-├── README.md            # 产物 README
-├── doc/                 # 除 README 外的运行时文档与交付文档
-│   ├── USER-MANUAL.md   # 产物用户手册
-│   ├── STATE.md         # 工作流运行时状态
-│   ├── HLD.md           # 高层设计（经人工确认后进入 Story 拆解）
-│   └── ...              # 需求/设计/验证文档
-├── stories/             # Story 卡片与 Story 级 LLD
-└── ...                  # 其他工作流中间文件
+.meta-workflow/
+├── process/                     # 运行时文档（默认建议 gitignore）
+│   ├── STATE.md
+│   ├── REQUEST.md
+│   ├── INPUT-INDEX.md
+│   ├── CLARIFICATION-LOG.md
+│   ├── USE-CASES.md
+│   ├── REQUIREMENTS.md
+│   ├── HLD.md
+│   ├── ARCHITECTURE-DECISION.md
+│   ├── STORY-BACKLOG.md
+│   ├── DEVELOPMENT-PLAN.yaml
+│   ├── TEST-STRATEGY.md
+│   ├── changes/
+│   └── stories/
+├── checkpoints/                 # 人工确认稿（默认建议 gitignore）
+│   ├── CHECKPOINT-REQUIREMENTS.md
+│   ├── CHECKPOINT-HLD.md
+│   ├── CHECKPOINT-STORY-PLAN.md
+│   └── CHECKPOINT-STORY-LLD-<story-id>.md
+└── delivery/                    # 最终交付物（默认入库）
+    ├── README.md
+    ├── doc/
+    ├── agents/
+    ├── skills/
+    ├── rules/
+    └── scripts/
 ```
 
-测试时可在 `.output/` 目录中独立启动 Agent 加载产物文件：
+测试时可在 `.meta-workflow/delivery/` 目录中独立启动 Agent 加载产物文件：
 
 ```bash
-cd .output && copilot @ptm-tde
+cd .meta-workflow/delivery && copilot @ptm-tde
 ```
 
 ## Python 环境规范（uv）
@@ -83,8 +96,8 @@ uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
 命名规则：
 
 - Copilot 安装目标中的 Agent 文件后缀必须为 `.agent.md`
-- 其他平台的 Agent 文件后缀保持为 `.md`
-- Codex 目标会自动转换为 `.yaml`
+- Claude Code / OpenClaw 的 Agent 文件后缀保持为 `.md`
+- Codex 目标会自动转换为 `.toml`
 
 ## 快速开始
 
@@ -92,4 +105,4 @@ uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
 @meta-po 开始
 ```
 
-详细使用说明见 `.output/README.md`（产物文档）和 `.output/doc/USER-MANUAL.md`。
+详细使用说明见 `.meta-workflow/delivery/README.md`（产物文档）和 `.meta-workflow/delivery/doc/USER-MANUAL.md`。

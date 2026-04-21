@@ -25,9 +25,9 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/VERIFICATION-REPORT.md`
-- `.output/doc/INSTALL-MANIFEST.yaml`
-- `.output/doc/PLATFORM-INSTALL-SPEC.md`
+- `.meta-workflow/delivery/doc/VERIFICATION-REPORT.md`
+- `.meta-workflow/delivery/doc/INSTALL-MANIFEST.yaml`
+- `.meta-workflow/process/PLATFORM-INSTALL-SPEC.md`
 - 已验证产物目录
 
 ## 知识来源
@@ -45,9 +45,9 @@ status: active
 
 | 文件 | 路径 | 说明 |
 |---|---|---|
-| 安装器 | `.output/scripts/install.py` | 跨平台核心安装器 |
-| Windows 入口 | `.output/scripts/install.ps1` | PowerShell 安装入口 |
-| Shell 入口 | `.output/scripts/install.sh` | shell 安装入口 |
+| 安装器 | `.meta-workflow/delivery/scripts/install.py` | 跨平台核心安装器 |
+| Windows 入口 | `.meta-workflow/delivery/scripts/install.ps1` | PowerShell 安装入口 |
+| Shell 入口 | `.meta-workflow/delivery/scripts/install.sh` | shell 安装入口 |
 
 ## 约束
 
@@ -70,3 +70,4 @@ status: active
 
 - 安装器最容易静默带出未验证中间文件，清单驱动必须严格限定复制范围
 - DryRun 输出和真实安装逻辑必须共用同一映射规则，避免校验与执行分叉
+

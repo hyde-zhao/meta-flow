@@ -25,7 +25,7 @@ status: active
 
 ## 必须读取的输入
 
-- 已批准的计划文件（如 `.output/doc/DEVELOPMENT-PLAN.yaml`）
+- 已批准的计划文件（如 `.meta-workflow/process/DEVELOPMENT-PLAN.yaml`）
 - 相关风险、验证或约束结论
 - 需要出现在交付文档中的人工确认点与回滚信息
 
@@ -67,3 +67,4 @@ status: active
 
 - 渲染时不要擅自替换变量占位符，应保留执行时注入的动态值
 - 回滚与人工确认点最容易遗漏，必须与计划中的高风险动作一一对齐
+
