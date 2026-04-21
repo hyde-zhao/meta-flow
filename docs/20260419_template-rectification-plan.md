@@ -11,6 +11,8 @@
 5. Agent 与 Skill 的应用关系统一记录到 `skills/README.md`，不再通过共享模板目录承载 Agent ↔ Skill 关系。
 
 > 本方案是对第一轮“目录搬迁整改”的**第二轮收缩**：不是回退治理，而是进一步消除“根共享模板目录 + Agent 直接引用模板”的设计冗余。
+>
+> 2026-04-20 复核说明：仓库已完成第二版整改，本文当前用于保留治理结论、验收口径与实施记录；原先面向共享模板目录（含共享模板安装逻辑）的待执行计划，已按仓库现状改写为实施结果，不再继续保留为未来计划项。
 
 ---
 
@@ -285,32 +287,30 @@ skills/
 
 ---
 
-## 8. 安装脚本与文档整改要求
+## 8. 安装脚本与文档整改结果
 
 ### 8.1 安装脚本
 
-1. `scripts/install.py` 删除 `install_shared_templates()` 函数及其调用；
-2. 删除 `shared_templates_dir` 字段及所有引用（约 16 处）；
-3. 安装时只复制 `skills/<skill-name>/templates/`（已有 `install_skill_private_templates()` 函数）。
+1. `scripts/install.py` 已移除共享模板安装逻辑，当前只复制 `skills/<skill-name>/templates/`。
+2. 不再维护任何共享模板安装目标；该类目录不属于当前项目结构。
+3. 安装器当前保留的模板安装入口为 `install_skill_private_templates()`。
 
 ### 8.2 规则文件（`rules/` 目录）
 
-以下文件需同步修改：
+以下文件已同步完成修改：
 
 | 文件 | 修改内容 |
 |---|---|
-| `rules/AGENTS.md` | 删除 `templates/` 共享模板目录行，并将旧的 `templates/README.md` 维护规则改为同步更新 `skills/README.md` |
-| `rules/copilot-instructions.md` | 删除"共享模板：`templates/`"相关表述 |
-| `rules/CLAUDE.md` | 删除"共享模板：`templates/`"相关表述 |
+| `rules/AGENTS.md` | 已删除 `templates/` 共享模板目录行，并将旧的 `templates/README.md` 维护规则改为同步更新 `skills/README.md` |
+| `rules/copilot-instructions.md` | 已删除"共享模板：`templates/`"相关表述 |
+| `rules/CLAUDE.md` | 已删除"共享模板：`templates/`"相关表述 |
 
 ### 8.3 根目录文档
 
 | 文件 | 修改内容 |
 |---|---|
-| `README.md` line 11 | 删除 `templates/` 共享模板目录行 |
-| `README.md` line 78 | 从交付目录列表中删除 `- templates/` |
-| `README.md` line 83 | 删除"共享模板从 `templates/` 安装"行 |
-| `AGENTS.md` | 删除 `templates/` 共享模板目录行，并将旧的 `templates/README.md` 维护规则改为同步更新 `skills/README.md` |
+| `README.md` | 已删除 `templates/` 共享模板目录行及共享模板安装说明 |
+| `AGENTS.md` | 已删除 `templates/` 共享模板目录行，并将旧的 `templates/README.md` 维护规则改为同步更新 `skills/README.md` |
 
 ### 8.4 关系登记表
 
@@ -340,44 +340,13 @@ skills/
 
 ---
 
-## 9. 执行顺序
+## 9. 已实施摘要
 
-1. 审计 `docs/AGENT-SKILL-REFERENCE.md`，确保它只反映当前已交付的 Agent / Skill。
-2. 合并 `solution-designer` 到 `hld-designer`：
-   a. 将 `solution-designer` 触发词合入 `hld-designer/SKILL.md` 的 `description`；
-   b. 将 `solution-designer/SKILL.md` 标记为 `status: deprecated`，正文改为重定向说明；
-   c. 确认 `agents/meta-se.md` Skill 编排合约无 `solution-designer` 引用（当前已不含，无需修改）。
-3. 为需要下沉模板所有权的 Skill 建立或补齐 `templates/` 子目录：
-   - `skills/requirement-clarifier/templates/CLARIFICATION-LOG-TEMPLATE.md`
-   - `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md`
-   - `skills/state-router/templates/STATE-TEMPLATE.md`
-   - `skills/hld-designer/templates/HLD-TEMPLATE.md`
-   - `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md`
-   - `skills/change-impact-analysis/templates/CR-TEMPLATE.md`
-4. 将根 `templates/` 下需保留的模板搬迁到对应 Skill 的 `templates/` 目录。
-5. 逐 Skill 更新 `SKILL.md` 中的模板路径引用：
-   - `templates/XXX` → `skills/<skill-name>/templates/XXX`
-   - 受影响 Skill 及引用处数量：`state-router`(9处)、`requirement-extraction`(4处)、`hld-designer`(3处)、`lld-designer`(2处)、`story-manager`(2处)、`requirement-clarifier`(2处)、`change-impact-analysis`(2处)
-   - `solution-designer`：删除模板路径引用（已废弃）
-   - `issue-routing` line 36：删除 `templates/CR-TEMPLATE.md` 引用（消费者不引用模板路径）
-6. 将没有 Skill owner 的模板删除，并把结构要求内联到 Agent 提示词（按 §7.3 策略处理大小模板）。
-7. 删除 Agent 提示词中的模板路径引用：
-   - `meta-dm.md` line 38
-   - `meta-qa.md` line 44
-8. 更新 `skills/README.md`：
-   a. `solution-designer` 标注为已废弃，从 `meta-se` Skill 列表中移除；
-   b. 新增"模板交叉引用"章节（见 §8.5）。
-9. 更新规则文件：
-   - `rules/AGENTS.md`：删除 line 66 模板目录行 + 替换 line 111 协议规则
-   - `rules/copilot-instructions.md`：删除 line 55 共享模板行 + 删除 line 26 `solution-designer` 行（触发词合入 `hld-designer` 行）
-   - `rules/CLAUDE.md`：删除 line 55 共享模板行 + 删除 line 26 `solution-designer` 行（触发词合入 `hld-designer` 行）
-10. 更新根目录文档：
-    - `AGENTS.md`：删除 line 66 + 替换 line 100 协议规则
-    - `README.md`：删除 line 11 模板目录行 + 删除 line 78 交付目录列表中的 `templates/` + 删除 line 83 共享模板安装说明
-    - `docs/AGENT-SKILL-REFERENCE.md` line 100：标注 `solution-designer` 为 `deprecated`
-11. 更新安装脚本 `scripts/install.py`：删除 `install_shared_templates()` 函数、`shared_templates_dir` 字段及相关调用。
-12. 删除根 `templates/` 目录（含 `README.md`）。
-13. 全仓库回归验证（见 §10.9）。
+1. 已审计 `docs/AGENT-SKILL-REFERENCE.md`，确保它只反映当前已交付的 Agent / Skill。
+2. 已将 `solution-designer` 收敛为 `deprecated` 的兼容入口，正式能力统一并入 `hld-designer`。
+3. 已完成 Skill 私有模板下沉、模板路径修正，以及 consumer Skill 的模板解耦。
+4. 已删除根 `templates/` 目录，并将无 owner 的模板结构内联到相应 Agent 提示词。
+5. 已同步更新 `skills/README.md`、规则文件、根目录文档与安装脚本，并完成回归验证。
 
 ---
 
@@ -393,16 +362,16 @@ skills/
 6. `docs/AGENT-SKILL-REFERENCE.md` 与当前交付 Agent / Skill 清单一致。
 7. `solution-designer` 已标记为 `deprecated`，触发词已合入 `hld-designer`。
 8. 以下文件已完成更新：
-   - `scripts/install.py`：删除 `install_shared_templates()` 函数及 `shared_templates_dir` 字段
-   - `README.md`：删除 line 11 模板目录行 + line 78 交付目录列表 + line 83 共享模板安装说明
-   - `AGENTS.md`：删除 `templates/` 目录行 + 替换"模板映射维护"协议规则
-   - `rules/AGENTS.md`：删除 `templates/` 目录行 + 替换协议规则
-   - `rules/copilot-instructions.md`：删除"共享模板"行 + 删除 `solution-designer` 触发词行
-   - `rules/CLAUDE.md`：删除"共享模板"行 + 删除 `solution-designer` 触发词行
-   - `docs/AGENT-SKILL-REFERENCE.md`：`solution-designer` 标注 deprecated
-   - `issue-routing/SKILL.md`：删除 `templates/CR-TEMPLATE.md` 路径引用
+   - `scripts/install.py`：仅保留 Skill 私有模板安装逻辑，不再处理共享模板目录
+   - `README.md`：已删除共享模板目录与共享模板安装说明
+   - `AGENTS.md`：已删除 `templates/` 目录行并替换"模板映射维护"协议规则
+   - `rules/AGENTS.md`：已删除 `templates/` 目录行并替换协议规则
+   - `rules/copilot-instructions.md`：已删除"共享模板"行，并移除 `solution-designer` 独立触发词行
+   - `rules/CLAUDE.md`：已删除"共享模板"行，并移除 `solution-designer` 独立触发词行
+   - `docs/AGENT-SKILL-REFERENCE.md`：已将 `solution-designer` 标注为 deprecated
+   - `issue-routing/SKILL.md`：已删除 `templates/CR-TEMPLATE.md` 路径引用
 
-### 10.9 回归验证命令
+### 10.9 回归验证命令（归档）
 
 ```bash
 # 1. 验证根 templates/ 已删除
@@ -429,10 +398,10 @@ grep -q "status: deprecated" skills/solution-designer/SKILL.md \
   && echo "PASS: solution-designer deprecated" \
   || echo "FAIL: solution-designer not deprecated"
 
-# 5. 验证 install.py 无共享模板函数
-grep -q "install_shared_templates" scripts/install.py \
-  && echo "FAIL: install_shared_templates still exists" \
-  || echo "PASS: install_shared_templates removed"
+# 5. 验证 install.py 仅保留 Skill 私有模板安装逻辑
+grep -q "install_skill_private_templates" scripts/install.py \
+  && echo "PASS: private template installer present" \
+  || echo "FAIL: private template installer missing"
 ```
 
 ---
@@ -505,3 +474,16 @@ grep -q "install_shared_templates" scripts/install.py \
 ### 12.3 结论
 
 本方案定义的第二版整改目标已在仓库中完成落地，仓库当前实际状态已与“**无根 templates、Skill 持有模板、Agent 内联文档契约**”治理模型一致。
+
+### 12.4 阻塞问题复核（2026-04-20）
+
+| 编号 | 阻塞问题 | 当前状态 | 复核结论 |
+|---|---|---|---|
+| B-01 | 根共享模板目录与模板 owner 边界不清 | 已解除 | 仓库根 `templates/` 已删除，保留模板均收敛到 `skills/<skill-name>/templates/` |
+| B-02 | 安装流程仍可能复制共享模板目录 / 规划中仍保留共享模板安装步骤 | 已解除 | `scripts/install.py` 现只安装 Skill 私有模板；本文已移除共享模板安装相关待执行计划 |
+| B-03 | consumer Skill 仍直接引用模板路径 | 已解除 | 代表性消费者如 `issue-routing` 已改为只依赖正式工件内容契约 |
+| B-04 | `solution-designer` 与 `hld-designer` 双轨维护 | 已解除 | `solution-designer` 已标记为 `deprecated`，正式能力已并入 `hld-designer` |
+
+## 13. 遗留问题列表
+
+本次复核未发现仍然阻塞本方案收尾的事项，**当前无遗留阻塞问题**，因此未新增遗留问题编号。
