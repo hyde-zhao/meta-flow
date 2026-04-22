@@ -25,7 +25,7 @@ status: active
 
 ## 必须读取的输入
 
-- `.meta-workflow/process/REQUIREMENTS.md`
+- `process/REQUIREMENTS.md`
 - 与需求相关的澄清结论（若存在）
 
 ## 知识来源
@@ -43,8 +43,8 @@ status: active
 
 | 文件 | 路径 | 说明 |
 |---|---|---|
-| 场景清单 | `.meta-workflow/process/SCENARIOS.yaml` | 结构化场景集合 |
-| 覆盖矩阵 | `.meta-workflow/process/TEST-MATRIX.md` | 需求-场景覆盖关系 |
+| 场景清单 | `process/SCENARIOS.yaml` | 结构化场景集合 |
+| 覆盖矩阵 | `process/TEST-MATRIX.md` | 需求-场景覆盖关系 |
 
 ## 约束
 

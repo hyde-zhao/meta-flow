@@ -25,10 +25,10 @@ status: active
 
 ## 必须读取的输入
 
-- `.meta-workflow/process/DEVELOPMENT-PLAN.yaml`
-- `.meta-workflow/process/HLD.md`
-- `.meta-workflow/process/ARCHITECTURE-DECISION.md`
-- `.meta-workflow/delivery/doc/VERIFICATION-REPORT.md`（若存在）
+- `process/DEVELOPMENT-PLAN.yaml`
+- `process/HLD.md`
+- `process/ARCHITECTURE-DECISION.md`
+- `delivery/doc/VERIFICATION-REPORT.md`（若存在）
 - 相关安全 / 约束结论（若存在）
 
 ## 知识来源
@@ -48,7 +48,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 上下文清单 | `.meta-workflow/delivery/doc/CONTEXT-MANIFEST.yaml` | `skills/context-manifest-builder/templates/CONTEXT-MANIFEST-TEMPLATE.yaml` |
+| 上下文清单 | `delivery/doc/CONTEXT-MANIFEST.yaml` | `skills/context-manifest-builder/templates/CONTEXT-MANIFEST-TEMPLATE.yaml` |
 
 ## 约束
 

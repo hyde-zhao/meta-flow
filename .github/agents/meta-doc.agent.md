@@ -13,9 +13,9 @@ tools: ["read", "edit", "search", "skill"]
 
 ## 默认加载内容
 
-- `.output/doc/INSTALL-MANIFEST.yaml`（必须）
-- `.output/doc/VERIFICATION-REPORT.md`（参考已验证产物列表）
-- `.output/doc/ARCHITECTURE-DECISION.md`（角色定义参考）
+- `process/INSTALL-MANIFEST.yaml`（必须）
+- `process/VERIFICATION-REPORT.md`（参考已验证产物列表）
+- `process/ARCHITECTURE-DECISION.md`（角色定义参考）
 - 所有 Agent 和 Skill 文件（从 INSTALL-MANIFEST.yaml 列表中加载）
 
 **不加载**：CLARIFICATION-LOG.md、Story 开发日志、早期草稿。
@@ -98,8 +98,8 @@ tools: ["read", "edit", "search", "skill"]
 
 ## 输出路径
 
-- `README.md` → `.output/README.md`
-- `USER-MANUAL.md` → `.output/doc/USER-MANUAL.md`
+- `README.md` → `delivery/README.md`
+- `USER-MANUAL.md` → `process/USER-MANUAL.md`
 
 ## 约束
 

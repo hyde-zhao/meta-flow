@@ -13,16 +13,15 @@
 | `.agents/skills/` | 元工作流内部 Skill 定义（保留） |
 | `.github/agents/` | Copilot CLI 入口（元工作流 Agent） |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
-| `.meta-workflow/` | **工作流运行根目录** — `process/`、`checkpoints/`、`delivery/` 三层输出面 |
+| `process/` · `checkpoints/` · `delivery/` | **工作流三层输出目录** — 运行态 / 确认态 / 交付态 |
 | `docs/` | 参考文档和源材料 |
 | `scripts/` | 元工作流工具脚本与安装脚本 |
 
 ## 输出隔离原则
 
-所有由元工作流产生的运行时文档、人工确认稿与最终交付物统一输出到 `.meta-workflow/`：
+所有由元工作流产生的运行时文档、人工确认稿与最终交付物统一按层输出：
 
 ```
-.meta-workflow/
 ├── process/                     # 运行时文档（默认建议 gitignore）
 │   ├── STATE.md
 │   ├── REQUEST.md
@@ -51,10 +50,10 @@
     └── scripts/
 ```
 
-测试时可在 `.meta-workflow/delivery/` 目录中独立启动 Agent 加载产物文件：
+测试时可在 `delivery/` 目录中独立启动 Agent 加载产物文件：
 
 ```bash
-cd .meta-workflow/delivery && copilot @ptm-tde
+cd delivery && copilot @ptm-tde
 ```
 
 ## Python 环境规范（uv）
@@ -105,4 +104,4 @@ uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
 @meta-po 开始
 ```
 
-详细使用说明见 `.meta-workflow/delivery/README.md`（产物文档）和 `.meta-workflow/delivery/doc/USER-MANUAL.md`。
+详细使用说明见 `delivery/README.md`（产物文档）和 `delivery/doc/USER-MANUAL.md`。

@@ -49,13 +49,13 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 ## 状态文件
 
-- **运行时状态**：`.meta-workflow/process/STATE.md`
-- **高层设计**：`.meta-workflow/process/HLD.md`
+- **运行时状态**：`process/STATE.md`
+- **高层设计**：`process/HLD.md`
 - **Skill 私有模板**：`skills/<skill-name>/templates/`
-- **人工确认稿**：`.meta-workflow/checkpoints/`
-- **Story 卡片**：`.meta-workflow/process/stories/STORY-*.md`
-- **Story 级 LLD**：`.meta-workflow/process/stories/STORY-*-LLD.md`
-- **变更单**：`.meta-workflow/process/changes/CR-*.md`
+- **人工确认稿**：`checkpoints/`
+- **Story 卡片**：`process/stories/STORY-*.md`
+- **Story 级 LLD**：`process/stories/STORY-*-LLD.md`
+- **变更单**：`process/changes/CR-*.md`
 
 ## Python 环境与依赖管理（uv）
 
@@ -74,14 +74,14 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 2. **HLD 锁**：`HLD.md` 未经人工确认，不得进入 Story 拆解
 3. **Story 锁**：未进入 `approved` 状态的 Story，不得开始 LLD 设计
 4. **LLD 锁**：`STORY-{id}-LLD.md` 未确认前，不得开始该 Story 实现
-5. **验证锁**：没有 `.meta-workflow/process/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
+5. **验证锁**：没有 `process/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
 6. **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
 7. **禁止越级改写**：`meta-dev` 不修改 REQUIREMENTS.md、HLD.md；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
 8. **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 9. **确定性语言**：meta-se / meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
 11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
-12. **输出隔离**：运行态写入 `.meta-workflow/process/`，确认稿写入 `.meta-workflow/checkpoints/`，交付物写入 `.meta-workflow/delivery/`；`.agents/` 和 `.github/` 仅存放元工作流自身定义
+12. **输出隔离**：运行态写入 `process/`，确认稿写入 `checkpoints/`，交付物写入 `delivery/`；`.agents/` 和 `.github/` 仅存放元工作流自身定义
 13. **Agent/Skill 关系维护**：开发或修改 Agent、Skill 时，若影响调用、适用或归属关系，必须同步更新 `skills/README.md`
 
 ## 人工检查点（5 类）
@@ -101,4 +101,21 @@ Complex 模式下，同一 Wave 内的 Story 支持并行执行，但同一 Stor
 `LLD 起草 → LLD 确认 → 开发实现 → 验证`
 
 顺序推进。
+
+## 方案评审规则（Design Review）
+
+对 HLD / LLD / Story Plan / ADR 等设计产物评审时，必须逐条校验：
+
+1. **内部一致性检查**：ADR、Risk、NFR、模块职责、流程图之间不得自相矛盾，发现矛盾必须在同一轮修订中解决。
+2. **目标必须量化**：成功标准必须含可度量值（数量、百分比、字段集、覆盖率），禁止"不少于"、"尽可能"、"更完整"等无下限表述。
+3. **集成契约显式化**：新 Agent / Skill / 模块必须定义与调用方和相邻对象的契约（调用方向、时机、触发方式、输入/输出、衔接、降级、调用方同步修改范围），禁止只声明"独立可调用"。
+4. **相邻对象边界澄清**：非目标章节必须显式区分与相邻 Skill / Agent 的职责，避免"澄清 / 扩展 / 发现"等近义词默认重叠。
+5. **前置校验与失败路径**：每个执行阶段必须定义前置校验和失败行为（终止 / 降级 / 回退），禁止"成功路径 only"。
+6. **回退决策可操作化**：用户修改/回退必须映射为可枚举决策表（意图 → 目标 → 理由），禁止模糊"根据类型回退"。
+7. **理论依据可追溯**：枚举型框架（维度、阶段、清单）必须说明来源方法论，或显式声明"可扩展"，避免被当作穷尽集合。
+8. **遗留问题状态闭环**：待确认问题每次修订必须回写状态（OPEN / RESOLVED + 日期）；收敛后原行不删除以保留追溯。
+9. **Gotchas 必有**：Skill 类产出（HLD / SKILL.md）必须含实质性 Gotchas 章节。
+10. **修订记录完整**：每次迭代必须在产物头部追加修订记录（版本号 / 日期 / 修订人 / 变更要点精确到章节号）。
+11. **Story 拆解一致性**：§工作量章节的 Story 数、Wave 数必须与 §分阶段落地一一对应。
+12. **决策与产物形态对齐**：ADR 结论必须回写到架构图、模块表、流程图、落地阶段；孤立 ADR 视为未落地。
 

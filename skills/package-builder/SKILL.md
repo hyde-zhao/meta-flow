@@ -25,9 +25,9 @@ status: active
 
 ## 必须读取的输入
 
-- `.meta-workflow/delivery/doc/VERIFICATION-REPORT.md`
-- `.meta-workflow/delivery/doc/INSTALL-MANIFEST.yaml`
-- `.meta-workflow/process/PLATFORM-INSTALL-SPEC.md`
+- `delivery/doc/VERIFICATION-REPORT.md`
+- `delivery/doc/INSTALL-MANIFEST.yaml`
+- `process/PLATFORM-INSTALL-SPEC.md`
 - 已验证产物目录
 
 ## 知识来源
@@ -45,9 +45,9 @@ status: active
 
 | 文件 | 路径 | 说明 |
 |---|---|---|
-| 安装器 | `.meta-workflow/delivery/scripts/install.py` | 跨平台核心安装器 |
-| Windows 入口 | `.meta-workflow/delivery/scripts/install.ps1` | PowerShell 安装入口 |
-| Shell 入口 | `.meta-workflow/delivery/scripts/install.sh` | shell 安装入口 |
+| 安装器 | `delivery/scripts/install.py` | 跨平台核心安装器 |
+| Windows 入口 | `delivery/scripts/install.ps1` | PowerShell 安装入口 |
+| Shell 入口 | `delivery/scripts/install.sh` | shell 安装入口 |
 
 ## 约束
 

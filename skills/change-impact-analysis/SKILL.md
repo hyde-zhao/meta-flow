@@ -21,12 +21,12 @@ status: active
 
 ## 前置条件
 
-- [ ] `.meta-workflow/process/STATE.md` 已存在且当前阶段明确
+- [ ] `process/STATE.md` 已存在且当前阶段明确
 - [ ] 变更原因和影响范围已提供，或可从 ISSUE / RUN-EXEC 推断
 
 ## 必须读取的输入
 
-- `.meta-workflow/process/STATE.md`
+- `process/STATE.md`
 - 当前变更描述
 - 相关 ISSUE / RUN-EXEC / 上游文档（若存在）
 - 受影响的正式对象（如 `REQUIREMENTS.md`、`HLD.md`、`DEVELOPMENT-PLAN.yaml` 等）
@@ -49,7 +49,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 变更单 | `.meta-workflow/process/changes/CR-{id}.md` | `skills/change-impact-analysis/templates/CR-TEMPLATE.md` |
+| 变更单 | `process/changes/CR-{id}.md` | `skills/change-impact-analysis/templates/CR-TEMPLATE.md` |
 
 ## 约束
 

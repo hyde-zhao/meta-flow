@@ -27,7 +27,7 @@ status: active
 ## 必须读取的输入
 
 - 用户自然语言需求
-- `.output/doc/REQUEST.md`（若存在）
+- `process/REQUEST.md`（若存在）
 - `input_spec.yaml`（兼容旧输入方式，若存在）
 - 已知的目标平台、约束、验收线索
 
@@ -49,7 +49,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 结构化需求 | `.output/doc/REQUIREMENTS.md` | `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md` |
+| 结构化需求 | `process/REQUIREMENTS.md` | `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md` |
 
 ## 约束
 

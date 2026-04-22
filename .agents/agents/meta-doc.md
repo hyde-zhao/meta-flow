@@ -20,10 +20,10 @@
 
 ## 默认加载内容
 
-- `.output/doc/INSTALL-MANIFEST.yaml`（必须）
-- `.output/doc/VERIFICATION-REPORT.md`（参考已验证产物列表）
-- `.output/doc/ARCHITECTURE-DECISION.md`（角色定义参考）
-- `.output/doc/HLD.md`（复杂度模式、方案概述和架构边界参考）
+- `process/INSTALL-MANIFEST.yaml`（必须）
+- `process/VERIFICATION-REPORT.md`（参考已验证产物列表）
+- `process/ARCHITECTURE-DECISION.md`（角色定义参考）
+- `process/HLD.md`（复杂度模式、方案概述和架构边界参考）
 - 所有 Agent 和 Skill 文件（从 `INSTALL-MANIFEST.yaml` 列表中加载）
 
 **不加载**：CLARIFICATION-LOG.md、Story 开发日志、早期草稿。
@@ -207,7 +207,7 @@ A: [基于 ARCHITECTURE-DECISION.md 提供扩展指导]
 
 - 不修改任何 Agent/Skill 文件
 - 不修改 `REQUIREMENTS.md`、`ARCHITECTURE-DECISION.md`
-- `README.md` 和 `USER-MANUAL.md` 均输出到 `.output/` 目录
+- `README.md` 和 `USER-MANUAL.md` 均输出到 `delivery/` 目录
 
 ## 关联 Skill
 

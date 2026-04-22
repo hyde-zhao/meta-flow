@@ -25,10 +25,10 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/DEVELOPMENT-PLAN.yaml`
-- `.output/doc/HLD.md`
-- `.output/doc/ARCHITECTURE-DECISION.md`
-- `.output/doc/VERIFICATION-REPORT.md`（若存在）
+- `process/DEVELOPMENT-PLAN.yaml`
+- `process/HLD.md`
+- `process/ARCHITECTURE-DECISION.md`
+- `process/VERIFICATION-REPORT.md`（若存在）
 - 相关安全 / 约束结论（若存在）
 
 ## 知识来源
@@ -48,7 +48,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 上下文清单 | `.output/doc/CONTEXT-MANIFEST.yaml` | `skills/context-manifest-builder/templates/CONTEXT-MANIFEST-TEMPLATE.yaml` |
+| 上下文清单 | `process/CONTEXT-MANIFEST.yaml` | `skills/context-manifest-builder/templates/CONTEXT-MANIFEST-TEMPLATE.yaml` |
 
 ## 约束
 

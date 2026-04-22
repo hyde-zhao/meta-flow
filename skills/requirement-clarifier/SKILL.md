@@ -20,14 +20,14 @@ status: active
 
 ## 前置条件
 
-- [ ] `.meta-workflow/process/REQUEST.md` 已存在
+- [ ] `process/REQUEST.md` 已存在
 - [ ] 已有需求草稿、用户补充说明或历史澄清记录之一
 
 ## 必须读取的输入
 
-- `.meta-workflow/process/REQUEST.md`
-- `.meta-workflow/process/REQUIREMENTS.md`（若存在）
-- `.meta-workflow/process/CLARIFICATION-LOG.md`（若存在）
+- `process/REQUEST.md`
+- `process/REQUIREMENTS.md`（若存在）
+- `process/CLARIFICATION-LOG.md`（若存在）
 - 用户本轮新增回复
 
 ## 知识来源
@@ -47,7 +47,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 澄清日志 | `.meta-workflow/process/CLARIFICATION-LOG.md` | `skills/requirement-clarifier/templates/CLARIFICATION-LOG-TEMPLATE.md` |
+| 澄清日志 | `process/CLARIFICATION-LOG.md` | `skills/requirement-clarifier/templates/CLARIFICATION-LOG-TEMPLATE.md` |
 
 ## 约束
 

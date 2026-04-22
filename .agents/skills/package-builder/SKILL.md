@@ -25,9 +25,9 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/VERIFICATION-REPORT.md`
-- `.output/doc/INSTALL-MANIFEST.yaml`
-- `.output/doc/PLATFORM-INSTALL-SPEC.md`
+- `process/VERIFICATION-REPORT.md`
+- `process/INSTALL-MANIFEST.yaml`
+- `process/PLATFORM-INSTALL-SPEC.md`
 - 已验证产物目录
 
 ## 知识来源
@@ -45,9 +45,9 @@ status: active
 
 | 文件 | 路径 | 说明 |
 |---|---|---|
-| 安装器 | `.output/scripts/install.py` | 跨平台核心安装器 |
-| Windows 入口 | `.output/scripts/install.ps1` | PowerShell 安装入口 |
-| Shell 入口 | `.output/scripts/install.sh` | shell 安装入口 |
+| 安装器 | `delivery/scripts/install.py` | 跨平台核心安装器 |
+| Windows 入口 | `delivery/scripts/install.ps1` | PowerShell 安装入口 |
+| Shell 入口 | `delivery/scripts/install.sh` | shell 安装入口 |
 
 ## 约束
 

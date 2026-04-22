@@ -182,24 +182,25 @@ uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
 #### ✅ Codex 验证
 
 ```bash
-# 1. 检查 YAML 格式 Agent 文件
-ls .codex/agents/   # 应有 7 个 .yaml 文件
+# 1. 检查 TOML 格式 Agent 文件
+ls .codex/agents/   # 应有 7 个 .toml 文件
 
-# 2. 验证 YAML 语法合法
-uv run --with pyyaml --python 3.11 python -c "
-import yaml, pathlib
-for f in pathlib.Path('.codex/agents').glob('*.yaml'):
-    yaml.safe_load(f.read_text())
+# 2. 验证 TOML 语法合法
+uv run --python 3.11 python -c "
+import pathlib, tomllib
+for f in pathlib.Path('.codex/agents').glob('*.toml'):
+    tomllib.loads(f.read_text())
     print(f'OK: {f.name}')
 "
 
 # 3. 检查必填字段
-uv run --with pyyaml --python 3.11 python -c "
-import yaml, pathlib
-for f in pathlib.Path('.codex/agents').glob('*.yaml'):
-    d = yaml.safe_load(f.read_text())
-    assert 'instructions' in d, f'{f.name} 缺少 instructions'
+uv run --python 3.11 python -c "
+import pathlib, tomllib
+for f in pathlib.Path('.codex/agents').glob('*.toml'):
+    d = tomllib.loads(f.read_text())
+    assert 'developer_instructions' in d, f'{f.name} 缺少 developer_instructions'
     assert 'description' in d, f'{f.name} 缺少 description'
+    assert 'name' in d, f'{f.name} 缺少 name'
 print('All agents valid')
 "
 ```

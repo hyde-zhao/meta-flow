@@ -55,7 +55,7 @@ Agent 不应：
 |------|----------------|---------------------|------|
 | 前置条件 | REQUIREMENTS.md + USE-CASES.md 已确认 | 相同 | 一致 |
 | 输入 | REQUIREMENTS.md, USE-CASES.md, REQUEST.md | 相同 | 一致 |
-| 输出 | `.output/doc/HLD.md` | 相同 | 一致 |
+| 输出 | `process/HLD.md` | 相同 | 一致 |
 | 模板 | `skills/hld-designer/templates/HLD-TEMPLATE.md` | 不再单独持有模板，复用 `hld-designer` 输出契约 | 一致 |
 | 执行步骤 | 问题定义 → ≥2 候选方案 → 对比 → 推荐 → 写 HLD → 停在确认前 | 相同 | 一致 |
 | 验收标准 | ≥2 候选方案 + 推荐 + 风险 | 与 hld-designer 输出口径一致 | 一致 |
@@ -105,7 +105,7 @@ Agent 不应：
 
 1. 模板存在的目的，是约束**正式工件结构**，而不是提供共享目录。
 2. 正式工件的 canonical owner 必须唯一。
-3. 消费者 Skill 读取的是 `.output/...` 里的正式文档，不是模板文件。
+3. 消费者 Skill 读取的是 `process/...` 里的正式文档，不是模板文件。
 4. 若某模板不再有明确的 Skill owner，应删除模板文件并把结构内联到规范中。
 
 ---
@@ -250,7 +250,7 @@ skills/
 - `solution-designer`（已废弃，重定向到 `hld-designer`）
 - `scenario-expansion`
 - `scope-normalization`
-- `issue-routing`（SKILL.md line 36 引用 `templates/CR-TEMPLATE.md`，需删除该路径引用，改为依赖 `.output/changes/CR-*.md` 内容契约）
+- `issue-routing`（SKILL.md line 36 引用 `templates/CR-TEMPLATE.md`，需删除该路径引用，改为依赖 `process/changes/CR-*.md` 内容契约）
 - `coverage-checker`
 - `dangerous-command-scan`
 - `package-builder`
@@ -325,7 +325,7 @@ skills/
 ## Skill 模板交叉引用
 
 > 本章节记录 Skill 间因消费同一正式工件而产生的模板交叉引用关系。
-> 消费者 Skill 不直接引用模板路径，只依赖产出 Skill 写入 `.output/` 的正式文档内容契约。
+> 消费者 Skill 不直接引用模板路径，只依赖产出 Skill 写入 `process/`、`delivery/` 的正式文档内容契约。
 
 | 正式工件 | 模板持有 Skill | 消费者 Skill | 说明 |
 |---|---|---|---|
@@ -377,10 +377,10 @@ skills/
 # 1. 验证根 templates/ 已删除
 test ! -d templates/ && echo "PASS: templates/ deleted" || echo "FAIL: templates/ still exists"
 
-# 2. 验证无残留的根模板路径引用（排除本方案文档、docs/、.output/、.github/）
+# 2. 验证无残留的根模板路径引用（排除本方案文档、docs/、process/、.github/）
 grep -rn "templates/" agents/ skills/ rules/ AGENTS.md README.md scripts/ \
   | grep -v "skills/.*/templates/" \
-  | grep -v ".output/templates/" \
+  | grep -v "process/templates/" \
   | grep -v "docs/" \
   | grep -v ".github/" \
   && echo "FAIL: residual root template references found" \
@@ -412,7 +412,7 @@ grep -q "install_skill_private_templates" scripts/install.py \
 2. **协议规则已变更**——从"必须同步更新 `templates/README.md`"变更为"必须同步更新 `skills/README.md` 的模板交叉引用章节"。
 3. **Agent 不得直接引用模板路径**——Agent 如需文档结构要求，需通过 Skill 调用获取或内联结构描述。
 4. **`solution-designer` 不得重新激活**——如发现新的差异化需求，应在 `hld-designer` 上新增能力而非恢复 `solution-designer`。
-5. **交叉引用限制**——消费者 Skill 只依赖 `.output/` 正式工件的内容契约，不通过路径交叉引用其他 Skill 的模板文件。
+5. **交叉引用限制**——消费者 Skill 只依赖 `process/`、`delivery/` 正式工件的内容契约，不通过路径交叉引用其他 Skill 的模板文件。
 6. **新增 Skill 的模板要求**——新建 Skill 若携带模板，须在 `SKILL.md` 声明模板路径，并在 `skills/README.md` 的模板交叉引用章节登记关系。
 7. **`docs/AGENT-SKILL-REFERENCE.md` 只记录已交付 Skill**，不记录历史占位 Skill。
 
@@ -439,7 +439,7 @@ grep -q "install_skill_private_templates" scripts/install.py \
    - `meta-dm`：删除历史模板路径引用，仅保留卡片结构说明
 3. 更新所有相关 `skills/*/SKILL.md` 与 `.agents/skills/*/SKILL.md`：
    - producer Skill 改为引用 `skills/<skill>/templates/...`
-   - consumer Skill（如 `issue-routing`）改为只依赖 `.output/` 正式工件内容契约
+   - consumer Skill（如 `issue-routing`）改为只依赖 `process/`、`delivery/` 正式工件内容契约
 4. 将 `solution-designer` 收敛为 `status: deprecated` 的兼容入口，并把历史触发词合并到 `hld-designer`
 5. 更新 `scripts/install.py`，删除共享模板安装逻辑，仅安装 Skill 私有模板
 6. 更新治理与说明文件：
@@ -458,7 +458,7 @@ grep -q "install_skill_private_templates" scripts/install.py \
 
 1. **目录验证**
    - 仓库根 `templates/` 已不存在
-   - `.output/templates/` 约定未受影响
+   - `process/templates/` 约定未受影响
 2. **引用验证**
    - 活跃文件中已无残留的根模板路径引用
    - 所有保留模板均位于 `skills/<skill-name>/templates/`
@@ -469,7 +469,7 @@ grep -q "install_skill_private_templates" scripts/install.py \
 4. **代表性运行态验证**
    - 已执行 `meta-se -> hld-designer` 代表性链路
    - Agent 能按当前编排合约调用 Skill，并生成符合当前 HLD 契约的结果内容
-   - 受子 Agent 执行上下文限制，该次验证未直接落盘 `.output/doc/HLD.md`，但生成内容已按模板章节完成检查
+   - 受子 Agent 执行上下文限制，该次验证未直接落盘 `process/HLD.md`，但生成内容已按模板章节完成检查
 
 ### 12.3 结论
 

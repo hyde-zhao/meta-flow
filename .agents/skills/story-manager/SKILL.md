@@ -25,9 +25,9 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/ARCHITECTURE-DECISION.md`
-- `.output/doc/DEVELOPMENT-PLAN.yaml`
-- 现有 `.output/stories/STORY-*.md`（update / status 时）
+- `process/ARCHITECTURE-DECISION.md`
+- `process/DEVELOPMENT-PLAN.yaml`
+- 现有 `process/stories/STORY-*.md`（update / status 时）
 
 ## 知识来源
 
@@ -46,8 +46,8 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| Story 卡片 | `.output/stories/STORY-{id}.md` | `skills/story-manager/templates/STORY-TEMPLATE.md` |
-| Story 状态汇总 | `.output/STORY-STATUS.md` | `skills/story-manager/templates/STORY-STATUS-TEMPLATE.md` |
+| Story 卡片 | `process/stories/STORY-{id}.md` | `skills/story-manager/templates/STORY-TEMPLATE.md` |
+| Story 状态汇总 | `process/STORY-STATUS.md` | `skills/story-manager/templates/STORY-STATUS-TEMPLATE.md` |
 
 ## 约束
 

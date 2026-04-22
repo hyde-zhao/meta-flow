@@ -10,7 +10,7 @@
 本规范适用于：
 
 - 根目录 `skills/` 下的所有交付 Skill
-- `.output/skills/` 下由元工作流生成的产物 Skill
+- `delivery/skills/` 下由元工作流生成的产物 Skill
 - 后续新增的跨平台共享 Skill（Copilot / Claude Code / Codex）
 
 本规范不适用于：
@@ -346,7 +346,7 @@ output_mode: advisory | file-generation | validation
 - 不要在 REQUIREMENTS 未确认时输出正式设计对象
 - 不要把建议写成已确认结论
 - 不要补全用户未提供的环境变量
-- 不要把 `.output/` 中间文件当成交付件安装
+- 不要把 `process/` 中间文件当成交付件安装
 ```
 
 Gotchas 的作用：

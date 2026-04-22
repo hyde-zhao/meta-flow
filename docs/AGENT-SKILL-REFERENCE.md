@@ -24,7 +24,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 职责 | 初始化 `.output/`、推进阶段、触发人工检查点、路由变更 |
+| 职责 | 初始化 `process/`、推进阶段、触发人工检查点、路由变更 |
 | 触发方式 | `@meta-po`、开始、新建工作流、推进、当前状态、继续、回退、需求变更 |
 | 不负责 | 直接写需求、HLD、LLD、代码或文档 |
 
@@ -74,7 +74,7 @@
 |------|------|
 | 职责 | 在验证通过后整理 README 与用户手册 |
 | 触发阶段 | `documentation` |
-| 输出 | `.output/README.md`、`.output/doc/USER-MANUAL.md` |
+| 输出 | `delivery/README.md`、`process/USER-MANUAL.md` |
 
 ---
 
@@ -185,7 +185,7 @@ rules/    # Canonical 规则文件（AGENTS.md / CLAUDE.md / copilot-instruction
 ```text
 用户：请启动一个新的复杂工作流项目，先澄清需求，再输出 HLD，确认后拆 Story。
 
-meta-po：初始化 .output/，唤醒 meta-pm。
+meta-po：初始化 process/，唤醒 meta-pm。
 meta-pm：完成 USE-CASES.md / REQUIREMENTS.md。
 meta-po：[检查点1] 请确认需求。
 用户：确认。
@@ -211,27 +211,33 @@ meta-po：[检查点5] 请终验。
 ### 运行时目录
 
 ```text
-.output/
-├── README.md
-├── doc/
-│   ├── STATE.md
-│   ├── REQUEST.md
-│   ├── USE-CASES.md
-│   ├── REQUIREMENTS.md
-│   ├── HLD.md
-│   ├── ARCHITECTURE-DECISION.md
-│   ├── STORY-BACKLOG.md
-│   ├── DEVELOPMENT-PLAN.yaml
-│   ├── TEST-STRATEGY.md
-│   ├── VERIFICATION-REPORT.md
-│   └── INSTALL-MANIFEST.yaml
-├── rules/
+process/
+├── STATE.md
+├── REQUEST.md
+├── USE-CASES.md
+├── REQUIREMENTS.md
+├── HLD.md
+├── ARCHITECTURE-DECISION.md
+├── STORY-BACKLOG.md
+├── DEVELOPMENT-PLAN.yaml
+├── TEST-STRATEGY.md
 ├── stories/
 │   ├── STORY-001.md
 │   ├── STORY-001-LLD.md
 │   └── ...
-├── changes/
-└── scripts/
+└── changes/
+
+checkpoints/
+└── （人工确认稿）
+
+delivery/
+├── README.md
+├── doc/
+│   ├── VERIFICATION-REPORT.md
+│   └── INSTALL-MANIFEST.yaml
+├── rules/
+├── scripts/
+└── agents/
 ```
 
 ### 关键文件说明

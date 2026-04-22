@@ -11,7 +11,7 @@ status: active
 
 ## 目标
 
-根据目标 Agent 的职责，从 `.output/` 工作区中筛选最小必要上下文，并明确哪些内容不应加载，确保交接简洁且不越权。
+根据目标 Agent 的职责，从工作区中筛选最小必要上下文，并明确哪些内容不应加载，确保交接简洁且不越权。
 
 ## 适用场景
 
@@ -21,18 +21,18 @@ status: active
 ## 前置条件
 
 - [ ] 目标 Agent 已明确
-- [ ] `.output/` 下相关输入文档已生成
+- [ ] `process/` 下相关输入文档已生成
 
 ## 必须读取的输入
 
-- `.output/doc/STATE.md`
+- `process/STATE.md`
 - 目标 Agent 对应阶段的正式对象
 - 活跃 `CR-*` / 当前 Story 卡片（若存在）
 
 ## 知识来源
 
 - `AGENTS.md`：角色职责与阶段定义
-- `.output/doc/STATE.md`：当前阶段、当前 Wave、活跃变更
+- `process/STATE.md`：当前阶段、当前 Wave、活跃变更
 - 正式对象的文件路径与 frontmatter：决定是否需要加载
 
 ## 执行步骤
@@ -50,7 +50,7 @@ status: active
 
 - 只加载正式对象，不加载其他 Agent 的历史推理过程
 - 活跃 `CR-*`、当前 Story 与当前阶段状态必须优先纳入
-- 只使用当前 `.output/` 工作区路径
+- 只使用当前工作区路径（`process/`、`checkpoints/`、`delivery/`）
 
 ## 验收标准
 

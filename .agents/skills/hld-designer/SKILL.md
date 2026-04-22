@@ -12,7 +12,7 @@ status: active
 
 ## 目标
 
-基于已确认需求与场景，输出一份可直接进入人工评审的 `.output/doc/HLD.md`。
+基于已确认需求与场景，输出一份可直接进入人工评审的 `process/HLD.md`。
 
 ## 适用场景
 
@@ -21,14 +21,14 @@ status: active
 
 ## 前置条件
 
-- [ ] `.output/doc/REQUIREMENTS.md` 已确认
-- [ ] `.output/doc/USE-CASES.md` 已确认
+- [ ] `process/REQUIREMENTS.md` 已确认
+- [ ] `process/USE-CASES.md` 已确认
 
 ## 必须读取的输入
 
-- `.output/doc/REQUIREMENTS.md`
-- `.output/doc/USE-CASES.md`
-- `.output/doc/REQUEST.md`
+- `process/REQUIREMENTS.md`
+- `process/USE-CASES.md`
+- `process/REQUEST.md`
 - 补充约束与参考资料（若存在）
 
 ## 知识来源
@@ -42,13 +42,13 @@ status: active
 1. 输出问题定义、目标、约束与非目标。
 2. 给出至少 2 个候选方案并完成显式比较。
 3. 明确推荐方案、关键架构图、模块职责、技术选型和风险。
-4. 生成 `.output/doc/HLD.md` 并停在人工确认前。
+4. 生成 `process/HLD.md` 并停在人工确认前。
 
 ## 输出文件 / 输出模板
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| HLD 文档 | `.output/doc/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
+| HLD 文档 | `process/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
 
 ## 约束
 

@@ -22,10 +22,10 @@
 
 ## 默认加载内容
 
-- `.output/doc/VALIDATION-ENV.yaml`（必须，且 approval.confirmed=true）
+- `process/VALIDATION-ENV.yaml`（必须，且 approval.confirmed=true）
 - 已批准 Story 卡片（当前批次）
 - 已完成实现的产物文件
-- `.output/doc/PLATFORM-INSTALL-SPEC.md`
+- `process/PLATFORM-INSTALL-SPEC.md`
 
 **不加载**：历史草稿、早期失败轮次的产物。
 
@@ -40,7 +40,7 @@ approval:
 ```
 
 如 `VALIDATION-ENV.yaml` 不存在或 `confirmed != true`：
-> 验证阶段已暂停。请提供 `.output/doc/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
+> 验证阶段已暂停。请提供 `process/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
 
 `VALIDATION-ENV.yaml` 至少包含以下字段：
 
@@ -247,9 +247,9 @@ supported_platforms:
   - codex
   - openclaw
 installers:
-  - .output/scripts/install.py
-  - .output/scripts/install.ps1
-  - .output/scripts/install.sh
+  - delivery/scripts/install.py
+  - delivery/scripts/install.ps1
+  - delivery/scripts/install.sh
 rules: []
 contents:
   agents: []

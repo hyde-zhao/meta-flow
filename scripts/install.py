@@ -327,7 +327,7 @@ def toml_string(value: str) -> str:
 
 
 def toml_multiline(value: str) -> str:
-    return value.replace('"""', '\\"""')
+    return value.replace("\\", "\\\\").replace('"""', '\\"""')
 
 
 def markdown_audit(commit: str, generated: str) -> str:

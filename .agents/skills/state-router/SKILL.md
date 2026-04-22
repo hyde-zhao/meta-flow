@@ -11,7 +11,7 @@ status: active
 
 ## 目标
 
-读取并更新 `.output/doc/STATE.md`，根据当前阶段的退出条件判断是否可推进、是否需要回退、下一步应唤醒哪个 Agent，并保持状态机与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致。
+读取并更新 `process/STATE.md`，根据当前阶段的退出条件判断是否可推进、是否需要回退、下一步应唤醒哪个 Agent，并保持状态机与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致。
 
 ## 适用场景
 
@@ -21,12 +21,12 @@ status: active
 
 ## 前置条件
 
-- [ ] `.output/doc/STATE.md` 已存在，或允许由 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化
+- [ ] `process/STATE.md` 已存在，或允许由 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化
 - [ ] 当前阶段相关产物的存在性和确认状态可被检查
 
 ## 必须读取的输入
 
-- `.output/doc/STATE.md`（若已存在）
+- `process/STATE.md`（若已存在）
 - `skills/state-router/templates/STATE-TEMPLATE.md`
 - 与当前阶段直接相关的上游文档：
   - `REQUEST.md`
@@ -39,7 +39,7 @@ status: active
   - `TEST-STRATEGY.md`
   - `README.md`
   - `USER-MANUAL.md`
-- Story 执行阶段需要读取 `.output/stories/STORY-*.md`
+- Story 执行阶段需要读取 `process/stories/STORY-*.md`
 
 ## 知识来源
 
@@ -51,7 +51,7 @@ status: active
 
 ### 1. 初始化或读取状态
 
-1. 若 `.output/doc/STATE.md` 不存在，则以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化。
+1. 若 `process/STATE.md` 不存在，则以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化。
 2. 读取 `current_phase`、`current_agent`、`blocked`、`checkpoints`、`history`。
 3. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 
@@ -83,7 +83,7 @@ status: active
 
 | 对象 | 路径 | 用途 |
 |---|---|---|
-| 运行时状态 | `.output/doc/STATE.md` | 当前状态机实例 |
+| 运行时状态 | `process/STATE.md` | 当前状态机实例 |
 | 状态模板 | `skills/state-router/templates/STATE-TEMPLATE.md` | 初始化与结构基线 |
 
 ## 约束
@@ -91,7 +91,7 @@ status: active
 - 只负责状态判断、推进决策与状态回写，不生成需求/设计/实现内容
 - 推进前必须验证当前阶段退出条件，不能用“默认通过”代替检查
 - 回退必须记录原因、发起方和目标阶段
-- 仅使用当前 `.output/doc/STATE.md` 与 `skills/state-router/templates/STATE-TEMPLATE.md` 契约
+- 仅使用当前 `process/STATE.md` 与 `skills/state-router/templates/STATE-TEMPLATE.md` 契约
 
 ## 验收标准
 

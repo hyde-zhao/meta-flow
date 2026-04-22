@@ -12,7 +12,7 @@ status: active
 
 ## 目标
 
-基于已确认需求与场景，先输出 `.meta-workflow/process/HLD.md`，再生成供人工确认的 `.meta-workflow/checkpoints/CHECKPOINT-HLD.md`。
+基于已确认需求与场景，先输出 `process/HLD.md`，再生成供人工确认的 `checkpoints/CHECKPOINT-HLD.md`。
 
 ## 适用场景
 
@@ -21,14 +21,14 @@ status: active
 
 ## 前置条件
 
-- [ ] `.meta-workflow/process/REQUIREMENTS.md` 已确认
-- [ ] `.meta-workflow/process/USE-CASES.md` 已确认
+- [ ] `process/REQUIREMENTS.md` 已确认
+- [ ] `process/USE-CASES.md` 已确认
 
 ## 必须读取的输入
 
-- `.meta-workflow/process/REQUIREMENTS.md`
-- `.meta-workflow/process/USE-CASES.md`
-- `.meta-workflow/process/REQUEST.md`
+- `process/REQUIREMENTS.md`
+- `process/USE-CASES.md`
+- `process/REQUEST.md`
 - 补充约束与参考资料（若存在）
 
 ## 知识来源
@@ -42,14 +42,14 @@ status: active
 1. 输出问题定义、目标、约束与非目标。
 2. 给出至少 2 个候选方案并完成显式比较。
 3. 明确推荐方案、关键架构图、模块职责、技术选型和风险。
-4. 生成 `.meta-workflow/process/HLD.md`，并同步整理 `.meta-workflow/checkpoints/CHECKPOINT-HLD.md` 供人工确认。
+4. 生成 `process/HLD.md`，并同步整理 `checkpoints/CHECKPOINT-HLD.md` 供人工确认。
 
 ## 输出文件 / 输出模板
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| HLD 过程稿 | `.meta-workflow/process/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
-| HLD 检查点稿 | `.meta-workflow/checkpoints/CHECKPOINT-HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
+| HLD 过程稿 | `process/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
+| HLD 检查点稿 | `checkpoints/CHECKPOINT-HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
 
 ## 约束
 

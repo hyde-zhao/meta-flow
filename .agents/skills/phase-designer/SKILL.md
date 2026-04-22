@@ -25,8 +25,8 @@ status: active
 
 ## 必须读取的输入
 
-- `.output/doc/REQUIREMENTS.md`
-- `.output/doc/SCENARIOS.yaml`
+- `process/REQUIREMENTS.md`
+- `process/SCENARIOS.yaml`
 - 相关约束或平台限制（若存在）
 
 ## 知识来源
@@ -42,7 +42,7 @@ status: active
 
 ## 输出文件 / 输出模板
 
-输出为 `.output/doc/DEVELOPMENT-PLAN.yaml` 中的阶段结构；不直接依赖模板文件。
+输出为 `process/DEVELOPMENT-PLAN.yaml` 中的阶段结构；不直接依赖模板文件。
 
 ## 约束
 

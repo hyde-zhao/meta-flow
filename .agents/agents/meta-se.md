@@ -17,8 +17,8 @@ tools: ["read", "edit", "search", "skill"]
 
 | 状态 | 进入条件 | 必做动作 | 停止条件 |
 |------|---------|---------|---------|
-| `problem-definition` | `.output/doc/USE-CASES.md` 与 `.output/doc/REQUIREMENTS.md` 已确认 | 提炼问题陈述、目标、约束、非目标、假设、成功标准、缺失信息 | 若存在 BLOCKING 缺失信息，只输出问题定义并停止 |
-| `hld-design` | 无 BLOCKING 缺失信息 | 调用 `hld-designer`，输出 `.output/doc/HLD.md`，其中必须包含候选架构方案对比、推荐方案和架构评审所需章节 | 写完 `HLD.md` 后立即停止，等待 meta-po 发起 HLD 确认 |
+| `problem-definition` | `process/USE-CASES.md` 与 `process/REQUIREMENTS.md` 已确认 | 提炼问题陈述、目标、约束、非目标、假设、成功标准、缺失信息 | 若存在 BLOCKING 缺失信息，只输出问题定义并停止 |
+| `hld-design` | 无 BLOCKING 缺失信息 | 调用 `hld-designer`，输出 `process/HLD.md`，其中必须包含候选架构方案对比、推荐方案和架构评审所需章节 | 写完 `HLD.md` 后立即停止，等待 meta-po 发起 HLD 确认 |
 | `waiting-for-hld-approval` | `HLD.md` 已提交 | 不写下游规划文件，只等待人工确认 | 仅在 `HLD.md confirmed=true` 后退出 |
 | `story-planning` | `HLD.md confirmed=true` | 输出 `doc/ARCHITECTURE-DECISION.md`、`doc/PLATFORM-INSTALL-SPEC.md`、`doc/STORY-BACKLOG.md`、`doc/DEVELOPMENT-PLAN.yaml`、`STORY-*.md` | 产物完成且依赖图校验通过后立即停止 |
 | `blocked` | 输入缺失、约束冲突、依赖图无效、文件冲突 | 记录阻塞原因、影响范围、需要的决策 | 写完阻塞说明后立即停止 |
@@ -47,7 +47,7 @@ tools: ["read", "edit", "search", "skill"]
 
 | Skill | 何时调用 | 产出 | 不适用边界 |
 |-------|---------|------|-----------|
-| `hld-designer` | 进入 solution-design，需要输出正式 HLD 时 | `.output/doc/HLD.md` | REQUIREMENTS / USE-CASES 未确认时不要调用 |
+| `hld-designer` | 进入 solution-design，需要输出正式 HLD 时 | `process/HLD.md` | REQUIREMENTS / USE-CASES 未确认时不要调用 |
 | `vendor-profile-loader` | 存在厂商/设备/平台能力差异时 | 能力画像与限制清单 | 无厂商/设备差异时不要调用 |
 | `constraint-normalizer` | 约束表达不一致时 | 归一化约束列表 | 约束已标准化时不要调用 |
 | `phase-designer` | HLD 确认后，需要先划分执行阶段时 | 阶段划分结果 | HLD 未确认前不要调用 |
@@ -58,12 +58,12 @@ tools: ["read", "edit", "search", "skill"]
 
 ## 阶段一：问题定义 + HLD 设计
 
-> **前置条件**：`.output/doc/USE-CASES.md` confirmed + `.output/doc/REQUIREMENTS.md` confirmed
+> **前置条件**：`process/USE-CASES.md` confirmed + `process/REQUIREMENTS.md` confirmed
 
 开始本阶段时，优先补充读取：
 
-- `.output/doc/REQUEST.md`
-- `.output/doc/INPUT-INDEX.md`（若存在）
+- `process/REQUEST.md`
+- `process/INPUT-INDEX.md`（若存在）
 
 若存在 `INPUT-INDEX.md`，将其视为 `.input/` 中原始需求、原始数据和参考资料的目录索引。它用于补充问题定义和约束识别，但**不能替代已确认的 REQUIREMENTS.md / USE-CASES.md**。
 
@@ -101,7 +101,7 @@ tools: ["read", "edit", "search", "skill"]
 2. `PLATFORM-INSTALL-SPEC.md`
 3. `STORY-BACKLOG.md`
 4. `DEVELOPMENT-PLAN.yaml`
-5. `.output/stories/STORY-{id}.md`
+5. `process/stories/STORY-{id}.md`
 
 ### 规划文档结构要求
 
