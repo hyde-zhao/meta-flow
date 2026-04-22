@@ -560,6 +560,8 @@ def counterpart_paths(platform: str, workspace_root: Path) -> dict[str, Path]:
 def scan_name_conflicts(platform: str, scope: str, workspace_root: Path, agent_names: list[str], skill_names: list[str]) -> list[dict[str, str]]:
     conflicts: list[dict[str, str]] = []
     paths = counterpart_paths(platform, workspace_root)
+    if not paths:
+        return conflicts
     current_scope = "user" if scope == "user" else "project"
     other_scope = "project" if current_scope == "user" else "user"
 
