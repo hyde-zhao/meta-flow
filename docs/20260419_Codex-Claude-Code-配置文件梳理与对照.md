@@ -104,7 +104,7 @@ Claude Code 配置优先级从高到低为：
 | 层级 | 文件 / 路径 | 作用 | 说明 |
 |---|---|---|---|
 | 用户级 | `~/.codex/rules/default.rules` | 用户命令执行规则 | TUI 中添加 allow list 规则时会写入这里 |
-| Team Config 层 | `rules/*.rules` | 团队或组织规则 | 启动时扫描 team config 中的 `rules/` 目录 |
+| Team Config 层 | `rules/*.rules` | 团队或组织规则 | 启动时扫描 team config 中的 `delivery/rules/` 目录 |
 | 管理级 | `requirements.toml` 中的 `rules` | 强制限制规则 | 只能是 `prompt` / `forbidden` 等更保守约束 |
 
 **注意：**
@@ -133,7 +133,7 @@ Claude Code 配置优先级从高到低为：
 | skill command | Skills 位于 `.agents/skills/**/SKILL.md`，显式调用偏 `$skill-name` |
 | AGENTS.md | `~/.codex/AGENTS.md`、`AGENTS.override.md`、项目路径上的 `AGENTS.md` / `AGENTS.override.md` |
 | agents | `config.toml` 的 `[agents]`、`agents.<name>.*` |
-| rules | `~/.codex/rules/*.rules`、team config `rules/`、`requirements.toml` 中的 `rules` |
+| rules | `~/.codex/rules/*.rules`、team config `delivery/rules/`、`requirements.toml` 中的 `rules` |
 | hooks | `~/.codex/hooks.json`、`<repo>/.codex/hooks.json` |
 | MCP | `config.toml` 的 `[mcp_servers.<id>]` |
 

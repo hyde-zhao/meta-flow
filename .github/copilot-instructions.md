@@ -51,7 +51,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 - **运行时状态**：`process/STATE.md`
 - **高层设计**：`process/HLD.md`
-- **Skill 私有模板**：`skills/<skill-name>/templates/`
+- **Skill 私有模板**：`delivery/skills/<skill-name>/templates/`
 - **人工确认稿**：`checkpoints/`
 - **Story 卡片**：`process/stories/STORY-*.md`
 - **Story 级 LLD**：`process/stories/STORY-*-LLD.md`

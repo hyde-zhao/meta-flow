@@ -2,7 +2,7 @@
 
 > ⚠️ 历史文档：本文件记录早期实施计划和旧版 `.workflow-meta` / `packages/` 设计，不作为当前使用说明。
 > 当前对外使用文档请以 `docs/USER_GUIDE.md`、`docs/AGENT-SKILL-REFERENCE.md`、`README.md` 和 `AGENTS.md` 为准。
-> 当前交付源目录为根目录 `agents/`、`skills/`、`rules/`，`packages/` 已移除。
+> 当前交付源目录为根目录 `delivery/agents/`、`delivery/skills/`、`delivery/rules/`，`packages/` 已移除。
 
 > 文档状态：🔄 执行中
 > 最后更新：2026-04-04
@@ -187,11 +187,11 @@ init
 
 ## Phase 6：平台安装脚本交付 ✅
 
-**目标**：`scripts/install.py` 可覆盖 4 个平台的项目级与用户级安装。
+**目标**：`delivery/scripts/install.py` 可覆盖 4 个平台的项目级与用户级安装。
 
 ### 任务清单
 
-- [x] **T6.1** 创建 `scripts/install.py`（含 DryRun 模式）
+- [x] **T6.1** 创建 `delivery/scripts/install.py`（含 DryRun 模式）
 - [x] **T6.2** 实现 GitHub Copilot 安装目标（`.github/` 或 `~/.copilot/`）
 - [x] **T6.3** 实现 Claude Code 安装目标（`.claude/` 或 `~/.claude/`）
 - [x] **T6.4** 实现 Codex 安装目标（`.codex/` 或 `~/.codex/`，YAML 格式自动转换）

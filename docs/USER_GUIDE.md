@@ -69,7 +69,7 @@
 3. 运行仓库脚本时使用 `uv run --python 3.11 python <script>`
 4. 一次性工具优先使用 `uvx`；带临时依赖的命令优先使用 `uv run --with <package>`
 
-`scripts/install.py` 本身无需额外安装 `PyYAML`。
+`delivery/scripts/install.py` 本身无需额外安装 `PyYAML`。
 
 ---
 
@@ -77,7 +77,7 @@
 
 ### 3.1 使用安装脚本
 
-当前仓库通过 `scripts/install.py`、`scripts/install.ps1`、`scripts/install.sh` 直接安装产物，不再先生成平台包。安装脚本默认从根目录的 `agents/`、`skills/`、`rules/` 读取交付件。
+当前仓库通过 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh` 直接安装产物，不再先生成平台包。安装脚本默认从根目录的 `delivery/agents/`、`delivery/skills/`、`delivery/rules/` 读取交付件。
 
 #### 安装当前仓库内置元工作流
 
@@ -121,9 +121,9 @@ bash scripts/install.sh --platform copilot --scope user --content skills --skill
 
 | 源目录 | 内容 | 规则 |
 |--------|------|------|
-| `agents/` | Canonical Agent 文件 | 源文件统一为 `<name>.md` |
-| `skills/` | Canonical Skill 目录 | 结构固定为 `skills/<name>/SKILL.md` |
-| `rules/` | 规则文件 | 如 `AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md` |
+| `delivery/agents/` | Canonical Agent 文件 | 源文件统一为 `<name>.md` |
+| `delivery/skills/` | Canonical Skill 目录 | 结构固定为 `skills/<name>/SKILL.md` |
+| `delivery/rules/` | 规则文件 | 如 `AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md` |
 
 安装时的命名规则：
 

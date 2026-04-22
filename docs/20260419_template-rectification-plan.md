@@ -8,7 +8,7 @@
 2. **meta-agent 不直接引用模板路径**；
 3. 模板只归属于**拥有该正式工件结构的 Skill**；
 4. 多 Skill 共享同一正式工件时，以**单一 Skill 持有模板**、其他 Skill 依赖内容契约为原则；
-5. Agent 与 Skill 的应用关系统一记录到 `skills/README.md`，不再通过共享模板目录承载 Agent ↔ Skill 关系。
+5. Agent 与 Skill 的应用关系统一记录到 `delivery/skills/README.md`，不再通过共享模板目录承载 Agent ↔ Skill 关系。
 
 > 本方案是对第一轮“目录搬迁整改”的**第二轮收缩**：不是回退治理，而是进一步消除“根共享模板目录 + Agent 直接引用模板”的设计冗余。
 >
@@ -90,7 +90,7 @@ Agent 不应：
 
 | 判定条件 | 目标位置 |
 |---|---|
-| 某正式工件由单一 Skill 初始化或渲染 | `skills/<skill-name>/templates/` |
+| 某正式工件由单一 Skill 初始化或渲染 | `delivery/skills/<skill-name>/templates/` |
 | 其他 Skill 仅消费该工件内容 | 不引用模板路径，只依赖输出对象契约 |
 | 没有 Skill 拥有、仅 Agent 需要结构约束（≤30 行） | 内联到 Agent 提示词，不保留独立模板文件 |
 | 没有 Skill 拥有、仅 Agent 需要结构约束（>30 行） | 保留为 Agent 提示词内的精简结构描述（关键章节 + 字段清单），不完整内联 |
@@ -99,7 +99,7 @@ Agent 不应：
 
 1. Agent 只声明**输出对象**，不声明模板路径。
 2. Agent 只声明“调用哪个 Skill”，不声明“该 Skill 用哪个模板文件”。
-3. Agent 与 Skill 的应用关系记录在 `skills/README.md`，不再通过模板登记表维护。
+3. Agent 与 Skill 的应用关系记录在 `delivery/skills/README.md`，不再通过模板登记表维护。
 
 ### 3.3 文档契约原则
 
@@ -189,7 +189,7 @@ skills/
 
 | 当前文件 | 新目标 | 所有权归属 | 行数 | 处理结论 |
 |---|---|---|---|---|
-| `templates/README.md` | 治理关系迁入 `skills/README.md` 新增章节 | 无（删除） | 34 | 交叉引用信息迁入 `skills/README.md`，原文件删除 |
+| `templates/README.md` | 治理关系迁入 `delivery/skills/README.md` 新增章节 | 无（删除） | 34 | 交叉引用信息迁入 `delivery/skills/README.md`，原文件删除 |
 | `templates/ARCHITECTURE-DECISION-TEMPLATE.md` | 删除独立模板，结构内联到 `meta-se` | Agent 内联 | 32 | `ARCHITECTURE-DECISION.md` 当前由 `meta-se` 直接产出，不交由 Skill 持有模板 |
 | `templates/CLARIFICATION-LOG-TEMPLATE.md` | `skills/requirement-clarifier/templates/CLARIFICATION-LOG-TEMPLATE.md` | `requirement-clarifier` | 29 | 下沉为 Skill 私有模板 |
 | `templates/CR-TEMPLATE.md` | `skills/change-impact-analysis/templates/CR-TEMPLATE.md` | `change-impact-analysis` | 48 | 下沉为 Skill 私有模板 |
@@ -263,12 +263,12 @@ skills/
 
 1. `solution-designer` 的触发词（方案设计、架构设计、复杂度判定、设计方案、simple/standard/complex 判断）合入 `hld-designer` 的 `description` 字段；
 2. `solution-designer/SKILL.md` 的 `status` 改为 `deprecated`，正文替换为重定向说明；
-3. `skills/README.md`：
+3. `delivery/skills/README.md`：
    - line 18：从 `meta-se` 的 Skill 列表中移除 `solution-designer`；
    - line 37：标注为"已废弃，重定向到 hld-designer"；
-4. `rules/copilot-instructions.md` line 26 和 `rules/CLAUDE.md` line 26：删除 `solution-designer` 行，触发词合入 `hld-designer` 行；
+4. `delivery/rules/copilot-instructions.md` line 26 和 `delivery/rules/CLAUDE.md` line 26：删除 `solution-designer` 行，触发词合入 `hld-designer` 行；
 5. `docs/AGENT-SKILL-REFERENCE.md` line 100：标注 `deprecated`，说明已合入 `hld-designer`；
-6. 确认 `agents/meta-se.md` Skill 编排合约中无 `solution-designer` 引用（当前已不含，无需修改）。
+6. 确认 `delivery/agents/meta-se.md` Skill 编排合约中无 `solution-designer` 引用（当前已不含，无需修改）。
 
 ---
 
@@ -282,7 +282,7 @@ skills/
    - ≤30 行的模板（`REQUEST-TEMPLATE`、`VALIDATION-ENV-TEMPLATE`、`VERIFICATION-REPORT-TEMPLATE`）：可完整内联为结构描述；
    - >30 行的模板（`FINAL-REVIEW-CHECKLIST` 140 行、`TEST-STRATEGY-TEMPLATE` 62 行、`USE-CASES-TEMPLATE` 54 行、`INPUT-INDEX-TEMPLATE` 38 行）：只内联关键章节清单与必填字段说明，不完整嵌入模板全文；
 4. 确认 `meta-se` Skill 编排合约中无 `solution-designer` 引用（当前已不含，无需修改）；
-5. Agent 与 Skill 的应用关系统一登记在 `skills/README.md`；
+5. Agent 与 Skill 的应用关系统一登记在 `delivery/skills/README.md`；
 6. `docs/AGENT-SKILL-REFERENCE.md` 只描述当前正式交付的 Skill，不为历史占位 Skill 背书。
 
 ---
@@ -291,33 +291,33 @@ skills/
 
 ### 8.1 安装脚本
 
-1. `scripts/install.py` 已移除共享模板安装逻辑，当前只复制 `skills/<skill-name>/templates/`。
+1. `delivery/scripts/install.py` 已移除共享模板安装逻辑，当前只复制 `delivery/skills/<skill-name>/templates/`。
 2. 不再维护任何共享模板安装目标；该类目录不属于当前项目结构。
 3. 安装器当前保留的模板安装入口为 `install_skill_private_templates()`。
 
-### 8.2 规则文件（`rules/` 目录）
+### 8.2 规则文件（`delivery/rules/` 目录）
 
 以下文件已同步完成修改：
 
 | 文件 | 修改内容 |
 |---|---|
-| `rules/AGENTS.md` | 已删除 `templates/` 共享模板目录行，并将旧的 `templates/README.md` 维护规则改为同步更新 `skills/README.md` |
-| `rules/copilot-instructions.md` | 已删除"共享模板：`templates/`"相关表述 |
-| `rules/CLAUDE.md` | 已删除"共享模板：`templates/`"相关表述 |
+| `delivery/rules/AGENTS.md` | 已删除 `templates/` 共享模板目录行，并将旧的 `templates/README.md` 维护规则改为同步更新 `delivery/skills/README.md` |
+| `delivery/rules/copilot-instructions.md` | 已删除"共享模板：`templates/`"相关表述 |
+| `delivery/rules/CLAUDE.md` | 已删除"共享模板：`templates/`"相关表述 |
 
 ### 8.3 根目录文档
 
 | 文件 | 修改内容 |
 |---|---|
 | `README.md` | 已删除 `templates/` 共享模板目录行及共享模板安装说明 |
-| `AGENTS.md` | 已删除 `templates/` 共享模板目录行，并将旧的 `templates/README.md` 维护规则改为同步更新 `skills/README.md` |
+| `AGENTS.md` | 已删除 `templates/` 共享模板目录行，并将旧的 `templates/README.md` 维护规则改为同步更新 `delivery/skills/README.md` |
 
 ### 8.4 关系登记表
 
-- 与模板关系相关的文档，以 `skills/README.md` 为正式关系表；
-- 若后续需要记录模板 owner / consumer 关系，可在 `skills/README.md` 增加对应章节；该章节不是本次整改的唯一完成条件。
+- 与模板关系相关的文档，以 `delivery/skills/README.md` 为正式关系表；
+- 若后续需要记录模板 owner / consumer 关系，可在 `delivery/skills/README.md` 增加对应章节；该章节不是本次整改的唯一完成条件。
 
-### 8.5 `skills/README.md` 新增章节
+### 8.5 `delivery/skills/README.md` 新增章节
 
 若后续需要记录模板 owner / consumer 关系，可在现有"Skill → Canonical Agent 关系"表之后追加以下章节：
 
@@ -346,7 +346,7 @@ skills/
 2. 已将 `solution-designer` 收敛为 `deprecated` 的兼容入口，正式能力统一并入 `hld-designer`。
 3. 已完成 Skill 私有模板下沉、模板路径修正，以及 consumer Skill 的模板解耦。
 4. 已删除根 `templates/` 目录，并将无 owner 的模板结构内联到相应 Agent 提示词。
-5. 已同步更新 `skills/README.md`、规则文件、根目录文档与安装脚本，并完成回归验证。
+5. 已同步更新 `delivery/skills/README.md`、规则文件、根目录文档与安装脚本，并完成回归验证。
 
 ---
 
@@ -356,18 +356,18 @@ skills/
 
 1. 仓库根**不存在** `templates/` 目录（含 `templates/README.md`）。
 2. 不存在 Agent 直接引用模板路径的情况。
-3. 所有保留的模板都位于 `skills/<skill-name>/templates/`。
+3. 所有保留的模板都位于 `delivery/skills/<skill-name>/templates/`。
 4. 所有消费者 Skill 只依赖正式工件内容，不依赖模板路径。
-5. `skills/README.md` 已包含"模板交叉引用"章节，且与当前 Skill 关系一致。
+5. `delivery/skills/README.md` 已包含"模板交叉引用"章节，且与当前 Skill 关系一致。
 6. `docs/AGENT-SKILL-REFERENCE.md` 与当前交付 Agent / Skill 清单一致。
 7. `solution-designer` 已标记为 `deprecated`，触发词已合入 `hld-designer`。
 8. 以下文件已完成更新：
-   - `scripts/install.py`：仅保留 Skill 私有模板安装逻辑，不再处理共享模板目录
+   - `delivery/scripts/install.py`：仅保留 Skill 私有模板安装逻辑，不再处理共享模板目录
    - `README.md`：已删除共享模板目录与共享模板安装说明
    - `AGENTS.md`：已删除 `templates/` 目录行并替换"模板映射维护"协议规则
-   - `rules/AGENTS.md`：已删除 `templates/` 目录行并替换协议规则
-   - `rules/copilot-instructions.md`：已删除"共享模板"行，并移除 `solution-designer` 独立触发词行
-   - `rules/CLAUDE.md`：已删除"共享模板"行，并移除 `solution-designer` 独立触发词行
+   - `delivery/rules/AGENTS.md`：已删除 `templates/` 目录行并替换协议规则
+   - `delivery/rules/copilot-instructions.md`：已删除"共享模板"行，并移除 `solution-designer` 独立触发词行
+   - `delivery/rules/CLAUDE.md`：已删除"共享模板"行，并移除 `solution-designer` 独立触发词行
    - `docs/AGENT-SKILL-REFERENCE.md`：已将 `solution-designer` 标注为 deprecated
    - `issue-routing/SKILL.md`：已删除 `templates/CR-TEMPLATE.md` 路径引用
 
@@ -409,11 +409,11 @@ grep -q "install_skill_private_templates" scripts/install.py \
 ## 11. 迁移后约束
 
 1. **不得重建根 `templates/` 目录**——如需新增模板，必须选定 owner Skill 并放入其 `templates/` 子目录。
-2. **协议规则已变更**——从"必须同步更新 `templates/README.md`"变更为"必须同步更新 `skills/README.md` 的模板交叉引用章节"。
+2. **协议规则已变更**——从"必须同步更新 `templates/README.md`"变更为"必须同步更新 `delivery/skills/README.md` 的模板交叉引用章节"。
 3. **Agent 不得直接引用模板路径**——Agent 如需文档结构要求，需通过 Skill 调用获取或内联结构描述。
 4. **`solution-designer` 不得重新激活**——如发现新的差异化需求，应在 `hld-designer` 上新增能力而非恢复 `solution-designer`。
 5. **交叉引用限制**——消费者 Skill 只依赖 `process/`、`delivery/` 正式工件的内容契约，不通过路径交叉引用其他 Skill 的模板文件。
-6. **新增 Skill 的模板要求**——新建 Skill 若携带模板，须在 `SKILL.md` 声明模板路径，并在 `skills/README.md` 的模板交叉引用章节登记关系。
+6. **新增 Skill 的模板要求**——新建 Skill 若携带模板，须在 `SKILL.md` 声明模板路径，并在 `delivery/skills/README.md` 的模板交叉引用章节登记关系。
 7. **`docs/AGENT-SKILL-REFERENCE.md` 只记录已交付 Skill**，不记录历史占位 Skill。
 
 ---
@@ -441,15 +441,15 @@ grep -q "install_skill_private_templates" scripts/install.py \
    - producer Skill 改为引用 `skills/<skill>/templates/...`
    - consumer Skill（如 `issue-routing`）改为只依赖 `process/`、`delivery/` 正式工件内容契约
 4. 将 `solution-designer` 收敛为 `status: deprecated` 的兼容入口，并把历史触发词合并到 `hld-designer`
-5. 更新 `scripts/install.py`，删除共享模板安装逻辑，仅安装 Skill 私有模板
+5. 更新 `delivery/scripts/install.py`，删除共享模板安装逻辑，仅安装 Skill 私有模板
 6. 更新治理与说明文件：
    - `README.md`
    - `AGENTS.md`
-   - `rules/AGENTS.md`
-   - `rules/CLAUDE.md`
-   - `rules/copilot-instructions.md`
+   - `delivery/rules/AGENTS.md`
+   - `delivery/rules/CLAUDE.md`
+   - `delivery/rules/copilot-instructions.md`
    - `.github/copilot-instructions.md`
-   - `skills/README.md`
+   - `delivery/skills/README.md`
    - `docs/AGENT-SKILL-REFERENCE.md`
 
 ### 12.2 验证结果
@@ -461,9 +461,9 @@ grep -q "install_skill_private_templates" scripts/install.py \
    - `process/templates/` 约定未受影响
 2. **引用验证**
    - 活跃文件中已无残留的根模板路径引用
-   - 所有保留模板均位于 `skills/<skill-name>/templates/`
+   - 所有保留模板均位于 `delivery/skills/<skill-name>/templates/`
 3. **安装验证**
-   - `scripts/install.py` 已通过 `py_compile`
+   - `delivery/scripts/install.py` 已通过 `py_compile`
    - DryRun 与实际安装均已验证
    - 实际安装结果只包含 Skill 私有模板，不再生成根模板目录
 4. **代表性运行态验证**
@@ -479,8 +479,8 @@ grep -q "install_skill_private_templates" scripts/install.py \
 
 | 编号 | 阻塞问题 | 当前状态 | 复核结论 |
 |---|---|---|---|
-| B-01 | 根共享模板目录与模板 owner 边界不清 | 已解除 | 仓库根 `templates/` 已删除，保留模板均收敛到 `skills/<skill-name>/templates/` |
-| B-02 | 安装流程仍可能复制共享模板目录 / 规划中仍保留共享模板安装步骤 | 已解除 | `scripts/install.py` 现只安装 Skill 私有模板；本文已移除共享模板安装相关待执行计划 |
+| B-01 | 根共享模板目录与模板 owner 边界不清 | 已解除 | 仓库根 `templates/` 已删除，保留模板均收敛到 `delivery/skills/<skill-name>/templates/` |
+| B-02 | 安装流程仍可能复制共享模板目录 / 规划中仍保留共享模板安装步骤 | 已解除 | `delivery/scripts/install.py` 现只安装 Skill 私有模板；本文已移除共享模板安装相关待执行计划 |
 | B-03 | consumer Skill 仍直接引用模板路径 | 已解除 | 代表性消费者如 `issue-routing` 已改为只依赖正式工件内容契约 |
 | B-04 | `solution-designer` 与 `hld-designer` 双轨维护 | 已解除 | `solution-designer` 已标记为 `deprecated`，正式能力已并入 `hld-designer` |
 

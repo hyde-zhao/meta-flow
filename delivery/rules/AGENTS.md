@@ -66,15 +66,11 @@ init（meta-po）
 | `checkpoints/` | 人工确认稿（REQUIREMENTS/HLD/STORY-PLAN/STORY-LLD） |
 | `process/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
 | `process/changes/` | 变更单（CR-*.md） |
-| `delivery/scripts/install.*` | 各平台安装脚本输出 |
-| `delivery/rules/` | 各平台规则文件输出 |
-| `delivery/agents/` | **产物 Agent 提示词文件**（meta-dev 产出） |
-| `delivery/skills/` | **产物 Skill 定义文件**（meta-dev 产出） |
-| `agents/` | 根目录交付 Agent 源目录 |
-| `skills/` | 根目录交付 Skill 源目录 |
-| `rules/` | 根目录交付规则源目录 |
-| `delivery/scripts/*.py` | **产物工具脚本**（meta-dev 产出） |
-| `delivery/.github/agents/` | **产物 Copilot CLI 入口**（meta-dev 产出） |
+| `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
+| `delivery/skills/` | 交付 Skill 定义文件（canonical 源，同时是 meta-dev 产出目录） |
+| `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md / copilot-instructions.md） |
+| `delivery/scripts/` | 安装脚本（install.py / install.sh / install.ps1） |
+| `delivery/.github/agents/` | Copilot CLI Agent 入口文件 |
 | `delivery/README.md` | 产物 README（meta-doc 产出） |
 | `delivery/doc/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
 | `.agents/agents/` | 元工作流 Agent 提示词文件（meta-po/pm/se/dev/qa/doc） |
@@ -83,8 +79,8 @@ init（meta-po）
 ### 输出隔离原则
 
 > **所有由元工作流产生的文件必须按层输出到 `process/`（运行态）、`checkpoints/`（确认态）、`delivery/`（交付态）。**
-> 根目录 `agents/`、`skills/`、`rules/` 为交付源目录；`.agents/` 和 `.github/` 仍保留元工作流自身定义。
-> 测试时可在 `delivery/` 目录中独立启动 Agent 加载产物文件验证。
+> `delivery/` 是可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`、`.github/agents/`。
+> `.agents/` 保留元工作流引擎自身定义，不参与安装。
 
 ## Python 环境与依赖管理（uv）
 

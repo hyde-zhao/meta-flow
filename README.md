@@ -6,16 +6,19 @@
 
 | 目录 | 用途 |
 |------|------|
-| `agents/` | **交付 Agent 源目录**（安装脚本默认从此读取，文件名为 `<name>.md`） |
-| `skills/` | **交付 Skill 源目录**（安装脚本默认从此读取，结构为 `skills/<name>/SKILL.md`；如有模板，位于 `skills/<name>/templates/`） |
-| `rules/` | **交付规则源目录**（如 `AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md`） |
-| `.agents/agents/` | 元工作流内部 Agent 定义（保留） |
-| `.agents/skills/` | 元工作流内部 Skill 定义（保留） |
-| `.github/agents/` | Copilot CLI 入口（元工作流 Agent） |
+| `delivery/` | **可独立交付的包**（可推送为独立 Git 仓库） |
+| `delivery/agents/` | 交付 Agent 定义（安装脚本从此读取，`<name>.md`） |
+| `delivery/skills/` | 交付 Skill 定义（结构为 `<name>/SKILL.md`；模板位于 `<name>/templates/`） |
+| `delivery/rules/` | 平台规则文件（`AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md`） |
+| `delivery/scripts/` | 安装脚本（`install.py` / `install.sh` / `install.ps1`） |
+| `delivery/.github/agents/` | Copilot CLI Agent 入口文件 |
+| `.agents/agents/` | 元工作流引擎 Agent 定义（不参与安装） |
+| `.agents/skills/` | 元工作流引擎 Skill 定义（不参与安装） |
+| `.github/` | 本仓库的 Copilot 平台配置 |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
-| `process/` · `checkpoints/` · `delivery/` | **工作流三层输出目录** — 运行态 / 确认态 / 交付态 |
-| `docs/` | 参考文档和源材料 |
-| `scripts/` | 元工作流工具脚本与安装脚本 |
+| `process/` | 运行时文档（gitignored，STATE.md / HLD.md / stories 等） |
+| `checkpoints/` | 人工确认稿（gitignored） |
+| `docs/` | 参考文档和设计历史 |
 
 ## 输出隔离原则
 
@@ -63,13 +66,16 @@ cd delivery && copilot @ptm-tde
 1. 使用 `uv` 安装和选择 Python 解释器，不以系统 Python 作为默认入口。
 2. 运行仓库内 Python 脚本时，优先使用 `uv run --python <version> python <script>`。
 3. 一次性工具与临时依赖优先使用 `uvx` 或 `uv run --with <package>`，不把裸 `pip install` 作为日常流程。
-4. 安装到目标项目的 uv 规范统一通过 `rules/AGENTS.md`、`rules/CLAUDE.md`、`rules/copilot-instructions.md` 传播。
+4. 安装到目标项目的 uv 规范统一通过 `delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md`、`delivery/rules/copilot-instructions.md` 传播。
 
 示例：
 
 ```bash
 uv python install 3.11
-uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
+# 从项目根运行
+uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
+# 或从 delivery/ 目录运行（delivery 作为独立仓库时）
+cd delivery && python scripts/install.py --platform claude-code --dry-run
 ```
 
 ## 开发节奏
@@ -82,15 +88,21 @@ uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
 
 ## 交付目录约定
 
-安装脚本默认从仓库根目录的以下目录读取交付件：
+安装脚本从 `delivery/` 内读取交付件，支持两种运行方式：
 
-- `agents/`
-- `skills/`
-- `rules/`
+```bash
+# 方式一：从项目根目录运行
+python delivery/scripts/install.py --platform claude-code
 
-其中：
+# 方式二：以 delivery/ 为根（独立 Git 仓库）运行
+cd delivery
+python scripts/install.py --platform claude-code
+```
 
-- Skill 私有模板随 `skills/<skill-name>/templates/` 一并安装
+交付目录结构：
+- `delivery/agents/` — canonical Agent 定义
+- `delivery/skills/` — canonical Skill 定义（含 `<skill>/templates/`）
+- `delivery/rules/` — 平台规则文件
 
 命名规则：
 

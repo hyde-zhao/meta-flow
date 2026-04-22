@@ -210,7 +210,7 @@ awesome_copilot_analysis: ".meta-workflow/AWESOME-COPILOT-ANALYSIS.md"
 - 私有参考文档：1（`references/8-dimensions-framework.md`，按需加载）
 - 私有模板：1（`templates/USE-CASES-TEMPLATE.md`）
 - 工具脚本：0
-- 配套集成改动：2（`agents/meta-pm.md`、`skills/requirement-extraction/SKILL.md`）
+- 配套集成改动：2（`delivery/agents/meta-pm.md`、`skills/requirement-extraction/SKILL.md`）
 - 目标平台：Copilot CLI / Claude Code / Codex（纯文本对话，无平台差异）
 
 ---
@@ -483,7 +483,7 @@ sequenceDiagram
 | 阶段 3 | **meta-pm.md 集成改造**：完全替换场景发现子流程为"先输出 3–5 行引导文本 + 触发 use-case-discovery Skill"（激活失败时终止并报错，Q4/C 已决）；**同步更新 meta-pm.md 的 USE-CASES.md 结构规范，纳入覆盖自检表附录的正式定义**（Q5 已决）| meta-pm 通过触发词自动激活本 Skill 且用户可见引导文本；下游 requirement-extraction 能识别附录章节 | 阶段 2 完成 |
 | 阶段 4 | **`skills/requirement-extraction/SKILL.md` 契约改造**：将 `process/USE-CASES.md` 纳入兼容输入与来源映射说明，确保 requirement-extraction 直接消费正式工件而非依赖 meta-pm 转述 | requirement-extraction 可直接以 USE-CASES.md 为输入生成 REQUIREMENTS.md，并保持来源可追溯 | 阶段 3 完成 |
 | 阶段 5 | **`CLARIFICATION-LOG.md` 日志契约同步**：在相关模板 / 说明中补充“场景发现摘要”追加节格式，确保场景发现日志与需求歧义日志共存但可区分 | 日志追加格式稳定，且场景摘要与需求澄清记录可被人工快速区分 | 阶段 4 完成 |
-| 阶段 6 | `skills/README.md` 更新（新增 `use-case-discovery → meta-pm` 映射关系，以及与 `requirement-extraction` / `requirement-clarifier` / `scenario-expansion` 的边界说明）| skills/README.md 维护规则全部满足 | 阶段 5 完成 |
+| 阶段 6 | `delivery/skills/README.md` 更新（新增 `use-case-discovery → meta-pm` 映射关系，以及与 `requirement-extraction` / `requirement-clarifier` / `scenario-expansion` 的边界说明）| skills/README.md 维护规则全部满足 | 阶段 5 完成 |
 
 ---
 

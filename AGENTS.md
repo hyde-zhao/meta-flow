@@ -10,7 +10,7 @@
 | 字段 | 值 |
 |------|----|
 | 角色名称 | meta-po（元工作流产品负责人） |
-| 提示词文件 | `agents/meta-po.md` |
+| 提示词文件 | `delivery/agents/meta-po.md` |
 | 触发词 | 开始、新建工作流、需求变更、推进、当前状态、继续、回退 |
 | 始终激活 | 是 |
 
@@ -28,12 +28,12 @@ meta-po 的职责：
 
 | Agent | 提示词文件 | 职责 | 唤醒条件 |
 |-------|-----------|------|---------|
-| **meta-pm** | `agents/meta-pm.md` | 快速调研（阶段零）+ 场景发现（USE-CASES.md，含画像/指标）+ 需求结构化（REQUIREMENTS.md，含风险/里程碑）+ 完整性自检 | 新请求进入、需求模糊、需求变更后重整 |
-| **meta-se** | `agents/meta-se.md` | HLD 设计（含候选方案对比 + 5 层架构图 + 技术选型理由）+ Story 拆解（含文件布局 + TASK-ID 任务清单）+ 开发计划（含完成准则） | REQUIREMENTS.md 已确认（solution-design 和 story-planning 两阶段均由 meta-se 执行） |
-| ~~**meta-dm**~~ | ~~`agents/meta-dm.md`~~ | ~~Story 拆解与并行计划~~ | ⚠️ **已废弃**，职责合并至 meta-se |
-| **meta-dev** | `agents/meta-dev.md` | Story LLD 输出与人工确认闭环 + Agent/Skill 文件实现 + TASK-ID 增量追踪 + 偏差记录 | 存在已批准且可执行的 Story |
-| **meta-qa** | `agents/meta-qa.md` | TEST-STRATEGY.md 输出（ISTQB/ISO 25010）+ 8 维度验收 + 质量门控 + 平台安装脚本交付 | Story 进入 ready-for-verification + VALIDATION-ENV.yaml 已就绪 |
-| **meta-doc** | `agents/meta-doc.md` | README（含架构概览 + 用户旅程）+ USER-MANUAL（含故障排除）+ 严重度分级文档缺口 | 核心产物已验证且安装脚本稳定 |
+| **meta-pm** | `delivery/agents/meta-pm.md` | 快速调研（阶段零）+ 场景发现（USE-CASES.md，含画像/指标）+ 需求结构化（REQUIREMENTS.md，含风险/里程碑）+ 完整性自检 | 新请求进入、需求模糊、需求变更后重整 |
+| **meta-se** | `delivery/agents/meta-se.md` | HLD 设计（含候选方案对比 + 5 层架构图 + 技术选型理由）+ Story 拆解（含文件布局 + TASK-ID 任务清单）+ 开发计划（含完成准则） | REQUIREMENTS.md 已确认（solution-design 和 story-planning 两阶段均由 meta-se 执行） |
+| ~~**meta-dm**~~ | ~~`delivery/agents/meta-dm.md`~~ | ~~Story 拆解与并行计划~~ | ⚠️ **已废弃**，职责合并至 meta-se |
+| **meta-dev** | `delivery/agents/meta-dev.md` | Story LLD 输出与人工确认闭环 + Agent/Skill 文件实现 + TASK-ID 增量追踪 + 偏差记录 | 存在已批准且可执行的 Story |
+| **meta-qa** | `delivery/agents/meta-qa.md` | TEST-STRATEGY.md 输出（ISTQB/ISO 25010）+ 8 维度验收 + 质量门控 + 平台安装脚本交付 | Story 进入 ready-for-verification + VALIDATION-ENV.yaml 已就绪 |
+| **meta-doc** | `delivery/agents/meta-doc.md` | README（含架构概览 + 用户旅程）+ USER-MANUAL（含故障排除）+ 严重度分级文档缺口 | 核心产物已验证且安装脚本稳定 |
 
 ## 工作流阶段与 Agent 对应关系
 
@@ -62,19 +62,15 @@ init（meta-po）
 | `process/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
 | `process/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
 | `process/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
-| `skills/<skill-name>/templates/` | Skill 私有模板目录（仅单个 Skill 内部初始化 / 渲染使用） |
+| `delivery/skills/<skill-name>/templates/` | Skill 私有模板目录（仅单个 Skill 内部初始化 / 渲染使用） |
 | `checkpoints/` | 人工确认稿（REQUIREMENTS/HLD/STORY-PLAN/STORY-LLD） |
 | `process/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
 | `process/changes/` | 变更单（CR-*.md） |
-| `delivery/scripts/install.*` | 各平台安装脚本输出 |
-| `delivery/rules/` | 各平台规则文件输出 |
-| `delivery/agents/` | **产物 Agent 提示词文件**（meta-dev 产出） |
-| `delivery/skills/` | **产物 Skill 定义文件**（meta-dev 产出） |
-| `agents/` | 根目录交付 Agent 源目录 |
-| `skills/` | 根目录交付 Skill 源目录 |
-| `rules/` | 根目录交付规则源目录 |
-| `delivery/scripts/*.py` | **产物工具脚本**（meta-dev 产出） |
-| `delivery/.github/agents/` | **产物 Copilot CLI 入口**（meta-dev 产出） |
+| `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
+| `delivery/skills/` | 交付 Skill 定义文件（canonical 源，同时是 meta-dev 产出目录） |
+| `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md / copilot-instructions.md） |
+| `delivery/scripts/` | 安装脚本（install.py / install.sh / install.ps1） |
+| `delivery/.github/agents/` | Copilot CLI Agent 入口文件 |
 | `delivery/README.md` | 产物 README（meta-doc 产出） |
 | `delivery/doc/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
 | `.agents/agents/` | 元工作流 Agent 提示词文件（meta-po/pm/se/dev/qa/doc） |
@@ -83,8 +79,8 @@ init（meta-po）
 ### 输出隔离原则
 
 > **所有由元工作流产生的文件必须按层输出到 `process/`（运行态）、`checkpoints/`（确认态）、`delivery/`（交付态）。**
-> 根目录 `agents/`、`skills/`、`rules/` 为交付源目录；`.agents/` 和 `.github/` 仍保留元工作流自身定义。
-> 测试时可在 `delivery/` 目录中独立启动 Agent 加载产物文件验证。
+> `delivery/` 是可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`、`.github/agents/`。
+> `.agents/` 保留元工作流引擎自身定义，不参与安装。
 
 ## 方案编写与修订规则
 
@@ -123,7 +119,7 @@ init（meta-po）
 - **人工检查点**：所有人工确认统一由 meta-po 发起，通过 `ask_user` 工具触发
 - **HLD 门控**：`HLD.md` 未确认前，不得进入 Story 拆解
 - **LLD 门控**：`STORY-{id}-LLD.md` 未确认前，不得开始对应 Story 的实现
-- **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `skills/README.md`
+- **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `delivery/skills/README.md`
 - **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 - **确定性语言**：meta-se 与 meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 - **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批

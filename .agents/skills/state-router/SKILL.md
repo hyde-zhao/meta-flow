@@ -44,7 +44,7 @@ status: active
 ## 知识来源
 
 - `skills/state-router/templates/STATE-TEMPLATE.md`：状态对象结构与阶段机基线
-- `AGENTS.md` / `rules/AGENTS.md`：阶段定义、人工检查点与角色职责
+- `AGENTS.md` / `delivery/rules/AGENTS.md`：阶段定义、人工检查点与角色职责
 - 各阶段产物 frontmatter 与文件存在性：退出条件的事实来源
 
 ## 执行步骤

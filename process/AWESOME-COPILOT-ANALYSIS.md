@@ -179,5 +179,5 @@ status: ready
 | 发现 | 当前仓库事实 | 对 HLD / 落地计划的影响 |
 |------|-------------|------------------------|
 | `requirement-extraction` 当前**未**声明 `USE-CASES.md` 为兼容输入 | `skills/requirement-extraction/SKILL.md` 的必须读取输入仅包含自然语言需求、`REQUEST.md`、`input_spec.yaml` 与目标平台/约束线索 | HLD 不能假设下游已天然兼容 `USE-CASES.md`；必须把 `requirement-extraction` 契约改造纳入落地范围，确保场景 → 需求链路通过正式工件交接 |
-| meta-pm 当前默认读取 `INPUT-INDEX.md` 与已有 `USE-CASES.md` | `agents/meta-pm.md` 默认加载内容包含 `process/INPUT-INDEX.md` 与 `process/USE-CASES.md` | HLD 的输入契约需要显式纳入这两个工件，否则导入模式与草稿恢复路径只停留在概念层，不符合现有 Agent 行为 |
+| meta-pm 当前默认读取 `INPUT-INDEX.md` 与已有 `USE-CASES.md` | `delivery/agents/meta-pm.md` 默认加载内容包含 `process/INPUT-INDEX.md` 与 `process/USE-CASES.md` | HLD 的输入契约需要显式纳入这两个工件，否则导入模式与草稿恢复路径只停留在概念层，不符合现有 Agent 行为 |
 | 触发词 / 描述存在与相邻 Skill 冲突的现实风险 | `scenario-expansion` 已占用"展开场景 / 测试场景 / 场景扩展"，`requirement-clarifier` 已占用"澄清需求 / 需求歧义"语义 | `use-case-discovery` 的 `description` 与 README 边界说明必须显式排除上述语义，避免自动激活命中错误 Skill |

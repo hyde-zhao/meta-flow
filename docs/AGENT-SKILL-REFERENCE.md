@@ -18,7 +18,7 @@
 
 ## 一、Agent 使用参考
 
-当前仓库中有 **7 个交付 Agent 文件**，位于根目录 `agents/`。其中 `meta-dm` 已废弃，仅作为兼容占位保留。实际主流程由 `meta-po / meta-pm / meta-se / meta-dev / meta-qa / meta-doc` 协作完成。
+当前仓库中有 **7 个交付 Agent 文件**，位于根目录 `delivery/agents/`。其中 `meta-dm` 已废弃，仅作为兼容占位保留。实际主流程由 `meta-po / meta-pm / meta-se / meta-dev / meta-qa / meta-doc` 协作完成。
 
 ### `meta-po` — 主编排器
 
@@ -80,9 +80,9 @@
 
 ## 二、Skill 使用参考
 
-当前仓库内共有 **30 个通用 Skill**（含 1 个已废弃兼容入口）。交付源目录位于 `skills/<skill-name>/SKILL.md`；内部实现定义仍保留在 `.agents/skills/`。
+当前仓库内共有 **30 个通用 Skill**（含 1 个已废弃兼容入口）。交付源目录位于 `delivery/skills/<skill-name>/SKILL.md`；内部实现定义仍保留在 `.agents/skills/`。
 
-> 说明：本节只统计 **`skills/` 目录中实际交付的 Skill**。若个别 Agent 提示词中仍出现历史占位或未交付 Skill 名称（例如 `vendor-profile-loader`、`constraint-normalizer`），不计入当前正式清单。
+> 说明：本节只统计 **`delivery/skills/` 目录中实际交付的 Skill**。若个别 Agent 提示词中仍出现历史占位或未交付 Skill 名称（例如 `vendor-profile-loader`、`constraint-normalizer`），不计入当前正式清单。
 
 ### 1. 需求分析类
 

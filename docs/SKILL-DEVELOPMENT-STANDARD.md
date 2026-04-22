@@ -9,7 +9,7 @@
 
 本规范适用于：
 
-- 根目录 `skills/` 下的所有交付 Skill
+- 根目录 `delivery/skills/` 下的所有交付 Skill
 - `delivery/skills/` 下由元工作流生成的产物 Skill
 - 后续新增的跨平台共享 Skill（Copilot / Claude Code / Codex）
 
@@ -130,7 +130,7 @@ skills/<skill-name>/
 | `references/` | 补充知识、规范摘录、来源材料 |
 | `examples/` | 典型输入输出、好/坏案例 |
 | `templates/` | 当前 Skill 私有模板 |
-| `scripts/` | 仅供当前 Skill 调用的辅助脚本 |
+| `delivery/scripts/` | 仅供当前 Skill 调用的辅助脚本 |
 | `tests/` | smoke test、回归样例或评审用例 |
 
 ### 3.3 Template 放置规范
@@ -140,7 +140,7 @@ Template 按复用范围分层放置：
 | 类型 | 位置 |
 |------|------|
 | 多个 Skill / Agent 共用模板 | 仓库根 `templates/` |
-| 单个 Skill 私有模板 | `skills/<skill-name>/templates/` |
+| 单个 Skill 私有模板 | `delivery/skills/<skill-name>/templates/` |
 
 安装到用户级共享运行时时：
 

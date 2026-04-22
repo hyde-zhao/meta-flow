@@ -1,3 +1,10 @@
+# Input materials (read-only, not tracked)
 /.input/*
+
+# Old directories (deprecated)
 /.output/*
 /.temp/
+
+# Meta-workflow runtime (recommended to gitignore, only delivery/ should be committed)
+/process/
+/checkpoints/

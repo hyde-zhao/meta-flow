@@ -7,12 +7,18 @@ Installs workflow assets from the canonical delivery directories:
   - skills/
   - rules/
 
+Supports two run modes:
+  1. From project root (delivery/ is a subdirectory):
+       uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
+  2. From delivery/ as root (delivery pushed as standalone repo):
+       python scripts/install.py --platform claude-code
+
 Examples:
-  uv run --python 3.11 python scripts/install.py --platform claude-code
-  uv run --python 3.11 python scripts/install.py --platform codex --scope user
-  uv run --python 3.11 python scripts/install.py --platform codex --project-dir D:\\work\\demo
-  uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
-  uv run --python 3.11 python scripts/install.py --platform codex --scope user --uninstall
+  uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
+  uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user
+  uv run --python 3.11 python delivery/scripts/install.py --platform codex --project-dir D:\\work\\demo
+  uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
+  uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user --uninstall
 """
 
 from __future__ import annotations
