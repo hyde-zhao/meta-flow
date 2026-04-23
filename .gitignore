@@ -6,5 +6,5 @@
 /.temp/
 
 # Meta-workflow runtime (recommended to gitignore, only delivery/ should be committed)
-/process/
-/checkpoints/
+# /process/
+# /checkpoints/
