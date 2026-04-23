@@ -128,6 +128,8 @@ init（meta-po）
 - **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器生成缓存不是交付物，不得提交
 - **护栏静态检查**：提交前必须运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
 - **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
+- **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
+- **场景主体默认值**：若用户未显式声明 meta 优化，`USE-CASES.md` 默认 `scenario_subject_type=target-artifact`，不得把当前仓库 / 当前工作流当成默认场景主体
 - **确定性语言**：meta-se 与 meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 - **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
 - **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程

@@ -3,6 +3,9 @@ status: draft | confirmed
 version: "1.0"
 confirmed_by: ""
 confirmed_at: ""
+engagement_mode: production | meta-self-dev
+scenario_subject_type: target-artifact | implementation-carrier
+scenario_subject_id: ""
 target_artifact_type: tool | skill | agent | workflow | mixed
 governance_mode: direct | review-gated | conditional
 review_policy: none | light | strict
@@ -30,6 +33,9 @@ total_use_cases: N
 
 | 字段 | 当前值 | 说明 |
 |---|---|---|
+| `engagement_mode` | <production / meta-self-dev> | 是否是面向目标产物的生产模式，还是 meta 工作流自我开发模式 |
+| `scenario_subject_type` | <target-artifact / implementation-carrier> | 场景主体是目标产物，还是当前实现载体 |
+| `scenario_subject_id` | <ptm-tde / meta-flow / ...> | 当前场景真正服务的对象 ID |
 | `target_artifact_type` | <tool / skill / agent / workflow / mixed> | 当前场景集的目标交付类型 |
 | `governance_mode` | <direct / review-gated / conditional> | 决定下游是否进入评审门禁 |
 | `review_policy` | <none / light / strict> | 决定评审强度 |

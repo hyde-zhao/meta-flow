@@ -13,7 +13,7 @@ output: process/USE-CASES.md
 
 ## 目标
 
-与用户共同完成**产物类型感知**的渐进式场景发现：先判定目标交付形态与治理方式，再建立基线场景，随后做 8 维覆盖扫描，最终生成或更新标准化 `USE-CASES.md`，并在 Phase 3 追加场景发现摘要到 `CLARIFICATION-LOG.md`。
+与用户共同完成**产物类型感知**的渐进式场景发现：先锁定当前工作模式与场景主体，再判定目标交付形态与治理方式，随后建立基线场景并做 8 维覆盖扫描，最终生成或更新标准化 `USE-CASES.md`，并在 Phase 3 追加场景发现摘要到 `CLARIFICATION-LOG.md`。
 
 ## 适用场景
 
@@ -52,7 +52,13 @@ output: process/USE-CASES.md
 2. 若存在 `USE-CASES.md status: draft`，默认进入**恢复模式**，继续完善已有草稿。
 3. 若存在 `USE-CASES.md status: confirmed`，仅在用户明确要求修改时进入**更新模式**；更新后必须递增 `version`，禁止静默覆盖。
 4. 若存在 `CLARIFICATION-LOG.md`，只读历史；后续仅追加，不覆盖。
-5. 若已有草稿包含 `target_artifact_type`、`governance_mode`、`review_policy`，恢复时优先沿用；仅在用户目标明显变化时重判。
+5. 若已有草稿包含 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`、`target_artifact_type`、`governance_mode`、`review_policy`，恢复时优先沿用；仅在用户目标明显变化时重判。
+6. 若用户**未显式说明**“当前是在做 meta 工作流自我开发 / 优化 / 整改”，默认：
+   - `engagement_mode = production`
+   - `scenario_subject_type = target-artifact`
+7. 仅当用户明确表达“这是 meta 工作流优化 / 自我开发 / 整改 meta 工作流本身”时，才切换为：
+   - `engagement_mode = meta-self-dev`
+   - `scenario_subject_type = implementation-carrier`
 
 ### 步骤 1：Phase 0（可选）导入模式
 
@@ -62,17 +68,23 @@ output: process/USE-CASES.md
 
 ### 步骤 2：Phase 1A 目标产物与治理方式判定
 
-1. 先判定当前请求的目标交付类型：`tool / skill / agent / workflow / mixed`。
-2. 仅在必要时追问以下最小问题：交付对象是什么、谁触发、主要文件/目录落点在哪、是否存在多个不同交付面。
-3. 同步确定治理字段：
+1. 先锁定模式字段：
+   - `engagement_mode`：`production / meta-self-dev`
+   - `scenario_subject_type`：`target-artifact / implementation-carrier`
+   - `scenario_subject_id`：目标产物 ID 或当前实现载体 ID
+2. 若用户没有显式声明 meta 优化，**不得**把当前仓库 / 当前工作流视为默认场景主体。
+3. 在 `production` 模式下，若请求同时出现“整改当前仓库”和“目标 Agent/Skill/Workflow”，优先把目标产物作为场景主体，当前仓库仅视为实现载体。
+4. 再判定当前请求的目标交付类型：`tool / skill / agent / workflow / mixed`。
+5. 仅在必要时追问以下最小问题：交付对象是什么、谁触发、主要文件/目录落点在哪、是否存在多个不同交付面。
+6. 同步确定治理字段：
    - `target_artifact_type`
    - `governance_mode`：`direct / review-gated / conditional`
    - `review_policy`：`none / light / strict`
-4. `mixed` 只能在以下任一硬规则成立时输出：
+7. `mixed` 只能在以下任一硬规则成立时输出：
    - 同一请求同时要求 **2 类以上不同交付形态**，且它们的主要落盘位置或安装位置不同；
    - 同一请求同时包含 **不同触发方式**（例如交互式对话 + 后台自动执行）；
    - 同一请求需要经过 **不同下游链路**（例如一个走 Agent 实现，一个走 Workflow 编排）。
-5. 若无法判定为单一类型且未命中 `mixed` 硬规则，继续追问；不得凭感觉落 `mixed`。
+8. 若无法判定为单一类型且未命中 `mixed` 硬规则，继续追问；不得凭感觉落 `mixed`。
 
 ### 步骤 3：Phase 1B 基线场景发现
 
@@ -105,6 +117,9 @@ use_cases_path: process/USE-CASES.md
 status: draft | confirmed
 version: "x.y"
 mode: create | resume | update
+engagement_mode: production | meta-self-dev
+scenario_subject_type: target-artifact | implementation-carrier
+scenario_subject_id: "<artifact-id or repo-id>"
 target_artifact_type: tool | skill | agent | workflow | mixed
 governance_mode: direct | review-gated | conditional
 review_policy: none | light | strict
@@ -125,13 +140,15 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - `USE-CASES.md` 必须与 `agents/meta-pm.md` 的字段契约逐项一致
 - Phase 1A / 1B 与 Phase 2 都必须增量写入 `draft`，不得只在确认时一次性落盘
 - 对已确认的 `USE-CASES.md` 只能进入更新模式，必须显式保留版本演进
+- 若用户未显式声明 meta 工作流优化 / 自我开发，必须默认 `engagement_mode=production` 且 `scenario_subject_type=target-artifact`
+- 在 `production` 模式下，`USE-CASES.md` 不得把当前仓库整改者 / workflow 维护者写成默认 Persona，除非用户明确说明他们就是目标用户
 - 本 Skill 不负责提取 `REQUIREMENTS.md`，也不负责测试场景展开或需求歧义清单
 - 默认使用中文；仅在用户显式要求时切换英文
 - 不得把 review gate 的执行细节写回本 Skill；这里只输出治理标签，不负责编排评审
 
 ## 验收标准
 
-- [ ] `USE-CASES.md` 含完整 frontmatter、治理字段、画像、成功指标、排除项、场景列表与覆盖自检表
+- [ ] `USE-CASES.md` 含完整 frontmatter、模式字段、治理字段、画像、成功指标、排除项、场景列表与覆盖自检表
 - [ ] 每个场景都具备 7 个必填字段：角色、触发条件、输入、处理逻辑、输出/结果、前置条件、排除情况
 - [ ] 默认 8 维全部被处理，未适用项已显式标注理由
 - [ ] draft 可恢复，confirmed 不会被静默覆盖
@@ -155,3 +172,4 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - **不要越界到需求提取**：场景里出现“应该支持 X”时，仍只记录为场景内容
 - **`mixed` 不是兜底桶**：只有命中三条硬规则之一时才可使用，否则继续追问
 - **治理字段只负责打标签**：`governance_mode` 和 `review_policy` 用于下游路由，不在本 Skill 内执行评审
+- **默认是 production，不是 meta-self-dev**：只有用户明确说“meta 工作流优化 / 自我开发”时，才允许把当前仓库 / 当前工作流当成场景主体

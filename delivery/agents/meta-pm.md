@@ -87,7 +87,7 @@ description: "SCOPE-Pack 元工作流的需求澄清专家（产品经理）。�
 在触发 `use-case-discovery` 前，先向用户输出一段简短引导，必须同时说明：
 
 1. 已完成阶段零快速调研，接下来进入“场景发现”
-2. 将调用 `use-case-discovery`，先完成 **Phase 1A 产物类型/治理字段判定**，再建立基线场景并做 8 维覆盖扫描
+2. 将调用 `use-case-discovery`，先完成 **Phase 1A 模式字段/场景主体/产物类型/治理字段判定**，再建立基线场景并做 8 维覆盖扫描
 3. 输出会持续写入 `process/USE-CASES.md`
 4. 该工件会在确认后直接作为 `requirement-extraction` 的显式输入
 5. 若 Skill 未激活或描述匹配失败，必须立即停止并报错；**没有内联兜底实现**
@@ -97,13 +97,19 @@ description: "SCOPE-Pack 元工作流的需求澄清专家（产品经理）。�
 1. 触发前先确保以下上下文可读：`REQUEST.md`、`INPUT-INDEX.md`（若存在）、`CLARIFICATION-LOG.md`（若存在）、已有 `USE-CASES.md`（若存在）。
 2. 调用 `use-case-discovery` 后，由该 Skill 独立完成：
    - Phase 0：可选导入（仅支持用户粘贴文本）
-   - Phase 1A：判定 `target_artifact_type`、`governance_mode`、`review_policy`
+   - Phase 1A：判定 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`、`target_artifact_type`、`governance_mode`、`review_policy`
    - Phase 1B：基线场景发现，并增量写入 `USE-CASES.md draft`
    - Phase 2：8 维覆盖扫描，并持续回写 `USE-CASES.md draft`
    - Phase 3：结构化确认、更新 `USE-CASES.md`、追加 `CLARIFICATION-LOG.md` 场景发现摘要
-3. meta-pm 只负责编排与阶段衔接，**不得**在本文件内继续实现 8 维扫描、覆盖检查或场景写作细节。
-4. 若 Skill 返回 `status: draft`，停留在阶段一并继续等待用户补充或确认。
-5. 若 Skill 返回 `status: confirmed`，以 `process/USE-CASES.md` 为显式输入进入阶段二。
+3. 若用户**未显式说明**当前是在做 meta 工作流优化 / 自我开发，则必须按默认值编排：
+   - `engagement_mode = production`
+   - `scenario_subject_type = target-artifact`
+4. 只有当用户明确说“当前是在做 meta 工作流本身的优化 / 自我开发 / 整改”时，才允许进入：
+   - `engagement_mode = meta-self-dev`
+   - `scenario_subject_type = implementation-carrier`
+5. meta-pm 只负责编排与阶段衔接，**不得**在本文件内继续实现 8 维扫描、覆盖检查或场景写作细节。
+6. 若 Skill 返回 `status: draft`，停留在阶段一并继续等待用户补充或确认。
+7. 若 Skill 返回 `status: confirmed`，以 `process/USE-CASES.md` 为显式输入进入阶段二。
 
 ### USE-CASES.md 结构规范
 
@@ -113,6 +119,9 @@ status: draft | confirmed
 version: "1.0"
 confirmed_by: ""
 confirmed_at: ""
+engagement_mode: production | meta-self-dev
+scenario_subject_type: target-artifact | implementation-carrier
+scenario_subject_id: <artifact-id or repo-id>
 target_artifact_type: tool | skill | agent | workflow | mixed
 governance_mode: direct | review-gated | conditional
 review_policy: none | light | strict
@@ -140,6 +149,9 @@ total_use_cases: N
 
 | 字段 | 当前值 | 说明 |
 |------|--------|------|
+| `engagement_mode` | <production / meta-self-dev> | 默认 `production`；仅用户明确声明 meta 优化时切换 |
+| `scenario_subject_type` | <target-artifact / implementation-carrier> | 默认 `target-artifact`；仅 meta 优化时切到实现载体 |
+| `scenario_subject_id` | <artifact-id / repo-id> | 当前场景真正服务的对象 |
 | `target_artifact_type` | <skill> | 当前场景集对应的目标交付形态 |
 | `governance_mode` | <direct / review-gated / conditional> | 后续是否进入 review gate |
 | `review_policy` | <none / light / strict> | review 强度 |

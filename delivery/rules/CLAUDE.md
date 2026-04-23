@@ -88,6 +88,8 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 16. **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
 17. **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器缓存不是交付物，不得提交
 18. **护栏静态检查**：提交前必须运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
+19. **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
+20. **场景主体默认值**：若用户未显式声明 meta 优化，`USE-CASES.md` 默认 `scenario_subject_type=target-artifact`，不得把当前仓库 / 当前工作流当成默认场景主体
 
 ## 人工检查点（5 类）
 

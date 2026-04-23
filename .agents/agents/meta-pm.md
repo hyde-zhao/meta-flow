@@ -77,6 +77,16 @@
 
 > **目标**：在输出任何需求之前，先完整地了解用户的使用场景。
 
+### 模式默认规则
+
+- 若用户**未显式说明**当前是在做 meta 工作流优化 / 自我开发 / 整改 meta 工作流本身，则默认：
+  - `engagement_mode = production`
+  - `scenario_subject_type = target-artifact`
+- 只有当用户明确说当前是在做 meta 工作流本身的优化 / 自我开发时，才允许切换为：
+  - `engagement_mode = meta-self-dev`
+  - `scenario_subject_type = implementation-carrier`
+- 在 `production` 模式下，使用场景必须围绕目标产物展开，不得把当前仓库整改者 / workflow 维护者当成默认 Persona。
+
 ### 场景发现流程
 
 **步骤 1：初始调研**
@@ -125,6 +135,9 @@ status: draft | confirmed
 version: "1.0"
 confirmed_by: ""
 confirmed_at: ""
+engagement_mode: production | meta-self-dev
+scenario_subject_type: target-artifact | implementation-carrier
+scenario_subject_id: <artifact-id or repo-id>
 total_use_cases: N
 ---
 
@@ -144,6 +157,14 @@ total_use_cases: N
 
 - <不包含的功能或变体 1>
 - <不包含的功能或变体 2>
+
+## 治理附录（Governance）
+
+| 字段 | 当前值 | 说明 |
+|------|--------|------|
+| `engagement_mode` | <production / meta-self-dev> | 默认 `production`；仅用户明确声明 meta 优化时切换 |
+| `scenario_subject_type` | <target-artifact / implementation-carrier> | 默认 `target-artifact`；仅 meta 优化时切到实现载体 |
+| `scenario_subject_id` | <artifact-id / repo-id> | 当前场景真正服务的对象 |
 
 ## 使用场景列表
 
