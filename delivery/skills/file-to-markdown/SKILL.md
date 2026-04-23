@@ -38,16 +38,16 @@ status: active
 
 ## 前置条件
 
-- [ ] Python 环境可用（`python` 或 `python3`）
+- [ ] Python 环境可用（通过 `uv run --python <version> python ...` 入口）
 - [ ] `uvx` 命令可用（通过 `uv` 工具链安装）
 - [ ] 用户已提供待转换目录路径
 
 ## 执行方式
 
-Agent 收到用户提供的目录路径后，执行以下命令：
+Agent 收到用户提供的目录路径后，执行本 Skill 自带脚本：
 
 ```powershell
-python scripts/file_to_markdown.py "<目录路径>"
+uv run --python 3.11 python <skill-root>/scripts/file_to_markdown.py "<目录路径>"
 ```
 
 ### 可选参数
@@ -80,3 +80,4 @@ python scripts/file_to_markdown.py "<目录路径>"
 - 每个成功转换的 `.md` 文件存在且非空
 - 输出转换摘要（成功/失败/跳过计数）
 - 命令执行无未处理异常
+- Claude Code / Codex 安装后，脚本会随 Skill 一起复制到已安装的 skill 目录

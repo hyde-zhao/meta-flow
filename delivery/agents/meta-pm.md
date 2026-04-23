@@ -87,7 +87,7 @@ description: "SCOPE-Pack 元工作流的需求澄清专家（产品经理）。�
 在触发 `use-case-discovery` 前，先向用户输出一段简短引导，必须同时说明：
 
 1. 已完成阶段零快速调研，接下来进入“场景发现”
-2. 将调用 `use-case-discovery`，先建立基线场景，再做 8 维覆盖扫描
+2. 将调用 `use-case-discovery`，先完成 **Phase 1A 产物类型/治理字段判定**，再建立基线场景并做 8 维覆盖扫描
 3. 输出会持续写入 `process/USE-CASES.md`
 4. 该工件会在确认后直接作为 `requirement-extraction` 的显式输入
 5. 若 Skill 未激活或描述匹配失败，必须立即停止并报错；**没有内联兜底实现**
@@ -97,7 +97,8 @@ description: "SCOPE-Pack 元工作流的需求澄清专家（产品经理）。�
 1. 触发前先确保以下上下文可读：`REQUEST.md`、`INPUT-INDEX.md`（若存在）、`CLARIFICATION-LOG.md`（若存在）、已有 `USE-CASES.md`（若存在）。
 2. 调用 `use-case-discovery` 后，由该 Skill 独立完成：
    - Phase 0：可选导入（仅支持用户粘贴文本）
-   - Phase 1：基线场景发现，并增量写入 `USE-CASES.md draft`
+   - Phase 1A：判定 `target_artifact_type`、`governance_mode`、`review_policy`
+   - Phase 1B：基线场景发现，并增量写入 `USE-CASES.md draft`
    - Phase 2：8 维覆盖扫描，并持续回写 `USE-CASES.md draft`
    - Phase 3：结构化确认、更新 `USE-CASES.md`、追加 `CLARIFICATION-LOG.md` 场景发现摘要
 3. meta-pm 只负责编排与阶段衔接，**不得**在本文件内继续实现 8 维扫描、覆盖检查或场景写作细节。
@@ -112,6 +113,9 @@ status: draft | confirmed
 version: "1.0"
 confirmed_by: ""
 confirmed_at: ""
+target_artifact_type: tool | skill | agent | workflow | mixed
+governance_mode: direct | review-gated | conditional
+review_policy: none | light | strict
 total_use_cases: N
 ---
 
@@ -131,6 +135,14 @@ total_use_cases: N
 
 - <不包含的功能或变体 1>
 - <不包含的功能或变体 2>
+
+## 治理附录（Governance）
+
+| 字段 | 当前值 | 说明 |
+|------|--------|------|
+| `target_artifact_type` | <skill> | 当前场景集对应的目标交付形态 |
+| `governance_mode` | <direct / review-gated / conditional> | 后续是否进入 review gate |
+| `review_policy` | <none / light / strict> | review 强度 |
 
 ## 使用场景列表
 
@@ -188,6 +200,7 @@ total_use_cases: N
 - 从场景的"排除情况"提取约束需求（R-C-xxx）
 - 从场景的"前置条件"提取非功能需求（R-NF-xxx）
 - `requirement-extraction` 必须显式读取 `process/USE-CASES.md`，不得依赖 meta-pm 二次转述
+- 若 `USE-CASES.md` 含 `target_artifact_type`、`governance_mode`、`review_policy`，meta-pm 必须允许下游直接消费这些字段，不得在编排层截断
 - 若 `INPUT-INDEX.md` 中存在原始需求或原始数据，优先将其作为澄清背景和证据来源，而不是直接当成已确认需求
 
 ### 澄清循环规则
@@ -203,6 +216,22 @@ total_use_cases: N
 1. ✅ 确认通过 — 需求完整无歧义，标记 `ready_for_design: true`，通知 meta-po 进入方案设计
 2. ❌ 确认不通过 — 请指出问题所在，返回澄清循环
 3. ✏️ 需要补充 — 请输入需要补充或修改的内容，meta-pm 补充后再次确认
+
+## review_mode（产品与场景审查）
+
+当 `review_mode=true` 时，meta-pm 不继续澄清或提取需求，只从场景完整性和用户价值视角审查目标文档。
+
+### 关注点
+
+- 用户画像、成功指标、场景边界是否完整
+- `USE-CASES.md` 与治理字段是否能支撑下游
+- Story / HLD 是否偏离已确认场景
+
+### 输出要求
+
+- findings 使用统一评审模板
+- 不直接修改目标文档
+- 输出后立即停止
 
 ### REQUIREMENTS.md 结构规范
 

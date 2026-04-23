@@ -8,3 +8,7 @@
 # Meta-workflow runtime (recommended to gitignore, only delivery/ should be committed)
 # /process/
 # /checkpoints/
+
+# Python bytecode cache
+__pycache__/
+*.pyc

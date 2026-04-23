@@ -1,0 +1,40 @@
+environment_id: meta-flow-w1-doc-validation
+provided_by: meta-po-delegated
+targets:
+  - W1
+  - W2
+  - W3
+  - W4
+  - W5
+  - W6
+runtime:
+  python: "3.11"
+  node: ""
+  required_paths:
+    - delivery/skills/use-case-discovery/SKILL.md
+    - delivery/skills/use-case-discovery/templates/USE-CASES-TEMPLATE.md
+    - delivery/skills/use-case-discovery/references/8-dimensions-framework.md
+    - delivery/skills/lld-designer/SKILL.md
+    - delivery/skills/review-artifact-protocol/templates/REVIEW-FINDINGS-TEMPLATE.md
+    - delivery/skills/review-artifact-protocol/templates/REVIEW-SUMMARY-TEMPLATE.md
+    - delivery/skills/review-artifact-protocol/scripts/validate_review_artifact.py
+    - delivery/agents/meta-dev.md
+    - delivery/agents/meta-qa.md
+    - delivery/agents/meta-se.md
+    - delivery/agents/meta-doc.md
+    - delivery/rules/AGENTS.md
+    - delivery/rules/CLAUDE.md
+    - delivery/rules/copilot-instructions.md
+    - process/stories/STORY-PILOT-01.md
+    - process/stories/STORY-PILOT-01-LLD.md
+credentials:
+  provided: false
+  notes: "W1 验证仅涉及仓库内静态文档，不依赖外部凭证。"
+notes:
+  - "验证方式为结构化内容检查、路径检查和轻量脚本 dry-run。"
+  - "W3-W5 验证对象为 review gate 模板、validator、Agent/rules/README 同步结果。"
+  - "W6 验证对象为试点 Story 与试点 LLD。"
+approval:
+  confirmed: true
+  confirmed_by: meta-po-delegated
+  confirmed_at: "2026-04-23T11:47:36+08:00"

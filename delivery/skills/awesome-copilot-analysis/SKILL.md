@@ -10,7 +10,7 @@ argument-hint: "可选：指定分析类别（agents/skills/workflows/hooks/inst
 user-invokable: false
 status: active
 called-by: meta-se
-output: process/AWESOME-COPILOT-ANALYSIS.md
+output: process/ANALYSIS-<project_id>-<analysis_topic>.md
 ---
 
 ## 目标
@@ -19,7 +19,7 @@ output: process/AWESOME-COPILOT-ANALYSIS.md
 扫描 `.input/` 目录下由 `awesome-copilot-fetcher` 获取的所有资源，
 识别与当前项目**技术栈、领域、质量目标**相关的资源，
 对每条资源分析优缺点，并给出**可直接借鉴 / 需要适配 / 不适用**的明确判断，
-最终输出结构化分析报告 `AWESOME-COPILOT-ANALYSIS.md`，供 HLD、meta-dev 和 meta-qa 引用。
+最终输出结构化分析报告 `ANALYSIS-<project_id>-<analysis_topic>.md`，供 HLD、meta-dev 和 meta-qa 引用。
 
 ## 适用场景
 
@@ -102,9 +102,9 @@ ELSE:
 
 ### 步骤 5：输出文件
 
-将分析结果写入 `process/AWESOME-COPILOT-ANALYSIS.md`。
+将分析结果写入 `process/ANALYSIS-<project_id>-<analysis_topic>.md`。
 
-## 输出格式：`AWESOME-COPILOT-ANALYSIS.md`
+## 输出格式：`ANALYSIS-<project_id>-<analysis_topic>.md`
 
 ```markdown
 ---
@@ -231,7 +231,7 @@ status: ready  # ready | partial（.input/ 不完整时）
 
 `meta-se` 输出 `HLD.md` 时，必须：
 
-1. 在 `## 技术选型与理由` 中，对来自 `AWESOME-COPILOT-ANALYSIS.md` 的借鉴内容加注来源引用：
+1. 在 `## 技术选型与理由` 中，对来自 `ANALYSIS-<project_id>-<analysis_topic>.md` 的借鉴内容加注来源引用：
    ```
    > 参考：[awesome-copilot/<资源路径>](<GitHub 链接>) — <一句话说明借鉴内容>
    ```
@@ -240,7 +240,7 @@ status: ready  # ready | partial（.input/ 不完整时）
 4. 在 HLD 末尾追加：
    ```markdown
    ## 附录：Awesome-Copilot 资源借鉴清单
-   > 完整分析见 `process/AWESOME-COPILOT-ANALYSIS.md`
+   > 完整分析见 `process/ANALYSIS-<project_id>-<analysis_topic>.md`
 
    | 资源 | 类型 | 借鉴内容 | 消费方 |
    |------|------|---------|-------|
@@ -248,7 +248,7 @@ status: ready  # ready | partial（.input/ 不完整时）
 
 ## 与 meta-dev / meta-qa 的集成约定
 
-- `meta-dev` 在实现 Story 前，**必须读取** `AWESOME-COPILOT-ANALYSIS.md` 的第 7.1 节，
+- `meta-dev` 在实现 Story 前，**必须读取** `ANALYSIS-<project_id>-<analysis_topic>.md` 的第 7.1 节，
   直接使用其中标注的 `instructions` 和 `agents`
 - `meta-qa` 在执行验证前，**必须读取** 第 7.1 节中 hooks 部分，
   将 `secrets-scanner`、`dependency-license-checker`、`governance-audit` 等纳入验证流程
@@ -257,7 +257,7 @@ status: ready  # ready | partial（.input/ 不完整时）
 
 | 产出文件 | 路径 |
 |---------|------|
-| 分析报告 | `process/AWESOME-COPILOT-ANALYSIS.md` |
+| 分析报告 | `process/ANALYSIS-<project_id>-<analysis_topic>.md` |
 | 无检查点文件（分析报告不需要人工确认） | — |
 
 > 分析报告是 HLD 的**前置输入**，不是人工确认对象；但 HLD 检查点中需要引用分析结论。

@@ -83,29 +83,29 @@
 
 ```bash
 # 默认安装到当前项目目录
-uv run --python 3.11 python scripts/install.py --platform claude-code
+uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
 
 # 指定项目目录
-uv run --python 3.11 python scripts/install.py --platform codex --project-dir /path/to/your-project
+uv run --python 3.11 python delivery/scripts/install.py --platform codex --project-dir /path/to/your-project
 
 # 用户级安装，仅安装 skills
-uv run --python 3.11 python scripts/install.py --platform copilot --scope user --content skills
+uv run --python 3.11 python delivery/scripts/install.py --platform copilot --scope user --content skills
 
 # 仅安装规则文件
-uv run --python 3.11 python scripts/install.py --platform claude-code --content rules
+uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --content rules
 
 # DryRun
-uv run --python 3.11 python scripts/install.py --platform openclaw --dry-run
+uv run --python 3.11 python delivery/scripts/install.py --platform openclaw --dry-run
 ```
 
 #### 平台包装器脚本
 
 ```powershell
-scripts\install.ps1 --platform codex --content agents --agent meta-po --dry-run
+delivery\scripts\install.ps1 --platform codex --content agents --agent meta-po --dry-run
 ```
 
 ```bash
-bash scripts/install.sh --platform copilot --scope user --content skills --skill state-router --dry-run
+bash delivery/scripts/install.sh --platform copilot --scope user --content skills --skill state-router --dry-run
 ```
 
 ### 3.2 默认安装位置
@@ -175,7 +175,7 @@ ls .claude/skills/   # 应有约 30 个 .md 文件
 # 期望：hld-designer / meta-se 路径被正确使用
 
 # 4. DryRun 校验
-uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
+uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
 # 期望：输出默认安装路径和将写入的文件
 ```
 

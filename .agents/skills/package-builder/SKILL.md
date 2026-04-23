@@ -34,6 +34,7 @@ status: active
 
 - 安装清单与平台规则
 - 当前安装脚本能力边界
+- 仓库级打包辅助脚本：`scripts/package_builder.py`（repo-local，不随 `delivery/` 安装）
 
 ## 执行步骤
 
@@ -70,3 +71,4 @@ status: active
 
 - 安装器最容易静默带出未验证中间文件，清单驱动必须严格限定复制范围
 - DryRun 输出和真实安装逻辑必须共用同一映射规则，避免校验与执行分叉
+- 若需要构建仓库级平台安装包，使用 `uv run --with pyyaml --python 3.11 python scripts/package_builder.py --dry-run`，不要把该辅助脚本放回 `delivery/scripts/`

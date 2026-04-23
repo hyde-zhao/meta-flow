@@ -1,0 +1,137 @@
+project_id: meta-flow
+version: "1.0"
+confirmed: true
+confirmed_by: "meta-po-delegated"
+confirmed_at: "2026-04-23T11:47:36+08:00"
+created_at: "2026-04-23T11:37:06+08:00"
+waves:
+  - wave: W1
+    parallel: true
+    stories:
+      - story_id: UCD-01
+        title: use-case-discovery 核心增强
+        priority: P0
+        assignee: meta-dev
+        depends_on: []
+        status: verified
+        output_files:
+          - delivery/skills/use-case-discovery/SKILL.md
+      - story_id: UCD-02
+        title: use-case-discovery 模板与引用增强
+        priority: P0
+        assignee: meta-dev
+        depends_on: []
+        status: verified
+        output_files:
+          - delivery/skills/use-case-discovery/references/8-dimensions-framework.md
+          - delivery/skills/use-case-discovery/templates/USE-CASES-TEMPLATE.md
+      - story_id: LLD-01
+        title: lld-designer 六阶段管道与输入输出契约
+        priority: P0
+        assignee: meta-dev
+        depends_on: []
+        status: verified
+        output_files:
+          - delivery/skills/lld-designer/SKILL.md
+  - wave: W2
+    parallel: true
+    stories:
+      - story_id: UCD-03
+        title: UCD 上下游契约同步
+        priority: P1
+        assignee: meta-dev
+        depends_on: [UCD-01, UCD-02]
+        status: verified
+        output_files:
+          - delivery/agents/meta-pm.md
+          - delivery/skills/requirement-extraction/SKILL.md
+          - delivery/skills/README.md
+      - story_id: RG-01
+        title: meta-po 评审协调核心
+        priority: P0
+        assignee: meta-dev
+        depends_on: [UCD-01, UCD-02]
+        status: verified
+        output_files:
+          - delivery/agents/meta-po.md
+      - story_id: LLD-02
+        title: STORY-LLD 模板增强（14 章节固定）
+        priority: P0
+        assignee: meta-dev
+        depends_on: [LLD-01]
+        status: verified
+        output_files:
+          - delivery/skills/lld-designer/templates/STORY-LLD-TEMPLATE.md
+  - wave: W3
+    parallel: true
+    stories:
+      - story_id: RG-02
+        title: review 产物协议与静态前置检查
+        priority: P1
+        assignee: meta-dev
+        depends_on: [RG-01]
+        status: verified
+        output_files:
+          - delivery/skills/review-artifact-protocol/templates/REVIEW-FINDINGS-TEMPLATE.md
+          - delivery/skills/review-artifact-protocol/templates/REVIEW-SUMMARY-TEMPLATE.md
+          - delivery/skills/review-artifact-protocol/scripts/validate_review_artifact.py
+      - story_id: LLD-03
+        title: LLD 生产/消费契约对齐
+        priority: P0
+        assignee: meta-dev
+        depends_on: [LLD-01, LLD-02]
+        status: verified
+        output_files:
+          - delivery/agents/meta-dev.md
+          - delivery/agents/meta-qa.md
+          - delivery/rules/AGENTS.md
+          - delivery/rules/CLAUDE.md
+          - delivery/rules/copilot-instructions.md
+  - wave: W4
+    parallel: true
+    stories:
+      - story_id: RG-03
+        title: review mode 第一组扩展
+        priority: P1
+        assignee: meta-dev
+        depends_on: [RG-01, RG-02]
+        status: verified
+        output_files:
+          - delivery/agents/meta-pm.md
+          - delivery/agents/meta-se.md
+          - delivery/agents/meta-qa.md
+      - story_id: RG-04
+        title: review mode 第二组扩展
+        priority: P1
+        assignee: meta-dev
+        depends_on: [RG-01, RG-02]
+        status: verified
+        output_files:
+          - delivery/agents/meta-dev.md
+          - delivery/agents/meta-doc.md
+  - wave: W5
+    parallel: false
+    stories:
+      - story_id: RG-05
+        title: 分派表与灰度落地
+        priority: P1
+        assignee: meta-dev
+        depends_on: [UCD-03, RG-03, RG-04]
+        status: verified
+        output_files:
+          - delivery/skills/README.md
+          - delivery/rules/AGENTS.md
+          - delivery/rules/CLAUDE.md
+          - delivery/rules/copilot-instructions.md
+  - wave: W6
+    parallel: false
+    stories:
+      - story_id: LLD-04
+        title: LLD 方法试点 Story
+        priority: P1
+        assignee: meta-dev
+        depends_on: [LLD-03, RG-05]
+        status: verified
+        output_files:
+          - process/stories/STORY-PILOT-01.md
+          - process/stories/STORY-PILOT-01-LLD.md

@@ -83,6 +83,11 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 12. **输出隔离**：运行态写入 `process/`，确认稿写入 `checkpoints/`，交付物写入 `delivery/`；`.agents/` 和 `.github/` 仅存放元工作流自身定义
 13. **Agent/Skill 关系维护**：开发或修改 Agent、Skill 时，若影响调用、适用或归属关系，必须同步更新 `skills/README.md`
+14. **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；Skill 运行时脚本必须放到 `delivery/skills/<skill>/scripts/`
+15. **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...`
+16. **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
+17. **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器缓存不是交付物，不得提交
+18. **护栏静态检查**：提交前必须运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
 
 ## 人工检查点（5 类）
 
@@ -119,3 +124,20 @@ Complex 模式下，同一 Wave 内的 Story 支持并行执行，但同一 Stor
 11. **Story 拆解一致性**：§工作量章节的 Story 数、Wave 数必须与 §分阶段落地一一对应。
 12. **决策与产物形态对齐**：ADR 结论必须回写到架构图、模块表、流程图、落地阶段；孤立 ADR 视为未落地。
 
+## LLD 消费契约补充
+
+- `STORY-*-LLD.md` 必须保留 14 个可见章节。
+- `tier`、`shared_fragments`、`open_items` 为必读字段。
+- meta-dev / meta-qa 必须把接口、异常、测试、回滚章节转成实施或验证输入，不能自行脑补缺失部分。
+
+## Review Gate 分派与灰度
+
+| Lane | Agent | 主要职责 |
+|------|-------|----------|
+| `lane-product` | `meta-pm` | 场景与范围一致性 |
+| `lane-architecture` | `meta-se` | 架构与依赖一致性 |
+| `lane-implementation` | `meta-dev` | 可实现性与平台约束 |
+| `lane-quality` | `meta-qa` | 可验证性与风险 |
+| `lane-docs` | `meta-doc` | 交付文档可读性 |
+
+灰度顺序：先 `HLD.md` / `STORY-*-LLD.md`，后 `ARCHITECTURE-DECISION.md` / `STORY-BACKLOG.md`，最后 `README.md` / `USER-MANUAL.md`。

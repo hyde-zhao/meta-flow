@@ -63,13 +63,15 @@ init（meta-po）
 | `process/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
 | `process/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
 | `skills/<skill-name>/templates/` | Skill 私有模板目录（仅单个 Skill 内部初始化 / 渲染使用） |
+| `skills/<skill-name>/scripts/` | Skill 私有运行时脚本目录（需随 Skill 一起安装时使用） |
 | `checkpoints/` | 人工确认稿（REQUIREMENTS/HLD/STORY-PLAN/STORY-LLD） |
 | `process/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
 | `process/changes/` | 变更单（CR-*.md） |
 | `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
 | `delivery/skills/` | 交付 Skill 定义文件（canonical 源，同时是 meta-dev 产出目录） |
 | `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md / copilot-instructions.md） |
-| `delivery/scripts/` | 安装脚本（install.py / install.sh / install.ps1） |
+| `delivery/scripts/` | 仅安装器入口（install.py / install.sh / install.ps1） |
+| `scripts/` | 仓库级检查与构建脚本（不属于交付包） |
 | `delivery/.github/agents/` | Copilot CLI Agent 入口文件 |
 | `delivery/README.md` | 产物 README（meta-doc 产出） |
 | `delivery/doc/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
@@ -131,6 +133,11 @@ init（meta-po）
 - **HLD 门控**：`HLD.md` 未确认前，不得进入 Story 拆解
 - **LLD 门控**：`STORY-{id}-LLD.md` 未确认前，不得开始对应 Story 的实现
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `skills/README.md`
+- **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
+- **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...` 表达
+- **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
+- **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器生成缓存不是交付物，不得提交
+- **护栏静态检查**：提交前必须运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
 - **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 - **确定性语言**：meta-se 与 meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 - **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
@@ -143,3 +150,25 @@ init（meta-po）
 > 本项目同时保留原有防火墙测试元工作流说明，两套系统并行存在，互不干扰。
 > 当前统一编排入口：`.agents/agents/meta-po.md`
 
+## LLD 消费契约补充
+
+- `STORY-*-LLD.md` 必须保持 **14 个可见章节**；`Tier-S` 只允许简化内容深度，不允许压缩章节数量。
+- `tier`、`shared_fragments`、`open_items` 是强输入字段，meta-dev / meta-qa 不得跳过。
+- meta-dev 至少消费：文件影响范围、接口设计、异常处理、测试设计、实施步骤、回滚策略。
+- meta-qa 至少消费：接口设计、核心流程、测试设计、回滚策略、OPEN/Spike 状态。
+
+## Review Gate 分派与灰度
+
+| Lane | Agent | 主要职责 |
+|------|-------|----------|
+| `lane-product` | `meta-pm` | 场景、画像、指标与范围一致性 |
+| `lane-architecture` | `meta-se` | 设计边界、依赖、ADR 与阶段一致性 |
+| `lane-implementation` | `meta-dev` | 可实现性、文件归属、平台约束 |
+| `lane-quality` | `meta-qa` | 可验证性、风险、安全、安装约束 |
+| `lane-docs` | `meta-doc` | 面向用户的可读性与交付完整性 |
+
+灰度顺序：
+
+1. 先覆盖 `HLD.md` 与 `STORY-*-LLD.md`
+2. 再覆盖 `ARCHITECTURE-DECISION.md` 与 `STORY-BACKLOG.md`
+3. 最后覆盖 `README.md`、`USER-MANUAL.md` 等交付文档

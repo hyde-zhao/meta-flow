@@ -1,4 +1,6 @@
-# SCOPE-Pack 跨平台用户级统一指令 / Skill / 工具方案（Codex / Claude Code）
+# 高层设计（HLD）：跨平台用户级统一指令 / Skill / 工具方案（Codex / Claude Code）
+
+> 迁移说明：本文已从 `docs/` 迁移到 `process/`，作为过程实施分析文档保留。
 
 > **评审记录**
 >
@@ -53,7 +55,7 @@
 | Q-05 | closed | Codex subagent 文件载体 | 独立 TOML 文件（`~/.codex/agents/*.toml` / `.codex/agents/*.toml`）；无 fallback；与 Q-21 合并 |
 | Q-06 | closed | 目标平台范围 | 本轮仅 Codex / Claude Code |
 | Q-07 | closed | 用户状态分离 | `~/.claude.json`、Codex `auth.json` / `history.jsonl` / memories 不托管 |
-| Q-08 | in-progress | Python 入口 | 统一为 `uv run --python 3.11 python scripts/...` |
+| Q-08 | in-progress | Python 入口 | 统一为 `uv run --python 3.11 python delivery/scripts/install.py ...`（交付安装器）或 `uv run --with pyyaml --python 3.11 python scripts/package_builder.py ...`（仓库级辅助脚本） |
 | Q-09 | in-progress | `/skill` 与 `$skill` 调用语法 | 需统一渲染规则，两端命中均不降级到自由文本 |
 | Q-10 | closed | 托管配置所有权 | `model`、`provider`、`mcp` 不托管 |
 | Q-11 | in-progress | Skill 注册表闭环 | 影响 Agent/Skill 关系变更时必须回写 `delivery/skills/README.md` |

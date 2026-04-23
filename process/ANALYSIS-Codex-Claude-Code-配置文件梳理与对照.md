@@ -1,4 +1,6 @@
-# Codex 与 Claude Code 配置文件梳理与对照
+# ANALYSIS：Codex 与 Claude Code 配置文件梳理与对照
+
+> 迁移说明：本文已从 `docs/` 迁移到 `process/`，作为过程实施分析文档保留。
 
 > 目标：基于 `.input/` 目录中的 Codex 与 Claude Code 指导文档，整理两者的配置文件、作用、层级范围与对应关系，重点覆盖 **模型**、**API Key**、**skill / command**、**AGENTS.md / CLAUDE.md**、**rules**、**hooks**、**agents**、**MCP** 等关键配置面。
 
@@ -305,4 +307,3 @@ Claude Code 配置优先级从高到低为：
 - 若只想快速抓住两者的核心配置面：
   - **Codex**：先看 `config.toml` 与 `AGENTS.md`
   - **Claude Code**：先看 `settings.json`、`~/.claude.json` 与 `CLAUDE.md`
-

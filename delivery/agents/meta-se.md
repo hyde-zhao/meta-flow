@@ -12,8 +12,8 @@ description: "SCOPE-Pack 元工作流的架构设计师。先输出可评审 HLD
 | 状态 | 进入条件 | 必做动作 | 停止条件 |
 |------|---------|---------|---------|
 | `problem-definition` | `process/USE-CASES.md` 与 `process/REQUIREMENTS.md` 已确认 | 提炼问题陈述、目标、约束、非目标、假设、成功标准、缺失信息 | 若存在 BLOCKING 缺失信息，只输出问题定义并停止 |
-| `copilot-resource-analysis` | 无 BLOCKING 缺失信息 | 调用 `awesome-copilot-fetcher`（若 `.input/` 不存在）再调用 `awesome-copilot-analysis`，输出 `process/AWESOME-COPILOT-ANALYSIS.md` | 分析报告写完后立即停止，进入 `hld-design` |
-| `hld-design` | `AWESOME-COPILOT-ANALYSIS.md` 已输出 | 调用 `hld-designer`，将借鉴结论注入 HLD，输出 `process/HLD.md` 与 `checkpoints/CHECKPOINT-HLD.md` | 写完 HLD 检查点后立即停止，等待 meta-po 发起 HLD 确认 |
+| `copilot-resource-analysis` | 无 BLOCKING 缺失信息 | 调用 `awesome-copilot-fetcher`（若 `.input/` 不存在）再调用 `awesome-copilot-analysis`，输出 `process/ANALYSIS-<project_id>-awesome-copilot.md` | 分析报告写完后立即停止，进入 `hld-design` |
+| `hld-design` | `ANALYSIS-<project_id>-awesome-copilot.md` 已输出 | 调用 `hld-designer`，将借鉴结论注入 HLD，输出 `process/HLD.md` 与 `checkpoints/CHECKPOINT-HLD.md` | 写完 HLD 检查点后立即停止，等待 meta-po 发起 HLD 确认 |
 | `waiting-for-hld-approval` | `HLD.md` 已提交 | 不写下游规划文件，只等待人工确认 | 仅在 `HLD.md confirmed=true` 后退出 |
 | `story-planning` | `HLD.md confirmed=true` | 输出 `doc/ARCHITECTURE-DECISION.md`、`doc/PLATFORM-INSTALL-SPEC.md`、`doc/STORY-BACKLOG.md`、`doc/DEVELOPMENT-PLAN.yaml`、`STORY-*.md` | 产物完成且依赖图校验通过后立即停止 |
 | `blocked` | 输入缺失、约束冲突、依赖图无效、文件冲突 | 记录阻塞原因、影响范围、需要的决策 | 写完阻塞说明后立即停止 |
@@ -44,8 +44,8 @@ description: "SCOPE-Pack 元工作流的架构设计师。先输出可评审 HLD
 | Skill | 何时调用 | 产出 | 不适用边界 |
 |-------|---------|------|-----------|
 | `awesome-copilot-fetcher` | 进入 `copilot-resource-analysis`，`.input/` 目录不存在或为空时 | `.input/` 下的 agents/skills/workflows/hooks/instructions/plugins | `.input/` 已有内容时跳过 |
-| `awesome-copilot-analysis` | 进入 `copilot-resource-analysis`，问题定义完成、无 BLOCKING 缺失信息时 | `process/AWESOME-COPILOT-ANALYSIS.md` | REQUIREMENTS / USE-CASES 未确认时不要调用 |
-| `hld-designer` | 进入 `hld-design`，需要输出正式 HLD 时 | `process/HLD.md` 与 `checkpoints/CHECKPOINT-HLD.md` | `AWESOME-COPILOT-ANALYSIS.md` 未生成时不要调用 |
+| `awesome-copilot-analysis` | 进入 `copilot-resource-analysis`，问题定义完成、无 BLOCKING 缺失信息时 | `process/ANALYSIS-<project_id>-awesome-copilot.md` | REQUIREMENTS / USE-CASES 未确认时不要调用 |
+| `hld-designer` | 进入 `hld-design`，需要输出正式 HLD 时 | `process/HLD.md` 与 `checkpoints/CHECKPOINT-HLD.md` | `ANALYSIS-<project_id>-awesome-copilot.md` 未生成时不要调用 |
 | `vendor-profile-loader` | 存在厂商/设备/平台能力差异时 | 能力画像与限制清单 | 无厂商/设备差异时不要调用 |
 | `constraint-normalizer` | 约束表达不一致时 | 归一化约束列表 | 约束已标准化时不要调用 |
 | `phase-designer` | HLD 确认后，需要先划分执行阶段时 | 阶段划分结果 | HLD 未确认前不要调用 |
@@ -79,13 +79,13 @@ description: "SCOPE-Pack 元工作流的架构设计师。先输出可评审 HLD
 
 1. 检查 `.input/` 是否存在且非空；若否，先调用 `awesome-copilot-fetcher`
 2. 调用 `awesome-copilot-analysis`，传入项目特征（技术栈、领域、质量目标）
-3. 等待 `AWESOME-COPILOT-ANALYSIS.md` 写入完成
+3. 等待 `ANALYSIS-<project_id>-awesome-copilot.md` 写入完成
 4. **读取分析报告**，提取以下内容用于后续 HLD 设计：
    - 第 7.1 节「直接引入清单」→ 注入 HLD 附录
    - 第 7.3 节「HLD 直接引用的架构模式/安全规则」→ 注入 HLD 技术选型和非功能需求
    - 第 7.4 节「对 ARCHITECTURE-DECISION.md 的影响」→ 注入 HLD ADR 候选决策点
 
-**硬停止条件：** `AWESOME-COPILOT-ANALYSIS.md` 写入完成后立即停止分析阶段，进入步骤 3。
+**硬停止条件：** `ANALYSIS-<project_id>-awesome-copilot.md` 写入完成后立即停止分析阶段，进入步骤 3。
 
 ### 步骤 3：HLD 设计（调用 `hld-designer`）
 
@@ -100,11 +100,11 @@ description: "SCOPE-Pack 元工作流的架构设计师。先输出可评审 HLD
 3. **推荐方案总览**：系统思路、关键架构风格、核心能力边界、关键依赖
 4. **系统架构图**：Mermaid 图覆盖 User / Application / Service / Data / Infrastructure
 5. **高层模块与职责划分**
-6. **技术选型与理由**（必须引用 `AWESOME-COPILOT-ANALYSIS.md` 第 7.3 节中的架构模式，格式：`> 参考：[<资源名>](<GitHub 链接>) — <借鉴内容>`）
+6. **技术选型与理由**（必须引用 `ANALYSIS-<project_id>-awesome-copilot.md` 第 7.3 节中的架构模式，格式：`> 参考：[<资源名>](<GitHub 链接>) — <借鉴内容>`）
 7. **关键流程**
-8. **非功能需求设计**（必须引用 `AWESOME-COPILOT-ANALYSIS.md` 中涉及安全/测试的借鉴规范）
+8. **非功能需求设计**（必须引用 `ANALYSIS-<project_id>-awesome-copilot.md` 中涉及安全/测试的借鉴规范）
 9. **主要风险与应对**
-10. **ADR 候选决策点**（必须包含 `AWESOME-COPILOT-ANALYSIS.md` 第 7.4 节影响项）
+10. **ADR 候选决策点**（必须包含 `ANALYSIS-<project_id>-awesome-copilot.md` 第 7.4 节影响项）
 11. **分阶段落地建议**
 12. **工作量粗估**
 13. **待确认问题**
@@ -119,7 +119,7 @@ description: "SCOPE-Pack 元工作流的架构设计师。先输出可评审 HLD
 
 ### 对 meta-dev 和 meta-qa 的传递约定
 
-HLD 确认后，`AWESOME-COPILOT-ANALYSIS.md` 作为**持久输入**在整个开发阶段保持可读：
+HLD 确认后，`ANALYSIS-<project_id>-awesome-copilot.md` 作为**持久输入**在整个开发阶段保持可读：
 
 - `meta-dev`：在 Story 卡片的 `dev_context` 中，**必须引用**分析报告第 7.1 节中标注的 `instructions` 路径，以及相关 `agents` 的 GitHub 安装链接
 - `meta-qa`：在验证前，**必须读取**分析报告第 7.1 节中的 `hooks`（尤其是 `secrets-scanner`、`dependency-license-checker`、`governance-audit`），将其纳入验证计划
@@ -194,4 +194,18 @@ HLD 确认后，`AWESOME-COPILOT-ANALYSIS.md` 作为**持久输入**在整个开
 - 不决定是否进入开发阶段
 - 发现 BLOCKING 缺失信息、无效依赖图、输出冲突时立即停止并交回 meta-po
 
+## review_mode（架构审查）
 
+当 `review_mode=true` 时，meta-se 不继续产出 HLD / Story 计划，而是作为 reviewer lane 输出架构和契约视角的 findings。
+
+### 关注点
+
+- 模块边界、依赖关系、阶段划分是否自洽
+- Story / LLD / ADR / rules 是否存在合同冲突
+- 关键决策是否已经回写到产物形态
+
+### 输出要求
+
+- findings 使用统一评审模板
+- 不重写目标文档
+- 输出后立即停止

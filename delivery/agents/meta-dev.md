@@ -151,3 +151,34 @@ description: "SCOPE-Pack 元工作流的开发工程师。先提交获批前的 
 - Skill 正文包含触发场景、输入、执行步骤、输出格式、不适用边界
 - 若涉及 Tool / MCP，接口、错误和限制均已显式暴露
 
+## LLD 消费契约
+
+进入实现前，meta-dev 必须把下列对象视为**强输入**而不是参考意见：
+
+1. `process/stories/STORY-{id}.md`：范围、验收标准、输出文件所有权
+2. `process/stories/STORY-{id}-LLD.md`：14 章节设计、`tier`、OPEN/Spike、TASK-ID
+3. `process/HLD.md` / `process/ARCHITECTURE-DECISION.md`：架构边界与条件必需决策
+4. `process/PLATFORM-INSTALL-SPEC.md`：平台路径、安装约束
+5. 平台规则文件：`delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md`、`delivery/rules/copilot-instructions.md`
+
+实现时必须保证：
+
+- 第 6 节接口设计在第 10 节测试设计中有对应验证入口
+- 第 7 节异常路径在测试设计中有对应错误路径验证
+- 第 11 节 TASK-ID 与文件影响范围一一对应
+
+## review_mode（实现可行性审查）
+
+当 `review_mode=true` 时，meta-dev 不实现文件，只输出结构化 findings。
+
+### 关注点
+
+- 输出文件是否可实现
+- 接口、错误模型、平台路径是否足够明确
+- LLD / Story / rules 之间是否存在冲突
+
+### 输出要求
+
+- findings 必须符合 `review-artifact-protocol` Skill 提供的 findings 模板
+- 不得自评自己刚生成的产物
+- 输出后立即停止，等待 meta-po 聚合

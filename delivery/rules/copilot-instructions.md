@@ -82,6 +82,11 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
 11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 12. **输出隔离**：运行态写入 `process/`，确认稿写入 `checkpoints/`，交付物写入 `delivery/`；`.agents/` 和 `.github/` 仅存放元工作流自身定义
+13. **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；Skill 运行时脚本必须放到 `delivery/skills/<skill>/scripts/`
+14. **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...`
+15. **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
+16. **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器缓存不是交付物，不得提交
+17. **护栏静态检查**：提交前必须运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
 
 ## 人工检查点（5 类）
 
@@ -101,3 +106,24 @@ Complex 模式下，同一 Wave 内的 Story 支持并行执行，但同一 Stor
 
 顺序推进。
 
+## LLD 消费契约补充
+
+- Keep all `STORY-*-LLD.md` artifacts at 14 visible sections across tiers.
+- Treat `tier`, `shared_fragments`, and `open_items` as required control fields.
+- `meta-dev` consumes implementation-facing sections directly; `meta-qa` consumes validation-facing sections directly.
+
+## Review Gate Dispatch and Rollout
+
+| Lane | Agent | Focus |
+|------|-------|-------|
+| `lane-product` | `meta-pm` | scope, persona, use-case coverage |
+| `lane-architecture` | `meta-se` | boundaries, ADR consistency, dependency shape |
+| `lane-implementation` | `meta-dev` | implementability, file ownership, platform fit |
+| `lane-quality` | `meta-qa` | verifiability, risk, security, install safety |
+| `lane-docs` | `meta-doc` | readability and delivery clarity |
+
+Roll out review-gated mode in this order:
+
+1. `HLD.md` and `STORY-*-LLD.md`
+2. `ARCHITECTURE-DECISION.md` and `STORY-BACKLOG.md`
+3. `README.md` and `USER-MANUAL.md`

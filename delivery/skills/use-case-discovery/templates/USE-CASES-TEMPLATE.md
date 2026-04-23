@@ -3,6 +3,9 @@ status: draft | confirmed
 version: "1.0"
 confirmed_by: ""
 confirmed_at: ""
+target_artifact_type: tool | skill | agent | workflow | mixed
+governance_mode: direct | review-gated | conditional
+review_policy: none | light | strict
 total_use_cases: N
 ---
 
@@ -22,6 +25,16 @@ total_use_cases: N
 
 - <不包含的功能或变体 1>
 - <不包含的功能或变体 2>
+
+## 治理附录（Governance）
+
+| 字段 | 当前值 | 说明 |
+|---|---|---|
+| `target_artifact_type` | <tool / skill / agent / workflow / mixed> | 当前场景集的目标交付类型 |
+| `governance_mode` | <direct / review-gated / conditional> | 决定下游是否进入评审门禁 |
+| `review_policy` | <none / light / strict> | 决定评审强度 |
+
+> 若 `target_artifact_type = mixed`，需在本节补充拆分建议与原因，不得只写结果。
 
 ## 使用场景列表
 
@@ -80,3 +93,9 @@ total_use_cases: N
 | D8 | 集成维度 | 已覆盖 / 已补充 / 不适用 / 待调研 | UC-01 | <补充说明> |
 | Dx | 自定义维度（可选） | 已覆盖 / 已补充 / 不适用 / 待调研 | UC-02 | <仅在会话中临时追加时填写> |
 <!-- coverage-checklist: end -->
+
+## 附录：治理变更记录（可选）
+
+| 版本 | 变更字段 | 旧值 | 新值 | 原因 |
+|---|---|---|---|---|
+| 1.0 | `target_artifact_type` | <空> | <skill> | <首次确认> |

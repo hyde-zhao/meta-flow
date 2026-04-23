@@ -1,14 +1,14 @@
 ---
 generated_by: meta-se / awesome-copilot-analysis
 generated_at: 2026-04-22T22:58:00+08:00
-project: meta-workflow-review-brainstorm-analysis
+project: meta-flow
 source_repo: https://github.com/github/awesome-copilot
 requirements_version: draft（当前仓库缺少已确认的 REQUIREMENTS.md / USE-CASES.md，本报告基于用户当前请求）
 status: partial
-scope: review-and-brainstorm
+analysis_topic: awesome-copilot
 ---
 
-# Awesome-Copilot 资源借鉴分析报告
+# ANALYSIS：Awesome-Copilot 资源借鉴分析报告
 
 ## 项目特征摘要
 
@@ -342,4 +342,4 @@ meta 项目本身已有更强的流程治理：
 |---|---|---|
 | 当前仓库缺少已确认的 `REQUIREMENTS.md` / `USE-CASES.md` | 本报告无法按项目需求做强相关性筛选 | 后续若进入正式 HLD 前分析，应补齐需求工件再做一次面向需求的二次筛选 |
 | awesome-copilot 中“brainstorming Skill”弱于“brainstorming Agent” | 说明头脑风暴更偏交互式，不偏模板化 | meta 项目实现时应避免强行把 brainstorm 做成一个超大 Skill |
-| 现有 `process/HLD.md` 的 `awesome_copilot_analysis` 路径仍指向 `.meta-workflow/...` | 引用路径与当前实际产物路径不一致 | 后续修订 HLD 时应改为 `process/AWESOME-COPILOT-ANALYSIS.md` |
+| 现有 `process/HLD.md` 的 `awesome_copilot_analysis` 路径仍指向 `.meta-workflow/...` | 引用路径与当前实际产物路径不一致 | 后续修订 HLD 时应改为 `process/ANALYSIS-meta-flow-awesome-copilot.md` |

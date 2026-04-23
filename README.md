@@ -10,8 +10,9 @@
 | `delivery/agents/` | 交付 Agent 定义（安装脚本从此读取，`<name>.md`） |
 | `delivery/skills/` | 交付 Skill 定义（结构为 `<name>/SKILL.md`；模板位于 `<name>/templates/`） |
 | `delivery/rules/` | 平台规则文件（`AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md`） |
-| `delivery/scripts/` | 安装脚本（`install.py` / `install.sh` / `install.ps1`） |
+| `delivery/scripts/` | 安装脚本入口（`install.py` / `install.sh` / `install.ps1`）；需随 Skill 一起安装的私有脚本应放在对应 `delivery/skills/<skill>/scripts/` 下 |
 | `delivery/.github/agents/` | Copilot CLI Agent 入口文件 |
+| `scripts/` | 仓库级检查/构建脚本（不随 `delivery/` 一起安装到目标平台） |
 | `.agents/agents/` | 元工作流引擎 Agent 定义（不参与安装） |
 | `.agents/skills/` | 元工作流引擎 Skill 定义（不参与安装） |
 | `.github/` | 本仓库的 Copilot 平台配置 |
@@ -101,8 +102,21 @@ python scripts/install.py --platform claude-code
 
 交付目录结构：
 - `delivery/agents/` — canonical Agent 定义
-- `delivery/skills/` — canonical Skill 定义（含 `<skill>/templates/`）
+- `delivery/skills/` — canonical Skill 定义（含 `<skill>/templates/`、`<skill>/scripts/` 等私有运行时资产）
 - `delivery/rules/` — 平台规则文件
+
+## 交付护栏
+
+1. `delivery/scripts/` **只允许**安装器入口：`install.py`、`install.sh`、`install.ps1`。
+2. 任何被 active Skill 运行时使用的模板、脚本、schema、示例，都必须放在 `delivery/skills/<skill>/` 私有子目录下。
+3. active Skill 的 `SKILL.md` 不得引用 `delivery/scripts/*.py`，也不得使用依赖当前工作目录的 `python scripts/...` 写法。
+4. Python 缓存/编译产物（`__pycache__/`、`*.pyc`）不得入库。
+
+仓库级静态检查命令：
+
+```bash
+uv run --python 3.11 python scripts/check_delivery_guardrails.py
+```
 
 命名规则：
 
