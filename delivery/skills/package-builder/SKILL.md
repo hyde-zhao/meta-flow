@@ -34,11 +34,12 @@ status: active
 
 - 安装清单与平台规则
 - 当前安装脚本能力边界
-- 仓库侧可能存在额外打包辅助脚本，但这类脚本不属于 `delivery/` 安装产物
+- `meta-flow` 当前 canonical 安装器：`delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh`
+- 仓库侧可能存在额外打包辅助脚本，但这类脚本不属于 `delivery/` 安装产物，也不作为安装脚本分析真相源
 
 ## 执行步骤
 
-1. 读取安装清单和平台规则。
+1. 读取安装清单和平台规则，并先对照 `meta-flow` 的 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh` 确认真实文件名与路径。
 2. 生成 `install.py`、`install.ps1`、`install.sh`。
 3. 用 `platform-validator` 校验 DryRun 输出与目录结构。
 
@@ -55,6 +56,7 @@ status: active
 - 输入依赖验证报告与安装清单内容，不依赖模板文件存在
 - 默认安装目标必须是当前项目目录
 - 用户级安装必须显式触发
+- 分析和产出安装脚本时，仓库根上下文中的 canonical 路径必须写为 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh`；只有当 `delivery/` 被单独分发为仓库根时，才使用 `scripts/install.py`、`scripts/install.ps1`、`scripts/install.sh`
 
 ## 验收标准
 
@@ -72,3 +74,4 @@ status: active
 - 安装器最容易静默带出未验证中间文件，清单驱动必须严格限定复制范围
 - DryRun 输出和真实安装逻辑必须共用同一映射规则，避免校验与执行分叉
 - 仓库侧辅助打包脚本若存在，也必须留在仓库级 `scripts/`，不要把它们放回 `delivery/scripts/`
+- 不要把安装脚本参考面写成 `scripts/install.*` 或其他模糊旧路径；需要输出精确文件名

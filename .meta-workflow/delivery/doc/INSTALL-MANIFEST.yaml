@@ -674,10 +674,10 @@
       "platform": "copilot",
       "scope": "user",
       "status": "installed",
-      "installed_at": "2026-04-22T10:28:49Z",
+      "installed_at": "2026-04-24T03:08:54Z",
       "workspace_root": "/home/hyde/projects/meta-flow",
       "project_meta_root": "/home/hyde/projects/meta-flow/.meta-workflow",
-      "canonical_commit": "40ee064",
+      "canonical_commit": "ec7891b",
       "warnings": [],
       "conflicts": [],
       "entries": [
@@ -865,6 +865,12 @@
           "name": "requirement-extraction",
           "path": "/home/hyde/.copilot/skills/requirement-extraction/SKILL.md",
           "remove_path": "/home/hyde/.copilot/skills/requirement-extraction"
+        },
+        {
+          "kind": "skill",
+          "name": "review-artifact-protocol",
+          "path": "/home/hyde/.copilot/skills/review-artifact-protocol/SKILL.md",
+          "remove_path": "/home/hyde/.copilot/skills/review-artifact-protocol"
         },
         {
           "kind": "skill",

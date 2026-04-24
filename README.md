@@ -124,10 +124,28 @@ uv run --python 3.11 python scripts/check_delivery_guardrails.py
 - Claude Code / OpenClaw 的 Agent 文件后缀保持为 `.md`
 - Codex 目标会自动转换为 `.toml`
 
-## 快速开始
+## 快速使用 meta-flow
 
-```
+首次启动一个正式交付工作流时，建议直接给出目标、平台和约束：
+
+```text
 @meta-po 开始
+目标：为 <agent / skill / workflow 名称> 产出正式方案
+平台：Claude Code、Codex
+要求：先澄清需求，再给我 HLD，确认后再拆 Story
 ```
 
-详细使用说明见 `delivery/README.md`（产物文档）和 `delivery/doc/USER-MANUAL.md`。
+常用控制语句：
+
+```text
+@meta-po 当前状态
+@meta-po 继续
+```
+
+如果当前是在优化 meta-flow 本身，而不是为目标产物交付方案，请显式声明：
+
+```text
+当前是在做 meta 工作流优化，请进入 meta-self-dev 模式。
+```
+
+详细使用说明见 [delivery/README.md](delivery/README.md) 和 [delivery/doc/USER-MANUAL.md](delivery/doc/USER-MANUAL.md)。

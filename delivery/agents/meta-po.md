@@ -266,5 +266,5 @@ draft → approved → ready-for-lld-review → lld-approved → in-development 
 | meta-pm | 场景发现 + 需求澄清与结构化 | USE-CASES.md, CLARIFICATION-LOG.md, REQUIREMENTS.md |
 | meta-se | HLD 设计 + Story 拆解与并行计划 | HLD.md, ARCHITECTURE-DECISION.md, PLATFORM-INSTALL-SPEC.md, STORY-BACKLOG.md, DEVELOPMENT-PLAN.yaml, STORY-*.md |
 | meta-dev | Story LLD + Agent/Skill 文件实现 | STORY-{id}-{story_slug}-LLD.md, Agent/Skill 文件, DEV-LOG.md |
-| meta-qa | Story 验证与安装脚本交付 | VERIFICATION-REPORT.md, INSTALL-MANIFEST.yaml, scripts/install.* |
+| meta-qa | Story 验证与安装脚本交付 | VERIFICATION-REPORT.md, INSTALL-MANIFEST.yaml, delivery/scripts/install.py, delivery/scripts/install.ps1, delivery/scripts/install.sh |
 | meta-doc | 文档输出 | README.md, USER-MANUAL.md |

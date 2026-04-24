@@ -56,7 +56,7 @@ approval:
 ## 安装脚本交付流程（所有 Story verified 后）
 
 1. 生成 `INSTALL-MANIFEST.yaml`（列出所有通过验证的产物文件）
-2. 调用 `package-builder` Skill 生成 `install.py`、`install.ps1`、`install.sh`
+2. 调用 `package-builder` Skill 生成 `install.py`、`install.ps1`、`install.sh`，并要求其以 `meta-flow` 的 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh` 为路径与文件名真相源
 3. 调用 `platform-validator` 校验默认安装路径与 DryRun 输出
 4. 在验证报告中记录安装脚本验证结果
 
