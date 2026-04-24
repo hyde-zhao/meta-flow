@@ -28,7 +28,7 @@ status: active
 |------|----------------------|----------------------|
 | copilot | `.github/copilot-instructions.md`，`.github/agents/` 或 `.github/copilot/skills/` | `~/.copilot/agents/` 或 `~/.copilot/skills/` |
 | claude-code | `.claude/CLAUDE.md`，`.claude/agents/`，`.claude/skills/` | `~/.claude/CLAUDE.md`，`~/.claude/agents/`，`~/.claude/skills/` |
-| codex | `.codex/agents/`，`.codex/skills/` | `~/.codex/agents/`，`~/.codex/skills/` |
+| codex | `AGENTS.md`，`.codex/agents/`，`.agents/skills/` | `~/.codex/AGENTS.md`，`~/.codex/agents/`，`~/.agents/skills/` |
 | openclaw | `.openclaw/manifest.yaml`，`.openclaw/agents/`，`.openclaw/skills/` | `~/.openclaw/manifest.yaml`，`~/.openclaw/agents/`，`~/.openclaw/skills/` |
 
 ### 维度 2：主入口文件（BLOCKING）
@@ -37,6 +37,7 @@ status: active
 
 - Copilot：`copilot-instructions.md`
 - Claude Code：`CLAUDE.md`
+- Codex：`AGENTS.md`
 - OpenClaw：`manifest.yaml`
 
 ### 维度 3：命名规范（REQUIRED）
@@ -45,14 +46,23 @@ status: active
 
 - Agent / Skill：kebab-case
 - Copilot Agent：允许 `.agent.md`
-- Codex Agent：允许 `.yaml`
+- Codex Agent：允许 `.toml`
 - 安装脚本：`install.py`、`install.ps1`、`install.sh`
 
 ### 维度 4：DryRun 一致性（REQUIRED）
 
 安装脚本的 `--dry-run` 输出必须与目标目录规则一致，且默认目标为当前项目目录。
 
-### 维度 5：OpenClaw manifest 完整性（仅 openclaw，REQUIRED）
+### 维度 5：Codex subagent schema（仅 codex，BLOCKING）
+
+若目标平台是 Codex，必须额外校验：
+
+- `.codex/agents/*.toml` 为合法 TOML
+- 必填 `name`、`description`、`developer_instructions`
+- 只允许官方 schema 字段：`name`、`description`、`developer_instructions`、`nickname_candidates`、`model`、`model_reasoning_effort`、`sandbox_mode`、`mcp_servers`、`skills.config`
+- 不得出现 `version`、`instructions` 或其他非标准顶层字段
+
+### 维度 6：OpenClaw manifest 完整性（仅 openclaw，REQUIRED）
 
 `manifest.yaml` 必须覆盖目标目录中的所有 Agent 和 Skill 文件。
 
@@ -62,7 +72,8 @@ status: active
 2. 读取 `PLATFORM-INSTALL-SPEC.md` 获取路径规则
 3. 校验安装脚本默认参数与 DryRun 输出
 4. 校验目标目录结构与关键入口文件
-5. 输出校验报告（含未通过项与修复建议）
+5. 若目标平台是 Codex，校验 subagent TOML schema
+6. 输出校验报告（含未通过项与修复建议）
 
 ## 输出格式
 
@@ -78,6 +89,7 @@ status: active
 | 目录结构 | BLOCKING | ✅ 通过 | |
 | 主入口文件 | BLOCKING | ✅ 通过 | |
 | DryRun 一致性 | REQUIRED | ✅ 通过 | 默认安装到当前项目 |
+| Codex schema | BLOCKING | ✅ 通过 | 所有 `.codex/agents/*.toml` 均含 `developer_instructions`，且不存在 `version` |
 | 命名规范 | REQUIRED | ❌ 未通过 | `MySkill.md` 不符合 kebab-case |
 
 ### 综合结论
@@ -98,3 +110,4 @@ status: active
 - [ ] 所有 BLOCKING 维度校验结果有明确通过/未通过记录
 - [ ] 未通过项有具体路径和修复建议
 - [ ] 已检查安装脚本 DryRun 行为
+- [ ] Codex 目标已检查 subagent TOML schema（若平台为 codex）

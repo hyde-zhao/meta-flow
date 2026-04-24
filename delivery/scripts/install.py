@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,19 @@ KEBAB_CASE_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 BUILT_IN_CODEX_AGENTS = {"default", "worker", "explorer"}
 MANAGED_VERSION = "1.0.0"
+CANONICAL_AGENT_FRONTMATTER_FIELDS = frozenset({"name", "description", "model"})
+CODEX_REQUIRED_AGENT_FIELDS = ("name", "description", "developer_instructions")
+CODEX_OPTIONAL_AGENT_FIELDS = frozenset(
+    {
+        "nickname_candidates",
+        "model",
+        "model_reasoning_effort",
+        "sandbox_mode",
+        "mcp_servers",
+        "skills",
+    }
+)
+CODEX_ALLOWED_AGENT_FIELDS = frozenset(CODEX_REQUIRED_AGENT_FIELDS) | CODEX_OPTIONAL_AGENT_FIELDS
 
 
 @dataclass(frozen=True)
@@ -206,9 +220,13 @@ def load_canonical_agent(path: Path, permissive: bool) -> AgentDefinition | None
     if not KEBAB_CASE_RE.fullmatch(name):
         fail(f"agent name 必须为 kebab-case: {path}")
 
-    unsupported = sorted(key for key in fields if key not in {"name", "description", "model"})
+    unsupported = sorted(key for key in fields if key not in CANONICAL_AGENT_FRONTMATTER_FIELDS)
     if unsupported and not permissive:
-        fail(f"canonical agent 存在未支持字段（请改用 --permissive 或先清理字段）: {path} -> {', '.join(unsupported)}")
+        fail(
+            "canonical agent frontmatter 仅支持 name/description/model；"
+            "Codex 的 developer_instructions 由 Markdown 正文渲染，禁止写 version、instructions 等其它顶层字段: "
+            f"{path} -> {', '.join(unsupported)}"
+        )
 
     model = str(fields["model"]).strip() if "model" in fields and str(fields["model"]).strip() else None
     return AgentDefinition(
@@ -386,6 +404,21 @@ def render_codex_agent(agent: AgentDefinition, commit: str, generated: str) -> s
         ]
     )
     return "\n".join(lines)
+
+
+def validate_codex_agent_render(content: str, agent: AgentDefinition) -> None:
+    try:
+        payload = tomllib.loads(content)
+    except tomllib.TOMLDecodeError as exc:
+        fail(f"Codex agent 渲染结果不是合法 TOML: {agent.source} -> {exc}")
+
+    missing = [field for field in CODEX_REQUIRED_AGENT_FIELDS if not str(payload.get(field, "")).strip()]
+    if missing:
+        fail(f"Codex agent 渲染结果缺少必填字段: {agent.source} -> {', '.join(missing)}")
+
+    unsupported = sorted(key for key in payload if key not in CODEX_ALLOWED_AGENT_FIELDS)
+    if unsupported:
+        fail(f"Codex agent 渲染结果包含非官方 schema 字段: {agent.source} -> {', '.join(unsupported)}")
 
 
 def build_openclaw_manifest(agent_entries: list[dict[str, str]], skill_entries: list[dict[str, str]]) -> str:
@@ -700,7 +733,9 @@ def install_agents(
         base_dir = (workspace_root / ".codex" / "agents") if scope == "project" else (resolve_user_home_root("codex") / "agents")
         for agent in selected_agents:
             dest = base_dir / f"{agent.name}.toml"
-            write_text(dest, render_codex_agent(agent, commit, generated), transaction, dry_run)
+            content = render_codex_agent(agent, commit, generated)
+            validate_codex_agent_render(content, agent)
+            write_text(dest, content, transaction, dry_run)
             installed_names.append(agent.name)
             manifest_entries.append({"kind": "agent", "name": agent.name, "path": str(dest), "remove_path": str(dest)})
         return installed_names

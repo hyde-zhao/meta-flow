@@ -41,7 +41,8 @@ status: active
 
 1. 读取安装清单和平台规则，并先对照 `meta-flow` 的 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh` 确认真实文件名与路径。
 2. 生成 `install.py`、`install.ps1`、`install.sh`。
-3. 用 `platform-validator` 校验 DryRun 输出与目录结构。
+3. 若目标包含 Codex，必须把 subagent 写入 `.codex/agents/<name>.toml`，并严格遵循官方 schema：必填 `name`、`description`、`developer_instructions`；仅允许官方可选字段 `nickname_candidates`、`model`、`model_reasoning_effort`、`sandbox_mode`、`mcp_servers`、`skills.config`；不得写 `version`、`instructions` 或其他非标准顶层字段。
+4. 用 `platform-validator` 校验 DryRun 输出、目录结构和 Codex subagent schema。
 
 ## 输出文件 / 输出模板
 
@@ -57,12 +58,15 @@ status: active
 - 默认安装目标必须是当前项目目录
 - 用户级安装必须显式触发
 - 分析和产出安装脚本时，仓库根上下文中的 canonical 路径必须写为 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh`；只有当 `delivery/` 被单独分发为仓库根时，才使用 `scripts/install.py`、`scripts/install.ps1`、`scripts/install.sh`
+- Codex subagent 的指令正文必须写入 `developer_instructions`；canonical agent Markdown 正文映射到该字段，不得另造 `instructions` 顶层字段
+- 若 canonical source 或渲染结果出现 `version` 等非官方 Codex subagent 顶层字段，必须视为错误并阻断交付
 
 ## 验收标准
 
 - [ ] 3 个安装脚本已生成
 - [ ] 支持 4 平台与 project / user 两类安装
 - [ ] DryRun 输出可被 `platform-validator` 校验
+- [ ] Codex 安装产物中的 `.codex/agents/*.toml` 仅包含官方 schema 字段，且 `developer_instructions` 非空
 
 ## 不适用边界
 
@@ -73,5 +77,6 @@ status: active
 
 - 安装器最容易静默带出未验证中间文件，清单驱动必须严格限定复制范围
 - DryRun 输出和真实安装逻辑必须共用同一映射规则，避免校验与执行分叉
+- Codex 不识别 `version`，而且不会把 `instructions` 当成 subagent 指令体；必须写成 `developer_instructions`
 - 仓库侧辅助打包脚本若存在，也必须留在仓库级 `scripts/`，不要把它们放回 `delivery/scripts/`
 - 不要把安装脚本参考面写成 `scripts/install.*` 或其他模糊旧路径；需要输出精确文件名
