@@ -17,3 +17,4 @@ __pycache__/
 # Dependencies
 node_modules/
 package-lock.json
+package.json
