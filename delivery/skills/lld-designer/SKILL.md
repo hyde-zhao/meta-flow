@@ -4,7 +4,7 @@ description: >-
   当某个已批准 Story 在开发前需要落地为 Low-Level Design（LLD）时使用。
   输出模块拆分、文件影响范围、数据模型、接口、流程、异常处理、测试设计、实施步骤、
   风险、发布与回滚策略，并交由人工确认后再进入实现。触发词包括：LLD、详细设计、实现设计、Story 设计。
-argument-hint: "必填：Story ID；可选：功能名、目标平台或技术栈"
+argument-hint: "必填：Story ID；可选：Story 名称 / slug、目标平台或技术栈"
 user-invokable: true
 status: active
 ---
@@ -20,13 +20,13 @@ status: active
 
 ## 前置条件
 
-- [ ] `process/stories/STORY-{id}.md` 已批准
+- [ ] `process/stories/STORY-{id}-{story_slug}.md` 已批准
 - [ ] `process/HLD.md` 与 `process/ARCHITECTURE-DECISION.md` 已确认
 - [ ] 若 Story 涉及平台路径或安装结构，`process/PLATFORM-INSTALL-SPEC.md` 可读
 
 ## 必须读取的输入
 
-- `process/stories/STORY-{id}.md`
+- `process/stories/STORY-{id}-{story_slug}.md`
 - `process/HLD.md`
 - `process/ARCHITECTURE-DECISION.md`
 - 相关前置 Story、平台约束、共享设计片段或 `CR-*.md`（若存在）
@@ -71,7 +71,7 @@ status: active
 
 ### 阶段 6：Checkpoint Handoff
 
-1. 写入 `process/stories/STORY-{id}-LLD.md`。
+1. 复用 Story 卡片中的 `story_slug`，写入 `process/stories/STORY-{id}-{story_slug}-LLD.md`。
 2. 将 Story 推进到 `ready-for-lld-review`。
 3. 停止在人工确认前，不进入实现。
 
@@ -79,7 +79,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| Story LLD | `process/stories/STORY-{id}-LLD.md` | `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` |
+| Story LLD | `process/stories/STORY-{id}-{story_slug}-LLD.md` | `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` |
 
 ## 约束
 
@@ -88,6 +88,7 @@ status: active
 - 不超出当前 Story 范围
 - 发现未决技术点时，必须输出 `OPEN` 或 Spike，禁止伪确定
 - 若模板章节与说明冲突，以模板契约为准同步修正
+- LLD 文件名必须复用 Story 卡片中的 `story_slug`，不得自行再生成第二套命名
 
 ## 验收标准
 
@@ -108,5 +109,4 @@ status: active
 - 若模板章节与说明口径不一致，应以模板契约为准同步修正，不允许双轨并存
 - 详细设计不是实现日志，必须保持“可实施”而不是“已完成”
 - `ARCHITECTURE-DECISION.md` 是条件必需输入：只要 Story 命中关键取舍、接口边界或平台规范，就必须显式读取
-- LLD 的唯一正式输出仍是 `STORY-{id}-LLD.md`；不要把关键信息拆到会话说明里
-
+- LLD 的唯一正式输出仍是 `STORY-{id}-{story_slug}-LLD.md`；不要把关键信息拆到会话说明里

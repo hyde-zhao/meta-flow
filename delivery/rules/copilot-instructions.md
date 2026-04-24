@@ -73,7 +73,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 1. **澄清锁**：`REQUIREMENTS.md` 未确认前，不得输出正式设计对象
 2. **HLD 锁**：`HLD.md` 未经人工确认，不得进入 Story 拆解
 3. **Story 锁**：未进入 `approved` 状态的 Story，不得开始 LLD 设计
-4. **LLD 锁**：`STORY-{id}-LLD.md` 未确认前，不得开始该 Story 实现
+4. **LLD 锁**：`STORY-{id}-{story_slug}-LLD.md` 未确认前，不得开始该 Story 实现
 5. **验证锁**：没有 `process/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
 6. **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
 7. **禁止越级改写**：`meta-dev` 不修改 REQUIREMENTS.md、HLD.md；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
@@ -97,7 +97,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | 需求确认 | requirement-clarification → solution-design | REQUIREMENTS.md 是否完整、无歧义 |
 | HLD 确认 | solution-design → story-planning | HLD.md 是否完整、可接受 |
 | Story 计划确认 | story-planning → story-execution | STORY-BACKLOG.md 边界与优先级 |
-| Story LLD 确认 | story-execution 内逐个 Story | `STORY-{id}-LLD.md` 是否允许进入实现 |
+| Story LLD 确认 | story-execution 内逐个 Story | `STORY-{id}-{story_slug}-LLD.md` 是否允许进入实现 |
 | 终验 | documentation → delivered | 交付范围、安装脚本、版本信息是否完整 |
 
 ## 并行执行（Complex 模式）

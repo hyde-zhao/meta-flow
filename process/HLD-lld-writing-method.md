@@ -65,7 +65,7 @@ companion_hld:
 
 | 类型 | 约束内容 |
 |------|---------|
-| 协议 | `STORY-{id}-LLD.md confirmed=true` 前不得开始实现 |
+| 协议 | `STORY-{id}-{story_slug}-LLD.md confirmed=true` 前不得开始实现 |
 | 工程 | 不引入新的通用 planner 或新的设计对象类型，优先在现有 `lld-designer` / `meta-dev` / 模板体系内增强 |
 | 输出 | LLD 仍然以 Markdown + frontmatter 为主载体，图示统一采用 Mermaid |
 | 治理 | 人工确认仍由 meta-po 发起；本 HLD 不替代 review gate 或人工检查点 |
@@ -174,25 +174,25 @@ companion_hld:
 
 | 输入对象 | 生产者 | 必需性 | 用途 | 缺失行为 |
 |---------|--------|-------|------|---------|
-| `process/stories/STORY-{id}.md` | meta-se | 必需 | 定义 Story 范围、验收标准、依赖关系 | 缺失即终止，进入 blocked |
+| `process/stories/STORY-{id}-{story_slug}.md` | meta-se | 必需 | 定义 Story 范围、验收标准、依赖关系 | 缺失即终止，进入 blocked |
 | `process/HLD.md` 或相关 companion HLD | meta-se | 必需 | 提供上游边界、模块职责、架构约束 | 缺失即终止，进入 blocked |
 | `process/ARCHITECTURE-DECISION.md` | meta-se | 条件必需 | 提供关键取舍、接口边界、平台规则 | 若 Story 命中关键取舍但 ADR 缺失，则 blocked |
 | 前置 Story 产物 / 接口 | 上游 Story | 条件必需 | 约束兼容性、复用路径 | 缺失则写明阻塞依赖，不得假设接口 |
 | `process/PLATFORM-INSTALL-SPEC.md` 或平台规则 | meta-se / meta-qa | 条件必需 | 约束安装结构或平台特有路径 | 若涉及平台目录且缺失，则 blocked |
 | `process/changes/CR-*.md` | meta-po | 可选 | 约束变更背景与偏差说明 | 若存在必须读取；不得忽略 |
-| 现有 `STORY-{id}-LLD.md` | meta-dev | 更新场景必需 | 用于增量修订、版本递增和问题状态回写 | 更新场景下缺失则视为异常，需重新起草 |
+| 现有 `STORY-{id}-{story_slug}-LLD.md` | meta-dev | 更新场景必需 | 用于增量修订、版本递增和问题状态回写 | 更新场景下缺失则视为异常，需重新起草 |
 
 ### 3.3 输出契约
 
 | 输出对象 | 主要消费者 | 必须承载的信息 | 交付条件 |
 |---------|-----------|---------------|---------|
-| `process/stories/STORY-{id}-LLD.md` | meta-dev / meta-qa / meta-po / review gate | 设计范围、接口/数据契约、主/异常流程、测试设计、实施步骤、发布回滚、待决问题 | 每次 `lld-designer` 成功执行后生成或更新 |
+| `process/stories/STORY-{id}-{story_slug}-LLD.md` | meta-dev / meta-qa / meta-po / review gate | 设计范围、接口/数据契约、主/异常流程、测试设计、实施步骤、发布回滚、待决问题 | 每次 `lld-designer` 成功执行后生成或更新 |
 | LLD 中的 TASK-ID 清单 | meta-dev | 原子实施顺序、目标文件、动作、详细描述 | 必须可直接指导编码 |
 | LLD 中的验证设计 | meta-qa | 测试入口、边界值、错误路径、最小回归点 | 必须覆盖主流程与异常流程 |
 | LLD 中的确认区 | meta-po / 用户 | 当前版本是否允许进入实现 | `confirmed=false` 时只允许评审，不允许实现 |
 | LLD 中的 OPEN / Spike 项 | meta-po / meta-se / meta-dev | 仍未拍板的问题、默认处理动作、需要谁决策 | 不得为空转；必须指向下一动作 |
 
-**总原则**：LLD 的唯一正式输出仍是 `STORY-{id}-LLD.md`，但该文档内部必须显式承载不同消费方需要的信息，而不是依赖 meta-dev 二次解释。
+**总原则**：LLD 的唯一正式输出仍是 `STORY-{id}-{story_slug}-LLD.md`，其中 `story_slug` 复用 Story 标题生成的 kebab-case 稳定片段；该文档内部必须显式承载不同消费方需要的信息，而不是依赖 meta-dev 二次解释。
 
 ### 3.4 LLD 章节级输入 / 输出契约
 
@@ -243,10 +243,10 @@ LLD 中若引用共享片段，**必须**：
 
 | Story 类型 | 产物 | 是否走 LLD 检查点 | 是否包含实现任务 |
 |-----------|------|----------------|----------------|
-| `feature`（默认） | `STORY-{id}-LLD.md` + 代码/文档实现 | 是 | 是 |
-| `design-only` | `STORY-{id}-LLD.md` + `process/shared/*.md` 共享片段 | 是 | 否（TASK-ID 仅产出设计文件） |
-| `refactor` | `STORY-{id}-LLD.md` + 代码重构 | 是 | 是（无新功能） |
-| `infra` | `STORY-{id}-LLD.md` + 基础设施/工具链变更 | 是 | 是 |
+| `feature`（默认） | `STORY-{id}-{story_slug}-LLD.md` + 代码/文档实现 | 是 | 是 |
+| `design-only` | `STORY-{id}-{story_slug}-LLD.md` + `process/shared/*.md` 共享片段 | 是 | 否（TASK-ID 仅产出设计文件） |
+| `refactor` | `STORY-{id}-{story_slug}-LLD.md` + 代码重构 | 是 | 是（无新功能） |
+| `infra` | `STORY-{id}-{story_slug}-LLD.md` + 基础设施/工具链变更 | 是 | 是 |
 
 `design-only` Story 的 LLD 章节允许弱化实现相关章节（§11 TASK-ID 可只含"产出共享片段"一条；§10 测试设计仅需覆盖共享片段的契约可验证性）。
 
@@ -310,7 +310,7 @@ LLD 中若引用共享片段，**必须**：
 ```mermaid
 graph TD
   subgraph Upstream["上游约束层"]
-    ST["STORY-{id}.md"]
+    ST["STORY-{id}-{story_slug}.md"]
     HLD["HLD.md / companion HLD"]
     ADR["ARCHITECTURE-DECISION.md"]
     DEP["depends_on 产物"]
@@ -327,7 +327,7 @@ graph TD
   end
 
   subgraph Output["正式输出层"]
-    LLD["STORY-{id}-LLD.md"]
+    LLD["STORY-{id}-{story_slug}-LLD.md"]
   end
 
   subgraph Consumers["下游消费层"]
@@ -365,7 +365,7 @@ graph TD
 | Phase 3 Flow Designer | Method Step | 写清主流程、异常流程、补偿路径，并判断是否需要 Mermaid 图 | 契约草案、依赖接口 | §7 处理流程正文 + 图示 | HLD、依赖 Story |
 | Phase 4 Validation Designer | Method Step | 生成测试入口、错误路径、回滚与发布策略 | 流程草案、平台约束 | §10 测试设计、§13 回滚、§12 风险 | meta-qa 消费需求 |
 | Phase 5 Render & Consistency | Method Step | 将全部内容写入 14 章节外形，检查配对约束（接口↔测试、异常↔测试、TASK↔文件） | 全量设计草案 | 渲染后的 LLD 草稿 + 一致性报告 | 模板、§3.4 契约表 |
-| Phase 6 Checkpoint Handoff | Method Step | 产出确认区、切换 Story 状态、交接 meta-po 发起检查点 | 渲染后的 LLD 草稿 | `STORY-{id}-LLD.md`（`confirmed=false`）+ `ready-for-lld-review` 状态 | meta-po 检查点协议 |
+| Phase 6 Checkpoint Handoff | Method Step | 产出确认区、切换 Story 状态、交接 meta-po 发起检查点 | 渲染后的 LLD 草稿 | `STORY-{id}-{story_slug}-LLD.md`（`confirmed=false`）+ `ready-for-lld-review` 状态 | meta-po 检查点协议 |
 
 **模块边界规则**：
 - Ready Check 只负责判断“能不能写”，不负责替缺失输入脑补内容。
@@ -423,7 +423,7 @@ sequenceDiagram
     LLD->>LLD: Phase 3 主流程/异常流程建模
     LLD->>LLD: Phase 4 测试/回滚/风险设计
     LLD->>TMP: Phase 5 渲染到 14 章节外形
-    TMP-->>FS: 写入 STORY-{id}-LLD.md
+    TMP-->>FS: 写入 STORY-{id}-{story_slug}-LLD.md
     LLD-->>DEV: 输出完成，Story 进入 ready-for-lld-review
     DEV->>PO: 请求发起 LLD 检查点
   end
@@ -445,7 +445,7 @@ flowchart TD
   D1 --> E
   E --> F{LLD 是否覆盖主流程+异常流程?}
   F -- 否 --> F1[返回流程设计阶段补齐]
-  F -- 是 --> G[输出 STORY-{id}-LLD.md]
+  F -- 是 --> G[输出 STORY-{id}-{story_slug}-LLD.md]
 ```
 
 ### 7.1 阶段处理表
@@ -457,7 +457,7 @@ flowchart TD
 | Phase 3 Flow Modeling | 写清主流程、异常路径、补偿动作、图示 | 契约草案、依赖接口 | ①写 happy path 步骤；②枚举异常分支（输入无效 / 依赖失败 / 超时 / 并发冲突）；③写补偿或回退动作；④按 §7.5 选择图类型并绘制 Mermaid | §7 流程正文 + 图示 | 每条异常分支都有处理动作；命中 §7.5 阈值的 Story 有对应图示 | 若流程无法闭环，返回 Phase 2 |
 | Phase 4 Validation & Rollback | 设计测试、风险、发布回滚 | 流程草案、平台约束 | ①为每条接口方法写测试入口；②为每条异常分支写错误路径测试；③识别风险与触发信号；④写回滚条件与开关策略 | §10 测试设计 + §12 风险 + §13 回滚 | §10 条目能覆盖 §7 全部异常分支；§13 给出可触发的回滚条件 | 若无法验证，标记 blocked 或 OPEN |
 | Phase 5 Render & Consistency | 映射到 14 章节外形 + 执行配对约束 | 全量设计草案、模板 | ①按模板渲染到 14 章节；②运行配对约束检查（§3.4 强约束）；③检查 OPEN 项是否全部带去向；④版本号与修订记录更新 | 完整 LLD 草稿 + 一致性报告 | 配对约束全部通过；无无去向的 OPEN；修订记录已追加 | 若不一致，返回对应阶段修订 |
-| Phase 6 Checkpoint Handoff | 交接人工确认 | 完整 LLD 草稿 | ①写确认区（confirmed=false）；②更新 Story 状态为 `ready-for-lld-review`；③通知 meta-po 发起检查点 | `STORY-{id}-LLD.md` + 状态切换 | Story 状态已切换；meta-po 已接收通知 | 未进入确认前不得实现 |
+| Phase 6 Checkpoint Handoff | 交接人工确认 | 完整 LLD 草稿 | ①写确认区（confirmed=false）；②更新 Story 状态为 `ready-for-lld-review`；③通知 meta-po 发起检查点 | `STORY-{id}-{story_slug}-LLD.md` + 状态切换 | Story 状态已切换；meta-po 已接收通知 | 未进入确认前不得实现 |
 
 ### 7.2 写作框架的理论依据
 
@@ -490,7 +490,7 @@ flowchart TD
 
 | 前置条件 | 校验动作 | 失败行为 |
 |---------|---------|---------|
-| `STORY-{id}.md` 存在且 `status=approved` 或 `lld-approved` | 起草前读取 Story frontmatter 与验收标准 | 终止执行并进入 blocked |
+| `STORY-{id}-{story_slug}.md` 存在且 `status=approved` 或 `lld-approved` | 起草前读取 Story frontmatter 与验收标准 | 终止执行并进入 blocked |
 | `process/HLD.md` 或相关 companion HLD 已存在且可读取 | Ready Check 时解析 HLD 边界与约束 | 终止执行并提示先完成上游设计 |
 | Story 命中关键取舍时 `ARCHITECTURE-DECISION.md` 可读取 | 校验是否涉及跨模块接口 / 平台协议 / 关键技术选择 | 缺失则 blocked，不得自行拍板 |
 | 前置 Story 产物存在且接口兼容 | 检查 `depends_on` 对应对象 | 缺失或不兼容则 blocked，并写明依赖项 |

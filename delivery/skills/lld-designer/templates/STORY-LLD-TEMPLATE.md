@@ -1,6 +1,7 @@
 ---
 story_id: "STORY-{id}"
 title: ""
+story_slug: ""
 lld_version: "1.0"
 tier: "S | M | L"
 status: "ready-for-review"  # ready-for-review | confirmed
@@ -15,6 +16,8 @@ open_items: 0
 
 # LLD: STORY-{id} — {标题}
 
+> 文件名格式：`STORY-{id}-{story_slug}-LLD.md`，其中 `story_slug` 必须复用对应 Story 卡片中的稳定 slug。
+>
 > 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需经人工确认后方可进入实现。
 
 ## 1. Goal

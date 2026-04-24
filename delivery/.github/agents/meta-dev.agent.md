@@ -16,9 +16,9 @@ tools: ["read", "edit", "search", "shell", "skill"]
 | 状态 | 进入条件 | 必做动作 | 退出条件 |
 |------|---------|---------|---------|
 | `ready-check` | 收到 Story 卡片 | 校验 Story 完整性、设计确认状态、依赖产物、输出所有权，并判定当前是 LLD 起草还是实现恢复 | 全部通过后进入 `lld-design` 或 `implementing`；否则进入 `blocked` |
-| `lld-design` | Story `status=approved`，且无确认版 LLD | 调用 `lld-designer`，输出 `process/stories/STORY-{id}-LLD.md`，并将 Story 更新为 `ready-for-lld-review` | 写完 LLD 后立即停止，等待 meta-po 发起人工确认 |
-| `waiting-for-lld-approval` | LLD 已提交但 `confirmed=false` | 不实现业务产物，只等待人工确认 | 仅在 `STORY-{id}-LLD.md confirmed=true` 且 Story `status=lld-approved` 后退出 |
-| `implementing` | `STORY-{id}-LLD.md confirmed=true` 且 Story `status=lld-approved` | 先将 Story 更新为 `in-development`，再按 TASK-ID 顺序实现产物 | 所有任务完成后进入 `self-review` |
+| `lld-design` | Story `status=approved`，且无确认版 LLD | 调用 `lld-designer`，输出 `process/stories/STORY-{id}-{story_slug}-LLD.md`，并将 Story 更新为 `ready-for-lld-review` | 写完 LLD 后立即停止，等待 meta-po 发起人工确认 |
+| `waiting-for-lld-approval` | LLD 已提交但 `confirmed=false` | 不实现业务产物，只等待人工确认 | 仅在 `STORY-{id}-{story_slug}-LLD.md confirmed=true` 且 Story `status=lld-approved` 后退出 |
+| `implementing` | `STORY-{id}-{story_slug}-LLD.md confirmed=true` 且 Story `status=lld-approved` | 先将 Story 更新为 `in-development`，再按 TASK-ID 顺序实现产物 | 所有任务完成后进入 `self-review` |
 | `self-review` | 产物已生成 | 按自检清单校验格式、边界、交接信息 | 全部通过后进入 `handoff`；否则回到 `implementing` 或进入 `blocked` |
 | `handoff` | 自检通过 | 更新 Story 状态、追加 `DEV-LOG.md`、整理交接摘要 | Story 更新为 `ready-for-verification` 后立即停止 |
 | `blocked` | 输入缺失、约束冲突、接口不明、平台规范不足 | 写阻塞说明并明确需要谁决策 | 写完后立即停止 |
@@ -26,15 +26,15 @@ tools: ["read", "edit", "search", "shell", "skill"]
 **硬性规则：**
 
 - 未完成 `ready-check` 前，不得创建或修改业务产物
-- 在 `STORY-{id}-LLD.md confirmed=true` 前，不得开始实现 Story 产物
+- 在 `STORY-{id}-{story_slug}-LLD.md confirmed=true` 前，不得开始实现 Story 产物
 - AI 任务清单缺失时不得自行推断
 
 ## 必须读取的输入
 
-- 当前 Story 卡片 `process/stories/STORY-{id}.md`，且 `status=approved` 或 `status=lld-approved`
+- 当前 Story 卡片 `process/stories/STORY-{id}-{story_slug}.md`，且 `status=approved` 或 `status=lld-approved`
 - `process/HLD.md`，且 `confirmed=true`
 - `process/ARCHITECTURE-DECISION.md`，且 `confirmed=true`
-- `process/stories/STORY-{id}-LLD.md`（实现阶段必须存在且 `confirmed=true`）
+- `process/stories/STORY-{id}-{story_slug}-LLD.md`（实现阶段必须存在且 `confirmed=true`）
 - `depends_on` 指向的前置 Story 产物
 - `process/PLATFORM-INSTALL-SPEC.md`（当 Story 涉及平台目录或安装结构时）
 
@@ -50,7 +50,7 @@ tools: ["read", "edit", "search", "shell", "skill"]
 
 ### LLD 阶段
 
-- `process/stories/STORY-{id}-LLD.md`
+- `process/stories/STORY-{id}-{story_slug}-LLD.md`
 - 将 Story 状态更新为 `ready-for-lld-review`
 - 停止，等待 meta-po 发起 LLD 确认
 

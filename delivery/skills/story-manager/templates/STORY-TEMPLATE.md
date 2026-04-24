@@ -1,6 +1,7 @@
 ---
 story_id: "STORY-{id}"
 title: ""
+story_slug: ""
 status: "draft"
 priority: "P0"
 wave: "W1"
@@ -19,7 +20,7 @@ updated_at: ""
 - **输入文件**：
 - **输出文件**：
 - **设计约束**：
-- **命名规范**：kebab-case，文件名符合 `^[a-z][a-z0-9-]+\.md$`，必须包含 title/version/description Frontmatter
+- **命名规范**：Story 卡片文件名必须为 `STORY-{id}-{story_slug}.md`，其中 `story_slug` 是 `title` 的 kebab-case 稳定片段
 - **平台目标**：
 
 ### 文件系统布局

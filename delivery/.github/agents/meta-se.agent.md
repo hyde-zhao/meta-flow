@@ -57,7 +57,7 @@ tools: ["read", "edit", "search", "skill"]
 - `PLATFORM-INSTALL-SPEC.md`
 - `STORY-BACKLOG.md`
 - `DEVELOPMENT-PLAN.yaml`
-- `process/stories/STORY-{id}.md`
+- `process/stories/STORY-{id}-{story_slug}.md`
 
 每张 Story 卡片必须足以让 meta-dev 仅基于 Story + HLD + 架构决策，先产出并提交该 Story 的 LLD，再根据获批 LLD 开发。
 

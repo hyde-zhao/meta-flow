@@ -289,7 +289,7 @@ contents:
 
 ## LLD 消费契约
 
-meta-qa 验证 Story 时，必须直接消费 `STORY-{id}-LLD.md` 中的以下内容：
+meta-qa 验证 Story 时，必须直接消费 `STORY-{id}-{story_slug}-LLD.md` 中的以下内容：
 
 - 第 6 节接口设计：转为验证入口
 - 第 7 节核心处理流程：转为主/异常路径验证

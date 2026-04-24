@@ -4,7 +4,7 @@ description: >-
   当需要拆分 Story、管理 Story 生命周期、生成 Story 卡片或更新 Story 状态时使用。
   触发词包括：拆分 Story、Story 状态、Story 卡片、Story 管理、生成 Story。
   适用场景：story-planning 和 story-execution 阶段。
-argument-hint: "可选：指定 Story ID 或操作类型（create/update/status）"
+argument-hint: "可选：指定 Story ID、Story 名称或操作类型（create/update/status）"
 user-invokable: true
 status: active
 ---
@@ -37,7 +37,7 @@ status: active
 
 ## 执行步骤
 
-1. 生成或读取 Story 卡片。
+1. 生成或读取 Story 卡片，并基于 Story 标题生成或复用 `story_slug`。
 2. 按生命周期规则校验状态转换是否合法。
 3. 在卡片中维护开发上下文、验证上下文与量化验收标准三件套。
 4. 回写 `STORY-STATUS.md` 汇总视图。
@@ -46,7 +46,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| Story 卡片 | `process/stories/STORY-{id}.md` | `skills/story-manager/templates/STORY-TEMPLATE.md` |
+| Story 卡片 | `process/stories/STORY-{id}-{story_slug}.md` | `skills/story-manager/templates/STORY-TEMPLATE.md` |
 | Story 状态汇总 | `process/STORY-STATUS.md` | `skills/story-manager/templates/STORY-STATUS-TEMPLATE.md` |
 
 ## 约束
@@ -54,12 +54,14 @@ status: active
 - Story 状态只能按既定生命周期推进，不允许跳级
 - 缺少三件套的 Story 不得进入 LLD 审核
 - `STORY-STATUS.md` 必须与卡片状态保持一致
+- `story_slug` 必须由 Story 标题生成 kebab-case 稳定片段；已有卡片时必须复用原值，不得静默改名
 
 ## 验收标准
 
 - [ ] Story 生命周期包含 LLD 审核门控
 - [ ] 每张 Story 卡片包含完整三件套
 - [ ] 汇总视图与卡片状态一致
+- [ ] Story 卡片文件名同时包含 Story 编号与名称 slug
 
 ## 不适用边界
 
@@ -70,4 +72,4 @@ status: active
 
 - `verified` 是验证完成，不等于最终归档；只有收敛后才进入 `done`
 - 批量更新状态时最容易漏掉 `STORY-STATUS.md`，必须同步回写
-
+- `story_slug` 来自标题但一旦落盘即成为稳定标识；标题文案微调不能自动触发文件重命名

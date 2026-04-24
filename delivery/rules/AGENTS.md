@@ -131,7 +131,7 @@ init（meta-po）
 - **变更规则**：需求或设计变动必须先创建 `CR-*.md` 再修改正式对象
 - **人工检查点**：所有人工确认统一由 meta-po 发起，通过 `ask_user` 工具触发
 - **HLD 门控**：`HLD.md` 未确认前，不得进入 Story 拆解
-- **LLD 门控**：`STORY-{id}-LLD.md` 未确认前，不得开始对应 Story 的实现
+- **LLD 门控**：`STORY-{id}-{story_slug}-LLD.md` 未确认前，不得开始对应 Story 的实现
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `skills/README.md`
 - **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
 - **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...` 表达

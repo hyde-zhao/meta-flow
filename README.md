@@ -84,7 +84,7 @@ cd delivery && python scripts/install.py --platform claude-code --dry-run
 1. `meta-pm` 输出需求与场景
 2. `meta-se` 输出并提交 `HLD.md`
 3. 用户确认 HLD 后，`meta-se` 拆解 Story 与开发计划
-4. `meta-dev` 对每个 Story 先输出 `STORY-{id}-LLD.md`，确认后再实现
+4. `meta-dev` 对每个 Story 先输出 `STORY-{id}-{story_slug}-LLD.md`，确认后再实现
 5. `meta-qa` 验证并生成安装脚本，`meta-doc` 输出交付文档
 
 ## 交付目录约定

@@ -101,7 +101,7 @@ tools: ["read", "edit", "search", "skill"]
 2. `PLATFORM-INSTALL-SPEC.md`
 3. `STORY-BACKLOG.md`
 4. `DEVELOPMENT-PLAN.yaml`
-5. `process/stories/STORY-{id}.md`
+5. `process/stories/STORY-{id}-{story_slug}.md`
 
 ### 规划文档结构要求
 
