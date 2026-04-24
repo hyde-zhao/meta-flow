@@ -17,6 +17,7 @@
 | `.agents/skills/` | 元工作流引擎 Skill 定义（不参与安装） |
 | `.github/` | 本仓库的 Copilot 平台配置 |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
+| `.meta-workflow/` | 安装器状态目录（仅保存安装 manifest，不作为当前元工作流运行态输出目录） |
 | `process/` | 运行时文档（gitignored，STATE.md / HLD.md / stories 等） |
 | `checkpoints/` | 人工确认稿（gitignored） |
 | `docs/` | 参考文档和设计历史 |
@@ -59,6 +60,18 @@
 ```bash
 cd delivery && copilot @ptm-tde
 ```
+
+## `.meta-workflow` 目录说明
+
+`.meta-workflow/` 当前不承载 SCOPE-Pack 的运行态文档，也不是 `process/`、`checkpoints/`、`delivery/` 的替代目录。当前规则要求元工作流产物仍按输出隔离原则写入仓库根目录下的 `process/`、`checkpoints/` 和 `delivery/`。
+
+当前实现中，`delivery/scripts/install.py` 会把安装状态写入 `<WORKSPACE_ROOT>/.meta-workflow/delivery/doc/INSTALL-MANIFEST.yaml`。该 manifest 记录已安装的平台、scope、安装时间、canonical commit、目标路径和卸载所需的 remove path。安装器执行 `--uninstall` 时依赖这个文件精确卸载。
+
+因此：
+
+1. 若仍需要通过安装器执行精确卸载，应保留 `.meta-workflow/`。
+2. 若确认不再需要历史安装记录或安装器卸载能力，可以删除 `.meta-workflow/`，但会丢失既有安装记录。
+3. 当前仓库中的 `.meta-workflow/` 未被 Git 跟踪，也未在 `.gitignore` 中显式忽略；如团队决定长期把它作为本地状态目录，应补充 ignore 规则。
 
 ## Python 环境规范（uv）
 

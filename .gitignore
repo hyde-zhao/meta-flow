@@ -6,9 +6,14 @@
 /.temp/
 
 # Meta-workflow runtime (recommended to gitignore, only delivery/ should be committed)
-# /process/
-# /checkpoints/
+/process/
+/checkpoints/
+.meta-workflow/
 
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Dependencies
+node_modules/
+package-lock.json
