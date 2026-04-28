@@ -20,6 +20,11 @@
 >   2. **Q-21 敲定**：仅支持 **Codex 最新版本**（独立 TOML 文件载体），不保留 `config.toml [agents.<name>]` fallback。新增第 **7.9 节「Codex Subagent 写作规范」**，依据 <https://developers.openai.com/codex/subagents>。
 >   3. **Q-26 敲定**：全局命名规范 —— Skill 名、Subagent 名在各自命名空间内必须全局唯一；跨命名空间强烈建议不重复（`/skills` 与 `$agent` 触发面不同但视觉相似会造成误用）。新增第 **4.5 节「全局命名与冲突检测」**，含第三方 Skill / Subagent 引入时的冲突检测机制。
 >   4. **Q-27 敲定**：当前主要运行环境是 **WSL**（Linux 语义），Codex Hooks 的 Windows 禁用问题在 WSL 下不触发；方案中保留备注即可，不做 Windows 原生路径特殊处理。
+>
+> - **2026-04-28 五次评审 · CR-001 回写**：
+>   1. 新增 `delivery/doc/PLATFORM-CONTRACTS.yaml` 作为平台安装路径单一真相源；
+>   2. `delivery/scripts/install.py` 已改为从契约矩阵读取 rules / agents / skills 路径；
+>   3. guardrail 已覆盖 Codex Skill 项目级 `.agents/skills`、用户级 `~/.agents/skills` 正向断言，以及 `.codex/skills` / `~/.codex/skills` 负向断言。
 
 ---
 
@@ -35,7 +40,7 @@
 4. 只列目标路径，未固化运行时优先级 / 覆盖链；
 5. Agent 在两平台并非只差目标目录，存在 schema 差异（Codex `developer_instructions` vs Claude `body`、Codex 无 `tools` 字段等）；
 6. `.output -> .meta-workflow` 迁移缺兼容策略；
-7. 仓库 `delivery/scripts/install.py`、`README.md`、`platform-validator` 仍保留旧假设；
+7. 仓库 `delivery/scripts/install.py`、README、USER-MANUAL、`platform-validator` 已通过 CR-001 收敛到平台契约矩阵；
 8. Skill / Subagent 全局命名未规范，第三方引入缺冲突检测。
 
 ---
@@ -63,7 +68,7 @@
 | Q-13 | decided | 运行时优先级 / 覆盖链 | 主选：见第 3 节；写入目标路径仅表示"安装成功"，doctor 负责"运行时是否生效"判断 |
 | Q-14 | decided | canonical agent 字段合同 | 主选：共享核心字段 `name/description/instructions` + 严格失败；过渡期 `--permissive` 允许仅丢弃平台专属字段并落审计记录 |
 | Q-15 | decided | `.output -> .meta-workflow` 迁移 | 主选：新写入只落新路径；旧路径只读兜底；兜底期 doctor 强制提示；切换完成条件见第 6.3 节 |
-| Q-16 | in-progress | 仓库实现漂移 | `delivery/scripts/install.py`（Codex `.yaml`/`.codex/skills`）、`README.md`、`platform-validator` 需同步整改 |
+| Q-16 | closed | 仓库实现漂移 | CR-001 已将安装器、README、USER-MANUAL、platform-validator 与 guardrail 收敛到 `delivery/doc/PLATFORM-CONTRACTS.yaml` |
 | Q-17 | decided | Override / Local 层处理 | 主选：只提示不阻断；备选：阻断渲染 / 仅记录不提示 |
 | Q-18 | decided | canonical agent 共享字段白名单 | 主选：共享 `{name, description, instructions}`；可映射 `{model, tools}` 经映射矩阵；其它严格失败 |
 | Q-19 | decided | 用户已有 `AGENTS.md` / `CLAUDE.md` 的 merge 策略 | 主选：**managed block 夹带**（以 HTML 注释哨兵为边界，仅替换块内，不触碰人工内容）；备选：整体托管 / 外部 `@import` 导入 |
@@ -413,16 +418,13 @@ doctor 通过该哨兵比对 canonical 与 installed 版本漂移；哨兵缺失
 
 ### 7.8 当前仓库实现漂移（Q-16）
 
-必须整改：
+CR-001 已关闭本项：
 
-1. `delivery/scripts/install.py` 仍把 Codex agent 写为 `.yaml`（应为 `~/.codex/agents/*.toml` / `.codex/agents/*.toml`，遵循 §7.9 写作规范）；
-2. `delivery/scripts/install.py` 仍写 `.codex/skills/*.md`（应为 `~/.agents/skills/<name>/SKILL.md` 目录形态，Codex 官方 USER scope）；
-3. `README.md` 仍保留"Codex 自动转 `.yaml`"旧表述；
-4. `platform-validator` 仍围绕 `.codex/skills/` 旧目标面；
-5. 根目录 `delivery/agents/` / `delivery/skills/` / `delivery/rules/` 与 meta 内部旧路径未迁到 `{{WORKSPACE_ROOT}}/process/`、`checkpoints/`、`delivery/`；
-6. 新增：`delivery/agents/README.md` Subagent 注册表尚未建立（Q-26 §4.5 要求）。
-
-> **文档修订 ≠ 实现完成**。Q-16 未关闭前，本方案只能视为目标设计。
+1. `delivery/scripts/install.py` 已从 `delivery/doc/PLATFORM-CONTRACTS.yaml` 读取 rules / agents / skills 路径矩阵；
+2. Codex agent 已渲染为 `.codex/agents/*.toml` / `~/.codex/agents/*.toml`，遵循 §7.9 写作规范；
+3. Codex Skill 已渲染为 `.agents/skills/<name>/SKILL.md` / `~/.agents/skills/<name>/SKILL.md`，并将 `.codex/skills` / `~/.codex/skills` 作为禁止路径；
+4. README、USER-MANUAL、`package-builder`、`platform-validator` 已同步为派生说明，不再作为平台路径事实来源；
+5. `scripts/check_delivery_guardrails.py` 已新增 Codex Skill dry-run 正向 / 负向断言。
 
 ### 7.9 Codex Subagent 写作规范（Q-21）
 

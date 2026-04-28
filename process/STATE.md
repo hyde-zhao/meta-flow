@@ -5,7 +5,7 @@ current_phase: "documentation"
 current_agent: "meta-po"
 iteration: 8
 blocked: false
-last_action: "delivery/README.md 与 delivery/doc/USER-MANUAL.md 已生成，process 运行态旧路径引用已收口"
+last_action: "CR-002 已实施并验证通过：安装器新增路径组件冲突前置校验，guardrail 补充 .codex 文件占用负向用例"
 next_action: "准备终验范围并等待用户确认 final review"
 checkpoints:
   requirement_confirmed: false
@@ -169,7 +169,17 @@ history:
     action: "generate-delivery-docs"
     phase: "documentation"
     summary: "已生成 delivery/README.md 与 delivery/doc/USER-MANUAL.md，并同步修正文档与 process 运行态中的旧路径引用"
-last_updated: "2026-04-23T16:02:48+08:00"
+  - at: "2026-04-28T00:00:00+08:00"
+    actor: "meta-po"
+    action: "apply-change-request"
+    phase: "documentation"
+    summary: "CR-001：将平台路径治理收敛到 delivery/doc/PLATFORM-CONTRACTS.yaml，安装器从契约矩阵取路径，guardrail 增加 Codex .codex/skills 负向断言"
+  - at: "2026-04-28T00:00:00+08:00"
+    actor: "meta-po"
+    action: "apply-change-request"
+    phase: "documentation"
+    summary: "CR-002：安装器新增 ensure_directory / ensure_file_target 路径前置校验，guardrail 构造 .codex 被普通文件占用的 Codex project 安装负向用例"
+last_updated: "2026-04-28T00:00:00+08:00"
 ---
 
 <!--

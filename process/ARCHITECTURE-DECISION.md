@@ -3,7 +3,7 @@ complexity: standard
 confirmed: true
 confirmed_by: "meta-po-delegated"
 confirmed_at: "2026-04-23T11:47:36+08:00"
-last_updated: "2026-04-23T11:47:36+08:00"
+last_updated: "2026-04-28T00:00:00+08:00"
 ---
 
 # 架构决策（Story Planning）
@@ -35,6 +35,7 @@ last_updated: "2026-04-23T11:47:36+08:00"
 | ADR-SP-04 | 正式 Wave 以依赖图为准 | 将先前 4-Wave 草案细化为 **6-Wave** 正式计划 |
 | ADR-SP-05 | Review gate 不新增专职 reviewer Agent | 复用现有子 Agent 的 `review_mode=true` |
 | ADR-SP-06 | LLD 复杂度分级保留，但不影响章节外形 | `tier: S/M/L` 只影响深度与图示，不影响章节数量 |
+| ADR-SP-07 | 平台路径以 `delivery/doc/PLATFORM-CONTRACTS.yaml` 为单一真相源 | 安装器、DryRun、平台校验与规划说明都从该契约派生；禁止按同平台目录类比推断路径 |
 
 ## 平台适配差异
 
@@ -47,9 +48,10 @@ last_updated: "2026-04-23T11:47:36+08:00"
 
 ### 规划阶段适配原则
 
-1. `PLATFORM-INSTALL-SPEC.md` 作为 story-planning 阶段的平台安装真相源。
+1. `delivery/doc/PLATFORM-CONTRACTS.yaml` 作为平台安装路径单一真相源；`PLATFORM-INSTALL-SPEC.md` 是 story-planning 阶段的可读说明。
 2. Story 卡片若涉及安装路径、模板路径、规则入口，必须直接写明目标平台差异。
 3. `delivery/skills/README.md` 必须同步维护 Agent/Skill 关系和模板交叉引用。
+4. Codex Agent 与 Skill 发现路径必须分开断言：Agent 在 `.codex/agents` / `~/.codex/agents`，Skill 在 `.agents/skills` / `~/.agents/skills`。
 
 ## 设计确认点（需人工确认）
 
@@ -64,3 +66,4 @@ last_updated: "2026-04-23T11:47:36+08:00"
 | 版本 | 日期 | 变更人 | 说明 |
 |---|---|---|---|
 | 1.0 | 2026-04-23 | meta-se | 基于 3 份已确认 HLD 与用户确认的 Story 拆分方向，产出 story-planning 阶段架构决策 |
+| 1.1 | 2026-04-28 | meta-po | CR-001：补充平台契约单一真相源与 Codex Agent/Skill 路径分离原则 |

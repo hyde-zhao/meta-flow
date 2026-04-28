@@ -22,7 +22,7 @@ status: active
 
 - [ ] `process/stories/STORY-{id}-{story_slug}.md` 已批准
 - [ ] `process/HLD.md` 与 `process/ARCHITECTURE-DECISION.md` 已确认
-- [ ] 若 Story 涉及平台路径或安装结构，`process/PLATFORM-INSTALL-SPEC.md` 可读
+- [ ] 若 Story 涉及平台路径或安装结构，`delivery/doc/PLATFORM-CONTRACTS.yaml` 与 `process/PLATFORM-INSTALL-SPEC.md` 可读
 
 ## 必须读取的输入
 
@@ -37,13 +37,14 @@ status: active
 - Story 卡片中的验收标准与设计约束
 - 上游 HLD / ADR 约束
 - `process/HLD-lld-writing-method.md` 的阶段化方法与章节契约
+- `delivery/doc/PLATFORM-CONTRACTS.yaml` 的平台路径契约；`PLATFORM-INSTALL-SPEC.md` 仅作为说明性对照
 
 ## 执行步骤
 
 ### 阶段 1：Ready Check
 
 1. 校验 Story `status=approved`，且三件套完整。
-2. 校验 `HLD.md`、`ARCHITECTURE-DECISION.md` 已确认；命中平台路径时读取 `PLATFORM-INSTALL-SPEC.md`。
+2. 校验 `HLD.md`、`ARCHITECTURE-DECISION.md` 已确认；命中平台路径时读取 `delivery/doc/PLATFORM-CONTRACTS.yaml` 和 `PLATFORM-INSTALL-SPEC.md`。
 3. 若缺少关键输入，立即进入 `blocked`，写清缺失对象和缺失原因。
 
 ### 阶段 2：Scope Extraction
@@ -89,6 +90,7 @@ status: active
 - 发现未决技术点时，必须输出 `OPEN` 或 Spike，禁止伪确定
 - 若模板章节与说明冲突，以模板契约为准同步修正
 - LLD 文件名必须复用 Story 卡片中的 `story_slug`，不得自行再生成第二套命名
+- 涉及平台路径、schema 或发现机制时，必须引用 `delivery/doc/PLATFORM-CONTRACTS.yaml` 或官方文档证据；禁止按同平台目录进行类比推断
 
 ## 验收标准
 
