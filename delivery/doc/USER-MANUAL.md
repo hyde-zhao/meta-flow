@@ -5,6 +5,7 @@
 - Python 入口统一使用 `uv run --python 3.11 python ...`
 - 若从源码仓库根目录执行，安装器路径是 `delivery/scripts/install.py`
 - 若 `delivery/` 已作为独立仓库分发，安装器路径是 `scripts/install.py`
+- 平台安装路径以 `doc/PLATFORM-CONTRACTS.yaml` 为真相源，README 与本手册只是派生说明
 
 ## 2. 常用安装命令
 
@@ -13,7 +14,6 @@
 ```bash
 uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
 uv run --python 3.11 python delivery/scripts/install.py --platform codex --project-dir /path/to/project
-uv run --python 3.11 python delivery/scripts/install.py --platform copilot --scope user --content skills
 uv run --python 3.11 python delivery/scripts/install.py --platform openclaw --dry-run
 ```
 
@@ -52,12 +52,15 @@ uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope
 
 ## 5. 默认安装位置
 
-| 平台 | 项目级默认目录 | 用户级默认目录 |
-|------|---------------|----------------|
-| Copilot CLI | `<project>/.github/` | `~/.copilot/` |
-| Claude Code | `<project>/.claude/` | `~/.claude/` |
-| Codex | `<project>/.codex/` | `~/.codex/` |
-| OpenClaw | `<project>/.openclaw/` | `~/.openclaw/` |
+| 平台 | 项目级 Agent | 项目级 Skill | 用户级 Agent | 用户级 Skill |
+|------|---------------|---------------|--------------|--------------|
+| Claude Code | `<project>/.claude/agents/` | `<project>/.claude/skills/` | `~/.claude/agents/` | `~/.claude/skills/` |
+| Codex | `<project>/.codex/agents/` | `<project>/.agents/skills/` | `~/.codex/agents/` | `~/.agents/skills/` |
+| OpenClaw | `<project>/.openclaw/agents/` | `<project>/.openclaw/skills/` | `~/.openclaw/agents/` | `~/.openclaw/skills/` |
+
+Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-run 和 guardrail 会检查这个负向断言。
+
+如果安装失败并提示 `安装路径被非目录占用: <path>`，说明目标安装目录的某一级已被普通文件占用。请删除、移动或重命名该文件后重试。
 
 ## 6. 快速使用 meta-flow
 

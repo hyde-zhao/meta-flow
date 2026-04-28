@@ -148,9 +148,6 @@ description: "SCOPE-Pack 元工作流的文档工程师。将已验证产物和�
 
 ### 安装
 
-#### GitHub Copilot
-[步骤说明]
-
 #### Claude Code
 [步骤说明]
 
@@ -355,7 +352,6 @@ description: "SCOPE-Pack 元工作流的文档工程师。将已验证产物和�
 - 不直接修改目标文档
 - 输出后立即停止
 | Agent 加载失败 | Frontmatter 缺少必填字段 | 检查 name/description 字段是否存在且非空 |
-| Copilot CLI 报错 | 文件扩展名不正确 | Copilot CLI 专用文件必须使用 `.agent.md` 扩展名 |
 | 安全扫描未通过 | 提示词中包含可执行命令 | 移除或用 DryRun 模式替代直接命令调用 |
 | 跨平台行为不一致 | 平台能力差异 | 参考 PLATFORM-INSTALL-SPEC.md 了解各平台限制 |
 [从工具特性补充更多业务层面的问题]
@@ -423,4 +419,3 @@ description: "SCOPE-Pack 元工作流的文档工程师。将已验证产物和�
 - **【工作流型】** `USER-MANUAL.md` 必须包含每个检查点的操作指南（示例输出 + 回复模板）
 - 文档缺口清单已输出（即使缺口为 0 也需明确声明），按严重程度分级
 - 未修改任何产物文件、设计文件或需求文件
-

@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "format": "json-compatible-yaml",
+  "last_verified": "2026-04-28",
+  "contracts": {
+    "claude-code": {
+      "source": "project convention",
+      "scopes": {
+        "project": {
+          "rules": ".claude/CLAUDE.md",
+          "agents": ".claude/agents",
+          "skills": ".claude/skills"
+        },
+        "user": {
+          "rules": "~/.claude/CLAUDE.md",
+          "agents": "~/.claude/agents",
+          "skills": "~/.claude/skills"
+        }
+      },
+      "forbidden": {
+        "project": [],
+        "user": []
+      }
+    },
+    "codex": {
+      "source": "https://developers.openai.com/codex/concepts/customization#skills and https://developers.openai.com/codex/subagents#custom-agents",
+      "scopes": {
+        "project": {
+          "rules": "AGENTS.md",
+          "agents": ".codex/agents",
+          "skills": ".agents/skills"
+        },
+        "user": {
+          "rules": "~/.codex/AGENTS.md",
+          "agents": "~/.codex/agents",
+          "skills": "~/.agents/skills"
+        }
+      },
+      "forbidden": {
+        "project": [".codex/skills"],
+        "user": ["~/.codex/skills"]
+      }
+    },
+    "openclaw": {
+      "source": "project convention",
+      "scopes": {
+        "project": {
+          "rules": ".openclaw/manifest.yaml",
+          "agents": ".openclaw/agents",
+          "skills": ".openclaw/skills"
+        },
+        "user": {
+          "rules": "~/.openclaw/manifest.yaml",
+          "agents": "~/.openclaw/agents",
+          "skills": "~/.openclaw/skills"
+        }
+      },
+      "forbidden": {
+        "project": [],
+        "user": []
+      }
+    }
+  }
+}

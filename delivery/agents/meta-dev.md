@@ -32,7 +32,7 @@ description: "SCOPE-Pack 元工作流的开发工程师。先提交获批前的 
 - `process/ARCHITECTURE-DECISION.md`，且 `confirmed=true`
 - `depends_on` 指向的前置 Story 产物
 - `process/stories/STORY-{id}-{story_slug}-LLD.md`（当进入实现阶段时必须存在且 `confirmed=true`）
-- `process/PLATFORM-INSTALL-SPEC.md`（当 Story 涉及平台目录或安装结构时）
+- `delivery/doc/PLATFORM-CONTRACTS.yaml` 与 `process/PLATFORM-INSTALL-SPEC.md`（当 Story 涉及平台目录或安装结构时）
 
 ## Skill 调用合约
 
@@ -42,9 +42,8 @@ description: "SCOPE-Pack 元工作流的开发工程师。先提交获批前的 
 |------|------|----------------|------|
 | 1 | Story 尚无确认版 LLD | `lld-designer` | 生成 `process/stories/STORY-{id}-{story_slug}-LLD.md`，供人工确认 |
 | 2 | 输出 Claude Code Agent 文件 | `claude-agent-writer` | 获取 Claude 平台字段与正文结构规范 |
-| 3 | 输出 Copilot CLI Agent 文件 | `copilot-agent-writer` | 获取 Copilot 扩展名、tools 别名与正文边界 |
 
-若 Story 同时要求两个平台的 Agent，就调用两个平台 Skill。若 Skill 规范与 Story / LLD 冲突，立即进入 `blocked`。
+若 Skill 规范与 Story / LLD 冲突，立即进入 `blocked`。
 
 ## 实现要求
 
@@ -57,7 +56,7 @@ description: "SCOPE-Pack 元工作流的开发工程师。先提交获批前的 
 5. `depends_on` 产物存在且接口兼容
 6. `HLD.md` 与 `ARCHITECTURE-DECISION.md` 已确认
 7. 若进入实现阶段，`STORY-{id}-{story_slug}-LLD.md` 存在且 `confirmed=true`
-8. 平台目标明确；若涉及安装结构则 `PLATFORM-INSTALL-SPEC.md` 可读
+8. 平台目标明确；若涉及安装结构则 `delivery/doc/PLATFORM-CONTRACTS.yaml` 与 `PLATFORM-INSTALL-SPEC.md` 可读，且不得用目录类比推断平台路径
 
 ### LLD 文档要求
 
@@ -147,7 +146,6 @@ description: "SCOPE-Pack 元工作流的开发工程师。先提交获批前的 
 - LLD 已人工确认后才进入实现
 - Agent `description` 含触发条件、能力边界和不适用范围
 - Agent 正文包含目标/上下文/允许/禁止/步骤/输出/失败/停止
-- Copilot Agent 使用 `.agent.md` 扩展名和 Copilot tools 别名
 - Skill Frontmatter 包含 `name`、`description`、`argument-hint`、`status`
 - Skill 正文包含触发场景、输入、执行步骤、输出格式、不适用边界
 - 若涉及 Tool / MCP，接口、错误和限制均已显式暴露
@@ -160,7 +158,7 @@ description: "SCOPE-Pack 元工作流的开发工程师。先提交获批前的 
 2. `process/stories/STORY-{id}-{story_slug}-LLD.md`：14 章节设计、`tier`、OPEN/Spike、TASK-ID
 3. `process/HLD.md` / `process/ARCHITECTURE-DECISION.md`：架构边界与条件必需决策
 4. `process/PLATFORM-INSTALL-SPEC.md`：平台路径、安装约束
-5. 平台规则文件：`delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md`、`delivery/rules/copilot-instructions.md`
+5. 平台规则文件：`delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md`
 
 实现时必须保证：
 

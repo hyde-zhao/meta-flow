@@ -3,19 +3,142 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
 DELIVERY_ROOT = ROOT / "delivery"
-ALLOWED_DELIVERY_DIRS = {".github", "agents", "doc", "rules", "scripts", "skills"}
+PLATFORM_CONTRACTS = DELIVERY_ROOT / "doc" / "PLATFORM-CONTRACTS.yaml"
+ALLOWED_DELIVERY_DIRS = {"agents", "doc", "rules", "scripts", "skills"}
 ALLOWED_DELIVERY_SCRIPT_FILES = {"install.py", "install.sh", "install.ps1"}
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 SKILL_ROOT_ASSET_REF_RE = re.compile(r"<skill-root>/(?P<kind>templates|scripts)/(?P<path>[A-Za-z0-9_./-]+)")
 TEMPLATE_REF_RE = re.compile(r"(?<![A-Za-z0-9_./-])templates/(?P<path>[A-Za-z0-9_./-]+)")
 DELIVERY_SCRIPT_REF_RE = re.compile(r"delivery/scripts/(?P<name>[A-Za-z0-9_.-]+)")
+
+
+def load_platform_contracts(errors: list[str]) -> dict[str, object]:
+    if not PLATFORM_CONTRACTS.is_file():
+        errors.append(f"missing platform contract source: {PLATFORM_CONTRACTS.relative_to(ROOT)}")
+        return {}
+    try:
+        return json.loads(PLATFORM_CONTRACTS.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        errors.append(f"platform contract must be JSON-compatible YAML: {PLATFORM_CONTRACTS.relative_to(ROOT)} -> {exc}")
+        return {}
+
+
+def collect_platform_contract_errors(payload: dict[str, object]) -> list[str]:
+    errors: list[str] = []
+    try:
+        codex = payload["contracts"]["codex"]  # type: ignore[index]
+        project = codex["scopes"]["project"]  # type: ignore[index]
+        user = codex["scopes"]["user"]  # type: ignore[index]
+        forbidden_project = codex["forbidden"]["project"]  # type: ignore[index]
+        forbidden_user = codex["forbidden"]["user"]  # type: ignore[index]
+    except (AttributeError, KeyError, TypeError):
+        return ["platform contract missing codex scopes/forbidden entries"]
+
+    expected = {
+        "codex project agents": (project.get("agents"), ".codex/agents"),
+        "codex project skills": (project.get("skills"), ".agents/skills"),
+        "codex user agents": (user.get("agents"), "~/.codex/agents"),
+        "codex user skills": (user.get("skills"), "~/.agents/skills"),
+    }
+    for label, (actual, required) in expected.items():
+        if actual != required:
+            errors.append(f"platform contract mismatch: {label} must be {required}, got {actual}")
+
+    if ".codex/skills" not in forbidden_project:
+        errors.append("platform contract must forbid codex project .codex/skills")
+    if "~/.codex/skills" not in forbidden_user:
+        errors.append("platform contract must forbid codex user ~/.codex/skills")
+    return errors
+
+
+def collect_codex_dry_run_errors(payload: dict[str, object]) -> list[str]:
+    errors: list[str] = []
+    install_script = DELIVERY_ROOT / "scripts" / "install.py"
+    if not install_script.is_file():
+        return [f"missing installer: {install_script.relative_to(ROOT)}"]
+
+    with tempfile.TemporaryDirectory(prefix="scope-pack-guardrail-") as tmp:
+        project_root = Path(tmp)
+        cases = [
+            ("project", project_root / ".agents" / "skills" / "context-handoff" / "SKILL.md", ".codex/skills"),
+            ("user", Path.home() / ".agents" / "skills" / "context-handoff" / "SKILL.md", str(Path.home() / ".codex" / "skills")),
+        ]
+        for scope, required_path, forbidden_path in cases:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(install_script),
+                    "--platform",
+                    "codex",
+                    "--scope",
+                    scope,
+                    "--project-dir",
+                    str(project_root),
+                    "--content",
+                    "skills",
+                    "--skill",
+                    "context-handoff",
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            if result.returncode != 0:
+                errors.append(f"codex {scope} dry-run failed with exit {result.returncode}: {output.strip()}")
+                continue
+            if str(required_path) not in output:
+                errors.append(f"codex {scope} dry-run missing required skill path: {required_path}")
+            if forbidden_path in output or ".codex/skills" in output:
+                errors.append(f"codex {scope} dry-run must not target forbidden skill path: {forbidden_path}")
+
+        conflict_root = project_root / "path-conflict"
+        conflict_root.mkdir()
+        blocker = conflict_root / ".codex"
+        blocker.write_text("file occupying a directory path\n", encoding="utf-8")
+        conflict_result = subprocess.run(
+            [
+                sys.executable,
+                str(install_script),
+                "--platform",
+                "codex",
+                "--scope",
+                "project",
+                "--project-dir",
+                str(conflict_root),
+                "--content",
+                "agents",
+                "--agent",
+                "meta-po",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        conflict_output = conflict_result.stdout + conflict_result.stderr
+        if conflict_result.returncode == 0:
+            errors.append("codex project install must fail when .codex is a file")
+        if "安装路径被非目录占用:" not in conflict_output or str(blocker) not in conflict_output:
+            errors.append("codex path conflict must report a clear occupied-path error")
+        if "Traceback" in conflict_output or "NotADirectoryError" in conflict_output:
+            errors.append("codex path conflict must not expose a Python traceback")
+
+    contract_errors = collect_platform_contract_errors(payload)
+    errors.extend(contract_errors)
+    return errors
 
 
 def parse_frontmatter(content: str) -> dict[str, str]:
@@ -33,6 +156,9 @@ def parse_frontmatter(content: str) -> dict[str, str]:
 
 def collect_errors() -> list[str]:
     errors: list[str] = []
+    platform_contracts = load_platform_contracts(errors)
+    if platform_contracts:
+        errors.extend(collect_codex_dry_run_errors(platform_contracts))
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):
         if child.name not in ALLOWED_DELIVERY_DIRS:

@@ -69,10 +69,9 @@ init（meta-po）
 | `process/changes/` | 变更单（CR-*.md） |
 | `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
 | `delivery/skills/` | 交付 Skill 定义文件（canonical 源，同时是 meta-dev 产出目录） |
-| `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md / copilot-instructions.md） |
+| `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md） |
 | `delivery/scripts/` | 仅安装器入口（install.py / install.sh / install.ps1） |
 | `scripts/` | 仓库级检查与构建脚本（不属于交付包） |
-| `delivery/.github/agents/` | Copilot CLI Agent 入口文件 |
 | `delivery/README.md` | 产物 README（meta-doc 产出） |
 | `delivery/doc/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
 | `.agents/agents/` | 元工作流 Agent 提示词文件（meta-po/pm/se/dev/qa/doc） |
@@ -81,7 +80,7 @@ init（meta-po）
 ### 输出隔离原则
 
 > **所有由元工作流产生的文件必须按层输出到 `process/`（运行态）、`checkpoints/`（确认态）、`delivery/`（交付态）。**
-> `delivery/` 是可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`、`.github/agents/`。
+> `delivery/` 是可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`。
 > `.agents/` 保留元工作流引擎自身定义，不参与安装。
 
 ## 方案编写与修订规则

@@ -9,13 +9,11 @@
 | `delivery/` | **可独立交付的包**（可推送为独立 Git 仓库） |
 | `delivery/agents/` | 交付 Agent 定义（安装脚本从此读取，`<name>.md`） |
 | `delivery/skills/` | 交付 Skill 定义（结构为 `<name>/SKILL.md`；模板位于 `<name>/templates/`） |
-| `delivery/rules/` | 平台规则文件（`AGENTS.md`、`CLAUDE.md`、`copilot-instructions.md`） |
+| `delivery/rules/` | 平台规则文件（`AGENTS.md`、`CLAUDE.md`） |
 | `delivery/scripts/` | 安装脚本入口（`install.py` / `install.sh` / `install.ps1`）；需随 Skill 一起安装的私有脚本应放在对应 `delivery/skills/<skill>/scripts/` 下 |
-| `delivery/.github/agents/` | Copilot CLI Agent 入口文件 |
 | `scripts/` | 仓库级检查/构建脚本（不随 `delivery/` 一起安装到目标平台） |
 | `.agents/agents/` | 元工作流引擎 Agent 定义（不参与安装） |
 | `.agents/skills/` | 元工作流引擎 Skill 定义（不参与安装） |
-| `.github/` | 本仓库的 Copilot 平台配置 |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
 | `.meta-workflow/` | 安装器状态目录（仅保存安装 manifest，不作为当前元工作流运行态输出目录） |
 | `process/` | 运行时文档（gitignored，STATE.md / HLD.md / stories 等） |
@@ -58,7 +56,7 @@
 测试时可在 `delivery/` 目录中独立启动 Agent 加载产物文件：
 
 ```bash
-cd delivery && copilot @ptm-tde
+uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-run
 ```
 
 ## `.meta-workflow` 目录说明
@@ -80,7 +78,7 @@ cd delivery && copilot @ptm-tde
 1. 使用 `uv` 安装和选择 Python 解释器，不以系统 Python 作为默认入口。
 2. 运行仓库内 Python 脚本时，优先使用 `uv run --python <version> python <script>`。
 3. 一次性工具与临时依赖优先使用 `uvx` 或 `uv run --with <package>`，不把裸 `pip install` 作为日常流程。
-4. 安装到目标项目的 uv 规范统一通过 `delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md`、`delivery/rules/copilot-instructions.md` 传播。
+4. 安装到目标项目的 uv 规范统一通过 `delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md` 传播。
 
 示例：
 
@@ -117,6 +115,7 @@ python scripts/install.py --platform claude-code
 - `delivery/agents/` — canonical Agent 定义
 - `delivery/skills/` — canonical Skill 定义（含 `<skill>/templates/`、`<skill>/scripts/` 等私有运行时资产）
 - `delivery/rules/` — 平台规则文件
+- `delivery/doc/PLATFORM-CONTRACTS.yaml` — 平台安装路径单一真相源，安装器、DryRun 与 guardrail 共同读取
 
 ## 交付护栏
 
@@ -124,6 +123,8 @@ python scripts/install.py --platform claude-code
 2. 任何被 active Skill 运行时使用的模板、脚本、schema、示例，都必须放在 `delivery/skills/<skill>/` 私有子目录下。
 3. active Skill 的 `SKILL.md` 不得引用 `delivery/scripts/*.py`，也不得使用依赖当前工作目录的 `python scripts/...` 写法。
 4. Python 缓存/编译产物（`__pycache__/`、`*.pyc`）不得入库。
+5. Codex Skill 禁止安装到 `.codex/skills` 或 `~/.codex/skills`；项目级使用 `.agents/skills`，用户级使用 `~/.agents/skills`。
+6. 安装器必须在写入前检查路径组件冲突；例如目标 `.codex` 已是普通文件时，应明确报错 `安装路径被非目录占用`，不得输出 Python traceback。
 
 仓库级静态检查命令：
 
@@ -133,7 +134,6 @@ uv run --python 3.11 python scripts/check_delivery_guardrails.py
 
 命名规则：
 
-- Copilot 安装目标中的 Agent 文件后缀必须为 `.agent.md`
 - Claude Code / OpenClaw 的 Agent 文件后缀保持为 `.md`
 - Codex 目标会自动转换为 `.toml`
 

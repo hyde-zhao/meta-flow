@@ -5,7 +5,7 @@ SCOPE-Pack Platform Package Builder
 
 用法：
   uv run --with pyyaml --python 3.11 python scripts/package_builder.py --manifest delivery/doc/PACKAGE-MANIFEST.yaml
-  uv run --with pyyaml --python 3.11 python scripts/package_builder.py --manifest delivery/doc/PACKAGE-MANIFEST.yaml --targets copilot,claude-code
+  uv run --with pyyaml --python 3.11 python scripts/package_builder.py --manifest delivery/doc/PACKAGE-MANIFEST.yaml --targets claude-code,codex
   uv run --with pyyaml --python 3.11 python scripts/package_builder.py --manifest delivery/doc/PACKAGE-MANIFEST.yaml --dry-run
 """
 
@@ -21,13 +21,6 @@ from pathlib import Path
 import yaml
 
 PLATFORM_CONFIGS = {
-    "copilot": {
-        "root": ".github/copilot",
-        "entry_file": "copilot-instructions.md",
-        "agents_dir": None,
-        "skills_dir": "skills",
-        "agent_format": "md",
-    },
     "claude-code": {
         "root": ".claude",
         "entry_file": "CLAUDE.md",
@@ -198,10 +191,10 @@ def build_platform(platform: str, config: dict, agents_src: Path, skills_src: Pa
 def main():
     parser = argparse.ArgumentParser(description="SCOPE-Pack Platform Package Builder")
     parser.add_argument("--manifest", default="delivery/doc/PACKAGE-MANIFEST.yaml", help="PACKAGE-MANIFEST.yaml 路径")
-    parser.add_argument("--targets", default="copilot,claude-code,codex,openclaw", help="目标平台，逗号分隔")
+    parser.add_argument("--targets", default="claude-code,codex,openclaw", help="目标平台，逗号分隔")
     parser.add_argument("--agents-dir", default="delivery/agents", help="Agent 产物源文件目录")
     parser.add_argument("--skills-dir", default="delivery/skills", help="Skill 产物源文件目录")
-    parser.add_argument("--entry-file", default=".github/copilot-instructions.md", help="Copilot 主入口文件")
+    parser.add_argument("--entry-file", default="delivery/rules/AGENTS.md", help="平台主入口文件")
     parser.add_argument("--output", default="packages", help="输出目录")
     parser.add_argument("--dry-run", action="store_true", help="仅校验，不写文件")
     args = parser.parse_args()

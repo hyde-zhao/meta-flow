@@ -36,13 +36,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VALID_PLATFORMS = ("copilot", "claude-code", "codex", "openclaw")
+VALID_PLATFORMS = ("claude-code", "codex", "openclaw")
 VALID_SCOPES = ("project", "user")
 VALID_CONTENTS = ("all", "agents", "skills", "rules")
 KEBAB_CASE_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 BUILT_IN_CODEX_AGENTS = {"default", "worker", "explorer"}
 MANAGED_VERSION = "1.0.0"
+PLATFORM_CONTRACTS_PATH = Path("doc") / "PLATFORM-CONTRACTS.yaml"
 CANONICAL_AGENT_FRONTMATTER_FIELDS = frozenset({"name", "description", "model"})
 CODEX_REQUIRED_AGENT_FIELDS = ("name", "description", "developer_instructions")
 CODEX_OPTIONAL_AGENT_FIELDS = frozenset(
@@ -63,9 +64,8 @@ class SourceLayout:
     root: Path
     canonical_agents_dir: Path
     canonical_skills_dir: Path
-    copilot_agents_dir: Path | None
+    platform_contracts: Path
     agents_rule: Path | None
-    copilot_rule: Path | None
     claude_rule: Path | None
 
 
@@ -138,11 +138,63 @@ def detect_source_layout(root: Path) -> SourceLayout:
         root=root,
         canonical_agents_dir=canonical_agents,
         canonical_skills_dir=canonical_skills,
-        copilot_agents_dir=(root / ".github" / "agents") if (root / ".github" / "agents").is_dir() else None,
+        platform_contracts=root / PLATFORM_CONTRACTS_PATH,
         agents_rule=choose_existing(rules_dir / "AGENTS.md", root / "AGENTS.md"),
-        copilot_rule=choose_existing(rules_dir / "copilot-instructions.md", root / ".github" / "copilot-instructions.md"),
         claude_rule=choose_existing(rules_dir / "CLAUDE.md", root / "CLAUDE.md", root / ".claude" / "CLAUDE.md"),
     )
+
+
+def load_platform_contracts(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        fail(f"缺少平台契约文件: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"无法解析平台契约文件（需为 JSON-compatible YAML）: {path} -> {exc}")
+
+    contracts = payload.get("contracts")
+    if not isinstance(contracts, dict):
+        fail(f"平台契约文件缺少 contracts 对象: {path}")
+
+    missing_platforms = sorted(set(VALID_PLATFORMS) - set(contracts))
+    if missing_platforms:
+        fail(f"平台契约缺少平台: {', '.join(missing_platforms)}")
+
+    for platform in VALID_PLATFORMS:
+        platform_contract = contracts.get(platform)
+        if not isinstance(platform_contract, dict):
+            fail(f"平台契约不是对象: {platform}")
+        scopes = platform_contract.get("scopes")
+        if not isinstance(scopes, dict):
+            fail(f"平台契约缺少 scopes: {platform}")
+        for scope in VALID_SCOPES:
+            scope_contract = scopes.get(scope)
+            if not isinstance(scope_contract, dict):
+                fail(f"平台契约缺少 scope: {platform}/{scope}")
+            missing_kinds = sorted({"rules", "agents", "skills"} - set(scope_contract))
+            if missing_kinds:
+                fail(f"平台契约缺少路径类型: {platform}/{scope} -> {', '.join(missing_kinds)}")
+    return payload
+
+
+def platform_scope_contract(contracts: dict[str, object], platform: str, scope: str) -> dict[str, str]:
+    platform_contract = contracts["contracts"][platform]  # type: ignore[index]
+    scope_contract = platform_contract["scopes"][scope]  # type: ignore[index]
+    return scope_contract  # type: ignore[return-value]
+
+
+def resolve_contract_path(path_value: str, workspace_root: Path) -> Path:
+    if path_value.startswith("~/"):
+        return Path(path_value).expanduser()
+    candidate = Path(path_value)
+    if candidate.is_absolute():
+        return candidate
+    return workspace_root / candidate
+
+
+def target_path(contracts: dict[str, object], platform: str, scope: str, kind: str, workspace_root: Path) -> Path:
+    scope_contract = platform_scope_contract(contracts, platform, scope)
+    return resolve_contract_path(scope_contract[kind], workspace_root)
 
 
 def parse_frontmatter(content: str) -> tuple[dict[str, object], str]:
@@ -248,12 +300,6 @@ def list_canonical_agents(layout: SourceLayout, permissive: bool) -> list[AgentD
     return agents
 
 
-def list_copilot_agent_files(layout: SourceLayout) -> list[Path]:
-    if layout.copilot_agents_dir is None:
-        return []
-    return sorted(layout.copilot_agents_dir.glob("*.agent.md"))
-
-
 def list_skill_dirs(layout: SourceLayout) -> list[Path]:
     return sorted(path for path in layout.canonical_skills_dir.iterdir() if path.is_dir() and (path / "SKILL.md").is_file())
 
@@ -267,18 +313,6 @@ def select_agent_definitions(definitions: list[AgentDefinition], requested: list
     missing = requested_set - {definition.name for definition in selected}
     if missing:
         fail(f"未找到这些 canonical agent: {', '.join(sorted(missing))}")
-    return selected
-
-
-def select_copilot_agent_files(files: list[Path], requested: list[str]) -> list[Path]:
-    if not requested:
-        return files
-
-    requested_set = set(requested)
-    selected = [file_path for file_path in files if file_path.name.endswith(".agent.md") and file_path.name[:-9] in requested_set]
-    missing = requested_set - {file_path.name[:-9] for file_path in selected}
-    if missing:
-        fail(f"未找到这些 Copilot agent: {', '.join(sorted(missing))}")
     return selected
 
 
@@ -307,7 +341,6 @@ def resolve_workspace_root(project_dir: str | None) -> Path:
 def resolve_user_home_root(platform: str) -> Path:
     home = Path.home()
     roots = {
-        "copilot": home / ".copilot",
         "claude-code": home / ".claude",
         "codex": home / ".codex",
         "openclaw": home / ".openclaw",
@@ -435,12 +468,51 @@ def record_original_text(transaction: Transaction, path: Path) -> None:
         transaction.original_text[path] = path.read_text(encoding="utf-8") if path.exists() else None
 
 
+def path_components(path: Path) -> list[Path]:
+    if path.is_absolute():
+        current = Path(path.anchor)
+        parts = path.parts[1:]
+    else:
+        current = Path()
+        parts = path.parts
+
+    components: list[Path] = []
+    for part in parts:
+        current = current / part
+        components.append(current)
+    return components
+
+
+def path_conflict_message(path: Path) -> str:
+    return (
+        f"安装路径被非目录占用: {path}\n"
+        "请删除、移动或重命名该文件后重试；安装器需要在该位置创建目录。"
+    )
+
+
+def ensure_directory(path: Path, dry_run: bool) -> None:
+    for component in path_components(path):
+        if component.exists() and not component.is_dir():
+            fail(path_conflict_message(component))
+    if not dry_run:
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_file_target(path: Path, dry_run: bool) -> None:
+    ensure_directory(path.parent, dry_run)
+    if path.exists() and path.is_dir():
+        fail(
+            f"安装目标文件被目录占用: {path}\n"
+            "请删除、移动或重命名该目录后重试；安装器需要在该位置写入文件。"
+        )
+
+
 def write_text(path: Path, content: str, transaction: Transaction, dry_run: bool) -> None:
+    ensure_file_target(path, dry_run)
     if dry_run:
         print(f"[DryRun] write -> {path}")
         return
     record_original_text(transaction, path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
@@ -469,10 +541,10 @@ def remove_path(path: Path, transaction: Transaction, dry_run: bool) -> None:
 
 def rollback_transaction(transaction: Transaction) -> None:
     for path, files in transaction.removed_dirs.items():
-        path.mkdir(parents=True, exist_ok=True)
+        ensure_directory(path, dry_run=False)
         for relative_path, payload in files:
             restored = path / relative_path
-            restored.parent.mkdir(parents=True, exist_ok=True)
+            ensure_file_target(restored, dry_run=False)
             restored.write_bytes(payload)
 
     for path in sorted(transaction.original_text, reverse=True):
@@ -481,7 +553,7 @@ def rollback_transaction(transaction: Transaction) -> None:
             if path.exists():
                 path.unlink()
             continue
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_file_target(path, dry_run=False)
         path.write_text(original, encoding="utf-8")
 
 
@@ -502,6 +574,7 @@ def upsert_managed_block(path: Path, canonical_content: str, transaction: Transa
     begin_prefix = "<!-- myflow:managed:begin"
     end_marker = "<!-- myflow:managed:end -->"
 
+    ensure_file_target(path, dry_run)
     if not path.exists():
         write_text(path, block + "\n", transaction, dry_run)
         return
@@ -533,6 +606,7 @@ def clear_managed_block(path: Path, transaction: Transaction, dry_run: bool) -> 
     end_marker = "<!-- myflow:managed:end -->"
     if not path.exists():
         return
+    ensure_file_target(path, dry_run)
 
     existing = path.read_text(encoding="utf-8")
     begin_index = existing.find(begin_prefix)
@@ -563,36 +637,35 @@ def copy_skill_tree(src_dir: Path, dest_dir: Path, transaction: Transaction, dry
             copy_text_with_audit(src_path, dest_path, transaction, dry_run, commit, generated)
             continue
         if dry_run:
+            ensure_file_target(dest_path, dry_run=True)
             print(f"[DryRun] {src_path} -> {dest_path}")
             continue
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        if dest_path.exists():
-            record_original_text(transaction, dest_path)
-        else:
-            record_original_text(transaction, dest_path)
+        ensure_file_target(dest_path, dry_run=False)
+        record_original_text(transaction, dest_path)
         shutil.copy2(src_path, dest_path)
 
 
-def counterpart_paths(platform: str, workspace_root: Path) -> dict[str, Path]:
-    home = Path.home()
-    mapping = {
-        "codex-agent-user": home / ".codex" / "agents",
-        "codex-agent-project": workspace_root / ".codex" / "agents",
-        "codex-skill-user": home / ".agents" / "skills",
-        "codex-skill-project": workspace_root / ".agents" / "skills",
-        "claude-agent-user": home / ".claude" / "agents",
-        "claude-agent-project": workspace_root / ".claude" / "agents",
-        "claude-skill-user": home / ".claude" / "skills",
-        "claude-skill-project": workspace_root / ".claude" / "skills",
-    }
+def counterpart_paths(platform: str, workspace_root: Path, contracts: dict[str, object]) -> dict[str, Path]:
     if platform not in {"codex", "claude-code"}:
         return {}
-    return mapping
+    return {
+        "agent-user": target_path(contracts, platform, "user", "agents", workspace_root),
+        "agent-project": target_path(contracts, platform, "project", "agents", workspace_root),
+        "skill-user": target_path(contracts, platform, "user", "skills", workspace_root),
+        "skill-project": target_path(contracts, platform, "project", "skills", workspace_root),
+    }
 
 
-def scan_name_conflicts(platform: str, scope: str, workspace_root: Path, agent_names: list[str], skill_names: list[str]) -> list[dict[str, str]]:
+def scan_name_conflicts(
+    platform: str,
+    scope: str,
+    workspace_root: Path,
+    contracts: dict[str, object],
+    agent_names: list[str],
+    skill_names: list[str],
+) -> list[dict[str, str]]:
     conflicts: list[dict[str, str]] = []
-    paths = counterpart_paths(platform, workspace_root)
+    paths = counterpart_paths(platform, workspace_root, contracts)
     if not paths:
         return conflicts
     current_scope = "user" if scope == "user" else "project"
@@ -602,37 +675,48 @@ def scan_name_conflicts(platform: str, scope: str, workspace_root: Path, agent_n
         for name in agent_names:
             if name in BUILT_IN_CODEX_AGENTS:
                 fail(f"Codex subagent 名称禁止与 built-in 重名: {name}")
-            other_path = paths[f"codex-agent-{other_scope}"] / f"{name}.toml"
+            other_path = paths[f"agent-{other_scope}"] / f"{name}.toml"
             if other_path.exists():
                 conflicts.append({"kind": "agent", "name": name, "scope": other_scope, "path": str(other_path)})
         for name in skill_names:
-            other_path = paths[f"codex-skill-{other_scope}"] / name / "SKILL.md"
+            other_path = paths[f"skill-{other_scope}"] / name / "SKILL.md"
             if other_path.exists():
                 conflicts.append({"kind": "skill", "name": name, "scope": other_scope, "path": str(other_path)})
         return conflicts
 
     for name in agent_names:
-        other_path = paths[f"claude-agent-{other_scope}"] / f"{name}.md"
+        other_path = paths[f"agent-{other_scope}"] / f"{name}.md"
         if other_path.exists():
             conflicts.append({"kind": "agent", "name": name, "scope": other_scope, "path": str(other_path)})
     for name in skill_names:
-        other_path = paths[f"claude-skill-{other_scope}"] / name / "SKILL.md"
+        other_path = paths[f"skill-{other_scope}"] / name / "SKILL.md"
         if other_path.exists():
             conflicts.append({"kind": "skill", "name": name, "scope": other_scope, "path": str(other_path)})
     return conflicts
 
 
-def runtime_override_warnings(platform: str, scope: str, workspace_root: Path) -> list[str]:
+def runtime_override_warnings(platform: str, scope: str, workspace_root: Path, contracts: dict[str, object]) -> list[str]:
     warnings: list[str] = []
     if scope != "user":
         return warnings
 
     if platform == "codex":
-        for candidate in [workspace_root / "AGENTS.override.md", workspace_root / "AGENTS.md", workspace_root / ".codex" / "agents"]:
+        for candidate in [
+            workspace_root / "AGENTS.override.md",
+            target_path(contracts, "codex", "project", "rules", workspace_root),
+            target_path(contracts, "codex", "project", "agents", workspace_root),
+            target_path(contracts, "codex", "project", "skills", workspace_root),
+        ]:
             if candidate.exists():
                 warnings.append(f"检测到可能覆盖用户级 Codex 安装的项目层对象: {candidate}")
     if platform == "claude-code":
-        for candidate in [workspace_root / "CLAUDE.md", workspace_root / "CLAUDE.local.md", workspace_root / ".claude" / "CLAUDE.md", workspace_root / ".claude" / "agents"]:
+        for candidate in [
+            workspace_root / "CLAUDE.md",
+            workspace_root / "CLAUDE.local.md",
+            target_path(contracts, "claude-code", "project", "rules", workspace_root),
+            target_path(contracts, "claude-code", "project", "agents", workspace_root),
+            target_path(contracts, "claude-code", "project", "skills", workspace_root),
+        ]:
             if candidate.exists():
                 warnings.append(f"检测到可能覆盖用户级 Claude Code 安装的项目层对象: {candidate}")
     return warnings
@@ -663,6 +747,7 @@ def install_rules(
     platform: str,
     scope: str,
     workspace_root: Path,
+    contracts: dict[str, object],
     layout: SourceLayout,
     transaction: Transaction,
     dry_run: bool,
@@ -670,20 +755,14 @@ def install_rules(
     generated: str,
     manifest_entries: list[dict[str, str]],
 ) -> None:
-    if platform == "copilot" and layout.copilot_rule:
-        dest = (workspace_root / ".github" / "copilot-instructions.md") if scope == "project" else (resolve_user_home_root("copilot") / "copilot-instructions.md")
-        copy_text_with_audit(layout.copilot_rule, dest, transaction, dry_run, commit, generated)
-        manifest_entries.append({"kind": "rule", "path": str(dest), "remove_path": str(dest)})
-        return
-
     if platform == "codex" and layout.agents_rule:
-        dest = (workspace_root / "AGENTS.md") if scope == "project" else (resolve_user_home_root("codex") / "AGENTS.md")
+        dest = target_path(contracts, platform, scope, "rules", workspace_root)
         upsert_managed_block(dest, layout.agents_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated)
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
         return
 
     if platform == "claude-code" and layout.claude_rule:
-        dest = (workspace_root / ".claude" / "CLAUDE.md") if scope == "project" else (resolve_user_home_root("claude-code") / "CLAUDE.md")
+        dest = target_path(contracts, platform, scope, "rules", workspace_root)
         upsert_managed_block(dest, layout.claude_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated)
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
 
@@ -692,6 +771,7 @@ def install_agents(
     platform: str,
     scope: str,
     workspace_root: Path,
+    contracts: dict[str, object],
     layout: SourceLayout,
     canonical_agents: list[AgentDefinition],
     requested_agents: list[str],
@@ -703,25 +783,12 @@ def install_agents(
 ) -> list[str]:
     installed_names: list[str] = []
 
-    if platform == "copilot":
-        files = select_copilot_agent_files(list_copilot_agent_files(layout), requested_agents)
-        if not files:
-            fail("Copilot 平台没有可安装的 agent 文件。")
-        base_dir = (workspace_root / ".github" / "agents") if scope == "project" else (resolve_user_home_root("copilot") / "agents")
-        for src in files:
-            dest = base_dir / src.name
-            copy_text_with_audit(src, dest, transaction, dry_run, commit, generated)
-            name = src.name[:-9]
-            installed_names.append(name)
-            manifest_entries.append({"kind": "agent", "name": name, "path": str(dest), "remove_path": str(dest)})
-        return installed_names
-
     selected_agents = select_agent_definitions(canonical_agents, requested_agents)
     if not selected_agents:
         fail(f"{platform} 平台没有可安装的 canonical agent。")
 
     if platform == "claude-code":
-        base_dir = (workspace_root / ".claude" / "agents") if scope == "project" else (resolve_user_home_root("claude-code") / "agents")
+        base_dir = target_path(contracts, platform, scope, "agents", workspace_root)
         for agent in selected_agents:
             dest = base_dir / f"{agent.name}.md"
             write_text(dest, render_claude_agent(agent, commit, generated), transaction, dry_run)
@@ -730,7 +797,7 @@ def install_agents(
         return installed_names
 
     if platform == "codex":
-        base_dir = (workspace_root / ".codex" / "agents") if scope == "project" else (resolve_user_home_root("codex") / "agents")
+        base_dir = target_path(contracts, platform, scope, "agents", workspace_root)
         for agent in selected_agents:
             dest = base_dir / f"{agent.name}.toml"
             content = render_codex_agent(agent, commit, generated)
@@ -740,7 +807,7 @@ def install_agents(
             manifest_entries.append({"kind": "agent", "name": agent.name, "path": str(dest), "remove_path": str(dest)})
         return installed_names
 
-    base_dir = (workspace_root / ".openclaw" / "agents") if scope == "project" else (resolve_user_home_root("openclaw") / "agents")
+    base_dir = target_path(contracts, platform, scope, "agents", workspace_root)
     for agent in selected_agents:
         dest = base_dir / f"{agent.name}.md"
         copy_text_with_audit(agent.source, dest, transaction, dry_run, commit, generated)
@@ -753,6 +820,7 @@ def install_skills(
     platform: str,
     scope: str,
     workspace_root: Path,
+    contracts: dict[str, object],
     skill_dirs: list[Path],
     transaction: Transaction,
     dry_run: bool,
@@ -761,14 +829,7 @@ def install_skills(
     manifest_entries: list[dict[str, str]],
 ) -> list[str]:
     installed_names: list[str] = []
-    if platform == "codex":
-        base_dir = (workspace_root / ".agents" / "skills") if scope == "project" else (Path.home() / ".agents" / "skills")
-    elif platform == "claude-code":
-        base_dir = (workspace_root / ".claude" / "skills") if scope == "project" else (resolve_user_home_root("claude-code") / "skills")
-    elif platform == "copilot":
-        base_dir = (workspace_root / ".github" / "copilot" / "skills") if scope == "project" else (resolve_user_home_root("copilot") / "skills")
-    else:
-        base_dir = (workspace_root / ".openclaw" / "skills") if scope == "project" else (resolve_user_home_root("openclaw") / "skills")
+    base_dir = target_path(contracts, platform, scope, "skills", workspace_root)
 
     for skill_dir in skill_dirs:
         dest_dir = base_dir / skill_dir.name
@@ -788,11 +849,12 @@ def install_skills(
 def write_openclaw_manifest(
     scope: str,
     workspace_root: Path,
+    contracts: dict[str, object],
     manifest_entries: list[dict[str, str]],
     transaction: Transaction,
     dry_run: bool,
 ) -> None:
-    base_dir = (workspace_root / ".openclaw") if scope == "project" else resolve_user_home_root("openclaw")
+    base_dir = target_path(contracts, "openclaw", scope, "rules", workspace_root).parent
     agents: list[dict[str, str]] = []
     skills: list[dict[str, str]] = []
     for entry in manifest_entries:
@@ -848,6 +910,7 @@ def main() -> None:
     workspace_root = resolve_workspace_root(args.project_dir)
     repo_root = script_repo_root(Path(__file__))
     layout = detect_source_layout(repo_root)
+    platform_contracts = load_platform_contracts(layout.platform_contracts)
     commit = canonical_commit(repo_root)
     generated = iso_now()
     target_manifest_path = manifest_path(workspace_root)
@@ -862,6 +925,7 @@ def main() -> None:
 
     print(f"Workspace root: {workspace_root}")
     print(f"Canonical source root: {layout.root}")
+    print(f"Platform contracts: {layout.platform_contracts}")
     print(f"Manifest path: {target_manifest_path}")
     print(f"Platform: {args.platform}")
     print(f"Scope: {args.scope}")
@@ -893,20 +957,21 @@ def main() -> None:
     if requested_skills and not install_skills_enabled:
         fail("指定了 --skill，但内容类型未包含 skills。")
 
-    warnings: list[str] = runtime_override_warnings(args.platform, args.scope, workspace_root)
+    warnings: list[str] = runtime_override_warnings(args.platform, args.scope, workspace_root, platform_contracts)
     manifest_entries: list[dict[str, str]] = []
     installed_agent_names: list[str] = []
     installed_skill_names: list[str] = []
 
     try:
         if install_rules_enabled:
-            install_rules(args.platform, args.scope, workspace_root, layout, transaction, args.dry_run, commit, generated, manifest_entries)
+            install_rules(args.platform, args.scope, workspace_root, platform_contracts, layout, transaction, args.dry_run, commit, generated, manifest_entries)
 
         if install_agents_enabled:
             installed_agent_names = install_agents(
                 args.platform,
                 args.scope,
                 workspace_root,
+                platform_contracts,
                 layout,
                 canonical_agents,
                 requested_agents,
@@ -922,6 +987,7 @@ def main() -> None:
                 args.platform,
                 args.scope,
                 workspace_root,
+                platform_contracts,
                 selected_skill_dirs,
                 transaction,
                 args.dry_run,
@@ -930,10 +996,10 @@ def main() -> None:
                 manifest_entries,
             )
 
-        conflicts = scan_name_conflicts(args.platform, args.scope, workspace_root, installed_agent_names, installed_skill_names)
+        conflicts = scan_name_conflicts(args.platform, args.scope, workspace_root, platform_contracts, installed_agent_names, installed_skill_names)
 
         if args.platform == "openclaw" and (install_agents_enabled or install_skills_enabled):
-            write_openclaw_manifest(args.scope, workspace_root, manifest_entries, transaction, args.dry_run)
+            write_openclaw_manifest(args.scope, workspace_root, platform_contracts, manifest_entries, transaction, args.dry_run)
 
         entry: dict[str, object] = {
             "platform": args.platform,

@@ -48,7 +48,6 @@ confirmed_at: ""
 
 ## 目标平台
 
-- [ ] GitHub Copilot
 - [ ] Claude Code
 - [ ] Codex
 - [ ] OpenClaw

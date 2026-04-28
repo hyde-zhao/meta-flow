@@ -11,6 +11,7 @@
 4. active Skill 的运行时资产（`templates/`、`scripts/`、`schemas/`、`examples/`）必须留在该 Skill 目录内，不得回流到 `delivery/` 顶层公共目录。
 5. active Skill 若在 `SKILL.md` 中引用 `templates/` 或 `scripts/`，必须使用 Skill 相对路径或 `<skill-root>/...`，不得写 `delivery/scripts/*.py` 或依赖 cwd 的 `python scripts/...`。
 6. active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后脚本仍可直接执行。
+7. 涉及平台安装路径的 Skill 必须以 `delivery/doc/PLATFORM-CONTRACTS.yaml` 为路径真相源；不得按同平台目录进行类比推断。
 
 ## Agent → Skill 关系
 
@@ -18,8 +19,8 @@
 |---|---|---|---|
 | `meta-po` | `init`、状态推进、变更管理、问题分流 | `state-router`、`change-impact-analysis`、`issue-routing`、`context-handoff`、`review-artifact-protocol` | 推进状态、受理变更、路由问题、装配交接上下文，并持有 review gate 共享协议 |
 | `meta-pm` | `requirement-clarification` | `use-case-discovery`、`requirement-clarifier`、`scenario-expansion`、`requirement-extraction`、`scope-normalization`、`review-artifact-protocol` | 发现**产物类型感知**场景、澄清需求歧义、展开测试场景、提取需求、整理需求范围，并在 review_mode 复用统一评审协议 |
-| `meta-se` | `solution-design`（HLD 前）、`story-planning` | `awesome-copilot-fetcher`、`awesome-copilot-analysis`、`hld-designer`、`phase-designer`、`dependency-mapper`、`wave-planner`、`story-manager`、`dag-validator`、`review-artifact-protocol` | 资源获取与借鉴分析、输出 HLD、拆解 Story、建立依赖并校验计划，并在 review_mode 复用统一评审协议 |
-| `meta-dev` | `story-execution` | `lld-designer`、`claude-agent-writer`、`copilot-agent-writer`、`review-artifact-protocol` | 先输出 LLD，再按平台规范实现 Agent 产物，并在可行性审查时复用统一评审协议 |
+| `meta-se` | `solution-design`、`story-planning` | `hld-designer`、`phase-designer`、`dependency-mapper`、`wave-planner`、`story-manager`、`dag-validator`、`review-artifact-protocol` | 输出 HLD、拆解 Story、建立依赖并校验计划，并在 review_mode 复用统一评审协议 |
+| `meta-dev` | `story-execution` | `lld-designer`、`claude-agent-writer`、`review-artifact-protocol` | 先输出 LLD，再按平台规范实现 Agent 产物，并在可行性审查时复用统一评审协议 |
 | `meta-qa` | `ready-for-verification` 后 | `dangerous-command-scan`、`platform-validator`、`package-builder`、`coverage-checker`、`runtime-risk-review`、`permission-boundary-check`、`context-manifest-builder`、`review-artifact-protocol` | 执行质量验证、安全审计、安装脚本与安装结构校验，并在 review_mode 复用统一评审协议 |
 | `meta-doc` | `documentation` | `workflow-renderer`、`review-artifact-protocol` | 将已验证产物组织为可读交付文档，并在 review_mode 复用统一评审协议 |
 | `meta-dm`（已废弃） | 历史 Story 规划 | `phase-designer`、`wave-planner`、`dependency-mapper`、`story-manager`、`dag-validator` | 仅供历史参考，现由 `meta-se` 接管 |
@@ -28,8 +29,6 @@
 
 | Skill | Canonical Agent | 说明 |
 |---|---|---|
-| `awesome-copilot-fetcher` | `meta-se` | 拉取 `.input/` 外部资源（`.input/` 为空时由 meta-se 触发）|
-| `awesome-copilot-analysis` | `meta-se` | HLD 前借鉴分析，输出 `ANALYSIS-<project>-<topic>.md` |
 | `state-router` | `meta-po` | 状态机推进与回退 |
 | `change-impact-analysis` | `meta-po` | 需求/设计变更管理 |
 | `issue-routing` | `meta-po` | ISSUE 分类与路由 |
@@ -48,10 +47,9 @@
 | `dag-validator` | `meta-se` | 校验计划依赖图 |
 | `lld-designer` | `meta-dev` | Story 级 LLD 设计 |
 | `claude-agent-writer` | `meta-dev` | Claude Agent 产物规范 |
-| `copilot-agent-writer` | `meta-dev` | Copilot Agent 产物规范 |
 | `dangerous-command-scan` | `meta-qa` | 危险命令与注入风险扫描 |
-| `platform-validator` | `meta-qa` | 安装目标与 DryRun 校验 |
-| `package-builder` | `meta-qa` | 平台安装脚本生成 |
+| `platform-validator` | `meta-qa` | 基于 `delivery/doc/PLATFORM-CONTRACTS.yaml` 校验安装目标、DryRun 和 Codex 禁止路径 |
+| `package-builder` | `meta-qa` | 基于 `delivery/doc/PLATFORM-CONTRACTS.yaml` 生成平台安装脚本 |
 | `coverage-checker` | `meta-qa` | 覆盖度检查 |
 | `runtime-risk-review` | `meta-qa` | 运行时风险复核 |
 | `permission-boundary-check` | `meta-qa` | 权限边界检查 |
@@ -70,13 +68,6 @@
 | `requirement-clarifier` | `REQUEST.md`、`REQUIREMENTS.md`、`CLARIFICATION-LOG.md` → `CLARIFICATION-LOG.md` | 只处理需求歧义、未决问题和澄清轮次；不替代场景发现 |
 | `requirement-extraction` | `USE-CASES.md` / `REQUEST.md` → `REQUIREMENTS.md` | 直接消费正式场景工件及其治理字段提取需求；不重做场景访谈 |
 | `scenario-expansion` | `REQUIREMENTS.md` → `SCENARIOS.yaml`、`TEST-MATRIX.md` | 面向测试覆盖与验证场景；不用于用户场景发现或需求歧义澄清 |
-
-## 外部资源 Skill
-
-| Skill | 分类 | 说明 |
-|---|---|---|
-| `awesome-copilot-fetcher` | 资源获取 | 从 `github/awesome-copilot` 拉取 agents/skills/workflows/hooks/instructions/plugins，存放到 `.input/` |
-| `awesome-copilot-analysis` | 资源分析 | 对照项目 REQUIREMENTS，分析 `.input/` 中资源的优缺点，输出 `ANALYSIS-<project>-<topic>.md` 供 HLD / meta-dev / meta-qa 引用 |
 
 ## 非正式 / 未交付占位说明
 
@@ -97,7 +88,6 @@
 
 | 正式工件 | 模板持有 Skill | 消费者 Skill | 说明 |
 |---|---|---|---|
-| `ANALYSIS-<project>-<topic>.md` | `awesome-copilot-analysis` | `hld-designer`、`lld-designer`（via Story dev_context）、`meta-qa`（via hooks 清单）| 分析报告是 HLD 前置输入；meta-dev/meta-qa 消费其第 7.1/7.4 节 |
 | `CR-*.md` | `change-impact-analysis` | `issue-routing` | `issue-routing` 只消费 CR 内容契约 |
 | `USE-CASES.md` | `use-case-discovery` | `requirement-extraction` | `use-case-discovery` 维护正式场景工件、治理字段与覆盖自检表；`requirement-extraction` 直接消费该工件 |
 | `REQUIREMENTS.md` | `requirement-extraction` | `scope-normalization` | `scope-normalization` 归一化已生成的需求 |

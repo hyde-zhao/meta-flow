@@ -1,1 +1,0 @@
-D:/01_workspaces/myflow/.output/skills/combination-design/SKILL.md

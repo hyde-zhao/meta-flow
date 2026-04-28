@@ -1,4 +1,4 @@
-# SCOPE-Pack 元工作流 — Copilot 全局指令
+# SCOPE-Pack 元工作流 — Claude Code 全局指令
 
 本会话运行 **SCOPE-Pack** 通用 Agent/Skill 工作流产物工厂。
 
@@ -26,7 +26,6 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | `hld-designer` | HLD、高层设计、架构评审、架构方案、方案设计、架构设计、复杂度判定、设计方案、simple/standard/complex 判断 |
 | `lld-designer` | LLD、详细设计、实现设计、Story 设计 |
 | `claude-agent-writer` | 写 Claude Agent、创建 Claude 子代理、Claude subagent |
-| `copilot-agent-writer` | 写 Copilot Agent、创建自定义 Agent、Copilot CLI Agent |
 | `phase-designer` | 阶段划分、设计阶段、Phase 设计、执行顺序 |
 | `wave-planner` | 并行分组、Wave 划分、并行计划、任务编排 |
 | `dependency-mapper` | 依赖关系、DAG、任务依赖、前置依赖 |
@@ -81,7 +80,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 9. **确定性语言**：meta-se / meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
 10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
 11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
-12. **输出隔离**：运行态写入 `process/`，确认稿写入 `checkpoints/`，交付物写入 `delivery/`；`.agents/` 和 `.github/` 仅存放元工作流自身定义
+12. **输出隔离**：运行态写入 `process/`，确认稿写入 `checkpoints/`，交付物写入 `delivery/`；`.agents/` 存放元工作流自身 Skill 定义
 13. **Agent/Skill 关系维护**：开发或修改 Agent、Skill 时，若影响调用、适用或归属关系，必须同步更新 `skills/README.md`
 14. **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；Skill 运行时脚本必须放到 `delivery/skills/<skill>/scripts/`
 15. **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...`
@@ -90,6 +89,8 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 18. **护栏静态检查**：提交前必须运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
 19. **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
 20. **场景主体默认值**：若用户未显式声明 meta 优化，`USE-CASES.md` 默认 `scenario_subject_type=target-artifact`，不得把当前仓库 / 当前工作流当成默认场景主体
+21. **平台契约优先**：涉及安装路径、schema 或发现机制时，`delivery/doc/PLATFORM-CONTRACTS.yaml` 是路径真相源；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
+22. **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
 
 ## 人工检查点（5 类）
 
@@ -125,6 +126,7 @@ Complex 模式下，同一 Wave 内的 Story 支持并行执行，但同一 Stor
 10. **修订记录完整**：每次迭代必须在产物头部追加修订记录（版本号 / 日期 / 修订人 / 变更要点精确到章节号）。
 11. **Story 拆解一致性**：§工作量章节的 Story 数、Wave 数必须与 §分阶段落地一一对应。
 12. **决策与产物形态对齐**：ADR 结论必须回写到架构图、模块表、流程图、落地阶段；孤立 ADR 视为未落地。
+13. **官方契约一致性**：平台路径、schema 或发现机制必须引用官方文档或 `delivery/doc/PLATFORM-CONTRACTS.yaml`；禁止按同平台目录类比推断。
 
 ## LLD 消费契约补充
 

@@ -69,10 +69,9 @@ init（meta-po）
 | `process/changes/` | 变更单（CR-*.md） |
 | `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
 | `delivery/skills/` | 交付 Skill 定义文件（canonical 源，同时是 meta-dev 产出目录） |
-| `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md / copilot-instructions.md） |
+| `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md） |
 | `delivery/scripts/` | 仅安装器入口（install.py / install.sh / install.ps1） |
 | `scripts/` | 仓库级检查与构建脚本（不属于交付包） |
-| `delivery/.github/agents/` | Copilot CLI Agent 入口文件 |
 | `delivery/README.md` | 产物 README（meta-doc 产出） |
 | `delivery/doc/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
 | `.agents/agents/` | 元工作流 Agent 提示词文件（meta-po/pm/se/dev/qa/doc） |
@@ -81,7 +80,7 @@ init（meta-po）
 ### 输出隔离原则
 
 > **所有由元工作流产生的文件必须按层输出到 `process/`（运行态）、`checkpoints/`（确认态）、`delivery/`（交付态）。**
-> `delivery/` 是可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`、`.github/agents/`。
+> `delivery/` 是可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`。
 > `.agents/` 保留元工作流引擎自身定义，不参与安装。
 
 ## Python 环境与依赖管理（uv）
@@ -97,7 +96,7 @@ init（meta-po）
 
 ## 方案编写与修订规则
 
-1. **先核对事实，再写方案**：平台路径、发现面、配置位置和行为约束，必须以当前仓库实现与官方文档为准；发现旧假设错误时，先修正事实判断，再扩展方案。
+1. **先核对事实，再写方案**：平台路径、发现面、配置位置和行为约束，必须以当前仓库实现与官方文档为准；发现旧假设错误时，先修正事实判断，再扩展方案。涉及平台安装路径时，`delivery/doc/PLATFORM-CONTRACTS.yaml` 是单一真相源，README / USER-MANUAL / HLD / LLD 只能作为派生说明。
 2. **优先最简方案**：默认选择能满足目标的最小设计，避免为“统一”额外引入新抽象层、共享运行时或重复形态；若必须保留备选方案，应说明何时切换。
 3. **废弃内容要彻底删除**：已确认废弃的目录、路径变量、章节、实施步骤和验收项，不得只标注“废弃”而保留残余引用。
 4. **问题必须状态化**：阻塞问题、遗留问题和开放问题必须逐项标注状态（如已解答、部分解答、待整改），并在方案修订时同步刷新。
@@ -122,6 +121,7 @@ init（meta-po）
 10. **修订记录完整**：每次设计迭代必须在产物头部的 `修订记录` 表追加一行，包含版本号、日期、修订人、变更要点（精确到章节号），避免靠 Git 历史反推。
 11. **Story 拆解一致性**：§工作量章节中的 Story 数、Wave 数必须与 §分阶段落地章节一一对应；不一致视为设计缺陷。
 12. **决策与产物形态对齐**：ADR 的结论必须反映在对应章节（架构图、模块表、流程图、落地阶段）中；孤立的 ADR 未回写到其他章节视为未落地。
+13. **官方契约一致性**：涉及平台路径、schema 或发现机制的 HLD / LLD / Story Plan / ADR，必须引用官方文档或 `delivery/doc/PLATFORM-CONTRACTS.yaml` 中的已验证来源；禁止用同平台目录类比推断。Codex Agent 与 Skill 必须分开断言：Agent 在 `.codex/agents` / `~/.codex/agents`，Skill 在 `.agents/skills` / `~/.agents/skills`。
 
 ## 协议约定
 
@@ -146,6 +146,8 @@ init（meta-po）
 - **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 - **方案收敛优先**：涉及方案设计、整改规划或跨平台治理时，默认优先最简方案与内联策略；除非事实或验收要求证明不足，不新增共享模板体系或多余抽象层
 - **精确匹配优先**：涉及对象定位、版本对齐、规则命中或平台路径判定时，默认采用 exact 语义，不使用模糊匹配作为默认行为
+- **平台契约优先**：安装器、DryRun、guardrail 与交付文档必须共同引用 `delivery/doc/PLATFORM-CONTRACTS.yaml`；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
+- **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
 
 ## 防火墙测试工作流（现有，独立运行）
 

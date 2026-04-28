@@ -92,7 +92,7 @@ description: "SCOPE-Pack 元工作流的主编排器（产品负责人）。负�
 
 - frontmatter：`request_id`、`submitted_at`、`submitted_by`、`engagement_mode`、`scenario_subject_type`、`scenario_subject_id`
 - `## 用户目标`
-- `## 目标平台`（GitHub Copilot / Claude Code / Codex / OpenClaw 勾选项）
+- `## 目标平台`（Claude Code / Codex / OpenClaw 勾选项）
 - `## 交付预期`
 - `## 补充约束`
 - 若用户未显式声明“meta 工作流优化 / 自我开发”，默认写入：

@@ -4,7 +4,7 @@ description: >-
   当需要校验安装目标目录或安装脚本 DryRun 输出是否符合平台规范时使用。
   触发词包括：校验安装、平台验证、结构校验、安装结构检查、目录规范校验。
   适用场景：安装脚本生成后执行；或独立校验现有项目 / 用户级安装目录。
-argument-hint: "可选：指定目标平台（copilot/claude-code/codex/openclaw）、scope（project/user）或目标路径"
+argument-hint: "可选：指定目标平台（claude-code/codex/openclaw）、scope（project/user）或目标路径"
 user-invokable: true
 status: active
 ---
@@ -26,7 +26,6 @@ status: active
 
 | 平台 | 项目级必须存在的路径 | 用户级必须存在的路径 |
 |------|----------------------|----------------------|
-| copilot | `.github/copilot-instructions.md`，`.github/agents/` 或 `.github/copilot/skills/` | `~/.copilot/agents/` 或 `~/.copilot/skills/` |
 | claude-code | `.claude/CLAUDE.md`，`.claude/agents/`，`.claude/skills/` | `~/.claude/CLAUDE.md`，`~/.claude/agents/`，`~/.claude/skills/` |
 | codex | `AGENTS.md`，`.codex/agents/`，`.agents/skills/` | `~/.codex/AGENTS.md`，`~/.codex/agents/`，`~/.agents/skills/` |
 | openclaw | `.openclaw/manifest.yaml`，`.openclaw/agents/`，`.openclaw/skills/` | `~/.openclaw/manifest.yaml`，`~/.openclaw/agents/`，`~/.openclaw/skills/` |
@@ -35,7 +34,6 @@ status: active
 
 需要入口文件的平台必须存在非空文件：
 
-- Copilot：`copilot-instructions.md`
 - Claude Code：`CLAUDE.md`
 - Codex：`AGENTS.md`
 - OpenClaw：`manifest.yaml`
@@ -45,7 +43,6 @@ status: active
 所有 Agent / Skill / 脚本文件名必须符合约定：
 
 - Agent / Skill：kebab-case
-- Copilot Agent：允许 `.agent.md`
 - Codex Agent：允许 `.toml`
 - 安装脚本：`install.py`、`install.ps1`、`install.sh`
 

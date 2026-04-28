@@ -30,6 +30,7 @@ description: "SCOPE-Pack 元工作流的质量工程师。负责测试策略、8
 - `process/VALIDATION-ENV.yaml`（必须，且 approval.confirmed=true）
 - 已批准 Story 卡片（当前批次）
 - 已完成实现的产物文件
+- `delivery/doc/PLATFORM-CONTRACTS.yaml`
 - `process/PLATFORM-INSTALL-SPEC.md`
 
 **不加载**：历史草稿、早期失败轮次的产物。
@@ -139,7 +140,7 @@ created_at: ""
 ### 等价分区（Equivalence Partitioning）
 
 **适用于 Agent/Skill 产物的场景**：
-- 目标平台分类（Copilot / Claude Code / Codex / OpenClaw 为不同分区）
+- 目标平台分类（Claude Code / Codex / OpenClaw 为不同分区）
 - 输入类型分类（有效输入 / 无效输入 / 边界输入）
 - 复杂度模式分类（simple / standard / complex）
 
@@ -150,7 +151,7 @@ created_at: ""
 **适用于 Agent/Skill 产物的场景**：
 - Frontmatter 字段的空值/非空值边界
 - 文件名长度（最短合法名 vs 极长名）
-- 提示词文本长度（特别是 Copilot CLI 的 30,000 字符限制）
+- 提示词文本长度
 
 **验证方法**：在边界值处测试，确认行为符合预期。
 
@@ -167,7 +168,7 @@ created_at: ""
 **适用于 Agent/Skill 产物的场景**：
 - 缺少 Frontmatter 必填字段
 - 触发词拼写变体
-- 平台特有的格式陷阱（如 Copilot 的 `.agent.md` 扩展名）
+- 平台特有的格式陷阱
 - Prompt 注入风险点
 
 **验证方法**：基于经验构造可能的错误场景，逐一验证。
@@ -177,12 +178,12 @@ created_at: ""
 | # | 维度 | 检查内容 | 阻断等级 | 量化校验方式 |
 |---|------|---------|---------|------------|
 | 1 | 完整性 | 产物文件数量 >= Story.expected_outputs | BLOCKING | `len(outputs) >= len(expected_outputs)` |
-| 2 | 平台适配 | 至少 1 个平台安装目标符合 PLATFORM-INSTALL-SPEC.md | BLOCKING | 调用 `platform-validator` |
+| 2 | 平台适配 | 至少 1 个平台安装目标符合 `delivery/doc/PLATFORM-CONTRACTS.yaml` / `PLATFORM-INSTALL-SPEC.md` | BLOCKING | 调用 `platform-validator` |
 | 3 | 验收标准覆盖 | 每条验收标准均有对应验证记录 | BLOCKING | `verified == total` |
 | 4 | 安全合规 | 无危险命令（`dangerous-command-scan` 扫描） | BLOCKING | 风险项 == 0 |
 | 5 | 命名规范 | 文件名符合平台命名约定 | REQUIRED | Agent/Skill 为 kebab-case；脚本为 `install.py/.ps1/.sh` |
 | 6 | Frontmatter 完整性 | title/version/description 均非空 | REQUIRED | 字段存在且非空字符串 |
-| 7 | 可安装性 | 安装脚本 DryRun 与目标目录结构校验通过 | REQUIRED | `platform-validator` + `install.py --dry-run` |
+| 7 | 可安装性 | 安装脚本 DryRun、目标目录结构、路径冲突安全失败均验证通过 | REQUIRED | `platform-validator` + `install.py --dry-run` + 路径组件冲突负向用例 |
 | 8 | 文档覆盖 | 功能在 USER-MANUAL.md 中有对应说明 | OPTIONAL | 仅文档阶段检查 |
 
 **放行规则**：BLOCKING 维度全部通过 → Story 状态更新为 `verified`。
@@ -217,7 +218,7 @@ created_at: ""
 | 维度 | 阻断等级 | 状态 | 说明 |
 |------|---------|------|------|
 | 完整性 | BLOCKING | ✅ | 产物 3 个，期望 3 个 |
-| 平台适配 | BLOCKING | ✅ | Copilot + Claude Code 通过 |
+| 平台适配 | BLOCKING | ✅ | Claude Code + Codex 通过 |
 | 验收标准覆盖 | BLOCKING | ✅ | 5/5 条全部验证 |
 | 安全合规 | BLOCKING | ✅ | 0 个风险项 |
 | 命名规范 | REQUIRED | ✅ | 全部 kebab-case |
@@ -235,10 +236,19 @@ created_at: ""
 ## 安装脚本交付流程（verification 通过后）
 
 1. 生成 `INSTALL-MANIFEST.yaml`（列出所有通过验证的产物文件和默认安装目标）
-2. 调用 `package-builder` Skill 生成 `install.py`、`install.ps1`、`install.sh`，并要求其以 `meta-flow` 的 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh` 为路径与文件名真相源
+2. 调用 `package-builder` Skill 生成 `install.py`、`install.ps1`、`install.sh`，并要求其以 `delivery/doc/PLATFORM-CONTRACTS.yaml` 为平台路径真相源，以 `meta-flow` 的 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh` 为脚本路径与文件名真相源
 3. 要求脚本支持平台选择、当前项目默认安装、指定项目目录、用户级 agent/skill 安装
-4. 调用 `platform-validator` 校验默认安装路径与 DryRun 输出
+4. 调用 `platform-validator` 校验默认安装路径、DryRun 输出、Codex `.codex/skills` 负向断言和路径组件冲突负向用例
 5. 在 `VERIFICATION-REPORT.md` 中记录安装脚本验证结论
+
+路径组件冲突负向用例至少覆盖：
+
+```bash
+touch <target>/.codex
+uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope project --project-dir <target> --content agents --agent meta-po
+```
+
+预期：安装器非零退出，输出 `安装路径被非目录占用: <target>/.codex`，且不出现 `Traceback` 或 `NotADirectoryError`。
 
 `INSTALL-MANIFEST.yaml` 至少包含以下字段：
 
@@ -247,7 +257,6 @@ name: ""
 version: ""
 default_scope: project
 supported_platforms:
-  - copilot
   - claude-code
   - codex
   - openclaw

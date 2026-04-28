@@ -139,7 +139,7 @@ confirmed_at: ""
 - Agent 数量：N
 - Skill 数量：N
 - 工具脚本：N 个
-- 目标平台：{Copilot / Claude Code / Codex / OpenClaw}
+- 目标平台：{Claude Code / Codex / OpenClaw}
 
 ---
 
