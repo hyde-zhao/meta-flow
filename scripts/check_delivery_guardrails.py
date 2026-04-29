@@ -13,9 +13,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DELIVERY_ROOT = ROOT / "delivery"
+PROCESS_ROOT = ROOT / "process"
+CHANGE_ROOT = PROCESS_ROOT / "changes"
 PLATFORM_CONTRACTS = DELIVERY_ROOT / "doc" / "PLATFORM-CONTRACTS.yaml"
 ALLOWED_DELIVERY_DIRS = {"agents", "doc", "rules", "scripts", "skills"}
 ALLOWED_DELIVERY_SCRIPT_FILES = {"install.py", "install.sh", "install.ps1"}
+REVISION_RECORD_TARGETS = {
+    "process/USE-CASES.md": PROCESS_ROOT / "USE-CASES.md",
+    "process/REQUIREMENTS.md": PROCESS_ROOT / "REQUIREMENTS.md",
+}
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 SKILL_ROOT_ASSET_REF_RE = re.compile(r"<skill-root>/(?P<kind>templates|scripts)/(?P<path>[A-Za-z0-9_./-]+)")
 TEMPLATE_REF_RE = re.compile(r"(?<![A-Za-z0-9_./-])templates/(?P<path>[A-Za-z0-9_./-]+)")
@@ -154,11 +160,67 @@ def parse_frontmatter(content: str) -> dict[str, str]:
     return result
 
 
+def collect_git_changed_paths() -> set[str]:
+    targets = list(REVISION_RECORD_TARGETS)
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--", *targets],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def has_revision_record(content: str) -> bool:
+    return "## 修订记录" in content
+
+
+def cr_marks_document_changed(cr_path: Path, rel_path: str) -> bool:
+    doc_name = Path(rel_path).name
+    text = cr_path.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        normalized = line.replace("`", "")
+        if rel_path not in normalized and doc_name not in normalized:
+            continue
+        if re.search(r"\|\s*false\s*\|", normalized):
+            continue
+        if re.search(r"\|\s*true\s*\|", normalized) or any(
+            word in normalized for word in ("原文档更新", "新增", "修改", "更新", "重定义", "删除", "归档")
+        ):
+            return True
+    return False
+
+
+def collect_revision_record_errors() -> list[str]:
+    errors: list[str] = []
+    changed_paths = collect_git_changed_paths()
+    cr_paths = sorted(CHANGE_ROOT.glob("CR-*.md")) if CHANGE_ROOT.is_dir() else []
+
+    for rel_path, abs_path in REVISION_RECORD_TARGETS.items():
+        if not abs_path.is_file():
+            continue
+
+        changed_now = rel_path in changed_paths
+        changed_by_cr = any(cr_marks_document_changed(cr_path, rel_path) for cr_path in cr_paths)
+        if not changed_now and not changed_by_cr:
+            continue
+
+        content = abs_path.read_text(encoding="utf-8")
+        if not has_revision_record(content):
+            errors.append(f"{rel_path} changed under CR flow but is missing required '## 修订记录'")
+
+    return errors
+
+
 def collect_errors() -> list[str]:
     errors: list[str] = []
     platform_contracts = load_platform_contracts(errors)
     if platform_contracts:
         errors.extend(collect_codex_dry_run_errors(platform_contracts))
+    errors.extend(collect_revision_record_errors())
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):
         if child.name not in ALLOWED_DELIVERY_DIRS:

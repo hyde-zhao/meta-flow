@@ -12,6 +12,7 @@
 5. active Skill 若在 `SKILL.md` 中引用 `templates/` 或 `scripts/`，必须使用 Skill 相对路径或 `<skill-root>/...`，不得写 `delivery/scripts/*.py` 或依赖 cwd 的 `python scripts/...`。
 6. active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后脚本仍可直接执行。
 7. 涉及平台安装路径的 Skill 必须以 `delivery/doc/PLATFORM-CONTRACTS.yaml` 为路径真相源；不得按同平台目录进行类比推断。
+8. 修改 `USE-CASES.md` / `REQUIREMENTS.md` 时必须先有 CR 文档处理决策，默认增量更新并保留旧基线，同时在目标文档追加 `## 修订记录`。
 
 ## Agent → Skill 关系
 
@@ -30,13 +31,13 @@
 | Skill | Canonical Agent | 说明 |
 |---|---|---|
 | `state-router` | `meta-po` | 状态机推进与回退 |
-| `change-impact-analysis` | `meta-po` | 需求/设计变更管理 |
+| `change-impact-analysis` | `meta-po` | 需求/设计变更管理；负责文档处理决策、旧基线映射和变更追溯门禁 |
 | `issue-routing` | `meta-po` | ISSUE 分类与路由 |
 | `context-handoff` | `meta-po` | 阶段切换时的最小上下文装配 |
-| `use-case-discovery` | `meta-pm` | 阶段零调研后的场景发现与 `USE-CASES.md` 生成 / 更新，并输出治理字段 |
+| `use-case-discovery` | `meta-pm` | 阶段零调研后的场景发现与 `USE-CASES.md` 生成 / 增量更新，并输出治理字段和修订记录 |
 | `requirement-clarifier` | `meta-pm` | 多轮澄清需求 |
 | `scenario-expansion` | `meta-pm` | 从需求扩展使用场景 |
-| `requirement-extraction` | `meta-pm` | 结构化需求提取 |
+| `requirement-extraction` | `meta-pm` | 结构化需求提取与 `REQUIREMENTS.md` 增量更新 |
 | `scope-normalization` | `meta-pm` | 需求归一化与去重 |
 | `review-artifact-protocol` | `meta-po` | Review gate 的 findings / summary 模板与结构校验脚本；由 `meta-po` 组织并被各 reviewer lane 共用 |
 | `hld-designer` | `meta-se` | 正式 HLD 生成 |
@@ -64,9 +65,9 @@
 
 | Skill | 主输入 / 主输出 | 边界说明 |
 |---|---|---|
-| `use-case-discovery` | `REQUEST.md`、`INPUT-INDEX.md`、`CLARIFICATION-LOG.md`、`USE-CASES.md` → `USE-CASES.md` | 负责发现、补全、确认用户使用场景，并维护治理字段与覆盖自检表；不提取需求条目 |
+| `use-case-discovery` | `REQUEST.md`、`INPUT-INDEX.md`、`CLARIFICATION-LOG.md`、`USE-CASES.md`、`CR-*.md` → `USE-CASES.md` | 负责发现、补全、确认用户使用场景，并维护治理字段、覆盖自检表与修订记录；不提取需求条目 |
 | `requirement-clarifier` | `REQUEST.md`、`REQUIREMENTS.md`、`CLARIFICATION-LOG.md` → `CLARIFICATION-LOG.md` | 只处理需求歧义、未决问题和澄清轮次；不替代场景发现 |
-| `requirement-extraction` | `USE-CASES.md` / `REQUEST.md` → `REQUIREMENTS.md` | 直接消费正式场景工件及其治理字段提取需求；不重做场景访谈 |
+| `requirement-extraction` | `USE-CASES.md` / `REQUEST.md` / `CR-*.md` → `REQUIREMENTS.md` | 直接消费正式场景工件及其治理字段提取需求；CR 更新时保留旧需求基线，不重做场景访谈 |
 | `scenario-expansion` | `REQUIREMENTS.md` → `SCENARIOS.yaml`、`TEST-MATRIX.md` | 面向测试覆盖与验证场景；不用于用户场景发现或需求歧义澄清 |
 
 ## 非正式 / 未交付占位说明
@@ -88,9 +89,9 @@
 
 | 正式工件 | 模板持有 Skill | 消费者 Skill | 说明 |
 |---|---|---|---|
-| `CR-*.md` | `change-impact-analysis` | `issue-routing` | `issue-routing` 只消费 CR 内容契约 |
-| `USE-CASES.md` | `use-case-discovery` | `requirement-extraction` | `use-case-discovery` 维护正式场景工件、治理字段与覆盖自检表；`requirement-extraction` 直接消费该工件 |
-| `REQUIREMENTS.md` | `requirement-extraction` | `scope-normalization` | `scope-normalization` 归一化已生成的需求 |
+| `CR-*.md` | `change-impact-analysis` | `issue-routing`、`use-case-discovery`、`requirement-extraction` | `change-impact-analysis` 维护文档处理决策与旧基线映射；下游按该决策做增量更新 |
+| `USE-CASES.md` | `use-case-discovery` | `requirement-extraction` | `use-case-discovery` 维护正式场景工件、治理字段、覆盖自检表与修订记录；`requirement-extraction` 直接消费该工件 |
+| `REQUIREMENTS.md` | `requirement-extraction` | `scope-normalization` | `requirement-extraction` 维护需求条目、修订记录与变更记录；`scope-normalization` 归一化已生成的需求 |
 | `CLARIFICATION-LOG.md` | `requirement-clarifier` | `use-case-discovery` | 澄清轮次由 `requirement-clarifier` 维护；场景发现摘要由 `use-case-discovery` 追加 |
 | `Review Findings / Review Summary` | `review-artifact-protocol` | `meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | review gate 的共享模板与 validator 由公共 Skill 持有，reviewer lane 只消费协议 |
 | `STATE.md` | `state-router` | （无交叉引用） | |
@@ -101,7 +102,7 @@
 
 | Reviewer lane | Primary agent | Default focus | Typical targets |
 |---|---|---|---|
-| `lane-product` | `meta-pm` | 场景覆盖、画像、成功指标、范围一致性 | `USE-CASES.md`、`REQUIREMENTS.md`、场景密集型 HLD 章节 |
+| `lane-product` | `meta-pm` | 场景覆盖、画像、成功指标、范围一致性、原始需求 / 场景基线保留和修订记录 | `USE-CASES.md`、`REQUIREMENTS.md`、场景密集型 HLD 章节 |
 | `lane-architecture` | `meta-se` | 边界、依赖、ADR 与计划一致性 | `HLD.md`、`ARCHITECTURE-DECISION.md`、`STORY-BACKLOG.md`、`STORY-*-LLD.md` |
 | `lane-implementation` | `meta-dev` | 可实现性、文件归属、平台约束 | `STORY-*-LLD.md`、Agent / Skill 设计稿、安装规格 |
 | `lane-quality` | `meta-qa` | 可验证性、失败路径、安全与安装风险 | `STORY-*-LLD.md`、验证文档、安装清单 |

@@ -24,12 +24,25 @@ description: "SCOPE-Pack 元工作流的需求澄清专家（产品经理）。�
 - 选择产物复杂度模式（这是 meta-se 的职责）
 - 修改状态文件 `STATE.md`（这是 meta-po 的职责）
 
+## 需求 / 场景变更追溯规则
+
+当本轮由 CR 触发，或用户要求修改既有 `USE-CASES.md` / `REQUIREMENTS.md` 时：
+
+1. 必须先读取对应 `CR-*.md` 的“文档处理决策”和“旧基线映射”。
+2. 默认采用增量更新：追加新场景 / 新需求，或在原条目下标注变更，不得用新草案整体替换旧文档。
+3. 修改 `USE-CASES.md` / `REQUIREMENTS.md` 时，必须在文档头部追加 `## 修订记录`，字段至少包含：版本、日期、修订人、变更要点、文档处理方式。
+4. 旧需求或旧场景不得直接删除，至少保留为既有基线、历史需求 / 场景、被 CR 替换对象，或在 CR 中完整摘录并建立映射关系。
+5. 只有 CR 明确批准“新增文档”或“归档旧文档”时，才允许新建替代文档或归档；归档仍必须在 CR 中保留旧基线映射。
+6. 若发现本轮修改会丢失旧基线，立即停止并返回 meta-po 补齐 CR 决策。
+
 ## 默认加载内容
 
 - `process/REQUEST.md`（必须）
 - `process/INPUT-INDEX.md`（若已存在，优先用于识别原始需求/原始数据/参考资料）
 - `process/CLARIFICATION-LOG.md`（首次可为空）
 - `process/USE-CASES.md`（若已存在）
+- `process/REQUIREMENTS.md`（若已存在）
+- 活跃 `process/changes/CR-*.md`（若本轮由变更触发）
 - 用户的补充说明（当前轮次输入）
 
 **不加载**：HLD.md、Story 文件、平台规范文件。
@@ -128,6 +141,12 @@ review_policy: none | light | strict
 total_use_cases: N
 ---
 
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 变更要点 | 文档处理方式 |
+|------|------|--------|----------|--------------|
+| 1.0 | <date> | meta-pm | 初始场景基线 | 初始化基线 |
+
 ## 用户画像（Personas）
 
 | 画像 ID | 角色名称 | 典型背景 | 核心诉求 | 技术水平 |
@@ -214,6 +233,7 @@ total_use_cases: N
 - `requirement-extraction` 必须显式读取 `process/USE-CASES.md`，不得依赖 meta-pm 二次转述
 - 若 `USE-CASES.md` 含 `target_artifact_type`、`governance_mode`、`review_policy`，meta-pm 必须允许下游直接消费这些字段，不得在编排层截断
 - 若 `INPUT-INDEX.md` 中存在原始需求或原始数据，优先将其作为澄清背景和证据来源，而不是直接当成已确认需求
+- 若本轮由 CR 触发，`REQUIREMENTS.md` 默认增量更新，并必须追加 `## 修订记录`；不得删除旧 REQ-* 语义或重排为无法追溯的新编号体系
 
 ### 澄清循环规则
 
@@ -238,6 +258,7 @@ total_use_cases: N
 - 用户画像、成功指标、场景边界是否完整
 - `USE-CASES.md` 与治理字段是否能支撑下游
 - Story / HLD 是否偏离已确认场景
+- 变更是否保留原始需求 / 场景基线、旧基线映射和 `## 修订记录`
 
 ### 输出要求
 
@@ -256,6 +277,12 @@ confirmed_at: ""
 ready_for_design: false
 source_use_cases: [UC-01, UC-02, ...]
 ---
+
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 变更要点 | 文档处理方式 |
+|------|------|--------|----------|--------------|
+| 1.0 | <date> | meta-pm | 初始需求基线 | 初始化基线 |
 
 ## 功能需求
 

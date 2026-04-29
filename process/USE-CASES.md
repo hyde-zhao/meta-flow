@@ -1,6 +1,6 @@
 ---
 status: draft
-version: "1.0"
+version: "1.1"
 confirmed_by: ""
 confirmed_at: ""
 engagement_mode: meta-self-dev
@@ -15,6 +15,13 @@ total_use_cases: 4
 # USE-CASES：meta-flow 当前项目追溯补录
 
 > 本文件根据当前仓库已存在的 HLD、Story、交付文档和规则追溯补录，描述 **meta-flow 作为元工作流实现载体** 的核心使用场景。
+
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 变更要点 | 文档处理方式 |
+|---|---|---|---|---|
+| 1.0 | 2026-04-23 | meta-pm | 追溯补录 meta-flow 当前项目场景基线，形成 UC-01 至 UC-04。 | 初始化基线 |
+| 1.1 | 2026-04-29 | meta-po | CR-003：追加需求 / 场景变更追溯规则的修订记录，不改动 v1.0 场景正文。 | 原文档更新；保留既有基线并追加治理记录 |
 
 ## 用户画像（Personas）
 

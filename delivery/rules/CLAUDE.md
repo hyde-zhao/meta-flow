@@ -91,6 +91,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 20. **场景主体默认值**：若用户未显式声明 meta 优化，`USE-CASES.md` 默认 `scenario_subject_type=target-artifact`，不得把当前仓库 / 当前工作流当成默认场景主体
 21. **平台契约优先**：涉及安装路径、schema 或发现机制时，`delivery/doc/PLATFORM-CONTRACTS.yaml` 是路径真相源；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
 22. **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
+23. **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前必须在 CR 中填写文档处理决策；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
 
 ## 人工检查点（5 类）
 
@@ -123,7 +124,7 @@ Complex 模式下，同一 Wave 内的 Story 支持并行执行，但同一 Stor
 7. **理论依据可追溯**：枚举型框架（维度、阶段、清单）必须说明来源方法论，或显式声明"可扩展"，避免被当作穷尽集合。
 8. **遗留问题状态闭环**：待确认问题每次修订必须回写状态（OPEN / RESOLVED + 日期）；收敛后原行不删除以保留追溯。
 9. **Gotchas 必有**：Skill 类产出（HLD / SKILL.md）必须含实质性 Gotchas 章节。
-10. **修订记录完整**：每次迭代必须在产物头部追加修订记录（版本号 / 日期 / 修订人 / 变更要点精确到章节号）。
+10. **修订记录完整**：每次迭代必须在产物头部追加修订记录（版本号 / 日期 / 修订人 / 变更要点精确到章节号）；该规则同样覆盖 `USE-CASES.md` 与 `REQUIREMENTS.md`。
 11. **Story 拆解一致性**：§工作量章节的 Story 数、Wave 数必须与 §分阶段落地一一对应。
 12. **决策与产物形态对齐**：ADR 结论必须回写到架构图、模块表、流程图、落地阶段；孤立 ADR 视为未落地。
 13. **官方契约一致性**：平台路径、schema 或发现机制必须引用官方文档或 `delivery/doc/PLATFORM-CONTRACTS.yaml`；禁止按同平台目录类比推断。
@@ -138,7 +139,7 @@ Complex 模式下，同一 Wave 内的 Story 支持并行执行，但同一 Stor
 
 | Lane | Agent | 主要职责 |
 |------|-------|----------|
-| `lane-product` | `meta-pm` | 场景与范围一致性 |
+| `lane-product` | `meta-pm` | 场景与范围一致性、原始需求 / 场景基线保留和修订记录 |
 | `lane-architecture` | `meta-se` | 架构与依赖一致性 |
 | `lane-implementation` | `meta-dev` | 可实现性与平台约束 |
 | `lane-quality` | `meta-qa` | 可验证性与风险 |

@@ -12,6 +12,12 @@ review_policy: none | light | strict
 total_use_cases: N
 ---
 
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 变更要点 | 文档处理方式 |
+|---|---|---|---|---|
+| 1.0 | <YYYY-MM-DD> | meta-pm | 初始场景基线 | 初始化基线 |
+
 ## 用户画像（Personas）
 
 | 画像 ID | 角色名称 | 典型背景 | 核心诉求 | 技术水平 |

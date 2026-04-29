@@ -35,6 +35,7 @@ output: process/USE-CASES.md
 | `process/INPUT-INDEX.md` | 可选 | 定位原始材料与可导入背景 |
 | `process/CLARIFICATION-LOG.md` | 可选 | 读取阶段零调研结论，并在 Phase 3 追加场景发现摘要 |
 | `process/USE-CASES.md` | 可选 | draft 恢复或 confirmed 更新的唯一真相源 |
+| `process/changes/CR-*.md` | 条件必须 | 若本轮为变更触发，读取文档处理决策与旧基线映射 |
 | 用户本轮新增输入 | 可选 | 新场景、补充说明、或 Phase 0 粘贴文本 |
 | 目标平台 / 安装约束 | 可选 | 辅助判断产物类型、交付边界与治理方式 |
 
@@ -51,12 +52,14 @@ output: process/USE-CASES.md
 1. 读取 `REQUEST.md`；若缺失或为空，立即终止并提示先完成初始化。
 2. 若存在 `USE-CASES.md status: draft`，默认进入**恢复模式**，继续完善已有草稿。
 3. 若存在 `USE-CASES.md status: confirmed`，仅在用户明确要求修改时进入**更新模式**；更新后必须递增 `version`，禁止静默覆盖。
-4. 若存在 `CLARIFICATION-LOG.md`，只读历史；后续仅追加，不覆盖。
-5. 若已有草稿包含 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`、`target_artifact_type`、`governance_mode`、`review_policy`，恢复时优先沿用；仅在用户目标明显变化时重判。
-6. 若用户**未显式说明**“当前是在做 meta 工作流自我开发 / 优化 / 整改”，默认：
+4. 若本轮为 CR 触发，必须读取 CR 中的文档处理决策；未明确允许归档或新建时，默认进入**增量更新模式**。
+5. 若进入更新模式，必须保留旧场景基线，追加或标注变更，并在 `## 修订记录` 中写入版本、日期、修订人、变更要点、文档处理方式。
+6. 若存在 `CLARIFICATION-LOG.md`，只读历史；后续仅追加，不覆盖。
+7. 若已有草稿包含 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`、`target_artifact_type`、`governance_mode`、`review_policy`，恢复时优先沿用；仅在用户目标明显变化时重判。
+8. 若用户**未显式说明**“当前是在做 meta 工作流自我开发 / 优化 / 整改”，默认：
    - `engagement_mode = production`
    - `scenario_subject_type = target-artifact`
-7. 仅当用户明确表达“这是 meta 工作流优化 / 自我开发 / 整改 meta 工作流本身”时，才切换为：
+9. 仅当用户明确表达“这是 meta 工作流优化 / 自我开发 / 整改 meta 工作流本身”时，才切换为：
    - `engagement_mode = meta-self-dev`
    - `scenario_subject_type = implementation-carrier`
 
@@ -110,7 +113,8 @@ output: process/USE-CASES.md
 2. `✅`：将 `USE-CASES.md` 标记为 `confirmed`；若是更新模式，递增 `version`。
 3. `❌` 或 `✏️`：记录修改建议，保持或回退到 `draft`，并根据修改类型返回 Phase 1 或 Phase 2。
 4. 在 Phase 3 退出时，向 `CLARIFICATION-LOG.md` 追加**场景发现摘要**；若日志不存在，则按标准模板初始化后再追加。
-5. 返回结构化完成摘要，至少包含：
+5. 若是更新模式，检查 `## 修订记录` 与 CR 旧基线映射均已落地；缺失时不得返回 `confirmed`。
+6. 返回结构化完成摘要，至少包含：
 
 ```yaml
 use_cases_path: process/USE-CASES.md
@@ -140,6 +144,8 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - `USE-CASES.md` 必须与 `agents/meta-pm.md` 的字段契约逐项一致
 - Phase 1A / 1B 与 Phase 2 都必须增量写入 `draft`，不得只在确认时一次性落盘
 - 对已确认的 `USE-CASES.md` 只能进入更新模式，必须显式保留版本演进
+- CR 触发的更新必须保留旧场景基线，并追加 `## 修订记录`；不得用新草案整体替换旧文档
+- 删除或归档旧场景只能在 CR 明确批准时执行，且必须在 CR 中保留完整摘录和映射关系
 - 若用户未显式声明 meta 工作流优化 / 自我开发，必须默认 `engagement_mode=production` 且 `scenario_subject_type=target-artifact`
 - 在 `production` 模式下，`USE-CASES.md` 不得把当前仓库整改者 / workflow 维护者写成默认 Persona，除非用户明确说明他们就是目标用户
 - 本 Skill 不负责提取 `REQUIREMENTS.md`，也不负责测试场景展开或需求歧义清单
@@ -152,6 +158,7 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - [ ] 每个场景都具备 7 个必填字段：角色、触发条件、输入、处理逻辑、输出/结果、前置条件、排除情况
 - [ ] 默认 8 维全部被处理，未适用项已显式标注理由
 - [ ] draft 可恢复，confirmed 不会被静默覆盖
+- [ ] 更新模式下 `## 修订记录` 已追加，旧场景基线可追溯
 - [ ] `target_artifact_type` / `governance_mode` / `review_policy` 语义明确且可被上下游直接消费
 - [ ] Phase 3 返回结构化完成摘要，并已向 `CLARIFICATION-LOG.md` 追加摘要
 
@@ -169,6 +176,7 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - **不要替用户补答案**：追问一次仍无结论时，可记为“待调研”，不能脑补
 - **draft 文件是恢复唯一真相源**：恢复依赖 `USE-CASES.md`，不是会话记忆
 - **confirmed 只能更新，不能覆盖**：进入更新模式后再确认，并递增版本
+- **更新不是重写**：CR 场景变更必须保留旧 UC-* 语义，新增或修改内容要能回链到旧基线
 - **不要越界到需求提取**：场景里出现“应该支持 X”时，仍只记录为场景内容
 - **`mixed` 不是兜底桶**：只有命中三条硬规则之一时才可使用，否则继续追问
 - **治理字段只负责打标签**：`governance_mode` 和 `review_policy` 用于下游路由，不在本 Skill 内执行评审

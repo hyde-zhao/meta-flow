@@ -5,8 +5,8 @@ current_phase: "documentation"
 current_agent: "meta-po"
 iteration: 8
 blocked: false
-last_action: "CR-002 已实施并验证通过：安装器新增路径组件冲突前置校验，guardrail 补充 .codex 文件占用负向用例"
-next_action: "准备终验范围并等待用户确认 final review"
+last_action: "CR-003 已实施：需求 / 场景文档变更新增文档处理决策、旧基线保留、修订记录与 guardrail 检查"
+next_action: "运行护栏静态检查后，准备终验范围并等待用户确认 final review"
 checkpoints:
   requirement_confirmed: false
   hld_confirmed: true
@@ -179,7 +179,12 @@ history:
     action: "apply-change-request"
     phase: "documentation"
     summary: "CR-002：安装器新增 ensure_directory / ensure_file_target 路径前置校验，guardrail 构造 .codex 被普通文件占用的 Codex project 安装负向用例"
-last_updated: "2026-04-28T00:00:00+08:00"
+  - at: "2026-04-29T00:00:00+08:00"
+    actor: "meta-po"
+    action: "apply-change-request"
+    phase: "documentation"
+    summary: "CR-003：需求 / 场景文档变更默认增量更新，CR 必填文档处理决策与旧基线映射，USE-CASES / REQUIREMENTS 必须追加修订记录并纳入 guardrail"
+last_updated: "2026-04-29T00:00:00+08:00"
 ---
 
 <!--
