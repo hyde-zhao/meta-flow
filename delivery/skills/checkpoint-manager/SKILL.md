@@ -33,8 +33,8 @@ status: active
 | 自动检查结果 | `process/checks/CP{n}-{slug}.md` | 由 agent 填写，必须包含逐项 PASS / FAIL / N/A / WAIVED |
 | 人工审查稿 | `checkpoints/CP{n}-{slug}.md` | 由 meta-po 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
 | Story LLD 人工审查稿 | `checkpoints/CP5-{story_id}-{story_slug}-LLD.md` | 单 Story 或小批次滚动确认 |
-| Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果 |
-| Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果 |
+| Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
+| Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
 
 `process/checks/` 属于运行态检查证据；`checkpoints/` 属于人工确认态文件。人工审查时，meta-po 必须在用户提示中给出具体 `checkpoints/...` 路径。
 
@@ -463,6 +463,7 @@ meta-po 发起人工检查时必须提示：
 | CP5 通过 | Story LLD 已确认 |
 | dev_gate 满足 | 依赖和文件所有权允许开发 |
 | 实现完成 | Story 任务清单已执行完 |
+| meta-dev 调度证据存在 | `STATE.md.agent_lifecycle` 与 handoff `dispatch` 证明 meta-dev 已由子 agent 执行，或存在用户批准的 inline fallback |
 
 ### Checklist
 
@@ -478,6 +479,7 @@ meta-po 发起人工检查时必须提示：
 | 8 | 文档同步 | README、接口文档、配置说明、变更说明必要时更新 |
 | 9 | 状态回写 | Story 状态、任务清单、偏差记录已更新 |
 | 10 | 无缓存产物 | `__pycache__`、构建缓存等不进入交付物 |
+| 11 | Agent Dispatch Evidence | 存在 meta-dev 的 `agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
 
 ### Exit Criteria
 
@@ -485,6 +487,7 @@ meta-po 发起人工检查时必须提示：
 |---|---|
 | 必要命令通过 | 验证命令有证据或 N/A 理由 |
 | 无阻塞自查问题 | Story 可进入 `ready-for-verification` |
+| 调度证据通过 | meta-dev 执行证据有效；仅 handoff-created 不可放行 |
 
 ### Deliverables
 
@@ -492,6 +495,7 @@ meta-po 发起人工检查时必须提示：
 - `DEV-LOG.md`
 - `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md`
 - 更新后的 Story 状态
+- 对应 meta-dev handoff 的 `dispatch` 记录
 
 ## CP7 Story 验证完成门
 
@@ -506,6 +510,7 @@ meta-po 发起人工检查时必须提示：
 | CP6 通过 | Story 处于 `ready-for-verification` |
 | 测试上下文可用 | 验证环境或等价验证方式可用 |
 | 测试策略存在 | `TEST-STRATEGY.md` 已生成或明确 N/A |
+| meta-qa 调度证据存在 | `STATE.md.agent_lifecycle` 与 handoff `dispatch` 证明 meta-qa 已由子 agent 执行，或存在用户批准的 inline fallback |
 
 ### Checklist
 
@@ -519,6 +524,7 @@ meta-po 发起人工检查时必须提示：
 | 6 | 缺陷闭环 | P0/P1 缺陷为 0，P2 有处理计划 |
 | 7 | 测试证据完整 | 命令、日志、报告、截图或等价证据记录 |
 | 8 | 追溯完整 | 需求、Story、LLD、代码、测试结果可串联 |
+| 9 | Agent Dispatch Evidence | 存在 meta-qa 的 `agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
 
 ### Exit Criteria
 
@@ -526,6 +532,7 @@ meta-po 发起人工检查时必须提示：
 |---|---|
 | 阻塞缺陷为 0 | P0/P1 缺陷 = 0 |
 | 验证结论通过 | Story 可进入 `verified` |
+| 调度证据通过 | meta-qa 执行证据有效；仅 handoff-created 不可放行 |
 
 ### Deliverables
 
@@ -533,6 +540,7 @@ meta-po 发起人工检查时必须提示：
 - `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md`
 - 缺陷记录或风险接受记录
 - 更新后的 `STORY-STATUS.md`
+- 对应 meta-qa handoff 的 `dispatch` 记录
 
 ## CP8 交付就绪门
 
@@ -590,6 +598,21 @@ meta-po 发起人工检查时必须提示：
 4. 如果用户直接在对话中回复 `1/approve/通过`，meta-po 也必须补写人工审查结果文件，不能只改状态。
 5. `changes_requested` 必须路由给对应 agent 修订，并在重提时保留旧检查结果作为历史证据。
 6. `rejected` 必须回退到检查点定义的目标阶段或 Story 状态。
+7. CP6 / CP7 必须包含 `## Agent Dispatch Evidence` 小节；若缺少真实子 agent 证据且没有用户批准的 `inline-fallback`，结论只能是 `FAIL` 或 `BLOCKED`。
+
+CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
+
+```markdown
+## Agent Dispatch Evidence
+
+| 检查项 | 状态 | 证据 | 说明 |
+|---|---|---|---|
+| 子 agent 调度模式 | PASS/FAIL/WAIVED | `process/handoffs/...` | `subagent` / `inline-fallback` / `handoff-only` |
+| agent 标识 | PASS/FAIL/WAIVED | `STATE.md.agent_lifecycle` | `agent_id` 或 `thread_id` |
+| 平台工具证据 | PASS/FAIL/WAIVED | `tool_name` | `spawn_agent` / `resume_agent` / `send_input` / platform task |
+| 完成时间 | PASS/FAIL/WAIVED | `completed_at` | 子 agent 返回完成结果的时间 |
+| inline fallback 授权 | N/A/WAIVED/FAIL | `approved_by`、`approved_at` | 仅 fallback 时允许 WAIVED |
+```
 
 ## 验收标准
 

@@ -21,6 +21,7 @@ meta-po 的职责：
 - **先理解，后行动**：退出条件先验、上下文先行、追问优先于假设、状态一致性校验
 - 维护 CP0-CP8 检查点：自动检查点写入 `process/checks/CP*.md`，人工检查点写入 `checkpoints/CP*.md` 并在发起确认时提示用户 checklist 路径，审查后回填人工结果
 - 唤醒和收敛下游功能 Agent（机器可验证退出条件）；Codex 下同一工作流只允许 1 个 `meta-po`，同角色同任务优先复用已有子 agent，检查点或交接完成后及时关闭；发现两个活动 `meta-po` 时必须阻断推进并要求用户选择保留线程
+- 记录子 agent 调度证据：handoff 文件只表示交接，不表示目标 agent 已执行；meta-dev / meta-qa 等下游完成必须有 `spawn_agent` / `resume_agent` / `send_input` 或平台 Task/Subagent 证据，或用户批准的 `inline-fallback`
 - 受理变更请求，创建 `changes/CR-*.md`，执行五维度影响分析
 - **失败模式识别**：识别需求循环、HLD 僵局、LLD 僵局、开发卡顿等常见失败信号
 
@@ -125,10 +126,12 @@ init（meta-po）                                                   [CP0 自动]
 - **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前，必须在 CR 中填写文档处理决策（新增 / 原文档更新 / 归档 / 不变）；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
 - **检查点结构**：CP0-CP8 均必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables；自动检查点必须在 `process/checks/CP*.md` 写入逐项结果，人工检查点必须在 `checkpoints/CP*.md` 写入 checklist 和“人工审查结果”。
 - **人工检查点**：所有人工确认统一由 meta-po 发起；发起时必须提示用户 checklist 文件路径（如 `checkpoints/CP3-HLD-REVIEW.md`）。Claude Code 可使用结构化选择，Codex 优先使用结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；若当前 Codex 客户端、运行模式或工具面无法提供可选择 UI，必须显式降级为 exact 文本确认（`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`）。用户直接在对话中确认时，meta-po 仍必须回填对应 `checkpoints/CP*.md`。
+- **子 agent 调度证据**：meta-po 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created`，不得写成目标 agent 已完成。
+- **inline fallback 门禁**：当前平台无法拉起子 agent 时，meta-po 必须阻断并说明原因；只有用户明确批准后才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。inline fallback 结果必须表述为 meta-po 代执行，不得表述为 meta-dev / meta-qa 独立完成。
 - **HLD 门控**：CP3 自动预检和人工确认未通过前，不得进入 Story 拆解。
 - **Story 计划门控**：CP4 自动预检和人工确认未通过前，不得进入 Story 执行。
 - **Story LLD 门控**：单个 Story 的 CP5 自动预检和人工确认未通过前，不得开始对应 Story 的实现；LLD 可跨 Story 并行写作，开发必须满足 Story DAG、依赖类型、文件所有权和 CP5 门控。
-- **编码与验证门控**：Story 实现完成后必须写入 CP6 编码完成检查结果；验证完成后必须写入 CP7 验证完成检查结果。CP6/CP7 未通过时不得推进 Story 状态。
+- **编码与验证门控**：Story 实现完成后必须写入 CP6 编码完成检查结果；验证完成后必须写入 CP7 验证完成检查结果。CP6/CP7 必须包含 `Agent Dispatch Evidence`；缺少真实子 agent 证据且没有用户批准的 `inline-fallback` 时不得推进 Story 状态。
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `delivery/skills/README.md`
 - **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
 - **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...` 表达

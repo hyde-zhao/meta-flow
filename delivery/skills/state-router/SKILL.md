@@ -57,6 +57,7 @@ status: active
 2. 读取 `current_phase`、`current_agent`、`blocked`、`active_change`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`history`。
 3. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 4. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。
+5. 若 `agent_lifecycle.platform_capabilities.subagent_dispatch` 缺失，必须先补齐并将 `available=false`、`method=unverified` 写入状态；能力未探测前，不得把需要功能 Agent 的任务标记为 `completed`。
 
 ### 2. 按阶段检查退出条件
 
@@ -66,7 +67,7 @@ status: active
 | `requirement-clarification` | CP1 自动检查通过，CP2 自动预检通过且 `checkpoints/CP2-REQUIREMENTS-BASELINE.md` 人工结论为 `approved` | `solution-design` | `meta-se` |
 | `solution-design` | CP3 自动预检通过且 `checkpoints/CP3-HLD-REVIEW.md` 人工结论为 `approved` | `story-planning` | `meta-se` |
 | `story-planning` | CP4 自动预检通过且 `checkpoints/CP4-STORY-PLAN-REVIEW.md` 人工结论为 `approved` | `story-execution` | `meta-dev` |
-| `story-execution` | 当前 DAG 中每个目标 Story 均通过 CP5、CP6、CP7，并到达 `verified` | 下一调度批次或 `documentation` | `meta-dev` / `meta-qa` / `meta-doc` |
+| `story-execution` | 当前 DAG 中每个目标 Story 均通过 CP5、CP6、CP7，并到达 `verified`，且 CP6/CP7 包含 Agent Dispatch Evidence | 下一调度批次或 `documentation` | `meta-dev` / `meta-qa` / `meta-doc` |
 | `documentation` | CP8 自动预检通过且 `checkpoints/CP8-DELIVERY-READINESS.md` 人工结论为 `approved` | `delivered` | `meta-po` |
 | `delivered` | 只读归档 | — | — |
 
@@ -97,8 +98,8 @@ status: active
 | CP3 | `process/checks/CP3-HLD-CONSISTENCY.md` + `checkpoints/CP3-HLD-REVIEW.md` | 自动预检通过且人工结论 `approved` |
 | CP4 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md` + `checkpoints/CP4-STORY-PLAN-REVIEW.md` | 自动预检通过且人工结论 `approved` |
 | CP5 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` + `checkpoints/CP5-{story_id}-{story_slug}-LLD.md` | 当前 Story 自动预检通过且人工结论 `approved` |
-| CP6 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | 当前 Story 结论为 `PASS` 或 `WAIVED` |
-| CP7 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | 当前 Story 结论为 `PASS` 或 `WAIVED` |
+| CP6 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | 当前 Story 结论为 `PASS` 或 `WAIVED`，且 meta-dev 调度证据通过 |
+| CP7 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | 当前 Story 结论为 `PASS` 或 `WAIVED`，且 meta-qa 调度证据通过 |
 | CP8 | `process/checks/CP8-DELIVERY-READINESS.md` + `checkpoints/CP8-DELIVERY-READINESS.md` | 自动预检通过且人工结论 `approved` |
 
 人工检查点文件缺失、未填“人工审查结果”或结论不是 `approved` 时，不得推进。
@@ -134,6 +135,30 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 4. `meta-po` 角色始终单例；若发现 2 个活动 `meta-po`，必须阻断推进并要求人工选择保留线程。
 5. `active_agents` 失活或用户手动关闭时，必须在 `history` 记录重建原因，不能静默生成新线程。
 6. 若旧 `STATE.md` 缺少 `agent_lifecycle`，必须先按模板补齐结构；补齐本身不代表允许新建 `meta-po`，仍需确认当前 UI 中没有其他活动 `meta-po`。
+
+`active_agents[]` 中每条记录必须使用以下字段。平台没有提供的字段可以为空，但 `completed` 状态必须满足证据规则。
+
+| 字段 | 说明 |
+|---|---|
+| `role` | 目标功能 Agent，例如 `meta-dev`、`meta-qa` |
+| `agent_id` | 平台返回的子 agent 标识；Codex `spawn_agent` 返回值优先写入这里 |
+| `agent_name` | 平台返回的昵称或任务名 |
+| `thread_id` | 可恢复线程标识；平台无独立 thread 时可与 `agent_id` 相同 |
+| `workflow_id` / `change_id` / `story_id` / `wave_id` | 精确复用键 |
+| `handoff_path` | 对应 `process/handoffs/*.md` |
+| `status` | `handoff-created`、`spawn-requested`、`running`、`completed`、`failed`、`unavailable`、`blocked`、`closing`、`closed` |
+| `evidence` | `spawn_agent`、`resume_agent`、`send_input`、`platform-task` 或 `user-approved-inline-fallback` |
+| `tool_name` | 实际调用的平台工具名 |
+| `spawned_at` / `resumed_at` / `last_seen_at` / `completed_at` / `closed_at` | 生命周期时间 |
+| `reusable` | 是否允许同 key 继续复用 |
+| `fallback_reason` | 仅 `inline-fallback` 使用，必须写明用户批准原因 |
+
+完成证据规则：
+
+1. `status=completed` 且 `evidence` 为 `spawn_agent` / `resume_agent` / `send_input` / `platform-task` 时，`agent_id` 或 `thread_id` 必须非空，`tool_name` 必须非空，`completed_at` 必须非空。
+2. `status=completed` 且 `evidence=user-approved-inline-fallback` 时，必须存在 `fallback_reason`，并在对应 handoff 的 `dispatch.mode` 中写明 `inline-fallback`。
+3. 只有 `handoff_path` 或 `to_agent`，但缺少上述证据时，只能标记为 `handoff-created`、`blocked` 或 `unavailable`，不得标记为 `completed`。
+4. CP6 / CP7 推进前必须交叉检查 `STATE.md.agent_lifecycle.active_agents` 与对应 handoff frontmatter；任一方缺失证据时，检查点必须失败。
 
 ## 输出文件 / 输出模板
 

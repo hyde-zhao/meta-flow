@@ -20,10 +20,28 @@ confirmation_adapter:
   fallback_mode: "exact-text"
 agent_lifecycle:
   orchestrator_singleton: true
+  platform_capabilities:
+    subagent_dispatch:
+      available: false
+      checked_at: ""
+      method: "unverified"
+      limitation: "未完成平台子 agent 调度能力探测前，不得把下游任务标记为 completed"
   active_agents: []
   singleton_violation: false
   singleton_resolution: ""
-  reuse_policy: "same workflow/change/story reuses the same role thread; close after checkpoint or handoff completion"
+  dispatch_evidence_required: true
+  allowed_statuses:
+    - "handoff-created"
+    - "spawn-requested"
+    - "running"
+    - "completed"
+    - "failed"
+    - "unavailable"
+    - "blocked"
+    - "closing"
+    - "closed"
+  reuse_policy: "same workflow/change/story reuses the same role thread; close after checkpoint or verified agent completion"
+  evidence_policy: "Agent Dispatch Evidence required: handoff files are not execution evidence; completed subagent work requires agent_id/thread_id plus tool evidence, unless user-approved inline-fallback is recorded"
 parallel_execution:
   max_parallel_lld: 3
   max_parallel_dev: 2

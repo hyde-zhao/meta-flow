@@ -48,11 +48,30 @@ description: "Meta Flow 元工作流的主编排器（产品负责人）。负�
 0. 启动后第一步必须读取 `process/STATE.md`。若 `agent_lifecycle.active_agents` 缺失，必须先补齐该结构并记录到 `history`，再进行任何下游唤醒；若当前 UI、用户消息或状态记录显示已有另一个活动 `meta-po`（例如同时出现两个不同昵称的 `[meta-po]`），必须立即阻断推进，要求用户明确保留哪个线程，并关闭或停止另一个线程后再继续。
 1. 同一工作流只允许 1 个 `meta-po` 子 agent；如果已有活动 `meta-po`，必须复用 / resume，不得再次 spawn `meta-po`。
 2. `meta-po` 不得递归拉起另一个 `meta-po`；下游只允许按需唤醒 `meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`。
-3. 唤醒下游前必须维护 `STATE.md.agent_lifecycle.active_agents`，字段至少包含 `role`、`thread_id`、`workflow_id`、`change_id`、`story_id`、`wave_id`、`status`、`reusable`、`started_at`、`last_seen_at`。
-4. 同一 `workflow_id/change_id/story_id/wave_id` 下，同角色 agent 必须优先 `resume` 或 `send_input`，不得重复 spawn。
+3. 唤醒下游前必须维护 `STATE.md.agent_lifecycle.active_agents`，字段至少包含 `role`、`agent_id`、`thread_id`、`workflow_id`、`change_id`、`story_id`、`wave_id`、`handoff_path`、`status`、`evidence`、`tool_name`、`reusable`、`spawned_at`、`resumed_at`、`last_seen_at`、`completed_at`、`closed_at`。
+4. 同一 `workflow_id/change_id/story_id/wave_id` 下，同角色 agent 必须优先 `resume_agent` 或 `send_input`，不得重复 `spawn_agent`。
 5. `meta-pm`、`meta-se`、`meta-doc` 在交付阶段产物后关闭；`meta-dev` 在 Story LLD 交付后暂停，LLD 确认且进入 `dev-ready` 后优先复用同线程实现，实现交接 `meta-qa` 后关闭；`meta-qa` 在验证报告和安装回归交付后关闭。
 6. Codex 下默认不 fork 全量上下文；只有并行收益明确且不阻塞当前关键路径时才允许 fork。普通阶段交接必须通过 `context-handoff` 生成最小上下文包。
 7. 推荐 Codex 运行配置：`agents.max_depth = 1`、`agents.max_threads = 3~4`，并按模型窗口设置 `model_auto_compact_token_limit`；这些是运行建议，不替代 `STATE.md` 中的生命周期记录。
+
+### 子 Agent 调度硬门禁
+
+`meta-po` 的“唤醒”必须是平台级子 agent 调度动作，不得只创建 handoff 文件后由自己代执行。
+
+| 平台 | 必须使用的调度方式 | 证据字段 |
+|---|---|---|
+| Codex | 新任务调用 `spawn_agent`；复用任务调用 `resume_agent` 或 `send_input` | `agent_id` 或 `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at` |
+| Claude Code / OpenClaw | 使用平台对应 Task / Subagent 能力 | 平台返回的 agent / task 标识、启动时间、完成时间 |
+| 不支持子 agent 的运行模式 | 默认 `blocked` | `platform_capabilities.subagent_dispatch.available=false` 和阻塞原因 |
+
+强制规则：
+
+1. `meta-po` 不得直接代替 `meta-pm` 写需求、代替 `meta-se` 写 HLD / Story 计划、代替 `meta-dev` 写 LLD 或代码、代替 `meta-qa` 做验证、代替 `meta-doc` 写最终文档。
+2. `process/handoffs/*.md` 只表示交接文件，不表示目标 agent 已执行；handoff 的完成不能替代子 agent 完成。
+3. 当 `dispatch.required=true` 且 `dispatch.mode=subagent` 时，`agent_id` / `thread_id` / `tool_name` / `spawned_at` 或 `resumed_at` 必须有真实值，否则目标任务不得标记为 `completed`。
+4. 子 agent 无法启动时，meta-po 必须把对应任务置为 `blocked`，向用户说明限制；只有用户明确批准后，才能使用 `dispatch.mode=inline-fallback`。
+5. `inline-fallback` 必须写明 `fallback_reason`、批准人、批准时间和影响范围；其结果只能表述为“meta-po 在自身上下文内按目标职责执行”，不得表述为“已由 meta-dev / meta-qa 完成”。
+6. CP6 编码完成和 CP7 验证完成必须包含 Agent Dispatch Evidence。缺少真实子 agent 证据且没有用户批准的 `inline-fallback` 时，检查点结论必须为 `FAIL` 或 `BLOCKED`。
 
 ### 最小上下文包
 

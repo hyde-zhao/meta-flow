@@ -104,8 +104,9 @@ cd delivery && uv run --python 3.11 python scripts/install.py --platform claude-
 3. `meta-se` 输出 `HLD.md` 和 CP3 自动预检；CP3 通过人工审查后拆解 Story、开发计划、依赖类型与文件所有权。
 4. `meta-se` 写入 CP4 自动预检；CP4 通过人工审查后，`meta-po` 按 Story DAG 计算 `lld_ready` / `dev_ready` 队列。
 5. `meta-dev` 并行输出 Story LLD 和 CP5 自动预检，`meta-po` 发起单 Story 或小批次滚动确认。
-6. Story CP5 确认且 `dev_gate` 满足后，`meta-dev` 并行实现并写入 CP6 编码完成结果，`meta-qa` 验证并写入 CP7 验证完成结果。
-7. 所有目标 Story 验证后，`meta-qa` / `meta-doc` 完成交付材料并写入 CP8 自动预检；CP8 人工终验通过后进入 delivered。
+6. Story CP5 确认且 `dev_gate` 满足后，`meta-po` 必须通过平台子 agent 能力调度 `meta-dev` 并记录证据；`meta-dev` 并行实现并写入 CP6 编码完成结果。
+7. Story 进入验证时，`meta-po` 必须通过平台子 agent 能力调度 `meta-qa` 并记录证据；`meta-qa` 验证并写入 CP7 验证完成结果。
+8. 所有目标 Story 验证后，`meta-qa` / `meta-doc` 完成交付材料并写入 CP8 自动预检；CP8 人工终验通过后进入 delivered。
 
 ## 检查点
 
@@ -124,6 +125,8 @@ Meta Flow 默认采用 CP0-CP8 检查点。所有检查点都包含 Entry Criter
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
 
 人工检查点由 `meta-po` 发起。发起时会提示 `checkpoints/CP*.md` 路径；用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `1/approve/通过`、`2/修改: <具体修改点>`、`3/reject/不通过`，由 `meta-po` 回填结果文件。
+
+CP6 / CP7 还必须包含 `Agent Dispatch Evidence` 小节。`process/handoffs/*.md` 只表示交接，不表示子 agent 已执行；Story 编码或验证完成必须有 `spawn_agent` / `resume_agent` / `send_input`、平台 Task/Subagent 返回标识，并在 `STATE.md.agent_lifecycle` 或 handoff `dispatch` 中记录 `agent_id` 或 `thread_id`，或用户明确批准的 `inline-fallback`。缺少调度证据时，CP6 / CP7 只能判定为 `FAIL` 或 `BLOCKED`。
 
 ## 交付目录约定
 

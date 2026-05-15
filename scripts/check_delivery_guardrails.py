@@ -348,6 +348,47 @@ def collect_guardrail_command_scope_errors() -> list[str]:
     return errors
 
 
+def collect_agent_dispatch_evidence_errors() -> list[str]:
+    errors: list[str] = []
+    targets = [
+        DELIVERY_ROOT / "agents" / "meta-po.md",
+        DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
+        DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
+        DELIVERY_ROOT / "skills" / "context-handoff" / "SKILL.md",
+        DELIVERY_ROOT / "skills" / "checkpoint-manager" / "SKILL.md",
+        DELIVERY_ROOT / "rules" / "AGENTS.md",
+        DELIVERY_ROOT / "rules" / "CLAUDE.md",
+        DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
+        DELIVERY_ROOT / "README.md",
+        ROOT / "AGENTS.md",
+    ]
+    required_tokens = ("Agent Dispatch Evidence", "inline-fallback", "agent_id", "thread_id")
+    for target in targets:
+        if not target.is_file():
+            errors.append(f"missing agent dispatch evidence target: {target.relative_to(ROOT)}")
+            continue
+        text = target.read_text(encoding="utf-8")
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} missing agent dispatch evidence tokens: {', '.join(missing)}")
+
+    meta_po = DELIVERY_ROOT / "agents" / "meta-po.md"
+    if meta_po.is_file():
+        text = meta_po.read_text(encoding="utf-8")
+        for token in ("spawn_agent", "resume_agent", "send_input", "不得直接代替"):
+            if token not in text:
+                errors.append(f"{meta_po.relative_to(ROOT)} missing subagent hard-gate token: {token}")
+
+    handoff_skill = DELIVERY_ROOT / "skills" / "context-handoff" / "SKILL.md"
+    if handoff_skill.is_file():
+        text = handoff_skill.read_text(encoding="utf-8")
+        for token in ("dispatch:", "mode=subagent", "mode=inline-fallback", "not-subagent-executed"):
+            if token not in text:
+                errors.append(f"{handoff_skill.relative_to(ROOT)} missing dispatch frontmatter token: {token}")
+
+    return errors
+
+
 def parse_frontmatter(content: str) -> dict[str, str]:
     match = FRONTMATTER_RE.match(content)
     if not match:
@@ -424,6 +465,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_installer_component_errors())
     errors.extend(collect_cr004_protocol_errors())
     errors.extend(collect_guardrail_command_scope_errors())
+    errors.extend(collect_agent_dispatch_evidence_errors())
     errors.extend(collect_revision_record_errors())
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):

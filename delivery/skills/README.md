@@ -13,12 +13,13 @@
 6. active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后脚本仍可直接执行。
 7. 涉及平台安装路径的 Skill 必须以 `delivery/doc/PLATFORM-CONTRACTS.yaml` 为路径真相源；不得按同平台目录进行类比推断。
 8. 修改 `USE-CASES.md` / `REQUIREMENTS.md` 时必须先有 CR 文档处理决策，默认增量更新并保留旧基线，同时在目标文档追加 `## 修订记录`。
+9. 涉及功能 Agent 调度的 Skill 必须区分 handoff 与真实执行证据；CP6 / CP7 必须读取 `Agent Dispatch Evidence`，不得用 handoff 文件替代子 agent 运行结果。
 
 ## Agent → Skill 关系
 
 | Agent | 主要阶段 / 场景 | 使用 Skill | 用途 |
 |---|---|---|---|
-| `meta-po` | `init`、状态推进、变更管理、问题分流、并行调度、检查点控制 | `state-router`、`checkpoint-manager`、`change-impact-analysis`、`issue-routing`、`context-handoff`、`review-artifact-protocol` | 推进状态、受理变更、路由问题、装配交接上下文，维护 LLD / Dev / QA 并行队列，生成和收敛 CP0-CP8 检查点，并持有 review gate 共享协议 |
+| `meta-po` | `init`、状态推进、变更管理、问题分流、并行调度、检查点控制 | `state-router`、`checkpoint-manager`、`change-impact-analysis`、`issue-routing`、`context-handoff`、`review-artifact-protocol` | 推进状态、受理变更、路由问题、装配交接上下文，维护 LLD / Dev / QA 并行队列，生成和收敛 CP0-CP8 检查点，记录子 agent 调度证据，并持有 review gate 共享协议 |
 | `meta-pm` | `requirement-clarification` | `use-case-discovery`、`requirement-clarifier`、`scenario-expansion`、`requirement-extraction`、`scope-normalization`、`checkpoint-manager`、`review-artifact-protocol` | 发现**产物类型感知**场景、执行轻量头脑风暴、识别交付出口、澄清需求歧义、展开测试场景、提取需求、整理需求范围，输出 CP1 / CP2 自动检查结果，并在 review_mode 复用统一评审协议 |
 | `meta-se` | `solution-design`、`story-planning` | `hld-designer`、`phase-designer`、`dependency-mapper`、`wave-planner`、`story-manager`、`dag-validator`、`checkpoint-manager`、`review-artifact-protocol` | 输出 HLD、拆解 Story、建立依赖类型和文件所有权并校验计划，输出 CP3 / CP4 自动检查结果，产出可供 meta-po 计算并行队列的 Story 草案 |
 | `meta-dev` | `story-execution` | `lld-designer`、`checkpoint-manager`、`claude-agent-writer`、`review-artifact-protocol` | 按 Story 输出 LLD 和 CP5 自动预检，确认后在 `dev_gate` 满足时实现并输出 CP6 编码完成结果，并在可行性审查时复用统一评审协议 |
@@ -30,11 +31,11 @@
 
 | Skill | Canonical Agent | 说明 |
 |---|---|---|
-| `state-router` | `meta-po` | 状态机推进与回退，并维护 `agent_lifecycle.active_agents`、`parallel_execution` 队列、依赖门控与复用/关闭登记 |
-| `checkpoint-manager` | `meta-po` | CP0-CP8 检查点契约、自动检查结果和人工审查稿的 canonical 规则；各阶段 Agent 按需写入结果，meta-po 负责发起和回填人工确认 |
+| `state-router` | `meta-po` | 状态机推进与回退，并维护 `agent_lifecycle.active_agents`、子 agent 调度证据、`parallel_execution` 队列、依赖门控与复用/关闭登记 |
+| `checkpoint-manager` | `meta-po` | CP0-CP8 检查点契约、自动检查结果和人工审查稿的 canonical 规则；CP6 / CP7 校验 `Agent Dispatch Evidence`；各阶段 Agent 按需写入结果，meta-po 负责发起和回填人工确认 |
 | `change-impact-analysis` | `meta-po` | 需求/设计变更管理；负责文档处理决策、旧基线映射和变更追溯门禁 |
 | `issue-routing` | `meta-po` | ISSUE 分类与路由 |
-| `context-handoff` | `meta-po` | 阶段切换时的最小上下文装配；Codex 默认 `fork_context=false`，只传必要文件与状态片段 |
+| `context-handoff` | `meta-po` | 阶段切换时的最小上下文装配；Codex 默认 `fork_context=false`，只传必要文件与状态片段；handoff frontmatter 必须包含 `dispatch` 区，不能把 handoff 当作执行完成证据 |
 | `use-case-discovery` | `meta-pm` | 阶段零调研后的场景发现与 `USE-CASES.md` 生成 / 增量更新，并输出治理字段、交付出口路由、头脑风暴候选和修订记录 |
 | `requirement-clarifier` | `meta-pm` | 多轮澄清需求 |
 | `scenario-expansion` | `meta-pm` | 从需求扩展使用场景 |
@@ -96,7 +97,7 @@
 | `CLARIFICATION-LOG.md` | `requirement-clarifier` | `use-case-discovery` | 澄清轮次由 `requirement-clarifier` 维护；场景发现摘要由 `use-case-discovery` 追加 |
 | `Review Findings / Review Summary` | `review-artifact-protocol` | `meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | review gate 的共享模板与 validator 由公共 Skill 持有，reviewer lane 只消费协议 |
 | `CP0-CP8 检查结果` | `checkpoint-manager` | `state-router`、`meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | 自动检查结果写 `process/checks/CP*.md`，人工审查稿写 `checkpoints/CP*.md`；state-router 以结果文件判定是否可推进 |
-| `STATE.md` | `state-router` | `checkpoint-manager` | `STATE.md.checkpoints` 保存每个 CP 的结果文件路径和同步状态 |
+| `STATE.md` | `state-router` | `checkpoint-manager`、`context-handoff` | `STATE.md.checkpoints` 保存每个 CP 的结果文件路径和同步状态；`agent_lifecycle.active_agents` 保存子 agent 调度证据 |
 | `STORY-*.md` | `story-manager` | `state-router`、`wave-planner`、`meta-dev`、`meta-po` | Story 卡片包含依赖类型、file_ownership、lld_gate、dev_gate，是并行队列计算输入 |
 | `STORY-*-LLD.md` | `lld-designer` | `meta-dev`、`meta-po`、`meta-qa` | LLD 由 `lld-designer` 模板持有；单 Story 或小批次确认后，开发与验证均直接消费该工件 |
 

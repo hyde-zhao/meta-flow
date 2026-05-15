@@ -12,6 +12,8 @@
 
 安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；人工审查稿写入 `checkpoints/CP*.md`。人工确认由 `meta-po` 发起，发起时会提示具体 checklist 文件路径，审查后必须回填“人工审查结果”。
 
+CP6 / CP7 必须包含 `Agent Dispatch Evidence`。handoff 文件只表示交接，不表示目标 agent 已执行；编码和验证完成必须有真实子 agent 调度证据，或用户明确批准的 `inline-fallback`。
+
 | CP | 名称 | 类型 |
 |----|------|------|
 | CP0 | 原始请求受理门 | 自动 |
@@ -23,6 +25,16 @@
 | CP6 | Story 编码完成门 | 滚动自动 |
 | CP7 | Story 验证完成门 | 滚动自动 |
 | CP8 | 交付就绪门 | 自动预检 + 人工 |
+
+## 子 Agent 调度证据
+
+`meta-po` 调用 `meta-dev`、`meta-qa` 等功能 Agent 时，必须记录平台调度证据：
+
+- Codex：新任务记录 `spawn_agent`，复用任务记录 `resume_agent` 或 `send_input`
+- Claude Code / OpenClaw：记录平台 Task/Subagent 标识
+- `process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`
+
+若当前运行模式不能拉起子 agent，默认阻断。只有用户明确批准时，才允许 `dispatch.mode=inline-fallback`，并必须写明 fallback 原因和批准信息。
 
 ## 安装
 

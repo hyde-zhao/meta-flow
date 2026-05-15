@@ -22,6 +22,7 @@ status: active
 
 - [ ] 目标 Agent 已明确
 - [ ] `process/` 下相关输入文档已生成
+- [ ] `process/STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch` 已完成探测或明确标记为 unavailable
 
 ## 必须读取的输入
 
@@ -43,6 +44,43 @@ status: active
 4. 若存在活跃变更单或当前 Story，补入对应上下文。
 5. Codex 下默认 `fork_context=false`，只发送本 Skill 产出的上下文包；不得传递完整会话历史，只有并行收益明确且经 meta-po 记录理由时，才允许 fork。
 6. 输出子 agent 复用键：`role + workflow_id + change_id + story_id + wave_id`，供 meta-po 查询 `STATE.md.agent_lifecycle.active_agents`。
+7. 输出 handoff frontmatter 的 `dispatch` 区，区分 `handoff-created`、`agent_spawned` 和 `agent_completed`；handoff 文件不得自行声明目标 agent 已完成，除非已有平台调度证据。
+
+## Handoff Dispatch Frontmatter 与 Agent Dispatch Evidence
+
+所有 `process/handoffs/*.md` 必须包含以下字段：
+
+```yaml
+dispatch:
+  required: true
+  mode: "subagent"
+  platform: "codex|claude-code|openclaw|unknown"
+  agent_role: "meta-dev"
+  agent_path: ""
+  tool_name: ""
+  agent_id: ""
+  agent_name: ""
+  thread_id: ""
+  spawned_at: ""
+  resumed_at: ""
+  completed_at: ""
+  evidence: ""
+  fallback_reason: ""
+  approved_by: ""
+  approved_at: ""
+```
+
+字段语义：
+
+- `mode=subagent`：必须由平台子 agent 能力执行。Codex 必须记录 `spawn_agent`、`resume_agent` 或 `send_input` 的返回标识。
+- `mode=inline-fallback`：仅在平台不可用且用户明确批准时使用，必须填写 `fallback_reason`、`approved_by`、`approved_at`。
+- `mode=handoff-only`：只创建交接文件，不代表目标 agent 已执行；不得把业务任务标记为完成。
+
+完成判定：
+
+1. `dispatch.required=true` 且 `mode=subagent` 时，`agent_id` 或 `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at` 必须非空，才允许把目标任务标记为 `agent_completed`。
+2. 只有 `from_agent` / `to_agent` / `status=completed`，但 `dispatch` 证据为空时，审计结论必须为 `not-subagent-executed`。
+3. CP6 / CP7 读取 handoff 时必须检查本 `dispatch` 区；缺少证据时不得推进 Story 到 `ready-for-verification` 或 `verified`。
 
 ## 输出文件 / 输出模板
 
@@ -55,6 +93,7 @@ status: active
 - 只使用当前工作区路径（`process/`、`checkpoints/`、`delivery/`）
 - 不得把完整对话、全量 `process/stories/`、历史失败轮次或无关 HLD 批量传给子 agent
 - production 项目交付前必须携带 `delivery_routing` 决策；未确认输出路径时，下游不得写交付件
+- handoff 文件只是调度输入和审计载体；不得用 handoff 文档代替 `spawn_agent` / `resume_agent` / `send_input` 或平台 Task/Subagent 调用
 
 ## 验收标准
 
@@ -62,6 +101,7 @@ status: active
 - [ ] 不包含无关阶段草稿或历史失败轮次
 - [ ] 活跃变更与当前 Story 上下文已纳入
 - [ ] Codex 子 agent 上下文包包含复用键和明确的关闭时机
+- [ ] handoff frontmatter 含 `dispatch` 区，且能区分子 agent 执行、仅交接、用户批准的 inline fallback
 
 ## 不适用边界
 

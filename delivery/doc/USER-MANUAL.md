@@ -103,8 +103,8 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 3. CP2 人工确认通过后，`meta-se` 输出 `HLD.md` 和 CP3 自动预检。
 4. CP3 人工确认通过后，`meta-se` 输出 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 CP4 自动预检。
 5. CP4 人工确认通过后，`meta-po` 按 Story DAG 组织 `meta-dev` 并行输出 `STORY-{id}-{story_slug}-LLD.md` 和 CP5 自动预检，并发起单 Story 或小批次滚动确认。
-6. Story CP5 确认且 `dev_gate` 满足后，`meta-dev` 复用同一子 agent 线程或登记的新线程并行实现，完成后写入 CP6 编码完成检查结果。
-7. `meta-qa` 在验证环境确认后执行验证，写入 CP7 验证完成检查结果，并生成安装脚本。
+6. Story CP5 确认且 `dev_gate` 满足后，`meta-po` 必须通过平台子 agent 能力调度 `meta-dev`，并在 `STATE.md.agent_lifecycle` 与 handoff `dispatch` 中记录证据；实现完成后写入 CP6 编码完成检查结果。
+7. `meta-po` 必须通过平台子 agent 能力调度 `meta-qa` 执行验证，并记录调度证据；验证完成后写入 CP7 验证完成检查结果，并生成安装脚本。
 8. `meta-doc` 最后输出 README 和 USER-MANUAL，CP8 自动预检和人工终验通过后进入 delivered。
 
 ### 6.2 检查点文件
@@ -122,6 +122,19 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 | CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
+
+CP6 / CP7 自动检查结果必须包含 `Agent Dispatch Evidence` 小节，用来证明 `meta-dev` / `meta-qa` 是真实子 agent 执行，而不是只有 handoff 文档。
+
+合格证据包括：
+
+- Codex `spawn_agent` / `resume_agent` / `send_input` 的返回标识
+- Claude Code / OpenClaw 的 Task/Subagent 标识
+- `STATE.md.agent_lifecycle.active_agents` 中非空的 `agent_id` 或 `thread_id`
+- handoff `dispatch` 中的 `tool_name`、`spawned_at` / `resumed_at`、`completed_at`
+
+只有 `to_agent: meta-dev`、`to_agent: meta-qa` 或 handoff `status=completed`，不能作为子 agent 执行证据。
+
+如果当前运行模式无法拉起子 agent，meta-po 必须阻断并说明原因。用户明确批准后，才允许 `dispatch.mode=inline-fallback`，并必须写明 `fallback_reason`、`approved_by`、`approved_at`。这种结果应表述为 meta-po 代执行，不能表述为 meta-dev / meta-qa 独立完成。
 
 ### 6.3 人工确认操作
 
