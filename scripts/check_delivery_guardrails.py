@@ -30,6 +30,12 @@ DELIVERY_SCRIPT_REF_RE = re.compile(r"delivery/scripts/(?P<name>[A-Za-z0-9_.-]+)
 CODEX_CONFIRMATION_TOKENS = ("结构化选择", "1/approve/通过", "2/修改", "3/reject/不通过")
 DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
+CACHE_SCAN_EXCLUDED_DIRS = {".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+
+
+def is_under_excluded_cache_dir(path: Path) -> bool:
+    rel_parts = path.relative_to(ROOT).parts
+    return any(part in CACHE_SCAN_EXCLUDED_DIRS for part in rel_parts)
 
 
 def load_platform_contracts(errors: list[str]) -> dict[str, object]:
@@ -77,7 +83,7 @@ def collect_codex_dry_run_errors(payload: dict[str, object]) -> list[str]:
     if not install_script.is_file():
         return [f"missing installer: {install_script.relative_to(ROOT)}"]
 
-    with tempfile.TemporaryDirectory(prefix="scope-pack-guardrail-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="meta-flow-guardrail-") as tmp:
         project_root = Path(tmp)
         cases = [
             ("project", project_root / ".agents" / "skills" / "context-handoff" / "SKILL.md", ".codex/skills"),
@@ -155,7 +161,7 @@ def collect_installer_component_errors() -> list[str]:
     errors: list[str] = []
     install_script = DELIVERY_ROOT / "scripts" / "install.py"
     pyproject = ROOT / "pyproject.toml"
-    cli_module = ROOT / "scope_pack" / "cli.py"
+    cli_module = ROOT / "meta_flow" / "cli.py"
 
     if not pyproject.is_file():
         errors.append("missing pyproject.toml for uv tool installation")
@@ -166,18 +172,18 @@ def collect_installer_component_errors() -> list[str]:
             errors.append(f"pyproject.toml is not valid TOML: {exc}")
         else:
             scripts = project_config.get("project", {}).get("scripts", {})
-            if scripts.get("scope-pack") != "scope_pack.cli:main":
-                errors.append("pyproject.toml must expose console script: scope-pack = scope_pack.cli:main")
+            if scripts.get("meta-flow") != "meta_flow.cli:main":
+                errors.append("pyproject.toml must expose console script: meta-flow = meta_flow.cli:main")
             if project_config.get("project", {}).get("readme") != "delivery/README.md":
                 errors.append("pyproject.toml project.readme must point at delivery/README.md")
 
     if not cli_module.is_file():
-        errors.append("missing scope_pack/cli.py for scope-pack command")
+        errors.append("missing meta_flow/cli.py for meta-flow command")
     else:
         cli_text = cli_module.read_text(encoding="utf-8")
-        for required in ("install", "SCOPE_PACK_SOURCE", "delivery/scripts/install.py"):
+        for required in ("install", "META_FLOW_SOURCE", "delivery/scripts/install.py"):
             if required not in cli_text:
-                errors.append(f"scope_pack/cli.py missing required token: {required}")
+                errors.append(f"meta_flow/cli.py missing required token: {required}")
 
     if not install_script.is_file():
         return errors + [f"missing installer: {install_script.relative_to(ROOT)}"]
@@ -196,7 +202,7 @@ def collect_installer_component_errors() -> list[str]:
         if required not in help_output:
             errors.append(f"installer --help missing component/legacy token: {required}")
 
-    with tempfile.TemporaryDirectory(prefix="scope-pack-component-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="meta-flow-component-") as tmp:
         project_root = Path(tmp)
         cases = [
             {
@@ -300,7 +306,7 @@ def collect_cr004_protocol_errors() -> list[str]:
     state_template = DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md"
     if state_template.is_file():
         state_text = state_template.read_text(encoding="utf-8")
-        for required in ("agent_lifecycle", "active_agents", "story_package_confirmed"):
+        for required in ("agent_lifecycle", "active_agents", "cp5_story_lld_review"):
             if required not in state_text:
                 errors.append(f"{state_template.relative_to(ROOT)} missing lifecycle/state token: {required}")
     else:
@@ -425,9 +431,13 @@ def collect_errors() -> list[str]:
             errors.append(f"delivery top-level directory not allowed: {child.relative_to(ROOT)}")
 
     for path in ROOT.rglob("__pycache__"):
+        if is_under_excluded_cache_dir(path):
+            continue
         if path.is_dir():
             errors.append(f"python cache directory must not exist: {path.relative_to(ROOT)}")
     for path in ROOT.rglob("*.pyc"):
+        if is_under_excluded_cache_dir(path):
+            continue
         if path.is_file():
             errors.append(f"python bytecode file must not exist: {path.relative_to(ROOT)}")
 

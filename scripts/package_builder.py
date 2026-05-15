@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SCOPE-Pack Platform Package Builder
+Meta Flow Platform Package Builder
 将已验证的 Agent/Skill 产物打包为各平台安装包。
 
 用法：
@@ -45,7 +45,7 @@ PLATFORM_CONFIGS = {
 }
 
 KEBAB_CASE_RE = re.compile(r"^[a-z][a-z0-9-]+\.(md|toml)$")
-SCOPE_PACK_AGENTS = {"meta-po", "meta-pm", "meta-se", "meta-dm", "meta-dev", "meta-qa", "meta-doc"}
+META_FLOW_AGENTS = {"meta-po", "meta-pm", "meta-se", "meta-dm", "meta-dev", "meta-qa", "meta-doc"}
 EXCLUDE_SKILLS = {"command-capability-map", "constraint-checker", "constraint-normalizer", "vendor-profile-loader"}
 
 
@@ -86,7 +86,7 @@ def convert_md_to_toml(md_path: Path, agent_name: str) -> str:
                 if line.startswith("description:"):
                     description = line.split(":", 1)[1].strip()
             content = content[end + 3:].strip()
-    description = description or f"SCOPE-Pack Agent: {agent_name}"
+    description = description or f"Meta Flow Agent: {agent_name}"
     description = description.replace("\\", "\\\\").replace('"""', '\\"""')
     instructions = content.replace("\\", "\\\\").replace('"""', '\\"""')
     return (
@@ -130,9 +130,9 @@ def build_platform(platform: str, config: dict, agents_src: Path, skills_src: Pa
         if not dry_run:
             agents_dest.mkdir(parents=True, exist_ok=True)
         for agent_file in sorted(agents_src.glob("*.md")):
-            if agent_file.stem not in SCOPE_PACK_AGENTS:
+            if agent_file.stem not in META_FLOW_AGENTS:
                 if dry_run:
-                    print(f"  [DryRun] 跳过非 SCOPE-Pack Agent: {agent_file.name}")
+                    print(f"  [DryRun] 跳过非 Meta Flow Agent: {agent_file.name}")
                 continue
             if not KEBAB_CASE_RE.match(agent_file.name):
                 issues.append(f"命名规范: {agent_file.name} 不符合 kebab-case")
@@ -189,7 +189,7 @@ def build_platform(platform: str, config: dict, agents_src: Path, skills_src: Pa
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SCOPE-Pack Platform Package Builder")
+    parser = argparse.ArgumentParser(description="Meta Flow Platform Package Builder")
     parser.add_argument("--manifest", default="delivery/doc/PACKAGE-MANIFEST.yaml", help="PACKAGE-MANIFEST.yaml 路径")
     parser.add_argument("--targets", default="claude-code,codex,openclaw", help="目标平台，逗号分隔")
     parser.add_argument("--agents-dir", default="delivery/agents", help="Agent 产物源文件目录")
@@ -207,7 +207,7 @@ def main():
     all_issues = []
     all_checksums = []
 
-    print(f"SCOPE-Pack Package Builder ({'DryRun' if args.dry_run else 'Build'})")
+    print(f"Meta Flow Package Builder ({'DryRun' if args.dry_run else 'Build'})")
     print(f"目标平台: {', '.join(targets)}")
     print()
 

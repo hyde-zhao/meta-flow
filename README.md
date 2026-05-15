@@ -1,4 +1,4 @@
-# SCOPE-Pack 元工作流
+# Meta Flow 元工作流
 
 > 通用 Agent/Skill 工作流产物工厂 — 从需求到交付的全流程编排。
 
@@ -15,9 +15,10 @@
 | `.agents/agents/` | 元工作流引擎 Agent 定义（不参与安装） |
 | `.agents/skills/` | 元工作流引擎 Skill 定义（不参与安装） |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
-| `.meta-workflow/` | 安装器状态目录（仅保存安装 manifest，不作为当前元工作流运行态输出目录） |
+| `~/.meta-flow/` | 安装器状态目录（仅保存安装 manifest，不作为当前元工作流运行态输出目录） |
 | `process/` | 运行时文档（gitignored，STATE.md / HLD.md / stories 等） |
-| `checkpoints/` | 人工确认稿（gitignored） |
+| `process/checks/` | 自动检查点结果（gitignored，CP0-CP8 自检证据） |
+| `checkpoints/` | 人工检查点审查稿（gitignored，CP2/CP3/CP4/CP5/CP8 checklist 与审查结果） |
 | `docs/` | 参考文档和设计历史 |
 
 ## 输出隔离原则
@@ -37,13 +38,15 @@
 │   ├── STORY-BACKLOG.md
 │   ├── DEVELOPMENT-PLAN.yaml
 │   ├── TEST-STRATEGY.md
+│   ├── checks/
 │   ├── changes/
 │   └── stories/
-├── checkpoints/                 # 人工确认稿（默认建议 gitignore）
-│   ├── CHECKPOINT-REQUIREMENTS.md
-│   ├── CHECKPOINT-HLD.md
-│   ├── CHECKPOINT-STORY-PACKAGE.md
-│   └── CHECKPOINT-FINAL.md
+├── checkpoints/                 # 人工检查点审查稿（默认建议 gitignore）
+│   ├── CP2-REQUIREMENTS-BASELINE.md
+│   ├── CP3-HLD-REVIEW.md
+│   ├── CP4-STORY-PLAN-REVIEW.md
+│   ├── CP5-STORY-001-example-LLD.md
+│   └── CP8-DELIVERY-READINESS.md
 └── delivery/                    # meta-flow 自身最终交付物（production 项目不默认使用）
     ├── README.md
     ├── doc/
@@ -56,28 +59,28 @@
 安装测试优先使用全局命令或 `uv run`：
 
 ```bash
-scope-pack install --platform codex --scope project --component agent --dry-run
+meta-flow install --platform codex --scope project --component agent --dry-run
 uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-run
 ```
 
-## `.meta-workflow` 目录说明
+## `~/.meta-flow` 目录说明
 
-`.meta-workflow/` 当前不承载 SCOPE-Pack 的运行态文档，也不是 `process/`、`checkpoints/` 或交付出口的替代目录。当前规则要求元工作流运行态仍写入仓库根目录下的 `process/`、`checkpoints/`；交付态按 engagement mode 路由，meta-flow 自身改进写当前仓库 `delivery/`，外部 production 项目按目标项目约定或用户确认输出。
+`~/.meta-flow/` 当前不承载 Meta Flow 的运行态文档，也不是 `process/`、`process/checks/`、`checkpoints/` 或交付出口的替代目录。当前规则要求元工作流运行态仍写入仓库根目录下的 `process/`、自动检查结果写入 `process/checks/`、人工审查稿写入 `checkpoints/`；交付态按 engagement mode 路由，meta-flow 自身改进写当前仓库 `delivery/`，外部 production 项目按目标项目约定或用户确认输出。
 
-当前实现中，`delivery/scripts/install.py` 会把安装状态写入 `<WORKSPACE_ROOT>/.meta-workflow/delivery/doc/INSTALL-MANIFEST.yaml`。该 manifest 记录已安装的平台、scope、安装时间、canonical commit、目标路径和卸载所需的 remove path。安装器执行 `--uninstall` 时依赖这个文件精确卸载。
+当前实现中，`delivery/scripts/install.py` 会把安装状态写入 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。该 manifest 记录已安装的平台、scope、安装时间、canonical commit、目标路径和卸载所需的 remove path。安装器执行 `--uninstall` 时依赖这个文件精确卸载。
 
 因此：
 
-1. 若仍需要通过安装器执行精确卸载，应保留 `.meta-workflow/`。
-2. 若确认不再需要历史安装记录或安装器卸载能力，可以删除 `.meta-workflow/`，但会丢失既有安装记录。
-3. 当前仓库中的 `.meta-workflow/` 未被 Git 跟踪，也未在 `.gitignore` 中显式忽略；如团队决定长期把它作为本地状态目录，应补充 ignore 规则。
+1. 若仍需要通过安装器执行精确卸载，应保留 `~/.meta-flow/`。
+2. 若确认不再需要历史安装记录或安装器卸载能力，可以删除 `~/.meta-flow/`，但会丢失既有安装记录。
+3. `~/.meta-flow/` 位于用户主目录，不属于当前仓库跟踪范围；不应作为项目运行态文档或交付出口使用。
 
 ## Python 环境规范（uv）
 
-当前仓库对 Python 运行环境采用 `uv` 作为统一工具链，并已提供 `pyproject.toml` / `uv.lock` 与 `scope-pack` console script。因此本阶段的执行约束是：
+当前仓库对 Python 运行环境采用 `uv` 作为统一工具链，并已提供 `pyproject.toml` / `uv.lock` 与 `meta-flow` console script。因此本阶段的执行约束是：
 
 1. 使用 `uv` 安装和选择 Python 解释器，不以系统 Python 作为默认入口。
-2. 运行仓库内 Python 脚本时，优先使用 `uv run --python <version> python <script>`；安装入口优先使用 `scope-pack install`。
+2. 运行仓库内 Python 脚本时，优先使用 `uv run --python <version> python <script>`；安装入口优先使用 `meta-flow install`。
 3. 一次性工具与临时依赖优先使用 `uvx` 或 `uv run --with <package>`，不把裸 `pip install` 作为日常流程。
 4. 安装到目标项目的 uv 规范统一通过 `delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md` 传播。
 
@@ -86,8 +89,8 @@ uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-r
 ```bash
 uv python install 3.11
 uv tool install --editable .
-scope-pack install --platform codex --scope user --component rules
-scope-pack install --platform codex --scope project --component agent --project-dir /path/to/project
+meta-flow install --platform codex --scope user --component rules
+meta-flow install --platform codex --scope project --component agent --project-dir /path/to/project
 # 从项目根运行
 uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
 # 或从 delivery/ 目录运行（delivery 作为独立仓库时）
@@ -96,25 +99,48 @@ cd delivery && uv run --python 3.11 python scripts/install.py --platform claude-
 
 ## 开发节奏
 
-1. `meta-pm` 输出需求与场景
-2. `meta-se` 输出并提交 `HLD.md`
-3. 用户确认 HLD 后，`meta-se` 拆解 Story、开发计划与当前 Wave 的 Story Package 草案
-4. `meta-po` 组织 `meta-dev` 为当前 Wave 输出 LLD 包，并发起 Story Package 合并确认
-5. Story Package 确认通过后，`meta-dev` 复用同一子 agent 实现，`meta-qa` 验证并生成安装脚本，`meta-doc` 输出交付文档
+1. `meta-po` 初始化请求并写入 CP0 自动检查结果。
+2. `meta-pm` 输出场景与需求，写入 CP1 / CP2 自动检查结果；CP2 通过人工审查后进入设计。
+3. `meta-se` 输出 `HLD.md` 和 CP3 自动预检；CP3 通过人工审查后拆解 Story、开发计划、依赖类型与文件所有权。
+4. `meta-se` 写入 CP4 自动预检；CP4 通过人工审查后，`meta-po` 按 Story DAG 计算 `lld_ready` / `dev_ready` 队列。
+5. `meta-dev` 并行输出 Story LLD 和 CP5 自动预检，`meta-po` 发起单 Story 或小批次滚动确认。
+6. Story CP5 确认且 `dev_gate` 满足后，`meta-dev` 并行实现并写入 CP6 编码完成结果，`meta-qa` 验证并写入 CP7 验证完成结果。
+7. 所有目标 Story 验证后，`meta-qa` / `meta-doc` 完成交付材料并写入 CP8 自动预检；CP8 人工终验通过后进入 delivered。
+
+## 检查点
+
+Meta Flow 默认采用 CP0-CP8 检查点。所有检查点都包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。
+
+| CP | 名称 | 类型 | 文件 |
+|----|------|------|------|
+| CP0 | 原始请求受理门 | 自动 | `process/checks/CP0-REQUEST-INTAKE.md` |
+| CP1 | 用户场景完备门 | 自动 | `process/checks/CP1-USE-CASE-COMPLETENESS.md` |
+| CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
+| CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
+| CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
+| CP5 | Story LLD 可实现性门 | 滚动自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{story_id}-{story_slug}-LLD.md` |
+| CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
+| CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
+| CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
+
+人工检查点由 `meta-po` 发起。发起时会提示 `checkpoints/CP*.md` 路径；用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `1/approve/通过`、`2/修改: <具体修改点>`、`3/reject/不通过`，由 `meta-po` 回填结果文件。
 
 ## 交付目录约定
 
-安装脚本从 `delivery/` 内读取交付件，推荐使用 `scope-pack install`：
+安装脚本从 `delivery/` 内读取交付件，推荐使用 `meta-flow install`：
 
 ```bash
 # user scope 默认只安装 rules
-scope-pack install --platform codex --scope user
+meta-flow install --platform codex --scope user
 
 # project scope 默认安装 agent 组件（agents + skills）
-scope-pack install --platform codex --scope project --project-dir /path/to/project
+meta-flow install --platform codex --scope project --project-dir /path/to/project
+
+# 未指定 --project-dir 时，交互式终端会提示确认当前目录或输入其他目录
+meta-flow install --platform codex --scope project
 
 # 显式安装完整组件
-scope-pack install --platform codex --scope project --component full --project-dir /path/to/project
+meta-flow install --platform codex --scope project --component full --project-dir /path/to/project
 ```
 
 兼容运行方式：

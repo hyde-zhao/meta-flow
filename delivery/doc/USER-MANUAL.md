@@ -1,4 +1,4 @@
-# SCOPE-Pack USER-MANUAL
+# Meta Flow USER-MANUAL
 
 ## 1. 安装前准备
 
@@ -13,9 +13,11 @@
 
 ```bash
 uv tool install --editable .
-scope-pack install --platform codex --scope user
-scope-pack install --platform codex --scope project --project-dir /path/to/project
+meta-flow install --platform codex --scope user
+meta-flow install --platform codex --scope project --project-dir /path/to/project
 ```
+
+项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
 
 从仓库根目录执行：
 
@@ -91,22 +93,46 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 ```text
 @meta-po 当前状态
 @meta-po 继续
-@meta-po 回退到 HLD 确认前
+@meta-po 回退到 CP3 HLD 架构评审前
 ```
 
 ### 6.1 标准推进顺序
 
-1. `meta-pm` 澄清需求，沉淀 `USE-CASES.md` 和 `REQUIREMENTS.md`
-2. `meta-se` 输出 `HLD.md`，经人工确认后再进入 Story 拆解
-3. `meta-se` 输出 `STORY-BACKLOG.md` 和 `DEVELOPMENT-PLAN.yaml`
-4. `meta-po` 组织 `meta-dev` 为当前 Wave 输出 `STORY-{id}-{story_slug}-LLD.md` 包，并发起 Story Package 确认
-5. Story Package 确认通过后，`meta-dev` 复用同一子 agent 线程实现，完成后交给 `meta-qa`
-6. `meta-qa` 在验证环境确认后执行验证并生成安装脚本
-7. `meta-doc` 最后输出 README 和 USER-MANUAL
+1. `meta-po` 初始化请求并写入 CP0 自动检查结果。
+2. `meta-pm` 澄清需求，沉淀 `USE-CASES.md` 和 `REQUIREMENTS.md`，写入 CP1 / CP2 自动检查结果。
+3. CP2 人工确认通过后，`meta-se` 输出 `HLD.md` 和 CP3 自动预检。
+4. CP3 人工确认通过后，`meta-se` 输出 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 CP4 自动预检。
+5. CP4 人工确认通过后，`meta-po` 按 Story DAG 组织 `meta-dev` 并行输出 `STORY-{id}-{story_slug}-LLD.md` 和 CP5 自动预检，并发起单 Story 或小批次滚动确认。
+6. Story CP5 确认且 `dev_gate` 满足后，`meta-dev` 复用同一子 agent 线程或登记的新线程并行实现，完成后写入 CP6 编码完成检查结果。
+7. `meta-qa` 在验证环境确认后执行验证，写入 CP7 验证完成检查结果，并生成安装脚本。
+8. `meta-doc` 最后输出 README 和 USER-MANUAL，CP8 自动预检和人工终验通过后进入 delivered。
 
-### 6.2 人工确认操作
+### 6.2 检查点文件
 
-Claude Code 可继续使用结构化选择。Codex 也优先使用结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；如果当前 Codex 客户端或运行模式无法提供可选择 UI，系统必须显式提示降级并接受 exact 文本：`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`。
+所有检查点都包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须写入逐项检查结果；人工检查点必须有可审查的 checklist 文件。
+
+| CP | 名称 | 类型 | 文件 |
+|----|------|------|------|
+| CP0 | 原始请求受理门 | 自动 | `process/checks/CP0-REQUEST-INTAKE.md` |
+| CP1 | 用户场景完备门 | 自动 | `process/checks/CP1-USE-CASE-COMPLETENESS.md` |
+| CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
+| CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
+| CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
+| CP5 | Story LLD 可实现性门 | 滚动自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{story_id}-{story_slug}-LLD.md` |
+| CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
+| CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
+| CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
+
+### 6.3 人工确认操作
+
+meta-po 发起人工检查时会提示 checklist 文件路径，例如：
+
+```text
+请审查：checkpoints/CP3-HLD-REVIEW.md
+该文件包含本检查点的 Entry Criteria、Checklist、Exit Criteria、Deliverables 和自动预检摘要。
+```
+
+审查后可以在对应 `checkpoints/CP*.md` 的“人工审查结果”中填写结论，也可以直接在对话中回复。Claude Code 可继续使用结构化选择。Codex 也优先使用结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；如果当前 Codex 客户端或运行模式无法提供可选择 UI，系统必须显式提示降级并接受 exact 文本：`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`。
 
 ```text
 1 / approve / 通过        # 确认通过
@@ -116,7 +142,9 @@ Claude Code 可继续使用结构化选择。Codex 也优先使用结构化选�
 
 不匹配上述 exact 输入时，meta-po 不得推进状态。
 
-### 6.3 何时显式声明 meta-self-dev
+用户直接在对话中确认时，meta-po 仍必须把结论回填到对应 `checkpoints/CP*.md`。
+
+### 6.4 何时显式声明 meta-self-dev
 
 如果这次目标是优化当前元工作流本身，而不是为某个目标产物交付方案，请在第一轮明确说明：
 

@@ -1,4 +1,4 @@
-"""SCOPE-Pack command line package."""
+"""Meta Flow command line package."""
 
 __all__ = ["__version__"]
 

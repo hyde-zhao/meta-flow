@@ -6,6 +6,19 @@ status: "draft"
 priority: "P0"
 wave: "W1"
 depends_on: []
+dependency_contracts: []
+file_ownership:
+  primary: []
+  shared: []
+  merge_owner: ""
+  forbidden: []
+lld_gate:
+  required_inputs: ["HLD", "ADR", "Story"]
+  status: "not-started"
+dev_gate:
+  lld_confirmed: false
+  dependencies_satisfied: false
+  file_conflict_free: false
 task_count: 0
 created_at: ""
 updated_at: ""
@@ -22,6 +35,22 @@ updated_at: ""
 - **设计约束**：
 - **命名规范**：Story 卡片文件名必须为 `STORY-{id}-{story_slug}.md`，其中 `story_slug` 是 `title` 的 kebab-case 稳定片段
 - **平台目标**：
+
+### 依赖与并行门控
+
+> `depends_on` 必须声明依赖类型，供 meta-po 计算 `lld_ready` 与 `dev_ready`。
+
+| 上游 Story | 类型（contract/runtime/file-conflict） | LLD 门控 | 开发门控 | 说明 |
+|------------|-----------------------------------------|----------|----------|------|
+| STORY-XXX | contract | upstream_lld_or_story_contract_declared | upstream_contract_frozen | |
+
+### 文件所有权
+
+| 类型 | 文件 | Owner / 合并规则 |
+|------|------|------------------|
+| primary | | 当前 Story 独占写入 |
+| shared | | 必须指定 merge_owner |
+| forbidden | | 当前 Story 禁止修改 |
 
 ### 文件系统布局
 

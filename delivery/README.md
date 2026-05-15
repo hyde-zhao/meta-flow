@@ -1,6 +1,6 @@
-# SCOPE-Pack Delivery Package
+# Meta Flow Delivery Package
 
-本目录是可独立交付的 SCOPE-Pack 产物包，包含：
+本目录是可独立交付的 Meta Flow 产物包，包含：
 
 - `agents/`：交付 Agent 定义
 - `skills/`：交付 Skill 定义及其私有运行时资产
@@ -8,15 +8,33 @@
 - `scripts/`：安装器入口
 - `doc/PLATFORM-CONTRACTS.yaml`：平台安装路径契约；安装器和校验脚本以此为路径真相源
 
+## 工作流检查点
+
+安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；人工审查稿写入 `checkpoints/CP*.md`。人工确认由 `meta-po` 发起，发起时会提示具体 checklist 文件路径，审查后必须回填“人工审查结果”。
+
+| CP | 名称 | 类型 |
+|----|------|------|
+| CP0 | 原始请求受理门 | 自动 |
+| CP1 | 用户场景完备门 | 自动 |
+| CP2 | 需求基线门 | 自动预检 + 人工 |
+| CP3 | HLD 架构评审门 | 自动预检 + 人工 |
+| CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 |
+| CP5 | Story LLD 可实现性门 | 滚动自动预检 + 人工 |
+| CP6 | Story 编码完成门 | 滚动自动 |
+| CP7 | Story 验证完成门 | 滚动自动 |
+| CP8 | 交付就绪门 | 自动预检 + 人工 |
+
 ## 安装
 
 推荐作为全局命令安装（本地开发建议 editable，便于读取当前 checkout 的 `delivery/` 资产）：
 
 ```bash
 uv tool install --editable .
-scope-pack install --platform codex --scope user
-scope-pack install --platform codex --scope project --project-dir /path/to/project
+meta-flow install --platform codex --scope user
+meta-flow install --platform codex --scope project --project-dir /path/to/project
 ```
+
+项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
 
 从仓库根目录运行：
 
@@ -40,8 +58,8 @@ uv run --python 3.11 python scripts/install.py --platform claude-code
 常用示例：
 
 ```bash
-scope-pack install --platform codex --scope user --component rules
-scope-pack install --platform codex --scope project --component agent --project-dir /path/to/project
+meta-flow install --platform codex --scope user --component rules
+meta-flow install --platform codex --scope project --component agent --project-dir /path/to/project
 uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
 ```
 

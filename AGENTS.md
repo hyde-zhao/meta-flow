@@ -1,6 +1,6 @@
-# SCOPE-Pack 元工作流 — Agent 声明
+# Meta Flow 元工作流 — Agent 声明
 
-> 本项目运行 **SCOPE-Pack** 通用 Agent/Skill 工作流产物工厂。
+> 本项目运行 **Meta Flow** 通用 Agent/Skill 工作流产物工厂。
 > 主编排器为 **meta-po**，所有任务统一由一个 meta-po 子 agent 发起并协调。
 
 ---
@@ -12,15 +12,15 @@
 | 角色名称 | meta-po（元工作流产品负责人） |
 | 提示词文件 | `delivery/agents/meta-po.md` |
 | 触发词 | 开始、新建工作流、需求变更、推进、当前状态、继续、回退 |
-| 始终激活 | 是 |
+| 始终激活 | 否。仅在显式 `@meta-po` 或触发词命中时启动；若已有活动 `meta-po`，必须复用，不得再拉起新线程 |
 
 meta-po 的职责：
 
-- **项目初始化**：创建 `process/`、`checkpoints/`，并按交付路由决定是否写入 `delivery/` 或目标项目约定目录
+- **项目初始化**：创建 `process/`、`process/checks/`、`checkpoints/`，并按交付路由决定是否写入 `delivery/` 或目标项目约定目录
 - 初始化 `process/STATE.md` 并维护全程状态
 - **先理解，后行动**：退出条件先验、上下文先行、追问优先于假设、状态一致性校验
-- 发起人工检查点（共 4 类：需求确认、HLD 确认、Story Package 确认、终验）
-- 唤醒和收敛下游功能 Agent（机器可验证退出条件）；Codex 下同一工作流只允许 1 个 `meta-po`，同角色同任务优先复用已有子 agent，检查点或交接完成后及时关闭
+- 维护 CP0-CP8 检查点：自动检查点写入 `process/checks/CP*.md`，人工检查点写入 `checkpoints/CP*.md` 并在发起确认时提示用户 checklist 路径，审查后回填人工结果
+- 唤醒和收敛下游功能 Agent（机器可验证退出条件）；Codex 下同一工作流只允许 1 个 `meta-po`，同角色同任务优先复用已有子 agent，检查点或交接完成后及时关闭；发现两个活动 `meta-po` 时必须阻断推进并要求用户选择保留线程
 - 受理变更请求，创建 `changes/CR-*.md`，执行五维度影响分析
 - **失败模式识别**：识别需求循环、HLD 僵局、LLD 僵局、开发卡顿等常见失败信号
 
@@ -38,14 +38,15 @@ meta-po 的职责：
 ## 工作流阶段与 Agent 对应关系
 
 ```
-init（meta-po）
- └─► requirement-clarification（meta-pm：场景发现 → 需求结构化）   [检查点①]
-      └─► solution-design（meta-se：输出 HLD）                     [检查点②]
-           └─► story-planning（meta-se 拆解 Story → meta-dev 产出当前 Wave LLD 包） [检查点③ Story Package]
+init（meta-po）                                                   [CP0 自动]
+ └─► requirement-clarification（meta-pm：场景发现 → 需求结构化）   [CP1 自动 + CP2 人工]
+      └─► solution-design（meta-se：输出 HLD）                     [CP3 人工]
+           └─► story-planning（meta-se 拆解 Story → meta-po 计算 DAG 队列 → meta-dev 并行产出 Story LLD） [CP4 人工 + CP5 滚动确认]
                 └─► story-execution（Wave 循环）
-                │    Wave 内并行：STORY-A [Story Package 已确认→实现→meta-qa] ‖ STORY-B [...]
-                │    同一 Story 内串行：Story Package 确认 → 开发 → 验证
-                └─► documentation（meta-doc）                      [检查点⑤]
+                │    LLD 写作并行：多个 lld-ready Story 可同时起草 LLD
+                │    开发并行：dev-ready Story 在依赖满足、文件无冲突且 CP5 通过后并行实现
+                │    同一 Story 内串行：CP5 LLD 确认 → CP6 开发完成 → CP7 验证完成
+                └─► documentation（meta-doc）                      [CP8 人工]
                      └─► delivered
 ```
 
@@ -62,9 +63,10 @@ init（meta-po）
 | `process/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
 | `process/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
 | `process/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
+| `process/checks/` | 自动检查点结果（CP0/CP1/CP2/CP3/CP4/CP5/CP6/CP7/CP8） |
 | `delivery/skills/<skill-name>/templates/` | Skill 私有模板目录（仅单个 Skill 内部初始化 / 渲染使用） |
 | `delivery/skills/<skill-name>/scripts/` | Skill 私有运行时脚本目录（需随 Skill 一起安装时使用） |
-| `checkpoints/` | 人工确认稿（REQUIREMENTS/HLD/STORY-PACKAGE/FINAL） |
+| `checkpoints/` | 人工检查点审查稿（CP2/CP3/CP4/CP5/CP8，含 checklist 和人工审查结果） |
 | `process/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
 | `process/changes/` | 变更单（CR-*.md） |
 | `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
@@ -75,11 +77,11 @@ init（meta-po）
 | `delivery/README.md` | 产物 README（meta-doc 产出） |
 | `delivery/doc/USER-MANUAL.md` | 产物用户手册（meta-doc 产出） |
 | `.agents/agents/` | 元工作流 Agent 提示词文件（meta-po/pm/se/dev/qa/doc） |
-| `.agents/skills/` | 元工作流 Skill 定义文件（SCOPE-Pack 内置） |
+| `.agents/skills/` | 元工作流 Skill 定义文件（Meta Flow 内置） |
 
 ### 输出隔离原则
 
-> **所有由元工作流产生的文件必须按层输出到 `process/`（运行态）、`checkpoints/`（确认态）和经确认的交付出口。**
+> **所有由元工作流产生的文件必须按层输出到 `process/`（运行态）、`process/checks/`（自动检查结果）、`checkpoints/`（确认态）和经确认的交付出口。**
 > 只有 `engagement_mode=meta-self-dev` 或用户明确说明优化 meta-flow 本身时，才默认把交付物写入当前仓库 `delivery/`。
 > production 项目必须先扫描目标项目 `README.md` / `README.*` / `docs/` 的交付物约定；存在则遵守，不存在则先提出建议并等待用户确认。
 > 当前仓库 `delivery/` 是 meta-flow 自身可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`。
@@ -121,9 +123,12 @@ init（meta-po）
 - **回写规则**：每一阶段结束必须回写 `STATE.md`
 - **变更规则**：需求或设计变动必须先创建 `CR-*.md` 再修改正式对象
 - **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前，必须在 CR 中填写文档处理决策（新增 / 原文档更新 / 归档 / 不变）；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
-- **人工检查点**：所有人工确认统一由 meta-po 发起；Claude Code 可使用结构化选择，Codex 优先使用结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；若当前 Codex 客户端、运行模式或工具面无法提供可选择 UI，必须显式降级为 exact 文本确认（`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`）
-- **HLD 门控**：`HLD.md` 未确认前，不得进入 Story 拆解
-- **Story Package 门控**：当前 Wave 的 Story 边界、Wave 分组与 `STORY-{id}-{story_slug}-LLD.md` 未合并确认前，不得开始对应 Story 的实现
+- **检查点结构**：CP0-CP8 均必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables；自动检查点必须在 `process/checks/CP*.md` 写入逐项结果，人工检查点必须在 `checkpoints/CP*.md` 写入 checklist 和“人工审查结果”。
+- **人工检查点**：所有人工确认统一由 meta-po 发起；发起时必须提示用户 checklist 文件路径（如 `checkpoints/CP3-HLD-REVIEW.md`）。Claude Code 可使用结构化选择，Codex 优先使用结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；若当前 Codex 客户端、运行模式或工具面无法提供可选择 UI，必须显式降级为 exact 文本确认（`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`）。用户直接在对话中确认时，meta-po 仍必须回填对应 `checkpoints/CP*.md`。
+- **HLD 门控**：CP3 自动预检和人工确认未通过前，不得进入 Story 拆解。
+- **Story 计划门控**：CP4 自动预检和人工确认未通过前，不得进入 Story 执行。
+- **Story LLD 门控**：单个 Story 的 CP5 自动预检和人工确认未通过前，不得开始对应 Story 的实现；LLD 可跨 Story 并行写作，开发必须满足 Story DAG、依赖类型、文件所有权和 CP5 门控。
+- **编码与验证门控**：Story 实现完成后必须写入 CP6 编码完成检查结果；验证完成后必须写入 CP7 验证完成检查结果。CP6/CP7 未通过时不得推进 Story 状态。
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `delivery/skills/README.md`
 - **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
 - **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...` 表达
@@ -134,7 +139,7 @@ init（meta-po）
 - **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
 - **场景主体默认值**：若用户未显式声明 meta 优化，`USE-CASES.md` 默认 `scenario_subject_type=target-artifact`，不得把当前仓库 / 当前工作流当成默认场景主体
 - **确定性语言**：meta-se 与 meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
-- **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查，并确认 Story Package 与 LLD 均已获批
+- **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查，并确认 LLD 已获批、依赖门控满足、文件所有权不冲突
 - **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 - **方案收敛优先**：涉及方案设计、整改规划或跨平台治理时，默认优先最简方案与内联策略；除非事实或验收要求证明不足，不新增共享模板体系或多余抽象层
 - **精确匹配优先**：涉及对象定位、版本对齐、规则命中或平台路径判定时，默认采用 exact 语义，不使用模糊匹配作为默认行为
@@ -143,4 +148,4 @@ init（meta-po）
 ## 防火墙测试工作流（现有，独立运行）
 
 > 本项目同时保留原有防火墙测试元工作流说明，两套系统并行存在，互不干扰。
-> 当前统一编排入口：`.agents/agents/meta-po.md`
+> 当前统一编排入口：Codex 使用 `.codex/agents/meta-po.toml`；Claude Code/OpenClaw 使用对应平台的 `agents/meta-po.md`。

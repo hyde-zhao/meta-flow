@@ -12,7 +12,7 @@ status: active
 
 ## 目标
 
-基于已确认需求与场景，先输出 `process/HLD.md`，再生成供人工确认的 `checkpoints/CHECKPOINT-HLD.md`。
+基于已确认需求与场景输出 `process/HLD.md`。HLD 完成后由 meta-se 使用 `checkpoint-manager` 生成 `process/checks/CP3-HLD-CONSISTENCY.md`，再由 meta-po 生成 `checkpoints/CP3-HLD-REVIEW.md` 发起人工确认。
 
 ## 适用场景
 
@@ -43,7 +43,7 @@ status: active
 2. 给出至少 2 个候选方案并完成显式比较。
 3. 明确推荐方案、关键架构图、模块职责、技术选型和风险。
 4. **应用 HLD 拆分检查**：按 §"HLD 拆分原则"评估当前设计是否应拆为多份 HLD；若应拆，先完成拆分再继续。
-5. 生成 `process/HLD.md`（及拆分出的同级 HLD 文件），并同步整理 `checkpoints/CHECKPOINT-HLD.md` 供人工确认。
+5. 生成 `process/HLD.md`（及拆分出的同级 HLD 文件）。不得自行跳过 CP3 自动预检和人工确认。
 
 ## HLD 拆分原则
 
@@ -85,7 +85,8 @@ status: active
 | 文件 | 路径 | 模板 |
 |---|---|---|
 | HLD 过程稿 | `process/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
-| HLD 检查点稿 | `checkpoints/CHECKPOINT-HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
+| CP3 自动预检结果 | `process/checks/CP3-HLD-CONSISTENCY.md` | 由 `checkpoint-manager` 生成 |
+| CP3 人工审查稿 | `checkpoints/CP3-HLD-REVIEW.md` | 由 meta-po 基于 `checkpoint-manager` 生成 |
 
 ## 约束
 
@@ -111,4 +112,3 @@ status: active
 - 推荐方案若缺少适用边界说明，后续 Story 拆解很容易失真
 - **忽视拆分信号的代价很高**：把"某产物 + 某全局机制"压进一份 HLD，后续评审者会同时面对两种抽象层，容易陷入口径漂移
 - **不要只在结尾补 companion_hld**：拆分必须反写 §非目标、§修订记录与 ADR 集合，否则追溯链不闭环
-

@@ -1,6 +1,6 @@
-# SCOPE-Pack Skill 开发规范
+# Meta Flow Skill 开发规范
 
-> 本规范用于约束 SCOPE-Pack 项目中 Skill 的设计、编写、评审和演进方式。
+> 本规范用于约束 Meta Flow 项目中 Skill 的设计、编写、评审和演进方式。
 > 目标是让 Skill 成为可复用、可组合、可审查、可交接的工程制品，而不是一次性对话 Prompt。
 
 ---
@@ -129,25 +129,26 @@ skills/<skill-name>/
 |------|------|
 | `references/` | 补充知识、规范摘录、来源材料 |
 | `examples/` | 典型输入输出、好/坏案例 |
-| `templates/` | 当前 Skill 私有模板 |
-| `delivery/scripts/` | 仅供当前 Skill 调用的辅助脚本 |
+| `templates/` | 当前 Skill 私有模板，必须随 Skill 同树安装 |
+| `scripts/` | 当前 Skill 私有运行时脚本，必须随 Skill 同树安装 |
 | `tests/` | smoke test、回归样例或评审用例 |
 
 ### 3.3 Template 放置规范
 
-Template 按复用范围分层放置：
+Template 按归属范围分层放置：
 
 | 类型 | 位置 |
 |------|------|
-| 多个 Skill / Agent 共用模板 | 仓库根 `templates/` |
 | 单个 Skill 私有模板 | `delivery/skills/<skill-name>/templates/` |
+| 多个 Skill / Agent 需要共享的模板 | 优先沉淀为专门 Skill 或显式复制到消费方 Skill，避免新增无 owner 的公共模板根 |
 
-安装到用户级共享运行时时：
+安装到项目或用户级运行时时：
 
-- 根 `templates/` → `<SCOPE_PACK_HOME>/templates/`
-- Skill 私有模板 → `<SCOPE_PACK_HOME>/skills/<skill-name>/templates/`
+- Skill 私有模板随 `delivery/skills/<skill-name>/` 同树安装。
+- Skill 私有脚本随 `delivery/skills/<skill-name>/scripts/` 同树安装。
+- `delivery/scripts/` 只允许放安装器入口，例如 `install.py`、`install.sh`、`install.ps1`。
 
-不建议长期继续使用 `agents/templates/` 作为公共模板根目录。
+不得依赖仓库根 `templates/`、`agents/templates/` 或 `delivery/scripts/` 作为 Skill 私有资产位置。
 
 ---
 
@@ -411,11 +412,11 @@ Gotchas 的作用：
 
 ## 12. 与当前仓库的落地要求
 
-结合当前 SCOPE-Pack 仓库，新增或升级 Skill 时应优先执行以下规则：
+结合当前 Meta Flow 仓库，新增或升级 Skill 时应优先执行以下规则：
 
 1. 所有新 Skill 默认按目录化结构设计
 2. 所有 Skill 逐步补齐 `## Gotchas`
-3. 共享模板逐步迁移到根 `templates/`
+3. Skill 私有模板和脚本必须保留在对应 `delivery/skills/<skill-name>/` 同树目录下
 4. 复杂 Skill 逐步补齐 `references/`、`templates/`、`examples/`、`tests/`
 5. 所有高副作用 Skill 明确知识来源与确认门控
 
@@ -432,4 +433,5 @@ Gotchas 的作用：
 - [ ] 已定义信息不足处理
 - [ ] 已包含 `Gotchas`
 - [ ] 模板位置符合共享 / 私有分层规则
+- [ ] Skill 私有脚本没有放入 `delivery/scripts/`
 - [ ] 复杂 Skill 已补齐必要的 examples / tests / references

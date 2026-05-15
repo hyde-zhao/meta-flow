@@ -3,7 +3,7 @@ name: dangerous-command-scan
 description: >-
   当需要扫描工作流计划或 Agent/Skill 产物中是否存在危险命令时使用。
   触发词包括：危险命令、命令扫描、安全扫描、风险扫描、Prompt 注入检测。
-  适用场景：安全审计的规划层检查（防火墙测试工作流）和 SCOPE-Pack 产物层安全检查。
+  适用场景：安全审计的规划层检查（防火墙测试工作流）和 Meta Flow 产物层安全检查。
 argument-hint: "可选：指定扫描目标文件或目录路径（默认扫描当前 Story 产物）"
 user-invokable: true
 status: active

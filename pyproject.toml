@@ -3,15 +3,15 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scope-pack"
+name = "meta-flow"
 version = "0.4.0"
-description = "SCOPE-Pack workflow asset installer and delivery package"
+description = "Meta Flow workflow asset installer and delivery package"
 readme = "delivery/README.md"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-scope-pack = "scope_pack.cli:main"
+meta-flow = "meta_flow.cli:main"
 
 [tool.setuptools]
-packages = ["scope_pack"]
+packages = ["meta_flow"]

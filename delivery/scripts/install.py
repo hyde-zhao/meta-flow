@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SCOPE-Pack installer.
+Meta Flow installer.
 
 Installs workflow assets from the canonical delivery directories:
   - agents/
@@ -16,7 +16,7 @@ Supports two run modes:
 Examples:
   uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user
-  scope-pack install --platform codex --scope user --component rules
+  meta-flow install --platform codex --scope user --component rules
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --project-dir D:\\work\\demo
   uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user --uninstall
@@ -330,13 +330,41 @@ def select_skill_dirs(skill_dirs: list[Path], requested: list[str]) -> list[Path
     return selected
 
 
-def resolve_workspace_root(project_dir: str | None) -> Path:
+def prompt_project_workspace_root(default_dir: Path) -> Path:
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        fail("项目级安装未指定 --project-dir，且当前不是交互式终端。请显式传入 --project-dir。")
+
+    print("未指定 --project-dir。")
+    print(f"项目级安装会写入当前目录: {default_dir}")
+    print("直接回车使用当前目录；输入其他目录可改用该目录；输入 q 取消。")
+
+    while True:
+        answer = input("安装目录 [当前目录]: ").strip()
+        if not answer:
+            return default_dir.resolve()
+        if answer.lower() in {"q", "quit", "cancel", "取消"}:
+            fail("已取消项目级安装。")
+
+        selected = Path(answer).expanduser().resolve()
+        print(f"将安装到: {selected}")
+        confirm = input("确认使用该目录？[Y/n]: ").strip().lower()
+        if confirm in {"", "y", "yes", "是"}:
+            return selected
+        if confirm in {"n", "no", "否"}:
+            continue
+        print("请输入 Y 或 n。")
+
+
+def resolve_workspace_root(project_dir: str | None, scope: str) -> Path:
     if project_dir:
         return Path(project_dir).expanduser().resolve()
 
+    if scope == "project":
+        return prompt_project_workspace_root(Path.cwd())
+
     detected = find_git_repo_root(Path.cwd())
     if detected is None:
-        fail("无法自动确定 WORKSPACE_ROOT。请在 git 仓库内运行，或显式传入 --project-dir。")
+        return Path.cwd().resolve()
     return detected
 
 
@@ -350,12 +378,12 @@ def resolve_user_home_root(platform: str) -> Path:
     return roots[platform]
 
 
-def project_meta_root(workspace_root: Path) -> Path:
-    return workspace_root / ".meta-workflow"
+def meta_flow_root(workspace_root: Path) -> Path:
+    return Path.home() / ".meta-flow"
 
 
 def manifest_path(workspace_root: Path) -> Path:
-    return project_meta_root(workspace_root) / "delivery" / "doc" / "INSTALL-MANIFEST.yaml"
+    return meta_flow_root(workspace_root) / "delivery" / "doc" / "INSTALL-MANIFEST.yaml"
 
 
 def canonical_commit(root: Path) -> str:
@@ -619,13 +647,9 @@ def clear_managed_block(path: Path, transaction: Transaction, dry_run: bool) -> 
         fail(f"managed block 哨兵顺序错误，请先手工修复: {path}")
 
     end_index += len(end_marker)
-    begin_line_end = existing.find("\n", begin_index)
-    if begin_line_end == -1:
-        begin_line_end = begin_index + len(existing[begin_index:end_index])
-    retained = existing[:begin_line_end] + "\n" + end_marker
     prefix = existing[:begin_index].rstrip()
     suffix = existing[end_index:].lstrip("\r\n")
-    parts = [part for part in [prefix, retained, suffix.rstrip()] if part]
+    parts = [part for part in [prefix, suffix.rstrip()] if part]
     write_text(path, "\n\n".join(parts) + "\n", transaction, dry_run)
 
 
@@ -738,9 +762,19 @@ def save_manifest(path: Path, payload: dict[str, object], transaction: Transacti
     write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n", transaction, dry_run)
 
 
+def manifest_entry_matches(existing: object, entry: dict[str, object]) -> bool:
+    if not isinstance(existing, dict):
+        return False
+    return (
+        existing.get("platform") == entry["platform"]
+        and existing.get("scope") == entry["scope"]
+        and existing.get("workspace_root") == entry["workspace_root"]
+    )
+
+
 def upsert_manifest_entry(payload: dict[str, object], entry: dict[str, object]) -> None:
     installs = list(payload.get("installs", []))
-    installs = [existing for existing in installs if not (existing.get("platform") == entry["platform"] and existing.get("scope") == entry["scope"])]
+    installs = [existing for existing in installs if not manifest_entry_matches(existing, entry)]
     installs.append(entry)
     payload["installs"] = installs
 
@@ -877,9 +911,20 @@ def uninstall_platform(
     dry_run: bool,
 ) -> dict[str, object]:
     installs = list(manifest_payload.get("installs", []))
-    matching = next((entry for entry in installs if entry.get("platform") == platform and entry.get("scope") == scope and entry.get("status") == "installed"), None)
+    workspace_root_text = str(workspace_root)
+    matching = next(
+        (
+            entry
+            for entry in installs
+            if entry.get("platform") == platform
+            and entry.get("scope") == scope
+            and entry.get("workspace_root") == workspace_root_text
+            and entry.get("status") == "installed"
+        ),
+        None,
+    )
     if matching is None:
-        fail(f"INSTALL-MANIFEST 中未找到 {platform}/{scope} 的已安装记录。")
+        fail(f"INSTALL-MANIFEST 中未找到 {workspace_root_text} 的 {platform}/{scope} 已安装记录。")
 
     for entry in matching.get("entries", []):
         remove_target = Path(entry["remove_path"])
@@ -894,10 +939,10 @@ def uninstall_platform(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Install SCOPE-Pack assets into a platform directory.")
+    parser = argparse.ArgumentParser(description="Install Meta Flow assets into a platform directory.")
     parser.add_argument("--platform", required=True, choices=VALID_PLATFORMS, help="目标平台")
     parser.add_argument("--scope", default="project", choices=VALID_SCOPES, help="安装范围")
-    parser.add_argument("--project-dir", default=None, help="WORKSPACE_ROOT；未提供时从当前目录向上查找 git repo root")
+    parser.add_argument("--project-dir", default=None, help="WORKSPACE_ROOT；project scope 未提供时交互确认当前目录或输入目录")
     parser.add_argument(
         "--component",
         default=None,
@@ -953,7 +998,7 @@ def resolve_install_selection(args: argparse.Namespace) -> tuple[bool, bool, boo
 
 def main() -> None:
     args = parse_args()
-    workspace_root = resolve_workspace_root(args.project_dir)
+    workspace_root = resolve_workspace_root(args.project_dir, args.scope)
     repo_root = script_repo_root(Path(__file__))
     layout = detect_source_layout(repo_root)
     platform_contracts = load_platform_contracts(layout.platform_contracts)
@@ -1053,7 +1098,7 @@ def main() -> None:
             "status": "installed",
             "installed_at": generated,
             "workspace_root": str(workspace_root),
-            "project_meta_root": str(project_meta_root(workspace_root)),
+            "meta_flow_root": str(meta_flow_root(workspace_root)),
             "canonical_commit": commit,
             "warnings": warnings
             + [

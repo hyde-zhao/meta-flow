@@ -1,4 +1,4 @@
-"""Command line entry point for SCOPE-Pack."""
+"""Command line entry point for Meta Flow."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 
 def _candidate_roots() -> list[Path]:
     roots: list[Path] = []
-    if os.environ.get("SCOPE_PACK_SOURCE"):
-        roots.append(Path(os.environ["SCOPE_PACK_SOURCE"]).expanduser())
+    if os.environ.get("META_FLOW_SOURCE"):
+        roots.append(Path(os.environ["META_FLOW_SOURCE"]).expanduser())
 
     cwd = Path.cwd()
     roots.extend([cwd, *cwd.parents])
@@ -27,19 +27,19 @@ def _find_installer() -> Path:
         if candidate.is_file():
             return candidate
     raise SystemExit(
-        "无法定位 SCOPE-Pack 安装器。请在 meta-flow 仓库内运行，"
-        "或设置 SCOPE_PACK_SOURCE 指向包含 delivery/scripts/install.py 的目录。"
+        "无法定位 Meta Flow 安装器。请在 meta-flow 仓库内运行，"
+        "或设置 META_FLOW_SOURCE 指向包含 delivery/scripts/install.py 的目录。"
     )
 
 
 def _print_help() -> None:
     print(
-        "usage: scope-pack <command> [options]\n\n"
+        "usage: meta-flow <command> [options]\n\n"
         "Commands:\n"
-        "  install    Install SCOPE-Pack assets into Claude Code, Codex, or OpenClaw.\n\n"
+        "  install    Install Meta Flow assets into Claude Code, Codex, or OpenClaw.\n\n"
         "Examples:\n"
-        "  scope-pack install --platform codex --scope user --component rules\n"
-        "  scope-pack install --platform codex --scope project --project-dir /path/to/repo\n"
+        "  meta-flow install --platform codex --scope user --component rules\n"
+        "  meta-flow install --platform codex --scope project --project-dir /path/to/repo\n"
     )
 
 

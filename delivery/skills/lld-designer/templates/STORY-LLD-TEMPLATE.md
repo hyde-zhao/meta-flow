@@ -18,7 +18,7 @@ open_items: 0
 
 > 文件名格式：`STORY-{id}-{story_slug}-LLD.md`，其中 `story_slug` 必须复用对应 Story 卡片中的稳定 slug。
 >
-> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需纳入 Story Package 合并确认后方可进入实现。
+> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需完成单 Story 或小批次 LLD 确认，并满足 `dev_gate` 后方可进入实现。
 
 ## 1. Goal
 
@@ -133,8 +133,20 @@ open_items: 0
 
 ## 人工确认区
 
-> **元工作流检查点 ③ — Story Package 确认**
-> meta-po 发起，用户一次性确认 Story 边界、Wave 分组与对应 LLD 设计后方可进入实现。
+> **CP5 — Story LLD 可实现性门**
+> meta-dev 先写入 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` 自动预检结果。
+> meta-po 再生成并提示用户审查 `checkpoints/CP5-{story_id}-{story_slug}-LLD.md`。
+> 用户确认当前 Story 或小批次 Story 的 LLD 设计后，仍需满足依赖门控与文件所有权门控方可进入实现。
+
+**CP5 checklist 摘要**：
+
+| # | 检查项 | 状态 | 证据 |
+|---|---|---|---|
+| 1 | LLD 覆盖 AC | 待检查 | 第 2 / 10 / 14 节 |
+| 2 | 与 HLD / ADR 一致 | 待检查 | 第 3 / 8 / 12 节 |
+| 3 | 文件影响范围明确 | 待检查 | 第 4 / 11 节 |
+| 4 | 接口契约完整 | 待检查 | 第 6 节 |
+| 5 | 测试与 dev_gate 可计算 | 待检查 | 第 10 / 14 节 |
 
 **确认选项**：
 1. ✅ **批准** — LLD 设计合理，允许进入实现
@@ -146,3 +158,11 @@ open_items: 0
 - `1` / `approve` / `通过` = 批准。
 - `2` / `修改: <具体修改点>` = 需要修改。
 - `3` / `reject` / `不通过` = 拒绝。
+
+**人工审查结果回填**：
+
+- 结论：`approved | changes_requested | rejected`
+- 审查人：
+- 审查时间：
+- 修改意见：
+- 风险接受项：
