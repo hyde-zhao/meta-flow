@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 
@@ -26,6 +27,9 @@ FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 SKILL_ROOT_ASSET_REF_RE = re.compile(r"<skill-root>/(?P<kind>templates|scripts)/(?P<path>[A-Za-z0-9_./-]+)")
 TEMPLATE_REF_RE = re.compile(r"(?<![A-Za-z0-9_./-])templates/(?P<path>[A-Za-z0-9_./-]+)")
 DELIVERY_SCRIPT_REF_RE = re.compile(r"delivery/scripts/(?P<name>[A-Za-z0-9_.-]+)")
+CODEX_CONFIRMATION_TOKENS = ("结构化选择", "1/approve/通过", "2/修改", "3/reject/不通过")
+DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
+GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
 
 
 def load_platform_contracts(errors: list[str]) -> dict[str, object]:
@@ -147,6 +151,197 @@ def collect_codex_dry_run_errors(payload: dict[str, object]) -> list[str]:
     return errors
 
 
+def collect_installer_component_errors() -> list[str]:
+    errors: list[str] = []
+    install_script = DELIVERY_ROOT / "scripts" / "install.py"
+    pyproject = ROOT / "pyproject.toml"
+    cli_module = ROOT / "scope_pack" / "cli.py"
+
+    if not pyproject.is_file():
+        errors.append("missing pyproject.toml for uv tool installation")
+    else:
+        try:
+            project_config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as exc:
+            errors.append(f"pyproject.toml is not valid TOML: {exc}")
+        else:
+            scripts = project_config.get("project", {}).get("scripts", {})
+            if scripts.get("scope-pack") != "scope_pack.cli:main":
+                errors.append("pyproject.toml must expose console script: scope-pack = scope_pack.cli:main")
+            if project_config.get("project", {}).get("readme") != "delivery/README.md":
+                errors.append("pyproject.toml project.readme must point at delivery/README.md")
+
+    if not cli_module.is_file():
+        errors.append("missing scope_pack/cli.py for scope-pack command")
+    else:
+        cli_text = cli_module.read_text(encoding="utf-8")
+        for required in ("install", "SCOPE_PACK_SOURCE", "delivery/scripts/install.py"):
+            if required not in cli_text:
+                errors.append(f"scope_pack/cli.py missing required token: {required}")
+
+    if not install_script.is_file():
+        return errors + [f"missing installer: {install_script.relative_to(ROOT)}"]
+
+    help_result = subprocess.run(
+        [sys.executable, str(install_script), "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    help_output = help_result.stdout + help_result.stderr
+    if help_result.returncode != 0:
+        errors.append(f"installer --help failed with exit {help_result.returncode}: {help_output.strip()}")
+    for required in ("--component", "rules", "agent", "full", "--content"):
+        if required not in help_output:
+            errors.append(f"installer --help missing component/legacy token: {required}")
+
+    with tempfile.TemporaryDirectory(prefix="scope-pack-component-") as tmp:
+        project_root = Path(tmp)
+        cases = [
+            {
+                "label": "codex user default",
+                "args": ["--platform", "codex", "--scope", "user", "--project-dir", str(project_root), "--dry-run"],
+                "required": ["Component: rules", str(Path.home() / ".codex" / "AGENTS.md")],
+                "forbidden": [str(Path.home() / ".codex" / "agents" / "meta-po.toml"), str(Path.home() / ".agents" / "skills")],
+            },
+            {
+                "label": "codex project default",
+                "args": ["--platform", "codex", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
+                "required": ["Component: agent", str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".agents" / "skills")],
+                "forbidden": [str(project_root / "AGENTS.md")],
+            },
+            {
+                "label": "codex full component",
+                "args": ["--platform", "codex", "--scope", "project", "--project-dir", str(project_root), "--component", "full", "--dry-run"],
+                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".agents" / "skills")],
+                "forbidden": [".codex/skills"],
+            },
+            {
+                "label": "legacy skills content",
+                "args": [
+                    "--platform",
+                    "codex",
+                    "--scope",
+                    "project",
+                    "--project-dir",
+                    str(project_root),
+                    "--content",
+                    "skills",
+                    "--skill",
+                    "context-handoff",
+                    "--dry-run",
+                ],
+                "required": ["Component: agent", "Legacy content: skills", str(project_root / ".agents" / "skills" / "context-handoff" / "SKILL.md")],
+                "forbidden": [str(project_root / ".codex" / "agents" / "meta-po.toml"), ".codex/skills"],
+            },
+        ]
+
+        for case in cases:
+            result = subprocess.run(
+                [sys.executable, str(install_script), *case["args"]],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            if result.returncode != 0:
+                errors.append(f"{case['label']} dry-run failed with exit {result.returncode}: {output.strip()}")
+                continue
+            for required in case["required"]:
+                if required not in output:
+                    errors.append(f"{case['label']} dry-run missing required output: {required}")
+            for forbidden in case["forbidden"]:
+                if forbidden in output:
+                    errors.append(f"{case['label']} dry-run unexpectedly included: {forbidden}")
+
+    return errors
+
+
+def collect_cr004_protocol_errors() -> list[str]:
+    errors: list[str] = []
+    targets = [
+        DELIVERY_ROOT / "agents" / "meta-po.md",
+        DELIVERY_ROOT / "agents" / "meta-doc.md",
+        DELIVERY_ROOT / "agents" / "meta-qa.md",
+        DELIVERY_ROOT / "rules" / "AGENTS.md",
+        DELIVERY_ROOT / "rules" / "CLAUDE.md",
+        DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
+    ]
+    for target in targets:
+        if not target.is_file():
+            errors.append(f"missing CR-004 protocol target: {target.relative_to(ROOT)}")
+            continue
+        text = target.read_text(encoding="utf-8")
+        missing = [token for token in CODEX_CONFIRMATION_TOKENS if token not in text]
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} missing Codex confirmation tokens: {', '.join(missing)}")
+
+    routing_targets = [
+        DELIVERY_ROOT / "agents" / "meta-po.md",
+        DELIVERY_ROOT / "agents" / "meta-pm.md",
+        DELIVERY_ROOT / "agents" / "meta-doc.md",
+        DELIVERY_ROOT / "skills" / "use-case-discovery" / "SKILL.md",
+        DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
+        DELIVERY_ROOT / "README.md",
+        DELIVERY_ROOT / "rules" / "AGENTS.md",
+        ROOT / "AGENTS.md",
+    ]
+    for target in routing_targets:
+        if not target.is_file():
+            errors.append(f"missing delivery routing target: {target.relative_to(ROOT)}")
+            continue
+        text = target.read_text(encoding="utf-8")
+        missing = [token for token in DELIVERY_ROUTING_TOKENS if token not in text]
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} missing delivery routing tokens: {', '.join(missing)}")
+
+    state_template = DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md"
+    if state_template.is_file():
+        state_text = state_template.read_text(encoding="utf-8")
+        for required in ("agent_lifecycle", "active_agents", "story_package_confirmed"):
+            if required not in state_text:
+                errors.append(f"{state_template.relative_to(ROOT)} missing lifecycle/state token: {required}")
+    else:
+        errors.append(f"missing state template: {state_template.relative_to(ROOT)}")
+
+    handoff_skill = DELIVERY_ROOT / "skills" / "context-handoff" / "SKILL.md"
+    if handoff_skill.is_file():
+        handoff_text = handoff_skill.read_text(encoding="utf-8")
+        for required in ("fork_context=false", "完整会话", "active_agents"):
+            if required not in handoff_text:
+                errors.append(f"{handoff_skill.relative_to(ROOT)} missing context-budget token: {required}")
+    else:
+        errors.append(f"missing context handoff skill: {handoff_skill.relative_to(ROOT)}")
+
+    return errors
+
+
+def collect_guardrail_command_scope_errors() -> list[str]:
+    errors: list[str] = []
+    targets = [
+        ROOT / "AGENTS.md",
+        ROOT / "README.md",
+        DELIVERY_ROOT / "rules" / "AGENTS.md",
+        DELIVERY_ROOT / "rules" / "CLAUDE.md",
+        DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
+        DELIVERY_ROOT / "agents" / "meta-qa.md",
+    ]
+    for target in targets:
+        if not target.is_file():
+            continue
+        text = target.read_text(encoding="utf-8")
+        if "check_delivery_guardrails.py" not in text:
+            continue
+        missing = [token for token in GUARDRAIL_CONDITION_TOKENS if token not in text]
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} references check_delivery_guardrails.py without conditional scope tokens: {', '.join(missing)}")
+        if "/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py" in text and "不得硬引用" not in text:
+            errors.append(f"{target.relative_to(ROOT)} must not hard-code the meta-flow guardrail absolute path")
+    return errors
+
+
 def parse_frontmatter(content: str) -> dict[str, str]:
     match = FRONTMATTER_RE.match(content)
     if not match:
@@ -220,6 +415,9 @@ def collect_errors() -> list[str]:
     platform_contracts = load_platform_contracts(errors)
     if platform_contracts:
         errors.extend(collect_codex_dry_run_errors(platform_contracts))
+    errors.extend(collect_installer_component_errors())
+    errors.extend(collect_cr004_protocol_errors())
+    errors.extend(collect_guardrail_command_scope_errors())
     errors.extend(collect_revision_record_errors())
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):

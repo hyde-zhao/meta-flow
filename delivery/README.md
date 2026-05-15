@@ -10,6 +10,14 @@
 
 ## 安装
 
+推荐作为全局命令安装（本地开发建议 editable，便于读取当前 checkout 的 `delivery/` 资产）：
+
+```bash
+uv tool install --editable .
+scope-pack install --platform codex --scope user
+scope-pack install --platform codex --scope project --project-dir /path/to/project
+```
+
 从仓库根目录运行：
 
 ```bash
@@ -20,7 +28,7 @@ uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
 
 ```bash
 cd delivery
-python scripts/install.py --platform claude-code
+uv run --python 3.11 python scripts/install.py --platform claude-code
 ```
 
 支持的平台：
@@ -32,9 +40,28 @@ python scripts/install.py --platform claude-code
 常用示例：
 
 ```bash
-uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user
+scope-pack install --platform codex --scope user --component rules
+scope-pack install --platform codex --scope project --component agent --project-dir /path/to/project
 uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
 ```
+
+legacy 兼容示例：
+
+```bash
+uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user --content rules
+```
+
+组件参数：
+
+- `rules`：只安装平台规则入口（如 AGENTS.md / CLAUDE.md）。
+- `agent`：安装 agents + skills。
+- `full`：同时安装 rules 与 agent 组件。
+
+默认值：
+
+- `--scope user` 默认 `--component rules`。
+- `--scope project` 默认 `--component agent`。
+- legacy `--content all|agents|skills|rules` 保留兼容，但新命令优先使用 `--component`。
 
 ## 目录约束
 
@@ -43,5 +70,9 @@ uv run --python 3.11 python delivery/scripts/install.py --platform claude-code -
 3. Python 缓存文件（`__pycache__/`、`*.pyc`）不得进入交付包
 4. Codex Agent 与 Skill 路径分开治理：Agent 在 `.codex/agents` / `~/.codex/agents`，Skill 在 `.agents/skills` / `~/.agents/skills`
 5. 安装器写入前会检查路径组件冲突；目标目录任一级被普通文件占用时会 fail fast 并提示修复
+
+## 交付出口路由
+
+当前仓库 `delivery/` 只作为 meta-flow 自身交付包。若工作流服务外部 production 项目，meta-po 必须先扫描目标项目 `README.md` / `README.*` / `docs/` 的交付物或发布约定；存在约定时按目标项目执行，不存在时先提出建议并等待用户确认，不能默认写当前仓库 `delivery/`。
 
 更多使用方式见 `doc/USER-MANUAL.md`。

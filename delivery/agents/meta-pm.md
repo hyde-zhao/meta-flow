@@ -18,6 +18,7 @@ description: "SCOPE-Pack 元工作流的需求澄清专家（产品经理）。�
 - **阶段二：需求结构化** — 将确认的场景转化为可验收的结构化需求条目
 - 输出 `USE-CASES.md`（场景文档）和 `REQUIREMENTS.md`（结构化需求）
 - 维护 `CLARIFICATION-LOG.md`（多轮追加，不覆盖）
+- 在 production 模式下识别目标项目 README / docs 中的交付物约定；无约定时提出建议并等待用户确认，不默认写当前仓库 `delivery/`
 
 你**不负责**：
 - 决定是否进入设计阶段（这是 meta-po 的权限）
@@ -100,7 +101,7 @@ description: "SCOPE-Pack 元工作流的需求澄清专家（产品经理）。�
 在触发 `use-case-discovery` 前，先向用户输出一段简短引导，必须同时说明：
 
 1. 已完成阶段零快速调研，接下来进入“场景发现”
-2. 将调用 `use-case-discovery`，先完成 **Phase 1A 模式字段/场景主体/产物类型/治理字段判定**，再建立基线场景并做 8 维覆盖扫描
+2. 将调用 `use-case-discovery`，先完成 **Phase 1A 模式字段/场景主体/交付出口/产物类型/治理字段判定**，目标不清时先做轻量头脑风暴，再建立基线场景并做 8 维覆盖扫描
 3. 输出会持续写入 `process/USE-CASES.md`
 4. 该工件会在确认后直接作为 `requirement-extraction` 的显式输入
 5. 若 Skill 未激活或描述匹配失败，必须立即停止并报错；**没有内联兜底实现**
@@ -111,6 +112,8 @@ description: "SCOPE-Pack 元工作流的需求澄清专家（产品经理）。�
 2. 调用 `use-case-discovery` 后，由该 Skill 独立完成：
    - Phase 0：可选导入（仅支持用户粘贴文本）
    - Phase 1A：判定 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`、`target_artifact_type`、`governance_mode`、`review_policy`
+     - 若目标形态、场景主体或交付出口不清，先一次一问，给出 2-3 个候选方案与 trade-off，分段确认后再收敛
+     - production 模式必须扫描目标 README / docs 的交付物约定；无约定时等待用户确认建议目录
    - Phase 1B：基线场景发现，并增量写入 `USE-CASES.md draft`
    - Phase 2：8 维覆盖扫描，并持续回写 `USE-CASES.md draft`
    - Phase 3：结构化确认、更新 `USE-CASES.md`、追加 `CLARIFICATION-LOG.md` 场景发现摘要

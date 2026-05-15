@@ -1,9 +1,14 @@
 project_id: meta-flow
-version: "1.0"
+version: "1.1"
 confirmed: true
 confirmed_by: "meta-po-delegated"
 confirmed_at: "2026-04-23T11:47:36+08:00"
 created_at: "2026-04-23T11:37:06+08:00"
+last_updated: "2026-05-15T00:00:00+08:00"
+change_notes:
+  - change_id: CR-004
+    date: "2026-05-15"
+    summary: "追加 Codex agent 生命周期、最小上下文 handoff、Story Package 确认、安装组件 CLI、平台确认协议和交付出口路由修订 wave；不覆盖 W1-W6 已验证基线。"
 waves:
   - wave: W1
     parallel: true
@@ -135,3 +140,80 @@ waves:
         output_files:
           - process/stories/STORY-PILOT-01.md
           - process/stories/STORY-PILOT-01-LLD.md
+  - wave: CR004-W1
+    parallel: true
+    change_id: CR-004
+    stories:
+      - story_id: CR004-01
+        title: Codex agent 生命周期与最小上下文 handoff
+        priority: P0
+        assignee: meta-dev
+        depends_on: []
+        status: verified
+        output_files:
+          - delivery/agents/meta-po.md
+          - delivery/skills/state-router/SKILL.md
+          - delivery/skills/state-router/templates/STATE-TEMPLATE.md
+          - delivery/skills/context-handoff/SKILL.md
+          - AGENTS.md
+      - story_id: CR004-02
+        title: Story Package 合并确认流程
+        priority: P0
+        assignee: meta-dev
+        depends_on: [CR004-01]
+        status: verified
+        output_files:
+          - delivery/agents/meta-se.md
+          - delivery/agents/meta-dev.md
+          - delivery/skills/lld-designer/SKILL.md
+          - delivery/skills/lld-designer/templates/STORY-LLD-TEMPLATE.md
+          - delivery/rules/AGENTS.md
+          - delivery/rules/CLAUDE.md
+  - wave: CR004-W2
+    parallel: true
+    change_id: CR-004
+    stories:
+      - story_id: CR004-03
+        title: 安装组件 CLI 与 uv tool 入口
+        priority: P0
+        assignee: meta-dev
+        depends_on: []
+        status: verified
+        output_files:
+          - pyproject.toml
+          - uv.lock
+          - scope_pack/__init__.py
+          - scope_pack/cli.py
+          - delivery/scripts/install.py
+          - delivery/README.md
+          - delivery/doc/USER-MANUAL.md
+      - story_id: CR004-04
+        title: use-case 头脑风暴与交付出口路由
+        priority: P1
+        assignee: meta-dev
+        depends_on: []
+        status: verified
+        output_files:
+          - process/HLD.md
+          - delivery/agents/meta-pm.md
+          - delivery/skills/use-case-discovery/SKILL.md
+          - delivery/skills/use-case-discovery/templates/USE-CASES-TEMPLATE.md
+          - delivery/agents/meta-doc.md
+  - wave: CR004-W3
+    parallel: false
+    change_id: CR-004
+    stories:
+      - story_id: CR004-05
+        title: 平台确认协议与文档/guardrail 回归
+        priority: P1
+        assignee: meta-qa
+        depends_on: [CR004-01, CR004-02, CR004-03, CR004-04]
+        status: verified
+        output_files:
+          - process/ARCHITECTURE-DECISION.md
+          - process/HLD-review-gate.md
+          - process/HLD-lld-writing-method.md
+          - process/STORY-BACKLOG.md
+          - process/DEVELOPMENT-PLAN.yaml
+          - scripts/check_delivery_guardrails.py
+          - delivery/agents/meta-qa.md

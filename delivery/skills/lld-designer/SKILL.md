@@ -1,9 +1,9 @@
 ---
 name: lld-designer
 description: >-
-  当某个已批准 Story 在开发前需要落地为 Low-Level Design（LLD）时使用。
+  当某个 Story Package 或已批准 Story 在开发前需要落地为 Low-Level Design（LLD）时使用。
   输出模块拆分、文件影响范围、数据模型、接口、流程、异常处理、测试设计、实施步骤、
-  风险、发布与回滚策略，并交由人工确认后再进入实现。触发词包括：LLD、详细设计、实现设计、Story 设计。
+  风险、发布与回滚策略，并交由 Story Package 合并确认后再进入实现。触发词包括：LLD、详细设计、实现设计、Story 设计。
 argument-hint: "必填：Story ID；可选：Story 名称 / slug、目标平台或技术栈"
 user-invokable: true
 status: active
@@ -11,16 +11,16 @@ status: active
 
 ## 目标
 
-基于已批准的 Story、已确认的 HLD 和架构约束，输出一份可直接指导编码、评审与验证的 Story 级 LLD，并在人工确认前停止，不进入实现。
+基于 Story Package 草案、已确认的 HLD 和架构约束，输出可直接指导编码、评审与验证的 Story 级 LLD，并在 Story Package 合并确认前停止，不进入实现。
 
 ## 适用场景
 
-- Story 已批准，准备进入实现前的详细设计
+- Story Package 已进入当前 Wave，准备进入实现前的详细设计
 - 需要形成可评审的 Story 级实现蓝图
 
 ## 前置条件
 
-- [ ] `process/stories/STORY-{id}-{story_slug}.md` 已批准
+- [ ] `process/stories/STORY-{id}-{story_slug}.md` 已进入 `package-draft` 或等价待设计状态
 - [ ] `process/HLD.md` 与 `process/ARCHITECTURE-DECISION.md` 已确认
 - [ ] 若 Story 涉及平台路径或安装结构，`delivery/doc/PLATFORM-CONTRACTS.yaml` 与 `process/PLATFORM-INSTALL-SPEC.md` 可读
 
@@ -43,7 +43,7 @@ status: active
 
 ### 阶段 1：Ready Check
 
-1. 校验 Story `status=approved`，且三件套完整。
+1. 校验 Story `status=package-draft` 或等价待设计状态，且三件套完整。
 2. 校验 `HLD.md`、`ARCHITECTURE-DECISION.md` 已确认；命中平台路径时读取 `delivery/doc/PLATFORM-CONTRACTS.yaml` 和 `PLATFORM-INSTALL-SPEC.md`。
 3. 若缺少关键输入，立即进入 `blocked`，写清缺失对象和缺失原因。
 
@@ -73,8 +73,8 @@ status: active
 ### 阶段 6：Checkpoint Handoff
 
 1. 复用 Story 卡片中的 `story_slug`，写入 `process/stories/STORY-{id}-{story_slug}-LLD.md`。
-2. 将 Story 推进到 `ready-for-lld-review`。
-3. 停止在人工确认前，不进入实现。
+2. 将 Story 推进到 `package-ready-for-review`。
+3. 停止在 Story Package 合并确认前，不进入实现。
 
 ## 输出文件 / 输出模板
 
@@ -85,7 +85,7 @@ status: active
 ## 约束
 
 - 14 个章节必须与 `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` 一一对应
-- `confirmed=false` 时不得进入实现
+- Story Package 未确认或 LLD `confirmed=false` 时不得进入实现
 - 不超出当前 Story 范围
 - 发现未决技术点时，必须输出 `OPEN` 或 Spike，禁止伪确定
 - 若模板章节与说明冲突，以模板契约为准同步修正
@@ -98,12 +98,12 @@ status: active
 - [ ] 文件影响范围、接口、测试与实施步骤可直接指导编码
 - [ ] 回滚与发布策略明确
 - [ ] 输入契约覆盖 Story / HLD / ADR / 依赖 / 平台 / CR
-- [ ] 失败路径覆盖 blocked / 回退 / Spike / 人工确认
+- [ ] 失败路径覆盖 blocked / 回退 / Spike / Story Package 合并确认
 
 ## 不适用边界
 
 - 当前任务还处于需求或 HLD 设计阶段
-- Story 尚未批准
+- Story 尚未进入当前 Wave 的 Story Package
 - 当前任务要求直接实现业务产物而非先完成 LLD
 
 ## Gotchas

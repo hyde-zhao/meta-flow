@@ -52,7 +52,7 @@ status: active
 ### 1. 初始化或读取状态
 
 1. 若 `process/STATE.md` 不存在，则以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化。
-2. 读取 `current_phase`、`current_agent`、`blocked`、`checkpoints`、`history`。
+2. 读取 `current_phase`、`current_agent`、`blocked`、`active_change`、`agent_lifecycle`、`checkpoints`、`history`。
 3. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 
 ### 2. 按阶段检查退出条件
@@ -62,7 +62,7 @@ status: active
 | `init` | `REQUEST.md` 已初始化且请求已登记 | `requirement-clarification` | `meta-pm` |
 | `requirement-clarification` | `USE-CASES.md` 与 `REQUIREMENTS.md` 已确认，且无 `BLOCKING` 未决项 | `solution-design` | `meta-se` |
 | `solution-design` | `HLD.md` 已确认 | `story-planning` | `meta-se` |
-| `story-planning` | `STORY-BACKLOG.md` 与 `DEVELOPMENT-PLAN.yaml` 已确认 | `story-execution` | `meta-dev` |
+| `story-planning` | `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 与当前 Wave LLD 包已纳入 Story Package 且确认通过 | `story-execution` | `meta-dev` |
 | `story-execution` | 当前 Wave 内所有 Story 已到达 `verified`，且验证输出已收敛 | 下一 Wave 或 `documentation` | `meta-dev` / `meta-qa` / `meta-doc` |
 | `documentation` | `README.md` 与 `USER-MANUAL.md` 已完成终验范围 | `delivered` | `meta-po` |
 | `delivered` | 只读归档 | — | — |
@@ -79,6 +79,16 @@ status: active
 2. 推进或回退时追加 `history` 记录。
 3. 查询状态时不改变业务内容，但允许刷新 `next_action`。
 
+### 5. Agent 生命周期登记
+
+Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_agents`：
+
+1. 新 agent 启动前，按 `role + workflow_id + change_id + story_id + wave_id` 精确查找可复用线程。
+2. 命中可复用线程时返回 resume / send_input 建议，不允许重复 spawn。
+3. 人工检查点通过、Story Package 确认完成、实现交接验证、验证报告交付或文档终验完成后，标记对应线程 `status=closing` 并提示 meta-po close。
+4. `meta-po` 角色始终单例；若发现 2 个活动 `meta-po`，必须阻断推进并要求人工选择保留线程。
+5. `active_agents` 失活或用户手动关闭时，必须在 `history` 记录重建原因，不能静默生成新线程。
+
 ## 输出文件 / 输出模板
 
 | 对象 | 路径 | 用途 |
@@ -91,6 +101,7 @@ status: active
 - 只负责状态判断、推进决策与状态回写，不生成需求/设计/实现内容
 - 推进前必须验证当前阶段退出条件，不能用“默认通过”代替检查
 - 回退必须记录原因、发起方和目标阶段
+- Agent 复用必须使用 exact key，不得用模糊角色名匹配替代
 - 仅使用当前 `process/STATE.md` 与 `skills/state-router/templates/STATE-TEMPLATE.md` 契约
 
 ## 验收标准
@@ -98,6 +109,7 @@ status: active
 - [ ] `STATE.md` 的阶段与下一步动作与实际产物状态一致
 - [ ] 初始化时结构与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致
 - [ ] 推进 / 回退操作均追加 `history`
+- [ ] 同一任务同角色不会重复登记活动 agent，检查点完成后有关闭动作
 - [ ] 阻塞状态下返回明确阻塞原因
 
 ## 不适用边界
@@ -110,4 +122,3 @@ status: active
 - `story-execution` 是阶段状态，不替代单个 Story 的生命周期；Story 状态仍以 `story-manager` 维护的卡片为准
 - 当存在活跃 `CR-*` 时，应优先收敛变更影响，再判断是否允许推进
 - 首次初始化时只允许从 `skills/state-router/templates/STATE-TEMPLATE.md` 复制，不允许凭空脑补字段
-

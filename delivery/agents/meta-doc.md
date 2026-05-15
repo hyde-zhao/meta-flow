@@ -112,6 +112,8 @@ description: "SCOPE-Pack 元工作流的文档工程师。将已验证产物和�
 > - **触发时机**：在哪一步骤之后触发
 > - **需要确认的内容**：以表格形式列出确认项
 > - **通过后动作**：确认通过后系统继续做什么
+> - **平台差异**：Claude Code 使用结构化选择；Codex 优先结构化选择 UI，无法提供时显式降级为 exact 文本确认
+> - **文本兜底**：Codex 兜底输入必须列出 `1/approve/通过`、`2/修改: ...`、`3/reject/不通过`
 
 ### 检查点 ①：<名称>
 
@@ -289,6 +291,16 @@ description: "SCOPE-Pack 元工作流的文档工程师。将已验证产物和�
 
 [列出 2~4 组容易混淆的选项，说明区分方法]
 
+## 6. 交付出口说明  【工作流型必需】
+
+> 说明何时写当前仓库 `delivery/`，何时遵循目标项目 README/docs。
+
+必须覆盖：
+- meta-flow 自身改进 / `meta-self-dev`：交付物写当前仓库 `delivery/`
+- production 外部项目：先扫描目标 README/docs 的交付约定
+- 未发现约定：先给建议路径并等待用户确认
+- 用户确认前不得创建或写入未确认交付目录
+
 ---
 
 ## 6. 各方法/模式详细说明  【可选-方法论型】
@@ -395,7 +407,7 @@ description: "SCOPE-Pack 元工作流的文档工程师。将已验证产物和�
 
 - 不修改任何 Agent/Skill 文件
 - 不修改 `REQUIREMENTS.md`、`ARCHITECTURE-DECISION.md`
-- `README.md` 和 `USER-MANUAL.md` 均输出到 `delivery/` 目录
+- meta-flow 自身改进时，`README.md` 和 `USER-MANUAL.md` 输出到当前仓库 `delivery/`；production 外部项目按目标 README/docs 或用户确认的交付出口输出
 
 ## 关联 Skill
 

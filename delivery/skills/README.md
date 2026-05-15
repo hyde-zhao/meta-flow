@@ -19,10 +19,10 @@
 | Agent | 主要阶段 / 场景 | 使用 Skill | 用途 |
 |---|---|---|---|
 | `meta-po` | `init`、状态推进、变更管理、问题分流 | `state-router`、`change-impact-analysis`、`issue-routing`、`context-handoff`、`review-artifact-protocol` | 推进状态、受理变更、路由问题、装配交接上下文，并持有 review gate 共享协议 |
-| `meta-pm` | `requirement-clarification` | `use-case-discovery`、`requirement-clarifier`、`scenario-expansion`、`requirement-extraction`、`scope-normalization`、`review-artifact-protocol` | 发现**产物类型感知**场景、澄清需求歧义、展开测试场景、提取需求、整理需求范围，并在 review_mode 复用统一评审协议 |
-| `meta-se` | `solution-design`、`story-planning` | `hld-designer`、`phase-designer`、`dependency-mapper`、`wave-planner`、`story-manager`、`dag-validator`、`review-artifact-protocol` | 输出 HLD、拆解 Story、建立依赖并校验计划，并在 review_mode 复用统一评审协议 |
-| `meta-dev` | `story-execution` | `lld-designer`、`claude-agent-writer`、`review-artifact-protocol` | 先输出 LLD，再按平台规范实现 Agent 产物，并在可行性审查时复用统一评审协议 |
-| `meta-qa` | `ready-for-verification` 后 | `dangerous-command-scan`、`platform-validator`、`package-builder`、`coverage-checker`、`runtime-risk-review`、`permission-boundary-check`、`context-manifest-builder`、`review-artifact-protocol` | 执行质量验证、安全审计、安装脚本与安装结构校验，并在 review_mode 复用统一评审协议 |
+| `meta-pm` | `requirement-clarification` | `use-case-discovery`、`requirement-clarifier`、`scenario-expansion`、`requirement-extraction`、`scope-normalization`、`review-artifact-protocol` | 发现**产物类型感知**场景、执行轻量头脑风暴、识别交付出口、澄清需求歧义、展开测试场景、提取需求、整理需求范围，并在 review_mode 复用统一评审协议 |
+| `meta-se` | `solution-design`、`story-planning` | `hld-designer`、`phase-designer`、`dependency-mapper`、`wave-planner`、`story-manager`、`dag-validator`、`review-artifact-protocol` | 输出 HLD、拆解 Story、建立依赖并校验计划，产出 Story Package 草案并交给 meta-po 组织 LLD 包 |
+| `meta-dev` | `story-execution` | `lld-designer`、`claude-agent-writer`、`review-artifact-protocol` | 先按 Wave 输出 Story Package LLD 包，确认后复用同一子 agent 实现，并在可行性审查时复用统一评审协议 |
+| `meta-qa` | `ready-for-verification` 后 | `dangerous-command-scan`、`platform-validator`、`package-builder`、`coverage-checker`、`runtime-risk-review`、`permission-boundary-check`、`context-manifest-builder`、`review-artifact-protocol` | 执行质量验证、安全审计、安装脚本与安装结构校验，覆盖 `scope-pack install` 组件默认值、Codex 确认协议和交付路由 |
 | `meta-doc` | `documentation` | `workflow-renderer`、`review-artifact-protocol` | 将已验证产物组织为可读交付文档，并在 review_mode 复用统一评审协议 |
 | `meta-dm`（已废弃） | 历史 Story 规划 | `phase-designer`、`wave-planner`、`dependency-mapper`、`story-manager`、`dag-validator` | 仅供历史参考，现由 `meta-se` 接管 |
 
@@ -30,11 +30,11 @@
 
 | Skill | Canonical Agent | 说明 |
 |---|---|---|
-| `state-router` | `meta-po` | 状态机推进与回退 |
+| `state-router` | `meta-po` | 状态机推进与回退，并维护 `agent_lifecycle.active_agents` 复用/关闭登记 |
 | `change-impact-analysis` | `meta-po` | 需求/设计变更管理；负责文档处理决策、旧基线映射和变更追溯门禁 |
 | `issue-routing` | `meta-po` | ISSUE 分类与路由 |
-| `context-handoff` | `meta-po` | 阶段切换时的最小上下文装配 |
-| `use-case-discovery` | `meta-pm` | 阶段零调研后的场景发现与 `USE-CASES.md` 生成 / 增量更新，并输出治理字段和修订记录 |
+| `context-handoff` | `meta-po` | 阶段切换时的最小上下文装配；Codex 默认 `fork_context=false`，只传必要文件与状态片段 |
+| `use-case-discovery` | `meta-pm` | 阶段零调研后的场景发现与 `USE-CASES.md` 生成 / 增量更新，并输出治理字段、交付出口路由、头脑风暴候选和修订记录 |
 | `requirement-clarifier` | `meta-pm` | 多轮澄清需求 |
 | `scenario-expansion` | `meta-pm` | 从需求扩展使用场景 |
 | `requirement-extraction` | `meta-pm` | 结构化需求提取与 `REQUIREMENTS.md` 增量更新 |
@@ -46,7 +46,7 @@
 | `wave-planner` | `meta-se` | 规划并行 Wave |
 | `story-manager` | `meta-se` | 生成 Story 卡片与 Backlog |
 | `dag-validator` | `meta-se` | 校验计划依赖图 |
-| `lld-designer` | `meta-dev` | Story 级 LLD 设计 |
+| `lld-designer` | `meta-dev` | Story Package LLD 包设计；输出后等待合并确认，不直接进入实现 |
 | `claude-agent-writer` | `meta-dev` | Claude Agent 产物规范 |
 | `dangerous-command-scan` | `meta-qa` | 危险命令与注入风险扫描 |
 | `platform-validator` | `meta-qa` | 基于 `delivery/doc/PLATFORM-CONTRACTS.yaml` 校验安装目标、DryRun 和 Codex 禁止路径 |
@@ -96,7 +96,7 @@
 | `Review Findings / Review Summary` | `review-artifact-protocol` | `meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | review gate 的共享模板与 validator 由公共 Skill 持有，reviewer lane 只消费协议 |
 | `STATE.md` | `state-router` | （无交叉引用） | |
 | `STORY-*.md` | `story-manager` | （无交叉引用） | |
-| `STORY-*-LLD.md` | `lld-designer` | `meta-dev`、`meta-po`、`meta-qa` | LLD 由 `lld-designer` 模板持有；实现、确认与验证均直接消费该工件 |
+| `STORY-*-LLD.md` | `lld-designer` | `meta-dev`、`meta-po`、`meta-qa` | LLD 由 `lld-designer` 模板持有；作为 Story Package 的一部分被确认，确认后实现与验证均直接消费该工件 |
 
 ## Reviewer Dispatch
 

@@ -80,7 +80,7 @@ Codex project 安装必须至少构造以下负向用例：
 
 ```bash
 touch <target>/.codex
-uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope project --project-dir <target> --content agents --agent meta-po
+scope-pack install --platform codex --scope project --project-dir <target> --component agent --agent meta-po --skill context-handoff
 ```
 
 预期：非零退出，错误包含 `安装路径被非目录占用: <target>/.codex`。

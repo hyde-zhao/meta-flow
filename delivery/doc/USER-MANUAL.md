@@ -9,6 +9,14 @@
 
 ## 2. 常用安装命令
 
+全局命令方式（推荐本地开发使用 editable，以便命令读取当前 checkout 的 `delivery/` 资产）：
+
+```bash
+uv tool install --editable .
+scope-pack install --platform codex --scope user
+scope-pack install --platform codex --scope project --project-dir /path/to/project
+```
+
 从仓库根目录执行：
 
 ```bash
@@ -21,8 +29,8 @@ uv run --python 3.11 python delivery/scripts/install.py --platform openclaw --dr
 
 ```bash
 cd delivery
-python scripts/install.py --platform claude-code
-python scripts/install.py --platform codex --scope user
+uv run --python 3.11 python scripts/install.py --platform claude-code
+uv run --python 3.11 python scripts/install.py --platform codex --scope user
 ```
 
 包装脚本：
@@ -37,11 +45,16 @@ bash scripts/install.sh --platform claude-code --dry-run
 
 ## 3. 安装内容
 
-- `agents`：平台 Agent 定义
-- `skills`：Skill 定义与 Skill 私有运行时资产
-- `rules`：平台规则入口
+- `rules`：平台规则入口（AGENTS.md / CLAUDE.md 等）
+- `agent`：平台 Agent 定义 + Skill 定义与 Skill 私有运行时资产
+- `full`：同时安装 rules 与 agent
 
-可通过 `--content agents|skills|rules|all` 控制安装范围。
+可通过 `--component rules|agent|full` 控制安装范围。默认值：
+
+- `--scope user` 默认只安装 `rules`
+- `--scope project` 默认只安装 `agent`
+
+legacy `--content agents|skills|rules|all` 保留兼容，但新文档优先使用 `--component`。
 
 ## 4. DryRun 与卸载
 
@@ -86,11 +99,24 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 1. `meta-pm` 澄清需求，沉淀 `USE-CASES.md` 和 `REQUIREMENTS.md`
 2. `meta-se` 输出 `HLD.md`，经人工确认后再进入 Story 拆解
 3. `meta-se` 输出 `STORY-BACKLOG.md` 和 `DEVELOPMENT-PLAN.yaml`
-4. `meta-dev` 为每个 Story 先输出 `STORY-{id}-{story_slug}-LLD.md`，确认后再实现
-5. `meta-qa` 在验证环境确认后执行验证并生成安装脚本
-6. `meta-doc` 最后输出 README 和 USER-MANUAL
+4. `meta-po` 组织 `meta-dev` 为当前 Wave 输出 `STORY-{id}-{story_slug}-LLD.md` 包，并发起 Story Package 确认
+5. Story Package 确认通过后，`meta-dev` 复用同一子 agent 线程实现，完成后交给 `meta-qa`
+6. `meta-qa` 在验证环境确认后执行验证并生成安装脚本
+7. `meta-doc` 最后输出 README 和 USER-MANUAL
 
-### 6.2 何时显式声明 meta-self-dev
+### 6.2 人工确认操作
+
+Claude Code 可继续使用结构化选择。Codex 也优先使用结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；如果当前 Codex 客户端或运行模式无法提供可选择 UI，系统必须显式提示降级并接受 exact 文本：`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`。
+
+```text
+1 / approve / 通过        # 确认通过
+2 / 修改: <具体修改点>    # 需要修改
+3 / reject / 不通过       # 不通过并回退
+```
+
+不匹配上述 exact 输入时，meta-po 不得推进状态。
+
+### 6.3 何时显式声明 meta-self-dev
 
 如果这次目标是优化当前元工作流本身，而不是为某个目标产物交付方案，请在第一轮明确说明：
 
@@ -105,6 +131,7 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 - 工作流默认是 `production`
 - 只有当你**明确说明**当前是在做“meta 工作流优化 / 自我开发”时，才会切换到 `meta-self-dev`
 - 在 `production` 模式下，场景主体默认是目标产物，而不是当前仓库本身
+- 在 `production` 模式下，不默认把交付物写入当前仓库 `delivery/`
 
 ### 7.2 如何查看当前工作模式
 
@@ -160,7 +187,18 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 - 如果请求同时提到“整改当前仓库”和“目标 Agent / Skill / Workflow”，又**没有**明确声明 meta 优化，系统会优先把目标产物当作场景主体
 - 想避免歧义时，建议在第一轮消息里同时写明：`engagement_mode` 意图 + 目标产物名称
 
-## 8. 验证环境准备
+## 8. 交付出口路由
+
+meta-flow 会先判断当前任务是否为自身改进：
+
+- `meta-self-dev` 或用户明确说明“优化 meta-flow / 当前元工作流”：交付件写当前仓库 `delivery/`
+- `production` 外部项目：先扫描目标项目 `README.md`、`README.*` 与 `docs/` 是否有交付物、发布、构建或包结构说明
+- README/docs 存在交付约定：按目标项目约定输出，并在 HLD / Story 中引用依据
+- README/docs 没有交付约定：meta-po / meta-se 先提出建议目录，等待用户确认后才写入
+
+用户确认前，production 项目不得默认创建当前仓库 `delivery/` 交付件。
+
+## 9. 验证环境准备
 
 进入验证阶段前，建议由人工提供或确认类似如下的环境配置：
 
@@ -176,8 +214,8 @@ notes:
   - "本轮验证只检查安装目录、文件引用和提示词加载"
 ```
 
-## 9. 排障
+## 10. 排障
 
 1. **提示找不到 `scripts/install.py`**：你在仓库根目录执行了 delivery-root 命令；改用 `delivery/scripts/install.py`
 2. **Skill 运行时脚本未找到**：检查目标 Skill 的私有脚本是否位于 `delivery/skills/<skill>/scripts/`
-3. **需要确认交付结构是否合规**：运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
+3. **需要确认交付结构是否合规**：仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时，运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`；如果是外部 production 项目且没有该脚本，外部 production 项目不得硬引用 meta-flow 源仓库路径，改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。

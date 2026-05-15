@@ -16,6 +16,7 @@ Supports two run modes:
 Examples:
   uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user
+  scope-pack install --platform codex --scope user --component rules
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --project-dir D:\\work\\demo
   uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user --uninstall
@@ -39,6 +40,7 @@ from pathlib import Path
 VALID_PLATFORMS = ("claude-code", "codex", "openclaw")
 VALID_SCOPES = ("project", "user")
 VALID_CONTENTS = ("all", "agents", "skills", "rules")
+VALID_COMPONENTS = ("rules", "agent", "full")
 KEBAB_CASE_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 BUILT_IN_CODEX_AGENTS = {"default", "worker", "explorer"}
@@ -896,13 +898,57 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--platform", required=True, choices=VALID_PLATFORMS, help="目标平台")
     parser.add_argument("--scope", default="project", choices=VALID_SCOPES, help="安装范围")
     parser.add_argument("--project-dir", default=None, help="WORKSPACE_ROOT；未提供时从当前目录向上查找 git repo root")
-    parser.add_argument("--content", default="all", choices=VALID_CONTENTS, help="安装内容")
+    parser.add_argument(
+        "--component",
+        default=None,
+        choices=VALID_COMPONENTS,
+        help="安装组件：rules=规则文件，agent=agents+skills，full=rules+agents+skills；未提供时 user 默认 rules，project 默认 agent",
+    )
+    parser.add_argument(
+        "--content",
+        default=None,
+        choices=VALID_CONTENTS,
+        help="Legacy 安装内容：all|agents|skills|rules；保留兼容，优先使用 --component",
+    )
     parser.add_argument("--agent", default="", help="仅安装指定 agent，逗号分隔")
     parser.add_argument("--skill", default="", help="仅安装指定 skill，逗号分隔")
     parser.add_argument("--dry-run", action="store_true", help="仅打印将执行的操作")
     parser.add_argument("--uninstall", action="store_true", help="按 INSTALL-MANIFEST 精确卸载当前平台与 scope")
     parser.add_argument("--permissive", action="store_true", help="允许忽略 canonical agent 中的未支持字段，并将其记录到 warnings")
     return parser.parse_args()
+
+
+def resolve_install_selection(args: argparse.Namespace) -> tuple[bool, bool, bool, str]:
+    if args.component and args.content:
+        fail("--component 与 legacy --content 不能同时使用。")
+
+    if args.component:
+        component = args.component
+    elif args.content:
+        component = {
+            "all": "full",
+            "agents": "agent",
+            "skills": "agent",
+            "rules": "rules",
+        }[args.content]
+    else:
+        component = "rules" if args.scope == "user" else "agent"
+
+    install_rules_enabled = component in ("rules", "full")
+    install_agents_enabled = component in ("agent", "full")
+    install_skills_enabled = component in ("agent", "full")
+
+    if args.content == "agents":
+        install_skills_enabled = False
+    if args.content == "skills":
+        install_agents_enabled = False
+
+    if parse_csv(args.agent):
+        install_agents_enabled = True
+    if parse_csv(args.skill):
+        install_skills_enabled = True
+
+    return install_rules_enabled, install_agents_enabled, install_skills_enabled, component
 
 
 def main() -> None:
@@ -919,8 +965,7 @@ def main() -> None:
     requested_skills = parse_csv(args.skill)
     ensure_kebab_case(requested_agents, "agent")
     ensure_kebab_case(requested_skills, "skill")
-
-    if args.uninstall and (args.content != "all" or requested_agents or requested_skills):
+    if args.uninstall and (args.component or args.content or requested_agents or requested_skills):
         fail("--uninstall 当前仅支持按 platform + scope 整体卸载，不支持 --content/--agent/--skill 过滤。")
 
     print(f"Workspace root: {workspace_root}")
@@ -948,9 +993,10 @@ def main() -> None:
     canonical_agents = list_canonical_agents(layout, args.permissive)
     selected_skill_dirs = select_skill_dirs(list_skill_dirs(layout), requested_skills)
 
-    install_rules_enabled = args.content in ("all", "rules")
-    install_agents_enabled = args.content in ("all", "agents") or bool(requested_agents)
-    install_skills_enabled = args.content in ("all", "skills") or bool(requested_skills)
+    install_rules_enabled, install_agents_enabled, install_skills_enabled, resolved_component = resolve_install_selection(args)
+    print(f"Component: {resolved_component}")
+    if args.content:
+        print(f"Legacy content: {args.content}")
 
     if requested_agents and not install_agents_enabled:
         fail("指定了 --agent，但内容类型未包含 agents。")

@@ -3,7 +3,7 @@ complexity: standard
 confirmed: true
 confirmed_by: "meta-po-delegated"
 confirmed_at: "2026-04-23T11:47:36+08:00"
-last_updated: "2026-04-28T00:00:00+08:00"
+last_updated: "2026-05-15T00:00:00+08:00"
 ---
 
 # 架构决策（Story Planning）
@@ -36,6 +36,12 @@ last_updated: "2026-04-28T00:00:00+08:00"
 | ADR-SP-05 | Review gate 不新增专职 reviewer Agent | 复用现有子 Agent 的 `review_mode=true` |
 | ADR-SP-06 | LLD 复杂度分级保留，但不影响章节外形 | `tier: S/M/L` 只影响深度与图示，不影响章节数量 |
 | ADR-SP-07 | 平台路径以 `delivery/doc/PLATFORM-CONTRACTS.yaml` 为单一真相源 | 安装器、DryRun、平台校验与规划说明都从该契约派生；禁止按同平台目录类比推断路径 |
+| ADR-SP-08 | Codex 编排采用 `meta-po` 单例 + role/task registry | 同一工作流最多 1 个 `meta-po`；下游 agent 通过 `workflow_id/change_id/wave_id/story_id` 精确复用，检查点或交接完成后关闭 |
+| ADR-SP-09 | Codex 上下文控制采用最小 handoff 包而非全量 fork | 默认 `fork_context=false`；只传 STATE 当前片段、当前 CR、当前 Story/Wave、必要设计对象和路径契约，禁止传完整会话历史与全量 stories |
+| ADR-SP-10 | Story 计划确认与 LLD 确认合并为 Story Package 确认 | `meta-se` 产出 Story Package 草案后，由 `meta-dev` 为当前 Wave 产出 LLD 包；meta-po 发起一次合并确认后才允许实现 |
+| ADR-SP-11 | 安装 CLI 使用 `scope-pack install` 与 `--component rules|agent|full` | user scope 默认 `rules`；project scope 默认 `agent`；legacy `--content` 只作兼容入口 |
+| ADR-SP-12 | 平台确认协议保留结构化优先，Codex 文本只作兜底 | Claude Code 与 Codex 均优先结构化选择；Codex 无可选 UI 时才接受 exact 文本 `1/approve/通过`、`2/修改: ...`、`3/reject/不通过` |
+| ADR-SP-13 | 交付出口按 engagement mode 路由 | `meta-self-dev` 写当前仓库 `delivery/`；production 先读目标 README/docs 约定，无约定则提建议并等待确认 |
 
 ## 平台适配差异
 
@@ -52,6 +58,8 @@ last_updated: "2026-04-28T00:00:00+08:00"
 2. Story 卡片若涉及安装路径、模板路径、规则入口，必须直接写明目标平台差异。
 3. `delivery/skills/README.md` 必须同步维护 Agent/Skill 关系和模板交叉引用。
 4. Codex Agent 与 Skill 发现路径必须分开断言：Agent 在 `.codex/agents` / `~/.codex/agents`，Skill 在 `.agents/skills` / `~/.agents/skills`。
+5. `scope-pack install --component rules|agent|full` 是新安装入口；`--content all|agents|skills|rules` 仅保留 legacy 兼容。
+6. production 项目的交付出口不得从 meta-flow 当前仓库 `delivery/` 推断，必须先读取目标 README/docs 或获得用户确认。
 
 ## 设计确认点（需人工确认）
 
@@ -67,3 +75,4 @@ last_updated: "2026-04-28T00:00:00+08:00"
 |---|---|---|---|
 | 1.0 | 2026-04-23 | meta-se | 基于 3 份已确认 HLD 与用户确认的 Story 拆分方向，产出 story-planning 阶段架构决策 |
 | 1.1 | 2026-04-28 | meta-po | CR-001：补充平台契约单一真相源与 Codex Agent/Skill 路径分离原则 |
+| 1.2 | 2026-05-15 | meta-po | CR-004：新增 `meta-po` 单例、上下文最小 handoff、Story Package 确认、安装组件 CLI、平台确认协议和交付出口路由决策 |

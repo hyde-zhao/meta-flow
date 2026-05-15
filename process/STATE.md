@@ -3,14 +3,19 @@ project_id: "meta-flow"
 workflow_mode: "standard"
 current_phase: "documentation"
 current_agent: "meta-po"
-iteration: 8
+iteration: 9
 blocked: false
-last_action: "CR-003 已实施：需求 / 场景文档变更新增文档处理决策、旧基线保留、修订记录与 guardrail 检查"
-next_action: "运行护栏静态检查后，准备终验范围并等待用户确认 final review"
+active_change: "CR-004"
+last_action: "CR-004 已实施并通过 uv lock、scope-pack install dry-run 与 delivery guardrail 验证"
+next_action: "等待人工终验或进入提交/发布准备"
+agent_lifecycle:
+  orchestrator_singleton: true
+  active_agents: []
+  reuse_policy: "same workflow/change/story reuses the same role thread; close after checkpoint or handoff completion"
 checkpoints:
   requirement_confirmed: false
   hld_confirmed: true
-  story_plan_confirmed: true
+  story_package_confirmed: true
   final_review_confirmed: false
 parallel_waves: []
 history:
@@ -184,7 +189,17 @@ history:
     action: "apply-change-request"
     phase: "documentation"
     summary: "CR-003：需求 / 场景文档变更默认增量更新，CR 必填文档处理决策与旧基线映射，USE-CASES / REQUIREMENTS 必须追加修订记录并纳入 guardrail"
-last_updated: "2026-04-29T00:00:00+08:00"
+  - at: "2026-05-15T00:00:00+08:00"
+    actor: "meta-po"
+    action: "apply-change-request"
+    phase: "solution-design"
+    summary: "CR-004：采用单 meta-po 编排、最小上下文 handoff、同任务复用并关闭子 agent、Story Package 合并确认、scope-pack install 组件 CLI、Codex 结构化优先确认协议和 production 交付路由"
+  - at: "2026-05-15T00:00:00+08:00"
+    actor: "meta-qa"
+    action: "verify-change-request"
+    phase: "story-execution"
+    summary: "CR-004：uv lock、scope-pack install help/user default/project default/full/legacy dry-run 与 scripts/check_delivery_guardrails.py 均通过；未保留 .venv 或 __pycache__"
+last_updated: "2026-05-15T00:00:00+08:00"
 ---
 
 <!--
@@ -195,13 +210,13 @@ last_updated: "2026-04-29T00:00:00+08:00"
 | init | REQUEST.md 已填写 | requirement-clarification | — |
 | requirement-clarification | USE-CASES.md confirmed=true + REQUIREMENTS.md confirmed=true + 无 BLOCKING 未决项 | solution-design | ① 需求确认 |
 | solution-design | HLD.md confirmed=true | story-planning | ② HLD 确认 |
-| story-planning | STORY-BACKLOG.md + DEVELOPMENT-PLAN.yaml confirmed=true | story-execution | ③ Story 计划确认 |
-| story-execution（Wave 内） | 当前 Wave 所有 Story = verified | 下一 Wave 或 documentation | Story LLD 确认在 Story 卡片内逐个处理 |
+| story-planning | STORY-BACKLOG.md + DEVELOPMENT-PLAN.yaml + 当前 Wave LLD 包完成且 Story Package 已确认 | story-execution | ③ Story Package 确认 |
+| story-execution（Wave 内） | 当前 Wave 所有 Story = verified | 下一 Wave 或 documentation | Story Package 已确认后执行 |
 | documentation | README.md + USER-MANUAL.md 生成并完成终验 | delivered | ⑤ 终验 |
 
 Story 生命周期（每个 Story 独立）：
-  draft → approved → ready-for-lld-review → lld-approved → in-development → ready-for-verification → verified → done
-  同一 Story：LLD → 开发 → 验证 严格串行
+  draft → package-draft → package-ready-for-review → package-approved → in-development → ready-for-verification → verified → done
+  同一 Story：Story Package 确认 → 开发 → 验证 严格串行
   同一 Wave：不同 Story 可并行
   不同 Wave：前一 Wave 全部 verified 后才启动下一 Wave
 

@@ -19,6 +19,7 @@ split_from: "process/HLD.md@v1.8 §5(M6/M7) §7.4 ADR-13/14 §11(阶段4,5) §12
 | 版本 | 日期 | 修订人 | 关键变更 |
 |------|------|--------|---------|
 | 1.0 | 2026-04-23 | meta-se | 初稿：从 `HLD.md` v1.8 拆出（§5 M6/M7、§7.4、§10 ADR-13/14、§11 阶段 4/5、§12 Story 4/5/7）；同时回应原评审 S3/S4/S5，补入迭代上限与升级路径、review mode 建设成本章节、reviewer 分派重检 |
+| 1.1 | 2026-05-15 | meta-po | CR-004：补充 Codex/Claude Code 平台确认协议、Story Package 合并确认与 agent 生命周期复用/关闭约束 |
 
 ---
 
@@ -403,6 +404,17 @@ sequenceDiagram
 | ADR-8 | 聚合摘要持久化位置 | **`process/reviews/<doc>-SUMMARY.md`**；关键结论回写 STATE.md | 便于追溯 |
 | ADR-9 | 与 `governance_mode` 的关系 | **评审通过后按 governance_mode 决定是否进入人工确认** | 治理分流 |
 | ADR-10 | 是否引入静态前置检查 | **引入**（机械性问题不浪费 reviewer token） | 提升总体效率 |
+| ADR-11 | 平台化人工确认 | **Claude Code 与 Codex 均优先结构化选择；Codex 无选择 UI 时用 exact 文本兜底** | 保留 Claude Code 方向键体验，同时避免 Codex 在不可选择环境中卡住 |
+| ADR-12 | Story 与 LLD 确认合并 | **Story Package 确认一次性覆盖 Story 边界、Wave 分组与当前 Wave LLD 包** | 减少人工确认次数，同时不降低 LLD 门控强度 |
+| ADR-13 | reviewer / worker 生命周期 | **同一任务复用同一 role 子 agent；检查点或交接完成后关闭** | 避免 Codex agent 超限与 token 漂移 |
+
+### CR-004 平台确认补充
+
+| 平台 | 首选确认方式 | 兜底方式 | 状态推进规则 |
+|---|---|---|---|
+| Claude Code | `ask_user` 结构化选择，上下方向键选择选项 | 无需默认兜底；异常时转人工文本 | 选择项命中才推进 |
+| Codex | 原生结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择 | exact 文本：`1/approve/通过`、`2/修改: ...`、`3/reject/不通过` | 非 exact 输入不得推进 |
+| 未知平台 | 不假设方向键能力 | Codex exact 文本协议 | 非 exact 输入不得推进 |
 
 ---
 

@@ -23,6 +23,7 @@ companion_hld:
 | 1.0 | 2026-04-23 | meta-se | 初稿：基于 LLD 写作专题分析，判定采用独立 HLD；补齐输入/输出契约、阶段处理流程、图示要求、失败路径、ADR 候选与落地建议 |
 | 1.1 | 2026-04-23 | meta-se | 评审回应：①修复 §4/§5/§7.1 方法步骤数量不一致（补齐 Checkpoint Handoff 模块）；②新增 §3.4 "LLD 章节级输入/输出契约表"，把"明确的输入输出"下沉到每个 LLD 章节；③§7.1 阶段表补入原子步骤与检查项；④新增 §7.5 "图示类型选择指引"，明确时序图/流程图/状态图/结构图的使用场景；⑤§7.2 理论依据补入 `spec-driven-workflow-v1.instructions.md`；⑥§11 与 §12 的阶段-Story 对应关系显式化；⑦§13 追加本轮评审遗留问题 Q4–Q6 |
 | 1.2 | 2026-04-23 | meta-se | 方法完备性增强：①新增 §3.5 "共享设计片段与 Story 类型"，引入 `process/shared/` 承载跨 Story 的数据模型/接口/协议，避免在多份 LLD 中漂移；②新增 Story 类型 `design-only`，允许设计性 Story 独立走 LLD 检查点；③新增 §3.6 "LLD 复杂度分级（Tier-S/M/L）"，按文件影响数/模块数/跨 Story 接口量化，Tier-S 允许章节合并；④§7.4 增加"HLD 反向修订触发规则"——同一 OPEN 问题出现在 ≥2 份 LLD 时自动升级为 HLD 级 CR；⑤新增 ADR-6/ADR-7/ADR-8；⑥新增遗留问题 Q7（Wave 级 LLD 契约对齐机制，留待 phase-2） |
+| 1.3 | 2026-05-15 | meta-po | CR-004：将 Story 计划确认与 LLD 确认合并为 Story Package 确认；meta-dev 先为当前 Wave 产出 LLD 包，确认通过后复用同一子 agent 实现 |
 
 ---
 
@@ -193,6 +194,17 @@ companion_hld:
 | LLD 中的 OPEN / Spike 项 | meta-po / meta-se / meta-dev | 仍未拍板的问题、默认处理动作、需要谁决策 | 不得为空转；必须指向下一动作 |
 
 **总原则**：LLD 的唯一正式输出仍是 `STORY-{id}-{story_slug}-LLD.md`，其中 `story_slug` 复用 Story 标题生成的 kebab-case 稳定片段；该文档内部必须显式承载不同消费方需要的信息，而不是依赖 meta-dev 二次解释。
+
+### 3.3.1 Story Package 合并确认契约（CR-004）
+
+| 对象 | 生产者 | 状态 | 说明 |
+|------|--------|------|------|
+| Story Package 草案 | meta-se | `package-draft` | 包含当前 Wave 的 Story 边界、优先级、依赖、输出文件与 LLD 输入清单 |
+| Wave LLD 包 | meta-dev | `package-ready-for-review` | 为当前 Wave 每个 Story 生成 `STORY-*-LLD.md`，但不得开始实现 |
+| Story Package 确认 | meta-po / 用户 | `package-approved` 或回退 | 一次性确认 Story 边界、Wave 分组和对应 LLD 设计；确认不通过时回退到 story-planning 或 LLD 包修订 |
+| 实现恢复 | meta-dev | `in-development` | Story Package 确认通过后，优先复用产出 LLD 包的同一 meta-dev 子 agent 继续实现 |
+
+该契约替代旧的“Story 计划确认”和逐 Story “LLD 确认”双检查点，但不降低 LLD 门控强度：`STORY-*-LLD.md confirmed=true` 与 Story `status=package-approved` 同时成立后才允许实现。
 
 ### 3.4 LLD 章节级输入 / 输出契约
 
@@ -365,7 +377,7 @@ graph TD
 | Phase 3 Flow Designer | Method Step | 写清主流程、异常流程、补偿路径，并判断是否需要 Mermaid 图 | 契约草案、依赖接口 | §7 处理流程正文 + 图示 | HLD、依赖 Story |
 | Phase 4 Validation Designer | Method Step | 生成测试入口、错误路径、回滚与发布策略 | 流程草案、平台约束 | §10 测试设计、§13 回滚、§12 风险 | meta-qa 消费需求 |
 | Phase 5 Render & Consistency | Method Step | 将全部内容写入 14 章节外形，检查配对约束（接口↔测试、异常↔测试、TASK↔文件） | 全量设计草案 | 渲染后的 LLD 草稿 + 一致性报告 | 模板、§3.4 契约表 |
-| Phase 6 Checkpoint Handoff | Method Step | 产出确认区、切换 Story 状态、交接 meta-po 发起检查点 | 渲染后的 LLD 草稿 | `STORY-{id}-{story_slug}-LLD.md`（`confirmed=false`）+ `ready-for-lld-review` 状态 | meta-po 检查点协议 |
+| Phase 6 Story Package Handoff | Method Step | 产出确认区、切换 Story 状态、交接 meta-po 发起 Story Package 确认 | 渲染后的 LLD 草稿 | `STORY-{id}-{story_slug}-LLD.md`（`confirmed=false`）+ `package-ready-for-review` 状态 | meta-po Story Package 检查点协议 |
 
 **模块边界规则**：
 - Ready Check 只负责判断“能不能写”，不负责替缺失输入脑补内容。
@@ -424,8 +436,8 @@ sequenceDiagram
     LLD->>LLD: Phase 4 测试/回滚/风险设计
     LLD->>TMP: Phase 5 渲染到 14 章节外形
     TMP-->>FS: 写入 STORY-{id}-{story_slug}-LLD.md
-    LLD-->>DEV: 输出完成，Story 进入 ready-for-lld-review
-    DEV->>PO: 请求发起 LLD 检查点
+    LLD-->>DEV: 输出完成，Story 进入 package-ready-for-review
+    DEV->>PO: 请求发起 Story Package 合并确认
   end
 ```
 
@@ -457,7 +469,7 @@ flowchart TD
 | Phase 3 Flow Modeling | 写清主流程、异常路径、补偿动作、图示 | 契约草案、依赖接口 | ①写 happy path 步骤；②枚举异常分支（输入无效 / 依赖失败 / 超时 / 并发冲突）；③写补偿或回退动作；④按 §7.5 选择图类型并绘制 Mermaid | §7 流程正文 + 图示 | 每条异常分支都有处理动作；命中 §7.5 阈值的 Story 有对应图示 | 若流程无法闭环，返回 Phase 2 |
 | Phase 4 Validation & Rollback | 设计测试、风险、发布回滚 | 流程草案、平台约束 | ①为每条接口方法写测试入口；②为每条异常分支写错误路径测试；③识别风险与触发信号；④写回滚条件与开关策略 | §10 测试设计 + §12 风险 + §13 回滚 | §10 条目能覆盖 §7 全部异常分支；§13 给出可触发的回滚条件 | 若无法验证，标记 blocked 或 OPEN |
 | Phase 5 Render & Consistency | 映射到 14 章节外形 + 执行配对约束 | 全量设计草案、模板 | ①按模板渲染到 14 章节；②运行配对约束检查（§3.4 强约束）；③检查 OPEN 项是否全部带去向；④版本号与修订记录更新 | 完整 LLD 草稿 + 一致性报告 | 配对约束全部通过；无无去向的 OPEN；修订记录已追加 | 若不一致，返回对应阶段修订 |
-| Phase 6 Checkpoint Handoff | 交接人工确认 | 完整 LLD 草稿 | ①写确认区（confirmed=false）；②更新 Story 状态为 `ready-for-lld-review`；③通知 meta-po 发起检查点 | `STORY-{id}-{story_slug}-LLD.md` + 状态切换 | Story 状态已切换；meta-po 已接收通知 | 未进入确认前不得实现 |
+| Phase 6 Story Package Handoff | 交接 Story Package 确认 | 完整 LLD 草稿 | ①写确认区（confirmed=false）；②更新 Story 状态为 `package-ready-for-review`；③通知 meta-po 发起 Story Package 合并确认 | `STORY-{id}-{story_slug}-LLD.md` + 状态切换 | Story 状态已切换；meta-po 已接收通知 | Story Package 未确认前不得实现 |
 
 ### 7.2 写作框架的理论依据
 
@@ -490,7 +502,7 @@ flowchart TD
 
 | 前置条件 | 校验动作 | 失败行为 |
 |---------|---------|---------|
-| `STORY-{id}-{story_slug}.md` 存在且 `status=approved` 或 `lld-approved` | 起草前读取 Story frontmatter 与验收标准 | 终止执行并进入 blocked |
+| `STORY-{id}-{story_slug}.md` 存在且 `status=package-draft` 或 `package-approved` | 起草或恢复前读取 Story frontmatter 与验收标准 | 缺失或状态不匹配则终止执行并进入 blocked |
 | `process/HLD.md` 或相关 companion HLD 已存在且可读取 | Ready Check 时解析 HLD 边界与约束 | 终止执行并提示先完成上游设计 |
 | Story 命中关键取舍时 `ARCHITECTURE-DECISION.md` 可读取 | 校验是否涉及跨模块接口 / 平台协议 / 关键技术选择 | 缺失则 blocked，不得自行拍板 |
 | 前置 Story 产物存在且接口兼容 | 检查 `depends_on` 对应对象 | 缺失或不兼容则 blocked，并写明依赖项 |

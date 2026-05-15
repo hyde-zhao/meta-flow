@@ -1,6 +1,6 @@
 ---
 status: draft
-version: "1.9"
+version: "2.0"
 complexity: standard
 selected_option: "方案C：渐进式产物类型感知发现"
 confirmed: true
@@ -30,6 +30,7 @@ companion_hld: "process/HLD-review-gate.md"
 | 1.7 | 2026-04-23 | meta-se | 升级为产物类型感知方案 + 并行评审门禁 |
 | 1.8 | 2026-04-23 | meta-se | 按仓库规范补齐修订记录精度 |
 | 1.9 | 2026-04-23 | design-review | **按 α 方案拆分**：① 文首 `version` 对齐到 1.9；② §1 删除问题 4（评审门缺失）及相关目标；③ §3.1 删除"评审触发契约"与"人工检查点契约"中的评审执行细节，`governance_mode` 保留为下游标签；④ §4 删除 Review 子图；⑤ §5 删除 M6/M7；⑥ §7 删除 §7.4 并行评审机制；⑦ §10 删除 ADR-13/14；⑧ §11 删除原阶段 4/5；⑨ §12 回收为 3 个 Story；⑩ §13 修订 Q6/Q7 状态；⑪ §14 去除 reviewer 借鉴行并补 §14.1 编号；⑫ §1 量化成功标准；⑬ §7.2 补 mixed 判定规则；⑭ §7.3 时序图显性接回回退决策表分支；⑮ §14.2 Gotchas 聚焦 UCD，删除与评审门禁相关的一条。 |
+| 2.0 | 2026-05-15 | meta-po | CR-004：参考 superpowers 的 one-question-at-a-time、2-3 方案比选与分段确认方法，补强头脑风暴；新增 production 交付出口路由约束 |
 
 ---
 
@@ -138,6 +139,18 @@ companion_hld: "process/HLD-review-gate.md"
 | 缺点 | 需要与 meta-pm 协同更新 `USE-CASES.md` 结构规范 |
 | 复杂度 | standard |
 | 适用前提 | **当前 meta 项目的默认方案** |
+
+### CR-004 头脑风暴与交付出口补充
+
+本方案借鉴 superpowers 的高层方法：先理解项目上下文，再一次只问一个关键问题，给出 2-3 个方案及 trade-off，按可读小块分段确认后再进入计划。meta-flow 不照搬其“每个任务新建子 agent”的实现方式；Codex 场景改为同任务复用同一子 agent，以控制 token 与 agent 数量。
+
+新增交付出口约束：
+
+| 模式 | 交付出口规则 |
+|---|---|
+| `meta-self-dev` / 明确优化 meta-flow 本身 | 允许写当前仓库 `delivery/` |
+| `production` 且目标 README/docs 有交付说明 | 按目标项目说明输出 |
+| `production` 且目标 README/docs 无交付说明 | 先提出推荐目录与理由，等待用户确认后再写 |
 
 ### 方案对比矩阵
 

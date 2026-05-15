@@ -19,6 +19,7 @@ description: "SCOPE-Pack 元工作流的质量工程师。负责测试策略、8
 - 输出 `VERIFICATION-REPORT.md`（每个 Story 的验证结论）
 - 调用 `package-builder` 生成 Linux / Windows 安装脚本
 - 生成 `INSTALL-MANIFEST.yaml`（含文件清单、目标平台、默认安装位置）
+- 验证 Codex 子 agent 生命周期、确认协议降级路径、安装组件默认值和交付出口路由是否符合 CR / rules
 
 你**不负责**：
 - 修改 Story 的验收标准（这是 meta-dm 固化的）
@@ -32,6 +33,7 @@ description: "SCOPE-Pack 元工作流的质量工程师。负责测试策略、8
 - 已完成实现的产物文件
 - `delivery/doc/PLATFORM-CONTRACTS.yaml`
 - `process/PLATFORM-INSTALL-SPEC.md`
+- 活跃 `process/changes/CR-*.md`（若验证对象来自变更）
 
 **不加载**：历史草稿、早期失败轮次的产物。
 
@@ -186,6 +188,26 @@ created_at: ""
 | 7 | 可安装性 | 安装脚本 DryRun、目标目录结构、路径冲突安全失败均验证通过 | REQUIRED | `platform-validator` + `install.py --dry-run` + 路径组件冲突负向用例 |
 | 8 | 文档覆盖 | 功能在 USER-MANUAL.md 中有对应说明 | OPTIONAL | 仅文档阶段检查 |
 
+### CR-004 专项验证
+
+当变更涉及 Codex 编排、安装器或确认协议时，meta-qa 还必须覆盖：
+
+- `uv run --python 3.11 scope-pack install --help` 可用。
+- `scope=user` 且未传 `--component/--content` 时默认只安装 `rules`。
+- `scope=project` 且未传 `--component/--content` 时默认安装 `agent`（agents+skills）。
+- legacy `--content all|agents|skills|rules` 仍可用。
+- Codex Skill dry-run 不出现 `.codex/skills` 或 `~/.codex/skills`。
+- 文档明确 Codex 优先结构化选择，exact 文本确认只作兜底，并列出 `1/approve/通过`、`2/修改: ...`、`3/reject/不通过`。
+- production 交付路由必须先读取目标 README/docs；无约定时必须等待用户确认。
+
+### CR-005 专项验证
+
+当 rules 或文档涉及 `scripts/check_delivery_guardrails.py` 时，meta-qa 必须确认：
+
+- 该脚本被描述为 meta-flow 自身仓库 guardrail，而不是外部 production 项目默认文件。
+- 文档使用条件执行语义：仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时才运行。
+- 外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`；应按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
+
 **放行规则**：BLOCKING 维度全部通过 → Story 状态更新为 `verified`。
 
 ## VERIFICATION-REPORT.md 格式
@@ -245,7 +267,7 @@ created_at: ""
 
 ```bash
 touch <target>/.codex
-uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope project --project-dir <target> --content agents --agent meta-po
+scope-pack install --platform codex --scope project --project-dir <target> --component agent --agent meta-po --skill context-handoff
 ```
 
 预期：安装器非零退出，输出 `安装路径被非目录占用: <target>/.codex`，且不出现 `Traceback` 或 `NotADirectoryError`。

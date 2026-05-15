@@ -71,43 +71,46 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 1. **澄清锁**：`REQUIREMENTS.md` 未确认前，不得输出正式设计对象
 2. **HLD 锁**：`HLD.md` 未经人工确认，不得进入 Story 拆解
-3. **Story 锁**：未进入 `approved` 状态的 Story，不得开始 LLD 设计
-4. **LLD 锁**：`STORY-{id}-{story_slug}-LLD.md` 未确认前，不得开始该 Story 实现
+3. **Story Package 锁**：当前 Wave 未进入 `package-draft` 状态的 Story，不得开始 LLD 包设计
+4. **Story Package 确认锁**：Story 边界、Wave 分组与 `STORY-{id}-{story_slug}-LLD.md` 未合并确认前，不得开始该 Story 实现
 5. **验证锁**：没有 `process/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
 6. **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
 7. **禁止越级改写**：`meta-dev` 不修改 REQUIREMENTS.md、HLD.md；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
 8. **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 9. **确定性语言**：meta-se / meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
-10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
+10. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 Story Package / LLD 已获批
 11. **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
-12. **输出隔离**：运行态写入 `process/`，确认稿写入 `checkpoints/`，交付物写入 `delivery/`；`.agents/` 存放元工作流自身 Skill 定义
+12. **输出路由**：运行态写入 `process/`，确认稿写入 `checkpoints/`；只有 meta-flow 自身改进才默认写当前仓库 `delivery/`，production 项目必须先扫描 README/docs 的交付约定，缺失时先询问用户
 13. **Agent/Skill 关系维护**：开发或修改 Agent、Skill 时，若影响调用、适用或归属关系，必须同步更新 `skills/README.md`
 14. **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；Skill 运行时脚本必须放到 `delivery/skills/<skill>/scripts/`
 15. **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...`
 16. **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
 17. **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器缓存不是交付物，不得提交
-18. **护栏静态检查**：提交前必须运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
+18. **护栏静态检查**：`scripts/check_delivery_guardrails.py` 是 meta-flow 自身仓库 guardrail；仅当当前仓库存在该文件时，提交前运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`。外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`，应改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 19. **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
 20. **场景主体默认值**：若用户未显式声明 meta 优化，`USE-CASES.md` 默认 `scenario_subject_type=target-artifact`，不得把当前仓库 / 当前工作流当成默认场景主体
 21. **平台契约优先**：涉及安装路径、schema 或发现机制时，`delivery/doc/PLATFORM-CONTRACTS.yaml` 是路径真相源；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
 22. **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
 23. **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前必须在 CR 中填写文档处理决策；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
+24. **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；user scope 默认 `rules`，project scope 默认 `agent`；legacy `--content all|agents|skills|rules` 仅作兼容入口
+25. **Codex 生命周期**：Codex 下同一工作流只允许 1 个 `meta-po` 子 agent；同角色同任务优先复用已有子 agent，检查点或交接完成后及时关闭
 
-## 人工检查点（5 类）
+## 人工检查点（4 类）
 
 | 检查点 | 触发阶段 | 用户需确认的内容 |
 |--------|---------|---------------|
 | 需求确认 | requirement-clarification → solution-design | REQUIREMENTS.md 是否完整、无歧义 |
 | HLD 确认 | solution-design → story-planning | HLD.md 是否完整、可接受 |
-| Story 计划确认 | story-planning → story-execution | STORY-BACKLOG.md 边界与优先级 |
-| Story LLD 确认 | story-execution 内逐个 Story | `STORY-{id}-{story_slug}-LLD.md` 是否允许进入实现 |
+| Story Package 确认 | story-planning → story-execution | STORY-BACKLOG.md 边界、Wave 分组与当前 Wave LLD 包是否允许进入实现 |
 | 终验 | documentation → delivered | 交付范围、安装脚本、版本信息是否完整 |
+
+Claude Code 可继续使用结构化选择。Codex 也优先使用结构化选择 UI；无法提供时必须显式降级为 exact 文本确认：`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`。
 
 ## 并行执行（Complex 模式）
 
 Complex 模式下，同一 Wave 内的 Story 支持并行执行，但同一 Story 必须严格按：
 
-`LLD 起草 → LLD 确认 → 开发实现 → 验证`
+`Story Package 确认 → 开发实现 → 验证`
 
 顺序推进。
 

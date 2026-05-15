@@ -14,7 +14,7 @@ description: "SCOPE-Pack 元工作流的架构设计师。先输出可评审 HLD
 | `problem-definition` | `process/USE-CASES.md` 与 `process/REQUIREMENTS.md` 已确认 | 提炼问题陈述、目标、约束、非目标、假设、成功标准、缺失信息 | 若存在 BLOCKING 缺失信息，只输出问题定义并停止 |
 | `hld-design` | 无 BLOCKING 缺失信息 | 调用 `hld-designer`，输出 `process/HLD.md` 与 `checkpoints/CHECKPOINT-HLD.md` | 写完 HLD 检查点后立即停止，等待 meta-po 发起 HLD 确认 |
 | `waiting-for-hld-approval` | `HLD.md` 已提交 | 不写下游规划文件，只等待人工确认 | 仅在 `HLD.md confirmed=true` 后退出 |
-| `story-planning` | `HLD.md confirmed=true` | 输出 `process/ARCHITECTURE-DECISION.md`、`process/PLATFORM-INSTALL-SPEC.md`、`process/STORY-BACKLOG.md`、`process/DEVELOPMENT-PLAN.yaml`、`process/stories/STORY-*.md`；若涉及平台安装路径，同步引用 `delivery/doc/PLATFORM-CONTRACTS.yaml` | 产物完成且依赖图校验通过后立即停止 |
+| `story-planning` | `HLD.md confirmed=true` | 输出 `process/ARCHITECTURE-DECISION.md`、`process/PLATFORM-INSTALL-SPEC.md`、`process/STORY-BACKLOG.md`、`process/DEVELOPMENT-PLAN.yaml`、`process/stories/STORY-*.md`；若涉及平台安装路径，同步引用 `delivery/doc/PLATFORM-CONTRACTS.yaml`；为当前 Wave 标记需要 Story Package 确认 | 产物完成且依赖图校验通过后立即停止，交由 meta-po 组织 meta-dev 产出 LLD 包 |
 | `blocked` | 输入缺失、约束冲突、依赖图无效、文件冲突 | 记录阻塞原因、影响范围、需要的决策 | 写完阻塞说明后立即停止 |
 
 **硬性规则：**
@@ -146,7 +146,7 @@ description: "SCOPE-Pack 元工作流的架构设计师。先输出可评审 HLD
 - `validation_context`：验证入口、验证方式、依赖环境、关键验证场景
 - `acceptance_criteria`：量化、可验证、可交接
 
-并且必须保证：**仅依赖 Story 卡片 + HLD.md + ARCHITECTURE-DECISION.md，meta-dev 就能先产出该 Story 的 LLD，再根据获批 LLD 开发。**
+并且必须保证：**仅依赖 Story 卡片 + HLD.md + ARCHITECTURE-DECISION.md，meta-dev 就能为当前 Wave 产出 LLD 包；Story Package 经确认后，meta-dev 再根据已确认的 LLD 实现。**
 
 若 Story 涉及 Tool / MCP / 平台差异，卡片中必须直接写明接口、错误、限制和消费方。
 
@@ -154,9 +154,15 @@ description: "SCOPE-Pack 元工作流的架构设计师。先输出可评审 HLD
 
 - 用 `phase-designer` 明确阶段顺序（如需要）
 - 用 `dependency-mapper` 与 `wave-planner` 建立执行顺序
-- 用 `story-manager` 生成卡片并确保 Story 生命周期支持 LLD 审核
+- 用 `story-manager` 生成卡片并确保 Story 生命周期支持 Story Package 确认
 - 用 `dag-validator` 校验 `DEVELOPMENT-PLAN.yaml` 无循环依赖
 - 若并行 Story 输出文件冲突，进入 `blocked`
+
+### Story Package 交接规则
+
+story-planning 不再以“Story 计划确认”单独结束。meta-se 必须把当前 Wave 的 Story 边界、优先级、依赖、输出文件和 LLD 输入清单整理为 Story Package 草案，交给 meta-po。meta-po 随后组织 meta-dev 为当前 Wave 生成 LLD 包，并把 **Story 边界 + Wave 分组 + LLD 设计** 合并为一次人工确认。
+
+若需要为全部 Story 一次性生成 LLD，会显著增加 token 和前置设计成本；默认只为当前 Wave 生成 LLD 包。只有用户明确要求或依赖关系要求全局对齐时，才允许扩大到多 Wave。
 
 ## 约束
 

@@ -1,7 +1,7 @@
 # SCOPE-Pack 元工作流 — Agent 声明
 
 > 本项目运行 **SCOPE-Pack** 通用 Agent/Skill 工作流产物工厂。
-> 主编排器为 **meta-po**，所有任务统一由 meta-po 发起并协调。
+> 主编排器为 **meta-po**，所有任务统一由一个 meta-po 子 agent 发起并协调。
 
 ---
 
@@ -16,11 +16,11 @@
 
 meta-po 的职责：
 
-- **项目初始化**：创建 `process/`、`checkpoints/`、`delivery/` 工作目录及所有信息流转文件
+- **项目初始化**：创建 `process/`、`checkpoints/`，并按交付路由决定是否写入 `delivery/` 或目标项目约定目录
 - 初始化 `process/STATE.md` 并维护全程状态
 - **先理解，后行动**：退出条件先验、上下文先行、追问优先于假设、状态一致性校验
-- 发起人工检查点（共 5 类：需求确认、HLD 确认、Story 计划确认、Story LLD 确认、终验）
-- 唤醒和收敛下游功能 Agent（机器可验证退出条件）
+- 发起人工检查点（共 4 类：需求确认、HLD 确认、Story Package 确认、终验）
+- 唤醒和收敛下游功能 Agent（机器可验证退出条件）；Codex 下同一工作流只允许 1 个 `meta-po`，同角色同任务优先复用已有子 agent，检查点或交接完成后及时关闭
 - 受理变更请求，创建 `changes/CR-*.md`，执行五维度影响分析
 - **失败模式识别**：识别需求循环、HLD 僵局、LLD 僵局、开发卡顿等常见失败信号
 
@@ -41,10 +41,10 @@ meta-po 的职责：
 init（meta-po）
  └─► requirement-clarification（meta-pm：场景发现 → 需求结构化）   [检查点①]
       └─► solution-design（meta-se：输出 HLD）                     [检查点②]
-           └─► story-planning（meta-se：按 HLD 拆解 Story）        [检查点③]
+           └─► story-planning（meta-se 拆解 Story → meta-dev 产出当前 Wave LLD 包） [检查点③ Story Package]
                 └─► story-execution（Wave 循环）
-                │    Wave 内并行：STORY-A [meta-dev:LLD→确认→实现→meta-qa] ‖ STORY-B [...]
-                │    同一 Story 内串行：LLD 起草 → LLD 确认 → 开发 → 验证
+                │    Wave 内并行：STORY-A [Story Package 已确认→实现→meta-qa] ‖ STORY-B [...]
+                │    同一 Story 内串行：Story Package 确认 → 开发 → 验证
                 └─► documentation（meta-doc）                      [检查点⑤]
                      └─► delivered
 ```
@@ -64,7 +64,7 @@ init（meta-po）
 | `process/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
 | `delivery/skills/<skill-name>/templates/` | Skill 私有模板目录（仅单个 Skill 内部初始化 / 渲染使用） |
 | `delivery/skills/<skill-name>/scripts/` | Skill 私有运行时脚本目录（需随 Skill 一起安装时使用） |
-| `checkpoints/` | 人工确认稿（REQUIREMENTS/HLD/STORY-PLAN/STORY-LLD） |
+| `checkpoints/` | 人工确认稿（REQUIREMENTS/HLD/STORY-PACKAGE/FINAL） |
 | `process/stories/` | Story 卡片（STORY-*.md）与 Story 级 LLD（STORY-*-LLD.md） |
 | `process/changes/` | 变更单（CR-*.md） |
 | `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
@@ -79,8 +79,10 @@ init（meta-po）
 
 ### 输出隔离原则
 
-> **所有由元工作流产生的文件必须按层输出到 `process/`（运行态）、`checkpoints/`（确认态）、`delivery/`（交付态）。**
-> `delivery/` 是可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`。
+> **所有由元工作流产生的文件必须按层输出到 `process/`（运行态）、`checkpoints/`（确认态）和经确认的交付出口。**
+> 只有 `engagement_mode=meta-self-dev` 或用户明确说明优化 meta-flow 本身时，才默认把交付物写入当前仓库 `delivery/`。
+> production 项目必须先扫描目标项目 `README.md` / `README.*` / `docs/` 的交付物约定；存在则遵守，不存在则先提出建议并等待用户确认。
+> 当前仓库 `delivery/` 是 meta-flow 自身可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`。
 > `.agents/` 保留元工作流引擎自身定义，不参与安装。
 
 ## 方案编写与修订规则
@@ -119,23 +121,24 @@ init（meta-po）
 - **回写规则**：每一阶段结束必须回写 `STATE.md`
 - **变更规则**：需求或设计变动必须先创建 `CR-*.md` 再修改正式对象
 - **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前，必须在 CR 中填写文档处理决策（新增 / 原文档更新 / 归档 / 不变）；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
-- **人工检查点**：所有人工确认统一由 meta-po 发起，通过 `ask_user` 工具触发
+- **人工检查点**：所有人工确认统一由 meta-po 发起；Claude Code 可使用结构化选择，Codex 优先使用结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；若当前 Codex 客户端、运行模式或工具面无法提供可选择 UI，必须显式降级为 exact 文本确认（`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`）
 - **HLD 门控**：`HLD.md` 未确认前，不得进入 Story 拆解
-- **LLD 门控**：`STORY-{id}-{story_slug}-LLD.md` 未确认前，不得开始对应 Story 的实现
+- **Story Package 门控**：当前 Wave 的 Story 边界、Wave 分组与 `STORY-{id}-{story_slug}-LLD.md` 未合并确认前，不得开始对应 Story 的实现
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `delivery/skills/README.md`
 - **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
 - **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...` 表达
 - **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
 - **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器生成缓存不是交付物，不得提交
-- **护栏静态检查**：提交前必须运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`
+- **护栏静态检查**：`scripts/check_delivery_guardrails.py` 是 meta-flow 自身仓库 guardrail；仅当当前仓库存在该文件时，提交前运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`。外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`，应改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 - **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 - **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
 - **场景主体默认值**：若用户未显式声明 meta 优化，`USE-CASES.md` 默认 `scenario_subject_type=target-artifact`，不得把当前仓库 / 当前工作流当成默认场景主体
 - **确定性语言**：meta-se 与 meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
-- **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查并确认 LLD 已获批
+- **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查，并确认 Story Package 与 LLD 均已获批
 - **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 - **方案收敛优先**：涉及方案设计、整改规划或跨平台治理时，默认优先最简方案与内联策略；除非事实或验收要求证明不足，不新增共享模板体系或多余抽象层
 - **精确匹配优先**：涉及对象定位、版本对齐、规则命中或平台路径判定时，默认采用 exact 语义，不使用模糊匹配作为默认行为
+- **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md / CLAUDE.md 等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `agent`；legacy `--content all|agents|skills|rules` 仅作兼容入口
 
 ## 防火墙测试工作流（现有，独立运行）
 

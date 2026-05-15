@@ -13,7 +13,7 @@ output: process/USE-CASES.md
 
 ## 目标
 
-与用户共同完成**产物类型感知**的渐进式场景发现：先锁定当前工作模式与场景主体，再判定目标交付形态与治理方式，随后建立基线场景并做 8 维覆盖扫描，最终生成或更新标准化 `USE-CASES.md`，并在 Phase 3 追加场景发现摘要到 `CLARIFICATION-LOG.md`。
+与用户共同完成**产物类型感知**的渐进式场景发现：先锁定当前工作模式、场景主体和交付出口，再通过轻量头脑风暴判定目标交付形态与治理方式，随后建立基线场景并做 8 维覆盖扫描，最终生成或更新标准化 `USE-CASES.md`，并在 Phase 3 追加场景发现摘要到 `CLARIFICATION-LOG.md`。
 
 ## 适用场景
 
@@ -59,9 +59,12 @@ output: process/USE-CASES.md
 8. 若用户**未显式说明**“当前是在做 meta 工作流自我开发 / 优化 / 整改”，默认：
    - `engagement_mode = production`
    - `scenario_subject_type = target-artifact`
+   - 交付出口不得默认为当前仓库 `delivery/`
 9. 仅当用户明确表达“这是 meta 工作流优化 / 自我开发 / 整改 meta 工作流本身”时，才切换为：
    - `engagement_mode = meta-self-dev`
    - `scenario_subject_type = implementation-carrier`
+   - 允许交付出口使用当前仓库 `delivery/`
+10. 在 `production` 模式下，必须扫描目标项目 `README.md` / `README.*` / `docs/` 中的交付物、发布、构建或包结构说明；若存在，按其记录 `delivery_routing`；若不存在，输出建议目录并等待用户确认，不得直接写当前仓库 `delivery/`。
 
 ### 步骤 1：Phase 0（可选）导入模式
 
@@ -75,19 +78,28 @@ output: process/USE-CASES.md
    - `engagement_mode`：`production / meta-self-dev`
    - `scenario_subject_type`：`target-artifact / implementation-carrier`
    - `scenario_subject_id`：目标产物 ID 或当前实现载体 ID
-2. 若用户没有显式声明 meta 优化，**不得**把当前仓库 / 当前工作流视为默认场景主体。
-3. 在 `production` 模式下，若请求同时出现“整改当前仓库”和“目标 Agent/Skill/Workflow”，优先把目标产物作为场景主体，当前仓库仅视为实现载体。
-4. 再判定当前请求的目标交付类型：`tool / skill / agent / workflow / mixed`。
-5. 仅在必要时追问以下最小问题：交付对象是什么、谁触发、主要文件/目录落点在哪、是否存在多个不同交付面。
-6. 同步确定治理字段：
+2. 先锁定交付出口字段：
+   - `delivery_routing.mode`：`meta-flow-delivery / project-readme-contract / proposed-output`
+   - `delivery_routing.output_root`：已确认输出根目录；未确认时必须留空
+   - `delivery_routing.source`：`meta-self-dev / README / docs / user-confirmed`
+3. 若用户没有显式声明 meta 优化，**不得**把当前仓库 / 当前工作流视为默认场景主体。
+4. 在 `production` 模式下，若请求同时出现“整改当前仓库”和“目标 Agent/Skill/Workflow”，优先把目标产物作为场景主体，当前仓库仅视为实现载体。
+5. 若目标形态、场景主体或交付出口不清，进入轻量头脑风暴子流程：
+   - 一次只问 1 个问题，避免一次性抛出长问卷；
+   - 至少提出 2 个候选交付形态或输出路径，并给出 trade-off；
+   - 若只有 1 个合理方案，必须写明无备选原因；
+   - 用户分段确认后再进入 8 维扫描。
+6. 再判定当前请求的目标交付类型：`tool / skill / agent / workflow / mixed`。
+7. 仅在必要时追问以下最小问题：交付对象是什么、谁触发、主要文件/目录落点在哪、是否存在多个不同交付面。
+8. 同步确定治理字段：
    - `target_artifact_type`
    - `governance_mode`：`direct / review-gated / conditional`
    - `review_policy`：`none / light / strict`
-7. `mixed` 只能在以下任一硬规则成立时输出：
+9. `mixed` 只能在以下任一硬规则成立时输出：
    - 同一请求同时要求 **2 类以上不同交付形态**，且它们的主要落盘位置或安装位置不同；
    - 同一请求同时包含 **不同触发方式**（例如交互式对话 + 后台自动执行）；
    - 同一请求需要经过 **不同下游链路**（例如一个走 Agent 实现，一个走 Workflow 编排）。
-8. 若无法判定为单一类型且未命中 `mixed` 硬规则，继续追问；不得凭感觉落 `mixed`。
+10. 若无法判定为单一类型且未命中 `mixed` 硬规则，继续追问；不得凭感觉落 `mixed`。
 
 ### 步骤 3：Phase 1B 基线场景发现
 
@@ -127,6 +139,10 @@ scenario_subject_id: "<artifact-id or repo-id>"
 target_artifact_type: tool | skill | agent | workflow | mixed
 governance_mode: direct | review-gated | conditional
 review_policy: none | light | strict
+delivery_routing:
+  mode: meta-flow-delivery | project-readme-contract | proposed-output
+  output_root: "<confirmed output root or empty>"
+  source: meta-self-dev | README | docs | user-confirmed
 clarification_log_appended: true
 next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用户确认"
 ```
@@ -148,6 +164,7 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - 删除或归档旧场景只能在 CR 明确批准时执行，且必须在 CR 中保留完整摘录和映射关系
 - 若用户未显式声明 meta 工作流优化 / 自我开发，必须默认 `engagement_mode=production` 且 `scenario_subject_type=target-artifact`
 - 在 `production` 模式下，`USE-CASES.md` 不得把当前仓库整改者 / workflow 维护者写成默认 Persona，除非用户明确说明他们就是目标用户
+- 在 `production` 模式下，未发现 README/docs 交付约定时，必须先提出建议并等待用户确认；确认前不得创建 `delivery/` 交付件
 - 本 Skill 不负责提取 `REQUIREMENTS.md`，也不负责测试场景展开或需求歧义清单
 - 默认使用中文；仅在用户显式要求时切换英文
 - 不得把 review gate 的执行细节写回本 Skill；这里只输出治理标签，不负责编排评审
@@ -160,6 +177,7 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - [ ] draft 可恢复，confirmed 不会被静默覆盖
 - [ ] 更新模式下 `## 修订记录` 已追加，旧场景基线可追溯
 - [ ] `target_artifact_type` / `governance_mode` / `review_policy` 语义明确且可被上下游直接消费
+- [ ] `delivery_routing` 已记录交付出口来源；production 模式下不默认写当前仓库 `delivery/`
 - [ ] Phase 3 返回结构化完成摘要，并已向 `CLARIFICATION-LOG.md` 追加摘要
 
 ## 不适用边界
@@ -172,6 +190,7 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 ## Gotchas
 
 - **Never skip Phase 1A / 1B**：即使用户粘贴现成材料，也必须先判定交付形态，再补齐画像与成功指标基线
+- **头脑风暴不是长问卷**：目标不清时一次只问一个问题，先给 2-3 个候选方案和 trade-off，再让用户分段确认
 - **维度不能静默跳过**：每个维度至少标成已覆盖 / 已补充 / 不适用 / 待调研之一
 - **不要替用户补答案**：追问一次仍无结论时，可记为“待调研”，不能脑补
 - **draft 文件是恢复唯一真相源**：恢复依赖 `USE-CASES.md`，不是会话记忆
@@ -181,3 +200,4 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - **`mixed` 不是兜底桶**：只有命中三条硬规则之一时才可使用，否则继续追问
 - **治理字段只负责打标签**：`governance_mode` 和 `review_policy` 用于下游路由，不在本 Skill 内执行评审
 - **默认是 production，不是 meta-self-dev**：只有用户明确说“meta 工作流优化 / 自我开发”时，才允许把当前仓库 / 当前工作流当成场景主体
+- **delivery/ 不是 production 默认出口**：只有 meta-flow 自身改进才默认写当前仓库 `delivery/`；外部项目必须先读 README/docs 或获得用户确认

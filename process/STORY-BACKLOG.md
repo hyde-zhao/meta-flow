@@ -1,12 +1,19 @@
 ---
-version: "1.0"
+version: "1.1"
 confirmed: true
 confirmed_by: "meta-po-delegated"
 confirmed_at: "2026-04-23T11:47:36+08:00"
-last_updated: "2026-04-23T11:47:36+08:00"
+last_updated: "2026-05-15T00:00:00+08:00"
 ---
 
 # Story Backlog
+
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 关键变更 |
+|---|---|---|---|
+| 1.0 | 2026-04-23 | meta-se | 基于 3 份 HLD 生成 12 Story / 6 Wave 基线 |
+| 1.1 | 2026-05-15 | meta-po | CR-004：追加 Codex agent 生命周期、安装组件、确认协议与交付路由综合修订，不重排既有 Story 编号 |
 
 ## Story 列表
 
@@ -45,3 +52,13 @@ last_updated: "2026-04-23T11:47:36+08:00"
 | B1 | closed | RG-02 的 review 共享资产归属 | RG-02, RG-05 | 已收敛为 `delivery/skills/review-artifact-protocol/`，模板与校验脚本随 Skill 同树安装 |
 | B2 | open | LLD Ready Check 中 `ARCHITECTURE-DECISION.md` 的“条件必需”边界仍需在实现时细化 | LLD-01, LLD-03 | 作为实现期细化决策，不阻断 Story 规划 |
 | B3 | open | Phase 6 Checkpoint Handoff 采用文件状态变更还是显式调用 | LLD-03, RG-01 | 进入实现期后在 Agent 协议中定稿 |
+
+## CR-004 追加 Patch Story
+
+| Story ID | 标题 | 类型 | 优先级 | Wave | depends_on | 说明 |
+|---|---|---|---|---|---|---|
+| CR004-01 | Codex agent 生命周期与最小上下文 handoff | governance | P0 | CR004-W1 | — | 单 meta-po、active_agents registry、同任务复用、checkpoint/handoff 后 close、默认不 fork 全量上下文 |
+| CR004-02 | Story Package 合并确认流程 | workflow | P0 | CR004-W1 | CR004-01 | meta-se 产出 Story Package 草案，meta-dev 产出当前 Wave LLD 包，meta-po 发起一次确认后实现 |
+| CR004-03 | 安装组件 CLI 与 uv tool 入口 | install | P0 | CR004-W2 | — | `scope-pack install`、`--component rules|agent|full`、user 默认 rules、project 默认 agent、legacy `--content` 兼容 |
+| CR004-04 | use-case 头脑风暴与交付出口路由 | product | P1 | CR004-W2 | — | 一次一问、2-3 方案比选、分段确认；production 先读目标 README/docs，无约定则询问 |
+| CR004-05 | 平台确认协议与文档/guardrail 回归 | qa-doc | P1 | CR004-W3 | CR004-01,CR004-02,CR004-03,CR004-04 | Claude/Codex 结构化优先，Codex exact 文本兜底；README/USER-MANUAL/rules/guardrail 同步 |

@@ -18,7 +18,7 @@ open_items: 0
 
 > 文件名格式：`STORY-{id}-{story_slug}-LLD.md`，其中 `story_slug` 必须复用对应 Story 卡片中的稳定 slug。
 >
-> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需经人工确认后方可进入实现。
+> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需纳入 Story Package 合并确认后方可进入实现。
 
 ## 1. Goal
 
@@ -133,10 +133,16 @@ open_items: 0
 
 ## 人工确认区
 
-> **元工作流检查点 ④ — Story LLD 确认**
-> meta-po 发起，用户确认后方可进入实现。
+> **元工作流检查点 ③ — Story Package 确认**
+> meta-po 发起，用户一次性确认 Story 边界、Wave 分组与对应 LLD 设计后方可进入实现。
 
 **确认选项**：
 1. ✅ **批准** — LLD 设计合理，允许进入实现
 2. ✏️ **需要修改** — 指出具体修改点后由 meta-dev 更新重提
 3. ❌ **拒绝** — 设计方向有根本问题，需重新设计
+
+**Codex 兼容输入**：
+- 首选结构化选择 UI；若当前客户端无法提供上下方向键选择，使用 exact 文本兜底。
+- `1` / `approve` / `通过` = 批准。
+- `2` / `修改: <具体修改点>` = 需要修改。
+- `3` / `reject` / `不通过` = 拒绝。

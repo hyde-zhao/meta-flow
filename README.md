@@ -6,7 +6,7 @@
 
 | 目录 | 用途 |
 |------|------|
-| `delivery/` | **可独立交付的包**（可推送为独立 Git 仓库） |
+| `delivery/` | **meta-flow 自身可独立交付的包**（可推送为独立 Git 仓库）；外部 production 项目的交付出口需按目标 README/docs 或用户确认路由 |
 | `delivery/agents/` | 交付 Agent 定义（安装脚本从此读取，`<name>.md`） |
 | `delivery/skills/` | 交付 Skill 定义（结构为 `<name>/SKILL.md`；模板位于 `<name>/templates/`） |
 | `delivery/rules/` | 平台规则文件（`AGENTS.md`、`CLAUDE.md`） |
@@ -22,7 +22,7 @@
 
 ## 输出隔离原则
 
-所有由元工作流产生的运行时文档、人工确认稿与最终交付物统一按层输出：
+所有由元工作流产生的运行时文档、人工确认稿与最终交付物统一按层输出。meta-flow 自身改进使用当前仓库 `delivery/`；外部 production 项目必须先读取目标 `README.md` / `README.*` / `docs/` 的交付约定，若无约定则先给出建议并等待用户确认。
 
 ```
 ├── process/                     # 运行时文档（默认建议 gitignore）
@@ -42,9 +42,9 @@
 ├── checkpoints/                 # 人工确认稿（默认建议 gitignore）
 │   ├── CHECKPOINT-REQUIREMENTS.md
 │   ├── CHECKPOINT-HLD.md
-│   ├── CHECKPOINT-STORY-PLAN.md
-│   └── CHECKPOINT-STORY-LLD-<story-id>.md
-└── delivery/                    # 最终交付物（默认入库）
+│   ├── CHECKPOINT-STORY-PACKAGE.md
+│   └── CHECKPOINT-FINAL.md
+└── delivery/                    # meta-flow 自身最终交付物（production 项目不默认使用）
     ├── README.md
     ├── doc/
     ├── agents/
@@ -53,15 +53,16 @@
     └── scripts/
 ```
 
-测试时可在 `delivery/` 目录中独立启动 Agent 加载产物文件：
+安装测试优先使用全局命令或 `uv run`：
 
 ```bash
+scope-pack install --platform codex --scope project --component agent --dry-run
 uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-run
 ```
 
 ## `.meta-workflow` 目录说明
 
-`.meta-workflow/` 当前不承载 SCOPE-Pack 的运行态文档，也不是 `process/`、`checkpoints/`、`delivery/` 的替代目录。当前规则要求元工作流产物仍按输出隔离原则写入仓库根目录下的 `process/`、`checkpoints/` 和 `delivery/`。
+`.meta-workflow/` 当前不承载 SCOPE-Pack 的运行态文档，也不是 `process/`、`checkpoints/` 或交付出口的替代目录。当前规则要求元工作流运行态仍写入仓库根目录下的 `process/`、`checkpoints/`；交付态按 engagement mode 路由，meta-flow 自身改进写当前仓库 `delivery/`，外部 production 项目按目标项目约定或用户确认输出。
 
 当前实现中，`delivery/scripts/install.py` 会把安装状态写入 `<WORKSPACE_ROOT>/.meta-workflow/delivery/doc/INSTALL-MANIFEST.yaml`。该 manifest 记录已安装的平台、scope、安装时间、canonical commit、目标路径和卸载所需的 remove path。安装器执行 `--uninstall` 时依赖这个文件精确卸载。
 
@@ -73,10 +74,10 @@ uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-r
 
 ## Python 环境规范（uv）
 
-当前仓库对 Python 运行环境采用 `uv` 作为统一工具链，但仓库当前**尚未**内置 `pyproject.toml` / `uv.lock`。因此本阶段的执行约束是：
+当前仓库对 Python 运行环境采用 `uv` 作为统一工具链，并已提供 `pyproject.toml` / `uv.lock` 与 `scope-pack` console script。因此本阶段的执行约束是：
 
 1. 使用 `uv` 安装和选择 Python 解释器，不以系统 Python 作为默认入口。
-2. 运行仓库内 Python 脚本时，优先使用 `uv run --python <version> python <script>`。
+2. 运行仓库内 Python 脚本时，优先使用 `uv run --python <version> python <script>`；安装入口优先使用 `scope-pack install`。
 3. 一次性工具与临时依赖优先使用 `uvx` 或 `uv run --with <package>`，不把裸 `pip install` 作为日常流程。
 4. 安装到目标项目的 uv 规范统一通过 `delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md` 传播。
 
@@ -84,31 +85,47 @@ uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-r
 
 ```bash
 uv python install 3.11
+uv tool install --editable .
+scope-pack install --platform codex --scope user --component rules
+scope-pack install --platform codex --scope project --component agent --project-dir /path/to/project
 # 从项目根运行
 uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
 # 或从 delivery/ 目录运行（delivery 作为独立仓库时）
-cd delivery && python scripts/install.py --platform claude-code --dry-run
+cd delivery && uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
 ```
 
 ## 开发节奏
 
 1. `meta-pm` 输出需求与场景
 2. `meta-se` 输出并提交 `HLD.md`
-3. 用户确认 HLD 后，`meta-se` 拆解 Story 与开发计划
-4. `meta-dev` 对每个 Story 先输出 `STORY-{id}-{story_slug}-LLD.md`，确认后再实现
-5. `meta-qa` 验证并生成安装脚本，`meta-doc` 输出交付文档
+3. 用户确认 HLD 后，`meta-se` 拆解 Story、开发计划与当前 Wave 的 Story Package 草案
+4. `meta-po` 组织 `meta-dev` 为当前 Wave 输出 LLD 包，并发起 Story Package 合并确认
+5. Story Package 确认通过后，`meta-dev` 复用同一子 agent 实现，`meta-qa` 验证并生成安装脚本，`meta-doc` 输出交付文档
 
 ## 交付目录约定
 
-安装脚本从 `delivery/` 内读取交付件，支持两种运行方式：
+安装脚本从 `delivery/` 内读取交付件，推荐使用 `scope-pack install`：
 
 ```bash
-# 方式一：从项目根目录运行
-python delivery/scripts/install.py --platform claude-code
+# user scope 默认只安装 rules
+scope-pack install --platform codex --scope user
 
-# 方式二：以 delivery/ 为根（独立 Git 仓库）运行
+# project scope 默认安装 agent 组件（agents + skills）
+scope-pack install --platform codex --scope project --project-dir /path/to/project
+
+# 显式安装完整组件
+scope-pack install --platform codex --scope project --component full --project-dir /path/to/project
+```
+
+兼容运行方式：
+
+```bash
+# 从项目根目录运行
+uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
+
+# 以 delivery/ 为根（独立 Git 仓库）运行
 cd delivery
-python scripts/install.py --platform claude-code
+uv run --python 3.11 python scripts/install.py --platform claude-code
 ```
 
 交付目录结构：
@@ -116,6 +133,13 @@ python scripts/install.py --platform claude-code
 - `delivery/skills/` — canonical Skill 定义（含 `<skill>/templates/`、`<skill>/scripts/` 等私有运行时资产）
 - `delivery/rules/` — 平台规则文件
 - `delivery/doc/PLATFORM-CONTRACTS.yaml` — 平台安装路径单一真相源，安装器、DryRun 与 guardrail 共同读取
+
+组件语义：
+
+- `rules`：只安装平台规则入口（如 `AGENTS.md` / `CLAUDE.md`）
+- `agent`：安装 agents + skills
+- `full`：同时安装 rules 与 agent 组件
+- legacy `--content all|agents|skills|rules` 仅保留兼容，新文档优先使用 `--component`
 
 ## 交付护栏
 
@@ -126,11 +150,13 @@ python scripts/install.py --platform claude-code
 5. Codex Skill 禁止安装到 `.codex/skills` 或 `~/.codex/skills`；项目级使用 `.agents/skills`，用户级使用 `~/.agents/skills`。
 6. 安装器必须在写入前检查路径组件冲突；例如目标 `.codex` 已是普通文件时，应明确报错 `安装路径被非目录占用`，不得输出 Python traceback。
 
-仓库级静态检查命令：
+meta-flow 自身仓库级静态检查命令：
 
 ```bash
 uv run --python 3.11 python scripts/check_delivery_guardrails.py
 ```
+
+该脚本不属于外部 production 项目的默认交付物。仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时才运行上述命令。若在其他项目使用 meta-flow 生成或安装工作流，而目标项目没有该脚本，外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`；应按目标项目 README/docs 中的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 
 命名规则：
 

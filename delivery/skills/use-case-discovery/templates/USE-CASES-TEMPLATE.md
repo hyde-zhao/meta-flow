@@ -9,6 +9,10 @@ scenario_subject_id: ""
 target_artifact_type: tool | skill | agent | workflow | mixed
 governance_mode: direct | review-gated | conditional
 review_policy: none | light | strict
+delivery_routing:
+  mode: meta-flow-delivery | project-readme-contract | proposed-output
+  output_root: ""
+  source: meta-self-dev | README | docs | user-confirmed
 total_use_cases: N
 ---
 
@@ -45,8 +49,28 @@ total_use_cases: N
 | `target_artifact_type` | <tool / skill / agent / workflow / mixed> | 当前场景集的目标交付类型 |
 | `governance_mode` | <direct / review-gated / conditional> | 决定下游是否进入评审门禁 |
 | `review_policy` | <none / light / strict> | 决定评审强度 |
+| `delivery_routing.mode` | <meta-flow-delivery / project-readme-contract / proposed-output> | 交付出口来源；production 不默认写当前仓库 `delivery/` |
+| `delivery_routing.output_root` | <路径或空> | 已确认交付输出根目录；未确认时保持空 |
+| `delivery_routing.source` | <meta-self-dev / README / docs / user-confirmed> | 输出目录决策依据 |
 
 > 若 `target_artifact_type = mixed`，需在本节补充拆分建议与原因，不得只写结果。
+
+## 头脑风暴与候选方案
+
+> 目标形态、场景主体或交付出口不清时必须填写；简单明确需求可标注“不适用”。
+
+| 候选 ID | 交付形态 / 输出路径 | 适用条件 | 优点 | 风险 / 代价 | 是否主选 |
+|---|---|---|---|---|---|
+| OPT-01 | <候选方案> | <何时适用> | <优点> | <风险> | 是 / 否 |
+| OPT-02 | <候选方案> | <何时适用> | <优点> | <风险> | 是 / 否 |
+
+**分段确认记录**：
+
+| 确认项 | 结论 | 确认来源 |
+|---|---|---|
+| 场景主体 | <已确认 / 待确认> | <用户回复 / README / docs> |
+| 交付出口 | <已确认 / 待确认> | <用户回复 / README / docs> |
+| 主选方案 | <OPT-*> | <用户回复> |
 
 ## 使用场景列表
 
