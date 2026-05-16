@@ -17,6 +17,8 @@
 | MF-007 | 检查点体系缺少完整 checklist 和自检结果要求 | DONE | 已加入 CP0-CP8，自动检查写 `process/checks/CP*.md`，人工检查写 `checkpoints/CP*.md` 并回填人工结果。 |
 | MF-008 | 文档未同步刷新 | DONE | 已刷新 README、delivery README、USER-MANUAL、Skill 标准和相关规则文档。 |
 | MF-009 | meta-po 使用 handoff 文档冒充 meta-dev / meta-qa 子 agent 执行 | DONE | 已完成修改：加入子 agent 调度硬门禁、`Agent Dispatch Evidence`、handoff `dispatch` frontmatter、STATE 调度证据字段和 CP6 / CP7 调度证据检查。 |
+| MF-010 | 子 agent 缺少面向 Codex 的命令别名和 Claude Code 的颜色区分 | DONE | 已完成修改：Codex 安装产物写入 `nickname_candidates`，Claude Code 安装产物写入 `color`，并补充 guardrail 和文档。 |
+| MF-011 | Codex `nickname_candidates` 使用点号导致 agent role definition malformed | DONE | 已完成修改：Codex 命令别名从点号形式改为连字符形式，并在安装器与 guardrail 中加入合法字符校验。 |
 
 ## MF-009 修改范围
 
@@ -38,3 +40,36 @@
 - [x] 运行 `PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow --help`，命令正常输出帮助
 - [x] 检查 `rg "Agent Dispatch Evidence|inline-fallback|spawn_agent|resume_agent|send_input"` 覆盖关键文件
 - [x] 检查缓存文件；仅发现 `.venv/` 下缓存，属于 `.gitignore` 和 guardrail 排除范围，未新增交付缓存
+
+## MF-010 修改范围
+
+| 文件 | 修改内容 |
+|---|---|
+| `delivery/scripts/install.py` | 增加 `AGENT_DISPLAY_PROFILES`，Codex 渲染 `nickname_candidates`，Claude Code 渲染 `color`。 |
+| `delivery/agents/README.md` | 记录 canonical role、Codex 命令别名和 Claude Code 颜色映射。 |
+| `delivery/agents/meta-po.md` | 补充调度时 canonical role 与平台展示名的关系。 |
+| `delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md` | 同步 Codex nickname 与 Claude Code color 规则。 |
+| `README.md`、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` | 增加使用者可见的命令 / 颜色说明。 |
+| `delivery/skills/package-builder/SKILL.md`、`delivery/skills/platform-validator/SKILL.md` | 增加安装和校验要求。 |
+| `scripts/check_delivery_guardrails.py` | 增加 Codex nickname 和 Claude Code color 的真实安装产物校验。 |
+
+## MF-010 验证结果
+
+- [x] 运行 `PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py`，结果 `OK`
+- [x] 运行 `PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow --help`，命令正常输出帮助
+- [x] 运行 Codex project dry-run，确认 agent 写入 `.codex/agents/*.toml`
+- [x] 运行 Claude Code project dry-run，确认 agent 写入 `.claude/agents/*.md`
+
+## MF-011 修改范围
+
+| 文件 | 修改内容 |
+|---|---|
+| `delivery/scripts/install.py` | 将 Codex nickname 改为每个 canonical subagent 预留 5 个百家姓顺序别名，并增加 `CODEX_NICKNAME_RE` 校验。 |
+| `scripts/check_delivery_guardrails.py` | 增加 Codex nickname 合法字符校验，防止点号或其他非法字符再次进入安装产物。 |
+| `AGENTS.md`、`README.md`、`delivery/**`、`docs/MODIFICATION-LOG.md` | 同步更新命令别名文档。 |
+
+## MF-011 验证结果
+
+- [x] 运行 `PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py`，结果 `OK`
+- [x] 重新安装到 `/home/hyde/workspace/local_backtest`
+- [x] 检查 `/home/hyde/workspace/local_backtest/.codex/agents/*.toml`，不再包含点号 nickname

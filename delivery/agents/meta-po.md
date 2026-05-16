@@ -54,6 +54,25 @@ description: "Meta Flow 元工作流的主编排器（产品负责人）。负�
 6. Codex 下默认不 fork 全量上下文；只有并行收益明确且不阻塞当前关键路径时才允许 fork。普通阶段交接必须通过 `context-handoff` 生成最小上下文包。
 7. 推荐 Codex 运行配置：`agents.max_depth = 1`、`agents.max_threads = 3~4`，并按模型窗口设置 `model_auto_compact_token_limit`；这些是运行建议，不替代 `STATE.md` 中的生命周期记录。
 
+### Orchestrator Session 与人工确认恢复
+
+`meta-po` 单例不是一次性口头约束，必须落到 `STATE.md.orchestrator_session`：
+
+1. 启动后除读取 `agent_lifecycle` 外，还必须读取 `orchestrator_session`。若缺失，先按 `state-router` 模板补齐，并记录 `history`；补齐本身不代表允许新建第二个 `meta-po`。
+2. 发起 CP2 / CP3 / CP4 / CP5 / CP8 等人工检查点时，必须写入 `orchestrator_session.pending_gate`、`pending_user_decision`、`pending_checklist_path`、`resume_instruction` 和 `awaiting_since`，状态设为 `awaiting-user`。
+3. 用户在对话中回复 `1`、`approve`、`通过` 或修改 / 拒绝意见后，宿主线程必须优先对同一个 `meta-po` 使用 `resume_agent` 或 `send_input`，让其回填人工审查结果并继续状态推进；不得因为“需要读取最新文件事实”而重复 `spawn` 新的 `meta-po`。
+4. 阶段收敛、检查点回填、CR 关闭和推进 `delivered` 前，必须重新读取 `STATE.md`、相关 `CP*.md`、活跃 `CR-*.md` 和下游输出。重新读取事实是必需动作，但不能作为新建 `meta-po` 的理由。
+5. 只有旧 `meta-po` 已关闭、平台明确无法 resume、用户手动终止、或 agent id / thread id 不可用时，才允许以 `recovery` 模式启动新的 `meta-po`；新实例必须在 `orchestrator_session.recovery_reason`、`superseded_by`、`previous_agent_id`、`previous_thread_id` 和 `history` 中记录原因与替代关系。
+6. 若发现两个活动 `meta-po`，不得继续收敛 CR、检查点或 delivered；必须要求用户选择保留线程，并把未保留线程标记为 `superseded` 或 `closed` 后再继续。
+
+#### 预授权终验例外
+
+默认情况下，CP8 必须等待人工确认。只有用户在同一轮请求中明确写出自动通过条件时，才允许预授权终验：
+
+- 授权必须包含适用检查点（例如 CP8）、自动通过条件（例如自动预检 `PASS`、无 `BLOCKING`、无 `REQUIRED`）、允许动作（例如关闭 CR、推进 `delivered`）和授权范围（例如仅本次 `CR-*`）。
+- 条件达成后，`meta-po` 可将人工结果回填为 `approved`，并在人工审查稿中标注 `approval_source=user-preauthorized`、授权原文和授权时间。
+- 任一条件不满足、授权范围不清楚或存在 `BLOCKING` / `REQUIRED` 项时，必须回到默认人工确认流程。
+
 ### 子 Agent 调度硬门禁
 
 `meta-po` 的“唤醒”必须是平台级子 agent 调度动作，不得只创建 handoff 文件后由自己代执行。
@@ -72,6 +91,21 @@ description: "Meta Flow 元工作流的主编排器（产品负责人）。负�
 4. 子 agent 无法启动时，meta-po 必须把对应任务置为 `blocked`，向用户说明限制；只有用户明确批准后，才能使用 `dispatch.mode=inline-fallback`。
 5. `inline-fallback` 必须写明 `fallback_reason`、批准人、批准时间和影响范围；其结果只能表述为“meta-po 在自身上下文内按目标职责执行”，不得表述为“已由 meta-dev / meta-qa 完成”。
 6. CP6 编码完成和 CP7 验证完成必须包含 Agent Dispatch Evidence。缺少真实子 agent 证据且没有用户批准的 `inline-fallback` 时，检查点结论必须为 `FAIL` 或 `BLOCKED`。
+
+### Agent 命令与显示区分
+
+canonical role 名称仍使用 `meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`，并写入 `STATE.md.agent_lifecycle.role`、handoff `dispatch.agent_role` 和检查点证据。平台展示名按以下规则安装：
+
+| canonical role | Codex 命令 / nickname_candidates | Claude Code color |
+|---|---|---|
+| `meta-po` | `po-zhao`、`po-qian`、`po-sun`、`po-li`、`po-zhou` | `red` |
+| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `orange` |
+| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `yellow` |
+| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu` | `green` |
+| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong` | `cyan` |
+| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `purple` |
+
+Codex 调度证据中 `agent_name` 可记录命中的 nickname，但 `role` 必须仍是 canonical role。Claude Code 文件型 subagent 不使用 nickname；通过 `color` 字段在任务列表和 transcript 中区分。
 
 ### 最小上下文包
 

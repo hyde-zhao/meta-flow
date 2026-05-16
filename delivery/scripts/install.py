@@ -59,6 +59,16 @@ CODEX_OPTIONAL_AGENT_FIELDS = frozenset(
     }
 )
 CODEX_ALLOWED_AGENT_FIELDS = frozenset(CODEX_REQUIRED_AGENT_FIELDS) | CODEX_OPTIONAL_AGENT_FIELDS
+CODEX_NICKNAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
+CLAUDE_AGENT_COLORS = frozenset({"red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"})
+AGENT_DISPLAY_PROFILES: dict[str, dict[str, object]] = {
+    "meta-po": {"codex_nicknames": ["po-zhao", "po-qian", "po-sun", "po-li", "po-zhou"], "claude_color": "red"},
+    "meta-pm": {"codex_nicknames": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"], "claude_color": "orange"},
+    "meta-se": {"codex_nicknames": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"], "claude_color": "yellow"},
+    "meta-dev": {"codex_nicknames": ["dev-yang", "dev-zhu", "dev-qin", "dev-you", "dev-xu"], "claude_color": "green"},
+    "meta-qa": {"codex_nicknames": ["qa-he", "qa-lv", "qa-shi", "qa-zhang", "qa-kong"], "claude_color": "cyan"},
+    "meta-doc": {"codex_nicknames": ["doc-cao", "doc-yan", "doc-hua", "doc-jin", "doc-wei"], "claude_color": "purple"},
+}
 
 
 @dataclass(frozen=True)
@@ -417,6 +427,10 @@ def toml_multiline(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"""', '\\"""')
 
 
+def toml_array(values: list[str]) -> str:
+    return "[" + ", ".join(toml_string(value) for value in values) + "]"
+
+
 def markdown_audit(commit: str, generated: str) -> str:
     return f"<!-- myflow-managed: version={MANAGED_VERSION} canonical-commit={commit} generated={generated} -->"
 
@@ -437,6 +451,11 @@ def inject_markdown_audit(content: str, commit: str, generated: str) -> str:
 
 
 def render_claude_agent(agent: AgentDefinition, commit: str, generated: str) -> str:
+    display_profile = AGENT_DISPLAY_PROFILES.get(agent.name, {})
+    color = str(display_profile.get("claude_color", "")).strip()
+    if color and color not in CLAUDE_AGENT_COLORS:
+        fail(f"Claude Code agent color 非法: {agent.name} -> {color}")
+
     frontmatter = [
         "---",
         f"name: {yaml_scalar(agent.name)}",
@@ -444,18 +463,35 @@ def render_claude_agent(agent: AgentDefinition, commit: str, generated: str) -> 
     ]
     if agent.model:
         frontmatter.append(f"model: {yaml_scalar(agent.model)}")
+    if color:
+        frontmatter.append(f"color: {yaml_scalar(color)}")
     frontmatter.append("---")
     return "\n".join(frontmatter) + f"\n{markdown_audit(commit, generated)}\n\n{agent.instructions.rstrip()}\n"
 
 
 def render_codex_agent(agent: AgentDefinition, commit: str, generated: str) -> str:
+    display_profile = AGENT_DISPLAY_PROFILES.get(agent.name, {})
+    nicknames = [str(item).strip() for item in display_profile.get("codex_nicknames", []) if str(item).strip()]
+    invalid_nicknames = [nickname for nickname in nicknames if not CODEX_NICKNAME_RE.fullmatch(nickname)]
+    if invalid_nicknames:
+        fail(
+            "Codex nickname_candidates 只能包含 ASCII 字母、数字、空格、连字符和下划线: "
+            f"{agent.name} -> {', '.join(invalid_nicknames)}"
+        )
+
     lines = [
         toml_audit(commit, generated),
         f"name = {toml_string(agent.name)}",
-        "description = \"\"\"",
-        toml_multiline(agent.description),
-        "\"\"\"",
     ]
+    if nicknames:
+        lines.append(f"nickname_candidates = {toml_array(nicknames)}")
+    lines.extend(
+        [
+            "description = \"\"\"",
+            toml_multiline(agent.description),
+            "\"\"\"",
+        ]
+    )
     if agent.model:
         lines.append(f"model = {toml_string(agent.model)}")
     lines.extend(

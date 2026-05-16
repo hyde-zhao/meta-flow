@@ -31,9 +31,9 @@
 
 | Skill | Canonical Agent | 说明 |
 |---|---|---|
-| `state-router` | `meta-po` | 状态机推进与回退，并维护 `agent_lifecycle.active_agents`、子 agent 调度证据、`parallel_execution` 队列、依赖门控与复用/关闭登记 |
+| `state-router` | `meta-po` | 状态机推进与回退，并维护 `orchestrator_session`、`agent_lifecycle.active_agents`、子 agent 调度证据、`parallel_execution` 队列、依赖门控与复用/关闭登记 |
 | `checkpoint-manager` | `meta-po` | CP0-CP8 检查点契约、自动检查结果和人工审查稿的 canonical 规则；CP6 / CP7 校验 `Agent Dispatch Evidence`；各阶段 Agent 按需写入结果，meta-po 负责发起和回填人工确认 |
-| `change-impact-analysis` | `meta-po` | 需求/设计变更管理；负责文档处理决策、旧基线映射和变更追溯门禁 |
+| `change-impact-analysis` | `meta-po` | 需求/设计变更管理；负责文档处理决策、旧基线映射、CR 执行链路、自动终验授权和变更追溯门禁 |
 | `issue-routing` | `meta-po` | ISSUE 分类与路由 |
 | `context-handoff` | `meta-po` | 阶段切换时的最小上下文装配；Codex 默认 `fork_context=false`，只传必要文件与状态片段；handoff frontmatter 必须包含 `dispatch` 区，不能把 handoff 当作执行完成证据 |
 | `use-case-discovery` | `meta-pm` | 阶段零调研后的场景发现与 `USE-CASES.md` 生成 / 增量更新，并输出治理字段、交付出口路由、头脑风暴候选和修订记录 |
@@ -91,13 +91,13 @@
 
 | 正式工件 | 模板持有 Skill | 消费者 Skill | 说明 |
 |---|---|---|---|
-| `CR-*.md` | `change-impact-analysis` | `issue-routing`、`use-case-discovery`、`requirement-extraction` | `change-impact-analysis` 维护文档处理决策与旧基线映射；下游按该决策做增量更新 |
+| `CR-*.md` | `change-impact-analysis` | `issue-routing`、`state-router`、`use-case-discovery`、`requirement-extraction` | `change-impact-analysis` 维护文档处理决策、旧基线映射、执行链路和自动终验授权；`state-router` 消费 CR 执行链与预授权条件做检查点恢复和状态推进，下游按文档处理决策做增量更新 |
 | `USE-CASES.md` | `use-case-discovery` | `requirement-extraction` | `use-case-discovery` 维护正式场景工件、治理字段、覆盖自检表与修订记录；`requirement-extraction` 直接消费该工件 |
 | `REQUIREMENTS.md` | `requirement-extraction` | `scope-normalization` | `requirement-extraction` 维护需求条目、修订记录与变更记录；`scope-normalization` 归一化已生成的需求 |
 | `CLARIFICATION-LOG.md` | `requirement-clarifier` | `use-case-discovery` | 澄清轮次由 `requirement-clarifier` 维护；场景发现摘要由 `use-case-discovery` 追加 |
 | `Review Findings / Review Summary` | `review-artifact-protocol` | `meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | review gate 的共享模板与 validator 由公共 Skill 持有，reviewer lane 只消费协议 |
 | `CP0-CP8 检查结果` | `checkpoint-manager` | `state-router`、`meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | 自动检查结果写 `process/checks/CP*.md`，人工审查稿写 `checkpoints/CP*.md`；state-router 以结果文件判定是否可推进 |
-| `STATE.md` | `state-router` | `checkpoint-manager`、`context-handoff` | `STATE.md.checkpoints` 保存每个 CP 的结果文件路径和同步状态；`agent_lifecycle.active_agents` 保存子 agent 调度证据 |
+| `STATE.md` | `state-router` | `checkpoint-manager`、`context-handoff` | `STATE.md.orchestrator_session` 保存唯一 `meta-po` 会话、人工确认恢复和 recovery 证据；`STATE.md.checkpoints` 保存每个 CP 的结果文件路径和同步状态；`agent_lifecycle.active_agents` 保存功能子 agent 调度证据 |
 | `STORY-*.md` | `story-manager` | `state-router`、`wave-planner`、`meta-dev`、`meta-po` | Story 卡片包含依赖类型、file_ownership、lld_gate、dev_gate，是并行队列计算输入 |
 | `STORY-*-LLD.md` | `lld-designer` | `meta-dev`、`meta-po`、`meta-qa` | LLD 由 `lld-designer` 模板持有；单 Story 或小批次确认后，开发与验证均直接消费该工件 |
 

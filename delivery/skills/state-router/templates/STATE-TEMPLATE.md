@@ -18,6 +18,27 @@ confirmation_adapter:
   platform: ""
   preferred_mode: "structured-select"
   fallback_mode: "exact-text"
+orchestrator_session:
+  role: "meta-po"
+  agent_id: ""
+  agent_name: ""
+  thread_id: ""
+  status: "active"
+  workflow_id: ""
+  active_change: ""
+  pending_gate: ""
+  pending_checklist_path: ""
+  pending_user_decision: ""
+  resume_instruction: "用户回复人工检查点结论后，优先使用 resume_agent 或 send_input 恢复同一 meta-po；仅旧线程不可恢复时才允许 recovery"
+  spawned_at: ""
+  last_seen_at: ""
+  awaiting_since: ""
+  resumed_at: ""
+  closed_at: ""
+  previous_agent_id: ""
+  previous_thread_id: ""
+  superseded_by: ""
+  recovery_reason: ""
 agent_lifecycle:
   orchestrator_singleton: true
   platform_capabilities:

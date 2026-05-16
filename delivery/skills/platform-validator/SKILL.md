@@ -58,6 +58,17 @@ status: active
 - 必填 `name`、`description`、`developer_instructions`
 - 只允许官方 schema 字段：`name`、`description`、`developer_instructions`、`nickname_candidates`、`model`、`model_reasoning_effort`、`sandbox_mode`、`mcp_servers`、`skills.config`
 - 不得出现 `version`、`instructions` 或其他非标准顶层字段
+- `nickname_candidates` 必须符合命令别名映射：`po-zhao/po-qian/po-sun/po-li/po-zhou`、`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`
+
+### 维度 5.1：Claude Code subagent color（仅 claude-code，REQUIRED）
+
+若目标平台是 Claude Code，必须额外校验：
+
+- `.claude/agents/*.md` frontmatter 可解析
+- canonical `name` 保持 `meta-*`
+- 不写 Codex 风格的 `nickname_candidates`
+- `color` 使用允许值：`red`、`blue`、`green`、`yellow`、`purple`、`orange`、`pink`、`cyan`
+- 颜色映射符合：`meta-po=red`、`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`
 
 ### 维度 6：Codex forbidden path（仅 codex，BLOCKING）
 
@@ -96,8 +107,9 @@ meta-flow install --platform codex --scope project --project-dir <target> --comp
 3. 校验安装脚本默认参数与 DryRun 输出
 4. 校验目标目录结构与关键入口文件
 5. 构造路径组件被文件占用的负向用例，确认安装器 fail fast 且无 traceback
-6. 若目标平台是 Codex，校验 subagent TOML schema
-7. 输出校验报告（含未通过项与修复建议）
+6. 若目标平台是 Codex，校验 subagent TOML schema 和 `nickname_candidates`
+7. 若目标平台是 Claude Code，校验 subagent `color`
+8. 输出校验报告（含未通过项与修复建议）
 
 ## 输出格式
 
@@ -114,6 +126,7 @@ meta-flow install --platform codex --scope project --project-dir <target> --comp
 | 主入口文件 | BLOCKING | ✅ 通过 | |
 | DryRun 一致性 | REQUIRED | ✅ 通过 | 默认安装到当前项目 |
 | Codex schema | BLOCKING | ✅ 通过 | 所有 `.codex/agents/*.toml` 均含 `developer_instructions`，且不存在 `version` |
+| Agent 展示区分 | REQUIRED | ✅ 通过 | Codex nickname / Claude Code color 符合映射 |
 | Codex forbidden path | BLOCKING | ✅ 通过 | DryRun 和目标目录均未出现 `.codex/skills` |
 | 路径组件冲突 | BLOCKING | ✅ 通过 | `.codex` 为普通文件时明确报错且无 traceback |
 | 命名规范 | REQUIRED | ❌ 未通过 | `MySkill.md` 不符合 kebab-case |
@@ -137,5 +150,7 @@ meta-flow install --platform codex --scope project --project-dir <target> --comp
 - [ ] 未通过项有具体路径和修复建议
 - [ ] 已检查安装脚本 DryRun 行为
 - [ ] Codex 目标已检查 subagent TOML schema（若平台为 codex）
+- [ ] Codex 目标已检查 `nickname_candidates` 命令别名（若平台为 codex）
+- [ ] Claude Code 目标已检查 subagent `color`（若平台为 claude-code）
 - [ ] Codex 目标已检查 `.codex/skills` / `~/.codex/skills` 负向断言（若平台为 codex）
 - [ ] 已检查目标路径组件被文件占用时的 fail-fast 行为和错误提示

@@ -48,6 +48,34 @@ linked_issue: ""
 - 回退到阶段：`rollback_to`
 - 需要重新确认的对象：
 
+## 执行链路
+
+> CR 创建时必须先写明串行依赖、责任角色、门控和恢复点。`meta-po` 负责分派与收敛；功能 Agent 只处理自身职责，不关闭 CR、不推进 `delivered`。
+
+| 顺序 | 责任角色 | 动作 | 输入 | 输出 | 门控 | 完成后下一步 |
+|---|---|---|---|---|---|---|
+| 1 | `meta-po` | 创建 CR 并分派 | 用户请求 / ISSUE / RUN-EXEC | 本 CR、handoff、调度证据 | CR 已登记 | 等待下游完成 |
+| 2 | `meta-dev` | 实施变更 | CR、handoff、相关 Story / 文件 | 代码、目录或交付产物变更 | CP6 / 对应验证证据 | 交回 `meta-po` |
+| 3 | `meta-doc` | 刷新文档 | CR、当前交付物、变更结果 | README / USER-MANUAL / 文档更新 | 文档自检 | 交回 `meta-po` |
+| 4 | `meta-po` | 收敛终验 | 下游结果、CR、检查点 | CP8 自动预检与人工审查稿 | 等待用户确认或有效预授权 | 写入 `pending_user_decision` |
+| 5 | `meta-po` | 回填确认并关闭 CR | 用户确认或有效预授权 | CR closed、STATE 更新 | CP8 approved | 推进 `delivered` 或下一阶段 |
+
+## 自动终验授权
+
+> 默认不启用。只有用户在同一轮请求中明确授权时才填写并生效；否则必须等待人工确认。
+
+- 是否启用：false
+- 授权范围：仅本 CR / 指定检查点 / 不适用
+- 适用检查点：CP8 / 其他
+- 自动通过条件：
+  - [ ] 自动预检结论为 `PASS`
+  - [ ] 无 `BLOCKING`
+  - [ ] 无 `REQUIRED`
+  - [ ] 授权动作明确包含关闭 CR 和 / 或推进 `delivered`
+- 授权原文：
+- 授权时间：
+- 回填要求：若生效，人工审查稿必须标注 `approval_source=user-preauthorized`
+
 ## 处理结论
 
 - 审批结论：`approval_result`

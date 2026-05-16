@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -31,6 +32,23 @@ CODEX_CONFIRMATION_TOKENS = ("结构化选择", "1/approve/通过", "2/修改", 
 DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
 CACHE_SCAN_EXCLUDED_DIRS = {".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+EXPECTED_CODEX_NICKNAMES = {
+    "meta-po": ["po-zhao", "po-qian", "po-sun", "po-li", "po-zhou"],
+    "meta-pm": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"],
+    "meta-se": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"],
+    "meta-dev": ["dev-yang", "dev-zhu", "dev-qin", "dev-you", "dev-xu"],
+    "meta-qa": ["qa-he", "qa-lv", "qa-shi", "qa-zhang", "qa-kong"],
+    "meta-doc": ["doc-cao", "doc-yan", "doc-hua", "doc-jin", "doc-wei"],
+}
+EXPECTED_CLAUDE_COLORS = {
+    "meta-po": "red",
+    "meta-pm": "orange",
+    "meta-se": "yellow",
+    "meta-dev": "green",
+    "meta-qa": "cyan",
+    "meta-doc": "purple",
+}
+CODEX_NICKNAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
 
 
 def is_under_excluded_cache_dir(path: Path) -> bool:
@@ -389,6 +407,81 @@ def collect_agent_dispatch_evidence_errors() -> list[str]:
     return errors
 
 
+def collect_agent_display_profile_errors() -> list[str]:
+    errors: list[str] = []
+    install_script = DELIVERY_ROOT / "scripts" / "install.py"
+    if not install_script.is_file():
+        return [f"missing installer for display profile checks: {install_script.relative_to(ROOT)}"]
+
+    source_text = install_script.read_text(encoding="utf-8")
+    for token in ("AGENT_DISPLAY_PROFILES", "CODEX_NICKNAME_RE", "nickname_candidates", "claude_color", "po-zhao", "doc-wei"):
+        if token not in source_text:
+            errors.append(f"{install_script.relative_to(ROOT)} missing display profile token: {token}")
+
+    with tempfile.TemporaryDirectory(prefix="meta-flow-display-") as tmp:
+        project_root = Path(tmp)
+        isolated_home = project_root / "home"
+        isolated_home.mkdir()
+        subprocess_env = {**os.environ, "HOME": str(isolated_home)}
+        for platform in ("codex", "claude-code"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(install_script),
+                    "--platform",
+                    platform,
+                    "--scope",
+                    "project",
+                    "--project-dir",
+                    str(project_root),
+                    "--component",
+                    "agent",
+                ],
+                cwd=ROOT,
+                env=subprocess_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            if result.returncode != 0:
+                errors.append(f"{platform} display profile install failed with exit {result.returncode}: {output.strip()}")
+                continue
+
+        for agent_name, expected in EXPECTED_CODEX_NICKNAMES.items():
+            agent_path = project_root / ".codex" / "agents" / f"{agent_name}.toml"
+            if not agent_path.is_file():
+                errors.append(f"missing codex agent for nickname check: {agent_path}")
+                continue
+            try:
+                payload = tomllib.loads(agent_path.read_text(encoding="utf-8"))
+            except tomllib.TOMLDecodeError as exc:
+                errors.append(f"codex agent TOML invalid for nickname check: {agent_path} -> {exc}")
+                continue
+            actual = payload.get("nickname_candidates")
+            if actual != expected:
+                errors.append(f"{agent_path.relative_to(project_root)} nickname_candidates must be {expected}, got {actual}")
+            if isinstance(actual, list):
+                invalid = [str(item) for item in actual if not CODEX_NICKNAME_RE.fullmatch(str(item))]
+                if invalid:
+                    errors.append(f"{agent_path.relative_to(project_root)} has invalid Codex nickname_candidates: {invalid}")
+
+        for agent_name, expected_color in EXPECTED_CLAUDE_COLORS.items():
+            agent_path = project_root / ".claude" / "agents" / f"{agent_name}.md"
+            if not agent_path.is_file():
+                errors.append(f"missing claude agent for color check: {agent_path}")
+                continue
+            text = agent_path.read_text(encoding="utf-8")
+            fields = parse_frontmatter(text)
+            if "nickname_candidates" in fields:
+                errors.append(f"{agent_path.relative_to(project_root)} frontmatter must not contain Codex nickname_candidates")
+            actual_color = fields.get("color")
+            if actual_color != expected_color:
+                errors.append(f"{agent_path.relative_to(project_root)} color must be {expected_color}, got {actual_color}")
+
+    return errors
+
+
 def parse_frontmatter(content: str) -> dict[str, str]:
     match = FRONTMATTER_RE.match(content)
     if not match:
@@ -466,6 +559,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_cr004_protocol_errors())
     errors.extend(collect_guardrail_command_scope_errors())
     errors.extend(collect_agent_dispatch_evidence_errors())
+    errors.extend(collect_agent_display_profile_errors())
     errors.extend(collect_revision_record_errors())
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):

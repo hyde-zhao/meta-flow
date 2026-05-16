@@ -54,10 +54,11 @@ status: active
 ### 1. 初始化或读取状态
 
 1. 若 `process/STATE.md` 不存在，则以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化。
-2. 读取 `current_phase`、`current_agent`、`blocked`、`active_change`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`history`。
+2. 读取 `current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`history`。
 3. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 4. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。
 5. 若 `agent_lifecycle.platform_capabilities.subagent_dispatch` 缺失，必须先补齐并将 `available=false`、`method=unverified` 写入状态；能力未探测前，不得把需要功能 Agent 的任务标记为 `completed`。
+6. 若 `orchestrator_session` 缺失，必须先按模板补齐并写入 `history`；补齐动作只表示状态结构升级，不表示允许重复启动 `meta-po`。
 
 ### 2. 按阶段检查退出条件
 
@@ -135,6 +136,34 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 4. `meta-po` 角色始终单例；若发现 2 个活动 `meta-po`，必须阻断推进并要求人工选择保留线程。
 5. `active_agents` 失活或用户手动关闭时，必须在 `history` 记录重建原因，不能静默生成新线程。
 6. 若旧 `STATE.md` 缺少 `agent_lifecycle`，必须先按模板补齐结构；补齐本身不代表允许新建 `meta-po`，仍需确认当前 UI 中没有其他活动 `meta-po`。
+
+### 6.1 Orchestrator Session 登记
+
+`meta-po` 自身生命周期必须登记在 `orchestrator_session`，不得只依赖 `active_agents[]` 的功能 Agent 记录。
+
+| 字段 | 说明 |
+|---|---|
+| `role` | 固定为 `meta-po` |
+| `agent_id` / `thread_id` | 当前唯一编排器的 Codex agent id / thread id；平台没有独立 thread 时可与 `agent_id` 相同 |
+| `status` | `active`、`awaiting-user`、`resuming`、`closed`、`superseded`、`unavailable` |
+| `workflow_id` / `active_change` | 当前工作流与活跃变更键 |
+| `pending_gate` | 等待人工确认的检查点，例如 `CP8` |
+| `pending_checklist_path` | 已提示给用户的人工审查稿路径 |
+| `pending_user_decision` | 允许的用户输入与当前等待事项，例如 `1/approve/通过`、`2/修改: ...`、`3/reject/不通过` |
+| `resume_instruction` | 用户回复后应优先使用 `resume_agent` / `send_input` 继续同一 `meta-po` 的说明 |
+| `spawned_at` / `last_seen_at` / `awaiting_since` / `resumed_at` / `closed_at` | 编排器生命周期时间 |
+| `previous_agent_id` / `previous_thread_id` | recovery 模式下被替代的旧编排器标识 |
+| `superseded_by` | recovery 模式下替代当前编排器的新 agent id / thread id |
+| `recovery_reason` | 仅当旧 `meta-po` 不可 resume、已关闭、用户手动终止或平台标识不可用时填写 |
+
+规则：
+
+1. 发起人工检查点时，必须将 `status=awaiting-user`，并写入 `pending_gate`、`pending_checklist_path`、`pending_user_decision`、`resume_instruction` 和 `awaiting_since`。
+2. 用户确认、修改或拒绝后，必须优先复用 `orchestrator_session.agent_id` / `thread_id`，通过 `resume_agent` 或 `send_input` 恢复同一 `meta-po`；不得把“需要重新读取文件事实”作为新建 `meta-po` 的理由。
+3. 回填人工结果、关闭 CR、推进阶段或推进 `delivered` 前，必须重新读取 `STATE.md`、对应 `process/checks/CP*.md`、`checkpoints/CP*.md`、活跃 `CR-*.md` 和下游输出，并把结果写入 `history`。
+4. 只有旧 `meta-po` 不可恢复时，才允许创建新的 recovery `meta-po`；必须将旧 session 标为 `superseded` 或 `closed`，记录 `previous_agent_id`、`previous_thread_id`、`superseded_by`、`recovery_reason` 和 `history`。
+5. 若同时发现两个 `status=active|awaiting-user|resuming` 的 `meta-po`，必须阻断推进，要求人工选择保留线程。
+6. 若 CR 模板的自动终验授权字段有效，且 CP8 自动预检 `PASS`、无 `BLOCKING` / `REQUIRED`，允许将人工结果写为 `approved` 并标注 `approval_source=user-preauthorized`；否则仍按默认人工确认处理。
 
 `active_agents[]` 中每条记录必须使用以下字段。平台没有提供的字段可以为空，但 `completed` 状态必须满足证据规则。
 

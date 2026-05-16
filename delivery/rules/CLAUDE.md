@@ -10,6 +10,7 @@
 - **功能 Agent**（按需启用）：`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`
 - **所有任务均通过 meta-po 发起**，功能 Agent 不直接响应用户，由 meta-po 唤醒和收敛
 - **调度证据优先**：handoff 文件只表示交接，不表示功能 Agent 已执行。功能 Agent 完成必须有平台 Task/Subagent 证据，或用户明确批准的 `inline-fallback`。
+- **显示区分**：Claude Code 文件型 subagent 不使用 nickname；安装器通过 `color` 字段区分角色：`meta-po=red`、`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。Codex 侧每个 canonical subagent 预留 5 个命令别名，按百家姓顺序依次为 `po-zhao/po-qian/po-sun/po-li/po-zhou`、`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`。
 
 ## Skill 发现路径
 
