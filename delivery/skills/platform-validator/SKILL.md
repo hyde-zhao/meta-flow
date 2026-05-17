@@ -58,7 +58,7 @@ status: active
 - 必填 `name`、`description`、`developer_instructions`
 - 只允许官方 schema 字段：`name`、`description`、`developer_instructions`、`nickname_candidates`、`model`、`model_reasoning_effort`、`sandbox_mode`、`mcp_servers`、`skills.config`
 - 不得出现 `version`、`instructions` 或其他非标准顶层字段
-- `nickname_candidates` 必须符合命令别名映射：`po-zhao/po-qian/po-sun/po-li/po-zhou`、`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`
+- `nickname_candidates` 必须符合命令别名映射：`po-zhao/po-qian/po-sun/po-li/po-zhou`、`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`
 
 ### 维度 5.1：Claude Code subagent color（仅 claude-code，REQUIRED）
 

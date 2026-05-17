@@ -16,8 +16,8 @@
 | `meta-po` | `po-zhao`、`po-qian`、`po-sun`、`po-li`、`po-zhou` | `red` | first-party | `init`、状态推进、变更管理 | 主编排器，负责初始化、状态流转与人工检查点 |
 | `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `orange` | first-party | `requirement-clarification` | 需求澄清与结构化 |
 | `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `yellow` | first-party | `solution-design`、`story-planning` | HLD 设计、Story 拆解与开发计划 |
-| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu` | `green` | first-party | `story-execution` | Story LLD 起草与实现 |
-| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong` | `cyan` | first-party | `ready-for-verification` 后 | 测试策略、质量验收与安装脚本交付 |
+| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `green` | first-party | `story-execution` | Story LLD 起草与实现 |
+| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `cyan` | first-party | `ready-for-verification` 后 | 测试策略、质量验收与安装脚本交付 |
 | `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `purple` | first-party | `documentation` | README 与 USER-MANUAL 生成 |
 
 说明：

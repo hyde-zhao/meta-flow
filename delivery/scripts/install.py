@@ -65,8 +65,36 @@ AGENT_DISPLAY_PROFILES: dict[str, dict[str, object]] = {
     "meta-po": {"codex_nicknames": ["po-zhao", "po-qian", "po-sun", "po-li", "po-zhou"], "claude_color": "red"},
     "meta-pm": {"codex_nicknames": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"], "claude_color": "orange"},
     "meta-se": {"codex_nicknames": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"], "claude_color": "yellow"},
-    "meta-dev": {"codex_nicknames": ["dev-yang", "dev-zhu", "dev-qin", "dev-you", "dev-xu"], "claude_color": "green"},
-    "meta-qa": {"codex_nicknames": ["qa-he", "qa-lv", "qa-shi", "qa-zhang", "qa-kong"], "claude_color": "cyan"},
+    "meta-dev": {
+        "codex_nicknames": [
+            "dev-yang",
+            "dev-zhu",
+            "dev-qin",
+            "dev-you",
+            "dev-xu",
+            "dev-he",
+            "dev-lv",
+            "dev-shi",
+            "dev-zhang",
+            "dev-kong",
+        ],
+        "claude_color": "green",
+    },
+    "meta-qa": {
+        "codex_nicknames": [
+            "qa-he",
+            "qa-lv",
+            "qa-shi",
+            "qa-zhang",
+            "qa-kong",
+            "qa-cao",
+            "qa-yan",
+            "qa-hua",
+            "qa-jin",
+            "qa-wei",
+        ],
+        "claude_color": "cyan",
+    },
     "meta-doc": {"codex_nicknames": ["doc-cao", "doc-yan", "doc-hua", "doc-jin", "doc-wei"], "claude_color": "purple"},
 }
 

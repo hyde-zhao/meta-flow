@@ -64,7 +64,7 @@
 
 | 文件 | 修改内容 |
 |---|---|
-| `delivery/scripts/install.py` | 将 Codex nickname 改为每个 canonical subagent 预留 5 个百家姓顺序别名，并增加 `CODEX_NICKNAME_RE` 校验。 |
+| `delivery/scripts/install.py` | 将 Codex nickname 改为 canonical subagent 百家姓顺序别名；默认每个角色 5 个，`meta-dev` 与 `meta-qa` 各 10 个，并增加 `CODEX_NICKNAME_RE` 校验。 |
 | `scripts/check_delivery_guardrails.py` | 增加 Codex nickname 合法字符校验，防止点号或其他非法字符再次进入安装产物。 |
 | `AGENTS.md`、`README.md`、`delivery/**`、`docs/MODIFICATION-LOG.md` | 同步更新命令别名文档。 |
 
