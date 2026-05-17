@@ -32,7 +32,7 @@ status: active
 |---|---|---|
 | 自动检查结果 | `process/checks/CP{n}-{slug}.md` | 由 agent 填写，必须包含逐项 PASS / FAIL / N/A / WAIVED |
 | 人工审查稿 | `checkpoints/CP{n}-{slug}.md` | 由 meta-po 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
-| Story LLD 人工审查稿 | `checkpoints/CP5-{story_id}-{story_slug}-LLD.md` | 单 Story 或小批次滚动确认 |
+| Story LLD 人工审查稿 | `checkpoints/CP5-{batch_id}-LLD-BATCH.md` | 本轮 LLD 设计批次统一确认 |
 | Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
 | Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
 
@@ -68,7 +68,7 @@ status: active
 ---
 checkpoint_id: "CP{n}"
 checkpoint_name: ""
-type: "auto | auto_precheck | rolling_auto"
+type: "auto | auto_precheck | rolling_auto | batch_auto_then_manual"
 status: "PASS | FAIL | BLOCKED | WAIVED"
 owner: ""
 created_at: ""
@@ -122,7 +122,7 @@ manual_checkpoint: ""
 ---
 checkpoint_id: "CP{n}"
 checkpoint_name: ""
-type: "manual | auto_then_manual | rolling_auto_then_manual"
+type: "manual | auto_then_manual | rolling_auto_then_manual | batch_auto_then_manual"
 status: "pending | approved | changes_requested | rejected"
 owner: "meta-po"
 created_at: ""
@@ -181,8 +181,10 @@ meta-po 发起人工检查时必须提示：
 ```text
 请审查：checkpoints/CP{n}-{slug}.md
 该文件包含本检查点的 Entry Criteria、Checklist、Exit Criteria、Deliverables 和自动预检摘要。
-审查后请在“人工审查结果”中填写结论，也可以直接回复：
-1/approve/通过，2/修改: <具体修改点>，3/reject/不通过。
+审查后请在“人工审查结果”中填写结论，也可以直接回复以下任一整行：
+approve
+修改: <具体修改点>
+reject
 ```
 
 ## CP0 原始请求受理门
@@ -373,7 +375,7 @@ meta-po 发起人工检查时必须提示：
 | # | 检查项 | 说明 |
 |---|---|---|
 | 1 | Story 覆盖需求 | 每条 P0/P1 需求有 Story 覆盖 |
-| 2 | Story 粒度合理 | 单 Story 可独立确认、开发、验证 |
+| 2 | Story 粒度合理 | 单 Story 可独立开发、验证，并可纳入 LLD 设计批次统一确认 |
 | 3 | AC 明确 | 每个 Story 有可验证验收标准 |
 | 4 | INVEST 基本满足 | 独立、可协商、有价值、可估算、小、可测试 |
 | 5 | 依赖关系完整 | `depends_on` 标清上游 Story |
@@ -405,9 +407,9 @@ meta-po 发起人工检查时必须提示：
 
 ## CP5 Story LLD 可实现性门
 
-- 类型：滚动自动预检 + 滚动人工
+- 类型：批次自动预检 + 批次人工
 - 自动结果文件：`process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
-- 人工审查稿：`checkpoints/CP5-{story_id}-{story_slug}-LLD.md`
+- 人工审查稿：`checkpoints/CP5-{batch_id}-LLD-BATCH.md`
 - 责任方：meta-dev / meta-po
 
 ### Entry Criteria
@@ -415,8 +417,8 @@ meta-po 发起人工检查时必须提示：
 | 条目 | 说明 |
 |---|---|
 | CP4 通过 | Story 拆解与并行计划已确认 |
-| Story 处于 LLD 审查态 | 状态为 `lld-ready-for-review` |
-| LLD 已生成 | `STORY-{id}-{story_slug}-LLD.md` 存在 |
+| 批次内 Story 处于 LLD 审查态 | 状态均为 `lld-ready-for-review` 或批次级 `lld-batch-ready-for-review` |
+| 批次内 LLD 已生成 | 每个 `STORY-{id}-{story_slug}-LLD.md` 均存在 |
 
 ### Checklist
 
@@ -439,15 +441,15 @@ meta-po 发起人工检查时必须提示：
 
 | 条目 | 说明 |
 |---|---|
-| 自动预检通过 | LLD 可实现性检查无阻断项 |
-| 人工确认完成 | Story LLD 被批准 |
-| dev_gate 可更新 | Story 可进入 `lld-approved`，满足时进入 `dev_ready` |
+| 自动预检通过 | 批次内全部 LLD 可实现性检查无阻断项 |
+| 人工确认完成 | 批次 LLD 被统一批准 |
+| dev_gate 可更新 | 批次内 Story 可进入 `lld-approved`，满足时进入 `dev_ready` |
 
 ### Deliverables
 
 - `process/stories/STORY-{id}-{story_slug}-LLD.md`
 - `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
-- `checkpoints/CP5-{story_id}-{story_slug}-LLD.md`
+- `checkpoints/CP5-{batch_id}-LLD-BATCH.md`
 - 更新后的 `process/stories/STORY-STATUS.md`
 
 ## CP6 Story 编码完成门
@@ -460,7 +462,7 @@ meta-po 发起人工检查时必须提示：
 
 | 条目 | 说明 |
 |---|---|
-| CP5 通过 | Story LLD 已确认 |
+| CP5 通过 | 本轮 LLD 设计批次已确认 |
 | dev_gate 满足 | 依赖和文件所有权允许开发 |
 | 实现完成 | Story 任务清单已执行完 |
 | meta-dev 调度证据存在 | `STATE.md.agent_lifecycle` 与 handoff `dispatch` 证明 meta-dev 已由子 agent 执行，或存在用户批准的 inline fallback |
@@ -595,7 +597,7 @@ meta-po 发起人工检查时必须提示：
 1. 所有 CP 文件创建或更新后，必须回写 `process/STATE.md.checkpoints` 中的路径和结论。
 2. 人工检查点的自动预检未 `PASS` 或 `WAIVED` 前，meta-po 不得发起人工确认。
 3. 人工确认通过后，meta-po 必须把人工结论写回对应 `checkpoints/CP*.md` 的“人工审查结果”，并同步更新 `STATE.md`。
-4. 如果用户直接在对话中回复 `1/approve/通过`，meta-po 也必须补写人工审查结果文件，不能只改状态。
+4. 如果用户直接在对话中回复 `approve`，meta-po 也必须补写人工审查结果文件，不能只改状态。`1/通过` 可作为历史兼容别名解析，但新提示不得再把多个等价别名混排给用户。
 5. `changes_requested` 必须路由给对应 agent 修订，并在重提时保留旧检查结果作为历史证据。
 6. `rejected` 必须回退到检查点定义的目标阶段或 Story 状态。
 7. CP6 / CP7 必须包含 `## Agent Dispatch Evidence` 小节；若缺少真实子 agent 证据且没有用户批准的 `inline-fallback`，结论只能是 `FAIL` 或 `BLOCKED`。

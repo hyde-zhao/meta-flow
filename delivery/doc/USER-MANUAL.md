@@ -117,8 +117,8 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 2. `meta-pm` 澄清需求，沉淀 `USE-CASES.md` 和 `REQUIREMENTS.md`，写入 CP1 / CP2 自动检查结果。
 3. CP2 人工确认通过后，`meta-se` 输出 `HLD.md` 和 CP3 自动预检。
 4. CP3 人工确认通过后，`meta-se` 输出 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 CP4 自动预检。
-5. CP4 人工确认通过后，`meta-po` 按 Story DAG 组织 `meta-dev` 并行输出 `STORY-{id}-{story_slug}-LLD.md` 和 CP5 自动预检，并发起单 Story 或小批次滚动确认。
-6. Story CP5 确认且 `dev_gate` 满足后，`meta-po` 必须通过平台子 agent 能力调度 `meta-dev`，并在 `STATE.md.agent_lifecycle` 与 handoff `dispatch` 中记录证据；实现完成后写入 CP6 编码完成检查结果。
+5. CP4 人工确认通过后，`meta-po` 按 Story DAG 确定本轮 LLD 设计批次，组织 `meta-dev` 并行输出批次内全部 `STORY-{id}-{story_slug}-LLD.md` 和 CP5 自动预检，再发起一次批次人工确认。
+6. 批次 CP5 确认且批次内 Story 的 `dev_gate` 满足后，`meta-po` 必须通过平台子 agent 能力调度 `meta-dev`，并在 `STATE.md.agent_lifecycle` 与 handoff `dispatch` 中记录证据；实现完成后写入 CP6 编码完成检查结果。
 7. `meta-po` 必须通过平台子 agent 能力调度 `meta-qa` 执行验证，并记录调度证据；验证完成后写入 CP7 验证完成检查结果，并生成安装脚本。
 8. `meta-doc` 最后输出 README 和 USER-MANUAL，CP8 自动预检和人工终验通过后进入 delivered。
 
@@ -133,7 +133,7 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 | CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 | Story LLD 可实现性门 | 滚动自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{story_id}-{story_slug}-LLD.md` |
+| CP5 | Story LLD 可实现性门 | 批次自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{batch_id}-LLD-BATCH.md` |
 | CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
@@ -160,12 +160,12 @@ meta-po 发起人工检查时会提示 checklist 文件路径，例如：
 该文件包含本检查点的 Entry Criteria、Checklist、Exit Criteria、Deliverables 和自动预检摘要。
 ```
 
-审查后可以在对应 `checkpoints/CP*.md` 的“人工审查结果”中填写结论，也可以直接在对话中回复。Claude Code 可继续使用结构化选择。Codex 也优先使用结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；如果当前 Codex 客户端或运行模式无法提供可选择 UI，系统必须显式提示降级并接受 exact 文本：`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`。
+审查后可以在对应 `checkpoints/CP*.md` 的“人工审查结果”中填写结论，也可以直接在对话中回复。Claude Code 可继续使用结构化选择。Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择；否则默认使用 exact 文本确认。系统对用户只展示三个推荐回复：`approve`、`修改: <具体修改点>`、`reject`；历史别名 `1/通过`、`2/修改: ...`、`3/不通过` 仅作为兼容解析，不作为主要提示文案。
 
 ```text
-1 / approve / 通过        # 确认通过
-2 / 修改: <具体修改点>    # 需要修改
-3 / reject / 不通过       # 不通过并回退
+approve                  # 确认通过
+修改: <具体修改点>        # 需要修改
+reject                   # 不通过并回退
 ```
 
 不匹配上述 exact 输入时，meta-po 不得推进状态。

@@ -76,7 +76,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 1. **澄清锁**：CP2 需求基线门未通过前，不得输出正式设计对象
 2. **HLD 锁**：CP3 HLD 架构评审门未通过前，不得进入 Story 拆解
 3. **Story LLD 锁**：Story 未进入 `lld-ready` / `package-draft` 等待设计状态前，不得开始 LLD 设计
-4. **Story 开发锁**：CP5 Story LLD 可实现性门未通过、`dev_gate` 未满足、或文件所有权冲突时，不得开始该 Story 实现
+4. **Story 开发锁**：本轮 LLD 设计批次的 CP5 Story LLD 可实现性门未通过、`dev_gate` 未满足、或文件所有权冲突时，不得开始任何 Story 实现
 5. **验证锁**：没有 `process/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
 6. **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
 7. **禁止越级改写**：`meta-dev` 不修改 REQUIREMENTS.md、HLD.md；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
@@ -112,7 +112,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 | Story LLD 可实现性门 | 滚动自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{story_id}-{story_slug}-LLD.md` |
+| CP5 | Story LLD 可实现性门 | 批次自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{batch_id}-LLD-BATCH.md` |
 | CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
@@ -121,15 +121,17 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 CP6 / CP7 还必须包含 `Agent Dispatch Evidence` 小节。缺少 meta-dev / meta-qa 的真实子 agent 证据，且没有用户批准的 `inline-fallback` 时，结论只能是 `FAIL` 或 `BLOCKED`。
 
-Claude Code 可继续使用结构化选择。Codex 也优先使用结构化选择 UI；无法提供时必须显式降级为 exact 文本确认：`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`。
+Claude Code 可继续使用结构化选择。Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择；否则默认使用 exact 文本确认。对用户只展示三个推荐回复：`approve`、`修改: <具体修改点>`、`reject`；历史别名 `1/通过`、`2/修改: ...`、`3/不通过` 仅作为兼容解析，不作为主要提示文案。
 
 ## 并行执行（Complex 模式）
 
 Complex 模式下，LLD 写作、开发和验证均按 Story DAG 队列并行调度，但同一 Story 必须严格按：
 
-`CP5 LLD 确认 → CP6 开发实现完成 → CP7 验证完成`
+`批次 CP5 LLD 确认 → CP6 开发实现完成 → CP7 验证完成`
 
 顺序推进。
+
+LLD 写作可以按 Story 并行，但人工确认必须按本轮 LLD 设计批次统一发起。标准开发默认以当前 Wave / 调度批次为批次；变更流程默认以 CR 影响范围为批次。批次内全部 LLD 与 CP5 自动预检完成前，不得启动任何 Story 开发。
 
 默认并发上限：`max_parallel_lld=3`、`max_parallel_dev=2`、`max_parallel_qa=2`。开发并行必须同时满足依赖类型门控和文件所有权门控；`runtime` 依赖默认等待上游 `verified`，`file-conflict` 依赖默认串行。
 

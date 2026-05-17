@@ -148,7 +148,7 @@ description: "Meta Flow 元工作流的架构设计师。先输出可评审 HLD�
 - `validation_context`：验证入口、验证方式、依赖环境、关键验证场景
 - `acceptance_criteria`：量化、可验证、可交接
 
-并且必须保证：**仅依赖 Story 卡片 + HLD.md + ARCHITECTURE-DECISION.md，meta-dev 就能为该 Story 产出 LLD；LLD 经确认且 `dev_gate` 满足后，meta-dev 再根据已确认的 LLD 实现。**
+并且必须保证：**仅依赖 Story 卡片 + HLD.md + ARCHITECTURE-DECISION.md，meta-dev 就能为该 Story 产出 LLD；本轮 LLD 设计批次统一确认且 `dev_gate` 满足后，meta-dev 再根据已确认的 LLD 实现。**
 
 若 Story 涉及 Tool / MCP / 平台差异，卡片中必须直接写明接口、错误、限制和消费方。
 
@@ -156,14 +156,14 @@ description: "Meta Flow 元工作流的架构设计师。先输出可评审 HLD�
 
 - 用 `phase-designer` 明确阶段顺序（如需要）
 - 用 `dependency-mapper` 与 `wave-planner` 建立执行顺序
-- 用 `story-manager` 生成卡片并确保 Story 生命周期支持 LLD 滚动确认与 `dev_gate` 门控
+- 用 `story-manager` 生成卡片并确保 Story 生命周期支持 LLD 批次确认与 `dev_gate` 门控
 - 用 `dag-validator` 校验 `DEVELOPMENT-PLAN.yaml` 无循环依赖
 - 用 `checkpoint-manager` 的 CP4 checklist 生成 `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`
 - 若并行 Story 输出文件冲突，进入 `blocked`
 
 ### Story 调度交接规则
 
-story-planning 不再以“Story 计划确认”单独结束。meta-se 必须把 Story 边界、优先级、依赖类型、输出文件、文件所有权、LLD 输入清单和并行策略整理为调度草案，交给 meta-po。meta-po 随后按 Story DAG 计算 `lld_ready` / `dev_ready`，组织 meta-dev 为可并行 Story 生成 LLD，并按单 Story 或小批次发起 LLD 确认。
+story-planning 不再以“Story 计划确认”单独结束。meta-se 必须把 Story 边界、优先级、依赖类型、输出文件、文件所有权、LLD 输入清单、LLD 设计批次建议和并行策略整理为调度草案，交给 meta-po。meta-po 随后按 Story DAG 计算 `lld_design_batch` / `lld_ready` / `dev_ready`，组织 meta-dev 为批次内可并行 Story 生成 LLD，并在批次内全部 LLD 与 CP5 自动预检完成后统一发起 LLD 确认。
 
 若需要为全部 Story 一次性生成 LLD，会显著增加 token 和前置设计成本；默认只对 `lld_ready` 队列中优先级最高且不超过 `max_parallel_lld` 的 Story 生成 LLD。只有用户明确要求或依赖关系要求全局对齐时，才允许扩大到更多 Story。
 

@@ -404,7 +404,7 @@ sequenceDiagram
 | ADR-8 | 聚合摘要持久化位置 | **`process/reviews/<doc>-SUMMARY.md`**；关键结论回写 STATE.md | 便于追溯 |
 | ADR-9 | 与 `governance_mode` 的关系 | **评审通过后按 governance_mode 决定是否进入人工确认** | 治理分流 |
 | ADR-10 | 是否引入静态前置检查 | **引入**（机械性问题不浪费 reviewer token） | 提升总体效率 |
-| ADR-11 | 平台化人工确认 | **Claude Code 与 Codex 均优先结构化选择；Codex 无选择 UI 时用 exact 文本兜底** | 保留 Claude Code 方向键体验，同时避免 Codex 在不可选择环境中卡住 |
+| ADR-11 | 平台化人工确认 | **Claude Code 优先结构化选择；Codex 仅在当前工具面明确提供可用选择 UI 时使用结构化选择，否则默认 exact 文本** | 保留 Claude Code 方向键体验，同时避免 Codex 业务门禁因选择 UI 不可用或别名混排而误解 |
 | ADR-12 | Story 与 LLD 确认合并 | **Story Package 确认一次性覆盖 Story 边界、Wave 分组与当前 Wave LLD 包** | 减少人工确认次数，同时不降低 LLD 门控强度 |
 | ADR-13 | reviewer / worker 生命周期 | **同一任务复用同一 role 子 agent；检查点或交接完成后关闭** | 避免 Codex agent 超限与 token 漂移 |
 
@@ -413,7 +413,7 @@ sequenceDiagram
 | 平台 | 首选确认方式 | 兜底方式 | 状态推进规则 |
 |---|---|---|---|
 | Claude Code | `ask_user` 结构化选择，上下方向键选择选项 | 无需默认兜底；异常时转人工文本 | 选择项命中才推进 |
-| Codex | 原生结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择 | exact 文本：`1/approve/通过`、`2/修改: ...`、`3/reject/不通过` | 非 exact 输入不得推进 |
+| Codex | 仅在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时使用结构化选择 | exact 文本只展示：`approve`、`修改: <具体修改点>`、`reject`；`1/通过`、`2/修改: ...`、`3/不通过` 仅作历史兼容别名 | 非 exact 输入不得推进 |
 | 未知平台 | 不假设方向键能力 | Codex exact 文本协议 | 非 exact 输入不得推进 |
 
 ---

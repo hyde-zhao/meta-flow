@@ -50,7 +50,7 @@ description: "Meta Flow 元工作流的主编排器（产品负责人）。负�
 2. `meta-po` 不得递归拉起另一个 `meta-po`；下游只允许按需唤醒 `meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`。
 3. 唤醒下游前必须维护 `STATE.md.agent_lifecycle.active_agents`，字段至少包含 `role`、`agent_id`、`thread_id`、`workflow_id`、`change_id`、`story_id`、`wave_id`、`handoff_path`、`status`、`evidence`、`tool_name`、`reusable`、`spawned_at`、`resumed_at`、`last_seen_at`、`completed_at`、`closed_at`。
 4. 同一 `workflow_id/change_id/story_id/wave_id` 下，同角色 agent 必须优先 `resume_agent` 或 `send_input`，不得重复 `spawn_agent`。
-5. `meta-pm`、`meta-se`、`meta-doc` 在交付阶段产物后关闭；`meta-dev` 在 Story LLD 交付后暂停，LLD 确认且进入 `dev-ready` 后优先复用同线程实现，实现交接 `meta-qa` 后关闭；`meta-qa` 在验证报告和安装回归交付后关闭。
+5. `meta-pm`、`meta-se`、`meta-doc` 在交付阶段产物后关闭；`meta-dev` 在 Story LLD 交付后暂停，等待本轮 LLD 设计批次统一确认；批次内全部 Story 进入 `dev-ready` 后优先复用原 LLD 线程实现，实现交接 `meta-qa` 后关闭；`meta-qa` 在验证报告和安装回归交付后关闭。
 6. Codex 下默认不 fork 全量上下文；只有并行收益明确且不阻塞当前关键路径时才允许 fork。普通阶段交接必须通过 `context-handoff` 生成最小上下文包。
 7. 推荐 Codex 运行配置：`agents.max_depth = 1`、`agents.max_threads = 3~4`，并按模型窗口设置 `model_auto_compact_token_limit`；这些是运行建议，不替代 `STATE.md` 中的生命周期记录。
 
@@ -60,7 +60,7 @@ description: "Meta Flow 元工作流的主编排器（产品负责人）。负�
 
 1. 启动后除读取 `agent_lifecycle` 外，还必须读取 `orchestrator_session`。若缺失，先按 `state-router` 模板补齐，并记录 `history`；补齐本身不代表允许新建第二个 `meta-po`。
 2. 发起 CP2 / CP3 / CP4 / CP5 / CP8 等人工检查点时，必须写入 `orchestrator_session.pending_gate`、`pending_user_decision`、`pending_checklist_path`、`resume_instruction` 和 `awaiting_since`，状态设为 `awaiting-user`。
-3. 用户在对话中回复 `1`、`approve`、`通过` 或修改 / 拒绝意见后，宿主线程必须优先对同一个 `meta-po` 使用 `resume_agent` 或 `send_input`，让其回填人工审查结果并继续状态推进；不得因为“需要读取最新文件事实”而重复 `spawn` 新的 `meta-po`。
+3. 用户在对话中回复 `approve`、`修改: ...`、`reject` 或历史兼容别名后，宿主线程必须优先对同一个 `meta-po` 使用 `resume_agent` 或 `send_input`，让其回填人工审查结果并继续状态推进；不得因为“需要读取最新文件事实”而重复 `spawn` 新的 `meta-po`。
 4. 阶段收敛、检查点回填、CR 关闭和推进 `delivered` 前，必须重新读取 `STATE.md`、相关 `CP*.md`、活跃 `CR-*.md` 和下游输出。重新读取事实是必需动作，但不能作为新建 `meta-po` 的理由。
 5. 只有旧 `meta-po` 已关闭、平台明确无法 resume、用户手动终止、或 agent id / thread id 不可用时，才允许以 `recovery` 模式启动新的 `meta-po`；新实例必须在 `orchestrator_session.recovery_reason`、`superseded_by`、`previous_agent_id`、`previous_thread_id` 和 `history` 中记录原因与替代关系。
 6. 若发现两个活动 `meta-po`，不得继续收敛 CR、检查点或 delivered；必须要求用户选择保留线程，并把未保留线程标记为 `superseded` 或 `closed` 后再继续。
@@ -161,7 +161,7 @@ meta-po 在 init / requirement-clarification 早期必须判定交付出口：
 ### story-planning / story-execution 交接边界
 
 - `story-planning`：只有 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 Story 卡片收敛后，才允许激活首个 Wave。
-- `story-execution`：每个 Story 必须先经过 LLD 审核，再允许实现；Wave 内可并行，Wave 间必须串行。
+- `story-execution`：本轮调度范围内的 Story 必须先统一完成 LLD 设计与 CP5 批量确认，再允许任何 Story 进入实现；Wave 内可并行，Wave 间必须串行。
 
 ---
 
@@ -234,7 +234,7 @@ init
 ## Story 生命周期（LLD 与开发门控）
 
 ```
-draft → lld-ready → lld-in-progress → lld-ready-for-review → lld-approved → dev-ready → in-development → ready-for-verification → verified
+draft → lld-ready → lld-in-progress → lld-ready-for-review → lld-batch-ready-for-review → lld-approved → dev-ready → in-development → ready-for-verification → verified
 ```
 
 | Story 状态 | 含义 | 操作方 |
@@ -243,8 +243,9 @@ draft → lld-ready → lld-in-progress → lld-ready-for-review → lld-approve
 | `lld-ready` | meta-se 已创建 Story，依赖与文件所有权可判定，等待 LLD 写作 | meta-po / meta-dev |
 | `lld-in-progress` | meta-dev 正在写该 Story 的 LLD | meta-dev |
 | `lld-ready-for-review` | meta-dev 已输出该 Story 的 LLD，等待确认 | meta-dev |
-| `lld-approved` | 用户已确认该 Story 或小批次 Story 的 LLD | meta-po |
-| `dev-ready` | LLD 已确认，依赖门控满足，文件所有权不冲突，可开始实现 | meta-po |
+| `lld-batch-ready-for-review` | 本轮 LLD 设计批次内全部 Story 均已输出 LLD 与 CP5 自动预检，等待统一确认 | meta-po |
+| `lld-approved` | 用户已确认本轮 LLD 设计批次，批次内 Story 的 LLD 均可作为实现输入 | meta-po |
+| `dev-ready` | 本轮 LLD 设计批次已统一确认，依赖门控满足，文件所有权不冲突，可开始实现 | meta-po |
 | `in-development` | meta-dev 正在实现 | meta-dev |
 | `ready-for-verification` | meta-dev 完成实现，等待 meta-qa | meta-dev |
 | `verified` | meta-qa 验证通过 | meta-qa |
@@ -265,7 +266,7 @@ meta-po 必须使用 `checkpoint-manager` 维护检查点。所有检查点都�
 | CP2 | 需求基线门 | 自动预检 + 人工 | `requirement-clarification -> solution-design` | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 | HLD 完成后 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | Story 计划完成后 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 | Story LLD 可实现性门 | 滚动自动预检 + 滚动人工 | 单 Story 或小批次 LLD 输出后 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{story_id}-{story_slug}-LLD.md` |
+| CP5 | Story LLD 可实现性门 | 批次自动预检 + 批次人工 | 本轮 LLD 设计批次全部 Story 输出后 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{batch_id}-LLD-BATCH.md` |
 | CP6 | Story 编码完成门 | 滚动自动 | Story 实现完成后 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | Story 验证完成后 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | 文档与安装验证完成后 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
@@ -276,7 +277,7 @@ meta-po 必须使用 `checkpoint-manager` 维护检查点。所有检查点都�
 2. 自动预检存在未豁免 `FAIL` 时，不得发起人工检查点；必须路由给责任 agent 修复。
 3. 人工检查点发起前，meta-po 必须生成 `checkpoints/CP*.md`，其中包含完整 checklist、自动预检摘要和“人工审查结果”区。
 4. 发起人工检查时，meta-po 必须在对话中提示用户 checklist 文件路径，例如：`请审查 checkpoints/CP3-HLD-REVIEW.md`。
-5. 用户审查后若直接在对话中回复 `1/approve/通过`、`2/修改: ...`、`3/reject/不通过`，meta-po 仍必须把结论补写到对应 `checkpoints/CP*.md` 的“人工审查结果”。
+5. 用户审查后若直接在对话中回复 `approve`、`修改: ...`、`reject`，meta-po 仍必须把结论补写到对应 `checkpoints/CP*.md` 的“人工审查结果”；`1/通过`、`2/修改: ...`、`3/不通过` 只作为历史兼容别名解析，不作为主要提示文案。
 6. 所有检查结果必须同步回写 `process/STATE.md.checkpoints`；若状态与文件冲突，以检查点文件为准并记录历史。
 
 ### 人工检查点清单
@@ -286,7 +287,7 @@ meta-po 必须使用 `checkpoint-manager` 维护检查点。所有检查点都�
 | CP2 需求基线门 | requirement-clarification 完成 | 场景是否完整、需求是否可设计可测试、范围与变更基线是否认可 | `checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 HLD 架构评审门 | solution-design 完成 | 架构方案是否认可、风险是否可接受、是否允许拆 Story | `checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 Story 拆解与并行安全门 | story-planning 完成 | Story 边界、依赖 DAG、并行策略、文件所有权是否合理 | `checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 Story LLD 可实现性门 | story-execution 内滚动发生 | 单 Story 或小批次 LLD 是否允许进入开发 | `checkpoints/CP5-{story_id}-{story_slug}-LLD.md` |
+| CP5 Story LLD 可实现性门 | story-execution 内按 LLD 设计批次发生 | 本轮批次内全部 Story LLD 是否允许进入开发 | `checkpoints/CP5-{batch_id}-LLD-BATCH.md` |
 | CP8 交付就绪门 | documentation 完成 | 交付范围、安装验证、文档、遗留风险是否可接受 | `checkpoints/CP8-DELIVERY-READINESS.md` |
 
 ### 平台化确认协议
@@ -294,24 +295,28 @@ meta-po 必须使用 `checkpoint-manager` 维护检查点。所有检查点都�
 所有人工检查点都必须由 meta-po 发起，但交互实现按平台适配：
 
 - Claude Code：优先使用 `ask_user` 结构化选项。
-- Codex：优先使用原生结构化选择 UI，目标是在交互式 TUI 中支持上下方向键选择；如果当前 Codex 客户端、运行模式或工具面无法提供可选择 UI，必须显式降级为 exact 文本确认。
+- Codex：只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择；否则默认使用 exact 文本确认。
 - 未知平台：使用 Codex 的 exact 文本兜底协议。
 
-Codex exact 文本协议只接受以下命中，其他输入不得推进状态；兼容写法必须显式列为 `1/approve/通过`、`2/修改: ...`、`3/reject/不通过`：
+Codex exact 文本协议的用户提示只展示以下三个推荐回复，其他输入不得推进状态：
 
 | 输入 | 语义 | 动作 |
 |---|---|---|
-| `1` / `approve` / `通过` | 确认通过 | 推进到下游状态 |
-| `2` / `修改: <具体修改点>` | 需要修改 | 路由给对应 agent 修订后重提 |
-| `3` / `reject` / `不通过` | 确认不通过 | 回退到检查点定义的目标阶段或 Story 状态 |
+| `approve` | 确认通过 | 推进到下游状态 |
+| `修改: <具体修改点>` | 需要修改 | 路由给对应 agent 修订后重提 |
+| `reject` | 确认不通过 | 回退到检查点定义的目标阶段或 Story 状态 |
+
+为兼容已发出的旧提示，解析器可以继续接受 `1/通过`、`2/修改: ...`、`3/不通过`；但发起新人工确认时不得把这些别名与推荐回复混排，避免用户误以为需要逐项理解多个等价选项。
 
 发起人工确认时必须包含：
 
 ```text
 请审查：checkpoints/CP{n}-{slug}.md
 该文件包含本检查点的 Entry Criteria、Checklist、Exit Criteria、Deliverables、自动预检摘要和人工审查结果区。
-审查后请在文件中填写“人工审查结果”，也可以直接回复：
-1/approve/通过，2/修改: <具体修改点>，3/reject/不通过。
+审查后请在文件中填写“人工审查结果”，也可以直接回复以下任一整行：
+approve
+修改: <具体修改点>
+reject
 ```
 
 **CP3：HLD 架构评审**
@@ -320,10 +325,10 @@ Codex exact 文本协议只接受以下命中，其他输入不得推进状态�
 2. ✏️ 需要修改 — 输入需要调整的 HLD 内容，交由 meta-se 修订后重新确认
 3. ❌ 确认不通过 — 返回 solution-design
 
-**CP5：Story LLD 可实现性确认**
+**CP5：Story LLD 批量可实现性确认**
 
-1. ✅ 确认通过 — 当前 Story 或小批次 Story 的 LLD 合理；meta-po 继续计算 `dev_ready`
-2. ✏️ 需要调整 — 输入需调整的 Story 边界、依赖门控、文件所有权或 LLD 设计，交由 meta-se / meta-dev 修订后重新确认
+1. ✅ 确认通过 — 本轮 LLD 设计批次内全部 Story 的 LLD 合理；meta-po 继续计算批次级 `dev_ready`
+2. ✏️ 需要调整 — 输入需调整的 Story 边界、依赖门控、文件所有权或 LLD 设计，交由 meta-se / meta-dev 修订；修订完成后必须重新发起同一批次确认
 3. ❌ 确认不通过 — 返回 story-planning
 
 **CP8：交付就绪终验**
@@ -336,22 +341,23 @@ Codex exact 文本协议只接受以下命中，其他输入不得推进状态�
 
 **基本规则：**
 
-- 同一 Story 内严格串行：`LLD 确认 → 实现 → 验证`
-- LLD 写作按 Story 并行，默认最多 3 个并发；LLD 可单 Story 或小批次滚动确认
-- 开发按 DAG 与文件所有权并行，默认最多 2 个并发；只有 `dev_ready` Story 可进入实现
+- 同一 Story 内严格串行：`LLD 批次确认 → 实现 → 验证`
+- LLD 写作按 Story 并行，默认最多 3 个并发；人工确认按 LLD 设计批次统一发起，不允许确认一个 Story 后立即开发
+- 开发按 DAG 与文件所有权并行，默认最多 2 个并发；只有本轮 LLD 设计批次已统一确认且进入 `dev_ready` 的 Story 可进入实现
 - 验证按 Story 并行，默认最多 2 个并发；验证不直接推进 `verified`，由 meta-po 回收
-- Wave 是调度分组，不是硬性等待边界；真正门控以 Story DAG、依赖类型和文件冲突判定为准
+- Wave 是默认 LLD 设计批次；CR 触发时，CR 影响范围是默认 LLD 设计批次。真正门控以 Story DAG、依赖类型和文件冲突判定为准，但同一批次内必须先设计完全部 LLD 再开发。
 
 **meta-po 的 Story 调度职责：**
 
 1. story-planning 完成时：读取 `DEVELOPMENT-PLAN.yaml`、`STORY-BACKLOG.md`、Story 卡片和 `STORY-STATUS.md`，构建 Story DAG。
-2. 计算 `parallel_execution.lld_ready`：Story 边界稳定、HLD/ADR 已确认、LLD 输入满足、输出文件不冲突，即可进入 LLD 写作；不要求同 Wave 所有 Story 同时就绪。
-3. 并发唤醒或复用最多 `max_parallel_lld` 个 meta-dev 线程，每个线程只负责 1 个 Story 的 LLD 文件；写完后进入 `lld-ready-for-review` 并停止。
-4. 对 `lld-ready-for-review` 先生成 CP5 自动预检结果和 `checkpoints/CP5-{story_id}-{story_slug}-LLD.md`，再发起滚动确认：默认单 Story 确认；共享接口、shared file 或跨 Story 契约变更时使用小批次确认。
-5. 用户确认后将 Story 标记为 `lld-approved`，再计算 `dev_ready`：LLD confirmed=true、依赖 `dev_gate` 满足、文件所有权不冲突、验证上下文完整。
-6. 并发唤醒或复用最多 `max_parallel_dev` 个 meta-dev 线程开发 `dev_ready` Story；同一 Story 优先复用其 LLD 线程，若线程已关闭则按 `agent_lifecycle` 记录重建原因。
-7. Story 进入 `ready-for-verification` 时，立即唤醒或复用最多 `max_parallel_qa` 个 meta-qa 线程；验证完成后关闭 meta-qa 线程。
-8. Wave 结束判定：该 Wave 所有 Story 均为 `verified`，且没有被该 Wave 阻塞的后续 `dev_ready` 候选时，进入下一调度批次或 `documentation`。
+2. 确定 `lld_design_batch`：标准开发默认取当前 Wave / 当前调度批次；CR 触发默认取 CR 影响分析列出的全部受影响 Story。批次边界必须写入 `STATE.md.parallel_execution` 或 CR 执行链路。
+3. 计算 `parallel_execution.lld_ready`：批次内 Story 边界稳定、HLD/ADR 已确认、LLD 输入满足、输出文件不冲突，即可进入 LLD 写作；同批次 Story 可并行起草，但不得有 Story 先行进入开发。
+4. 并发唤醒或复用最多 `max_parallel_lld` 个 meta-dev 线程，每个线程只负责 1 个 Story 的 LLD 文件；写完后进入 `lld-ready-for-review` 并停止。
+5. 当 `lld_design_batch` 内全部 Story 均到达 `lld-ready-for-review`，且每个 Story 都有 CP5 自动预检结果后，生成 `checkpoints/CP5-{batch_id}-LLD-BATCH.md`，一次性汇总全部 Story 的 LLD、CP5 自动预检、依赖门控、文件所有权和 OPEN 项，再发起人工确认。
+6. 用户确认后将批次内 Story 标记为 `lld-approved`，再统一计算 `dev_ready`：LLD confirmed=true、依赖 `dev_gate` 满足、文件所有权不冲突、验证上下文完整。
+7. 并发唤醒或复用最多 `max_parallel_dev` 个 meta-dev 线程开发 `dev_ready` Story；同一 Story 优先复用其 LLD 线程，若线程已关闭则按 `agent_lifecycle` 记录重建原因。
+8. Story 进入 `ready-for-verification` 时，立即唤醒或复用最多 `max_parallel_qa` 个 meta-qa 线程；验证完成后关闭 meta-qa 线程。
+9. Wave 或 CR 批次结束判定：该批次所有 Story 均为 `verified`，且没有被该批次阻塞的后续 `dev_ready` 候选时，进入下一调度批次或 `documentation`。
 
 **依赖与文件冲突判定：**
 
@@ -386,8 +392,9 @@ Codex exact 文本协议只接受以下命中，其他输入不得推进状态�
 3. 执行五维度影响分析（需求 / 设计 / Story / 安全 / 交付）
 4. 对每个受影响正式文档填写文档处理决策：新增 / 原文档更新 / 归档 / 不变
 5. 若变更影响 `USE-CASES.md` 或 `REQUIREMENTS.md`，默认要求原文档增量更新、保留旧基线并追加 `## 修订记录`
-6. 判定回退到最小受影响阶段
-7. 更新 `STATE.md`
+6. 若变更影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须把 CR 影响范围内全部 Story 组成一个 LLD 设计批次；批次内全部 LLD 设计和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
+7. 判定回退到最小受影响阶段
+8. 更新 `STATE.md`
 
 ### 文档变更门禁
 

@@ -18,7 +18,7 @@ open_items: 0
 
 > 文件名格式：`STORY-{id}-{story_slug}-LLD.md`，其中 `story_slug` 必须复用对应 Story 卡片中的稳定 slug。
 >
-> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需完成单 Story 或小批次 LLD 确认，并满足 `dev_gate` 后方可进入实现。
+> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需纳入本轮 LLD 设计批次统一确认，并满足 `dev_gate` 后方可进入实现。
 
 ## 1. Goal
 
@@ -135,8 +135,8 @@ open_items: 0
 
 > **CP5 — Story LLD 可实现性门**
 > meta-dev 先写入 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` 自动预检结果。
-> meta-po 再生成并提示用户审查 `checkpoints/CP5-{story_id}-{story_slug}-LLD.md`。
-> 用户确认当前 Story 或小批次 Story 的 LLD 设计后，仍需满足依赖门控与文件所有权门控方可进入实现。
+> meta-po 收齐本轮 LLD 设计批次内全部 Story 的 LLD 和 CP5 自动预检后，再生成并提示用户审查 `checkpoints/CP5-{batch_id}-LLD-BATCH.md`。
+> 用户统一确认本轮批次 LLD 设计后，仍需满足依赖门控与文件所有权门控方可进入实现。
 
 **CP5 checklist 摘要**：
 
@@ -148,16 +148,20 @@ open_items: 0
 | 4 | 接口契约完整 | 待检查 | 第 6 节 |
 | 5 | 测试与 dev_gate 可计算 | 待检查 | 第 10 / 14 节 |
 
-**确认选项**：
-1. ✅ **批准** — LLD 设计合理，允许进入实现
-2. ✏️ **需要修改** — 指出具体修改点后由 meta-dev 更新重提
-3. ❌ **拒绝** — 设计方向有根本问题，需重新设计
+**人工确认回复**：
 
-**Codex 兼容输入**：
-- 首选结构化选择 UI；若当前客户端无法提供上下方向键选择，使用 exact 文本兜底。
-- `1` / `approve` / `通过` = 批准。
-- `2` / `修改: <具体修改点>` = 需要修改。
-- `3` / `reject` / `不通过` = 拒绝。
+请直接回复以下任一整行：
+
+```text
+approve
+修改: <具体修改点>
+reject
+```
+
+- `approve`：LLD 设计合理，允许进入实现。
+- `修改: <具体修改点>`：指出具体修改点后由 meta-dev 更新重提。
+- `reject`：设计方向有根本问题，需重新设计。
+- Codex 历史别名 `1/通过`、`2/修改: ...`、`3/不通过` 仅作兼容解析；新提示不得把多个别名混排为主要选项。
 
 **人工审查结果回填**：
 

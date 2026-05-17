@@ -201,7 +201,7 @@ created_at: ""
 - `scope=project` 且未传 `--component/--content` 时默认安装 `agent`（agents+skills）。
 - legacy `--content all|agents|skills|rules` 仍可用。
 - Codex Skill dry-run 不出现 `.codex/skills` 或 `~/.codex/skills`。
-- 文档明确 Codex 优先结构化选择，exact 文本确认只作兜底，并列出 `1/approve/通过`、`2/修改: ...`、`3/reject/不通过`。
+- 文档明确 Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择，否则默认使用 exact 文本确认；对用户只展示 `approve`、`修改: <具体修改点>`、`reject` 三个推荐回复，历史别名仅作为兼容解析。
 - production 交付路由必须先读取目标 README/docs；无约定时必须等待用户确认。
 
 ### CR-005 专项验证

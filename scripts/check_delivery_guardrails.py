@@ -28,7 +28,13 @@ FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 SKILL_ROOT_ASSET_REF_RE = re.compile(r"<skill-root>/(?P<kind>templates|scripts)/(?P<path>[A-Za-z0-9_./-]+)")
 TEMPLATE_REF_RE = re.compile(r"(?<![A-Za-z0-9_./-])templates/(?P<path>[A-Za-z0-9_./-]+)")
 DELIVERY_SCRIPT_REF_RE = re.compile(r"delivery/scripts/(?P<name>[A-Za-z0-9_.-]+)")
-CODEX_CONFIRMATION_TOKENS = ("结构化选择", "1/approve/通过", "2/修改", "3/reject/不通过")
+CODEX_CONFIRMATION_TOKENS = (
+    "request_user_input",
+    "approve",
+    "修改: <具体修改点>",
+    "reject",
+    "别名",
+)
 DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
 CACHE_SCAN_EXCLUDED_DIRS = {".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
@@ -300,7 +306,9 @@ def collect_cr004_protocol_errors() -> list[str]:
         text = target.read_text(encoding="utf-8")
         missing = [token for token in CODEX_CONFIRMATION_TOKENS if token not in text]
         if missing:
-            errors.append(f"{target.relative_to(ROOT)} missing Codex confirmation tokens: {', '.join(missing)}")
+            errors.append(
+                f"{target.relative_to(ROOT)} missing Codex confirmation protocol tokens: {', '.join(missing)}"
+            )
 
     routing_targets = [
         DELIVERY_ROOT / "agents" / "meta-po.md",

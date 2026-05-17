@@ -56,11 +56,12 @@ canonical role 仍为 `meta-*`，用于状态机、handoff、检查点和审计�
 init（meta-po）                                                   [CP0 自动]
  └─► requirement-clarification（meta-pm：场景发现 → 需求结构化）   [CP1 自动 + CP2 人工]
       └─► solution-design（meta-se：输出 HLD）                     [CP3 人工]
-           └─► story-planning（meta-se 拆解 Story → meta-po 计算 DAG 队列 → meta-dev 并行产出 Story LLD） [CP4 人工 + CP5 滚动确认]
+           └─► story-planning（meta-se 拆解 Story → meta-po 计算 DAG 队列 → meta-dev 并行产出 Story LLD） [CP4 人工 + CP5 批次确认]
                 └─► story-execution（Wave 循环）
-                │    LLD 写作并行：多个 lld-ready Story 可同时起草 LLD
-                │    开发并行：dev-ready Story 在依赖满足、文件无冲突且 CP5 通过后并行实现
-                │    同一 Story 内串行：CP5 LLD 确认 → CP6 开发完成 → CP7 验证完成
+                │    LLD 写作并行：本轮 LLD 设计批次内多个 lld-ready Story 可同时起草 LLD
+                │    LLD 确认批次化：批次内全部 LLD 与 CP5 自动预检完成后，统一人工确认
+                │    开发并行：批次 CP5 已通过、依赖满足且文件无冲突的 dev-ready Story 可并行实现
+                │    同一 Story 内串行：批次 CP5 LLD 确认 → CP6 开发完成 → CP7 验证完成
                 └─► documentation（meta-doc）                      [CP8 人工]
                      └─► delivered
 ```
@@ -151,12 +152,12 @@ init（meta-po）                                                   [CP0 自动]
 - **变更规则**：需求或设计变动必须先创建 `CR-*.md` 再修改正式对象
 - **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前，必须在 CR 中填写文档处理决策（新增 / 原文档更新 / 归档 / 不变）；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
 - **检查点结构**：CP0-CP8 均必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables；自动检查点必须在 `process/checks/CP*.md` 写入逐项结果，人工检查点必须在 `checkpoints/CP*.md` 写入 checklist 和“人工审查结果”。
-- **人工检查点**：所有人工确认统一由 meta-po 发起；发起时必须提示用户 checklist 文件路径（如 `checkpoints/CP3-HLD-REVIEW.md`）。Claude Code 可使用结构化选择，Codex 优先使用结构化选择 UI，无法提供时显式降级为 exact 文本确认（`1/approve/通过`、`2/修改: ...`、`3/reject/不通过`）。用户直接在对话中确认时，meta-po 仍必须回填对应 `checkpoints/CP*.md`。
+- **人工检查点**：所有人工确认统一由 meta-po 发起；发起时必须提示用户 checklist 文件路径（如 `checkpoints/CP3-HLD-REVIEW.md`）。Claude Code 可使用结构化选择；Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择，否则默认使用 exact 文本确认。发起确认时只展示三个推荐回复：`approve`、`修改: <具体修改点>`、`reject`；内部可兼容历史别名 `1/通过`、`2/修改: ...`、`3/不通过`，但不得把多个别名混排成用户必须理解的选项。用户直接在对话中确认时，meta-po 仍必须回填对应 `checkpoints/CP*.md`。
 - **子 agent 调度证据**：meta-po 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created`，不得写成目标 agent 已完成。
 - **inline fallback 门禁**：当前平台无法拉起子 agent 时，meta-po 必须阻断并说明原因；只有用户明确批准后才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。inline fallback 结果必须表述为 meta-po 代执行，不得表述为 meta-dev / meta-qa 独立完成。
 - **HLD 门控**：CP3 自动预检和人工确认未通过前，不得进入 Story 拆解。
 - **Story 计划门控**：CP4 自动预检和人工确认未通过前，不得进入 Story 执行。
-- **Story LLD 门控**：单个 Story 的 CP5 自动预检和人工确认未通过前，不得开始对应 Story 的实现；LLD 可跨 Story 并行写作，开发必须满足 Story DAG、依赖类型、文件所有权和 CP5 门控。
+- **Story LLD 门控**：本轮 LLD 设计批次内全部 Story 的 CP5 自动预检和批次人工确认未通过前，不得开始任何 Story 的实现；LLD 可跨 Story 并行写作，开发必须满足 Story DAG、依赖类型、文件所有权和批次 CP5 门控。标准开发默认以当前 Wave / 调度批次为 LLD 设计批次；变更流程默认以 CR 影响范围为 LLD 设计批次。
 - **编码与验证门控**：Story 实现完成后必须写入 CP6 编码完成检查结果；验证完成后必须写入 CP7 验证完成检查结果。CP6/CP7 必须包含 `Agent Dispatch Evidence`；缺少真实子 agent 证据且没有用户批准的 `inline-fallback` 时不得推进 Story 状态。
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `skills/README.md`
 - **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
@@ -185,7 +186,7 @@ init（meta-po）                                                   [CP0 自动]
 
 - `STORY-*-LLD.md` 必须保持 **14 个可见章节**；`Tier-S` 只允许简化内容深度，不允许压缩章节数量。
 - `tier`、`shared_fragments`、`open_items` 是强输入字段，meta-dev / meta-qa 不得跳过。
-- meta-dev 至少消费：文件影响范围、接口设计、异常处理、测试设计、实施步骤、回滚策略，并在 LLD 确认且 `dev_gate` 满足后优先复用同一子 agent 继续实现。
+- meta-dev 至少消费：文件影响范围、接口设计、异常处理、测试设计、实施步骤、回滚策略，并在 LLD 设计批次统一确认且 `dev_gate` 满足后优先复用同一子 agent 继续实现。
 - meta-qa 至少消费：接口设计、核心流程、测试设计、回滚策略、OPEN/Spike 状态。
 
 ## Review Gate 分派与灰度

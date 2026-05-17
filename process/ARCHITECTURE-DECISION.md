@@ -40,7 +40,7 @@ last_updated: "2026-05-15T00:00:00+08:00"
 | ADR-SP-09 | Codex 上下文控制采用最小 handoff 包而非全量 fork | 默认 `fork_context=false`；只传 STATE 当前片段、当前 CR、当前 Story/Wave、必要设计对象和路径契约，禁止传完整会话历史与全量 stories |
 | ADR-SP-10 | Story 计划确认与 LLD 确认合并为 Story Package 确认 | `meta-se` 产出 Story Package 草案后，由 `meta-dev` 为当前 Wave 产出 LLD 包；meta-po 发起一次合并确认后才允许实现 |
 | ADR-SP-11 | 安装 CLI 使用 `scope-pack install` 与 `--component rules|agent|full` | user scope 默认 `rules`；project scope 默认 `agent`；legacy `--content` 只作兼容入口 |
-| ADR-SP-12 | 平台确认协议保留结构化优先，Codex 文本只作兜底 | Claude Code 与 Codex 均优先结构化选择；Codex 无可选 UI 时才接受 exact 文本 `1/approve/通过`、`2/修改: ...`、`3/reject/不通过` |
+| ADR-SP-12 | 平台确认协议保留结构化优先但 Codex 默认 exact 文本 | Claude Code 优先结构化选择；Codex 仅在当前工具面明确提供可用 `request_user_input` / 选择 UI 时使用结构化选择，否则只向用户展示 `approve`、`修改: <具体修改点>`、`reject` 三个推荐回复，历史别名仅兼容解析 |
 | ADR-SP-13 | 交付出口按 engagement mode 路由 | `meta-self-dev` 写当前仓库 `delivery/`；production 先读目标 README/docs 约定，无约定则提建议并等待确认 |
 
 ## 平台适配差异

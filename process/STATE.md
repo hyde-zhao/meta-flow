@@ -5,9 +5,9 @@ current_phase: "documentation"
 current_agent: "meta-po"
 iteration: 9
 blocked: false
-active_change: "CR-004"
-last_action: "CR-004 已实施并通过 uv lock、scope-pack install dry-run 与 delivery guardrail 验证"
-next_action: "等待人工终验或进入提交/发布准备"
+active_change: "CR-005"
+last_action: "CR-005 已追加人工门禁提示格式整改：Codex 默认 exact 文本，只展示 approve / 修改 / reject 三个推荐回复"
+next_action: "运行 guardrail 验证，等待用户确认 CR-005；CP3/CP4 未因本轮反馈自动批准"
 agent_lifecycle:
   orchestrator_singleton: true
   active_agents: []
@@ -199,7 +199,17 @@ history:
     action: "verify-change-request"
     phase: "story-execution"
     summary: "CR-004：uv lock、scope-pack install help/user default/project default/full/legacy dry-run 与 scripts/check_delivery_guardrails.py 均通过；未保留 .venv 或 __pycache__"
-last_updated: "2026-05-15T00:00:00+08:00"
+  - at: "2026-05-17T00:00:00+08:00"
+    actor: "meta-po"
+    action: "apply-change-request"
+    phase: "story-execution"
+    summary: "CR-005：开发流程与变更流程统一采用 LLD 设计批次；批次内全部 LLD 和 CP5 自动预检完成并统一人工确认后，才允许进入开发"
+  - at: "2026-05-17T00:00:00+08:00"
+    actor: "meta-po"
+    action: "revise-manual-gate-prompt"
+    phase: "documentation"
+    summary: "根据用户反馈与 Codex 官方/GitHub 调研，人工门禁提示改为只展示 approve、修改: <具体修改点>、reject；历史别名仅兼容解析，CP3/CP4 仍待人工确认"
+last_updated: "2026-05-17T00:00:00+08:00"
 ---
 
 <!--

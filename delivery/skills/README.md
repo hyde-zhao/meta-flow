@@ -22,7 +22,7 @@
 | `meta-po` | `init`、状态推进、变更管理、问题分流、并行调度、检查点控制 | `state-router`、`checkpoint-manager`、`change-impact-analysis`、`issue-routing`、`context-handoff`、`review-artifact-protocol` | 推进状态、受理变更、路由问题、装配交接上下文，维护 LLD / Dev / QA 并行队列，生成和收敛 CP0-CP8 检查点，记录子 agent 调度证据，并持有 review gate 共享协议 |
 | `meta-pm` | `requirement-clarification` | `use-case-discovery`、`requirement-clarifier`、`scenario-expansion`、`requirement-extraction`、`scope-normalization`、`checkpoint-manager`、`review-artifact-protocol` | 发现**产物类型感知**场景、执行轻量头脑风暴、识别交付出口、澄清需求歧义、展开测试场景、提取需求、整理需求范围，输出 CP1 / CP2 自动检查结果，并在 review_mode 复用统一评审协议 |
 | `meta-se` | `solution-design`、`story-planning` | `hld-designer`、`phase-designer`、`dependency-mapper`、`wave-planner`、`story-manager`、`dag-validator`、`checkpoint-manager`、`review-artifact-protocol` | 输出 HLD、拆解 Story、建立依赖类型和文件所有权并校验计划，输出 CP3 / CP4 自动检查结果，产出可供 meta-po 计算并行队列的 Story 草案 |
-| `meta-dev` | `story-execution` | `lld-designer`、`checkpoint-manager`、`claude-agent-writer`、`review-artifact-protocol` | 按 Story 输出 LLD 和 CP5 自动预检，确认后在 `dev_gate` 满足时实现并输出 CP6 编码完成结果，并在可行性审查时复用统一评审协议 |
+| `meta-dev` | `story-execution` | `lld-designer`、`checkpoint-manager`、`claude-agent-writer`、`review-artifact-protocol` | 按 Story 输出 LLD 和 CP5 自动预检，等待本轮 LLD 设计批次统一确认后，在 `dev_gate` 满足时实现并输出 CP6 编码完成结果，并在可行性审查时复用统一评审协议 |
 | `meta-qa` | `ready-for-verification` 后 | `dangerous-command-scan`、`platform-validator`、`package-builder`、`coverage-checker`、`runtime-risk-review`、`permission-boundary-check`、`context-manifest-builder`、`checkpoint-manager`、`review-artifact-protocol` | 执行质量验证、安全审计、安装脚本与安装结构校验，输出 CP7 / CP8 检查结果，覆盖 `meta-flow install` 组件默认值、Codex 确认协议和交付路由 |
 | `meta-doc` | `documentation` | `workflow-renderer`、`review-artifact-protocol` | 将已验证产物组织为可读交付文档，说明 CP0-CP8 检查点文件路径和用户操作，并在 review_mode 复用统一评审协议 |
 | `meta-dm`（已废弃） | 历史 Story 规划 | `phase-designer`、`wave-planner`、`dependency-mapper`、`story-manager`、`dag-validator` | 仅供历史参考，现由 `meta-se` 接管 |
@@ -48,7 +48,7 @@
 | `wave-planner` | `meta-se` | 规划 LLD / Dev / QA 并行策略、依赖类型、dev_gate 和文件所有权门控 |
 | `story-manager` | `meta-se` | 生成 Story 卡片、Backlog、Story 状态汇总，并维护依赖类型与文件所有权字段 |
 | `dag-validator` | `meta-se` | 校验计划依赖图 |
-| `lld-designer` | `meta-dev` | Story LLD 设计；输出后等待单 Story 或小批次确认，不直接进入实现 |
+| `lld-designer` | `meta-dev` | Story LLD 设计；输出后等待本轮 LLD 设计批次统一确认，不直接进入实现 |
 | `claude-agent-writer` | `meta-dev` | Claude Agent 产物规范 |
 | `dangerous-command-scan` | `meta-qa` | 危险命令与注入风险扫描 |
 | `platform-validator` | `meta-qa` | 基于 `delivery/doc/PLATFORM-CONTRACTS.yaml` 校验安装目标、DryRun 和 Codex 禁止路径 |
@@ -99,7 +99,7 @@
 | `CP0-CP8 检查结果` | `checkpoint-manager` | `state-router`、`meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | 自动检查结果写 `process/checks/CP*.md`，人工审查稿写 `checkpoints/CP*.md`；state-router 以结果文件判定是否可推进 |
 | `STATE.md` | `state-router` | `checkpoint-manager`、`context-handoff` | `STATE.md.orchestrator_session` 保存唯一 `meta-po` 会话、人工确认恢复和 recovery 证据；`STATE.md.checkpoints` 保存每个 CP 的结果文件路径和同步状态；`agent_lifecycle.active_agents` 保存功能子 agent 调度证据 |
 | `STORY-*.md` | `story-manager` | `state-router`、`wave-planner`、`meta-dev`、`meta-po` | Story 卡片包含依赖类型、file_ownership、lld_gate、dev_gate，是并行队列计算输入 |
-| `STORY-*-LLD.md` | `lld-designer` | `meta-dev`、`meta-po`、`meta-qa` | LLD 由 `lld-designer` 模板持有；单 Story 或小批次确认后，开发与验证均直接消费该工件 |
+| `STORY-*-LLD.md` | `lld-designer` | `meta-dev`、`meta-po`、`meta-qa` | LLD 由 `lld-designer` 模板持有；本轮 LLD 设计批次统一确认后，开发与验证均直接消费该工件 |
 
 ## Reviewer Dispatch
 

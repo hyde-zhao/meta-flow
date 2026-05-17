@@ -54,7 +54,7 @@ status: draft
 | `runtime` 依赖 | 是 | 默认否 | 可提前设计，但开发需等待上游 verified |
 | `file-conflict` 依赖 | 是 | 否 | LLD 可写合并策略，开发必须串行 |
 | shared 文件无 `merge_owner` | 是 | 否 | 缺少合并责任人 |
-| 修改同一 schema / contract | 小批次确认 | 否 | 需先收敛契约 |
+| 修改同一 schema / contract | 纳入同一 LLD 设计批次确认 | 否 | 需先收敛契约 |
 
 ## 输出字段
 

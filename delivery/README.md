@@ -21,7 +21,7 @@ CP6 / CP7 必须包含 `Agent Dispatch Evidence`。handoff 文件只表示交接
 | CP2 | 需求基线门 | 自动预检 + 人工 |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 |
 | CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 |
-| CP5 | Story LLD 可实现性门 | 滚动自动预检 + 人工 |
+| CP5 | Story LLD 可实现性门 | 批次自动预检 + 人工 |
 | CP6 | Story 编码完成门 | 滚动自动 |
 | CP7 | Story 验证完成门 | 滚动自动 |
 | CP8 | 交付就绪门 | 自动预检 + 人工 |

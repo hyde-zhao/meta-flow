@@ -67,9 +67,17 @@ parallel_execution:
   max_parallel_lld: 3
   max_parallel_dev: 2
   max_parallel_qa: 2
+  lld_design_batch:
+    batch_id: ""
+    source: "wave|change|manual"
+    stories: []
+    status: "not-started|designing|ready-for-review|approved|blocked"
+    manual_review: ""
+    basis: ""
   lld_ready: []
   lld_running: []
   lld_review: []
+  lld_batch_review: []
   dev_ready: []
   dev_running: []
   verify_ready: []
@@ -110,10 +118,10 @@ checkpoints:
     manual_review: "checkpoints/CP4-STORY-PLAN-REVIEW.md"
     last_result: ""
   cp5_story_lld_review:
-    type: "rolling_auto_then_manual"
-    status: "per_story"
+    type: "batch_auto_then_manual"
+    status: "per_batch"
     auto_result_pattern: "process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md"
-    manual_review_pattern: "checkpoints/CP5-{story_id}-{story_slug}-LLD.md"
+    manual_review_pattern: "checkpoints/CP5-{batch_id}-LLD-BATCH.md"
     results: []
   cp6_coding_done:
     type: "rolling_auto"
@@ -145,15 +153,15 @@ last_updated: ""
 | requirement-clarification | CP1 自动检查通过 + CP2 人工确认通过 | solution-design | CP1 用户场景完备门；CP2 需求基线门 |
 | solution-design | CP3 人工确认通过 | story-planning | CP3 HLD 架构评审门 |
 | story-planning | CP4 人工确认通过，Story DAG 与并行计划可校验 | story-execution | CP4 Story 拆解与并行安全门 |
-| story-execution | 每个目标 Story 通过 CP5/CP6/CP7 并到达 verified | 下一调度批次或 documentation | CP5 LLD、CP6 编码完成、CP7 验证完成滚动检查 |
+| story-execution | 每个目标 Story 通过批次 CP5、CP6、CP7 并到达 verified | 下一调度批次或 documentation | CP5 LLD 批次确认、CP6 编码完成、CP7 验证完成检查 |
 | documentation | CP8 自动预检与人工终验通过 | delivered | CP8 交付就绪门 |
 
 Story 生命周期（每个 Story 独立）：
-  draft → lld-ready → lld-in-progress → lld-ready-for-review → lld-approved → dev-ready → in-development → ready-for-verification → verified → done
+  draft → lld-ready → lld-in-progress → lld-ready-for-review → lld-batch-ready-for-review → lld-approved → dev-ready → in-development → ready-for-verification → verified → done
   兼容旧状态：package-draft≈lld-ready，package-ready-for-review≈lld-ready-for-review，package-approved≈dev-ready
-  同一 Story：LLD 确认 → 开发 → 验证 严格串行
-  LLD 写作可跨 Story 并行；开发必须满足 dev_gate、依赖类型、文件所有权和 CP5 确认
-  Wave 是调度分组，不是唯一门控；真正门控以 Story DAG 为准
+  同一 Story：LLD 批次确认 → 开发 → 验证 严格串行
+  LLD 写作可跨 Story 并行；开发必须满足 dev_gate、依赖类型、文件所有权和批次 CP5 确认
+  Wave 是默认 LLD 设计批次；CR 触发时，CR 影响范围是默认 LLD 设计批次；真正门控以 Story DAG 为准
 
 注：
 - packaging 不再是独立状态，由 meta-qa 在 story verified 后自动执行
