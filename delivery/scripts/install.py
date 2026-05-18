@@ -9,16 +9,16 @@ Installs workflow assets from the canonical delivery directories:
 
 Supports two run modes:
   1. From project root (delivery/ is a subdirectory):
-       uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
+       uv run --python 3.11 python delivery/scripts/install.py --platform claude
   2. From delivery/ as root (delivery pushed as standalone repo):
-       python scripts/install.py --platform claude-code
+       python scripts/install.py --platform claude
 
 Examples:
-  uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
+  uv run --python 3.11 python delivery/scripts/install.py --platform claude
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user
   meta-flow install --platform codex --scope user --component rules
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --project-dir D:\\work\\demo
-  uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
+  uv run --python 3.11 python delivery/scripts/install.py --platform claude --dry-run
   uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user --uninstall
 """
 
@@ -37,7 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VALID_PLATFORMS = ("claude-code", "codex", "openclaw")
+VALID_PLATFORMS = ("claude", "codex", "openclaw")
+PLATFORM_ALIASES = {"claude-code": "claude"}
 VALID_SCOPES = ("project", "user")
 VALID_CONTENTS = ("all", "agents", "skills", "rules")
 VALID_COMPONENTS = ("rules", "agent", "full")
@@ -128,6 +129,19 @@ class Transaction:
 def fail(message: str) -> None:
     print(f"[ERROR] {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def normalize_platform(platform: str) -> str:
+    normalized = PLATFORM_ALIASES.get(platform, platform)
+    if normalized not in VALID_PLATFORMS:
+        fail(f"未知平台: {platform}。支持的平台: {', '.join(VALID_PLATFORMS)}")
+    return normalized
+
+
+def platform_manifest_names(platform: str) -> set[str]:
+    names = {platform}
+    names.update(alias for alias, canonical in PLATFORM_ALIASES.items() if canonical == platform)
+    return names
 
 
 def parse_csv(value: str | None) -> list[str]:
@@ -409,7 +423,7 @@ def resolve_workspace_root(project_dir: str | None, scope: str) -> Path:
 def resolve_user_home_root(platform: str) -> Path:
     home = Path.home()
     roots = {
-        "claude-code": home / ".claude",
+        "claude": home / ".claude",
         "codex": home / ".codex",
         "openclaw": home / ".openclaw",
     }
@@ -736,7 +750,7 @@ def copy_skill_tree(src_dir: Path, dest_dir: Path, transaction: Transaction, dry
 
 
 def counterpart_paths(platform: str, workspace_root: Path, contracts: dict[str, object]) -> dict[str, Path]:
-    if platform not in {"codex", "claude-code"}:
+    if platform not in {"codex", "claude"}:
         return {}
     return {
         "agent-user": target_path(contracts, platform, "user", "agents", workspace_root),
@@ -799,13 +813,13 @@ def runtime_override_warnings(platform: str, scope: str, workspace_root: Path, c
         ]:
             if candidate.exists():
                 warnings.append(f"检测到可能覆盖用户级 Codex 安装的项目层对象: {candidate}")
-    if platform == "claude-code":
+    if platform == "claude":
         for candidate in [
             workspace_root / "CLAUDE.md",
             workspace_root / "CLAUDE.local.md",
-            target_path(contracts, "claude-code", "project", "rules", workspace_root),
-            target_path(contracts, "claude-code", "project", "agents", workspace_root),
-            target_path(contracts, "claude-code", "project", "skills", workspace_root),
+            target_path(contracts, "claude", "project", "rules", workspace_root),
+            target_path(contracts, "claude", "project", "agents", workspace_root),
+            target_path(contracts, "claude", "project", "skills", workspace_root),
         ]:
             if candidate.exists():
                 warnings.append(f"检测到可能覆盖用户级 Claude Code 安装的项目层对象: {candidate}")
@@ -830,7 +844,7 @@ def manifest_entry_matches(existing: object, entry: dict[str, object]) -> bool:
     if not isinstance(existing, dict):
         return False
     return (
-        existing.get("platform") == entry["platform"]
+        existing.get("platform") in platform_manifest_names(str(entry["platform"]))
         and existing.get("scope") == entry["scope"]
         and existing.get("workspace_root") == entry["workspace_root"]
     )
@@ -861,7 +875,7 @@ def install_rules(
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
         return
 
-    if platform == "claude-code" and layout.claude_rule:
+    if platform == "claude" and layout.claude_rule:
         dest = target_path(contracts, platform, scope, "rules", workspace_root)
         upsert_managed_block(dest, layout.claude_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated)
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
@@ -887,7 +901,7 @@ def install_agents(
     if not selected_agents:
         fail(f"{platform} 平台没有可安装的 canonical agent。")
 
-    if platform == "claude-code":
+    if platform == "claude":
         base_dir = target_path(contracts, platform, scope, "agents", workspace_root)
         for agent in selected_agents:
             dest = base_dir / f"{agent.name}.md"
@@ -980,7 +994,7 @@ def uninstall_platform(
         (
             entry
             for entry in installs
-            if entry.get("platform") == platform
+            if entry.get("platform") in platform_manifest_names(platform)
             and entry.get("scope") == scope
             and entry.get("workspace_root") == workspace_root_text
             and entry.get("status") == "installed"
@@ -1004,14 +1018,14 @@ def uninstall_platform(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install Meta Flow assets into a platform directory.")
-    parser.add_argument("--platform", required=True, choices=VALID_PLATFORMS, help="目标平台")
+    parser.add_argument("--platform", required=True, help="目标平台：claude|codex|openclaw")
     parser.add_argument("--scope", default="project", choices=VALID_SCOPES, help="安装范围")
     parser.add_argument("--project-dir", default=None, help="WORKSPACE_ROOT；project scope 未提供时交互确认当前目录或输入目录")
     parser.add_argument(
         "--component",
         default=None,
         choices=VALID_COMPONENTS,
-        help="安装组件：rules=规则文件，agent=agents+skills，full=rules+agents+skills；未提供时 user 默认 rules，project 默认 agent",
+        help="安装组件：rules=规则文件，agent=agents+skills，full=rules+agents+skills；未提供时 user 默认 rules，project 默认 full",
     )
     parser.add_argument(
         "--content",
@@ -1041,7 +1055,7 @@ def resolve_install_selection(args: argparse.Namespace) -> tuple[bool, bool, boo
             "rules": "rules",
         }[args.content]
     else:
-        component = "rules" if args.scope == "user" else "agent"
+        component = "rules" if args.scope == "user" else "full"
 
     install_rules_enabled = component in ("rules", "full")
     install_agents_enabled = component in ("agent", "full")
@@ -1062,6 +1076,7 @@ def resolve_install_selection(args: argparse.Namespace) -> tuple[bool, bool, boo
 
 def main() -> None:
     args = parse_args()
+    args.platform = normalize_platform(args.platform)
     workspace_root = resolve_workspace_root(args.project_dir, args.scope)
     repo_root = script_repo_root(Path(__file__))
     layout = detect_source_layout(repo_root)

@@ -67,8 +67,8 @@ status: active
 | `init` | `process/checks/CP0-REQUEST-INTAKE.md` 结论为 `PASS` 或 `WAIVED` | `requirement-clarification` | `meta-pm` |
 | `requirement-clarification` | CP1 自动检查通过，CP2 自动预检通过且 `checkpoints/CP2-REQUIREMENTS-BASELINE.md` 人工结论为 `approved` | `solution-design` | `meta-se` |
 | `solution-design` | CP3 自动预检通过且 `checkpoints/CP3-HLD-REVIEW.md` 人工结论为 `approved` | `story-planning` | `meta-se` |
-| `story-planning` | CP4 自动预检通过且 `checkpoints/CP4-STORY-PLAN-REVIEW.md` 人工结论为 `approved` | `story-execution` | `meta-dev` |
-| `story-execution` | 当前 DAG 中每个目标 Story 均通过批次 CP5、CP6、CP7，并到达 `verified`，且 CP6/CP7 包含 Agent Dispatch Evidence | 下一调度批次或 `documentation` | `meta-dev` / `meta-qa` / `meta-doc` |
+| `story-planning` | CP4 自动预检通过且 `checkpoints/CP4-STORY-PLAN-REVIEW.md` 人工结论为 `approved`，全部目标 Story 通过 CP5 自动预检且 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` 人工结论为 `approved` | `story-execution` | `meta-dev` |
+| `story-execution` | 全部目标 Story 均通过 CP6、CP7，并到达 `verified`，且 CP6/CP7 包含 Agent Dispatch Evidence | `documentation` | `meta-dev` / `meta-qa` / `meta-doc` |
 | `documentation` | CP8 自动预检通过且 `checkpoints/CP8-DELIVERY-READINESS.md` 人工结论为 `approved` | `delivered` | `meta-po` |
 | `delivered` | 只读归档 | — | — |
 
@@ -98,7 +98,7 @@ status: active
 | CP2 | `process/checks/CP2-REQUIREMENTS-BASELINE.md` + `checkpoints/CP2-REQUIREMENTS-BASELINE.md` | 自动预检通过且人工结论 `approved` |
 | CP3 | `process/checks/CP3-HLD-CONSISTENCY.md` + `checkpoints/CP3-HLD-REVIEW.md` | 自动预检通过且人工结论 `approved` |
 | CP4 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md` + `checkpoints/CP4-STORY-PLAN-REVIEW.md` | 自动预检通过且人工结论 `approved` |
-| CP5 | 批次内每个 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` + `checkpoints/CP5-{batch_id}-LLD-BATCH.md` | 批次内全部 Story 自动预检通过且批次人工结论 `approved` |
+| CP5 | 全部目标 Story 的 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` + `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 自动预检通过且全量人工结论 `approved` |
 | CP6 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | 当前 Story 结论为 `PASS` 或 `WAIVED`，且 meta-dev 调度证据通过 |
 | CP7 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | 当前 Story 结论为 `PASS` 或 `WAIVED`，且 meta-qa 调度证据通过 |
 | CP8 | `process/checks/CP8-DELIVERY-READINESS.md` + `checkpoints/CP8-DELIVERY-READINESS.md` | 自动预检通过且人工结论 `approved` |
@@ -107,14 +107,14 @@ status: active
 
 ### 5. Story 并行调度队列
 
-story-execution 阶段必须维护 `parallel_execution`。标准开发时，`lld_design_batch` 默认等于当前 Wave / 调度批次；CR 触发时，`lld_design_batch` 默认等于 CR 影响范围内全部受影响 Story。
+story-planning 和 story-execution 阶段必须维护 `parallel_execution`。标准开发时，`lld_design_batch` 必须覆盖全部目标 Story，并在 story-planning 内完成全量 CP5 确认；CR 触发时，`lld_design_batch` 默认等于 CR 影响范围内全部受影响 Story。Wave 只用于进入 story-execution 后的开发/验证调度。
 
-1. `lld_design_batch`：本轮必须先完成 LLD 设计的 Story 集合，必须写明 `batch_id`、`source=wave|change`、Story 列表、批次边界依据和阻塞项。
-2. `lld_ready`：批次内 Story 边界稳定、HLD/ADR 已确认、LLD 输入满足且没有 LLD confirmed=true。
+1. `lld_design_batch`：本轮必须先完成 LLD 设计的 Story 集合；标准开发使用 `batch_id=all-stories`、`source=all-stories` 并列出全部目标 Story，CR 使用 `source=change` 并列出全部受影响 Story。
+2. `lld_ready`：全量 LLD 设计批次内 Story 边界稳定、HLD/ADR 已确认、LLD 输入满足且没有 LLD confirmed=true。
 3. `lld_running`：正在写 LLD 的 Story，数量不得超过 `max_parallel_lld`。
-4. `lld_review`：LLD 已输出，等待批次内其他 Story 完成 LLD 与 CP5 自动预检；不得因单个 Story 已就绪就进入开发。
-5. `lld_batch_review`：批次内全部 Story 均已输出 LLD 和 CP5 自动预检，等待 `checkpoints/CP5-{batch_id}-LLD-BATCH.md` 人工确认。
-6. `dev_ready`：批次 CP5 人工确认 approved，当前 Story LLD confirmed=true，`dev_gate` 满足，且 `file_ownership.primary` 不与 `dev_running` 冲突。
+4. `lld_review`：LLD 已输出，等待全部目标 Story 完成 LLD 与 CP5 自动预检；不得因单个 Story 或单个 Wave 已就绪就进入开发。
+5. `lld_batch_review`：全部目标 Story 均已输出 LLD 和 CP5 自动预检，等待 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` 人工确认。
+6. `dev_ready`：进入 story-execution 后，全量 CP5 人工确认 approved，当前 Story 所在 Wave 可执行，当前 Story LLD confirmed=true，`dev_gate` 满足，且 `file_ownership.primary` 不与 `dev_running` 冲突。
 7. `dev_running`：正在实现的 Story，数量不得超过 `max_parallel_dev`。
 8. `verify_ready`：开发完成并进入 `ready-for-verification` 的 Story。
 9. `verify_running`：正在验证的 Story，数量不得超过 `max_parallel_qa`。
@@ -227,9 +227,9 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 
 ## Gotchas
 
-- `story-execution` 是阶段状态，不替代单个 Story 的生命周期；Story 状态仍以 `story-manager` 维护的卡片为准
-- LLD 可以提前并行写，但开发不能绕过批次 CP5 人工确认和 `dev_gate`；特别是 `runtime` 依赖默认等上游 `verified`
-- 同一 Wave 内也可能因文件冲突串行；不同 Wave 的 Story 若依赖和文件所有权满足，也可以提前写 LLD
+- `story-execution` 是开发/验证阶段状态，不替代单个 Story 的生命周期；Story 状态仍以 `story-manager` 维护的卡片为准
+- LLD 必须在 story-planning 内覆盖全部目标 Story 后统一确认，开发不能绕过全量 CP5 人工确认和 `dev_gate`；特别是 `runtime` 依赖默认等上游 `verified`
+- 同一 Wave 内也可能因文件冲突串行；不同 Wave 的 Story 可以提前写 LLD，但不得在全量 CP5 通过前进入开发
 - 当存在活跃 `CR-*` 时，应优先收敛变更影响，再判断是否允许推进
 - 当 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计时，必须先形成 CR 影响范围的 `lld_design_batch`，批次确认前不得进入开发
 - 首次初始化时只允许从 `skills/state-router/templates/STATE-TEMPLATE.md` 复制，不允许凭空脑补字段

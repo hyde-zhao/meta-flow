@@ -3,7 +3,7 @@ name: lld-designer
 description: >-
   当某个 Story 在开发前需要落地为 Low-Level Design（LLD）时使用。
   输出模块拆分、文件影响范围、数据模型、接口、流程、异常处理、测试设计、实施步骤、
-  风险、发布与回滚策略，并交由本轮 LLD 设计批次统一确认后再进入实现。触发词包括：LLD、详细设计、实现设计、Story 设计。
+  风险、发布与回滚策略，并交由全部目标 Story 的 LLD 统一确认后再进入实现。触发词包括：LLD、详细设计、实现设计、Story 设计。
 argument-hint: "必填：Story ID；可选：Story 名称 / slug、目标平台或技术栈"
 user-invokable: true
 status: active
@@ -11,7 +11,7 @@ status: active
 
 ## 目标
 
-基于 Story 卡片、已确认的 HLD、架构约束、依赖类型和文件所有权，输出可直接指导编码、评审与验证的 Story 级 LLD，并在本轮 LLD 设计批次统一确认前停止，不进入实现。
+基于 Story 卡片、已确认的 HLD、架构约束、依赖类型和文件所有权，输出可直接指导编码、评审与验证的 Story 级 LLD，并在全部目标 Story 的 LLD 统一确认前停止，不进入实现。
 
 ## 适用场景
 
@@ -75,7 +75,7 @@ status: active
 
 1. 复用 Story 卡片中的 `story_slug`，写入 `process/stories/STORY-{id}-{story_slug}-LLD.md`。
 2. 将 Story 推进到 `lld-ready-for-review`。
-3. 停止在本轮 LLD 设计批次统一确认前，不进入实现。
+3. 停止在全部目标 Story 的 LLD 统一确认前，不进入实现。
 
 ## 输出文件 / 输出模板
 
@@ -86,7 +86,7 @@ status: active
 ## 约束
 
 - 14 个章节必须与 `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` 一一对应
-- LLD `confirmed=false`、批次 CP5 人工确认未通过、`dev_gate` 未满足或文件所有权冲突时不得进入实现
+- LLD `confirmed=false`、全量 CP5 人工确认未通过、`dev_gate` 未满足或文件所有权冲突时不得进入实现
 - 不超出当前 Story 范围
 - 发现未决技术点时，必须输出 `OPEN` 或 Spike，禁止伪确定
 - 若模板章节与说明冲突，以模板契约为准同步修正

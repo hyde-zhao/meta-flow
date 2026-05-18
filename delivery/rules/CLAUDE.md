@@ -75,8 +75,8 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 1. **澄清锁**：CP2 需求基线门未通过前，不得输出正式设计对象
 2. **HLD 锁**：CP3 HLD 架构评审门未通过前，不得进入 Story 拆解
-3. **Story LLD 锁**：Story 未进入 `lld-ready` / `package-draft` 等待设计状态前，不得开始 LLD 设计
-4. **Story 开发锁**：本轮 LLD 设计批次的 CP5 Story LLD 可实现性门未通过、`dev_gate` 未满足、或文件所有权冲突时，不得开始任何 Story 实现
+3. **Story LLD 锁**：CP4 Story 计划人工确认未通过前，不得开始全量 LLD 设计；Story 未进入 `lld-ready` / `package-draft` 等待设计状态前，不得开始对应 Story 的 LLD 设计
+4. **Story 开发锁**：全部目标 Story 的 CP5 Story LLD 可实现性门未通过、尚未进入 `story-execution`、当前 Wave 不可执行、`dev_gate` 未满足、或文件所有权冲突时，不得开始任何 Story 实现
 5. **验证锁**：没有 `process/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
 6. **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
 7. **禁止越级改写**：`meta-dev` 不修改 REQUIREMENTS.md、HLD.md；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
@@ -96,7 +96,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 21. **平台契约优先**：涉及安装路径、schema 或发现机制时，`delivery/doc/PLATFORM-CONTRACTS.yaml` 是路径真相源；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
 22. **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
 23. **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前必须在 CR 中填写文档处理决策；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
-24. **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；user scope 默认 `rules`，project scope 默认 `agent`；legacy `--content all|agents|skills|rules` 仅作兼容入口
+24. **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
 25. **Codex 生命周期**：Codex 下同一工作流只允许 1 个 `meta-po` 子 agent；同角色同任务优先复用已有子 agent，检查点或交接完成后及时关闭；发现两个活动 `meta-po` 时必须阻断推进并要求用户选择保留线程
 26. **检查点文件优先**：推进阶段前必须读取对应 `process/checks/CP*.md` 与 `checkpoints/CP*.md`；不能只看产物 frontmatter 的 `confirmed=true`
 27. **人工审查回填**：meta-po 发起人工检查时必须提示 checklist 文件路径；用户直接对话确认后，仍必须回填对应 `checkpoints/CP*.md` 的“人工审查结果”
@@ -112,7 +112,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 | Story LLD 可实现性门 | 批次自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{batch_id}-LLD-BATCH.md` |
+| CP5 | Story LLD 可实现性门 | 全量自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` |
 | CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
@@ -125,13 +125,18 @@ Claude Code 可继续使用结构化选择。Codex 只有在当前工具面明�
 
 ## 并行执行（Complex 模式）
 
+Claude Code 全局规则不复制完整工作流状态机；完整状态机以 `AGENTS.md`、`meta-po` 和 `state-router` 为准。本文件只保留执行边界摘要：
+
+- `story-planning`：CP4 通过后，完成全部目标 Story 的 LLD 写作、CP5 自动预检和 CP5 全量人工确认
+- `story-execution`：进入时全量 CP5 必须已通过；本阶段只按 Wave 调度开发与验证，不再进行 LLD 写作
+
 Complex 模式下，LLD 写作、开发和验证均按 Story DAG 队列并行调度，但同一 Story 必须严格按：
 
-`批次 CP5 LLD 确认 → CP6 开发实现完成 → CP7 验证完成`
+`全量 CP5 LLD 确认 → CP6 开发实现完成 → CP7 验证完成`
 
 顺序推进。
 
-LLD 写作可以按 Story 并行，但人工确认必须按本轮 LLD 设计批次统一发起。标准开发默认以当前 Wave / 调度批次为批次；变更流程默认以 CR 影响范围为批次。批次内全部 LLD 与 CP5 自动预检完成前，不得启动任何 Story 开发。
+LLD 写作必须覆盖全部目标 Story，且可以按 Story 并行；人工确认必须等全部目标 Story 的 LLD 与 CP5 自动预检完成后统一发起。标准开发默认以全部目标 Story 为 LLD 设计批次；变更流程默认以 CR 影响范围为批次。全量 CP5 通过前，不得启动任何 Story 开发；通过后按 Wave、依赖类型和文件所有权调度开发。
 
 默认并发上限：`max_parallel_lld=3`、`max_parallel_dev=2`、`max_parallel_qa=2`。开发并行必须同时满足依赖类型门控和文件所有权门控；`runtime` 依赖默认等待上游 `verified`，`file-conflict` 依赖默认串行。
 

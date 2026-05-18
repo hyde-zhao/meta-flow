@@ -50,7 +50,7 @@ description: "Meta Flow 元工作流的主编排器（产品负责人）。负�
 2. `meta-po` 不得递归拉起另一个 `meta-po`；下游只允许按需唤醒 `meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`。
 3. 唤醒下游前必须维护 `STATE.md.agent_lifecycle.active_agents`，字段至少包含 `role`、`agent_id`、`thread_id`、`workflow_id`、`change_id`、`story_id`、`wave_id`、`handoff_path`、`status`、`evidence`、`tool_name`、`reusable`、`spawned_at`、`resumed_at`、`last_seen_at`、`completed_at`、`closed_at`。
 4. 同一 `workflow_id/change_id/story_id/wave_id` 下，同角色 agent 必须优先 `resume_agent` 或 `send_input`，不得重复 `spawn_agent`。
-5. `meta-pm`、`meta-se`、`meta-doc` 在交付阶段产物后关闭；`meta-dev` 在 Story LLD 交付后暂停，等待本轮 LLD 设计批次统一确认；批次内全部 Story 进入 `dev-ready` 后优先复用原 LLD 线程实现，实现交接 `meta-qa` 后关闭；`meta-qa` 在验证报告和安装回归交付后关闭。
+5. `meta-pm`、`meta-se`、`meta-doc` 在交付阶段产物后关闭；`meta-dev` 在 Story LLD 交付后暂停，等待全部目标 Story 的 LLD 设计统一确认；全量 LLD 确认后按 Wave 调度进入 `dev-ready` 的 Story，并优先复用原 LLD 线程实现，实现交接 `meta-qa` 后关闭；`meta-qa` 在验证报告和安装回归交付后关闭。
 6. Codex 下默认不 fork 全量上下文；只有并行收益明确且不阻塞当前关键路径时才允许 fork。普通阶段交接必须通过 `context-handoff` 生成最小上下文包。
 7. 推荐 Codex 运行配置：`agents.max_depth = 1`、`agents.max_threads = 3~4`，并按模型窗口设置 `model_auto_compact_token_limit`；这些是运行建议，不替代 `STATE.md` 中的生命周期记录。
 
@@ -113,7 +113,7 @@ Codex 调度证据中 `agent_name` 可记录命中的 nickname，但 `role` 必�
 
 - `process/STATE.md` 中当前阶段、active CR、当前 Wave / Story、agent registry 摘要
 - 当前阶段正式对象，例如 `REQUEST.md`、`USE-CASES.md`、`REQUIREMENTS.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`
-- 当前 Story 卡片、当前 Story LLD 与 CP5/CP6/CP7 检查结果（仅 story-execution）
+- 当前 Story 卡片、当前 Story LLD 与 CP5/CP6/CP7 检查结果（story-planning / story-execution）
 - `delivery/doc/PLATFORM-CONTRACTS.yaml`（仅涉及平台路径、安装或发现机制时）
 
 禁止默认传入历史草稿、失败轮次、无关 Story、完整会话 transcript 或其它 agent 的推理过程。
@@ -160,8 +160,8 @@ meta-po 在 init / requirement-clarification 早期必须判定交付出口：
 
 ### story-planning / story-execution 交接边界
 
-- `story-planning`：只有 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 Story 卡片收敛后，才允许激活首个 Wave。
-- `story-execution`：本轮调度范围内的 Story 必须先统一完成 LLD 设计与 CP5 批量确认，再允许任何 Story 进入实现；Wave 内可并行，Wave 间必须串行。
+- `story-planning`：覆盖 Story 拆解、全量 LLD 设计与 CP5 全量人工确认。只有 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml`、全部 Story 卡片、全部 Story LLD、CP5 自动预检和 CP5 全量人工确认均收敛后，才允许进入 `story-execution`。
+- `story-execution`：进入时全部目标 Story 的 LLD 必须已确认；本阶段只按 `DEVELOPMENT-PLAN.yaml` 的 Wave 顺序调度开发与验证，同一 Wave 内可并行拉起 meta-dev，Story 开发完成后立即拉起 meta-qa 验证。
 
 ---
 
@@ -205,14 +205,14 @@ meta-po 在 init / requirement-clarification 早期必须判定交付出口：
 
 ---
 
-## 状态机（8 状态）
+## 状态机（7 状态）
 
 ```
 init
  └─► requirement-clarification（meta-pm）
       └─► solution-design（meta-se：输出 HLD）
-           └─► story-planning（meta-se：拆解 Story 与开发计划）
-                └─► story-execution（Wave 循环，含每个 Story 的 LLD 审核）
+           └─► story-planning（meta-se：拆解全部 Story 与开发计划）
+                └─► story-execution（Wave 开发/验证循环）
                      └─► documentation（meta-doc）
                           └─► delivered
 ```
@@ -223,11 +223,11 @@ init
 |---------|---------|---------|-----------|--------|
 | `init` | CP0 自动检查通过 | `requirement-clarification` | meta-pm | **CP0 原始请求受理门** |
 | `requirement-clarification` | CP1 自动检查通过 + CP2 自动预检通过 + CP2 人工确认通过 | `solution-design` | meta-se | **CP1 用户场景完备门；CP2 需求基线门** |
-| `solution-design` | `HLD.md` 已生成且 CP3 自动预检通过 | — | — | **CP3 HLD 架构评审门** |
-| `solution-design`（HLD 已确认） | CP3 人工确认通过 | `story-planning` | meta-se | — |
-| `story-planning` | CP4 自动预检和人工确认通过 | `story-execution` | meta-dev | **CP4 Story 拆解与并行安全门** |
-| `story-execution` | 目标 Story 均通过 CP5/CP6/CP7 且 `status=verified` | 下一调度批次或 `documentation` | meta-dev / meta-qa / meta-doc | **CP5/CP6/CP7 滚动门禁** |
-| `documentation` | CP8 自动预检和人工终验通过 | `delivered` | — | **CP8 交付就绪门** |
+| `solution-design` | CP3 自动预检通过 + CP3 人工确认通过 | `story-planning` | meta-se | **CP3 HLD 架构评审门** |
+| `story-planning` | CP4 自动预检和人工确认通过 + 全部目标 Story 通过 CP5 自动预检和全量人工确认 | `story-execution` | meta-dev | **CP4 Story 拆解与并行安全门；CP5 全量 LLD 可实现性门** |
+| `story-execution` | 全部目标 Story 均通过 CP6/CP7 且 `status=verified`，CP6/CP7 含 Agent Dispatch Evidence | `documentation` | meta-dev / meta-qa / meta-doc | **CP6/CP7 滚动门禁** |
+| `documentation` | CP8 自动预检和人工终验通过 | `delivered` | meta-po | **CP8 交付就绪门** |
+| `delivered` | 只读归档；除用户发起 CR 或新工作流外不得继续推进 | — | — | — |
 
 ---
 
@@ -243,9 +243,9 @@ draft → lld-ready → lld-in-progress → lld-ready-for-review → lld-batch-r
 | `lld-ready` | meta-se 已创建 Story，依赖与文件所有权可判定，等待 LLD 写作 | meta-po / meta-dev |
 | `lld-in-progress` | meta-dev 正在写该 Story 的 LLD | meta-dev |
 | `lld-ready-for-review` | meta-dev 已输出该 Story 的 LLD，等待确认 | meta-dev |
-| `lld-batch-ready-for-review` | 本轮 LLD 设计批次内全部 Story 均已输出 LLD 与 CP5 自动预检，等待统一确认 | meta-po |
-| `lld-approved` | 用户已确认本轮 LLD 设计批次，批次内 Story 的 LLD 均可作为实现输入 | meta-po |
-| `dev-ready` | 本轮 LLD 设计批次已统一确认，依赖门控满足，文件所有权不冲突，可开始实现 | meta-po |
+| `lld-batch-ready-for-review` | 全部目标 Story 均已输出 LLD 与 CP5 自动预检，等待统一确认 | meta-po |
+| `lld-approved` | 用户已确认全部目标 Story 的 LLD，全部 LLD 均可作为实现输入 | meta-po |
+| `dev-ready` | 全量 LLD 已统一确认，当前 Wave、依赖门控和文件所有权均满足，可开始实现 | meta-po |
 | `in-development` | meta-dev 正在实现 | meta-dev |
 | `ready-for-verification` | meta-dev 完成实现，等待 meta-qa | meta-dev |
 | `verified` | meta-qa 验证通过 | meta-qa |
@@ -266,7 +266,7 @@ meta-po 必须使用 `checkpoint-manager` 维护检查点。所有检查点都�
 | CP2 | 需求基线门 | 自动预检 + 人工 | `requirement-clarification -> solution-design` | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 | HLD 完成后 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | Story 计划完成后 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 | Story LLD 可实现性门 | 批次自动预检 + 批次人工 | 本轮 LLD 设计批次全部 Story 输出后 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{batch_id}-LLD-BATCH.md` |
+| CP5 | Story LLD 可实现性门 | 全量自动预检 + 全量人工 | story-planning 内全部目标 Story LLD 输出后 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` |
 | CP6 | Story 编码完成门 | 滚动自动 | Story 实现完成后 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | Story 验证完成后 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | 文档与安装验证完成后 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
@@ -287,7 +287,7 @@ meta-po 必须使用 `checkpoint-manager` 维护检查点。所有检查点都�
 | CP2 需求基线门 | requirement-clarification 完成 | 场景是否完整、需求是否可设计可测试、范围与变更基线是否认可 | `checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 HLD 架构评审门 | solution-design 完成 | 架构方案是否认可、风险是否可接受、是否允许拆 Story | `checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 Story 拆解与并行安全门 | story-planning 完成 | Story 边界、依赖 DAG、并行策略、文件所有权是否合理 | `checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 Story LLD 可实现性门 | story-execution 内按 LLD 设计批次发生 | 本轮批次内全部 Story LLD 是否允许进入开发 | `checkpoints/CP5-{batch_id}-LLD-BATCH.md` |
+| CP5 Story LLD 可实现性门 | story-planning 内全部目标 Story LLD 完成后发生 | 全部目标 Story LLD 是否允许作为后续 Wave 开发输入 | `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` |
 | CP8 交付就绪门 | documentation 完成 | 交付范围、安装验证、文档、遗留风险是否可接受 | `checkpoints/CP8-DELIVERY-READINESS.md` |
 
 ### 平台化确认协议
@@ -327,8 +327,8 @@ reject
 
 **CP5：Story LLD 批量可实现性确认**
 
-1. ✅ 确认通过 — 本轮 LLD 设计批次内全部 Story 的 LLD 合理；meta-po 继续计算批次级 `dev_ready`
-2. ✏️ 需要调整 — 输入需调整的 Story 边界、依赖门控、文件所有权或 LLD 设计，交由 meta-se / meta-dev 修订；修订完成后必须重新发起同一批次确认
+1. ✅ 确认通过 — 全部目标 Story 的 LLD 合理；meta-po 按 Wave 计算 `dev_ready` 并调度开发
+2. ✏️ 需要调整 — 输入需调整的 Story 边界、依赖门控、文件所有权或 LLD 设计，交由 meta-se / meta-dev 修订；修订完成后必须重新发起全量 LLD 确认
 3. ❌ 确认不通过 — 返回 story-planning
 
 **CP8：交付就绪终验**
@@ -337,27 +337,28 @@ reject
 
 ---
 
-## Story LLD 编排与并行执行
+## 全量 LLD 与 Wave 执行编排
 
 **基本规则：**
 
-- 同一 Story 内严格串行：`LLD 批次确认 → 实现 → 验证`
-- LLD 写作按 Story 并行，默认最多 3 个并发；人工确认按 LLD 设计批次统一发起，不允许确认一个 Story 后立即开发
-- 开发按 DAG 与文件所有权并行，默认最多 2 个并发；只有本轮 LLD 设计批次已统一确认且进入 `dev_ready` 的 Story 可进入实现
-- 验证按 Story 并行，默认最多 2 个并发；验证不直接推进 `verified`，由 meta-po 回收
-- Wave 是默认 LLD 设计批次；CR 触发时，CR 影响范围是默认 LLD 设计批次。真正门控以 Story DAG、依赖类型和文件冲突判定为准，但同一批次内必须先设计完全部 LLD 再开发。
+- 同一 Story 内严格串行：`全量 LLD 确认 → 实现 → 验证`
+- LLD 写作覆盖全部目标 Story，可按 Story 并行，默认最多 3 个并发；全部目标 Story 的 LLD 和 CP5 自动预检完成后，只发起一次全量人工确认
+- 全量 CP5 人工确认通过前，不允许任何 Story 进入实现，也不允许按单个 Story 或单个 Wave 提前放行
+- 进入 `story-execution` 时全量 CP5 必须已通过；开发按 Wave、DAG 与文件所有权并行，默认最多 2 个并发；只有当前 Wave 可执行且进入 `dev_ready` 的 Story 可进入实现
+- 验证按 Story 并行，默认最多 2 个并发；每个 Story 开发完成后立即拉起或复用 meta-qa 验证，验证不直接推进 `verified`，由 meta-po 回收
+- Wave 只用于全量 LLD 确认后的开发/验证调度；标准开发的 LLD 设计批次是全部目标 Story。CR 触发时，LLD 设计批次是 CR 影响范围内全部受影响 Story。
 
 **meta-po 的 Story 调度职责：**
 
-1. story-planning 完成时：读取 `DEVELOPMENT-PLAN.yaml`、`STORY-BACKLOG.md`、Story 卡片和 `STORY-STATUS.md`，构建 Story DAG。
-2. 确定 `lld_design_batch`：标准开发默认取当前 Wave / 当前调度批次；CR 触发默认取 CR 影响分析列出的全部受影响 Story。批次边界必须写入 `STATE.md.parallel_execution` 或 CR 执行链路。
+1. story-planning 中 CP4 通过后：读取 `DEVELOPMENT-PLAN.yaml`、`STORY-BACKLOG.md`、Story 卡片和 `STORY-STATUS.md`，构建全量 Story DAG。
+2. 确定 `lld_design_batch`：标准开发必须包含全部目标 Story，`batch_id=all-stories`；CR 触发默认取 CR 影响分析列出的全部受影响 Story。批次边界必须写入 `STATE.md.parallel_execution` 或 CR 执行链路。
 3. 计算 `parallel_execution.lld_ready`：批次内 Story 边界稳定、HLD/ADR 已确认、LLD 输入满足、输出文件不冲突，即可进入 LLD 写作；同批次 Story 可并行起草，但不得有 Story 先行进入开发。
-4. 并发唤醒或复用最多 `max_parallel_lld` 个 meta-dev 线程，每个线程只负责 1 个 Story 的 LLD 文件；写完后进入 `lld-ready-for-review` 并停止。
-5. 当 `lld_design_batch` 内全部 Story 均到达 `lld-ready-for-review`，且每个 Story 都有 CP5 自动预检结果后，生成 `checkpoints/CP5-{batch_id}-LLD-BATCH.md`，一次性汇总全部 Story 的 LLD、CP5 自动预检、依赖门控、文件所有权和 OPEN 项，再发起人工确认。
-6. 用户确认后将批次内 Story 标记为 `lld-approved`，再统一计算 `dev_ready`：LLD confirmed=true、依赖 `dev_gate` 满足、文件所有权不冲突、验证上下文完整。
-7. 并发唤醒或复用最多 `max_parallel_dev` 个 meta-dev 线程开发 `dev_ready` Story；同一 Story 优先复用其 LLD 线程，若线程已关闭则按 `agent_lifecycle` 记录重建原因。
+4. 并发唤醒或复用最多 `max_parallel_lld` 个 meta-dev 线程，每个线程只负责 1 个 Story 的 LLD 文件；写完后进入 `lld-ready-for-review` 并暂停，等待其他 Story 的 LLD 完成。
+5. 当全部目标 Story 均到达 `lld-ready-for-review`，且每个 Story 都有 CP5 自动预检结果后，生成 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`，一次性汇总全部 Story 的 LLD、CP5 自动预检、依赖门控、文件所有权和 OPEN 项，再发起人工确认。
+6. 用户确认后将全部目标 Story 标记为 `lld-approved`，再按 Wave 统一计算 `dev_ready`：全量 LLD confirmed=true、当前 Wave 可执行、依赖 `dev_gate` 满足、文件所有权不冲突、验证上下文完整。
+7. 按 `DEVELOPMENT-PLAN.yaml` 的 Wave 顺序，并发唤醒或复用最多 `max_parallel_dev` 个 meta-dev 线程开发当前 Wave 中的 `dev_ready` Story；同一 Story 优先复用其 LLD 线程，若线程已关闭则按 `agent_lifecycle` 记录重建原因。
 8. Story 进入 `ready-for-verification` 时，立即唤醒或复用最多 `max_parallel_qa` 个 meta-qa 线程；验证完成后关闭 meta-qa 线程。
-9. Wave 或 CR 批次结束判定：该批次所有 Story 均为 `verified`，且没有被该批次阻塞的后续 `dev_ready` 候选时，进入下一调度批次或 `documentation`。
+9. Wave 结束判定：当前 Wave 所有 Story 均为 `verified`，且下一 Wave 的依赖门控满足时，进入下一 Wave；全部 Wave 均为 `verified` 后进入 `documentation`。CR 批次结束判定：CR 影响范围内全部 Story 均为 `verified` 后回到 CR 指定阶段或继续原阶段。
 
 **依赖与文件冲突判定：**
 

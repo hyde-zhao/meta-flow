@@ -203,7 +203,7 @@ status: active
 对高价值或高副作用 Skill，建议后续统一支持：
 
 ```yaml
-applies_to: [copilot, claude-code, codex]
+applies_to: [copilot, claude, codex]
 side_effect_level: low | medium | high
 requires_confirmation: true | false
 output_mode: advisory | file-generation | validation

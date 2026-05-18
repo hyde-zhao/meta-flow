@@ -99,14 +99,23 @@ def collect_platform_contract_errors(payload: dict[str, object]) -> list[str]:
     errors: list[str] = []
     try:
         codex = payload["contracts"]["codex"]  # type: ignore[index]
+        claude = payload["contracts"]["claude"]  # type: ignore[index]
         project = codex["scopes"]["project"]  # type: ignore[index]
         user = codex["scopes"]["user"]  # type: ignore[index]
+        claude_project = claude["scopes"]["project"]  # type: ignore[index]
+        claude_user = claude["scopes"]["user"]  # type: ignore[index]
         forbidden_project = codex["forbidden"]["project"]  # type: ignore[index]
         forbidden_user = codex["forbidden"]["user"]  # type: ignore[index]
     except (AttributeError, KeyError, TypeError):
-        return ["platform contract missing codex scopes/forbidden entries"]
+        return ["platform contract missing codex/claude scopes or codex forbidden entries"]
 
     expected = {
+        "claude project rules": (claude_project.get("rules"), "CLAUDE.md"),
+        "claude project agents": (claude_project.get("agents"), ".claude/agents"),
+        "claude project skills": (claude_project.get("skills"), ".claude/skills"),
+        "claude user rules": (claude_user.get("rules"), "~/.claude/CLAUDE.md"),
+        "claude user agents": (claude_user.get("agents"), "~/.claude/agents"),
+        "claude user skills": (claude_user.get("skills"), "~/.claude/skills"),
         "codex project agents": (project.get("agents"), ".codex/agents"),
         "codex project skills": (project.get("skills"), ".agents/skills"),
         "codex user agents": (user.get("agents"), "~/.codex/agents"),
@@ -260,8 +269,14 @@ def collect_installer_component_errors() -> list[str]:
             {
                 "label": "codex project default",
                 "args": ["--platform", "codex", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
-                "required": ["Component: agent", str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".agents" / "skills")],
-                "forbidden": [str(project_root / "AGENTS.md")],
+                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".agents" / "skills")],
+                "forbidden": [".codex/skills"],
+            },
+            {
+                "label": "claude project default",
+                "args": ["--platform", "claude", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
+                "required": ["Component: full", str(project_root / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-po.md"), str(project_root / ".claude" / "skills")],
+                "forbidden": [str(project_root / ".claude" / "CLAUDE.md")],
             },
             {
                 "label": "codex full component",
@@ -453,7 +468,7 @@ def collect_agent_display_profile_errors() -> list[str]:
         isolated_home = project_root / "home"
         isolated_home.mkdir()
         subprocess_env = {**os.environ, "HOME": str(isolated_home)}
-        for platform in ("codex", "claude-code"):
+        for platform in ("codex", "claude"):
             result = subprocess.run(
                 [
                     sys.executable,

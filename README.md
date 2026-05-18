@@ -59,7 +59,7 @@
 安装测试优先使用全局命令或 `uv run`：
 
 ```bash
-meta-flow install --platform codex --scope project --component agent --dry-run
+meta-flow install --platform codex --scope project --component full --dry-run
 uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-run
 ```
 
@@ -90,11 +90,11 @@ uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-r
 uv python install 3.11
 uv tool install --editable .
 meta-flow install --platform codex --scope user --component rules
-meta-flow install --platform codex --scope project --component agent --project-dir /path/to/project
+meta-flow install --platform codex --scope project --component full --project-dir /path/to/project
 # 从项目根运行
-uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
+uv run --python 3.11 python delivery/scripts/install.py --platform claude --dry-run
 # 或从 delivery/ 目录运行（delivery 作为独立仓库时）
-cd delivery && uv run --python 3.11 python scripts/install.py --platform claude-code --dry-run
+cd delivery && uv run --python 3.11 python scripts/install.py --platform claude --dry-run
 ```
 
 ## 开发节奏
@@ -136,7 +136,7 @@ CP6 / CP7 还必须包含 `Agent Dispatch Evidence` 小节。`process/handoffs/*
 # user scope 默认只安装 rules
 meta-flow install --platform codex --scope user
 
-# project scope 默认安装 agent 组件（agents + skills）
+# project scope 默认安装 full 组件（rules + agents + skills）
 meta-flow install --platform codex --scope project --project-dir /path/to/project
 
 # 未指定 --project-dir 时，交互式终端会提示确认当前目录或输入其他目录
@@ -150,11 +150,11 @@ meta-flow install --platform codex --scope project --component full --project-di
 
 ```bash
 # 从项目根目录运行
-uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
+uv run --python 3.11 python delivery/scripts/install.py --platform claude
 
 # 以 delivery/ 为根（独立 Git 仓库）运行
 cd delivery
-uv run --python 3.11 python scripts/install.py --platform claude-code
+uv run --python 3.11 python scripts/install.py --platform claude
 ```
 
 交付目录结构：

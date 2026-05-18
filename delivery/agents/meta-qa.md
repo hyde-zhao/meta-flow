@@ -198,7 +198,7 @@ created_at: ""
 
 - `uv run --python 3.11 meta-flow install --help` 可用。
 - `scope=user` 且未传 `--component/--content` 时默认只安装 `rules`。
-- `scope=project` 且未传 `--component/--content` 时默认安装 `agent`（agents+skills）。
+- `scope=project` 且未传 `--component/--content` 时默认安装 `full`（rules+agents+skills）。
 - legacy `--content all|agents|skills|rules` 仍可用。
 - Codex Skill dry-run 不出现 `.codex/skills` 或 `~/.codex/skills`。
 - 文档明确 Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择，否则默认使用 exact 文本确认；对用户只展示 `approve`、`修改: <具体修改点>`、`reject` 三个推荐回复，历史别名仅作为兼容解析。
@@ -294,7 +294,7 @@ name: ""
 version: ""
 default_scope: project
 supported_platforms:
-  - claude-code
+  - claude
   - codex
   - openclaw
 installers:

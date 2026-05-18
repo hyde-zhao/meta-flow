@@ -56,12 +56,12 @@ canonical role 仍为 `meta-*`，用于状态机、handoff、检查点和审计�
 init（meta-po）                                                   [CP0 自动]
  └─► requirement-clarification（meta-pm：场景发现 → 需求结构化）   [CP1 自动 + CP2 人工]
       └─► solution-design（meta-se：输出 HLD）                     [CP3 人工]
-           └─► story-planning（meta-se 拆解 Story → meta-po 计算 DAG 队列 → meta-dev 并行产出 Story LLD） [CP4 人工 + CP5 批次确认]
-                └─► story-execution（Wave 循环）
-                │    LLD 写作并行：本轮 LLD 设计批次内多个 lld-ready Story 可同时起草 LLD
-                │    LLD 确认批次化：批次内全部 LLD 与 CP5 自动预检完成后，统一人工确认
-                │    开发并行：批次 CP5 已通过、依赖满足且文件无冲突的 dev-ready Story 可并行实现
-                │    同一 Story 内串行：批次 CP5 LLD 确认 → CP6 开发完成 → CP7 验证完成
+           └─► story-planning（meta-se 拆解全部 Story → meta-po 计算全量 LLD 队列 → meta-dev 并行产出全部 Story LLD） [CP4 人工 + CP5 全量确认]
+                │    LLD 写作并行：全部目标 Story 的 LLD 可按并发上限分轮起草
+                │    LLD 确认全量化：全部 Story LLD 与 CP5 自动预检完成后，统一人工确认
+                └─► story-execution（全量 LLD 确认后进入 Wave 开发/验证循环）
+                │    开发并行：全量 CP5 已通过后，按 Wave 调度依赖满足且文件无冲突的 dev-ready Story 并行实现
+                │    同一 Story 内串行：CP6 开发完成 → CP7 验证完成
                 └─► documentation（meta-doc）                      [CP8 人工]
                      └─► delivered
 ```
@@ -156,8 +156,8 @@ init（meta-po）                                                   [CP0 自动]
 - **子 agent 调度证据**：meta-po 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created`，不得写成目标 agent 已完成。
 - **inline fallback 门禁**：当前平台无法拉起子 agent 时，meta-po 必须阻断并说明原因；只有用户明确批准后才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。inline fallback 结果必须表述为 meta-po 代执行，不得表述为 meta-dev / meta-qa 独立完成。
 - **HLD 门控**：CP3 自动预检和人工确认未通过前，不得进入 Story 拆解。
-- **Story 计划门控**：CP4 自动预检和人工确认未通过前，不得进入 Story 执行。
-- **Story LLD 门控**：本轮 LLD 设计批次内全部 Story 的 CP5 自动预检和批次人工确认未通过前，不得开始任何 Story 的实现；LLD 可跨 Story 并行写作，开发必须满足 Story DAG、依赖类型、文件所有权和批次 CP5 门控。标准开发默认以当前 Wave / 调度批次为 LLD 设计批次；变更流程默认以 CR 影响范围为 LLD 设计批次。
+- **Story 计划与 LLD 门控**：CP4 自动预检和人工确认未通过前，不得开始全量 LLD 设计；全部目标 Story 的 CP5 自动预检和全量人工确认未通过前，不得进入 Story 执行。LLD 必须覆盖全部目标 Story，且可跨 Story 并行写作。标准开发默认以全部目标 Story 为 LLD 设计批次；变更流程默认以 CR 影响范围为 LLD 设计批次。
+- **Story 执行门控**：进入 story-execution 时全部目标 Story 的 LLD 必须已确认；开发按 Wave、Story DAG、依赖类型和文件所有权调度，不得在 CP5 前实现任何 Story。
 - **编码与验证门控**：Story 实现完成后必须写入 CP6 编码完成检查结果；验证完成后必须写入 CP7 验证完成检查结果。CP6/CP7 必须包含 `Agent Dispatch Evidence`；缺少真实子 agent 证据且没有用户批准的 `inline-fallback` 时不得推进 Story 状态。
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `skills/README.md`
 - **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
@@ -175,7 +175,7 @@ init（meta-po）                                                   [CP0 自动]
 - **精确匹配优先**：涉及对象定位、版本对齐、规则命中或平台路径判定时，默认采用 exact 语义，不使用模糊匹配作为默认行为
 - **平台契约优先**：安装器、DryRun、guardrail 与交付文档必须共同引用 `delivery/doc/PLATFORM-CONTRACTS.yaml`；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
 - **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
-- **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md / CLAUDE.md 等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `agent`；legacy `--content all|agents|skills|rules` 仅作兼容入口
+- **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md / CLAUDE.md 等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
 
 ## 防火墙测试工作流（现有，独立运行）
 
@@ -186,7 +186,7 @@ init（meta-po）                                                   [CP0 自动]
 
 - `STORY-*-LLD.md` 必须保持 **14 个可见章节**；`Tier-S` 只允许简化内容深度，不允许压缩章节数量。
 - `tier`、`shared_fragments`、`open_items` 是强输入字段，meta-dev / meta-qa 不得跳过。
-- meta-dev 至少消费：文件影响范围、接口设计、异常处理、测试设计、实施步骤、回滚策略，并在 LLD 设计批次统一确认且 `dev_gate` 满足后优先复用同一子 agent 继续实现。
+- meta-dev 至少消费：文件影响范围、接口设计、异常处理、测试设计、实施步骤、回滚策略，并在全部目标 Story 的 LLD 统一确认且当前 Wave 的 `dev_gate` 满足后优先复用同一子 agent 继续实现。
 - meta-qa 至少消费：接口设计、核心流程、测试设计、回滚策略、OPEN/Spike 状态。
 
 ## Review Gate 分派与灰度

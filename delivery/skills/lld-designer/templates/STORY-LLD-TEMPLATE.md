@@ -18,7 +18,7 @@ open_items: 0
 
 > 文件名格式：`STORY-{id}-{story_slug}-LLD.md`，其中 `story_slug` 必须复用对应 Story 卡片中的稳定 slug。
 >
-> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需纳入本轮 LLD 设计批次统一确认，并满足 `dev_gate` 后方可进入实现。
+> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需纳入全部目标 Story 的 LLD 统一确认，并满足当前 Wave 的 `dev_gate` 后方可进入实现。
 
 ## 1. Goal
 
@@ -135,8 +135,8 @@ open_items: 0
 
 > **CP5 — Story LLD 可实现性门**
 > meta-dev 先写入 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` 自动预检结果。
-> meta-po 收齐本轮 LLD 设计批次内全部 Story 的 LLD 和 CP5 自动预检后，再生成并提示用户审查 `checkpoints/CP5-{batch_id}-LLD-BATCH.md`。
-> 用户统一确认本轮批次 LLD 设计后，仍需满足依赖门控与文件所有权门控方可进入实现。
+> meta-po 收齐全部目标 Story 的 LLD 和 CP5 自动预检后，再生成并提示用户审查 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`。
+> 用户统一确认全部目标 Story 的 LLD 后，仍需满足当前 Wave、依赖门控与文件所有权门控方可进入实现。
 
 **CP5 checklist 摘要**：
 

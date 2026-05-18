@@ -22,7 +22,7 @@ meta-flow install --platform codex --scope project --project-dir /path/to/projec
 从仓库根目录执行：
 
 ```bash
-uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
+uv run --python 3.11 python delivery/scripts/install.py --platform claude
 uv run --python 3.11 python delivery/scripts/install.py --platform codex --project-dir /path/to/project
 uv run --python 3.11 python delivery/scripts/install.py --platform openclaw --dry-run
 ```
@@ -31,7 +31,7 @@ uv run --python 3.11 python delivery/scripts/install.py --platform openclaw --dr
 
 ```bash
 cd delivery
-uv run --python 3.11 python scripts/install.py --platform claude-code
+uv run --python 3.11 python scripts/install.py --platform claude
 uv run --python 3.11 python scripts/install.py --platform codex --scope user
 ```
 
@@ -42,7 +42,7 @@ scripts\install.ps1 --platform codex --dry-run
 ```
 
 ```bash
-bash scripts/install.sh --platform claude-code --dry-run
+bash scripts/install.sh --platform claude --dry-run
 ```
 
 ## 3. 安装内容
@@ -54,7 +54,7 @@ bash scripts/install.sh --platform claude-code --dry-run
 可通过 `--component rules|agent|full` 控制安装范围。默认值：
 
 - `--scope user` 默认只安装 `rules`
-- `--scope project` 默认只安装 `agent`
+- `--scope project` 默认安装 `full`
 
 legacy `--content agents|skills|rules|all` 保留兼容，但新文档优先使用 `--component`。
 
@@ -75,9 +75,27 @@ Codex 安装器把命令别名写入 `.codex/agents/*.toml` 的 `nickname_candid
 
 ## 4. DryRun 与卸载
 
+全局命令方式：
+
 ```bash
-uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
+meta-flow install --platform codex --scope user --uninstall
+meta-flow install --platform codex --scope project --project-dir /path/to/project --uninstall
+meta-flow install --platform claude --scope user --uninstall --dry-run
+```
+
+脚本入口方式：
+
+```bash
+uv run --python 3.11 python delivery/scripts/install.py --platform claude --dry-run
 uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user --uninstall
+```
+
+`--uninstall` 依赖 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml` 中记录的 `platform + scope + workspace_root` 精确移除已安装文件；当前不支持和 `--component`、`--content`、`--agent`、`--skill` 组合做部分卸载。项目级卸载必须传入和安装时一致的 `--project-dir`，否则无法匹配 manifest 里的 workspace。
+
+如果要移除 `meta-flow` 这个全局命令本身，而不是卸载已写入 Claude Code / Codex / OpenClaw 的规则、Agent 或 Skill，使用：
+
+```bash
+uv tool uninstall meta-flow
 ```
 
 ## 5. 默认安装位置
@@ -117,9 +135,9 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 2. `meta-pm` 澄清需求，沉淀 `USE-CASES.md` 和 `REQUIREMENTS.md`，写入 CP1 / CP2 自动检查结果。
 3. CP2 人工确认通过后，`meta-se` 输出 `HLD.md` 和 CP3 自动预检。
 4. CP3 人工确认通过后，`meta-se` 输出 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 CP4 自动预检。
-5. CP4 人工确认通过后，`meta-po` 按 Story DAG 确定本轮 LLD 设计批次，组织 `meta-dev` 并行输出批次内全部 `STORY-{id}-{story_slug}-LLD.md` 和 CP5 自动预检，再发起一次批次人工确认。
-6. 批次 CP5 确认且批次内 Story 的 `dev_gate` 满足后，`meta-po` 必须通过平台子 agent 能力调度 `meta-dev`，并在 `STATE.md.agent_lifecycle` 与 handoff `dispatch` 中记录证据；实现完成后写入 CP6 编码完成检查结果。
-7. `meta-po` 必须通过平台子 agent 能力调度 `meta-qa` 执行验证，并记录调度证据；验证完成后写入 CP7 验证完成检查结果，并生成安装脚本。
+5. CP4 人工确认通过后，`meta-po` 仍处于 story-planning，按 Story DAG 确定覆盖全部目标 Story 的 LLD 设计批次，组织 `meta-dev` 并行输出全部 `STORY-{id}-{story_slug}-LLD.md` 和 CP5 自动预检，再发起一次全量人工确认。
+6. 全量 CP5 确认后进入 story-execution；当前 Wave Story 的 `dev_gate` 满足后，`meta-po` 必须通过平台子 agent 能力按 Wave 调度 `meta-dev`，并在 `STATE.md.agent_lifecycle` 与 handoff `dispatch` 中记录证据；实现完成后写入 CP6 编码完成检查结果。
+7. 每个 Story 开发完成后，`meta-po` 必须通过平台子 agent 能力调度 `meta-qa` 执行验证，并记录调度证据；验证完成后写入 CP7 验证完成检查结果，并生成安装脚本。
 8. `meta-doc` 最后输出 README 和 USER-MANUAL，CP8 自动预检和人工终验通过后进入 delivered。
 
 ### 6.2 检查点文件
@@ -133,7 +151,7 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 | CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 | Story LLD 可实现性门 | 批次自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{batch_id}-LLD-BATCH.md` |
+| CP5 | Story LLD 可实现性门 | 全量自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` |
 | CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
@@ -262,7 +280,7 @@ meta-flow 会先判断当前任务是否为自身改进：
 environment_id: local-dev
 provided_by: human
 targets:
-  - claude-code
+  - claude
   - openclaw
 approval:
   confirmed: true

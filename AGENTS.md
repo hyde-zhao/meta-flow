@@ -56,11 +56,12 @@ canonical role 仍为 `meta-*`，用于状态机、handoff、检查点和审计�
 init（meta-po）                                                   [CP0 自动]
  └─► requirement-clarification（meta-pm：场景发现 → 需求结构化）   [CP1 自动 + CP2 人工]
       └─► solution-design（meta-se：输出 HLD）                     [CP3 人工]
-           └─► story-planning（meta-se 拆解 Story → meta-po 计算 DAG 队列 → meta-dev 并行产出 Story LLD） [CP4 人工 + CP5 滚动确认]
-                └─► story-execution（Wave 循环）
-                │    LLD 写作并行：多个 lld-ready Story 可同时起草 LLD
-                │    开发并行：dev-ready Story 在依赖满足、文件无冲突且 CP5 通过后并行实现
-                │    同一 Story 内串行：CP5 LLD 确认 → CP6 开发完成 → CP7 验证完成
+           └─► story-planning（meta-se 拆解全部 Story → meta-po 计算全量 LLD 队列 → meta-dev 并行产出全部 Story LLD） [CP4 人工 + CP5 全量确认]
+                │    LLD 写作并行：全部目标 Story 的 LLD 可按并发上限分轮起草
+                │    LLD 确认全量化：全部 Story LLD 与 CP5 自动预检完成后，统一人工确认
+                └─► story-execution（全量 LLD 确认后进入 Wave 开发/验证循环）
+                │    开发并行：全量 CP5 已通过后，按 Wave 调度依赖满足且文件无冲突的 dev-ready Story 并行实现
+                │    同一 Story 内串行：CP6 开发完成 → CP7 验证完成
                 └─► documentation（meta-doc）                      [CP8 人工]
                      └─► delivered
 ```
@@ -143,8 +144,8 @@ init（meta-po）                                                   [CP0 自动]
 - **子 agent 调度证据**：meta-po 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created`，不得写成目标 agent 已完成。
 - **inline fallback 门禁**：当前平台无法拉起子 agent 时，meta-po 必须阻断并说明原因；只有用户明确批准后才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。inline fallback 结果必须表述为 meta-po 代执行，不得表述为 meta-dev / meta-qa 独立完成。
 - **HLD 门控**：CP3 自动预检和人工确认未通过前，不得进入 Story 拆解。
-- **Story 计划门控**：CP4 自动预检和人工确认未通过前，不得进入 Story 执行。
-- **Story LLD 门控**：单个 Story 的 CP5 自动预检和人工确认未通过前，不得开始对应 Story 的实现；LLD 可跨 Story 并行写作，开发必须满足 Story DAG、依赖类型、文件所有权和 CP5 门控。
+- **Story 计划与 LLD 门控**：CP4 自动预检和人工确认未通过前，不得开始全量 LLD 设计；全部目标 Story 的 CP5 自动预检和全量人工确认未通过前，不得进入 Story 执行。
+- **Story 执行门控**：进入 story-execution 时全部目标 Story 的 LLD 必须已确认；开发必须按 Wave、Story DAG、依赖类型和文件所有权调度，不得在 CP5 前实现任何 Story。
 - **编码与验证门控**：Story 实现完成后必须写入 CP6 编码完成检查结果；验证完成后必须写入 CP7 验证完成检查结果。CP6/CP7 必须包含 `Agent Dispatch Evidence`；缺少真实子 agent 证据且没有用户批准的 `inline-fallback` 时不得推进 Story 状态。
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `delivery/skills/README.md`
 - **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
@@ -160,7 +161,7 @@ init（meta-po）                                                   [CP0 自动]
 - **测试策略前置**：meta-qa 验收前先输出 TEST-STRATEGY.md，指导验证过程
 - **方案收敛优先**：涉及方案设计、整改规划或跨平台治理时，默认优先最简方案与内联策略；除非事实或验收要求证明不足，不新增共享模板体系或多余抽象层
 - **精确匹配优先**：涉及对象定位、版本对齐、规则命中或平台路径判定时，默认采用 exact 语义，不使用模糊匹配作为默认行为
-- **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md / CLAUDE.md 等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `agent`；legacy `--content all|agents|skills|rules` 仅作兼容入口
+- **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md / CLAUDE.md 等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
 
 ## 防火墙测试工作流（现有，独立运行）
 

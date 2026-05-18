@@ -54,7 +54,7 @@ status: active
 dispatch:
   required: true
   mode: "subagent"
-  platform: "codex|claude-code|openclaw|unknown"
+  platform: "codex|claude|openclaw|unknown"
   agent_role: "meta-dev"
   agent_path: ""
   tool_name: ""

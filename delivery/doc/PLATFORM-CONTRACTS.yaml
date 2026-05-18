@@ -3,11 +3,11 @@
   "format": "json-compatible-yaml",
   "last_verified": "2026-04-28",
   "contracts": {
-    "claude-code": {
+    "claude": {
       "source": "project convention",
       "scopes": {
         "project": {
-          "rules": ".claude/CLAUDE.md",
+          "rules": "CLAUDE.md",
           "agents": ".claude/agents",
           "skills": ".claude/skills"
         },

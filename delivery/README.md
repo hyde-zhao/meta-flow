@@ -51,19 +51,19 @@ meta-flow install --platform codex --scope project --project-dir /path/to/projec
 从仓库根目录运行：
 
 ```bash
-uv run --python 3.11 python delivery/scripts/install.py --platform claude-code
+uv run --python 3.11 python delivery/scripts/install.py --platform claude
 ```
 
 或把 `delivery/` 作为独立仓库根目录运行：
 
 ```bash
 cd delivery
-uv run --python 3.11 python scripts/install.py --platform claude-code
+uv run --python 3.11 python scripts/install.py --platform claude
 ```
 
 支持的平台：
 
-- `claude-code`
+- `claude`
 - `codex`
 - `openclaw`
 
@@ -71,8 +71,8 @@ uv run --python 3.11 python scripts/install.py --platform claude-code
 
 ```bash
 meta-flow install --platform codex --scope user --component rules
-meta-flow install --platform codex --scope project --component agent --project-dir /path/to/project
-uv run --python 3.11 python delivery/scripts/install.py --platform claude-code --dry-run
+meta-flow install --platform codex --scope project --component full --project-dir /path/to/project
+uv run --python 3.11 python delivery/scripts/install.py --platform claude --dry-run
 ```
 
 legacy 兼容示例：
@@ -90,7 +90,7 @@ uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope
 默认值：
 
 - `--scope user` 默认 `--component rules`。
-- `--scope project` 默认 `--component agent`。
+- `--scope project` 默认 `--component full`。
 - legacy `--content all|agents|skills|rules` 保留兼容，但新命令优先使用 `--component`。
 
 ## Agent 命令与显示区分

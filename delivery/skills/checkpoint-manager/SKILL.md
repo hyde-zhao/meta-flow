@@ -32,7 +32,7 @@ status: active
 |---|---|---|
 | 自动检查结果 | `process/checks/CP{n}-{slug}.md` | 由 agent 填写，必须包含逐项 PASS / FAIL / N/A / WAIVED |
 | 人工审查稿 | `checkpoints/CP{n}-{slug}.md` | 由 meta-po 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
-| Story LLD 人工审查稿 | `checkpoints/CP5-{batch_id}-LLD-BATCH.md` | 本轮 LLD 设计批次统一确认 |
+| Story LLD 人工审查稿 | `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 的 LLD 统一确认 |
 | Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
 | Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
 
@@ -407,9 +407,9 @@ reject
 
 ## CP5 Story LLD 可实现性门
 
-- 类型：批次自动预检 + 批次人工
+- 类型：全量自动预检 + 全量人工
 - 自动结果文件：`process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
-- 人工审查稿：`checkpoints/CP5-{batch_id}-LLD-BATCH.md`
+- 人工审查稿：`checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
 - 责任方：meta-dev / meta-po
 
 ### Entry Criteria
@@ -417,8 +417,8 @@ reject
 | 条目 | 说明 |
 |---|---|
 | CP4 通过 | Story 拆解与并行计划已确认 |
-| 批次内 Story 处于 LLD 审查态 | 状态均为 `lld-ready-for-review` 或批次级 `lld-batch-ready-for-review` |
-| 批次内 LLD 已生成 | 每个 `STORY-{id}-{story_slug}-LLD.md` 均存在 |
+| 全部目标 Story 处于 LLD 审查态 | 状态均为 `lld-ready-for-review` 或全量 `lld-batch-ready-for-review` |
+| 全部目标 Story LLD 已生成 | 每个 `STORY-{id}-{story_slug}-LLD.md` 均存在 |
 
 ### Checklist
 
@@ -441,15 +441,15 @@ reject
 
 | 条目 | 说明 |
 |---|---|
-| 自动预检通过 | 批次内全部 LLD 可实现性检查无阻断项 |
-| 人工确认完成 | 批次 LLD 被统一批准 |
-| dev_gate 可更新 | 批次内 Story 可进入 `lld-approved`，满足时进入 `dev_ready` |
+| 自动预检通过 | 全部目标 Story 的 LLD 可实现性检查无阻断项 |
+| 人工确认完成 | 全部目标 Story 的 LLD 被统一批准 |
+| dev_gate 可更新 | 全部目标 Story 可进入 `lld-approved`，当前 Wave 满足时进入 `dev_ready` |
 
 ### Deliverables
 
 - `process/stories/STORY-{id}-{story_slug}-LLD.md`
 - `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
-- `checkpoints/CP5-{batch_id}-LLD-BATCH.md`
+- `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
 - 更新后的 `process/stories/STORY-STATUS.md`
 
 ## CP6 Story 编码完成门
@@ -462,7 +462,7 @@ reject
 
 | 条目 | 说明 |
 |---|---|
-| CP5 通过 | 本轮 LLD 设计批次已确认 |
+| CP5 通过 | 全部目标 Story 的 LLD 已确认 |
 | dev_gate 满足 | 依赖和文件所有权允许开发 |
 | 实现完成 | Story 任务清单已执行完 |
 | meta-dev 调度证据存在 | `STATE.md.agent_lifecycle` 与 handoff `dispatch` 证明 meta-dev 已由子 agent 执行，或存在用户批准的 inline fallback |

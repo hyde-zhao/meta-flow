@@ -54,7 +54,7 @@ linked_issue: ""
 
 - 是否需要 LLD 设计批次：true / false
 - batch_id：`CR-{id}-LLD-BATCH`
-- 批次范围来源：CR 影响分析 / 当前 Wave / 人工指定
+- 批次范围来源：CR 影响分析 / 人工指定
 - 批次内 Story：
   - `STORY-*`
 - 批次人工确认稿：`checkpoints/CP5-{batch_id}-LLD-BATCH.md`

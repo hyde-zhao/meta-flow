@@ -4,7 +4,7 @@ description: >-
   当需要校验安装目标目录或安装脚本 DryRun 输出是否符合平台规范时使用。
   触发词包括：校验安装、平台验证、结构校验、安装结构检查、目录规范校验。
   适用场景：安装脚本生成后执行；或独立校验现有项目 / 用户级安装目录。
-argument-hint: "可选：指定目标平台（claude-code/codex/openclaw）、scope（project/user）或目标路径"
+argument-hint: "可选：指定目标平台（claude/codex/openclaw）、scope（project/user）或目标路径"
 user-invokable: true
 status: active
 ---
@@ -26,7 +26,7 @@ status: active
 
 | 平台 | 项目级必须存在的路径 | 用户级必须存在的路径 |
 |------|----------------------|----------------------|
-| claude-code | `.claude/CLAUDE.md`，`.claude/agents/`，`.claude/skills/` | `~/.claude/CLAUDE.md`，`~/.claude/agents/`，`~/.claude/skills/` |
+| claude | `CLAUDE.md`，`.claude/agents/`，`.claude/skills/` | `~/.claude/CLAUDE.md`，`~/.claude/agents/`，`~/.claude/skills/` |
 | codex | `AGENTS.md`，`.codex/agents/`，`.agents/skills/` | `~/.codex/AGENTS.md`，`~/.codex/agents/`，`~/.agents/skills/` |
 | openclaw | `.openclaw/manifest.yaml`，`.openclaw/agents/`，`.openclaw/skills/` | `~/.openclaw/manifest.yaml`，`~/.openclaw/agents/`，`~/.openclaw/skills/` |
 
@@ -60,7 +60,7 @@ status: active
 - 不得出现 `version`、`instructions` 或其他非标准顶层字段
 - `nickname_candidates` 必须符合命令别名映射：`po-zhao/po-qian/po-sun/po-li/po-zhou`、`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`
 
-### 维度 5.1：Claude Code subagent color（仅 claude-code，REQUIRED）
+### 维度 5.1：Claude Code subagent color（仅 claude，REQUIRED）
 
 若目标平台是 Claude Code，必须额外校验：
 
@@ -151,6 +151,6 @@ meta-flow install --platform codex --scope project --project-dir <target> --comp
 - [ ] 已检查安装脚本 DryRun 行为
 - [ ] Codex 目标已检查 subagent TOML schema（若平台为 codex）
 - [ ] Codex 目标已检查 `nickname_candidates` 命令别名（若平台为 codex）
-- [ ] Claude Code 目标已检查 subagent `color`（若平台为 claude-code）
+- [ ] Claude Code 目标已检查 subagent `color`（若平台为 claude）
 - [ ] Codex 目标已检查 `.codex/skills` / `~/.codex/skills` 负向断言（若平台为 codex）
 - [ ] 已检查目标路径组件被文件占用时的 fail-fast 行为和错误提示

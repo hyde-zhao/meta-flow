@@ -5,7 +5,7 @@ Meta Flow Platform Package Builder
 
 用法：
   uv run --with pyyaml --python 3.11 python scripts/package_builder.py --manifest delivery/doc/PACKAGE-MANIFEST.yaml
-  uv run --with pyyaml --python 3.11 python scripts/package_builder.py --manifest delivery/doc/PACKAGE-MANIFEST.yaml --targets claude-code,codex
+  uv run --with pyyaml --python 3.11 python scripts/package_builder.py --manifest delivery/doc/PACKAGE-MANIFEST.yaml --targets claude,codex
   uv run --with pyyaml --python 3.11 python scripts/package_builder.py --manifest delivery/doc/PACKAGE-MANIFEST.yaml --dry-run
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 PLATFORM_CONFIGS = {
-    "claude-code": {
+    "claude": {
         "root": ".claude",
         "entry_file": "CLAUDE.md",
         "agents_dir": "agents",
@@ -110,9 +110,18 @@ def build_openclaw_manifest(agents_dir: Path, skills_dir: Path) -> str:
     return yaml.dump({"version": "1.0", "agents": agents, "skills": skills}, allow_unicode=True, default_flow_style=False)
 
 
+def resolve_platform_entry(platform: str, entry_src: Path | None) -> Path | None:
+    if platform == "claude" and entry_src and entry_src.name == "AGENTS.md":
+        claude_entry = entry_src.with_name("CLAUDE.md")
+        if claude_entry.exists():
+            return claude_entry
+    return entry_src
+
+
 def build_platform(platform: str, config: dict, agents_src: Path, skills_src: Path, entry_src: Path | None, output_root: Path, dry_run: bool) -> tuple[list[str], list[str]]:
     checksums = []
     issues = []
+    entry_src = resolve_platform_entry(platform, entry_src)
     pkg_root = output_root / platform / config["root"]
     if not dry_run:
         pkg_root.mkdir(parents=True, exist_ok=True)
@@ -191,7 +200,7 @@ def build_platform(platform: str, config: dict, agents_src: Path, skills_src: Pa
 def main():
     parser = argparse.ArgumentParser(description="Meta Flow Platform Package Builder")
     parser.add_argument("--manifest", default="delivery/doc/PACKAGE-MANIFEST.yaml", help="PACKAGE-MANIFEST.yaml 路径")
-    parser.add_argument("--targets", default="claude-code,codex,openclaw", help="目标平台，逗号分隔")
+    parser.add_argument("--targets", default="claude,codex,openclaw", help="目标平台，逗号分隔")
     parser.add_argument("--agents-dir", default="delivery/agents", help="Agent 产物源文件目录")
     parser.add_argument("--skills-dir", default="delivery/skills", help="Skill 产物源文件目录")
     parser.add_argument("--entry-file", default="delivery/rules/AGENTS.md", help="平台主入口文件")

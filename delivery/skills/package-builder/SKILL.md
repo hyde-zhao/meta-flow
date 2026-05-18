@@ -4,7 +4,7 @@ description: >-
   保留原有 skill 名称以兼容旧触发词，但职责已切换为生成安装脚本。
   当需要交付 Linux / Windows 安装脚本时使用。触发词包括：安装脚本、安装到项目、
   用户级安装、平台安装。
-argument-hint: "可选：指定目标平台（claude-code/codex/openclaw）或安装范围（project/user）"
+argument-hint: "可选：指定目标平台（claude/codex/openclaw）或安装范围（project/user）"
 user-invokable: true
 status: active
 ---
