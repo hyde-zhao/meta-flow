@@ -12,7 +12,7 @@ status: active
 
 ## 目标
 
-基于已确认需求与场景输出 `process/HLD.md`。HLD 完成后由 meta-se 使用 `checkpoint-manager` 生成 `process/checks/CP3-HLD-CONSISTENCY.md`，再由 meta-po 生成 `checkpoints/CP3-HLD-REVIEW.md` 发起人工确认。
+基于已确认需求与场景输出 `process/HLD.md`。正式写 HLD 前，先识别 `Architecture Gray Areas` 并输出 table-first advisor 输入；处于阶段委托时由 meta-se 直接与用户完成讨论，必要时再由 meta-po 汇总 reviewer lane。HLD 完成后由 meta-se 使用 `checkpoint-manager` 生成 `process/checks/CP3-HLD-CONSISTENCY.md`，再由 meta-po 汇总交还摘要、生成 CP3 Decision Brief，并在 `checkpoints/CP3-HLD-REVIEW.md` 中发起人工确认。
 
 ## 适用场景
 
@@ -29,6 +29,8 @@ status: active
 - `process/REQUIREMENTS.md`
 - `process/USE-CASES.md`
 - `process/REQUEST.md`
+- `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`（若存在）
+- `process/checks/CP2-DISCUSSION-CHECKPOINT.json`（若存在）
 - 补充约束与参考资料（若存在）
 
 ## 知识来源
@@ -40,10 +42,32 @@ status: active
 ## 执行步骤
 
 1. 输出问题定义、目标、约束与非目标。
-2. 给出至少 2 个候选方案并完成显式比较。
-3. 明确推荐方案、关键架构图、模块职责、技术选型和风险。
-4. **应用 HLD 拆分检查**：按 §"HLD 拆分原则"评估当前设计是否应拆为多份 HLD；若应拆，先完成拆分再继续。
-5. 生成 `process/HLD.md`（及拆分出的同级 HLD 文件）。不得自行跳过 CP3 自动预检和人工确认。
+2. 识别 `Architecture Gray Areas`：从已确认需求、场景、NFR、交付约束和 CP2 讨论结果中找出 3-4 个会改变架构形态、模块边界、验证策略、权限安全或维护成本的关键灰区。
+3. 输出 table-first advisor 输入，表头固定为：`Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch`；处于 `delegated_interaction.phase=solution-design` 时，由 meta-se 直接与用户讨论并记录选择。
+4. 读取用户选择或 meta-po 汇总后的 reviewer lane 结果，再给出至少 2 个候选方案并完成显式比较；若需要 reviewer 子 agent 但平台当前无法真实拉起且未获 inline fallback 批准，必须把 HLD 前置讨论标记为阻断或 `N/A` 原因，不得伪造多角色意见。
+5. 明确推荐方案、关键架构图、模块职责、技术选型、风险、适用条件、优化项、牺牲项和切换条件。
+6. 执行 Use Case → Architecture Traceability，并至少用 2-3 个关键 UC 做场景模拟；模拟失败时不得进入 CP3 人工确认。
+7. 为 CP3 Decision Brief 输出候选方案取舍摘要，覆盖用户意图匹配度、实现复杂度、可验证性、维护成本、平台兼容、安全 / 权限风险、交付影响、适用条件、切换条件和回退点。
+8. **应用 HLD 拆分检查**：按 §"HLD 拆分原则"评估当前设计是否应拆为多份 HLD；若应拆，先完成拆分再继续。
+9. 生成 `process/HLD.md`（及拆分出的同级 HLD 文件）。不得自行跳过 HLD 前置讨论、CP3 自动预检、多角色讨论和人工确认。
+
+## Architecture Gray Areas 子流程
+
+1. 灰区来源必须显式引用 `USE-CASES.md`、`REQUIREMENTS.md`、NFR、交付路由、平台约束、CP2 discussion log / checkpoint 或输入材料。
+2. 每个灰区必须说明为何影响 HLD 形成，而不是只列出待确认问题。
+3. advisor discussion 使用已有角色，不新增 canonical agent：
+   - `lane-product`：用户价值、场景适配、成功指标、范围取舍
+   - `lane-architecture`：模块边界、演进路径、ADR、依赖关系
+   - `lane-quality`：质量属性、安全、失败路径、验证与安装风险
+   - `lane-docs`：可解释性和维护可读性作为检查项纳入汇总，不默认新增一次子 agent 调度
+4. advisor lane 输出必须优先使用以下表格：
+
+| Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch |
+|---|---|---|---|---|---|
+| <候选> | <优势> | <代价> | <范围 / 模块 / 数据 / 安全 / 验证 / 文档> | <推荐 / 不推荐 / 条件推荐> | <假设与切换条件> |
+
+5. 讨论日志建议写入 `process/discussions/CP3-HLD-DISCUSSION-LOG.md`，恢复点建议写入 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`。日志用于审计和恢复，不作为下游唯一输入；下游正式消费仍以 `HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md` 为准。
+6. HLD 必须记录哪些讨论输入影响了推荐方案，哪些想法被延后，以及何时切换到备选方案。
 
 ## HLD 拆分原则
 
@@ -85,12 +109,16 @@ status: active
 | 文件 | 路径 | 模板 |
 |---|---|---|
 | HLD 过程稿 | `process/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
+| HLD 讨论日志 | `process/discussions/CP3-HLD-DISCUSSION-LOG.md` | 人类审计和恢复；由 meta-po 汇总 |
+| HLD 讨论恢复点 | `process/checks/CP3-DISCUSSION-CHECKPOINT.json` | 中断恢复；缺失时 CP3 自动检查必须说明 N/A 或阻断原因 |
 | CP3 自动预检结果 | `process/checks/CP3-HLD-CONSISTENCY.md` | 由 `checkpoint-manager` 生成 |
 | CP3 人工审查稿 | `checkpoints/CP3-HLD-REVIEW.md` | 由 meta-po 基于 `checkpoint-manager` 生成 |
 
 ## 约束
 
 - 输出必须遵循 `skills/hld-designer/templates/HLD-TEMPLATE.md`
+- 标准模式下必须执行 `Architecture Gray Areas`；若判定不适用，必须在 CP3 自动检查或 HLD 自审中说明 `N/A` 原因
+- 多角色讨论结果必须区分“方案形成输入”和“HLD 后评审意见”，不得只做事后评审
 - 未确认前不得继续 Story 拆解
 - 不下沉到类、函数或字段级实现设计
 
@@ -99,6 +127,8 @@ status: active
 - [ ] HLD 覆盖规定章节
 - [ ] 至少 2 个候选方案已完成比较
 - [ ] 推荐方案、风险和待确认问题明确
+- [ ] HLD 前已记录 Architecture Gray Areas、advisor table-first 输入、discussion log / checkpoint 或 N/A 原因
+- [ ] HLD 包含适用性矩阵、Use Case → Architecture Traceability、关键场景模拟、优化 / 牺牲 / 切换条件和自审记录
 - [ ] 已应用 §"HLD 拆分原则"判定信号进行评估；若有拆分信号，已完成拆分并在 frontmatter 与修订记录中留痕
 
 ## 不适用边界
@@ -110,5 +140,8 @@ status: active
 
 - 候选方案不能只是一个方案换不同措辞，必须有真实权衡差异
 - 推荐方案若缺少适用边界说明，后续 Story 拆解很容易失真
+- **Architecture Gray Areas 必须前置**：只在 HLD 写完后收集意见会错过影响方案形态的关键分歧
+- **advisor table 不是装饰**：每个候选必须写清 Pros / Cons / Impact Surface / Recommendation / When to switch，避免只输出单一结论
+- **场景模拟失败必须阻断**：关键 UC 无法走通推荐架构时，不得把问题推给 Story 拆解阶段
 - **忽视拆分信号的代价很高**：把"某产物 + 某全局机制"压进一份 HLD，后续评审者会同时面对两种抽象层，容易陷入口径漂移
 - **不要只在结尾补 companion_hld**：拆分必须反写 §非目标、§修订记录与 ADR 集合，否则追溯链不闭环

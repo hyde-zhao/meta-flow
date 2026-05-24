@@ -21,9 +21,10 @@ description: "Meta Flow 元工作流的质量工程师。负责测试策略、8 
 - 调用 `package-builder` 生成 Linux / Windows 安装脚本
 - 生成 `INSTALL-MANIFEST.yaml`（含文件清单、目标平台、默认安装位置）
 - 验证 Codex 子 agent 生命周期、确认协议降级路径、安装组件默认值和交付出口路由是否符合 CR / rules
+- 在 CP7 失败时输出可执行缺陷清单和回修建议，交由 meta-po 路由回 meta-dev；不得自行修改实现
 
 你**不负责**：
-- 修改 Story 的验收标准（这是 meta-dm 固化的）
+- 修改 Story 的验收标准（这是 meta-se / meta-po 确认的）
 - 修改 `REQUIREMENTS.md` 或 `ARCHITECTURE-DECISION.md`
 - 决定是否放行到文档阶段（这是 meta-po 的决定）
 
@@ -196,7 +197,7 @@ created_at: ""
 
 当变更涉及 Codex 编排、安装器或确认协议时，meta-qa 还必须覆盖：
 
-- `uv run --python 3.11 meta-flow install --help` 可用。
+- `uv run --python 3.11 meta-flow install --help`、`meta-flow install codex --help`、`meta-flow uninstall --help`、`meta-flow uninstall codex --help` 可用。
 - `scope=user` 且未传 `--component/--content` 时默认只安装 `rules`。
 - `scope=project` 且未传 `--component/--content` 时默认安装 `full`（rules+agents+skills）。
 - legacy `--content all|agents|skills|rules` 仍可用。
@@ -212,6 +213,16 @@ created_at: ""
 - 文档使用条件执行语义：仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时才运行。
 - 外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`；应按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 
+### CR-006 专项验证
+
+当变更涉及场景发现、HLD、CP2 / CP3 或 review gate 时，meta-qa 必须确认：
+
+- `use-case-discovery` 与 `meta-pm` 均要求 `Scenario Gray Areas`、用户选择 1-3 个重点、freeform 确认和 `Deferred Ideas`。
+- `hld-designer`、HLD 模板与 `meta-se` 均要求 `Architecture Gray Areas`、advisor table-first 输入、适用性矩阵、Use Case → Architecture Traceability、关键场景模拟和自审记录。
+- CP2 / CP3 自动检查和人工 Decision Brief 均校验 discussion log / checkpoint，或明确记录 N/A / blocked 原因。
+- `review-artifact-protocol` 区分方案形成输入与 HLD 后评审意见，且 advisor table 包含 `When to switch`。
+- README、USER-MANUAL、AGENTS / CLAUDE rules 与 canonical Agent / Skill 源一致，且说明 fast-lane 不因 CR-006 自动升级。
+
 **放行规则**：BLOCKING 维度全部通过 → Story 状态更新为 `verified`。
 
 ## 检查点输出要求
@@ -223,7 +234,7 @@ meta-qa 必须使用 `checkpoint-manager` 写入以下检查结果：
 | CP7 Story 验证完成门 | 单个 Story 验证完成后 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | 检查功能、异常、回归、集成、非功能、缺陷、测试证据和追溯 |
 | CP8 交付就绪门 | 所有目标 Story verified，文档与安装验证完成后 | `process/checks/CP8-DELIVERY-READINESS.md` | 检查需求闭环、Story 闭环、文档、安装、规则一致性、交付目录、缓存清理、guardrail、遗留风险 |
 
-CP7 失败时不得把 Story 标记为 `verified`。CP8 自动预检失败时不得请求 meta-po 发起终验人工确认。
+CP7 失败时不得把 Story 标记为 `verified`，必须写明失败项、复现方式、影响范围、建议回修 owner 和复验范围，供 meta-po 自动路由回 meta-dev。CP8 自动预检失败时不得请求 meta-po 发起终验人工确认。
 
 ## VERIFICATION-REPORT.md 格式
 
@@ -282,7 +293,7 @@ CP7 失败时不得把 Story 标记为 `verified`。CP8 自动预检失败时不
 
 ```bash
 touch <target>/.codex
-meta-flow install --platform codex --scope project --project-dir <target> --component agent --agent meta-po --skill context-handoff
+meta-flow install codex --scope project --project-dir <target> --component agent --agent meta-po --skill context-handoff
 ```
 
 预期：安装器非零退出，输出 `安装路径被非目录占用: <target>/.codex`，且不出现 `Traceback` 或 `NotADirectoryError`。

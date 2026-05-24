@@ -2,6 +2,9 @@
 cr_id: "CR-{id}"
 status: "open"
 impact_level: "low|medium|high"
+workflow_mode_before: "standard|fast-lane"
+workflow_mode_after_change: "standard|fast-lane"
+fast_lane_upgrade_reason: ""
 rollback_to: ""
 approval_result: "pending"
 created_at: ""
@@ -47,6 +50,16 @@ linked_issue: ""
 - 影响范围：局部 / 全局
 - 回退到阶段：`rollback_to`
 - 需要重新确认的对象：
+
+## fast-lane 判定
+
+| 条件 | 是否命中 | 说明 |
+|---|---|---|
+| 仅低风险轻量实现 / 文档 / 规则修改 | true / false |  |
+| 修改架构、权限、安全边界或平台安装路径 | true / false | 命中则升级 standard |
+| 修改外部接口契约、文件所有权或多 Story 依赖 | true / false | 命中则升级 standard |
+| 需要 HLD / LLD 才能解释影响 | true / false | 命中则升级 standard |
+| 是否保持 fast-lane | true / false |  |
 
 ## LLD 设计批次门禁
 

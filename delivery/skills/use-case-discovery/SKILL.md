@@ -13,7 +13,7 @@ output: process/USE-CASES.md
 
 ## 目标
 
-与用户共同完成**产物类型感知**的渐进式场景发现：先锁定当前工作模式、场景主体和交付出口，再通过轻量头脑风暴判定目标交付形态与治理方式，随后建立基线场景并做 8 维覆盖扫描，最终生成或更新标准化 `USE-CASES.md`，并在 Phase 3 追加场景发现摘要到 `CLARIFICATION-LOG.md`。
+与用户共同完成**产物类型感知**的渐进式场景发现：先锁定当前工作模式、场景主体和交付出口，再通过轻量头脑风暴与 `Scenario Gray Areas` 校准用户真实意图、认知盲区和交付影响面，随后建立基线场景并做 8 维后台覆盖扫描，最终生成或更新标准化 `USE-CASES.md`，并在 Phase 3 追加场景发现摘要到 `CLARIFICATION-LOG.md`。
 
 ## 适用场景
 
@@ -35,6 +35,8 @@ output: process/USE-CASES.md
 | `process/INPUT-INDEX.md` | 可选 | 定位原始材料与可导入背景 |
 | `process/CLARIFICATION-LOG.md` | 可选 | 读取阶段零调研结论，并在 Phase 3 追加场景发现摘要 |
 | `process/USE-CASES.md` | 可选 | draft 恢复或 confirmed 更新的唯一真相源 |
+| `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` | 可选 | CP2 场景讨论日志；恢复讨论、审计灰区选择和 deferred ideas |
+| `process/checks/CP2-DISCUSSION-CHECKPOINT.json` | 可选 | CP2 讨论恢复点；记录已完成灰区、剩余灰区和用户选择 |
 | `process/changes/CR-*.md` | 条件必须 | 若本轮为变更触发，读取文档处理决策与旧基线映射 |
 | 用户本轮新增输入 | 可选 | 新场景、补充说明、或 Phase 0 粘贴文本 |
 | 目标平台 / 安装约束 | 可选 | 辅助判断产物类型、交付边界与治理方式 |
@@ -84,11 +86,12 @@ output: process/USE-CASES.md
    - `delivery_routing.source`：`meta-self-dev / README / docs / user-confirmed`
 3. 若用户没有显式声明 meta 优化，**不得**把当前仓库 / 当前工作流视为默认场景主体。
 4. 在 `production` 模式下，若请求同时出现“整改当前仓库”和“目标 Agent/Skill/Workflow”，优先把目标产物作为场景主体，当前仓库仅视为实现载体。
-5. 若目标形态、场景主体或交付出口不清，进入轻量头脑风暴子流程：
+5. 若目标形态、场景主体、用户真实意图或交付出口不清，进入轻量头脑风暴子流程：
    - 一次只问 1 个问题，避免一次性抛出长问卷；
-   - 至少提出 2 个候选交付形态或输出路径，并给出 trade-off；
+   - 至少提出 2 个候选理解、交付形态或输出路径，并给出 trade-off；
+   - 每个候选都说明对范围、复杂度、验证方式、交付出口和后续门控的影响；
    - 若只有 1 个合理方案，必须写明无备选原因；
-   - 用户分段确认后再进入 8 维扫描。
+   - 用户分段确认后再进入 Scenario Gray Areas 和 8 维后台扫描。
 6. 再判定当前请求的目标交付类型：`tool / skill / agent / workflow / mixed`。
 7. 仅在必要时追问以下最小问题：交付对象是什么、谁触发、主要文件/目录落点在哪、是否存在多个不同交付面。
 8. 同步确定治理字段：
@@ -101,22 +104,55 @@ output: process/USE-CASES.md
    - 同一请求需要经过 **不同下游链路**（例如一个走 Agent 实现，一个走 Workflow 编排）。
 10. 若无法判定为单一类型且未命中 `mixed` 硬规则，继续追问；不得凭感觉落 `mixed`。
 
-### 步骤 3：Phase 1B 基线场景发现
+### 步骤 3：Scenario Gray Areas（场景灰区校准）
+
+1. 在标准模式下，即使用户初始描述看似清楚，也必须至少执行一次“真实意图 / 认知盲区 / 场景主体”校准；仅当 `workflow_mode=fast-lane` 且本轮未触发 standard 升级条件时，才可把灰区校准标为 `N/A` 并说明原因。
+2. 先识别 3-4 个真正会改变交付形态、验证方式、维护成本、用户价值或后续门控的灰区，不得把普通信息补全包装成灰区。
+3. 每个灰区必须包含：
+   - `gray_area_id`
+   - `question`
+   - `why_it_matters`
+   - `impact_surface`：范围、复杂度、验证、交付出口、后续门控中至少 2 项
+   - `recommended_discussion_order`
+   - `canonical_refs`：原始请求、README/docs、CR、输入材料或既有场景的引用
+4. 让用户选择 1-3 个重点讨论灰区；未选但有价值的内容进入 `Deferred Ideas`，不得丢失，也不得混入当前 scope。
+5. 讨论时一次只问 1 个高价值问题。问题优先给出 2-4 个具体选项，推荐项放在首位，并说明每个选项对范围、复杂度、验证、交付出口和后续门控的影响。
+6. 若用户自由表达、纠正上下文或拒绝结构化选项，立即停止继续推送选项，改为复述理解并请求确认；确认记录必须进入讨论日志。
+7. 将讨论过程写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`。该日志用于人类审计和恢复，不替代 `USE-CASES.md` 或 `REQUIREMENTS.md`。
+8. 将恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`；若当前路径不适用，必须在 CP2 自动检查中说明 `N/A` 理由。建议字段：
+
+```json
+{
+  "checkpoint_id": "CP2-DISCUSSION",
+  "status": "in_progress | completed | n/a",
+  "selected_gray_areas": [],
+  "completed_gray_areas": [],
+  "remaining_gray_areas": [],
+  "deferred_ideas": [],
+  "canonical_refs": [],
+  "last_user_confirmation": ""
+}
+```
+
+9. `USE-CASES.md` 只承载收敛后的场景基线、治理字段、覆盖自检和 deferred 摘要；下游正式消费仍以 `USE-CASES.md`、`REQUIREMENTS.md`、Decision Brief 为准，不依赖原始对话隐式记忆。
+
+### 步骤 4：Phase 1B 基线场景发现
 
 1. 以 PM 三问开场：**谁在使用 / 解决什么问题 / 如何量化成功**。
 2. 再用 5W1H 追问每个候选场景：触发条件、输入、处理逻辑、输出/结果、前置条件、排除情况。
 3. 每完成一轮基线整理，就按模板**增量写入** `process/USE-CASES.md`，状态保持 `draft`。
 4. Phase 1B 只建立场景基线，不做 8 维分析。
 
-### 步骤 4：Phase 2 八维覆盖扫描
+### 步骤 5：Phase 2 八维覆盖扫描
 
 1. 按需加载 `references/8-dimensions-framework.md`。
-2. 先询问是否需要追加会话级自定义维度；软性上限 ≤ 2 个。
-3. 按默认 8 维 + 自定义维度逐项扫描，每轮最多追问 3 个遗漏维度。
-4. 每个维度都必须落到以下状态之一：`已覆盖 / 已补充 / 不适用 / 待调研`。
-5. 每轮补充后都要把 `USE-CASES.md` 增量回写为 `draft`，不得只停留在会话内存。
+2. 8 维扫描是后台充分性检查。只把会改变设计、测试、交付或门控的缺口暴露给用户，避免把用户拖入固定长问卷。
+3. 先判断是否需要追加会话级自定义维度；软性上限 ≤ 2 个。只有自定义维度会影响交付时才向用户确认。
+4. 按默认 8 维 + 自定义维度逐项扫描，每轮最多追问 3 个遗漏维度。
+5. 每个维度都必须落到以下状态之一：`已覆盖 / 已补充 / 不适用 / 待调研`。
+6. 每轮补充后都要把 `USE-CASES.md` 增量回写为 `draft`，不得只停留在会话内存。
 
-### 步骤 5：Phase 3 确认与输出
+### 步骤 6：Phase 3 确认与输出
 
 1. 结构化展示全量场景、治理字段与覆盖自检表，使用固定选项让调用方确认：
    - `✅ 确认通过`
@@ -147,18 +183,46 @@ clarification_log_appended: true
 next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用户确认"
 ```
 
+7. 返回给 meta-pm 的摘要还必须包含 `decision_brief_input`，用于 CP2：
+
+```yaml
+decision_brief_input:
+  real_user_intent: ""
+  cognitive_blind_spots: []
+  scenario_gray_areas:
+    selected: []
+    deferred: []
+    discussion_log_path: process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md
+    checkpoint_path: process/checks/CP2-DISCUSSION-CHECKPOINT.json
+    canonical_refs: []
+  candidate_understandings: []
+  recommended_scope: ""
+  trade_offs: []
+  scenario_sufficiency: ""
+  freeform_confirmations: []
+  deferred_ideas: []
+  risks: []
+  user_decisions_needed: []
+```
+
 ## 输出文件 / 输出模板
 
 | 文件 | 路径 | 角色 |
 |---|---|---|
 | 场景工件 | `process/USE-CASES.md` | 主输出；Phase 1/2 持续写 draft，Phase 3 可确认 |
 | 场景发现摘要 | `process/CLARIFICATION-LOG.md` | Phase 3 追加式日志 |
+| 场景讨论日志 | `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` | 人类审计和恢复；不替代正式场景 / 需求 |
+| 场景讨论恢复点 | `process/checks/CP2-DISCUSSION-CHECKPOINT.json` | 中断恢复；缺失时 CP2 自动检查必须说明 N/A 或阻断原因 |
 | 模板 | `skills/use-case-discovery/templates/USE-CASES-TEMPLATE.md` | 渲染基线 |
 
 ## 约束
 
 - `USE-CASES.md` 必须与 `agents/meta-pm.md` 的字段契约逐项一致
 - Phase 1A / 1B 与 Phase 2 都必须增量写入 `draft`，不得只在确认时一次性落盘
+- 标准模式下必须执行 `Scenario Gray Areas` 校准；若判定不适用，必须在讨论日志或 CP2 自动检查中记录 `N/A` 原因
+- `Scenario Gray Areas` 只能暴露会改变设计、测试、交付或门控的关键缺口；普通字段补齐留给后台覆盖扫描
+- 未被选中的灰区、扩展想法和风险必须进入 `Deferred Ideas`，不得丢失，也不得直接并入当前 scope
+- 用户自由表达或纠正上下文时，必须停止结构化选项，先复述理解并确认
 - 对已确认的 `USE-CASES.md` 只能进入更新模式，必须显式保留版本演进
 - CR 触发的更新必须保留旧场景基线，并追加 `## 修订记录`；不得用新草案整体替换旧文档
 - 删除或归档旧场景只能在 CR 明确批准时执行，且必须在 CR 中保留完整摘录和映射关系
@@ -178,6 +242,8 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 - [ ] 更新模式下 `## 修订记录` 已追加，旧场景基线可追溯
 - [ ] `target_artifact_type` / `governance_mode` / `review_policy` 语义明确且可被上下游直接消费
 - [ ] `delivery_routing` 已记录交付出口来源；production 模式下不默认写当前仓库 `delivery/`
+- [ ] 标准模式下已记录 3-4 个 `Scenario Gray Areas`、用户选择、未选灰区和 `Deferred Ideas`
+- [ ] CP2 discussion log / checkpoint 已存在，或自动检查明确记录 N/A 理由
 - [ ] Phase 3 返回结构化完成摘要，并已向 `CLARIFICATION-LOG.md` 追加摘要
 
 ## 不适用边界
@@ -191,6 +257,9 @@ next_input_hint: "继续补充场景 / 转入 requirement-extraction / 等待用
 
 - **Never skip Phase 1A / 1B**：即使用户粘贴现成材料，也必须先判定交付形态，再补齐画像与成功指标基线
 - **头脑风暴不是长问卷**：目标不清时一次只问一个问题，先给 2-3 个候选方案和 trade-off，再让用户分段确认
+- **Scenario Gray Areas 不是字段清单**：灰区必须会改变交付形态、验证方式、维护成本或用户价值；否则放到后台覆盖扫描
+- **Deferred 不等于丢弃**：未进入当前范围的想法和风险必须可追溯，但不能偷偷扩大当前需求
+- **freeform 优先**：用户开始自由表达或纠正上下文后，先复述理解，不继续强推 A/B/C 选项
 - **维度不能静默跳过**：每个维度至少标成已覆盖 / 已补充 / 不适用 / 待调研之一
 - **不要替用户补答案**：追问一次仍无结论时，可记为“待调研”，不能脑补
 - **draft 文件是恢复唯一真相源**：恢复依赖 `USE-CASES.md`，不是会话记忆

@@ -149,7 +149,6 @@ def collect_codex_dry_run_errors(payload: dict[str, object]) -> list[str]:
                 [
                     sys.executable,
                     str(install_script),
-                    "--platform",
                     "codex",
                     "--scope",
                     scope,
@@ -183,7 +182,6 @@ def collect_codex_dry_run_errors(payload: dict[str, object]) -> list[str]:
             [
                 sys.executable,
                 str(install_script),
-                "--platform",
                 "codex",
                 "--scope",
                 "project",
@@ -243,51 +241,74 @@ def collect_installer_component_errors() -> list[str]:
     if not install_script.is_file():
         return errors + [f"missing installer: {install_script.relative_to(ROOT)}"]
 
-    help_result = subprocess.run(
-        [sys.executable, str(install_script), "--help"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    help_output = help_result.stdout + help_result.stderr
-    if help_result.returncode != 0:
-        errors.append(f"installer --help failed with exit {help_result.returncode}: {help_output.strip()}")
-    for required in ("--component", "rules", "agent", "full", "--content"):
-        if required not in help_output:
-            errors.append(f"installer --help missing component/legacy token: {required}")
+    help_cases = [
+        {
+            "label": "installer --help",
+            "args": ["--help"],
+            "required": ("<platform>", "--component", "rules", "agent", "full", "--content"),
+        },
+        {
+            "label": "installer platform --help",
+            "args": ["codex", "--help"],
+            "required": ("<platform>", "--component", "rules", "agent", "full", "--content"),
+        },
+        {
+            "label": "installer uninstall --help",
+            "args": ["uninstall", "--help"],
+            "required": ("Uninstall", "<platform>", "--component", "rules", "agent", "full"),
+        },
+        {
+            "label": "installer uninstall platform --help",
+            "args": ["uninstall", "codex", "--help"],
+            "required": ("Uninstall", "<platform>", "--component", "rules", "agent", "full"),
+        },
+    ]
+    for help_case in help_cases:
+        help_result = subprocess.run(
+            [sys.executable, str(install_script), *help_case["args"]],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        help_output = help_result.stdout + help_result.stderr
+        if help_result.returncode != 0:
+            errors.append(f"{help_case['label']} failed with exit {help_result.returncode}: {help_output.strip()}")
+            continue
+        for required in help_case["required"]:
+            if required not in help_output:
+                errors.append(f"{help_case['label']} missing help token: {required}")
 
     with tempfile.TemporaryDirectory(prefix="meta-flow-component-") as tmp:
         project_root = Path(tmp)
         cases = [
             {
                 "label": "codex user default",
-                "args": ["--platform", "codex", "--scope", "user", "--project-dir", str(project_root), "--dry-run"],
+                "args": ["codex", "--scope", "user", "--project-dir", str(project_root), "--dry-run"],
                 "required": ["Component: rules", str(Path.home() / ".codex" / "AGENTS.md")],
                 "forbidden": [str(Path.home() / ".codex" / "agents" / "meta-po.toml"), str(Path.home() / ".agents" / "skills")],
             },
             {
                 "label": "codex project default",
-                "args": ["--platform", "codex", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
+                "args": ["codex", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
                 "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".agents" / "skills")],
                 "forbidden": [".codex/skills"],
             },
             {
                 "label": "claude project default",
-                "args": ["--platform", "claude", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
+                "args": ["claude", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
                 "required": ["Component: full", str(project_root / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-po.md"), str(project_root / ".claude" / "skills")],
                 "forbidden": [str(project_root / ".claude" / "CLAUDE.md")],
             },
             {
                 "label": "codex full component",
-                "args": ["--platform", "codex", "--scope", "project", "--project-dir", str(project_root), "--component", "full", "--dry-run"],
+                "args": ["codex", "--scope", "project", "--project-dir", str(project_root), "--component", "full", "--dry-run"],
                 "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".agents" / "skills")],
                 "forbidden": [".codex/skills"],
             },
             {
                 "label": "legacy skills content",
                 "args": [
-                    "--platform",
                     "codex",
                     "--scope",
                     "project",
@@ -301,6 +322,12 @@ def collect_installer_component_errors() -> list[str]:
                 ],
                 "required": ["Component: agent", "Legacy content: skills", str(project_root / ".agents" / "skills" / "context-handoff" / "SKILL.md")],
                 "forbidden": [str(project_root / ".codex" / "agents" / "meta-po.toml"), ".codex/skills"],
+            },
+            {
+                "label": "legacy platform option",
+                "args": ["--platform", "codex", "--scope", "project", "--project-dir", str(project_root), "--component", "rules", "--dry-run"],
+                "required": ["Component: rules", str(project_root / "AGENTS.md")],
+                "forbidden": [".codex/skills"],
             },
         ]
 
@@ -473,7 +500,6 @@ def collect_agent_display_profile_errors() -> list[str]:
                 [
                     sys.executable,
                     str(install_script),
-                    "--platform",
                     platform,
                     "--scope",
                     "project",

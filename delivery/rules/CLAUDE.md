@@ -8,7 +8,7 @@
 
 - **主编排器**：`meta-po`（元工作流产品负责人），负责状态管理、阶段推进、CP0-CP8 检查点控制；不自动常驻，只有显式 `@meta-po` 或触发词命中时启动
 - **功能 Agent**（按需启用）：`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`
-- **所有任务均通过 meta-po 发起**，功能 Agent 不直接响应用户，由 meta-po 唤醒和收敛
+- **所有任务均通过 meta-po 发起**；`meta-pm` / `meta-se` 在阶段委托期间可直接与用户多轮沟通，阶段交还后仍由 meta-po 发起 CP2 / CP3 正式人工确认
 - **调度证据优先**：handoff 文件只表示交接，不表示功能 Agent 已执行。功能 Agent 完成必须有平台 Task/Subagent 证据，或用户明确批准的 `inline-fallback`。
 - **显示区分**：Claude Code 文件型 subagent 不使用 nickname；安装器通过 `color` 字段区分角色：`meta-po=red`、`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。Codex 侧默认每个 canonical subagent 预留 5 个命令别名，其中 `meta-dev` 与 `meta-qa` 各预留 10 个；按百家姓顺序依次为 `po-zhao/po-qian/po-sun/po-li/po-zhou`、`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`。
 
@@ -22,6 +22,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 |-------|--------|
 | `state-router` | 推进、下一步、当前状态、回退、状态查询、继续 |
 | `checkpoint-manager` | 检查点、checklist、自检结果、人工审查、CP0、CP1、CP2、CP3、CP4、CP5、CP6、CP7、CP8 |
+| `use-case-discovery` | 场景发现、使用场景讨论、用户场景梳理、use-case workshop、use case discovery |
 | `requirement-extraction` | 提取需求、整理需求、结构化需求、需求分析 |
 | `requirement-clarifier` | 澄清需求、需求问题、未决问题、需求歧义 |
 | `scenario-expansion` | 展开场景、生成场景、测试场景、场景扩展 |
@@ -41,6 +42,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | `workflow-renderer` | 渲染工作流、生成文档、交付文档、输出工作流 |
 | `context-handoff` | 上下文交接、装配上下文、阶段切换、交接给 |
 | `context-manifest-builder` | 上下文清单、执行上下文、CONTEXT-MANIFEST |
+| `review-artifact-protocol` | review gate、评审协议、advisor、Review Findings、Review Summary |
 | `change-impact-analysis` | 需求变更、修改需求、变更影响、发起变更、CR |
 | `issue-drafter` | 起草问题、创建 ISSUE、问题工单、报告问题 |
 | `issue-routing` | 路由问题、分配问题、ISSUE 路由、问题分流 |
@@ -53,6 +55,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 - **运行时状态**：`process/STATE.md`
 - **自动检查结果**：`process/checks/CP*.md`
+- **讨论日志**：`process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`、`process/discussions/CP3-HLD-DISCUSSION-LOG.md`
 - **高层设计**：`process/HLD.md`
 - **Skill 私有模板**：`skills/<skill-name>/templates/`
 - **人工确认稿**：`checkpoints/CP*.md`
@@ -75,7 +78,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 1. **澄清锁**：CP2 需求基线门未通过前，不得输出正式设计对象
 2. **HLD 锁**：CP3 HLD 架构评审门未通过前，不得进入 Story 拆解
-3. **Story LLD 锁**：CP4 Story 计划人工确认未通过前，不得开始全量 LLD 设计；Story 未进入 `lld-ready` / `package-draft` 等待设计状态前，不得开始对应 Story 的 LLD 设计
+3. **Story LLD 锁**：CP4 Story 计划自动预检未通过前，不得开始全量 LLD 设计；Story 未进入 `lld-ready` / `package-draft` 等待设计状态前，不得开始对应 Story 的 LLD 设计
 4. **Story 开发锁**：全部目标 Story 的 CP5 Story LLD 可实现性门未通过、尚未进入 `story-execution`、当前 Wave 不可执行、`dev_gate` 未满足、或文件所有权冲突时，不得开始任何 Story 实现
 5. **验证锁**：没有 `process/VALIDATION-ENV.yaml` 且 `approval.confirmed != true`，不得开始验证
 6. **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
@@ -96,12 +99,21 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 21. **平台契约优先**：涉及安装路径、schema 或发现机制时，`delivery/doc/PLATFORM-CONTRACTS.yaml` 是路径真相源；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
 22. **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
 23. **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前必须在 CR 中填写文档处理决策；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
-24. **安装组件默认值**：安装 CLI 使用 `--component rules|agent|full`；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
+24. **安装命令与组件默认值**：安装 CLI 使用 `meta-flow install <platform>`，卸载使用 `meta-flow uninstall <platform>`；`--platform` 与 `install --uninstall` 仅作 legacy 兼容。组件使用 `--component rules|agent|full`；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
 25. **Codex 生命周期**：Codex 下同一工作流只允许 1 个 `meta-po` 子 agent；同角色同任务优先复用已有子 agent，检查点或交接完成后及时关闭；发现两个活动 `meta-po` 时必须阻断推进并要求用户选择保留线程
 26. **检查点文件优先**：推进阶段前必须读取对应 `process/checks/CP*.md` 与 `checkpoints/CP*.md`；不能只看产物 frontmatter 的 `confirmed=true`
 27. **人工审查回填**：meta-po 发起人工检查时必须提示 checklist 文件路径；用户直接对话确认后，仍必须回填对应 `checkpoints/CP*.md` 的“人工审查结果”
 28. **子 agent 调度硬门禁**：meta-po 唤醒功能 Agent 必须使用平台 Task/Subagent 能力；Codex 环境对应 `spawn_agent` / `resume_agent` / `send_input`。`process/handoffs/*.md` 必须记录 `dispatch.mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。只有 handoff 没有调度证据时，不得把目标 Agent 标记为 completed。
 29. **inline fallback 显式化**：平台无法拉起子 agent 时，默认 blocked；只有用户明确批准，meta-po 才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。结果必须写成 meta-po 代执行，不得写成 meta-dev / meta-qa 独立完成。
+30. **关键决策门控**：CP2 / CP3 / CP5 / CP8 是人工决策点；CP4 只写自动预检并汇入 CP5 Decision Brief。
+31. **Decision Brief**：关键人工确认前必须汇总推荐决策、备选方案、影响维度、优劣、风险与回退、用户需决策事项。
+32. **自动拉起子 agent**：用户启动正式工作流后，同工作流内默认允许 meta-po 自动拉起功能 Agent；该授权不包含 inline fallback。
+33. **阶段委托交互**：`requirement-clarification` 默认委托 `meta-pm` 直接与用户完成场景和需求草案；`solution-design` 默认委托 `meta-se` 直接与用户完成架构灰区、advisor table 和 HLD 草案。委托状态写入 `STATE.md.delegated_interaction`；被委托 Agent 不得推进跨阶段状态，不得发起 CP2 / CP3 正式人工检查点；阶段收敛后写交还摘要，由 meta-po 回收并发起 Decision Brief。
+34. **LLD Clarification Queue**：并行 LLD 阶段多个 `meta-dev` 不得并发直接询问用户；遇到实现灰区必须写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`，字段至少包含 `id/story_id/owner_agent/question/options/recommendation/impact_surface/blocks_lld/answer/status`。meta-po 是唯一 question broker，负责合并同类问题、批量询问、回填答案并分发给对应 meta-dev。存在未回答 `blocks_lld=true` 项时不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief、LLD 和 DEV-LOG 中暴露。
+35. **fast-lane**：仅低风险轻量实现可用；不得跳过 CP6 / CP7、调度证据或 CP8 终验摘要；命中架构、权限、安装、外部接口、文件所有权冲突或多 Story 依赖时必须升级 standard。
+36. **CP2 Scenario Gray Areas**：标准模式下，场景发现必须先识别 3-4 个会影响交付的灰区，让用户选择 1-3 个重点讨论；未选项进入 Deferred Ideas。讨论日志写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`，恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`，缺失时 CP2 自动检查必须说明 N/A 或阻断原因。
+37. **CP3 Architecture Gray Areas**：HLD 正式生成前必须先识别关键架构灰区，advisor lane 使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格优先输出。讨论日志写入 `process/discussions/CP3-HLD-DISCUSSION-LOG.md`，恢复点写入 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`，缺失时 CP3 自动检查必须说明 N/A 或阻断原因。
+38. **讨论日志消费边界**：Discussion Log 用于审计和恢复，不替代 `USE-CASES.md`、`REQUIREMENTS.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md`。
 
 ## CP0-CP8 检查点
 
@@ -111,13 +123,15 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | CP1 | 用户场景完备门 | 自动 | `process/checks/CP1-USE-CASE-COMPLETENESS.md` |
 | CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
-| CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
+| CP4 | Story 拆解与并行安全门 | 自动预检（汇入 CP5） | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md` |
 | CP5 | Story LLD 可实现性门 | 全量自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` |
 | CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
 
-每个 CP 都必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须给出逐项检查结果；人工检查点必须给出 checklist 路径并回填人工审查结果。
+每个 CP 都必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须给出逐项检查结果；CP2 / CP3 / CP5 / CP8 人工检查点必须给出 checklist 路径、Decision Brief 并回填人工审查结果。
+
+CP2 Decision Brief 必须额外覆盖用户真实意图、场景覆盖、认知盲区、Scenario Gray Areas、Deferred Ideas、用户选择影响和回退方式。CP3 Decision Brief 必须额外覆盖候选架构适用条件、优化项、牺牲项、影响面、切换条件、Use Case → Architecture Traceability、场景模拟结果和未决风险。
 
 CP6 / CP7 还必须包含 `Agent Dispatch Evidence` 小节。缺少 meta-dev / meta-qa 的真实子 agent 证据，且没有用户批准的 `inline-fallback` 时，结论只能是 `FAIL` 或 `BLOCKED`。
 
@@ -127,7 +141,7 @@ Claude Code 可继续使用结构化选择。Codex 只有在当前工具面明�
 
 Claude Code 全局规则不复制完整工作流状态机；完整状态机以 `AGENTS.md`、`meta-po` 和 `state-router` 为准。本文件只保留执行边界摘要：
 
-- `story-planning`：CP4 通过后，完成全部目标 Story 的 LLD 写作、CP5 自动预检和 CP5 全量人工确认
+- `story-planning`：CP4 自动预检通过后，完成全部目标 Story 的 LLD 写作、CP5 自动预检和 CP5 全量人工确认
 - `story-execution`：进入时全量 CP5 必须已通过；本阶段只按 Wave 调度开发与验证，不再进行 LLD 写作
 
 Complex 模式下，LLD 写作、开发和验证均按 Story DAG 队列并行调度，但同一 Story 必须严格按：
@@ -137,6 +151,8 @@ Complex 模式下，LLD 写作、开发和验证均按 Story DAG 队列并行调
 顺序推进。
 
 LLD 写作必须覆盖全部目标 Story，且可以按 Story 并行；人工确认必须等全部目标 Story 的 LLD 与 CP5 自动预检完成后统一发起。标准开发默认以全部目标 Story 为 LLD 设计批次；变更流程默认以 CR 影响范围为批次。全量 CP5 通过前，不得启动任何 Story 开发；通过后按 Wave、依赖类型和文件所有权调度开发。
+
+并行 LLD 写作时，meta-dev 只能写 clarification item，不能多个线程同时直接问用户。meta-po 统一合并队列、形成 `active_question_batch`、批量问用户，并把答案回填到 queue、LLD 和 DEV-LOG。队列存在未回答 `blocks_lld=true` item 时，CP5 不得发起。
 
 默认并发上限：`max_parallel_lld=3`、`max_parallel_dev=2`、`max_parallel_qa=2`。开发并行必须同时满足依赖类型门控和文件所有权门控；`runtime` 依赖默认等待上游 `verified`，`file-conflict` 依赖默认串行。
 
@@ -173,5 +189,7 @@ LLD 写作必须覆盖全部目标 Story，且可以按 Story 并行；人工确
 | `lane-implementation` | `meta-dev` | 可实现性与平台约束 |
 | `lane-quality` | `meta-qa` | 可验证性与风险 |
 | `lane-docs` | `meta-doc` | 交付文档可读性 |
+
+CP3 HLD 讨论中，`lane-product`、`lane-architecture`、`lane-quality` 是默认 advisor lane；`lane-docs` 的可解释性 / 可维护性作为汇总检查项纳入，不默认新增一次 subagent 调度。方案形成输入和 HLD 后评审意见必须分开记录。
 
 灰度顺序：先 `HLD.md` / `STORY-*-LLD.md`，后 `ARCHITECTURE-DECISION.md` / `STORY-BACKLOG.md`，最后 `README.md` / `USER-MANUAL.md`。

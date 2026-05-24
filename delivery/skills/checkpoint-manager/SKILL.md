@@ -18,6 +18,7 @@ status: active
 - 自动检查点：执行检查并写入检查结果。
 - 自动预检 + 人工检查点：先写自动预检结果，再生成供用户审查的 checklist 文件。
 - Story 级滚动检查点：按 Story 独立记录 LLD、编码完成和验证完成结果。
+- 关键决策门控：CP2 / CP3 / CP5 / CP8 生成人工审查稿和 Decision Brief；CP4 只生成自动预检并汇入 CP5。
 
 所有检查点必须采用 IPD 风格的四段结构：
 
@@ -31,12 +32,14 @@ status: active
 | 类型 | 路径 | 说明 |
 |---|---|---|
 | 自动检查结果 | `process/checks/CP{n}-{slug}.md` | 由 agent 填写，必须包含逐项 PASS / FAIL / N/A / WAIVED |
+| 讨论日志 | `process/discussions/CP{n}-*-DISCUSSION-LOG.md` | CP2 / CP3 人类审计与恢复日志；不替代正式产物 |
+| 讨论恢复点 | `process/checks/CP{n}-DISCUSSION-CHECKPOINT.json` | CP2 / CP3 中断恢复状态；缺失时自动检查必须说明 N/A 或 blocked 原因 |
 | 人工审查稿 | `checkpoints/CP{n}-{slug}.md` | 由 meta-po 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
 | Story LLD 人工审查稿 | `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 的 LLD 统一确认 |
 | Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
 | Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
 
-`process/checks/` 属于运行态检查证据；`checkpoints/` 属于人工确认态文件。人工审查时，meta-po 必须在用户提示中给出具体 `checkpoints/...` 路径。
+`process/checks/` 属于运行态检查证据；`checkpoints/` 属于人工确认态文件。人工审查时，meta-po 必须在用户提示中给出具体 `checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
 
 ## 结果状态
 
@@ -142,6 +145,25 @@ target:
 | 预检文件 | 结论 | 阻断项 | 说明 |
 |---|---|---|---|
 | `process/checks/...` | PASS | 0 |  |
+
+## Decision Brief
+
+| 字段 | 内容 |
+|---|---|
+| 推荐决策 | `approve / 修改: <具体修改点> / reject` 及理由 |
+| 备选方案 | 至少 1 个备选；无合理备选时写明原因 |
+| 影响维度 | 用户价值、实现复杂度、可验证性、维护成本、平台兼容、安全 / 权限、交付影响 |
+| 优劣分析 | 各候选方案的优势、代价、适用条件 |
+| 风险与回退 | 风险等级、接受条件、回退阶段或 Story 状态 |
+| 用户需决策事项 | 本轮必须由用户决定的事项 |
+
+### CP2 / CP3 / CP5 追加 Decision Brief 字段
+
+| 检查点 | 必须追加内容 |
+|---|---|
+| CP2 | 用户真实意图、场景覆盖、认知盲区补充、Scenario Gray Areas 处理结果、Deferred Ideas、用户选择影响、回退方式、discussion log / checkpoint 路径或 N/A 原因 |
+| CP3 | 候选架构适用条件、优化项、牺牲项、影响面、切换条件、Use Case → Architecture Traceability、关键场景模拟结果、未决风险、discussion log / checkpoint 路径或 N/A 原因 |
+| CP5 | LLD clarification queue 收敛状态、已回答问题、转 OPEN / Spike 的问题、未回答阻断项为 0 的证据、跨 Story 契约、文件 owner、merge order |
 
 ## Entry Criteria
 
@@ -283,6 +305,7 @@ reject
 | CP1 通过 | 用户场景已形成可追溯基线 |
 | 需求草案存在 | `REQUIREMENTS.md` 已生成 |
 | 非功能需求有初稿 | 性能、安全、可靠性、兼容性等已列出 |
+| 场景讨论证据存在或说明 N/A | `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` 与 `process/checks/CP2-DISCUSSION-CHECKPOINT.json` 可读，或自动检查写明不适用原因 |
 
 ### Checklist
 
@@ -297,6 +320,9 @@ reject
 | 7 | 需求无冲突 | 冲突已解决或有决策记录 |
 | 8 | 变更机制明确 | 基线后修改必须走 CR |
 | 9 | 追溯矩阵建立 | 原始请求 -> 场景 -> 需求 可追溯 |
+| 10 | Scenario Gray Areas 已处理 | 3-4 个关键灰区、用户选择的 1-3 个重点、未选项和 canonical refs 已记录 |
+| 11 | Deferred Ideas 已隔离 | 超出当前 scope 的想法、风险和扩展场景已进入 deferred，不污染需求基线 |
+| 12 | 8 维扫描后台化 | 仅将影响设计 / 测试 / 交付 / 门控的缺口暴露给用户，其余覆盖状态已记录 |
 
 ### Exit Criteria
 
@@ -308,6 +334,8 @@ reject
 ### Deliverables
 
 - `process/REQUIREMENTS.md`
+- `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`（或 N/A 说明）
+- `process/checks/CP2-DISCUSSION-CHECKPOINT.json`（或 N/A 说明）
 - `process/checks/CP2-REQUIREMENTS-BASELINE.md`
 - `checkpoints/CP2-REQUIREMENTS-BASELINE.md`
 
@@ -325,6 +353,7 @@ reject
 | CP2 通过 | 需求基线已确认 |
 | HLD 草案存在 | `process/HLD.md` 已生成 |
 | ADR 候选可读 | 关键决策点已在 HLD 或 ADR 草案中说明 |
+| 架构讨论证据存在或说明 N/A | `process/discussions/CP3-HLD-DISCUSSION-LOG.md` 与 `process/checks/CP3-DISCUSSION-CHECKPOINT.json` 可读，或自动检查写明不适用 / blocked 原因 |
 
 ### Checklist
 
@@ -340,6 +369,11 @@ reject
 | 8 | 失败路径明确 | 超时、失败、回滚、降级、重试策略明确 |
 | 9 | 可测试性明确 | 架构支持单测、集成测试、回归测试 |
 | 10 | 内部一致 | HLD、ADR、Risk Matrix、NFR 不自相矛盾 |
+| 11 | Architecture Gray Areas 已前置 | HLD 前已识别关键架构灰区，且 advisor table 影响候选方案和推荐方案 |
+| 12 | 适用性矩阵完整 | 用户目标、项目成熟度、认知负担、验证条件和回退成本均已评估 |
+| 13 | 场景映射完整 | Use Case → Architecture Traceability 覆盖关键 UC、模块、异常路径和验证方式 |
+| 14 | 场景模拟通过 | 至少 2-3 个关键 UC 已走通推荐架构；失败项不存在或已阻断 |
+| 15 | 切换条件明确 | 推荐方案的优化项、牺牲项和 When to switch 条件已记录 |
 
 ### Exit Criteria
 
@@ -352,14 +386,15 @@ reject
 
 - `process/HLD.md`
 - `process/ARCHITECTURE-DECISION.md` 或 HLD 中 ADR 候选
+- `process/discussions/CP3-HLD-DISCUSSION-LOG.md`（或 N/A 说明）
+- `process/checks/CP3-DISCUSSION-CHECKPOINT.json`（或 N/A 说明）
 - `process/checks/CP3-HLD-CONSISTENCY.md`
 - `checkpoints/CP3-HLD-REVIEW.md`
 
 ## CP4 Story 拆解与并行安全门
 
-- 类型：自动预检 + 人工
+- 类型：自动预检（汇入 CP5）
 - 自动结果文件：`process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`
-- 人工审查稿：`checkpoints/CP4-STORY-PLAN-REVIEW.md`
 - 责任方：meta-se / meta-po
 
 ### Entry Criteria
@@ -394,7 +429,7 @@ reject
 | DAG 校验通过 | 无循环依赖 |
 | 文件冲突可控 | 未处理冲突 = 0 |
 | 首批队列可计算 | `lld_ready` 可解释 |
-| 人工确认完成 | Story 边界和并行计划被批准 |
+| CP5 汇总就绪 | Story 边界、依赖、文件所有权和并行计划风险可汇入 CP5 Decision Brief |
 
 ### Deliverables
 
@@ -403,7 +438,6 @@ reject
 - `process/stories/STORY-*.md`
 - `process/stories/STORY-STATUS.md`
 - `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`
-- `checkpoints/CP4-STORY-PLAN-REVIEW.md`
 
 ## CP5 Story LLD 可实现性门
 
@@ -416,9 +450,10 @@ reject
 
 | 条目 | 说明 |
 |---|---|
-| CP4 通过 | Story 拆解与并行计划已确认 |
+| CP4 自动预检通过 | Story 拆解、依赖 DAG、文件所有权和并行计划已通过自动检查 |
 | 全部目标 Story 处于 LLD 审查态 | 状态均为 `lld-ready-for-review` 或全量 `lld-batch-ready-for-review` |
 | 全部目标 Story LLD 已生成 | 每个 `STORY-{id}-{story_slug}-LLD.md` 均存在 |
+| LLD clarification 队列可读 | `STATE.md.parallel_execution.lld_clarification_queue` 已初始化，且无未回答阻断项；若有 OPEN / Spike，已标注非阻断和重访条件 |
 
 ### Checklist
 
@@ -436,12 +471,15 @@ reject
 | 10 | 可测试性明确 | 单测点、集成点、Mock 点、验证命令 |
 | 11 | dev_gate 可计算 | `lld_confirmed`、`dependencies_satisfied`、`file_conflict_free` 可判定 |
 | 12 | 偏差记录机制明确 | 实现偏离 LLD 时必须记录原因和影响 |
+| 13 | CP4 摘要已纳入 | Story 边界、DAG、并行安全、文件所有权和 OPEN 项已写入 Decision Brief |
+| 14 | clarification 队列已收敛 | 已回答项、转 OPEN / Spike 项、阻断项为 0、跨 Story 契约和 merge order 均已写入 Decision Brief |
 
 ### Exit Criteria
 
 | 条目 | 说明 |
 |---|---|
 | 自动预检通过 | 全部目标 Story 的 LLD 可实现性检查无阻断项 |
+| clarification 队列收敛 | `blocks_lld=true` 的未回答项为 0；非阻断 OPEN / Spike 已有 owner 和重访条件 |
 | 人工确认完成 | 全部目标 Story 的 LLD 被统一批准 |
 | dev_gate 可更新 | 全部目标 Story 可进入 `lld-approved`，当前 Wave 满足时进入 `dev_ready` |
 
@@ -601,6 +639,9 @@ reject
 5. `changes_requested` 必须路由给对应 agent 修订，并在重提时保留旧检查结果作为历史证据。
 6. `rejected` 必须回退到检查点定义的目标阶段或 Story 状态。
 7. CP6 / CP7 必须包含 `## Agent Dispatch Evidence` 小节；若缺少真实子 agent 证据且没有用户批准的 `inline-fallback`，结论只能是 `FAIL` 或 `BLOCKED`。
+8. CP4 自动预检失败时不得进入 CP5；CP4 通过时不得单独要求人工确认，必须把摘要并入 CP5。
+9. CP2 / CP3 人工检查点发起前必须校验 discussion log / checkpoint 存在；若缺失且没有 N/A 理由，结论只能是 `BLOCKED`。
+10. CP5 人工检查点发起前必须校验 `STATE.md.parallel_execution.lld_clarification_queue`。存在未回答 `blocks_lld=true` item 时，CP5 结论只能是 `BLOCKED`；用户明确接受转 OPEN / Spike 的 item 必须写入 Decision Brief、LLD 第 12.1 节和 DEV-LOG。
 
 CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 
@@ -620,7 +661,8 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 
 - [ ] CP0-CP8 均有 Entry Criteria、Checklist、Exit Criteria、Deliverables
 - [ ] 自动检查点均生成 `process/checks/CP*.md` 结果文件
-- [ ] 人工检查点均生成 `checkpoints/CP*.md` 审查稿
-- [ ] meta-po 发起人工确认时明确提示 checklist 文件路径
+- [ ] CP2 / CP3 / CP5 / CP8 人工检查点均生成 `checkpoints/CP*.md` 审查稿
+- [ ] 人工检查稿包含 Decision Brief
+- [ ] meta-po 发起关键人工确认时明确提示 checklist 文件路径
 - [ ] 人工审查后对应 `checkpoints/CP*.md` 已填入结论
 - [ ] `STATE.md.checkpoints` 与检查文件状态一致

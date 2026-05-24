@@ -17,8 +17,9 @@
 | `.input/` | 只读输入目录（用户提供的原始材料） |
 | `~/.meta-flow/` | 安装器状态目录（仅保存安装 manifest，不作为当前元工作流运行态输出目录） |
 | `process/` | 运行时文档（gitignored，STATE.md / HLD.md / stories 等） |
+| `process/discussions/` | CP2 / CP3 讨论日志（gitignored，用于人类审计和中断恢复，不替代正式产物） |
 | `process/checks/` | 自动检查点结果（gitignored，CP0-CP8 自检证据） |
-| `checkpoints/` | 人工检查点审查稿（gitignored，CP2/CP3/CP4/CP5/CP8 checklist 与审查结果） |
+| `checkpoints/` | 人工检查点审查稿（gitignored，CP2/CP3/CP5/CP8 Decision Brief、checklist 与审查结果；CP4 仅自动预检） |
 | `docs/` | 参考文档和设计历史 |
 
 ## 输出隔离原则
@@ -38,14 +39,14 @@
 │   ├── STORY-BACKLOG.md
 │   ├── DEVELOPMENT-PLAN.yaml
 │   ├── TEST-STRATEGY.md
+│   ├── discussions/
 │   ├── checks/
 │   ├── changes/
 │   └── stories/
 ├── checkpoints/                 # 人工检查点审查稿（默认建议 gitignore）
 │   ├── CP2-REQUIREMENTS-BASELINE.md
 │   ├── CP3-HLD-REVIEW.md
-│   ├── CP4-STORY-PLAN-REVIEW.md
-│   ├── CP5-STORY-001-example-LLD.md
+│   ├── CP5-ALL-STORIES-LLD-BATCH.md
 │   └── CP8-DELIVERY-READINESS.md
 └── delivery/                    # meta-flow 自身最终交付物（production 项目不默认使用）
     ├── README.md
@@ -59,15 +60,15 @@
 安装测试优先使用全局命令或 `uv run`：
 
 ```bash
-meta-flow install --platform codex --scope project --component full --dry-run
-uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-run
+meta-flow install codex --scope project --component full --dry-run
+uv run --python 3.11 python delivery/scripts/install.py codex --dry-run
 ```
 
 ## `~/.meta-flow` 目录说明
 
 `~/.meta-flow/` 当前不承载 Meta Flow 的运行态文档，也不是 `process/`、`process/checks/`、`checkpoints/` 或交付出口的替代目录。当前规则要求元工作流运行态仍写入仓库根目录下的 `process/`、自动检查结果写入 `process/checks/`、人工审查稿写入 `checkpoints/`；交付态按 engagement mode 路由，meta-flow 自身改进写当前仓库 `delivery/`，外部 production 项目按目标项目约定或用户确认输出。
 
-当前实现中，`delivery/scripts/install.py` 会把安装状态写入 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。该 manifest 记录已安装的平台、scope、安装时间、canonical commit、目标路径和卸载所需的 remove path。安装器执行 `--uninstall` 时依赖这个文件精确卸载。
+当前实现中，`delivery/scripts/install.py` 会把安装状态写入 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。该 manifest 记录已安装的平台、scope、安装时间、canonical commit、目标路径和卸载所需的 remove path。`meta-flow uninstall <platform>` 与 `delivery/scripts/install.py uninstall <platform>` 依赖这个文件精确卸载。
 
 因此：
 
@@ -89,24 +90,27 @@ uv run --python 3.11 python delivery/scripts/install.py --platform codex --dry-r
 ```bash
 uv python install 3.11
 uv tool install --editable .
-meta-flow install --platform codex --scope user --component rules
-meta-flow install --platform codex --scope project --component full --project-dir /path/to/project
+meta-flow install codex --scope user --component rules
+meta-flow install codex --scope project --component full --project-dir /path/to/project
+meta-flow uninstall codex --scope project --project-dir /path/to/project
+meta-flow install codex --help
+meta-flow uninstall codex --help
 # 从项目根运行
-uv run --python 3.11 python delivery/scripts/install.py --platform claude --dry-run
+uv run --python 3.11 python delivery/scripts/install.py claude --dry-run
 # 或从 delivery/ 目录运行（delivery 作为独立仓库时）
-cd delivery && uv run --python 3.11 python scripts/install.py --platform claude --dry-run
+cd delivery && uv run --python 3.11 python scripts/install.py claude --dry-run
 ```
 
 ## 开发节奏
 
 1. `meta-po` 初始化请求并写入 CP0 自动检查结果。
-2. `meta-pm` 输出场景与需求，写入 CP1 / CP2 自动检查结果；CP2 通过人工审查后进入设计。
-3. `meta-se` 输出 `HLD.md` 和 CP3 自动预检；CP3 通过人工审查后拆解 Story、开发计划、依赖类型与文件所有权。
-4. `meta-se` 写入 CP4 自动预检；CP4 通过人工审查后，`meta-po` 按 Story DAG 计算 `lld_ready` / `dev_ready` 队列。
-5. `meta-dev` 并行输出 Story LLD 和 CP5 自动预检，`meta-po` 发起单 Story 或小批次滚动确认。
-6. Story CP5 确认且 `dev_gate` 满足后，`meta-po` 必须通过平台子 agent 能力调度 `meta-dev` 并记录证据；`meta-dev` 并行实现并写入 CP6 编码完成结果。
-7. Story 进入验证时，`meta-po` 必须通过平台子 agent 能力调度 `meta-qa` 并记录证据；`meta-qa` 验证并写入 CP7 验证完成结果。
-8. 所有目标 Story 验证后，`meta-qa` / `meta-doc` 完成交付材料并写入 CP8 自动预检；CP8 人工终验通过后进入 delivered。
+2. `meta-po` 将需求澄清阶段委托给 `meta-pm`。用户直接与 `meta-pm` 通过 Scenario Gray Areas 识别 3-4 个会影响交付的场景灰区，选择 1-3 个重点讨论；未选项进入 Deferred Ideas。随后输出场景 / 需求，写入 CP1 / CP2 自动检查结果；用户确认“可提交给 meta-po 汇总”后交还，meta-po 发起 CP2 Decision Brief。
+3. CP2 通过后，`meta-po` 将 HLD 设计阶段委托给 `meta-se`。用户直接与 `meta-se` 讨论 Architecture Gray Areas 和 advisor table，并使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格形成方案输入；随后 `meta-se` 输出含适用性矩阵、Use Case → Architecture Traceability 和场景模拟的 `HLD.md`。用户确认“HLD 草案可提交给 meta-po 发起 CP3”后交还，meta-po 发起 CP3。
+4. `meta-se` 写入 CP4 自动预检；CP4 不再单独人工确认，结果汇入 CP5 批量 LLD 决策摘要。
+5. `meta-dev` 并行输出全部目标 Story 的 LLD 和 CP5 自动预检；遇到实现灰区时只写 `STATE.md.parallel_execution.lld_clarification_queue`。`meta-po` 作为 question broker 合并问题、批量询问用户、回填答案，然后生成 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` 一次性确认全部 LLD、CP4 摘要、clarification 队列、依赖门控和文件所有权。
+6. 全量 CP5 确认且 `dev_gate` 满足后，`meta-po` 按 Wave / Story DAG 自动调度 `meta-dev` 并记录证据；`meta-dev` 并行实现并写入 CP6 编码完成结果。
+7. Story 进入验证时，`meta-po` 自动调度 `meta-qa` 并记录证据；`meta-qa` 验证并写入 CP7。CP7 失败时，Story 回到 meta-dev 修复，修复后重新 CP6 / CP7。
+8. 所有目标 Story 验证后，`meta-po` 自动调度 `meta-doc` 完成文档，`meta-qa` 写入 CP8 自动预检；CP8 Decision Brief 人工终验通过后进入 delivered。
 
 ## 检查点
 
@@ -118,15 +122,41 @@ Meta Flow 默认采用 CP0-CP8 检查点。所有检查点都包含 Entry Criter
 | CP1 | 用户场景完备门 | 自动 | `process/checks/CP1-USE-CASE-COMPLETENESS.md` |
 | CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
 | CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
-| CP4 | Story 拆解与并行安全门 | 自动预检 + 人工 | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`；`checkpoints/CP4-STORY-PLAN-REVIEW.md` |
-| CP5 | Story LLD 可实现性门 | 滚动自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-{story_id}-{story_slug}-LLD.md` |
+| CP4 | Story 拆解与并行安全门 | 自动预检（汇入 CP5） | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md` |
+| CP5 | Story LLD 可实现性门 | 全量自动预检 + 全量人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` |
 | CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
 
-人工检查点由 `meta-po` 发起。发起时会提示 `checkpoints/CP*.md` 路径；用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `1/approve/通过`、`2/修改: <具体修改点>`、`3/reject/不通过`，由 `meta-po` 回填结果文件。
+关键人工检查点由 `meta-po` 发起。CP2 / CP3 / CP5 / CP8 发起前会生成 Decision Brief，并提示 `checkpoints/CP*.md` 路径；用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `approve`、`修改: <具体修改点>`、`reject`，由 `meta-po` 回填结果文件。CP4 只写自动预检并汇入 CP5。
+
+CP2 会额外检查 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` 和 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`，用于追溯 Scenario Gray Areas、用户选择、freeform 确认和 Deferred Ideas。CP3 会额外检查 `process/discussions/CP3-HLD-DISCUSSION-LOG.md` 和 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`，用于追溯 Architecture Gray Areas、advisor table、方案形成输入、HLD 后审查意见和切换条件。Discussion Log 用于审计和恢复，下游正式消费仍以 `USE-CASES.md`、`REQUIREMENTS.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md` 为准。
+
+异步 power mode（例如 `process/discussions/CP2-QUESTIONS.json/html` 或 `CP3-QUESTIONS.json/html`）是后续可选增强，本轮不作为默认产物或验收前置。
 
 CP6 / CP7 还必须包含 `Agent Dispatch Evidence` 小节。`process/handoffs/*.md` 只表示交接，不表示子 agent 已执行；Story 编码或验证完成必须有 `spawn_agent` / `resume_agent` / `send_input`、平台 Task/Subagent 返回标识，并在 `STATE.md.agent_lifecycle` 或 handoff `dispatch` 中记录 `agent_id` 或 `thread_id`，或用户明确批准的 `inline-fallback`。缺少调度证据时，CP6 / CP7 只能判定为 `FAIL` 或 `BLOCKED`。
+
+用户启动正式工作流后，同工作流内默认允许 `meta-po` 自动拉起所需功能 Agent。该授权只覆盖真实子 agent 调度；平台无法拉起子 agent 或需要 inline fallback 时，仍必须单独询问用户。
+
+## 阶段委托与 LLD Clarification Queue
+
+`STATE.md.delegated_interaction` 记录当前阶段委托：`phase`、`agent_role`、`agent_id/thread_id`、`handoff_path`、`status`、`started_at`、`returned_at` 和 `return_summary_path`。委托只表示阶段内交互权移交，不表示 CP2 / CP3 已确认。`meta-pm` / `meta-se` 可直接与用户讨论本阶段草案；正式人工门仍由 `meta-po` 发起。
+
+`STATE.md.parallel_execution.lld_clarification_queue` 记录并行 LLD 阶段的实现灰区。每个 item 至少包含 `id/story_id/owner_agent/question/options/recommendation/impact_surface/blocks_lld/answer/status`。多个 `meta-dev` 不直接并发问用户；`meta-po` 合并同类问题后一次性询问用户，并把答案回填到 queue、LLD 和 DEV-LOG。存在未回答 `blocks_lld=true` 项时不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief 中暴露。
+
+## fast-lane 快速模式
+
+`fast-lane` 用于低风险轻量实现、小型 Skill / Agent / rules 修订和文档更新。它减少需求 / HLD / LLD 文档厚度和人工门数量，但不跳过追溯证据。
+
+适用条件：
+
+- 不改变架构、安装路径、权限边界、安全规则或外部接口契约
+- 不涉及多个 Story、文件所有权冲突、运行时依赖或不可逆迁移
+- 可以用一页 `Intent + Approach Brief` 解释范围、做法、验证和风险
+
+不适用时自动升级 `standard`。fast-lane 仍必须保留 `REQUEST.md`、`STATE.md`、必要变更记录、CP6 / CP7、Agent Dispatch Evidence 和 CP8 终验摘要。
+
+CP2 / CP3 的讨论增强不会强行把所有小修改升级为 standard；只有出现架构、权限、安全、平台安装、外部接口、文件所有权冲突或多 Story 依赖等条件时才升级。fast-lane 下若 discussion log / checkpoint 不适用，自动检查必须写明 N/A 原因。
 
 ## 交付目录约定
 
@@ -134,27 +164,31 @@ CP6 / CP7 还必须包含 `Agent Dispatch Evidence` 小节。`process/handoffs/*
 
 ```bash
 # user scope 默认只安装 rules
-meta-flow install --platform codex --scope user
+meta-flow install codex --scope user
 
 # project scope 默认安装 full 组件（rules + agents + skills）
-meta-flow install --platform codex --scope project --project-dir /path/to/project
+meta-flow install codex --scope project --project-dir /path/to/project
 
 # 未指定 --project-dir 时，交互式终端会提示确认当前目录或输入其他目录
-meta-flow install --platform codex --scope project
+meta-flow install codex --scope project
 
 # 显式安装完整组件
-meta-flow install --platform codex --scope project --component full --project-dir /path/to/project
+meta-flow install codex --scope project --component full --project-dir /path/to/project
+
+# 卸载安装记录中的组件，默认卸载 full
+meta-flow uninstall codex --scope project --project-dir /path/to/project
+meta-flow uninstall codex --scope project --component rules --project-dir /path/to/project
 ```
 
 兼容运行方式：
 
 ```bash
 # 从项目根目录运行
-uv run --python 3.11 python delivery/scripts/install.py --platform claude
+uv run --python 3.11 python delivery/scripts/install.py claude
 
 # 以 delivery/ 为根（独立 Git 仓库）运行
 cd delivery
-uv run --python 3.11 python scripts/install.py --platform claude
+uv run --python 3.11 python scripts/install.py claude
 ```
 
 交付目录结构：
@@ -168,6 +202,7 @@ uv run --python 3.11 python scripts/install.py --platform claude
 - `rules`：只安装平台规则入口（如 `AGENTS.md` / `CLAUDE.md`）
 - `agent`：安装 agents + skills
 - `full`：同时安装 rules 与 agent 组件
+- `meta-flow uninstall <platform>` 未指定 `--component` 时默认卸载 `full`；可用 `--component rules|agent|full` 精确卸载组件
 - legacy `--content all|agents|skills|rules` 仅保留兼容，新文档优先使用 `--component`
 
 Agent 命令与显示区分：
@@ -220,7 +255,17 @@ uv run --python 3.11 python scripts/check_delivery_guardrails.py
 
 ```text
 @meta-po 当前状态
+@meta-po 下一步
 @meta-po 继续
+@meta-po 快速修改
+```
+
+CLI 也提供只读辅助入口：
+
+```bash
+meta-flow status
+meta-flow next
+meta-flow doctor
 ```
 
 如果当前是在优化 meta-flow 本身，而不是为目标产物交付方案，请显式声明：

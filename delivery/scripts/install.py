@@ -9,17 +9,18 @@ Installs workflow assets from the canonical delivery directories:
 
 Supports two run modes:
   1. From project root (delivery/ is a subdirectory):
-       uv run --python 3.11 python delivery/scripts/install.py --platform claude
+       uv run --python 3.11 python delivery/scripts/install.py claude
   2. From delivery/ as root (delivery pushed as standalone repo):
-       python scripts/install.py --platform claude
+       python scripts/install.py claude
 
 Examples:
-  uv run --python 3.11 python delivery/scripts/install.py --platform claude
-  uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user
-  meta-flow install --platform codex --scope user --component rules
-  uv run --python 3.11 python delivery/scripts/install.py --platform codex --project-dir D:\\work\\demo
-  uv run --python 3.11 python delivery/scripts/install.py --platform claude --dry-run
-  uv run --python 3.11 python delivery/scripts/install.py --platform codex --scope user --uninstall
+  uv run --python 3.11 python delivery/scripts/install.py claude
+  uv run --python 3.11 python delivery/scripts/install.py codex --scope user
+  meta-flow install codex --scope user --component rules
+  meta-flow uninstall codex --scope user
+  uv run --python 3.11 python delivery/scripts/install.py codex --project-dir D:\\work\\demo
+  uv run --python 3.11 python delivery/scripts/install.py claude --dry-run
+  uv run --python 3.11 python delivery/scripts/install.py uninstall codex --scope user
 """
 
 from __future__ import annotations
@@ -987,6 +988,7 @@ def uninstall_platform(
     manifest_payload: dict[str, object],
     transaction: Transaction,
     dry_run: bool,
+    component: str,
 ) -> dict[str, object]:
     installs = list(manifest_payload.get("installs", []))
     workspace_root_text = str(workspace_root)
@@ -1004,41 +1006,133 @@ def uninstall_platform(
     if matching is None:
         fail(f"INSTALL-MANIFEST 中未找到 {workspace_root_text} 的 {platform}/{scope} 已安装记录。")
 
+    entry_kinds = {
+        "rules": {"managed-block"},
+        "agent": {"agent", "skill"},
+        "full": {"managed-block", "agent", "skill"},
+    }[component]
+    remaining_entries: list[dict[str, str]] = []
+    removed_count = 0
+
     for entry in matching.get("entries", []):
+        if not isinstance(entry, dict) or str(entry.get("kind")) not in entry_kinds:
+            remaining_entries.append(entry)
+            continue
+
         remove_target = Path(entry["remove_path"])
         if entry["kind"] == "managed-block":
             clear_managed_block(remove_target, transaction, dry_run)
-            continue
-        remove_path(remove_target, transaction, dry_run)
+        else:
+            remove_path(remove_target, transaction, dry_run)
+        removed_count += 1
 
-    matching["status"] = "uninstalled"
-    matching["uninstalled_at"] = iso_now()
+    if removed_count == 0:
+        fail(f"INSTALL-MANIFEST 中未找到 {platform}/{scope} 的 {component} 组件安装项。")
+
+    matching["entries"] = remaining_entries
+    matching.setdefault("uninstall_events", []).append(
+        {
+            "component": component,
+            "uninstalled_at": iso_now(),
+            "removed_entries": removed_count,
+        }
+    )
+    if remaining_entries:
+        matching["status"] = "installed"
+        matching["updated_at"] = iso_now()
+    else:
+        matching["status"] = "uninstalled"
+        matching["uninstalled_at"] = iso_now()
     return matching
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Install Meta Flow assets into a platform directory.")
-    parser.add_argument("--platform", required=True, help="目标平台：claude|codex|openclaw")
+    raw_args = sys.argv[1:]
+    mode = "install"
+    if raw_args and raw_args[0] in {"install", "uninstall"}:
+        mode = raw_args[0]
+        raw_args = raw_args[1:]
+
+    prog = sys.argv[0]
+    display_prog = prog
+    if mode == "uninstall" and not prog.endswith(" uninstall"):
+        display_prog = f"{prog} uninstall"
+    action_text = "Install" if mode == "install" else "Uninstall"
+    usage = (
+        f"{display_prog} <platform> [options]\n"
+        f"       {display_prog} --platform <platform> [options]  (legacy)"
+    )
+    if mode == "install":
+        epilog = (
+            "Examples:\n"
+            f"  {display_prog} codex --scope user\n"
+            f"  {display_prog} claude --scope project --project-dir /path/to/project\n"
+            f"  {display_prog} codex --scope project --component agent --dry-run"
+        )
+    else:
+        epilog = (
+            "Examples:\n"
+            f"  {display_prog} codex --scope user\n"
+            f"  {display_prog} claude --scope project --project-dir /path/to/project\n"
+            f"  {display_prog} codex --component rules --dry-run"
+        )
+
+    parser = argparse.ArgumentParser(
+        prog=display_prog,
+        usage=usage,
+        description=f"{action_text} Meta Flow assets for claude, codex, or openclaw.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=epilog,
+    )
+    platform_choices = (*VALID_PLATFORMS, *PLATFORM_ALIASES)
+    parser.add_argument("platform_arg", nargs="?", choices=platform_choices, metavar="platform", help="目标平台：claude|codex|openclaw")
+    parser.add_argument("--platform", dest="platform_option", choices=platform_choices, help="Legacy 目标平台选项；新命令优先使用位置参数")
     parser.add_argument("--scope", default="project", choices=VALID_SCOPES, help="安装范围")
     parser.add_argument("--project-dir", default=None, help="WORKSPACE_ROOT；project scope 未提供时交互确认当前目录或输入目录")
     parser.add_argument(
         "--component",
         default=None,
         choices=VALID_COMPONENTS,
-        help="安装组件：rules=规则文件，agent=agents+skills，full=rules+agents+skills；未提供时 user 默认 rules，project 默认 full",
+        help=(
+            "安装组件：rules=规则文件，agent=agents+skills，full=rules+agents+skills；未提供时 user 默认 rules，project 默认 full"
+            if mode == "install"
+            else "卸载组件：rules=规则文件，agent=agents+skills，full=rules+agents+skills；未提供时默认 full"
+        ),
     )
-    parser.add_argument(
-        "--content",
-        default=None,
-        choices=VALID_CONTENTS,
-        help="Legacy 安装内容：all|agents|skills|rules；保留兼容，优先使用 --component",
-    )
-    parser.add_argument("--agent", default="", help="仅安装指定 agent，逗号分隔")
-    parser.add_argument("--skill", default="", help="仅安装指定 skill，逗号分隔")
+    if mode == "install":
+        parser.add_argument(
+            "--content",
+            default=None,
+            choices=VALID_CONTENTS,
+            help="Legacy 安装内容：all|agents|skills|rules；保留兼容，优先使用 --component",
+        )
+        parser.add_argument("--agent", default="", help="仅安装指定 agent，逗号分隔")
+        parser.add_argument("--skill", default="", help="仅安装指定 skill，逗号分隔")
+        parser.add_argument("--permissive", action="store_true", help="允许忽略 canonical agent 中的未支持字段，并将其记录到 warnings")
+    else:
+        parser.set_defaults(content=None, agent="", skill="", permissive=False)
     parser.add_argument("--dry-run", action="store_true", help="仅打印将执行的操作")
-    parser.add_argument("--uninstall", action="store_true", help="按 INSTALL-MANIFEST 精确卸载当前平台与 scope")
-    parser.add_argument("--permissive", action="store_true", help="允许忽略 canonical agent 中的未支持字段，并将其记录到 warnings")
-    return parser.parse_args()
+    parser.add_argument("--uninstall", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args(raw_args)
+
+    if args.uninstall:
+        if mode == "uninstall":
+            fail("已使用 uninstall 命令，无需再传 --uninstall。")
+        mode = "uninstall"
+
+    if args.platform_arg and args.platform_option:
+        positional = normalize_platform(args.platform_arg)
+        legacy = normalize_platform(args.platform_option)
+        if positional != legacy:
+            fail(f"位置平台 {args.platform_arg} 与 --platform {args.platform_option} 不一致。")
+
+    platform = args.platform_arg or args.platform_option
+    if not platform:
+        parser.error("必须指定目标平台：claude|codex|openclaw，例如 `meta-flow install codex`。")
+
+    args.mode = mode
+    args.platform = normalize_platform(platform)
+    return args
 
 
 def resolve_install_selection(args: argparse.Namespace) -> tuple[bool, bool, bool, str]:
@@ -1076,7 +1170,6 @@ def resolve_install_selection(args: argparse.Namespace) -> tuple[bool, bool, boo
 
 def main() -> None:
     args = parse_args()
-    args.platform = normalize_platform(args.platform)
     workspace_root = resolve_workspace_root(args.project_dir, args.scope)
     repo_root = script_repo_root(Path(__file__))
     layout = detect_source_layout(repo_root)
@@ -1089,8 +1182,8 @@ def main() -> None:
     requested_skills = parse_csv(args.skill)
     ensure_kebab_case(requested_agents, "agent")
     ensure_kebab_case(requested_skills, "skill")
-    if args.uninstall and (args.component or args.content or requested_agents or requested_skills):
-        fail("--uninstall 当前仅支持按 platform + scope 整体卸载，不支持 --content/--agent/--skill 过滤。")
+    if args.mode == "uninstall" and (args.content or requested_agents or requested_skills):
+        fail("uninstall 仅支持按 --component rules|agent|full 卸载，不支持 --content/--agent/--skill 过滤。")
 
     print(f"Workspace root: {workspace_root}")
     print(f"Canonical source root: {layout.root}")
@@ -1102,16 +1195,18 @@ def main() -> None:
     transaction = Transaction()
     manifest_payload = load_manifest(target_manifest_path)
 
-    if args.uninstall:
+    if args.mode == "uninstall":
+        resolved_component = args.component or "full"
+        print(f"Component: {resolved_component}")
         try:
-            entry = uninstall_platform(args.platform, args.scope, workspace_root, manifest_payload, transaction, args.dry_run)
+            entry = uninstall_platform(args.platform, args.scope, workspace_root, manifest_payload, transaction, args.dry_run, resolved_component)
             if not args.dry_run:
                 save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)
         except Exception:
             if not args.dry_run:
                 rollback_transaction(transaction)
             raise
-        print(f"Uninstalled {args.platform}/{args.scope}.")
+        print(f"Uninstalled {args.platform}/{args.scope} component={resolved_component}.")
         return
 
     canonical_agents = list_canonical_agents(layout, args.permissive)

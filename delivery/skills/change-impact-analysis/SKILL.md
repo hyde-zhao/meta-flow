@@ -11,7 +11,7 @@ status: active
 
 ## 目标
 
-受理变更请求，创建标准化 `CR-*.md`，执行五维度影响分析，判定 `rollback_to` 与审批要求，并同步更新当前工作流状态。
+受理变更请求，创建标准化 `CR-*.md` 或 fast-lane 轻量变更记录，执行五维度影响分析，判定 `rollback_to`、审批要求与是否需要从 `fast-lane` 升级到 `standard`，并同步更新当前工作流状态。
 
 ## 适用场景
 
@@ -45,8 +45,9 @@ status: active
 4. 对每个受影响正式文档填写“文档处理决策”：新增 / 原文档更新 / 归档 / 不变。
 5. 若处理方式为“原文档更新”，必须写明旧基线保留方式，并要求目标文档追加 `## 修订记录`。
 6. 若变更影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须列出 CR 影响范围内全部 Story，形成 LLD 设计批次；批次内全部 LLD 设计和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
-7. 给出 `impact_level`、`rollback_to` 和审批结论。
-8. 将活跃变更单写回状态对象，并明确后续收敛路径。
+7. 若当前为 `workflow_mode=fast-lane`，先执行快速模式升级判定：命中架构、权限、安装路径、外部接口、文件所有权冲突、多 Story 依赖或不可逆迁移时，必须升级为 `standard`。
+8. 给出 `impact_level`、`rollback_to`、`workflow_mode_after_change` 和审批结论。
+9. 将活跃变更单写回状态对象，并明确后续收敛路径。
 
 ## 输出文件 / 输出模板
 
@@ -61,6 +62,7 @@ status: active
 - 影响 Story / LLD / 实现设计的 CR 必须先完成 CR 影响范围内全部 LLD 的统一设计和 CP5 批次人工确认，不得逐个 Story 确认后逐个开发
 - CR 编号递增，不复用
 - `impact_level`、`rollback_to`、审批结论必须显式落地
+- fast-lane 只允许低风险轻量实现；命中升级条件时必须切回 `standard`
 - CR 必须统一复用 `skills/change-impact-analysis/templates/CR-TEMPLATE.md` 口径
 - 需求 / 场景变更默认采用增量更新；不得用新草案整体替换旧基线
 - 旧需求或旧场景不得直接删除，至少保留为既有基线、历史需求 / 场景、被 CR 替换对象，或在 CR 中完整摘录并建立映射关系

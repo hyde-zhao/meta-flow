@@ -12,11 +12,13 @@ called-by: meta-po, meta-pm, meta-se, meta-dev, meta-qa, meta-doc
 ## 目标
 
 集中持有 review gate 的共享产物协议：`Review Findings` 模板、`Review Summary` 模板，以及只做机械结构检查的 validator 脚本。
+该协议同时服务 CP3 HLD 多角色讨论和 CP5 LLD 批量决策摘要，并支持 advisor table-first 输入。
 
 ## 适用场景
 
 - `meta-po` 组织结构化评审，需要下发统一 findings / summary 模板
 - reviewer lane 产出 findings 前，需要确认字段、章节和锚点口径
+- CP3 HLD 前置讨论需要区分“方案形成输入”和“HLD 后评审意见”
 - 聚合 summary 前，需要先做一次轻量结构校验
 
 ## 必须读取的输入
@@ -36,6 +38,10 @@ called-by: meta-po, meta-pm, meta-se, meta-dev, meta-qa, meta-doc
 
 1. 根据当前产物类型选择 findings 或 summary 模板。
 2. 填写 frontmatter、章节与表格内容；不得删减模板要求的结构标记。
+   - CP3 HLD 讨论至少覆盖 `lane-product`、`lane-architecture`、`lane-quality` 三类视角；`lane-docs` 的可读性 / 可维护性可作为汇总检查项纳入。
+   - CP3 HLD 方案形成输入必须优先使用 advisor 表格：`Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch`。
+   - CP3 HLD 后评审意见必须单独标记为 `post_hld_review`，不得倒填为方案形成前输入。
+   - Summary 必须给出推荐决策、备选方案、风险和用户需决策事项，供 meta-po 汇入 Decision Brief。
 3. 在提交给 `meta-po` 聚合前，运行 validator 脚本做结构检查：
 
 ```bash
@@ -58,6 +64,8 @@ uv run --python 3.11 python <skill-root>/scripts/validate_review_artifact.py <ar
 - 只做**结构协议**复用，不承载语义评审规则
 - validator 只校验 frontmatter、标题/章节 marker 和固定锚点，不做结论裁决
 - 模板属于共享 Skill 私有资产，不再放到 `delivery/` 顶层公共目录
+- advisor table-first 只定义输入结构，不新增 canonical agent；具体调度仍由 meta-po 决定并记录子 agent 调度证据
+- discussion log 用于审计和恢复，不替代正式 HLD、ADR、Decision Brief 或 Review Summary
 
 ## 验收标准
 
@@ -69,4 +77,6 @@ uv run --python 3.11 python <skill-root>/scripts/validate_review_artifact.py <ar
 
 - findings / summary 的正文可以扩展，但 frontmatter 必填字段与 marker 不能删
 - 该 Skill 提供的是共享协议，不替代 `meta-po` 的 reviewer dispatch 和严重度聚合规则
+- 方案形成前输入和 HLD 后评审意见混写，会导致 CP3 追溯失真，必须拆分记录
+- advisor 表格缺少 `When to switch` 时，推荐方案没有可操作回退条件，应视为不完整输入
 - 若平台安装时未安装本 Skill，就不能假定 validator 脚本在目标环境中可用

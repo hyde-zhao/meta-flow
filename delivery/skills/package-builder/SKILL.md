@@ -48,7 +48,8 @@ status: active
 5. Codex 安装时必须为 canonical subagent 写入 `nickname_candidates` 命令别名：`meta-po`、`meta-pm`、`meta-se`、`meta-doc` 各 5 个，`meta-dev` 与 `meta-qa` 各 10 个。按百家姓顺序依次分配：`meta-po -> po-zhao/po-qian/po-sun/po-li/po-zhou`、`meta-pm -> pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`meta-se -> se-chu/se-wei/se-jiang/se-shen/se-han`、`meta-dev -> dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`meta-qa -> qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`meta-doc -> doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`。
 6. Claude Code 文件型 subagent 不使用 nickname；安装时必须写入不同 `color`：`meta-po=red`、`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。
 7. 安装器必须封装 `ensure_directory()` / `ensure_file_target()`：写入任何文件、复制任何树、生成 manifest 前，逐级检查父路径组件；存在且为目录则继续，不存在则创建，存在但不是目录则输出明确错误并终止。
-8. 用 `platform-validator` 校验 DryRun 输出、目录结构、Codex subagent schema、Codex nickname、Claude Code color、Codex `.codex/skills` 负向断言和路径组件冲突场景。
+8. 安装 CLI 必须支持 `meta-flow install <platform>` 与 `meta-flow uninstall <platform>`；`--platform` 仅作为 legacy 兼容入口保留。`meta-flow install --help`、`meta-flow install <platform> --help`、`meta-flow uninstall --help`、`meta-flow uninstall <platform> --help` 都必须输出可读帮助。
+9. 用 `platform-validator` 校验 DryRun 输出、目录结构、Codex subagent schema、Codex nickname、Claude Code color、Codex `.codex/skills` 负向断言和路径组件冲突场景。
 
 ## 输出文件 / 输出模板
 
@@ -76,8 +77,9 @@ status: active
 ## 验收标准
 
 - [ ] 3 个安装脚本已生成
-- [ ] 支持 4 平台与 project / user 两类安装
+- [ ] 支持 claude / codex / openclaw 与 project / user 两类安装
 - [ ] DryRun 输出可被 `platform-validator` 校验
+- [ ] `meta-flow install <platform>` 与 `meta-flow uninstall <platform>` 可用，多层级 `-h` / `--help` 可用
 - [ ] Codex 安装产物中的 `.codex/agents/*.toml` 仅包含官方 schema 字段，且 `developer_instructions` 非空
 - [ ] Codex Skill dry-run 输出包含 `.agents/skills/<skill>/SKILL.md` 或 `~/.agents/skills/<skill>/SKILL.md`，且不包含 `.codex/skills`
 - [ ] 目标路径被文件占用时，安装器必须 fail fast，并输出可操作修复提示；例如 `<target>/.codex` 为普通文件时，Codex project agent 安装不得出现 `Traceback` 或 `NotADirectoryError`

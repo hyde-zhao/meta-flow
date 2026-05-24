@@ -106,6 +106,14 @@ open_items: 0
 
 ## 12. 风险、难点与预研建议
 
+### 12.1 实现灰区与取舍记录
+
+> 并行 LLD 阶段遇到需要用户或上游决策的实现灰区时，先写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`，由 meta-po 作为 question broker 批量询问。已回答或转 OPEN / Spike 的问题必须回填到本表。
+
+| Clarification ID | 问题 | 选项与推荐 | 决策 / 答案 | 影响面 | 证据 | 重访条件 |
+|---|---|---|---|---|---|---|
+| LCQ-STORY-{id}-01 |  |  |  | 接口 / 文件 owner / 测试 / 安全 / 文档 / 跨 Story 契约 |  |  |
+
 | 风险 / 难点 | 影响 | 缓解措施 / 预研建议 |
 |---|---|---|
 |  |  |  |
@@ -126,6 +134,7 @@ open_items: 0
 
 - [ ] 14 个章节全部填写完成
 - [ ] 文件影响范围、接口、测试与实施步骤可直接指导编码
+- [ ] 实现灰区与取舍记录已回填所有相关 clarification item，或显式写“无”
 - [ ] `confirmed=false` 时不进入实现
 - [ ] 人工确认意见已收敛
 - [ ] frontmatter 已填写 `tier`
@@ -135,7 +144,7 @@ open_items: 0
 
 > **CP5 — Story LLD 可实现性门**
 > meta-dev 先写入 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` 自动预检结果。
-> meta-po 收齐全部目标 Story 的 LLD 和 CP5 自动预检后，再生成并提示用户审查 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`。
+> meta-po 收齐全部目标 Story 的 LLD、CP4 自动预检摘要和 CP5 自动预检后，再生成并提示用户审查 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`。
 > 用户统一确认全部目标 Story 的 LLD 后，仍需满足当前 Wave、依赖门控与文件所有权门控方可进入实现。
 
 **CP5 checklist 摘要**：
@@ -147,6 +156,7 @@ open_items: 0
 | 3 | 文件影响范围明确 | 待检查 | 第 4 / 11 节 |
 | 4 | 接口契约完整 | 待检查 | 第 6 节 |
 | 5 | 测试与 dev_gate 可计算 | 待检查 | 第 10 / 14 节 |
+| 6 | clarification queue 已收敛 | 待检查 | 第 12.1 节 / `STATE.md.parallel_execution.lld_clarification_queue` |
 
 **人工确认回复**：
 

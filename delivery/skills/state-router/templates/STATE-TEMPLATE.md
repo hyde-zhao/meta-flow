@@ -1,6 +1,8 @@
 ---
 project_id: ""
-workflow_mode: ""
+workflow_mode: "standard"
+fast_lane_reason: ""
+fast_lane_risk_classification: ""
 current_phase: "init"
 current_agent: "meta-po"
 iteration: 0
@@ -29,6 +31,7 @@ orchestrator_session:
   pending_gate: ""
   pending_checklist_path: ""
   pending_user_decision: ""
+  subagent_auto_dispatch: "enabled"
   resume_instruction: "用户回复人工检查点结论后，优先使用 resume_agent 或 send_input 恢复同一 meta-po；仅旧线程不可恢复时才允许 recovery"
   spawned_at: ""
   last_seen_at: ""
@@ -39,6 +42,19 @@ orchestrator_session:
   previous_thread_id: ""
   superseded_by: ""
   recovery_reason: ""
+delegated_interaction:
+  phase: ""
+  agent_role: ""
+  agent_id: ""
+  agent_name: ""
+  thread_id: ""
+  handoff_path: ""
+  status: "none|delegated|active|awaiting-user|returned|blocked|closed"
+  started_at: ""
+  returned_at: ""
+  return_summary_path: ""
+  pending_user_input: ""
+  routing_note: "requirement-clarification 委托 meta-pm、solution-design 委托 meta-se；正式人工检查点仍由 meta-po 发起"
 agent_lifecycle:
   orchestrator_singleton: true
   platform_capabilities:
@@ -78,6 +94,21 @@ parallel_execution:
   lld_running: []
   lld_review: []
   lld_batch_review: []
+  lld_clarification_queue:
+    status: "idle|collecting|batching|awaiting-user|answered|blocked|closed"
+    active_question_batch: ""
+    items: []
+    item_schema:
+      - "id"
+      - "story_id"
+      - "owner_agent"
+      - "question"
+      - "options"
+      - "recommendation"
+      - "impact_surface"
+      - "blocks_lld"
+      - "answer"
+      - "status"
   dev_ready: []
   dev_running: []
   verify_ready: []
@@ -112,10 +143,10 @@ checkpoints:
     manual_review: "checkpoints/CP3-HLD-REVIEW.md"
     last_result: ""
   cp4_story_plan_review:
-    type: "auto_then_manual"
+    type: "auto_precheck"
     status: "pending"
     auto_result: "process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md"
-    manual_review: "checkpoints/CP4-STORY-PLAN-REVIEW.md"
+    manual_review: ""
     last_result: ""
   cp5_story_lld_review:
     type: "all_stories_auto_then_manual"
@@ -139,6 +170,20 @@ checkpoints:
     auto_result: "process/checks/CP8-DELIVERY-READINESS.md"
     manual_review: "checkpoints/CP8-DELIVERY-READINESS.md"
     last_result: ""
+decision_briefs:
+  cp2_requirements_baseline: ""
+  cp3_hld_review: ""
+  cp5_story_lld_review: ""
+  cp8_delivery_readiness: ""
+discussion_checkpoints:
+  cp2_scenario_discussion:
+    log: "process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md"
+    checkpoint: "process/checks/CP2-DISCUSSION-CHECKPOINT.json"
+    status: "pending"
+  cp3_hld_discussion:
+    log: "process/discussions/CP3-HLD-DISCUSSION-LOG.md"
+    checkpoint: "process/checks/CP3-DISCUSSION-CHECKPOINT.json"
+    status: "pending"
 parallel_waves: []
 history: []
 last_updated: ""
@@ -152,7 +197,7 @@ last_updated: ""
 | init | CP0 自动检查通过 | requirement-clarification | CP0 原始请求受理门 |
 | requirement-clarification | CP1 自动检查通过 + CP2 人工确认通过 | solution-design | CP1 用户场景完备门；CP2 需求基线门 |
 | solution-design | CP3 人工确认通过 | story-planning | CP3 HLD 架构评审门 |
-| story-planning | CP4 人工确认通过，Story DAG 与并行计划可校验，全部目标 Story 通过全量 CP5 | story-execution | CP4 Story 拆解与并行安全门；CP5 全量 LLD 确认 |
+| story-planning | CP4 自动预检通过，Story DAG 与并行计划可校验，全部目标 Story 通过全量 CP5 | story-execution | CP4 Story 拆解与并行安全自动门；CP5 全量 LLD 确认 |
 | story-execution | 全部目标 Story 通过 CP6、CP7 并到达 verified | documentation | CP6 编码完成、CP7 验证完成检查 |
 | documentation | CP8 自动预检与人工终验通过 | delivered | CP8 交付就绪门 |
 
@@ -167,5 +212,8 @@ Story 生命周期（每个 Story 独立）：
 - packaging 不再是独立状态，由 meta-qa 在 story verified 后自动执行
 - 验证环境确认不再是人工检查点，VALIDATION-ENV.yaml 缺失时 meta-qa 自动阻断并提示
 - 所有自动检查结果写入 process/checks/CP*.md；所有人工审查稿写入 checkpoints/CP*.md
-- 人工检查点发起时必须提示用户 checklist 文件路径，人工审查后必须回填对应 checkpoints/CP*.md 的“人工审查结果”
+- CP2 / CP3 / CP5 / CP8 人工检查点发起时必须提示用户 checklist 文件路径，人工审查后必须回填对应 checkpoints/CP*.md 的“人工审查结果”；CP4 只写自动预检并汇入 CP5 Decision Brief
+- subagent_auto_dispatch=enabled 表示同工作流内允许 meta-po 自动拉起真实子 agent；inline fallback 仍需用户单独批准
+- delegated_interaction 仅记录阶段内用户交互权委托；不得代表 CP2 / CP3 已确认
+- lld_clarification_queue 存在 blocks_lld=true 且未回答的 item 时，不得发起 CP5 全量人工确认
 -->

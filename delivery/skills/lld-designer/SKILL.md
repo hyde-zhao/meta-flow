@@ -30,6 +30,7 @@ status: active
 - `process/HLD.md`
 - `process/ARCHITECTURE-DECISION.md`
 - `process/STATE.md.parallel_execution.lld_design_batch`（若已存在）
+- `process/STATE.md.parallel_execution.lld_clarification_queue`（并行 LLD 写作期间必须读取 / 更新）
 - 相关前置 Story、平台约束、共享设计片段或 `CR-*.md`（若存在）
 
 ## 知识来源
@@ -70,12 +71,15 @@ status: active
 
 1. 生成 `OPEN` / Spike / 风险表 / DoD / 确认区。
 2. 若存在关键未决点，必须写明下一动作和责任方。
+3. 若未决点需要用户决策且当前处于并行 LLD，写入 `lld_clarification_queue.items[]`，不得直接询问用户；只有 `max_parallel_lld=1` 或 CP5 单 Story 返工且唯一活跃 meta-dev 时才允许短问。
+4. 将已回答或转 OPEN / Spike 的问题写入 LLD 的“实现灰区与取舍记录”，包含问题、选项、决策、影响面、证据和重访条件。
 
 ### 阶段 6：Checkpoint Handoff
 
 1. 复用 Story 卡片中的 `story_slug`，写入 `process/stories/STORY-{id}-{story_slug}-LLD.md`。
-2. 将 Story 推进到 `lld-ready-for-review`。
-3. 停止在全部目标 Story 的 LLD 统一确认前，不进入实现。
+2. 若存在 `blocks_lld=true` 且未回答的 clarification item，不得生成通过态 CP5 自动预检；将 Story 标记为 blocked 或 waiting-clarification，并等待 meta-po broker。
+3. 将 Story 推进到 `lld-ready-for-review`。
+4. 停止在全部目标 Story 的 LLD 统一确认前，不进入实现。
 
 ## 输出文件 / 输出模板
 
@@ -89,6 +93,7 @@ status: active
 - LLD `confirmed=false`、全量 CP5 人工确认未通过、`dev_gate` 未满足或文件所有权冲突时不得进入实现
 - 不超出当前 Story 范围
 - 发现未决技术点时，必须输出 `OPEN` 或 Spike，禁止伪确定
+- 发现实现灰区时，必须优先写入 LLD Clarification Queue；并行 LLD 阶段不得让多个 meta-dev 直接问用户
 - 若模板章节与说明冲突，以模板契约为准同步修正
 - LLD 文件名必须复用 Story 卡片中的 `story_slug`，不得自行再生成第二套命名
 - 涉及平台路径、schema 或发现机制时，必须引用 `delivery/doc/PLATFORM-CONTRACTS.yaml` 或官方文档证据；禁止按同平台目录进行类比推断
@@ -99,6 +104,7 @@ status: active
 - [ ] 文件影响范围、接口、测试与实施步骤可直接指导编码
 - [ ] 回滚与发布策略明确
 - [ ] 输入契约覆盖 Story / HLD / ADR / 依赖 / 平台 / CR
+- [ ] 实现灰区与取舍记录已覆盖 queue 问题、用户答案、OPEN / Spike 和重访条件
 - [ ] 失败路径覆盖 blocked / 回退 / Spike / LLD 批次确认 / dev_gate 阻断
 
 ## 不适用边界
@@ -113,3 +119,4 @@ status: active
 - 详细设计不是实现日志，必须保持“可实施”而不是“已完成”
 - `ARCHITECTURE-DECISION.md` 是条件必需输入：只要 Story 命中关键取舍、接口边界或平台规范，就必须显式读取
 - LLD 的唯一正式输出仍是 `STORY-{id}-{story_slug}-LLD.md`；不要把关键信息拆到会话说明里
+- clarification queue 的答案必须落回 LLD 和 DEV-LOG；只在对话中答复不能作为 CP5 证据
