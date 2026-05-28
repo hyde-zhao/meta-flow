@@ -56,10 +56,10 @@ meta-se 在正式生成 HLD 前，必须先输出 Architecture Gray Areas 和 ad
 | Architecture Gray Areas | 3-4 个会改变架构形态、模块边界、验证策略、安全权限或维护成本的灰区 |
 | Advisor table | `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` |
 | 推荐方案 | 推荐架构及理由，必须说明适用条件 |
-| 备选方案 | 至少 1 个备选方案；无备选时说明原因 |
+| 备选方案 | 至少 1 个可执行备选方案，优先 2 个；不得写“无备选”，必要时用保持现状、缩小范围、延后 Spike 或回退需求作为治理备选 |
 | 关键取舍 | 复杂度、成本、扩展性、可验证性、维护成本、平台兼容和安全风险 |
 | 场景模拟 | 至少 2-3 个关键 UC 走通推荐架构的结果 |
-| 用户需决策点 | 必须由用户确认的范围、架构或风险接受项 |
+| 用户需决策点 | 必须由用户确认的范围、架构或风险接受项；每项包含决策 ID、推荐方案、至少 1 个备选方案、优劣分析、影响 / 风险和回退 / 切换条件 |
 | 回退点 | 若 CP3 不通过，应回退到的设计问题或需求约束 |
 | discussion 证据 | `process/discussions/CP3-HLD-DISCUSSION-LOG.md`、`process/checks/CP3-DISCUSSION-CHECKPOINT.json` 或 N/A / blocked 原因 |
 

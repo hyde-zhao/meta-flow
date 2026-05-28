@@ -234,7 +234,7 @@ meta-qa 必须使用 `checkpoint-manager` 写入以下检查结果：
 | CP7 Story 验证完成门 | 单个 Story 验证完成后 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | 检查功能、异常、回归、集成、非功能、缺陷、测试证据和追溯 |
 | CP8 交付就绪门 | 所有目标 Story verified，文档与安装验证完成后 | `process/checks/CP8-DELIVERY-READINESS.md` | 检查需求闭环、Story 闭环、文档、安装、规则一致性、交付目录、缓存清理、guardrail、遗留风险 |
 
-CP7 失败时不得把 Story 标记为 `verified`，必须写明失败项、复现方式、影响范围、建议回修 owner 和复验范围，供 meta-po 自动路由回 meta-dev。CP8 自动预检失败时不得请求 meta-po 发起终验人工确认。
+CP7 失败时不得把 Story 标记为 `verified`，必须写明失败项、复现方式、影响范围、建议回修 owner 和复验范围，供 meta-po 自动路由回 meta-dev。CP8 自动预检失败时不得请求 meta-po 发起终验人工确认。CP8 存在遗留风险、`WAIVED` 项或风险接受项时，meta-qa 必须输出可汇入 CP8 Decision Brief 的待人工决策项：推荐处理方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
 
 ## VERIFICATION-REPORT.md 格式
 

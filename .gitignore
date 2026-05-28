@@ -20,3 +20,8 @@ __pycache__/
 node_modules/
 package-lock.json
 package.json
+
+# Claude Code / Codex runtime
+.agents/
+.claude/
+.codex/

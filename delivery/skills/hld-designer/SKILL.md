@@ -47,7 +47,7 @@ status: active
 4. 读取用户选择或 meta-po 汇总后的 reviewer lane 结果，再给出至少 2 个候选方案并完成显式比较；若需要 reviewer 子 agent 但平台当前无法真实拉起且未获 inline fallback 批准，必须把 HLD 前置讨论标记为阻断或 `N/A` 原因，不得伪造多角色意见。
 5. 明确推荐方案、关键架构图、模块职责、技术选型、风险、适用条件、优化项、牺牲项和切换条件。
 6. 执行 Use Case → Architecture Traceability，并至少用 2-3 个关键 UC 做场景模拟；模拟失败时不得进入 CP3 人工确认。
-7. 为 CP3 Decision Brief 输出候选方案取舍摘要，覆盖用户意图匹配度、实现复杂度、可验证性、维护成本、平台兼容、安全 / 权限风险、交付影响、适用条件、切换条件和回退点。
+7. 为 CP3 Decision Brief 输出候选方案取舍摘要和 `decision_items`，覆盖用户意图匹配度、实现复杂度、可验证性、维护成本、平台兼容、安全 / 权限风险、交付影响、适用条件、切换条件和回退点；每个需要用户确认的架构 / 范围 / 风险接受项都必须包含推荐方案、至少 1 个备选方案（优先 2 个）和优劣分析。
 8. **应用 HLD 拆分检查**：按 §"HLD 拆分原则"评估当前设计是否应拆为多份 HLD；若应拆，先完成拆分再继续。
 9. 生成 `process/HLD.md`（及拆分出的同级 HLD 文件）。不得自行跳过 HLD 前置讨论、CP3 自动预检、多角色讨论和人工确认。
 
@@ -68,6 +68,7 @@ status: active
 
 5. 讨论日志建议写入 `process/discussions/CP3-HLD-DISCUSSION-LOG.md`，恢复点建议写入 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`。日志用于审计和恢复，不作为下游唯一输入；下游正式消费仍以 `HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md` 为准。
 6. HLD 必须记录哪些讨论输入影响了推荐方案，哪些想法被延后，以及何时切换到备选方案。
+7. 若某个架构灰区看似只有一个业务可行方案，也必须给出至少一个治理备选（保持现状、缩小范围、延后 Spike 或回退需求），供 meta-po 在 CP3 待人工决策清单中呈现。
 
 ## HLD 拆分原则
 

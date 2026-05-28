@@ -17,8 +17,9 @@ clarification item 字段至少包含：
 | `story_id` | 当前 Story ID |
 | `owner_agent` | 当前 meta-dev 的 `agent_id` 或 `thread_id` |
 | `question` | 需要用户或上游决策的问题 |
-| `options` | 2-4 个候选选项，必须互斥且说明 trade-off |
-| `recommendation` | 推荐选项和原因 |
+| `options` | 2-4 个候选选项，必须互斥且说明 trade-off；其中 1 个为推荐方案，至少 1 个为备选方案，优先提供 2 个备选 |
+| `recommendation` | 推荐选项、原因和默认动作；用户在 CP5 回复 `approve` 时即接受该推荐 |
+| `pros_cons` | 推荐方案与每个备选方案的优势、代价、适用条件 |
 | `impact_surface` | 影响范围：接口 / 文件 owner / 测试 / 安全 / 文档 / 跨 Story 契约等 |
 | `blocks_lld` | `true` 表示未回答前不能完成当前 Story LLD 或 CP5 自动预检 |
 | `answer` | meta-po 回填的用户答案 |

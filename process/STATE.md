@@ -5,9 +5,9 @@ current_phase: "documentation"
 current_agent: "meta-po"
 iteration: 9
 blocked: false
-active_change: "CR-005"
-last_action: "CR-005 已追加人工门禁提示格式整改：Codex 默认 exact 文本，只展示 approve / 修改 / reject 三个推荐回复"
-next_action: "运行 guardrail 验证，等待用户确认 CR-005；CP3/CP4 未因本轮反馈自动批准"
+active_change: "CR-006"
+last_action: "CR-006 已实现并验证：人工决策清单协议已同步到 Agent、Skill、rules 和用户文档，guardrail 通过"
+next_action: "等待用户审查 CR-006 变更结果；后续人工确认将按待人工决策清单统一打印"
 agent_lifecycle:
   orchestrator_singleton: true
   active_agents: []
@@ -209,7 +209,17 @@ history:
     action: "revise-manual-gate-prompt"
     phase: "documentation"
     summary: "根据用户反馈与 Codex 官方/GitHub 调研，人工门禁提示改为只展示 approve、修改: <具体修改点>、reject；历史别名仅兼容解析，CP3/CP4 仍待人工确认"
-last_updated: "2026-05-17T00:00:00+08:00"
+  - at: "2026-05-28T00:00:00+08:00"
+    actor: "meta-po"
+    action: "apply-change-request"
+    phase: "documentation"
+    summary: "CR-006：人工确认协议升级为待人工决策清单；所有需人工确定的信息必须给出推荐方案、至少 1 个备选方案、优劣分析、影响 / 风险和回退 / 切换条件，并由 meta-po 在确认前统一打印"
+  - at: "2026-05-28T00:00:00+08:00"
+    actor: "meta-qa"
+    action: "verify-change-request"
+    phase: "documentation"
+    summary: "CR-006：静态检索确认关键规则包含待人工决策清单协议；guardrail 在禁写 bytecode 环境下通过；未发现新增 __pycache__ / pyc"
+last_updated: "2026-05-28T00:00:00+08:00"
 ---
 
 <!--

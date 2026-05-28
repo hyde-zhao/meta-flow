@@ -71,8 +71,8 @@ status: active
 
 1. 生成 `OPEN` / Spike / 风险表 / DoD / 确认区。
 2. 若存在关键未决点，必须写明下一动作和责任方。
-3. 若未决点需要用户决策且当前处于并行 LLD，写入 `lld_clarification_queue.items[]`，不得直接询问用户；只有 `max_parallel_lld=1` 或 CP5 单 Story 返工且唯一活跃 meta-dev 时才允许短问。
-4. 将已回答或转 OPEN / Spike 的问题写入 LLD 的“实现灰区与取舍记录”，包含问题、选项、决策、影响面、证据和重访条件。
+3. 若未决点需要用户决策且当前处于并行 LLD，写入 `lld_clarification_queue.items[]`，不得直接询问用户；每个 item 必须包含推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响面、是否阻断 LLD 和回退 / 切换条件。只有 `max_parallel_lld=1` 或 CP5 单 Story 返工且唯一活跃 meta-dev 时才允许短问。
+4. 将已回答或转 OPEN / Spike 的问题写入 LLD 的“实现灰区与取舍记录”，包含问题、推荐方案、备选方案、优劣分析、决策、影响面、证据和重访条件。
 
 ### 阶段 6：Checkpoint Handoff
 
@@ -93,7 +93,7 @@ status: active
 - LLD `confirmed=false`、全量 CP5 人工确认未通过、`dev_gate` 未满足或文件所有权冲突时不得进入实现
 - 不超出当前 Story 范围
 - 发现未决技术点时，必须输出 `OPEN` 或 Spike，禁止伪确定
-- 发现实现灰区时，必须优先写入 LLD Clarification Queue；并行 LLD 阶段不得让多个 meta-dev 直接问用户
+- 发现实现灰区时，必须优先写入 LLD Clarification Queue；并行 LLD 阶段不得让多个 meta-dev 直接问用户；queue item 必须可被 meta-po 直接汇入 CP5 待人工决策清单
 - 若模板章节与说明冲突，以模板契约为准同步修正
 - LLD 文件名必须复用 Story 卡片中的 `story_slug`，不得自行再生成第二套命名
 - 涉及平台路径、schema 或发现机制时，必须引用 `delivery/doc/PLATFORM-CONTRACTS.yaml` 或官方文档证据；禁止按同平台目录进行类比推断

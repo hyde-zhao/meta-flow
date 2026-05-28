@@ -39,7 +39,7 @@ Meta Flow 的交互路径分两类：
 
 ## 工作流检查点
 
-安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；关键人工审查稿写入 `checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `meta-po` 发起人工确认，发起前必须生成 Decision Brief 并提示具体 checklist 文件路径，审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
+安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；关键人工审查稿写入 `checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `meta-po` 发起人工确认，发起前必须生成 Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。待人工决策清单逐项列出决策 ID、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
 
 CP6 / CP7 必须包含 `Agent Dispatch Evidence`。handoff 文件只表示交接，不表示目标 agent 已执行；编码和验证完成必须有真实子 agent 调度证据，或用户明确批准的 `inline-fallback`。
 

@@ -34,6 +34,9 @@ CODEX_CONFIRMATION_TOKENS = (
     "修改: <具体修改点>",
     "reject",
     "别名",
+    "待人工决策",
+    "备选方案",
+    "优劣",
 )
 DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
