@@ -43,7 +43,9 @@ Meta Flow 的交互路径分两类：
 
 人工门禁发起消息必须同时合规：包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须作为不授权项单独列出；`approve` 不代表授权这些操作。CP8 必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
 
-启动台账中的后续 CR 时，用 `@meta-po 启动后续 CR` 并给出台账路径、候选编号和目标摘要。meta-po 必须先读取台账、`STATE.md.active_change` 和活跃 `process/changes/CR-*.md`，做 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；候选项转正式 CR 后才把台账状态改为 `active`，写入正式 CR 路径。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 中选择。
+启动台账中的后续 CR 时，用 `@meta-po 启动后续 CR` 并给出台账路径、候选编号和目标摘要。meta-po 必须先读取台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和活跃 `process/changes/CR-*.md`，做 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；候选项转正式 CR 后才把台账状态、`cr_tracking` 和 `CR-INDEX.yaml` 改为 `active`，写入正式 CR 路径。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 中选择。
+
+状态查询必须列出 `active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate` 和 `stale_status_conflicts`，不能只返回唯一 active CR。若目标项目存在 `scripts/check_cr_tracking_consistency.py`，meta-po 在状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后运行或记录跳过原因；该脚本会检查 `STATE.md.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性。
 
 CP6 / CP7 必须包含 `Agent Dispatch Evidence`。handoff 文件只表示交接，不表示目标 agent 已执行；编码和验证完成必须有真实子 agent 调度证据，或用户明确批准的 `inline-fallback`。
 

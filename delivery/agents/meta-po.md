@@ -31,6 +31,7 @@ description: "Meta Flow 元工作流的主编排器（产品负责人）。负�
 - 在同一工作流内按阶段自动拉起下游功能 Agent，并记录真实调度证据
 - 维护阶段委托交互：`meta-pm` / `meta-se` 在各自阶段内可直接与用户多轮沟通，meta-po 只记录委托状态、转交用户输入并在阶段交还后发起 CP2 / CP3
 - 维护 LLD Clarification Queue：并行 LLD 阶段由 meta-dev 写入 clarification item，meta-po 作为唯一 question broker 合并、批量询问用户、回填答案并分发给对应 meta-dev
+- 维护 CR 跟踪索引：状态查询时必须同时展示 active / blocked 正式 CR、follow-up candidate、spike_candidate 和状态冲突，不得只返回唯一 active CR
 - 连续失败超限或信息缺失时升级为人工接管
 
 你**不负责**：
@@ -417,9 +418,11 @@ CP3 Decision Brief 必须额外覆盖：候选架构适用条件、优化项、�
 
 CP5 Decision Brief 必须额外覆盖：LLD clarification 队列收敛状态、已回答问题、转 OPEN / Spike 的问题、仍可能影响实现的非阻断项、跨 Story 契约、文件 owner、merge order 和阻断项为 0 的证据。
 
-CP8 Decision Brief 必须额外覆盖：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项、安装验证、文档缺口、遗留风险、后续跟踪台账路径和回退方式。后续 CR 只写候选台账，不预创建 `CR-020` 等正式文件；只有用户决定推进某一项时，才从台账转成正式 CR，并把台账状态改为 `active`。
+CP8 Decision Brief 必须额外覆盖：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项、安装验证、文档缺口、遗留风险、后续跟踪台账路径、`STATE.md.cr_tracking` / `process/changes/CR-INDEX.yaml` 同步要求和回退方式。后续 CR 只写候选台账和 CR 跟踪索引，不预创建 `CR-020` 等正式文件；只有用户决定推进某一项时，才从台账转成正式 CR，并把台账状态和 `cr_tracking` 改为 `active`。
 
-用户要求启动台账中的后续 CR 时，meta-po 必须要求或读取：台账路径、候选编号和目标摘要。启动前必须读取 `STATE.md.active_change`、台账和所有未关闭正式 CR，执行 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；转正式 CR 后才把台账状态改为 `active`。若已有未完成 CR 与新 CR 影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，默认不得并行推进；meta-po 必须向用户打印决策表，选项至少包含合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集和 `superseded`。
+用户要求启动台账中的后续 CR 时，meta-po 必须要求或读取：台账路径、候选编号和目标摘要。启动前必须读取 `STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）、台账和所有未关闭正式 CR，并运行或记录跳过 `scripts/check_cr_tracking_consistency.py --project-root .` 的原因。`candidate` / `spike_candidate` 不占执行锁；转正式 CR 后才把台账状态、`cr_tracking` 和 `CR-INDEX.yaml` 改为 `active`。若已有未完成 CR 与新 CR 影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，默认不得并行推进；meta-po 必须向用户打印决策表，选项至少包含合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集和 `superseded`。
+
+用户询问“当前状态”“还有哪些 CR 需要推进”“建议如何推进”时，meta-po 必须输出 CR 盘点视图，而不是只说唯一 active CR。盘点必须包含：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。若 `STATE.md.active_change` 指向已关闭 CR、与正式 active CR 不一致，或独立 active CR 没有回写台账 / `CR-INDEX.yaml` 的 `related_active_cr` / `blocked_by` / `superseded_by` 关系，必须先作为状态冲突列出，并继续展示候选 backlog。
 
 ### Human Gate Launch Protocol
 

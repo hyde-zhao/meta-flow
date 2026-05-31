@@ -655,6 +655,95 @@ def collect_human_gate_protocol_errors() -> list[str]:
     return errors
 
 
+def collect_cr_tracking_protocol_errors() -> list[str]:
+    errors: list[str] = []
+    validator = ROOT / "scripts" / "check_cr_tracking_consistency.py"
+    if not validator.is_file():
+        errors.append(f"missing CR tracking validator: {validator.relative_to(ROOT)}")
+    else:
+        result = subprocess.run(
+            [sys.executable, str(validator), "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            errors.append(f"CR tracking validator --help failed with exit {result.returncode}: {output.strip()}")
+        for token in ("STATE.active_change", "follow-up", "CR-INDEX.yaml", "--project-root"):
+            if token not in output:
+                errors.append(f"CR tracking validator help missing token: {token}")
+
+    token_targets = {
+        "meta-po": (
+            DELIVERY_ROOT / "agents" / "meta-po.md",
+            ("cr_tracking", "CR-INDEX.yaml", "active formal CR", "spike_candidate", "stale_status_conflicts"),
+        ),
+        "state-router": (
+            DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
+            ("cr_tracking", "CR-INDEX.yaml", "check_cr_tracking_consistency.py", "active formal CR", "stale_status_conflicts"),
+        ),
+        "state-template": (
+            DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
+            ("cr_tracking", "follow_up_candidates", "spike_candidates", "stale_status_conflicts", "CR-INDEX.yaml"),
+        ),
+        "change-impact-analysis": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "SKILL.md",
+            ("CR-INDEX-TEMPLATE.yaml", "check_cr_tracking_consistency.py", "STATE.md.cr_tracking", "stale_status_conflicts"),
+        ),
+        "cr-template": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-TEMPLATE.md",
+            ("cr_index_path", "STATE.md.cr_tracking", "CR-INDEX.yaml", "check_cr_tracking_consistency.py"),
+        ),
+        "follow-up-template": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "FOLLOW-UP-TRACKING-TEMPLATE.md",
+            ("cr_index_path", "STATE.md.cr_tracking", "CR-INDEX.yaml", "状态索引同步", "check_cr_tracking_consistency.py"),
+        ),
+        "cr-index-template": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-INDEX-TEMPLATE.yaml",
+            ("active_crs", "follow_up_candidates", "spike_candidates", "stale_status_conflicts", "conflict_keys"),
+        ),
+        "skills-readme": (
+            DELIVERY_ROOT / "skills" / "README.md",
+            ("cr_tracking", "CR-INDEX.yaml", "CR 跟踪一致性检查"),
+        ),
+        "delivery-agents-rule": (
+            DELIVERY_ROOT / "rules" / "AGENTS.md",
+            ("CR 跟踪状态查询", "cr_tracking", "CR-INDEX.yaml", "stale_status_conflicts"),
+        ),
+        "delivery-claude-rule": (
+            DELIVERY_ROOT / "rules" / "CLAUDE.md",
+            ("CR 跟踪状态查询", "cr_tracking", "CR-INDEX.yaml", "stale_status_conflicts"),
+        ),
+        "root-agents-rule": (
+            ROOT / "AGENTS.md",
+            ("CR 跟踪状态查询", "cr_tracking", "CR-INDEX.yaml", "stale_status_conflicts"),
+        ),
+        "readme": (
+            ROOT / "README.md",
+            ("CR-INDEX.yaml", "check_cr_tracking_consistency.py", "active formal CR", "stale_status_conflicts"),
+        ),
+        "delivery-readme": (
+            DELIVERY_ROOT / "README.md",
+            ("CR-INDEX.yaml", "check_cr_tracking_consistency.py", "active formal CR", "stale_status_conflicts"),
+        ),
+        "user-manual": (
+            DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
+            ("CR-INDEX.yaml", "check_cr_tracking_consistency.py", "active formal CR", "stale_status_conflicts"),
+        ),
+    }
+    for label, (target, tokens) in token_targets.items():
+        if not target.is_file():
+            errors.append(f"missing CR tracking protocol target {label}: {target.relative_to(ROOT)}")
+            continue
+        text = target.read_text(encoding="utf-8")
+        missing = [token for token in tokens if token not in text]
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} missing CR tracking protocol tokens: {', '.join(missing)}")
+    return errors
+
+
 def parse_frontmatter(content: str) -> dict[str, str]:
     match = FRONTMATTER_RE.match(content)
     if not match:
@@ -734,6 +823,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_agent_dispatch_evidence_errors())
     errors.extend(collect_agent_display_profile_errors())
     errors.extend(collect_human_gate_protocol_errors())
+    errors.extend(collect_cr_tracking_protocol_errors())
     errors.extend(collect_revision_record_errors())
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):

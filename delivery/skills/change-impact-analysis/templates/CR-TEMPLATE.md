@@ -22,6 +22,7 @@ owner: ""
 revisit_condition: ""
 acceptance_criteria: ""
 close_condition: ""
+cr_index_path: "process/changes/CR-INDEX.yaml"
 ---
 
 ## 变更描述
@@ -133,14 +134,17 @@ close_condition: ""
 ## 后续事项台账
 
 > CP8 或 CR 收敛时若产生后续事项，只维护台账，不预创建尚未启动的正式 CR 文件。用户决定推进某一项后，再创建正式 CR，并把本节或独立台账中的状态改为 `active`。
+> 本节必须同步 `process/STATE.md.cr_tracking` 与 `process/changes/CR-INDEX.yaml`，不能只写 Markdown 台账。
 
 - 是否存在后续事项：false
 - 台账路径：`process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`
+- CR 索引路径：`process/changes/CR-INDEX.yaml`
+- 一致性检查：`uv run --python 3.11 python scripts/check_cr_tracking_consistency.py --project-root .`
 - 状态取值：`candidate` / `active` / `blocked` / `spike_candidate` / `converted-to-spike` / `closed` / `cancelled` / `superseded`
 
-| 候选编号 | 标题 | 状态 | 类型 | 正式 CR 路径 | 当前门控 | 阻塞原因 | 下一步 |
-|---|---|---|---|---|---|---|---|
-| CR-020 |  | candidate | CR / Spike |  | 未启动 |  | 等待用户选择是否推进 |
+| 候选编号 | 标题 | 状态 | 类型 | 优先级 | 正式 CR 路径 | 相关 active CR / blocked_by / superseded_by | 当前门控 | 阻塞原因 | 下一步 |
+|---|---|---|---|---:|---|---|---|---|---|
+| CR-020 |  | candidate | CR / Spike | 1 |  |  | 未启动 |  | 等待用户选择是否推进 |
 
 ## 处理结论
 

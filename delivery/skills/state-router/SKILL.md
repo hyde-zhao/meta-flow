@@ -22,6 +22,7 @@ status: active
 - 并行 LLD 写作期间的 `lld_clarification_queue` 收敛检查
 - CP2 / CP3 / CP5 / CP8 前的 `human_gate_decisions.pending_human_decisions[]` 状态队列维护
 - CP0-CP8 检查点状态、自动检查结果路径和人工审查结果路径维护
+- CR 跟踪状态查询：汇总 active / blocked 正式 CR、follow-up candidate、spike_candidate 和状态冲突
 - `standard` / `fast-lane` 工作流模式、关键决策门控和同工作流自动子 agent 调度状态维护
 
 ## 前置条件
@@ -34,6 +35,7 @@ status: active
 - `process/STATE.md`（若已存在）
 - `skills/state-router/templates/STATE-TEMPLATE.md`
 - `skills/checkpoint-manager/SKILL.md`
+- `scripts/check_cr_tracking_consistency.py`（若存在）：CR 台账、正式 CR 和 `STATE.md.active_change` 一致性预检
 - 与当前阶段直接相关的上游文档：
   - `REQUEST.md`
   - `USE-CASES.md`
@@ -52,13 +54,14 @@ status: active
 - `skills/state-router/templates/STATE-TEMPLATE.md`：状态对象结构与阶段机基线
 - `AGENTS.md` / `rules/AGENTS.md`：阶段定义、人工检查点与角色职责
 - 各阶段产物 frontmatter 与文件存在性：退出条件的事实来源
+- `process/changes/CR-INDEX.yaml` 与 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md`：CR 跟踪索引和后续候选台账
 
 ## 执行步骤
 
 ### 1. 初始化或读取状态
 
 1. 若 `process/STATE.md` 不存在，则以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化。
-2. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`delegated_interaction`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`human_gate_decisions`、`decision_briefs`、`discussion_checkpoints`、`history`。
+2. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`delegated_interaction`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`human_gate_decisions`、`cr_tracking`、`decision_briefs`、`discussion_checkpoints`、`history`。
 3. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 4. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。
 5. 若 `agent_lifecycle.platform_capabilities.subagent_dispatch` 缺失，必须先补齐并将 `available=false`、`method=unverified` 写入状态；能力未探测前，不得把需要功能 Agent 的任务标记为 `completed`。
@@ -68,6 +71,7 @@ status: active
 9. 若 `delegated_interaction` 缺失，必须按模板补齐，默认 `status=none`；补齐不代表已经委托成功。
 10. 若 `parallel_execution.lld_clarification_queue` 缺失，必须按模板补齐，默认 `status=idle`、`items=[]`；补齐不代表问题已收敛。
 11. 若 `human_gate_decisions` 缺失，必须按模板补齐，默认 `status=idle`、`pending_human_decisions=[]`；补齐不代表当前没有待决策项，发起人工门禁前仍必须从正式产物重新聚合。
+12. 若 `cr_tracking` 缺失，必须按模板补齐，默认 `status=not-indexed`、`active_crs=[]`、`blocked_crs=[]`、`follow_up_candidates=[]`、`spike_candidates=[]`、`stale_status_conflicts=[]`；补齐不代表当前没有后续候选 CR，状态查询前仍必须读取台账和正式 CR 文件。
 
 ### 2. 按阶段检查退出条件
 
@@ -95,6 +99,18 @@ status: active
 
 若用户在 `meta-po` 线程中发送内容，而 `delegated_interaction.status` 表示活跃委托，state-router 必须返回“转交委托 Agent”的下一步建议，而不是推进阶段。
 
+### 2.2 当前状态 / CR 盘点查询
+
+当用户询问“当前状态”“还有哪些 CR 需要推进”“建议如何推进”“待跟踪 CR”等问题时，state-router 不得只返回 `STATE.md.active_change` 或唯一 `status=active` 的正式 CR；必须生成 CR 盘点视图：
+
+1. 读取 `process/STATE.md.active_change`、`STATE.md.orchestrator_session.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）、全部 `process/changes/CR-*.md` 正式 CR 和全部 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md` 台账。
+2. 若存在 `scripts/check_cr_tracking_consistency.py`，运行或要求运行该脚本检查 `--project-root .`；若无法运行，必须在回答中说明跳过原因。
+3. 输出必须固定分为五类：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。
+4. `candidate` / `spike_candidate` 是 backlog，不占执行锁，但必须在“还有哪些 CR 需要推进”回答中列出标题、优先级、阻塞前置、下一步和不授权边界。
+5. 若 `STATE.md.active_change` 指向已关闭 CR，或与正式 `status=active` 的 CR 不一致，必须先列为 `stale_status_conflicts`；不得因为状态冲突而隐藏 follow-up 台账候选项。
+6. 若存在独立 active CR（例如未占用 follow-up 候选编号的临时 CR），必须要求其在台账或 `CR-INDEX.yaml` 中建立 `related_active_cr`、`blocked_by`、`superseded_by` 或等价关系，否则列为同步缺口。
+7. 推进建议必须先收敛 active / blocked 正式 CR，再说明哪些 candidate 可启动、哪些必须等待前置 CR、哪些只适合 Spike。
+
 ### 3. 处理回退
 
 1. 记录回退原因与目标阶段。
@@ -105,10 +121,10 @@ status: active
 
 当用户请求从 follow-up tracking 台账启动候选 CR 时，state-router 必须先做冲突预检，再允许 `change-impact-analysis` 创建正式 CR：
 
-1. 读取台账路径、候选编号、`STATE.md.active_change`、所有未关闭 `process/changes/CR-*.md`。
+1. 读取台账路径、候选编号、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和所有未关闭 `process/changes/CR-*.md`。
 2. `candidate` / `spike_candidate` 不占执行锁；`active` / `blocked` 的正式 CR 视为未完成。
 3. 比较受影响正式文档、Story / LLD 批次、文件 owner、外部接口、权限 / 安全边界、运行授权、风险接受项和来源决策 ID。
-4. 若无重叠，允许创建正式 CR，并把台账状态改为 `active`。
+4. 若无重叠，允许创建正式 CR，并把台账状态和 `cr_tracking` / `CR-INDEX.yaml` 改为 `active`。
 5. 若存在重叠，返回 `blocked` 下一步，不得静默并行推进；meta-po 必须发起人工决策，选项包括合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded`。
 
 ### 4. 回写状态
@@ -249,6 +265,7 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 |---|---|---|
 | 运行时状态 | `process/STATE.md` | 当前状态机实例 |
 | 状态模板 | `skills/state-router/templates/STATE-TEMPLATE.md` | 初始化与结构基线 |
+| CR 跟踪索引 | `process/changes/CR-INDEX.yaml` | active / blocked / candidate / spike_candidate / conflict 的机器可查询索引 |
 | 自动检查结果 | `process/checks/CP*.md` | 自动检查点和自动预检证据 |
 | 人工审查稿 | `checkpoints/CP*.md` | 人工检查点 checklist 与审查结果 |
 
@@ -274,6 +291,8 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 - [ ] 活跃阶段委托不会被 meta-po 越权代写或越权发起 CP2 / CP3
 - [ ] `lld_clarification_queue` 无未回答阻断项时才允许进入 CP5
 - [ ] 阻塞状态下返回明确阻塞原因
+- [ ] 状态查询必须列出 active formal CR、blocked formal CR、follow-up candidate、spike_candidate 和 stale_status_conflicts
+- [ ] `scripts/check_cr_tracking_consistency.py` 能识别 `STATE.md.active_change` 指向已关闭 CR、多个 active CR、台账候选与正式 CR 文件不同步等问题
 
 ## 不适用边界
 
@@ -289,6 +308,7 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 - 同一 Wave 内也可能因文件冲突串行；不同 Wave 的 Story 可以提前写 LLD，但不得在全量 CP5 通过前进入开发
 - fast-lane 只能减少文档厚度和人工门数量，不能跳过 CP6 / CP7、Agent Dispatch Evidence 或 CP8 终验摘要
 - 当存在活跃 `CR-*` 时，应优先收敛变更影响，再判断是否允许推进
+- “唯一 active CR”不等于“没有后续 CR 候选”；follow-up tracking 中的 candidate / spike_candidate 必须作为 backlog 显式展示
 - 当 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计时，必须先形成 CR 影响范围的 `lld_design_batch`，批次确认前不得进入开发
 - 首次初始化时只允许从 `skills/state-router/templates/STATE-TEMPLATE.md` 复制，不允许凭空脑补字段
 - 自动检查点失败时，不要发起人工确认；先把失败结果写入 `process/checks/CP*.md` 并路由给责任 agent 修复

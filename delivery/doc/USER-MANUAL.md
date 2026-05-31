@@ -278,13 +278,26 @@ meta-po 会执行以下动作：
 
 | 步骤 | 动作 | 输出 |
 |---|---|---|
-| 1 | 读取台账候选项、`STATE.md.active_change` 和活跃 CR | 判断是否已有未完成 CR |
+| 1 | 读取台账候选项、`STATE.md.active_change`、`STATE.md.cr_tracking`、`CR-INDEX.yaml` 和活跃 CR | 判断是否已有未完成 CR |
 | 2 | 执行 CR 冲突预检 | 输出影响面、重叠对象和推荐处理 |
 | 3 | 无冲突或用户确认处理方式后创建正式 CR | `process/changes/CR-0xx-<slug>-YYYY-MM-DD.md` |
 | 4 | 回写台账 | 状态改为 `active`，填写正式 CR 路径、当前门控、阻塞原因和下一步 |
 | 5 | 进入普通 CR 流程 | 五维度影响分析、门禁、实现和验证 |
 
 候选项没有启动时只是 backlog，不会和新的 CR 冲突。已启动但未完成的 CR 会占用执行语义：如果新 CR 与它影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，meta-po 不得静默并行推进，必须发起冲突决策。可选处理包括：合并到现有 CR、保持候选等待、标记为 `blocked`、拆分无冲突子集先做、或标记为 `superseded` 并链接替代 CR。
+
+查看当前 CR 时，使用：
+
+```text
+@meta-po 当前状态
+检查还有哪些 CR 需要推进，建议如何推进
+```
+
+meta-po 必须输出五类清单：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。`candidate` 和 `spike_candidate` 不是执行锁，但必须作为 backlog 展示；如果 `STATE.md.active_change` 指向已关闭 CR，或正式 active CR 没有回写台账 / `CR-INDEX.yaml`，必须先列为状态冲突。存在 `scripts/check_cr_tracking_consistency.py` 时，可用以下命令独立检查：
+
+```bash
+uv run --python 3.11 python scripts/check_cr_tracking_consistency.py --project-root .
+```
 
 ### 6.6 何时显式声明 meta-self-dev
 

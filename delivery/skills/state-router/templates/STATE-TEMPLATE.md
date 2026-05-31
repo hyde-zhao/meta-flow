@@ -240,6 +240,30 @@ human_gate_decisions:
     - "closed"
     - "cancelled"
     - "superseded"
+cr_tracking:
+  status: "not-indexed|indexed|needs-sync|conflict|blocked"
+  index_path: "process/changes/CR-INDEX.yaml"
+  last_consistency_check: ""
+  active_crs: []
+  blocked_crs: []
+  follow_up_candidates: []
+  spike_candidates: []
+  stale_status_conflicts: []
+  item_schema:
+    - "id"
+    - "title"
+    - "status"
+    - "source_tracking"
+    - "formal_cr_path"
+    - "priority"
+    - "blocked_by"
+    - "impact_surface"
+    - "conflict_keys"
+    - "next_gate"
+    - "next_action"
+    - "last_checked_at"
+  reporting_policy: "状态查询必须同时输出 active CR、blocked CR、follow-up candidate、spike_candidate 和 stale_status_conflicts；candidate/spike_candidate 不占执行锁"
+  consistency_check: "存在 scripts/check_cr_tracking_consistency.py 时，当前状态查询、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后必须运行或记录跳过原因"
 parallel_waves: []
 history: []
 last_updated: ""
