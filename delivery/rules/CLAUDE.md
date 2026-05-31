@@ -107,14 +107,20 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 29. **inline fallback 显式化**：平台无法拉起子 agent 时，默认 blocked；只有用户明确批准，meta-po 才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。结果必须写成 meta-po 代执行，不得写成 meta-dev / meta-qa 独立完成。
 30. **关键决策门控**：CP2 / CP3 / CP5 / CP8 是人工决策点；CP4 只写自动预检并汇入 CP5 Decision Brief。
 31. **Decision Brief**：关键人工确认前必须汇总推荐决策、备选方案、影响维度、优劣、风险与回退、用户需决策事项。
-32. **待人工决策清单**：工作流程中所有需要人工确定的信息都必须形成决策项；每项必须包含待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、推荐 / 备选优劣分析、影响 / 风险和回退 / 切换条件。meta-po 发起人工确认时必须收集所有未决人工决策项，去重后打印给用户统一决策；用户回复 `approve` 表示接受清单内全部推荐方案。
-33. **自动拉起子 agent**：用户启动正式工作流后，同工作流内默认允许 meta-po 自动拉起功能 Agent；该授权不包含 inline fallback。
-34. **阶段委托交互**：`requirement-clarification` 默认委托 `meta-pm` 直接与用户完成场景和需求草案；`solution-design` 默认委托 `meta-se` 直接与用户完成架构灰区、advisor table 和 HLD 草案。委托状态写入 `STATE.md.delegated_interaction`；被委托 Agent 不得推进跨阶段状态，不得发起 CP2 / CP3 正式人工检查点；阶段收敛后写交还摘要，由 meta-po 回收并发起 Decision Brief。
-35. **LLD Clarification Queue**：并行 LLD 阶段多个 `meta-dev` 不得并发直接询问用户；遇到实现灰区必须写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`，字段至少包含 `id/story_id/owner_agent/question/options/recommendation/impact_surface/blocks_lld/answer/status`。meta-po 是唯一 question broker，负责合并同类问题、批量询问、回填答案并分发给对应 meta-dev。存在未回答 `blocks_lld=true` 项时不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief、LLD 和 DEV-LOG 中暴露。
-36. **fast-lane**：仅低风险轻量实现可用；不得跳过 CP6 / CP7、调度证据或 CP8 终验摘要；命中架构、权限、安装、外部接口、文件所有权冲突或多 Story 依赖时必须升级 standard。
-37. **CP2 Scenario Gray Areas**：标准模式下，场景发现必须先识别 3-4 个会影响交付的灰区，让用户选择 1-3 个重点讨论；未选项进入 Deferred Ideas。讨论日志写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`，恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`，缺失时 CP2 自动检查必须说明 N/A 或阻断原因。
-38. **CP3 Architecture Gray Areas**：HLD 正式生成前必须先识别关键架构灰区，advisor lane 使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格优先输出。讨论日志写入 `process/discussions/CP3-HLD-DISCUSSION-LOG.md`，恢复点写入 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`，缺失时 CP3 自动检查必须说明 N/A 或阻断原因。
-39. **讨论日志消费边界**：Discussion Log 用于审计和恢复，不替代 `USE-CASES.md`、`REQUIREMENTS.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md`。
+32. **待人工决策清单**：工作流程中所有需要人工确定的信息都必须形成决策项；每项必须包含决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、推荐 / 备选优劣分析、影响 / 风险和回退 / 切换条件。决策类型只能使用 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。meta-po 发起人工确认时必须收集所有未决人工决策项，去重后打印给用户统一决策；用户回复 `approve` 表示接受清单内全部推荐方案。
+33. **结构化人工决策队列**：`process/STATE.md.human_gate_decisions.pending_human_decisions[]` 是 CP2 / CP3 / CP5 / CP8 待人工决策清单的状态机对象。所有 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类问题必须先分类；`decision-item` 必须进入该队列。
+34. **Human Gate Launch Protocol**：CP2 / CP3 / CP5 / CP8 发起前必须运行 `scripts/check_human_gate_decision_brief.py` 校验 Decision Brief；若已有待发送消息草稿，必须同时校验对话内容包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。待决策项数量大于 0 但对话未打印表格，视为门禁发起失败。
+35. **用户视角复述与不授权项**：人工门禁消息必须说明 `approve` 接受哪些推荐方案，并明确不代表授权哪些禁止操作。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须独立列出不授权项。
+36. **决策修订再发布**：用户纠正范围、安全、运行授权或风险接受含义后，meta-po 必须更新相关 DQ、重新计算影响面、重新生成 Decision Brief 和待决策表，并重新发起确认。
+37. **自动拉起子 agent**：用户启动正式工作流后，同工作流内默认允许 meta-po 自动拉起功能 Agent；该授权不包含 inline fallback。
+38. **阶段委托交互**：`requirement-clarification` 默认委托 `meta-pm` 直接与用户完成场景和需求草案；`solution-design` 默认委托 `meta-se` 直接与用户完成架构灰区、advisor table 和 HLD 草案。委托状态写入 `STATE.md.delegated_interaction`；被委托 Agent 不得推进跨阶段状态，不得发起 CP2 / CP3 正式人工检查点；阶段收敛后写交还摘要，由 meta-po 回收并发起 Decision Brief。
+39. **LLD Clarification Queue**：并行 LLD 阶段多个 `meta-dev` 不得并发直接询问用户；遇到实现灰区必须写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`，字段至少包含 `id/story_id/owner_agent/question/options/recommendation/impact_surface/blocks_lld/answer/status`。meta-po 是唯一 question broker，负责合并同类问题、批量询问、回填答案并分发给对应 meta-dev。存在未回答 `blocks_lld=true` 项时不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief、LLD 和 DEV-LOG 中暴露。
+40. **CP8 后续跟踪分流**：CP8 必须区分关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，状态取值为 `candidate`、`active`、`blocked`、`spike_candidate`、`converted-to-spike`、`closed`、`cancelled`、`superseded`；只有用户决定推进某项时才创建正式 CR 文件。
+41. **后续 CR 启动与冲突预检**：用户用 `@meta-po 启动后续 CR` 并提供台账路径、候选编号和目标摘要后，meta-po 才能把候选项转正式 CR。启动前必须读取 `STATE.md.active_change`、台账和未关闭 CR，比较正式文档、Story、文件 owner、外部接口、安全 / 运行授权和风险接受项；`candidate` / `spike_candidate` 不占执行锁，已 `active` 的未完成 CR 若与新 CR 影响面重叠，默认不得并行推进，必须让用户选择合并、等待、blocked、拆分或 superseded。
+42. **fast-lane**：仅低风险轻量实现可用；不得跳过 CP6 / CP7、调度证据或 CP8 终验摘要；命中架构、权限、安装、外部接口、文件所有权冲突或多 Story 依赖时必须升级 standard。
+43. **CP2 Scenario Gray Areas**：标准模式下，场景发现必须先识别 3-4 个会影响交付的灰区，让用户选择 1-3 个重点讨论；未选项进入 Deferred Ideas。讨论日志写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`，恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`，缺失时 CP2 自动检查必须说明 N/A 或阻断原因。
+44. **CP3 Architecture Gray Areas**：HLD 正式生成前必须先识别关键架构灰区，advisor lane 使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格优先输出。讨论日志写入 `process/discussions/CP3-HLD-DISCUSSION-LOG.md`，恢复点写入 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`，缺失时 CP3 自动检查必须说明 N/A 或阻断原因。
+45. **讨论日志消费边界**：Discussion Log 用于审计和恢复，不替代 `USE-CASES.md`、`REQUIREMENTS.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md`。
 
 ## CP0-CP8 检查点
 
@@ -130,7 +136,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
 
-每个 CP 都必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须给出逐项检查结果；CP2 / CP3 / CP5 / CP8 人工检查点必须给出 checklist 路径、Decision Brief、待人工决策清单并回填人工审查结果。待人工决策清单逐项列出决策 ID、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
+每个 CP 都必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须给出逐项检查结果；CP2 / CP3 / CP5 / CP8 人工检查点必须给出 checklist 路径、自动预检结论、Decision Brief、待人工决策清单并回填人工审查结果。待人工决策清单逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
 
 CP2 Decision Brief 必须额外覆盖用户真实意图、场景覆盖、认知盲区、Scenario Gray Areas、Deferred Ideas、用户选择影响和回退方式。CP3 Decision Brief 必须额外覆盖候选架构适用条件、优化项、牺牲项、影响面、切换条件、Use Case → Architecture Traceability、场景模拟结果和未决风险。
 

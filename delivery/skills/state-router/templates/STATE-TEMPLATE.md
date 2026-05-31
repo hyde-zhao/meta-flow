@@ -31,6 +31,8 @@ orchestrator_session:
   pending_gate: ""
   pending_checklist_path: ""
   pending_user_decision: ""
+  pending_decision_ids: []
+  pending_non_authorized_items: []
   subagent_auto_dispatch: "enabled"
   resume_instruction: "用户回复人工检查点结论后，优先使用 resume_agent 或 send_input 恢复同一 meta-po；仅旧线程不可恢复时才允许 recovery"
   spawned_at: ""
@@ -184,6 +186,60 @@ discussion_checkpoints:
     log: "process/discussions/CP3-HLD-DISCUSSION-LOG.md"
     checkpoint: "process/checks/CP3-DISCUSSION-CHECKPOINT.json"
     status: "pending"
+human_gate_decisions:
+  status: "idle|collecting|ready-for-gate|awaiting-user|answered|blocked|closed"
+  active_gate: ""
+  active_checkpoint: ""
+  active_launch_message: ""
+  pending_human_decisions: []
+  accepted_decision_ids: []
+  non_authorized_items: []
+  follow_up_tracking_path: ""
+  item_schema:
+    - "id"
+    - "gate"
+    - "decision_type"
+    - "question"
+    - "recommendation"
+    - "alternatives"
+    - "pros_cons"
+    - "impact_risk"
+    - "rollback_switch"
+    - "status"
+    - "source"
+    - "owner_agent"
+    - "updated_at"
+    - "answer"
+  allowed_decision_types:
+    - "scope"
+    - "architecture"
+    - "security"
+    - "implementation"
+    - "runtime_authorization"
+    - "risk_acceptance"
+    - "follow_up_tracking"
+  allowed_statuses:
+    - "open"
+    - "ready-for-gate"
+    - "awaiting-user"
+    - "accepted"
+    - "changes-requested"
+    - "rejected"
+    - "resolved-by-user"
+    - "non-blocking-open"
+    - "converted-to-spike"
+    - "n/a-with-reason"
+  classification_policy: "CP2/CP3/CP5/CP8 前，所有 Q-*、OPEN、LCQ-*、O-*、权限/安全/运行授权/风险接受/外部接口/数据写入/publish/live/交易类问题必须分类；decision-item 写入 pending_human_decisions"
+  launch_protocol: "发起人工门禁消息必须包含 checklist 路径、自动预检结论、待决策项数量、待决策表格、三个 exact 回复，以及 approve 不代表授权禁止操作的复述"
+  follow_up_statuses:
+    - "candidate"
+    - "active"
+    - "blocked"
+    - "spike_candidate"
+    - "converted-to-spike"
+    - "closed"
+    - "cancelled"
+    - "superseded"
 parallel_waves: []
 history: []
 last_updated: ""
@@ -216,4 +272,6 @@ Story 生命周期（每个 Story 独立）：
 - subagent_auto_dispatch=enabled 表示同工作流内允许 meta-po 自动拉起真实子 agent；inline fallback 仍需用户单独批准
 - delegated_interaction 仅记录阶段内用户交互权委托；不得代表 CP2 / CP3 已确认
 - lld_clarification_queue 存在 blocks_lld=true 且未回答的 item 时，不得发起 CP5 全量人工确认
+- human_gate_decisions.pending_human_decisions 是 CP2 / CP3 / CP5 / CP8 待人工决策清单的状态机对象；checkpoint 文件和对话发起消息必须从该队列聚合并保持一致
+- pending_non_authorized_items 用于记录本轮 approve 不代表授权的事项，尤其是真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类操作
 -->

@@ -155,7 +155,7 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 
 ### 6.2 检查点文件
 
-所有检查点都包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须写入逐项检查结果；CP2 / CP3 / CP5 / CP8 人工检查点必须有可审查的 Decision Brief、待人工决策清单和 checklist 文件。待人工决策清单会汇总本轮所有需要你确认的问题，每项包含推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
+所有检查点都包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须写入逐项检查结果；CP2 / CP3 / CP5 / CP8 人工检查点必须有可审查的 Decision Brief、待人工决策清单和 checklist 文件。待人工决策清单会汇总本轮所有需要你确认的问题，状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`；每项包含决策 ID、决策类型、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
 
 | CP | 名称 | 类型 | 文件 |
 |----|------|------|------|
@@ -223,10 +223,16 @@ meta-po 发起人工检查时会提示 checklist 文件路径，例如：
 
 ```text
 请审查：checkpoints/CP3-HLD-REVIEW.md
+自动预检结论：PASS
+本轮待人工决策项：1
+如果你回复 approve，表示你接受以下 1 项推荐方案，不表示授权以下 0 项禁止操作。
 待人工决策清单：
-| 决策 ID | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |
-|---|---|---|---|---|---|
-| CP3-DQ-01 | ... | ... | ... | ... | ... |
+| 决策 ID | 决策类型 | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |
+|---|---|---|---|---|---|---|
+| CP3-DQ-01 | architecture | ... | ... | ... | ... | ... |
+
+不授权项：
+- 无
 
 该文件包含本检查点的 Entry Criteria、Checklist、Exit Criteria、Deliverables、自动预检摘要、Decision Brief、待人工决策清单和人工审查结果区。
 ```
@@ -242,6 +248,43 @@ reject                   # 不通过并回退
 不匹配上述 exact 输入时，meta-po 不得推进状态。
 
 用户直接在对话中确认时，meta-po 仍必须把结论回填到对应 `checkpoints/CP*.md`。
+
+人工门禁消息本身也会被校验：必须包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。如果存在待决策项但消息没有打印表格，门禁发起视为不合规。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须列为不授权项；`approve` 只接受表内推荐方案，不代表授权这些操作。
+
+### 6.5.1 CP8 follow-up tracking
+
+CP8 终验会把遗留事项分流到 follow-up tracking 台账，而不是一次性预创建多个正式 CR 文件：
+
+| 分类 | 含义 | 用户可调整内容 |
+|---|---|---|
+| 关闭范围 | 本轮已完成并关闭 | 关闭证据或范围描述 |
+| 不授权范围 | 设计 / 文档通过不代表授权执行 | 未来授权条件、是否转正式 CR |
+| 风险接受项 | 用户接受风险后放行 | 接受条件、回退条件、owner |
+| 后续 CR 候选项 | 只进入台账，未启动正式 CR | 标题、owner、重访条件、是否转 Spike |
+| 取消 / deferred 项 | 明确不做或延后 | 取消理由、可重启条件 |
+
+台账路径形如 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`。状态取值包括 `candidate`、`active`、`blocked`、`spike_candidate`、`converted-to-spike`、`closed`、`cancelled`、`superseded`。当你决定推进某一候选项时，meta-po 才创建正式 CR，并把台账状态改为 `active`。
+
+启动候选项时，在对话中给出“启动后续 CR”、台账路径、候选编号和目标摘要：
+
+```text
+@meta-po 启动后续 CR
+台账：process/changes/CR-019-FOLLOW-UP-TRACKING-2026-05-31.md
+候选编号：CR-020
+目标：推进 Windows gateway 实机部署准入
+```
+
+meta-po 会执行以下动作：
+
+| 步骤 | 动作 | 输出 |
+|---|---|---|
+| 1 | 读取台账候选项、`STATE.md.active_change` 和活跃 CR | 判断是否已有未完成 CR |
+| 2 | 执行 CR 冲突预检 | 输出影响面、重叠对象和推荐处理 |
+| 3 | 无冲突或用户确认处理方式后创建正式 CR | `process/changes/CR-0xx-<slug>-YYYY-MM-DD.md` |
+| 4 | 回写台账 | 状态改为 `active`，填写正式 CR 路径、当前门控、阻塞原因和下一步 |
+| 5 | 进入普通 CR 流程 | 五维度影响分析、门禁、实现和验证 |
+
+候选项没有启动时只是 backlog，不会和新的 CR 冲突。已启动但未完成的 CR 会占用执行语义：如果新 CR 与它影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，meta-po 不得静默并行推进，必须发起冲突决策。可选处理包括：合并到现有 CR、保持候选等待、标记为 `blocked`、拆分无冲突子集先做、或标记为 `superseded` 并链接替代 CR。
 
 ### 6.6 何时显式声明 meta-self-dev
 

@@ -8,7 +8,7 @@ argument-hint: "可选：指定目标平台（claude/codex/openclaw）或安装�
 user-invokable: true
 status: active
 ---
-<!-- myflow-managed: version=1.0.0 canonical-commit=8c2ee51 generated=2026-05-28T07:10:38Z -->
+<!-- myflow-managed: version=1.0.0 canonical-commit=fe24c81 generated=2026-05-31T04:12:07Z -->
 
 ## 目标
 

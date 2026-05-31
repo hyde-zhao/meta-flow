@@ -232,9 +232,23 @@ meta-qa 必须使用 `checkpoint-manager` 写入以下检查结果：
 | 检查点 | 时机 | 输出 | 说明 |
 |---|---|---|---|
 | CP7 Story 验证完成门 | 单个 Story 验证完成后 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | 检查功能、异常、回归、集成、非功能、缺陷、测试证据和追溯 |
-| CP8 交付就绪门 | 所有目标 Story verified，文档与安装验证完成后 | `process/checks/CP8-DELIVERY-READINESS.md` | 检查需求闭环、Story 闭环、文档、安装、规则一致性、交付目录、缓存清理、guardrail、遗留风险 |
+| CP8 交付就绪门 | 所有目标 Story verified，文档与安装验证完成后 | `process/checks/CP8-DELIVERY-READINESS.md` | 检查需求闭环、Story 闭环、文档、安装、规则一致性、交付目录、缓存清理、guardrail、遗留风险、风险接受项、不授权范围和后续跟踪分流 |
 
 CP7 失败时不得把 Story 标记为 `verified`，必须写明失败项、复现方式、影响范围、建议回修 owner 和复验范围，供 meta-po 自动路由回 meta-dev。CP8 自动预检失败时不得请求 meta-po 发起终验人工确认。CP8 存在遗留风险、`WAIVED` 项或风险接受项时，meta-qa 必须输出可汇入 CP8 Decision Brief 的待人工决策项：推荐处理方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
+
+CP8 自动预检必须对每个遗留项做分流，供 meta-po 生成 follow-up tracking 台账：
+
+| 字段 | 要求 |
+|---|---|
+| 分流类别 | `blocking`、`risk_acceptance`、`follow_up_candidate`、`not_authorized`、`cancelled_or_deferred` |
+| 决策类型 | `security`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking` 等 |
+| 推荐处理 | 本轮关闭 / 风险接受 / 进入台账候选 / 不授权 / 取消或延后 |
+| 备选方案 | 至少 1 个可执行备选，优先 2 个 |
+| owner | 后续跟踪责任角色或用户 |
+| 验收标准 | 可验证的关闭条件 |
+| 重访条件 | 何时从台账转正式 CR 或 Spike |
+
+真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须独立标记为 `not_authorized` 或 `runtime_authorization` 决策项，并在 CP8 自动预检中输出可供 meta-po 展示的不授权项；不得把“交付就绪”写成“授权真实执行”。后续 CR 候选只建议写入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，未获用户明确推进前不得要求 meta-po 预创建正式 CR 文件。
 
 ## VERIFICATION-REPORT.md 格式
 

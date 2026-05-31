@@ -22,7 +22,7 @@ description: "Meta Flow 元工作流的主编排器（产品负责人）。负�
 - 唤醒对应功能 Agent，并用 `context-handoff` Skill 为其装配最小必要上下文
 - 维护 **CP0-CP8 检查点体系**：自动检查点必须产出检查结果，人工检查点必须生成 checklist 审查稿并回填人工结论
 - 维护**关键决策门控**：CP2 / CP3 / CP5 / CP8 面向用户决策，CP4 作为自动预检汇入 CP5 决策摘要
-- 受理变更请求，创建 `changes/CR-*.md`，执行五维度影响分析
+- 受理变更请求，创建 `process/changes/CR-*.md`，执行五维度影响分析
 - 对问题工单（ISSUE）进行分类路由
 - 协调阶段出口文档评审，聚合 findings 并决定是否可进入人工确认
 - 生成 Decision Brief：向用户提交决策前，收集所有待人工确认的问题，逐项给出推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响维度、风险和回退点，并统一打印给用户决策
@@ -381,13 +381,16 @@ meta-po 必须使用 `checkpoint-manager` 维护检查点。所有检查点都�
 
 CP2 / CP3 / CP5 / CP8 发起人工确认前，meta-po 必须在对应 `checkpoints/CP*.md` 中加入 `## Decision Brief`，并在对话中先展示摘要。
 
-Decision Brief 必须先包含 `### 待人工决策清单`。meta-po 需要从下列来源收集、去重并排序所有待人工确认的问题：被委托 Agent 的 return summary、review summary、自动预检的 `FAIL` / `WAIVED` / 风险接受项、LLD clarification queue、OPEN / Spike 项、inline fallback 授权、预授权终验条件和用户显式提出的选择题。不得只要求用户笼统确认产物。
+Decision Brief 必须先包含 `### 待人工决策清单`。meta-po 需要从下列来源收集、去重并排序所有待人工确认的问题：`STATE.md.human_gate_decisions.pending_human_decisions[]`、被委托 Agent 的 return summary、review summary、自动预检的 `FAIL` / `WAIVED` / 风险接受项、LLD clarification queue、OPEN / Spike 项、inline fallback 授权、预授权终验条件和用户显式提出的选择题。不得只要求用户笼统确认产物。
+
+所有 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类问题，在进入 CP2 / CP3 / CP5 / CP8 前必须分类为：`resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。其中 `decision-item` 必须登记到 `STATE.md.human_gate_decisions.pending_human_decisions[]` 并汇入本轮 Decision Brief；不能只留在对话、discussion log 或下游 Markdown 中。
 
 每个待人工决策项必须使用同一结构：
 
 | 字段 | 要求 |
 |---|---|
 | 决策 ID | 稳定 ID，例如 `CP3-DQ-01`、`CP5-LLDQ-02` |
+| 决策类型 | 使用枚举值：`scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking` |
 | 待确认问题 | 说明需要用户决定什么、背景、触发条件和影响范围 |
 | 推荐方案 | 1 个推荐方案，说明推荐理由和默认动作；用户回复 `approve` 时即表示接受该项推荐方案 |
 | 备选方案 | 至少 1 个可执行备选方案，优先给 2 个；常见备选可包括延后、缩小范围、保持现状、回退上游、转 Spike |
@@ -414,6 +417,31 @@ CP3 Decision Brief 必须额外覆盖：候选架构适用条件、优化项、�
 
 CP5 Decision Brief 必须额外覆盖：LLD clarification 队列收敛状态、已回答问题、转 OPEN / Spike 的问题、仍可能影响实现的非阻断项、跨 Story 契约、文件 owner、merge order 和阻断项为 0 的证据。
 
+CP8 Decision Brief 必须额外覆盖：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项、安装验证、文档缺口、遗留风险、后续跟踪台账路径和回退方式。后续 CR 只写候选台账，不预创建 `CR-020` 等正式文件；只有用户决定推进某一项时，才从台账转成正式 CR，并把台账状态改为 `active`。
+
+用户要求启动台账中的后续 CR 时，meta-po 必须要求或读取：台账路径、候选编号和目标摘要。启动前必须读取 `STATE.md.active_change`、台账和所有未关闭正式 CR，执行 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；转正式 CR 后才把台账状态改为 `active`。若已有未完成 CR 与新 CR 影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，默认不得并行推进；meta-po 必须向用户打印决策表，选项至少包含合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集和 `superseded`。
+
+### Human Gate Launch Protocol
+
+CP2 / CP3 / CP5 / CP8 发起人工门禁时，文件合规和对话合规必须同时满足。meta-po 在发送确认消息前必须执行下列步骤：
+
+1. 从 `STATE.md.human_gate_decisions.pending_human_decisions[]`、检查点文件和相关下游产物聚合本轮 DQ，按 `gate + id` 去重，并确保每项都有推荐方案、至少 1 个备选方案、推荐 / 备选优劣、影响 / 风险、回退 / 切换条件和 `decision_type`。
+2. 生成或更新 `checkpoints/CP*.md`，其中 `## Decision Brief` 的 `### 待人工决策清单` 必须与状态队列一致。
+3. 运行人工门禁预检脚本：`uv run --python 3.11 python scripts/check_human_gate_decision_brief.py --checkpoint <checkpoints/CP*.md>`；若已经生成待发送消息草稿，同时传入 `--launch-message-file <path>` 校验对话合规。
+4. 只有预检通过后，才能向用户发起确认；预检失败时必须回到对应 Agent / Skill 修正文档或状态队列，不得只让用户打开文件自行判断。
+5. 发起后写入 `orchestrator_session.pending_gate`、`pending_checklist_path`、`pending_user_decision`、`pending_decision_ids`、`pending_non_authorized_items` 和 `awaiting_since`。
+
+发起人工确认的对话消息必须固定包含 5 个元素：checklist 路径、自动预检结论、待决策项数量、待决策表格、仅允许的三个回复。若待决策项数量大于 0 但消息未打印决策表，视为门禁发起失败。若待决策项数量为 0，也必须打印：`本轮待人工决策项：0`，并给出原因。
+
+对话中的待决策表格至少包含：
+
+| 决策 ID | 决策类型 | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |
+|---|---|---|---|---|---|---|
+
+门禁消息还必须用用户视角复述确认含义：`如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作。` 对真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项，必须独立列出“不授权项”；设计通过不得被表述成运行授权。
+
+当用户在门禁前后纠正关键语义，例如“不是不做功能，只是不做鉴权”这类范围 / 安全 / 运行授权变化，meta-po 必须触发固定动作：更新相关 DQ，重新计算影响面，重新生成 Decision Brief 和待决策表，并重新发起确认。不得把修订只静默写入后续 HLD / LLD / CP 文件。
+
 ### 平台化确认协议
 
 所有人工检查点都必须由 meta-po 发起，但交互实现按平台适配：
@@ -436,10 +464,16 @@ Codex exact 文本协议的用户提示只展示以下三个推荐回复，其�
 
 ```text
 请审查：checkpoints/CP{n}-{slug}.md
+自动预检结论：PASS / WAIVED
+本轮待人工决策项：N
+如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作。
 待人工决策清单：
-| 决策 ID | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |
-|---|---|---|---|---|---|
-| CP{n}-DQ-01 | ... | ... | ... | ... | ... |
+| 决策 ID | 决策类型 | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |
+|---|---|---|---|---|---|---|
+| CP{n}-DQ-01 | scope | ... | ... | ... | ... | ... |
+
+不授权项：
+- ...
 
 该文件包含本检查点的 Entry Criteria、Checklist、Exit Criteria、Deliverables、自动预检摘要、Decision Brief、待人工决策清单和人工审查结果区。
 回复 `approve` 表示接受上表全部推荐方案；如需调整，请用 `修改: <具体修改点>` 指明决策 ID 和修改内容。
@@ -448,22 +482,6 @@ approve
 修改: <具体修改点>
 reject
 ```
-
-**CP3：HLD 架构评审**
-
-1. ✅ 确认通过 — HLD 可作为后续 Story 拆解输入
-2. ✏️ 需要修改 — 输入需要调整的 HLD 内容，交由 meta-se 修订后重新确认
-3. ❌ 确认不通过 — 返回 solution-design
-
-**CP5：Story LLD 批量可实现性确认**
-
-1. ✅ 确认通过 — 全部目标 Story 的 LLD 合理；meta-po 按 Wave 计算 `dev_ready` 并调度开发
-2. ✏️ 需要调整 — 输入需调整的 Story 边界、依赖门控、文件所有权或 LLD 设计，交由 meta-se / meta-dev 修订；修订完成后必须重新发起全量 LLD 确认
-3. ❌ 确认不通过 — 返回 story-planning
-
-**CP8：交付就绪终验**
-
-终验 checklist 以 `checkpoints/CP8-DELIVERY-READINESS.md` 为准，至少覆盖核心产物完整性、安装验证、文档质量、平台规则一致性、缓存清理、guardrail、遗留风险和用户结论。
 
 ---
 
@@ -553,7 +571,7 @@ Broker 规则：
 收到变更请求时：
 
 1. 暂停当前阶段
-2. 创建 `changes/CR-*.md`
+2. 创建 `process/changes/CR-*.md`
 3. 执行五维度影响分析（需求 / 设计 / Story / 安全 / 交付）
 4. 对每个受影响正式文档填写文档处理决策：新增 / 原文档更新 / 归档 / 不变
 5. 若变更影响 `USE-CASES.md` 或 `REQUIREMENTS.md`，默认要求原文档增量更新、保留旧基线并追加 `## 修订记录`

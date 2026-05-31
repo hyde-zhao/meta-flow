@@ -39,7 +39,11 @@ Meta Flow 的交互路径分两类：
 
 ## 工作流检查点
 
-安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；关键人工审查稿写入 `checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `meta-po` 发起人工确认，发起前必须生成 Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。待人工决策清单逐项列出决策 ID、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
+安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；关键人工审查稿写入 `checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `meta-po` 发起人工确认，发起前必须生成 Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
+
+人工门禁发起消息必须同时合规：包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须作为不授权项单独列出；`approve` 不代表授权这些操作。CP8 必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
+
+启动台账中的后续 CR 时，用 `@meta-po 启动后续 CR` 并给出台账路径、候选编号和目标摘要。meta-po 必须先读取台账、`STATE.md.active_change` 和活跃 `process/changes/CR-*.md`，做 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；候选项转正式 CR 后才把台账状态改为 `active`，写入正式 CR 路径。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 中选择。
 
 CP6 / CP7 必须包含 `Agent Dispatch Evidence`。handoff 文件只表示交接，不表示目标 agent 已执行；编码和验证完成必须有真实子 agent 调度证据，或用户明确批准的 `inline-fallback`。
 

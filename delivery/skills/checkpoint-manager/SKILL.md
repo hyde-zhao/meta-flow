@@ -150,9 +150,9 @@ target:
 
 ### 待人工决策清单
 
-| 决策 ID | 待确认问题 | 推荐方案 | 备选方案 | 优劣分析 | 影响 / 风险 | 回退 / 切换条件 |
-|---|---|---|---|---|---|---|
-| CP{n}-DQ-01 | `<说明需要用户决定什么、背景、触发条件和影响范围>` | `<1 个推荐方案；用户回复 approve 时默认接受>` | `<至少 1 个可执行备选方案，优先 2 个；不得写“无备选”>` | `<分别说明推荐和备选的优势、代价、适用条件>` | `<用户价值 / 复杂度 / 可验证性 / 维护 / 平台 / 安全权限 / 交付影响>` | `<回退阶段、Story 状态或切换条件>` |
+| 决策 ID | 决策类型 | 待确认问题 | 推荐方案 | 备选方案 | 优劣分析 | 影响 / 风险 | 回退 / 切换条件 |
+|---|---|---|---|---|---|---|---|
+| CP{n}-DQ-01 | `scope / architecture / security / implementation / runtime_authorization / risk_acceptance / follow_up_tracking` | `<说明需要用户决定什么、背景、触发条件和影响范围>` | `<1 个推荐方案；用户回复 approve 时默认接受>` | `<至少 1 个可执行备选方案，优先 2 个；不得写“无备选”>` | `<分别说明推荐和备选的优势、代价、适用条件>` | `<用户价值 / 复杂度 / 可验证性 / 维护 / 平台 / 安全权限 / 交付影响>` | `<回退阶段、Story 状态或切换条件>` |
 
 | 字段 | 内容 |
 |---|---|
@@ -171,6 +171,16 @@ target:
 | CP3 | 候选架构适用条件、优化项、牺牲项、影响面、切换条件、Use Case → Architecture Traceability、关键场景模拟结果、未决风险、discussion log / checkpoint 路径或 N/A 原因 |
 | CP5 | LLD clarification queue 收敛状态、已回答问题、转 OPEN / Spike 的问题、未回答阻断项为 0 的证据、跨 Story 契约、文件 owner、merge order |
 | CP8 | 交付范围、安装验证、文档缺口、遗留风险、风险接受项、推荐处理方案、至少 1 个备选处理方案、回退方式 |
+
+### CP8 后续跟踪分流表
+
+| 分流类别 | 项目 ID | 状态 | 处理方式 | 台账 / CR 路径 | 说明 |
+|---|---|---|---|---|---|
+| 关闭范围 | CLOSE-01 | closed | 本轮交付内关闭 | `checkpoints/CP8-...md` |  |
+| 不授权范围 | NA-01 | not-authorized | 不进入本轮执行授权 | `checkpoints/CP8-...md` | 真实运行、凭据、publish、live 等必须独立列出 |
+| 风险接受项 | RA-01 | accepted-risk | 用户接受风险后放行 | `checkpoints/CP8-...md` | 必须有回退条件 |
+| 后续 CR 候选项 | CR-020 | candidate | 保留在 follow-up tracking 台账，暂不创建正式 CR 文件 | `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` | 启动时再转 active |
+| 取消 / deferred 项 | DEF-01 | cancelled/deferred | 不进入当前范围 | `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` | 不删除，保留追溯 |
 
 ## Entry Criteria
 
@@ -209,10 +219,16 @@ meta-po 发起人工检查时必须提示：
 
 ```text
 请审查：checkpoints/CP{n}-{slug}.md
+自动预检结论：PASS / WAIVED
+本轮待人工决策项：N
+如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作。
 待人工决策清单：
-| 决策 ID | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |
-|---|---|---|---|---|---|
-| CP{n}-DQ-01 | ... | ... | ... | ... | ... |
+| 决策 ID | 决策类型 | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |
+|---|---|---|---|---|---|---|
+| CP{n}-DQ-01 | scope | ... | ... | ... | ... | ... |
+
+不授权项：
+- ...
 
 该文件包含本检查点的 Entry Criteria、Checklist、Exit Criteria、Deliverables、自动预检摘要、Decision Brief、待人工决策清单和人工审查结果区。
 回复 `approve` 表示接受上表全部推荐方案；如需调整，请用 `修改: <具体修改点>` 指明决策 ID 和修改内容。
@@ -221,6 +237,16 @@ approve
 修改: <具体修改点>
 reject
 ```
+
+## Human Gate Launch Protocol
+
+CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规和对话合规：
+
+1. 发起前必须从 `STATE.md.human_gate_decisions.pending_human_decisions[]` 聚合本轮 DQ；若下游产物中存在 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类事项，必须先分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。
+2. `decision-item` 必须写入待人工决策清单；每项必须有 `decision_type`，取值为 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。
+3. 发起前必须运行 `scripts/check_human_gate_decision_brief.py` 校验 checkpoint 文件；如果存在待发送消息草稿，必须同时用 `--launch-message-file` 校验对话内容包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。
+4. 若待决策项数量大于 0 但发起消息未打印表格，检查点视为发起失败；若待决策项为 0，消息必须打印 `本轮待人工决策项：0` 并说明原因。
+5. 用户对关键语义做出修订后，必须更新 DQ、重新生成 Decision Brief 并重新发起确认，不得仅在后续文档静默修正。
 
 ## CP0 原始请求受理门
 
@@ -676,6 +702,8 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 - [ ] 自动检查点均生成 `process/checks/CP*.md` 结果文件
 - [ ] CP2 / CP3 / CP5 / CP8 人工检查点均生成 `checkpoints/CP*.md` 审查稿
 - [ ] 人工检查稿包含 Decision Brief
-- [ ] meta-po 发起关键人工确认时明确提示 checklist 文件路径
+- [ ] meta-po 发起关键人工确认时明确提示 checklist 文件路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复
+- [ ] 发起消息已复述 `approve` 接受哪些 DQ，且不授权项已独立列出
+- [ ] `scripts/check_human_gate_decision_brief.py` 校验 checkpoint 文件和发起消息通过
 - [ ] 人工审查后对应 `checkpoints/CP*.md` 已填入结论
 - [ ] `STATE.md.checkpoints` 与检查文件状态一致

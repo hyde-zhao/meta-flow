@@ -11,13 +11,14 @@ status: active
 
 ## 目标
 
-受理变更请求，创建标准化 `CR-*.md` 或 fast-lane 轻量变更记录，执行五维度影响分析，判定 `rollback_to`、审批要求与是否需要从 `fast-lane` 升级到 `standard`，并同步更新当前工作流状态。
+受理变更请求，创建标准化 `CR-*.md` 或 fast-lane 轻量变更记录，执行五维度影响分析，判定 `rollback_to`、审批要求与是否需要从 `fast-lane` 升级到 `standard`，并同步更新当前工作流状态。CR 关闭或 CP8 终验时若产生后续事项，维护 follow-up tracking 台账；只有用户决定推进某一候选项时，才从台账转为正式 CR 文件。
 
 ## 适用场景
 
 - 用户直接提出需求变更
 - ISSUE 升级为结构性变更
 - 执行反馈触发需求、设计或验证口径调整
+- CP8 终验发现后续 CR 候选、Spike 候选、风险接受项、不授权范围或取消 / deferred 项，需要建立可追溯台账
 
 ## 前置条件
 
@@ -34,6 +35,7 @@ status: active
 ## 知识来源
 
 - `skills/change-impact-analysis/templates/CR-TEMPLATE.md`：CR 结构基线
+- `skills/change-impact-analysis/templates/FOLLOW-UP-TRACKING-TEMPLATE.md`：CP8 后续事项台账结构基线
 - 当前工作流状态与正式文档：影响分析的事实来源
 - `AGENTS.md`：阶段、门控与回退语义
 
@@ -48,12 +50,20 @@ status: active
 7. 若当前为 `workflow_mode=fast-lane`，先执行快速模式升级判定：命中架构、权限、安装路径、外部接口、文件所有权冲突、多 Story 依赖或不可逆迁移时，必须升级为 `standard`。
 8. 给出 `impact_level`、`rollback_to`、`workflow_mode_after_change` 和审批结论。
 9. 将活跃变更单写回状态对象，并明确后续收敛路径。
+10. 若 CP8 或变更收敛阶段出现后续事项，只维护 `process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账；不得预创建 `CR-020` 到 `CR-028` 这类尚未启动的正式 CR 文件。
+11. 当用户决定推进某一候选项时，先执行 CR 冲突预检：读取台账、`STATE.md.active_change`、所有 `status=open|active|blocked` 的正式 CR，以及候选项的影响面。
+12. 冲突预检必须比较：受影响正式文档、Story / LLD 批次、文件 owner、外部接口、权限 / 安全边界、运行授权、风险接受项和来源决策 ID。
+13. `candidate` / `spike_candidate` 不占执行锁；转为正式 CR 后才允许把台账状态改为 `active`。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或标记 `superseded` 中选择。
+14. 冲突预检通过后，再创建正式 `process/changes/CR-0xx-<slug>-YYYY-MM-DD.md`，并把台账中对应状态改为 `active`，链接正式 CR 文件。
+15. 正式 CR 创建后，台账只保留索引字段：状态、正式 CR 路径、当前门控、阻塞原因、下一步；详细需求、影响分析和文档处理决策放入正式 CR 文件。
+16. 正式 CR 关闭后回写台账状态为 `closed`；候选项取消时写 `cancelled` 或 `superseded`，不得删除原行。
 
 ## 输出文件 / 输出模板
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
 | 变更单 | `process/changes/CR-{id}.md` | `skills/change-impact-analysis/templates/CR-TEMPLATE.md` |
+| 后续事项台账 | `process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` | `skills/change-impact-analysis/templates/FOLLOW-UP-TRACKING-TEMPLATE.md` |
 
 ## 约束
 
@@ -64,6 +74,10 @@ status: active
 - `impact_level`、`rollback_to`、审批结论必须显式落地
 - fast-lane 只允许低风险轻量实现；命中升级条件时必须切回 `standard`
 - CR 必须统一复用 `skills/change-impact-analysis/templates/CR-TEMPLATE.md` 口径
+- 后续 CR 候选只能先进入 follow-up tracking 台账，状态取值为 `candidate`、`active`、`blocked`、`spike_candidate`、`converted-to-spike`、`closed`、`cancelled`、`superseded`
+- 台账不得承载长需求正文；正式 CR 创建后，台账只保留索引，不重复详细内容
+- 新 CR 创建或候选 CR 转 active 前必须完成 CR 冲突预检；影响面重叠时不得静默并行推进
+- `process/STATE.md.active_change` 非空时，新 CR 默认进入候选 / blocked 等待，除非冲突预检证明影响面完全不重叠且用户确认可并行
 - 需求 / 场景变更默认采用增量更新；不得用新草案整体替换旧基线
 - 旧需求或旧场景不得直接删除，至少保留为既有基线、历史需求 / 场景、被 CR 替换对象，或在 CR 中完整摘录并建立映射关系
 - “废弃内容要彻底删除”只适用于已确认废弃的目录、路径变量、章节和实施步骤；不得用于删除仍需追溯的需求或场景基线
@@ -77,6 +91,9 @@ status: active
 - [ ] `rollback_to` 与审批结论已填写
 - [ ] 若影响 Story / LLD / 实现设计，LLD 设计批次边界和批次确认门禁已填写
 - [ ] 当前状态已记录活跃变更单
+- [ ] CP8 后续事项已按关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项分流
+- [ ] 后续 CR 候选只进入 follow-up tracking 台账，未预创建尚未启动的正式 CR 文件
+- [ ] 候选 CR 转 active 或新 CR 创建前已完成冲突预检，并记录处理结论
 
 ## 不适用边界
 
@@ -88,3 +105,4 @@ status: active
 - 执行反馈驱动的变更经常同时影响验证和交付层，不能只分析需求层
 - 若变更触发回退，不得跳过人工检查点直接继续下游阶段
 - “修订”不是“重写最新真相源”：需求和场景文档必须优先保留可追溯基线，再追加或修改新内容
+- CP8 后续事项不等于立即启动一组 CR；提前创建空 CR 会制造假进度和维护负担

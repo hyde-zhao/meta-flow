@@ -11,13 +11,38 @@ created_at: ""
 created_by: "meta-po"
 approved_by: ""
 approved_at: ""
-source: "user|issue|run-exec"
+source: "user|issue|run-exec|cp8-follow-up"
 linked_issue: ""
+parent_cr: ""
+source_checkpoint: ""
+source_decision_id: ""
+follow_up_type: ""
+risk_class: ""
+owner: ""
+revisit_condition: ""
+acceptance_criteria: ""
+close_condition: ""
 ---
 
 ## 变更描述
 
 [用户或 Agent 提出的变更内容]
+
+## CP8 Follow-up 来源
+
+> 仅当 `source=cp8-follow-up` 时填写。该正式 CR 由 follow-up tracking 台账中的候选项转入，不代表原 CP8 终验被重新打开，除非本 CR 的影响分析要求回退。
+
+| 字段 | 内容 |
+|---|---|
+| 父级 CR | `parent_cr` |
+| 来源检查点 | `source_checkpoint` |
+| 来源决策 ID | `source_decision_id` |
+| follow-up 类型 | `follow_up_type` |
+| 风险等级 | `risk_class` |
+| owner | `owner` |
+| 重访条件 | `revisit_condition` |
+| 验收标准 | `acceptance_criteria` |
+| 关闭条件 | `close_condition` |
 
 ## 文档处理决策
 
@@ -104,6 +129,18 @@ linked_issue: ""
 - 授权原文：
 - 授权时间：
 - 回填要求：若生效，人工审查稿必须标注 `approval_source=user-preauthorized`
+
+## 后续事项台账
+
+> CP8 或 CR 收敛时若产生后续事项，只维护台账，不预创建尚未启动的正式 CR 文件。用户决定推进某一项后，再创建正式 CR，并把本节或独立台账中的状态改为 `active`。
+
+- 是否存在后续事项：false
+- 台账路径：`process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`
+- 状态取值：`candidate` / `active` / `blocked` / `spike_candidate` / `converted-to-spike` / `closed` / `cancelled` / `superseded`
+
+| 候选编号 | 标题 | 状态 | 类型 | 正式 CR 路径 | 当前门控 | 阻塞原因 | 下一步 |
+|---|---|---|---|---|---|---|---|
+| CR-020 |  | candidate | CR / Spike |  | 未启动 |  | 等待用户选择是否推进 |
 
 ## 处理结论
 

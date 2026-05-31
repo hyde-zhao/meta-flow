@@ -20,6 +20,7 @@ status: active
 - Story 执行阶段内的 LLD 设计批次、开发队列、验证队列和依赖门控判断
 - `requirement-clarification` / `solution-design` 阶段内的用户交互权委托状态判断
 - 并行 LLD 写作期间的 `lld_clarification_queue` 收敛检查
+- CP2 / CP3 / CP5 / CP8 前的 `human_gate_decisions.pending_human_decisions[]` 状态队列维护
 - CP0-CP8 检查点状态、自动检查结果路径和人工审查结果路径维护
 - `standard` / `fast-lane` 工作流模式、关键决策门控和同工作流自动子 agent 调度状态维护
 
@@ -57,7 +58,7 @@ status: active
 ### 1. 初始化或读取状态
 
 1. 若 `process/STATE.md` 不存在，则以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化。
-2. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`delegated_interaction`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`decision_briefs`、`discussion_checkpoints`、`history`。
+2. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`delegated_interaction`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`human_gate_decisions`、`decision_briefs`、`discussion_checkpoints`、`history`。
 3. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 4. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。
 5. 若 `agent_lifecycle.platform_capabilities.subagent_dispatch` 缺失，必须先补齐并将 `available=false`、`method=unverified` 写入状态；能力未探测前，不得把需要功能 Agent 的任务标记为 `completed`。
@@ -66,6 +67,7 @@ status: active
 8. 若 `discussion_checkpoints` 缺失，必须按模板补齐 CP2 / CP3 discussion log 和 checkpoint 路径；补齐路径不代表讨论已完成。
 9. 若 `delegated_interaction` 缺失，必须按模板补齐，默认 `status=none`；补齐不代表已经委托成功。
 10. 若 `parallel_execution.lld_clarification_queue` 缺失，必须按模板补齐，默认 `status=idle`、`items=[]`；补齐不代表问题已收敛。
+11. 若 `human_gate_decisions` 缺失，必须按模板补齐，默认 `status=idle`、`pending_human_decisions=[]`；补齐不代表当前没有待决策项，发起人工门禁前仍必须从正式产物重新聚合。
 
 ### 2. 按阶段检查退出条件
 
@@ -76,7 +78,7 @@ status: active
 | `solution-design` | 阶段委托已交还，CP3 自动预检通过且 `checkpoints/CP3-HLD-REVIEW.md` 人工结论为 `approved` | `story-planning` | `meta-se` |
 | `story-planning` | CP4 自动预检通过，`lld_clarification_queue` 无未回答阻断项，全部目标 Story 通过 CP5 自动预检且 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` 人工结论为 `approved` | `story-execution` | `meta-dev` |
 | `story-execution` | 全部目标 Story 均通过 CP6、CP7，并到达 `verified`，且 CP6/CP7 包含 Agent Dispatch Evidence | `documentation` | `meta-dev` / `meta-qa` / `meta-doc` |
-| `documentation` | CP8 自动预检通过且 `checkpoints/CP8-DELIVERY-READINESS.md` 人工结论为 `approved` | `delivered` | `meta-po` |
+| `documentation` | CP8 自动预检通过且 `checkpoints/CP8-DELIVERY-READINESS.md` 人工结论为 `approved`；CP8 后续事项已按关闭范围 / 不授权范围 / 风险接受项 / 后续 CR 候选项 / 取消或 deferred 项分流，必要时 `human_gate_decisions.follow_up_tracking_path` 可读 | `delivered` | `meta-po` |
 | `delivered` | 只读归档 | — | — |
 
 推进时只允许读取检查点结果文件和 `STATE.md.checkpoints` 的同步状态；若两者冲突，以检查点结果文件为准，并把冲突写入 `history`。
@@ -99,6 +101,16 @@ status: active
 2. 将回退动作写入 `history`。
 3. 只回退到最近仍可恢复的稳定阶段，不跨越未收敛变更单。
 
+### 3.1 后续 CR 启动与冲突预检
+
+当用户请求从 follow-up tracking 台账启动候选 CR 时，state-router 必须先做冲突预检，再允许 `change-impact-analysis` 创建正式 CR：
+
+1. 读取台账路径、候选编号、`STATE.md.active_change`、所有未关闭 `process/changes/CR-*.md`。
+2. `candidate` / `spike_candidate` 不占执行锁；`active` / `blocked` 的正式 CR 视为未完成。
+3. 比较受影响正式文档、Story / LLD 批次、文件 owner、外部接口、权限 / 安全边界、运行授权、风险接受项和来源决策 ID。
+4. 若无重叠，允许创建正式 CR，并把台账状态改为 `active`。
+5. 若存在重叠，返回 `blocked` 下一步，不得静默并行推进；meta-po 必须发起人工决策，选项包括合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded`。
+
 ### 4. 回写状态
 
 1. 更新 `current_phase`、`current_agent`、`last_action`、`next_action`、`last_updated`。
@@ -120,11 +132,19 @@ status: active
 | CP5 | 全部目标 Story 的 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` + `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 自动预检通过且全量人工结论 `approved` |
 | CP6 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | 当前 Story 结论为 `PASS` 或 `WAIVED`，且 meta-dev 调度证据通过 |
 | CP7 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | 当前 Story 结论为 `PASS` 或 `WAIVED`，且 meta-qa 调度证据通过 |
-| CP8 | `process/checks/CP8-DELIVERY-READINESS.md` + `checkpoints/CP8-DELIVERY-READINESS.md` | 自动预检通过且人工结论 `approved` |
+| CP8 | `process/checks/CP8-DELIVERY-READINESS.md` + `checkpoints/CP8-DELIVERY-READINESS.md` | 自动预检通过且人工结论 `approved`；若存在 CP8 后续事项，follow-up tracking 台账可读且无未分类项 |
 
 CP2 / CP3 / CP5 / CP8 人工检查点文件缺失、未填“人工审查结果”或结论不是 `approved` 时，不得推进。CP4 不再要求独立人工审查稿。
 
 CP2 推进前必须确认 `discussion_checkpoints.cp2_scenario_discussion` 指向的 log / checkpoint 已存在，或 CP2 自动检查明确写明 N/A / blocked 原因。CP3 推进前同理检查 `discussion_checkpoints.cp3_hld_discussion`，不得只看 `HLD.md confirmed=true`。
+
+CP2 / CP3 / CP5 / CP8 发起前必须额外确认 `human_gate_decisions`：
+
+- 所有 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类事项已分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。
+- `decision-item` 均已写入 `pending_human_decisions[]`，并含 `id/gate/decision_type/question/recommendation/alternatives/pros_cons/impact_risk/rollback_switch/status/source`。
+- 本轮 `pending_human_decisions[]` 与 `checkpoints/CP*.md` 的 Decision Brief 决策表一致；若不一致，不得把 `orchestrator_session.status` 置为 `awaiting-user`。
+- 门禁消息草稿通过 `scripts/check_human_gate_decision_brief.py --launch-message-file` 校验后，才能发起人工确认。
+- 若用户修订了范围、安全、运行授权或风险接受含义，必须把相关 DQ 退回 `open`，重新生成 Decision Brief 和发起消息。
 
 ### 5. Story 并行调度队列
 
@@ -181,6 +201,8 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 | `pending_gate` | 等待人工确认的检查点，例如 `CP8` |
 | `pending_checklist_path` | 已提示给用户的人工审查稿路径 |
 | `pending_user_decision` | 允许的用户输入与当前等待事项，例如 `approve`、`修改: ...`、`reject`；`1/通过`、`2/修改: ...`、`3/不通过` 仅作历史兼容别名 |
+| `pending_decision_ids` | 本轮发起消息中实际展示给用户的 DQ ID；必须与 Decision Brief 和 `human_gate_decisions.pending_human_decisions[]` 一致 |
+| `pending_non_authorized_items` | 本轮 approve 不代表授权的事项，尤其是真实运行、凭据、外部接口、数据写入、publish、live / 交易类操作 |
 | `resume_instruction` | 用户回复后应优先使用 `resume_agent` / `send_input` 继续同一 `meta-po` 的说明 |
 | `subagent_auto_dispatch` | `enabled` / `disabled`；同工作流真实子 agent 调度授权状态 |
 | `spawned_at` / `last_seen_at` / `awaiting_since` / `resumed_at` / `closed_at` | 编排器生命周期时间 |
@@ -190,7 +212,7 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 
 规则：
 
-1. 发起 CP2 / CP3 / CP5 / CP8 关键人工检查点时，必须将 `status=awaiting-user`，并写入 `pending_gate`、`pending_checklist_path`、`pending_user_decision`、`resume_instruction` 和 `awaiting_since`。
+1. 发起 CP2 / CP3 / CP5 / CP8 关键人工检查点时，必须将 `status=awaiting-user`，并写入 `pending_gate`、`pending_checklist_path`、`pending_user_decision`、`pending_decision_ids`、`pending_non_authorized_items`、`resume_instruction` 和 `awaiting_since`。
 2. 用户确认、修改或拒绝后，必须优先复用 `orchestrator_session.agent_id` / `thread_id`，通过 `resume_agent` 或 `send_input` 恢复同一 `meta-po`；不得把“需要重新读取文件事实”作为新建 `meta-po` 的理由。
 3. 回填人工结果、关闭 CR、推进阶段或推进 `delivered` 前，必须重新读取 `STATE.md`、对应 `process/checks/CP*.md`、`checkpoints/CP*.md`、活跃 `CR-*.md` 和下游输出，并把结果写入 `history`。
 4. 只有旧 `meta-po` 不可恢复时，才允许创建新的 recovery `meta-po`；必须将旧 session 标为 `superseded` 或 `closed`，记录 `previous_agent_id`、`previous_thread_id`、`superseded_by`、`recovery_reason` 和 `history`。

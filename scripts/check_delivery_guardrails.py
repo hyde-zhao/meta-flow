@@ -35,8 +35,10 @@ CODEX_CONFIRMATION_TOKENS = (
     "reject",
     "别名",
     "待人工决策",
+    "决策类型",
     "备选方案",
     "优劣",
+    "不授权项",
 )
 DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
@@ -556,6 +558,103 @@ def collect_agent_display_profile_errors() -> list[str]:
     return errors
 
 
+def collect_human_gate_protocol_errors() -> list[str]:
+    errors: list[str] = []
+    validator = ROOT / "scripts" / "check_human_gate_decision_brief.py"
+    if not validator.is_file():
+        errors.append(f"missing human gate validator: {validator.relative_to(ROOT)}")
+    else:
+        result = subprocess.run(
+            [sys.executable, str(validator), "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            errors.append(f"human gate validator --help failed with exit {result.returncode}: {output.strip()}")
+        for token in ("--checkpoint", "--launch-message-file", "Decision Brief"):
+            if token not in output:
+                errors.append(f"human gate validator help missing token: {token}")
+
+    token_targets = {
+        "meta-po": (
+            DELIVERY_ROOT / "agents" / "meta-po.md",
+            ("Human Gate Launch Protocol", "pending_human_decisions", "decision_type", "不授权项", "check_human_gate_decision_brief.py"),
+        ),
+        "checkpoint-manager": (
+            DELIVERY_ROOT / "skills" / "checkpoint-manager" / "SKILL.md",
+            ("Human Gate Launch Protocol", "决策类型", "不授权项", "check_human_gate_decision_brief.py", "CP8 后续跟踪分流表"),
+        ),
+        "state-router": (
+            DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
+            ("human_gate_decisions", "pending_human_decisions", "pending_non_authorized_items", "check_human_gate_decision_brief.py"),
+        ),
+        "state-template": (
+            DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
+            ("human_gate_decisions", "pending_human_decisions", "pending_non_authorized_items", "follow_up_tracking_path"),
+        ),
+        "change-impact-analysis": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "SKILL.md",
+            ("FOLLOW-UP-TRACKING-TEMPLATE.md", "candidate", "converted-to-spike", "superseded", "冲突预检"),
+        ),
+        "cr-template": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-TEMPLATE.md",
+            ("后续事项台账", "candidate", "active", "closed"),
+        ),
+        "follow-up-template": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "FOLLOW-UP-TRACKING-TEMPLATE.md",
+            ("candidate", "active", "blocked", "converted-to-spike", "superseded", "不授权范围", "启动候选 CR", "冲突预检"),
+        ),
+        "meta-qa": (
+            DELIVERY_ROOT / "agents" / "meta-qa.md",
+            ("follow-up tracking", "not_authorized", "runtime_authorization", "后续 CR 候选"),
+        ),
+        "meta-doc": (
+            DELIVERY_ROOT / "agents" / "meta-doc.md",
+            ("CP8 后续跟踪", "不授权项", "follow-up tracking"),
+        ),
+        "skills-readme": (
+            DELIVERY_ROOT / "skills" / "README.md",
+            ("pending_human_decisions", "Human Gate Launch Protocol", "follow-up tracking"),
+        ),
+        "delivery-agents-rule": (
+            DELIVERY_ROOT / "rules" / "AGENTS.md",
+            ("Human Gate Launch Protocol", "pending_human_decisions", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
+        ),
+        "delivery-claude-rule": (
+            DELIVERY_ROOT / "rules" / "CLAUDE.md",
+            ("Human Gate Launch Protocol", "pending_human_decisions", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
+        ),
+        "root-agents-rule": (
+            ROOT / "AGENTS.md",
+            ("Human Gate Launch Protocol", "pending_human_decisions", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
+        ),
+        "readme": (
+            ROOT / "README.md",
+            ("pending_human_decisions", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
+        ),
+        "delivery-readme": (
+            DELIVERY_ROOT / "README.md",
+            ("pending_human_decisions", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
+        ),
+        "user-manual": (
+            DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
+            ("pending_human_decisions", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
+        ),
+    }
+    for label, (target, tokens) in token_targets.items():
+        if not target.is_file():
+            errors.append(f"missing human gate protocol target {label}: {target.relative_to(ROOT)}")
+            continue
+        text = target.read_text(encoding="utf-8")
+        missing = [token for token in tokens if token not in text]
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} missing human gate protocol tokens: {', '.join(missing)}")
+    return errors
+
+
 def parse_frontmatter(content: str) -> dict[str, str]:
     match = FRONTMATTER_RE.match(content)
     if not match:
@@ -634,6 +733,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_guardrail_command_scope_errors())
     errors.extend(collect_agent_dispatch_evidence_errors())
     errors.extend(collect_agent_display_profile_errors())
+    errors.extend(collect_human_gate_protocol_errors())
     errors.extend(collect_revision_record_errors())
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):

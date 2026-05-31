@@ -128,7 +128,20 @@ Meta Flow 默认采用 CP0-CP8 检查点。所有检查点都包含 Entry Criter
 | CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
 
-关键人工检查点由 `meta-po` 发起。CP2 / CP3 / CP5 / CP8 发起前会生成 Decision Brief 和待人工决策清单，并提示 `checkpoints/CP*.md` 路径。待人工决策清单会逐项列出决策 ID、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `approve`、`修改: <具体修改点>`、`reject`，由 `meta-po` 回填结果文件；`approve` 表示接受清单内全部推荐方案。CP4 只写自动预检并汇入 CP5。
+关键人工检查点由 `meta-po` 发起。CP2 / CP3 / CP5 / CP8 发起前会生成 Decision Brief 和待人工决策清单，并提示 `checkpoints/CP*.md` 路径。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，会逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `approve`、`修改: <具体修改点>`、`reject`，由 `meta-po` 回填结果文件；`approve` 表示接受清单内全部推荐方案。CP4 只写自动预检并汇入 CP5。
+
+发起人工门禁的对话本身也受校验：必须包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须独立列为不授权项；`approve` 不代表授权这些操作。CP8 还必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
+
+启动台账中的后续 CR 时，直接让 `meta-po` 指定台账和候选编号：
+
+```text
+@meta-po 启动后续 CR
+台账：process/changes/CR-019-FOLLOW-UP-TRACKING-2026-05-31.md
+候选编号：CR-020
+目标：推进 Windows gateway 实机部署准入
+```
+
+meta-po 必须先读取台账、`STATE.md.active_change` 和当前活跃 `process/changes/CR-*.md`，执行 CR 冲突预检。`candidate` / `spike_candidate` 只是 backlog，不占执行锁；转为正式 CR 后才把台账状态改为 `active`，写入正式 CR 路径并设置活跃变更。若已有未完成 CR，新 CR 与其影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，默认不得并行推进；meta-po 必须给出合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 的决策表，由用户确认后再继续。
 
 CP2 会额外检查 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` 和 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`，用于追溯 Scenario Gray Areas、用户选择、freeform 确认和 Deferred Ideas。CP3 会额外检查 `process/discussions/CP3-HLD-DISCUSSION-LOG.md` 和 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`，用于追溯 Architecture Gray Areas、advisor table、方案形成输入、HLD 后审查意见和切换条件。Discussion Log 用于审计和恢复，下游正式消费仍以 `USE-CASES.md`、`REQUIREMENTS.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md` 为准。
 

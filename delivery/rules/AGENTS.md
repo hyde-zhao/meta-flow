@@ -26,7 +26,7 @@ meta-po 的职责：
 - 维护阶段委托交互：`meta-pm` / `meta-se` 在各自阶段内可直接与用户多轮沟通，meta-po 记录委托状态并在阶段交还后发起 CP2 / CP3
 - 维护 LLD Clarification Queue：并行 LLD 阶段由 meta-dev 写入 clarification item，meta-po 作为唯一 question broker 合并、批量询问用户、回填答案并分发
 - 维护 Agent 命令与显示区分：Codex 使用 `nickname_candidates`（如 `po-zhao`、`dev-yang`），Claude Code 不使用 nickname，改用不同 `color` 区分 subagent
-- 受理变更请求，创建 `changes/CR-*.md`，执行五维度影响分析
+- 受理变更请求，创建 `process/changes/CR-*.md`，执行五维度影响分析
 - 判定 `standard` / `fast-lane` 模式；fast-lane 仅用于低风险轻量实现，仍必须保留验证、终验摘要和追溯证据
 - **失败模式识别**：识别需求循环、HLD 僵局、LLD 僵局、开发卡顿等常见失败信号
 
@@ -160,12 +160,17 @@ init（meta-po）                                                   [CP0 自动]
 - **检查点结构**：CP0-CP8 均必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables；自动检查点必须在 `process/checks/CP*.md` 写入逐项结果，人工检查点必须在 `checkpoints/CP*.md` 写入 checklist 和“人工审查结果”。
 - **关键决策门控**：CP2 / CP3 / CP5 / CP8 是用户决策点；CP4 只生成自动预检 `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`，其摘要、风险和开放项必须汇入 CP5 Decision Brief。
 - **Decision Brief**：CP2 / CP3 / CP5 / CP8 发起人工确认前，必须在对应 `checkpoints/CP*.md` 写入 Decision Brief，覆盖推荐决策、备选方案、影响维度、优劣、风险与回退、用户需决策事项。
-- **待人工决策清单**：工作流程中所有需要人工确定的信息都必须形成决策项；每项必须包含待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、推荐 / 备选优劣分析、影响 / 风险和回退 / 切换条件。meta-po 发起人工确认时必须收集所有未决人工决策项，去重后打印给用户统一决策；用户回复 `approve` 表示接受清单内全部推荐方案。
+- **待人工决策清单**：工作流程中所有需要人工确定的信息都必须形成决策项；每项必须包含决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、推荐 / 备选优劣分析、影响 / 风险和回退 / 切换条件。决策类型只能使用 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。meta-po 发起人工确认时必须收集所有未决人工决策项，去重后打印给用户统一决策；用户回复 `approve` 表示接受清单内全部推荐方案。
+- **结构化人工决策队列**：`process/STATE.md.human_gate_decisions.pending_human_decisions[]` 是 CP2 / CP3 / CP5 / CP8 待人工决策清单的状态机对象。meta-pm / meta-se / meta-dev / meta-qa 发现需要用户决定的问题时，必须写入该队列或交还给 meta-po 写入；不得只留在对话、discussion log 或下游 Markdown 中。
+- **灰区问题分类**：进入 CP2 / CP3 / CP5 / CP8 前，所有 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类问题必须分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`；其中 `decision-item` 必须进入待人工决策清单。
 - **CP2 场景讨论追溯**：标准模式下，CP2 前必须处理 `Scenario Gray Areas`，将讨论日志写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`，将恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`；缺失时必须在 CP2 自动检查中记录 `N/A` 或阻断原因。
 - **CP3 架构讨论追溯**：HLD 正式生成前必须处理 `Architecture Gray Areas`，advisor lane 使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格优先输出；讨论日志写入 `process/discussions/CP3-HLD-DISCUSSION-LOG.md`，恢复点写入 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`，缺失时必须在 CP3 自动检查中记录 `N/A` 或阻断原因。
 - **讨论日志消费边界**：Discussion Log 用于人类审计和中断恢复，不作为下游唯一输入；下游正式消费仍以 `USE-CASES.md`、`REQUIREMENTS.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md` 为准。
 - **异步讨论模式边界**：`process/discussions/CP2-QUESTIONS.json/html` 与 `CP3-QUESTIONS.json/html` 属于后续可选增强，不作为当前默认产物或检查点前置条件。
-- **人工检查点**：关键人工确认统一由 meta-po 发起；发起时必须提示用户 checklist 文件路径（如 `checkpoints/CP3-HLD-REVIEW.md`），并打印本轮待人工决策清单（决策 ID、问题、推荐方案、备选方案、优劣摘要、影响 / 风险）。Claude Code 可使用结构化选择；Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择，否则默认使用 exact 文本确认。发起确认时只展示三个推荐回复：`approve`、`修改: <具体修改点>`、`reject`；内部可兼容历史别名 `1/通过`、`2/修改: ...`、`3/不通过`，但不得把多个别名混排成用户必须理解的选项。用户直接在对话中确认时，meta-po 仍必须回填对应 `checkpoints/CP*.md`。
+- **人工检查点**：关键人工确认统一由 meta-po 发起；发起时必须提示用户 checklist 文件路径（如 `checkpoints/CP3-HLD-REVIEW.md`）、自动预检结论、待决策项数量，并打印本轮待人工决策清单（决策 ID、决策类型、问题、推荐方案、备选方案、优劣摘要、影响 / 风险）。Claude Code 可使用结构化选择；Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择，否则默认使用 exact 文本确认。发起确认时只展示三个推荐回复：`approve`、`修改: <具体修改点>`、`reject`；内部可兼容历史别名 `1/通过`、`2/修改: ...`、`3/不通过`，但不得把多个别名混排成用户必须理解的选项。用户直接在对话中确认时，meta-po 仍必须回填对应 `checkpoints/CP*.md`。
+- **Human Gate Launch Protocol**：CP2 / CP3 / CP5 / CP8 发起前必须运行 `scripts/check_human_gate_decision_brief.py` 校验 Decision Brief；若已有待发送消息草稿，必须同时校验对话内容包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。若待决策项数量大于 0 但对话未打印表格，视为门禁发起失败；若待决策项为 0，也必须打印原因。
+- **用户视角复述与不授权项**：人工门禁消息必须说明“如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作”。对真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项，必须独立列出不授权项；设计通过不得被误读为运行授权。
+- **决策修订再发布**：用户纠正范围、安全、运行授权或风险接受含义后，meta-po 必须更新相关 DQ、重新计算影响面、重新生成 Decision Brief 和待决策表，并重新发起确认；不得只在后续 HLD / LLD / CP 文件中静默修正。
 - **阶段委托交互**：`requirement-clarification` 默认委托 `meta-pm` 直接与用户完成场景和需求草案；`solution-design` 默认委托 `meta-se` 直接与用户完成架构灰区、advisor table 和 HLD 草案。委托状态写入 `STATE.md.delegated_interaction`；被委托 Agent 不得推进跨阶段状态，不得发起 CP2 / CP3 正式人工检查点；阶段收敛后写交还摘要，由 meta-po 回收并发起 Decision Brief。
 - **子 agent 调度证据**：meta-po 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created`，不得写成目标 agent 已完成。
 - **子 agent 自动调度**：用户启动正式工作流后，同工作流内默认授权 `meta-po` 按阶段自动拉起 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc`；自动授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
@@ -176,6 +181,8 @@ init（meta-po）                                                   [CP0 自动]
 - **Story 执行门控**：进入 story-execution 时全部目标 Story 的 LLD 必须已确认；开发按 Wave、Story DAG、依赖类型和文件所有权调度，不得在 CP5 前实现任何 Story。
 - **编码与验证门控**：Story 实现完成后必须写入 CP6 编码完成检查结果；验证完成后必须写入 CP7 验证完成检查结果。CP6/CP7 必须包含 `Agent Dispatch Evidence`；缺少真实子 agent 证据且没有用户批准的 `inline-fallback` 时不得推进 Story 状态。
 - **验证失败回修**：CP7 失败时不得标记 Story 为 `verified`；meta-po 必须路由回 meta-dev 修复，修复后重新生成 CP6 并再次拉起 meta-qa 生成 CP7。
+- **CP8 后续跟踪分流**：CP8 必须区分关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，状态取值为 `candidate`、`active`、`blocked`、`spike_candidate`、`converted-to-spike`、`closed`、`cancelled`、`superseded`；只有用户决定推进某项时才创建正式 CR 文件。
+- **后续 CR 启动与冲突预检**：用户用 `@meta-po 启动后续 CR` 并提供台账路径、候选编号和目标摘要后，meta-po 才能把候选项转正式 CR。启动前必须读取 `STATE.md.active_change`、台账和未关闭 CR，比较正式文档、Story、文件 owner、外部接口、安全 / 运行授权和风险接受项；`candidate` / `spike_candidate` 不占执行锁，已 `active` 的未完成 CR 若与新 CR 影响面重叠，默认不得并行推进，必须让用户选择合并、等待、blocked、拆分或 superseded。
 - **Skill 模板关系维护**：创建或修改 Agent、Skill 或 Skill 私有模板时，若影响调用、适用、归属或模板交叉引用关系，必须同步更新 `skills/README.md`
 - **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；任何被 Skill 运行时引用的脚本必须放到 `delivery/skills/<skill>/scripts/`
 - **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...` 表达

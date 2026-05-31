@@ -19,7 +19,7 @@
 
 | Agent | 主要阶段 / 场景 | 使用 Skill | 用途 |
 |---|---|---|---|
-| `meta-po` | `init`、状态推进、变更管理、问题分流、并行调度、检查点控制 | `state-router`、`checkpoint-manager`、`change-impact-analysis`、`issue-routing`、`context-handoff`、`review-artifact-protocol` | 推进状态、受理变更、路由问题、装配交接上下文，维护阶段委托交互、LLD clarification question broker、LLD / Dev / QA 并行队列，生成和收敛 CP0-CP8 检查点，维护 CP2/CP3 discussion log/checkpoint、关键决策门控、Decision Brief、待人工决策清单、fast-lane 和自动子 agent 调度证据 |
+| `meta-po` | `init`、状态推进、变更管理、问题分流、并行调度、检查点控制 | `state-router`、`checkpoint-manager`、`change-impact-analysis`、`issue-routing`、`context-handoff`、`review-artifact-protocol` | 推进状态、受理变更、路由问题、装配交接上下文，维护阶段委托交互、LLD clarification question broker、LLD / Dev / QA 并行队列，生成和收敛 CP0-CP8 检查点，维护 CP2/CP3 discussion log/checkpoint、关键决策门控、结构化 `pending_human_decisions`、Decision Brief、人工门禁发起消息、CP8 follow-up tracking、fast-lane 和自动子 agent 调度证据 |
 | `meta-pm` | `requirement-clarification` | `use-case-discovery`、`requirement-clarifier`、`scenario-expansion`、`requirement-extraction`、`scope-normalization`、`checkpoint-manager`、`review-artifact-protocol` | 被阶段委托期间直接与用户发现**产物类型感知**场景，执行 Scenario Gray Areas、识别真实用户意图、认知盲区、Deferred Ideas 与交付出口，澄清需求歧义、提取需求、确认草案可提交 meta-po，输出 CP1 / CP2 自动检查结果和 CP2 Decision Brief 输入 |
 | `meta-se` | `solution-design`、`story-planning` | `hld-designer`、`phase-designer`、`dependency-mapper`、`wave-planner`、`story-manager`、`dag-validator`、`checkpoint-manager`、`review-artifact-protocol` | 被阶段委托期间直接与用户完成 Architecture Gray Areas、advisor table-first 讨论和 HLD 草案确认，生成含适用性矩阵、Use Case → Architecture Traceability、场景模拟和自审记录的 HLD；CP3 后拆解 Story、建立依赖类型和文件所有权并校验计划 |
 | `meta-dev` | `story-planning`、`story-execution` | `lld-designer`、`checkpoint-manager`、`claude-agent-writer`、`review-artifact-protocol` | 按 Story 输出 LLD 和 CP5 自动预检；并行 LLD 中只写 clarification item，由 meta-po broker 提问；等待全部目标 Story 的 LLD 统一确认后，在当前 Wave 的 `dev_gate` 满足时实现并输出 CP6；CP7 失败时按原 Story 范围回修并重提 CP6 |
@@ -31,9 +31,9 @@
 
 | Skill | Canonical Agent | 说明 |
 |---|---|---|
-| `state-router` | `meta-po` | 状态机推进与回退，并维护 `workflow_mode`、`orchestrator_session.subagent_auto_dispatch`、`delegated_interaction`、`agent_lifecycle.active_agents`、子 agent 调度证据、`parallel_execution` 队列、`lld_clarification_queue`、依赖门控与复用/关闭登记 |
-| `checkpoint-manager` | `meta-po` | CP0-CP8 检查点契约、自动检查结果、关键人工审查稿、Decision Brief 和待人工决策清单的 canonical 规则；CP2 / CP3 校验 discussion log / checkpoint 或 N/A 原因；CP4 为自动预检并汇入 CP5；CP5 校验 clarification 队列收敛；CP8 汇总交付范围、安装验证、文档缺口和遗留风险决策项；CP6 / CP7 校验 `Agent Dispatch Evidence` |
-| `change-impact-analysis` | `meta-po` | 需求/设计变更管理；负责文档处理决策、旧基线映射、CR 执行链路、fast-lane 升级判定、自动终验授权和变更追溯门禁 |
+| `state-router` | `meta-po` | 状态机推进与回退，并维护 `workflow_mode`、`orchestrator_session.subagent_auto_dispatch`、`delegated_interaction`、`agent_lifecycle.active_agents`、子 agent 调度证据、`parallel_execution` 队列、`lld_clarification_queue`、`human_gate_decisions.pending_human_decisions`、依赖门控与复用/关闭登记 |
+| `checkpoint-manager` | `meta-po` | CP0-CP8 检查点契约、自动检查结果、关键人工审查稿、Decision Brief、待人工决策清单和 Human Gate Launch Protocol 的 canonical 规则；CP2 / CP3 校验 discussion log / checkpoint 或 N/A 原因；CP4 为自动预检并汇入 CP5；CP5 校验 clarification 队列收敛；CP8 汇总交付范围、安装验证、文档缺口、遗留风险决策项、不授权范围和后续跟踪分流表；CP6 / CP7 校验 `Agent Dispatch Evidence` |
+| `change-impact-analysis` | `meta-po` | 需求/设计变更管理；负责文档处理决策、旧基线映射、CR 执行链路、fast-lane 升级判定、自动终验授权、CP8 follow-up tracking 台账和变更追溯门禁 |
 | `issue-routing` | `meta-po` | ISSUE 分类与路由 |
 | `context-handoff` | `meta-po` | 阶段切换时的最小上下文装配；支持 `delegated-user-interaction` 与 `lld-clarification-broker` handoff 语义；Codex 默认 `fork_context=false`，只传必要文件与状态片段；handoff frontmatter 必须包含 `dispatch` 区，不能把 handoff 当作执行完成证据 |
 | `use-case-discovery` | `meta-pm` | 阶段零调研后的场景发现与 `USE-CASES.md` 生成 / 增量更新，并输出治理字段、交付出口路由、Scenario Gray Areas、认知盲区、Deferred Ideas、头脑风暴候选和修订记录 |
@@ -91,7 +91,7 @@
 
 | 正式工件 | 模板持有 Skill | 消费者 Skill | 说明 |
 |---|---|---|---|
-| `CR-*.md` | `change-impact-analysis` | `issue-routing`、`state-router`、`use-case-discovery`、`requirement-extraction` | `change-impact-analysis` 维护文档处理决策、旧基线映射、执行链路和自动终验授权；`state-router` 消费 CR 执行链与预授权条件做检查点恢复和状态推进，下游按文档处理决策做增量更新 |
+| `CR-*.md` / `CR-*-FOLLOW-UP-TRACKING-*.md` | `change-impact-analysis` | `issue-routing`、`state-router`、`use-case-discovery`、`requirement-extraction`、`checkpoint-manager` | `change-impact-analysis` 维护文档处理决策、旧基线映射、执行链路、自动终验授权和后续事项台账；`state-router` 消费 CR 执行链与预授权条件做检查点恢复和状态推进，下游按文档处理决策做增量更新；`checkpoint-manager` 在 CP8 中汇总台账分流 |
 | `USE-CASES.md` | `use-case-discovery` | `requirement-extraction` | `use-case-discovery` 维护正式场景工件、治理字段、覆盖自检表与修订记录；`requirement-extraction` 直接消费该工件 |
 | `CP2-SCENARIO-DISCUSSION-LOG.md` / `CP2-DISCUSSION-CHECKPOINT.json` | `use-case-discovery` / `checkpoint-manager` | `meta-po`、`checkpoint-manager`、`hld-designer` | 记录 Scenario Gray Areas、用户选择、freeform 确认、Deferred Ideas 和 canonical refs；用于审计和恢复，不替代 `USE-CASES.md` / `REQUIREMENTS.md` |
 | `REQUIREMENTS.md` | `requirement-extraction` | `scope-normalization` | `requirement-extraction` 维护需求条目、修订记录与变更记录；`scope-normalization` 归一化已生成的需求 |
@@ -99,8 +99,8 @@
 | `Review Findings / Review Summary` | `review-artifact-protocol` | `meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | review gate 的共享模板与 validator 由公共 Skill 持有，reviewer lane 输出 findings，summary 提供 Decision Brief 输入；需要人工确认的 review 结论必须带推荐方案、至少 1 个备选方案和优劣分析 |
 | `HLD.md` | `hld-designer` | `meta-po`、`checkpoint-manager`、`phase-designer`、`story-manager` | HLD 模板持有 Architecture Gray Areas、适用性矩阵、Use Case → Architecture Traceability、关键场景模拟和自审结构；CP3 通过后作为 Story 拆解输入 |
 | `CP3-HLD-DISCUSSION-LOG.md` / `CP3-DISCUSSION-CHECKPOINT.json` | `hld-designer` / `review-artifact-protocol` / `checkpoint-manager` | `meta-po`、`checkpoint-manager`、`hld-designer` | 记录 Architecture Gray Areas、advisor table、方案形成输入、HLD 后审查意见和切换条件；用于审计和恢复，不替代正式 HLD / ADR / Decision Brief |
-| `CP0-CP8 检查结果` | `checkpoint-manager` | `state-router`、`meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | 自动检查结果写 `process/checks/CP*.md`；CP2 / CP3 / CP5 / CP8 人工审查稿写 `checkpoints/CP*.md`；CP4 自动结果汇入 CP5；state-router 以结果文件判定是否可推进 |
-| `STATE.md` | `state-router` | `checkpoint-manager`、`context-handoff` | `STATE.md.orchestrator_session` 保存唯一 `meta-po` 会话、自动子 agent 调度授权、人工确认恢复和 recovery 证据；`STATE.md.delegated_interaction` 保存阶段委托交互；`STATE.md.checkpoints` 保存每个 CP 的结果文件路径和同步状态；`parallel_execution.lld_clarification_queue` 保存 LLD 实现灰区队列；`agent_lifecycle.active_agents` 保存功能子 agent 调度证据 |
+| `CP0-CP8 检查结果` | `checkpoint-manager` | `state-router`、`meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc` | 自动检查结果写 `process/checks/CP*.md`；CP2 / CP3 / CP5 / CP8 人工审查稿写 `checkpoints/CP*.md`；CP4 自动结果汇入 CP5；人工门禁发起前必须通过 Decision Brief 与发起消息校验；state-router 以结果文件判定是否可推进 |
+| `STATE.md` | `state-router` | `checkpoint-manager`、`context-handoff` | `STATE.md.orchestrator_session` 保存唯一 `meta-po` 会话、自动子 agent 调度授权、人工确认恢复和 recovery 证据；`STATE.md.human_gate_decisions` 保存 CP2 / CP3 / CP5 / CP8 的结构化待人工决策队列、不授权项和 follow-up 台账路径；`STATE.md.delegated_interaction` 保存阶段委托交互；`STATE.md.checkpoints` 保存每个 CP 的结果文件路径和同步状态；`parallel_execution.lld_clarification_queue` 保存 LLD 实现灰区队列；`agent_lifecycle.active_agents` 保存功能子 agent 调度证据 |
 | `STORY-*.md` | `story-manager` | `state-router`、`wave-planner`、`meta-dev`、`meta-po` | Story 卡片包含依赖类型、file_ownership、lld_gate、dev_gate，是并行队列计算输入 |
 | `STORY-*-LLD.md` | `lld-designer` | `meta-dev`、`meta-po`、`meta-qa` | LLD 由 `lld-designer` 模板持有；包含“实现灰区与取舍记录”，全部目标 Story 的 LLD 统一确认后，开发与验证均直接消费该工件 |
 
