@@ -307,6 +307,16 @@ def collect_installer_component_errors() -> list[str]:
                 errors.append("pyproject.toml must expose console script: meta-flow = meta_flow.cli:main")
             if project_config.get("project", {}).get("readme") != "delivery/README.md":
                 errors.append("pyproject.toml project.readme must point at delivery/README.md")
+            setuptools_config = project_config.get("tool", {}).get("setuptools", {})
+            package_find = setuptools_config.get("packages", {}).get("find", {})
+            package_data = setuptools_config.get("package-data", {})
+            package_includes = set(package_find.get("include", [])) if isinstance(package_find, dict) else set()
+            delivery_data = set(package_data.get("delivery", [])) if isinstance(package_data, dict) else set()
+            if "delivery" not in package_includes or "delivery.scripts" not in package_includes:
+                errors.append("pyproject.toml must package delivery and delivery.scripts so installed meta-flow can locate delivery/scripts/install.py")
+            for required_pattern in ("**/*.md", "**/*.yaml", "**/*.sh", "**/*.ps1", "**/*.py"):
+                if required_pattern not in delivery_data:
+                    errors.append(f"pyproject.toml delivery package-data missing pattern: {required_pattern}")
 
     if not cli_module.is_file():
         errors.append("missing meta_flow/cli.py for meta-flow command")

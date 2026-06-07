@@ -48,6 +48,10 @@ FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 BUILT_IN_CODEX_AGENTS = {"default", "worker", "explorer"}
 MANAGED_VERSION = "1.0.0"
 PLATFORM_CONTRACTS_PATH = Path("doc") / "PLATFORM-CONTRACTS.yaml"
+MANAGED_MARKDOWN_TOKEN = "<!-- myflow-managed:"
+MANAGED_TOML_TOKEN = "# myflow-managed:"
+MANAGED_BLOCK_BEGIN = "<!-- myflow:managed:begin"
+MANAGED_BLOCK_END = "<!-- myflow:managed:end -->"
 CANONICAL_AGENT_FRONTMATTER_FIELDS = frozenset({"name", "description", "model", "tools"})
 CODEX_REQUIRED_AGENT_FIELDS = ("name", "description", "developer_instructions")
 CODEX_OPTIONAL_AGENT_FIELDS = frozenset(
@@ -553,6 +557,16 @@ def render_codex_agent(agent: AgentDefinition, commit: str, generated: str) -> s
     return "\n".join(lines)
 
 
+def has_managed_file_audit(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return False
+    return MANAGED_MARKDOWN_TOKEN in text or MANAGED_TOML_TOKEN in text
+
+
 def validate_codex_agent_render(content: str, agent: AgentDefinition) -> None:
     try:
         payload = tomllib.loads(content)
@@ -672,8 +686,8 @@ def rollback_transaction(transaction: Transaction) -> None:
 
 
 def managed_block_markers(commit: str, generated: str) -> tuple[str, str]:
-    begin = f"<!-- myflow:managed:begin v=1 commit={commit} generated={generated} -->"
-    end = "<!-- myflow:managed:end -->"
+    begin = f"{MANAGED_BLOCK_BEGIN} v=1 commit={commit} generated={generated} -->"
+    end = MANAGED_BLOCK_END
     return begin, end
 
 
@@ -685,8 +699,8 @@ def render_managed_block(content: str, commit: str, generated: str) -> str:
 
 def upsert_managed_block(path: Path, canonical_content: str, transaction: Transaction, dry_run: bool, commit: str, generated: str) -> None:
     block = render_managed_block(canonical_content, commit, generated)
-    begin_prefix = "<!-- myflow:managed:begin"
-    end_marker = "<!-- myflow:managed:end -->"
+    begin_prefix = MANAGED_BLOCK_BEGIN
+    end_marker = MANAGED_BLOCK_END
 
     ensure_file_target(path, dry_run)
     if not path.exists():
@@ -716,8 +730,8 @@ def upsert_managed_block(path: Path, canonical_content: str, transaction: Transa
 
 
 def clear_managed_block(path: Path, transaction: Transaction, dry_run: bool) -> None:
-    begin_prefix = "<!-- myflow:managed:begin"
-    end_marker = "<!-- myflow:managed:end -->"
+    begin_prefix = MANAGED_BLOCK_BEGIN
+    end_marker = MANAGED_BLOCK_END
     if not path.exists():
         return
     ensure_file_target(path, dry_run)
@@ -735,6 +749,16 @@ def clear_managed_block(path: Path, transaction: Transaction, dry_run: bool) -> 
     suffix = existing[end_index:].lstrip("\r\n")
     parts = [part for part in [prefix, suffix.rstrip()] if part]
     write_text(path, "\n\n".join(parts) + "\n", transaction, dry_run)
+
+
+def has_managed_block(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return False
+    return MANAGED_BLOCK_BEGIN in text and MANAGED_BLOCK_END in text
 
 
 def copy_skill_tree(src_dir: Path, dest_dir: Path, transaction: Transaction, dry_run: bool, commit: str, generated: str) -> None:
@@ -856,11 +880,38 @@ def manifest_entry_matches(existing: object, entry: dict[str, object]) -> bool:
     )
 
 
+def find_matching_install(
+    payload: dict[str, object],
+    platform: str,
+    scope: str,
+    workspace_root: Path,
+) -> dict[str, object] | None:
+    workspace_root_text = str(workspace_root)
+    for entry in payload.get("installs", []):
+        if (
+            isinstance(entry, dict)
+            and entry.get("platform") in platform_manifest_names(platform)
+            and entry.get("scope") == scope
+            and entry.get("workspace_root") == workspace_root_text
+            and entry.get("status") == "installed"
+        ):
+            return entry
+    return None
+
+
 def upsert_manifest_entry(payload: dict[str, object], entry: dict[str, object]) -> None:
     installs = list(payload.get("installs", []))
     installs = [existing for existing in installs if not manifest_entry_matches(existing, entry)]
     installs.append(entry)
     payload["installs"] = installs
+
+
+def component_entry_kinds(component: str) -> set[str]:
+    return {
+        "rules": {"managed-block"},
+        "agent": {"agent", "skill"},
+        "full": {"managed-block", "agent", "skill"},
+    }[component]
 
 
 def install_rules(
@@ -986,55 +1037,147 @@ def write_openclaw_manifest(
     write_text(base_dir / "manifest.yaml", build_openclaw_manifest(agents, skills), transaction, dry_run)
 
 
+def scan_managed_component_entries(
+    platform: str,
+    scope: str,
+    workspace_root: Path,
+    contracts: dict[str, object],
+    component: str,
+) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    kinds = component_entry_kinds(component)
+
+    if "managed-block" in kinds:
+        rules_path = target_path(contracts, platform, scope, "rules", workspace_root)
+        if has_managed_block(rules_path):
+            entries.append({"kind": "managed-block", "path": str(rules_path), "remove_path": str(rules_path)})
+
+    if "agent" in kinds:
+        agents_dir = target_path(contracts, platform, scope, "agents", workspace_root)
+        if agents_dir.is_dir():
+            for agent_path in sorted(path for path in agents_dir.iterdir() if path.is_file()):
+                if has_managed_file_audit(agent_path):
+                    entries.append(
+                        {
+                            "kind": "agent",
+                            "name": agent_path.stem,
+                            "path": str(agent_path),
+                            "remove_path": str(agent_path),
+                        }
+                    )
+
+    if "skill" in kinds:
+        skills_dir = target_path(contracts, platform, scope, "skills", workspace_root)
+        if skills_dir.is_dir():
+            for skill_dir in sorted(path for path in skills_dir.iterdir() if path.is_dir()):
+                skill_file = skill_dir / "SKILL.md"
+                if has_managed_file_audit(skill_file):
+                    entries.append(
+                        {
+                            "kind": "skill",
+                            "name": skill_dir.name,
+                            "path": str(skill_file),
+                            "remove_path": str(skill_dir),
+                        }
+                    )
+
+    return entries
+
+
+def remove_manifest_entry(entry: dict[str, object], transaction: Transaction, dry_run: bool) -> None:
+    remove_target = Path(str(entry["remove_path"]))
+    if entry["kind"] == "managed-block":
+        clear_managed_block(remove_target, transaction, dry_run)
+        return
+    remove_path(remove_target, transaction, dry_run)
+
+
+def prune_stale_manifest_entries(
+    platform: str,
+    scope: str,
+    workspace_root: Path,
+    manifest_payload: dict[str, object],
+    current_entries: list[dict[str, str]],
+    transaction: Transaction,
+    dry_run: bool,
+    component: str,
+) -> int:
+    matching = find_matching_install(manifest_payload, platform, scope, workspace_root)
+    if matching is None:
+        return 0
+
+    kinds = component_entry_kinds(component)
+    current_remove_paths = {
+        str(Path(entry["remove_path"]))
+        for entry in current_entries
+        if entry.get("kind") in kinds and entry.get("remove_path")
+    }
+    pruned = 0
+    for entry in matching.get("entries", []):
+        if not isinstance(entry, dict) or str(entry.get("kind")) not in kinds:
+            continue
+        remove_path_value = str(entry.get("remove_path", ""))
+        if not remove_path_value or str(Path(remove_path_value)) in current_remove_paths:
+            continue
+        remove_manifest_entry(entry, transaction, dry_run)
+        pruned += 1
+    return pruned
+
+
 def uninstall_platform(
     platform: str,
     scope: str,
     workspace_root: Path,
+    contracts: dict[str, object],
     manifest_payload: dict[str, object],
     transaction: Transaction,
     dry_run: bool,
     component: str,
 ) -> dict[str, object]:
-    installs = list(manifest_payload.get("installs", []))
-    workspace_root_text = str(workspace_root)
-    matching = next(
-        (
-            entry
-            for entry in installs
-            if entry.get("platform") in platform_manifest_names(platform)
-            and entry.get("scope") == scope
-            and entry.get("workspace_root") == workspace_root_text
-            and entry.get("status") == "installed"
-        ),
-        None,
-    )
-    if matching is None:
-        fail(f"INSTALL-MANIFEST 中未找到 {workspace_root_text} 的 {platform}/{scope} 已安装记录。")
+    matching = find_matching_install(manifest_payload, platform, scope, workspace_root)
 
-    entry_kinds = {
-        "rules": {"managed-block"},
-        "agent": {"agent", "skill"},
-        "full": {"managed-block", "agent", "skill"},
-    }[component]
+    entry_kinds = component_entry_kinds(component)
     remaining_entries: list[dict[str, str]] = []
     removed_count = 0
+    removed_paths: set[str] = set()
 
-    for entry in matching.get("entries", []):
-        if not isinstance(entry, dict) or str(entry.get("kind")) not in entry_kinds:
-            remaining_entries.append(entry)
+    if matching is not None:
+        for entry in matching.get("entries", []):
+            if not isinstance(entry, dict) or str(entry.get("kind")) not in entry_kinds:
+                remaining_entries.append(entry)
+                continue
+
+            remove_manifest_entry(entry, transaction, dry_run)
+            removed_paths.add(str(Path(str(entry["remove_path"]))))
+            removed_count += 1
+
+    for entry in scan_managed_component_entries(platform, scope, workspace_root, contracts, component):
+        remove_path_value = str(Path(entry["remove_path"]))
+        if remove_path_value in removed_paths:
             continue
-
-        remove_target = Path(entry["remove_path"])
-        if entry["kind"] == "managed-block":
-            clear_managed_block(remove_target, transaction, dry_run)
-        else:
-            remove_path(remove_target, transaction, dry_run)
+        remove_manifest_entry(entry, transaction, dry_run)
+        removed_paths.add(remove_path_value)
         removed_count += 1
 
     if removed_count == 0:
-        fail(f"INSTALL-MANIFEST 中未找到 {platform}/{scope} 的 {component} 组件安装项。")
+        fail(
+            f"INSTALL-MANIFEST 中未找到 {workspace_root} 的 {platform}/{scope} 已安装记录，"
+            "并且目标目录中也没有发现带 myflow-managed 标记的可卸载对象。"
+        )
 
-    matching["entries"] = remaining_entries
+    if matching is None:
+        matching = {
+            "platform": platform,
+            "scope": scope,
+            "workspace_root": str(workspace_root),
+            "status": "uninstalled",
+            "entries": [],
+            "cleanup_mode": "managed-scan",
+        }
+        manifest_payload.setdefault("installs", []).append(matching)
+    else:
+        matching["entries"] = remaining_entries
+
     matching.setdefault("uninstall_events", []).append(
         {
             "component": component,
@@ -1204,7 +1347,16 @@ def main() -> None:
         resolved_component = args.component or "full"
         print(f"Component: {resolved_component}")
         try:
-            entry = uninstall_platform(args.platform, args.scope, workspace_root, manifest_payload, transaction, args.dry_run, resolved_component)
+            entry = uninstall_platform(
+                args.platform,
+                args.scope,
+                workspace_root,
+                platform_contracts,
+                manifest_payload,
+                transaction,
+                args.dry_run,
+                resolved_component,
+            )
             if not args.dry_run:
                 save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)
         except Exception:
@@ -1289,6 +1441,18 @@ def main() -> None:
             "entries": manifest_entries,
         }
 
+        pruned_count = prune_stale_manifest_entries(
+            args.platform,
+            args.scope,
+            workspace_root,
+            manifest_payload,
+            manifest_entries,
+            transaction,
+            args.dry_run,
+            resolved_component,
+        )
+        if pruned_count:
+            print(f"Pruned {pruned_count} stale managed item(s) from previous install.")
         upsert_manifest_entry(manifest_payload, entry)
         if not args.dry_run:
             save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)

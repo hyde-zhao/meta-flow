@@ -13,5 +13,10 @@ dependencies = []
 [project.scripts]
 meta-flow = "meta_flow.cli:main"
 
-[tool.setuptools]
-packages = ["meta_flow"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["meta_flow", "delivery", "delivery.scripts"]
+namespaces = true
+
+[tool.setuptools.package-data]
+delivery = ["**/*.md", "**/*.yaml", "**/*.json", "**/*.sh", "**/*.ps1", "**/*.py"]
