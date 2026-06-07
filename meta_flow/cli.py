@@ -150,6 +150,7 @@ def _print_help() -> None:
         "Commands:\n"
         "  install    Install Meta Flow assets into Claude Code, Codex, or OpenClaw.\n"
         "  uninstall  Uninstall Meta Flow assets recorded in INSTALL-MANIFEST.\n"
+        "  check      Run packaged Meta Flow validators.\n"
         "  status     Show current process/STATE.md summary.\n"
         "  next       Show the next workflow action or pending gate.\n"
         "  doctor     Check local Meta Flow runtime structure.\n\n"
@@ -157,6 +158,8 @@ def _print_help() -> None:
         "  meta-flow install codex --scope user --component rules\n"
         "  meta-flow install claude --scope project --project-dir /path/to/repo\n"
         "  meta-flow uninstall codex --scope user\n"
+        "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
+        "  meta-flow check cr-tracking --project-root .\n"
         "  meta-flow status\n"
     )
 
@@ -173,6 +176,37 @@ def _run_installer(command: str, args: list[str]) -> None:
         namespace["main"]()
     finally:
         sys.argv = original_argv
+
+
+def _print_check_help() -> None:
+    print(
+        "usage: meta-flow check <validator> [options]\n\n"
+        "Validators:\n"
+        "  human-gate   Validate CP2/CP3/CP5/CP8 Decision Brief and optional launch message.\n"
+        "  cr-tracking  Validate CR tracking consistency across STATE, CR files, follow-up tables, and CR-INDEX.\n\n"
+        "Examples:\n"
+        "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
+        "  meta-flow check human-gate --checkpoint process/checkpoints/CP5-STORY-DESIGN-REVIEW.md --launch-message-file process/checkpoints/CP5-LAUNCH-MESSAGE.md\n"
+        "  meta-flow check cr-tracking --project-root .\n"
+    )
+
+
+def _run_check(args: list[str]) -> None:
+    if not args or args[0] in {"-h", "--help"}:
+        _print_check_help()
+        return
+
+    validator = args[0]
+    forwarded = args[1:]
+    if validator == "human-gate":
+        from meta_flow.checks import human_gate
+
+        raise SystemExit(human_gate.main(forwarded))
+    if validator == "cr-tracking":
+        from meta_flow.checks import cr_tracking
+
+        raise SystemExit(cr_tracking.main(forwarded))
+    raise SystemExit(f"未知检查器: {validator}. 目前支持: human-gate, cr-tracking")
 
 
 def main() -> None:
@@ -194,7 +228,10 @@ def main() -> None:
     if command in {"install", "uninstall"}:
         _run_installer(command, args[1:])
         return
-    raise SystemExit(f"未知命令: {command}. 目前支持: install, uninstall, status, next, doctor")
+    if command == "check":
+        _run_check(args[1:])
+        return
+    raise SystemExit(f"未知命令: {command}. 目前支持: install, uninstall, check, status, next, doctor")
 
 
 if __name__ == "__main__":

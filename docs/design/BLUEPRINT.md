@@ -63,7 +63,7 @@ confirmed_at: "2026-06-07"
 | Flow ID | 触发 | 参与 Feature | 数据写入 Owner | 失败路径 | 验证入口 |
 |---|---|---|---|---|---|
 | FLOW-01 | 新建标准工作流 | ORCHESTRATION -> SCENARIO -> SOLUTION -> DESIGN-EVIDENCE -> IMPLEMENTATION -> RELEASE | 各阶段 owner 单写 | CP 自动检查失败或人工 reject 回退到对应阶段 | CP0-CP8 |
-| FLOW-02 | CP2 / CP3 / CP5 / CP8 人工确认 | HUMAN-GATE 读取阶段产物和自动检查 | HUMAN-GATE | Decision Brief 缺失或决策表未打印时阻断 | `scripts/check_human_gate_decision_brief.py` |
+| FLOW-02 | CP2 / CP3 / CP5 / CP8 人工确认 | HUMAN-GATE 读取阶段产物和自动检查 | HUMAN-GATE | Decision Brief 缺失或决策表未打印时阻断 | `meta-flow check human-gate` |
 | FLOW-03 | 并行 LLD 写作 | DESIGN-EVIDENCE -> AGENT-LIFECYCLE -> HUMAN-GATE | DESIGN-EVIDENCE / STATE queue | `blocks_lld=true` 未回答时不得发起 CP5 | CP5 |
 | FLOW-04 | CP7 验证失败 | IMPLEMENTATION-VERIFICATION -> ORCHESTRATION -> meta-dev 回修 | IMPLEMENTATION-VERIFICATION | 不得标记 verified，回修后重跑 CP6 / CP7 | CP6 / CP7 |
 | FLOW-05 | 交付安装验证 | INSTALLER-GUARDRAILS -> RELEASE-DOCUMENTATION | INSTALLER-GUARDRAILS | guardrail / dry-run 失败时 CP8 不得 READY | guardrail、install dry-run |

@@ -37,7 +37,7 @@ status: active
 - `skills/change-impact-analysis/templates/CR-TEMPLATE.md`：CR 结构基线
 - `skills/change-impact-analysis/templates/FOLLOW-UP-TRACKING-TEMPLATE.md`：CP8 后续事项台账结构基线
 - `skills/change-impact-analysis/templates/CR-INDEX-TEMPLATE.yaml`：CR 跟踪索引结构基线
-- `scripts/check_cr_tracking_consistency.py`：`STATE.md.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性检查
+- `meta-flow check cr-tracking`：`STATE.md.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性检查
 - 当前工作流状态与正式文档：影响分析的事实来源
 - `AGENTS.md`：阶段、门控与回退语义
 
@@ -59,7 +59,7 @@ status: active
 14. 冲突预检通过后，再创建正式 `process/changes/CR-0xx-<slug>-YYYY-MM-DD.md`，并把台账中对应状态改为 `active`，链接正式 CR 文件，同时刷新 `STATE.md.cr_tracking` 与 `CR-INDEX.yaml`。
 15. 正式 CR 创建后，台账只保留索引字段：状态、正式 CR 路径、当前门控、阻塞原因、下一步、相关 active CR / blocked_by / superseded_by；详细需求、影响分析和文档处理决策放入正式 CR 文件。
 16. 正式 CR 关闭后回写台账状态为 `closed`，并同步 `STATE.md.cr_tracking`、`CR-INDEX.yaml` 和 CR frontmatter；候选项取消时写 `cancelled` 或 `superseded`，不得删除原行。
-17. 每次新增台账、启动候选 CR、关闭 CR 或状态查询发现冲突后，若存在 `scripts/check_cr_tracking_consistency.py`，必须运行或记录跳过原因；发现 `STATE.md.active_change` 指向已关闭 CR、多个 active CR 未授权、台账 candidate 已有正式 CR 文件等问题时，先修正索引或发起人工决策。
+17. 每次新增台账、启动候选 CR、关闭 CR 或状态查询发现冲突后，若存在 `meta-flow check cr-tracking`，必须运行或记录跳过原因；发现 `STATE.md.active_change` 指向已关闭 CR、多个 active CR 未授权、台账 candidate 已有正式 CR 文件等问题时，先修正索引或发起人工决策。
 
 ## 输出文件 / 输出模板
 
@@ -100,7 +100,7 @@ status: active
 - [ ] 后续 CR 候选只进入 follow-up tracking 台账，未预创建尚未启动的正式 CR 文件
 - [ ] 候选 CR 转 active 或新 CR 创建前已完成冲突预检，并记录处理结论
 - [ ] `STATE.md.cr_tracking` / `process/changes/CR-INDEX.yaml` 已同步 active、blocked、candidate、spike_candidate 和状态冲突
-- [ ] `scripts/check_cr_tracking_consistency.py` 对当前台账和正式 CR 返回 PASS，或已记录需要人工处理的冲突
+- [ ] `meta-flow check cr-tracking` 对当前台账和正式 CR 返回 PASS，或已记录需要人工处理的冲突
 
 ## 不适用边界
 

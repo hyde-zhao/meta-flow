@@ -14,7 +14,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 本台账只记录 CP8 或 CR 收敛后需要后续跟踪的候选事项。候选项未启动前不得预创建正式 CR 文件；只有用户决定推进某一项时，才在 `process/changes/` 下创建对应正式 CR，并把本台账中的状态改为 `active`。
 
-本台账不是唯一状态索引。每次新增、启动、关闭、取消或替代候选项后，必须同步 `process/STATE.md.cr_tracking` 与 `process/changes/CR-INDEX.yaml`，并运行或记录跳过 `scripts/check_cr_tracking_consistency.py` 的原因。
+本台账不是唯一状态索引。每次新增、启动、关闭、取消或替代候选项后，必须同步 `process/STATE.md.cr_tracking` 与 `process/changes/CR-INDEX.yaml`，并运行或记录跳过 `meta-flow check cr-tracking` 的原因。
 
 ## 状态字段约定
 
@@ -59,8 +59,8 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 | Story / LLD 批次是否重叠 | PASS / BLOCKED | Story / CR 影响分析 |  |
 | 文件 owner 是否冲突 | PASS / BLOCKED | Story file_ownership / CR 影响分析 |  |
 | 外部接口 / 安全 / 运行授权是否重叠 | PASS / BLOCKED | Decision Brief / CR |  |
-| `STATE.md.active_change` 是否指向已关闭 CR | PASS / BLOCKED | `scripts/check_cr_tracking_consistency.py` |  |
-| 台账候选与正式 CR 文件是否同步 | PASS / BLOCKED | `scripts/check_cr_tracking_consistency.py` |  |
+| `STATE.md.active_change` 是否指向已关闭 CR | PASS / BLOCKED | `meta-flow check cr-tracking` |  |
+| 台账候选与正式 CR 文件是否同步 | PASS / BLOCKED | `meta-flow check cr-tracking` |  |
 
 若存在重叠，默认不得并行推进；必须在以下处理方式中选择并记录：合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集、或标记 `superseded` 并链接替代 CR。
 
@@ -70,7 +70,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 |---|---|---|---|
 | 运行时状态 | `process/STATE.md.cr_tracking` | 记录 active、blocked、candidate、spike_candidate、stale_status_conflicts | pending |
 | CR 索引 | `process/changes/CR-INDEX.yaml` | 记录每个候选项的状态、正式 CR 路径、影响面、blocked_by 和下一步 | pending |
-| 一致性检查 | `scripts/check_cr_tracking_consistency.py --project-root .` | 新增台账、启动候选、关闭 CR 或状态冲突修复后执行 | pending |
+| 一致性检查 | `meta-flow check cr-tracking --project-root .` | 新增台账、启动候选、关闭 CR 或状态冲突修复后执行 | pending |
 
 ## 不授权范围
 

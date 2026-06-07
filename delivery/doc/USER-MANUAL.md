@@ -327,10 +327,10 @@ meta-po 会执行以下动作：
 检查还有哪些 CR 需要推进，建议如何推进
 ```
 
-meta-po 必须输出五类清单：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。`candidate` 和 `spike_candidate` 不是执行锁，但必须作为 backlog 展示；如果 `STATE.md.active_change` 指向已关闭 CR，或正式 active CR 没有回写台账 / `CR-INDEX.yaml`，必须先列为状态冲突。存在 `scripts/check_cr_tracking_consistency.py` 时，可用以下命令独立检查：
+meta-po 必须输出五类清单：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。`candidate` 和 `spike_candidate` 不是执行锁，但必须作为 backlog 展示；如果 `STATE.md.active_change` 指向已关闭 CR，或正式 active CR 没有回写台账 / `CR-INDEX.yaml`，必须先列为状态冲突。存在 `meta-flow check cr-tracking` 时，可用以下命令独立检查：
 
 ```bash
-uv run --python 3.11 python scripts/check_cr_tracking_consistency.py --project-root .
+meta-flow check cr-tracking --project-root .
 ```
 
 ### 6.6 何时显式声明 meta-self-dev

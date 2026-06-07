@@ -67,7 +67,7 @@ confirmed_at: "2026-06-07"
 | Human Gate | CP2 / CP3 / CP5 / CP8 正式发起与回填 | 阶段内自由讨论 | Workflow Orchestration | ADR-004 |
 | Pending Decision | 结构化字段、去重、展示、状态更新 | 生成业务问题内容本身 | meta-pm / meta-se / meta-dev / meta-qa | ADR-005 |
 | Not Authorized Items | 明确 approve 不包含的操作 | 执行真实发布或写入 | Release Readiness | ADR-006 |
-| Validator | 校验 checkpoint 和发起消息完整性 | 判断业务方案对错 | `scripts/check_human_gate_decision_brief.py` | Human Gate Protocol |
+| Validator | 校验 checkpoint 和发起消息完整性 | 判断业务方案对错 | `meta-flow check human-gate` | Human Gate Protocol |
 
 ## 6. 推荐方案
 
@@ -143,7 +143,7 @@ confirmed_at: "2026-06-07"
 
 | 验收对象 | 测试层级 | 覆盖场景 | 自动化方式 | 未自动化原因 / 手工入口 |
 |---|---|---|---|---|
-| Human Gate checkpoint | static | Brief 结构完整 | `scripts/check_human_gate_decision_brief.py` | 人工审查业务合理性 |
+| Human Gate checkpoint | static | Brief 结构完整 | `meta-flow check human-gate` | 人工审查业务合理性 |
 | Launch message | static | 三个 exact 回复、待决策表、不授权项 | validator `--launch-message-file` | 用户理解仍需人工确认 |
 | STATE queue | review | 决策项字段完整 | CP precheck | 状态语义人工审查 |
 

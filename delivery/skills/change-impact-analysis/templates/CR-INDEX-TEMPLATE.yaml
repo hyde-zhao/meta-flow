@@ -4,7 +4,7 @@ updated_by: "meta-po"
 status: "indexed"
 consistency_check:
   last_run_at: ""
-  command: "uv run --python 3.11 python scripts/check_cr_tracking_consistency.py --project-root ."
+  command: "meta-flow check cr-tracking --project-root ."
   result: ""
 active_crs: []
 blocked_crs: []

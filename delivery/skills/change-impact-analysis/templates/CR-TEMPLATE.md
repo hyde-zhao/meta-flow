@@ -139,7 +139,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 - 是否存在后续事项：false
 - 台账路径：`process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`
 - CR 索引路径：`process/changes/CR-INDEX.yaml`
-- 一致性检查：`uv run --python 3.11 python scripts/check_cr_tracking_consistency.py --project-root .`
+- 一致性检查：`meta-flow check cr-tracking --project-root .`
 - 状态取值：`candidate` / `active` / `blocked` / `spike_candidate` / `converted-to-spike` / `closed` / `cancelled` / `superseded`
 
 | 候选编号 | 标题 | 状态 | 类型 | 优先级 | 正式 CR 路径 | 相关 active CR / blocked_by / superseded_by | 当前门控 | 阻塞原因 | 下一步 |

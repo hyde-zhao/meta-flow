@@ -312,6 +312,8 @@ def collect_installer_component_errors() -> list[str]:
             package_data = setuptools_config.get("package-data", {})
             package_includes = set(package_find.get("include", [])) if isinstance(package_find, dict) else set()
             delivery_data = set(package_data.get("delivery", [])) if isinstance(package_data, dict) else set()
+            if "meta_flow.*" not in package_includes:
+                errors.append("pyproject.toml must package meta_flow.* so installed meta-flow can expose runtime check commands")
             if "delivery" not in package_includes or "delivery.scripts" not in package_includes:
                 errors.append("pyproject.toml must package delivery and delivery.scripts so installed meta-flow can locate delivery/scripts/install.py")
             for required_pattern in ("**/*.md", "**/*.yaml", "**/*.sh", "**/*.ps1", "**/*.py"):
@@ -648,7 +650,7 @@ def collect_agent_display_profile_errors() -> list[str]:
 
 def collect_human_gate_protocol_errors() -> list[str]:
     errors: list[str] = []
-    validator = ROOT / "scripts" / "check_human_gate_decision_brief.py"
+    validator = ROOT / "meta_flow" / "checks" / "human_gate.py"
     if not validator.is_file():
         errors.append(f"missing human gate validator: {validator.relative_to(ROOT)}")
     else:
@@ -666,25 +668,33 @@ def collect_human_gate_protocol_errors() -> list[str]:
             if token not in output:
                 errors.append(f"human gate validator help missing token: {token}")
 
+    wrapper = ROOT / "scripts" / "check_human_gate_decision_brief.py"
+    if not wrapper.is_file():
+        errors.append(f"missing human gate compatibility wrapper: {wrapper.relative_to(ROOT)}")
+    else:
+        wrapper_text = wrapper.read_text(encoding="utf-8")
+        if "meta_flow.checks.human_gate" not in wrapper_text:
+            errors.append("human gate compatibility wrapper must delegate to meta_flow.checks.human_gate")
+
     token_targets = {
         "meta-po": (
             DELIVERY_ROOT / "agents" / "meta-po.md",
-            ("Human Gate Launch Protocol", "pending_human_decisions", "decision_type", "Decision Collection Coverage", "决策收集覆盖", "不授权项", "check_human_gate_decision_brief.py"),
+            ("Human Gate Launch Protocol", "pending_human_decisions", "decision_type", "Decision Collection Coverage", "决策收集覆盖", "不授权项", "meta-flow check human-gate"),
         ),
         "checkpoint-manager": (
             DELIVERY_ROOT / "skills" / "checkpoint-manager" / "SKILL.md",
-            ("Human Gate Launch Protocol", "决策类型", "Decision Collection Coverage", "决策收集覆盖", "不授权项", "check_human_gate_decision_brief.py", "CP8 后续跟踪分流表"),
+            ("Human Gate Launch Protocol", "决策类型", "Decision Collection Coverage", "决策收集覆盖", "不授权项", "meta-flow check human-gate", "CP8 后续跟踪分流表"),
         ),
         "state-router": (
             DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
-            ("human_gate_decisions", "pending_human_decisions", "decision_collection_coverage", "pending_non_authorized_items", "check_human_gate_decision_brief.py"),
+            ("human_gate_decisions", "pending_human_decisions", "decision_collection_coverage", "pending_non_authorized_items", "meta-flow check human-gate"),
         ),
         "state-template": (
             DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
             ("human_gate_decisions", "pending_human_decisions", "decision_collection_coverage", "pending_non_authorized_items", "follow_up_tracking_path"),
         ),
         "human-gate-validator": (
-            ROOT / "scripts" / "check_human_gate_decision_brief.py",
+            ROOT / "meta_flow" / "checks" / "human_gate.py",
             ("Decision Collection Coverage", "决策收集覆盖", "候选问题数", "纳入待决策数"),
         ),
         "change-impact-analysis": (
@@ -749,7 +759,7 @@ def collect_human_gate_protocol_errors() -> list[str]:
 
 def collect_cr_tracking_protocol_errors() -> list[str]:
     errors: list[str] = []
-    validator = ROOT / "scripts" / "check_cr_tracking_consistency.py"
+    validator = ROOT / "meta_flow" / "checks" / "cr_tracking.py"
     if not validator.is_file():
         errors.append(f"missing CR tracking validator: {validator.relative_to(ROOT)}")
     else:
@@ -767,6 +777,14 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
             if token not in output:
                 errors.append(f"CR tracking validator help missing token: {token}")
 
+    wrapper = ROOT / "scripts" / "check_cr_tracking_consistency.py"
+    if not wrapper.is_file():
+        errors.append(f"missing CR tracking compatibility wrapper: {wrapper.relative_to(ROOT)}")
+    else:
+        wrapper_text = wrapper.read_text(encoding="utf-8")
+        if "meta_flow.checks.cr_tracking" not in wrapper_text:
+            errors.append("CR tracking compatibility wrapper must delegate to meta_flow.checks.cr_tracking")
+
     token_targets = {
         "meta-po": (
             DELIVERY_ROOT / "agents" / "meta-po.md",
@@ -774,7 +792,7 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
         ),
         "state-router": (
             DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
-            ("cr_tracking", "CR-INDEX.yaml", "check_cr_tracking_consistency.py", "active formal CR", "stale_status_conflicts"),
+            ("cr_tracking", "CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
         ),
         "state-template": (
             DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
@@ -782,15 +800,15 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
         ),
         "change-impact-analysis": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "SKILL.md",
-            ("CR-INDEX-TEMPLATE.yaml", "check_cr_tracking_consistency.py", "STATE.md.cr_tracking", "stale_status_conflicts"),
+            ("CR-INDEX-TEMPLATE.yaml", "meta-flow check cr-tracking", "STATE.md.cr_tracking", "stale_status_conflicts"),
         ),
         "cr-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-TEMPLATE.md",
-            ("cr_index_path", "STATE.md.cr_tracking", "CR-INDEX.yaml", "check_cr_tracking_consistency.py"),
+            ("cr_index_path", "STATE.md.cr_tracking", "CR-INDEX.yaml", "meta-flow check cr-tracking"),
         ),
         "follow-up-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "FOLLOW-UP-TRACKING-TEMPLATE.md",
-            ("cr_index_path", "STATE.md.cr_tracking", "CR-INDEX.yaml", "状态索引同步", "check_cr_tracking_consistency.py"),
+            ("cr_index_path", "STATE.md.cr_tracking", "CR-INDEX.yaml", "状态索引同步", "meta-flow check cr-tracking"),
         ),
         "cr-index-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-INDEX-TEMPLATE.yaml",
@@ -814,15 +832,15 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
         ),
         "readme": (
             ROOT / "README.md",
-            ("CR-INDEX.yaml", "check_cr_tracking_consistency.py", "active formal CR", "stale_status_conflicts"),
+            ("CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
         ),
         "delivery-readme": (
             DELIVERY_ROOT / "README.md",
-            ("CR-INDEX.yaml", "check_cr_tracking_consistency.py", "active formal CR", "stale_status_conflicts"),
+            ("CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
         ),
         "user-manual": (
             DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
-            ("CR-INDEX.yaml", "check_cr_tracking_consistency.py", "active formal CR", "stale_status_conflicts"),
+            ("CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
         ),
     }
     for label, (target, tokens) in token_targets.items():

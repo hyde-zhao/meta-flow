@@ -37,7 +37,7 @@ status: active
 - `process/STATE.md`（若已存在）
 - `skills/state-router/templates/STATE-TEMPLATE.md`
 - `skills/checkpoint-manager/SKILL.md`
-- `scripts/check_cr_tracking_consistency.py`（若存在）：CR 台账、正式 CR 和 `STATE.md.active_change` 一致性预检
+- `meta-flow check cr-tracking`（若存在）：CR 台账、正式 CR 和 `STATE.md.active_change` 一致性预检
 - `process/context/*-CONTEXT.yaml`：当前阶段上下文胶囊；默认优先读取
 - 与当前阶段直接相关的上游文档（仅在 capsule 缺失、冲突、字段不足、人工审计或深度评审触发时读取全文）：
   - `process/REQUEST.md`
@@ -168,7 +168,7 @@ state-router 每次推进前必须刷新 `workflow_health`：
 当用户询问“当前状态”“还有哪些 CR 需要推进”“建议如何推进”“待跟踪 CR”等问题时，state-router 不得只返回 `STATE.md.active_change` 或唯一 `status=active` 的正式 CR；必须生成 CR 盘点视图：
 
 1. 读取 `process/STATE.md.active_change`、`STATE.md.orchestrator_session.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）、全部 `process/changes/CR-*.md` 正式 CR 和全部 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md` 台账。
-2. 若存在 `scripts/check_cr_tracking_consistency.py`，运行或要求运行该脚本检查 `--project-root .`；若无法运行，必须在回答中说明跳过原因。
+2. 若存在 `meta-flow check cr-tracking`，运行或要求运行该脚本检查 `--project-root .`；若无法运行，必须在回答中说明跳过原因。
 3. 输出必须固定分为五类：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。
 4. `candidate` / `spike_candidate` 是 backlog，不占执行锁，但必须在“还有哪些 CR 需要推进”回答中列出标题、优先级、阻塞前置、下一步和不授权边界。
 5. 若 `STATE.md.active_change` 指向已关闭 CR，或与正式 `status=active` 的 CR 不一致，必须先列为 `stale_status_conflicts`；不得因为状态冲突而隐藏 follow-up 台账候选项。
@@ -224,7 +224,7 @@ CP2 / CP3 / CP5 / CP8 发起前必须额外确认 `human_gate_decisions`：
 - `decision-item` 均已写入 `pending_human_decisions[]`，并含 `id/gate/decision_type/question/recommendation/alternatives/pros_cons/impact_risk/rollback_switch/status/source`。
 - `decision_collection_coverage[]` 已记录本轮 gate 的来源扫描覆盖，包含每个适用来源的 `source_type/source_path/scan_status/candidate_count/included_decision_count/classification_or_na_reason`。
 - 本轮 `pending_human_decisions[]` 与 `process/checkpoints/CP*.md` 的 Decision Brief 决策表一致；若不一致，不得把 `orchestrator_session.status` 置为 `awaiting-user`。
-- 门禁消息草稿通过 `scripts/check_human_gate_decision_brief.py --launch-message-file` 校验后，才能发起人工确认。
+- 门禁消息草稿通过 `meta-flow check human-gate --checkpoint <process/checkpoints/CP*.md> --launch-message-file <path>` 校验后，才能发起人工确认。
 - 若用户修订了范围、安全、运行授权或风险接受含义，必须把相关 DQ 退回 `open`，重新生成 Decision Brief 和发起消息。
 
 ### 5. Story 并行调度队列
@@ -364,7 +364,7 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 - [ ] `lld_clarification_queue` 无未回答阻断项时才允许进入 CP5
 - [ ] 阻塞状态下返回明确阻塞原因
 - [ ] 状态查询必须列出 active formal CR、blocked formal CR、follow-up candidate、spike_candidate 和 stale_status_conflicts
-- [ ] `scripts/check_cr_tracking_consistency.py` 能识别 `STATE.md.active_change` 指向已关闭 CR、多个 active CR、台账候选与正式 CR 文件不同步等问题
+- [ ] `meta-flow check cr-tracking` 能识别 `STATE.md.active_change` 指向已关闭 CR、多个 active CR、台账候选与正式 CR 文件不同步等问题
 
 ## 不适用边界
 

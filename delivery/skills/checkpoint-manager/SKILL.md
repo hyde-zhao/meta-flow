@@ -299,7 +299,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 2. Decision Brief 必须包含 `### Decision Collection Coverage`，逐项列出适用来源、扫描状态、候选问题数、纳入待决策数和分类 / N/A 原因；缺少覆盖报告时不得发起人工确认。
 3. 若下游产物中存在 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类事项，必须先分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。
 4. `decision-item` 必须写入待人工决策清单；每项必须有 `decision_type`，取值为 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。
-5. 发起前必须运行 `scripts/check_human_gate_decision_brief.py` 校验 checkpoint 文件；如果存在待发送消息草稿，必须同时用 `--launch-message-file` 校验对话内容包含 checklist 路径、自动预检结论、决策收集覆盖摘要、待决策项数量、待决策表格和三个 exact 回复。
+5. 发起前必须运行 `meta-flow check human-gate` 校验 checkpoint 文件；如果存在待发送消息草稿，必须同时用 `--launch-message-file` 校验对话内容包含 checklist 路径、自动预检结论、决策收集覆盖摘要、待决策项数量、待决策表格和三个 exact 回复。
 6. 若待决策项数量大于 0 但发起消息未打印表格，检查点视为发起失败；若待决策项为 0，消息必须打印 `本轮待人工决策项：0` 并说明原因。
 7. 用户对关键语义做出修订后，必须更新 DQ、重新生成 Decision Brief 和 Decision Collection Coverage，并重新发起确认，不得仅在后续文档静默修正。
 
@@ -831,7 +831,7 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 - [ ] 人工检查稿包含 Decision Brief
 - [ ] meta-po 发起关键人工确认时明确提示 checklist 文件路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复
 - [ ] 发起消息已复述 `approve` 接受哪些 DQ，且不授权项已独立列出
-- [ ] `scripts/check_human_gate_decision_brief.py` 校验 checkpoint 文件和发起消息通过
+- [ ] `meta-flow check human-gate` 校验 checkpoint 文件和发起消息通过
 - [ ] 人工审查后对应 `process/checkpoints/CP*.md` 已填入结论
 - [ ] `STATE.md.checkpoints` 与检查文件状态一致
 

@@ -537,7 +537,7 @@ cr_tracking:
     - "next_action"
     - "last_checked_at"
   reporting_policy: "状态查询必须同时输出 active CR、blocked CR、follow-up candidate、spike_candidate 和 stale_status_conflicts；candidate/spike_candidate 不占执行锁"
-  consistency_check: "存在 scripts/check_cr_tracking_consistency.py 时，当前状态查询、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后必须运行或记录跳过原因"
+  consistency_check: "存在 meta-flow check cr-tracking 时，当前状态查询、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后必须运行或记录跳过原因"
 parallel_waves: []
 history: []
 last_updated: ""

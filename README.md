@@ -188,10 +188,10 @@ Meta Flow 默认采用 CP0-CP8 检查点。所有检查点都包含 Entry Criter
 
 meta-po 必须先读取台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和当前活跃 `process/changes/CR-*.md`，执行 CR 冲突预检。`candidate` / `spike_candidate` 只是 backlog，不占执行锁；转为正式 CR 后才把台账状态、`STATE.md.cr_tracking` 和 `CR-INDEX.yaml` 改为 `active`，写入正式 CR 路径并设置活跃变更。若已有未完成 CR，新 CR 与其影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，默认不得并行推进；meta-po 必须给出合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 的决策表，由用户确认后再继续。
 
-询问“当前状态”或“还有哪些 CR 需要推进”时，meta-po 必须输出 CR 盘点视图：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。如果当前项目存在 `scripts/check_cr_tracking_consistency.py`，状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后都应运行：
+询问“当前状态”或“还有哪些 CR 需要推进”时，meta-po 必须输出 CR 盘点视图：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。如果当前项目存在 `meta-flow check cr-tracking`，状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后都应运行：
 
 ```bash
-uv run --python 3.11 python scripts/check_cr_tracking_consistency.py --project-root .
+meta-flow check cr-tracking --project-root .
 ```
 
 该脚本用于发现 `STATE.md.active_change` 指向已关闭 CR、多个 active CR 未授权、follow-up candidate 已有正式 CR 文件、台账 active 项缺正式 CR 路径等问题。
