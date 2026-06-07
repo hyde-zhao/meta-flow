@@ -19,6 +19,7 @@ status: active
 - 自动预检 + 人工检查点：先写自动预检结果，再生成供用户审查的 checklist 文件。
 - Story 级滚动检查点：按 Story 独立记录 LLD、编码完成和验证完成结果。
 - 关键决策门控：CP2 / CP3 / CP5 / CP8 生成人工审查稿和 Decision Brief；CP4 只生成自动预检并汇入 CP5。
+- 上下文门控：CP2 / CP3 / CP5 / CP6 / CP7 / CP8 必须检查对应 `process/context/*-CONTEXT.yaml`，或记录 `N/A` / `WAIVED` / `BLOCKED` 原因。
 
 所有检查点必须采用 IPD 风格的四段结构：
 
@@ -34,12 +35,13 @@ status: active
 | 自动检查结果 | `process/checks/CP{n}-{slug}.md` | 由 agent 填写，必须包含逐项 PASS / FAIL / N/A / WAIVED |
 | 讨论日志 | `process/discussions/CP{n}-*-DISCUSSION-LOG.md` | CP2 / CP3 人类审计与恢复日志；不替代正式产物 |
 | 讨论恢复点 | `process/checks/CP{n}-DISCUSSION-CHECKPOINT.json` | CP2 / CP3 中断恢复状态；缺失时自动检查必须说明 N/A 或 blocked 原因 |
-| 人工审查稿 | `checkpoints/CP{n}-{slug}.md` | 由 meta-po 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
-| Story LLD 人工审查稿 | `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 的 LLD 统一确认 |
+| 人工审查稿 | `process/checkpoints/CP{n}-{slug}.md` | 由 meta-po 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
+| Story 设计证据人工审查稿 | `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 的完整 LLD / 技术说明 / waived 证据统一确认 |
 | Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
 | Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
+| 阶段上下文胶囊 | `process/context/CP*-*-CONTEXT.yaml` | 默认读取入口；checkpoint 记录其状态和读取扩展理由 |
 
-`process/checks/` 属于运行态检查证据；`checkpoints/` 属于人工确认态文件。人工审查时，meta-po 必须在用户提示中给出具体 `checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
+`process/checks/` 属于运行态检查证据；`process/checkpoints/` 属于人工确认态文件。人工审查时，meta-po 必须在用户提示中给出具体 `process/checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
 
 ## 结果状态
 
@@ -62,6 +64,8 @@ status: active
 | `WAIVED` | 人工接受风险后放行 |
 
 自动检查点存在任一 `FAIL` 且未被 `WAIVED` 时，结论必须为 `FAIL` 或 `BLOCKED`，不得进入人工确认。
+
+CP7 是验证完成滚动门，允许使用更细的路由结论：`PASS`、`PASS_WITH_RISK`、`WAIVED`、`NEEDS_REWORK`、`NEEDS_DESIGN_CLARIFICATION`、`BLOCKED`。其中 `PASS_WITH_RISK` 可推进但必须汇入 CP8 风险接受输入；`NEEDS_REWORK` 路由回 meta-dev；`NEEDS_DESIGN_CLARIFICATION` 路由回 meta-se / meta-po；`BLOCKED` 停止推进。
 
 ## 通用检查结果模板
 
@@ -111,7 +115,7 @@ manual_checkpoint: ""
 
 ## 结论
 
-- 结论：`PASS | FAIL | BLOCKED | WAIVED`
+- 结论：`PASS | FAIL | BLOCKED | WAIVED`（CP7 可使用 `PASS | PASS_WITH_RISK | WAIVED | NEEDS_REWORK | NEEDS_DESIGN_CLARIFICATION | BLOCKED`）
 - 阻断项：
 - 豁免项：
 - 下一步：
@@ -148,6 +152,30 @@ target:
 
 ## Decision Brief
 
+### Context Capsule Summary
+
+| 字段 | 内容 |
+|---|---|
+| capsule 路径 | `process/context/CP*-*-CONTEXT.yaml` |
+| capsule 状态 | `ready / blocked / waived / missing` |
+| read_profile | `minimal / compact / full` |
+| 默认读取策略 | 先读 capsule；仅在缺失、冲突、字段不足、人工审计或深度评审时读取完整文档 |
+| 全文档读取扩展 | `<0/N 次；逐项说明 reason>` |
+| 缺失 / waived 理由 | `<若无 capsule，必须说明>` |
+
+### Decision Collection Coverage
+
+| 来源 | 路径 / 对象 | 扫描状态 | 候选问题数 | 纳入待决策数 | 分类 / N/A 原因 |
+|---|---|---:|---:|---:|---|
+| STATE pending queue | `STATE.md.human_gate_decisions.pending_human_decisions[]` | scanned / missing / n/a | 0 | 0 |  |
+| 委托 Agent 交还摘要 | `process/handoffs/*RETURN-SUMMARY.md` | scanned / missing / n/a | 0 | 0 |  |
+| 自动预检结果 | `process/checks/CP*.md` | scanned / missing / n/a | 0 | 0 |  |
+| discussion log / checkpoint | `process/discussions/*` / `process/checks/*DISCUSSION-CHECKPOINT.json` | scanned / missing / n/a | 0 | 0 |  |
+| 下游正式产物 | `HLD.md` / `LLD` / `REVIEW.md` / `FIXES.md` / release docs | scanned / missing / n/a | 0 | 0 |  |
+| 用户显式选择题 | 当前对话 / REQUEST / CR | scanned / missing / n/a | 0 | 0 |  |
+
+> 发起人工确认前必须证明所有适用来源已扫描。若某来源缺失或 N/A，必须写明原因；不得让用户再打开长文档自行查找未收集的问题。
+
 ### 待人工决策清单
 
 | 决策 ID | 决策类型 | 待确认问题 | 推荐方案 | 备选方案 | 优劣分析 | 影响 / 风险 | 回退 / 切换条件 |
@@ -169,16 +197,16 @@ target:
 |---|---|
 | CP2 | 用户真实意图、场景覆盖、认知盲区补充、Scenario Gray Areas 处理结果、Deferred Ideas、用户选择影响、回退方式、discussion log / checkpoint 路径或 N/A 原因 |
 | CP3 | 候选架构适用条件、优化项、牺牲项、影响面、切换条件、Use Case → Architecture Traceability、关键场景模拟结果、未决风险、discussion log / checkpoint 路径或 N/A 原因 |
-| CP5 | LLD clarification queue 收敛状态、已回答问题、转 OPEN / Spike 的问题、未回答阻断项为 0 的证据、跨 Story 契约、文件 owner、merge order |
+| CP5 | 设计证据类型分布、LLD clarification queue 收敛状态、已回答问题、转 OPEN / Spike 的问题、未回答阻断项为 0 的证据、跨 Story 契约、文件 owner、merge order |
 | CP8 | 交付范围、安装验证、文档缺口、遗留风险、风险接受项、推荐处理方案、至少 1 个备选处理方案、回退方式 |
 
 ### CP8 后续跟踪分流表
 
 | 分流类别 | 项目 ID | 状态 | 处理方式 | 台账 / CR 路径 | 说明 |
 |---|---|---|---|---|---|
-| 关闭范围 | CLOSE-01 | closed | 本轮交付内关闭 | `checkpoints/CP8-...md` |  |
-| 不授权范围 | NA-01 | not-authorized | 不进入本轮执行授权 | `checkpoints/CP8-...md` | 真实运行、凭据、publish、live 等必须独立列出 |
-| 风险接受项 | RA-01 | accepted-risk | 用户接受风险后放行 | `checkpoints/CP8-...md` | 必须有回退条件 |
+| 关闭范围 | CLOSE-01 | closed | 本轮交付内关闭 | `process/checkpoints/CP8-...md` |  |
+| 不授权范围 | NA-01 | not-authorized | 不进入本轮执行授权 | `process/checkpoints/CP8-...md` | 真实运行、凭据、publish、live 等必须独立列出 |
+| 风险接受项 | RA-01 | accepted-risk | 用户接受风险后放行 | `process/checkpoints/CP8-...md` | 必须有回退条件 |
 | 后续 CR 候选项 | CR-020 | candidate | 保留在 follow-up tracking 台账，暂不创建正式 CR 文件 | `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` | 启动时再转 active |
 | 取消 / deferred 项 | DEF-01 | cancelled/deferred | 不进入当前范围 | `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` | 不删除，保留追溯 |
 
@@ -218,9 +246,11 @@ target:
 meta-po 发起人工检查时必须提示：
 
 ```text
-请审查：checkpoints/CP{n}-{slug}.md
+请审查：process/checkpoints/CP{n}-{slug}.md
 自动预检结论：PASS / WAIVED
+上下文胶囊：process/context/CP{n}-*-CONTEXT.yaml（read_profile=<minimal|compact|full>，完整来源见 checklist）
 本轮待人工决策项：N
+决策收集覆盖：已扫描 <S> 个来源，发现候选问题 <C> 个，纳入待决策 <D> 个；N/A / 缺失来源 <M> 个，原因见 checklist 的 Decision Collection Coverage。
 如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作。
 待人工决策清单：
 | 决策 ID | 决策类型 | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |
@@ -238,15 +268,40 @@ approve
 reject
 ```
 
+### Decision Brief 压缩策略
+
+checkpoint 文件中的 Decision Brief 必须完整；对话发起消息可以按 `STATE.md.human_gate_decisions.decision_brief_profile` 压缩，以减少 token 消耗。
+
+允许值：full|compact|summary。
+
+| profile | 对话输出 | 文件要求 | 适用条件 |
+|---|---|---|---|
+| `full` | 打印完整待决策表 | checkpoint 保持完整 | 决策项少、用户要求全文或高风险审计 |
+| `compact` | 打印 checklist 路径、自动预检、capsule 摘要、决策项总数、blocking / high-risk 决策表、不授权项、三个 exact 回复 | checkpoint 保持完整 | 默认模式 |
+| `summary` | 按决策类型分组汇总，只打印高风险 / 阻断项和完整表路径 | checkpoint 保持完整 | 决策项数量超过 `summary_threshold` |
+
+压缩不得省略：
+
+- checklist 文件路径
+- 自动预检结论
+- Context Capsule Summary
+- Decision Collection Coverage 摘要
+- 待决策项总数
+- blocking / high-risk 决策项
+- approve 不代表授权的不授权项
+- `approve`、`修改: <具体修改点>`、`reject` 三个 exact 回复
+
 ## Human Gate Launch Protocol
 
 CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规和对话合规：
 
-1. 发起前必须从 `STATE.md.human_gate_decisions.pending_human_decisions[]` 聚合本轮 DQ；若下游产物中存在 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类事项，必须先分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。
-2. `decision-item` 必须写入待人工决策清单；每项必须有 `decision_type`，取值为 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。
-3. 发起前必须运行 `scripts/check_human_gate_decision_brief.py` 校验 checkpoint 文件；如果存在待发送消息草稿，必须同时用 `--launch-message-file` 校验对话内容包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。
-4. 若待决策项数量大于 0 但发起消息未打印表格，检查点视为发起失败；若待决策项为 0，消息必须打印 `本轮待人工决策项：0` 并说明原因。
-5. 用户对关键语义做出修订后，必须更新 DQ、重新生成 Decision Brief 并重新发起确认，不得仅在后续文档静默修正。
+1. 发起前必须从 `STATE.md.human_gate_decisions.pending_human_decisions[]`、委托 Agent 交还摘要、review summary、自动预检结果、discussion log / checkpoint、LLD clarification queue、OPEN / Spike 项、inline fallback 授权、预授权终验条件、用户显式提出的选择题和当前 gate 相关正式产物中聚合本轮 DQ。
+2. Decision Brief 必须包含 `### Decision Collection Coverage`，逐项列出适用来源、扫描状态、候选问题数、纳入待决策数和分类 / N/A 原因；缺少覆盖报告时不得发起人工确认。
+3. 若下游产物中存在 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类事项，必须先分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。
+4. `decision-item` 必须写入待人工决策清单；每项必须有 `decision_type`，取值为 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。
+5. 发起前必须运行 `scripts/check_human_gate_decision_brief.py` 校验 checkpoint 文件；如果存在待发送消息草稿，必须同时用 `--launch-message-file` 校验对话内容包含 checklist 路径、自动预检结论、决策收集覆盖摘要、待决策项数量、待决策表格和三个 exact 回复。
+6. 若待决策项数量大于 0 但发起消息未打印表格，检查点视为发起失败；若待决策项为 0，消息必须打印 `本轮待人工决策项：0` 并说明原因。
+7. 用户对关键语义做出修订后，必须更新 DQ、重新生成 Decision Brief 和 Decision Collection Coverage，并重新发起确认，不得仅在后续文档静默修正。
 
 ## CP0 原始请求受理门
 
@@ -260,7 +315,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 条目 | 说明 |
 |---|---|
 | 原始请求存在 | 用户已有明确任务、变更请求或 `.input/` 输入 |
-| 工作目录可写 | `process/`、`checkpoints/` 可创建 |
+| 工作目录可写 | `docs/`、`process/`、`process/checkpoints/` 可创建 |
 | 编排器单例可判定 | Codex 下未发现多个活动 meta-po |
 
 ### Checklist
@@ -326,15 +381,15 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 ### Deliverables
 
-- `process/USE-CASES.md`
+- `docs/product/USE-CASES.md`
 - `process/CLARIFICATION-LOG.md`
 - `process/checks/CP1-USE-CASE-COMPLETENESS.md`
 
-## CP2 需求基线门
+## CP2 需求 / 场景 / 范围基线门
 
 - 类型：自动预检 + 人工
 - 自动结果文件：`process/checks/CP2-REQUIREMENTS-BASELINE.md`
-- 人工审查稿：`checkpoints/CP2-REQUIREMENTS-BASELINE.md`
+- 人工审查稿：`process/checkpoints/CP2-REQUIREMENTS-BASELINE.md`
 - 责任方：meta-pm / meta-po
 
 ### Entry Criteria
@@ -342,9 +397,12 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 条目 | 说明 |
 |---|---|
 | CP1 通过 | 用户场景已形成可追溯基线 |
-| 需求草案存在 | `REQUIREMENTS.md` 已生成 |
+| 需求草案存在 | `docs/product/REQUIREMENTS.md` 已生成 |
+| 工程验证场景存在或说明 N/A | `SCENARIOS.yaml` 与 `TEST-MATRIX.md` 已生成，或自动检查写明不适用 / waived 原因 |
+| 产品规划输入存在或说明 N/A | `STORY-MAP.md` 与 `MVP-SCOPE.md` 已生成，或自动检查写明不适用 / waived 原因 |
 | 非功能需求有初稿 | 性能、安全、可靠性、兼容性等已列出 |
 | 场景讨论证据存在或说明 N/A | `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` 与 `process/checks/CP2-DISCUSSION-CHECKPOINT.json` 可读，或自动检查写明不适用原因 |
+| 用户可见场景确认证据存在 | 标准模式下至少 1 条 `SGQ-*` 场景确认问题、用户回答和复述确认已写入 discussion log / checkpoint；fast-lane N/A 必须说明原因 |
 
 ### Checklist
 
@@ -361,37 +419,47 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 9 | 追溯矩阵建立 | 原始请求 -> 场景 -> 需求 可追溯 |
 | 10 | Scenario Gray Areas 已处理 | 3-4 个关键灰区、用户选择的 1-3 个重点、未选项和 canonical refs 已记录 |
 | 11 | Deferred Ideas 已隔离 | 超出当前 scope 的想法、风险和扩展场景已进入 deferred，不污染需求基线 |
-| 12 | 8 维扫描后台化 | 仅将影响设计 / 测试 / 交付 / 门控的缺口暴露给用户，其余覆盖状态已记录 |
+| 12 | 用户可见场景确认已完成 | 至少 1 条 `SGQ-*` 场景确认交互已记录问题、候选选项或 freeform、用户回答、复述确认和影响面；缺失时 CP2 只能 `FAIL` / `BLOCKED` |
+| 13 | 8 维扫描后台化 | 仅将影响设计 / 测试 / 交付 / 门控的缺口暴露给用户，其余覆盖状态已记录 |
+| 14 | 工程验证场景可追踪 | `SCENARIOS.yaml` 覆盖正向、负向、边界、权限、失败恢复或写明 N/A；`TEST-MATRIX.md` 可追踪 Scenario / Requirement / Story / 测试状态 |
+| 15 | MVP 范围可确认 | `STORY-MAP.md`、`MVP-SCOPE.md`、`RELEASE-SLICES.md`、`BACKLOG.md` 存在或有 N/A / waived 原因，且 In Scope / Out of Scope / Deferred 可人工确认 |
 
 ### Exit Criteria
 
 | 条目 | 说明 |
 |---|---|
 | P0/P1 需求通过 | 致命问题 = 0，阻塞问题 = 0 |
-| 人工确认完成 | `checkpoints/CP2-REQUIREMENTS-BASELINE.md` 结论为 approved |
+| 人工确认完成 | `process/checkpoints/CP2-REQUIREMENTS-BASELINE.md` 结论为 approved |
 
 ### Deliverables
 
-- `process/REQUIREMENTS.md`
+- `docs/product/REQUIREMENTS.md`
+- `docs/product/SCENARIOS.yaml`
+- `docs/product/TEST-MATRIX.md`
+- `docs/product/STORY-MAP.md`
+- `docs/product/MVP-SCOPE.md`
+- `docs/product/RELEASE-SLICES.md`
+- `docs/product/BACKLOG.md`
 - `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`（或 N/A 说明）
 - `process/checks/CP2-DISCUSSION-CHECKPOINT.json`（或 N/A 说明）
 - `process/checks/CP2-REQUIREMENTS-BASELINE.md`
-- `checkpoints/CP2-REQUIREMENTS-BASELINE.md`
+- `process/checkpoints/CP2-REQUIREMENTS-BASELINE.md`
 
-## CP3 HLD 架构评审门
+## CP3 蓝图 / HLD 架构评审门
 
 - 类型：自动预检 + 人工
 - 自动结果文件：`process/checks/CP3-HLD-CONSISTENCY.md`
-- 人工审查稿：`checkpoints/CP3-HLD-REVIEW.md`
+- 人工审查稿：`process/checkpoints/CP3-HLD-REVIEW.md`
 - 责任方：meta-se / meta-po
 
 ### Entry Criteria
 
 | 条目 | 说明 |
 |---|---|
-| CP2 通过 | 需求基线已确认 |
-| HLD 草案存在 | `process/HLD.md` 已生成 |
-| ADR 候选可读 | 关键决策点已在 HLD 或 ADR 草案中说明 |
+| CP2 通过 | 需求 / 场景 / 范围基线已确认 |
+| 蓝图适用性已判定 | `docs/design/BLUEPRINT.md` / `docs/design/DOMAIN-MAP.md` / `docs/design/DEPENDENCY-MAP.md` 已生成，或 CP3 自动检查写明 N/A / waived 原因 |
+| HLD 草案存在 | `docs/design/HLD.md` 已生成 |
+| ADR 草案可读 | `docs/design/ARCHITECTURE-DECISION.md` 已生成草案；关键决策点越早确认越好，CP3 只提交影响架构 / 安全 / 权限 / 外部接口 / 运行授权的核心 ADR |
 | 架构讨论证据存在或说明 N/A | `process/discussions/CP3-HLD-DISCUSSION-LOG.md` 与 `process/checks/CP3-DISCUSSION-CHECKPOINT.json` 可读，或自动检查写明不适用 / blocked 原因 |
 
 ### Checklist
@@ -402,7 +470,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 2 | 模块边界清晰 | 职责高内聚、低耦合 |
 | 3 | 接口方向明确 | 调用方向、输入输出、错误处理清晰 |
 | 4 | 数据流清晰 | 核心数据流、状态流、持久化策略清楚 |
-| 5 | ADR 完整 | 关键决策有理由、备选方案和取舍依据 |
+| 5 | 核心 ADR 可决策 | CP3 需确认的关键 ADR 有推荐方案、至少 1 个备选方案、优劣分析、影响 / 风险和回退 / 切换条件 |
 | 6 | 风险有缓解 | 技术、依赖、性能风险有应对方案 |
 | 7 | NFR 已落地 | 性能、安全、可靠性、可观测性有设计承载 |
 | 8 | 失败路径明确 | 超时、失败、回滚、降级、重试策略明确 |
@@ -413,6 +481,8 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 13 | 场景映射完整 | Use Case → Architecture Traceability 覆盖关键 UC、模块、异常路径和验证方式 |
 | 14 | 场景模拟通过 | 至少 2-3 个关键 UC 已走通推荐架构；失败项不存在或已阻断 |
 | 15 | 切换条件明确 | 推荐方案的优化项、牺牲项和 When to switch 条件已记录 |
+| 16 | 蓝图承接明确 | `docs/design/BLUEPRINT.md` / `docs/design/DOMAIN-MAP.md` / `docs/design/DEPENDENCY-MAP.md` 已被 HLD 消费，或自动检查逐项写明 N/A / waived 原因、影响和后续触发条件 |
+| 17 | Feature 级实现设计触发条件明确 | HLD 已列出哪些 Feature 需要 `implementation-design`，以及 `docs/design/FEATURE-DESIGN-MATRIX.md` / `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md` 的生成条件 |
 
 ### Exit Criteria
 
@@ -423,12 +493,15 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 ### Deliverables
 
-- `process/HLD.md`
-- `process/ARCHITECTURE-DECISION.md` 或 HLD 中 ADR 候选
+- `docs/design/HLD.md`
+- `docs/design/BLUEPRINT.md`（或 CP3 N/A / waived 说明）
+- `docs/design/DOMAIN-MAP.md`（或 CP3 N/A / waived 说明）
+- `docs/design/DEPENDENCY-MAP.md`（或 CP3 N/A / waived 说明）
+- `docs/design/ARCHITECTURE-DECISION.md`（CP3 前为草案，CP3 后回写核心 ADR 确认结论）
 - `process/discussions/CP3-HLD-DISCUSSION-LOG.md`（或 N/A 说明）
 - `process/checks/CP3-DISCUSSION-CHECKPOINT.json`（或 N/A 说明）
 - `process/checks/CP3-HLD-CONSISTENCY.md`
-- `checkpoints/CP3-HLD-REVIEW.md`
+- `process/checkpoints/CP3-HLD-REVIEW.md`
 
 ## CP4 Story 拆解与并行安全门
 
@@ -441,6 +514,8 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 条目 | 说明 |
 |---|---|
 | CP3 通过 | HLD 已确认 |
+| Feature 设计矩阵存在 | `docs/design/FEATURE-DESIGN-MATRIX.md` 已生成，覆盖 Feature / Epic 适用性、required / waived / n/a 理由和 Story lld_policy 建议 |
+| 必要 Feature 设计已处理 | 矩阵中 `required` 的 Feature 已生成 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`，或写明 waived 决策和重访条件 |
 | Story 计划存在 | `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 Story 卡片已生成 |
 | 依赖信息存在 | `depends_on`、依赖类型和文件所有权已填写 |
 
@@ -460,6 +535,10 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 10 | 并行计划合理 | `lld_ready` / `dev_ready` 可解释 |
 | 11 | Wave 不是硬门 | Wave 只作为调度分组，实际以 DAG 和 gate 为准 |
 | 12 | QA 策略同步 | Story 如何验证、哪些可并行验证已说明 |
+| 13 | Feature 设计矩阵完整 | 所有 Feature / Epic 均有 `required` / `waived` / `n/a` 判定和理由 |
+| 14 | required Feature 设计就绪 | `required` Feature 的 DESIGN / TEST-PLAN / TASKS 已生成，或 waived 决策已进入人工决策项 |
+| 15 | Story 设计引用完整 | 每个 Story 均有 `feature_design_refs`，指向 Feature 设计或 waived 证据 |
+| 16 | LLD 策略明确 | 每个 Story 均有 `lld_policy.required_level=full-lld|technical-note|waived`、触发原因和重访条件 |
 
 ### Exit Criteria
 
@@ -468,21 +547,23 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | DAG 校验通过 | 无循环依赖 |
 | 文件冲突可控 | 未处理冲突 = 0 |
 | 首批队列可计算 | `lld_ready` 可解释 |
-| CP5 汇总就绪 | Story 边界、依赖、文件所有权和并行计划风险可汇入 CP5 Decision Brief |
+| CP5 汇总就绪 | Feature 设计矩阵、Story 边界、`lld_policy`、依赖、文件所有权和并行计划风险可汇入 CP5 Decision Brief |
 
 ### Deliverables
 
+- `docs/design/FEATURE-DESIGN-MATRIX.md`
+- `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`（仅矩阵中 required 的 Feature；waived / n/a 写明原因）
 - `process/STORY-BACKLOG.md`
 - `process/DEVELOPMENT-PLAN.yaml`
 - `process/stories/STORY-*.md`
 - `process/stories/STORY-STATUS.md`
 - `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`
 
-## CP5 Story LLD 可实现性门
+## CP5 Story 设计证据可实现性门
 
 - 类型：全量自动预检 + 全量人工
 - 自动结果文件：`process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
-- 人工审查稿：`checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
+- 人工审查稿：`process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
 - 责任方：meta-dev / meta-po
 
 ### Entry Criteria
@@ -490,15 +571,15 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 条目 | 说明 |
 |---|---|
 | CP4 自动预检通过 | Story 拆解、依赖 DAG、文件所有权和并行计划已通过自动检查 |
-| 全部目标 Story 处于 LLD 审查态 | 状态均为 `lld-ready-for-review` 或全量 `lld-batch-ready-for-review` |
-| 全部目标 Story LLD 已生成 | 每个 `STORY-{id}-{story_slug}-LLD.md` 均存在 |
+| 全部目标 Story 处于设计审查态 | 状态均为 `lld-ready-for-review` 或全量 `lld-batch-ready-for-review` |
+| 全部目标 Story 设计证据已生成 | `full-lld` 有 `STORY-{id}-{story_slug}-LLD.md`；`technical-note` 有 Story `## 技术说明`；`waived` 有豁免理由、风险接受和重访条件 |
 | LLD clarification 队列可读 | `STATE.md.parallel_execution.lld_clarification_queue` 已初始化，且无未回答阻断项；若有 OPEN / Spike，已标注非阻断和重访条件 |
 
 ### Checklist
 
 | # | 检查项 | 说明 |
 |---|---|---|
-| 1 | LLD 覆盖 AC | 每条验收标准有实现设计 |
+| 1 | 设计证据覆盖 AC | 每条验收标准有实现设计或明确 waived 理由 |
 | 2 | 与 HLD 一致 | 不违背 HLD / ADR |
 | 3 | 文件影响范围明确 | 新增、修改、删除文件写清楚 |
 | 4 | 接口契约完整 | 输入、输出、错误码、超时、兼容性 |
@@ -512,21 +593,24 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 12 | 偏差记录机制明确 | 实现偏离 LLD 时必须记录原因和影响 |
 | 13 | CP4 摘要已纳入 | Story 边界、DAG、并行安全、文件所有权和 OPEN 项已写入 Decision Brief |
 | 14 | clarification 队列已收敛 | 已回答项、转 OPEN / Spike 项、阻断项为 0、跨 Story 契约和 merge order 均已写入 Decision Brief |
+| 15 | lld_policy 分级合理 | `full-lld` / `technical-note` / `waived` 与触发原因一致，高风险 Story 未被降级 |
+| 16 | Feature 设计输入被消费 | Story 的 `feature_design_refs` 已在 LLD / 技术说明 / waived 证据中引用 |
 
 ### Exit Criteria
 
 | 条目 | 说明 |
 |---|---|
-| 自动预检通过 | 全部目标 Story 的 LLD 可实现性检查无阻断项 |
+| 自动预检通过 | 全部目标 Story 的设计证据可实现性检查无阻断项 |
 | clarification 队列收敛 | `blocks_lld=true` 的未回答项为 0；非阻断 OPEN / Spike 已有 owner 和重访条件 |
-| 人工确认完成 | 全部目标 Story 的 LLD 被统一批准 |
+| 人工确认完成 | 全部目标 Story 的完整 LLD / 技术说明 / waived 证据被统一批准 |
 | dev_gate 可更新 | 全部目标 Story 可进入 `lld-approved`，当前 Wave 满足时进入 `dev_ready` |
 
 ### Deliverables
 
-- `process/stories/STORY-{id}-{story_slug}-LLD.md`
+- `process/stories/STORY-{id}-{story_slug}-LLD.md`（仅 `full-lld`）
+- `process/stories/STORY-{id}-{story_slug}.md` 的 `## 技术说明` 或 waived 证据（仅 `technical-note` / `waived`）
 - `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
-- `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
+- `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
 - 更新后的 `process/stories/STORY-STATUS.md`
 
 ## CP6 Story 编码完成门
@@ -539,9 +623,10 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 | 条目 | 说明 |
 |---|---|
-| CP5 通过 | 全部目标 Story 的 LLD 已确认 |
+| CP5 通过 | 全部目标 Story 的设计证据已确认 |
 | dev_gate 满足 | 依赖和文件所有权允许开发 |
 | 实现完成 | Story 任务清单已执行完 |
+| 实现执行证据存在 | Story 必需的 `IMPLEMENTATION.md`、Story 实现摘要或 `DEV-LOG.md` 已生成；复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / Guardrail / 平台适配必须有完整 IMPLEMENTATION |
 | meta-dev 调度证据存在 | `STATE.md.agent_lifecycle` 与 handoff `dispatch` 证明 meta-dev 已由子 agent 执行，或存在用户批准的 inline fallback |
 
 ### Checklist
@@ -551,26 +636,34 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 1 | AC 全部实现 | Story 验收标准无遗漏 |
 | 2 | 与 LLD 一致 | 偏离 LLD 的地方有记录和理由 |
 | 3 | 文件边界合规 | 未越过 `file_ownership.forbidden`，未抢占其他 Story primary 文件 |
-| 4 | 代码规范通过 | lint、format、类型检查或项目等价命令通过 |
-| 5 | 单元测试通过 | 核心逻辑、边界、异常路径覆盖 |
-| 6 | 静态检查通过 | guardrail、安全扫描、静态检查按适用范围通过 |
-| 7 | 自测完成 | 正向和主要异常场景已验证 |
-| 8 | 文档同步 | README、接口文档、配置说明、变更说明必要时更新 |
-| 9 | 状态回写 | Story 状态、任务清单、偏差记录已更新 |
-| 10 | 无缓存产物 | `__pycache__`、构建缓存等不进入交付物 |
-| 11 | Agent Dispatch Evidence | 存在 meta-dev 的 `agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
+| 4 | 实现对象清单完整 | 代码、Prompt / Skill、模板 / Schema、安装器、guardrail、测试、文档等适用对象均已列出，N/A 有理由 |
+| 5 | 设计契约映射完整 | 每个 must / should / must-not、输入输出字段、状态变化、权限变化、平台分支均映射到实现位置或 N/A |
+| 6 | 单元测试 / Fixture 计划已执行 | 按实现对象选择 pytest、fixture、结构检查、契约测试、dry-run 或人工检查；未运行项有原因 |
+| 7 | 最小实现切片已验证 | 每个 Slice 有输出文件、局部验证和状态；失败项未被忽略 |
+| 8 | 平台差异检查完成 | Claude / Codex / OpenClaw 的工具权限、schema、安装路径、降级策略已检查或 N/A |
+| 9 | 代码规范通过 | lint、format、类型检查或项目等价命令通过，或 N/A 有理由 |
+| 10 | 静态检查通过 | guardrail、安全扫描、结构检查按适用范围通过 |
+| 11 | 自测完成 | 正向和主要异常场景已验证 |
+| 12 | 文档同步 | README、USER-MANUAL、接口文档、配置说明、变更说明必要时更新 |
+| 13 | 实现交接摘要完整 | 完成内容、行为变化、受影响文件、验证、未运行检查、剩余风险、QA / Review / Doc 关注点已记录 |
+| 14 | 设计缺口反馈 | Feature / HLD / LLD / TEST-MATRIX / 决策队列缺口已反馈，不被实现阶段静默吞掉 |
+| 15 | 状态回写 | Story 状态、任务清单、偏差记录、implementation evidence 路径已更新 |
+| 16 | 无缓存产物 | `__pycache__`、构建缓存等不进入交付物 |
+| 17 | Agent Dispatch Evidence | 存在 meta-dev 的 `agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
 
 ### Exit Criteria
 
 | 条目 | 说明 |
 |---|---|
 | 必要命令通过 | 验证命令有证据或 N/A 理由 |
+| 实现契约闭环 | 实现对象、设计契约、测试 / fixture、切片验证和交接摘要均可追溯 |
 | 无阻塞自查问题 | Story 可进入 `ready-for-verification` |
 | 调度证据通过 | meta-dev 执行证据有效；仅 handoff-created 不可放行 |
 
 ### Deliverables
 
 - 代码变更
+- `process/stories/STORY-{id}-{story_slug}-IMPLEMENTATION.md`（强制场景）或 Story 实现摘要 / `DEV-LOG.md`（普通场景）
 - `DEV-LOG.md`
 - `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md`
 - 更新后的 Story 状态
@@ -589,6 +682,9 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | CP6 通过 | Story 处于 `ready-for-verification` |
 | 测试上下文可用 | 验证环境或等价验证方式可用 |
 | 测试策略存在 | `TEST-STRATEGY.md` 已生成或明确 N/A |
+| 覆盖矩阵可用 | `TEST-MATRIX.md` 可读，或 CP7 自动检查写明 N/A / waived 原因 |
+| 验证执行证据可生成 | `verification-execution` 可输出验证范围、对象清单、追踪矩阵、设计契约验证、分层验证计划和阶段决策，或检查结果写明轻量 N/A 原因 |
+| 质量评审产物可生成 | `quality-review` 可输出 `docs/quality/TEST-REPORT.md` / `docs/quality/REVIEW.md` / `docs/quality/FIXES.md`，或检查结果写明不适用原因 |
 | meta-qa 调度证据存在 | `STATE.md.agent_lifecycle` 与 handoff `dispatch` 证明 meta-qa 已由子 agent 执行，或存在用户批准的 inline fallback |
 
 ### Checklist
@@ -603,19 +699,32 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 6 | 缺陷闭环 | P0/P1 缺陷为 0，P2 有处理计划 |
 | 7 | 测试证据完整 | 命令、日志、报告、截图或等价证据记录 |
 | 8 | 追溯完整 | 需求、Story、LLD、代码、测试结果可串联 |
-| 9 | Agent Dispatch Evidence | 存在 meta-qa 的 `agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
+| 9 | TEST-MATRIX 回链完整 | `docs/product/TEST-MATRIX.md` 的适用场景均回链到 `docs/quality/TEST-REPORT.md` / `docs/quality/REVIEW.md` 结论，未执行项有风险或 N/A / waived 理由 |
+| 10 | 质量发现闭环 | `REVIEW.md` findings 已按严重度处理，`FIXES.md` 记录修复、豁免或回修 owner |
+| 11 | 验证对象清单完整 | 代码、Prompt / Skill、模板 / Schema、安装器、guardrail、文档、状态和发布产物按适用范围列出，N/A 有原因 |
+| 12 | 验证追踪矩阵完整 | Scenario / Requirement / Story / Design Contract / Implementation / Test / Risk 可追溯，缺口已记录 |
+| 13 | 设计契约验证完成 | HLD / ADR / LLD / Feature DESIGN / IMPLEMENTATION / PLATFORM-CONTRACTS 中的 must / should / must-not 有验证方式和结果 |
+| 14 | 分层验证计划执行 | 静态、单元、Prompt / Skill fixture、契约、集成、dry-run、回归、人工审查均按适用性执行或 N/A |
+| 15 | Prompt / Skill fixture 记录 | 复杂 Prompt / Skill / Workflow 改造有 fixture 或人工样例验证；低风险 N/A 有理由 |
+| 16 | 人工 / 语义质量审查 | 需求一致性、场景覆盖、Prompt 边界、文档可用性、错误信息和 happy path 偏差已审查 |
+| 17 | 问题与剩余风险分级 | `BLOCKER` / `HIGH` / `MEDIUM` / `LOW` / `INFO` 已记录 owner、状态和下一步 |
+| 18 | 阶段决策合法 | CP7 结论只使用 `PASS` / `PASS_WITH_RISK` / `BLOCKED` / `NEEDS_REWORK` / `NEEDS_DESIGN_CLARIFICATION` / `WAIVED`，并带路由 |
+| 19 | Agent Dispatch Evidence | 存在 meta-qa 的 `agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
 
 ### Exit Criteria
 
 | 条目 | 说明 |
 |---|---|
 | 阻塞缺陷为 0 | P0/P1 缺陷 = 0 |
-| 验证结论通过 | Story 可进入 `verified` |
+| 验证结论可路由 | `PASS` / `PASS_WITH_RISK` / `WAIVED` 可进入下一阶段；`NEEDS_REWORK` 回 meta-dev；`NEEDS_DESIGN_CLARIFICATION` 回 meta-se / meta-po；`BLOCKED` 停止推进 |
 | 调度证据通过 | meta-qa 执行证据有效；仅 handoff-created 不可放行 |
 
 ### Deliverables
 
-- `VERIFICATION-REPORT.md`
+- `docs/quality/VERIFICATION-REPORT.md` 或 Feature scoped 等价文件
+- `docs/quality/TEST-REPORT.md`（或 Story / Feature scoped 等价文件）
+- `docs/quality/REVIEW.md`（或 Story / Feature scoped 等价文件）
+- `docs/quality/FIXES.md`（若存在 findings；无 findings 时写 N/A 理由）
 - `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md`
 - 缺陷记录或风险接受记录
 - 更新后的 `STORY-STATUS.md`
@@ -625,7 +734,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 - 类型：自动预检 + 人工
 - 自动结果文件：`process/checks/CP8-DELIVERY-READINESS.md`
-- 人工审查稿：`checkpoints/CP8-DELIVERY-READINESS.md`
+- 人工审查稿：`process/checkpoints/CP8-DELIVERY-READINESS.md`
 - 责任方：meta-qa / meta-doc / meta-po
 
 ### Entry Criteria
@@ -635,6 +744,9 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 目标 Story 已验证 | 所有目标 Story 处于 `verified` |
 | 文档已生成 | README、USER-MANUAL 或等价文档完成 |
 | 安装验证完成 | 适用平台的安装或 dry-run 已执行 |
+| 发布上下文胶囊存在 | `process/release/RELEASE-CONTEXT.yaml` 已生成，且只包含摘要、计数、风险 ID、决策 ID 和证据路径 |
+| 发布 profile 已判定 | `release_artifact_profile=minimal|compact|full` 已写入 capsule、发布产物和 CP8 自动预检 |
+| 发布就绪产物存在 | `docs/release/RELEASE-NOTES.md`、`docs/release/DEPLOY-CHECKLIST.md`、`docs/release/ROLLBACK.md`、`docs/release/MIGRATION.md`、`docs/release/FEEDBACK.md` 已生成，或 CP8 自动预检写明逐项 N/A / waived 原因 |
 
 ### Checklist
 
@@ -649,13 +761,22 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 7 | 缓存和临时文件清理 | 无 `__pycache__`、临时构建产物 |
 | 8 | guardrail 通过 | 当前仓库存在 guardrail 时必须通过 |
 | 9 | 风险和遗留问题明确 | 遗留问题有状态、owner、后续计划 |
-| 10 | 用户终验确认 | 用户明确 approve / 修改 / reject |
+| 10 | Release Context Capsule 完整 | 发布范围、版本号决策、质量摘要、影响面、安装验证摘要、发布文档状态、不授权项和后续事项均已汇总；不得复制长日志、全文 diff 或上游全文 |
+| 11 | 发布 profile 合法 | `minimal` / `compact` / `full` 判定有理由；fast-lane 可 minimal，standard 默认 compact，高风险 / 真实发布 / 迁移 / 权限 / 安装路径变更必须 full |
+| 12 | 发布结论合法 | `release_decision` 只使用 `READY` / `READY_WITH_RISK` / `NOT_READY` / `RELEASED` / `FAILED`；CP8 默认只允许 `READY` / `READY_WITH_RISK` / `NOT_READY` |
+| 13 | 发布就绪产物完整 | 发布说明、部署检查、回滚、迁移和反馈计划按 profile 可读；不适用项有原因、影响和后续触发条件 |
+| 14 | 版本号决策完成 | SemVer / alpha / beta / rc 判断已写入 `RELEASE-NOTES.md` 和 CP8 Decision Brief |
+| 15 | 安装升级矩阵完成 | 受影响平台 / 组件 / scope 的全新安装、升级、重复安装幂等、dry-run、卸载 / 回滚已执行或 N/A |
+| 16 | 迁移兼容性判断完成 | 状态 schema、模板字段、配置、安装路径、Agent frontmatter、Skill 输出格式、命令参数和数据结构已判断 |
+| 17 | 发布后观察计划完成 | `FEEDBACK.md` 含观察信号、触发阈值和反馈分流；默认不要求独立 `POST-RELEASE-OBSERVATION.md` |
+| 18 | 用户终验确认 | 用户明确 approve / 修改 / reject；approve 仅接受 READY / READY_WITH_RISK，不授权真实发布动作 |
 
 ### Exit Criteria
 
 | 条目 | 说明 |
 |---|---|
 | 自动预检通过 | 无未豁免 FAIL |
+| 发布就绪可判定 | `release_decision=READY` 或 `READY_WITH_RISK` 可发起人工终验；`NOT_READY` 不得发起人工终验；`RELEASED` / `FAILED` 只能在独立真实发布授权后写入 |
 | 人工终验通过 | 用户确认 delivered |
 
 ### Deliverables
@@ -666,21 +787,27 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `delivery/skills/*`
 - `delivery/rules/*`
 - `delivery/scripts/*`
+- `process/release/RELEASE-CONTEXT.yaml`
+- `docs/release/RELEASE-NOTES.md`（或 CP8 N/A / waived 说明）
+- `docs/release/DEPLOY-CHECKLIST.md`（或 CP8 N/A / waived 说明）
+- `docs/release/ROLLBACK.md`（或 CP8 N/A / waived 说明）
+- `docs/release/MIGRATION.md`（或 CP8 N/A / waived 说明）
+- `docs/release/FEEDBACK.md`（或 CP8 N/A / waived 说明）
 - `process/checks/CP8-DELIVERY-READINESS.md`
-- `checkpoints/CP8-DELIVERY-READINESS.md`
+- `process/checkpoints/CP8-DELIVERY-READINESS.md`
 
 ## 执行规则
 
 1. 所有 CP 文件创建或更新后，必须回写 `process/STATE.md.checkpoints` 中的路径和结论。
 2. 人工检查点的自动预检未 `PASS` 或 `WAIVED` 前，meta-po 不得发起人工确认。
-3. 人工确认通过后，meta-po 必须把人工结论写回对应 `checkpoints/CP*.md` 的“人工审查结果”，并同步更新 `STATE.md`。
+3. 人工确认通过后，meta-po 必须把人工结论写回对应 `process/checkpoints/CP*.md` 的“人工审查结果”，并同步更新 `STATE.md`。
 4. 如果用户直接在对话中回复 `approve`，meta-po 也必须补写人工审查结果文件，不能只改状态。`1/通过` 可作为历史兼容别名解析，但新提示不得再把多个等价别名混排给用户。
 5. `changes_requested` 必须路由给对应 agent 修订，并在重提时保留旧检查结果作为历史证据。
 6. `rejected` 必须回退到检查点定义的目标阶段或 Story 状态。
 7. CP6 / CP7 必须包含 `## Agent Dispatch Evidence` 小节；若缺少真实子 agent 证据且没有用户批准的 `inline-fallback`，结论只能是 `FAIL` 或 `BLOCKED`。
 8. CP4 自动预检失败时不得进入 CP5；CP4 通过时不得单独要求人工确认，必须把摘要并入 CP5。
 9. CP2 / CP3 人工检查点发起前必须校验 discussion log / checkpoint 存在；若缺失且没有 N/A 理由，结论只能是 `BLOCKED`。
-10. CP5 人工检查点发起前必须校验 `STATE.md.parallel_execution.lld_clarification_queue`。存在未回答 `blocks_lld=true` item 时，CP5 结论只能是 `BLOCKED`；用户明确接受转 OPEN / Spike 的 item 必须写入 Decision Brief、LLD 第 12.1 节和 DEV-LOG。
+10. CP5 人工检查点发起前必须校验 `STATE.md.parallel_execution.lld_clarification_queue`。存在未回答 `blocks_lld=true` item 时，CP5 结论只能是 `BLOCKED`；用户明确接受转 OPEN / Spike 的 item 必须写入 Decision Brief、LLD 第 12.1 节或 Story 技术说明，以及 DEV-LOG。
 
 CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 
@@ -700,10 +827,18 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 
 - [ ] CP0-CP8 均有 Entry Criteria、Checklist、Exit Criteria、Deliverables
 - [ ] 自动检查点均生成 `process/checks/CP*.md` 结果文件
-- [ ] CP2 / CP3 / CP5 / CP8 人工检查点均生成 `checkpoints/CP*.md` 审查稿
+- [ ] CP2 / CP3 / CP5 / CP8 人工检查点均生成 `process/checkpoints/CP*.md` 审查稿
 - [ ] 人工检查稿包含 Decision Brief
 - [ ] meta-po 发起关键人工确认时明确提示 checklist 文件路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复
 - [ ] 发起消息已复述 `approve` 接受哪些 DQ，且不授权项已独立列出
 - [ ] `scripts/check_human_gate_decision_brief.py` 校验 checkpoint 文件和发起消息通过
-- [ ] 人工审查后对应 `checkpoints/CP*.md` 已填入结论
+- [ ] 人工审查后对应 `process/checkpoints/CP*.md` 已填入结论
 - [ ] `STATE.md.checkpoints` 与检查文件状态一致
+
+## Gotchas
+
+- 自动预检 `PASS` 或 `WAIVED` 不等于人工门已通过；CP2 / CP3 / CP5 / CP8 缺少用户结论和“人工审查结果”回填时，不得推进状态。
+- CP4 只生成自动预检并汇入 CP5；不得为 CP4 单独生成用户确认稿，也不得用 CP4 通过替代全量 CP5 设计证据确认。
+- Decision Brief 里的人工决策项必须有可执行备选方案和回退 / 切换条件；治理类备选可以是暂缓确认、保持当前基线、回退上游或转 Spike，但不能写“无备选”。
+- `approve` 只表示接受待人工决策清单内的推荐方案，不授权真实运行、凭据、安全、外部接口、数据写入、publish 或 live / 交易类操作。
+- 模板文件存在不等于检查通过；每个检查项必须有路径、状态和证据，缺证据时应写 `FAIL`、`BLOCKED`、`N/A` 或 `WAIVED` 及原因。

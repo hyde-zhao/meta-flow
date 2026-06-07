@@ -1,0 +1,29 @@
+status: draft
+version: "1.0"
+source_requirements:
+  - docs/product/REQUIREMENTS.md
+source_use_cases:
+  - docs/product/USE-CASES.md
+scenarios:
+  - id: SCN-001
+    title: "<场景标题>"
+    type: positive # positive | negative | boundary | permission | empty-data | external-failure | precheck
+    priority: HIGH # HIGH | MEDIUM | LOW
+    persona: "P-01"
+    source_refs:
+      requirements: ["REQ-001"]
+      use_cases: ["UC-001"]
+    trigger: "<触发条件>"
+    context: "<上下文>"
+    preconditions:
+      - "<前置条件>"
+    steps:
+      - action: "<测试动作>"
+        expected: "<期望结果>"
+    evidence_type: automated # automated | manual | review | N/A
+    automation_status: planned # planned | covered | gap | waived
+    gap_reason: ""
+coverage_summary:
+  total: 1
+  high_priority_positive_and_negative_covered: false
+  gaps: []

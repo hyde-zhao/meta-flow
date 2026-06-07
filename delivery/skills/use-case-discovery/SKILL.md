@@ -1,14 +1,14 @@
 ---
 name: use-case-discovery
 description: >-
-  当需要与用户系统化讨论使用场景、生成或增量更新 `process/USE-CASES.md` 时使用。
+  当需要与用户系统化讨论使用场景、生成或增量更新 `docs/product/USE-CASES.md` 时使用。
   触发词包括：场景发现、使用场景讨论、用户场景梳理、use-case workshop、use case discovery。
   适用场景：meta-pm 完成阶段零调研后进入场景发现，或已有 USE-CASES 草稿 / 确认稿需要恢复、评审与更新时。
 argument-hint: "可选：用户本轮补充的场景描述、粘贴的现有用户故事 / PRD 文本"
 user-invokable: true
 status: active
 called-by: meta-pm
-output: process/USE-CASES.md
+output: docs/product/USE-CASES.md
 ---
 
 ## 目标
@@ -19,7 +19,7 @@ output: process/USE-CASES.md
 
 - meta-pm 已完成阶段零快速调研，准备进入正式场景发现
 - 用户粘贴了已有用户故事 / PRD 文本，希望先导入为场景基线再校准
-- 已存在 `process/USE-CASES.md`，需要从 draft 恢复继续，或对 confirmed 版本做增量更新
+- 已存在 `docs/product/USE-CASES.md`，需要从 draft 恢复继续，或对 confirmed 版本做增量更新
 - 需要先判断目标交付是 tool / skill / agent / workflow / mixed，再决定场景发现的治理标签
 
 ## 前置条件
@@ -34,7 +34,7 @@ output: process/USE-CASES.md
 | `process/REQUEST.md` | 必须 | 场景发现的原始起点 |
 | `process/INPUT-INDEX.md` | 可选 | 定位原始材料与可导入背景 |
 | `process/CLARIFICATION-LOG.md` | 可选 | 读取阶段零调研结论，并在 Phase 3 追加场景发现摘要 |
-| `process/USE-CASES.md` | 可选 | draft 恢复或 confirmed 更新的唯一真相源 |
+| `docs/product/USE-CASES.md` | 可选 | draft 恢复或 confirmed 更新的唯一真相源 |
 | `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` | 可选 | CP2 场景讨论日志；恢复讨论、审计灰区选择和 deferred ideas |
 | `process/checks/CP2-DISCUSSION-CHECKPOINT.json` | 可选 | CP2 讨论恢复点；记录已完成灰区、剩余灰区和用户选择 |
 | `process/changes/CR-*.md` | 条件必须 | 若本轮为变更触发，读取文档处理决策与旧基线映射 |
@@ -118,9 +118,11 @@ output: process/USE-CASES.md
    - `canonical_refs`：原始请求、README/docs、CR、输入材料或既有场景的引用
 4. 让用户选择 1-3 个重点讨论灰区；未选但有价值的内容进入 `Deferred Ideas`，不得丢失，也不得混入当前 scope。
 5. 讨论时一次只问 1 个高价值问题。问题优先给出 2-4 个具体选项，推荐项放在首位，并说明每个选项对范围、复杂度、验证、交付出口和后续门控的影响；该问题若会进入 CP2，则同步记录为 `decision_item` 供 meta-po 汇总到待人工决策清单。
-6. 若用户自由表达、纠正上下文或拒绝结构化选项，立即停止继续推送选项，改为复述理解并请求确认；确认记录必须进入讨论日志。
-7. 将讨论过程写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`。该日志用于人类审计和恢复，不替代 `USE-CASES.md` 或 `REQUIREMENTS.md`。
-8. 将恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`；若当前路径不适用，必须在 CP2 自动检查中说明 `N/A` 理由。建议字段：
+6. 标准模式下必须至少形成 1 条用户可见场景确认交互，写入 `scenario_confirmation_interactions[]`；不得只通过后台分析、文档扫描或模型推断静默生成 `USE-CASES.md`。
+7. 每条 `scenario_confirmation_interactions[]` 至少包含：`question_id`、`question`、`options`、`recommendation`、`user_response`、`confirmed_understanding`、`impact_surface`、`source_refs`、`status`。其中 `question_id` 使用 `SGQ-001` 这类稳定编号。
+8. 若用户自由表达、纠正上下文或拒绝结构化选项，立即停止继续推送选项，改为复述理解并请求确认；确认记录必须进入讨论日志和 `scenario_confirmation_interactions[]`。
+9. 将讨论过程写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`。该日志用于人类审计和恢复，不替代 `USE-CASES.md` 或 `REQUIREMENTS.md`。
+10. 将恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`；若当前路径不适用，必须在 CP2 自动检查中说明 `N/A` 理由。建议字段：
 
 ```json
 {
@@ -130,6 +132,19 @@ output: process/USE-CASES.md
   "completed_gray_areas": [],
   "remaining_gray_areas": [],
   "deferred_ideas": [],
+  "scenario_confirmation_interactions": [
+    {
+      "question_id": "SGQ-001",
+      "question": "",
+      "options": [],
+      "recommendation": "",
+      "user_response": "",
+      "confirmed_understanding": "",
+      "impact_surface": [],
+      "source_refs": [],
+      "status": "asked | answered | confirmed | n/a"
+    }
+  ],
   "canonical_refs": [],
   "last_user_confirmation": ""
 }
@@ -141,7 +156,7 @@ output: process/USE-CASES.md
 
 1. 以 PM 三问开场：**谁在使用 / 解决什么问题 / 如何量化成功**。
 2. 再用 5W1H 追问每个候选场景：触发条件、输入、处理逻辑、输出/结果、前置条件、排除情况。
-3. 每完成一轮基线整理，就按模板**增量写入** `process/USE-CASES.md`，状态保持 `draft`。
+3. 每完成一轮基线整理，就按模板**增量写入** `docs/product/USE-CASES.md`，状态保持 `draft`。
 4. Phase 1B 只建立场景基线，不做 8 维分析。
 
 ### 步骤 5：Phase 2 八维覆盖扫描
@@ -166,7 +181,7 @@ output: process/USE-CASES.md
 6. 返回结构化完成摘要，至少包含：
 
 ```yaml
-use_cases_path: process/USE-CASES.md
+use_cases_path: docs/product/USE-CASES.md
 status: draft | confirmed
 version: "x.y"
 mode: create | resume | update
@@ -210,7 +225,7 @@ decision_brief_input:
 
 | 文件 | 路径 | 角色 |
 |---|---|---|
-| 场景工件 | `process/USE-CASES.md` | 主输出；Phase 1/2 持续写 draft，Phase 3 可确认 |
+| 场景工件 | `docs/product/USE-CASES.md` | 主输出；Phase 1/2 持续写 draft，Phase 3 可确认 |
 | 场景发现摘要 | `process/CLARIFICATION-LOG.md` | Phase 3 追加式日志 |
 | 场景讨论日志 | `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` | 人类审计和恢复；不替代正式场景 / 需求 |
 | 场景讨论恢复点 | `process/checks/CP2-DISCUSSION-CHECKPOINT.json` | 中断恢复；缺失时 CP2 自动检查必须说明 N/A 或阻断原因 |
@@ -221,6 +236,8 @@ decision_brief_input:
 - `USE-CASES.md` 必须与 `agents/meta-pm.md` 的字段契约逐项一致
 - Phase 1A / 1B 与 Phase 2 都必须增量写入 `draft`，不得只在确认时一次性落盘
 - 标准模式下必须执行 `Scenario Gray Areas` 校准；若判定不适用，必须在讨论日志或 CP2 自动检查中记录 `N/A` 原因
+- 标准模式下必须至少有 1 条 `SGQ-*` 用户可见场景确认交互；缺少 `scenario_confirmation_interactions[]` 时，CP2 不得通过
+- 不得静默场景发现：仅靠后台 8 维扫描、README/docs 推断或模型总结生成场景，不算完成用户场景确认
 - `Scenario Gray Areas` 只能暴露会改变设计、测试、交付或门控的关键缺口；普通字段补齐留给后台覆盖扫描
 - 未被选中的灰区、扩展想法和风险必须进入 `Deferred Ideas`，不得丢失，也不得直接并入当前 scope
 - 用户自由表达或纠正上下文时，必须停止结构化选项，先复述理解并确认
@@ -244,6 +261,7 @@ decision_brief_input:
 - [ ] `target_artifact_type` / `governance_mode` / `review_policy` 语义明确且可被上下游直接消费
 - [ ] `delivery_routing` 已记录交付出口来源；production 模式下不默认写当前仓库 `delivery/`
 - [ ] 标准模式下已记录 3-4 个 `Scenario Gray Areas`、用户选择、未选灰区和 `Deferred Ideas`
+- [ ] 标准模式下已记录至少 1 条 `SGQ-*` 用户可见场景确认问题、用户回答和复述确认
 - [ ] CP2 discussion log / checkpoint 已存在，或自动检查明确记录 N/A 理由
 - [ ] Phase 3 返回结构化完成摘要，并已向 `CLARIFICATION-LOG.md` 追加摘要
 
@@ -259,6 +277,7 @@ decision_brief_input:
 - **Never skip Phase 1A / 1B**：即使用户粘贴现成材料，也必须先判定交付形态，再补齐画像与成功指标基线
 - **头脑风暴不是长问卷**：目标不清时一次只问一个问题，先给 2-3 个候选方案和 trade-off，再让用户分段确认
 - **Scenario Gray Areas 不是字段清单**：灰区必须会改变交付形态、验证方式、维护成本或用户价值；否则放到后台覆盖扫描
+- **场景确认必须让用户看见**：标准模式下至少问 1 个 `SGQ-*` 场景确认问题；没有用户回答或复述确认时，不应把场景标记为 confirmed
 - **Deferred 不等于丢弃**：未进入当前范围的想法和风险必须可追溯，但不能偷偷扩大当前需求
 - **freeform 优先**：用户开始自由表达或纠正上下文后，先复述理解，不继续强推 A/B/C 选项
 - **维度不能静默跳过**：每个维度至少标成已覆盖 / 已补充 / 不适用 / 待调研之一

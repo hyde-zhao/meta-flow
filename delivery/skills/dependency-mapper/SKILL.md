@@ -4,24 +4,24 @@ description: >-
   当需要建立任务间依赖关系、构建 DAG 依赖图时使用。
   触发词包括：依赖关系、DAG、任务依赖、前置依赖。
   适用场景：工作流计划设计阶段。
-argument-hint: "WORKFLOW-PLAN.yaml（已有 tasks）"
+argument-hint: "process/DEVELOPMENT-PLAN.yaml（已有 Story / tasks）"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-为 `WORKFLOW-PLAN.yaml` 中的每个任务建立前置依赖关系（`depends_on` 字段），确保执行顺序正确，并验证依赖图无环路。
+为 `process/DEVELOPMENT-PLAN.yaml` 中的每个 Story / Task 建立前置依赖关系（`depends_on` 字段）和依赖类型，确保执行顺序正确，并验证依赖图无环路。
 
 ## 适用范围
 
 - 适用阶段：计划设计阶段
-- 输入：已有 tasks 的 `WORKFLOW-PLAN.yaml`
+- 输入：已有 Story / tasks 的 `process/DEVELOPMENT-PLAN.yaml`
 - 输出：更新所有 task 的 `depends_on` 字段
 
 ## 前置条件
 
-- [ ] `WORKFLOW-PLAN.yaml` 中 phases、waves、tasks 已定义
+- [ ] `process/DEVELOPMENT-PLAN.yaml` 中 phases、waves、stories / tasks 已定义
 - [ ] 每个 task 有唯一 id
 
 ## 执行约束
@@ -47,7 +47,7 @@ status: draft
 - 使用拓扑排序检测环路
 - 标记孤立任务（无依赖也无被依赖）——它们可能是遗漏
 
-辅助校验脚本：`scripts/validate_dag.py`（Phase 3 开发）
+若仓库提供 DAG 校验脚本，可调用脚本辅助；不存在脚本时按 YAML 结构做拓扑校验。
 
 ## Gotchas
 

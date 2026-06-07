@@ -1,0 +1,73 @@
+schema_version: "1.0"
+capsule_id: ""
+project_id: ""
+workflow_id: ""
+phase: "requirement-clarification|solution-design|story-planning|story-execution|documentation"
+checkpoint: "CP2|CP3|CP5|CP6|CP7|CP8"
+capsule_type: "cp2-requirement|cp3-design|cp5-lld|cp6-implementation|cp7-verification|cp8-delivery"
+status: "draft|ready|blocked|waived"
+created_at: ""
+created_by: ""
+source_cr: ""
+
+token_control:
+  read_profile: "minimal|compact|full"
+  max_source_files: 0
+  max_summary_items: 0
+  full_doc_read_policy: "only-on-missing-conflict-audit-or-deep-review"
+  full_doc_read_reason: ""
+  default_instruction: "Agent 必须先读取本 capsule；只有触发 full_doc_read_policy 时才读取完整正式文档，并在 read_expansion_log 记录原因。"
+
+must_read:
+  - path: "process/STATE.md"
+    reason: "状态机、当前阶段、门禁和上下文预算"
+    required: true
+
+read_if_needed:
+  - path: ""
+    trigger: "capsule 缺失字段、正式文档冲突、人工审计、深度评审或下游任务明确需要"
+
+do_not_read_by_default:
+  - path_or_pattern: "process/archive/**"
+    reason: "历史归档不属于当前阶段默认上下文"
+  - path_or_pattern: "process/discussions/**"
+    reason: "讨论日志仅用于审计 / 恢复，不替代正式产物；需要追溯时再读取"
+  - path_or_pattern: "完整会话 transcript"
+    reason: "不得作为下游默认输入"
+
+key_facts:
+  scope_summary: ""
+  accepted_decisions: []
+  active_constraints: []
+  downstream_tasks: []
+  traceability:
+    requirements: []
+    use_cases: []
+    scenarios: []
+    stories: []
+    features: []
+
+risks_and_decisions:
+  pending_human_decisions: []
+  non_authorized_items: []
+  risk_acceptance_items: []
+  open_questions: []
+  n_a_or_waived_items: []
+
+handoff:
+  target_agent: ""
+  expected_output: []
+  exit_criteria: []
+  blocked_if_missing: []
+
+read_expansion_log:
+  - at: ""
+    actor: ""
+    expanded_to: ""
+    reason: ""
+
+validation:
+  generated_from_sources: []
+  missing_sources: []
+  consistency_status: "unchecked|pass|warning|fail"
+  notes: []

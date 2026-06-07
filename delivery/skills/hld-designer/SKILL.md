@@ -12,7 +12,7 @@ status: active
 
 ## 目标
 
-基于已确认需求与场景输出 `process/HLD.md`。正式写 HLD 前，先识别 `Architecture Gray Areas` 并输出 table-first advisor 输入；处于阶段委托时由 meta-se 直接与用户完成讨论，必要时再由 meta-po 汇总 reviewer lane。HLD 完成后由 meta-se 使用 `checkpoint-manager` 生成 `process/checks/CP3-HLD-CONSISTENCY.md`，再由 meta-po 汇总交还摘要、生成 CP3 Decision Brief，并在 `checkpoints/CP3-HLD-REVIEW.md` 中发起人工确认。
+基于已确认需求与场景输出 `docs/design/HLD.md`。正式写 HLD 前，先识别 `Architecture Gray Areas` 并输出 table-first advisor 输入；处于阶段委托时由 meta-se 直接与用户完成讨论，必要时再由 meta-po 汇总 reviewer lane。HLD 完成后由 meta-se 使用 `checkpoint-manager` 生成 `process/checks/CP3-HLD-CONSISTENCY.md`，再由 meta-po 汇总交还摘要、生成 CP3 Decision Brief，并在 `process/checkpoints/CP3-HLD-REVIEW.md` 中发起人工确认。
 
 ## 适用场景
 
@@ -21,13 +21,13 @@ status: active
 
 ## 前置条件
 
-- [ ] `process/REQUIREMENTS.md` 已确认
-- [ ] `process/USE-CASES.md` 已确认
+- [ ] `docs/product/REQUIREMENTS.md` 已确认
+- [ ] `docs/product/USE-CASES.md` 已确认
 
 ## 必须读取的输入
 
-- `process/REQUIREMENTS.md`
-- `process/USE-CASES.md`
+- `docs/product/REQUIREMENTS.md`
+- `docs/product/USE-CASES.md`
 - `process/REQUEST.md`
 - `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`（若存在）
 - `process/checks/CP2-DISCUSSION-CHECKPOINT.json`（若存在）
@@ -49,7 +49,7 @@ status: active
 6. 执行 Use Case → Architecture Traceability，并至少用 2-3 个关键 UC 做场景模拟；模拟失败时不得进入 CP3 人工确认。
 7. 为 CP3 Decision Brief 输出候选方案取舍摘要和 `decision_items`，覆盖用户意图匹配度、实现复杂度、可验证性、维护成本、平台兼容、安全 / 权限风险、交付影响、适用条件、切换条件和回退点；每个需要用户确认的架构 / 范围 / 风险接受项都必须包含推荐方案、至少 1 个备选方案（优先 2 个）和优劣分析。
 8. **应用 HLD 拆分检查**：按 §"HLD 拆分原则"评估当前设计是否应拆为多份 HLD；若应拆，先完成拆分再继续。
-9. 生成 `process/HLD.md`（及拆分出的同级 HLD 文件）。不得自行跳过 HLD 前置讨论、CP3 自动预检、多角色讨论和人工确认。
+9. 生成 `docs/design/HLD.md`（及拆分出的同级 HLD 文件）。不得自行跳过 HLD 前置讨论、CP3 自动预检、多角色讨论和人工确认。
 
 ## Architecture Gray Areas 子流程
 
@@ -109,11 +109,11 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| HLD 过程稿 | `process/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
+| HLD 过程稿 | `docs/design/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
 | HLD 讨论日志 | `process/discussions/CP3-HLD-DISCUSSION-LOG.md` | 人类审计和恢复；由 meta-po 汇总 |
 | HLD 讨论恢复点 | `process/checks/CP3-DISCUSSION-CHECKPOINT.json` | 中断恢复；缺失时 CP3 自动检查必须说明 N/A 或阻断原因 |
 | CP3 自动预检结果 | `process/checks/CP3-HLD-CONSISTENCY.md` | 由 `checkpoint-manager` 生成 |
-| CP3 人工审查稿 | `checkpoints/CP3-HLD-REVIEW.md` | 由 meta-po 基于 `checkpoint-manager` 生成 |
+| CP3 人工审查稿 | `process/checkpoints/CP3-HLD-REVIEW.md` | 由 meta-po 基于 `checkpoint-manager` 生成 |
 
 ## 约束
 

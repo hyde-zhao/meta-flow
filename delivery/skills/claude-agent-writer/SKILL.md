@@ -61,6 +61,31 @@ color: blue                  # 可选：red/blue/green/yellow/purple/orange/pink
 | `Bash` | 执行 shell 命令 |
 | `WebSearch` / `WebFetch` | 网络搜索/抓取 |
 | `TodoWrite` | 任务列表管理 |
+| `AskUserQuestion` | 向用户发起结构化提问；仅允许需要 direct ask 的 Agent 使用 |
+
+### AskUserQuestion 授权规则
+
+`AskUserQuestion` 不是默认可用能力。只要 Claude Code subagent 需要直接向用户提问，就必须在 frontmatter 的 `tools:` 中显式包含 `AskUserQuestion`。
+
+Meta Flow canonical agent 的授权边界：
+
+| Agent | 是否声明 `AskUserQuestion` | 原因 |
+|---|---:|---|
+| `meta-po` | 是 | CP2 / CP3 / CP5 / CP8 人工门禁、LLD clarification broker、CR 冲突决策 |
+| `meta-pm` | 是 | `requirement-clarification` 阶段委托内可直接问场景 / 需求 / 范围问题 |
+| `meta-se` | 是 | `solution-design` 阶段委托内可直接问蓝图 / 架构 / HLD 问题 |
+| `meta-dev` | 否 | 默认写入 LLD clarification queue，由 `meta-po` broker |
+| `meta-qa` | 否 | 默认写检查结果或待人工决策项，由 `meta-po` 汇总 |
+| `meta-doc` | 否 | 默认写文档缺口或建议，由 `meta-po` 汇总 |
+
+如果某个新 Agent 需要 direct ask，必须同时满足：
+
+1. frontmatter `tools:` 包含 `AskUserQuestion`。
+2. 正文说明可直接提问的阶段、问题类型和禁止范围。
+3. `context-handoff` 的 `question_permission.can_ask_user=true` 且 `structured_choice_allowed=true`。
+4. `STATE.md.agent_lifecycle.platform_capabilities.user_question.method=direct`。
+
+否则必须走 `meta-po` relay、clarification queue 或 exact-text 协议，不得声称可直接使用用户提问工具。
 
 ---
 
@@ -159,7 +184,17 @@ model: haiku
 - [ ] `name` 字段为小写 kebab-case
 - [ ] `description` 包含明确触发条件（何时使用）和能力边界（不做什么）
 - [ ] `tools` 遵循最小权限原则（只列出实际需要的工具）
+- [ ] 需要 direct ask 的 Claude Code Agent 已在 `tools` 中显式包含 `AskUserQuestion`
+- [ ] 不应直接问用户的 Agent 未声明 `AskUserQuestion`，并说明 relay / queue 路径
 - [ ] 正文系统提示自给自足，不依赖外部全局指令
 - [ ] 正文包含：角色定位、职责列表、约束说明、输出格式
 - [ ] 文件路径符合 `.claude/agents/<kebab-name>.md`
 
+## Gotchas
+
+- Claude Code subagent 使用 frontmatter 的 `color` 区分展示；不要写 Codex 专用的 `nickname_candidates`，也不要把 Codex 命令别名混入 Claude agent 文件。
+- canonical role 仍然是 `meta-po`、`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`；状态机、handoff、检查点和审计字段不得改写成展示昵称。
+- 不得重新创建或引用已废弃的 `meta-dm` 作为新产物；Story 拆解职责由 `meta-se` 承担。
+- `description` 是 Claude 自动委托的主要依据；只写角色名会导致误触发或不触发，必须写清触发条件、能力边界和不做事项。
+- 如果限制 `tools`，正文中的职责必须与工具权限匹配；例如只读 review agent 不应声称会修改文件。
+- 忘记在 direct ask agent 的 `tools` 中加入 `AskUserQuestion` 会导致 Claude Code subagent 语义上被允许提问、运行时却无法调用提问工具。

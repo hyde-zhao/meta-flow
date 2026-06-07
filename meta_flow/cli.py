@@ -103,7 +103,7 @@ def _print_next() -> None:
         print("当前工作流处于 blocked 状态，请先查看 STATE.md 中的阻塞原因。")
         return
     if summary["pending_gate"]:
-        path = summary["pending_checklist_path"] or "checkpoints/CP*.md"
+        path = summary["pending_checklist_path"] or "process/checkpoints/CP*.md"
         print(f"等待用户确认 {summary['pending_gate']}。请审查 {path} 后回复 approve / 修改: <具体修改点> / reject。")
         return
     print(summary["next_action"] or f"当前阶段为 {summary['current_phase']}，请使用 @meta-po 继续推进。")

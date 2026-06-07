@@ -21,8 +21,8 @@ PLATFORM_CONTRACTS = DELIVERY_ROOT / "doc" / "PLATFORM-CONTRACTS.yaml"
 ALLOWED_DELIVERY_DIRS = {"agents", "doc", "rules", "scripts", "skills"}
 ALLOWED_DELIVERY_SCRIPT_FILES = {"install.py", "install.sh", "install.ps1"}
 REVISION_RECORD_TARGETS = {
-    "process/USE-CASES.md": PROCESS_ROOT / "USE-CASES.md",
-    "process/REQUIREMENTS.md": PROCESS_ROOT / "REQUIREMENTS.md",
+    "docs/product/USE-CASES.md": ROOT / "docs" / "product" / "USE-CASES.md",
+    "docs/product/REQUIREMENTS.md": ROOT / "docs" / "product" / "REQUIREMENTS.md",
 }
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 SKILL_ROOT_ASSET_REF_RE = re.compile(r"<skill-root>/(?P<kind>templates|scripts)/(?P<path>[A-Za-z0-9_./-]+)")
@@ -42,6 +42,73 @@ CODEX_CONFIRMATION_TOKENS = (
 )
 DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
+SOFTWARE_WORKFLOW_REQUIRED_FILES = (
+    "delivery/skills/blueprint-design/SKILL.md",
+    "delivery/skills/blueprint-design/templates/BLUEPRINT-TEMPLATE.md",
+    "delivery/skills/blueprint-design/templates/DOMAIN-MAP-TEMPLATE.md",
+    "delivery/skills/blueprint-design/templates/DEPENDENCY-MAP-TEMPLATE.md",
+    "delivery/skills/implementation-design/SKILL.md",
+    "delivery/skills/implementation-design/templates/FEATURE-DESIGN-MATRIX-TEMPLATE.md",
+    "delivery/skills/implementation-design/templates/FEATURE-DESIGN-TEMPLATE.md",
+    "delivery/skills/implementation-design/templates/TEST-PLAN-TEMPLATE.md",
+    "delivery/skills/implementation-design/templates/TASKS-TEMPLATE.md",
+    "delivery/skills/implementation-execution/SKILL.md",
+    "delivery/skills/implementation-execution/templates/IMPLEMENTATION-TEMPLATE.md",
+    "delivery/skills/verification-execution/SKILL.md",
+    "delivery/skills/verification-execution/templates/VERIFICATION-TEMPLATE.md",
+    "delivery/skills/quality-review/SKILL.md",
+    "delivery/skills/quality-review/templates/TEST-REPORT-TEMPLATE.md",
+    "delivery/skills/quality-review/templates/REVIEW-TEMPLATE.md",
+    "delivery/skills/quality-review/templates/FIXES-TEMPLATE.md",
+    "delivery/skills/release-readiness/SKILL.md",
+    "delivery/skills/release-readiness/templates/RELEASE-CONTEXT-TEMPLATE.yaml",
+    "delivery/skills/release-readiness/templates/RELEASE-NOTES-TEMPLATE.md",
+    "delivery/skills/release-readiness/templates/DEPLOY-CHECKLIST-TEMPLATE.md",
+    "delivery/skills/release-readiness/templates/ROLLBACK-TEMPLATE.md",
+    "delivery/skills/release-readiness/templates/MIGRATION-TEMPLATE.md",
+    "delivery/skills/release-readiness/templates/FEEDBACK-TEMPLATE.md",
+    "delivery/skills/context-manifest-builder/templates/CONTEXT-CAPSULE-TEMPLATE.yaml",
+    "delivery/skills/scenario-expansion/templates/SCENARIOS-TEMPLATE.yaml",
+    "delivery/skills/scenario-expansion/templates/TEST-MATRIX-TEMPLATE.md",
+    "delivery/skills/story-planning/SKILL.md",
+    "delivery/skills/story-planning/templates/STORY-MAP-TEMPLATE.md",
+    "delivery/skills/story-planning/templates/MVP-SCOPE-TEMPLATE.md",
+    "delivery/skills/story-planning/templates/RELEASE-SLICES-TEMPLATE.md",
+    "delivery/skills/story-planning/templates/BACKLOG-TEMPLATE.md",
+)
+SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
+    "delivery/agents/meta-pm.md": ("scenario-expansion", "story-planning", "docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "SGQ-*", "用户可见场景确认"),
+    "delivery/agents/meta-se.md": ("blueprint-design", "implementation-design", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "feature_design_refs", "lld_policy"),
+    "delivery/agents/meta-dev.md": ("implementation-execution", "IMPLEMENTATION", "实现对象清单", "设计契约映射", "测试 / Fixture", "最小实现切片"),
+    "delivery/agents/meta-qa.md": ("verification-execution", "quality-review", "release-readiness", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/CP7-VERIFICATION-CONTEXT.yaml", "process/context/CP8-DELIVERY-CONTEXT.yaml", "release_artifact_profile", "release_decision", "实现执行证据", "PASS_WITH_RISK"),
+    "delivery/agents/meta-po.md": ("docs/product/TEST-MATRIX.md", "docs/design/DOMAIN-MAP.md", "docs/design/DEPENDENCY-MAP.md", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/*-CONTEXT.yaml", "context_budget", "workflow_health", "decision_brief_profile", "release_artifact_profile", "release_decision", "实现执行证据", "PASS_WITH_RISK"),
+    "delivery/agents/README.md": ("docs/product/TEST-MATRIX.md", "Feature 设计", "verification-execution", "发布就绪"),
+    "delivery/skills/README.md": ("scenario-expansion", "story-planning", "blueprint-design", "implementation-design", "implementation-execution", "verification-execution", "quality-review", "release-readiness", "process/checkpoints/CP*.md", "FEATURE-DESIGN-MATRIX.md", "lld_policy", "STORY-*-IMPLEMENTATION.md", "VERIFICATION-REPORT.md"),
+    "delivery/skills/blueprint-design/templates/BLUEPRINT-TEMPLATE.md": ("决策类型", "推荐 / 备选优劣", "runtime_authorization", "follow_up_tracking"),
+    "delivery/skills/story-planning/templates/MVP-SCOPE-TEMPLATE.md": ("决策类型", "推荐 / 备选优劣", "runtime_authorization", "follow_up_tracking"),
+    "delivery/skills/story-planning/templates/BACKLOG-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "STATE.md.cr_tracking"),
+    "delivery/skills/release-readiness/SKILL.md": ("FEEDBACK.md", "follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "STATE.md.cr_tracking", "Release Context Capsule", "process/release/RELEASE-CONTEXT.yaml", "release_artifact_profile", "release_decision", "READY_WITH_RISK", "capsule-first"),
+    "delivery/skills/release-readiness/templates/RELEASE-CONTEXT-TEMPLATE.yaml": ("release_artifact_profile", "release_decision", "quality_summary", "affected_surface", "install_validation_summary", "token_control"),
+    "delivery/skills/release-readiness/templates/RELEASE-NOTES-TEMPLATE.md": ("版本号决策", "release_artifact_profile", "release_decision", "安装与升级", "回滚方式"),
+    "delivery/skills/release-readiness/templates/DEPLOY-CHECKLIST-TEMPLATE.md": ("发布候选快照", "安装 / 升级 / 幂等验证矩阵", "release_decision", "不授权项"),
+    "delivery/skills/release-readiness/templates/MIGRATION-TEMPLATE.md": ("兼容性判断表", "STATE.md", "Agent frontmatter", "Skill 输出格式", "命令参数"),
+    "delivery/skills/release-readiness/templates/FEEDBACK-TEMPLATE.md": ("发布后观察计划", "follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "STATE.md.cr_tracking"),
+    "delivery/skills/release-readiness/templates/FEEDBACK-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "STATE.md.cr_tracking"),
+    "delivery/skills/use-case-discovery/SKILL.md": ("scenario_confirmation_interactions", "SGQ-*", "不得静默场景发现", "用户可见场景确认"),
+    "delivery/skills/use-case-discovery/templates/USE-CASES-TEMPLATE.md": ("用户可见场景确认证据", "SGQ-*", "confirmed", "静默生成场景"),
+    "delivery/skills/implementation-execution/SKILL.md": ("IMPLEMENTATION", "实现对象清单", "设计契约映射", "测试 / Fixture", "最小实现切片", "平台差异", "handoff"),
+    "delivery/skills/implementation-execution/templates/IMPLEMENTATION-TEMPLATE.md": ("实现对象清单", "设计契约映射", "单元测试 / Fixture", "最小实现切片", "平台差异", "QA / Review / Doc"),
+    "delivery/skills/verification-execution/SKILL.md": ("VERIFICATION", "验证对象清单", "验证追踪矩阵", "设计契约验证", "分层验证计划", "PASS_WITH_RISK", "validation_mode"),
+    "delivery/skills/verification-execution/templates/VERIFICATION-TEMPLATE.md": ("验证对象清单", "验证追踪矩阵", "设计契约验证清单", "分层验证计划", "Prompt / Skill Fixture", "阶段决策"),
+    "delivery/skills/quality-review/SKILL.md": ("IMPLEMENTATION", "VERIFICATION", "实现执行证据", "验证对象清单", "设计契约映射", "Fixture", "阶段决策"),
+    "delivery/skills/checkpoint-manager/SKILL.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "full-lld", "technical-note", "waived", "quality-review", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/*-CONTEXT.yaml", "decision_brief_profile", "release_artifact_profile", "release_decision", "实现执行证据", "IMPLEMENTATION", "验证对象清单", "PASS_WITH_RISK"),
+    "delivery/skills/state-router/SKILL.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "design_evidence", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/*-CONTEXT.yaml", "context_budget", "workflow_health", "release_artifact_profile", "release_decision", "implementation-execution", "verification-execution", "STORY-*-IMPLEMENTATION.md", "PASS_WITH_RISK"),
+    "delivery/skills/state-router/templates/STATE-TEMPLATE.md": ("artifacts:", "docs/product/SCENARIOS.yaml", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "context_budget:", "workflow_health:", "decision_brief_profile", "route_validation", "release_artifact_profile_values", "release_decision_values", "implementation:", "cp7_result_values"),
+    "delivery/rules/AGENTS.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "docs/design/BLUEPRINT.md", "docs/design/DOMAIN-MAP.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/", "Context Capsule", "workflow_health", "decision_brief_profile", "release_artifact_profile", "release_decision", "process/checkpoints/", "implementation-execution", "verification-execution", "IMPLEMENTATION", "VERIFICATION-REPORT", "PASS_WITH_RISK"),
+    "delivery/rules/CLAUDE.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "docs/design/BLUEPRINT.md", "docs/design/DOMAIN-MAP.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/", "Context Capsule", "workflow_health", "decision_brief_profile", "release_artifact_profile", "release_decision", "process/checkpoints/", "implementation-execution", "verification-execution", "IMPLEMENTATION", "VERIFICATION-REPORT", "PASS_WITH_RISK"),
+    "AGENTS.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "docs/design/BLUEPRINT.md", "docs/design/DOMAIN-MAP.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/", "Context Capsule", "workflow_health", "decision_brief_profile", "release_artifact_profile", "release_decision", "process/checkpoints/", "implementation-execution", "verification-execution", "IMPLEMENTATION", "VERIFICATION-REPORT", "PASS_WITH_RISK"),
+    "README.md": ("docs/product/SCENARIOS.yaml", "docs/product/MVP-SCOPE.md", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/", "decision_brief_profile", "release_artifact_profile", "release_decision", "process/checkpoints/", "implementation-execution", "verification-execution", "IMPLEMENTATION", "VERIFICATION-REPORT"),
+}
 CACHE_SCAN_EXCLUDED_DIRS = {".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 EXPECTED_CODEX_NICKNAMES = {
     "meta-po": ["po-zhao", "po-qian", "po-sun", "po-li", "po-zhou"],
@@ -81,7 +148,13 @@ EXPECTED_CLAUDE_COLORS = {
     "meta-qa": "cyan",
     "meta-doc": "purple",
 }
+CLAUDE_DIRECT_ASK_AGENTS = {"meta-po", "meta-pm", "meta-se"}
+CLAUDE_NO_DIRECT_ASK_AGENTS = {"meta-dev", "meta-qa", "meta-doc"}
 CODEX_NICKNAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
+ARCHIVED_AGENT_PATHS = {
+    "meta-dm": PROCESS_ROOT / "archive" / "meta-dm.md",
+}
+NON_DELIVERED_SKILL_PLACEHOLDERS = ("vendor-profile-loader", "constraint-normalizer")
 
 
 def is_under_excluded_cache_dir(path: Path) -> bool:
@@ -554,6 +627,11 @@ def collect_agent_display_profile_errors() -> list[str]:
             actual_color = fields.get("color")
             if actual_color != expected_color:
                 errors.append(f"{agent_path.relative_to(project_root)} color must be {expected_color}, got {actual_color}")
+            tools = {item.strip() for item in fields.get("tools", "").split(",") if item.strip()}
+            if agent_name in CLAUDE_DIRECT_ASK_AGENTS and "AskUserQuestion" not in tools:
+                errors.append(f"{agent_path.relative_to(project_root)} direct-ask agent must include AskUserQuestion in tools")
+            if agent_name in CLAUDE_NO_DIRECT_ASK_AGENTS and "AskUserQuestion" in tools:
+                errors.append(f"{agent_path.relative_to(project_root)} non-direct-ask agent must not include AskUserQuestion in tools")
 
     return errors
 
@@ -581,19 +659,23 @@ def collect_human_gate_protocol_errors() -> list[str]:
     token_targets = {
         "meta-po": (
             DELIVERY_ROOT / "agents" / "meta-po.md",
-            ("Human Gate Launch Protocol", "pending_human_decisions", "decision_type", "不授权项", "check_human_gate_decision_brief.py"),
+            ("Human Gate Launch Protocol", "pending_human_decisions", "decision_type", "Decision Collection Coverage", "决策收集覆盖", "不授权项", "check_human_gate_decision_brief.py"),
         ),
         "checkpoint-manager": (
             DELIVERY_ROOT / "skills" / "checkpoint-manager" / "SKILL.md",
-            ("Human Gate Launch Protocol", "决策类型", "不授权项", "check_human_gate_decision_brief.py", "CP8 后续跟踪分流表"),
+            ("Human Gate Launch Protocol", "决策类型", "Decision Collection Coverage", "决策收集覆盖", "不授权项", "check_human_gate_decision_brief.py", "CP8 后续跟踪分流表"),
         ),
         "state-router": (
             DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
-            ("human_gate_decisions", "pending_human_decisions", "pending_non_authorized_items", "check_human_gate_decision_brief.py"),
+            ("human_gate_decisions", "pending_human_decisions", "decision_collection_coverage", "pending_non_authorized_items", "check_human_gate_decision_brief.py"),
         ),
         "state-template": (
             DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
-            ("human_gate_decisions", "pending_human_decisions", "pending_non_authorized_items", "follow_up_tracking_path"),
+            ("human_gate_decisions", "pending_human_decisions", "decision_collection_coverage", "pending_non_authorized_items", "follow_up_tracking_path"),
+        ),
+        "human-gate-validator": (
+            ROOT / "scripts" / "check_human_gate_decision_brief.py",
+            ("Decision Collection Coverage", "决策收集覆盖", "候选问题数", "纳入待决策数"),
         ),
         "change-impact-analysis": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "SKILL.md",
@@ -812,6 +894,221 @@ def collect_revision_record_errors() -> list[str]:
     return errors
 
 
+def collect_software_workflow_artifact_errors() -> list[str]:
+    errors: list[str] = []
+
+    for rel_path in SOFTWARE_WORKFLOW_REQUIRED_FILES:
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing software workflow artifact file: {rel_path}")
+
+    for rel_path, required_tokens in SOFTWARE_WORKFLOW_TOKEN_TARGETS.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing software workflow token target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(f"{rel_path} missing software workflow tokens: {', '.join(missing)}")
+
+    forbidden_tokens = {
+        "delivery/skills/implementation-design/SKILL.md": ("ARCHITECTURE.md", "process/ARCHITECTURE.md"),
+    }
+    for rel_path, tokens in forbidden_tokens.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        present = [token for token in tokens if token in text]
+        if present:
+            errors.append(f"{rel_path} contains deprecated software workflow tokens: {', '.join(present)}")
+
+    return errors
+
+
+def collect_context_capsule_protocol_errors() -> list[str]:
+    errors: list[str] = []
+    capsule_template = DELIVERY_ROOT / "skills" / "context-manifest-builder" / "templates" / "CONTEXT-CAPSULE-TEMPLATE.yaml"
+    if not capsule_template.is_file():
+        errors.append(f"missing context capsule template: {capsule_template.relative_to(ROOT)}")
+    else:
+        text = capsule_template.read_text(encoding="utf-8")
+        for token in (
+            "token_control:",
+            "read_profile",
+            "full_doc_read_policy",
+            "must_read:",
+            "read_if_needed:",
+            "do_not_read_by_default:",
+            "risks_and_decisions:",
+            "read_expansion_log:",
+        ):
+            if token not in text:
+                errors.append(f"{capsule_template.relative_to(ROOT)} missing context capsule token: {token}")
+
+    state_template = DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md"
+    if state_template.is_file():
+        text = state_template.read_text(encoding="utf-8")
+        required_tokens = (
+            "context_budget:",
+            "require_capsule_first",
+            "process/context/CP2-REQUIREMENT-CONTEXT.yaml",
+            "process/context/CP8-DELIVERY-CONTEXT.yaml",
+            "workflow_health:",
+            "same_question_rounds_max",
+            "decision_brief_profile",
+            "route_validation",
+            "forbidden_roots_when_production",
+        )
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(f"{state_template.relative_to(ROOT)} missing context/state tokens: {', '.join(missing)}")
+    else:
+        errors.append(f"missing state template for context protocol: {state_template.relative_to(ROOT)}")
+
+    targets = {
+        "delivery/skills/context-manifest-builder/SKILL.md": (
+            "process/context/<CP>-<slug>-CONTEXT.yaml",
+            "full_doc_read_reason",
+            "read_expansion_log",
+            "CONTEXT-CAPSULE-TEMPLATE.yaml",
+        ),
+        "delivery/skills/context-handoff/SKILL.md": (
+            "context_policy:",
+            "capsule_first",
+            "full_doc_read_reason",
+            "read_expansion_log",
+        ),
+        "delivery/skills/checkpoint-manager/SKILL.md": (
+            "Context Capsule Summary",
+            "decision_brief_profile",
+            "full|compact|summary",
+            "blocking / high-risk",
+        ),
+        "delivery/skills/state-router/SKILL.md": (
+            "Context Capsule 与读取预算",
+            "Workflow Health 失败模式阈值",
+            "read_expansion_log",
+            "phase_elapsed_rounds",
+        ),
+        "delivery/skills/platform-validator/SKILL.md": (
+            "Production delivery route",
+            "route_validation",
+            "user_confirmed_output_route",
+            "forbidden_roots_when_production",
+        ),
+        "delivery/agents/meta-po.md": (
+            "process/context/*-CONTEXT.yaml",
+            "context_budget",
+            "workflow_health",
+            "decision_brief_profile",
+        ),
+        "delivery/agents/meta-pm.md": ("CP2-REQUIREMENT-CONTEXT.yaml", "read_expansion_log"),
+        "delivery/agents/meta-se.md": ("CP3-DESIGN-CONTEXT.yaml", "CP5-LLD-CONTEXT.yaml", "read_expansion_log"),
+        "delivery/agents/meta-dev.md": ("CP5-LLD-CONTEXT.yaml", "CP6-IMPLEMENTATION-CONTEXT.yaml", "read_expansion_log"),
+        "delivery/agents/meta-qa.md": ("CP7-VERIFICATION-CONTEXT.yaml", "CP8-DELIVERY-CONTEXT.yaml", "route_validation"),
+        "delivery/agents/meta-doc.md": ("CP8-DELIVERY-CONTEXT.yaml", "read_expansion_log"),
+        "delivery/skills/README.md": ("process/context/*-CONTEXT.yaml", "context_budget", "workflow_health"),
+        "delivery/rules/AGENTS.md": ("全阶段 Context Capsule", "上下文预算", "Workflow Health", "Decision Brief 压缩"),
+        "delivery/rules/CLAUDE.md": ("全阶段 Context Capsule", "上下文预算", "workflow_health", "Decision Brief 压缩"),
+        "AGENTS.md": ("全阶段 Context Capsule", "上下文预算", "Workflow Health", "Decision Brief 压缩"),
+        "README.md": ("process/context/", "decision_brief_profile", "Context Capsule"),
+        "delivery/README.md": ("process/context/", "decision_brief_profile", "Context Capsule"),
+        "delivery/doc/USER-MANUAL.md": ("process/context/*-CONTEXT.yaml", "decision_brief_profile", "Context Capsule"),
+    }
+    for rel_path, tokens in targets.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing context protocol target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in tokens if token not in text]
+        if missing:
+            errors.append(f"{rel_path} missing context protocol tokens: {', '.join(missing)}")
+
+    cp7_values = {"PASS", "PASS_WITH_RISK", "BLOCKED", "NEEDS_REWORK", "NEEDS_DESIGN_CLARIFICATION", "WAIVED"}
+    cp7_targets = [
+        DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
+        DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
+        DELIVERY_ROOT / "skills" / "checkpoint-manager" / "SKILL.md",
+        DELIVERY_ROOT / "agents" / "meta-qa.md",
+        DELIVERY_ROOT / "agents" / "meta-po.md",
+    ]
+    for target in cp7_targets:
+        if not target.is_file():
+            continue
+        text = target.read_text(encoding="utf-8")
+        missing = sorted(value for value in cp7_values if value not in text)
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} missing CP7 result values: {', '.join(missing)}")
+
+    release_values = {"READY", "READY_WITH_RISK", "NOT_READY", "RELEASED", "FAILED"}
+    release_targets = [
+        DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
+        DELIVERY_ROOT / "skills" / "release-readiness" / "SKILL.md",
+        DELIVERY_ROOT / "skills" / "release-readiness" / "templates" / "RELEASE-CONTEXT-TEMPLATE.yaml",
+        DELIVERY_ROOT / "agents" / "meta-qa.md",
+        DELIVERY_ROOT / "agents" / "meta-po.md",
+    ]
+    for target in release_targets:
+        if not target.is_file():
+            continue
+        text = target.read_text(encoding="utf-8")
+        missing = sorted(value for value in release_values if value not in text)
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} missing release decision values: {', '.join(missing)}")
+
+    return errors
+
+
+def collect_delivery_asset_lifecycle_errors() -> list[str]:
+    errors: list[str] = []
+
+    for agent_name, archive_path in ARCHIVED_AGENT_PATHS.items():
+        delivery_path = DELIVERY_ROOT / "agents" / f"{agent_name}.md"
+        if delivery_path.exists():
+            errors.append(f"archived agent must not remain in delivery agents: {delivery_path.relative_to(ROOT)}")
+        if not archive_path.is_file():
+            errors.append(f"archived agent must have process archive copy: {archive_path.relative_to(ROOT)}")
+        else:
+            text = archive_path.read_text(encoding="utf-8")
+            if "DEPRECATED" not in text or "不得唤醒" not in text:
+                errors.append(f"archived agent missing explicit deprecated/no-dispatch marker: {archive_path.relative_to(ROOT)}")
+
+    package_builder = ROOT / "scripts" / "package_builder.py"
+    if package_builder.is_file():
+        text = package_builder.read_text(encoding="utf-8")
+        meta_flow_match = re.search(r"META_FLOW_AGENTS\s*=\s*\{(?P<body>[^}]+)\}", text, re.DOTALL)
+        if meta_flow_match and "meta-dm" in meta_flow_match.group("body"):
+            errors.append(f"legacy package builder must not include archived meta-dm: {package_builder.relative_to(ROOT)}")
+
+    active_agent_targets = [
+        path for path in (DELIVERY_ROOT / "agents").glob("meta-*.md") if path.name != "meta-dm.md"
+    ]
+    active_agent_targets.extend([DELIVERY_ROOT / "rules" / "AGENTS.md", ROOT / "AGENTS.md"])
+    for target in active_agent_targets:
+        if not target.is_file():
+            continue
+        text = target.read_text(encoding="utf-8")
+        for placeholder in NON_DELIVERED_SKILL_PLACEHOLDERS:
+            if placeholder in text:
+                errors.append(f"active delivery text must not reference non-delivered skill placeholder: {target.relative_to(ROOT)} -> {placeholder}")
+
+    skills_root = DELIVERY_ROOT / "skills"
+    if skills_root.is_dir():
+        for skill_file in sorted(skills_root.glob("*/SKILL.md")):
+            fields = parse_frontmatter(skill_file.read_text(encoding="utf-8"))
+            if fields.get("status") != "active":
+                errors.append(f"installed delivery skill must be active or moved out of delivery: {skill_file.relative_to(ROOT)}")
+
+    cli_module = ROOT / "meta_flow" / "cli.py"
+    if cli_module.is_file() and '"checkpoints/CP*.md"' in cli_module.read_text(encoding="utf-8"):
+        errors.append(f"meta-flow CLI must use process/checkpoints fallback, not root checkpoints: {cli_module.relative_to(ROOT)}")
+
+    return errors
+
+
 def collect_errors() -> list[str]:
     errors: list[str] = []
     platform_contracts = load_platform_contracts(errors)
@@ -825,6 +1122,9 @@ def collect_errors() -> list[str]:
     errors.extend(collect_human_gate_protocol_errors())
     errors.extend(collect_cr_tracking_protocol_errors())
     errors.extend(collect_revision_record_errors())
+    errors.extend(collect_software_workflow_artifact_errors())
+    errors.extend(collect_context_capsule_protocol_errors())
+    errors.extend(collect_delivery_asset_lifecycle_errors())
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):
         if child.name not in ALLOWED_DELIVERY_DIRS:
@@ -865,6 +1165,9 @@ def collect_errors() -> list[str]:
         fields = parse_frontmatter(content)
         if fields.get("status") != "active":
             continue
+
+        if "## Gotchas" not in content:
+            errors.append(f"active skill must contain a Gotchas section: {skill_file.relative_to(ROOT)}")
 
         for match in DELIVERY_SCRIPT_REF_RE.finditer(content):
             if match.group("name") not in ALLOWED_DELIVERY_SCRIPT_FILES:

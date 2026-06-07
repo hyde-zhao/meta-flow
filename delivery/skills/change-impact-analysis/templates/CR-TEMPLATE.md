@@ -52,8 +52,8 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 | 受影响文档 | 处理方式 | 旧基线保留方式 | 修订记录位置 | 批准状态 |
 |---|---|---|---|---|
-| `process/USE-CASES.md` | 新增 / 原文档更新 / 归档 / 不变 | 既有基线 / 历史场景 / 被 CR 替换的场景 / CR 完整摘录与映射 | `## 修订记录` / 不适用 | pending |
-| `process/REQUIREMENTS.md` | 新增 / 原文档更新 / 归档 / 不变 | 既有基线 / 历史需求 / 被 CR 替换的需求 / CR 完整摘录与映射 | `## 修订记录` / 不适用 | pending |
+| `docs/product/USE-CASES.md` | 新增 / 原文档更新 / 归档 / 不变 | 既有基线 / 历史场景 / 被 CR 替换的场景 / CR 完整摘录与映射 | `## 修订记录` / 不适用 | pending |
+| `docs/product/REQUIREMENTS.md` | 新增 / 原文档更新 / 归档 / 不变 | 既有基线 / 历史需求 / 被 CR 替换的需求 / CR 完整摘录与映射 | `## 修订记录` / 不适用 | pending |
 
 ## 旧基线映射
 
@@ -67,7 +67,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 |------|----------|-----------|--------------------|---------|
 | 需求层 | 是否新增、删除或重定义 REQ-* | `REQUIREMENTS.md` |  |  |
 | 场景层 | 是否改变测试矩阵覆盖范围 | `SCENARIOS.yaml` / `TEST-MATRIX.md` |  |  |
-| 计划层 | 是否改变 Phase、Wave、任务依赖 | `WORKFLOW-PLAN.yaml` |  |  |
+| 计划层 | 是否改变 Phase、Wave、Story / 任务依赖 | `process/DEVELOPMENT-PLAN.yaml` |  |  |
 | 安全层 | 是否引入新的高风险动作或权限要求 | 安全边界 / 审计结论 |  |  |
 | 交付层 | 是否需要重新生成交付物或回归子集 | 交付文档 / 回归集 |  |  |
 
@@ -89,16 +89,16 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 ## LLD 设计批次门禁
 
-> 若本 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须填写本节。批次内全部 LLD 设计和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
+> 若本 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须填写本节。批次内全部 full-lld / technical-note / waived 证据和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
 
 - 是否需要 LLD 设计批次：true / false
 - batch_id：`CR-{id}-LLD-BATCH`
 - 批次范围来源：CR 影响分析 / 人工指定
 - 批次内 Story：
   - `STORY-*`
-- 批次人工确认稿：`checkpoints/CP5-{batch_id}-LLD-BATCH.md`
+- 批次人工确认稿：`process/checkpoints/CP5-{batch_id}-LLD-BATCH.md`
 - 开发启动条件：
-  - [ ] 批次内全部 Story LLD 已输出
+  - [ ] 批次内全部 Story 设计证据已输出（full-lld / technical-note / waived）
   - [ ] 批次内全部 Story CP5 自动预检已通过
   - [ ] 批次 CP5 人工确认结论为 `approved`
   - [ ] 批次内每个 Story 的 `dev_gate` 已满足

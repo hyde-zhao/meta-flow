@@ -49,7 +49,7 @@ ready_for_design: false
 
 #### 下一步建议
 
-- 若 `status=confirmed`：可由 meta-pm 以 `process/USE-CASES.md` 为显式输入调用 `requirement-extraction`
+- 若 `status=confirmed`：可由 meta-pm 以 `docs/product/USE-CASES.md` 为显式输入调用 `requirement-extraction`
 - 若 `status=draft`：继续补充遗漏场景或维度后再确认
 
 <!-- scene-discovery-summaries: end -->

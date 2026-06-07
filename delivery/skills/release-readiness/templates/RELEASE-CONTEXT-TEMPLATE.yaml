@@ -1,0 +1,95 @@
+schema_version: "1.0"
+status: draft
+release_artifact_profile: compact  # minimal | compact | full
+release_decision: NOT_READY  # READY | READY_WITH_RISK | NOT_READY | RELEASED | FAILED
+created_at: ""
+updated_at: ""
+source_gate: CP8
+
+release_scope:
+  current_version: ""
+  target_version: ""
+  included_features: []
+  included_stories: []
+  excluded_scope: []
+  user_visible_changes: []
+  internal_changes: []
+  breaking_changes: []
+  known_risks: []
+
+version_decision:
+  current_version: ""
+  target_version: ""
+  change_type: ""  # MAJOR | MINOR | PATCH | alpha | beta | rc
+  compatibility: ""  # breaking | compatible | unknown
+  reason: ""
+
+quality_summary:
+  cp7_results: []
+  test_report_path: "docs/quality/TEST-REPORT.md"
+  review_path: "docs/quality/REVIEW.md"
+  blocker_count: 0
+  high_count: 0
+  accepted_risk_ids: []
+  unresolved_findings: []
+
+affected_surface:
+  platforms: []
+  components: []
+  install_scopes: []
+  config_changes: []
+  permission_changes: []
+  migration_required: false
+  external_interfaces: []
+  state_schema_changes: []
+  command_parameter_changes: []
+
+install_validation_summary:
+  commands: []
+  results: []
+  log_paths: []
+  skipped_with_reason: []
+
+release_documents:
+  release_notes:
+    path: "docs/release/RELEASE-NOTES.md"
+    status: pending
+    na_reason: ""
+  deploy_checklist:
+    path: "docs/release/DEPLOY-CHECKLIST.md"
+    status: pending
+    na_reason: ""
+  rollback:
+    path: "docs/release/ROLLBACK.md"
+    status: pending
+    na_reason: ""
+  migration:
+    path: "docs/release/MIGRATION.md"
+    status: pending
+    na_reason: ""
+  feedback:
+    path: "docs/release/FEEDBACK.md"
+    status: pending
+    na_reason: ""
+
+non_authorized_items:
+  - id: NA-001
+    operation: "publish / live / data write / external call"
+    reason: ""
+    required_authorization: ""
+
+follow_up_summary:
+  observation_items: []
+  feedback_items: []
+  follow_up_candidates: []
+  risk_acceptance_items: []
+
+token_control:
+  default_read_mode: capsule-first
+  copied_long_text: false
+  allowed_payload: "summary, count, risk id, decision id, evidence path"
+  full_doc_read_triggers:
+    - missing_capsule_field
+    - unreadable_evidence_path
+    - conflicting_conclusion
+    - user_requested_deep_review

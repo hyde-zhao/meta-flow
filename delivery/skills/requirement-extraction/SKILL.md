@@ -11,7 +11,7 @@ status: active
 
 ## 目标
 
-从用户自然语言需求、`REQUEST.md`、`process/USE-CASES.md` 或兼容输入（如 `input_spec.yaml`）中提取可编号、可追踪、可验证的结构化需求，按 `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md` 生成 `REQUIREMENTS.md`。
+从用户自然语言需求、`REQUEST.md`、`docs/product/USE-CASES.md` 或兼容输入（如 `input_spec.yaml`）中提取可编号、可追踪、可验证的结构化需求，按 `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md` 生成 `REQUIREMENTS.md`。
 
 ## 适用场景
 
@@ -23,15 +23,15 @@ status: active
 ## 前置条件
 
 - [ ] 已有用户原始需求描述、`REQUEST.md` 或 `input_spec.yaml`
-- [ ] 若存在 `process/USE-CASES.md`，优先将其视为结构化事实来源
+- [ ] 若存在 `docs/product/USE-CASES.md`，优先将其视为结构化事实来源
 - [ ] 需求边界至少有可识别的目标、约束或平台信息
 
 ## 必须读取的输入
 
 - 用户自然语言需求
 - `process/REQUEST.md`（若存在）
-- `process/USE-CASES.md`（若存在，且应作为显式兼容输入）
-- `process/REQUIREMENTS.md`（若存在，用于增量更新和旧基线保留）
+- `docs/product/USE-CASES.md`（若存在，且应作为显式兼容输入）
+- `docs/product/REQUIREMENTS.md`（若存在，用于增量更新和旧基线保留）
 - `process/changes/CR-*.md`（若本轮为变更触发，用于读取文档处理决策与旧基线映射）
 - `input_spec.yaml`（兼容旧输入方式，若存在）
 - 已知的目标平台、约束、验收线索
@@ -40,7 +40,7 @@ status: active
 
 | 输入 | 角色 | 使用规则 |
 |---|---|---|
-| `process/USE-CASES.md` | 首选结构化真相源 | 若存在，必须直接消费其中的画像、成功指标、排除项、`UC-*` 场景字段以及治理字段（`target_artifact_type` / `governance_mode` / `review_policy`）；不得依赖 meta-pm 在会话中的二次转述 |
+| `docs/product/USE-CASES.md` | 首选结构化真相源 | 若存在，必须直接消费其中的画像、成功指标、排除项、`UC-*` 场景字段以及治理字段（`target_artifact_type` / `governance_mode` / `review_policy`）；不得依赖 meta-pm 在会话中的二次转述 |
 | `process/REQUEST.md` | 原始意图背景 | 用于补充初始目标、平台线索与未结构化背景，不替代 `USE-CASES.md` |
 | 用户自然语言需求 | 补充输入 | 当 `USE-CASES.md` 不存在，或用户本轮补充了新约束 / 新目标时使用 |
 | `input_spec.yaml` | 兼容旧入口 | 仅作为补充兼容来源，不高于 `USE-CASES.md` 的优先级 |
@@ -66,7 +66,7 @@ status: active
 
 | 文件 | 路径 | 模板 |
 |---|---|---|
-| 结构化需求 | `process/REQUIREMENTS.md` | `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md` |
+| 结构化需求 | `docs/product/REQUIREMENTS.md` | `skills/requirement-extraction/templates/REQUIREMENTS-TEMPLATE.md` |
 
 ## 约束
 

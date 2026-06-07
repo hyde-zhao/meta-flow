@@ -11,6 +11,11 @@ created_at: ""
 confirmed_by: ""
 confirmed_at: ""
 shared_fragments: []
+feature_design_refs: []
+lld_policy:
+  required_level: "full-lld"
+  trigger_reasons: []
+  rationale: ""
 open_items: 0
 ---
 
@@ -18,7 +23,18 @@ open_items: 0
 
 > 文件名格式：`STORY-{id}-{story_slug}-LLD.md`，其中 `story_slug` 必须复用对应 Story 卡片中的稳定 slug。
 >
-> 本文档是 `STORY-{id}` 的低层设计（Low-Level Design），需纳入全部目标 Story 的 LLD 统一确认，并满足当前 Wave 的 `dev_gate` 后方可进入实现。
+> 本文档只用于 `lld_policy.required_level=full-lld` 的 Story。
+> `technical-note` / `waived` Story 的正式设计证据写在对应 Story 卡片中。
+> 本文档需纳入全部目标 Story 的设计证据统一确认，并满足当前 Wave 的 `dev_gate` 后方可进入实现。
+
+## 0. 上游设计依据
+
+| 来源 | 路径 / ID | 被本 LLD 消费的内容 |
+|---|---|---|
+| HLD | `docs/design/HLD.md` | <架构约束> |
+| ADR | `docs/design/ARCHITECTURE-DECISION.md` | <关键决策> |
+| Feature Matrix | `docs/design/FEATURE-DESIGN-MATRIX.md` | <lld_policy 判定> |
+| Feature DESIGN | `docs/features/<feature>/DESIGN.md` | <接口 / 数据 / 任务约束> |
 
 ## 1. Goal
 
@@ -142,10 +158,10 @@ open_items: 0
 
 ## 人工确认区
 
-> **CP5 — Story LLD 可实现性门**
+> **CP5 — Story 设计证据可实现性门**
 > meta-dev 先写入 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md` 自动预检结果。
-> meta-po 收齐全部目标 Story 的 LLD、CP4 自动预检摘要和 CP5 自动预检后，再生成并提示用户审查 `checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`。
-> 用户统一确认全部目标 Story 的 LLD 后，仍需满足当前 Wave、依赖门控与文件所有权门控方可进入实现。
+> meta-po 收齐全部目标 Story 的完整 LLD、Story 技术说明或 waived 证据、CP4 自动预检摘要和 CP5 自动预检后，再生成并提示用户审查 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`。
+> 用户统一确认全部目标 Story 的设计证据后，仍需满足当前 Wave、依赖门控与文件所有权门控方可进入实现。
 
 **CP5 checklist 摘要**：
 

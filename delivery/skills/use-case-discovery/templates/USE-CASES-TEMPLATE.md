@@ -90,6 +90,14 @@ total_use_cases: N
 |---|---|---|---|
 | <YYYY-MM-DD> | <选择的 SGA-*> | <深入讨论 / deferred / N/A> | <用户确认或 freeform 复述确认> |
 
+## 用户可见场景确认证据
+
+> 标准模式下至少 1 条 `SGQ-*` 记录必须为 `confirmed`。该表证明 Agent 没有只通过后台分析静默生成场景。
+
+| Question ID | 问题 | 选项 / 候选理解 | 推荐方案 | 用户回答 | 复述确认 | 影响面 | 来源 | 状态 |
+|---|---|---|---|---|---|---|---|---|
+| SGQ-001 | <需要用户确认的场景主体 / 真实意图 / 交付出口问题> | <2-4 个选项或 freeform> | <推荐项> | <用户原话或摘要> | <复述后的确认理解> | scope / validation / delivery / gate | <REQUEST / README / CR / SGA> | asked / answered / confirmed / n/a |
+
 ## Deferred Ideas
 
 | ID | 想法 / 风险 / 扩展场景 | 来源 | 延后原因 | 触发重启条件 |

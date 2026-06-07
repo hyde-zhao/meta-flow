@@ -26,7 +26,7 @@ status: active
 ## 必须读取的输入
 
 - `process/REQUEST.md`
-- `process/REQUIREMENTS.md`（若存在）
+- `docs/product/REQUIREMENTS.md`（若存在）
 - `process/CLARIFICATION-LOG.md`（若存在）
 - 用户本轮新增回复
 

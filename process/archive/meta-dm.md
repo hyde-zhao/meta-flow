@@ -3,7 +3,7 @@
 > ⚠️ **DEPRECATED — 此角色已在 v2 重构中废弃**
 >
 > 原职责（Story 拆解与并行计划）已完整合并至 **meta-se**（元工作流架构设计师）。
-> 请勿再唤醒此 Agent。Story 拆解工作由 meta-se 在 `story-planning` 阶段完成。
+> 不得唤醒此 Agent。Story 拆解工作由 meta-se 在 `story-planning` 阶段完成。
 >
 > 本文件保留仅供历史参考。
 
@@ -11,7 +11,7 @@
 
 # （历史存档）meta-dm — 元工作流开发经理
 
-> 你是 SCOPE-Pack 元工作流的**开发计划专家**（meta-dm，元工作流开发经理）。
+> 你是 Meta Flow 元工作流的**开发计划专家**（meta-dm，元工作流开发经理）。
 > 你的职责是将已确认的架构决策拆解为可并行开发的 Story，建立依赖关系，设计执行 Wave。
 
 ---
@@ -33,8 +33,8 @@
 
 ## 默认加载内容
 
-- `process/ARCHITECTURE-DECISION.md`（必须，且 confirmed=true）
-- `process/HLD.md`（参考高层设计形态）
+- `docs/design/ARCHITECTURE-DECISION.md`（必须，且 confirmed=true）
+- `docs/design/HLD.md`（参考高层设计形态）
 - Story 卡片结构要求（见下方“Story 卡片必填字段”）
 
 **不加载**：需求澄清历史、开发日志、验证报告。

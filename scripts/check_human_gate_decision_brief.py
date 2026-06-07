@@ -110,6 +110,20 @@ def collect_checkpoint_errors(path: Path, text: str) -> tuple[list[str], list[De
     errors: list[str] = []
     if "## Decision Brief" not in text:
         errors.append("missing section: ## Decision Brief")
+    if "### Context Capsule Summary" not in text:
+        errors.append("missing section: ### Context Capsule Summary")
+    else:
+        capsule_section = text.split("### Context Capsule Summary", 1)[1].split("### Decision Collection Coverage", 1)[0]
+        for token in ("capsule", "read_profile", "默认读取策略", "全文档读取"):
+            if token not in capsule_section:
+                errors.append(f"Context Capsule Summary missing token: {token}")
+    if "### Decision Collection Coverage" not in text:
+        errors.append("missing section: ### Decision Collection Coverage")
+    else:
+        coverage_section = text.split("### Decision Collection Coverage", 1)[1].split("### 待人工决策清单", 1)[0]
+        for token in ("| 来源", "扫描状态", "候选问题数", "纳入待决策数", "分类 / N/A 原因"):
+            if token not in coverage_section:
+                errors.append(f"Decision Collection Coverage missing token: {token}")
     if "待人工决策清单" not in text:
         errors.append("missing section: 待人工决策清单")
 
@@ -175,7 +189,7 @@ def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow]
     checkpoint_ref = path.as_posix()
     if checkpoint_ref not in text and path.name not in text:
         errors.append("launch message missing checkpoint path")
-    for token in ("自动预检结论", "本轮待人工决策项", "approve", "修改: <具体修改点>", "reject"):
+    for token in ("自动预检结论", "Context Capsule", "决策收集覆盖", "本轮待人工决策项", "approve", "修改: <具体修改点>", "reject"):
         if token not in text:
             errors.append(f"launch message missing token: {token}")
     for alias in OLD_CONFIRMATION_ALIASES:
@@ -192,13 +206,19 @@ def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow]
             errors.append(f"launch message decision count {declared_count} != checkpoint decision rows {len(rows)}")
 
     if rows:
-        required_table_tokens = ("| 决策 ID", "决策类型", "推荐方案", "备选方案", "优劣", "影响 / 风险")
-        for token in required_table_tokens:
-            if token not in text:
-                errors.append(f"launch message missing decision table token: {token}")
-        for row in rows:
-            if row.decision_id not in text:
-                errors.append(f"launch message missing decision id: {row.decision_id}")
+        has_full_table = "| 决策 ID" in text and "决策类型" in text and "推荐方案" in text and "备选方案" in text
+        has_compact_summary = ("blocking" in text or "high-risk" in text or "高风险" in text or "阻断" in text) and (
+            "完整表" in text or "完整待决策表" in text or checkpoint_ref in text or path.name in text
+        )
+        if not has_full_table and not has_compact_summary:
+            errors.append("launch message with decisions must include a full decision table or compact blocking/high-risk summary with checkpoint path")
+        if has_full_table:
+            for token in ("优劣", "影响 / 风险"):
+                if token not in text:
+                    errors.append(f"launch message missing decision table token: {token}")
+            for row in rows:
+                if row.decision_id not in text:
+                    errors.append(f"launch message missing decision id: {row.decision_id}")
     elif declared_count == 0 and not ("原因" in text or "无新增取舍" in text):
         errors.append("zero-decision launch message must include a reason")
 
@@ -210,7 +230,7 @@ def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate human gate Decision Brief and launch message.")
-    parser.add_argument("--checkpoint", required=True, type=Path, help="Path to checkpoints/CP*.md")
+    parser.add_argument("--checkpoint", required=True, type=Path, help="Path to process/checkpoints/CP*.md")
     parser.add_argument("--launch-message-file", type=Path, help="Optional file containing the message to send to the user")
     args = parser.parse_args()
 

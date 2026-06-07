@@ -3,15 +3,82 @@ project_id: "meta-flow"
 workflow_mode: "standard"
 current_phase: "documentation"
 current_agent: "meta-po"
-iteration: 9
+iteration: 10
 blocked: false
-active_change: "CR-006"
-last_action: "CR-006 已实现并验证：人工决策清单协议已同步到 Agent、Skill、rules 和用户文档，guardrail 通过"
-next_action: "等待用户审查 CR-006 变更结果；后续人工确认将按待人工决策清单统一打印"
+active_change: ""
+last_action: "CR-016 已实现并验证：全阶段 Context Capsule、上下文预算、workflow health、Decision Brief 压缩、production route validator 和语义 guardrail 已同步"
+next_action: "等待用户审查 CR-016 变更结果；后续阶段交接和人工门禁将优先使用 process/context/*-CONTEXT.yaml"
 agent_lifecycle:
   orchestrator_singleton: true
   active_agents: []
   reuse_policy: "same workflow/change/story reuses the same role thread; close after checkpoint or handoff completion"
+context_budget:
+  default_read_profile: "compact"
+  full_doc_read_policy: "only-on-missing-conflict-audit-or-deep-review"
+  max_source_files_per_handoff: 8
+  max_summary_items_per_capsule: 20
+  require_capsule_first: true
+  full_doc_read_reason_required: true
+  context_root: "process/context"
+  phase_capsules:
+    cp2_requirement:
+      path: "process/context/CP2-REQUIREMENT-CONTEXT.yaml"
+      status: "pending"
+      read_profile: "compact"
+      generated_at: ""
+      missing_or_waived_reason: ""
+    cp3_design:
+      path: "process/context/CP3-DESIGN-CONTEXT.yaml"
+      status: "pending"
+      read_profile: "compact"
+      generated_at: ""
+      missing_or_waived_reason: ""
+    cp5_lld:
+      path: "process/context/CP5-LLD-CONTEXT.yaml"
+      status: "pending"
+      read_profile: "compact"
+      generated_at: ""
+      missing_or_waived_reason: ""
+    cp6_implementation:
+      path: "process/context/CP6-IMPLEMENTATION-CONTEXT.yaml"
+      status: "pending"
+      read_profile: "minimal"
+      generated_at: ""
+      missing_or_waived_reason: ""
+    cp7_verification:
+      path: "process/context/CP7-VERIFICATION-CONTEXT.yaml"
+      status: "pending"
+      read_profile: "compact"
+      generated_at: ""
+      missing_or_waived_reason: ""
+    cp8_delivery:
+      path: "process/context/CP8-DELIVERY-CONTEXT.yaml"
+      status: "pending"
+      read_profile: "compact"
+      generated_at: ""
+      missing_or_waived_reason: ""
+  read_expansion_log: []
+workflow_health:
+  status: "healthy"
+  last_checked_at: "2026-06-07T10:42:25+08:00"
+  thresholds:
+    same_question_rounds_max: 2
+    hld_revision_rounds_max: 3
+    lld_clarification_items_max: 8
+    cp_retry_count_max: 2
+    story_rework_count_max: 2
+    unchanged_artifact_hash_rounds_max: 2
+    phase_elapsed_rounds_max: 6
+  counters:
+    same_question_rounds: 0
+    hld_revision_rounds: 0
+    lld_clarification_items: 0
+    cp_retry_count: 0
+    story_rework_count: 0
+    unchanged_artifact_hash_rounds: 0
+    phase_elapsed_rounds: 0
+  active_signals: []
+  last_escalation: ""
 checkpoints:
   requirement_confirmed: false
   hld_confirmed: true

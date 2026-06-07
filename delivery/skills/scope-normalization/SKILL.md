@@ -25,7 +25,7 @@ status: active
 
 ## 必须读取的输入
 
-- `process/REQUIREMENTS.md`
+- `docs/product/REQUIREMENTS.md`
 - 关联 CR（若存在）
 - 已知澄清结论与范围限制
 
@@ -43,7 +43,7 @@ status: active
 
 ## 输出文件 / 输出模板
 
-输出为更新后的 `process/REQUIREMENTS.md`；不直接依赖模板文件路径，只依赖现有文档内容契约。
+输出为更新后的 `docs/product/REQUIREMENTS.md`；不直接依赖模板文件路径，只依赖现有文档内容契约。
 
 ## 约束
 

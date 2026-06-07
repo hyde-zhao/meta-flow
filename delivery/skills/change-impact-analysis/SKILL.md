@@ -48,7 +48,7 @@ status: active
 3. 从需求层、场景层、计划层、安全层、交付层五个维度进行影响分析。
 4. 对每个受影响正式文档填写“文档处理决策”：新增 / 原文档更新 / 归档 / 不变。
 5. 若处理方式为“原文档更新”，必须写明旧基线保留方式，并要求目标文档追加 `## 修订记录`。
-6. 若变更影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须列出 CR 影响范围内全部 Story，形成 LLD 设计批次；批次内全部 LLD 设计和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
+6. 若变更影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须列出 CR 影响范围内全部 Story，形成设计证据批次；批次内全部 full-lld / technical-note / waived 证据和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
 7. 若当前为 `workflow_mode=fast-lane`，先执行快速模式升级判定：命中架构、权限、安装路径、外部接口、文件所有权冲突、多 Story 依赖或不可逆迁移时，必须升级为 `standard`。
 8. 给出 `impact_level`、`rollback_to`、`workflow_mode_after_change` 和审批结论。
 9. 将活跃变更单写回状态对象，并明确后续收敛路径。
@@ -73,7 +73,7 @@ status: active
 
 - 必须先完成五维度分析，再允许修改正式对象
 - 必须先完成文档处理决策，再允许修改 `USE-CASES.md`、`REQUIREMENTS.md` 或其他正式文档
-- 影响 Story / LLD / 实现设计的 CR 必须先完成 CR 影响范围内全部 LLD 的统一设计和 CP5 批次人工确认，不得逐个 Story 确认后逐个开发
+- 影响 Story / LLD / 实现设计的 CR 必须先完成 CR 影响范围内全部设计证据的统一设计和 CP5 批次人工确认，不得逐个 Story 确认后逐个开发
 - CR 编号递增，不复用
 - `impact_level`、`rollback_to`、审批结论必须显式落地
 - fast-lane 只允许低风险轻量实现；命中升级条件时必须切回 `standard`

@@ -11,7 +11,7 @@ confirmed_at: ""
 # 高层设计（HLD）：{项目名称}
 
 > 基于 REQUIREMENTS.md + USE-CASES.md 输出。由 meta-se 在 solution-design 阶段生成。
-> HLD 必须先通过 CP3 自动预检（`process/checks/CP3-HLD-CONSISTENCY.md`），再经 CP3 人工确认（`checkpoints/CP3-HLD-REVIEW.md`）后，方可进入 Story 拆解阶段。
+> HLD 必须先通过 CP3 自动预检（`process/checks/CP3-HLD-CONSISTENCY.md`），再经 CP3 人工确认（`process/checkpoints/CP3-HLD-REVIEW.md`）后，方可进入 Story 拆解阶段。
 
 ---
 
@@ -408,7 +408,7 @@ sequenceDiagram
 ## CP3 确认记录
 
 **CP3 自动预检结果**：`process/checks/CP3-HLD-CONSISTENCY.md`  
-**CP3 人工 checklist**：`checkpoints/CP3-HLD-REVIEW.md`
+**CP3 人工 checklist**：`process/checkpoints/CP3-HLD-REVIEW.md`
 
 **确认状态**：⬜ 待审核 → ✅ 已批准 / ❌ 需修改
 

@@ -48,7 +48,7 @@ FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 BUILT_IN_CODEX_AGENTS = {"default", "worker", "explorer"}
 MANAGED_VERSION = "1.0.0"
 PLATFORM_CONTRACTS_PATH = Path("doc") / "PLATFORM-CONTRACTS.yaml"
-CANONICAL_AGENT_FRONTMATTER_FIELDS = frozenset({"name", "description", "model"})
+CANONICAL_AGENT_FRONTMATTER_FIELDS = frozenset({"name", "description", "model", "tools"})
 CODEX_REQUIRED_AGENT_FIELDS = ("name", "description", "developer_instructions")
 CODEX_OPTIONAL_AGENT_FIELDS = frozenset(
     {
@@ -118,6 +118,7 @@ class AgentDefinition:
     description: str
     instructions: str
     model: str | None
+    tools: str | None
     extra_fields: tuple[str, ...]
 
 
@@ -330,18 +331,20 @@ def load_canonical_agent(path: Path, permissive: bool) -> AgentDefinition | None
     unsupported = sorted(key for key in fields if key not in CANONICAL_AGENT_FRONTMATTER_FIELDS)
     if unsupported and not permissive:
         fail(
-            "canonical agent frontmatter 仅支持 name/description/model；"
+            "canonical agent frontmatter 仅支持 name/description/model/tools；"
             "Codex 的 developer_instructions 由 Markdown 正文渲染，禁止写 version、instructions 等其它顶层字段: "
             f"{path} -> {', '.join(unsupported)}"
         )
 
     model = str(fields["model"]).strip() if "model" in fields and str(fields["model"]).strip() else None
+    tools = str(fields["tools"]).strip() if "tools" in fields and str(fields["tools"]).strip() else None
     return AgentDefinition(
         source=path,
         name=name,
         description=description,
         instructions=instructions,
         model=model,
+        tools=tools,
         extra_fields=tuple(unsupported),
     )
 
@@ -506,6 +509,8 @@ def render_claude_agent(agent: AgentDefinition, commit: str, generated: str) -> 
     ]
     if agent.model:
         frontmatter.append(f"model: {yaml_scalar(agent.model)}")
+    if agent.tools:
+        frontmatter.append(f"tools: {yaml_scalar(agent.tools)}")
     if color:
         frontmatter.append(f"color: {yaml_scalar(color)}")
     frontmatter.append("---")

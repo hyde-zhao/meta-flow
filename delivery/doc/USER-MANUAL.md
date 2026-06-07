@@ -139,37 +139,71 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 @meta-po 下一步
 @meta-po 继续
 @meta-po 快速修改
-@meta-po 回退到 CP3 HLD 架构评审前
+@meta-po 回退到 CP3 蓝图 / HLD 架构评审前
 ```
+
+### 6.0 输出目录
+
+Meta Flow 生成的文档默认分为三类：
+
+| 类型 | 默认目录 | 典型文件 |
+|---|---|---|
+| 长期可交付文档 | `docs/` | `docs/product/USE-CASES.md`、`docs/design/HLD.md`、`docs/features/<feature>/DESIGN.md`、`docs/quality/TEST-REPORT.md`、`docs/release/DEPLOY-CHECKLIST.md` |
+| 运行过程文档 | `process/` | `process/STATE.md`、`process/REQUEST.md`、`process/STORY-BACKLOG.md`、`process/DEVELOPMENT-PLAN.yaml`、`process/stories/STORY-*.md`、`process/stories/STORY-*-IMPLEMENTATION.md`、`process/changes/CR-*.md` |
+| 人工确认态 | `process/checkpoints/` | `process/checkpoints/CP2-REQUIREMENTS-BASELINE.md`、`process/checkpoints/CP3-HLD-REVIEW.md`、`process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`、`process/checkpoints/CP8-DELIVERY-READINESS.md` |
+
+旧项目中已经存在的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流默认写入 `docs/...` 和 `process/checkpoints/...`。production 项目如果已有 README/docs 约定，优先按目标项目约定输出。
 
 ### 6.1 标准推进顺序
 
 1. `meta-po` 初始化请求并写入 CP0 自动检查结果。
-2. `meta-po` 将需求澄清阶段委托给 `meta-pm`。你可以直接与 `meta-pm` 多轮讨论 Scenario Gray Areas：先识别 3-4 个会影响交付的灰区，让你选择 1-3 个重点讨论；未选但有价值的想法进入 Deferred Ideas。随后沉淀 `USE-CASES.md` 和 `REQUIREMENTS.md`，写入 CP1 / CP2 自动检查结果，并在你确认“可提交给 meta-po 汇总”后交还。
-3. CP2 Decision Brief 人工确认通过后，`meta-po` 将 HLD 设计阶段委托给 `meta-se`。你可以直接与 `meta-se` 讨论 Architecture Gray Areas 和 advisor table；advisor lane 使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格形成候选方案输入。随后 `meta-se` 输出包含适用性矩阵、Use Case → Architecture Traceability 和关键场景模拟的 `HLD.md` 与 CP3 自动预检，并在你确认“HLD 草案可提交给 meta-po 发起 CP3”后交还。
-4. CP3 人工确认通过后，`meta-se` 输出 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 CP4 自动预检。CP4 不再单独人工确认，其摘要汇入 CP5。
-5. `meta-po` 仍处于 story-planning，按 Story DAG 确定覆盖全部目标 Story 的 LLD 设计批次，组织 `meta-dev` 并行输出全部 `STORY-{id}-{story_slug}-LLD.md` 和 CP5 自动预检。多个 `meta-dev` 遇到实现灰区时只写 clarification queue，由 `meta-po` 合并后一次性问你，再把答案分发回对应 `meta-dev`。队列收敛后，meta-po 发起一次全量人工确认。
-6. 全量 CP5 确认后进入 story-execution；当前 Wave Story 的 `dev_gate` 满足后，`meta-po` 自动按 Wave 调度 `meta-dev`，并在 `STATE.md.agent_lifecycle` 与 handoff `dispatch` 中记录证据；实现完成后写入 CP6 编码完成检查结果。
-7. 每个 Story 开发完成后，`meta-po` 自动调度 `meta-qa` 执行验证，并记录调度证据；验证完成后写入 CP7。CP7 失败时回到 `meta-dev` 修复并再次验证。
-8. `meta-doc` 最后输出 README 和 USER-MANUAL，CP8 Decision Brief 和人工终验通过后进入 delivered。
+2. `meta-po` 将需求澄清阶段委托给 `meta-pm`。你可以直接与 `meta-pm` 多轮讨论 Scenario Gray Areas：先识别 3-4 个会影响交付的灰区，让你选择 1-3 个重点讨论；标准模式下至少会出现 1 个 `SGQ-*` 用户可见场景确认问题，并记录你的回答和复述确认；未选但有价值的想法进入 Deferred Ideas。随后沉淀 `USE-CASES.md` 和 `REQUIREMENTS.md`，写入 CP1 / CP2 自动检查结果，并在你确认“可提交给 meta-po 汇总”后交还。
+3. CP2 Decision Brief 人工确认通过后，`meta-po` 将 HLD 设计阶段委托给 `meta-se`。你可以直接与 `meta-se` 讨论 Architecture Gray Areas 和 advisor table；advisor lane 使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格形成候选方案输入。随后 `meta-se` 输出 `BLUEPRINT.md`、`DOMAIN-MAP.md`、`DEPENDENCY-MAP.md`，并生成包含适用性矩阵、Use Case → Architecture Traceability 和关键场景模拟的 `HLD.md` 与 CP3 自动预检；当你确认“HLD 草案可提交给 meta-po 发起 CP3”后交还。
+4. CP3 人工确认通过后，`meta-se` 先输出 `docs/design/FEATURE-DESIGN-MATRIX.md`，判断哪些 Feature 需要 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`，并为每个 Story 标记 `feature_design_refs` 与 `lld_policy=full-lld|technical-note|waived`；随后输出 `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 CP4 自动预检。CP4 不再单独人工确认，其摘要汇入 CP5。
+5. `meta-po` 仍处于 story-planning，按 Story DAG 确定覆盖全部目标 Story 的设计证据批次，组织 `meta-dev` 并行输出设计证据：高风险 Story 生成完整 `STORY-{id}-{story_slug}-LLD.md`，低风险 Story 在 Story 卡片内补 `## 技术说明`，明确豁免的 Story 写 waived 证据，并全部生成 CP5 自动预检。多个 `meta-dev` 遇到实现灰区时只写 clarification queue，由 `meta-po` 合并后一次性问你，再把答案分发回对应 `meta-dev`。队列收敛后，meta-po 发起一次全量人工确认。
+6. 全量 CP5 确认后进入 story-execution；当前 Wave Story 的 `dev_gate` 满足后，`meta-po` 自动按 Wave 调度 `meta-dev`，并在 `STATE.md.agent_lifecycle` 与 handoff `dispatch` 中记录证据。`meta-dev` 先用 `implementation-execution` 形成实现对象清单、设计契约映射、测试 / Fixture 计划、最小实现切片、平台差异和交接摘要；复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 写完整 `IMPLEMENTATION.md`，低风险 Story 可写 Story 摘要或 DEV-LOG。实现完成后写入 CP6 编码完成检查结果。
+7. 每个 Story 开发完成且 CP6 通过后，`meta-po` 自动调度 `meta-qa` 执行验证，并记录调度证据。验证时 `meta-qa` 会使用 `verification-execution` 消费 CP6 实现执行证据、设计证据和 `TEST-MATRIX.md`，输出验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险，再使用 `quality-review` 固化 TEST-REPORT / REVIEW / FIXES 并写入 CP7。CP7 结论为 `PASS` / `WAIVED` 时进入 verified，`PASS_WITH_RISK` 时可推进但风险进入 CP8，`NEEDS_REWORK` 回 meta-dev，`NEEDS_DESIGN_CLARIFICATION` 回 meta-se / meta-po，`BLOCKED` 阻断。
+8. `meta-doc` 最后输出 README 和 USER-MANUAL。随后 `meta-qa` 使用 `release-readiness` 先生成 `process/release/RELEASE-CONTEXT.yaml` 和 `process/context/CP8-DELIVERY-CONTEXT.yaml`，再按 `release_artifact_profile=minimal|compact|full` 裁剪发布文档。CP8 的 `release_decision=READY|READY_WITH_RISK` 才可发起人工终验，`NOT_READY` 阻断，`RELEASED|FAILED` 必须有独立真实发布授权；CP8 Decision Brief 和人工终验通过后进入 delivered。
 
 ### 6.2 检查点文件
 
 所有检查点都包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须写入逐项检查结果；CP2 / CP3 / CP5 / CP8 人工检查点必须有可审查的 Decision Brief、待人工决策清单和 checklist 文件。待人工决策清单会汇总本轮所有需要你确认的问题，状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`；每项包含决策 ID、决策类型、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
 
+CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后会生成 `process/context/*-CONTEXT.yaml` 阶段上下文胶囊。它不替代正式文档，也不需要用户手工维护；作用是让下游 Agent 先读取摘要、证据路径、决策项、风险和不授权项，只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档，从而减少 token 消耗。
+
 | CP | 名称 | 类型 | 文件 |
 |----|------|------|------|
 | CP0 | 原始请求受理门 | 自动 | `process/checks/CP0-REQUEST-INTAKE.md` |
 | CP1 | 用户场景完备门 | 自动 | `process/checks/CP1-USE-CASE-COMPLETENESS.md` |
-| CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
-| CP3 | HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`checkpoints/CP3-HLD-REVIEW.md` |
+| CP2 | 需求基线门 | 自动预检 + 人工 | `process/checks/CP2-REQUIREMENTS-BASELINE.md`；`process/checkpoints/CP2-REQUIREMENTS-BASELINE.md` |
+| CP3 | 蓝图 / HLD 架构评审门 | 自动预检 + 人工 | `process/checks/CP3-HLD-CONSISTENCY.md`；`process/checkpoints/CP3-HLD-REVIEW.md` |
 | CP4 | Story 拆解与并行安全门 | 自动预检（汇入 CP5） | `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md` |
-| CP5 | Story LLD 可实现性门 | 全量自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` |
-| CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` |
-| CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
-| CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`checkpoints/CP8-DELIVERY-READINESS.md` |
+| CP5 | Story 设计证据可实现性门 | 全量自动预检 + 人工 | `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；`process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` |
+| CP6 | Story 编码完成门 | 滚动自动 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md`，并引用 `IMPLEMENTATION.md` 或低风险实现摘要 |
+| CP7 | Story 验证完成门 | 滚动自动 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md`，并引用 `VERIFICATION-REPORT.md`、`TEST-REPORT.md`、`REVIEW.md` 或低风险验证摘要 |
+| CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`process/checkpoints/CP8-DELIVERY-READINESS.md` |
 
-CP6 / CP7 自动检查结果必须包含 `Agent Dispatch Evidence` 小节，用来证明 `meta-dev` / `meta-qa` 是真实子 agent 执行，而不是只有 handoff 文档。
+CP6 / CP7 自动检查结果必须包含 `Agent Dispatch Evidence` 小节，用来证明 `meta-dev` / `meta-qa` 是真实子 agent 执行，而不是只有 handoff 文档。CP6 还必须记录实现执行证据路径、证据类型和 N/A 理由。CP7 还必须记录验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险、阶段决策。
+
+软件开发工作流会在这些检查点周围生成额外工程产物：
+
+| 阶段 | 关键产物 | 用途 |
+|---|---|---|
+| CP2 前 | `docs/product/SCENARIOS.yaml`、`docs/product/TEST-MATRIX.md`、`docs/product/STORY-MAP.md`、`docs/product/MVP-SCOPE.md`、`docs/product/RELEASE-SLICES.md` | 把用户场景转为工程验证覆盖、产品范围、发布切片和 backlog 输入 |
+| CP3 前 | `docs/design/BLUEPRINT.md`、`docs/design/DOMAIN-MAP.md`、`docs/design/DEPENDENCY-MAP.md`、`docs/design/HLD.md` | 先定义 Feature / Epic 边界、领域对象、数据归属和依赖方向，再形成系统架构 |
+| CP7 | `docs/quality/VERIFICATION-REPORT.md`、`docs/quality/TEST-REPORT.md`、`docs/quality/REVIEW.md`、`docs/quality/FIXES.md` | 汇总验证对象清单、追踪矩阵、设计契约、分层验证、验证命令、覆盖缺口、review findings、回修 / 设计澄清输入和剩余风险 |
+| CP8 | `process/release/RELEASE-CONTEXT.yaml`、`docs/release/RELEASE-NOTES.md`、`docs/release/DEPLOY-CHECKLIST.md`、`docs/release/ROLLBACK.md`、`docs/release/MIGRATION.md`、`docs/release/FEEDBACK.md` | 先用 capsule 摘要控制发布上下文，再按 `release_artifact_profile=minimal|compact|full` 输出发布产物；`release_decision=READY|READY_WITH_RISK` 可进入终验，`NOT_READY` 阻断，`RELEASED|FAILED` 需要独立真实发布授权；`FEEDBACK.md` 不替代 follow-up tracking 台账 |
+
+阶段上下文胶囊默认路径：
+
+| 门禁 | 路径 | 说明 |
+|---|---|---|
+| CP2 | `process/context/CP2-REQUIREMENT-CONTEXT.yaml` | 需求、场景、范围和待决策摘要 |
+| CP3 | `process/context/CP3-DESIGN-CONTEXT.yaml` | 蓝图、HLD、ADR 和架构灰区摘要 |
+| CP5 | `process/context/CP5-LLD-CONTEXT.yaml` | Story 设计证据、LLD policy、clarification 队列和文件 owner 摘要 |
+| CP6 | `process/context/CP6-IMPLEMENTATION-CONTEXT.yaml` | 当前 Wave / Story 的实现输入和设计契约摘要 |
+| CP7 | `process/context/CP7-VERIFICATION-CONTEXT.yaml` | 验证范围、实现证据、测试矩阵和风险摘要 |
+| CP8 | `process/context/CP8-DELIVERY-CONTEXT.yaml` | 发布准备、文档缺口、风险接受、不授权项和 follow-up 摘要 |
 
 CP2 / CP3 还会生成讨论追溯文件：
 
@@ -178,7 +212,7 @@ CP2 / CP3 还会生成讨论追溯文件：
 | CP2 | `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` | `process/checks/CP2-DISCUSSION-CHECKPOINT.json` | Scenario Gray Areas、用户选择、freeform 确认、Deferred Ideas、canonical refs |
 | CP3 | `process/discussions/CP3-HLD-DISCUSSION-LOG.md` | `process/checks/CP3-DISCUSSION-CHECKPOINT.json` | Architecture Gray Areas、advisor table、方案形成输入、HLD 后审查意见、切换条件 |
 
-这些 Discussion Log 用于审计和中断恢复，不替代正式产物。后续 Agent 仍以 `USE-CASES.md`、`REQUIREMENTS.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md` 为准。
+这些 Discussion Log 用于审计和中断恢复，不替代正式产物。后续 Agent 默认先以 `process/context/*-CONTEXT.yaml` 为读取入口；必要时再展开读取 `docs/product/USE-CASES.md`、`docs/product/REQUIREMENTS.md`、`docs/product/SCENARIOS.yaml`、`docs/product/TEST-MATRIX.md`、`docs/design/HLD.md`、`docs/design/ARCHITECTURE-DECISION.md`、`docs/design/FEATURE-DESIGN-MATRIX.md` 或 Decision Brief。
 
 复杂项目未来可扩展为异步 power mode，例如生成 `process/discussions/CP2-QUESTIONS.json/html` 或 `CP3-QUESTIONS.json/html` 让用户批量回答问题。本版本不默认生成这些文件，也不把它们作为检查点前置条件。
 
@@ -194,7 +228,7 @@ LLD clarification queue 用来避免多个 `meta-dev` 同时打断你：
 
 - 队列位置是 `STATE.md.parallel_execution.lld_clarification_queue`。
 - 每个 item 至少包含 `id`、`story_id`、`owner_agent`、`question`、`options`、`recommendation`、`pros_cons`、`impact_surface`、`blocks_lld`、`answer`、`status`；其中 `options` 必须表达 1 个推荐方案和至少 1 个备选方案。
-- `blocks_lld=true` 的未回答项会阻止 CP5；非阻断 OPEN / Spike 可以进入 CP5，但必须在 Decision Brief、LLD 和 DEV-LOG 中说明影响、owner 和重访条件。
+- `blocks_lld=true` 的未回答项会阻止 CP5；非阻断 OPEN / Spike 可以进入 CP5，但必须在 Decision Brief、完整 LLD 或 Story 技术说明、DEV-LOG 中说明影响、owner 和重访条件。
 
 合格证据包括：
 
@@ -211,7 +245,7 @@ LLD clarification queue 用来避免多个 `meta-dev` 同时打断你：
 
 ### 6.4 fast-lane 快速模式
 
-`fast-lane` 适用于低风险轻量实现、小型规则 / Skill / Agent 修改和文档更新。它可以减少需求、HLD、LLD 的文档厚度和人工门数量，但不能跳过 CP6 / CP7、Agent Dispatch Evidence 或 CP8 终验摘要。
+`fast-lane` 适用于低风险轻量实现、小型规则 / Skill / Agent 修改和文档更新。它可以减少需求、HLD、LLD、IMPLEMENTATION、VERIFICATION 和 release 文档厚度，发布阶段默认使用 `release_artifact_profile=minimal`，但不能跳过 CP6 / CP7、Agent Dispatch Evidence、实现执行证据摘要、验证执行证据摘要、`RELEASE-CONTEXT.yaml` 或 CP8 终验摘要。
 
 命中架构、权限、安全、平台安装、外部接口、文件所有权冲突或多 Story 依赖时，必须升级为 `standard`。
 
@@ -222,7 +256,7 @@ Scenario / Architecture Gray Areas 不会把所有小修改强制升级成长流
 meta-po 发起人工检查时会提示 checklist 文件路径，例如：
 
 ```text
-请审查：checkpoints/CP3-HLD-REVIEW.md
+请审查：process/checkpoints/CP3-HLD-REVIEW.md
 自动预检结论：PASS
 本轮待人工决策项：1
 如果你回复 approve，表示你接受以下 1 项推荐方案，不表示授权以下 0 项禁止操作。
@@ -237,7 +271,7 @@ meta-po 发起人工检查时会提示 checklist 文件路径，例如：
 该文件包含本检查点的 Entry Criteria、Checklist、Exit Criteria、Deliverables、自动预检摘要、Decision Brief、待人工决策清单和人工审查结果区。
 ```
 
-审查后可以在对应 `checkpoints/CP*.md` 的“人工审查结果”中填写结论，也可以直接在对话中回复。Claude Code 可继续使用结构化选择。Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择；否则默认使用 exact 文本确认。系统对用户只展示三个推荐回复：`approve`、`修改: <具体修改点>`、`reject`；历史别名 `1/通过`、`2/修改: ...`、`3/不通过` 仅作为兼容解析，不作为主要提示文案。`approve` 表示接受待人工决策清单内全部推荐方案；需要调整单项时，用 `修改: <决策 ID>=<具体修改点>`。
+审查后可以在对应 `process/checkpoints/CP*.md` 的“人工审查结果”中填写结论，也可以直接在对话中回复。Claude Code 可继续使用结构化选择，但允许 direct ask 的 subagent 必须在 frontmatter `tools:` 中显式包含 `AskUserQuestion`。Codex 只有在当前工具面明确提供可用的 `request_user_input` / 选择 UI 时才使用结构化选择；否则默认使用 exact 文本确认。系统对用户只展示三个推荐回复：`approve`、`修改: <具体修改点>`、`reject`；历史别名 `1/通过`、`2/修改: ...`、`3/不通过` 仅作为兼容解析，不作为主要提示文案。`approve` 表示接受待人工决策清单内全部推荐方案；需要调整单项时，用 `修改: <决策 ID>=<具体修改点>`。
 
 ```text
 approve                  # 确认通过
@@ -247,9 +281,9 @@ reject                   # 不通过并回退
 
 不匹配上述 exact 输入时，meta-po 不得推进状态。
 
-用户直接在对话中确认时，meta-po 仍必须把结论回填到对应 `checkpoints/CP*.md`。
+用户直接在对话中确认时，meta-po 仍必须把结论回填到对应 `process/checkpoints/CP*.md`。
 
-人工门禁消息本身也会被校验：必须包含 checklist 路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复。如果存在待决策项但消息没有打印表格，门禁发起视为不合规。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须列为不授权项；`approve` 只接受表内推荐方案，不代表授权这些操作。
+人工门禁消息本身也会被校验：必须包含 checklist 路径、自动预检结论、Context Capsule 摘要、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。对应 checklist 的 Decision Brief 必须完整，并包含 `Decision Collection Coverage`，列出已扫描来源、候选问题数、纳入待决策数和 N/A / 缺失原因；这样你不需要再打开长文档自行查找是否还有遗漏问题。对话消息可按 `decision_brief_profile=full|compact|summary` 压缩，但不能省略高风险 / 阻断决策、不授权项和完整 checklist 路径。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须列为不授权项；`approve` 只接受表内推荐方案，不代表授权这些操作。
 
 ### 6.5.1 CP8 follow-up tracking
 
@@ -327,7 +361,7 @@ uv run --python 3.11 python scripts/check_cr_tracking_consistency.py --project-r
 方法二：查看过程文件中的 frontmatter 字段：
 
 - `process/REQUEST.md`：查看 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`
-- `process/USE-CASES.md`：查看 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`
+- `docs/product/USE-CASES.md`：查看 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`
 
 字段含义：
 

@@ -6,23 +6,23 @@ description: >-
   适用场景：问题修复后的验证阶段。
 argument-hint: "ISSUE ID 或修复涉及的 artifact 列表"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
 
-从 ISSUE 工单和 WORKFLOW-PLAN.yaml 中反推受影响的最小任务集合，生成 `REGRESSION-TEST-SUBSET.yaml`，用于修复后的精准回归验证。
+从 ISSUE / CR / `FIXES.md` 和 `process/DEVELOPMENT-PLAN.yaml` 中反推受影响的最小 Story / 验证集合，生成 `REGRESSION-TEST-SUBSET.yaml`，用于修复后的精准回归验证。
 
 ## 适用范围
 
 - 适用阶段：问题修复后的验证阶段
-- 输入：`issues/ISSUE-*.md`（affected_artifacts 字段）、`WORKFLOW-PLAN.yaml`
+- 输入：ISSUE / CR / `docs/quality/FIXES.md`（affected_artifacts 字段）、`process/DEVELOPMENT-PLAN.yaml`
 - 输出：`REGRESSION-TEST-SUBSET.yaml`
 
 ## 前置条件
 
 - [ ] ISSUE 工单已创建且 `affected_artifacts` 字段已填写
-- [ ] `WORKFLOW-PLAN.yaml` 存在且 tasks 中有依赖关系
+- [ ] `process/DEVELOPMENT-PLAN.yaml` 存在且 Story / tasks 中有依赖关系
 
 ## 执行约束
 
@@ -37,7 +37,7 @@ status: draft
 ## 反推逻辑
 
 1. 从 ISSUE 的 `affected_artifacts` 找到受影响的文件
-2. 从 `WORKFLOW-PLAN.yaml` 找到引用这些文件的 task
+2. 从 `process/DEVELOPMENT-PLAN.yaml` 找到引用这些文件的 Story / task
 3. 找到这些 task 的下游依赖（被 depends_on 引用的任务链）
 4. 检查是否有安全关键任务需要额外加入
 5. 输出最小任务集合

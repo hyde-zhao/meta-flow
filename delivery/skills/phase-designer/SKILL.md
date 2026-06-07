@@ -25,8 +25,8 @@ status: active
 
 ## 必须读取的输入
 
-- `process/REQUIREMENTS.md`
-- `process/SCENARIOS.yaml`
+- `docs/product/REQUIREMENTS.md`
+- `docs/product/SCENARIOS.yaml`
 - 相关约束或平台限制（若存在）
 
 ## 知识来源

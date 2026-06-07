@@ -6,7 +6,7 @@ description: >-
   适用场景：工作流计划设计阶段，Phase 划分之后。
 argument-hint: "DEVELOPMENT-PLAN.yaml、Story 依赖图、文件影响范围"
 user-invokable: true
-status: draft
+status: active
 ---
 
 ## 目标
