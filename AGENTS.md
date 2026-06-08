@@ -73,6 +73,8 @@ init（meta-po）                                                   [CP0 自动]
 
 ## 工作目录约定
 
+> 下表是 Meta Flow 无目标项目约定时的默认路由，不是 production 项目的强制目录。production 项目必须先识别目标项目已有交付目录和 README / docs 约定；存在约定时按目标项目路径映射并写入 `STATE.md.delivery_routing`，不得按下表另建 `docs/*` 或 `delivery/*`。
+
 | 目录 / 文件 | 用途 |
 |------------|------|
 | `process/STATE.md` | 工作流运行时状态（meta-po 维护） |
@@ -129,7 +131,7 @@ init（meta-po）                                                   [CP0 自动]
 > `docs/product/` 承载 USE-CASES / REQUIREMENTS / SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE / RELEASE-SLICES / BACKLOG；`docs/design/` 承载 BLUEPRINT / DOMAIN-MAP / DEPENDENCY-MAP / HLD / ARCHITECTURE-DECISION / FEATURE-DESIGN-MATRIX；`docs/features/` 承载 Feature 级 DESIGN / TEST-PLAN / TASKS；`docs/quality/` 承载 TEST-STRATEGY / VERIFICATION-REPORT / TEST-REPORT / REVIEW / FIXES；`docs/release/` 承载 RELEASE-NOTES / DEPLOY-CHECKLIST / ROLLBACK / MIGRATION / FEEDBACK。
 > `process/` 只承载运行状态、计划、Story 执行态、discussion、handoff、CR 和自动检查等过程文档；旧 `process/*.md` 技术文档路径与根目录 `checkpoints/CP*.md` 仅作为 legacy fallback 读取，不作为新生成默认路径。
 > 只有 `engagement_mode=meta-self-dev` 或用户明确说明优化 meta-flow 本身时，才默认把交付物写入当前仓库 `delivery/`。
-> production 项目必须先扫描目标项目 `README.md` / `README.*` / `docs/` 的交付物约定；存在则遵守，不存在则先提出建议并等待用户确认。
+> production 项目必须先扫描目标项目已有交付目录，以及 `README.md` / `README.*` / `docs/` 中的交付物、发布、构建或包结构约定；存在则遵守并写入 `STATE.md.delivery_routing`，不得再按 Meta Flow 默认路径另建交付目录；不存在则先提出建议并等待用户确认。
 > 当前仓库 `delivery/` 是 meta-flow 自身可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`。
 > `.agents/` 保留元工作流引擎自身定义，不参与安装。
 
@@ -309,6 +311,8 @@ init（meta-po）                                                   [CP0 自动]
 
 ## 工作目录约定
 
+> 下表是 Meta Flow 无目标项目约定时的默认路由，不是 production 项目的强制目录。production 项目必须先识别目标项目已有交付目录和 README / docs 约定；存在约定时按目标项目路径映射并写入 `STATE.md.delivery_routing`，不得按下表另建 `docs/*` 或 `delivery/*`。
+
 | 目录 / 文件 | 用途 |
 |------------|------|
 | `process/STATE.md` | 工作流运行时状态（meta-po 维护） |
@@ -364,7 +368,7 @@ init（meta-po）                                                   [CP0 自动]
 > `docs/product/` 承载 USE-CASES / REQUIREMENTS / SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE / RELEASE-SLICES / BACKLOG；`docs/design/` 承载 BLUEPRINT / DOMAIN-MAP / DEPENDENCY-MAP / HLD / ARCHITECTURE-DECISION / FEATURE-DESIGN-MATRIX；`docs/features/` 承载 Feature 级 DESIGN / TEST-PLAN / TASKS；`docs/quality/` 承载 TEST-STRATEGY / VERIFICATION-REPORT / TEST-REPORT / REVIEW / FIXES；`docs/release/` 承载 RELEASE-NOTES / DEPLOY-CHECKLIST / ROLLBACK / MIGRATION / FEEDBACK。
 > `process/` 只承载运行状态、计划、Story 执行态、discussion、handoff、CR 和自动检查等过程文档；旧 `process/*.md` 技术文档路径与根目录 `checkpoints/CP*.md` 仅作为 legacy fallback 读取，不作为新生成默认路径。
 > 只有 `engagement_mode=meta-self-dev` 或用户明确说明优化 meta-flow 本身时，才默认把交付物写入当前仓库 `delivery/`。
-> production 项目必须先扫描目标项目 `README.md` / `README.*` / `docs/` 的交付物约定；存在则遵守，不存在则先提出建议并等待用户确认。
+> production 项目必须先扫描目标项目已有交付目录，以及 `README.md` / `README.*` / `docs/` 中的交付物、发布、构建或包结构约定；存在则遵守并写入 `STATE.md.delivery_routing`，不得再按 Meta Flow 默认路径另建交付目录；不存在则先提出建议并等待用户确认。
 > 当前仓库 `delivery/` 是 meta-flow 自身可独立推送到目标 Git 仓库的交付包，内含 `agents/`、`skills/`、`rules/`、`scripts/`。
 > `.agents/` 保留元工作流引擎自身定义，不参与安装。
 

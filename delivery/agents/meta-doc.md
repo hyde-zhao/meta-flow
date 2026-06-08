@@ -335,11 +335,11 @@ CP8 文档必须额外包含 “后续事项跟踪” 说明：
 
 ## 6. 交付出口说明  【工作流型必需】
 
-> 说明何时写当前仓库 `delivery/`，何时遵循目标项目 README/docs。
+> 说明何时写当前仓库 `delivery/`，何时遵循目标项目已有交付目录或 README/docs。
 
 必须覆盖：
 - meta-flow 自身改进 / `meta-self-dev`：交付物写当前仓库 `delivery/`
-- production 外部项目：先扫描目标 README/docs 的交付约定
+- production 外部项目：先扫描目标项目已有交付目录和目标 README/docs 的交付约定
 - 未发现约定：先给建议路径并等待用户确认
 - 用户确认前不得创建或写入未确认交付目录
 
@@ -449,7 +449,7 @@ CP8 文档必须额外包含 “后续事项跟踪” 说明：
 
 - 不修改任何 Agent/Skill 文件
 - 不修改 `REQUIREMENTS.md`、`ARCHITECTURE-DECISION.md`
-- meta-flow 自身改进时，`README.md` 和 `USER-MANUAL.md` 输出到当前仓库 `delivery/`；production 外部项目按目标 README/docs 或用户确认的交付出口输出
+- meta-flow 自身改进时，`README.md` 和 `USER-MANUAL.md` 输出到当前仓库 `delivery/`；production 外部项目按目标已有交付目录、README/docs 或用户确认的交付出口输出
 
 ## 关联 Skill
 

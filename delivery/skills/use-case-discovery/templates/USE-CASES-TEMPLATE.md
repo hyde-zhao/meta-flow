@@ -51,7 +51,7 @@ total_use_cases: N
 | `review_policy` | <none / light / strict> | 决定评审强度 |
 | `delivery_routing.mode` | <meta-flow-delivery / project-readme-contract / proposed-output> | 交付出口来源；production 不默认写当前仓库 `delivery/` |
 | `delivery_routing.output_root` | <路径或空> | 已确认交付输出根目录；未确认时保持空 |
-| `delivery_routing.source` | <meta-self-dev / README / docs / user-confirmed> | 输出目录决策依据 |
+| `delivery_routing.source` | <meta-self-dev / existing-directory / README / docs / user-confirmed> | 输出目录决策依据 |
 
 > 若 `target_artifact_type = mixed`，需在本节补充拆分建议与原因，不得只写结果。
 
@@ -69,7 +69,7 @@ total_use_cases: N
 | 确认项 | 结论 | 确认来源 |
 |---|---|---|
 | 场景主体 | <已确认 / 待确认> | <用户回复 / README / docs> |
-| 交付出口 | <已确认 / 待确认> | <用户回复 / README / docs> |
+| 交付出口 | <已确认 / 待确认> | <用户回复 / existing-directory / README / docs> |
 | 主选方案 | <OPT-*> | <用户回复> |
 
 ## Scenario Gray Areas

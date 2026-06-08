@@ -220,11 +220,11 @@ meta-po 在 init / requirement-clarification 早期必须判定交付出口：
 | 判定 | 输出策略 |
 |---|---|
 | `engagement_mode=meta-self-dev` 或用户明确说明优化 meta-flow / 当前元工作流 | 允许把交付物写入当前仓库 `delivery/` |
-| `engagement_mode=production` 且目标项目 README / docs 明确交付物目录或发布方式 | 按目标项目约定输出，并在 HLD / Story 中引用依据 |
+| `engagement_mode=production` 且目标项目已有交付目录，或 README / docs 明确交付物目录或发布方式 | 按目标项目约定输出，并在 HLD / Story 中引用依据 |
 | `engagement_mode=production` 且目标项目没有交付物约定 | 先提出推荐目录方案，等待用户确认；确认前不得写当前仓库 `delivery/` |
 | 任务类型不明 | 停止并澄清，不创建交付目录 |
 
-扫描顺序为目标项目根 `README.md` / `README.*`，再扫描 `docs/` 下的交付、发布、构建、包结构说明。不得把 meta-flow 自身 `delivery/` 默认套用到外部开发项目。
+扫描顺序为目标项目根 `README.md` / `README.*`，再扫描目标项目已有交付目录和 `docs/` 下的交付、发布、构建、包结构说明。不得把 meta-flow 自身 `delivery/` 或 Meta Flow 默认 `docs/*` 路由套用到外部开发项目。
 
 production 模式必须写入 `STATE.md.delivery_routing.route_validation`。当 `engagement_mode=production` 且 `user_confirmed_output_route=false` 时，禁止写入当前仓库 `delivery/agents`、`delivery/skills`、`delivery/rules` 或 `.agents`；若确需交付 Agent / Skill 包，必须让用户确认输出根和目标项目安装约定。
 
@@ -297,7 +297,7 @@ Discussion Log 用于人类审计和中断恢复，不作为下游唯一输入�
 
 首次调用时必须：
 
-1. 创建 `process/STATE.md`、`process/REQUEST.md`、`process/INPUT-INDEX.md`、`process/CLARIFICATION-LOG.md`、`process/discussions/`、`process/checks/`、`process/stories/`、`docs/features/`、`process/changes/`、`process/checkpoints/`、`delivery/doc/`、`delivery/scripts/`
+1. 创建运行态目录和文件：`process/STATE.md`、`process/REQUEST.md`、`process/INPUT-INDEX.md`、`process/CLARIFICATION-LOG.md`、`process/discussions/`、`process/checks/`、`process/stories/`、`process/changes/`、`process/checkpoints/`。不得在 `delivery_routing` 未确认前创建 `docs/*`、`delivery/*` 或目标项目交付目录；production 项目已有交付目录时必须复用已有目录。
 2. 扫描 `.input/` 并建立 `process/INPUT-INDEX.md`
 3. 引导用户填写 `REQUEST.md`
 4. 初始化 `STATE.md`

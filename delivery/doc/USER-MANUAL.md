@@ -152,7 +152,7 @@ Meta Flow 生成的文档默认分为三类：
 | 运行过程文档 | `process/` | `process/STATE.md`、`process/REQUEST.md`、`process/STORY-BACKLOG.md`、`process/DEVELOPMENT-PLAN.yaml`、`process/stories/STORY-*.md`、`process/stories/STORY-*-IMPLEMENTATION.md`、`process/changes/CR-*.md` |
 | 人工确认态 | `process/checkpoints/` | `process/checkpoints/CP2-REQUIREMENTS-BASELINE.md`、`process/checkpoints/CP3-HLD-REVIEW.md`、`process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`、`process/checkpoints/CP8-DELIVERY-READINESS.md` |
 
-旧项目中已经存在的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流默认写入 `docs/...` 和 `process/checkpoints/...`。production 项目如果已有 README/docs 约定，优先按目标项目约定输出。
+旧项目中已经存在的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流在无目标项目约定时默认写入 `docs/...` 和 `process/checkpoints/...`。production 项目如果已有交付目录或 README/docs 约定，优先按目标项目约定输出。
 
 ### 6.1 标准推进顺序
 
@@ -409,9 +409,9 @@ meta-flow check cr-tracking --project-root .
 meta-flow 会先判断当前任务是否为自身改进：
 
 - `meta-self-dev` 或用户明确说明“优化 meta-flow / 当前元工作流”：交付件写当前仓库 `delivery/`
-- `production` 外部项目：先扫描目标项目 `README.md`、`README.*` 与 `docs/` 是否有交付物、发布、构建或包结构说明
-- README/docs 存在交付约定：按目标项目约定输出，并在 HLD / Story 中引用依据
-- README/docs 没有交付约定：meta-po / meta-se 先提出建议目录，等待用户确认后才写入
+- `production` 外部项目：先扫描目标项目已有交付目录、`README.md`、`README.*` 与 `docs/` 是否有交付物、发布、构建或包结构说明
+- 已有交付目录或 README/docs 存在交付约定：按目标项目约定输出，并在 HLD / Story 中引用依据
+- 目标项目没有已有交付目录且 README/docs 没有交付约定：meta-po / meta-se 先提出建议目录，等待用户确认后才写入
 
 用户确认前，production 项目不得默认创建当前仓库 `delivery/` 交付件。
 

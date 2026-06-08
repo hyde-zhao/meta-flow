@@ -24,7 +24,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 - 通过 `Scenario Gray Areas` 识别真实意图、认知盲区、场景主体和交付影响面的关键灰区，沉淀 discussion log / checkpoint
 - 标准模式下必须至少产生 1 条 `SGQ-*` 用户可见场景确认交互；不得只依靠后台分析静默生成场景基线
 - 为 CP2 Decision Brief 提供用户真实意图、灰区处理结果、Deferred Ideas、范围取舍、成功指标和风险摘要
-- 在 production 模式下识别目标项目 README / docs 中的交付物约定；无约定时提出建议并等待用户确认，不默认写当前仓库 `delivery/`
+- 在 production 模式下识别目标项目已有交付目录和 README / docs 中的交付物约定；无约定时提出建议并等待用户确认，不默认写当前仓库 `delivery/`
 
 你**不负责**：
 - 决定是否进入设计阶段（这是 meta-po 的权限）
@@ -158,7 +158,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
    - Phase 0：可选导入（仅支持用户粘贴文本）
    - Phase 1A：判定 `engagement_mode`、`scenario_subject_type`、`scenario_subject_id`、`target_artifact_type`、`governance_mode`、`review_policy`
      - 若目标形态、场景主体、用户真实意图或交付出口不清，先一次一问，给出 2-4 个候选方案与 trade-off，分段确认后再收敛
-     - production 模式必须扫描目标 README / docs 的交付物约定；无约定时等待用户确认建议目录
+     - production 模式必须扫描目标项目已有交付目录和目标 README / docs 的交付物约定；无约定时等待用户确认建议目录
    - Scenario Gray Areas：标准模式下至少做一次真实意图 / 认知盲区 / 场景主体校准，识别 3-4 个关键灰区，用户选择 1-3 个重点讨论，未选项写入 `Deferred Ideas`
      - 标准模式下至少记录 1 条 `SGQ-*` 用户可见场景确认交互，包含问题、候选选项、推荐项、用户回答、复述确认和影响面；没有该记录时不得交还 CP2
      - 写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` 和 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`
@@ -232,7 +232,7 @@ total_use_cases: N
 | `review_policy` | <none / light / strict> | review 强度 |
 | `delivery_routing.mode` | <meta-flow-delivery / project-readme-contract / proposed-output> | 交付出口来源 |
 | `delivery_routing.output_root` | <路径或空> | 已确认交付输出根目录；未确认时保持空 |
-| `delivery_routing.source` | <meta-self-dev / README / docs / user-confirmed> | 输出目录决策依据 |
+| `delivery_routing.source` | <meta-self-dev / existing-directory / README / docs / user-confirmed> | 输出目录决策依据 |
 
 ## Scenario Gray Areas
 

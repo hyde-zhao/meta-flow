@@ -60,6 +60,8 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 
 ## 状态文件
 
+以下路径是 Meta Flow 无目标项目约定时的默认路由，不是 production 项目的强制目录。production 项目必须先识别目标项目已有交付目录和 README / docs 约定；存在约定时按目标项目路径映射并写入 `STATE.md.delivery_routing`，不得按下列默认路径另建 `docs/*` 或 `delivery/*`。
+
 - **运行时状态**：`process/STATE.md`
 - **自动检查结果**：`process/checks/CP*.md`
 - **阶段上下文胶囊**：`process/context/CP*-*-CONTEXT.yaml`
@@ -107,7 +109,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 11. **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查，并确认 `feature_design_refs`、`lld_policy` 和 Story 设计证据已获批、依赖门控满足、文件所有权不冲突
 12. **测试策略与质量评审前置**：meta-qa 验收前先输出 `docs/quality/TEST-STRATEGY.md` 并声明 `validation_mode=runtime|static-only|dry-run-only|review-only|mixed`；验证时先使用 `verification-execution` 消费 `SCENARIOS.yaml` / `TEST-MATRIX.md`、设计证据和 CP6 实现执行证据，输出 `docs/quality/VERIFICATION-REPORT.md`，确认验证对象、设计契约、测试 / Fixture、最小切片、平台差异、人工审查、问题和风险闭环；随后使用 `quality-review` 固化 TEST-REPORT / REVIEW，发布前使用 `release-readiness` 先生成 `process/release/RELEASE-CONTEXT.yaml`，再按 `release_artifact_profile=minimal|compact|full` 固化发布、部署、回滚、迁移和反馈回流
 12a. **发布准备 capsule-first**：发布前必须判定 `release_decision=READY|READY_WITH_RISK|NOT_READY|RELEASED|FAILED`。CP8 默认只允许 `READY` / `READY_WITH_RISK` / `NOT_READY`；`RELEASED` / `FAILED` 必须有独立真实发布授权和执行证据。发布阶段不得默认读取完整 HLD、全部 LLD、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW 或完整 diff；只消费摘要、计数、风险 ID、决策 ID 和证据路径。`CHANGELOG.md`、`INSTALL.md`、`TROUBLESHOOTING.md`、`POST-RELEASE-OBSERVATION.md` 不作为默认产物，仅 `full` profile 或用户明确要求时生成。
-13. **输出路由**：长期产品 / 设计 / 质量 / 发布文档写入 `docs/product/`、`docs/design/`、`docs/features/`、`docs/quality/`、`docs/release/`；运行态写入 `process/`，自动检查结果写入 `process/checks/`，确认稿写入 `process/checkpoints/`；旧 `process/*.md` 技术文档路径与根目录 `checkpoints/CP*.md` 仅作为 legacy fallback 读取；只有 meta-flow 自身改进才默认写当前仓库 `delivery/`，production 项目必须先扫描 README/docs 的交付约定，缺失时先询问用户
+13. **输出路由**：长期产品 / 设计 / 质量 / 发布文档在无目标项目约定时默认写入 `docs/product/`、`docs/design/`、`docs/features/`、`docs/quality/`、`docs/release/`；运行态写入 `process/`，自动检查结果写入 `process/checks/`，确认稿写入 `process/checkpoints/`；旧 `process/*.md` 技术文档路径与根目录 `checkpoints/CP*.md` 仅作为 legacy fallback 读取；只有 meta-flow 自身改进才默认写当前仓库 `delivery/`。production 项目必须先扫描目标项目已有交付目录，以及 README/docs 中的交付、发布、构建或包结构约定；存在则按目标约定写入并记录 `STATE.md.delivery_routing`，不得按 Meta Flow 默认路径另建交付目录；缺失时先询问用户
 14. **Agent/Skill 关系维护**：开发或修改 Agent、Skill 时，若影响调用、适用或归属关系，必须同步更新 `skills/README.md`
 15. **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；Skill 运行时脚本必须放到 `delivery/skills/<skill>/scripts/`
 16. **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...`

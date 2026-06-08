@@ -114,7 +114,7 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 当 `STATE.md.delivery_routing.engagement_mode=production` 时，必须校验：
 
 - `target_project_root` 非空，并且不是当前 meta-flow 仓库根，除非用户明确要求优化 meta-flow 自身。
-- 已扫描目标项目 `README.md` / `README.*` / `docs/`，并记录在 `route_validation.scanned_sources[]`。
+- 已扫描目标项目已有交付目录、`README.md` / `README.*` / `docs/`，并记录在 `route_validation.scanned_sources[]`。
 - 若目标项目没有交付约定，`requires_user_confirmation=true`，且 `user_confirmed_output_route=true` 前不得写交付物。
 - 未经确认不得写入当前仓库 `delivery/agents`、`delivery/skills`、`delivery/rules` 或 `.agents`。
 - 禁止目录必须与 `STATE.md.delivery_routing.route_validation.forbidden_roots_when_production[]` 一致。

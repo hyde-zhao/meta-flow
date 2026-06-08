@@ -17,7 +17,7 @@
 - `process/context/`：阶段上下文胶囊。CP2 / CP3 / CP5 / CP6 / CP7 / CP8 的子 agent、人工门禁、验证和发布准备默认先读取这里，减少重复读取全文档。
 - `process/checkpoints/`：人工确认态。CP2 / CP3 / CP5 / CP8 的 Decision Brief、checklist 和人工审查结果写入这里。
 
-旧项目里的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流默认生成到 `docs/...` 与 `process/checkpoints/...`。如果目标项目 README/docs 已定义自己的文档目录，production 模式必须优先遵守目标约定；无约定时由 meta-po 提出路由建议并等待用户确认。
+旧项目里的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流在无目标项目约定时默认生成到 `docs/...` 与 `process/checkpoints/...`。如果目标项目已有交付目录或 README/docs 已定义自己的文档目录，production 模式必须优先遵守目标约定；无约定时由 meta-po 提出路由建议并等待用户确认。
 
 ## CP2 / CP3 讨论增强
 
@@ -187,6 +187,6 @@ canonical role 不变，仍用于状态机、handoff 与检查点审计。Codex 
 
 ## 交付出口路由
 
-当前仓库 `delivery/` 只作为 meta-flow 自身交付包。若工作流服务外部 production 项目，meta-po 必须先扫描目标项目 `README.md` / `README.*` / `docs/` 的交付物或发布约定；存在约定时按目标项目执行，不存在时先提出建议并等待用户确认，不能默认写当前仓库 `delivery/`。
+当前仓库 `delivery/` 只作为 meta-flow 自身交付包。若工作流服务外部 production 项目，meta-po 必须先扫描目标项目已有交付目录，以及 `README.md` / `README.*` / `docs/` 的交付物或发布约定；存在约定时按目标项目执行，不存在时先提出建议并等待用户确认，不能默认写当前仓库 `delivery/`。
 
 更多使用方式见 `doc/USER-MANUAL.md`。
