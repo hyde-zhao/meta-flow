@@ -45,8 +45,8 @@ status: active
 2. 生成 `install.py`、`install.ps1`、`install.sh`。
 3. 若目标包含 Codex，必须从 `delivery/doc/PLATFORM-CONTRACTS.yaml` 取路径：subagent 写入 `.codex/agents/<name>.toml` 或 `~/.codex/agents/<name>.toml`；Skill 写入 `.agents/skills/<skill>/SKILL.md` 或 `~/.agents/skills/<skill>/SKILL.md`。
 4. Codex subagent 严格遵循官方 schema：必填 `name`、`description`、`developer_instructions`；仅允许官方可选字段 `nickname_candidates`、`model`、`model_reasoning_effort`、`sandbox_mode`、`mcp_servers`、`skills.config`；不得写 `version`、`instructions` 或其他非标准顶层字段。
-5. Codex 安装时必须为 canonical subagent 写入 `nickname_candidates` 命令别名：`meta-po`、`meta-pm`、`meta-se`、`meta-doc` 各 5 个，`meta-dev` 与 `meta-qa` 各 10 个。按百家姓顺序依次分配：`meta-po -> po-zhao/po-qian/po-sun/po-li/po-zhou`、`meta-pm -> pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`meta-se -> se-chu/se-wei/se-jiang/se-shen/se-han`、`meta-dev -> dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`meta-qa -> qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`meta-doc -> doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`。
-6. Claude Code 文件型 subagent 不使用 nickname；安装时必须写入不同 `color`：`meta-po=red`、`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。
+5. Codex 安装时必须仅为功能 canonical subagent 写入 `nickname_candidates` 命令别名：`meta-pm`、`meta-se`、`meta-doc` 各 5 个，`meta-dev` 与 `meta-qa` 各 10 个。按百家姓顺序依次分配：`meta-pm -> pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`meta-se -> se-chu/se-wei/se-jiang/se-shen/se-han`、`meta-dev -> dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`meta-qa -> qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`meta-doc -> doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`。
+6. Claude Code 文件型 subagent 不使用 nickname；安装时必须写入不同 `color`：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。
 7. 安装器必须封装 `ensure_directory()` / `ensure_file_target()`：写入任何文件、复制任何树、生成 manifest 前，逐级检查父路径组件；存在且为目录则继续，不存在则创建，存在但不是目录则输出明确错误并终止。
 8. 安装 CLI 必须支持 `meta-flow install <platform>` 与 `meta-flow uninstall <platform>`；`--platform` 仅作为 legacy 兼容入口保留。`meta-flow install --help`、`meta-flow install <platform> --help`、`meta-flow uninstall --help`、`meta-flow uninstall <platform> --help` 都必须输出可读帮助。
 9. 用 `platform-validator` 校验 DryRun 输出、目录结构、Codex subagent schema、Codex nickname、Claude Code color、Codex `.codex/skills` 负向断言和路径组件冲突场景。
@@ -69,7 +69,7 @@ status: active
 - 分析和产出安装脚本时，仓库根上下文中的 canonical 路径必须写为 `delivery/scripts/install.py`、`delivery/scripts/install.ps1`、`delivery/scripts/install.sh`；只有当 `delivery/` 被单独分发为仓库根时，才使用 `scripts/install.py`、`scripts/install.ps1`、`scripts/install.sh`
 - Codex subagent 的指令正文必须写入 `developer_instructions`；canonical agent Markdown 正文映射到该字段，不得另造 `instructions` 顶层字段
 - 若 canonical source 或渲染结果出现 `version` 等非官方 Codex subagent 顶层字段，必须视为错误并阻断交付
-- canonical agent 的 `name` 不因命令别名改变；`po-zhao` 等只进入 Codex `nickname_candidates`，不得替换 `meta-po`、`meta-dev` 等状态机角色名
+- canonical agent 的 `name` 不因命令别名改变；`pm-wu` 等只进入 Codex `nickname_candidates`，不得替换 `meta-pm`、`meta-dev` 等状态机角色名；Host Orchestrator 是主进程职责，不生成平台 subagent
 - Claude Code 只用 `color` 区分 subagent，不新增伪 nickname 字段
 - Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`，guardrail 必须覆盖负向断言
 - 目标路径任一父级组件被普通文件占用时，安装器必须 fail fast，输出 `安装路径被非目录占用: <path>` 和可操作修复提示，不得暴露 Python traceback

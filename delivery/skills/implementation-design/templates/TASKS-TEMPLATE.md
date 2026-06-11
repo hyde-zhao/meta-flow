@@ -14,4 +14,4 @@ feature_id: ""
 
 | Blocker ID | 影响 TASK | 问题 | 需要谁决策 | 推荐处理 |
 |---|---|---|---|---|
-| BLK-01 | TASK-001 | <问题> | human / meta-se / meta-po | <recommendation> |
+| BLK-01 | TASK-001 | <问题> | human / meta-se / host-orchestrator | <recommendation> |

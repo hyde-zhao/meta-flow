@@ -2,7 +2,7 @@
 source_cr: "CR-{id}"
 status: "open"
 created_at: ""
-created_by: "meta-po"
+created_by: "host-orchestrator"
 updated_at: ""
 checkpoint_source: "CP8"
 cr_index_path: "process/changes/CR-INDEX.yaml"
@@ -47,7 +47,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 ## 启动候选 CR 流程
 
-用户决定推进某一候选项时，使用 `@meta-po 启动后续 CR`，并给出台账路径、候选编号和目标摘要。meta-po 必须先读取本台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml` 和活跃正式 CR，完成冲突预检后，才能创建正式 CR 文件并把状态改为 `active`。
+用户决定推进某一候选项时，在当前主进程会话中说明“启动后续 CR”，并给出台账路径、候选编号和目标摘要。host-orchestrator 必须先读取本台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml` 和活跃正式 CR，完成冲突预检后，才能创建正式 CR 文件并把状态改为 `active`。
 
 ## CR 冲突预检
 

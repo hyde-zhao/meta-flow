@@ -46,6 +46,7 @@ VALID_COMPONENTS = ("rules", "agent", "full")
 KEBAB_CASE_RE = re.compile(r"^[a-z][a-z0-9-]{2,39}$")
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 BUILT_IN_CODEX_AGENTS = {"default", "worker", "explorer"}
+LEGACY_ORCHESTRATOR_AGENT_NAMES = frozenset({"meta-po", "host-orchestrator"})
 MANAGED_VERSION = "1.0.0"
 PLATFORM_CONTRACTS_PATH = Path("doc") / "PLATFORM-CONTRACTS.yaml"
 MANAGED_MARKDOWN_TOKEN = "<!-- myflow-managed:"
@@ -68,7 +69,6 @@ CODEX_ALLOWED_AGENT_FIELDS = frozenset(CODEX_REQUIRED_AGENT_FIELDS) | CODEX_OPTI
 CODEX_NICKNAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
 CLAUDE_AGENT_COLORS = frozenset({"red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"})
 AGENT_DISPLAY_PROFILES: dict[str, dict[str, object]] = {
-    "meta-po": {"codex_nicknames": ["po-zhao", "po-qian", "po-sun", "po-li", "po-zhou"], "claude_color": "red"},
     "meta-pm": {"codex_nicknames": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"], "claude_color": "orange"},
     "meta-se": {"codex_nicknames": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"], "claude_color": "yellow"},
     "meta-dev": {
@@ -165,6 +165,15 @@ def ensure_kebab_case(items: list[str], kind: str) -> None:
     invalid = [item for item in items if not KEBAB_CASE_RE.fullmatch(item)]
     if invalid:
         fail(f"{kind} 名称必须为 kebab-case 且长度为 3-40: {', '.join(invalid)}")
+
+
+def reject_legacy_orchestrator_agents(requested_agents: list[str]) -> None:
+    legacy_requested = sorted(set(requested_agents) & LEGACY_ORCHESTRATOR_AGENT_NAMES)
+    if legacy_requested:
+        fail(
+            "主编排器现在由当前会话 Host Orchestrator 主进程承担，不再作为平台 agent 安装；"
+            f"请不要使用 --agent {', '.join(legacy_requested)}。可安装的对象仅为功能子 agent。"
+        )
 
 
 def script_repo_root(script_path: Path) -> Path:
@@ -914,6 +923,16 @@ def component_entry_kinds(component: str) -> set[str]:
     }[component]
 
 
+def selected_entry_kinds(component: str, legacy_content: str | None) -> set[str]:
+    if legacy_content == "agents":
+        return {"agent"}
+    if legacy_content == "skills":
+        return {"skill"}
+    if legacy_content == "rules":
+        return {"managed-block"}
+    return component_entry_kinds(component)
+
+
 def install_rules(
     platform: str,
     scope: str,
@@ -1100,26 +1119,49 @@ def prune_stale_manifest_entries(
     current_entries: list[dict[str, str]],
     transaction: Transaction,
     dry_run: bool,
-    component: str,
+    entry_kinds: set[str],
 ) -> int:
     matching = find_matching_install(manifest_payload, platform, scope, workspace_root)
     if matching is None:
         return 0
 
-    kinds = component_entry_kinds(component)
     current_remove_paths = {
         str(Path(entry["remove_path"]))
         for entry in current_entries
-        if entry.get("kind") in kinds and entry.get("remove_path")
+        if entry.get("kind") in entry_kinds and entry.get("remove_path")
     }
     pruned = 0
     for entry in matching.get("entries", []):
-        if not isinstance(entry, dict) or str(entry.get("kind")) not in kinds:
+        if not isinstance(entry, dict) or str(entry.get("kind")) not in entry_kinds:
             continue
         remove_path_value = str(entry.get("remove_path", ""))
         if not remove_path_value or str(Path(remove_path_value)) in current_remove_paths:
             continue
         remove_manifest_entry(entry, transaction, dry_run)
+        pruned += 1
+    return pruned
+
+
+def prune_legacy_orchestrator_agents(
+    platform: str,
+    scope: str,
+    workspace_root: Path,
+    contracts: dict[str, object],
+    transaction: Transaction,
+    dry_run: bool,
+    entry_kinds: set[str],
+) -> int:
+    if "agent" not in entry_kinds:
+        return 0
+
+    agents_dir = target_path(contracts, platform, scope, "agents", workspace_root)
+    extension = ".toml" if platform == "codex" else ".md"
+    pruned = 0
+    for name in sorted(LEGACY_ORCHESTRATOR_AGENT_NAMES):
+        candidate = agents_dir / f"{name}{extension}"
+        if not has_managed_file_audit(candidate):
+            continue
+        remove_path(candidate, transaction, dry_run)
         pruned += 1
     return pruned
 
@@ -1330,6 +1372,7 @@ def main() -> None:
     requested_skills = parse_csv(args.skill)
     ensure_kebab_case(requested_agents, "agent")
     ensure_kebab_case(requested_skills, "skill")
+    reject_legacy_orchestrator_agents(requested_agents)
     if args.mode == "uninstall" and (args.content or requested_agents or requested_skills):
         fail("uninstall 仅支持按 --component rules|agent|full 卸载，不支持 --content/--agent/--skill 过滤。")
 
@@ -1373,6 +1416,7 @@ def main() -> None:
     print(f"Component: {resolved_component}")
     if args.content:
         print(f"Legacy content: {args.content}")
+    prune_entry_kinds = selected_entry_kinds(resolved_component, args.content)
 
     if requested_agents and not install_agents_enabled:
         fail("指定了 --agent，但内容类型未包含 agents。")
@@ -1449,10 +1493,21 @@ def main() -> None:
             manifest_entries,
             transaction,
             args.dry_run,
-            resolved_component,
+            prune_entry_kinds,
         )
         if pruned_count:
             print(f"Pruned {pruned_count} stale managed item(s) from previous install.")
+        legacy_pruned_count = prune_legacy_orchestrator_agents(
+            args.platform,
+            args.scope,
+            workspace_root,
+            platform_contracts,
+            transaction,
+            args.dry_run,
+            prune_entry_kinds,
+        )
+        if legacy_pruned_count:
+            print(f"Pruned {legacy_pruned_count} legacy orchestrator agent file(s).")
         upsert_manifest_entry(manifest_payload, entry)
         if not args.dry_run:
             save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)

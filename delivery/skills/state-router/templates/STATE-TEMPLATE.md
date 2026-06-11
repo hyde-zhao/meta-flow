@@ -4,7 +4,7 @@ workflow_mode: "standard"
 fast_lane_reason: ""
 fast_lane_risk_classification: ""
 current_phase: "init"
-current_agent: "meta-po"
+current_agent: "host-orchestrator"
 iteration: 0
 blocked: false
 active_change: ""
@@ -101,7 +101,7 @@ workflow_health:
     story_rework_count: 0
     unchanged_artifact_hash_rounds: 0
     phase_elapsed_rounds: 0
-  escalation_policy: "任一计数器超过阈值时，meta-po 必须停止继续消耗轮次，生成决策项或人工仲裁请求；不得继续静默重试。"
+  escalation_policy: "任一计数器超过阈值时，host-orchestrator 必须停止继续消耗轮次，生成决策项或人工仲裁请求；不得继续静默重试。"
   active_signals: []
   last_escalation: ""
 artifacts:
@@ -235,7 +235,9 @@ confirmation_adapter:
   preferred_mode: "structured-select"
   fallback_mode: "exact-text"
 orchestrator_session:
-  role: "meta-po"
+  kind: "host"
+  role: "host-orchestrator"
+  host_session_id: ""
   agent_id: ""
   agent_name: ""
   thread_id: ""
@@ -248,7 +250,7 @@ orchestrator_session:
   pending_decision_ids: []
   pending_non_authorized_items: []
   subagent_auto_dispatch: "enabled"
-  resume_instruction: "用户回复人工检查点结论后，优先使用 resume_agent 或 send_input 恢复同一 meta-po；仅旧线程不可恢复时才允许 recovery"
+  resume_instruction: "用户回复人工检查点结论后，由 Host Orchestrator 主进程重新读取 STATE、checkpoint 和相关产物后继续；不得 spawn / resume 编排子 agent"
   spawned_at: ""
   last_seen_at: ""
   awaiting_since: ""
@@ -270,9 +272,11 @@ delegated_interaction:
   returned_at: ""
   return_summary_path: ""
   pending_user_input: ""
-  routing_note: "requirement-clarification 委托 meta-pm、solution-design 委托 meta-se；正式人工检查点仍由 meta-po 发起"
+  routing_note: "requirement-clarification 委托 meta-pm、solution-design 委托 meta-se；正式人工检查点仍由 host-orchestrator 发起"
 agent_lifecycle:
-  orchestrator_singleton: true
+  orchestration_model: "host-orchestrated"
+  orchestrator_singleton: false
+  active_agents_scope: "functional-agents-only"
   platform_capabilities:
     subagent_dispatch:
       available: false
@@ -284,12 +288,12 @@ agent_lifecycle:
       checked_at: ""
       method: "unverified|conversation|request_user_input|platform-task|relay-only"
       structured_choice_available: false
-      question_broker: "meta-po"
+      question_broker: "host-orchestrator"
       allowed_direct_roles:
-        - "meta-po"
+        - "host-orchestrator"
         - "meta-pm"
         - "meta-se"
-      limitation: "ask_user 是语义动作；未确认平台用户提问能力前，子 agent 不得假设可直接向用户提问。Codex 仅在当前工具面明确提供 request_user_input 时允许结构化选择，否则使用 exact-text 或经 meta-po relay。"
+      limitation: "ask_user 是语义动作；未确认平台用户提问能力前，子 agent 不得假设可直接向用户提问。Codex 仅在当前工具面明确提供 request_user_input 时允许结构化选择，否则使用 exact-text 或经 host-orchestrator relay。"
   active_agents: []
   singleton_violation: false
   singleton_resolution: ""
@@ -412,7 +416,7 @@ checkpoints:
       PASS_WITH_RISK: "verified-with-risk"
       WAIVED: "verified"
       NEEDS_REWORK: "meta-dev"
-      NEEDS_DESIGN_CLARIFICATION: "meta-se|meta-po"
+      NEEDS_DESIGN_CLARIFICATION: "meta-se|host-orchestrator"
       BLOCKED: "blocked"
     results: []
   cp8_delivery_readiness:
@@ -544,7 +548,7 @@ last_updated: ""
 ---
 
 <!--
-状态转换表（meta-po 参考）：
+状态转换表（host-orchestrator 参考）：
 
 | 当前状态 | 退出条件 | 下一状态 | 检查点 |
 |---------|---------|---------|----------|
@@ -567,8 +571,8 @@ Story 生命周期（每个 Story 独立）：
 - 验证环境确认不再是人工检查点；`validation_mode=runtime` 或 `mixed` 且需要真实运行时，`VALIDATION-ENV.yaml` 缺失才由 meta-qa 阻断；`static-only` / `dry-run-only` / `review-only` 必须记录等价验证证据、N/A 理由和剩余风险
 - 所有自动检查结果写入 process/checks/CP*.md；所有人工审查稿写入 process/checkpoints/CP*.md
 - CP2 / CP3 / CP5 / CP8 人工检查点发起时必须提示用户 checklist 文件路径，人工审查后必须回填对应 process/checkpoints/CP*.md 的“人工审查结果”；CP4 只写自动预检并汇入 CP5 Decision Brief
-- subagent_auto_dispatch=enabled 表示同工作流内允许 meta-po 自动拉起真实子 agent；inline fallback 仍需用户单独批准
-- user_question.available=false 或 method=relay-only 时，子 agent 不得直接向用户提问；meta-pm/meta-se 的阶段委托问题经 meta-po relay，meta-dev 的实现灰区写入 lld_clarification_queue
+- subagent_auto_dispatch=enabled 表示同工作流内允许 host-orchestrator 自动拉起真实子 agent；inline fallback 仍需用户单独批准
+- user_question.available=false 或 method=relay-only 时，子 agent 不得直接向用户提问；meta-pm/meta-se 的阶段委托问题经 host-orchestrator relay，meta-dev 的实现灰区写入 lld_clarification_queue
 - delegated_interaction 仅记录阶段内用户交互权委托；不得代表 CP2 / CP3 已确认
 - lld_clarification_queue 存在 blocks_lld=true 且未回答的 item 时，不得发起 CP5 全量人工确认
 - human_gate_decisions.pending_human_decisions 是 CP2 / CP3 / CP5 / CP8 待人工决策清单的状态机对象；checkpoint 文件和对话发起消息必须从该队列聚合并保持一致

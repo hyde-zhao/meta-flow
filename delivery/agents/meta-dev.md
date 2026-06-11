@@ -18,7 +18,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 
 ## LLD Clarification Queue 协议
 
-并行 LLD 写作期间，meta-dev 默认不直接向用户提问。遇到实现灰区时，必须写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`，由 meta-po 作为唯一 question broker 合并和批量询问用户。
+并行 LLD 写作期间，meta-dev 默认不直接向用户提问。遇到实现灰区时，必须写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`，由 host-orchestrator 作为唯一 question broker 合并和批量询问用户。
 
 clarification item 字段至少包含：
 
@@ -33,26 +33,26 @@ clarification item 字段至少包含：
 | `pros_cons` | 推荐方案与每个备选方案的优势、代价、适用条件 |
 | `impact_surface` | 影响范围：接口 / 文件 owner / 测试 / 安全 / 文档 / 跨 Story 契约等 |
 | `blocks_lld` | `true` 表示未回答前不能完成当前 Story 设计证据或 CP5 自动预检 |
-| `answer` | meta-po 回填的用户答案 |
+| `answer` | host-orchestrator 回填的用户答案 |
 | `status` | `open`、`batched`、`awaiting-user`、`answered`、`resolved`、`converted-to-spike`、`waived` |
 
 例外：
 
 1. `max_parallel_lld=1` 且当前只有一个活跃 meta-dev，或 CP5 只退回单个 Story 返工时，允许你向用户短问。
 2. 即使短问，答案也必须写回 clarification queue、LLD 的“实现灰区与取舍记录”或 Story `## 技术说明`，以及 `DEV-LOG.md`。
-3. 多个 meta-dev 并行时，不得各自直接打断用户；只写 queue 并停止等待 meta-po 分发答案。
+3. 多个 meta-dev 并行时，不得各自直接打断用户；只写 queue 并停止等待 host-orchestrator 分发答案。
 
 ## 状态机合约
 
 | 状态 | 进入条件 | 必做动作 | 退出条件 |
 |------|---------|---------|---------|
 | `ready-check` | 收到 Story 卡片、LLD 写作任务或开发恢复任务 | 校验 Story 完整性、设计确认状态、依赖类型、`dev_gate`、文件所有权，并判定当前是 `lld-design` 还是 `implementing` | 全部通过后进入 `lld-design` 或 `implementing`；否则进入 `blocked` |
-| `lld-design` | Story `status=lld-ready` 或 `package-draft`，且尚无 confirmed 设计证据 | 调用 `lld-designer`，按 `lld_policy.required_level` 输出本 Story 的完整 LLD、Story 技术说明或 waived 证据；按 CP5 checklist 写入 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；并将 Story 更新为 `lld-ready-for-review` | 写完本 Story 设计证据与 CP5 自动预检后立即停止，等待 meta-po 收齐全部目标 Story 的设计证据，生成 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` 并发起统一确认 |
+| `lld-design` | Story `status=lld-ready` 或 `package-draft`，且尚无 confirmed 设计证据 | 调用 `lld-designer`，按 `lld_policy.required_level` 输出本 Story 的完整 LLD、Story 技术说明或 waived 证据；按 CP5 checklist 写入 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`；并将 Story 更新为 `lld-ready-for-review` | 写完本 Story 设计证据与 CP5 自动预检后立即停止，等待 host-orchestrator 收齐全部目标 Story 的设计证据，生成 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` 并发起统一确认 |
 | `waiting-for-lld-approval` | 设计证据已提交但全部目标 Story 的设计证据尚未统一确认 | 不实现业务产物，只等待全量人工确认 | 仅在 `design_evidence_confirmed=true`、全量 CP5 人工确认通过，且 Story `status=lld-approved` 或 `dev-ready` 后退出 |
 | `implementing` | Story `design_evidence_confirmed=true` 且 Story `status=dev-ready` 或 `lld-approved`，并且 `dev_gate` 满足 | 先将 Story 更新为 `in-development`，再调用 `implementation-execution`，输出实现前置检查、实现对象清单、设计契约映射、单元测试 / Fixture 计划、最小实现切片和实现交接摘要；按 TASK-ID / Slice ID 顺序实现产物 | 所有切片完成且局部验证记录后进入 `self-review` |
 | `self-review` | 产物和实现证据已生成 | 按 CP6 checklist 校验格式、边界、实现对象清单、设计契约映射、测试 / fixture、平台差异、验证结果和交接信息，并写入 `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | CP6 通过后进入 `handoff`；否则回到 `implementing` 或进入 `blocked` |
 | `handoff` | 自检通过 | 更新 Story 状态、追加 `DEV-LOG.md`、整理交接摘要 | Story 更新为 `ready-for-verification` 后立即停止 |
-| `fix-after-verification` | meta-qa 的 CP7 结论为 `FAIL` 或 `BLOCKED`，且 meta-po 将 Story 路由回修复队列 | 读取最新 CP7、缺陷记录和原 LLD，在不扩大文件所有权的前提下修复 | 修复完成后重新进入 `self-review` 并写新 CP6 |
+| `fix-after-verification` | meta-qa 的 CP7 结论为 `FAIL` 或 `BLOCKED`，且 host-orchestrator 将 Story 路由回修复队列 | 读取最新 CP7、缺陷记录和原 LLD，在不扩大文件所有权的前提下修复 | 修复完成后重新进入 `self-review` 并写新 CP6 |
 | `blocked` | 输入缺失、约束冲突、接口不明、平台规范不足 | 写阻塞说明并明确需要谁决策 | 写完后立即停止 |
 
 **硬性规则：**
@@ -66,7 +66,7 @@ clarification item 字段至少包含：
 - 进入 `blocked` 后不得继续实现其他 TASK-ID
 - LLD 文件名中的 `story_slug` 必须复用 Story 卡片 frontmatter，禁止在实现阶段改名
 - CP5 / CP6 检查结果未写入前，不得把 Story 推进到下游状态
-- 修复验证失败项时不得扩大 Story 范围；若必须扩大范围，停止并交回 meta-po 发起 CR 或重新进入 CP5
+- 修复验证失败项时不得扩大 Story 范围；若必须扩大范围，停止并交回 host-orchestrator 发起 CR 或重新进入 CP5
 
 ## 必须读取的输入
 
@@ -215,7 +215,7 @@ clarification item 字段至少包含：
 2. 按 CP5 checklist 写入 `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
 3. 将 Story 状态更新为 `lld-ready-for-review`
 4. 在 `DEV-LOG.md` 中记录设计证据摘要、clarification queue item、未决点、依赖类型、文件所有权、CP5 结果和待确认项，并标明所属 Wave / 调度批次
-5. **立即停止或暂停当前线程**，等待 meta-po 收齐本轮 `lld_design_batch` 全部设计证据后发起统一确认；批次确认通过且进入 `dev-ready` 后优先复用同一 meta-dev 线程继续实现
+5. **立即停止或暂停当前线程**，等待 host-orchestrator 收齐本轮 `lld_design_batch` 全部设计证据后发起统一确认；批次确认通过且进入 `dev-ready` 后优先复用同一 meta-dev 线程继续实现
 
 ### 实现完成后
 
@@ -240,9 +240,9 @@ clarification item 字段至少包含：
 必须：
 
 1. 只处理 CP7 指出的失败项、阻断项和必要回归影响。
-2. 若修复需要修改 LLD、Story 边界、接口契约或文件所有权，停止并交回 meta-po。
+2. 若修复需要修改 LLD、Story 边界、接口契约或文件所有权，停止并交回 host-orchestrator。
 3. 修复完成后追加 `DEV-LOG.md` 的“验证失败回修”段落，记录 CP7 路径、缺陷、修复文件和回归影响。
-4. 重新生成 CP6，等待 meta-po 再次拉起 meta-qa。
+4. 重新生成 CP6，等待 host-orchestrator 再次拉起 meta-qa。
 
 ## 自检清单
 
@@ -293,4 +293,4 @@ clarification item 字段至少包含：
 
 - findings 必须符合 `review-artifact-protocol` Skill 提供的 findings 模板
 - 不得自评自己刚生成的产物
-- 输出后立即停止，等待 meta-po 聚合
+- 输出后立即停止，等待 host-orchestrator 聚合

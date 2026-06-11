@@ -35,13 +35,13 @@ status: active
 | 自动检查结果 | `process/checks/CP{n}-{slug}.md` | 由 agent 填写，必须包含逐项 PASS / FAIL / N/A / WAIVED |
 | 讨论日志 | `process/discussions/CP{n}-*-DISCUSSION-LOG.md` | CP2 / CP3 人类审计与恢复日志；不替代正式产物 |
 | 讨论恢复点 | `process/checks/CP{n}-DISCUSSION-CHECKPOINT.json` | CP2 / CP3 中断恢复状态；缺失时自动检查必须说明 N/A 或 blocked 原因 |
-| 人工审查稿 | `process/checkpoints/CP{n}-{slug}.md` | 由 meta-po 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
+| 人工审查稿 | `process/checkpoints/CP{n}-{slug}.md` | 由 host-orchestrator 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
 | Story 设计证据人工审查稿 | `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 的完整 LLD / 技术说明 / waived 证据统一确认 |
 | Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
 | Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
 | 阶段上下文胶囊 | `process/context/CP*-*-CONTEXT.yaml` | 默认读取入口；checkpoint 记录其状态和读取扩展理由 |
 
-`process/checks/` 属于运行态检查证据；`process/checkpoints/` 属于人工确认态文件。人工审查时，meta-po 必须在用户提示中给出具体 `process/checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
+`process/checks/` 属于运行态检查证据；`process/checkpoints/` 属于人工确认态文件。人工审查时，host-orchestrator 必须在用户提示中给出具体 `process/checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
 
 ## 结果状态
 
@@ -65,7 +65,7 @@ status: active
 
 自动检查点存在任一 `FAIL` 且未被 `WAIVED` 时，结论必须为 `FAIL` 或 `BLOCKED`，不得进入人工确认。
 
-CP7 是验证完成滚动门，允许使用更细的路由结论：`PASS`、`PASS_WITH_RISK`、`WAIVED`、`NEEDS_REWORK`、`NEEDS_DESIGN_CLARIFICATION`、`BLOCKED`。其中 `PASS_WITH_RISK` 可推进但必须汇入 CP8 风险接受输入；`NEEDS_REWORK` 路由回 meta-dev；`NEEDS_DESIGN_CLARIFICATION` 路由回 meta-se / meta-po；`BLOCKED` 停止推进。
+CP7 是验证完成滚动门，允许使用更细的路由结论：`PASS`、`PASS_WITH_RISK`、`WAIVED`、`NEEDS_REWORK`、`NEEDS_DESIGN_CLARIFICATION`、`BLOCKED`。其中 `PASS_WITH_RISK` 可推进但必须汇入 CP8 风险接受输入；`NEEDS_REWORK` 路由回 meta-dev；`NEEDS_DESIGN_CLARIFICATION` 路由回 meta-se / host-orchestrator；`BLOCKED` 停止推进。
 
 ## 通用检查结果模板
 
@@ -131,7 +131,7 @@ checkpoint_id: "CP{n}"
 checkpoint_name: ""
 type: "manual | auto_then_manual | rolling_auto_then_manual | batch_auto_then_manual"
 status: "pending | approved | changes_requested | rejected"
-owner: "meta-po"
+owner: "host-orchestrator"
 created_at: ""
 reviewed_by: ""
 reviewed_at: ""
@@ -243,7 +243,7 @@ target:
 - 风险接受项：
 ```
 
-meta-po 发起人工检查时必须提示：
+host-orchestrator 发起人工检查时必须提示：
 
 ```text
 请审查：process/checkpoints/CP{n}-{slug}.md
@@ -307,7 +307,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 - 类型：自动
 - 结果文件：`process/checks/CP0-REQUEST-INTAKE.md`
-- 责任方：meta-po
+- 责任方：host-orchestrator
 - 阶段：`init -> requirement-clarification`
 
 ### Entry Criteria
@@ -316,7 +316,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 |---|---|
 | 原始请求存在 | 用户已有明确任务、变更请求或 `.input/` 输入 |
 | 工作目录可写 | `docs/`、`process/`、`process/checkpoints/` 可创建 |
-| 编排器单例可判定 | Codex 下未发现多个活动 meta-po |
+| 编排器单例可判定 | Codex 下未发现多个活动 host-orchestrator |
 
 ### Checklist
 
@@ -390,7 +390,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - 类型：自动预检 + 人工
 - 自动结果文件：`process/checks/CP2-REQUIREMENTS-BASELINE.md`
 - 人工审查稿：`process/checkpoints/CP2-REQUIREMENTS-BASELINE.md`
-- 责任方：meta-pm / meta-po
+- 责任方：meta-pm / host-orchestrator
 
 ### Entry Criteria
 
@@ -450,7 +450,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - 类型：自动预检 + 人工
 - 自动结果文件：`process/checks/CP3-HLD-CONSISTENCY.md`
 - 人工审查稿：`process/checkpoints/CP3-HLD-REVIEW.md`
-- 责任方：meta-se / meta-po
+- 责任方：meta-se / host-orchestrator
 
 ### Entry Criteria
 
@@ -507,7 +507,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 - 类型：自动预检（汇入 CP5）
 - 自动结果文件：`process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`
-- 责任方：meta-se / meta-po
+- 责任方：meta-se / host-orchestrator
 
 ### Entry Criteria
 
@@ -564,7 +564,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - 类型：全量自动预检 + 全量人工
 - 自动结果文件：`process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
 - 人工审查稿：`process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
-- 责任方：meta-dev / meta-po
+- 责任方：meta-dev / host-orchestrator
 
 ### Entry Criteria
 
@@ -716,7 +716,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 条目 | 说明 |
 |---|---|
 | 阻塞缺陷为 0 | P0/P1 缺陷 = 0 |
-| 验证结论可路由 | `PASS` / `PASS_WITH_RISK` / `WAIVED` 可进入下一阶段；`NEEDS_REWORK` 回 meta-dev；`NEEDS_DESIGN_CLARIFICATION` 回 meta-se / meta-po；`BLOCKED` 停止推进 |
+| 验证结论可路由 | `PASS` / `PASS_WITH_RISK` / `WAIVED` 可进入下一阶段；`NEEDS_REWORK` 回 meta-dev；`NEEDS_DESIGN_CLARIFICATION` 回 meta-se / host-orchestrator；`BLOCKED` 停止推进 |
 | 调度证据通过 | meta-qa 执行证据有效；仅 handoff-created 不可放行 |
 
 ### Deliverables
@@ -735,7 +735,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - 类型：自动预检 + 人工
 - 自动结果文件：`process/checks/CP8-DELIVERY-READINESS.md`
 - 人工审查稿：`process/checkpoints/CP8-DELIVERY-READINESS.md`
-- 责任方：meta-qa / meta-doc / meta-po
+- 责任方：meta-qa / meta-doc / host-orchestrator
 
 ### Entry Criteria
 
@@ -799,9 +799,9 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 ## 执行规则
 
 1. 所有 CP 文件创建或更新后，必须回写 `process/STATE.md.checkpoints` 中的路径和结论。
-2. 人工检查点的自动预检未 `PASS` 或 `WAIVED` 前，meta-po 不得发起人工确认。
-3. 人工确认通过后，meta-po 必须把人工结论写回对应 `process/checkpoints/CP*.md` 的“人工审查结果”，并同步更新 `STATE.md`。
-4. 如果用户直接在对话中回复 `approve`，meta-po 也必须补写人工审查结果文件，不能只改状态。`1/通过` 可作为历史兼容别名解析，但新提示不得再把多个等价别名混排给用户。
+2. 人工检查点的自动预检未 `PASS` 或 `WAIVED` 前，host-orchestrator 不得发起人工确认。
+3. 人工确认通过后，host-orchestrator 必须把人工结论写回对应 `process/checkpoints/CP*.md` 的“人工审查结果”，并同步更新 `STATE.md`。
+4. 如果用户直接在对话中回复 `approve`，host-orchestrator 也必须补写人工审查结果文件，不能只改状态。`1/通过` 可作为历史兼容别名解析，但新提示不得再把多个等价别名混排给用户。
 5. `changes_requested` 必须路由给对应 agent 修订，并在重提时保留旧检查结果作为历史证据。
 6. `rejected` 必须回退到检查点定义的目标阶段或 Story 状态。
 7. CP6 / CP7 必须包含 `## Agent Dispatch Evidence` 小节；若缺少真实子 agent 证据且没有用户批准的 `inline-fallback`，结论只能是 `FAIL` 或 `BLOCKED`。
@@ -829,7 +829,7 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 - [ ] 自动检查点均生成 `process/checks/CP*.md` 结果文件
 - [ ] CP2 / CP3 / CP5 / CP8 人工检查点均生成 `process/checkpoints/CP*.md` 审查稿
 - [ ] 人工检查稿包含 Decision Brief
-- [ ] meta-po 发起关键人工确认时明确提示 checklist 文件路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复
+- [ ] host-orchestrator 发起关键人工确认时明确提示 checklist 文件路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复
 - [ ] 发起消息已复述 `approve` 接受哪些 DQ，且不授权项已独立列出
 - [ ] `meta-flow check human-gate` 校验 checkpoint 文件和发起消息通过
 - [ ] 人工审查后对应 `process/checkpoints/CP*.md` 已填入结论

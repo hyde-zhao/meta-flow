@@ -15,7 +15,7 @@ status: active
 
 ## 适用场景
 
-- `meta-po` 向 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc` 交接
+- `host-orchestrator` 向 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc` 交接
 - 阶段切换或 Story 执行中角色切换
 - `requirement-clarification` / `solution-design` 启用阶段委托直连用户时，生成 `delegated-user-interaction` 语义的 handoff
 - 并行 LLD 写作出现实现灰区时，生成或更新 `lld-clarification-broker` 语义的 broker handoff / queue 摘要
@@ -48,8 +48,8 @@ status: active
 4. 选择该 Agent 完成当前任务所需的最小文件集合，并按 `must_read`、`read_if_needed`、`do_not_read_by_default` 分类。
 5. 显式列出不应加载的历史草稿、中间推理、完整 transcript、无关 Story / Wave 和无关产物。
 6. 若存在活跃变更单或当前 Story，补入对应上下文。
-7. Codex 下默认 `fork_context=false`，只发送本 Skill 产出的上下文包；不得传递完整会话历史，只有并行收益明确且经 meta-po 记录理由时，才允许 fork。
-8. 输出子 agent 复用键：`role + workflow_id + change_id + story_id + wave_id`，供 meta-po 查询 `STATE.md.agent_lifecycle.active_agents`。
+7. Codex 下默认 `fork_context=false`，只发送本 Skill 产出的上下文包；不得传递完整会话历史，只有并行收益明确且经 host-orchestrator 记录理由时，才允许 fork。
+8. 输出子 agent 复用键：`role + workflow_id + change_id + story_id + wave_id`，供 host-orchestrator 查询 `STATE.md.agent_lifecycle.active_agents`。
 9. 输出 handoff frontmatter 的 `semantic` 与 `dispatch` 区，区分 `stage-dispatch`、`delegated-user-interaction`、`lld-clarification-broker`、`handoff-created`、`agent_spawned` 和 `agent_completed`；handoff 文件不得自行声明目标 agent 已完成，除非已有平台调度证据。
 10. 读取 `STATE.md.agent_lifecycle.platform_capabilities.user_question`，输出本次 handoff 的 `question_permission`。若用户提问能力未验证、不可用或仅支持 relay，不得让目标子 agent 假设能直接使用 `ask_user` / `request_user_input`。
 
@@ -57,9 +57,9 @@ status: active
 
 | semantic | 使用场景 | 交互权 | 收敛方式 |
 |---|---|---|---|
-| `stage-dispatch` | 普通阶段或 Story 任务交接 | 由 meta-po 继续对用户发起正式门控 | 目标 Agent 产出后回到 meta-po |
-| `delegated-user-interaction` | `meta-pm` 的需求澄清阶段、`meta-se` 的 HLD 设计阶段 | 平台支持时由目标 Agent 直接向用户提问；不支持时经 meta-po relay | 目标 Agent 写 `return_summary_path`，meta-po 回收后发起 CP2 / CP3 |
-| `lld-clarification-broker` | 多个 meta-dev 并行 LLD 写作时收集实现灰区 | meta-dev 不直接并发问用户；meta-po 作为 question broker 统一提问 | meta-po 写回 `lld_clarification_queue.items[].answer` 并分发给对应 meta-dev |
+| `stage-dispatch` | 普通阶段或 Story 任务交接 | 由 host-orchestrator 继续对用户发起正式门控 | 目标 Agent 产出后回到 host-orchestrator |
+| `delegated-user-interaction` | `meta-pm` 的需求澄清阶段、`meta-se` 的 HLD 设计阶段 | 平台支持时由目标 Agent 直接向用户提问；不支持时经 host-orchestrator relay | 目标 Agent 写 `return_summary_path`，host-orchestrator 回收后发起 CP2 / CP3 |
+| `lld-clarification-broker` | 多个 meta-dev 并行 LLD 写作时收集实现灰区 | meta-dev 不直接并发问用户；host-orchestrator 作为 question broker 统一提问 | host-orchestrator 写回 `lld_clarification_queue.items[].answer` 并分发给对应 meta-dev |
 
 当 `semantic=delegated-user-interaction` 时，handoff 必须同时写入 `STATE.md.delegated_interaction` 的字段来源；当 `semantic=lld-clarification-broker` 时，handoff 必须引用 `STATE.md.parallel_execution.lld_clarification_queue` 和当前 `active_question_batch`。
 
@@ -88,11 +88,11 @@ dispatch:
   approved_at: ""
 question_permission:
   can_ask_user: false
-  mode: "direct|relay-via-meta-po|queue-only|none"
+  mode: "direct|relay-via-host-orchestrator|queue-only|none"
   structured_choice_allowed: false
   allowed_question_scope: ""
   forbidden_question_scope: "CP2/CP3/CP5/CP8 正式人工门禁、运行授权、凭据、安全边界、publish、live / 交易类授权"
-  broker_agent: "meta-po"
+  broker_agent: "host-orchestrator"
 context_policy:
   capsule_first: true
   capsule_path: "process/context/CP*-*-CONTEXT.yaml"
@@ -111,13 +111,13 @@ context_policy:
 - `mode=inline-fallback`：仅在平台不可用且用户明确批准时使用，必须填写 `fallback_reason`、`approved_by`、`approved_at`。
 - `mode=handoff-only`：只创建交接文件，不代表目标 agent 已执行；不得把业务任务标记为完成。
 - `semantic=delegated-user-interaction`：允许被委托 Agent 在阶段内直接与用户多轮交互，但不得发起 CP2 / CP3 正式人工检查点。
-- `semantic=lld-clarification-broker`：只允许 meta-po 汇总和提问；并行 meta-dev 只能写 clarification item，不能各自打断用户。
+- `semantic=lld-clarification-broker`：只允许 host-orchestrator 汇总和提问；并行 meta-dev 只能写 clarification item，不能各自打断用户。
 
 用户提问字段语义：
 
 - `can_ask_user=true` 只表示允许提出本阶段澄清问题，不表示允许发起正式人工门禁或运行授权。
 - `structured_choice_allowed=true` 只能在当前平台工具面明确支持结构化选择时填写；Codex 下对应 `request_user_input` 可用性，未提供时必须使用 exact-text 或 relay。
-- `mode=relay-via-meta-po` 时，目标 Agent 写出问题、推荐方案、备选方案、影响面和阻塞状态，由 meta-po 代为询问并回填答案。
+- `mode=relay-via-host-orchestrator` 时，目标 Agent 写出问题、推荐方案、备选方案、影响面和阻塞状态，由 host-orchestrator 代为询问并回填答案。
 - `mode=queue-only` 主要用于并行 LLD；meta-dev 只能写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`。
 - `context_policy.capsule_first=true` 表示目标 Agent 必须先读 capsule；若 `full_doc_read_reason` 为空，不得默认读取完整上游正式文档。
 
@@ -154,7 +154,7 @@ context_policy:
 - [ ] 阶段委托 handoff 能对应 `STATE.md.delegated_interaction`
 - [ ] LLD clarification broker handoff 能对应 `STATE.md.parallel_execution.lld_clarification_queue`
 - [ ] handoff frontmatter 含 `dispatch` 区，且能区分子 agent 执行、仅交接、用户批准的 inline fallback
-- [ ] handoff frontmatter 含 `question_permission` 区，且能区分 direct、relay-via-meta-po、queue-only 和 none
+- [ ] handoff frontmatter 含 `question_permission` 区，且能区分 direct、relay-via-host-orchestrator、queue-only 和 none
 
 ## 不适用边界
 
@@ -166,5 +166,5 @@ context_policy:
 - Story 执行阶段通常同时存在 Wave 级和 Story 级上下文，不能只给其中一层
 - 文档太多时应优先给“当前正式版本”，不要把历史稿与现行稿混装
 - capsule 已经包含足够事实时，不要再把 HLD / LLD / TEST-MATRIX 等全文档一并传给子 agent
-- 阶段委托只是交互方式，不是门控授权；CP2 / CP3 正式确认仍必须回到 meta-po
+- 阶段委托只是交互方式，不是门控授权；CP2 / CP3 正式确认仍必须回到 host-orchestrator
 - LLD broker 的队列答案必须回写到正式 LLD 或 DEV-LOG，不能只停留在对话里

@@ -58,7 +58,7 @@ status: active
 - 必填 `name`、`description`、`developer_instructions`
 - 只允许官方 schema 字段：`name`、`description`、`developer_instructions`、`nickname_candidates`、`model`、`model_reasoning_effort`、`sandbox_mode`、`mcp_servers`、`skills.config`
 - 不得出现 `version`、`instructions` 或其他非标准顶层字段
-- `nickname_candidates` 必须符合命令别名映射：`po-zhao/po-qian/po-sun/po-li/po-zhou`、`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`
+- `nickname_candidates` 必须符合功能子 agent 命令别名映射：`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`
 
 ### 维度 5.1：Claude Code subagent color（仅 claude，REQUIRED）
 
@@ -68,13 +68,13 @@ status: active
 - canonical `name` 保持 `meta-*`
 - 不写 Codex 风格的 `nickname_candidates`
 - `color` 使用允许值：`red`、`blue`、`green`、`yellow`、`purple`、`orange`、`pink`、`cyan`
-- 颜色映射符合：`meta-po=red`、`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`
+- 颜色映射符合：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`
 
 ### 维度 5.2：Claude Code AskUserQuestion 权限（仅 claude，BLOCKING）
 
 若目标平台是 Claude Code，必须额外校验用户提问工具权限：
 
-- 允许 direct ask 的 agent 必须在 frontmatter `tools:` 中显式包含 `AskUserQuestion`：`meta-po`、`meta-pm`、`meta-se`
+- 允许 direct ask 的功能 subagent 必须在 frontmatter `tools:` 中显式包含 `AskUserQuestion`：`meta-pm`、`meta-se`
 - 默认不直接问用户的 agent 不得声明 `AskUserQuestion`：`meta-dev`、`meta-qa`、`meta-doc`
 - `AskUserQuestion` 只代表 Claude Code 结构化提问工具权限；Codex 不使用该工具名
 - 若 `tools:` 缺失或不含 `AskUserQuestion`，不得仅凭正文中的“可直接向用户提问”放行
@@ -100,7 +100,7 @@ Codex project 安装必须至少构造以下负向用例：
 
 ```bash
 touch <target>/.codex
-meta-flow install codex --scope project --project-dir <target> --component agent --agent meta-po --skill context-handoff
+meta-flow install codex --scope project --project-dir <target> --component agent --agent meta-pm --skill context-handoff
 ```
 
 预期：非零退出，错误包含 `安装路径被非目录占用: <target>/.codex`。
@@ -166,7 +166,7 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 
 - 只做校验，不修改任何文件
 - 发现 BLOCKING 问题时，阻断交付推进
-- 发现 REQUIRED 问题时，记录并通知 meta-po，由 meta-po 决定是否阻断
+- 发现 REQUIRED 问题时，记录并通知 host-orchestrator，由 host-orchestrator 决定是否阻断
 
 ## 验收标准
 
@@ -189,4 +189,4 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 - Claude Code 使用 `color` 展示角色，Codex 使用 `nickname_candidates` 命令别名；两者不能互相类比或混写。
 - Claude Code 的 `AskUserQuestion` 必须写入需要 direct ask 的 subagent frontmatter `tools:`；只在正文里写“可直接问用户”不够。
 - 路径组件冲突检查要覆盖父路径被普通文件占用的情况，不能只检查最终目标文件是否存在。
-- production 项目路由失败不是安装器问题；它表示 meta-po 尚未获得目标项目输出目录确认，不应通过安装 dry-run 掩盖。
+- production 项目路由失败不是安装器问题；它表示 host-orchestrator 尚未获得目标项目输出目录确认，不应通过安装 dry-run 掩盖。

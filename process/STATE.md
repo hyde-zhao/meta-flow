@@ -1,15 +1,44 @@
 ---
 project_id: "meta-flow"
 workflow_mode: "standard"
+orchestration_model: "host-orchestrated"
 current_phase: "documentation"
-current_agent: "meta-po"
-iteration: 10
+current_agent: "host-orchestrator"
+iteration: 11
 blocked: false
 active_change: ""
-last_action: "CR-016 已实现并验证：全阶段 Context Capsule、上下文预算、workflow health、Decision Brief 压缩、production route validator 和语义 guardrail 已同步"
-next_action: "等待用户审查 CR-016 变更结果；后续阶段交接和人工门禁将优先使用 process/context/*-CONTEXT.yaml"
+last_action: "CR-017 已关闭：Meta Flow 已迁移为 Host Orchestrator 主进程编排，Codex / Claude Code 仅安装功能子 agent"
+next_action: "无活跃 CR；后续正式工作流由 Host Orchestrator 主进程按阶段调度 meta-pm / meta-se / meta-dev / meta-qa / meta-doc"
+orchestrator_session:
+  kind: "host"
+  role: "host-orchestrator"
+  host_session_id: ""
+  agent_id: ""
+  agent_name: ""
+  thread_id: ""
+  status: "active"
+  workflow_id: "meta-flow"
+  active_change: ""
+  pending_gate: ""
+  pending_checklist_path: ""
+  pending_user_decision: ""
+  pending_decision_ids: []
+  pending_non_authorized_items: []
+  subagent_auto_dispatch: "enabled"
+  resume_instruction: "用户回复人工检查点结论后，由 Host Orchestrator 主进程重新读取 STATE、checkpoint 和相关产物后继续；不得 spawn / resume 编排子 agent"
+  spawned_at: ""
+  last_seen_at: "2026-06-11T16:50:00+08:00"
+  awaiting_since: ""
+  resumed_at: ""
+  closed_at: ""
+  previous_agent_id: ""
+  previous_thread_id: ""
+  superseded_by: ""
+  recovery_reason: ""
 agent_lifecycle:
-  orchestrator_singleton: true
+  orchestration_model: "host-orchestrated"
+  orchestrator_singleton: false
+  active_agents_scope: "functional-agents-only"
   active_agents: []
   reuse_policy: "same workflow/change/story reuses the same role thread; close after checkpoint or handoff completion"
 context_budget:
@@ -86,6 +115,16 @@ checkpoints:
   final_review_confirmed: false
 parallel_waves: []
 history:
+  - at: "2026-06-11T16:50:00+08:00"
+    actor: "host-orchestrator"
+    action: "close-cr-017-host-orchestrated"
+    phase: "documentation"
+    summary: "CR-017 验证通过并关闭：active rules、state-router、STATE 模板、README / USER-MANUAL、安装器、package-builder、platform-validator 与 guardrail 已切换为 Host Orchestrator 主进程编排；Codex / Claude Code dry-run 均只安装 meta-pm/meta-se/meta-dev/meta-qa/meta-doc 功能子 agent，不安装 meta-po 或 host-orchestrator 编排 agent。"
+  - at: "2026-06-11T00:00:00+08:00"
+    actor: "host-orchestrator"
+    action: "activate-cr-017-host-orchestrated"
+    phase: "documentation"
+    summary: "用户批准取消 meta-po 编排子 agent；主进程 Host Orchestrator 接管子 agent 调度、人工门禁、CR、状态推进和 LLD clarification broker，Codex / Claude Code 只安装功能子 agent。"
   - at: "2026-04-23T11:30:48+08:00"
     actor: "meta-po"
     action: "initialize-state"
@@ -290,7 +329,7 @@ last_updated: "2026-05-28T00:00:00+08:00"
 ---
 
 <!--
-状态转换表（meta-po 参考）：
+状态转换表（Host Orchestrator 参考）：
 
 | 当前状态 | 退出条件 | 下一状态 | 人工检查点 |
 |---------|---------|---------|----------|
@@ -310,5 +349,5 @@ Story 生命周期（每个 Story 独立）：
 注：
 - packaging 不再是独立状态，由 meta-qa 在 story verified 后自动执行
 - 验证环境确认不再是人工检查点，VALIDATION-ENV.yaml 缺失时 meta-qa 自动阻断并提示
-- hld_confirmed checkpoint 在 HLD 获得人工确认后由 meta-po 设置为 true
+- hld_confirmed checkpoint 在 HLD 获得人工确认后由 Host Orchestrator 设置为 true
 -->

@@ -106,7 +106,7 @@ def _print_next() -> None:
         path = summary["pending_checklist_path"] or "process/checkpoints/CP*.md"
         print(f"等待用户确认 {summary['pending_gate']}。请审查 {path} 后回复 approve / 修改: <具体修改点> / reject。")
         return
-    print(summary["next_action"] or f"当前阶段为 {summary['current_phase']}，请使用 @meta-po 继续推进。")
+    print(summary["next_action"] or f"当前阶段为 {summary['current_phase']}，请在当前主进程会话中回复“继续”推进。")
 
 
 def _run_doctor() -> None:

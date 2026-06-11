@@ -22,7 +22,7 @@ updated_at: ""
 | 阶段决策 | PASS / PASS_WITH_RISK / BLOCKED / NEEDS_REWORK / NEEDS_DESIGN_CLARIFICATION / WAIVED |
 | validation_mode | runtime / static-only / dry-run-only / review-only / mixed |
 | 是否可进入下一阶段 | yes / no |
-| 需要路由 | none / meta-dev / meta-se / meta-po / human |
+| 需要路由 | none / meta-dev / meta-se / host-orchestrator / human |
 | CP7 证据 | `process/checks/CP7-...md` |
 
 ## 2. 验证范围
@@ -105,7 +105,7 @@ updated_at: ""
 
 | ID | 等级 | 问题 | 影响 | 建议处理 | Owner | 状态 |
 |---|---|---|---|---|---|---|
-| Q-001 | BLOCKER / HIGH / MEDIUM / LOW / INFO | <问题> | <影响> | <建议> | meta-dev / meta-qa / meta-se / meta-po / human | OPEN / RESOLVED / WAIVED |
+| Q-001 | BLOCKER / HIGH / MEDIUM / LOW / INFO | <问题> | <影响> | <建议> | meta-dev / meta-qa / meta-se / host-orchestrator / human | OPEN / RESOLVED / WAIVED |
 
 ## 12. 剩余风险
 
@@ -125,7 +125,7 @@ updated_at: ""
 
 | 结论 | 路由 | 条件 / 说明 |
 |---|---|---|
-| PASS / PASS_WITH_RISK / BLOCKED / NEEDS_REWORK / NEEDS_DESIGN_CLARIFICATION / WAIVED | none / meta-dev / meta-se / meta-po / human | <下一步> |
+| PASS / PASS_WITH_RISK / BLOCKED / NEEDS_REWORK / NEEDS_DESIGN_CLARIFICATION / WAIVED | none / meta-dev / meta-se / host-orchestrator / human | <下一步> |
 
 ## 15. CP8 输入
 

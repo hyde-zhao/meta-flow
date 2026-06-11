@@ -12,7 +12,7 @@ status: active
 
 ## 目标
 
-基于已确认需求与场景输出 `docs/design/HLD.md`。正式写 HLD 前，先识别 `Architecture Gray Areas` 并输出 table-first advisor 输入；处于阶段委托时由 meta-se 直接与用户完成讨论，必要时再由 meta-po 汇总 reviewer lane。HLD 完成后由 meta-se 使用 `checkpoint-manager` 生成 `process/checks/CP3-HLD-CONSISTENCY.md`，再由 meta-po 汇总交还摘要、生成 CP3 Decision Brief，并在 `process/checkpoints/CP3-HLD-REVIEW.md` 中发起人工确认。
+基于已确认需求与场景输出 `docs/design/HLD.md`。正式写 HLD 前，先识别 `Architecture Gray Areas` 并输出 table-first advisor 输入；处于阶段委托时由 meta-se 直接与用户完成讨论，必要时再由 host-orchestrator 汇总 reviewer lane。HLD 完成后由 meta-se 使用 `checkpoint-manager` 生成 `process/checks/CP3-HLD-CONSISTENCY.md`，再由 host-orchestrator 汇总交还摘要、生成 CP3 Decision Brief，并在 `process/checkpoints/CP3-HLD-REVIEW.md` 中发起人工确认。
 
 ## 适用场景
 
@@ -44,7 +44,7 @@ status: active
 1. 输出问题定义、目标、约束与非目标。
 2. 识别 `Architecture Gray Areas`：从已确认需求、场景、NFR、交付约束和 CP2 讨论结果中找出 3-4 个会改变架构形态、模块边界、验证策略、权限安全或维护成本的关键灰区。
 3. 输出 table-first advisor 输入，表头固定为：`Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch`；处于 `delegated_interaction.phase=solution-design` 时，由 meta-se 直接与用户讨论并记录选择。
-4. 读取用户选择或 meta-po 汇总后的 reviewer lane 结果，再给出至少 2 个候选方案并完成显式比较；若需要 reviewer 子 agent 但平台当前无法真实拉起且未获 inline fallback 批准，必须把 HLD 前置讨论标记为阻断或 `N/A` 原因，不得伪造多角色意见。
+4. 读取用户选择或 host-orchestrator 汇总后的 reviewer lane 结果，再给出至少 2 个候选方案并完成显式比较；若需要 reviewer 子 agent 但平台当前无法真实拉起且未获 inline fallback 批准，必须把 HLD 前置讨论标记为阻断或 `N/A` 原因，不得伪造多角色意见。
 5. 明确推荐方案、关键架构图、模块职责、技术选型、风险、适用条件、优化项、牺牲项和切换条件。
 6. 执行 Use Case → Architecture Traceability，并至少用 2-3 个关键 UC 做场景模拟；模拟失败时不得进入 CP3 人工确认。
 7. 为 CP3 Decision Brief 输出候选方案取舍摘要和 `decision_items`，覆盖用户意图匹配度、实现复杂度、可验证性、维护成本、平台兼容、安全 / 权限风险、交付影响、适用条件、切换条件和回退点；每个需要用户确认的架构 / 范围 / 风险接受项都必须包含推荐方案、至少 1 个备选方案（优先 2 个）和优劣分析。
@@ -68,7 +68,7 @@ status: active
 
 5. 讨论日志建议写入 `process/discussions/CP3-HLD-DISCUSSION-LOG.md`，恢复点建议写入 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`。日志用于审计和恢复，不作为下游唯一输入；下游正式消费仍以 `HLD.md`、`ARCHITECTURE-DECISION.md`、Decision Brief 或必要的 `HLD-CONTEXT.md` 为准。
 6. HLD 必须记录哪些讨论输入影响了推荐方案，哪些想法被延后，以及何时切换到备选方案。
-7. 若某个架构灰区看似只有一个业务可行方案，也必须给出至少一个治理备选（保持现状、缩小范围、延后 Spike 或回退需求），供 meta-po 在 CP3 待人工决策清单中呈现。
+7. 若某个架构灰区看似只有一个业务可行方案，也必须给出至少一个治理备选（保持现状、缩小范围、延后 Spike 或回退需求），供 host-orchestrator 在 CP3 待人工决策清单中呈现。
 
 ## HLD 拆分原则
 
@@ -77,7 +77,7 @@ status: active
 ### 判定信号（满足任一即须考虑拆分）
 
 1. **核心产物 > 1**：文档同时在设计 Skill / Agent / Workflow / 跨 Agent 机制中的两个及以上独立产物。
-2. **职责跨层**：文档同时规定了"某产物的内部行为"与"meta-po / 全局编排机制"；后者应独立立项。
+2. **职责跨层**：文档同时规定了"某产物的内部行为"与"host-orchestrator / 全局编排机制"；后者应独立立项。
 3. **Story 数量超阈**：按当前设计拆出的 Story 数 > 5，且可明显按产物归组。
 4. **ADR 明显分簇**：ADR 能按"产物 A 相关"与"产物 B 相关"清晰聚类，彼此引用少。
 5. **交付顺序可独立**：两个产物可分别上线、彼此不强依赖（或只存在字段级依赖）。
@@ -110,10 +110,10 @@ status: active
 | 文件 | 路径 | 模板 |
 |---|---|---|
 | HLD 过程稿 | `docs/design/HLD.md` | `skills/hld-designer/templates/HLD-TEMPLATE.md` |
-| HLD 讨论日志 | `process/discussions/CP3-HLD-DISCUSSION-LOG.md` | 人类审计和恢复；由 meta-po 汇总 |
+| HLD 讨论日志 | `process/discussions/CP3-HLD-DISCUSSION-LOG.md` | 人类审计和恢复；由 host-orchestrator 汇总 |
 | HLD 讨论恢复点 | `process/checks/CP3-DISCUSSION-CHECKPOINT.json` | 中断恢复；缺失时 CP3 自动检查必须说明 N/A 或阻断原因 |
 | CP3 自动预检结果 | `process/checks/CP3-HLD-CONSISTENCY.md` | 由 `checkpoint-manager` 生成 |
-| CP3 人工审查稿 | `process/checkpoints/CP3-HLD-REVIEW.md` | 由 meta-po 基于 `checkpoint-manager` 生成 |
+| CP3 人工审查稿 | `process/checkpoints/CP3-HLD-REVIEW.md` | 由 host-orchestrator 基于 `checkpoint-manager` 生成 |
 
 ## 约束
 

@@ -17,14 +17,14 @@
 - `process/context/`：阶段上下文胶囊。CP2 / CP3 / CP5 / CP6 / CP7 / CP8 的子 agent、人工门禁、验证和发布准备默认先读取这里，减少重复读取全文档。
 - `process/checkpoints/`：人工确认态。CP2 / CP3 / CP5 / CP8 的 Decision Brief、checklist 和人工审查结果写入这里。
 
-旧项目里的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流在无目标项目约定时默认生成到 `docs/...` 与 `process/checkpoints/...`。如果目标项目已有交付目录或 README/docs 已定义自己的文档目录，production 模式必须优先遵守目标约定；无约定时由 meta-po 提出路由建议并等待用户确认。
+旧项目里的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流在无目标项目约定时默认生成到 `docs/...` 与 `process/checkpoints/...`。如果目标项目已有交付目录或 README/docs 已定义自己的文档目录，production 模式必须优先遵守目标约定；无约定时由 host-orchestrator 提出路由建议并等待用户确认。
 
 ## CP2 / CP3 讨论增强
 
 标准模式下，Meta Flow 会在两个关键人工门前加强讨论，但不新增 CP 编号或独立人工门：
 
 - CP2 前，`meta-pm` 先识别 3-4 个 `Scenario Gray Areas`，让用户选择 1-3 个重点讨论；未选但有价值的想法进入 `Deferred Ideas`，不污染当前 scope。
-- CP3 前，`meta-se` 先识别 `Architecture Gray Areas` 并在阶段委托内直接与用户完成 advisor table-first 讨论；需要额外 reviewer lane 时由 `meta-po` 汇总。advisor lane 优先使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格。
+- CP3 前，`meta-se` 先识别 `Architecture Gray Areas` 并在阶段委托内直接与用户完成 advisor table-first 讨论；需要额外 reviewer lane 时由 `host-orchestrator` 汇总。advisor lane 优先使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格。
 - HLD 必须记录适用性矩阵、Use Case → Architecture Traceability、关键场景模拟、优化 / 牺牲 / 切换条件和自审结果。
 
 讨论日志写入 `process/discussions/`，恢复点写入 `process/checks/`：
@@ -42,21 +42,21 @@ Discussion Log 用于审计和恢复，不替代正式产物。下游 Agent 默�
 
 Meta Flow 的交互路径分两类：
 
-- `requirement-clarification`：meta-po 启动或复用 `meta-pm` 后，将阶段内用户交互权委托给 `meta-pm`。用户可直接与 `meta-pm` 多轮讨论 Scenario Gray Areas、场景和需求草案；草案确认“可提交给 meta-po 汇总”后，`meta-pm` 写交还摘要，meta-po 回收并发起 CP2。
-- `solution-design`：meta-po 启动或复用 `meta-se` 后，将阶段内用户交互权委托给 `meta-se`。用户可直接与 `meta-se` 讨论 Architecture Gray Areas、advisor table 和 HLD 草案；草案确认“可提交给 meta-po 发起 CP3”后，`meta-se` 写交还摘要，meta-po 回收并发起 CP3。
-- `story-planning` 的并行 LLD：多个 `meta-dev` 不直接并发问用户。实现灰区写入 `STATE.md.parallel_execution.lld_clarification_queue`，由 meta-po 作为 question broker 合并、排序、批量询问用户、回填答案并分发给对应 `meta-dev`。
+- `requirement-clarification`：host-orchestrator 启动或复用 `meta-pm` 后，将阶段内用户交互权委托给 `meta-pm`。用户可直接与 `meta-pm` 多轮讨论 Scenario Gray Areas、场景和需求草案；草案确认“可提交给 host-orchestrator 汇总”后，`meta-pm` 写交还摘要，host-orchestrator 回收并发起 CP2。
+- `solution-design`：host-orchestrator 启动或复用 `meta-se` 后，将阶段内用户交互权委托给 `meta-se`。用户可直接与 `meta-se` 讨论 Architecture Gray Areas、advisor table 和 HLD 草案；草案确认“可提交给 host-orchestrator 发起 CP3”后，`meta-se` 写交还摘要，host-orchestrator 回收并发起 CP3。
+- `story-planning` 的并行 LLD：多个 `meta-dev` 不直接并发问用户。实现灰区写入 `STATE.md.parallel_execution.lld_clarification_queue`，由 host-orchestrator 作为 question broker 合并、排序、批量询问用户、回填答案并分发给对应 `meta-dev`。
 
-阶段委托状态写入 `STATE.md.delegated_interaction`。这只代表阶段内交互权委托，不代表 CP2 / CP3 已通过。LLD clarification 队列存在未回答 `blocks_lld=true` 项时，meta-po 不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief、完整 LLD 或 Story 技术说明、DEV-LOG 中暴露。
+阶段委托状态写入 `STATE.md.delegated_interaction`。这只代表阶段内交互权委托，不代表 CP2 / CP3 已通过。LLD clarification 队列存在未回答 `blocks_lld=true` 项时，host-orchestrator 不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief、完整 LLD 或 Story 技术说明、DEV-LOG 中暴露。
 
 ## 工作流检查点
 
-安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；阶段上下文胶囊写入 `process/context/*-CONTEXT.yaml`；关键人工审查稿写入 `process/checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `meta-po` 发起人工确认，发起前必须生成 Context Capsule、Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
+安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；阶段上下文胶囊写入 `process/context/*-CONTEXT.yaml`；关键人工审查稿写入 `process/checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `host-orchestrator` 发起人工确认，发起前必须生成 Context Capsule、Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
 
 人工门禁发起消息必须同时合规：包含 checklist 路径、自动预检结论、Context Capsule 摘要、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。checkpoint 文件中的 Decision Brief 必须完整；对话可按 `decision_brief_profile=full|compact|summary` 压缩。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须作为不授权项单独列出；`approve` 不代表授权这些操作。CP8 必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
 
-启动台账中的后续 CR 时，用 `@meta-po 启动后续 CR` 并给出台账路径、候选编号和目标摘要。meta-po 必须先读取台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和活跃 `process/changes/CR-*.md`，做 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；候选项转正式 CR 后才把台账状态、`cr_tracking` 和 `CR-INDEX.yaml` 改为 `active`，写入正式 CR 路径。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 中选择。
+启动台账中的后续 CR 时，在当前主进程会话中说明“启动后续 CR”并给出台账路径、候选编号和目标摘要。host-orchestrator 必须先读取台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和活跃 `process/changes/CR-*.md`，做 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；候选项转正式 CR 后才把台账状态、`cr_tracking` 和 `CR-INDEX.yaml` 改为 `active`，写入正式 CR 路径。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 中选择。
 
-状态查询必须列出 `active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate` 和 `stale_status_conflicts`，不能只返回唯一 active CR。若目标项目存在 `meta-flow check cr-tracking`，meta-po 在状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后运行或记录跳过原因；该脚本会检查 `STATE.md.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性。
+状态查询必须列出 `active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate` 和 `stale_status_conflicts`，不能只返回唯一 active CR。若目标项目存在 `meta-flow check cr-tracking`，host-orchestrator 在状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后运行或记录跳过原因；该脚本会检查 `STATE.md.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性。
 
 CP6 / CP7 必须包含 `Agent Dispatch Evidence`。handoff 文件只表示交接，不表示目标 agent 已执行；编码和验证完成必须有真实子 agent 调度证据，或用户明确批准的 `inline-fallback`。CP6 还必须记录实现执行证据：复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 输出完整 `IMPLEMENTATION.md`；低风险 Story 可写 Story 摘要或 DEV-LOG，但必须说明 N/A 理由。CP7 必须记录验证执行证据：验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险、阶段决策。
 
@@ -86,7 +86,7 @@ Meta Flow 的软件开发工作流在 CP2 / CP3 / CP7 / CP8 增加工程化产�
 
 ## 子 Agent 调度证据
 
-`meta-po` 调用 `meta-dev`、`meta-qa` 等功能 Agent 时，必须记录平台调度证据：
+`host-orchestrator` 调用 `meta-dev`、`meta-qa` 等功能 Agent 时，必须记录平台调度证据：
 
 - Codex：新任务记录 `spawn_agent`，复用任务记录 `resume_agent` 或 `send_input`
 - Claude Code / OpenClaw：记录平台 Task/Subagent 标识
@@ -94,7 +94,7 @@ Meta Flow 的软件开发工作流在 CP2 / CP3 / CP7 / CP8 增加工程化产�
 
 若当前运行模式不能拉起子 agent，默认阻断。只有用户明确批准时，才允许 `dispatch.mode=inline-fallback`，并必须写明 fallback 原因和批准信息。
 
-用户启动正式工作流后，同工作流内默认允许 `meta-po` 自动拉起所需功能 Agent；该授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
+用户启动正式工作流后，同工作流内默认允许 `host-orchestrator` 自动拉起所需功能 Agent；该授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
 
 ## fast-lane 快速模式
 
@@ -168,14 +168,13 @@ uv run --python 3.11 python delivery/scripts/install.py codex --scope user --con
 
 | canonical role | Codex 命令 / nickname_candidates | Claude Code color |
 |---|---|---|
-| `meta-po` | `po-zhao`、`po-qian`、`po-sun`、`po-li`、`po-zhou` | `red` |
 | `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `orange` |
 | `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `yellow` |
 | `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `green` |
 | `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `cyan` |
 | `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `purple` |
 
-canonical role 不变，仍用于状态机、handoff 与检查点审计。Codex 使用 `nickname_candidates` 作为命令别名；Claude Code 文件型 subagent 不使用 nickname，安装器写入 `color` 区分不同子 agent。
+canonical role 只覆盖功能子 agent，用于状态机、handoff 与检查点审计；Host Orchestrator 是主进程职责，不安装 Codex / Claude Code agent 文件。Codex 使用 `nickname_candidates` 作为命令别名；Claude Code 文件型 subagent 不使用 nickname，安装器写入 `color` 区分不同子 agent。
 
 ## 目录约束
 
@@ -187,6 +186,6 @@ canonical role 不变，仍用于状态机、handoff 与检查点审计。Codex 
 
 ## 交付出口路由
 
-当前仓库 `delivery/` 只作为 meta-flow 自身交付包。若工作流服务外部 production 项目，meta-po 必须先扫描目标项目已有交付目录，以及 `README.md` / `README.*` / `docs/` 的交付物或发布约定；存在约定时按目标项目执行，不存在时先提出建议并等待用户确认，不能默认写当前仓库 `delivery/`。
+当前仓库 `delivery/` 只作为 meta-flow 自身交付包。若工作流服务外部 production 项目，host-orchestrator 必须先扫描目标项目已有交付目录，以及 `README.md` / `README.*` / `docs/` 的交付物或发布约定；存在约定时按目标项目执行，不存在时先提出建议并等待用户确认，不能默认写当前仓库 `delivery/`。
 
 更多使用方式见 `doc/USER-MANUAL.md`。

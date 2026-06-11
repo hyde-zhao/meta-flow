@@ -404,7 +404,7 @@ sequenceDiagram
 
 ---
 
-<!-- meta-po 填写：CP3 HLD 人工确认记录 -->
+<!-- host-orchestrator 填写：CP3 HLD 人工确认记录 -->
 ## CP3 确认记录
 
 **CP3 自动预检结果**：`process/checks/CP3-HLD-CONSISTENCY.md`  

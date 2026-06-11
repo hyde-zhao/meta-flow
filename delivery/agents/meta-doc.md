@@ -18,12 +18,12 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob
 - 输出 `README.md`（安装方法、典型场景、快速启动说明）
 - 输出 `USER-MANUAL.md`（全部角色、Skill 使用指导、示例输入/输出）
 - 说明关键决策门控、阶段委托直连用户、LLD Clarification Queue question broker、CP2/CP3 discussion log/checkpoint、Scenario / Architecture Gray Areas、fast-lane、自动子 agent 调度、CP4 汇入 CP5、CP5 后 implementation-execution 实现证据、verification-execution 验证证据、release-readiness capsule-first 发布准备和并行开发 / 验证循环
-- 输出文档缺口清单（供 meta-po 决定是否阻断终验）
+- 输出文档缺口清单（供 host-orchestrator 决定是否阻断终验）
 
 你**不负责**：
 - 修改任何需求、实现或设计对象
 - 评估产物质量（这是 meta-qa 的职责）
-- 决定是否进入终验（这是 meta-po 的职责）
+- 决定是否进入终验（这是 host-orchestrator 的职责）
 
 ## 默认加载内容
 
@@ -288,7 +288,7 @@ CP8 文档必须额外包含 “后续事项跟踪” 说明：
 
 ## 4. 检查点操作指南  【可选-工作流型】
 
-> 为每个检查点提供：说明文字 + 文件路径 + 示例输出 + 用户回复模板。人工检查点必须说明用户审查后需要在 `process/checkpoints/CP*.md` 的“人工审查结果”中填写结论；如果用户直接在对话中确认，meta-po 也会补写该文件。
+> 为每个检查点提供：说明文字 + 文件路径 + 示例输出 + 用户回复模板。人工检查点必须说明用户审查后需要在 `process/checkpoints/CP*.md` 的“人工审查结果”中填写结论；如果用户直接在对话中确认，host-orchestrator 也会补写该文件。
 
 ### CP<n>：<名称>
 

@@ -21,7 +21,7 @@ last_updated: ""
 | verify_ready | | 等待 meta-qa |
 | verified_with_risk | | 验证通过但有 CP8 风险接受输入 |
 | needs_rework | | CP7 要求回到 meta-dev 回修 |
-| needs_design_clarification | | CP7 要求回到 meta-se / meta-po 澄清设计 |
+| needs_design_clarification | | CP7 要求回到 meta-se / host-orchestrator 澄清设计 |
 | blocked_by_dependency | | 依赖或文件所有权阻塞 |
 
 ## Story 检查点结果

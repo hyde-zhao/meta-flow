@@ -147,15 +147,15 @@ cd delivery && uv run --python 3.11 python scripts/install.py claude --dry-run
 
 ## 开发节奏
 
-1. `meta-po` 初始化请求并写入 CP0 自动检查结果。
-2. `meta-po` 将需求澄清阶段委托给 `meta-pm`。用户直接与 `meta-pm` 通过 Scenario Gray Areas 识别 3-4 个会影响交付的场景灰区，选择 1-3 个重点讨论；未选项进入 Deferred Ideas。随后输出场景 / 需求，写入 CP1 / CP2 自动检查结果；用户确认“可提交给 meta-po 汇总”后交还，meta-po 生成 `process/context/CP2-REQUIREMENT-CONTEXT.yaml` 并发起 CP2 Decision Brief。
-3. CP2 通过后，`meta-po` 将 HLD 设计阶段委托给 `meta-se`。用户直接与 `meta-se` 讨论 Architecture Gray Areas 和 advisor table，并使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格形成方案输入；随后 `meta-se` 输出含适用性矩阵、Use Case → Architecture Traceability 和场景模拟的 `HLD.md`。用户确认“HLD 草案可提交给 meta-po 发起 CP3”后交还，meta-po 生成 `process/context/CP3-DESIGN-CONTEXT.yaml` 并发起 CP3。
+1. `host-orchestrator` 初始化请求并写入 CP0 自动检查结果。
+2. `host-orchestrator` 将需求澄清阶段委托给 `meta-pm`。用户直接与 `meta-pm` 通过 Scenario Gray Areas 识别 3-4 个会影响交付的场景灰区，选择 1-3 个重点讨论；未选项进入 Deferred Ideas。随后输出场景 / 需求，写入 CP1 / CP2 自动检查结果；用户确认“可提交给 host-orchestrator 汇总”后交还，host-orchestrator 生成 `process/context/CP2-REQUIREMENT-CONTEXT.yaml` 并发起 CP2 Decision Brief。
+3. CP2 通过后，`host-orchestrator` 将 HLD 设计阶段委托给 `meta-se`。用户直接与 `meta-se` 讨论 Architecture Gray Areas 和 advisor table，并使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格形成方案输入；随后 `meta-se` 输出含适用性矩阵、Use Case → Architecture Traceability 和场景模拟的 `HLD.md`。用户确认“HLD 草案可提交给 host-orchestrator 发起 CP3”后交还，host-orchestrator 生成 `process/context/CP3-DESIGN-CONTEXT.yaml` 并发起 CP3。
 4. `meta-se` 写入 CP4 自动预检；CP4 不再单独人工确认，结果汇入 CP5 批量 LLD 决策摘要。
 5. CP3 通过后，`meta-se` 先生成 `docs/design/FEATURE-DESIGN-MATRIX.md`，判定哪些 Feature 需要 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`，并为每个 Story 标记 `feature_design_refs` 与 `lld_policy=full-lld|technical-note|waived`。
-6. `meta-dev` 并行输出全部目标 Story 的设计证据和 CP5 自动预检：高风险 Story 输出完整 LLD，低风险 Story 在 Story 卡片中补 `## 技术说明`，明确豁免的 Story 写 waived 证据。遇到实现灰区时只写 `STATE.md.parallel_execution.lld_clarification_queue`。`meta-po` 作为 question broker 合并问题、批量询问用户、回填答案，然后生成 `process/context/CP5-LLD-CONTEXT.yaml` 和 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`，一次性确认全部设计证据、CP4 摘要、clarification 队列、依赖门控和文件所有权。
-7. 全量 CP5 确认且 `dev_gate` 满足后，`meta-po` 按 Wave / Story DAG 自动调度 `meta-dev` 并记录证据；交接前生成或更新 `process/context/CP6-IMPLEMENTATION-CONTEXT.yaml`。`meta-dev` 使用 `implementation-execution` 产出实现对象清单、设计契约映射、测试 / Fixture 计划、最小实现切片、平台差异和交接摘要。复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 写完整 `IMPLEMENTATION.md`，低风险 Story 可写 Story 摘要或 DEV-LOG；实现完成后写入 CP6 编码完成结果。
-8. Story CP6 通过后，`meta-po` 自动调度 `meta-qa` 并记录证据；交接前生成或更新 `process/context/CP7-VERIFICATION-CONTEXT.yaml`。`meta-qa` 使用 `verification-execution` 消费 CP6 实现执行证据、设计证据和 `TEST-MATRIX.md` 摘要，输出验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险，再用 `quality-review` 固化 TEST-REPORT / REVIEW / FIXES 并写入 CP7。CP7 结论为 `PASS` / `WAIVED` 时进入 verified，`PASS_WITH_RISK` 时可推进但风险进入 CP8，`NEEDS_REWORK` 回 meta-dev，`NEEDS_DESIGN_CLARIFICATION` 回 meta-se / meta-po，`BLOCKED` 阻断。
-9. 所有目标 Story 验证后，`meta-po` 自动调度 `meta-doc` 完成文档，`meta-qa` 使用 `release-readiness` 先生成 `process/release/RELEASE-CONTEXT.yaml` 和 `process/context/CP8-DELIVERY-CONTEXT.yaml`，再按 `release_artifact_profile=minimal|compact|full` 裁剪发布文档并写入 CP8 自动预检。CP8 的 `release_decision=READY|READY_WITH_RISK` 才可发起人工终验，`NOT_READY` 阻断，`RELEASED|FAILED` 必须有独立真实发布授权；CP8 Decision Brief 人工终验通过后进入 delivered。
+6. `meta-dev` 并行输出全部目标 Story 的设计证据和 CP5 自动预检：高风险 Story 输出完整 LLD，低风险 Story 在 Story 卡片中补 `## 技术说明`，明确豁免的 Story 写 waived 证据。遇到实现灰区时只写 `STATE.md.parallel_execution.lld_clarification_queue`。`host-orchestrator` 作为 question broker 合并问题、批量询问用户、回填答案，然后生成 `process/context/CP5-LLD-CONTEXT.yaml` 和 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`，一次性确认全部设计证据、CP4 摘要、clarification 队列、依赖门控和文件所有权。
+7. 全量 CP5 确认且 `dev_gate` 满足后，`host-orchestrator` 按 Wave / Story DAG 自动调度 `meta-dev` 并记录证据；交接前生成或更新 `process/context/CP6-IMPLEMENTATION-CONTEXT.yaml`。`meta-dev` 使用 `implementation-execution` 产出实现对象清单、设计契约映射、测试 / Fixture 计划、最小实现切片、平台差异和交接摘要。复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 写完整 `IMPLEMENTATION.md`，低风险 Story 可写 Story 摘要或 DEV-LOG；实现完成后写入 CP6 编码完成结果。
+8. Story CP6 通过后，`host-orchestrator` 自动调度 `meta-qa` 并记录证据；交接前生成或更新 `process/context/CP7-VERIFICATION-CONTEXT.yaml`。`meta-qa` 使用 `verification-execution` 消费 CP6 实现执行证据、设计证据和 `TEST-MATRIX.md` 摘要，输出验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险，再用 `quality-review` 固化 TEST-REPORT / REVIEW / FIXES 并写入 CP7。CP7 结论为 `PASS` / `WAIVED` 时进入 verified，`PASS_WITH_RISK` 时可推进但风险进入 CP8，`NEEDS_REWORK` 回 meta-dev，`NEEDS_DESIGN_CLARIFICATION` 回 meta-se / host-orchestrator，`BLOCKED` 阻断。
+9. 所有目标 Story 验证后，`host-orchestrator` 自动调度 `meta-doc` 完成文档，`meta-qa` 使用 `release-readiness` 先生成 `process/release/RELEASE-CONTEXT.yaml` 和 `process/context/CP8-DELIVERY-CONTEXT.yaml`，再按 `release_artifact_profile=minimal|compact|full` 裁剪发布文档并写入 CP8 自动预检。CP8 的 `release_decision=READY|READY_WITH_RISK` 才可发起人工终验，`NOT_READY` 阻断，`RELEASED|FAILED` 必须有独立真实发布授权；CP8 Decision Brief 人工终验通过后进入 delivered。
 
 ## 检查点
 
@@ -173,22 +173,22 @@ Meta Flow 默认采用 CP0-CP8 检查点。所有检查点都包含 Entry Criter
 | CP7 | Story 验证完成门 | 滚动自动；检查验证执行证据和结论分级 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` |
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`process/checkpoints/CP8-DELIVERY-READINESS.md` |
 
-关键人工检查点由 `meta-po` 发起。CP2 / CP3 / CP5 / CP8 发起前会生成 Context Capsule、Decision Brief 和待人工决策清单，并提示 `process/checkpoints/CP*.md` 路径。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，会逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `approve`、`修改: <具体修改点>`、`reject`，由 `meta-po` 回填结果文件；`approve` 表示接受清单内全部推荐方案。CP4 只写自动预检并汇入 CP5。
+关键人工检查点由 `host-orchestrator` 发起。CP2 / CP3 / CP5 / CP8 发起前会生成 Context Capsule、Decision Brief 和待人工决策清单，并提示 `process/checkpoints/CP*.md` 路径。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，会逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `approve`、`修改: <具体修改点>`、`reject`，由 `host-orchestrator` 回填结果文件；`approve` 表示接受清单内全部推荐方案。CP4 只写自动预检并汇入 CP5。
 
 发起人工门禁的对话本身也受校验：必须包含 checklist 路径、自动预检结论、Context Capsule 摘要、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。checkpoint 文件中的 Decision Brief 始终完整；对话可按 `decision_brief_profile=full|compact|summary` 压缩。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须独立列为不授权项；`approve` 不代表授权这些操作。CP8 还必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
 
-启动台账中的后续 CR 时，直接让 `meta-po` 指定台账和候选编号：
+启动台账中的后续 CR 时，在当前主进程会话中指定台账和候选编号：
 
 ```text
-@meta-po 启动后续 CR
+启动后续 CR
 台账：process/changes/CR-019-FOLLOW-UP-TRACKING-2026-05-31.md
 候选编号：CR-020
 目标：推进 Windows gateway 实机部署准入
 ```
 
-meta-po 必须先读取台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和当前活跃 `process/changes/CR-*.md`，执行 CR 冲突预检。`candidate` / `spike_candidate` 只是 backlog，不占执行锁；转为正式 CR 后才把台账状态、`STATE.md.cr_tracking` 和 `CR-INDEX.yaml` 改为 `active`，写入正式 CR 路径并设置活跃变更。若已有未完成 CR，新 CR 与其影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，默认不得并行推进；meta-po 必须给出合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 的决策表，由用户确认后再继续。
+host-orchestrator 必须先读取台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和当前活跃 `process/changes/CR-*.md`，执行 CR 冲突预检。`candidate` / `spike_candidate` 只是 backlog，不占执行锁；转为正式 CR 后才把台账状态、`STATE.md.cr_tracking` 和 `CR-INDEX.yaml` 改为 `active`，写入正式 CR 路径并设置活跃变更。若已有未完成 CR，新 CR 与其影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，默认不得并行推进；host-orchestrator 必须给出合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 的决策表，由用户确认后再继续。
 
-询问“当前状态”或“还有哪些 CR 需要推进”时，meta-po 必须输出 CR 盘点视图：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。如果当前项目存在 `meta-flow check cr-tracking`，状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后都应运行：
+询问“当前状态”或“还有哪些 CR 需要推进”时，host-orchestrator 必须输出 CR 盘点视图：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。如果当前项目存在 `meta-flow check cr-tracking`，状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后都应运行：
 
 ```bash
 meta-flow check cr-tracking --project-root .
@@ -202,13 +202,13 @@ CP2 会额外检查 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` 和 `pr
 
 CP6 / CP7 还必须包含 `Agent Dispatch Evidence` 小节。`process/handoffs/*.md` 只表示交接，不表示子 agent 已执行；Story 编码或验证完成必须有 `spawn_agent` / `resume_agent` / `send_input`、平台 Task/Subagent 返回标识，并在 `STATE.md.agent_lifecycle` 或 handoff `dispatch` 中记录 `agent_id` 或 `thread_id`，或用户明确批准的 `inline-fallback`。CP6 必须额外记录实现执行证据路径、证据类型和 N/A 理由；CP7 必须记录验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险、阶段决策；缺少调度证据或必需实现 / 验证证据时，CP6 / CP7 只能判定为 `FAIL` 或 `BLOCKED`。
 
-用户启动正式工作流后，同工作流内默认允许 `meta-po` 自动拉起所需功能 Agent。该授权只覆盖真实子 agent 调度；平台无法拉起子 agent 或需要 inline fallback 时，仍必须单独询问用户。
+用户启动正式工作流后，同工作流内默认允许 `host-orchestrator` 自动拉起所需功能 Agent。该授权只覆盖真实子 agent 调度；平台无法拉起子 agent 或需要 inline fallback 时，仍必须单独询问用户。
 
 ## 阶段委托与 LLD Clarification Queue
 
-`STATE.md.delegated_interaction` 记录当前阶段委托：`phase`、`agent_role`、`agent_id/thread_id`、`handoff_path`、`status`、`started_at`、`returned_at` 和 `return_summary_path`。委托只表示阶段内交互权移交，不表示 CP2 / CP3 已确认。`meta-pm` / `meta-se` 可直接与用户讨论本阶段草案；正式人工门仍由 `meta-po` 发起。
+`STATE.md.delegated_interaction` 记录当前阶段委托：`phase`、`agent_role`、`agent_id/thread_id`、`handoff_path`、`status`、`started_at`、`returned_at` 和 `return_summary_path`。委托只表示阶段内交互权移交，不表示 CP2 / CP3 已确认。`meta-pm` / `meta-se` 可直接与用户讨论本阶段草案；正式人工门仍由 `host-orchestrator` 发起。
 
-`STATE.md.parallel_execution.lld_clarification_queue` 记录并行 LLD 阶段的实现灰区。每个 item 至少包含 `id/story_id/owner_agent/question/options/recommendation/pros_cons/impact_surface/blocks_lld/answer/status`，其中 `options` 必须能表达 1 个推荐方案和至少 1 个备选方案。多个 `meta-dev` 不直接并发问用户；`meta-po` 合并同类问题后一次性询问用户，并把答案回填到 queue、LLD 和 DEV-LOG。存在未回答 `blocks_lld=true` 项时不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief 中暴露。
+`STATE.md.parallel_execution.lld_clarification_queue` 记录并行 LLD 阶段的实现灰区。每个 item 至少包含 `id/story_id/owner_agent/question/options/recommendation/pros_cons/impact_surface/blocks_lld/answer/status`，其中 `options` 必须能表达 1 个推荐方案和至少 1 个备选方案。多个 `meta-dev` 不直接并发问用户；`host-orchestrator` 合并同类问题后一次性询问用户，并把答案回填到 queue、LLD 和 DEV-LOG。存在未回答 `blocks_lld=true` 项时不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief 中暴露。
 
 ## fast-lane 快速模式
 
@@ -275,14 +275,13 @@ Agent 命令与显示区分：
 
 | canonical role | Codex 命令 / nickname_candidates | Claude Code color |
 |---|---|---|
-| `meta-po` | `po-zhao`、`po-qian`、`po-sun`、`po-li`、`po-zhou` | `red` |
 | `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `orange` |
 | `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `yellow` |
 | `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `green` |
 | `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `cyan` |
 | `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `purple` |
 
-canonical role 名称仍为 `meta-*`，用于状态机、handoff 和检查点审计。Codex 安装器把上表命令写入 `.codex/agents/*.toml` 的 `nickname_candidates`；Claude Code 文件型 subagent 不支持 nickname，安装器使用 `color` 字段在任务列表和 transcript 中区分角色。
+canonical role 名称仅用于功能子 agent 的状态机、handoff 和检查点审计；Host Orchestrator 是当前会话主进程职责，不安装平台 agent 文件。Codex 安装器把上表命令写入 `.codex/agents/*.toml` 的 `nickname_candidates`；Claude Code 文件型 subagent 不支持 nickname，安装器使用 `color` 字段在任务列表和 transcript 中区分角色。
 
 ## 交付护栏
 
@@ -311,7 +310,7 @@ uv run --python 3.11 python scripts/check_delivery_guardrails.py
 首次启动一个正式交付工作流时，建议直接给出目标、平台和约束：
 
 ```text
-@meta-po 开始
+开始
 目标：为 <agent / skill / workflow 名称> 产出正式方案
 平台：Claude Code、Codex
 要求：先澄清需求，再给我 HLD，确认后再拆 Story
@@ -320,10 +319,10 @@ uv run --python 3.11 python scripts/check_delivery_guardrails.py
 常用控制语句：
 
 ```text
-@meta-po 当前状态
-@meta-po 下一步
-@meta-po 继续
-@meta-po 快速修改
+当前状态
+下一步
+继续
+快速修改
 ```
 
 CLI 也提供只读辅助入口：

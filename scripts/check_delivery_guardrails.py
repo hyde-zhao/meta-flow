@@ -81,7 +81,6 @@ SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
     "delivery/agents/meta-se.md": ("blueprint-design", "implementation-design", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "feature_design_refs", "lld_policy"),
     "delivery/agents/meta-dev.md": ("implementation-execution", "IMPLEMENTATION", "实现对象清单", "设计契约映射", "测试 / Fixture", "最小实现切片"),
     "delivery/agents/meta-qa.md": ("verification-execution", "quality-review", "release-readiness", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/CP7-VERIFICATION-CONTEXT.yaml", "process/context/CP8-DELIVERY-CONTEXT.yaml", "release_artifact_profile", "release_decision", "实现执行证据", "PASS_WITH_RISK"),
-    "delivery/agents/meta-po.md": ("docs/product/TEST-MATRIX.md", "docs/design/DOMAIN-MAP.md", "docs/design/DEPENDENCY-MAP.md", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/*-CONTEXT.yaml", "context_budget", "workflow_health", "decision_brief_profile", "release_artifact_profile", "release_decision", "实现执行证据", "PASS_WITH_RISK"),
     "delivery/agents/README.md": ("docs/product/TEST-MATRIX.md", "Feature 设计", "verification-execution", "发布就绪"),
     "delivery/skills/README.md": ("scenario-expansion", "story-planning", "blueprint-design", "implementation-design", "implementation-execution", "verification-execution", "quality-review", "release-readiness", "process/checkpoints/CP*.md", "FEATURE-DESIGN-MATRIX.md", "lld_policy", "STORY-*-IMPLEMENTATION.md", "VERIFICATION-REPORT.md"),
     "delivery/skills/blueprint-design/templates/BLUEPRINT-TEMPLATE.md": ("决策类型", "推荐 / 备选优劣", "runtime_authorization", "follow_up_tracking"),
@@ -111,7 +110,6 @@ SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
 }
 CACHE_SCAN_EXCLUDED_DIRS = {".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 EXPECTED_CODEX_NICKNAMES = {
-    "meta-po": ["po-zhao", "po-qian", "po-sun", "po-li", "po-zhou"],
     "meta-pm": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"],
     "meta-se": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"],
     "meta-dev": [
@@ -141,19 +139,19 @@ EXPECTED_CODEX_NICKNAMES = {
     "meta-doc": ["doc-cao", "doc-yan", "doc-hua", "doc-jin", "doc-wei"],
 }
 EXPECTED_CLAUDE_COLORS = {
-    "meta-po": "red",
     "meta-pm": "orange",
     "meta-se": "yellow",
     "meta-dev": "green",
     "meta-qa": "cyan",
     "meta-doc": "purple",
 }
-CLAUDE_DIRECT_ASK_AGENTS = {"meta-po", "meta-pm", "meta-se"}
+CLAUDE_DIRECT_ASK_AGENTS = {"meta-pm", "meta-se"}
 CLAUDE_NO_DIRECT_ASK_AGENTS = {"meta-dev", "meta-qa", "meta-doc"}
 CODEX_NICKNAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
 ARCHIVED_AGENT_PATHS = {
     "meta-dm": PROCESS_ROOT / "archive" / "meta-dm.md",
 }
+LEGACY_ORCHESTRATOR_AGENT_NAMES = {"meta-po", "host-orchestrator"}
 NON_DELIVERED_SKILL_PLACEHOLDERS = ("vendor-profile-loader", "constraint-normalizer")
 
 
@@ -268,7 +266,7 @@ def collect_codex_dry_run_errors(payload: dict[str, object]) -> list[str]:
                 "--content",
                 "agents",
                 "--agent",
-                "meta-po",
+                "meta-pm",
             ],
             cwd=ROOT,
             capture_output=True,
@@ -376,25 +374,29 @@ def collect_installer_component_errors() -> list[str]:
                 "label": "codex user default",
                 "args": ["codex", "--scope", "user", "--project-dir", str(project_root), "--dry-run"],
                 "required": ["Component: rules", str(Path.home() / ".codex" / "AGENTS.md")],
-                "forbidden": [str(Path.home() / ".codex" / "agents" / "meta-po.toml"), str(Path.home() / ".agents" / "skills")],
+                "forbidden": [
+                    str(Path.home() / ".codex" / "agents" / "meta-po.toml"),
+                    str(Path.home() / ".codex" / "agents" / "host-orchestrator.toml"),
+                    str(Path.home() / ".agents" / "skills"),
+                ],
             },
             {
                 "label": "codex project default",
                 "args": ["codex", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
-                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".agents" / "skills")],
-                "forbidden": [".codex/skills"],
+                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-pm.toml"), str(project_root / ".agents" / "skills")],
+                "forbidden": [".codex/skills", str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".codex" / "agents" / "host-orchestrator.toml")],
             },
             {
                 "label": "claude project default",
                 "args": ["claude", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
-                "required": ["Component: full", str(project_root / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-po.md"), str(project_root / ".claude" / "skills")],
-                "forbidden": [str(project_root / ".claude" / "CLAUDE.md")],
+                "required": ["Component: full", str(project_root / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-pm.md"), str(project_root / ".claude" / "skills")],
+                "forbidden": [str(project_root / ".claude" / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-po.md"), str(project_root / ".claude" / "agents" / "host-orchestrator.md")],
             },
             {
                 "label": "codex full component",
                 "args": ["codex", "--scope", "project", "--project-dir", str(project_root), "--component", "full", "--dry-run"],
-                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".agents" / "skills")],
-                "forbidden": [".codex/skills"],
+                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-pm.toml"), str(project_root / ".agents" / "skills")],
+                "forbidden": [".codex/skills", str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".codex" / "agents" / "host-orchestrator.toml")],
             },
             {
                 "label": "legacy skills content",
@@ -411,7 +413,7 @@ def collect_installer_component_errors() -> list[str]:
                     "--dry-run",
                 ],
                 "required": ["Component: agent", "Legacy content: skills", str(project_root / ".agents" / "skills" / "context-handoff" / "SKILL.md")],
-                "forbidden": [str(project_root / ".codex" / "agents" / "meta-po.toml"), ".codex/skills"],
+                "forbidden": [str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".codex" / "agents" / "host-orchestrator.toml"), ".codex/skills"],
             },
             {
                 "label": "legacy platform option",
@@ -440,13 +442,38 @@ def collect_installer_component_errors() -> list[str]:
                 if forbidden in output:
                     errors.append(f"{case['label']} dry-run unexpectedly included: {forbidden}")
 
+        legacy_result = subprocess.run(
+            [
+                sys.executable,
+                str(install_script),
+                "codex",
+                "--scope",
+                "project",
+                "--project-dir",
+                str(project_root),
+                "--component",
+                "agent",
+                "--agent",
+                "meta-po",
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        legacy_output = legacy_result.stdout + legacy_result.stderr
+        if legacy_result.returncode == 0:
+            errors.append("installer must reject legacy orchestrator agent request: --agent meta-po")
+        if "不再作为平台 agent 安装" not in legacy_output:
+            errors.append("legacy orchestrator rejection must explain that the orchestrator is host-managed")
+
     return errors
 
 
 def collect_cr004_protocol_errors() -> list[str]:
     errors: list[str] = []
     targets = [
-        DELIVERY_ROOT / "agents" / "meta-po.md",
         DELIVERY_ROOT / "agents" / "meta-doc.md",
         DELIVERY_ROOT / "agents" / "meta-qa.md",
         DELIVERY_ROOT / "rules" / "AGENTS.md",
@@ -465,7 +492,6 @@ def collect_cr004_protocol_errors() -> list[str]:
             )
 
     routing_targets = [
-        DELIVERY_ROOT / "agents" / "meta-po.md",
         DELIVERY_ROOT / "agents" / "meta-pm.md",
         DELIVERY_ROOT / "agents" / "meta-doc.md",
         DELIVERY_ROOT / "skills" / "use-case-discovery" / "SKILL.md",
@@ -531,7 +557,6 @@ def collect_guardrail_command_scope_errors() -> list[str]:
 def collect_agent_dispatch_evidence_errors() -> list[str]:
     errors: list[str] = []
     targets = [
-        DELIVERY_ROOT / "agents" / "meta-po.md",
         DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
         DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
         DELIVERY_ROOT / "skills" / "context-handoff" / "SKILL.md",
@@ -552,13 +577,6 @@ def collect_agent_dispatch_evidence_errors() -> list[str]:
         if missing:
             errors.append(f"{target.relative_to(ROOT)} missing agent dispatch evidence tokens: {', '.join(missing)}")
 
-    meta_po = DELIVERY_ROOT / "agents" / "meta-po.md"
-    if meta_po.is_file():
-        text = meta_po.read_text(encoding="utf-8")
-        for token in ("spawn_agent", "resume_agent", "send_input", "不得直接代替"):
-            if token not in text:
-                errors.append(f"{meta_po.relative_to(ROOT)} missing subagent hard-gate token: {token}")
-
     handoff_skill = DELIVERY_ROOT / "skills" / "context-handoff" / "SKILL.md"
     if handoff_skill.is_file():
         text = handoff_skill.read_text(encoding="utf-8")
@@ -576,7 +594,7 @@ def collect_agent_display_profile_errors() -> list[str]:
         return [f"missing installer for display profile checks: {install_script.relative_to(ROOT)}"]
 
     source_text = install_script.read_text(encoding="utf-8")
-    for token in ("AGENT_DISPLAY_PROFILES", "CODEX_NICKNAME_RE", "nickname_candidates", "claude_color", "po-zhao", "doc-wei"):
+    for token in ("AGENT_DISPLAY_PROFILES", "CODEX_NICKNAME_RE", "nickname_candidates", "claude_color", "pm-wu", "doc-wei"):
         if token not in source_text:
             errors.append(f"{install_script.relative_to(ROOT)} missing display profile token: {token}")
 
@@ -677,10 +695,6 @@ def collect_human_gate_protocol_errors() -> list[str]:
             errors.append("human gate compatibility wrapper must delegate to meta_flow.checks.human_gate")
 
     token_targets = {
-        "meta-po": (
-            DELIVERY_ROOT / "agents" / "meta-po.md",
-            ("Human Gate Launch Protocol", "pending_human_decisions", "decision_type", "Decision Collection Coverage", "决策收集覆盖", "不授权项", "meta-flow check human-gate"),
-        ),
         "checkpoint-manager": (
             DELIVERY_ROOT / "skills" / "checkpoint-manager" / "SKILL.md",
             ("Human Gate Launch Protocol", "决策类型", "Decision Collection Coverage", "决策收集覆盖", "不授权项", "meta-flow check human-gate", "CP8 后续跟踪分流表"),
@@ -786,10 +800,6 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
             errors.append("CR tracking compatibility wrapper must delegate to meta_flow.checks.cr_tracking")
 
     token_targets = {
-        "meta-po": (
-            DELIVERY_ROOT / "agents" / "meta-po.md",
-            ("cr_tracking", "CR-INDEX.yaml", "active formal CR", "spike_candidate", "stale_status_conflicts"),
-        ),
         "state-router": (
             DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
             ("cr_tracking", "CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
@@ -1026,12 +1036,6 @@ def collect_context_capsule_protocol_errors() -> list[str]:
             "user_confirmed_output_route",
             "forbidden_roots_when_production",
         ),
-        "delivery/agents/meta-po.md": (
-            "process/context/*-CONTEXT.yaml",
-            "context_budget",
-            "workflow_health",
-            "decision_brief_profile",
-        ),
         "delivery/agents/meta-pm.md": ("CP2-REQUIREMENT-CONTEXT.yaml", "read_expansion_log"),
         "delivery/agents/meta-se.md": ("CP3-DESIGN-CONTEXT.yaml", "CP5-LLD-CONTEXT.yaml", "read_expansion_log"),
         "delivery/agents/meta-dev.md": ("CP5-LLD-CONTEXT.yaml", "CP6-IMPLEMENTATION-CONTEXT.yaml", "read_expansion_log"),
@@ -1061,7 +1065,6 @@ def collect_context_capsule_protocol_errors() -> list[str]:
         DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
         DELIVERY_ROOT / "skills" / "checkpoint-manager" / "SKILL.md",
         DELIVERY_ROOT / "agents" / "meta-qa.md",
-        DELIVERY_ROOT / "agents" / "meta-po.md",
     ]
     for target in cp7_targets:
         if not target.is_file():
@@ -1077,7 +1080,6 @@ def collect_context_capsule_protocol_errors() -> list[str]:
         DELIVERY_ROOT / "skills" / "release-readiness" / "SKILL.md",
         DELIVERY_ROOT / "skills" / "release-readiness" / "templates" / "RELEASE-CONTEXT-TEMPLATE.yaml",
         DELIVERY_ROOT / "agents" / "meta-qa.md",
-        DELIVERY_ROOT / "agents" / "meta-po.md",
     ]
     for target in release_targets:
         if not target.is_file():
@@ -1092,6 +1094,11 @@ def collect_context_capsule_protocol_errors() -> list[str]:
 
 def collect_delivery_asset_lifecycle_errors() -> list[str]:
     errors: list[str] = []
+
+    for agent_name in sorted(LEGACY_ORCHESTRATOR_AGENT_NAMES):
+        delivery_path = DELIVERY_ROOT / "agents" / f"{agent_name}.md"
+        if delivery_path.exists():
+            errors.append(f"legacy orchestrator agent must not remain in delivery agents: {delivery_path.relative_to(ROOT)}")
 
     for agent_name, archive_path in ARCHIVED_AGENT_PATHS.items():
         delivery_path = DELIVERY_ROOT / "agents" / f"{agent_name}.md"

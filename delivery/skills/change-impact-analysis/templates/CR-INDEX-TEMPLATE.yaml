@@ -1,6 +1,6 @@
 version: 1
 updated_at: ""
-updated_by: "meta-po"
+updated_by: "host-orchestrator"
 status: "indexed"
 consistency_check:
   last_run_at: ""

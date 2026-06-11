@@ -113,4 +113,4 @@ status: active
 - 若变更触发回退，不得跳过人工检查点直接继续下游阶段
 - “修订”不是“重写最新真相源”：需求和场景文档必须优先保留可追溯基线，再追加或修改新内容
 - CP8 后续事项不等于立即启动一组 CR；提前创建空 CR 会制造假进度和维护负担
-- follow-up tracking 是 backlog，不是状态索引的替代品；缺少 `cr_tracking` / `CR-INDEX.yaml` 时，meta-po 查询当前 CR 很容易只看见 active 正式 CR 而漏掉 candidate
+- follow-up tracking 是 backlog，不是状态索引的替代品；缺少 `cr_tracking` / `CR-INDEX.yaml` 时，host-orchestrator 查询当前 CR 很容易只看见 active 正式 CR 而漏掉 candidate

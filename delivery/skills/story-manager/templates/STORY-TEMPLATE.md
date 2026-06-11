@@ -72,7 +72,7 @@ updated_at: ""
 
 ### 依赖与并行门控
 
-> `depends_on` 必须声明依赖类型，供 meta-po 计算 `lld_ready` 与 `dev_ready`。
+> `depends_on` 必须声明依赖类型，供 host-orchestrator 计算 `lld_ready` 与 `dev_ready`。
 
 | 上游 Story | 类型（contract/runtime/file-conflict） | LLD 门控 | 开发门控 | 说明 |
 |------------|-----------------------------------------|----------|----------|------|
@@ -167,7 +167,7 @@ updated_at: ""
 | 人工 / 语义审查 | PASS / RISK / FAIL / N/A |
 | CP7 结论 | PASS / PASS_WITH_RISK / BLOCKED / NEEDS_REWORK / NEEDS_DESIGN_CLARIFICATION / WAIVED |
 | 剩余风险 | `<risk ids or none>` |
-| 路由 | none / meta-dev / meta-se / meta-po / human |
+| 路由 | none / meta-dev / meta-se / host-orchestrator / human |
 
 ## 量化验收标准（acceptance_criteria）
 

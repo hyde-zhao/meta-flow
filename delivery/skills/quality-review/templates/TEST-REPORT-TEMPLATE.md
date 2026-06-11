@@ -105,4 +105,4 @@ verification_result: "PASS|PASS_WITH_RISK|BLOCKED|NEEDS_REWORK|NEEDS_DESIGN_CLAR
 
 | 结论 | 路由 | 条件 / 说明 |
 |---|---|---|
-| PASS / PASS_WITH_RISK / BLOCKED / NEEDS_REWORK / NEEDS_DESIGN_CLARIFICATION / WAIVED | none / meta-dev / meta-se / meta-po / human | <下一步> |
+| PASS / PASS_WITH_RISK / BLOCKED / NEEDS_REWORK / NEEDS_DESIGN_CLARIFICATION / WAIVED | none / meta-dev / meta-se / host-orchestrator / human | <下一步> |

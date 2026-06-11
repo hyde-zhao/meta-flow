@@ -128,7 +128,7 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 - 不扩大本轮交付范围；后续事项进入 feedback / follow-up / backlog。
 - 不默认新增 `CHANGELOG.md`、`INSTALL.md`、`TROUBLESHOOTING.md`、`POST-RELEASE-OBSERVATION.md`；仅 `full` profile 或用户明确要求时生成。
 - 不复制完整 TEST-REPORT、REVIEW、TEST-MATRIX、HLD、LLD、日志或全文 diff；只写摘要、计数、风险 ID 和证据路径。
-- `FEEDBACK.md` 只记录反馈回流入口；CP8 后续 CR 候选必须进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并由 meta-po 同步 `STATE.md.cr_tracking`。
+- `FEEDBACK.md` 只记录反馈回流入口；CP8 后续 CR 候选必须进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并由 host-orchestrator 同步 `STATE.md.cr_tracking`。
 
 ## 验收标准
 

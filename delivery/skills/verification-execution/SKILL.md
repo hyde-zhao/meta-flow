@@ -122,14 +122,14 @@ status: active
 |---|---|---|
 | `PASS` | 可进入下一阶段 | Story -> `verified` |
 | `PASS_WITH_RISK` | 可进入下一阶段，但风险必须被记录和接受 | Story -> `verified-with-risk` 或 `verified` + CP8 risk acceptance 输入 |
-| `BLOCKED` | 信息、环境、授权或阻塞缺陷导致不能继续 | meta-po 阻断推进 |
+| `BLOCKED` | 信息、环境、授权或阻塞缺陷导致不能继续 | host-orchestrator 阻断推进 |
 | `NEEDS_REWORK` | 实现需要返工 | 路由回 meta-dev |
-| `NEEDS_DESIGN_CLARIFICATION` | 上游设计或需求需澄清 | 路由回 meta-se / meta-po，必要时重开 CP5 或 CR |
+| `NEEDS_DESIGN_CLARIFICATION` | 上游设计或需求需澄清 | 路由回 meta-se / host-orchestrator，必要时重开 CP5 或 CR |
 | `WAIVED` | 验证项经批准豁免 | 记录批准来源、影响和重访条件 |
 
 ## 约束
 
-- 不修改验收目标；发现验收目标错误时回到 meta-po / meta-se。
+- 不修改验收目标；发现验收目标错误时回到 host-orchestrator / meta-se。
 - 不直接修复实现；验证输出问题、复现、影响、建议和复验范围。
 - 不用“测试通过”替代覆盖矩阵、设计契约、实现证据和平台约束验证。
 - 不把无证据的口头判断写成 PASS。

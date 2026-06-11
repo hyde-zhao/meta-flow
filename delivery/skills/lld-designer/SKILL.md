@@ -100,7 +100,7 @@ status: active
    - `full-lld` 写入 `process/stories/STORY-{id}-{story_slug}-LLD.md`。
    - `technical-note` 更新 `process/stories/STORY-{id}-{story_slug}.md` 的 `## 技术说明`。
    - `waived` 更新 Story 卡片中的豁免证据。
-2. 若存在 `blocks_lld=true` 且未回答的 clarification item，不得生成通过态 CP5 自动预检；将 Story 标记为 blocked 或 waiting-clarification，并等待 meta-po broker。
+2. 若存在 `blocks_lld=true` 且未回答的 clarification item，不得生成通过态 CP5 自动预检；将 Story 标记为 blocked 或 waiting-clarification，并等待 host-orchestrator broker。
 3. 将 Story 推进到 `lld-ready-for-review`，并在 CP5 自动预检中标明 `design_evidence_type=full-lld|technical-note|waived`。
 4. 停止在全部目标 Story 的设计证据统一确认前，不进入实现。
 
@@ -119,7 +119,7 @@ status: active
 - 不得为了节省 token 把高风险 Story 降级为 `technical-note`；数据、安全、外部接口、并发、迁移或跨 Story 契约命中时默认 `full-lld`
 - 不超出当前 Story 范围
 - 发现未决技术点时，必须输出 `OPEN` 或 Spike，禁止伪确定
-- 发现实现灰区时，必须优先写入 LLD Clarification Queue；并行 LLD 阶段不得让多个 meta-dev 直接问用户；queue item 必须可被 meta-po 直接汇入 CP5 待人工决策清单
+- 发现实现灰区时，必须优先写入 LLD Clarification Queue；并行 LLD 阶段不得让多个 meta-dev 直接问用户；queue item 必须可被 host-orchestrator 直接汇入 CP5 待人工决策清单
 - 若模板章节与说明冲突，以模板契约为准同步修正
 - LLD 文件名必须复用 Story 卡片中的 `story_slug`，不得自行再生成第二套命名
 - 涉及平台路径、schema 或发现机制时，必须引用 `delivery/doc/PLATFORM-CONTRACTS.yaml` 或官方文档证据；禁止按同平台目录进行类比推断

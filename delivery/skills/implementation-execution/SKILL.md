@@ -75,7 +75,7 @@ status: active
 8. **平台差异检查**：涉及 Claude / Codex / OpenClaw 时，检查平台专用 schema、AskUserQuestion、request_user_input 降级、安装路径和 dry-run。
 9. **整体验证**：运行适用的 `pytest`、guardrail、install dry-run、`git diff --check`、lint / format / 类型检查；未运行项必须说明原因。
 10. **输出实现交接摘要**：写入 `IMPLEMENTATION.md` 或 Story 实现摘要，列出完成内容、行为变化、受影响文件、验证、未运行检查、剩余风险和 QA / Review / Doc 关注点。
-11. **反馈设计缺口**：发现 Feature 边界、架构约束、Story 细节、用户确认点或测试验收不足时，写入设计缺口反馈；阻塞项交回 meta-po。
+11. **反馈设计缺口**：发现 Feature 边界、架构约束、Story 细节、用户确认点或测试验收不足时，写入设计缺口反馈；阻塞项交回 host-orchestrator。
 
 ## 输出文件 / 输出模板
 
@@ -106,11 +106,11 @@ status: active
 - 不只改 Prompt 而不改模板 / guardrail / 文档；不只改模板而不改 Prompt / Skill 执行规则。
 - 不把 handoff 文件当作子 agent 执行完成证据。
 - 不在 Codex 产物中写 Claude-only schema；Claude direct ask agent 必须符合 AskUserQuestion 权限规则。
-- 不扩大 Story 文件所有权；必须扩大时交回 meta-po 发起 CR 或重新进入设计门。
+- 不扩大 Story 文件所有权；必须扩大时交回 host-orchestrator 发起 CR 或重新进入设计门。
 
 ## 验收标准
 
-- [ ] 实现前置检查完成，阻塞项为 0 或已交回 meta-po。
+- [ ] 实现前置检查完成，阻塞项为 0 或已交回 host-orchestrator。
 - [ ] 实现对象清单覆盖代码、Prompt / Skill、模板 / Schema、安装器、guardrail、测试、文档中所有适用对象。
 - [ ] 每个设计契约都有实现位置、动作和验证方式。
 - [ ] 单元测试 / Fixture / 结构检查计划已按实现对象类型给出；N/A 项有原因。

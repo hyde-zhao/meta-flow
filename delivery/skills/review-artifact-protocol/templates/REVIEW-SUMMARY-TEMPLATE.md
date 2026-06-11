@@ -19,9 +19,9 @@ optional_count: 0
 
 | Severity | Count | Owner |
 |----------|-------|-------|
-| 严重 | 0 | `meta-po` |
-| 一般 | 0 | `meta-po` |
-| 轻微 | 0 | `meta-po` |
+| 严重 | 0 | `host-orchestrator` |
+| 一般 | 0 | `host-orchestrator` |
+| 轻微 | 0 | `host-orchestrator` |
 
 ## 3. 决策
 

@@ -117,7 +117,7 @@ output: docs/product/USE-CASES.md
    - `recommended_discussion_order`
    - `canonical_refs`：原始请求、README/docs、CR、输入材料或既有场景的引用
 4. 让用户选择 1-3 个重点讨论灰区；未选但有价值的内容进入 `Deferred Ideas`，不得丢失，也不得混入当前 scope。
-5. 讨论时一次只问 1 个高价值问题。问题优先给出 2-4 个具体选项，推荐项放在首位，并说明每个选项对范围、复杂度、验证、交付出口和后续门控的影响；该问题若会进入 CP2，则同步记录为 `decision_item` 供 meta-po 汇总到待人工决策清单。
+5. 讨论时一次只问 1 个高价值问题。问题优先给出 2-4 个具体选项，推荐项放在首位，并说明每个选项对范围、复杂度、验证、交付出口和后续门控的影响；该问题若会进入 CP2，则同步记录为 `decision_item` 供 host-orchestrator 汇总到待人工决策清单。
 6. 标准模式下必须至少形成 1 条用户可见场景确认交互，写入 `scenario_confirmation_interactions[]`；不得只通过后台分析、文档扫描或模型推断静默生成 `USE-CASES.md`。
 7. 每条 `scenario_confirmation_interactions[]` 至少包含：`question_id`、`question`、`options`、`recommendation`、`user_response`、`confirmed_understanding`、`impact_surface`、`source_refs`、`status`。其中 `question_id` 使用 `SGQ-001` 这类稳定编号。
 8. 若用户自由表达、纠正上下文或拒绝结构化选项，立即停止继续推送选项，改为复述理解并请求确认；确认记录必须进入讨论日志和 `scenario_confirmation_interactions[]`。

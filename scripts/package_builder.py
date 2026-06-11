@@ -45,7 +45,7 @@ PLATFORM_CONFIGS = {
 }
 
 KEBAB_CASE_RE = re.compile(r"^[a-z][a-z0-9-]+\.(md|toml)$")
-META_FLOW_AGENTS = {"meta-po", "meta-pm", "meta-se", "meta-dev", "meta-qa", "meta-doc"}
+META_FLOW_AGENTS = {"meta-pm", "meta-se", "meta-dev", "meta-qa", "meta-doc"}
 EXCLUDE_SKILLS = {"command-capability-map", "constraint-checker", "constraint-normalizer", "vendor-profile-loader"}
 
 

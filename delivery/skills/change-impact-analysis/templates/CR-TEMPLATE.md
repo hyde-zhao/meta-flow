@@ -8,7 +8,7 @@ fast_lane_upgrade_reason: ""
 rollback_to: ""
 approval_result: "pending"
 created_at: ""
-created_by: "meta-po"
+created_by: "host-orchestrator"
 approved_by: ""
 approved_at: ""
 source: "user|issue|run-exec|cp8-follow-up"
@@ -105,15 +105,15 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 ## 执行链路
 
-> CR 创建时必须先写明串行依赖、责任角色、门控和恢复点。`meta-po` 负责分派与收敛；功能 Agent 只处理自身职责，不关闭 CR、不推进 `delivered`。
+> CR 创建时必须先写明串行依赖、责任角色、门控和恢复点。`host-orchestrator` 负责分派与收敛；功能 Agent 只处理自身职责，不关闭 CR、不推进 `delivered`。
 
 | 顺序 | 责任角色 | 动作 | 输入 | 输出 | 门控 | 完成后下一步 |
 |---|---|---|---|---|---|---|
-| 1 | `meta-po` | 创建 CR 并分派 | 用户请求 / ISSUE / RUN-EXEC | 本 CR、handoff、调度证据 | CR 已登记 | 等待下游完成 |
-| 2 | `meta-dev` | 完成 LLD 设计批次或实施变更 | CR、handoff、相关 Story / 文件 | 批次内 LLD、代码、目录或交付产物变更 | 若影响 Story / LLD / 实现设计：先通过批次 CP5；否则进入 CP6 / 对应验证证据 | 交回 `meta-po` |
-| 3 | `meta-doc` | 刷新文档 | CR、当前交付物、变更结果 | README / USER-MANUAL / 文档更新 | 文档自检 | 交回 `meta-po` |
-| 4 | `meta-po` | 收敛终验 | 下游结果、CR、检查点 | CP8 自动预检与人工审查稿 | 等待用户确认或有效预授权 | 写入 `pending_user_decision` |
-| 5 | `meta-po` | 回填确认并关闭 CR | 用户确认或有效预授权 | CR closed、STATE 更新 | CP8 approved | 推进 `delivered` 或下一阶段 |
+| 1 | `host-orchestrator` | 创建 CR 并分派 | 用户请求 / ISSUE / RUN-EXEC | 本 CR、handoff、调度证据 | CR 已登记 | 等待下游完成 |
+| 2 | `meta-dev` | 完成 LLD 设计批次或实施变更 | CR、handoff、相关 Story / 文件 | 批次内 LLD、代码、目录或交付产物变更 | 若影响 Story / LLD / 实现设计：先通过批次 CP5；否则进入 CP6 / 对应验证证据 | 交回 `host-orchestrator` |
+| 3 | `meta-doc` | 刷新文档 | CR、当前交付物、变更结果 | README / USER-MANUAL / 文档更新 | 文档自检 | 交回 `host-orchestrator` |
+| 4 | `host-orchestrator` | 收敛终验 | 下游结果、CR、检查点 | CP8 自动预检与人工审查稿 | 等待用户确认或有效预授权 | 写入 `pending_user_decision` |
+| 5 | `host-orchestrator` | 回填确认并关闭 CR | 用户确认或有效预授权 | CR closed、STATE 更新 | CP8 approved | 推进 `delivered` 或下一阶段 |
 
 ## 自动终验授权
 
