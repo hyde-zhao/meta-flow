@@ -27,6 +27,7 @@ status: active
 | 文档 | README、USER-MANUAL、release notes | 用户可理解、路径正确、行为同步 |
 | 状态与过程文件 | STATE、CP6、handoff、Decision Brief | 状态一致、证据完整、授权边界明确 |
 | 发布产物 | deploy checklist、rollback、migration、feedback | 发布风险、回滚、后续跟踪 |
+| Workflow Eval Evidence | `WORKFLOW-EVAL.yaml`、`PROMPT-BUNDLE.yaml`、`CASE-REGISTRY.yaml`、`process/evals/runs/<run-id>/run-summary.json` | generated workflow / prompt-skill / mixed 产物的结构、trace、hash、case、权限和回归稳定性 |
 
 ## 适用场景
 
@@ -60,6 +61,7 @@ status: active
 - 测试、fixture、guardrail、dry-run 输出
 - `process/STATE.md` 与 handoff / dispatch 证据
 - 活跃 `process/changes/CR-*.md`（若验证对象来自变更）
+- `validation_target.sut_type` 与 workflow eval evidence（当 Story / CR 涉及 generated workflow、prompt-skill-workflow、meta-flow-core-code、agentic-code-product 或 mixed）
 
 ## 知识来源
 
@@ -77,6 +79,11 @@ status: active
 3. **建立验证追踪矩阵**：把 Scenario、Requirement、Story、Design Contract、Implementation、Test / Check、Status、Risk 串联起来，暴露“有需求无实现”“有实现无测试”“有测试无追溯”的缺口。
 4. **抽取设计契约和质量门禁**：从 Story、LLD、HLD、ADR、Feature DESIGN、IMPLEMENTATION、平台契约中抽取 must / should / must-not、输入输出、状态流转、权限、平台差异、异常处理和验收标准。
 5. **制定分层验证计划**：按风险选择静态检查、单元测试、Prompt / Skill fixture、契约测试、集成测试、安装 dry-run、回归测试、人工审查；每项标记必跑、条件触发、N/A 和阻塞条件。
+   - `sut_type=code-project`：workflow eval 默认 N/A，除非 Story 显式要求。
+   - `sut_type=generated-workflow`：必须消费 workflow eval run evidence，覆盖 schema、状态 / DAG、checkpoint、human gate、trace、permission 和 recovery。
+   - `sut_type=prompt-skill-workflow`：必须消费 prompt bundle hash、fixture / rubric、negative 和 regression case。
+   - `sut_type=meta-flow-core-code`：必须组合仓库原生检查、delivery guardrail 和 workflow eval 回归样例。
+   - `sut_type=agentic-code-product|mixed`：必须按 Story 对象组合 code + workflow + prompt 验证层。
 6. **运行静态检查**：记录 `git diff --check`、语法 / schema / frontmatter、缓存文件、敏感信息、路径和链接检查结果。
 7. **运行单元测试和 fixture 测试**：代码、状态机、安装器、guardrail、Prompt / Skill 均按适用对象验证；复杂 Prompt / Skill 至少要有 fixture 或人工样例验证。
 8. **运行契约测试和集成测试**：验证上游输入与下游消费兼容，例如 TEST-MATRIX 到 TEST-REPORT、IMPLEMENTATION 到 quality-review、install script 到 platform contracts。
@@ -133,6 +140,7 @@ status: active
 - 不直接修复实现；验证输出问题、复现、影响、建议和复验范围。
 - 不用“测试通过”替代覆盖矩阵、设计契约、实现证据和平台约束验证。
 - 不把无证据的口头判断写成 PASS。
+- 不把 eval run 的 PASS 直接写成 CP7 PASS；eval evidence 只是验证证据输入，仍需验证对象清单、追踪矩阵、设计契约验证、分层验证计划和风险判断。
 - 不把 `PASS_WITH_RISK` 静默转成 `PASS`；风险必须进入 CP8 Decision Brief 或风险接受记录。
 - 不在缺少 meta-qa 调度证据时推进 CP7。
 
@@ -160,3 +168,4 @@ status: active
 - Prompt / Skill fixture 不要求逐字匹配自然语言输出，但必须验证关键字段、角色边界、禁止行为和平台差异。
 - `PASS_WITH_RISK` 不是“失败”；它可以推进，但必须让风险进入 CP8 风险接受或后续跟踪。
 - `VALIDATION-ENV.yaml` 不是所有验证模式都必须完整运行环境；`static-only` / `dry-run-only` / `review-only` 可用等价验证方式，但必须写明理由。
+- 外部 Promptfoo / DeepEval / Langfuse / Garak 适配器默认不是 CP7 必跑项；任何网络、凭据、trace 上传或外部模型调用必须先有 `runtime_authorization`。

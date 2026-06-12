@@ -1,0 +1,24 @@
+schema_version: "1.0"
+bundle_id: "generated-workflow-basic-prompts"
+version: "1.0.0"
+change_type: "minor"
+components:
+  - id: "rules"
+    kind: "rules"
+    path: "prompts/rules.md"
+    sha256: "a46bc7f045f460b7ae651e6215ba6f357a28f3489c540fdb2e8f40e3a97fdec7"
+  - id: "orchestrator"
+    kind: "agent"
+    path: "agents/workflow-orchestrator.md"
+    sha256: "2c752fcf9bc0d15b57ec703f0b933b4c8d0873e61506343423b801b29e500bfa"
+  - id: "sample-skill"
+    kind: "skill"
+    path: "skills/sample-skill/SKILL.md"
+    sha256: "1becc64b764c4921db0cff7b19fa1c459335ff47ee168f9de5e7fb5cbdf55561"
+compatibility:
+  project_kind: ["workflow-product", "mixed"]
+  sut_type: ["generated-workflow", "prompt-skill-workflow"]
+  platforms: ["codex", "claude", "openclaw"]
+rollback:
+  previous_bundle: ""
+  rollback_condition: "Any component hash mismatch, missing artifact, or forbidden action finding."

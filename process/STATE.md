@@ -4,11 +4,11 @@ workflow_mode: "standard"
 orchestration_model: "host-orchestrated"
 current_phase: "documentation"
 current_agent: "host-orchestrator"
-iteration: 11
+iteration: 13
 blocked: false
 active_change: ""
-last_action: "CR-017 已关闭：Meta Flow 已迁移为 Host Orchestrator 主进程编排，Codex / Claude Code 仅安装功能子 agent"
-next_action: "无活跃 CR；后续正式工作流由 Host Orchestrator 主进程按阶段调度 meta-pm / meta-se / meta-dev / meta-qa / meta-doc"
+last_action: "完成 CR-018 至 CR-023：workflow eval、prompt bundle、case registry、本地 runner、CP7 集成、suite health 和 optional adapter policy 已落地并通过本地验证"
+next_action: "无活跃 CR；可进入提交与 GitHub 推送"
 orchestrator_session:
   kind: "host"
   role: "host-orchestrator"
@@ -27,7 +27,7 @@ orchestrator_session:
   subagent_auto_dispatch: "enabled"
   resume_instruction: "用户回复人工检查点结论后，由 Host Orchestrator 主进程重新读取 STATE、checkpoint 和相关产物后继续；不得 spawn / resume 编排子 agent"
   spawned_at: ""
-  last_seen_at: "2026-06-11T16:50:00+08:00"
+  last_seen_at: "2026-06-11T19:50:20+08:00"
   awaiting_since: ""
   resumed_at: ""
   closed_at: ""
@@ -108,6 +108,17 @@ workflow_health:
     phase_elapsed_rounds: 0
   active_signals: []
   last_escalation: ""
+cr_tracking:
+  index_path: "process/changes/CR-INDEX.yaml"
+  consistency_check:
+    last_run_at: "2026-06-11T19:59:32+08:00"
+    command: "meta-flow check cr-tracking --project-root ."
+    result: "PASS"
+  active_crs: []
+  blocked_crs: []
+  follow_up_candidates: []
+  spike_candidates: []
+  stale_status_conflicts: []
 checkpoints:
   requirement_confirmed: false
   hld_confirmed: true
@@ -115,6 +126,16 @@ checkpoints:
   final_review_confirmed: false
 parallel_waves: []
 history:
+  - at: "2026-06-11T19:50:20+08:00"
+    actor: "host-orchestrator"
+    action: "close-cr-018-to-cr-023-workflow-eval-governance"
+    phase: "documentation"
+    summary: "用户预授权跳过人工审批后，完成 CR-019 至 CR-023：新增 eval contracts、generated workflow fixture、本地 deterministic runner、suite health、failure backlog、CP7 eval evidence 集成和 optional adapter policy；本地 eval validate/run/suite-health 通过，外部 adapter 真实运行仍未授权。"
+  - at: "2026-06-11T19:30:30+08:00"
+    actor: "host-orchestrator"
+    action: "create-cr-018-eval-governance-baseline"
+    phase: "documentation"
+    summary: "创建 CR-018：建立单主流程 + project_kind / validation_target 分流、workflow eval、prompt bundle、纯代码兼容和后续 CR 拆分台账；当前等待用户审阅，未授权后续实现或外部工具运行。"
   - at: "2026-06-11T16:50:00+08:00"
     actor: "host-orchestrator"
     action: "close-cr-017-host-orchestrated"
@@ -325,7 +346,7 @@ history:
     action: "verify-change-request"
     phase: "documentation"
     summary: "CR-006：静态检索确认关键规则包含待人工决策清单协议；guardrail 在禁写 bytecode 环境下通过；未发现新增 __pycache__ / pyc"
-last_updated: "2026-05-28T00:00:00+08:00"
+last_updated: "2026-06-11T19:59:32+08:00"
 ---
 
 <!--

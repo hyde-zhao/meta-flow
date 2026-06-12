@@ -151,6 +151,7 @@ def _print_help() -> None:
         "  install    Install Meta Flow assets into Claude Code, Codex, or OpenClaw.\n"
         "  uninstall  Uninstall Meta Flow assets recorded in INSTALL-MANIFEST.\n"
         "  check      Run packaged Meta Flow validators.\n"
+        "  eval       Validate and run local workflow evaluation packages.\n"
         "  status     Show current process/STATE.md summary.\n"
         "  next       Show the next workflow action or pending gate.\n"
         "  doctor     Check local Meta Flow runtime structure.\n\n"
@@ -160,6 +161,7 @@ def _print_help() -> None:
         "  meta-flow uninstall codex --scope user\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
         "  meta-flow check cr-tracking --project-root .\n"
+        "  meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml\n"
         "  meta-flow status\n"
     )
 
@@ -209,6 +211,12 @@ def _run_check(args: list[str]) -> None:
     raise SystemExit(f"未知检查器: {validator}. 目前支持: human-gate, cr-tracking")
 
 
+def _run_eval(args: list[str]) -> None:
+    from meta_flow.evals import runner
+
+    raise SystemExit(runner.main(args))
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args or args[0] in {"-h", "--help"}:
@@ -231,7 +239,10 @@ def main() -> None:
     if command == "check":
         _run_check(args[1:])
         return
-    raise SystemExit(f"未知命令: {command}. 目前支持: install, uninstall, check, status, next, doctor")
+    if command == "eval":
+        _run_eval(args[1:])
+        return
+    raise SystemExit(f"未知命令: {command}. 目前支持: install, uninstall, check, eval, status, next, doctor")
 
 
 if __name__ == "__main__":

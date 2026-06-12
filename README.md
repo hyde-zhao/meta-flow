@@ -108,6 +108,36 @@ meta-flow install codex --scope project --component full --dry-run
 uv run --python 3.11 python delivery/scripts/install.py codex --dry-run
 ```
 
+## Workflow Eval 与 Prompt Bundle
+
+Meta Flow 同时支持纯代码项目和 workflow / prompt-skill / mixed 项目。两类判断必须分开：
+
+- `engagement_mode` 只判断当前是在优化 meta-flow 自身，还是在为 production 目标项目交付。
+- `STATE.md.target_project_profile.project_kind` 判断目标项目类型：`code-project`、`workflow-product`、`agentic-code-product`、`mixed` 或 `unknown`。
+- Story / 交付对象用 `validation_target.sut_type` 判断 CP7 验证层：`code-project`、`generated-workflow`、`prompt-skill-workflow`、`meta-flow-core-code`、`agentic-code-product` 或 `mixed`。
+
+纯代码项目默认继续使用目标项目原生测试、构建、静态检查和 quality-review，不强制 workflow eval。generated workflow、prompt-skill、meta-flow-core-code、agentic-code-product 和 mixed 对象必须提供 workflow eval / prompt bundle 证据，或在 CP7 中写明 `WAIVED` / `BLOCKED` 原因。
+
+本地 deterministic eval 命令：
+
+```bash
+meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml
+meta-flow eval run --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/generated-workflow-basic
+meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
+```
+
+核心契约：
+
+| 契约 | 路径 | 用途 |
+|---|---|---|
+| Workflow eval schema | `evals/contracts/WORKFLOW-EVAL.schema.yaml` | 定义 suite、SUT、trace policy 和 grader |
+| Prompt bundle schema | `evals/contracts/PROMPT-BUNDLE.schema.yaml` | 定义 prompt/rules/agent/skill/template/rubric 的引用、hash、兼容性和回滚 |
+| Case registry schema | `evals/contracts/CASE-REGISTRY.schema.yaml` | 定义 case 生命周期、覆盖类别、grader 引用和期望结果 |
+| Run evidence | `process/evals/runs/<run-id>/` | 本地执行证据，供 CP7 / CP8 消费 |
+| Suite health | `docs/quality/EVAL-SUITE-HEALTH.md` | 长期质量状态摘要 |
+
+Promptfoo、DeepEval、Langfuse 和 Garak 只作为可选 adapter，默认 disabled。任何网络、凭据、trace 上传、外部模型调用、publish、live 或 production 写入都必须单独形成 `runtime_authorization` 决策项；`approve` 或“跳过人工审批”不等于授权这些真实外部动作。
+
 ## `~/.meta-flow` 目录说明
 
 `~/.meta-flow/` 当前不承载 Meta Flow 的运行态文档，也不是 `process/`、`process/checks/`、`process/checkpoints/` 或交付出口的替代目录。当前规则要求元工作流运行态仍写入仓库根目录下的 `process/`、自动检查结果写入 `process/checks/`、人工审查稿写入 `process/checkpoints/`；交付态按 engagement mode 路由，meta-flow 自身改进写当前仓库 `delivery/`，外部 production 项目按目标项目约定或用户确认输出。

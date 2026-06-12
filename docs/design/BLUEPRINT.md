@@ -14,6 +14,7 @@ confirmed_at: "2026-06-07"
 | 版本 | 日期 | 修订人 | 变更要点 |
 |---|---|---|---|
 | 1.0 | 2026-06-07 | meta-po | 基于 AGENTS、delivery 规则、legacy HLD、ADR 和 CR-005 至 CR-018 建立正式设计基线 |
+| 1.1 | 2026-06-11 | host-orchestrator | 新增 workflow eval governance 能力域，修正 Host Orchestrator 编排表述 |
 
 ## 1. 蓝图定位
 
@@ -32,7 +33,7 @@ confirmed_at: "2026-06-07"
 
 | Capability ID | 能力域 | 用户价值 | 覆盖对象 | Owner Feature |
 |---|---|---|---|---|
-| CAP-01 | 工作流编排与状态推进 | 用户只需从 `meta-po` 入口推进复杂工作流，阶段、门禁和回退可追溯 | `STATE.md`、CP0-CP8、handoff、CR | FEAT-WORKFLOW-ORCHESTRATION |
+| CAP-01 | 工作流编排与状态推进 | 用户只需在主进程 Host Orchestrator 中推进复杂工作流，阶段、门禁和回退可追溯 | `STATE.md`、CP0-CP8、handoff、CR | FEAT-WORKFLOW-ORCHESTRATION |
 | CAP-02 | 场景发现与需求结构化 | 标准模式下先发现真实使用场景，再提取需求和验证场景 | `USE-CASES`、`REQUIREMENTS`、`SCENARIOS`、`TEST-MATRIX` | FEAT-SCENARIO-DISCOVERY |
 | CAP-03 | 蓝图、HLD 与 ADR 设计 | 在 Story 拆解前明确能力边界、架构方案、关键决策和切换条件 | `BLUEPRINT`、`DOMAIN-MAP`、`DEPENDENCY-MAP`、`HLD`、`ADR` | FEAT-SOLUTION-DESIGN |
 | CAP-04 | Feature 设计与 LLD 分级 | 只为高风险能力生成必要设计，低风险 Story 用技术说明或 waived 证据控制 token | `FEATURE-DESIGN-MATRIX`、`docs/features/*`、`STORY-*-LLD` | FEAT-DESIGN-EVIDENCE |
@@ -42,6 +43,7 @@ confirmed_at: "2026-06-07"
 | CAP-08 | 发布准备与交付文档 | 发布前按 profile 生成必要文档和风险分流，不默认执行真实发布 | `RELEASE-CONTEXT`、release docs、README、USER-MANUAL | FEAT-RELEASE-DOCUMENTATION |
 | CAP-09 | 安装契约与交付护栏 | 保证 delivery 包可安装、路径正确、废弃资产不回流 | `PLATFORM-CONTRACTS`、install scripts、guardrail | FEAT-INSTALLER-GUARDRAILS |
 | CAP-10 | 文档分层与交付出口路由 | 区分长期文档、过程文档、确认态和交付包，避免 production 项目被写入 meta-flow 自身交付面 | `docs/`、`process/`、`delivery/` | FEAT-DESIGN-DOCUMENT-LAYERING |
+| CAP-11 | Workflow Eval 与 Prompt Bundle 治理 | 生成工作流、Prompt / Skill 与 mixed 产物可通过 schema、case、hash、runner evidence 和 suite health 验证 | `evals/contracts/*`、`PROMPT-BUNDLE.yaml`、`CASE-REGISTRY.yaml`、`process/evals/runs/*`、`docs/quality/EVAL-SUITE-HEALTH.md` | FEAT-WORKFLOW-EVAL-GOVERNANCE |
 
 ## 3. Feature / Epic 边界
 
@@ -57,6 +59,7 @@ confirmed_at: "2026-06-07"
 | FEAT-RELEASE-DOCUMENTATION | 发布与文档 | Release Context、发布文档、README、USER-MANUAL、后续跟踪分流 | 未授权真实发布 | `docs/release/*`、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` | QA 报告、CP8 | 不得默认生成 full profile 或执行 publish |
 | FEAT-INSTALLER-GUARDRAILS | 安装与护栏 | 平台契约、安装脚本、资产生命周期、静态检查 | 目标项目业务测试 | `delivery/doc/PLATFORM-CONTRACTS.yaml`、`delivery/scripts/*`、`scripts/check_delivery_guardrails.py` | delivery agents / skills / rules | 不得按平台目录类比推断路径 |
 | FEAT-DESIGN-DOCUMENT-LAYERING | 文档分层 | docs/process/delivery 路由、legacy fallback 边界、production 交付出口 | 具体 HLD 内容本身 | 本设计基线、规则说明 | 目标 README/docs | 不得把过程态文档当长期交付物 |
+| FEAT-WORKFLOW-EVAL-GOVERNANCE | Workflow Eval 与 Prompt Bundle 治理 | eval schema、prompt bundle、case registry、本地 runner evidence、suite health、failure backlog、adapter 授权边界 | 目标项目业务逻辑、外部 SaaS 真实运行、CP7 最终放行裁决 | `evals/contracts/*`、`evals/fixtures/*`、`meta_flow/evals/*`、`docs/quality/EVAL-SUITE-HEALTH.md` | Story、verification-execution、meta-qa、目标项目测试结果 | 不得把 eval run PASS 直接等同 CP7 PASS |
 
 ## 4. 跨 Feature 流程
 
@@ -68,6 +71,7 @@ confirmed_at: "2026-06-07"
 | FLOW-04 | CP7 验证失败 | IMPLEMENTATION-VERIFICATION -> ORCHESTRATION -> meta-dev 回修 | IMPLEMENTATION-VERIFICATION | 不得标记 verified，回修后重跑 CP6 / CP7 | CP6 / CP7 |
 | FLOW-05 | 交付安装验证 | INSTALLER-GUARDRAILS -> RELEASE-DOCUMENTATION | INSTALLER-GUARDRAILS | guardrail / dry-run 失败时 CP8 不得 READY | guardrail、install dry-run |
 | FLOW-06 | 文档路由 | DESIGN-DOCUMENT-LAYERING -> 所有 Feature | 对应文档 owner | production 项目缺少输出约定时先询问用户 | README/docs 扫描、CP8 |
+| FLOW-07 | Workflow / Prompt 产物验证 | WORKFLOW-EVAL-GOVERNANCE -> IMPLEMENTATION-VERIFICATION -> RELEASE-DOCUMENTATION | WORKFLOW-EVAL-GOVERNANCE / docs/quality | eval suite FAIL 时不得把 CP7 标记 PASS；外部 adapter 缺授权时 N/A | `meta-flow eval validate/run/suite-health`、CP7 |
 
 ## 5. 共享能力
 
@@ -78,6 +82,7 @@ confirmed_at: "2026-06-07"
 | SH-03 | Platform Contracts | installer、platform-validator、guardrail、HLD / LLD | FEAT-INSTALLER-GUARDRAILS | 所有平台路径断言从该契约读取 | 契约缺失时不得类比推断 |
 | SH-04 | Review Artifact Protocol | meta-po、meta-se、meta-dev、meta-qa、meta-doc | FEAT-WORKFLOW-ORCHESTRATION | reviewer lane 使用共享 findings / summary | 无法拉起 reviewer 时记录 N/A / inline fallback 门禁 |
 | SH-05 | CR Tracking | meta-po、state-router、change-impact-analysis | FEAT-WORKFLOW-ORCHESTRATION | 变更先建 CR，再改正式对象 | 状态冲突时先展示冲突再推进 |
+| SH-06 | Workflow Eval Evidence | meta-qa、verification-execution、quality-review、release-readiness | FEAT-WORKFLOW-EVAL-GOVERNANCE | runner 生成 evidence，CP7 / CP8 消费摘要 | suite FAIL 时写 failure backlog；外部 adapter 缺授权时 N/A |
 
 ## 6. 待确认边界
 

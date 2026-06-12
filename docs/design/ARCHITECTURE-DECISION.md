@@ -13,14 +13,15 @@ source_hld: "docs/design/HLD.md"
 | 版本 | 日期 | 修订人 | 变更要点 |
 |---|---|---|---|
 | 1.0 | 2026-06-07 | meta-po | 汇总当前仍有效的 Meta Flow v2 架构决策，吸收 CR-005 至 CR-018 |
+| 1.1 | 2026-06-11 | host-orchestrator | 吸收 CR-019 至 CR-023：修正 Host Orchestrator 编排基线，新增 workflow eval / prompt bundle 治理决策 |
 
 ## ADR 列表
 
 | ADR | 决策 | 状态 | 理由 | 影响面 |
 |---|---|---|---|---|
-| ADR-001 | canonical role 保持 `meta-po` / `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc` 六类 | accepted | `meta-dm` 已归档，职责合并到 `meta-se`；六类角色覆盖端到端流程 | Agent lifecycle、安装、rules |
-| ADR-002 | `meta-po` 是唯一主编排器，Codex 同一工作流只允许一个 active `meta-po` | accepted | 避免状态竞争和多线程重复推进 | STATE、handoff、dispatch evidence |
-| ADR-003 | 阶段内允许委托 `meta-pm` / `meta-se` 直接与用户讨论，但正式 CP2 / CP3 由 `meta-po` 发起 | accepted | 保留阶段专业交互，同时保证人工门禁一致 | delegated_interaction、Human Gate |
+| ADR-001 | canonical functional role 保持 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc` 五类；主编排由 Host Orchestrator 主进程承担 | accepted | `meta-dm` 已归档，`meta-po` 编排子 agent 已由 CR-017 取消；功能角色覆盖端到端流程 | Agent lifecycle、安装、rules |
+| ADR-002 | Host Orchestrator 是唯一主编排器，Codex / Claude Code 只安装功能子 agent | accepted | 避免状态竞争和多线程重复推进；主进程统一维护 STATE、CR、人工门禁和调度证据 | STATE、handoff、dispatch evidence |
+| ADR-003 | 阶段内允许委托 `meta-pm` / `meta-se` 直接与用户讨论，但正式 CP2 / CP3 由 Host Orchestrator 发起 | accepted | 保留阶段专业交互，同时保证人工门禁一致 | delegated_interaction、Human Gate |
 | ADR-004 | CP2 / CP3 / CP5 / CP8 是关键人工门禁，CP4 只做自动预检并汇入 CP5 | accepted | 减少不必要确认，同时保留关键决策点 | checkpoint-manager、state-router |
 | ADR-005 | 人工门禁必须生成 Decision Brief 和 Decision Collection Coverage | accepted | 解决用户确认时问题收集不完整的问题 | pending_human_decisions、validator |
 | ADR-006 | 用户回复 `approve` 只表示接受待决策表推荐方案，不授权真实运行、外部写入、publish 或 live 操作 | accepted | 避免设计确认被误读为运行授权 | Human Gate、release-readiness |
@@ -45,6 +46,9 @@ source_hld: "docs/design/HLD.md"
 | ADR-025 | `meta-dm` 归档，仅保留 `process/archive/meta-dm.md` | accepted | Story 拆解职责已由 `meta-se` 承担 | Agent lifecycle、installer |
 | ADR-026 | guardrail 必须覆盖交付资产生命周期、安装路径、direct ask 权限、human gate 协议和 Python cache | accepted | 防止已修复结构性问题回流 | `scripts/check_delivery_guardrails.py` |
 | ADR-027 | 正式设计基线写入 `docs/design/`，legacy `process/HLD*.md` 仅作为来源材料 | accepted | 降低后续理解成本，避免旧草案混入执行 | docs/design |
+| ADR-028 | 使用单主流程 + `target_project_profile.project_kind` / `validation_target.sut_type` 分流 code / workflow / prompt / mixed 验证 | accepted | 避免拆出两套主流程，同时保证纯代码项目不被强制 workflow eval | STATE、Story template、CP7 |
+| ADR-029 | workflow eval、prompt bundle 和 case registry 是 generated workflow / prompt-skill / mixed 产物的一等验证契约 | accepted | 生成工作流需要结构、hash、trace、case、权限和回归证据；纯代码项目默认 N/A | evals/contracts、meta-qa、verification-execution |
+| ADR-030 | 本地 deterministic runner 是默认 eval producer；Promptfoo / DeepEval / Langfuse / Garak 只能作为可选 adapter | accepted | 保持无凭据、无网络、可审计的默认验证路径；外部工具必须单独 runtime_authorization | meta-flow eval、evals/adapters、CI policy |
 
 ## 决策与产物对齐
 
@@ -58,6 +62,7 @@ source_hld: "docs/design/HLD.md"
 | ADR-018 / ADR-019 | release-readiness Skill、release templates、meta-qa / meta-po rules |
 | ADR-020 / ADR-021 | AGENTS 输出路由、README、USER-MANUAL |
 | ADR-022 / ADR-023 / ADR-024 / ADR-026 | install.py、PLATFORM-CONTRACTS、guardrail |
+| ADR-028 / ADR-029 / ADR-030 | `evals/contracts/*`、`meta_flow/evals/runner.py`、`docs/features/workflow-eval-governance/*`、`docs/quality/EVAL-SUITE-HEALTH.md` |
 
 ## 待重访决策
 
@@ -67,6 +72,7 @@ source_hld: "docs/design/HLD.md"
 | RV-002 | 目标平台新增或路径契约变化 | 以 PLATFORM-CONTRACTS 为准 | 更新契约、installer、platform-validator 和 ADR |
 | RV-003 | Codex / Claude 平台提供新的结构化用户提问工具 | Codex exact text，Claude direct ask 受 tools 限制 | 更新 platform capabilities 和人工门禁协议 |
 | RV-004 | 发布阶段需要执行真实发布 | 默认只做发布准备 | 生成独立 runtime_authorization 决策项 |
+| RV-005 | 需要真实外部 eval adapter、LLM judge 或 trace backend | 默认本地 deterministic runner | 创建独立 runtime_authorization CR 或 Spike |
 
 ## Gotchas
 

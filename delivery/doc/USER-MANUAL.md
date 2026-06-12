@@ -416,6 +416,26 @@ meta-flow 会先判断当前任务是否为自身改进：
 
 ## 9. 验证环境准备
 
+### 9.1 项目类型与 workflow eval
+
+Meta Flow 不把“纯代码开发”和“工作流开发”拆成两条主流程。它通过两个字段分流：
+
+- `engagement_mode`：只判断当前是 meta-flow 自改进还是 production 交付。
+- `target_project_profile.project_kind`：判断目标项目是 `code-project`、`workflow-product`、`agentic-code-product`、`mixed` 或 `unknown`。
+- `validation_target.sut_type`：判断当前 Story / 交付对象需要 `code-project`、`generated-workflow`、`prompt-skill-workflow`、`meta-flow-core-code`、`agentic-code-product` 或 `mixed` 验证。
+
+纯代码项目默认继续跑目标项目自己的测试、构建、静态检查和质量评审。只有 generated workflow、prompt-skill、meta-flow-core-code、agentic-code-product 或 mixed 对象才默认要求 workflow eval / prompt bundle 证据。
+
+本地 workflow eval 示例：
+
+```bash
+meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml
+meta-flow eval run --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/generated-workflow-basic
+meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
+```
+
+外部 adapter（Promptfoo / DeepEval / Langfuse / Garak）默认关闭。它们可以做 case / result / trace 映射，但真实网络调用、凭据使用、trace 上传、外部模型评估、publish、live 或 production 写入必须单独授权。
+
 进入验证阶段前，建议由人工提供或确认类似如下的环境配置：
 
 ```yaml

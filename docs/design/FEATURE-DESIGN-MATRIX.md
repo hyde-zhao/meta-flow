@@ -14,6 +14,7 @@ confirmed_at: "2026-06-07"
 | 版本 | 日期 | 修订人 | 变更要点 |
 |---|---|---|---|
 | 1.0 | 2026-06-07 | meta-po | 建立 Feature 设计适用性矩阵，限定高风险 Feature 才补独立 DESIGN |
+| 1.1 | 2026-06-11 | host-orchestrator | 新增 workflow eval governance required Feature |
 
 ## 1. 适用性判定规则
 
@@ -40,6 +41,7 @@ confirmed_at: "2026-06-07"
 | FEAT-RELEASE-DOCUMENTATION | 发布准备与文档 | ADR-018、ADR-019 | technical-note | release profile 已落地，本轮不改发布行为 | none | CR-015 | technical-note | 修改 release_artifact_profile 或 release_decision 时 |
 | FEAT-INSTALLER-GUARDRAILS | 安装契约与交付护栏 | ADR-022 至 ADR-026 | technical-note | guardrail / installer 已有实现，本轮仅保持基线 | none | CR-017 | technical-note | 新增平台、改变安装路径或资产生命周期规则时 |
 | FEAT-WORKFLOW-ORCHESTRATION | 编排与 CR 跟踪 | ADR-002、ADR-004 | technical-note | 当前规则已覆盖，后续大改再补 DESIGN | none | 多个 CR | technical-note | 修改阶段图、CR 状态机或 CP 路由时 |
+| FEAT-WORKFLOW-EVAL-GOVERNANCE | Workflow Eval 与 Prompt Bundle 治理 | ADR-028 至 ADR-030 | required | 涉及验证门禁、状态字段、prompt bundle、schema、runner、case lifecycle、suite health 和外部 adapter 授权边界 | DESIGN / TEST-PLAN / TASKS | CR-019 至 CR-023 | full-lld | 修改 eval schema、runner evidence、CP7 消费或外部 adapter 时 |
 
 ## 3. Story 下游消费表
 
@@ -50,6 +52,7 @@ confirmed_at: "2026-06-07"
 | 修改文档路由 / 交付出口 | `docs/features/design-document-layering/DESIGN.md` | full-lld | output-routing、delivery-boundary | Feature DESIGN + Story LLD | CP5 自动预检 + 批量人工确认 |
 | 修改单个 Skill 文案或模板小节 | 相关 Skill / README | technical-note | low-risk、single-skill | Story 技术说明 | CP5 可轻量审查 |
 | 纯归档 / 删除废弃资产 | CR + archive 文件 | technical-note / waived | cleanup | CR 影响分析 + guardrail | CP5 可 N/A，CP8 汇总 |
+| 修改 workflow eval / prompt bundle / case registry / runner / CP7 eval evidence | `docs/features/workflow-eval-governance/DESIGN.md` | full-lld | verification-gate、prompt-bundle、schema、runner、adapter-authorization | Feature DESIGN + CR 技术说明 | CP5 批次可由用户预授权，CP7 必须验证 |
 
 ## 4. 提前确认的关键决策
 

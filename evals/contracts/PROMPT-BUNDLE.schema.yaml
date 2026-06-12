@@ -1,0 +1,59 @@
+schema_version: "1.0"
+schema_id: "meta-flow.prompt-bundle"
+kind: "contract-schema"
+owner: "FEAT-WORKFLOW-EVAL-GOVERNANCE"
+required_top_level_keys:
+  - "schema_version"
+  - "bundle_id"
+  - "version"
+  - "components"
+  - "compatibility"
+  - "rollback"
+fields:
+  bundle_id:
+    type: "string"
+    required: true
+  version:
+    type: "semver"
+    required: true
+  change_type:
+    type: "enum"
+    allowed_values:
+      - "major"
+      - "minor"
+      - "patch"
+      - "experimental"
+  components:
+    type: "list"
+    required: true
+    item_required_fields:
+      - "id"
+      - "kind"
+      - "path"
+      - "sha256"
+    allowed_kind_values:
+      - "rules"
+      - "agent"
+      - "skill"
+      - "template"
+      - "rubric"
+      - "eval-prompt"
+      - "context-policy"
+      - "human-gate-message"
+  compatibility:
+    type: "object"
+    required: true
+    required_fields:
+      - "project_kind"
+      - "sut_type"
+      - "platforms"
+  rollback:
+    type: "object"
+    required: true
+    required_fields:
+      - "previous_bundle"
+      - "rollback_condition"
+gotchas:
+  - "A prompt bundle is a versioned contract, not a concatenated prompt dump."
+  - "Hash mismatches are validation failures unless explicitly waived in the CR."
+  - "Human gate wording belongs in the bundle when it changes user authorization semantics."

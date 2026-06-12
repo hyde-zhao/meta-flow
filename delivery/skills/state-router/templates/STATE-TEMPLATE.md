@@ -29,6 +29,20 @@ delivery_routing:
     user_confirmed_output_route: false
     confirmation_source: ""
     validation_errors: []
+target_project_profile:
+  project_kind: "unknown" # code-project | workflow-product | agentic-code-product | mixed | unknown
+  confidence: "low" # high | medium | low
+  source: "" # user | readme-scan | cr | inferred
+  delivery_routing_ref: "process/STATE.md.delivery_routing"
+  validation_defaults:
+    native_test_required: true
+    workflow_eval_required: false
+    prompt_bundle_required: false
+  eval_contracts:
+    workflow_eval_schema: "evals/contracts/WORKFLOW-EVAL.schema.yaml"
+    prompt_bundle_schema: "evals/contracts/PROMPT-BUNDLE.schema.yaml"
+    case_registry_schema: "evals/contracts/CASE-REGISTRY.schema.yaml"
+  notes: []
 context_budget:
   default_read_profile: "compact"
   full_doc_read_policy: "only-on-missing-conflict-audit-or-deep-review"
@@ -210,6 +224,24 @@ artifacts:
       - "route_to"
       - "risk_acceptance_required"
     evidence: []
+    workflow_eval:
+      required_for_sut_types:
+        - "generated-workflow"
+        - "prompt-skill-workflow"
+        - "meta-flow-core-code"
+        - "agentic-code-product"
+        - "mixed"
+      optional_for_sut_types:
+        - "code-project"
+      run_root: "process/evals/runs"
+      suite_health: "docs/quality/EVAL-SUITE-HEALTH.md"
+      failure_backlog: "docs/quality/FAILURE-BACKLOG.md"
+      external_adapters_default: "disabled"
+      runtime_authorization_required_for:
+        - "external-service"
+        - "credentials"
+        - "trace-upload"
+        - "network"
   release:
     release_context: "process/release/RELEASE-CONTEXT.yaml"
     release_notes: "docs/release/RELEASE-NOTES.md"

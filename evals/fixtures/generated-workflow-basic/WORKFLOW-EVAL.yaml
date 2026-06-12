@@ -1,0 +1,31 @@
+schema_version: "1.0"
+suite_id: "generated-workflow-basic-suite"
+sut:
+  type: "generated-workflow"
+  manifest: "WORKFLOW-MANIFEST.yaml"
+prompt_bundle: "PROMPT-BUNDLE.yaml"
+case_registry: "CASE-REGISTRY.yaml"
+trace_policy:
+  secret_masking: true
+  retained_fields: ["case_id", "grader_id", "status", "artifact_hash", "prompt_bundle_hash"]
+  forbidden_fields: ["api_key", "password", "token", "secret", "cookie"]
+graders:
+  - id: "manifest-required-fields"
+    type: "required_fields"
+    target: "WORKFLOW-MANIFEST.yaml"
+    required_fields: ["schema_version", "workflow_id", "workflow_type", "entrypoints", "artifacts", "checkpoints"]
+  - id: "prompt-bundle-required-fields"
+    type: "required_fields"
+    target: "PROMPT-BUNDLE.yaml"
+    required_fields: ["schema_version", "bundle_id", "version", "components", "compatibility", "rollback"]
+  - id: "artifact-paths-exist"
+    type: "path_exists"
+    paths: ["agents/workflow-orchestrator.md", "skills/sample-skill/SKILL.md", "prompts/rules.md", "CASE-REGISTRY.yaml"]
+  - id: "prompt-bundle-hashes"
+    type: "prompt_bundle_hashes"
+  - id: "case-registry-links"
+    type: "case_registry_links"
+  - id: "no-live-or-secret-actions"
+    type: "forbidden_patterns"
+    target_globs: ["agents/*.md", "skills/*/SKILL.md", "prompts/*.md"]
+    patterns: ["api[_-]?key", "password", "publish\\s+--live", "curl\\s+.*prod"]

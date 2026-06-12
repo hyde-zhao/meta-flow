@@ -1,0 +1,22 @@
+schema_version: "1.0"
+registry_id: "generated-workflow-basic-cases"
+coverage_matrix: "EVAL-COVERAGE-MATRIX.md"
+cases:
+  - id: "CASE-001"
+    title: "Workflow manifest exposes required routing fields"
+    category: "smoke"
+    target: "WORKFLOW-MANIFEST.yaml"
+    graders: ["manifest-required-fields", "artifact-paths-exist"]
+    expected_result: "PASS"
+  - id: "CASE-002"
+    title: "Prompt bundle is hash-addressed and complete"
+    category: "regression"
+    target: "PROMPT-BUNDLE.yaml"
+    graders: ["prompt-bundle-required-fields", "prompt-bundle-hashes"]
+    expected_result: "PASS"
+  - id: "CASE-003"
+    title: "Generated workflow does not request live or credentialed actions"
+    category: "security"
+    target: "agents/workflow-orchestrator.md"
+    graders: ["no-live-or-secret-actions", "case-registry-links"]
+    expected_result: "PASS"

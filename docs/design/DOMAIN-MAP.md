@@ -12,12 +12,13 @@ confirmed_at: "2026-06-07"
 | 版本 | 日期 | 修订人 | 变更要点 |
 |---|---|---|---|
 | 1.0 | 2026-06-07 | meta-po | 建立 Meta Flow v2 核心领域对象、状态机和业务规则基线 |
+| 1.1 | 2026-06-11 | host-orchestrator | 新增 project kind、validation target、workflow eval、prompt bundle、case registry 和 suite health 对象 |
 
 ## 1. 术语表
 
 | Term | 定义 | 来源 | 备注 |
 |---|---|---|---|
-| Workflow | 一次由 `meta-po` 编排的端到端工作流实例 | `STATE.md` | 默认 `workflow_mode=standard` |
+| Workflow | 一次由 Host Orchestrator 主进程编排的端到端工作流实例 | `STATE.md` | 默认 `workflow_mode=standard` |
 | Phase | 工作流阶段，如 requirement-clarification、solution-design、story-planning | AGENTS | 阶段推进必须回写状态 |
 | Checkpoint | CP0-CP8 检查点，分自动检查和人工确认 | checkpoint-manager | 自动写 `process/checks`，人工写 `process/checkpoints` |
 | Human Gate | CP2 / CP3 / CP5 / CP8 的正式人工确认门 | AGENTS | 由 `meta-po` 发起 |
@@ -31,6 +32,10 @@ confirmed_at: "2026-06-07"
 | Change Request | 变更单 | change-impact-analysis | 修改正式对象前必须创建 |
 | Follow-up Candidate | CP8 后续候选项 | change-impact-analysis | 只进台账，不自动创建正式 CR |
 | Archived Agent | 已归档 Agent | CR-017 | `meta-dm` 已归档，不可安装 / 唤醒 |
+| Project Kind | 目标项目类型画像 | CR-018 / CR-019 | code-project / workflow-product / agentic-code-product / mixed / unknown |
+| Validation Target | Story 或交付对象的验证目标 | CR-018 / CR-021 | 决定 code / workflow / prompt / mixed 验证层 |
+| Prompt Bundle | 版本化 prompt / rules / agent / skill 契约 | CR-019 | 默认保存引用、hash、兼容范围和 rollback |
+| Workflow Eval Suite | 工作流评估套件 | CR-019 / CR-020 | 本地 deterministic runner 的输入 |
 
 ## 2. 领域对象
 
@@ -50,6 +55,13 @@ confirmed_at: "2026-06-07"
 | OBJ-12 | Release Context | FEAT-RELEASE-DOCUMENTATION | release_artifact_profile、release_decision、quality_summary、risk summary | minimal / compact / full; READY / NOT_READY | release-readiness |
 | OBJ-13 | Platform Contract | FEAT-INSTALLER-GUARDRAILS | platform scopes、forbidden paths、rules / agents / skills dirs | active / invalid | `delivery/doc/PLATFORM-CONTRACTS.yaml` |
 | OBJ-14 | Delivery Asset | FEAT-INSTALLER-GUARDRAILS | agents、skills、rules、scripts、status | active / archived | install.py / guardrail |
+| OBJ-15 | Target Project Profile | FEAT-WORKFLOW-EVAL-GOVERNANCE | project_kind、confidence、source、delivery_routing_ref、validation_defaults | unknown / classified | state-router |
+| OBJ-16 | Validation Target | FEAT-IMPLEMENTATION-VERIFICATION | sut_type、native_test_required、workflow_eval_required、prompt_bundle_required、eval_suite_refs | pending / ready / n/a | story-manager / verification-execution |
+| OBJ-17 | Workflow Eval Suite | FEAT-WORKFLOW-EVAL-GOVERNANCE | suite_id、sut、prompt_bundle、case_registry、trace_policy、graders | draft / valid / failed | `meta-flow eval validate` |
+| OBJ-18 | Prompt Bundle | FEAT-WORKFLOW-EVAL-GOVERNANCE | bundle_id、version、components、sha256、compatibility、rollback | valid / drifted / failed | prompt bundle grader |
+| OBJ-19 | Eval Case Registry | FEAT-WORKFLOW-EVAL-GOVERNANCE | registry_id、cases、category、grader refs、expected_result | draft / active / quarantined / archived | case registry links |
+| OBJ-20 | Eval Run Evidence | FEAT-WORKFLOW-EVAL-GOVERNANCE | run_id、suite_id、status、grader_results、issues | PASS / FAIL | `process/evals/runs/*` |
+| OBJ-21 | Eval Suite Health | FEAT-WORKFLOW-EVAL-GOVERNANCE | total_runs、passed、failed、open_blocking_failures | healthy / degraded / failing | `docs/quality/EVAL-SUITE-HEALTH.md` |
 
 ## 3. 状态机
 
@@ -63,6 +75,8 @@ confirmed_at: "2026-06-07"
 | SM-06 | Agent Lifecycle | idle -> spawned / resumed -> running -> completed / blocked / closed | 有真实调度证据或批准的 inline fallback | handoff-only 不得视为 completed |
 | SM-07 | CR | candidate -> active -> closed / cancelled / superseded / blocked | 用户启动正式 CR 后 active | follow-up candidate 不占执行锁 |
 | SM-08 | Delivery Asset | active -> archived | 通过 CR 明确废弃并移出 delivery | archived 资产回到 delivery 时 guardrail 失败 |
+| SM-09 | Eval Case | draft -> active -> quarantined / deprecated / archived | case registry 变更经 CR 或 suite health 分流 | candidate case 不得作为 required gate |
+| SM-10 | Eval Run | not-started -> running -> PASS / FAIL | runner 生成 run evidence | FAIL 不得被 CP7 静默忽略 |
 
 ## 4. 业务规则
 
@@ -80,6 +94,9 @@ confirmed_at: "2026-06-07"
 | RULE-10 | 已归档 `meta-dm` 不得安装、唤醒或重新出现在 `delivery/agents` | FEAT-INSTALLER-GUARDRAILS | Agent 生命周期 | guardrail |
 | RULE-11 | 发布阶段默认 capsule-first，按 `release_artifact_profile` 控制文档厚度 | FEAT-RELEASE-DOCUMENTATION | CP8 | release-readiness |
 | RULE-12 | 权限、安全、运行授权、外部写入和 live / 交易类事项必须进入独立决策项 | FEAT-HUMAN-GATE-DECISION-BRIEF | 设计 / 发布 | Decision Brief |
+| RULE-13 | `project_kind=code-project` 时 workflow eval 默认 N/A，除非 Story 显式要求 | FEAT-WORKFLOW-EVAL-GOVERNANCE | 纯代码项目验证 | CP7 |
+| RULE-14 | `sut_type=generated-workflow|prompt-skill-workflow|agentic-code-product|mixed` 时必须消费 eval evidence 或写明 WAIVED / BLOCKED | FEAT-WORKFLOW-EVAL-GOVERNANCE | workflow / prompt 验证 | CP7 |
+| RULE-15 | Promptfoo / DeepEval / Langfuse / Garak 默认 disabled；网络、凭据和 trace 上传必须有 runtime_authorization | FEAT-WORKFLOW-EVAL-GOVERNANCE | 外部 adapter | CP7 / CP8 |
 
 ## 5. Gotchas
 

@@ -1,0 +1,12 @@
+schema_version: "1.0"
+workflow_id: "generated-workflow-basic"
+workflow_type: "prompt-skill-workflow"
+project_kind: "workflow-product"
+entrypoints: ["agents/workflow-orchestrator.md"]
+artifacts:
+  agents: ["agents/workflow-orchestrator.md"]
+  skills: ["skills/sample-skill/SKILL.md"]
+  rules: ["prompts/rules.md"]
+states: ["intake", "plan", "execute", "verify", "done"]
+checkpoints: ["CP0", "CP5", "CP7", "CP8"]
+non_authorized_actions: ["publish", "live", "external-write", "credential-use"]

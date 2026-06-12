@@ -35,6 +35,21 @@ implementation_gate:
   status: "not-started"
 verification_gate:
   validation_mode: "runtime|static-only|dry-run-only|review-only|mixed"
+  validation_target:
+    sut_type: "code-project|generated-workflow|prompt-skill-workflow|meta-flow-core-code|agentic-code-product|mixed|unknown"
+    native_test_required: true
+    workflow_eval_required: false
+    prompt_bundle_required: false
+    eval_suite_refs: []
+    prompt_bundle_refs: []
+    runtime_authorization_required: []
+  workflow_eval:
+    run_id: ""
+    run_summary_path: ""
+    suite_health_path: ""
+    prompt_bundle_hash_status: "pending|pass|fail|n/a"
+    eval_trace_coverage_status: "pending|complete|partial|n/a"
+    eval_suite_health_status: "pending|pass|fail|n/a"
   verification_report_path: ""
   test_report_path: ""
   review_path: ""
@@ -155,6 +170,8 @@ updated_at: ""
 | 项目 | 内容 |
 |---|---|
 | validation_mode | runtime / static-only / dry-run-only / review-only / mixed |
+| validation_target.sut_type | code-project / generated-workflow / prompt-skill-workflow / meta-flow-core-code / agentic-code-product / mixed |
+| workflow eval | code-project 默认 N/A；workflow / prompt / mixed 默认要求 eval suite 与 prompt bundle 证据 |
 | 验证报告路径 | `docs/quality/VERIFICATION-REPORT.md` / Feature scoped / N/A |
 | 测试报告路径 | `docs/quality/TEST-REPORT.md` / N/A |
 | Review 路径 | `docs/quality/REVIEW.md` / N/A |
@@ -163,6 +180,7 @@ updated_at: ""
 | 设计契约验证状态 | pending / complete / n/a |
 | 分层验证计划状态 | pending / complete / n/a |
 | Prompt / Skill fixture | PASS / FAIL / N/A |
+| Workflow eval evidence | PASS / FAIL / N/A；引用 `process/evals/runs/<run-id>/run-summary.json` 和 `docs/quality/EVAL-SUITE-HEALTH.md` |
 | 平台 dry-run | PASS / FAIL / N/A |
 | 人工 / 语义审查 | PASS / RISK / FAIL / N/A |
 | CP7 结论 | PASS / PASS_WITH_RISK / BLOCKED / NEEDS_REWORK / NEEDS_DESIGN_CLARIFICATION / WAIVED |

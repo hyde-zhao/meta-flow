@@ -1,0 +1,40 @@
+schema_version: "1.0"
+schema_id: "meta-flow.case-registry"
+kind: "contract-schema"
+owner: "FEAT-WORKFLOW-EVAL-GOVERNANCE"
+required_top_level_keys:
+  - "schema_version"
+  - "registry_id"
+  - "cases"
+fields:
+  registry_id:
+    type: "string"
+    required: true
+  coverage_matrix:
+    type: "path"
+    required: false
+  cases:
+    type: "list"
+    required: true
+    item_required_fields:
+      - "id"
+      - "title"
+      - "category"
+      - "target"
+      - "graders"
+      - "expected_result"
+    allowed_category_values:
+      - "smoke"
+      - "positive"
+      - "negative"
+      - "regression"
+      - "security"
+      - "permission"
+      - "failure-recovery"
+      - "multi-run"
+      - "style"
+      - "efficiency"
+gotchas:
+  - "Cases must reference grader ids that exist in WORKFLOW-EVAL.yaml."
+  - "A passing case without trace metadata is incomplete for CP7 evidence."
+  - "Regression cases should remain stable and deterministic by default."

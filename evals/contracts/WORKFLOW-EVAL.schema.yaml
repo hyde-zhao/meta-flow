@@ -1,0 +1,61 @@
+schema_version: "1.0"
+schema_id: "meta-flow.workflow-eval"
+kind: "contract-schema"
+owner: "FEAT-WORKFLOW-EVAL-GOVERNANCE"
+required_top_level_keys:
+  - "schema_version"
+  - "suite_id"
+  - "sut"
+  - "prompt_bundle"
+  - "case_registry"
+  - "trace_policy"
+  - "graders"
+fields:
+  suite_id:
+    type: "string"
+    required: true
+    description: "Stable evaluation suite identifier."
+  sut:
+    type: "object"
+    required: true
+    required_fields:
+      - "type"
+      - "manifest"
+    allowed_type_values:
+      - "code-project"
+      - "generated-workflow"
+      - "prompt-skill-workflow"
+      - "meta-flow-core-code"
+      - "agentic-code-product"
+      - "mixed"
+  prompt_bundle:
+    type: "path"
+    required: true
+    description: "Relative path to PROMPT-BUNDLE.yaml."
+  case_registry:
+    type: "path"
+    required: true
+    description: "Relative path to CASE-REGISTRY.yaml."
+  trace_policy:
+    type: "object"
+    required: true
+    required_fields:
+      - "secret_masking"
+      - "retained_fields"
+      - "forbidden_fields"
+  graders:
+    type: "list"
+    required: true
+    item_required_fields:
+      - "id"
+      - "type"
+    allowed_type_values:
+      - "required_fields"
+      - "forbidden_patterns"
+      - "path_exists"
+      - "prompt_bundle_hashes"
+      - "case_registry_links"
+gotchas:
+  - "WORKFLOW-EVAL.yaml defines the suite contract; it is not run evidence."
+  - "External LLM/SaaS graders must be optional adapters and require runtime_authorization."
+  - "Pure code projects may use sut.type=code-project and skip workflow-only graders."

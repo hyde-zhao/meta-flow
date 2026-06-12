@@ -84,6 +84,22 @@ Meta Flow 的软件开发工作流在 CP2 / CP3 / CP7 / CP8 增加工程化产�
 | CP7 | `docs/quality/VERIFICATION-REPORT.md`、`docs/quality/TEST-REPORT.md`、`docs/quality/REVIEW.md`、`docs/quality/FIXES.md` | 记录验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、验证命令、覆盖缺口、独立 review findings、回修 / 设计澄清输入和阶段决策；`PASS_WITH_RISK` 风险进入 CP8 |
 | CP8 | `process/release/RELEASE-CONTEXT.yaml`、`docs/release/RELEASE-NOTES.md`、`docs/release/DEPLOY-CHECKLIST.md`、`docs/release/ROLLBACK.md`、`docs/release/MIGRATION.md`、`docs/release/FEEDBACK.md` | 发布准备先生成 capsule 摘要，再按 `release_artifact_profile=minimal|compact|full` 裁剪发布产物；`release_decision=READY|READY_WITH_RISK` 可进入终验，`NOT_READY` 阻断，`RELEASED|FAILED` 需要独立真实发布授权；`FEEDBACK.md` 不替代 follow-up tracking 台账 |
 
+## Workflow Eval 与 Prompt Bundle
+
+Meta Flow 通过 `project_kind` 和 `validation_target.sut_type` 在同一主流程内区分纯代码、workflow、prompt-skill、agentic-code 和 mixed 项目。纯代码项目默认使用目标项目原生测试、构建、静态检查和质量评审；workflow / prompt / mixed 对象增加 workflow eval 和 prompt bundle 证据。
+
+本地 eval 命令：
+
+```bash
+meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml
+meta-flow eval run --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/generated-workflow-basic
+meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
+```
+
+`WORKFLOW-EVAL.yaml`、`PROMPT-BUNDLE.yaml` 和 `CASE-REGISTRY.yaml` 是 generated workflow / prompt-skill 产物的验证契约。`process/evals/runs/<run-id>/run-summary.json` 是 CP7 的输入证据之一，但 eval run PASS 不等于 CP7 PASS；`verification-execution` 仍必须输出验证对象清单、追踪矩阵、设计契约验证、分层验证计划、问题和风险。
+
+Promptfoo / DeepEval / Langfuse / Garak 默认 disabled。任何网络、凭据、trace 上传、外部模型调用、publish、live 或 production 写入都必须单独形成 `runtime_authorization` 决策项。
+
 ## 子 Agent 调度证据
 
 `host-orchestrator` 调用 `meta-dev`、`meta-qa` 等功能 Agent 时，必须记录平台调度证据：

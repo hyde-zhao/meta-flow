@@ -18,6 +18,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 - 对每个 Story 执行 8 维度量化验收
 - 维护或消费 `SCENARIOS.yaml` / `TEST-MATRIX.md`，确认验证结果可回链到场景、Story 和验收标准
 - 读取 CP6 实现执行证据，确认实现对象、设计契约、测试 / Fixture、最小实现切片和平台差异已有可审计记录
+- 按 Story 或 CR 的 `validation_target.sut_type` 判定是否需要 workflow eval evidence；纯代码项目默认不强制 workflow eval，generated workflow / prompt-skill / mixed / agentic-code 项目必须消费 `WORKFLOW-EVAL.yaml`、`PROMPT-BUNDLE.yaml`、`CASE-REGISTRY.yaml` 和 `process/evals/runs/<run-id>/run-summary.json`
 - 调用 `verification-execution` 输出验证范围、验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查证据、问题和剩余风险、阶段决策
 - 调用 `quality-review` 输出 `docs/quality/TEST-REPORT.md` / `docs/quality/REVIEW.md` / `docs/quality/FIXES.md` 输入
 - 在发布确认前调用 `release-readiness`，先生成 `process/release/RELEASE-CONTEXT.yaml`，再按 `release_artifact_profile=minimal|compact|full` 输出发布说明、部署检查、回滚、迁移和反馈说明
@@ -52,6 +53,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 - `docs/product/SCENARIOS.yaml` 与 `docs/product/TEST-MATRIX.md`（若存在）
 - `docs/quality/TEST-REPORT.md` / `docs/quality/REVIEW.md`（发布准备时必须读取）
 - `docs/quality/FIXES.md`（若存在 findings）
+- `process/evals/runs/<run-id>/run-summary.json`、`docs/quality/EVAL-SUITE-HEALTH.md`、`docs/quality/FAILURE-BACKLOG.md`（当 `workflow_eval_required=true`）
 - `docs/release/RELEASE-NOTES.md`（发布准备时必须读取或生成）
 - `docs/release/DEPLOY-CHECKLIST.md`（发布准备时必须读取或生成）
 - `docs/release/ROLLBACK.md`（发布准备时必须读取或生成）
@@ -79,6 +81,9 @@ meta-qa 必须按以下顺序执行，不能用后一步产物替代前一步证
 2. 基于 `SCENARIOS.yaml` / `TEST-MATRIX.md` 做覆盖追溯检查；不存在时，CP7 必须写明 N/A / WAIVED 原因、影响范围和后续触发条件。
 3. 读取 CP6 实现执行证据，核对实现对象清单、设计契约映射、测试 / Fixture 计划、最小实现切片、平台差异和本地验证结果；复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 缺少完整 `IMPLEMENTATION.md` 时，CP7 必须先记录输入缺陷。
 4. 调用 `verification-execution`，建立验证范围、验证对象清单、验证追踪矩阵、设计契约验证清单、分层验证计划、Prompt / Skill fixture、平台 dry-run、人工 / 语义质量审查、问题清单、剩余风险和阶段决策。
+   - 若 `validation_target.sut_type=code-project`，workflow eval 默认写 N/A，并说明目标项目原生测试 / 构建 / 静态检查证据。
+   - 若 `sut_type=generated-workflow|prompt-skill-workflow|meta-flow-core-code|agentic-code-product|mixed`，必须把 eval run summary、prompt bundle hash 状态、case coverage 和 suite health 纳入验证对象清单和追踪矩阵。
+   - eval run PASS 不等于 CP7 PASS；CP7 仍以 verification-execution 的完整证据和风险判断为准。
 5. 执行 Story / Feature 的 8 维验收，记录命令、日志、截图或等价证据，并将结果写入 `VERIFICATION-REPORT.md`。
 6. 调用 `quality-review` 输出 `docs/quality/TEST-REPORT.md`、`docs/quality/REVIEW.md`、`docs/quality/FIXES.md`；`docs/quality/REVIEW.md` findings 必须先按严重度处理或豁免。
 7. 写入 CP7 Story 验证完成门；CP7 结论只能使用 `PASS`、`PASS_WITH_RISK`、`BLOCKED`、`NEEDS_REWORK`、`NEEDS_DESIGN_CLARIFICATION`、`WAIVED`。`NEEDS_REWORK` 路由回 meta-dev，`NEEDS_DESIGN_CLARIFICATION` 路由回 meta-se / host-orchestrator，`PASS_WITH_RISK` 必须把风险汇入 CP8 Decision Brief 输入。
@@ -100,6 +105,19 @@ approval:
 > 验证阶段已暂停。请提供 `process/VALIDATION-ENV.yaml` 并将 `approval.confirmed` 设为 true。
 
 如 `validation_mode=static-only|dry-run-only|review-only`，可不要求真实运行环境，但必须在 `VERIFICATION-REPORT.md` 和 CP7 中写明等价验证方式、未覆盖风险和 N/A 理由。
+
+## Workflow Eval Evidence
+
+| `validation_target.sut_type` | Workflow eval 要求 | 最小证据 |
+|---|---|---|
+| `code-project` | 默认 N/A | 原生测试 / 构建 / 静态检查 / quality-review |
+| `generated-workflow` | REQUIRED | `WORKFLOW-EVAL.yaml`、run summary、case coverage、permission / recovery checks |
+| `prompt-skill-workflow` | REQUIRED | `PROMPT-BUNDLE.yaml` hash、fixture / rubric、negative / regression case |
+| `meta-flow-core-code` | REQUIRED | 原生仓库检查 + delivery guardrail + workflow eval 回归样例 |
+| `agentic-code-product` | REQUIRED | 代码测试 + workflow eval + prompt bundle |
+| `mixed` | CONDITIONAL REQUIRED | 按 Story 验证对象组合 code / workflow / prompt 证据 |
+
+外部 Promptfoo / DeepEval / Langfuse / Garak 只能作为可选 adapter。默认不使用网络、不读取凭据、不上传 trace；需要真实运行时必须由 host-orchestrator 发起 `runtime_authorization` 决策项。
 
 `VALIDATION-ENV.yaml` 至少包含以下字段：
 

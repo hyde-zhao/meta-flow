@@ -12,6 +12,7 @@ confirmed_at: "2026-06-07"
 | 版本 | 日期 | 修订人 | 变更要点 |
 |---|---|---|---|
 | 1.0 | 2026-06-07 | meta-po | 建立阶段、Agent、Skill、文档和交付资产依赖基线 |
+| 1.1 | 2026-06-11 | host-orchestrator | 新增 workflow eval governance 依赖，修正 Host Orchestrator 编排依赖 |
 
 ## 1. 阶段依赖
 
@@ -40,12 +41,14 @@ confirmed_at: "2026-06-07"
 | Story 设计证据 | Story 实现证据 | runtime | allowed | 实现必须消费已确认设计 | CP6 |
 | Story 实现证据 | Story 验证证据 / `TEST-REPORT.md` | runtime | allowed | 验证必须知道改动对象和契约 | CP7 |
 | 验证 / 质量证据 | Release Context / release docs | release | allowed | 发布就绪需要质量和风险摘要 | CP8 |
+| `WORKFLOW-EVAL.yaml` / `PROMPT-BUNDLE.yaml` / `CASE-REGISTRY.yaml` | Eval Run Evidence | validation | allowed | runner 需要稳定契约和 case / grader 引用 | `meta-flow eval run` |
+| Eval Run Evidence / Suite Health | `VERIFICATION-REPORT.md` / `TEST-REPORT.md` / `REVIEW.md` | validation | allowed | CP7 消费 eval evidence，但不被 eval run 替代 | CP7 |
 
 ## 3. Agent / Skill 依赖
 
 | From | To | 依赖类型 | 允许方向 | 原因 | 验证 / 监控 |
 |---|---|---|---|---|---|
-| meta-po | meta-pm / meta-se / meta-dev / meta-qa / meta-doc | dispatch | allowed | meta-po 是统一编排器 | dispatch evidence |
+| host-orchestrator | meta-pm / meta-se / meta-dev / meta-qa / meta-doc | dispatch | allowed | Host Orchestrator 主进程是统一编排器 | dispatch evidence |
 | meta-pm | use-case-discovery / requirement-extraction / scenario-expansion / story-planning | skill-use | allowed | 需求阶段产出产品和验证输入 | CP1 / CP2 |
 | meta-se | blueprint-design / hld-designer / implementation-design / story-manager | skill-use | allowed | 设计阶段产出蓝图、HLD、Story 计划 | CP3 / CP4 |
 | meta-dev | lld-designer / implementation-execution | skill-use | allowed | 设计证据和实现执行 | CP5 / CP6 |
@@ -62,6 +65,7 @@ confirmed_at: "2026-06-07"
 | 正式文档 | Context Capsule | source | allowed | capsule 是摘要，不替代正式文档 | 冲突时以正式文档为准 |
 | Discussion Log | 正式文档 | audit-only | restricted | discussion 用于审计和恢复，不作为唯一输入 | CP2 / CP3 检查 |
 | Handoff | Dispatch Evidence | evidence | forbidden | handoff 只说明交接，不说明已执行 | CP6 / CP7 |
+| Eval Run PASS | CP7 PASS | gate-substitution | forbidden | eval evidence 是输入证据，不是 CP7 最终裁决 | verification-execution |
 
 ## 5. 禁止依赖
 
@@ -75,6 +79,8 @@ confirmed_at: "2026-06-07"
 | FD-06 | archived assets | delivery active surface | 归档资产不可安装 / 唤醒 | 保留在 `process/archive` | 废弃角色回流 |
 | FD-07 | release-readiness | 全量 HLD / LLD / diff 默认读取 | 发布阶段默认 capsule-first 控制 token | 只读取摘要、计数、风险 ID、证据路径 | 发布阶段 token 膨胀 |
 | FD-08 | low-risk Story | full-lld 默认生成 | LLD 深度需按风险分级 | technical-note / waived | 设计文档膨胀 |
+| FD-09 | external eval adapter | default CP7 execution | 外部工具可能需要网络、凭据或 trace 上传 | 先走 local deterministic runner；外部执行需 runtime_authorization | 凭据泄漏、不可复现、误授权 |
+| FD-10 | code-project | workflow eval 强制执行 | 纯代码项目不应被 workflow 验证层污染 | 原生测试 / 构建 / 静态检查，workflow eval N/A | 验证成本膨胀、错误阻断 |
 
 ## 6. 循环风险
 
