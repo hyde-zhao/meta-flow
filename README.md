@@ -16,7 +16,7 @@
 | `.agents/skills/` | 元工作流引擎 Skill 定义（不参与安装） |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
 | `~/.meta-flow/` | 安装器状态目录（仅保存安装 manifest，不作为当前元工作流运行态输出目录） |
-| `docs/` | 长期产品、设计、质量和发布文档（生产项目按目标 README/docs 约定或用户确认路由） |
+| `docs/` | 过程文档入口；当前源码仓库中为指向外置 artifact repo 的软链接（生产项目按目标 README/docs 约定或用户确认路由） |
 | `docs/product/` | 场景、需求、测试矩阵、Story Map、MVP 范围、发布切片和 backlog |
 | `docs/design/` | 蓝图、领域图、依赖图、HLD 和架构决策 |
 | `docs/features/` | Feature 级 DESIGN.md / TEST-PLAN.md / TASKS.md |
@@ -35,6 +35,7 @@
 分层原则：
 
 - `docs/` 承载长期可交付文档：蓝图、HLD、Feature 设计、场景/需求、质量报告和发布资料。
+- 在当前 meta-flow 源码仓库中，`docs/` 已外置到 artifact repo；源码仓库只保留根 README、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和平台契约等产品/安装入口。
 - `process/` 承载运行过程文档：状态、计划、Story 执行态、讨论日志、handoff、CR、自动检查结果。
 - `process/` 是运行态入口；迁移到外置过程仓库后，它应是指向 `<artifact-root>/process/<project-name>/` 的软链接。
 - `process/context/` 承载阶段上下文胶囊：下游 Agent、人工门禁、验证和发布准备默认先读 capsule；只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档。
@@ -43,9 +44,9 @@
 
 核心长期产物的 canonical 路径包括：`docs/product/SCENARIOS.yaml`、`docs/product/MVP-SCOPE.md`、`docs/design/BLUEPRINT.md`、`docs/release/DEPLOY-CHECKLIST.md`。
 
-## Process 外置路由
+## Artifact 外置路由
 
-Meta Flow 支持把过程文件从源码仓库中外置。默认目标形态是：
+Meta Flow 支持把过程文件和过程文档从源码仓库中外置。`process/` 默认目标形态是：
 
 ```text
 <project-root>/process -> <artifact-root>/process/<project-name>
@@ -74,6 +75,21 @@ meta-flow doctor
 ```bash
 meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow
 ```
+
+当前 `docs/` 也作为过程文档入口外置：
+
+```text
+<project-root>/docs -> <artifact-root>/docs/<project-name>
+```
+
+当前仓库对应：
+
+```text
+/home/hyde/projects/meta-flow/docs
+  -> /home/hyde/projects/meta-flow-artifacts/docs/meta-flow
+```
+
+源码仓库保留的文档入口为根 `README.md`、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和 `delivery/doc/PLATFORM-CONTRACTS.yaml`；`docs/` 下的设计、质量、发布、Feature、修改记录和偏好类过程文档由 artifact repo 跟踪。
 
 ```
 ├── process/                     # 运行时文档（默认建议 gitignore）

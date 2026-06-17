@@ -5,8 +5,9 @@
 /.output/*
 /.temp/
 
-# Meta-workflow runtime (external artifact repo; /process also ignores the symlink itself)
+# Meta-workflow runtime and process docs (external artifact repo; no trailing slash so symlinks are ignored)
 /process
+/docs
 /checkpoints/
 .meta-workflow/
 
