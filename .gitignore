@@ -5,8 +5,8 @@
 /.output/*
 /.temp/
 
-# Meta-workflow runtime (recommended to gitignore, only delivery/ should be committed)
-# /process/
+# Meta-workflow runtime (external artifact repo; /process also ignores the symlink itself)
+/process
 /checkpoints/
 .meta-workflow/
 

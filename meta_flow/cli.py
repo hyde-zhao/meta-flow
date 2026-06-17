@@ -7,6 +7,8 @@ import runpy
 import sys
 from pathlib import Path
 
+from meta_flow.workspace.routing import check_process_route, link_process_workspace, require_process_health
+
 
 def _candidate_roots() -> list[Path]:
     roots: list[Path] = []
@@ -41,6 +43,7 @@ def _find_workspace_root() -> Path:
 
 def _read_state() -> tuple[Path, str]:
     root = _find_workspace_root()
+    require_process_health(root)
     state_path = root / "process" / "STATE.md"
     if not state_path.is_file():
         raise SystemExit(f"未找到运行态文件: {state_path}")
@@ -113,11 +116,14 @@ def _run_doctor() -> None:
     root = _find_workspace_root()
     problems: list[str] = []
     warnings: list[str] = []
+    health = check_process_route(root)
 
     state_path = root / "process" / "STATE.md"
     if not state_path.is_file():
         problems.append(f"缺少 {state_path}")
-    for rel in ("process/checks", "checkpoints"):
+    if health.blocking:
+        problems.extend(health.errors)
+    for rel in ("process/checks", "process/checkpoints"):
         if not (root / rel).is_dir():
             warnings.append(f"缺少目录 {rel}")
     legacy_cp4 = root / "checkpoints" / "CP4-STORY-PLAN-REVIEW.md"
@@ -133,6 +139,8 @@ def _run_doctor() -> None:
 
     if problems:
         print("Doctor: FAIL")
+        for line in health.format_lines():
+            print(line)
         for item in problems:
             print(f"- ERROR: {item}")
         for item in warnings:
@@ -140,6 +148,8 @@ def _run_doctor() -> None:
         raise SystemExit(1)
 
     print("Doctor: OK")
+    for line in health.format_lines():
+        print(line)
     for item in warnings:
         print(f"- WARN: {item}")
 
@@ -152,6 +162,7 @@ def _print_help() -> None:
         "  uninstall  Uninstall Meta Flow assets recorded in INSTALL-MANIFEST.\n"
         "  check      Run packaged Meta Flow validators.\n"
         "  eval       Validate and run local workflow evaluation packages.\n"
+        "  workspace  Check or link the external process workspace.\n"
         "  status     Show current process/STATE.md summary.\n"
         "  next       Show the next workflow action or pending gate.\n"
         "  doctor     Check local Meta Flow runtime structure.\n\n"
@@ -161,6 +172,8 @@ def _print_help() -> None:
         "  meta-flow uninstall codex --scope user\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
         "  meta-flow check cr-tracking --project-root .\n"
+        "  meta-flow workspace check\n"
+        "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
         "  meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml\n"
         "  meta-flow status\n"
     )
@@ -211,6 +224,55 @@ def _run_check(args: list[str]) -> None:
     raise SystemExit(f"未知检查器: {validator}. 目前支持: human-gate, cr-tracking")
 
 
+def _print_workspace_help() -> None:
+    print(
+        "usage: meta-flow workspace <command> [options]\n\n"
+        "Commands:\n"
+        "  check  Print process route health.\n"
+        "  link   Create process -> <artifact-root>/process/<project-name> when process does not already exist.\n\n"
+        "Examples:\n"
+        "  meta-flow workspace check\n"
+        "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
+    )
+
+
+def _run_workspace(args: list[str]) -> None:
+    if not args or args[0] in {"-h", "--help"}:
+        _print_workspace_help()
+        return
+    command = args[0]
+    if command == "check":
+        import argparse
+
+        parser = argparse.ArgumentParser(
+            prog="meta-flow workspace check",
+            description="Print process route health.",
+        )
+        parser.add_argument("--project-root", type=Path, default=None)
+        parsed = parser.parse_args(args[1:])
+        root = parsed.project_root.resolve() if parsed.project_root else _find_workspace_root()
+        health = check_process_route(root)
+        for line in health.format_lines():
+            print(line)
+        raise SystemExit(1 if health.blocking else 0)
+    if command == "link":
+        import argparse
+
+        parser = argparse.ArgumentParser(
+            prog="meta-flow workspace link",
+            description="Create process -> <artifact-root>/process/<project-name>.",
+        )
+        parser.add_argument("--artifact-root", type=Path, required=True)
+        parser.add_argument("--project-name", default=Path.cwd().name)
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parsed = parser.parse_args(args[1:])
+        health = link_process_workspace(parsed.project_root, parsed.artifact_root, parsed.project_name)
+        for line in health.format_lines():
+            print(line)
+        raise SystemExit(1 if health.blocking else 0)
+    raise SystemExit(f"未知 workspace 命令: {command}. 目前支持: check, link")
+
+
 def _run_eval(args: list[str]) -> None:
     from meta_flow.evals import runner
 
@@ -238,6 +300,9 @@ def main() -> None:
         return
     if command == "check":
         _run_check(args[1:])
+        return
+    if command == "workspace":
+        _run_workspace(args[1:])
         return
     if command == "eval":
         _run_eval(args[1:])

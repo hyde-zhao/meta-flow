@@ -29,6 +29,16 @@ delivery_routing:
     user_confirmed_output_route: false
     confirmation_source: ""
     validation_errors: []
+artifact_routing:
+  routing_mode: "local-directory" # local-directory | symlink
+  artifact_root: "" # 外置过程仓库根目录；symlink 模式默认包含 process/<project_name>
+  project_process_root: "" # <artifact_root>/process/<project_name>
+  link_path: "process"
+  project_name: ""
+  health_status: "unchecked" # unchecked | ok | missing | broken_link | state_missing | project_mismatch | route_mismatch | permission_denied
+  migration_status: "local-compatible" # local-compatible | pending-migration | migrated | blocked
+  hard_stop_on_missing_or_broken_link: true
+  route_metadata: "process/.meta-flow-process.yaml"
 target_project_profile:
   project_kind: "unknown" # code-project | workflow-product | agentic-code-product | mixed | unknown
   confidence: "low" # high | medium | low

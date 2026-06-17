@@ -9,6 +9,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from meta_flow.workspace.routing import require_process_health
+
 
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 CR_ID_RE = re.compile(r"CR-\d+")
@@ -337,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     project_root = args.project_root.resolve()
+    require_process_health(project_root)
     state_path = project_root / "process" / "STATE.md"
     change_root = project_root / "process" / "changes"
     formal_crs = discover_formal_crs(change_root)

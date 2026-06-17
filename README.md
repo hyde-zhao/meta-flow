@@ -36,11 +36,44 @@
 
 - `docs/` 承载长期可交付文档：蓝图、HLD、Feature 设计、场景/需求、质量报告和发布资料。
 - `process/` 承载运行过程文档：状态、计划、Story 执行态、讨论日志、handoff、CR、自动检查结果。
+- `process/` 是运行态入口；迁移到外置过程仓库后，它应是指向 `<artifact-root>/process/<project-name>/` 的软链接。
 - `process/context/` 承载阶段上下文胶囊：下游 Agent、人工门禁、验证和发布准备默认先读 capsule；只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档。
 - `process/checkpoints/` 承载人工确认态：CP2 / CP3 / CP5 / CP8 Decision Brief、checklist 和人工审查结果。
 - 旧项目中的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等只作为 legacy fallback 读取；新生成默认写入 `docs/...` 和 `process/checkpoints/...`。
 
 核心长期产物的 canonical 路径包括：`docs/product/SCENARIOS.yaml`、`docs/product/MVP-SCOPE.md`、`docs/design/BLUEPRINT.md`、`docs/release/DEPLOY-CHECKLIST.md`。
+
+## Process 外置路由
+
+Meta Flow 支持把过程文件从源码仓库中外置。默认目标形态是：
+
+```text
+<project-root>/process -> <artifact-root>/process/<project-name>
+```
+
+初始化或迁移时必须先创建真实目录，再建立软链接，并写入：
+
+```text
+process/.meta-flow-process.yaml
+process/STATE.md.artifact_routing
+```
+
+健康检查会在读取状态、CR tracking 和推进检查点前验证 `process` 路由。若发现 `process` 缺失、软链接断裂、`process/STATE.md` 缺失、项目名不匹配或路由元数据冲突，当前工作流必须中断；用户需要提供有效 `artifact_root` / `process_root` 后继续，不得静默重建新的 `STATE.md`。
+
+当前仓库在迁移前允许 `routing_mode=local-directory` 兼容模式。迁移到软链接后，`.gitignore` 应使用 `/process`；不要使用 `/process/`，因为带尾斜杠的规则不会忽略 symlink 本身。
+
+路由检查命令：
+
+```bash
+meta-flow workspace check
+meta-flow doctor
+```
+
+新工作区链接命令：
+
+```bash
+meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow
+```
 
 ```
 ├── process/                     # 运行时文档（默认建议 gitignore）
