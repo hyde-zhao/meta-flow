@@ -22,6 +22,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] 已有用户原始需求描述、`REQUEST.md` 或 `input_spec.yaml`
 - [ ] 若存在 `docs/product/USE-CASES.md`，优先将其视为结构化事实来源
 - [ ] 需求边界至少有可识别的目标、约束或平台信息

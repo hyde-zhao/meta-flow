@@ -21,6 +21,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] `docs/product/STORY-MAP.md` 已生成。
 - [ ] `docs/product/MVP-SCOPE.md` 已生成，且关键范围决策已分类。
 - [ ] 目标项目现有结构或交付出口已确认。

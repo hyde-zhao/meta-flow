@@ -24,6 +24,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] `process/stories/STORY-{id}-{story_slug}.md` 已进入 `lld-ready`、`package-draft` 或等价待设计状态
 - [ ] `docs/design/HLD.md` 与 `docs/design/ARCHITECTURE-DECISION.md` 已确认
 - [ ] Story 卡片已包含 `feature_design_refs` 与 `lld_policy.required_level`

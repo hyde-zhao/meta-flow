@@ -20,6 +20,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] `process/REQUEST.md` 已存在
 - [ ] 已有需求草稿、用户补充说明或历史澄清记录之一
 

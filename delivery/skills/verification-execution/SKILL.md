@@ -39,6 +39,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] Story 状态为 `ready-for-verification`。
 - [ ] CP6 结论为 `PASS` 或 `WAIVED`，且包含 Agent Dispatch Evidence。
 - [ ] CP6 已记录实现执行证据路径、证据类型和低风险 N/A 理由。

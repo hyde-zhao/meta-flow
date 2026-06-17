@@ -20,6 +20,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] `ARCHITECTURE-DECISION.md` 或 `DEVELOPMENT-PLAN.yaml` 已存在
 - [ ] `docs/design/FEATURE-DESIGN-MATRIX.md` 已存在，或当前操作只是在 CP3 前创建初始 Story 草稿
 - [ ] Story 边界和 Wave 规划可读取

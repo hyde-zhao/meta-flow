@@ -23,6 +23,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] `process/STATE.md` 可读取，且当前阶段明确
 - [ ] 当前阶段至少有一个正式真相源或 N/A / WAIVED 理由
 - [ ] 若用于人工门禁，Decision Brief 或待人工决策队列已可读取

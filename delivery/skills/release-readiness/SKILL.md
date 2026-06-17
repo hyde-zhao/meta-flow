@@ -50,6 +50,7 @@ CP8 默认只允许推进到 `READY` / `READY_WITH_RISK` / `NOT_READY`。`RELEAS
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] `docs/quality/TEST-REPORT.md` 已存在且结论可判定，或 Release Context Capsule 写明 N/A / waived 原因。
 - [ ] `docs/quality/REVIEW.md` 已存在，且 BLOCKING findings 为 0 或有明确风险接受决策。
 - [ ] 变更文件清单、配置变化和发布目标可读取，或已有 diff 摘要。

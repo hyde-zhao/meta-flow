@@ -22,6 +22,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] 目标 Agent 已明确
 - [ ] `process/` 下相关输入文档已生成
 - [ ] `process/STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch` 已完成探测或明确标记为 unavailable

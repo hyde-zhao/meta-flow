@@ -21,6 +21,7 @@ status: active
 
 ## 前置条件
 
+- [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] `docs/product/USE-CASES.md` 已确认或 CP2 明确允许进入规划草案。
 - [ ] `docs/product/SCENARIOS.yaml` 已生成，或 `scenario-expansion` 明确给出 N/A 原因。
 - [ ] `docs/product/REQUIREMENTS.md` 已生成，且 BLOCKING 未决项为 0。
