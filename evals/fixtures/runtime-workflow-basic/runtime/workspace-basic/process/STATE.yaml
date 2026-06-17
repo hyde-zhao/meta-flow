@@ -1,0 +1,4 @@
+schema_version: "1.0"
+workflow_id: "runtime-workflow-basic"
+current_phase: "delivered"
+trace_id: "TRACE-RUNTIME-001"

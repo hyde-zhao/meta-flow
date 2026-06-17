@@ -1,0 +1,85 @@
+schema_version: "1.0"
+schema_id: "meta-flow.feedback-triage"
+kind: "contract-schema"
+owner: "FEAT-WORKFLOW-EVAL-GOVERNANCE"
+required_outputs:
+  - "RUN-EXEC-*.json"
+  - "TRIAGE-RESULTS.json"
+  - "ISSUE-DRAFTS.json"
+  - "GAPS.json"
+  - "EVAL-BACKLOG.json"
+  - "triage-metrics.json"
+normalized_run_exec:
+  required_fields:
+    - "run_exec_id"
+    - "source_path"
+    - "status"
+    - "category"
+    - "severity"
+    - "stage"
+    - "coverage_status"
+    - "evidence"
+  allowed_status_values:
+    - "PASS"
+    - "FAIL"
+    - "BLOCKED"
+    - "SKIPPED"
+  allowed_severity_values:
+    - "BLOCKER"
+    - "HIGH"
+    - "MEDIUM"
+    - "LOW"
+triage_result:
+  required_fields:
+    - "run_exec_id"
+    - "triage_type"
+    - "status"
+    - "severity"
+    - "category"
+    - "stage"
+    - "coverage_status"
+  allowed_triage_type_values:
+    - "ISSUE_DRAFT"
+    - "GAP"
+    - "BACKLOG"
+    - "ENVIRONMENT"
+    - "USAGE"
+    - "DUPLICATE"
+    - "NO_ACTION"
+issue_draft:
+  required_fields:
+    - "id"
+    - "run_exec_id"
+    - "category"
+    - "severity"
+    - "stage"
+    - "coverage_status"
+gap:
+  required_fields:
+    - "id"
+    - "run_exec_id"
+    - "coverage_status"
+    - "gap_type"
+    - "recommended_asset"
+    - "priority"
+    - "status"
+  allowed_gap_type_values:
+    - "missing_case"
+    - "missing_grader"
+    - "missing_fixture"
+    - "missing_runtime_sample"
+    - "weak_assertion"
+  allowed_recommended_asset_values:
+    - "case"
+    - "grader"
+    - "fixture"
+    - "runtime_sample"
+    - "doc_update"
+rules:
+  - "Feedback normalize only creates RUN-EXEC records; it must not directly promote all feedback into ISSUE."
+  - "Feedback triage may create ISSUE_DRAFT, GAP, BACKLOG, ENVIRONMENT, USAGE, DUPLICATE, or NO_ACTION."
+  - "Every ISSUE_DRAFT and GAP must preserve run_exec_id traceability."
+  - "Blocking/high ISSUE_DRAFT without regression_asset is release-check risk or blocker according to profile policy."
+gotchas:
+  - "Raw field feedback may contain sensitive values; normalized evidence should store masked excerpts only."
+  - "Triage output is a draft for human or rules confirmation, not an automatic production issue write."

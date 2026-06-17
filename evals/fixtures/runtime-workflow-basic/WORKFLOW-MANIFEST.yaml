@@ -1,0 +1,14 @@
+schema_version: "1.0"
+workflow_id: "runtime-workflow-basic"
+workflow_type: "generated-workflow"
+entrypoints:
+  - "agents/runtime-orchestrator.md"
+artifacts:
+  - "WORKFLOW-EVAL.yaml"
+  - "CASE-REGISTRY.yaml"
+  - "runtime/workspace-basic/process/STATE.yaml"
+  - "runtime/workspace-basic/delivery/README.md"
+checkpoints:
+  - "GATE-2"
+  - "GATE-3"
+  - "GATE-4"

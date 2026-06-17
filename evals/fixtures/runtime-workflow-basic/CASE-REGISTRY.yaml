@@ -1,0 +1,64 @@
+schema_version: "1.1"
+registry_id: "runtime-workflow-basic-cases"
+coverage_matrix: "EVAL-COVERAGE-MATRIX.md"
+cases:
+  - id: "CASE-PROMPT-001"
+    title: "Runtime workflow prompt bundle hashes match canonical artifacts"
+    category: "regression"
+    target: "PROMPT-BUNDLE.yaml"
+    graders: ["runtime-prompt-bundle-hashes"]
+    expected_result: "PASS"
+    blocking: true
+    severity: "HIGH"
+    owner: "meta-flow"
+    runtime_required: false
+    requires_authorization: false
+    regression_asset: "evals/fixtures/runtime-workflow-basic/PROMPT-BUNDLE.yaml"
+    source_issue: ""
+    coverage_status: "covered"
+    last_verified_at: "2026-06-17T00:00:00+00:00"
+  - id: "CASE-RUNTIME-001"
+    title: "Runtime workspace preserves required artifacts, gates, trace, coverage, and skill chain"
+    category: "runtime"
+    target: "runtime/workspace-basic"
+    graders: ["runtime-workspace-artifacts"]
+    expected_result: "PASS"
+    blocking: true
+    severity: "HIGH"
+    owner: "meta-flow"
+    runtime_required: true
+    requires_authorization: false
+    regression_asset: "evals/fixtures/runtime-workflow-basic/runtime/workspace-basic"
+    source_issue: ""
+    coverage_status: "covered"
+    last_verified_at: "2026-06-17T00:00:00+00:00"
+  - id: "CASE-INSTALL-001"
+    title: "Installed bundle manifest maps agent to expected skills and rules"
+    category: "install"
+    target: "INSTALL-MANIFEST.json"
+    graders: ["install-mapping-runtime-agent"]
+    expected_result: "PASS"
+    blocking: true
+    severity: "HIGH"
+    owner: "meta-flow"
+    runtime_required: false
+    requires_authorization: false
+    regression_asset: "evals/fixtures/runtime-workflow-basic/INSTALL-MANIFEST.json"
+    source_issue: ""
+    coverage_status: "covered"
+    last_verified_at: "2026-06-17T00:00:00+00:00"
+  - id: "CASE-RUNTIME-002"
+    title: "Expected blocked runtime samples are classified as BLOCKED evidence, not grader failure"
+    category: "runtime"
+    target: "runtime/workspace-blocked"
+    graders: ["runtime-expected-blocked-sample"]
+    expected_result: "BLOCKED"
+    blocking: false
+    severity: "MEDIUM"
+    owner: "meta-flow"
+    runtime_required: false
+    requires_authorization: false
+    regression_asset: "evals/fixtures/runtime-workflow-basic/runtime/workspace-blocked"
+    source_issue: ""
+    coverage_status: "covered"
+    last_verified_at: "2026-06-17T00:00:00+00:00"

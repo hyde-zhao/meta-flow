@@ -1,0 +1,63 @@
+schema_version: "1.0"
+schema_id: "meta-flow.eval-backlog"
+kind: "contract-schema"
+owner: "FEAT-WORKFLOW-EVAL-GOVERNANCE"
+required_top_level_keys:
+  - "eval_backlog"
+fields:
+  eval_backlog:
+    type: "list"
+    required: true
+    item_required_fields:
+      - "id"
+      - "source_issue"
+      - "status"
+      - "priority"
+    optional_item_fields:
+      - "source_run_exec"
+      - "missing_stage"
+      - "proposed_grader"
+      - "gap_type"
+      - "recommended_asset"
+      - "owner_hint"
+      - "coverage_status"
+      - "regression_asset"
+      - "case"
+      - "fixture"
+      - "closed_at"
+    allowed_status_values:
+      - "pending"
+      - "in_progress"
+      - "closed"
+      - "waived"
+    allowed_priority_values:
+      - "P0"
+      - "P1"
+      - "P2"
+      - "HIGH"
+      - "MEDIUM"
+      - "LOW"
+    allowed_gap_type_values:
+      - "missing_case"
+      - "missing_grader"
+      - "missing_fixture"
+      - "missing_runtime_sample"
+      - "weak_assertion"
+    allowed_recommended_asset_values:
+      - "case"
+      - "grader"
+      - "fixture"
+      - "runtime_sample"
+      - "doc_update"
+    allowed_coverage_status_values:
+      - "covered"
+      - "partially_covered"
+      - "not_covered"
+      - "unknown"
+closure_rules:
+  - "closed backlog items must bind source_issue and regression_asset."
+  - "GAP closure should bind at least one of case, grader, fixture, runtime_sample, or doc_update as regression evidence."
+  - "release-check may block open P0 backlog/GAP items."
+gotchas:
+  - "Backlog is a structured eval asset, not a conversation note."
+  - "Do not close a feedback-derived GAP without a concrete regression asset or an explicit waived status."

@@ -1,0 +1,16 @@
+{
+  "manifest_version": 1,
+  "installs": [
+    {
+      "platform": "codex",
+      "scope": "project",
+      "status": "installed",
+      "entries": [
+        {"kind": "agent", "name": "runtime-orchestrator", "path": ".codex/agents/runtime-orchestrator.toml"},
+        {"kind": "skill", "name": "sample-skill", "path": ".codex/skills/sample-skill/SKILL.md"},
+        {"kind": "skill", "name": "verification-execution", "path": ".codex/skills/verification-execution/SKILL.md"},
+        {"kind": "managed-block", "name": "AGENTS.md", "path": "AGENTS.md"}
+      ]
+    }
+  ]
+}

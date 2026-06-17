@@ -1,0 +1,12 @@
+schema_version: "1.0"
+bundle_id: "runtime-workflow-basic-bundle"
+version: "0.1.0"
+components:
+  - id: "runtime-agent"
+    kind: "agent"
+    path: "agents/runtime-orchestrator.md"
+    sha256: "094f54e8670e339c59daa17274a61a6cddd1ccbd6bae900d9e81b3c0a8356a4b"
+compatibility:
+  min_meta_flow_version: "0.4.0"
+rollback:
+  strategy: "reinstall previous prompt bundle"

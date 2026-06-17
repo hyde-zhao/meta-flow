@@ -1,0 +1,4 @@
+schema_version: "1.0"
+workflow_id: "runtime-workflow-blocked"
+current_phase: "blocked"
+blocked_by: "missing manual runtime authorization"

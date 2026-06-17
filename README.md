@@ -180,6 +180,12 @@ Meta Flow 同时支持纯代码项目和 workflow / prompt-skill / mixed 项目�
 meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml
 meta-flow eval run --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/generated-workflow-basic
 meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
+meta-flow eval run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/runtime-workflow-basic
+meta-flow eval suite-health --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
+meta-flow eval feedback sync --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/feedback/raw
+meta-flow eval feedback normalize --in process/evals/feedback/raw --out process/evals/feedback/run-exec
+meta-flow eval feedback triage --runs process/evals/feedback/run-exec --out process/evals/feedback/triage
+meta-flow eval release-check --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --runs process/evals/runs --profile release --triage process/evals/feedback/triage --format json --json-out process/evals/release-check.json
 ```
 
 核心契约：
@@ -189,8 +195,23 @@ meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SU
 | Workflow eval schema | `evals/contracts/WORKFLOW-EVAL.schema.yaml` | 定义 suite、SUT、trace policy 和 grader |
 | Prompt bundle schema | `evals/contracts/PROMPT-BUNDLE.schema.yaml` | 定义 prompt/rules/agent/skill/template/rubric 的引用、hash、兼容性和回滚 |
 | Case registry schema | `evals/contracts/CASE-REGISTRY.schema.yaml` | 定义 case 生命周期、覆盖类别、grader 引用和期望结果 |
+| Runtime sample registry schema | `evals/contracts/RUNTIME-SAMPLE-REGISTRY.schema.yaml` | 定义已有运行 workspace 样本、profile、阶段产物、trace chain 和 expected BLOCKED 语义 |
+| Feedback triage schema | `evals/contracts/FEEDBACK-TRIAGE.schema.yaml` | 定义 normalized RUN-EXEC、triage、ISSUE_DRAFT 和 GAP 输出 |
+| Eval backlog schema | `evals/contracts/EVAL-BACKLOG.schema.yaml` | 定义 feedback/GAP 驱动的 eval backlog 与关闭规则 |
 | Run evidence | `process/evals/runs/<run-id>/` | 本地执行证据，供 CP7 / CP8 消费 |
 | Suite health | `docs/quality/EVAL-SUITE-HEALTH.md` | 长期质量状态摘要 |
+
+通用 runtime / feedback / mutation / install eval 能力：
+
+| 能力 | 命令 | 边界 |
+|---|---|---|
+| Runtime artifact grader | `meta-flow eval run --eval <WORKFLOW-EVAL.yaml>` 中的 `type: runtime_artifact` | 只读取已有运行工作区；支持 `sample_registry` / `sample_ids` / `profile=partial|full|regression`，检查目录、STATE phase、Skill 调用链、Gate、阶段顺序、内容密度、空文件 / 模板残留、delivery、trace chain、coverage 和表格；不负责真实执行 Agent |
+| Feedback source / triage | `meta-flow eval feedback sync|normalize|triage|analyze` | source 先同步为 raw，再标准化为 RUN-EXEC，最后 triage 为 `ISSUE_DRAFT` / `GAP` / `BACKLOG` / `ENVIRONMENT` / `USAGE` / `DUPLICATE` / `NO_ACTION`；`local` 默认可读，`git` / `gitlab` 需要显式 `--allow-git-read` |
+| Mutation eval | `meta-flow eval mutate --eval <WORKFLOW-EVAL.yaml> --fixture <valid-fixture> --mutation <type> --out <generated-negative-dir>` | 生成确定性负例，用来验证 grader 是否能抓住缺字段、坏表格、错 prompt hash、缺 artifact path、secret pattern、缺 runtime artifact 等问题 |
+| Install mapping | `meta-flow eval install-check --eval <WORKFLOW-EVAL.yaml>` 或直接传 `--platform/--agent/--expected-skill --target --platform-contracts` | 复用安装 manifest、dry-run 输出或 installed root 做检查；可按 `PLATFORM-CONTRACTS.yaml` 检查真实 agent/skill/rules 路径和 stale / forbidden 项 |
+| Suite health | `meta-flow eval suite-health --runs <runs-dir> --triage <triage-dir> --feedback-metrics <run-exec-dir>` | 健康趋势报告，统计 runtime、feedback、RUN-EXEC、ISSUE/GAP/backlog、flaky 和覆盖趋势；不承担发布门禁 |
+| Release check | `meta-flow eval release-check --eval <WORKFLOW-EVAL.yaml> --runs <runs-dir> --profile release --triage <triage-dir>` | 独立发布判定；输出 `release_decision=PASS|PASS_WITH_RISK|BLOCKED`，支持 JSON，检查 blocking / required grader、prompt bundle hash、runtime sample、case registry 质量语义、未闭环 P0 GAP / blocking ISSUE 和最近运行退化 |
+| Eval backlog | `meta-flow eval backlog list/check/close --backlog <EVAL-BACKLOG.json|yaml>` | 未覆盖 ISSUE 应进入 backlog；关闭必须绑定 regression asset |
 
 Promptfoo、DeepEval、Langfuse 和 Garak 只作为可选 adapter，默认 disabled。任何网络、凭据、trace 上传、外部模型调用、publish、live 或 production 写入都必须单独形成 `runtime_authorization` 决策项；`approve` 或“跳过人工审批”不等于授权这些真实外部动作。
 

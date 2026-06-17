@@ -1,0 +1,53 @@
+schema_version: "1.0"
+registry_id: "runtime-workflow-basic-samples"
+samples:
+  - id: "RT-GENERIC-FULL-20260617"
+    profile: "full"
+    workspace: "runtime/workspace-basic"
+    expected_status: "PASS"
+    state_path: "process/STATE.yaml"
+    skill_calls_path: "process/execution/SKILL-CALLS.yaml"
+    expected_phase: "delivered"
+    required_paths:
+      - "process/STATE.yaml"
+      - "process/execution/SKILL-CALLS.yaml"
+      - "process/checkpoints/GATE-2.md"
+      - "process/checkpoints/GATE-3.md"
+      - "process/checkpoints/GATE-4.md"
+      - "kym/KYM.md"
+      - "mfq/MFQ.md"
+      - "ppdcs/PPDCS.md"
+      - "delivery/README.md"
+      - "delivery/TRACE.md"
+      - "delivery/COVERAGE.md"
+    required_skill_calls:
+      - "requirement-extraction"
+      - "scenario-expansion"
+      - "hld-designer"
+      - "implementation-execution"
+      - "verification-execution"
+      - "deliverable-renderer"
+    required_gates: ["GATE-2", "GATE-3", "GATE-4"]
+    target_globs: ["kym/*.md", "mfq/*.md", "ppdcs/*.md", "delivery/*.md", "process/**/*.md", "process/**/*.yaml"]
+    required_patterns: ["trace_id", "normal_path", "coverage"]
+    min_tables: "2"
+    min_phase_chars: "80"
+    phase_order: ["KYM", "MFQ", "PPDCS", "delivery"]
+    phase_paths:
+      - "KYM=kym/KYM.md"
+      - "MFQ=mfq/MFQ.md"
+      - "PPDCS=ppdcs/PPDCS.md"
+      - "delivery=delivery/README.md"
+    trace_chains:
+      - "SR -> TSP -> LC -> TD -> PC"
+  - id: "RT-GENERIC-BLOCKED-20260617"
+    profile: "partial"
+    workspace: "runtime/workspace-blocked"
+    expected_status: "BLOCKED"
+    expected_blocked: true
+    state_path: "process/STATE.yaml"
+    required_paths:
+      - "process/STATE.yaml"
+      - "process/RUN-EXEC.md"
+    target_globs: ["process/*.md", "process/*.yaml"]
+    blocked_patterns: ["BLOCKED", "blocked_by"]

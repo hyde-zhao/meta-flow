@@ -1,0 +1,51 @@
+schema_version: "1.1"
+suite_id: "runtime-workflow-basic-suite"
+sut:
+  type: "generated-workflow"
+  manifest: "WORKFLOW-MANIFEST.yaml"
+prompt_bundle: "PROMPT-BUNDLE.yaml"
+case_registry: "CASE-REGISTRY.yaml"
+trace_policy:
+  secret_masking: true
+  retained_fields: ["case_id", "grader_id", "status", "artifact_hash", "runtime_sample_id"]
+  forbidden_fields: ["api_key", "password", "token", "secret", "cookie"]
+feedback_sources:
+  - id: "local-feedback-fixture"
+    type: "local"
+    path: "feedback"
+graders:
+  - id: "runtime-prompt-bundle-hashes"
+    type: "prompt_bundle_hashes"
+    mode: "static"
+    authorization: "none"
+    blocking_policy: "always"
+    profile_requirement: "required"
+  - id: "runtime-workspace-artifacts"
+    type: "runtime_artifact"
+    mode: "runtime"
+    authorization: "local-fs"
+    blocking_policy: "on-release"
+    profile_requirement: "required"
+    sample_registry: "RUNTIME-SAMPLE-REGISTRY.yaml"
+    sample_ids: ["RT-GENERIC-FULL-20260617"]
+  - id: "runtime-expected-blocked-sample"
+    type: "runtime_artifact"
+    mode: "runtime"
+    authorization: "local-fs"
+    blocking_policy: "advisory"
+    profile_requirement: "optional"
+    sample_registry: "RUNTIME-SAMPLE-REGISTRY.yaml"
+    sample_ids: ["RT-GENERIC-BLOCKED-20260617"]
+  - id: "install-mapping-runtime-agent"
+    type: "install_mapping"
+    mode: "runtime"
+    authorization: "local-fs"
+    blocking_policy: "on-release"
+    platform: "codex"
+    agent: "runtime-orchestrator"
+    expected_skills: ["sample-skill", "verification-execution"]
+    expected_rules: ["AGENTS.md"]
+    manifest_path: "INSTALL-MANIFEST.json"
+    target_root: "installed/codex"
+    scope: "project"
+    platform_contracts: "../../../delivery/doc/PLATFORM-CONTRACTS.yaml"

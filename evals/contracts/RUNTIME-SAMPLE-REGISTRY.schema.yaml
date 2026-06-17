@@ -1,0 +1,52 @@
+schema_version: "1.0"
+schema_id: "meta-flow.runtime-sample-registry"
+kind: "contract-schema"
+owner: "FEAT-WORKFLOW-EVAL-GOVERNANCE"
+required_top_level_keys:
+  - "schema_version"
+  - "registry_id"
+  - "samples"
+fields:
+  registry_id:
+    type: "string"
+    required: true
+  samples:
+    type: "list"
+    required: true
+    item_required_fields:
+      - "id"
+      - "workspace"
+      - "profile"
+      - "expected_status"
+    optional_item_fields:
+      - "state_path"
+      - "skill_calls_path"
+      - "expected_phase"
+      - "expected_blocked"
+      - "required_paths"
+      - "required_skill_calls"
+      - "required_gates"
+      - "phase_order"
+      - "phase_paths"
+      - "phases"
+      - "min_phase_chars"
+      - "trace_chains"
+      - "required_patterns"
+      - "forbidden_patterns"
+      - "placeholder_patterns"
+      - "blocked_patterns"
+      - "target_globs"
+      - "min_tables"
+    allowed_profile_values:
+      - "partial"
+      - "full"
+      - "regression"
+    allowed_expected_status_values:
+      - "PASS"
+      - "FAIL"
+      - "BLOCKED"
+      - "SKIP"
+gotchas:
+  - "The registry describes already-produced workspaces; it must not start agents or perform installation."
+  - "expected_blocked=true means BLOCKED is expected evidence, not a grader failure."
+  - "Release profiles should prefer full or regression samples; partial samples are useful for advisory or field triage evidence."
