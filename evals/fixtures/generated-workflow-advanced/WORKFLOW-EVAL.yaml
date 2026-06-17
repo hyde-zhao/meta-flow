@@ -1,0 +1,76 @@
+schema_version: "1.0"
+suite_id: "generated-workflow-advanced"
+sut:
+  name: "advanced generated workflow fixture"
+  manifest: "WORKFLOW-MANIFEST.yaml"
+prompt_bundle: "PROMPT-BUNDLE.yaml"
+case_registry: "CASE-REGISTRY.yaml"
+trace_policy:
+  artifact_id: "advanced-workflow"
+  trace_id: "TRACE-ADV-001"
+  source_decision_id: "CR-028"
+graders:
+  - id: "eval-config-complete"
+    type: "eval_config_non_empty"
+  - id: "manifest-bundle-consistent"
+    type: "manifest_bundle_consistency"
+  - id: "agent-content-schema"
+    type: "content_schema"
+    target: "agents/advanced-orchestrator.md"
+    required_sections: ["States", "GATE-1 Requirement Review", "Skill Chain"]
+    required_patterns:
+      - "Decision ID"
+      - "source_decision_id"
+    table_header_text: "Decision ID"
+    table_min_columns: "5"
+  - id: "agent-state-machine"
+    type: "state_machine"
+    target: "agents/advanced-orchestrator.md"
+    expected_states: ["requirement-clarification", "solution-design", "story-execution"]
+    expected_transitions:
+      - "requirement-clarification.*solution-design"
+      - "solution-design.*story-execution"
+    required_gate_patterns: ["GATE-\d+"]
+    min_hard_stop_gates: "1"
+  - id: "gate-contract"
+    type: "gate_contract"
+    target: "agents/advanced-orchestrator.md"
+    gate_ids: ["GATE-1", "GATE-2"]
+    manual_gate_ids: ["GATE-1"]
+    required_terms: ["Entry Criteria", "Checklist", "Exit Criteria", "Deliverables"]
+  - id: "phase-skill-chain"
+    type: "phase_skill_chain"
+    target: "agents/advanced-orchestrator.md"
+    required_patterns:
+      - "requirement-clarification.*requirement-extraction.*scenario-expansion"
+      - "solution-design.*blueprint-design.*hld-designer"
+  - id: "hard-stop-confirmation"
+    type: "hard_stop_confirmation"
+    target: "agents/advanced-orchestrator.md"
+    required_patterns:
+      - "HARD-STOP.*approve.*reject"
+  - id: "artifact-trace-schema"
+    type: "artifact_trace_schema"
+    match_scope: "combined"
+    target_globs: ["*.yaml", "agents/*.md", "docs/*.md"]
+    required_patterns: ["artifact_id", "trace_id", "source_decision_id"]
+  - id: "candidate-decision-integrity"
+    type: "candidate_decision_integrity"
+    target: "docs/decisions.md"
+    required_patterns: ["Decision ID", "Recommended", "Rollback"]
+  - id: "deliverable-exact-schema"
+    type: "deliverable_exact_schema"
+    target: "docs/deliverables.md"
+    expected_columns: ["Deliverable", "Owner", "Evidence", "Status"]
+    required_patterns: ["USER-MANUAL.md"]
+  - id: "table-structure"
+    type: "table_structure"
+    target_globs: ["agents/*.md", "docs/*.md"]
+  - id: "deliverable-table-schema"
+    type: "table_schema"
+    target: "docs/deliverables.md"
+    expected_columns: ["Deliverable", "Owner", "Evidence", "Status"]
+  - id: "expected-fail-missing-pattern"
+    type: "candidate_decision_integrity"
+    target: "docs/decisions.md"
+    required_patterns: ["THIS_PATTERN_IS_EXPECTED_TO_BE_MISSING"]

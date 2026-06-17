@@ -1,0 +1,28 @@
+schema_version: "1.0"
+registry_id: "generated-workflow-advanced-cases"
+coverage_matrix: "EVAL-COVERAGE-MATRIX.md"
+cases:
+  - id: "CASE-ADV-001"
+    title: "Advanced workflow declares complete local eval contracts"
+    category: "regression"
+    target: "WORKFLOW-EVAL.yaml"
+    graders: ["eval-config-complete", "manifest-bundle-consistent", "artifact-trace-schema"]
+    expected_result: "PASS"
+  - id: "CASE-ADV-002"
+    title: "Agent contract includes state machine, gate and hard-stop semantics"
+    category: "governance"
+    target: "agents/advanced-orchestrator.md"
+    graders: ["agent-content-schema", "agent-state-machine", "gate-contract", "phase-skill-chain", "hard-stop-confirmation"]
+    expected_result: "PASS"
+  - id: "CASE-ADV-003"
+    title: "Deliverable and decision tables keep exact schemas"
+    category: "artifact-schema"
+    target: "docs/deliverables.md"
+    graders: ["candidate-decision-integrity", "deliverable-exact-schema", "table-structure", "deliverable-table-schema"]
+    expected_result: "PASS"
+  - id: "CASE-ADV-004"
+    title: "Expected failure case does not fail the suite when prediction matches"
+    category: "negative-control"
+    target: "docs/decisions.md"
+    graders: ["expected-fail-missing-pattern"]
+    expected_result: "FAIL"

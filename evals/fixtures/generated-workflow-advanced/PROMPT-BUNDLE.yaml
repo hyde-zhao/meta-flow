@@ -1,0 +1,12 @@
+schema_version: "1.0"
+bundle_id: "generated-workflow-advanced-prompts"
+version: "1.0.0"
+components:
+  - id: "advanced-orchestrator"
+    path: "agents/advanced-orchestrator.md"
+  - id: "decision-contract"
+    path: "docs/decisions.md"
+compatibility:
+  min_meta_flow_version: "0.1.0"
+rollback:
+  strategy: "restore previous prompt bundle"
