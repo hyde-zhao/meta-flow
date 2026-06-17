@@ -16,7 +16,7 @@
 | `.agents/skills/` | 元工作流引擎 Skill 定义（不参与安装） |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
 | `~/.meta-flow/` | 安装器状态目录（仅保存安装 manifest，不作为当前元工作流运行态输出目录） |
-| `docs/` | 过程文档入口；当前源码仓库中为指向外置 artifact repo 的软链接（生产项目按目标 README/docs 约定或用户确认路由） |
+| `docs/` | 公开文档入口；源码仓库跟踪用户可见文档，内部设计 / 质量 / 发布审查文档通过本地 symlink 指向外置 artifact repo（生产项目按目标 README/docs 约定或用户确认路由） |
 | `docs/product/` | 场景、需求、测试矩阵、Story Map、MVP 范围、发布切片和 backlog |
 | `docs/design/` | 蓝图、领域图、依赖图、HLD 和架构决策 |
 | `docs/features/` | Feature 级 DESIGN.md / TEST-PLAN.md / TASKS.md |
@@ -34,8 +34,9 @@
 
 分层原则：
 
-- `docs/` 承载长期可交付文档：蓝图、HLD、Feature 设计、场景/需求、质量报告和发布资料。
-- 在当前 meta-flow 源码仓库中，`docs/` 已外置到 artifact repo；源码仓库只保留根 README、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和平台契约等产品/安装入口。
+- `docs/` 承载公开文档入口：源码仓库跟踪 `docs/release/RELEASE-NOTES.md` 和 `docs/USER-MANUAL.md` 等用户可见文档。
+- 内部设计、Feature、质量、发布审查、修改记录和偏好类文档归档到 artifact repo，并可通过本地 ignored symlink 保持 `docs/design`、`docs/quality` 等旧路径可读。
+- 源码仓库还保留根 README、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和平台契约等产品/安装入口。
 - `process/` 承载运行过程文档：状态、计划、Story 执行态、讨论日志、handoff、CR、自动检查结果。
 - `process/` 是运行态入口；迁移到外置过程仓库后，它应是指向 `<artifact-root>/process/<project-name>/` 的软链接。
 - `process/context/` 承载阶段上下文胶囊：下游 Agent、人工门禁、验证和发布准备默认先读 capsule；只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档。
@@ -76,20 +77,26 @@ meta-flow doctor
 meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow
 ```
 
-当前 `docs/` 也作为过程文档入口外置：
+当前 `docs/` 不再整体外置。它分为公开文档和内部归档文档：
 
 ```text
-<project-root>/docs -> <artifact-root>/docs/<project-name>
+<project-root>/docs/release/RELEASE-NOTES.md  # 源码跟踪
+<project-root>/docs/USER-MANUAL.md            # 指向 delivery/doc/USER-MANUAL.md
+<project-root>/docs/design                    # 本地 ignored symlink -> <artifact-root>/docs/<project-name>/design
+<project-root>/docs/features                  # 本地 ignored symlink -> <artifact-root>/docs/<project-name>/features
+<project-root>/docs/quality                   # 本地 ignored symlink -> <artifact-root>/docs/<project-name>/quality
 ```
 
 当前仓库对应：
 
 ```text
-/home/hyde/projects/meta-flow/docs
-  -> /home/hyde/projects/meta-flow-artifacts/docs/meta-flow
+/home/hyde/projects/meta-flow/docs/design
+  -> /home/hyde/projects/meta-flow-artifacts/docs/meta-flow/design
+/home/hyde/projects/meta-flow/docs/quality
+  -> /home/hyde/projects/meta-flow-artifacts/docs/meta-flow/quality
 ```
 
-源码仓库保留的文档入口为根 `README.md`、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和 `delivery/doc/PLATFORM-CONTRACTS.yaml`；`docs/` 下的设计、质量、发布、Feature、修改记录和偏好类过程文档由 artifact repo 跟踪。
+源码仓库保留的文档入口为根 `README.md`、`docs/README.md`、`docs/release/RELEASE-NOTES.md`、`docs/USER-MANUAL.md`、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和 `delivery/doc/PLATFORM-CONTRACTS.yaml`；`docs/` 下的设计、Feature、质量、内部发布审查、修改记录和偏好类过程文档由 artifact repo 跟踪。
 
 ```
 ├── process/                     # 运行时文档（默认建议 gitignore）
