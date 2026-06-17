@@ -29,7 +29,8 @@ status: active
 
 ## 前置条件
 
-- [ ] `process/STATE.md` 已存在，或允许由 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化
+- [ ] `process` 路由已检查：已存在健康 `process/STATE.md`，或已通过 `meta-flow workspace link` / 等价动作建立外置过程目录与软链接
+- [ ] `process/STATE.md` 已存在，或在 `process` 路由健康、外置目标已确认后允许由 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化
 - [ ] 当前阶段相关产物的存在性和确认状态可被检查
 
 ## 必须读取的输入
@@ -86,20 +87,24 @@ status: active
 
 ### 1. 初始化或读取状态
 
-1. 若 `process/STATE.md` 不存在，则以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化。
-2. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`delegated_interaction`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`human_gate_decisions`、`cr_tracking`、`decision_briefs`、`discussion_checkpoints`、`history`。
-3. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
-4. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。
-5. 若 `agent_lifecycle.platform_capabilities.subagent_dispatch` 缺失，必须先补齐并将 `available=false`、`method=unverified` 写入状态；能力未探测前，不得把需要功能 Agent 的任务标记为 `completed`。
-6. 若 `orchestrator_session` 缺失，必须先按模板补齐并写入 `history`；补齐动作只表示状态结构升级，不表示允许重复启动 `host-orchestrator`。
-7. 若用户启动正式工作流且未显式禁用自动调度，`orchestrator_session.subagent_auto_dispatch` 默认为 `enabled`；该授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
-8. 若 `discussion_checkpoints` 缺失，必须按模板补齐 CP2 / CP3 discussion log 和 checkpoint 路径；补齐路径不代表讨论已完成。
-9. 若 `delegated_interaction` 缺失，必须按模板补齐，默认 `status=none`；补齐不代表已经委托成功。
-10. 若 `parallel_execution.lld_clarification_queue` 缺失，必须按模板补齐，默认 `status=idle`、`items=[]`；补齐不代表问题已收敛。
-11. 若 `human_gate_decisions` 缺失，必须按模板补齐，默认 `status=idle`、`pending_human_decisions=[]`；补齐不代表当前没有待决策项，发起人工门禁前仍必须从正式产物重新聚合。
-12. 若 `cr_tracking` 缺失，必须按模板补齐，默认 `status=not-indexed`、`active_crs=[]`、`blocked_crs=[]`、`follow_up_candidates=[]`、`spike_candidates=[]`、`stale_status_conflicts=[]`；补齐不代表当前没有后续候选 CR，状态查询前仍必须读取台账和正式 CR 文件。
-13. 若 `context_budget` 缺失，必须按模板补齐，默认 `require_capsule_first=true`；补齐不代表 capsule 已生成。CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前必须检查对应 `process/context/*-CONTEXT.yaml` 的存在性、状态和 `read_profile`。
-14. 若 `workflow_health` 缺失，必须按模板补齐，默认 `status=healthy` 和计数器为 0；每次推进、回退、重试、用户问题重复、CP 失败或 Story 回修时刷新对应计数器。
+0. 读写 `process/STATE.md` 前必须先执行 `meta-flow workspace check` 或等价检查。若 `process` 缺失、断链、`process/STATE.md` 缺失且不是首次初始化、`project_name` 不匹配或路由元数据冲突，必须阻断流程；不得直接创建本地 `process/STATE.md` 绕过外置路由。
+1. 首次初始化时，若用户或项目规则已确认 `artifact_root` 和 `project_name`，必须先执行或等价完成 `meta-flow workspace link --artifact-root <artifact_root> --project-name <project_name>`，创建 `<artifact_root>/process/<project_name>/`、基础子目录和 `<project-root>/process` 软链接，再以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化 `process/STATE.md`。
+2. 若 `artifact_root` / `project_process_root` 未知，必须强制中断并要求用户提供目录；不得猜测 artifact 仓库位置，不得退回普通本地 `process/`。
+3. 仅当用户明确选择兼容模式，或当前仓库已存在未迁移的 legacy `process/` 且 `STATE.md.artifact_routing.routing_mode=local-directory`，才允许本地目录模式；必须写入 `artifact_routing.migration_status` 和后续迁移动作。
+4. 初始化 `process/STATE.md` 后，必须回填 `artifact_routing.routing_mode`、`artifact_root`、`project_process_root`、`link_path`、`project_name`、`health_status`、`migration_status` 和 `route_metadata`，并创建 `process/checks/`、`process/checkpoints/`、`process/context/`、`process/changes/`。
+5. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`delegated_interaction`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`human_gate_decisions`、`cr_tracking`、`decision_briefs`、`discussion_checkpoints`、`history`。
+6. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
+7. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。
+8. 若 `agent_lifecycle.platform_capabilities.subagent_dispatch` 缺失，必须先补齐并将 `available=false`、`method=unverified` 写入状态；能力未探测前，不得把需要功能 Agent 的任务标记为 `completed`。
+9. 若 `orchestrator_session` 缺失，必须先按模板补齐并写入 `history`；补齐动作只表示状态结构升级，不表示允许重复启动 `host-orchestrator`。
+10. 若用户启动正式工作流且未显式禁用自动调度，`orchestrator_session.subagent_auto_dispatch` 默认为 `enabled`；该授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
+11. 若 `discussion_checkpoints` 缺失，必须按模板补齐 CP2 / CP3 discussion log 和 checkpoint 路径；补齐路径不代表讨论已完成。
+12. 若 `delegated_interaction` 缺失，必须按模板补齐，默认 `status=none`；补齐不代表已经委托成功。
+13. 若 `parallel_execution.lld_clarification_queue` 缺失，必须按模板补齐，默认 `status=idle`、`items=[]`；补齐不代表问题已收敛。
+14. 若 `human_gate_decisions` 缺失，必须按模板补齐，默认 `status=idle`、`pending_human_decisions=[]`；补齐不代表当前没有待决策项，发起人工门禁前仍必须从正式产物重新聚合。
+15. 若 `cr_tracking` 缺失，必须按模板补齐，默认 `status=not-indexed`、`active_crs=[]`、`blocked_crs=[]`、`follow_up_candidates=[]`、`spike_candidates=[]`、`stale_status_conflicts=[]`；补齐不代表当前没有后续候选 CR，状态查询前仍必须读取台账和正式 CR 文件。
+16. 若 `context_budget` 缺失，必须按模板补齐，默认 `require_capsule_first=true`；补齐不代表 capsule 已生成。CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前必须检查对应 `process/context/*-CONTEXT.yaml` 的存在性、状态和 `read_profile`。
+17. 若 `workflow_health` 缺失，必须按模板补齐，默认 `status=healthy` 和计数器为 0；每次推进、回退、重试、用户问题重复、CP 失败或 Story 回修时刷新对应计数器。
 
 ### 1.1 Context Capsule 与读取预算
 
@@ -353,7 +358,8 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 ## 验收标准
 
 - [ ] `STATE.md` 的阶段与下一步动作与实际产物状态一致
-- [ ] 初始化时结构与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致
+- [ ] 初始化前已完成 process 路由健康检查；外置模式下 `process` 是指向 `<artifact-root>/process/<project_name>` 的健康软链接
+- [ ] 初始化时结构与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致，且 `artifact_routing` 与 `.meta-flow-process.yaml` 一致
 - [ ] `STATE.md.checkpoints` 与 `process/checks/CP*.md`、`process/checkpoints/CP*.md` 的结论一致
 - [ ] 推进 / 回退操作均追加 `history`
 - [ ] 同一任务同角色不会重复登记活动 agent，检查点完成后有关闭动作
@@ -385,6 +391,7 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 - “唯一 active CR”不等于“没有后续 CR 候选”；follow-up tracking 中的 candidate / spike_candidate 必须作为 backlog 显式展示
 - 当 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计时，必须先形成 CR 影响范围的 `lld_design_batch`，批次确认前不得进入开发
 - 首次初始化时只允许从 `skills/state-router/templates/STATE-TEMPLATE.md` 复制，不允许凭空脑补字段
+- 首次初始化时不要直接 `mkdir process` 后写 `STATE.md`；外置模式必须先建立 artifact 目录和软链接。`workspace link` 创建后出现 `state_missing` 是新项目的正常下一步，不代表可以跳过 STATE 初始化。
 - 自动检查点失败时，不要发起人工确认；先把失败结果写入 `process/checks/CP*.md` 并路由给责任 agent 修复
 - 不要把 `delivery/skills/*/templates/` 中的模板文件当成运行态产物；只有 `docs/`、`process/`、`process/checkpoints/`、`delivery/` 中对应产物或 CP 自动检查里的逐项 N/A / WAIVED 说明才可作为推进证据
 - N/A / WAIVED 必须写明原因、影响范围和后续触发条件；空泛写“不适用”不能作为阶段推进证据

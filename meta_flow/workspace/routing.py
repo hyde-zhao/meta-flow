@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 ROUTE_METADATA_NAME = ".meta-flow-process.yaml"
+PROCESS_SCAFFOLD_DIRS = ("checks", "checkpoints", "context", "changes")
 BLOCKING_STATUSES = {
     "missing",
     "broken_link",
@@ -336,6 +337,8 @@ def link_process_workspace(project_root: Path, artifact_root: Path, project_name
     process_root = artifact_root / "process" / project_name
     link_path = project_root / "process"
     process_root.mkdir(parents=True, exist_ok=True)
+    for dirname in PROCESS_SCAFFOLD_DIRS:
+        (process_root / dirname).mkdir(parents=True, exist_ok=True)
 
     if link_path.exists() or link_path.is_symlink():
         if not link_path.is_symlink():

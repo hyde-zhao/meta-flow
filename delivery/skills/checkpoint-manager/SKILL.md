@@ -43,6 +43,8 @@ status: active
 
 `process/checks/` 属于运行态检查证据；`process/checkpoints/` 属于人工确认态文件。人工审查时，host-orchestrator 必须在用户提示中给出具体 `process/checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
 
+所有 `process/*` 检查点路径都必须先经过 process 路由健康检查。外置模式下，CP0 前必须存在 `<project-root>/process -> <artifact-root>/process/<project-name>` 软链接、`process/.meta-flow-process.yaml` 和与之匹配的 `STATE.md.artifact_routing`；缺失、断链、项目名不匹配或路由冲突时，检查点结论只能是 `BLOCKED`。
+
 ## 结果状态
 
 检查项状态只允许使用：
@@ -315,7 +317,8 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 条目 | 说明 |
 |---|---|
 | 原始请求存在 | 用户已有明确任务、变更请求或 `.input/` 输入 |
-| 工作目录可写 | `docs/`、`process/`、`process/checkpoints/` 可创建 |
+| process 路由可用 | `meta-flow workspace check` 通过；首次初始化时已先用 `meta-flow workspace link --artifact-root <artifact_root> --project-name <project_name>` 或等价动作创建外置目录和软链接 |
+| 工作目录可写 | `docs/`、`process/checks/`、`process/checkpoints/` 可创建；不得因缺少路由而直接创建本地 `process/` |
 | 编排器单例可判定 | Codex 下未发现多个活动 host-orchestrator |
 
 ### Checklist
@@ -326,15 +329,16 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 2 | 目标对象明确 | 区分新工作流、修改 meta-flow 本身、外部 production 交付 |
 | 3 | engagement mode 明确 | `production` 或 `meta-self-dev` 已设置 |
 | 4 | 输出位置明确 | 运行态、确认态、交付态路径可判定 |
-| 5 | 干系人或决策人明确 | 至少能判定谁负责人工确认 |
-| 6 | 初始优先级明确 | Must / Should / Could 或等价优先级已记录 |
-| 7 | 明显冲突已暴露 | 与现有规则冲突的内容已登记为开放问题 |
+| 5 | process 软链接契约明确 | 外置模式下 `process/.meta-flow-process.yaml` 与 `STATE.md.artifact_routing` 的 `artifact_root`、`project_process_root`、`project_name` 一致；首次初始化前缺 artifact 目录时先向用户索取 |
+| 6 | 干系人或决策人明确 | 至少能判定谁负责人工确认 |
+| 7 | 初始优先级明确 | Must / Should / Could 或等价优先级已记录 |
+| 8 | 明显冲突已暴露 | 与现有规则冲突的内容已登记为开放问题 |
 
 ### Exit Criteria
 
 | 条目 | 说明 |
 |---|---|
-| 初始化完成 | `STATE.md`、`REQUEST.md`、`INPUT-INDEX.md` 已就绪 |
+| 初始化完成 | `STATE.md`、`REQUEST.md`、`INPUT-INDEX.md` 已就绪，且 `process` 路由健康 |
 | 无阻断开放问题 | 不存在阻止进入场景发现的 BLOCKING 项 |
 
 ### Deliverables
@@ -799,6 +803,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 ## 执行规则
 
 1. 所有 CP 文件创建或更新后，必须回写 `process/STATE.md.checkpoints` 中的路径和结论。
+1. 写入任何 CP 文件前必须确认 `process` 路由健康。首次初始化只允许在已建立外置过程目录和软链接后写入 `STATE.md` / `REQUEST.md` / `INPUT-INDEX.md`；若 artifact 目录未知、软链接断裂或路由冲突，先写 `BLOCKED` 结论或中断并要求用户提供目录，不得静默创建新的本地 `process/`。
 2. 人工检查点的自动预检未 `PASS` 或 `WAIVED` 前，host-orchestrator 不得发起人工确认。
 3. 人工确认通过后，host-orchestrator 必须把人工结论写回对应 `process/checkpoints/CP*.md` 的“人工审查结果”，并同步更新 `STATE.md`。
 4. 如果用户直接在对话中回复 `approve`，host-orchestrator 也必须补写人工审查结果文件，不能只改状态。`1/通过` 可作为历史兼容别名解析，但新提示不得再把多个等价别名混排给用户。

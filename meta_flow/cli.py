@@ -229,7 +229,7 @@ def _print_workspace_help() -> None:
         "usage: meta-flow workspace <command> [options]\n\n"
         "Commands:\n"
         "  check  Print process route health.\n"
-        "  link   Create process -> <artifact-root>/process/<project-name> when process does not already exist.\n\n"
+        "  link   Create process -> <artifact-root>/process/<project-name> and process scaffold.\n\n"
         "Examples:\n"
         "  meta-flow workspace check\n"
         "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
@@ -260,7 +260,7 @@ def _run_workspace(args: list[str]) -> None:
 
         parser = argparse.ArgumentParser(
             prog="meta-flow workspace link",
-            description="Create process -> <artifact-root>/process/<project-name>.",
+            description="Create process -> <artifact-root>/process/<project-name> and process scaffold.",
         )
         parser.add_argument("--artifact-root", type=Path, required=True)
         parser.add_argument("--project-name", default=Path.cwd().name)
@@ -269,6 +269,9 @@ def _run_workspace(args: list[str]) -> None:
         health = link_process_workspace(parsed.project_root, parsed.artifact_root, parsed.project_name)
         for line in health.format_lines():
             print(line)
+        if health.status == "state_missing":
+            print("- NEXT: initialize process/STATE.md from the state-router template before running workflow commands.")
+            raise SystemExit(0)
         raise SystemExit(1 if health.blocking else 0)
     raise SystemExit(f"未知 workspace 命令: {command}. 目前支持: check, link")
 
