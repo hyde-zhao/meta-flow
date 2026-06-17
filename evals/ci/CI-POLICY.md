@@ -10,6 +10,7 @@ meta-flow eval run --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.
 meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
 meta-flow eval validate --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml
 meta-flow eval run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/runtime-workflow-basic
+meta-flow eval runtime-run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --sample RT-GENERIC-FULL-20260617 --platform codex --workspace evals/fixtures/runtime-workflow-basic/runtime/workspace-basic --mode collect --out process/evals/runtime-run
 meta-flow eval feedback sync --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/feedback/raw
 meta-flow eval feedback normalize --in process/evals/feedback/raw --out process/evals/feedback/run-exec
 meta-flow eval feedback triage --runs process/evals/feedback/run-exec --out process/evals/feedback/triage

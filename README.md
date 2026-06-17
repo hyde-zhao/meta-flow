@@ -181,6 +181,7 @@ meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-
 meta-flow eval run --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/generated-workflow-basic
 meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
 meta-flow eval run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/runtime-workflow-basic
+meta-flow eval runtime-run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --sample RT-GENERIC-FULL-20260617 --platform codex --workspace evals/fixtures/runtime-workflow-basic/runtime/workspace-basic --mode collect --out process/evals/runtime-run
 meta-flow eval suite-health --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
 meta-flow eval feedback sync --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/feedback/raw
 meta-flow eval feedback normalize --in process/evals/feedback/raw --out process/evals/feedback/run-exec
@@ -206,6 +207,7 @@ meta-flow eval release-check --eval evals/fixtures/runtime-workflow-basic/WORKFL
 | 能力 | 命令 | 边界 |
 |---|---|---|
 | Runtime artifact grader | `meta-flow eval run --eval <WORKFLOW-EVAL.yaml>` 中的 `type: runtime_artifact` | 只读取已有运行工作区；支持 `sample_registry` / `sample_ids` / `profile=partial|full|regression`，检查目录、STATE phase、Skill 调用链、Gate、阶段顺序、内容密度、空文件 / 模板残留、delivery、trace chain、coverage 和表格；不负责真实执行 Agent |
+| Runtime eval runner | `meta-flow eval runtime-run --eval <WORKFLOW-EVAL.yaml> --sample <id> --platform codex|claude --mode dry-run|manual-handoff|collect` | 生成 RUN-EXEC 和 runtime artifact manifest；`collect` 只收集已有 workspace 的证据路径，不判分、不启动 Agent，输出可直接交给 runtime_artifact grader |
 | Feedback source / triage | `meta-flow eval feedback sync|normalize|triage|analyze` | source 先同步为 raw，再标准化为 RUN-EXEC，最后 triage 为 `ISSUE_DRAFT` / `GAP` / `BACKLOG` / `ENVIRONMENT` / `USAGE` / `DUPLICATE` / `NO_ACTION`；`local` 默认可读，`git` / `gitlab` 需要显式 `--allow-git-read` |
 | Mutation eval | `meta-flow eval mutate --eval <WORKFLOW-EVAL.yaml> --fixture <valid-fixture> --mutation <type> --out <generated-negative-dir>` | 生成确定性负例，用来验证 grader 是否能抓住缺字段、坏表格、错 prompt hash、缺 artifact path、secret pattern、缺 runtime artifact 等问题 |
 | Install mapping | `meta-flow eval install-check --eval <WORKFLOW-EVAL.yaml>` 或直接传 `--platform/--agent/--expected-skill --target --platform-contracts` | 复用安装 manifest、dry-run 输出或 installed root 做检查；可按 `PLATFORM-CONTRACTS.yaml` 检查真实 agent/skill/rules 路径和 stale / forbidden 项 |

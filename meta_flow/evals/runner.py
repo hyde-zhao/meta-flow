@@ -1765,6 +1765,126 @@ def run_runtime_artifact(root: Path, grader: dict[str, object]) -> dict[str, obj
     )
 
 
+def find_runtime_sample_for_eval(eval_path: Path, sample_id: str) -> tuple[Path, dict[str, object], dict[str, object], list[dict[str, object]]]:
+    root = eval_path.resolve().parent
+    eval_text = read_text(eval_path) if eval_path.is_file() else ""
+    failures: list[dict[str, object]] = []
+    for grader in section_blocks(eval_text, "graders"):
+        if str(grader.get("type", "")) != "runtime_artifact":
+            continue
+        selected = dict(grader)
+        selected["sample_ids"] = [sample_id]
+        samples, sample_failures = load_runtime_samples(root, selected)
+        if sample_failures:
+            failures.extend(sample_failures)
+        for sample in samples:
+            if str(sample.get("id", "")) == sample_id:
+                return root, grader, sample, []
+    if not failures:
+        failures.append({"sample_id": sample_id, "message": f"runtime sample not found: {sample_id}"})
+    return root, {}, {}, failures
+
+
+def runtime_eval_run(
+    eval_path: Path,
+    sample_id: str,
+    platform: str,
+    workspace: Path | None,
+    out_dir: Path,
+    *,
+    mode: str = "manual-handoff",
+    agent: str = "",
+) -> tuple[int, dict[str, object]]:
+    root, grader, sample, failures = find_runtime_sample_for_eval(eval_path, sample_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    run_exec_id = f"RUN-EXEC-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{safe_id_component(sample_id)}"
+    if failures:
+        status = "BLOCKED"
+        sample = {"id": sample_id}
+        workspace_path = workspace or (root / "__MISSING_RUNTIME_WORKSPACE__")
+        required_paths: list[str] = []
+    else:
+        workspace_path = workspace.resolve() if workspace else sample_workspace(root, sample)
+        required_paths = merge_list_field(sample, grader, "required_paths")
+        if mode in {"dry-run", "manual-handoff"}:
+            status = "SKIPPED"
+        elif workspace_path.is_dir():
+            status = "PASS"
+        else:
+            status = "BLOCKED"
+            failures.append({"sample_id": sample_id, "path": workspace_path.as_posix(), "message": "workspace missing for runtime collect"})
+
+    present_paths: list[str] = []
+    missing_paths: list[str] = []
+    if workspace_path.is_dir():
+        for rel_path in required_paths:
+            if (workspace_path / rel_path).exists():
+                present_paths.append(rel_path)
+            else:
+                missing_paths.append(rel_path)
+        if mode == "collect" and missing_paths:
+            status = "BLOCKED"
+            failures.extend({"sample_id": sample_id, "path": path, "message": f"required runtime path missing during collection: {path}"} for path in missing_paths)
+
+    manifest = {
+        "manifest_version": 1,
+        "created_at": now_iso(),
+        "run_exec_id": run_exec_id,
+        "eval_path": eval_path.as_posix(),
+        "sample_id": sample_id,
+        "platform": platform,
+        "agent": agent,
+        "mode": mode,
+        "workspace": workspace_path.as_posix(),
+        "profile": str(sample.get("profile", "")),
+        "expected_status": runtime_sample_expected_status(sample) if sample else "PASS",
+        "required_paths": required_paths,
+        "present_paths": present_paths,
+        "missing_paths": missing_paths,
+        "note": "runtime-run collects or prepares existing runtime artifact evidence; it does not grade workspace quality or launch an agent.",
+    }
+    run_exec = {
+        "run_exec_id": run_exec_id,
+        "created_at": now_iso(),
+        "status": status,
+        "source": "meta-flow eval runtime-run",
+        "eval_path": eval_path.as_posix(),
+        "sample_id": sample_id,
+        "platform": platform,
+        "agent": agent,
+        "mode": mode,
+        "workspace": workspace_path.as_posix(),
+        "evidence_path": (out_dir / "runtime-artifact-manifest.json").as_posix(),
+        "failures": failures,
+    }
+    lines = [
+        "---",
+        f'run_exec_id: "{run_exec_id}"',
+        f'status: "{status}"',
+        f'sample_id: "{sample_id}"',
+        f'platform: "{platform}"',
+        f'mode: "{mode}"',
+        f'workspace: "{workspace_path.as_posix()}"',
+        "---",
+        "",
+        "# Runtime Eval Run",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        f"| status | `{status}` |",
+        f"| sample_id | `{sample_id}` |",
+        f"| platform | `{platform}` |",
+        f"| mode | `{mode}` |",
+        f"| workspace | `{workspace_path.as_posix()}` |",
+        f"| evidence_path | `{(out_dir / 'runtime-artifact-manifest.json').as_posix()}` |",
+        "",
+    ]
+    (out_dir / "runtime-artifact-manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    (out_dir / "RUN-EXEC.json").write_text(json.dumps(run_exec, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    (out_dir / "RUN-EXEC.md").write_text("\n".join(lines), encoding="utf-8")
+    return (0 if status in {"PASS", "SKIPPED"} else 1), run_exec
+
+
 def manifest_or_tree_text(root: Path, grader: dict[str, object]) -> tuple[str, list[str], int]:
     scan_paths: list[Path] = []
     manifest_path = str(grader.get("manifest_path", "")).strip()
@@ -3727,6 +3847,15 @@ def main(argv: list[str] | None = None) -> int:
     mutate_parser.add_argument("--out", required=True, type=Path, help="Output directory for generated mutations")
     mutate_parser.add_argument("--mutation", action="append", default=[], help="Mutation type/name to generate; repeatable. Default generates all applicable mutations.")
 
+    runtime_run_parser = subparsers.add_parser("runtime-run", help="Prepare or collect runtime artifact run evidence without grading it.")
+    runtime_run_parser.add_argument("--eval", required=True, type=Path, help="Path to WORKFLOW-EVAL.yaml")
+    runtime_run_parser.add_argument("--sample", required=True, help="Runtime sample id from RUNTIME-SAMPLE-REGISTRY.yaml")
+    runtime_run_parser.add_argument("--platform", required=True, choices=["claude", "codex", "manual"], help="Runtime platform label")
+    runtime_run_parser.add_argument("--workspace", type=Path, help="Existing or planned runtime workspace path")
+    runtime_run_parser.add_argument("--out", type=Path, default=Path("process/evals/runtime-run"), help="Output directory for RUN-EXEC and runtime artifact manifest")
+    runtime_run_parser.add_argument("--mode", default="manual-handoff", choices=["dry-run", "manual-handoff", "collect"], help="Runtime runner mode")
+    runtime_run_parser.add_argument("--agent", default="", help="Optional target agent name")
+
     install_parser = subparsers.add_parser("install-check", help="Run generic install mapping grader checks.")
     install_parser.add_argument("--eval", type=Path, help="Optional WORKFLOW-EVAL.yaml; runs install_mapping graders only")
     install_parser.add_argument("--out", type=Path, default=Path("process/evals/install-check"), help="Output directory when --eval is used")
@@ -3823,6 +3952,18 @@ def main(argv: list[str] | None = None) -> int:
             print("mutate requires --source or --fixture", file=sys.stderr)
             return 2
         exit_code, summary = mutate_eval(args.eval, source, args.out, set(args.mutation) if args.mutation else None)
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return exit_code
+    if args.command == "runtime-run":
+        exit_code, summary = runtime_eval_run(
+            args.eval,
+            args.sample,
+            args.platform,
+            args.workspace,
+            args.out,
+            mode=args.mode,
+            agent=args.agent,
+        )
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return exit_code
     if args.command == "install-check":

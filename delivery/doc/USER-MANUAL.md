@@ -433,13 +433,14 @@ meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-
 meta-flow eval run --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/generated-workflow-basic
 meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
 meta-flow eval run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/runtime-workflow-basic
+meta-flow eval runtime-run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --sample RT-GENERIC-FULL-20260617 --platform codex --workspace evals/fixtures/runtime-workflow-basic/runtime/workspace-basic --mode collect --out process/evals/runtime-run
 meta-flow eval feedback sync --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/feedback/raw
 meta-flow eval feedback normalize --in process/evals/feedback/raw --out process/evals/feedback/run-exec
 meta-flow eval feedback triage --runs process/evals/feedback/run-exec --out process/evals/feedback/triage
 meta-flow eval release-check --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --runs process/evals/runs --profile release --triage process/evals/feedback/triage --format json --json-out process/evals/release-check.json
 ```
 
-`runtime_artifact` grader 只读取已有运行工作区，用于检查运行态目录、STATE phase、Skill 调用链、Gate、阶段顺序、内容密度、空文件 / 模板残留、delivery、trace chain、coverage 和表格；release-grade 运行证据建议通过 `RUNTIME-SAMPLE-REGISTRY.yaml` 和 `sample_ids` 声明，支持 `partial`、`full`、`regression` profile 和 expected BLOCKED 样本。现场反馈流程是 `feedback source -> normalized RUN-EXEC -> triage -> ISSUE_DRAFT / GAP / BACKLOG / ENVIRONMENT / USAGE / DUPLICATE / NO_ACTION`，不会把所有 feedback 自动升级为 ISSUE；每条 triage 结果都保留 `run_exec_id`。mutation 使用 `meta-flow eval mutate` 生成确定性负例，并为每个 mutation 声明 `expected_failing_grader`；安装映射使用 `meta-flow eval install-check` 检查 manifest、installed root 或 `PLATFORM-CONTRACTS.yaml` 下的平台发现路径。`suite-health` 输出质量趋势，`release-check` 独立输出 `PASS|PASS_WITH_RISK|BLOCKED`，可用 `--format json` 生成机器可读门禁结果。
+`runtime_artifact` grader 只读取已有运行工作区，用于检查运行态目录、STATE phase、Skill 调用链、Gate、阶段顺序、内容密度、空文件 / 模板残留、delivery、trace chain、coverage 和表格；release-grade 运行证据建议通过 `RUNTIME-SAMPLE-REGISTRY.yaml` 和 `sample_ids` 声明，支持 `partial`、`full`、`regression` profile 和 expected BLOCKED 样本。`runtime-run` 是独立 runner 入口，只生成 RUN-EXEC 和 runtime artifact manifest，支持 `dry-run`、`manual-handoff`、`collect`，不负责启动 Agent，也不替代 runtime_artifact grader 判分。现场反馈流程是 `feedback source -> normalized RUN-EXEC -> triage -> ISSUE_DRAFT / GAP / BACKLOG / ENVIRONMENT / USAGE / DUPLICATE / NO_ACTION`，不会把所有 feedback 自动升级为 ISSUE；每条 triage 结果都保留 `run_exec_id`。mutation 使用 `meta-flow eval mutate` 生成确定性负例，并为每个 mutation 声明 `expected_failing_grader`；安装映射使用 `meta-flow eval install-check` 检查 manifest、installed root 或 `PLATFORM-CONTRACTS.yaml` 下的平台发现路径。`suite-health` 输出质量趋势，`release-check` 独立输出 `PASS|PASS_WITH_RISK|BLOCKED`，可用 `--format json` 生成机器可读门禁结果。
 
 外部 adapter（Promptfoo / DeepEval / Langfuse / Garak）默认关闭。它们可以做 case / result / trace 映射，但真实网络调用、凭据使用、trace 上传、外部模型评估、publish、live 或 production 写入必须单独授权。
 

@@ -95,6 +95,7 @@ meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-
 meta-flow eval run --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/generated-workflow-basic
 meta-flow eval suite-health --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
 meta-flow eval run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/runs/runtime-workflow-basic
+meta-flow eval runtime-run --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --sample RT-GENERIC-FULL-20260617 --platform codex --workspace evals/fixtures/runtime-workflow-basic/runtime/workspace-basic --mode collect --out process/evals/runtime-run
 meta-flow eval suite-health --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --runs process/evals/runs --out docs/quality/EVAL-SUITE-HEALTH.md
 meta-flow eval feedback sync --eval evals/fixtures/runtime-workflow-basic/WORKFLOW-EVAL.yaml --out process/evals/feedback/raw
 meta-flow eval feedback normalize --in process/evals/feedback/raw --out process/evals/feedback/run-exec
@@ -104,7 +105,7 @@ meta-flow eval release-check --eval evals/fixtures/runtime-workflow-basic/WORKFL
 
 `WORKFLOW-EVAL.yaml`、`PROMPT-BUNDLE.yaml` 和 `CASE-REGISTRY.yaml` 是 generated workflow / prompt-skill 产物的验证契约。`process/evals/runs/<run-id>/run-summary.json` 是 CP7 的输入证据之一，但 eval run PASS 不等于 CP7 PASS；`verification-execution` 仍必须输出验证对象清单、追踪矩阵、设计契约验证、分层验证计划、问题和风险。
 
-通用 eval 能力包括 `runtime_artifact`、`install_mapping`、`feedback sync/normalize/triage/analyze`、`mutate`、`backlog list/check/close`、`suite-health` 和 `release-check`。`runtime_artifact` 只读取已有运行工作区，支持 `RUNTIME-SAMPLE-REGISTRY.yaml`、`sample_ids`、`profile=partial|full|regression`、expected BLOCKED 样本、阶段顺序、内容密度、空文件 / 模板残留、trace chain、Gate、delivery、coverage 和表格检查；真实执行 Agent、git 拉取、外部模型、网络或写远端都必须按授权边界单独处理。feedback 必须先标准化为 RUN-EXEC，再 triage 为 `ISSUE_DRAFT`、`GAP`、`BACKLOG`、`ENVIRONMENT`、`USAGE`、`DUPLICATE` 或 `NO_ACTION`，不能把所有现场反馈自动升级为 ISSUE。`suite-health` 是趋势报告，`release-check` 才是发布门禁，输出 `PASS|PASS_WITH_RISK|BLOCKED` 和机器可读 JSON。
+通用 eval 能力包括 `runtime_artifact`、`runtime-run`、`install_mapping`、`feedback sync/normalize/triage/analyze`、`mutate`、`backlog list/check/close`、`suite-health` 和 `release-check`。`runtime_artifact` 只读取已有运行工作区，支持 `RUNTIME-SAMPLE-REGISTRY.yaml`、`sample_ids`、`profile=partial|full|regression`、expected BLOCKED 样本、阶段顺序、内容密度、空文件 / 模板残留、trace chain、Gate、delivery、coverage 和表格检查；`runtime-run` 只负责 dry-run / manual-handoff / collect 证据，生成 RUN-EXEC 与 runtime artifact manifest，不启动 Agent、不判分。真实执行 Agent、git 拉取、外部模型、网络或写远端都必须按授权边界单独处理。feedback 必须先标准化为 RUN-EXEC，再 triage 为 `ISSUE_DRAFT`、`GAP`、`BACKLOG`、`ENVIRONMENT`、`USAGE`、`DUPLICATE` 或 `NO_ACTION`，不能把所有现场反馈自动升级为 ISSUE。`suite-health` 是趋势报告，`release-check` 才是发布门禁，输出 `PASS|PASS_WITH_RISK|BLOCKED` 和机器可读 JSON。
 
 Promptfoo / DeepEval / Langfuse / Garak 默认 disabled。任何网络、凭据、trace 上传、外部模型调用、publish、live 或 production 写入都必须单独形成 `runtime_authorization` 决策项。
 
