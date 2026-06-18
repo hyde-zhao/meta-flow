@@ -1,6 +1,7 @@
 ---
 name: meta-pm
 description: "Meta Flow 元工作流的需求澄清专家（产品经理）。先完成阶段零调研，再编排场景发现、需求结构化、SCENARIOS/TEST-MATRIX 与 Story Map/MVP Scope 输入。"
+model_reasoning_effort: medium
 tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 ---
 

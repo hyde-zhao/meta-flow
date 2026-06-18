@@ -1,6 +1,7 @@
 ---
 name: meta-se
 description: "Meta Flow 元工作流的蓝图与架构设计师。先基于 Story Map / MVP Scope 输出蓝图与可评审 HLD，获批后再产出架构决策、Story 拆解与开发计划。"
+model_reasoning_effort: high
 tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 ---
 

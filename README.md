@@ -382,15 +382,19 @@ uv run --python 3.11 python scripts/install.py claude
 
 Agent 命令与显示区分：
 
-| canonical role | Codex 命令 / nickname_candidates | Claude Code color |
-|---|---|---|
-| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `orange` |
-| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `yellow` |
-| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `green` |
-| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `cyan` |
-| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `purple` |
+| canonical role | Codex 命令 / nickname_candidates | Codex `model_reasoning_effort` | Claude Code color |
+|---|---|---|---|
+| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `medium` | `orange` |
+| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `high` | `yellow` |
+| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `medium` | `green` |
+| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `high` | `cyan` |
+| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `low` | `purple` |
 
-canonical role 名称仅用于功能子 agent 的状态机、handoff 和检查点审计；Host Orchestrator 是当前会话主进程职责，不安装平台 agent 文件。Codex 安装器把上表命令写入 `.codex/agents/*.toml` 的 `nickname_candidates`；Claude Code 文件型 subagent 不支持 nickname，安装器使用 `color` 字段在任务列表和 transcript 中区分角色。
+canonical role 名称仅用于功能子 agent 的状态机、handoff 和检查点审计；Host Orchestrator 是当前会话主进程职责，不安装平台 agent 文件。Codex 安装器把上表命令写入 `.codex/agents/*.toml` 的 `nickname_candidates` 和 `model_reasoning_effort`；Claude Code 文件型 subagent 不支持 nickname，安装器使用 `color` 字段在任务列表和 transcript 中区分角色。主进程建议父会话在标准 / 复杂工作流中使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可使用 `medium`。
+
+Codex 还会安装动态思考 profile，但 canonical role 不变：`meta-dev-debugger` 用于重复失败和复杂追因（`high`），`meta-se-critical` 用于架构冻结 / contract / 重大 ADR（`xhigh`），`meta-qa-critical` 用于 CP5 / CP7 / CP8、发布前和高风险验证（`xhigh`）。Host Orchestrator 调度时必须在 `active_agents[]` 与 handoff `dispatch` 记录 `canonical_role`、`codex_agent_name`、`reasoning_profile` 和 `dispatch_trigger`。
+
+Codex 主进程启动正式工作流后默认授权真实子 agent 调度；若当前工具面有 `spawn_agent` / `resume_agent` / `send_input`，创建 `mode=subagent` handoff 后必须调用对应工具。只创建 handoff 不能算子 agent 已执行；工具不可用时必须阻断并记录 `subagent_dispatch.available=false`，除非用户明确批准 `inline-fallback`。
 
 ## 交付护栏
 

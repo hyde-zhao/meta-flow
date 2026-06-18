@@ -1,6 +1,7 @@
 ---
 name: meta-doc
 description: "Meta Flow 元工作流的文档工程师。将已验证产物和安装清单整理为 README 与 USER-MANUAL。"
+model_reasoning_effort: low
 tools: Read, Write, Edit, MultiEdit, Grep, Glob
 ---
 

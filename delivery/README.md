@@ -115,11 +115,13 @@ Promptfoo / DeepEval / Langfuse / Garak 默认 disabled。任何网络、凭据�
 
 - Codex：新任务记录 `spawn_agent`，复用任务记录 `resume_agent` 或 `send_input`
 - Claude Code / OpenClaw：记录平台 Task/Subagent 标识
-- `process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`
+- `process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`
 
 若当前运行模式不能拉起子 agent，默认阻断。只有用户明确批准时，才允许 `dispatch.mode=inline-fallback`，并必须写明 fallback 原因和批准信息。
 
 用户启动正式工作流后，同工作流内默认允许 `host-orchestrator` 自动拉起所需功能 Agent；该授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
+
+CP6 / CP7 的 `Agent Dispatch Evidence` 中若缺少真实工具调用、`codex_agent_name` / `reasoning_profile` / `dispatch_trigger` 或用户批准的 fallback，Story 不得推进到完成态。
 
 ## fast-lane 快速模式
 
@@ -191,15 +193,19 @@ uv run --python 3.11 python delivery/scripts/install.py codex --scope user --con
 
 ## Agent 命令与显示区分
 
-| canonical role | Codex 命令 / nickname_candidates | Claude Code color |
-|---|---|---|
-| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `orange` |
-| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `yellow` |
-| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `green` |
-| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `cyan` |
-| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `purple` |
+| canonical role | Codex 命令 / nickname_candidates | Codex `model_reasoning_effort` | Claude Code color |
+|---|---|---|---|
+| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `medium` | `orange` |
+| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `high` | `yellow` |
+| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `medium` | `green` |
+| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `high` | `cyan` |
+| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `low` | `purple` |
 
-canonical role 只覆盖功能子 agent，用于状态机、handoff 与检查点审计；Host Orchestrator 是主进程职责，不安装 Codex / Claude Code agent 文件。Codex 使用 `nickname_candidates` 作为命令别名；Claude Code 文件型 subagent 不使用 nickname，安装器写入 `color` 区分不同子 agent。
+canonical role 只覆盖功能子 agent，用于状态机、handoff 与检查点审计；Host Orchestrator 是主进程职责，不安装 Codex / Claude Code agent 文件。Codex 使用 `nickname_candidates` 作为命令别名，并显式写入 `model_reasoning_effort`；Claude Code 文件型 subagent 不使用 nickname，安装器写入 `color` 区分不同子 agent。主进程建议父会话在标准 / 复杂工作流中使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可使用 `medium`。
+
+Codex 还会安装动态思考 profile，但 canonical role 不变：`meta-dev-debugger` 用于重复失败和复杂追因（`high`），`meta-se-critical` 用于架构冻结 / contract / 重大 ADR（`xhigh`），`meta-qa-critical` 用于 CP5 / CP7 / CP8、发布前和高风险验证（`xhigh`）。Host Orchestrator 调度时必须在 `active_agents[]` 与 handoff `dispatch` 记录 `canonical_role`、`codex_agent_name`、`reasoning_profile` 和 `dispatch_trigger`。
+
+Codex 主进程启动正式工作流后默认授权真实子 agent 调度；若当前工具面有 `spawn_agent` / `resume_agent` / `send_input`，创建 `mode=subagent` handoff 后必须调用对应工具。只创建 handoff 不能算子 agent 已执行；工具不可用时必须阻断并记录 `subagent_dispatch.available=false`，除非用户明确批准 `inline-fallback`。
 
 ## 目录约束
 

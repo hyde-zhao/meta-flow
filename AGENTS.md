@@ -25,7 +25,7 @@ Host Orchestrator 的职责：
 - 记录子 agent 调度证据：handoff 文件只表示交接，不表示目标 agent 已执行；meta-dev / meta-qa 等下游完成必须有 `spawn_agent` / `resume_agent` / `send_input` 或平台 Task/Subagent 证据，或用户批准的 `inline-fallback`
 - 维护阶段委托交互：`meta-pm` / `meta-se` 在各自阶段内可直接与用户多轮沟通，host-orchestrator 记录委托状态并在阶段交还后发起 CP2 / CP3
 - 维护 LLD Clarification Queue：并行 LLD 阶段由 meta-dev 写入 clarification item，host-orchestrator 作为唯一 question broker 合并、批量询问用户、回填答案并分发
-- 维护 Agent 命令与显示区分：Codex 功能 agent 使用 `nickname_candidates`（如 `dev-yang`），Claude Code 功能 subagent 不使用 nickname，改用不同 `color` 区分；主编排器不安装平台子 agent
+- 维护 Agent 命令、显示与 Codex 思考等级区分：Codex 功能 agent 使用 `nickname_candidates`（如 `dev-yang`）区分显示，并使用 `model_reasoning_effort` 配置角色级思考等级；Claude Code 功能 subagent 不使用 nickname，改用不同 `color` 区分；主编排器不安装平台子 agent
 - 受理变更请求，创建 `process/changes/CR-*.md`，执行五维度影响分析
 - 判定 `standard` / `fast-lane` 模式；fast-lane 仅用于低风险轻量实现，仍必须保留验证、终验摘要和追溯证据
 - **失败模式识别**：识别需求循环、HLD 僵局、LLD 僵局、开发卡顿等常见失败信号
@@ -45,13 +45,25 @@ Host Orchestrator 的职责：
 
 canonical role 仅包含功能 Agent，用于状态机、handoff、检查点和审计。平台展示按下表安装；主编排器由主进程承担，不安装 Codex / Claude Code agent 文件：
 
-| canonical role | Codex 命令 / nickname_candidates | Claude Code color |
-|---|---|---|
-| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `orange` |
-| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `yellow` |
-| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `green` |
-| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `cyan` |
-| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `purple` |
+| canonical role | Codex 命令 / nickname_candidates | Codex `model_reasoning_effort` | Claude Code color |
+|---|---|---|---|
+| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `medium` | `orange` |
+| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `high` | `yellow` |
+| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `medium` | `green` |
+| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `high` | `cyan` |
+| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `low` | `purple` |
+
+主进程 Host Orchestrator 不安装为 Codex custom agent；标准 / 复杂工作流建议父会话使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可降为 `medium`。功能子 agent 的 Codex TOML 显式写入上表等级；若某个字段省略，则继承父会话配置。
+
+Codex 动态思考 profile 只改变实际 custom agent 名称，不改变 canonical role：
+
+| canonical role | 默认 Codex agent | 升级触发 | 升级 Codex agent | 升级 effort |
+|---|---|---|---|---|
+| `meta-dev` | `meta-dev` | 实现失败超过 2 轮、CP7 回修反复、跨模块 bug、状态机异常、PIT / 数据泄漏 / 数据一致性风险、复杂 flaky test | `meta-dev-debugger` | `high` |
+| `meta-se` | `meta-se` | 架构冻结、公共 contract、跨模块边界、安全权限、外部接口、重大 ADR | `meta-se-critical` | `xhigh` |
+| `meta-qa` | `meta-qa` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、高风险验证 | `meta-qa-critical` | `xhigh` |
+
+Codex 主进程必须在 `STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch` 记录工具面探测结果。若当前工具面暴露 `spawn_agent` / `resume_agent` / `send_input` 且 `orchestrator_session.subagent_auto_dispatch=enabled`，创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具，并在 `active_agents[]` 与 handoff `dispatch` 中记录 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`tool_name`、`agent_id/thread_id`；只写 handoff 不算拉起子 agent。
 
 ## 工作流阶段与 Agent 对应关系
 
@@ -196,8 +208,8 @@ init（host-orchestrator）                                                   [C
 - **用户视角复述与不授权项**：人工门禁消息必须说明“如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作”。对真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项，必须独立列出不授权项；设计通过不得被误读为运行授权。
 - **决策修订再发布**：用户纠正范围、安全、运行授权或风险接受含义后，host-orchestrator 必须更新相关 DQ、重新计算影响面、重新生成 Decision Brief 和待决策表，并重新发起确认；不得只在后续 HLD / LLD / CP 文件中静默修正。
 - **阶段委托交互**：`requirement-clarification` 默认委托 `meta-pm` 直接与用户完成场景、需求、工程验证场景和产品规划输入草案；`solution-design` 默认委托 `meta-se` 直接与用户完成蓝图适用性、架构灰区、advisor table 和 HLD 草案。委托状态写入 `STATE.md.delegated_interaction`；被委托 Agent 不得推进跨阶段状态，不得发起 CP2 / CP3 正式人工检查点；阶段收敛后写交还摘要，由 host-orchestrator 回收并发起 Decision Brief。
-- **子 agent 调度证据**：host-orchestrator 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created`，不得写成目标 agent 已完成。
-- **子 agent 自动调度**：用户启动正式工作流后，同工作流内默认授权 `host-orchestrator` 按阶段自动拉起 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc`；自动授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
+- **子 agent 调度证据**：host-orchestrator 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created` 或 `spawn-requested`，不得写成目标 agent 已完成。
+- **子 agent 自动调度**：用户启动正式工作流后，同工作流内默认授权 `host-orchestrator` 按阶段自动拉起 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc`；自动授权只覆盖真实子 agent 调度，不覆盖 inline fallback。Codex 下若 `spawn_agent` / `resume_agent` / `send_input` 工具面可用，Host Orchestrator 必须真实调用工具；若不可用，必须标记 `subagent_dispatch.available=false` 并阻断，不得静默用 handoff 代执行。
 - **inline fallback 门禁**：当前平台无法拉起子 agent 时，host-orchestrator 必须阻断并说明原因；只有用户明确批准后才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。inline fallback 结果必须表述为 host-orchestrator 代执行，不得表述为 meta-dev / meta-qa 独立完成。
 - **HLD 门控**：CP3 自动预检和人工确认未通过前，不得进入 Story 拆解。跨 Feature / Epic、数据归属或依赖方向问题必须先完成 `BLUEPRINT.md` / `DOMAIN-MAP.md` / `DEPENDENCY-MAP.md` 或写明 N/A / WAIVED 原因。
 - **Feature 设计矩阵门控**：CP3 通过后、CP4 通过前必须生成 `docs/design/FEATURE-DESIGN-MATRIX.md`，判定 Feature / Epic 的 `required` / `waived` / `n/a`，并为每个 Story 写入 `feature_design_refs` 与 `lld_policy.required_level=full-lld|technical-note|waived`。required Feature 必须生成 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`，或写明 waived 决策和重访条件。
@@ -268,7 +280,7 @@ Host Orchestrator 的职责：
 - 记录子 agent 调度证据：handoff 文件只表示交接，不表示目标 agent 已执行；meta-dev / meta-qa 等下游完成必须有 `spawn_agent` / `resume_agent` / `send_input` 或平台 Task/Subagent 证据，或用户批准的 `inline-fallback`
 - 维护阶段委托交互：`meta-pm` / `meta-se` 在各自阶段内可直接与用户多轮沟通，host-orchestrator 记录委托状态并在阶段交还后发起 CP2 / CP3
 - 维护 LLD Clarification Queue：并行 LLD 阶段由 meta-dev 写入 clarification item，host-orchestrator 作为唯一 question broker 合并、批量询问用户、回填答案并分发
-- 维护 Agent 命令与显示区分：Codex 功能 agent 使用 `nickname_candidates`（如 `dev-yang`），Claude Code 功能 subagent 不使用 nickname，改用不同 `color` 区分；主编排器不安装平台子 agent
+- 维护 Agent 命令、显示与 Codex 思考等级区分：Codex 功能 agent 使用 `nickname_candidates`（如 `dev-yang`）区分显示，并使用 `model_reasoning_effort` 配置角色级思考等级；Claude Code 功能 subagent 不使用 nickname，改用不同 `color` 区分；主编排器不安装平台子 agent
 - 受理变更请求，创建 `process/changes/CR-*.md`，执行五维度影响分析
 - 判定 `standard` / `fast-lane` 模式；fast-lane 仅用于低风险轻量实现，仍必须保留验证、终验摘要和追溯证据
 - **失败模式识别**：识别需求循环、HLD 僵局、LLD 僵局、开发卡顿等常见失败信号
@@ -288,13 +300,25 @@ Host Orchestrator 的职责：
 
 canonical role 仅包含功能 Agent，用于状态机、handoff、检查点和审计。平台展示按下表安装；主编排器由主进程承担，不安装 Codex / Claude Code agent 文件：
 
-| canonical role | Codex 命令 / nickname_candidates | Claude Code color |
-|---|---|---|
-| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `orange` |
-| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `yellow` |
-| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `green` |
-| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `cyan` |
-| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `purple` |
+| canonical role | Codex 命令 / nickname_candidates | Codex `model_reasoning_effort` | Claude Code color |
+|---|---|---|---|
+| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `medium` | `orange` |
+| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `high` | `yellow` |
+| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `medium` | `green` |
+| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `high` | `cyan` |
+| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `low` | `purple` |
+
+主进程 Host Orchestrator 不安装为 Codex custom agent；标准 / 复杂工作流建议父会话使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可降为 `medium`。功能子 agent 的 Codex TOML 显式写入上表等级；若某个字段省略，则继承父会话配置。
+
+Codex 动态思考 profile 只改变实际 custom agent 名称，不改变 canonical role：
+
+| canonical role | 默认 Codex agent | 升级触发 | 升级 Codex agent | 升级 effort |
+|---|---|---|---|---|
+| `meta-dev` | `meta-dev` | 实现失败超过 2 轮、CP7 回修反复、跨模块 bug、状态机异常、PIT / 数据泄漏 / 数据一致性风险、复杂 flaky test | `meta-dev-debugger` | `high` |
+| `meta-se` | `meta-se` | 架构冻结、公共 contract、跨模块边界、安全权限、外部接口、重大 ADR | `meta-se-critical` | `xhigh` |
+| `meta-qa` | `meta-qa` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、高风险验证 | `meta-qa-critical` | `xhigh` |
+
+Codex 主进程必须在 `STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch` 记录工具面探测结果。若当前工具面暴露 `spawn_agent` / `resume_agent` / `send_input` 且 `orchestrator_session.subagent_auto_dispatch=enabled`，创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具，并在 `active_agents[]` 与 handoff `dispatch` 中记录 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`tool_name`、`agent_id/thread_id`；只写 handoff 不算拉起子 agent。
 
 ## 工作流阶段与 Agent 对应关系
 
@@ -441,8 +465,8 @@ init（host-orchestrator）                                                   [C
 - **用户视角复述与不授权项**：人工门禁消息必须说明“如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作”。对真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项，必须独立列出不授权项；设计通过不得被误读为运行授权。
 - **决策修订再发布**：用户纠正范围、安全、运行授权或风险接受含义后，host-orchestrator 必须更新相关 DQ、重新计算影响面、重新生成 Decision Brief 和待决策表，并重新发起确认；不得只在后续 HLD / LLD / CP 文件中静默修正。
 - **阶段委托交互**：`requirement-clarification` 默认委托 `meta-pm` 直接与用户完成场景、需求、工程验证场景和产品规划输入草案；`solution-design` 默认委托 `meta-se` 直接与用户完成蓝图适用性、架构灰区、advisor table 和 HLD 草案。委托状态写入 `STATE.md.delegated_interaction`；被委托 Agent 不得推进跨阶段状态，不得发起 CP2 / CP3 正式人工检查点；阶段收敛后写交还摘要，由 host-orchestrator 回收并发起 Decision Brief。
-- **子 agent 调度证据**：host-orchestrator 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created`，不得写成目标 agent 已完成。
-- **子 agent 自动调度**：用户启动正式工作流后，同工作流内默认授权 `host-orchestrator` 按阶段自动拉起 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc`；自动授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
+- **子 agent 调度证据**：host-orchestrator 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created` 或 `spawn-requested`，不得写成目标 agent 已完成。
+- **子 agent 自动调度**：用户启动正式工作流后，同工作流内默认授权 `host-orchestrator` 按阶段自动拉起 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc`；自动授权只覆盖真实子 agent 调度，不覆盖 inline fallback。Codex 下若 `spawn_agent` / `resume_agent` / `send_input` 工具面可用，Host Orchestrator 必须真实调用工具；若不可用，必须标记 `subagent_dispatch.available=false` 并阻断，不得静默用 handoff 代执行。
 - **inline fallback 门禁**：当前平台无法拉起子 agent 时，host-orchestrator 必须阻断并说明原因；只有用户明确批准后才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。inline fallback 结果必须表述为 host-orchestrator 代执行，不得表述为 meta-dev / meta-qa 独立完成。
 - **HLD 门控**：CP3 自动预检和人工确认未通过前，不得进入 Story 拆解。跨 Feature / Epic、数据归属或依赖方向问题必须先完成 `BLUEPRINT.md` / `DOMAIN-MAP.md` / `DEPENDENCY-MAP.md` 或写明 N/A / WAIVED 原因。
 - **Feature 设计矩阵门控**：CP3 通过后、CP4 通过前必须生成 `docs/design/FEATURE-DESIGN-MATRIX.md`，判定 Feature / Epic 的 `required` / `waived` / `n/a`，并为每个 Story 写入 `feature_design_refs` 与 `lld_policy.required_level=full-lld|technical-note|waived`。required Feature 必须生成 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`，或写明 waived 决策和重访条件。

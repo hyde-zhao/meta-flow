@@ -653,7 +653,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 14 | 设计缺口反馈 | Feature / HLD / LLD / TEST-MATRIX / 决策队列缺口已反馈，不被实现阶段静默吞掉 |
 | 15 | 状态回写 | Story 状态、任务清单、偏差记录、implementation evidence 路径已更新 |
 | 16 | 无缓存产物 | `__pycache__`、构建缓存等不进入交付物 |
-| 17 | Agent Dispatch Evidence | 存在 meta-dev 的 `agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
+| 17 | Agent Dispatch Evidence | 存在 meta-dev 的 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
 
 ### Exit Criteria
 
@@ -713,7 +713,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 16 | 人工 / 语义质量审查 | 需求一致性、场景覆盖、Prompt 边界、文档可用性、错误信息和 happy path 偏差已审查 |
 | 17 | 问题与剩余风险分级 | `BLOCKER` / `HIGH` / `MEDIUM` / `LOW` / `INFO` 已记录 owner、状态和下一步 |
 | 18 | 阶段决策合法 | CP7 结论只使用 `PASS` / `PASS_WITH_RISK` / `BLOCKED` / `NEEDS_REWORK` / `NEEDS_DESIGN_CLARIFICATION` / `WAIVED`，并带路由 |
-| 19 | Agent Dispatch Evidence | 存在 meta-qa 的 `agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
+| 19 | Agent Dispatch Evidence | 存在 meta-qa 的 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
 
 ### Exit Criteria
 
@@ -822,6 +822,10 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 | 检查项 | 状态 | 证据 | 说明 |
 |---|---|---|---|
 | 子 agent 调度模式 | PASS/FAIL/WAIVED | `process/handoffs/...` | `subagent` / `inline-fallback` / `handoff-only` |
+| canonical role | PASS/FAIL/WAIVED | `dispatch.canonical_role` / `active_agents[].role` | `meta-dev` / `meta-qa`，不得写动态 profile 名称 |
+| Codex custom agent | PASS/FAIL/WAIVED | `dispatch.codex_agent_name` / `active_agents[].codex_agent_name` | `meta-dev` / `meta-dev-debugger` / `meta-qa` / `meta-qa-critical` |
+| reasoning profile | PASS/FAIL/WAIVED | `dispatch.reasoning_profile` / `active_agents[].reasoning_profile` | `default` / `debugger` / `critical` |
+| dispatch trigger | PASS/FAIL/WAIVED | `dispatch.dispatch_trigger` / `active_agents[].dispatch_trigger` | `phase-default` / `repeated-failure` / `critical-checkpoint` / `risk-review` 等可审计原因 |
 | agent 标识 | PASS/FAIL/WAIVED | `STATE.md.agent_lifecycle` | `agent_id` 或 `thread_id` |
 | 平台工具证据 | PASS/FAIL/WAIVED | `tool_name` | `spawn_agent` / `resume_agent` / `send_input` / platform task |
 | 完成时间 | PASS/FAIL/WAIVED | `completed_at` | 子 agent 返回完成结果的时间 |

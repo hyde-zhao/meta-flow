@@ -53,8 +53,9 @@ MANAGED_MARKDOWN_TOKEN = "<!-- myflow-managed:"
 MANAGED_TOML_TOKEN = "# myflow-managed:"
 MANAGED_BLOCK_BEGIN = "<!-- myflow:managed:begin"
 MANAGED_BLOCK_END = "<!-- myflow:managed:end -->"
-CANONICAL_AGENT_FRONTMATTER_FIELDS = frozenset({"name", "description", "model", "tools"})
+CANONICAL_AGENT_FRONTMATTER_FIELDS = frozenset({"name", "description", "model", "model_reasoning_effort", "tools"})
 CODEX_REQUIRED_AGENT_FIELDS = ("name", "description", "developer_instructions")
+CODEX_REASONING_EFFORT_VALUES = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 CODEX_OPTIONAL_AGENT_FIELDS = frozenset(
     {
         "nickname_candidates",
@@ -71,6 +72,7 @@ CLAUDE_AGENT_COLORS = frozenset({"red", "blue", "green", "yellow", "purple", "or
 AGENT_DISPLAY_PROFILES: dict[str, dict[str, object]] = {
     "meta-pm": {"codex_nicknames": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"], "claude_color": "orange"},
     "meta-se": {"codex_nicknames": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"], "claude_color": "yellow"},
+    "meta-se-critical": {"codex_nicknames": ["se-critical-chu", "se-critical-wei", "se-critical-jiang"]},
     "meta-dev": {
         "codex_nicknames": [
             "dev-yang",
@@ -86,6 +88,7 @@ AGENT_DISPLAY_PROFILES: dict[str, dict[str, object]] = {
         ],
         "claude_color": "green",
     },
+    "meta-dev-debugger": {"codex_nicknames": ["debug-yang", "debug-zhu", "debug-qin", "debug-you", "debug-xu"]},
     "meta-qa": {
         "codex_nicknames": [
             "qa-he",
@@ -101,7 +104,67 @@ AGENT_DISPLAY_PROFILES: dict[str, dict[str, object]] = {
         ],
         "claude_color": "cyan",
     },
+    "meta-qa-critical": {"codex_nicknames": ["qa-critical-he", "qa-critical-lv", "qa-critical-shi"]},
     "meta-doc": {"codex_nicknames": ["doc-cao", "doc-yan", "doc-hua", "doc-jin", "doc-wei"], "claude_color": "purple"},
+}
+CODEX_AGENT_REASONING_PROFILES: dict[str, tuple[dict[str, str], ...]] = {
+    "meta-dev": (
+        {
+            "name": "meta-dev-debugger",
+            "description": "Meta Flow 元工作流的开发故障追因专家。用于重复失败、跨模块 bug、状态机异常和数据一致性问题。",
+            "model_reasoning_effort": "high",
+            "instructions": """
+## Codex reasoning profile: meta-dev-debugger
+
+你是 `meta-dev` 的高推理故障追因 profile，canonical role 仍为 `meta-dev`。
+仅在实现失败超过阈值、CP7 回修反复、跨模块契约冲突、状态机异常、PIT / 数据泄漏 / 数据一致性风险或复杂 flaky test 时使用。
+
+执行要求：
+1. 先找根因，再提出或执行最小修复；不得扩大 Story / LLD 范围。
+2. 明确列出证据路径、触发条件、影响文件、最小修复计划和必须回归的测试。
+3. 如果修复需要改变架构、公共契约、文件 ownership 或用户授权，停止并交回 host-orchestrator 发起设计澄清或 CR。
+4. 输出和状态回写仍按 `meta-dev` 的 CP6 / implementation-execution 合约执行。
+""",
+        },
+    ),
+    "meta-se": (
+        {
+            "name": "meta-se-critical",
+            "description": "Meta Flow 元工作流的关键架构审查 profile。用于架构冻结、公共契约、跨模块边界和长期风险决策。",
+            "model_reasoning_effort": "xhigh",
+            "instructions": """
+## Codex reasoning profile: meta-se-critical
+
+你是 `meta-se` 的关键架构审查 profile，canonical role 仍为 `meta-se`。
+仅在架构冻结、公共 contract、跨模块边界、安全权限、外部接口、长期维护成本或重大 ADR 决策前使用。
+
+执行要求：
+1. 优先审查内部一致性、边界条件、回退策略、NFR、风险接受和 Use Case 到架构的可追溯性。
+2. 必须给出推荐方案、至少一个可执行备选方案、when-to-switch 条件和影响面。
+3. 发现阻断项时停止推进 Story 拆解，并交回 host-orchestrator 汇总为 CP3 / CP5 决策项。
+4. 输出和状态回写仍按 `meta-se` 的 HLD / story-planning 合约执行。
+""",
+        },
+    ),
+    "meta-qa": (
+        {
+            "name": "meta-qa-critical",
+            "description": "Meta Flow 元工作流的关键质量门 profile。用于 CP5/CP7/CP8、发布前和高风险验证裁决。",
+            "model_reasoning_effort": "xhigh",
+            "instructions": """
+## Codex reasoning profile: meta-qa-critical
+
+你是 `meta-qa` 的关键质量门 profile，canonical role 仍为 `meta-qa`。
+仅在 CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、安全 / 安装 / 平台路径 / workflow harness 高风险验证时使用。
+
+执行要求：
+1. 专门寻找隐藏假设、误导性 PASS、缺失负向测试、证据断链、契约违背和 workflow 风险。
+2. 必须区分 BLOCKING、REQUIRED、OPTIONAL 和风险接受项，并给出 PASS / PASS_WITH_RISK / FAIL / BLOCKED 建议。
+3. 只有 handoff 而没有 `spawn_agent` / `resume_agent` / `send_input` / platform-task 证据时，必须判定调度证据不足。
+4. 输出和状态回写仍按 `meta-qa` 的 verification-execution / quality-review / CP7 / CP8 合约执行。
+""",
+        },
+    ),
 }
 
 
@@ -122,6 +185,7 @@ class AgentDefinition:
     description: str
     instructions: str
     model: str | None
+    model_reasoning_effort: str | None
     tools: str | None
     extra_fields: tuple[str, ...]
 
@@ -344,12 +408,22 @@ def load_canonical_agent(path: Path, permissive: bool) -> AgentDefinition | None
     unsupported = sorted(key for key in fields if key not in CANONICAL_AGENT_FRONTMATTER_FIELDS)
     if unsupported and not permissive:
         fail(
-            "canonical agent frontmatter 仅支持 name/description/model/tools；"
+            "canonical agent frontmatter 仅支持 name/description/model/model_reasoning_effort/tools；"
             "Codex 的 developer_instructions 由 Markdown 正文渲染，禁止写 version、instructions 等其它顶层字段: "
             f"{path} -> {', '.join(unsupported)}"
         )
 
     model = str(fields["model"]).strip() if "model" in fields and str(fields["model"]).strip() else None
+    model_reasoning_effort = (
+        str(fields["model_reasoning_effort"]).strip()
+        if "model_reasoning_effort" in fields and str(fields["model_reasoning_effort"]).strip()
+        else None
+    )
+    if model_reasoning_effort and model_reasoning_effort not in CODEX_REASONING_EFFORT_VALUES:
+        fail(
+            "model_reasoning_effort 必须为 minimal/low/medium/high/xhigh: "
+            f"{path} -> {model_reasoning_effort}"
+        )
     tools = str(fields["tools"]).strip() if "tools" in fields and str(fields["tools"]).strip() else None
     return AgentDefinition(
         source=path,
@@ -357,6 +431,7 @@ def load_canonical_agent(path: Path, permissive: bool) -> AgentDefinition | None
         description=description,
         instructions=instructions,
         model=model,
+        model_reasoning_effort=model_reasoning_effort,
         tools=tools,
         extra_fields=tuple(unsupported),
     )
@@ -385,6 +460,38 @@ def select_agent_definitions(definitions: list[AgentDefinition], requested: list
     if missing:
         fail(f"未找到这些 canonical agent: {', '.join(sorted(missing))}")
     return selected
+
+
+def codex_profile_agent_definitions(agent: AgentDefinition) -> list[AgentDefinition]:
+    profiles: list[AgentDefinition] = []
+    for profile in CODEX_AGENT_REASONING_PROFILES.get(agent.name, ()):
+        profile_name = profile["name"]
+        profile_effort = profile["model_reasoning_effort"]
+        if not KEBAB_CASE_RE.fullmatch(profile_name):
+            fail(f"Codex reasoning profile name 必须为 kebab-case: {agent.name} -> {profile_name}")
+        if profile_effort not in CODEX_REASONING_EFFORT_VALUES:
+            fail(f"Codex reasoning profile effort 非法: {profile_name} -> {profile_effort}")
+        profiles.append(
+            AgentDefinition(
+                source=agent.source,
+                name=profile_name,
+                description=profile["description"],
+                instructions=f"{agent.instructions.rstrip()}\n\n{profile['instructions'].strip()}\n",
+                model=agent.model,
+                model_reasoning_effort=profile_effort,
+                tools=agent.tools,
+                extra_fields=agent.extra_fields,
+            )
+        )
+    return profiles
+
+
+def codex_install_agent_definitions(selected_agents: list[AgentDefinition]) -> list[AgentDefinition]:
+    install_agents: list[AgentDefinition] = []
+    for agent in selected_agents:
+        install_agents.append(agent)
+        install_agents.extend(codex_profile_agent_definitions(agent))
+    return install_agents
 
 
 def select_skill_dirs(skill_dirs: list[Path], requested: list[str]) -> list[Path]:
@@ -555,6 +662,8 @@ def render_codex_agent(agent: AgentDefinition, commit: str, generated: str) -> s
     )
     if agent.model:
         lines.append(f"model = {toml_string(agent.model)}")
+    if agent.model_reasoning_effort:
+        lines.append(f"model_reasoning_effort = {toml_string(agent.model_reasoning_effort)}")
     lines.extend(
         [
             "developer_instructions = \"\"\"",
@@ -988,7 +1097,7 @@ def install_agents(
 
     if platform == "codex":
         base_dir = target_path(contracts, platform, scope, "agents", workspace_root)
-        for agent in selected_agents:
+        for agent in codex_install_agent_definitions(selected_agents):
             dest = base_dir / f"{agent.name}.toml"
             content = render_codex_agent(agent, commit, generated)
             validate_codex_agent_render(content, agent)

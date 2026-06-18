@@ -10,7 +10,7 @@
 - **功能 Agent**（按需启用）：`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`
 - **所有任务均通过 host-orchestrator 发起**；`meta-pm` / `meta-se` 在阶段委托期间可直接与用户多轮沟通，阶段交还后仍由 host-orchestrator 发起 CP2 / CP3 正式人工确认
 - **调度证据优先**：handoff 文件只表示交接，不表示功能 Agent 已执行。功能 Agent 完成必须有平台 Task/Subagent 证据，或用户明确批准的 `inline-fallback`。
-- **显示区分**：Claude Code 文件型功能 subagent 不使用 nickname；安装器通过 `color` 字段区分角色：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。Codex 侧仅为功能 subagent 写入 `nickname_candidates`；`meta-dev` 与 `meta-qa` 各预留 10 个，其余功能角色预留 5 个。
+- **显示区分**：Claude Code 文件型功能 subagent 不使用 nickname；安装器通过 `color` 字段区分角色：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。Codex 侧为功能 subagent 写入 `nickname_candidates` 与 `model_reasoning_effort`，并额外生成 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 三个动态思考 profile；profile 不改变 canonical role。
 
 ## Skill 发现路径
 
@@ -124,10 +124,10 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 23. **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
 24. **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前必须在 CR 中填写文档处理决策；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
 25. **安装命令与组件默认值**：安装 CLI 使用 `meta-flow install <platform>`，卸载使用 `meta-flow uninstall <platform>`；`--platform` 与 `install --uninstall` 仅作 legacy 兼容。组件使用 `--component rules|agent|full`；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
-26. **Codex 生命周期**：Codex 下不安装主编排子 agent；Host Orchestrator 由主进程直接维护 `process/STATE.md.orchestrator_session`，并只把 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc` 登记到 `agent_lifecycle.active_agents[]`。同角色同任务优先复用已有功能子 agent，检查点或交接完成后及时关闭。
+26. **Codex 生命周期**：Codex 下不安装主编排子 agent；Host Orchestrator 由主进程直接维护 `process/STATE.md.orchestrator_session`，并只把 canonical role `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc` 登记到 `agent_lifecycle.active_agents[].role`。动态 profile 的实际 custom agent 名称写入 `codex_agent_name`。同角色同任务优先复用已有功能子 agent，检查点或交接完成后及时关闭。
 26. **检查点文件优先**：推进阶段前必须读取对应 `process/checks/CP*.md` 与 `process/checkpoints/CP*.md`；不能只看产物 frontmatter 的 `confirmed=true`
 27. **人工审查回填**：host-orchestrator 发起人工检查时必须提示 checklist 文件路径；用户直接对话确认后，仍必须回填对应 `process/checkpoints/CP*.md` 的“人工审查结果”
-28. **子 agent 调度硬门禁**：host-orchestrator 唤醒功能 Agent 必须使用平台 Task/Subagent 能力；Codex 环境对应 `spawn_agent` / `resume_agent` / `send_input`。`process/handoffs/*.md` 必须记录 `dispatch.mode`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。只有 handoff 没有调度证据时，不得把目标 Agent 标记为 completed。
+28. **子 agent 调度硬门禁**：host-orchestrator 唤醒功能 Agent 必须使用平台 Task/Subagent 能力；Codex 环境对应 `spawn_agent` / `resume_agent` / `send_input`。`process/handoffs/*.md` 必须记录 `dispatch.mode`、`canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。只有 handoff 没有调度证据时，不得把目标 Agent 标记为 completed。
 29. **inline fallback 显式化**：平台无法拉起子 agent 时，默认 blocked；只有用户明确批准，host-orchestrator 才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。结果必须写成 host-orchestrator 代执行，不得写成 meta-dev / meta-qa 独立完成。
 29. **全阶段 Context Capsule**：CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后必须生成或检查 `process/context/*-CONTEXT.yaml`。子 agent、人工门禁、验证和发布准备默认先读取 capsule；只有 capsule 缺失、冲突、字段不足、人工审计、深度评审或用户明确要求时，才读取完整正式文档，并在 `STATE.md.context_budget.read_expansion_log[]` 或 capsule `read_expansion_log[]` 写明 `full_doc_read_reason`。
 29. **上下文预算与健康阈值**：`context-handoff` 必须传 `context_policy`，包含 capsule 路径、`read_profile=minimal|compact|full`、`must_read`、`read_if_needed`、`do_not_read_by_default` 和全文档扩展理由；不得默认传完整 HLD、全部 LLD、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW、完整 diff 或完整会话 transcript。`STATE.md.workflow_health` 计数器超过阈值时，host-orchestrator 必须停止静默重试，生成决策项、回退、CR、Spike 或人工仲裁请求。

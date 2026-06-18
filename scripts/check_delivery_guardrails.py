@@ -112,6 +112,7 @@ CACHE_SCAN_EXCLUDED_DIRS = {".git", ".venv", ".mypy_cache", ".pytest_cache", ".r
 EXPECTED_CODEX_NICKNAMES = {
     "meta-pm": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"],
     "meta-se": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"],
+    "meta-se-critical": ["se-critical-chu", "se-critical-wei", "se-critical-jiang"],
     "meta-dev": [
         "dev-yang",
         "dev-zhu",
@@ -124,6 +125,7 @@ EXPECTED_CODEX_NICKNAMES = {
         "dev-zhang",
         "dev-kong",
     ],
+    "meta-dev-debugger": ["debug-yang", "debug-zhu", "debug-qin", "debug-you", "debug-xu"],
     "meta-qa": [
         "qa-he",
         "qa-lv",
@@ -136,7 +138,18 @@ EXPECTED_CODEX_NICKNAMES = {
         "qa-jin",
         "qa-wei",
     ],
+    "meta-qa-critical": ["qa-critical-he", "qa-critical-lv", "qa-critical-shi"],
     "meta-doc": ["doc-cao", "doc-yan", "doc-hua", "doc-jin", "doc-wei"],
+}
+EXPECTED_CODEX_REASONING_EFFORTS = {
+    "meta-pm": "medium",
+    "meta-se": "high",
+    "meta-se-critical": "xhigh",
+    "meta-dev": "medium",
+    "meta-dev-debugger": "high",
+    "meta-qa": "high",
+    "meta-qa-critical": "xhigh",
+    "meta-doc": "low",
 }
 EXPECTED_CLAUDE_COLORS = {
     "meta-pm": "orange",
@@ -567,7 +580,20 @@ def collect_agent_dispatch_evidence_errors() -> list[str]:
         DELIVERY_ROOT / "README.md",
         ROOT / "AGENTS.md",
     ]
-    required_tokens = ("Agent Dispatch Evidence", "inline-fallback", "agent_id", "thread_id")
+    required_tokens = (
+        "Agent Dispatch Evidence",
+        "inline-fallback",
+        "agent_id",
+        "thread_id",
+        "spawn_agent",
+        "resume_agent",
+        "send_input",
+        "tool_name",
+        "completed_at",
+        "codex_agent_name",
+        "reasoning_profile",
+        "dispatch_trigger",
+    )
     for target in targets:
         if not target.is_file():
             errors.append(f"missing agent dispatch evidence target: {target.relative_to(ROOT)}")
@@ -580,9 +606,65 @@ def collect_agent_dispatch_evidence_errors() -> list[str]:
     handoff_skill = DELIVERY_ROOT / "skills" / "context-handoff" / "SKILL.md"
     if handoff_skill.is_file():
         text = handoff_skill.read_text(encoding="utf-8")
-        for token in ("dispatch:", "mode=subagent", "mode=inline-fallback", "not-subagent-executed"):
+        for token in (
+            "dispatch:",
+            "mode=subagent",
+            "mode=inline-fallback",
+            "mode=handoff-only",
+            "not-subagent-executed",
+            "spawn-requested",
+            "tool_name",
+            "completed_at",
+            "codex_agent_name",
+            "reasoning_profile",
+            "dispatch_trigger",
+            "创建 `mode=subagent` handoff 后必须立即调用",
+            "不得进入 `running/completed`",
+        ):
             if token not in text:
                 errors.append(f"{handoff_skill.relative_to(ROOT)} missing dispatch frontmatter token: {token}")
+
+    state_router = DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md"
+    state_template = DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md"
+    for target in (state_router, state_template):
+        if not target.is_file():
+            continue
+        text = target.read_text(encoding="utf-8")
+        for token in (
+            "required_tools",
+            "codex_reasoning_profiles",
+            "meta-dev-debugger",
+            "meta-se-critical",
+            "meta-qa-critical",
+            "subagent_auto_dispatch=enabled",
+            "创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具",
+        ):
+            if token not in text:
+                errors.append(f"{target.relative_to(ROOT)} missing Codex dispatch/profile token: {token}")
+
+    if state_template.is_file():
+        text = state_template.read_text(encoding="utf-8")
+        for token in (
+            "dispatch_evidence_required",
+            "active_agent_item_schema",
+            "handoff-created",
+            "spawn-requested",
+        ):
+            if token not in text:
+                errors.append(f"{state_template.relative_to(ROOT)} missing dispatch state token: {token}")
+
+    for target in (ROOT / "AGENTS.md", DELIVERY_ROOT / "rules" / "AGENTS.md"):
+        if not target.is_file():
+            continue
+        text = target.read_text(encoding="utf-8")
+        for token in (
+            "codex_agent_name",
+            "reasoning_profile",
+            "dispatch_trigger",
+            "spawn-requested",
+        ):
+            if token not in text:
+                errors.append(f"{target.relative_to(ROOT)} missing canonical dispatch token: {token}")
 
     return errors
 
@@ -594,7 +676,19 @@ def collect_agent_display_profile_errors() -> list[str]:
         return [f"missing installer for display profile checks: {install_script.relative_to(ROOT)}"]
 
     source_text = install_script.read_text(encoding="utf-8")
-    for token in ("AGENT_DISPLAY_PROFILES", "CODEX_NICKNAME_RE", "nickname_candidates", "claude_color", "pm-wu", "doc-wei"):
+    for token in (
+        "AGENT_DISPLAY_PROFILES",
+        "CODEX_NICKNAME_RE",
+        "nickname_candidates",
+        "model_reasoning_effort",
+        "CODEX_AGENT_REASONING_PROFILES",
+        "meta-dev-debugger",
+        "meta-se-critical",
+        "meta-qa-critical",
+        "claude_color",
+        "pm-wu",
+        "doc-wei",
+    ):
         if token not in source_text:
             errors.append(f"{install_script.relative_to(ROOT)} missing display profile token: {token}")
 
@@ -644,6 +738,13 @@ def collect_agent_display_profile_errors() -> list[str]:
                 invalid = [str(item) for item in actual if not CODEX_NICKNAME_RE.fullmatch(str(item))]
                 if invalid:
                     errors.append(f"{agent_path.relative_to(project_root)} has invalid Codex nickname_candidates: {invalid}")
+            expected_effort = EXPECTED_CODEX_REASONING_EFFORTS[agent_name]
+            actual_effort = payload.get("model_reasoning_effort")
+            if actual_effort != expected_effort:
+                errors.append(
+                    f"{agent_path.relative_to(project_root)} model_reasoning_effort must be "
+                    f"{expected_effort}, got {actual_effort}"
+                )
 
         for agent_name, expected_color in EXPECTED_CLAUDE_COLORS.items():
             agent_path = project_root / ".claude" / "agents" / f"{agent_name}.md"

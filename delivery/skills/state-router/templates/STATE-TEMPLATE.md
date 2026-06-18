@@ -305,6 +305,9 @@ orchestrator_session:
 delegated_interaction:
   phase: ""
   agent_role: ""
+  codex_agent_name: ""
+  reasoning_profile: ""
+  dispatch_trigger: ""
   agent_id: ""
   agent_name: ""
   thread_id: ""
@@ -323,8 +326,12 @@ agent_lifecycle:
     subagent_dispatch:
       available: false
       checked_at: ""
-      method: "unverified"
-      limitation: "未完成平台子 agent 调度能力探测前，不得把下游任务标记为 completed"
+      method: "unverified|codex-tools|platform-task|unavailable"
+      required_tools:
+        - "spawn_agent"
+        - "resume_agent"
+        - "send_input"
+      limitation: "未完成平台子 agent 调度能力探测前，不得把下游任务标记为 completed；Codex 工具面可用时必须调用真实子 agent 工具，不得只写 handoff"
     user_question:
       available: false
       checked_at: ""
@@ -337,6 +344,75 @@ agent_lifecycle:
         - "meta-se"
       limitation: "ask_user 是语义动作；未确认平台用户提问能力前，子 agent 不得假设可直接向用户提问。Codex 仅在当前工具面明确提供 request_user_input 时允许结构化选择，否则使用 exact-text 或经 host-orchestrator relay。"
   active_agents: []
+  active_agent_item_schema:
+    role: "meta-pm|meta-se|meta-dev|meta-qa|meta-doc"
+    canonical_role: "meta-pm|meta-se|meta-dev|meta-qa|meta-doc"
+    codex_agent_name: "meta-dev|meta-dev-debugger|meta-se|meta-se-critical|meta-qa|meta-qa-critical"
+    reasoning_profile: "default|debugger|critical"
+    dispatch_trigger: "phase-default|repeated-failure|architecture-freeze|critical-checkpoint|risk-review"
+    mode: "subagent|inline-fallback|handoff-only"
+    status: "handoff-created|spawn-requested|running|awaiting-user|completed|failed|closed"
+    agent_id: ""
+    thread_id: ""
+    tool_name: "spawn_agent|resume_agent|send_input|platform-task|user-approved-inline-fallback"
+    handoff_path: ""
+    spawned_at: ""
+    resumed_at: ""
+    completed_at: ""
+    evidence: "spawn_agent|resume_agent|send_input|platform-task|user-approved-inline-fallback"
+    note: "创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具；未调用前只能保持 handoff-created 或 spawn-requested"
+  codex_reasoning_profiles:
+    enabled: true
+    policy: "canonical role stays stable; codex_agent_name selects actual custom agent profile"
+    profiles:
+      meta-dev:
+        default:
+          codex_agent_name: "meta-dev"
+          reasoning_profile: "default"
+          model_reasoning_effort: "medium"
+        debugger:
+          codex_agent_name: "meta-dev-debugger"
+          reasoning_profile: "debugger"
+          model_reasoning_effort: "high"
+          triggers:
+            - "repeated-implementation-failure"
+            - "cp7-rework-loop"
+            - "cross-module-bug"
+            - "state-machine-bug"
+            - "pit-data-leakage-consistency-risk"
+            - "complex-flaky-test"
+      meta-se:
+        default:
+          codex_agent_name: "meta-se"
+          reasoning_profile: "default"
+          model_reasoning_effort: "high"
+        critical:
+          codex_agent_name: "meta-se-critical"
+          reasoning_profile: "critical"
+          model_reasoning_effort: "xhigh"
+          triggers:
+            - "architecture-freeze"
+            - "public-contract"
+            - "cross-module-boundary"
+            - "security-permission-boundary"
+            - "external-interface"
+            - "major-adr"
+      meta-qa:
+        default:
+          codex_agent_name: "meta-qa"
+          reasoning_profile: "default"
+          model_reasoning_effort: "high"
+        critical:
+          codex_agent_name: "meta-qa-critical"
+          reasoning_profile: "critical"
+          model_reasoning_effort: "xhigh"
+          triggers:
+            - "cp5-all-design-evidence"
+            - "cp7-final-verification"
+            - "cp8-delivery-readiness"
+            - "pre-release"
+            - "security-install-platform-risk"
+            - "workflow-harness-risk"
   singleton_violation: false
   singleton_resolution: ""
   dispatch_evidence_required: true

@@ -1,6 +1,7 @@
 ---
 name: meta-qa
 description: "Meta Flow 元工作流的质量工程师。负责测试策略、8 维度验收、质量门控与平台安装脚本交付。"
+model_reasoning_effort: high
 tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 ---
 

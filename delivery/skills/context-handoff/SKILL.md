@@ -75,6 +75,10 @@ dispatch:
   mode: "subagent"
   platform: "codex|claude|openclaw|unknown"
   agent_role: "meta-dev"
+  canonical_role: "meta-dev"
+  codex_agent_name: "meta-dev|meta-dev-debugger|meta-se-critical|meta-qa-critical"
+  reasoning_profile: "default|debugger|critical"
+  dispatch_trigger: "phase-default|repeated-failure|architecture-freeze|critical-checkpoint|risk-review"
   agent_path: ""
   tool_name: ""
   agent_id: ""
@@ -111,6 +115,10 @@ context_policy:
 - `mode=subagent`：必须由平台子 agent 能力执行。Codex 必须记录 `spawn_agent`、`resume_agent` 或 `send_input` 的返回标识。
 - `mode=inline-fallback`：仅在平台不可用且用户明确批准时使用，必须填写 `fallback_reason`、`approved_by`、`approved_at`。
 - `mode=handoff-only`：只创建交接文件，不代表目标 agent 已执行；不得把业务任务标记为完成。
+- `canonical_role`：状态机角色，只能是功能 Agent，如 `meta-dev`、`meta-se`、`meta-qa`；不得写 `host-orchestrator`。
+- `codex_agent_name`：Codex 实际传给 `spawn_agent` / `resume_agent` / `send_input` 的 custom agent 名称；动态 profile 场景必须写 `meta-dev-debugger`、`meta-se-critical` 或 `meta-qa-critical`。
+- `reasoning_profile`：本次调度使用的思考 profile；默认路径写 `default`，升级路径写 `debugger` 或 `critical`。
+- `dispatch_trigger`：选择该 profile 的可审计原因；不得只写“dynamic”，必须写可枚举触发条件。
 - `semantic=delegated-user-interaction`：允许被委托 Agent 在阶段内直接与用户多轮交互，但不得发起 CP2 / CP3 正式人工检查点。
 - `semantic=lld-clarification-broker`：只允许 host-orchestrator 汇总和提问；并行 meta-dev 只能写 clarification item，不能各自打断用户。
 
@@ -143,6 +151,8 @@ context_policy:
 - 不得把 `ask_user` 当成总是可用的工具；它只是语义动作，必须按 `platform_capabilities.user_question` 映射到 direct、relay、queue 或 exact-text
 - production 项目交付前必须携带 `delivery_routing` 决策；未确认输出路径时，下游不得写交付件
 - handoff 文件只是调度输入和审计载体；不得用 handoff 文档代替 `spawn_agent` / `resume_agent` / `send_input` 或平台 Task/Subagent 调用
+- Codex 若 `STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch.available=true` 且 `orchestrator_session.subagent_auto_dispatch=enabled`，创建 `mode=subagent` handoff 后必须立即调用 `spawn_agent`、`resume_agent` 或 `send_input`；未调用前只能标记为 `handoff-created` 或 `spawn-requested`，不得进入 `running/completed`
+- Codex 若当前工具面没有 `spawn_agent` / `resume_agent` / `send_input`，必须把 `subagent_dispatch.available=false`、`method=unavailable`、`limitation` 写入 `STATE.md` 和 handoff，并阻断下游任务；只有用户明确批准后才允许 `inline-fallback`
 
 ## 验收标准
 

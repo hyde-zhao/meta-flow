@@ -276,6 +276,30 @@ Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_ag
 4. `active_agents[]` 中不得出现 `host-orchestrator` 或 `host-orchestrator`；发现时必须标记为 legacy/stale 并迁出，不得继续当作可调度功能 agent。
 5. `active_agents` 失活或用户手动关闭时，必须在 `history` 记录重建原因，不能静默生成新线程。
 6. 若旧 `STATE.md` 缺少 `agent_lifecycle`，必须先按模板补齐结构；补齐本身不代表允许新建编排子 agent。
+7. Codex 工具面暴露 `spawn_agent` / `resume_agent` / `send_input` 时，必须将 `platform_capabilities.subagent_dispatch.available=true`、`method=codex-tools` 写入 `STATE.md`；若工具面不可用，必须写 `available=false`、`method=unavailable`、`limitation` 并阻断需要功能 Agent 的任务。
+8. `orchestrator_session.subagent_auto_dispatch=enabled` 且 `subagent_dispatch.available=true` 时，创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具；不得只写 handoff 后继续由 Host Orchestrator 代做。
+9. Codex 动态思考 profile 只能改变实际 `codex_agent_name`，不能改变 canonical `role`；`active_agents[].role` 仍写 `meta-dev` / `meta-se` / `meta-qa`。
+10. `STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch.required_tools` 必须列出 `spawn_agent` / `resume_agent` / `send_input`；`STATE.md.agent_lifecycle.codex_reasoning_profiles` 必须保存 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 的默认 / 升级映射。
+
+### 6.0 Codex 动态思考 Profile 调度
+
+Codex 下按下表选择实际 custom agent；Claude Code / OpenClaw 暂不应用该表。
+
+| canonical role | 默认 `codex_agent_name` | 默认 profile | 升级条件 | 升级 `codex_agent_name` | 升级 profile |
+|---|---|---|---|---|---|
+| `meta-dev` | `meta-dev` | `default` | 实现失败超过 2 轮、CP7 回修反复、跨模块 bug、状态机异常、PIT / 数据泄漏 / 数据一致性风险、复杂 flaky test | `meta-dev-debugger` | `debugger` |
+| `meta-se` | `meta-se` | `default` | 架构冻结、公共 contract、跨模块边界、安全权限、外部接口、长期维护成本或重大 ADR 决策 | `meta-se-critical` | `critical` |
+| `meta-qa` | `meta-qa` | `default` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、安全 / 安装 / 平台路径 / workflow harness 高风险验证 | `meta-qa-critical` | `critical` |
+
+调度记录必须同时写入 `STATE.md.agent_lifecycle.active_agents[]` 与 handoff `dispatch`：
+
+- `role` / `canonical_role`：状态机角色，不随 profile 改名
+- `codex_agent_name`：实际调用的 Codex custom agent
+- `reasoning_profile`：`default|debugger|critical`
+- `dispatch_trigger`：命中升级条件或默认阶段原因
+- `tool_name`：`spawn_agent` / `resume_agent` / `send_input`
+
+若升级条件命中但对应 profile agent 不存在，或当前 Codex 会话的 `spawn_agent.agent_type` 发现面尚未暴露该 profile，必须阻断并提示重新安装 / 重载 Codex agents；不得静默回退到默认 agent。
 
 ### 6.1 Orchestrator Session 登记
 
@@ -315,6 +339,9 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 | 字段 | 说明 |
 |---|---|
 | `role` | 目标功能 Agent，例如 `meta-dev`、`meta-qa` |
+| `codex_agent_name` | Codex 实际 custom agent 名称，例如 `meta-dev-debugger`；非 Codex 平台可为空 |
+| `reasoning_profile` | `default`、`debugger` 或 `critical`；非 Codex 平台可为空 |
+| `dispatch_trigger` | 选择该 agent/profile 的可枚举触发条件 |
 | `agent_id` | 平台返回的子 agent 标识；Codex `spawn_agent` 返回值优先写入这里 |
 | `agent_name` | 平台返回的昵称或任务名 |
 | `thread_id` | 可恢复线程标识；平台无独立 thread 时可与 `agent_id` 相同 |

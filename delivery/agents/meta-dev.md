@@ -1,6 +1,7 @@
 ---
 name: meta-dev
 description: "Meta Flow 元工作流的开发工程师。先按 lld_policy 提交获批前的 Story 设计证据，再实现 Agent、Skill 和辅助文件。"
+model_reasoning_effort: medium
 tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 ---
 
