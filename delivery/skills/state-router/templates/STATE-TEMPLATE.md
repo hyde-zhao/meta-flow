@@ -10,6 +10,18 @@ blocked: false
 active_change: ""
 last_action: ""
 next_action: "执行 init 阶段：创建工作目录结构，初始化 REQUEST.md，引导用户填写后唤醒 meta-pm"
+next_action_queue:
+  - id: "NEXT-001"
+    recommendation: "continue_current_phase|start_candidate|close_active|resolve_blocker|run_check|n/a"
+    candidate_id: ""
+    priority: 1
+    reason: "初始化工作流"
+    required_prechecks: []
+    forbidden_actions:
+      - "runtime"
+      - "credential_read"
+      - "nas_access"
+      - "trading_write"
 delivery_routing:
   engagement_mode: "production"
   target_project_root: ""
@@ -639,15 +651,51 @@ human_gate_decisions:
 cr_tracking:
   status: "not-indexed|indexed|needs-sync|conflict|blocked"
   index_path: "process/changes/CR-INDEX.yaml"
+  schema_version: 2
+  current_requirement_baseline_path: "process/baseline/CURRENT-REQUIREMENT-BASELINE.yaml"
   last_consistency_check: ""
   active_crs: []
   blocked_crs: []
   follow_up_candidates: []
   spike_candidates: []
   stale_status_conflicts: []
+  status_model:
+    lifecycle_statuses:
+      - "candidate"
+      - "active"
+      - "blocked"
+      - "closed"
+      - "cancelled"
+      - "superseded"
+    readiness_statuses:
+      - "ready"
+      - "ready_with_risk"
+      - "not_ready"
+      - "n/a"
+    gate_statuses:
+      - "not_started"
+      - "cp2_pending"
+      - "cp3_pending"
+      - "cp5_pending"
+      - "cp7_pending"
+      - "cp8_pending"
+      - "closed"
+    cr_kinds:
+      - "requirement-change"
+      - "architecture-realignment"
+      - "implementation-gate"
+      - "runtime-authorization"
+      - "ledger-maintenance"
+      - "spike"
   item_schema:
     - "id"
+    - "legacy_ids"
     - "title"
+    - "kind"
+    - "lifecycle_status"
+    - "readiness_status"
+    - "gate_status"
+    - "gate_profile"
     - "status"
     - "source_tracking"
     - "formal_cr_path"
@@ -655,7 +703,10 @@ cr_tracking:
     - "blocked_by"
     - "impact_surface"
     - "conflict_keys"
-    - "next_gate"
+    - "authorization_required"
+    - "historical_baseline_status"
+    - "reframed_by"
+    - "reframe_summary"
     - "next_action"
     - "last_checked_at"
   reporting_policy: "状态查询必须同时输出 active CR、blocked CR、follow-up candidate、spike_candidate 和 stale_status_conflicts；candidate/spike_candidate 不占执行锁"

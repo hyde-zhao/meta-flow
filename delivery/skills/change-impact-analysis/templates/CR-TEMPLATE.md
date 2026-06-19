@@ -1,6 +1,11 @@
 ---
 cr_id: "CR-{id}"
-status: "open"
+cr_kind: "requirement-change"
+lifecycle_status: "active"
+readiness_status: "not_ready"
+gate_status: "cp2_pending"
+gate_profile: "full"
+status: "open" # legacy compatibility; prefer lifecycle_status/readiness_status/gate_status
 impact_level: "low|medium|high"
 workflow_mode_before: "standard|fast-lane"
 workflow_mode_after_change: "standard|fast-lane"
@@ -23,6 +28,10 @@ revisit_condition: ""
 acceptance_criteria: ""
 close_condition: ""
 cr_index_path: "process/changes/CR-INDEX.yaml"
+current_requirement_baseline_path: "process/baseline/CURRENT-REQUIREMENT-BASELINE.yaml"
+historical_baseline_status: "active"
+reframed_by: []
+reframe_summary: ""
 ---
 
 ## 变更描述
@@ -44,6 +53,54 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 | 重访条件 | `revisit_condition` |
 | 验收标准 | `acceptance_criteria` |
 | 关闭条件 | `close_condition` |
+
+## CR 类型与门禁策略
+
+| 字段 | 内容 |
+|---|---|
+| CR 类型 | `cr_kind` |
+| 生命周期状态 | `lifecycle_status` |
+| 就绪状态 | `readiness_status` |
+| 门禁状态 | `gate_status` |
+| 门禁模板 | `gate_profile` |
+
+| CR 类型 | 用途 | 默认门禁模板 |
+|---|---|---|
+| `requirement-change` | 改变需求 / 范围 / 目标 | `full` |
+| `architecture-realignment` | 改架构边界、接口契约、平台模型 | `full` |
+| `implementation-gate` | 已确认设计后的实现交付 | `standard` |
+| `runtime-authorization` | 真实运行 / 凭据 / 账户 / NAS / 交易类授权 | `runtime` |
+| `ledger-maintenance` | 台账清理、状态修正、索引治理 | `compact` |
+| `spike` | 受控探索，不承诺交付 | `spike` |
+
+## 结构化权限策略
+
+> 默认不授权真实运行、凭据读取、NAS 访问、publish 或交易写入。任何下游任务、脚本、测试或 runbook 要求超出本策略时，必须阻断并转入 `runtime-authorization` CR 或重新发起人工门禁。
+
+```yaml
+authorization_policy:
+  nas:
+    access: false
+    list: false
+    read: false
+    write: false
+    publish: false
+    delete: false
+  credentials:
+    env_read: false
+    secret_read: false
+    account_read: false
+  runtime:
+    qmt: false
+    miniqmt: false
+    xtquant: false
+    gateway: false
+  trading:
+    submit: false
+    cancel: false
+    simulation: false
+    live: false
+```
 
 ## 文档处理决策
 
@@ -140,11 +197,12 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 - 台账路径：`process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`
 - CR 索引路径：`process/changes/CR-INDEX.yaml`
 - 一致性检查：`meta-flow check cr-tracking --project-root .`
-- 状态取值：`candidate` / `active` / `blocked` / `spike_candidate` / `converted-to-spike` / `closed` / `cancelled` / `superseded`
+- 旧状态取值：`candidate` / `active` / `blocked` / `spike_candidate` / `converted-to-spike` / `closed` / `cancelled` / `superseded`
+- 新状态字段：`lifecycle_status` / `readiness_status` / `gate_status`
 
 | 候选编号 | 标题 | 状态 | 类型 | 优先级 | 正式 CR 路径 | 相关 active CR / blocked_by / superseded_by | 当前门控 | 阻塞原因 | 下一步 |
 |---|---|---|---|---:|---|---|---|---|---|
-| CR-020 |  | candidate | CR / Spike | 1 |  |  | 未启动 |  | 等待用户选择是否推进 |
+| FU-CR{id}-001 |  | candidate | CR / Spike | 1 |  |  | 未启动 |  | 等待用户选择是否推进 |
 
 ## 处理结论
 

@@ -1,0 +1,29 @@
+version: 1
+updated_at: ""
+updated_by: "host-orchestrator"
+source_crs: []
+status: "draft|active|needs-sync"
+baseline:
+  example_domain:
+    current_target: ""
+    current_owner: ""
+    current_contract: ""
+    future_candidates: []
+    forbidden: []
+    not_authorized:
+      runtime: true
+      credential_read: true
+      nas_access: true
+      trading_write: true
+    evidence:
+      requirement_refs: []
+      design_refs: []
+      cr_refs: []
+reframes:
+  - historical_cr: "CR-000"
+    historical_baseline_status: "reframed"
+    reframed_by:
+      - "FU-CR000-001"
+    reframe_summary: ""
+    current_baseline_path: "process/baseline/CURRENT-REQUIREMENT-BASELINE.yaml"
+open_questions: []

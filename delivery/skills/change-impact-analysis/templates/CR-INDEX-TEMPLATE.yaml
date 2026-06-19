@@ -1,21 +1,79 @@
 version: 1
+schema_version: 2
 updated_at: ""
 updated_by: "host-orchestrator"
 status: "indexed"
+status_model:
+  lifecycle_statuses:
+    - "candidate"
+    - "active"
+    - "blocked"
+    - "closed"
+    - "cancelled"
+    - "superseded"
+  readiness_statuses:
+    - "ready"
+    - "ready_with_risk"
+    - "not_ready"
+    - "n/a"
+  gate_statuses:
+    - "not_started"
+    - "cp2_pending"
+    - "cp3_pending"
+    - "cp5_pending"
+    - "cp7_pending"
+    - "cp8_pending"
+    - "closed"
+  cr_kinds:
+    - "requirement-change"
+    - "architecture-realignment"
+    - "implementation-gate"
+    - "runtime-authorization"
+    - "ledger-maintenance"
+    - "spike"
+  gate_profiles:
+    - "full"
+    - "standard"
+    - "compact"
+    - "runtime"
+    - "spike"
 consistency_check:
   last_run_at: ""
   command: "meta-flow check cr-tracking --project-root ."
   result: ""
+current_requirement_baseline_path: "process/baseline/CURRENT-REQUIREMENT-BASELINE.yaml"
 active_crs: []
 blocked_crs: []
 follow_up_candidates: []
 spike_candidates: []
 stale_status_conflicts: []
+next_action_queue:
+  - id: "NEXT-001"
+    recommendation: "start_candidate|close_active|resolve_blocker|run_check|n/a"
+    candidate_id: "FU-CR000-001"
+    priority: 1
+    reason: ""
+    required_prechecks:
+      - "workspace_check"
+      - "cr_tracking_check"
+      - "conflict_precheck"
+    forbidden_actions:
+      - "runtime"
+      - "credential_read"
+      - "nas_access"
+      - "trading_write"
 items:
-  - id: "CR-020"
+  - id: "FU-CR000-001"
+    legacy_ids:
+      - "CR-020"
     title: ""
-    status: "candidate"
-    type: "CR"
+    kind: "implementation-gate"
+    lifecycle_status: "candidate"
+    readiness_status: "n/a"
+    gate_status: "not_started"
+    gate_profile: "standard"
+    status: "candidate" # legacy compatibility; prefer lifecycle_status/readiness_status/gate_status
+    type: "CR" # legacy compatibility; prefer kind
     source_tracking: "process/changes/CR-000-FOLLOW-UP-TRACKING-YYYY-MM-DD.md"
     formal_cr_path: ""
     priority: 1
@@ -29,6 +87,36 @@ items:
       security_runtime: []
       risk_acceptance: []
       source_decisions: []
-    next_gate: "not-started"
+    authorization_required:
+      runtime: false
+      credential_read: false
+      nas_access: false
+      trading_write: false
+    authorization_policy:
+      nas:
+        access: false
+        list: false
+        read: false
+        write: false
+        publish: false
+        delete: false
+      credentials:
+        env_read: false
+        secret_read: false
+        account_read: false
+      runtime:
+        qmt: false
+        miniqmt: false
+        xtquant: false
+        gateway: false
+      trading:
+        submit: false
+        cancel: false
+        simulation: false
+        live: false
+    historical_baseline_status: "active"
+    reframed_by: []
+    reframe_summary: ""
+    next_gate: "not_started"
     next_action: "等待用户明确启动候选 CR"
     last_checked_at: ""

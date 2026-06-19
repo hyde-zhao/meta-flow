@@ -18,6 +18,14 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 ## 状态字段约定
 
+机器真相源优先使用 `lifecycle_status`、`readiness_status` 和 `gate_status`；`状态` 表格列只作为 legacy / 人读摘要。
+
+| 字段 | 允许值 | 含义 |
+|---|---|---|
+| `lifecycle_status` | `candidate` / `active` / `blocked` / `closed` / `cancelled` / `superseded` | 候选或正式 CR 的生命周期 |
+| `readiness_status` | `ready` / `ready_with_risk` / `not_ready` / `n/a` | 当前交付或验证就绪程度 |
+| `gate_status` | `not_started` / `cp2_pending` / `cp3_pending` / `cp5_pending` / `cp7_pending` / `cp8_pending` / `closed` | 当前门禁位置 |
+
 | 状态 | 含义 | 处理规则 |
 |---|---|---|
 | `candidate` | 候选，还没启动正式 CR | 保留摘要、触发条件和下一步，不创建正式 CR |
@@ -28,6 +36,44 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 | `closed` | 对应正式 CR 已关闭 | 填写关闭证据，例如 CP8 approved 时间 |
 | `cancelled` | 明确取消，不再推进 | 保留取消理由，不删除 |
 | `superseded` | 被另一个 CR 替代 | 填写替代 CR 路径 |
+
+## 结构化候选项
+
+> 本 fenced YAML 与 `process/changes/CR-INDEX.yaml.items[]` 同步；机器读取优先使用 YAML，下面的 Markdown 表格只做人读摘要。候选编号未来默认使用 `FU-CR{id}-001`、`SP-CR{id}-001`、`RA-CR{id}-001`，历史 `CR-020` 类编号写入 `legacy_ids`。
+
+```yaml
+follow_up_items:
+  - id: "FU-CR{id}-001"
+    legacy_ids: []
+    title: "<候选标题>"
+    kind: "implementation-gate"
+    lifecycle_status: "candidate"
+    readiness_status: "n/a"
+    gate_status: "not_started"
+    gate_profile: "standard"
+    source_cr: "CR-{id}"
+    source_decision_id: "CP8-DQ-xx"
+    priority: 1
+    formal_cr_path: ""
+    blocked_by: []
+    superseded_by: []
+    impact_surface:
+      - "<文档 / Story / 文件 owner / 外部接口 / 安全或运行授权>"
+    conflict_keys:
+      documents: []
+      stories: []
+      files: []
+      external_interfaces: []
+      security_runtime: []
+      risk_acceptance: []
+      source_decisions: []
+    authorization_required:
+      runtime: false
+      credential_read: false
+      nas_access: false
+      trading_write: false
+    next_action: "等待用户选择是否推进"
+```
 
 ## 分流总览
 
@@ -43,7 +89,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 | 候选编号 | 标题 | 状态 | 类型 | 优先级 | 影响面 / 冲突键 | 正式 CR 路径 | 相关 active CR / blocked_by / superseded_by | 当前门控 | 阻塞原因 | 下一步 | 来源 |
 |---|---|---|---|---:|---|---|---|---|---|---|---|
-| CR-020 | `<候选标题>` | candidate | CR / Spike | 1 | `<文档 / Story / 文件 owner / 外部接口 / 安全或运行授权>` |  |  | 未启动 |  | 等待用户选择是否推进 | CP8-DQ-xx |
+| FU-CR{id}-001 | `<候选标题>` | candidate | CR / Spike | 1 | `<文档 / Story / 文件 owner / 外部接口 / 安全或运行授权>` |  |  | 未启动 |  | 等待用户选择是否推进 | CP8-DQ-xx |
 
 ## 启动候选 CR 流程
 
