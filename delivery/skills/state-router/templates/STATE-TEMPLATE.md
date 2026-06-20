@@ -301,6 +301,8 @@ orchestrator_session:
   pending_gate: ""
   pending_checklist_path: ""
   pending_user_decision: ""
+  next_exact_prompt: ""
+  next_exact_prompt_policy: "阶段任务、检查点、Story 实现 / 验证或 CR 收敛完成后必须给出可直接复制的下一步准确提示词；不得只提示同意、继续、可以等模糊词。"
   pending_decision_ids: []
   pending_non_authorized_items: []
   subagent_auto_dispatch: "enabled"
@@ -349,6 +351,7 @@ agent_lifecycle:
       checked_at: ""
       method: "unverified|conversation|request_user_input|platform-task|relay-only"
       structured_choice_available: false
+      codex_payload_command: "meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --format codex-json"
       question_broker: "host-orchestrator"
       allowed_direct_roles:
         - "host-orchestrator"

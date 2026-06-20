@@ -316,6 +316,7 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 | `pending_gate` | 等待人工确认的检查点，例如 `CP8` |
 | `pending_checklist_path` | 已提示给用户的人工审查稿路径 |
 | `pending_user_decision` | 允许的用户输入与当前等待事项，例如 `approve`、`修改: ...`、`reject`；`1/通过`、`2/修改: ...`、`3/不通过` 仅作历史兼容别名 |
+| `next_exact_prompt` | 阶段任务、检查点、Story 实现 / 验证或 CR 收敛完成后给用户的可复制下一步准确提示词；不得只写“同意”“继续”“可以”等模糊词 |
 | `pending_decision_ids` | 本轮发起消息中实际展示给用户的 DQ ID；必须与 Decision Brief 和 `human_gate_decisions.pending_human_decisions[]` 一致 |
 | `pending_non_authorized_items` | 本轮 approve 不代表授权的事项，尤其是真实运行、凭据、外部接口、数据写入、publish、live / 交易类操作 |
 | `resume_instruction` | 用户回复后由同一主进程继续读取 `STATE.md`、回填 checkpoint 并推进；不得 spawn 编排子 agent |
@@ -327,7 +328,7 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 
 规则：
 
-1. 发起 CP2 / CP3 / CP5 / CP8 关键人工检查点时，必须将 `status=awaiting-user`，并写入 `pending_gate`、`pending_checklist_path`、`pending_user_decision`、`pending_decision_ids`、`pending_non_authorized_items`、`resume_instruction` 和 `awaiting_since`。
+1. 发起 CP2 / CP3 / CP5 / CP8 关键人工检查点时，必须将 `status=awaiting-user`，并写入 `pending_gate`、`pending_checklist_path`、`pending_user_decision`、`next_exact_prompt`、`pending_decision_ids`、`pending_non_authorized_items`、`resume_instruction` 和 `awaiting_since`。Codex 可用 `meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --format codex-json` 生成 `request_user_input` 负载；不可用时发送 exact-text fallback。
 2. 用户确认、修改或拒绝后，Host Orchestrator 必须在当前主进程中重新读取 `STATE.md` 和相关检查点，回填人工结果并继续；不得使用 `spawn_agent` / `resume_agent` / `send_input` 启动或恢复编排子 agent。
 3. 回填人工结果、关闭 CR、推进阶段或推进 `delivered` 前，必须重新读取 `STATE.md`、对应 `process/checks/CP*.md`、`process/checkpoints/CP*.md`、活跃 `CR-*.md` 和下游输出，并把结果写入 `history`。
 4. 若发现旧 `host-orchestrator` 编排子 agent 状态，必须迁移为 `orchestrator_session.kind=host`，将旧 agent 标识写入 `previous_agent_id` / `previous_thread_id`，并在 `history` 记录迁移原因。

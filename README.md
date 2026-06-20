@@ -69,7 +69,10 @@ process/STATE.md.artifact_routing
 ```bash
 meta-flow workspace check
 meta-flow doctor
+meta-flow next
 ```
+
+`meta-flow next` 只输出可直接复制的下一步准确提示词，例如 `approve`、`修改: <具体修改点>`、`reject`、`执行下一步: <具体动作>` 或 `处理阻塞: <具体处理方式>`；不会要求用户只回复“同意”“继续”等模糊词。
 
 新工作区链接命令：
 
@@ -283,6 +286,14 @@ Meta Flow 默认采用 CP0-CP8 检查点。所有检查点都包含 Entry Criter
 | CP8 | 交付就绪门 | 自动预检 + 人工 | `process/checks/CP8-DELIVERY-READINESS.md`；`process/checkpoints/CP8-DELIVERY-READINESS.md` |
 
 关键人工检查点由 `host-orchestrator` 发起。CP2 / CP3 / CP5 / CP8 发起前会生成 Context Capsule、Decision Brief 和待人工决策清单，并提示 `process/checkpoints/CP*.md` 路径。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，会逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。用户审查后可以在文件的“人工审查结果”中填写结论，也可以在对话中回复 `approve`、`修改: <具体修改点>`、`reject`，由 `host-orchestrator` 回填结果文件；`approve` 表示接受清单内全部推荐方案。CP4 只写自动预检并汇入 CP5。
+
+Codex 平台没有 Claude Code frontmatter `tools: AskUserQuestion` 的同构 agent 字段。Host Orchestrator 在当前 Codex 工具面明确提供 `request_user_input` 时，可用下面的命令把人工门禁转换为结构化提问负载；否则发送命令输出中的 exact-text fallback：
+
+```bash
+meta-flow ask-user human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md --format codex-json
+meta-flow ask-user human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md --output process/checkpoints/CP3-LAUNCH-MESSAGE.md
+meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md --launch-message-file process/checkpoints/CP3-LAUNCH-MESSAGE.md
+```
 
 发起人工门禁的对话本身也受校验：必须包含 checklist 路径、自动预检结论、Context Capsule 摘要、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。checkpoint 文件中的 Decision Brief 始终完整；对话可按 `decision_brief_profile=full|compact|summary` 压缩。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须独立列为不授权项；`approve` 不代表授权这些操作。CP8 还必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
 

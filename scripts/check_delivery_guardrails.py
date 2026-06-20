@@ -812,6 +812,14 @@ def collect_human_gate_protocol_errors() -> list[str]:
             ROOT / "meta_flow" / "checks" / "human_gate.py",
             ("Decision Collection Coverage", "决策收集覆盖", "候选问题数", "纳入待决策数"),
         ),
+        "ask-user-generator": (
+            ROOT / "meta_flow" / "ask_user.py",
+            ("request_user_input", "exact_text_fallback", "collect_launch_message_errors", "修改: <具体修改点>"),
+        ),
+        "cli-ask-user": (
+            ROOT / "meta_flow" / "cli.py",
+            ("ask-user", "下一步准确提示词", "request_user_input", "continue/agree"),
+        ),
         "change-impact-analysis": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "SKILL.md",
             ("FOLLOW-UP-TRACKING-TEMPLATE.md", "candidate", "converted-to-spike", "superseded", "冲突预检"),

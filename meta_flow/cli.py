@@ -103,13 +103,21 @@ def _print_status() -> None:
 def _print_next() -> None:
     summary = _state_summary()
     if summary["blocked"].lower() == "true":
-        print("当前工作流处于 blocked 状态，请先查看 STATE.md 中的阻塞原因。")
+        print("当前工作流处于 blocked 状态。")
+        print(f"STATE: {summary['state_path']}")
+        print("下一步准确提示词: 处理阻塞: <写明要解除的阻塞、接受的风险或回退目标>")
         return
     if summary["pending_gate"]:
         path = summary["pending_checklist_path"] or "process/checkpoints/CP*.md"
-        print(f"等待用户确认 {summary['pending_gate']}。请审查 {path} 后回复 approve / 修改: <具体修改点> / reject。")
+        print(f"等待用户确认 {summary['pending_gate']}。")
+        print(f"checklist 路径: {path}")
+        print("下一步准确提示词: 请只回复以下三个 exact 选项之一: approve / 修改: <具体修改点> / reject")
         return
-    print(summary["next_action"] or f"当前阶段为 {summary['current_phase']}，请在当前主进程会话中回复“继续”推进。")
+    if summary["next_action"]:
+        print(f"下一步准确提示词: 执行下一步: {summary['next_action']}")
+        return
+    print(f"当前阶段: {summary['current_phase']}")
+    print(f"下一步准确提示词: 推进阶段: {summary['current_phase']}")
 
 
 def _run_doctor() -> None:
@@ -162,15 +170,17 @@ def _print_help() -> None:
         "  uninstall  Uninstall Meta Flow assets recorded in INSTALL-MANIFEST.\n"
         "  check      Run packaged Meta Flow validators.\n"
         "  eval       Validate and run local workflow evaluation packages.\n"
+        "  ask-user   Generate exact user prompts or Codex request_user_input payloads.\n"
         "  workspace  Check or link the external process workspace.\n"
         "  status     Show current process/STATE.md summary.\n"
-        "  next       Show the next workflow action or pending gate.\n"
+        "  next       Show the exact next prompt; never falls back to vague continue/agree wording.\n"
         "  doctor     Check local Meta Flow runtime structure.\n\n"
         "Examples:\n"
         "  meta-flow install codex --scope user --component rules\n"
         "  meta-flow install claude --scope project --project-dir /path/to/repo\n"
         "  meta-flow uninstall codex --scope user\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
+        "  meta-flow ask-user human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md --format codex-json\n"
         "  meta-flow check cr-tracking --project-root .\n"
         "  meta-flow workspace check\n"
         "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
@@ -282,6 +292,12 @@ def _run_eval(args: list[str]) -> None:
     raise SystemExit(runner.main(args))
 
 
+def _run_ask_user(args: list[str]) -> None:
+    from meta_flow import ask_user
+
+    raise SystemExit(ask_user.main(args))
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args or args[0] in {"-h", "--help"}:
@@ -310,7 +326,10 @@ def main() -> None:
     if command == "eval":
         _run_eval(args[1:])
         return
-    raise SystemExit(f"未知命令: {command}. 目前支持: install, uninstall, check, eval, status, next, doctor")
+    if command == "ask-user":
+        _run_ask_user(args[1:])
+        return
+    raise SystemExit(f"未知命令: {command}. 目前支持: install, uninstall, check, eval, ask-user, status, next, doctor")
 
 
 if __name__ == "__main__":
