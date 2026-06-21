@@ -1,0 +1,37 @@
+schema_version: 1
+model_id: meta-flow-lightweight-quality-v1
+title: Lightweight Quality Model
+source_policy: derived-only
+metric_derivation:
+  mode: derived
+  manual_truth_source: false
+  allowed_sources:
+    - process/checks/*.result.json
+    - process/state/*-LEDGER.ndjson
+    - process/context/READ-EXPANSION-LEDGER.ndjson
+dimensions:
+  - id: requirements_traceability
+    owner: meta-pm
+    gates: [CP2, CP5, CP7]
+    required_evidence: [requirements_ref, scenarios_ref, story_refs, test_matrix_ref]
+    derived_metrics: [cp_decision_distribution, cp_item_status_distribution]
+  - id: architecture_contract
+    owner: meta-se
+    gates: [CP3, CP5, CP7]
+    required_evidence: [hld_ref, adr_ref, feature_design_refs, design_delta_refs]
+    derived_metrics: [cp_blockers, design_clarification_count]
+  - id: implementation_evidence
+    owner: meta-dev
+    gates: [CP6, CP7]
+    required_evidence: [story_return_ref, evidence_index_ref, verification_commands]
+    derived_metrics: [story_return_count, run_ledger_event_count, cp_item_status_distribution]
+  - id: verification_readiness
+    owner: meta-qa
+    gates: [CP7, CP8]
+    required_evidence: [verification_report_ref, test_report_ref, review_ref]
+    derived_metrics: [cp7_decision_distribution, waiver_count, blocker_count]
+  - id: context_budget_governance
+    owner: host-orchestrator
+    gates: [CP2, CP3, CP5, CP6, CP7, CP8]
+    required_evidence: [context_ref, read_expansion_refs, ledger_refs]
+    derived_metrics: [read_expansion_event_count, estimated_extra_tokens, ledger_event_count]

@@ -7,7 +7,12 @@ import runpy
 import sys
 from pathlib import Path
 
-from meta_flow.workspace.routing import check_process_route, link_process_workspace, require_process_health
+from meta_flow.workspace.routing import (
+    bootstrap_process_workspace,
+    check_process_route,
+    link_process_workspace,
+    require_process_health,
+)
 
 
 def _candidate_roots() -> list[Path]:
@@ -36,7 +41,7 @@ def _find_installer() -> Path:
 
 def _find_workspace_root() -> Path:
     for root in _candidate_roots():
-        if (root / "process" / "STATE.md").is_file():
+        if (root / "process" / "state" / "STATE.current.json").is_file() or (root / "process" / "STATE.md").is_file():
             return root
     return Path.cwd()
 
@@ -185,18 +190,24 @@ def _run_workspace_doctor() -> int:
 
 def _print_doctor_help() -> None:
     print(
-        "usage: meta-flow doctor [all|workspace|tokens|context|artifacts] [options]\n\n"
+        "usage: meta-flow doctor [all|workspace|tokens|context|artifacts|quality|workflow|adoption] [options]\n\n"
         "Commands:\n"
         "  workspace   Check local Meta Flow runtime structure. This is the legacy default.\n"
         "  tokens      Estimate token pressure and default-read deny-list candidates.\n"
         "  context     Summarize read expansion ledger and summary insufficiency feedback.\n"
         "  artifacts   Check known artifact byte budgets.\n"
-        "  all         Run workspace, token, context, and artifact doctors.\n\n"
+        "  quality     Validate quality model and eval matrix policies.\n"
+        "  workflow    Report minimal workflow metrics from CP results and ledgers.\n"
+        "  adoption    Check target-project adoption readiness without writing files.\n"
+        "  all         Run workspace, token, context, artifact, quality, and workflow doctors.\n\n"
         "Examples:\n"
         "  meta-flow doctor\n"
         "  meta-flow doctor tokens --project-root .\n"
         "  meta-flow doctor context --project-root .\n"
         "  meta-flow doctor artifacts --project-root .\n"
+        "  meta-flow doctor quality --project-root .\n"
+        "  meta-flow doctor workflow --project-root .\n"
+        "  meta-flow doctor adoption --project-root .\n"
         "  meta-flow doctor all --project-root .\n"
     )
 
@@ -220,16 +231,39 @@ def _run_doctor(args: list[str]) -> None:
         from meta_flow.checks import context_doctor
 
         raise SystemExit(context_doctor.main(forwarded))
+    if command == "adoption":
+        from meta_flow.checks import adoption_readiness
+
+        raise SystemExit(adoption_readiness.main(forwarded))
+    if command in {"quality", "workflow"}:
+        import argparse
+
+        from meta_flow.checks import quality_governance
+
+        parser = argparse.ArgumentParser(prog=f"meta-flow doctor {command}")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parsed = parser.parse_args(forwarded)
+        if command == "quality":
+            raise SystemExit(quality_governance.run_quality_doctor(parsed.project_root))
+        raise SystemExit(quality_governance.run_workflow_doctor(parsed.project_root))
     if command == "all":
+        import argparse
+
         from meta_flow.checks import context_doctor
+        from meta_flow.checks import quality_governance
         from meta_flow.checks import token_budget
 
         workspace_status = _run_workspace_doctor()
         tokens_status = token_budget.main(["--mode", "tokens", *forwarded])
         context_status = context_doctor.main(forwarded)
         artifacts_status = token_budget.main(["--mode", "artifacts", *forwarded])
-        raise SystemExit(1 if any((workspace_status, tokens_status, context_status, artifacts_status)) else 0)
-    raise SystemExit(f"未知 doctor 命令: {command}. 目前支持: all, workspace, tokens, context, artifacts")
+        parser = argparse.ArgumentParser(prog="meta-flow doctor all")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parsed, _unknown = parser.parse_known_args(forwarded)
+        quality_status = quality_governance.run_quality_doctor(parsed.project_root)
+        workflow_status = quality_governance.run_workflow_doctor(parsed.project_root)
+        raise SystemExit(1 if any((workspace_status, tokens_status, context_status, artifacts_status, quality_status, workflow_status)) else 0)
+    raise SystemExit(f"未知 doctor 命令: {command}. 目前支持: all, workspace, tokens, context, artifacts, quality, workflow, adoption")
 
 
 def _print_help() -> None:
@@ -254,6 +288,7 @@ def _print_help() -> None:
         "  identity   Validate product/package/import/CLI identity.\n"
         "  module     Validate module boundaries, imports, risk rings, and architecture fitness.\n"
         "  policy     List, expand, and validate authorization policies.\n"
+        "  quality    Validate quality model and eval matrix policies.\n"
         "  story      Validate Story return packets and evidence indexes.\n"
         "  waiver     Validate waiver policy and CP waiver records.\n"
         "  ask-user   Generate exact user prompts or Codex request_user_input payloads.\n"
@@ -279,6 +314,7 @@ def _print_help() -> None:
         "  meta-flow capability check --artifact README.md --project-root .\n"
         "  meta-flow concept check --changed-files quant_lab/engine/contracts.py --project-root .\n"
         "  meta-flow identity check --project-root .\n"
+        "  meta-flow identity scan --project-root .\n"
         "  meta-flow feature check --project-root .\n"
         "  meta-flow feature trace --project-root .\n"
         "  meta-flow failure route-check --result process/checks/CP7-STORY.result.json --project-root .\n"
@@ -291,9 +327,14 @@ def _print_help() -> None:
         "  meta-flow gate classify --changed-files README.md\n"
         "  meta-flow governance truth-map-check --project-root .\n"
         "  meta-flow policy list --project-root .\n"
+        "  meta-flow quality model-check --project-root .\n"
+        "  meta-flow quality eval-check --project-root .\n"
         "  meta-flow check cr-tracking --project-root .\n"
         "  meta-flow workspace check\n"
         "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
+        "  meta-flow workspace bootstrap --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
+        "  meta-flow doctor adoption --project-root .\n"
+        "  meta-flow cr bootstrap --id CR-001 --title \"project adoption bootstrap\" --scope \"Initialize Meta Flow adoption readiness.\" --project-root .\n"
         "  meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml\n"
         "  meta-flow status\n"
     )
@@ -468,11 +509,13 @@ def _print_workspace_help() -> None:
     print(
         "usage: meta-flow workspace <command> [options]\n\n"
         "Commands:\n"
-        "  check  Print process route health.\n"
-        "  link   Create process -> <artifact-root>/process/<project-name> and process scaffold.\n\n"
+        "  check      Print process route health.\n"
+        "  link       Create process -> <artifact-root>/process/<project-name> and process scaffold.\n"
+        "  bootstrap  Link process and initialize STATE.current.json, STATE.md, and base ledgers.\n\n"
         "Examples:\n"
         "  meta-flow workspace check\n"
         "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
+        "  meta-flow workspace bootstrap --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
     )
 
 
@@ -513,7 +556,29 @@ def _run_workspace(args: list[str]) -> None:
             print("- NEXT: initialize process/STATE.md from the state-router template before running workflow commands.")
             raise SystemExit(0)
         raise SystemExit(1 if health.blocking else 0)
-    raise SystemExit(f"未知 workspace 命令: {command}. 目前支持: check, link")
+    if command == "bootstrap":
+        import argparse
+
+        parser = argparse.ArgumentParser(
+            prog="meta-flow workspace bootstrap",
+            description="Link process and initialize STATE.current.json, STATE.md, and base ledgers.",
+        )
+        parser.add_argument("--artifact-root", type=Path, required=True)
+        parser.add_argument("--project-name", default=Path.cwd().name)
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--force", action="store_true")
+        parsed = parser.parse_args(args[1:])
+        health = bootstrap_process_workspace(
+            parsed.project_root,
+            parsed.artifact_root,
+            parsed.project_name,
+            force=parsed.force,
+        )
+        for line in health.format_lines():
+            print(line)
+        print("- NEXT: run meta-flow doctor adoption --project-root . before starting a target-project CR.")
+        raise SystemExit(1 if health.blocking else 0)
+    raise SystemExit(f"未知 workspace 命令: {command}. 目前支持: check, link, bootstrap")
 
 
 def _run_eval(args: list[str]) -> None:
@@ -624,6 +689,12 @@ def _run_policy(args: list[str]) -> None:
     raise SystemExit(authz.main(args))
 
 
+def _run_quality(args: list[str]) -> None:
+    from meta_flow.checks import quality_governance
+
+    raise SystemExit(quality_governance.quality_main(args))
+
+
 def _run_waiver(args: list[str]) -> None:
     from meta_flow.policies import failure_routing
 
@@ -685,6 +756,9 @@ def main() -> None:
     if command == "policy":
         _run_policy(args[1:])
         return
+    if command == "quality":
+        _run_quality(args[1:])
+        return
     if command == "waiver":
         _run_waiver(args[1:])
         return
@@ -715,7 +789,7 @@ def main() -> None:
     raise SystemExit(
         "未知命令: "
         "install, uninstall, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, identity, "
-        "governance, module, policy, story, waiver, ask-user, state, status, next, doctor"
+        "governance, module, policy, quality, story, waiver, ask-user, state, status, next, doctor"
     )
 
 

@@ -92,15 +92,31 @@ Capability Status 使用 `docs/design/CAPABILITY-STATUS.yaml` 区分 `implemente
 
 Concept Owners 使用 `docs/design/CONCEPT-OWNERS.yaml` 固化概念 canonical owner、conflict key aliases、legacy alias 和 forbidden alias。`meta-flow concept check --changed-files <files...> --project-root .` 或 `meta-flow check concept-overlap --changed-files <files...> --project-root .` 会发现新增或修改文件是否落在 legacy / forbidden alias 上，避免 contracts、manifest、quality、source_registry、runtime 等概念在多个 bounded context 中重复生长。触碰 legacy alias 默认给 warning，触碰 forbidden alias 默认 fail；`conflict_keys` 在 Concept Owners 内统一注册，不单独新增 Conflict Keys registry。
 
-Package Identity 使用 `docs/design/PACKAGE-IDENTITY.yaml` 统一 product name、repo name、Python import、CLI name、legacy alias、package mode 和 public API files。`meta-flow identity check --project-root .` 或 `meta-flow check package-identity --project-root .` 会对照 `pyproject.toml`、包目录、public API 文件和 README，发现 repo / package / import / CLI 漂移。对 quant-lab 这类项目，应先明确 `product_name=quant-lab`、`python_import=quant_lab`、`cli_name=qlab`、legacy alias 和 package mode，再推进 README、测试和交付包迁移。
+Package Identity 使用 `docs/design/PACKAGE-IDENTITY.yaml` 统一 product name、repo name、Python import、CLI name、legacy alias、package mode 和 public API files。`meta-flow identity check --project-root .` 或 `meta-flow check package-identity --project-root .` 会对照 `pyproject.toml`、包目录、public API 文件和 README，发现 repo / package / import / CLI 漂移。`meta-flow identity scan --project-root .` 额外输出只读 delivery routing 建议，扫描 README / docs 中已有交付约定，并列出 production 项目默认禁止写入的 meta-flow 交付根。对 quant-lab 这类项目，应先明确 `product_name=quant-lab`、`python_import=quant_lab`、`cli_name=qlab`、legacy alias 和 package mode，再推进 README、测试和交付包迁移。
 
 Gate profile 使用 `process/policies/GATE-PROFILES.json` 分级。`meta-flow gate classify --changed-files <files...>` 或 `meta-flow gate classify --impact <terms...>` 会把 docs-only 归入 `docs-lite`，process ledger / checker / context / state 类治理改动归入 `process-lite`，`manifest_schema` / `public_contract` 等架构关键词升级到 `architecture-major`，`credential` / `NAS` / `QMT` / `MiniQMT` / `XtQuant` / `gateway` / `trading` / `publish` 等关键词强制升级到 `runtime-high-risk`。`meta-flow gate plan --profile <profile>` 输出该 profile 的阶段、人工门和 context 预算；`meta-flow gate check` 校验 profile 注册表。
 
 授权边界使用 `process/policies/AUTHZ-POLICY.json` 注册。普通 artifact 只写 `authz_policy_refs`，不得复制 policy 全文；只有人工门禁和 release 决策可用 `meta-flow policy expand <POLICY-ID...>` 展开。`meta-flow policy check --artifact <path>` 会检查高风险词是否缺少对应 policy ref，并发现普通 artifact 中复制 `expanded_text` 的情况。`approve` 仍只表示接受本轮推荐决策，不表示授权 `requires=explicit_*` 的操作。
 
-轻量运行态使用 `process/state/STATE.current.json` 作为机器默认入口，`process/STATE.md` 作为 `meta-flow state render` 生成的人类摘要。迁移和检查命令为 `meta-flow state migrate-v2 --project-root .`、`meta-flow state render --project-root .`、`meta-flow state check --project-root .`。`STATE.current.json` 不得保存 closed CR 长字段、历史正文、检查点全集或授权 policy 全文；这些信息必须以 ledger、summary、policy ref 或 evidence ref 形式引用。
+轻量运行态使用 `process/state/STATE.current.json` 作为机器默认入口，`process/STATE.md` 作为 `meta-flow state render` 生成的人类摘要。新项目可运行 `meta-flow state init --project-root . --project-id <project-name>` 初始化 state v2 和基础 ledgers；完整 adoption 建议优先使用 `meta-flow workspace bootstrap --artifact-root <relative-artifact-root> --project-name <project-name> --project-root .`。迁移和检查命令为 `meta-flow state migrate-v2 --project-root .`、`meta-flow state render --project-root .`、`meta-flow state check --project-root .`。`STATE.current.json` 不得保存 closed CR 长字段、历史正文、检查点全集或授权 policy 全文；这些信息必须以 ledger、summary、policy ref 或 evidence ref 形式引用。
 
-CR 生命周期治理使用 `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.json` 和 `process/changes/summaries/CR-*.summary.json`。正式 CR 必须声明 `cr_type=product-scope|architecture|feature|refactor|bugfix|docs|process|runtime|release|experiment`；旧 `cr_kind` 会被兼容映射到 `cr_type`。关闭 CR 时运行 `meta-flow cr close --id <CR-ID> --readiness <READY|READY_WITH_RISK|NOT_READY>`，必须生成 summary、evidence index、ledger event 并重建 CR index。默认上下文只读取 CR summary / index；完整 `process/changes/CR-*.md` 仅在冲突排查、人工审计、深度评审或用户明确要求时展开。检查入口为 `meta-flow cr check --project-root .` 和 `meta-flow cr conflicts --id <CR-ID> --project-root .`。
+CR 生命周期治理使用 `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.json`、legacy `process/changes/CR-INDEX.yaml` 和 `process/changes/summaries/CR-*.summary.json`。正式 CR 必须声明 `cr_type=product-scope|architecture|feature|refactor|bugfix|docs|process|runtime|release|experiment`；旧 `cr_kind` 会被兼容映射到 `cr_type`。目标项目首次启动可运行 `meta-flow cr bootstrap --id CR-001 --title "<title>" --scope "<scope>" --project-root .`，创建 active bootstrap CR、CR summary/index/ledger、CP0 result/summary 和 CP0 context。关闭 CR 时运行 `meta-flow cr close --id <CR-ID> --readiness <READY|READY_WITH_RISK|NOT_READY>`，必须生成 summary、evidence index、ledger event 并重建 CR index。默认上下文只读取 CR summary / index；完整 `process/changes/CR-*.md` 仅在冲突排查、人工审计、深度评审或用户明确要求时展开。检查入口为 `meta-flow cr check --project-root .` 和 `meta-flow cr conflicts --id <CR-ID> --project-root .`。
+
+## Target Project Adoption Readiness
+
+在目标项目安装 Meta Flow 后，建议先执行只读 readiness，再创建 bootstrap CR：
+
+```bash
+meta-flow workspace bootstrap --artifact-root <relative-artifact-root> --project-name <project-name> --project-root .
+meta-flow identity scan --project-root .
+meta-flow quality init --project-root .
+meta-flow doctor adoption --project-root .
+meta-flow cr bootstrap --id CR-001 --title "<project> adoption bootstrap" --scope "Initialize Meta Flow adoption readiness." --project-root .
+meta-flow context check --context process/context/CP0-CR001.context.json --project-root .
+meta-flow check cp-result --result process/checks/CP0-CR-001-BOOTSTRAP.result.json --project-root .
+```
+
+`doctor adoption` 不写文件，只聚合 workspace route、state v2、CR tracking、package identity、quality governance、workflow ledgers 和 human gate readiness。它不授权 credentials、runtime、SaaS、production write、trading、publish 或 CR-033 runtime follow-up。
 
 CP6 / CP7 必须包含 `Agent Dispatch Evidence`。handoff 文件只表示交接，不表示目标 agent 已执行；编码和验证完成必须有真实子 agent 调度证据，或用户明确批准的 `inline-fallback`。CP6 还必须记录实现执行证据：复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 输出完整 `IMPLEMENTATION.md`；低风险 Story 可写 Story 摘要或 DEV-LOG，但必须说明 N/A 理由。CP7 必须记录验证执行证据：验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险、阶段决策。
 
@@ -152,6 +168,28 @@ meta-flow eval release-check --eval evals/fixtures/runtime-workflow-basic/WORKFL
 通用 eval 能力包括 `runtime_artifact`、`runtime-run`、`install_mapping`、`feedback sync/normalize/triage/analyze`、`mutate`、`backlog list/check/close`、`suite-health` 和 `release-check`。`runtime_artifact` 只读取已有运行工作区，支持 `RUNTIME-SAMPLE-REGISTRY.yaml`、`sample_ids`、`profile=partial|full|regression`、expected BLOCKED 样本、阶段顺序、内容密度、空文件 / 模板残留、trace chain、Gate、delivery、coverage 和表格检查；`runtime-run` 只负责 dry-run / manual-handoff / collect 证据，生成 RUN-EXEC 与 runtime artifact manifest，不启动 Agent、不判分。真实执行 Agent、git 拉取、外部模型、网络或写远端都必须按授权边界单独处理。feedback 必须先标准化为 RUN-EXEC，再 triage 为 `ISSUE_DRAFT`、`GAP`、`BACKLOG`、`ENVIRONMENT`、`USAGE`、`DUPLICATE` 或 `NO_ACTION`，不能把所有现场反馈自动升级为 ISSUE。`suite-health` 是趋势报告，`release-check` 才是发布门禁，输出 `PASS|PASS_WITH_RISK|BLOCKED` 和机器可读 JSON。
 
 Promptfoo / DeepEval / Langfuse / Garak 默认 disabled。任何网络、凭据、trace 上传、外部模型调用、publish、live 或 production 写入都必须单独形成 `runtime_authorization` 决策项。
+
+## Quality Governance
+
+Meta Flow 提供轻量质量治理 policy，用来把质量模型、eval 矩阵和最小 workflow metrics 固化为可检查契约。初始化命令：
+
+```bash
+meta-flow quality init --project-root .
+meta-flow quality model-check --project-root .
+meta-flow quality eval-check --project-root .
+meta-flow doctor quality --project-root .
+meta-flow doctor workflow --project-root .
+```
+
+`quality init` 会写入：
+
+- `process/policies/QUALITY-MODEL.yaml`
+- `process/policies/EVAL-MATRIX.yaml`
+
+这两个文件定义质量维度、eval 映射和派生指标来源。workflow metrics 只从已有 `process/checks/*.result.json`、`process/state/*-LEDGER.ndjson` 和 `process/context/READ-EXPANSION-LEDGER.ndjson` 派生；不要创建或手工维护独立 `WORKFLOW-METRICS` 真相源。默认模板随 `context-manifest-builder` skill 安装，路径是：
+
+- `skills/context-manifest-builder/templates/QUALITY-MODEL-TEMPLATE.yaml`
+- `skills/context-manifest-builder/templates/EVAL-MATRIX-TEMPLATE.yaml`
 
 ## 子 Agent 调度证据
 

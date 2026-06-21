@@ -8,6 +8,8 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow.state import current
+from meta_flow.context_pack import builder
+from meta_flow.checks import cp_result
 from meta_flow.workflow import cr_lifecycle
 
 
@@ -39,6 +41,45 @@ risk_refs: [RISK-001]
 
 
 class CRLifecycleTests(unittest.TestCase):
+    def test_bootstrap_cr_writes_active_cr_cp0_context_and_state_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = current.default_current_state(root, project_id="target-project")
+            current.write_current_state(root, state)
+            current.render_state_file(root)
+
+            paths = cr_lifecycle.bootstrap_cr(
+                root,
+                cr_id="CR-001",
+                title="target adoption bootstrap",
+                scope="Initialize target project adoption readiness.",
+            )
+
+            self.assertTrue(paths["cr"].is_file())
+            self.assertTrue(paths["summary"].is_file())
+            self.assertTrue(paths["index"].is_file())
+            self.assertTrue(paths["legacy_index"].is_file())
+            self.assertTrue(paths["context"].is_file())
+            self.assertTrue(paths["cp0_result"].is_file())
+            current_state = current.load_current_state(root)
+            self.assertEqual("CR-001", current_state["active_change"])
+            self.assertEqual("process/context/CP0-CR001.context.json", current_state["active_context_ref"])
+            index = json.loads((root / "process" / "changes" / "CR-INDEX.json").read_text(encoding="utf-8"))
+            self.assertEqual("CR-001", index["items"][0]["id"])
+            legacy_index = (root / "process" / "changes" / "CR-INDEX.yaml").read_text(encoding="utf-8")
+            self.assertIn('active_crs: ["CR-001"]', legacy_index)
+            context_errors, _context_warnings = builder.validate_context_pack(paths["context"], project_root=root)
+            self.assertEqual([], context_errors)
+            cp0_errors, _cp0_warnings = cp_result.validate_cp_result(paths["cp0_result"], project_root=root)
+            self.assertEqual([], cp0_errors)
+            events = [
+                json.loads(line)
+                for line in (root / "process" / "state" / "CR-LEDGER.ndjson").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual("active", events[0]["event"])
+            self.assertEqual("process/checks/CP0-CR-001-BOOTSTRAP.result.json", events[0]["cp0_result_ref"])
+
     def test_index_and_summary_generate_machine_readable_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

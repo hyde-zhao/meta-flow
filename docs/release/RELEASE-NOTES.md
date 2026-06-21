@@ -17,6 +17,8 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.3 | 2026-06-21 | host-orchestrator | 增加 Governance Truth Map / Retention Policy、profile-driven Feature taxonomy、CR type 和 Concept conflict key aliases |
 | 1.4 | 2026-06-21 | host-orchestrator | 增加 Context Sufficiency、Read Expansion Ledger、Context Doctor 和输出预算治理 |
 | 1.5 | 2026-06-21 | host-orchestrator | 增加 Failure Routing / Waiver Governance、不可豁免项和风险接受状态约束 |
+| 1.6 | 2026-06-21 | host-orchestrator | 增加 Quality Model / Eval Matrix、quality init、quality / workflow doctor 和 delivery 模板路由 |
+| 1.7 | 2026-06-21 | host-orchestrator | CR-034 增加目标项目 adoption readiness、workspace bootstrap、identity scan、adoption doctor 和 bootstrap CR / CP0 context 链路 |
 
 ## 发布范围
 
@@ -31,6 +33,8 @@ created_at: "2026-06-17T13:49:25+08:00"
 | Governance lifecycle policy | `process/policies/SOURCE-OF-TRUTH-MAP.yaml`、`process/policies/RETENTION-POLICY.json`、`meta-flow governance *`、Feature taxonomy policy、CR `cr_type`、Concept `conflict_keys` | MF-015 |
 | Context sufficiency / read expansion governance | `meta-flow context sufficiency-check`、`meta-flow context read-log/read-log-check`、`meta-flow doctor context`、`process/state/READ-EXPANSION-LEDGER.ndjson`、output profile budgets | MF-016 |
 | Failure routing / waiver governance | `process/policies/FAILURE-ROUTING.json`、`process/policies/WAIVER-POLICY.json`、`meta-flow failure *`、`meta-flow waiver *`、CP result route / waiver 联动校验 | MF-017 |
+| Quality / eval governance | `process/policies/QUALITY-MODEL.yaml`、`process/policies/EVAL-MATRIX.yaml`、`meta-flow quality init/model-check/eval-check`、`meta-flow doctor quality/workflow`、delivery quality/eval templates | MF-018 |
+| Target project adoption readiness | `meta-flow workspace bootstrap`、`meta-flow identity scan`、`meta-flow doctor adoption`、`meta-flow cr bootstrap`、CP0 result/summary/context、CR-xxx bootstrap naming | CR-034 |
 
 ## 用户可见变化
 
@@ -51,6 +55,13 @@ created_at: "2026-06-17T13:49:25+08:00"
 - Artifact budgets 增加 `output_profiles`，约束 Story return summary、CP summary、compact Decision Brief 和 Feature design summary 的输出字数。
 - CP result 的高严重度失败必须有动作式 `route_on_fail`；waiver 必须声明 scope、expiry、approval_ref 和 forces_release_status。
 - 未授权 runtime、credential / secret、missing dispatch evidence、runtime-high-risk forbidden path、missing read expansion log、missing evidence 和 false runtime-ready capability claim 不可被 waiver 绕过。
+- 新增 `meta-flow quality init --project-root .`，为新项目初始化 `QUALITY-MODEL.yaml` 和 `EVAL-MATRIX.yaml`。
+- 新增 `meta-flow quality model-check`、`meta-flow quality eval-check`、`meta-flow doctor quality` 和 `meta-flow doctor workflow`。
+- Quality / eval 模板随 `context-manifest-builder` skill 安装；workflow metrics 只从 CP result、event ledger 和 read-expansion ledger 派生，不新增手工 `WORKFLOW-METRICS` 真相源。
+- 新增 `meta-flow workspace bootstrap --artifact-root <relative-artifact-root> --project-name <project-name> --project-root .`，一条命令建立 process symlink、route metadata、`STATE.current.json`、`STATE.md` 摘要和基础 ledgers。
+- 新增 `meta-flow identity scan --project-root .`，只读报告 package identity 和 README/docs delivery routing 建议，不自动写 production 项目路由。
+- 新增 `meta-flow doctor adoption --project-root .`，聚合 workspace、state、CR tracking、identity、quality、workflow ledger 和 human gate readiness；该命令不读取凭据、不执行 runtime、不写业务文件。
+- 新增 `meta-flow cr bootstrap --id CR-001 ...`，创建 active bootstrap CR、CR summary/index/ledger、CP0 result/summary 和 CP0 context。正式新编号统一 `CR-xxx`，`MF-xxx` 仅作为历史别名。
 
 ## 兼容性
 
@@ -61,6 +72,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 - 既有 `process/STATE.md` 仍可作为人类摘要或 legacy fallback，但新流程默认机器入口是 `process/state/STATE.current.json`。
 - 关闭 CR 的完整 Markdown 仍可归档追溯，但默认上下文应读取 CR summary / index。
 - 新增治理命令保持零运行时依赖；token 估算使用 `ceil(char_count / 4)`，后续如需精确 tokenizer 可作为可选增强。
+- 新增质量治理命令保持零运行时依赖；policy 模板为 YAML 子集，checker 使用仓库既有保守解析器。
 
 ## 已知风险
 

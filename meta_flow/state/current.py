@@ -17,11 +17,14 @@ STATE_CURRENT_REL = Path("process/state/STATE.current.json")
 STATE_MD_REL = Path("process/STATE.md")
 ROUTING_REL = Path("process/.meta-flow-process.yaml")
 BASE_LEDGER_RELS = (
+    Path("process/state/CR-LEDGER.ndjson"),
+    Path("process/state/STORY-LEDGER.ndjson"),
     Path("process/state/CHECKPOINT-LEDGER.ndjson"),
     Path("process/state/HANDOFF-LEDGER.ndjson"),
     Path("process/state/AGENT-DISPATCH-LEDGER.ndjson"),
     Path("process/state/GATE-LEDGER.ndjson"),
     Path("process/state/RUN-LEDGER.ndjson"),
+    Path("process/state/READ-EXPANSION-LEDGER.ndjson"),
 )
 DISALLOWED_CURRENT_KEYS = {
     "closed_crs",
@@ -96,10 +99,10 @@ def state_md_path(project_root: Path) -> Path:
     return project_root / STATE_MD_REL
 
 
-def default_current_state(project_root: Path) -> dict[str, Any]:
+def default_current_state(project_root: Path, *, project_id: str | None = None) -> dict[str, Any]:
     return {
         "schema_version": STATE_SCHEMA_VERSION,
-        "project_id": project_root.resolve().name,
+        "project_id": project_id or project_root.resolve().name,
         "workflow_mode": "standard",
         "current_phase": "init",
         "blocked": False,
@@ -117,6 +120,22 @@ def default_current_state(project_root: Path) -> dict[str, Any]:
         "updated_at": now_utc(),
         "source_refs": [],
     }
+
+
+def ensure_base_ledgers(project_root: Path) -> None:
+    for ledger_rel in BASE_LEDGER_RELS:
+        ledger_path = project_root.resolve() / ledger_rel
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.touch(exist_ok=True)
+
+
+def init_current_state(project_root: Path, *, project_id: str | None = None, force: bool = False) -> Path:
+    path = current_state_path(project_root.resolve())
+    if path.exists() and not force:
+        ensure_base_ledgers(project_root)
+        return path
+    state = default_current_state(project_root.resolve(), project_id=project_id)
+    return write_current_state(project_root, state, force=force)
 
 
 def migrate_legacy_state(project_root: Path) -> dict[str, Any]:
@@ -171,10 +190,7 @@ def write_current_state(project_root: Path, state: dict[str, Any], *, force: boo
         raise FileExistsError(f"{path} 已存在；如需覆盖请使用 --force")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    for ledger_rel in BASE_LEDGER_RELS:
-        ledger_path = project_root / ledger_rel
-        ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        ledger_path.touch(exist_ok=True)
+    ensure_base_ledgers(project_root)
     return path
 
 
@@ -211,6 +227,7 @@ def render_state_markdown(state: dict[str, Any]) -> str:
         "- Agent dispatch ledger: process/state/AGENT-DISPATCH-LEDGER.ndjson",
         "- Gate ledger: process/state/GATE-LEDGER.ndjson",
         "- Run ledger: process/state/RUN-LEDGER.ndjson",
+        "- Read expansion ledger: process/state/READ-EXPANSION-LEDGER.ndjson",
         f"- routing: {state.get('routing_ref') or ROUTING_REL.as_posix()}",
         f"- active context: {state.get('active_context_ref') or 'none'}",
         "",
@@ -304,11 +321,13 @@ def _print_state_help() -> None:
     print(
         "usage: meta-flow state <command> [options]\n\n"
         "Commands:\n"
+        "  init        Create a fresh process/state/STATE.current.json and base ledgers.\n"
         "  migrate-v2  Create process/state/STATE.current.json from legacy process/STATE.md.\n"
         "  render      Render process/STATE.md as a human summary from STATE.current.json.\n"
         "  check       Validate STATE.current.json and generated STATE.md budgets.\n"
         "  compact     Render the human summary and run state check.\n\n"
         "Examples:\n"
+        "  meta-flow state init --project-root . --project-id my-project\n"
         "  meta-flow state migrate-v2 --project-root .\n"
         "  meta-flow state render --project-root . --force\n"
         "  meta-flow state check --project-root .\n"
@@ -323,10 +342,15 @@ def main(argv: list[str] | None = None) -> int:
     command = args[0]
     parser = argparse.ArgumentParser(prog=f"meta-flow state {command}")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--project-id", default=None)
     parser.add_argument("--force", action="store_true")
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
+    if command == "init":
+        path = init_current_state(project_root, project_id=parsed.project_id, force=parsed.force)
+        print(f"wrote: {path}")
+        return 0
     if command == "migrate-v2":
         state = migrate_legacy_state(project_root)
         path = write_current_state(project_root, state, force=parsed.force)
@@ -353,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"- ERROR: {error}")
         return 1 if errors else 0
-    raise SystemExit(f"未知 state 命令: {command}. 目前支持: migrate-v2, render, check, compact")
+    raise SystemExit(f"未知 state 命令: {command}. 目前支持: init, migrate-v2, render, check, compact")
 
 
 if __name__ == "__main__":

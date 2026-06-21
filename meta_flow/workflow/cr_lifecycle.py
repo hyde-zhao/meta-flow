@@ -14,6 +14,7 @@ from typing import Any
 
 CR_LEDGER_REL = Path("process/state/CR-LEDGER.ndjson")
 CR_INDEX_REL = Path("process/changes/CR-INDEX.json")
+LEGACY_CR_INDEX_REL = Path("process/changes/CR-INDEX.yaml")
 CR_SUMMARY_ROOT_REL = Path("process/changes/summaries")
 CR_ARCHIVE_ROOT_REL = Path("process/archive")
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
@@ -304,6 +305,41 @@ def write_index(project_root: Path) -> Path:
     return path
 
 
+def write_legacy_index(project_root: Path) -> Path:
+    project_root = project_root.resolve()
+    index = build_index(project_root)
+    active = [item["id"] for item in index.get("items", []) if item.get("status") == "active"]
+    blocked = [item["id"] for item in index.get("items", []) if item.get("status") == "blocked"]
+    items = index.get("items", [])
+    lines = [
+        'schema_version: "1"',
+        f'generated_at: "{index.get("generated_at", now_utc())}"',
+        "active_crs: [" + ", ".join(f'"{item}"' for item in active) + "]",
+        "blocked_crs: [" + ", ".join(f'"{item}"' for item in blocked) + "]",
+        "follow_up_candidates: []",
+        "spike_candidates: []",
+        "stale_status_conflicts: []",
+        "items:",
+    ]
+    for item in items:
+        lines.extend(
+            [
+                f'  - id: "{item.get("id")}"',
+                f'    status: "{item.get("status")}"',
+                f'    lifecycle_status: "{item.get("status")}"',
+                f'    readiness_status: "{item.get("readiness")}"',
+                f'    gate_status: "{item.get("gate_status")}"',
+                f'    gate_profile: "{item.get("gate_profile")}"',
+                f'    formal_cr_path: "{item.get("full_ref")}"',
+                f'    summary_ref: "{item.get("summary_ref")}"',
+            ]
+        )
+    path = project_root / LEGACY_CR_INDEX_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def load_index(project_root: Path) -> dict[str, Any]:
     path = project_root / CR_INDEX_REL
     if not path.is_file():
@@ -312,6 +348,188 @@ def load_index(project_root: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path} invalid JSON: {exc}") from exc
+
+
+def _write_bootstrap_cr_file(
+    project_root: Path,
+    *,
+    cr_id: str,
+    title: str,
+    scope: str,
+    gate_status: str,
+) -> Path:
+    if not re.fullmatch(r"CR-\d{3,}", cr_id):
+        raise ValueError("bootstrap CR id must use CR-xxx naming, for example CR-001")
+    path = project_root / "process" / "changes" / f"{cr_id}.md"
+    if path.exists():
+        raise FileExistsError(f"CR already exists: {path}")
+    created_at = now_utc()
+    text = f"""---
+cr_id: "{cr_id}"
+cr_type: "process"
+title: "{title}"
+lifecycle_status: "active"
+readiness_status: "not_ready"
+gate_status: "{gate_status}"
+gate_profile: "standard"
+conflict_keys: ["bootstrap", "adoption-readiness"]
+impact_surface: ["process", "workspace", "state", "context", "human-gate"]
+authz_policy_refs: ["NO_CREDENTIAL_READ", "NO_RUNTIME", "NO_PRODUCTION_WRITE", "NO_TRADING"]
+risk_refs: []
+created_at: "{created_at}"
+created_by: "meta-flow cr bootstrap"
+---
+
+# {cr_id} {title}
+
+## 变更描述
+
+{scope}
+
+## 不授权范围
+
+- credentials / secret / account read
+- runtime / SaaS / production write
+- trading / live / publish
+- CR-033 runtime trace follow-up activation
+
+## 启动约束
+
+- Formal CR IDs must use `CR-xxx`; `MF-xxx` is historical alias only.
+- Business remediation starts only after CP0/context/human gate readiness is reviewed.
+"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _update_current_active_change(project_root: Path, cr_id: str, context_ref: str) -> None:
+    current_path = project_root / STATE_CURRENT_REL
+    if not current_path.is_file():
+        return
+    state = json.loads(current_path.read_text(encoding="utf-8"))
+    state["active_change"] = cr_id
+    state["active_context_ref"] = context_ref
+    state["current_phase"] = "init"
+    state["next_action"] = {
+        "type": "cp0_ready",
+        "text": f"Review CP0 bootstrap readiness for {cr_id}, then launch the first human gate.",
+    }
+    state["updated_at"] = now_utc()
+    current_path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _write_cp0_result(project_root: Path, cr_id: str, context_ref: str) -> Path:
+    result_path = project_root / "process" / "checks" / f"CP0-{cr_id}-BOOTSTRAP.result.json"
+    result = {
+        "schema_version": 1,
+        "checkpoint": "CP0",
+        "cr_id": cr_id,
+        "decision": "PASS",
+        "context_ref": context_ref,
+        "evidence_ref": "",
+        "dispatch_refs": [],
+        "items": [
+            {
+                "id": "CP0-BS-01",
+                "name": "workspace/state/bootstrap artifacts exist",
+                "status": "PASS",
+                "severity": "INFO",
+                "evidence_refs": [
+                    "process/state/STATE.current.json",
+                    "process/changes/CR-INDEX.json",
+                    context_ref,
+                ],
+            },
+            {
+                "id": "CP0-BS-02",
+                "name": "runtime and credential actions are not authorized",
+                "status": "PASS",
+                "severity": "INFO",
+                "evidence_refs": [(CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()],
+            },
+        ],
+        "blockers": [],
+        "waivers": [],
+        "next_route": "human_gate",
+        "checked_at": now_utc(),
+    }
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return result_path
+
+
+def bootstrap_cr(
+    project_root: Path,
+    *,
+    cr_id: str,
+    title: str,
+    scope: str,
+    gate_status: str = "cp2_pending",
+) -> dict[str, Path]:
+    project_root = project_root.resolve()
+    from meta_flow.context_pack import builder
+    from meta_flow.policies import failure_routing
+    from meta_flow.state import current
+
+    failure_routing.write_default_failure_routing_policy(project_root)
+    failure_routing.write_default_waiver_policy(project_root)
+    cr_path = _write_bootstrap_cr_file(
+        project_root,
+        cr_id=cr_id,
+        title=title,
+        scope=scope,
+        gate_status=gate_status,
+    )
+    summary = summary_from_cr_file(project_root, cr_path)
+    summary_path = write_summary(project_root, cr_id, summary)
+    evidence_path = write_evidence_index(project_root, cr_id, summary)
+    index_path = write_index(project_root)
+    legacy_index_path = write_legacy_index(project_root)
+    context, context_path = builder.build_context_pack(
+        project_root,
+        stage="CP0",
+        profile="adoption-bootstrap",
+        cr_id=cr_id,
+    )
+    context_ref = _rel(project_root, context_path)
+    _update_current_active_change(project_root, cr_id, context_ref)
+    try:
+        current.render_state_file(project_root, force=False)
+    except FileExistsError:
+        pass
+    cp0_result_path = _write_cp0_result(project_root, cr_id, context_ref)
+    cp0_summary_path = cp0_result_path.with_suffix(".summary.md")
+    from meta_flow.checks import cp_result
+
+    cp0_summary_path.write_text(cp_result.render_summary(json.loads(cp0_result_path.read_text(encoding="utf-8"))), encoding="utf-8")
+    ledger_path = append_ledger_event(
+        project_root,
+        {
+            "event": "active",
+            "id": cr_id,
+            "cr_type": summary.get("cr_type"),
+            "status": "active",
+            "readiness": summary.get("readiness"),
+            "summary_ref": _rel(project_root, summary_path),
+            "full_ref": summary.get("full_ref"),
+            "evidence_index_ref": _rel(project_root, evidence_path),
+            "context_ref": context_ref,
+            "cp0_result_ref": _rel(project_root, cp0_result_path),
+            "created_at": now_utc(),
+        },
+    )
+    return {
+        "cr": cr_path,
+        "summary": summary_path,
+        "evidence_index": evidence_path,
+        "index": index_path,
+        "legacy_index": legacy_index_path,
+        "context": context_path,
+        "cp0_result": cp0_result_path,
+        "cp0_summary": cp0_summary_path,
+        "ledger": ledger_path,
+    }
 
 
 def close_cr(project_root: Path, cr_id: str, *, readiness: str) -> dict[str, Path]:
@@ -428,12 +646,14 @@ def _print_cr_help() -> None:
     print(
         "usage: meta-flow cr <command> [options]\n\n"
         "Commands:\n"
+        "  bootstrap  Create an active bootstrap CR plus summary, index, ledger, CP0 result, and context.\n"
         "  index      Rebuild process/changes/CR-INDEX.json from formal CR files.\n"
         "  summary    Generate process/changes/summaries/<CR>.summary.json.\n"
         "  close      Close a CR logically: summary + evidence index + ledger event.\n"
         "  check      Validate CR ledger, index, summaries, and active state refs.\n"
         "  conflicts  Compare active/proposed/blocked CR conflict keys from CR-INDEX.json.\n\n"
         "Examples:\n"
+        "  meta-flow cr bootstrap --id CR-001 --title \"target adoption bootstrap\" --scope \"Initialize Meta Flow adoption readiness.\" --project-root .\n"
         "  meta-flow cr index --project-root .\n"
         "  meta-flow cr summary --id CR-101 --project-root .\n"
         "  meta-flow cr close --id CR-101 --readiness READY_WITH_RISK --project-root .\n"
@@ -450,10 +670,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=f"meta-flow cr {command}")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--id", dest="cr_id", default="")
+    parser.add_argument("--title", default="Meta Flow adoption bootstrap")
+    parser.add_argument("--scope", default="Bootstrap Meta Flow adoption readiness for this target project.")
+    parser.add_argument("--gate-status", default="cp2_pending")
     parser.add_argument("--readiness", default="READY")
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
+    if command == "bootstrap":
+        if not parsed.cr_id:
+            raise SystemExit("--id is required and must use CR-xxx naming")
+        paths = bootstrap_cr(
+            project_root,
+            cr_id=parsed.cr_id,
+            title=parsed.title,
+            scope=parsed.scope,
+            gate_status=parsed.gate_status,
+        )
+        for key, path in paths.items():
+            print(f"{key}: {path}")
+        return 0
     if command == "index":
         path = write_index(project_root)
         print(f"wrote: {path}")
@@ -491,7 +727,7 @@ def main(argv: list[str] | None = None) -> int:
         for conflict in conflicts:
             print(f"- CONFLICT: {conflict}")
         return 1 if conflicts else 0
-    raise SystemExit(f"未知 cr 命令: {command}. 目前支持: index, summary, close, check, conflicts")
+    raise SystemExit(f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, close, check, conflicts")
 
 
 if __name__ == "__main__":

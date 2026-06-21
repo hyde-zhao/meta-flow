@@ -151,6 +151,43 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 回退到 CP3 蓝图 / HLD 架构评审前
 ```
 
+### 6.0.1 目标项目 Adoption Readiness
+
+在目标项目安装 Meta Flow 后，先完成 workspace/state/ledger bootstrap、identity scan、adoption doctor，再创建首个 bootstrap CR：
+
+```bash
+meta-flow workspace bootstrap --artifact-root <relative-artifact-root> --project-name <project-name> --project-root .
+meta-flow identity scan --project-root .
+meta-flow quality init --project-root .
+meta-flow doctor adoption --project-root .
+meta-flow cr bootstrap --id CR-001 --title "<project> adoption bootstrap" --scope "Initialize Meta Flow adoption readiness." --project-root .
+meta-flow context check --context process/context/CP0-CR001.context.json --project-root .
+meta-flow check cp-result --result process/checks/CP0-CR-001-BOOTSTRAP.result.json --project-root .
+```
+
+`workspace bootstrap` 会建立外置 `process` 路由、`STATE.current.json`、`STATE.md` 人类摘要和基础 ledgers。`identity scan` 只读扫描 `PACKAGE-IDENTITY.yaml`、`pyproject.toml`、README 和 docs 交付约定，不自动写 production 交付路由。`doctor adoption` 只聚合 readiness，不写文件；`cr bootstrap` 只写 `process/` 内的 active CR、summary/index/ledger、CP0 result/summary 和 CP0 context。
+
+上述流程不授权 credentials、runtime、SaaS、production write、trading、publish 或 CR-033 runtime follow-up。正式编号使用 `CR-xxx`；`MF-xxx` 仅作为历史别名。
+
+### 6.0.2 初始化质量治理 Policy
+
+新项目需要启用轻量质量治理时，先初始化默认 policy：
+
+```bash
+meta-flow quality init --project-root .
+meta-flow quality model-check --project-root .
+meta-flow quality eval-check --project-root .
+meta-flow doctor quality --project-root .
+meta-flow doctor workflow --project-root .
+```
+
+`quality init` 会写入：
+
+- `process/policies/QUALITY-MODEL.yaml`
+- `process/policies/EVAL-MATRIX.yaml`
+
+这两个 policy 用于定义质量维度、eval 映射和最小 workflow metrics 的派生来源。`doctor workflow` 只从 CP result、event ledger 和 read-expansion ledger 汇总指标，不会创建独立的手工 metrics 真相源。若某个项目暂时没有 ledger，doctor 会以 warning 说明缺失，而不是静默创建统计文件。
+
 ### 6.0 输出目录
 
 Meta Flow 生成的文档默认分为三类：

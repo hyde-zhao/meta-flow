@@ -250,6 +250,62 @@ class PackageIdentityTests(unittest.TestCase):
             self.assertEqual(0, exit_code)
             self.assertIn("Package Identity Check: OK", output.getvalue())
 
+    def test_delivery_routing_scan_uses_readme_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_package_identity(root)
+            (root / "quant_lab").mkdir()
+            (root / "quant_lab" / "__init__.py").write_text("", encoding="utf-8")
+            (root / "README.md").write_text(
+                "# quant-lab\n\nRelease deliverables are documented under docs/release.\n",
+                encoding="utf-8",
+            )
+            (root / "pyproject.toml").write_text(
+                '[project]\nname = "quant-lab"\n[project.scripts]\nqlab = "quant_lab.cli:main"\n',
+                encoding="utf-8",
+            )
+            (root / ".env").write_text("SECRET_SENTINEL=do-not-read\n", encoding="utf-8")
+
+            report = product_governance.scan_delivery_routing(root)
+
+            self.assertEqual([], report.errors)
+            self.assertEqual("python-package", report.project_kind)
+            self.assertEqual("project-readme-contract", report.mode)
+            self.assertFalse(report.decision_required)
+            self.assertIn("README.md", report.evidence)
+            self.assertNotIn(".env", "\n".join(report.evidence))
+
+    def test_delivery_routing_scan_requires_decision_without_docs_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_package_identity(root)
+            (root / "quant_lab").mkdir()
+            (root / "quant_lab" / "__init__.py").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("# quant-lab\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text(
+                '[project]\nname = "quant-lab"\n[project.scripts]\nqlab = "quant_lab.cli:main"\n',
+                encoding="utf-8",
+            )
+
+            report = product_governance.scan_delivery_routing(root)
+
+            self.assertEqual([], report.errors)
+            self.assertEqual("proposed-output", report.mode)
+            self.assertTrue(report.decision_required)
+            self.assertTrue(any("human confirmation required" in warning for warning in report.warnings))
+
+    def test_identity_scan_reports_missing_package_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = product_governance.identity_main(["scan", "--project-root", str(root)])
+
+            self.assertEqual(1, exit_code)
+            self.assertIn("Package Identity and Delivery Routing Scan: FAIL", output.getvalue())
+            self.assertIn("PACKAGE-IDENTITY missing", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

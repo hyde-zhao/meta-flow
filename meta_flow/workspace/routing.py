@@ -10,7 +10,18 @@ from pathlib import Path
 
 
 ROUTE_METADATA_NAME = ".meta-flow-process.yaml"
-PROCESS_SCAFFOLD_DIRS = ("checks", "checkpoints", "context", "changes")
+PROCESS_SCAFFOLD_DIRS = (
+    "checks",
+    "checkpoints",
+    "context",
+    "changes",
+    "state",
+    "policies",
+    "returns",
+    "evidence",
+    "handoffs",
+    "design-deltas",
+)
 BLOCKING_STATUSES = {
     "missing",
     "broken_link",
@@ -332,7 +343,7 @@ def write_route_metadata(
     created_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     artifact_root_rel = _relative_path(artifact_root, project_root)
     process_root_rel = _relative_path(process_root, artifact_root)
-    link_path_rel = _relative_path(link_path, project_root)
+    link_path_rel = os.path.relpath(link_path.absolute(), project_root.absolute())
     text = (
         f'project_name: "{project_name}"\n'
         'path_format: "portable-relative-v1"\n'
@@ -385,3 +396,54 @@ def link_process_workspace(project_root: Path, artifact_root: Path, project_name
         link_path=link_path,
     )
     return check_process_route(project_root)
+
+
+def bootstrap_process_workspace(
+    project_root: Path,
+    artifact_root: Path,
+    project_name: str,
+    *,
+    force: bool = False,
+) -> ProcessRouteHealth:
+    project_root = project_root.resolve()
+    health = link_process_workspace(project_root, artifact_root, project_name)
+
+    from meta_flow.state import current
+
+    current.init_current_state(project_root, project_id=project_name, force=force)
+    current.render_state_file(project_root, force=force)
+    state_errors, state_warnings = current.check_current_state(project_root)
+    health = check_process_route(project_root)
+    if state_errors:
+        return ProcessRouteHealth(
+            status="route_mismatch",
+            project_root=health.project_root,
+            link_path=health.link_path,
+            state_path=health.state_path,
+            routing_mode=health.routing_mode,
+            expected_project_name=health.expected_project_name,
+            actual_target=health.actual_target,
+            metadata_path=health.metadata_path,
+            artifact_root=health.artifact_root,
+            project_process_root=health.project_process_root,
+            errors=[*health.errors, *state_errors],
+            warnings=[*health.warnings, *state_warnings],
+            artifact_git_dirty=health.artifact_git_dirty,
+        )
+    if state_warnings:
+        return ProcessRouteHealth(
+            status=health.status,
+            project_root=health.project_root,
+            link_path=health.link_path,
+            state_path=health.state_path,
+            routing_mode=health.routing_mode,
+            expected_project_name=health.expected_project_name,
+            actual_target=health.actual_target,
+            metadata_path=health.metadata_path,
+            artifact_root=health.artifact_root,
+            project_process_root=health.project_process_root,
+            errors=health.errors,
+            warnings=[*health.warnings, *state_warnings],
+            artifact_git_dirty=health.artifact_git_dirty,
+        )
+    return health

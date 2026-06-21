@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import tomllib
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,37 @@ IMPLEMENTED_CLAIM_TERMS = (
     "默认 target",
     "默认目标",
 )
+DELIVERY_KEYWORDS = (
+    "delivery",
+    "deliverable",
+    "release",
+    "publish",
+    "install",
+    "build",
+    "docs/",
+    "docs\\",
+    "部署",
+    "发布",
+    "交付",
+    "安装",
+)
+FORBIDDEN_PRODUCTION_ROOTS = ("delivery/", ".agents/", ".claude/", ".codex/")
+
+
+@dataclass(frozen=True)
+class DeliveryRoutingReport:
+    project_kind: str
+    sut_type: str
+    mode: str
+    output_root: str
+    forbidden_roots_when_production: list[str]
+    evidence: list[str]
+    decision_required: bool
+    warnings: list[str]
+    errors: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def _read_json_compatible_yaml(path: Path) -> dict[str, Any]:
@@ -373,6 +405,102 @@ def validate_package_identity(project_root: Path) -> tuple[list[str], list[str]]
     return errors, warnings
 
 
+def _scan_text_artifacts(project_root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for name in ("README.md", "README.rst", "README.txt"):
+        path = project_root / name
+        if path.is_file():
+            candidates.append(path)
+    docs_root = project_root / "docs"
+    if docs_root.is_dir():
+        for pattern in ("*.md", "*.rst", "*.txt", "*/*.md", "*/*.rst", "*/*.txt"):
+            candidates.extend(path for path in docs_root.glob(pattern) if path.is_file())
+    return sorted(set(candidates))
+
+
+def _relative(project_root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _project_kind(project_root: Path) -> str:
+    if (project_root / "pyproject.toml").is_file():
+        return "python-package"
+    if (project_root / "package.json").is_file():
+        return "node-package"
+    return "generic-repo"
+
+
+def scan_delivery_routing(project_root: Path) -> DeliveryRoutingReport:
+    root = project_root.resolve()
+    identity_errors, identity_warnings = validate_package_identity(root)
+    evidence: list[str] = []
+    warnings: list[str] = [*identity_warnings]
+    errors: list[str] = [*identity_errors]
+    project_kind = _project_kind(root)
+    sut_type = "package" if project_kind.endswith("package") else "repository"
+
+    if (root / "pyproject.toml").is_file():
+        evidence.append("pyproject.toml")
+    identity_file = identity_path(root)
+    if identity_file.is_file():
+        evidence.append(PACKAGE_IDENTITY_REL.as_posix())
+
+    matched_docs: list[str] = []
+    for path in _scan_text_artifacts(root):
+        text = path.read_text(encoding="utf-8", errors="ignore").lower()
+        if any(keyword.lower() in text for keyword in DELIVERY_KEYWORDS):
+            matched_docs.append(_relative(root, path))
+    evidence.extend(matched_docs)
+
+    if matched_docs:
+        mode = "project-readme-contract"
+        output_root = "project-defined"
+        decision_required = False
+    else:
+        mode = "proposed-output"
+        output_root = "docs/"
+        decision_required = True
+        warnings.append("delivery routing convention not found in README/docs; human confirmation required")
+
+    return DeliveryRoutingReport(
+        project_kind=project_kind,
+        sut_type=sut_type,
+        mode=mode,
+        output_root=output_root,
+        forbidden_roots_when_production=list(FORBIDDEN_PRODUCTION_ROOTS),
+        evidence=evidence,
+        decision_required=decision_required,
+        warnings=warnings,
+        errors=errors,
+    )
+
+
+def _print_delivery_routing_report(project_root: Path, report: DeliveryRoutingReport) -> None:
+    print("Package Identity and Delivery Routing Scan: " + ("FAIL" if report.errors else "OK"))
+    print(f"project_root: {project_root.resolve()}")
+    print(f"project_kind: {report.project_kind}")
+    print(f"validation_target.sut_type: {report.sut_type}")
+    print(f"delivery_routing.mode: {report.mode}")
+    print(f"delivery_routing.output_root: {report.output_root}")
+    print(f"delivery_routing.decision_required: {str(report.decision_required).lower()}")
+    print("forbidden_roots_when_production:")
+    for root in report.forbidden_roots_when_production:
+        print(f"- {root}")
+    print("evidence:")
+    if report.evidence:
+        for item in report.evidence:
+            print(f"- {item}")
+    else:
+        print("- none")
+    for warning in report.warnings:
+        print(f"- WARN: {warning}")
+    for error in report.errors:
+        print(f"- ERROR: {error}")
+
+
 def _print_capability_help() -> None:
     print(
         "usage: meta-flow capability <command> [options]\n\n"
@@ -403,9 +531,11 @@ def _print_identity_help() -> None:
         "Commands:\n"
         "  init   Write default docs/design/PACKAGE-IDENTITY.yaml.\n"
         "  check  Validate repo/package/import/CLI identity.\n\n"
+        "  scan   Report package identity plus delivery routing adoption hints without writing files.\n\n"
         "Examples:\n"
         "  meta-flow identity init --project-root .\n"
         "  meta-flow identity check --project-root .\n"
+        "  meta-flow identity scan --project-root .\n"
     )
 
 
@@ -492,4 +622,11 @@ def identity_main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"- ERROR: {error}")
         return 1 if errors else 0
-    raise SystemExit(f"未知 identity 命令: {command}. 目前支持: init, check")
+    if command == "scan":
+        parser = argparse.ArgumentParser(prog="meta-flow identity scan")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parsed = parser.parse_args(args[1:])
+        report = scan_delivery_routing(parsed.project_root)
+        _print_delivery_routing_report(parsed.project_root, report)
+        return 1 if report.errors else 0
+    raise SystemExit(f"未知 identity 命令: {command}. 目前支持: init, check, scan")

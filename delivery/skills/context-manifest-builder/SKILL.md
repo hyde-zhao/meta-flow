@@ -51,6 +51,8 @@ status: active
 - `skills/context-manifest-builder/templates/CONTEXT-MANIFEST-TEMPLATE.yaml`
 - `skills/context-manifest-builder/templates/SOURCE-OF-TRUTH-MAP-TEMPLATE.yaml`
 - `skills/context-manifest-builder/templates/RETENTION-POLICY-TEMPLATE.json`
+- `skills/context-manifest-builder/templates/QUALITY-MODEL-TEMPLATE.yaml`
+- `skills/context-manifest-builder/templates/EVAL-MATRIX-TEMPLATE.yaml`
 - 已批准的计划、设计与验证文档
 - 当前交付边界与目标平台约束
 
@@ -77,6 +79,8 @@ status: active
 | 真相源策略 | `process/policies/SOURCE-OF-TRUTH-MAP.yaml` | `skills/context-manifest-builder/templates/SOURCE-OF-TRUTH-MAP-TEMPLATE.yaml` |
 | 真相源说明 | `docs/design/SOURCE-OF-TRUTH-MAP.md` | `skills/context-manifest-builder/templates/SOURCE-OF-TRUTH-MAP-DOC-TEMPLATE.md` |
 | 保留策略 | `process/policies/RETENTION-POLICY.json` | `skills/context-manifest-builder/templates/RETENTION-POLICY-TEMPLATE.json` |
+| 质量模型 | `process/policies/QUALITY-MODEL.yaml` | `skills/context-manifest-builder/templates/QUALITY-MODEL-TEMPLATE.yaml` |
+| Eval 矩阵 | `process/policies/EVAL-MATRIX.yaml` | `skills/context-manifest-builder/templates/EVAL-MATRIX-TEMPLATE.yaml` |
 | Story packet | `process/context/stories/STORY-*.json` | `skills/context-manifest-builder/templates/STORY-CONTEXT-PACKET-TEMPLATE.json` |
 | Read expansion ledger | `process/state/READ-EXPANSION-LEDGER.ndjson` | `meta-flow context read-log` |
 

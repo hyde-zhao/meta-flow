@@ -27,6 +27,39 @@ orchestrator_session:
 
 
 class StateV2Tests(unittest.TestCase):
+    def test_init_creates_current_state_and_all_base_ledgers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            exit_code = current.main(["init", "--project-root", str(root), "--project-id", "demo-project"])
+
+            self.assertEqual(0, exit_code)
+            state = current.load_current_state(root)
+            self.assertEqual("demo-project", state["project_id"])
+            for name in (
+                "CR-LEDGER.ndjson",
+                "STORY-LEDGER.ndjson",
+                "CHECKPOINT-LEDGER.ndjson",
+                "HANDOFF-LEDGER.ndjson",
+                "AGENT-DISPATCH-LEDGER.ndjson",
+                "GATE-LEDGER.ndjson",
+                "RUN-LEDGER.ndjson",
+                "READ-EXPANSION-LEDGER.ndjson",
+            ):
+                self.assertTrue((root / "process" / "state" / name).is_file(), name)
+
+    def test_init_is_idempotent_without_force(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.main(["init", "--project-root", str(root), "--project-id", "demo-project"])
+            first_text = (root / "process" / "state" / "STATE.current.json").read_text(encoding="utf-8")
+
+            exit_code = current.main(["init", "--project-root", str(root), "--project-id", "other-project"])
+
+            self.assertEqual(0, exit_code)
+            second_text = (root / "process" / "state" / "STATE.current.json").read_text(encoding="utf-8")
+            self.assertEqual(first_text, second_text)
+
     def test_migrate_v2_creates_lightweight_current_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

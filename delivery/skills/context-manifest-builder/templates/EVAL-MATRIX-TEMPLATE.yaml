@@ -1,0 +1,34 @@
+schema_version: 1
+matrix_id: meta-flow-lightweight-eval-matrix-v1
+quality_model_ref: process/policies/QUALITY-MODEL.yaml
+cases:
+  - id: eval-requirements-traceability
+    quality_dimension: requirements_traceability
+    eval_ref: meta-flow quality model-check
+    blocking_policy: on-release
+    applies_to: [CP2, CP5, CP7]
+    evidence_refs: [process/checks/*.result.json, docs/product/TEST-MATRIX.md]
+  - id: eval-architecture-contract
+    quality_dimension: architecture_contract
+    eval_ref: meta-flow quality eval-check
+    blocking_policy: on-release
+    applies_to: [CP3, CP5, CP7]
+    evidence_refs: [docs/design/HLD.md, docs/design/ARCHITECTURE-DECISION.md, process/design-deltas/*.delta.json]
+  - id: eval-implementation-evidence
+    quality_dimension: implementation_evidence
+    eval_ref: meta-flow story evidence-check
+    blocking_policy: always
+    applies_to: [CP6, CP7]
+    evidence_refs: [process/returns/*.return.json, process/evidence/*.index.json, process/state/RUN-LEDGER.ndjson]
+  - id: eval-verification-readiness
+    quality_dimension: verification_readiness
+    eval_ref: meta-flow cp result-check
+    blocking_policy: always
+    applies_to: [CP7, CP8]
+    evidence_refs: [process/checks/*.result.json, docs/quality/TEST-REPORT.md, docs/quality/REVIEW.md]
+  - id: eval-context-budget-governance
+    quality_dimension: context_budget_governance
+    eval_ref: meta-flow doctor workflow
+    blocking_policy: advisory
+    applies_to: [CP2, CP3, CP5, CP6, CP7, CP8]
+    evidence_refs: [process/context/*.context.json, process/context/READ-EXPANSION-LEDGER.ndjson, process/state/*-LEDGER.ndjson]
