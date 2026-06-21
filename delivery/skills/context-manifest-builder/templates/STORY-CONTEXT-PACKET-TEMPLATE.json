@@ -1,0 +1,82 @@
+{
+  "acceptance": [],
+  "allowed_reads": [],
+  "allowed_write_paths": [],
+  "authz_policy_refs": [],
+  "budget": {
+    "estimated_tokens": 0,
+    "estimator": "chars_div_4",
+    "max_tokens": 8000
+  },
+  "cr_id": "<CR-ID>",
+  "denied_default_reads": [
+    "process/STATE.md",
+    "process/DEVELOPMENT-PLAN.yaml",
+    "process/STORY-STATUS.md",
+    "process/changes/*.md",
+    "process/stories/*-LLD.md",
+    "process/stories/*-IMPLEMENTATION.md"
+  ],
+  "design_refs": {
+    "feature_registry": "docs/design/FEATURE-REGISTRY.yaml",
+    "module_boundaries": "docs/design/MODULE-BOUNDARIES.yaml"
+  },
+  "feature_design_refs": [],
+  "feature_contract_summary": "<compact feature contract summary or N/A>",
+  "feature_design_summary_ref": "docs/features/<feature>/DESIGN.summary.yaml",
+  "feature_refs": [],
+  "cr_delta": {
+    "summary": "<what this CR changes for this Story>",
+    "affected_contracts": []
+  },
+  "dependency_inputs": [],
+  "forbidden_write_paths": [],
+  "full_doc_read_allowed_when": [
+    "capsule_missing",
+    "field_conflict",
+    "human_audit",
+    "deep_review",
+    "schema_validation_failed"
+  ],
+  "lld_policy": "technical-note",
+  "objective": {
+    "non_goals": [],
+    "summary": "<story objective>"
+  },
+  "packet_type": "story_context_contract|story_work_packet|story_verify_packet",
+  "parent_context_ref": null,
+  "policy_refs": {
+    "authz_policy": "process/policies/AUTHZ-POLICY.json",
+    "gate_profiles": "process/policies/GATE-PROFILES.json",
+    "read_policy": "process/policies/READ-POLICY.json"
+  },
+  "project_id": "<project-id>",
+  "read_if_needed": [],
+  "required_full_doc_read_log": "process/state/READ-EXPANSION-LEDGER.ndjson",
+  "context_sufficiency": {
+    "required_slots": [
+      "objective.summary",
+      "feature_refs",
+      "feature_context",
+      "cr_delta.summary",
+      "acceptance",
+      "dependency_inputs",
+      "allowed_write_paths",
+      "forbidden_write_paths",
+      "verification_plan",
+      "authz_policy_refs",
+      "expected_return_packet"
+    ],
+    "strict_profiles": [
+      "architecture-major",
+      "product-redesign",
+      "runtime-high-risk"
+    ]
+  },
+  "risk_profile": "standard-code",
+  "schema_version": 1,
+  "stage": "BASE|CP6|CP7",
+  "story_id": "<STORY-ID>",
+  "story_ref": "process/stories/<story>.md",
+  "verification_plan": []
+}

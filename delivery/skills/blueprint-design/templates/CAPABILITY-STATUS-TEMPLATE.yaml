@@ -1,0 +1,15 @@
+{
+  "capabilities": {
+    "<capability_id>": {
+      "aliases": [],
+      "docs_claim_level": "guarded",
+      "implemented_target": false,
+      "required_evidence_for_status_change": [],
+      "runtime_authorized": false,
+      "status": "experimental",
+      "test_scope": "fixture",
+      "allowed_next_status": []
+    }
+  },
+  "schema_version": 1
+}

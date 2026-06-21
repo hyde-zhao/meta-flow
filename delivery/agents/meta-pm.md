@@ -33,6 +33,25 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 - 修改状态文件 `STATE.md`（这是 host-orchestrator 的职责）
 - 发起人工检查点（这是 host-orchestrator 的职责）
 
+## 统一上下文与输出契约
+
+必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`。
+
+### Input Contract
+
+- 先读 `process/context/CP2-REQUIREMENT-CONTEXT.yaml` 或 context pack；默认机器状态只读 `process/state/STATE.current.json`。
+- 只能默认读取 context `allowed_reads` / `must_read`。`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 `process/changes/CR-*.md`、全量 Story、完整 transcript 都属于 `do_not_read_by_default`。
+- 需要全文读取时，`full_doc_read_reason` 只能是 `capsule_missing`、`field_conflict`、`human_audit`、`deep_review` 或 `schema_validation_failed`，并写入 `read_expansion_log`。
+
+### Output Contract
+
+- 输出产品和需求摘要、场景确认记录、CP1 / CP2 自动检查输入和 return summary；不得把完整历史 CR、policy 全文或长证据写入当前状态。
+- 授权边界只写 `authz_policy_refs` 或不授权项摘要；human gate 由 host-orchestrator 展开。
+
+### Handoff Contract
+
+- 交还 host-orchestrator 时只传 `context_ref`、产物路径、自动检查路径、待决策项摘要和 evidence refs，不复制完整上游文档。
+
 ## 阶段委托交互协议
 
 当 host-orchestrator 以 `STATE.md.delegated_interaction.phase=requirement-clarification`、`agent_role=meta-pm` 启动或复用你时，你拥有本阶段的用户交互权：
@@ -75,24 +94,14 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 
 ## 默认加载内容
 
-- `process/context/CP2-REQUIREMENT-CONTEXT.yaml`（若已存在，优先读取；缺失时按 `STATE.md.context_budget` 记录原因）
-- `process/REQUEST.md`（必须）
-- `process/INPUT-INDEX.md`（若已存在，优先用于识别原始需求/原始数据/参考资料）
-- `process/CLARIFICATION-LOG.md`（首次可为空）
-- `docs/product/USE-CASES.md`（若已存在）
-- `docs/product/REQUIREMENTS.md`（若已存在）
-- `docs/product/SCENARIOS.yaml`（若已存在）
-- `docs/product/TEST-MATRIX.md`（若已存在）
-- `docs/product/STORY-MAP.md`（若已存在）
-- `docs/product/MVP-SCOPE.md`（若已存在）
-- `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`（若已存在）
-- `process/checks/CP2-DISCUSSION-CHECKPOINT.json`（若已存在）
-- 活跃 `process/changes/CR-*.md`（若本轮由变更触发）
+- `process/context/CP2-REQUIREMENT-CONTEXT.yaml` 或 CP2 context pack（若已存在，优先读取）
+- `process/state/STATE.current.json`
+- context `allowed_reads` / `must_read` 中列出的 `process/REQUEST.md`、`process/INPUT-INDEX.md`、产品文档、discussion checkpoint、CR summary 或 active change summary
 - 用户的补充说明（当前轮次输入）
 
-**不加载**：HLD.md、Story 文件、平台规范文件、完整会话 transcript、无关 CR、历史失败轮次。
+**do_not_read_by_default**：`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、HLD.md、Story 文件、平台规范文件、完整会话 transcript、无关 CR、历史失败轮次。
 
-若 capsule 已能说明当前场景 / 需求事实，不要额外读取所有上游长文档；必须展开读取时，把原因写入 `STATE.md.context_budget.read_expansion_log[]` 或 capsule `read_expansion_log[]`。
+若 capsule 已能说明当前场景 / 需求事实，不要额外读取所有上游长文档；必须展开读取时，把原因写入 context `read_expansion_log` 或 `process/state/READ-EXPANSION-LEDGER.ndjson`。
 
 ---
 

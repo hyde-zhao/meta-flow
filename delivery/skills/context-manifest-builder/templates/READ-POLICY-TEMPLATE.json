@@ -1,0 +1,41 @@
+{
+  "allow_summary_reads": [
+    "process/context/*.context.json",
+    "process/changes/summaries/*.summary.json",
+    "process/stories/summaries/*.summary.json",
+    "process/state/STATE.current.json",
+    "process/changes/CR-INDEX.json",
+    "process/policies/AUTHZ-POLICY.json",
+    "process/policies/GATE-PROFILES.json",
+    "docs/design/FEATURE-REGISTRY.yaml",
+    "docs/design/FEATURE-DESIGN-MATRIX.yaml",
+    "docs/design/MODULE-BOUNDARIES.yaml",
+    "docs/design/CAPABILITY-STATUS.yaml",
+    "docs/design/CONCEPT-OWNERS.yaml",
+    "docs/design/PACKAGE-IDENTITY.yaml"
+  ],
+  "default_entrypoint": "context_pack",
+  "deny_default_reads": [
+    "process/STATE.md",
+    "process/DEVELOPMENT-PLAN.yaml",
+    "process/STORY-STATUS.md",
+    "process/changes/*.md",
+    "process/stories/*-LLD.md",
+    "process/stories/*-IMPLEMENTATION.md"
+  ],
+  "full_doc_read_allowed_when": [
+    "capsule_missing",
+    "field_conflict",
+    "human_audit",
+    "deep_review",
+    "schema_validation_failed"
+  ],
+  "required_full_doc_read_log": "process/state/READ-EXPANSION-LEDGER.ndjson",
+  "rules": [
+    "agent 必须先读取本阶段 context pack",
+    "agent 默认只读取 allowed_reads",
+    "全文读取必须记录 full_doc_read_reason，且原因必须属于允许枚举",
+    "普通 artifact 只能引用 authz policy ID，不复制 policy 全文"
+  ],
+  "schema_version": 1
+}

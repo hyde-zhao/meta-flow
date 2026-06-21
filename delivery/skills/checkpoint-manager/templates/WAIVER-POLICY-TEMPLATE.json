@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "required_fields": [
+    "waiver_id",
+    "applies_to",
+    "scope",
+    "expires_at",
+    "approval_ref",
+    "forces_release_status"
+  ],
+  "applies_to_required_fields": [
+    "checkpoint",
+    "check_item_id"
+  ],
+  "non_waivable": {
+    "categories": [
+      "unauthorized_runtime_access",
+      "credential_secret_exposure",
+      "missing_dispatch_evidence",
+      "runtime_high_risk_forbidden_path_touched",
+      "missing_runtime_high_risk_human_gate",
+      "missing_read_expansion_log",
+      "missing_evidence",
+      "forbidden_path_high_risk",
+      "false_capability_claim"
+    ],
+    "name_patterns": [
+      "unauthorized_runtime",
+      "credential",
+      "secret",
+      "missing_dispatch",
+      "dispatch_evidence",
+      "runtime_high_risk_forbidden",
+      "missing_human_gate",
+      "missing_read_expansion",
+      "read_expansion_refs",
+      "evidence_does_not_exist",
+      "forbidden_path",
+      "runtime_ready_claim",
+      "not_authorized"
+    ]
+  },
+  "forces_release_status_values": [
+    "READY_WITH_RISK",
+    "NOT_READY"
+  ],
+  "ready_with_risk_requires": [
+    "risk_refs",
+    "approval_ref",
+    "scope",
+    "expires_at"
+  ],
+  "non_waivable_decisions": [
+    "FAIL",
+    "BLOCKED",
+    "NOT_READY"
+  ]
+}

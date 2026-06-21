@@ -1,0 +1,16 @@
+{
+  "event_id": "CP6-STORY-CR123-S01",
+  "event_type": "checkpoint_result",
+  "checkpoint": "CP6",
+  "decision": "PASS",
+  "result_ref": "process/checks/CP6-STORY-CR123-S01.result.json",
+  "summary_ref": "process/checks/CP6-STORY-CR123-S01.summary.md",
+  "story_id": "STORY-CR123-S01",
+  "cr_id": "CR-123",
+  "context_ref": "process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+  "evidence_ref": "process/evidence/STORY-CR123-S01.CP6.index.json",
+  "dispatch_refs": [
+    "ADE-0001"
+  ],
+  "checked_at": "2026-06-21T00:00:00+00:00"
+}

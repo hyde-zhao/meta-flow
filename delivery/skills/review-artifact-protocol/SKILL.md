@@ -14,6 +14,8 @@ called-by: host-orchestrator, meta-pm, meta-se, meta-dev, meta-qa, meta-doc
 集中持有 review gate 的共享产物协议：`Review Findings` 模板、`Review Summary` 模板，以及只做机械结构检查的 validator 脚本。
 该协议同时服务 CP3 HLD 多角色讨论和 CP5 LLD 批量决策摘要，并支持 advisor table-first 输入。
 
+本 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`：review artifact 默认消费 context `allowed_reads`、evidence index 和 summary，不复制完整 HLD / LLD / TEST-REPORT / diff。
+
 ## 适用场景
 
 - `host-orchestrator` 组织结构化评审，需要下发统一 findings / summary 模板
@@ -23,10 +25,11 @@ called-by: host-orchestrator, meta-pm, meta-se, meta-dev, meta-qa, meta-doc
 
 ## 必须读取的输入
 
-- 当前待评审对象路径
+- 当前待评审对象路径或 context / packet `allowed_reads` 中的对象摘要
 - reviewer lane / reviewer 标识
 - 当前轮次
 - 已填写的 findings 或 summary 文档
+- evidence index / CP result refs（若存在）
 
 ## 知识来源
 
@@ -42,14 +45,15 @@ called-by: host-orchestrator, meta-pm, meta-se, meta-dev, meta-qa, meta-doc
    - CP3 HLD 方案形成输入必须优先使用 advisor 表格：`Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch`。
    - CP3 HLD 后评审意见必须单独标记为 `post_hld_review`，不得倒填为方案形成前输入。
    - Summary 必须给出推荐决策、备选方案、风险和用户需决策事项，供 host-orchestrator 汇入 Decision Brief。
-3. 在提交给 `host-orchestrator` 聚合前，运行 validator 脚本做结构检查：
+3. Findings 和 Summary 只写问题、严重度、证据路径、hash / anchor、影响和建议；不得把完整待评审对象、完整 diff、完整测试日志或完整 policy 全文复制进 review artifact。
+4. 在提交给 `host-orchestrator` 聚合前，运行 validator 脚本做结构检查：
 
 ```bash
 uv run --python 3.11 python <skill-root>/scripts/validate_review_artifact.py <artifact-path> --kind findings
 uv run --python 3.11 python <skill-root>/scripts/validate_review_artifact.py <artifact-path> --kind summary
 ```
 
-4. validator 返回 `OK` 后再进入 findings 聚合或 summary 决策。
+5. validator 返回 `OK` 后再进入 findings 聚合或 summary 决策。
 
 ## 输出文件 / 输出模板
 
@@ -66,6 +70,7 @@ uv run --python 3.11 python <skill-root>/scripts/validate_review_artifact.py <ar
 - 模板属于共享 Skill 私有资产，不再放到 `delivery/` 顶层公共目录
 - advisor table-first 只定义输入结构，不新增 canonical agent；具体调度仍由 host-orchestrator 决定并记录子 agent 调度证据
 - discussion log 用于审计和恢复，不替代正式 HLD、ADR、Decision Brief 或 Review Summary
+- `process/STATE.md`、完整 Story LLD、完整 TEST-REPORT、完整 REVIEW 和完整 diff 必须属于 `do_not_read_by_default`
 
 ## 验收标准
 

@@ -1,5 +1,6 @@
 ---
 cr_id: "CR-{id}"
+cr_type: "feature"
 cr_kind: "requirement-change"
 lifecycle_status: "active"
 readiness_status: "not_ready"
@@ -58,7 +59,8 @@ reframe_summary: ""
 
 | 字段 | 内容 |
 |---|---|
-| CR 类型 | `cr_kind` |
+| CR 类型 | `cr_type` |
+| Legacy CR kind | `cr_kind` |
 | 生命周期状态 | `lifecycle_status` |
 | 就绪状态 | `readiness_status` |
 | 门禁状态 | `gate_status` |
@@ -66,12 +68,16 @@ reframe_summary: ""
 
 | CR 类型 | 用途 | 默认门禁模板 |
 |---|---|---|
-| `requirement-change` | 改变需求 / 范围 / 目标 | `full` |
-| `architecture-realignment` | 改架构边界、接口契约、平台模型 | `full` |
-| `implementation-gate` | 已确认设计后的实现交付 | `standard` |
-| `runtime-authorization` | 真实运行 / 凭据 / 账户 / NAS / 交易类授权 | `runtime` |
-| `ledger-maintenance` | 台账清理、状态修正、索引治理 | `compact` |
-| `spike` | 受控探索，不承诺交付 | `spike` |
+| `product-scope` | 改变产品范围、用户场景或需求基线 | `architecture-major` |
+| `architecture` | 改架构边界、接口契约、模块边界或 ADR | `architecture-major` |
+| `feature` | 已确认设计后的 Feature / Story 实现交付 | `standard-code` |
+| `refactor` | 不改变外部契约的内部结构调整 | `standard-code` |
+| `bugfix` | 缺陷修复和回归补充 | `standard-code` |
+| `docs` | 说明文档、README、用户手册等 | `docs-lite` |
+| `process` | 台账、checker、索引、归档、流程治理修复 | `process-lite` |
+| `runtime` | 真实运行 / 凭据 / 账户 / NAS / 交易类授权或边界 | `runtime-high-risk` |
+| `release` | 发布、安装、迁移、回滚、交付收敛 | `standard-code` / `runtime-high-risk` |
+| `experiment` | 受控探索，不承诺交付 | `process-lite` |
 
 ## 结构化权限策略
 

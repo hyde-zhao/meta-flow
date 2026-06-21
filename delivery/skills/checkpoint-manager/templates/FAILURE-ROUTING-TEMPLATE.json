@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "routes": {
+    "rework_same_story": {
+      "description": "实现或验证失败，但 Story 范围仍然成立，回到同一 Story 的 CP6/CP7 返工。",
+      "creates": [
+        "rework_packet"
+      ],
+      "updates": [
+        "STORY-LEDGER"
+      ],
+      "invalidates": [
+        "current_cp_result",
+        "downstream_verify_packet"
+      ],
+      "next_allowed_stage": "CP6"
+    },
+    "reopen_cp5_design": {
+      "description": "失败来自 Story 设计证据不足或契约不清，回到 CP5 设计证据。",
+      "creates": [
+        "question_ledger_entry",
+        "design_delta_or_lld_update"
+      ],
+      "updates": [
+        "STORY-LEDGER",
+        "QUESTION-LEDGER"
+      ],
+      "invalidates": [
+        "CP6_packet",
+        "CP7_packet",
+        "current_cp_result"
+      ],
+      "next_allowed_stage": "CP5"
+    },
+    "require_user_decision": {
+      "description": "需要用户确认 scope/security/runtime/risk decision 后才能继续。",
+      "creates": [
+        "human_decision_item"
+      ],
+      "updates": [
+        "GATE-LEDGER"
+      ],
+      "invalidates": [
+        "current_cp_result"
+      ],
+      "next_allowed_stage": "human_gate"
+    },
+    "create_followup_candidate": {
+      "description": "当前交付可收敛，但剩余问题必须进入 follow-up candidate，不自动创建正式 CR。",
+      "creates": [
+        "followup_candidate"
+      ],
+      "updates": [
+        "CR-LEDGER"
+      ],
+      "invalidates": [],
+      "next_allowed_stage": "CP8"
+    },
+    "escalate_runtime_high_risk": {
+      "description": "触碰 runtime / credential / trading / publish 等边界，强制升级高风险门禁。",
+      "creates": [
+        "runtime_authorization_decision_item"
+      ],
+      "updates": [
+        "GATE-LEDGER",
+        "AUTHZ policy refs"
+      ],
+      "invalidates": [
+        "current_gate_profile",
+        "current_context_pack"
+      ],
+      "next_allowed_stage": "CP3"
+    },
+    "block_release": {
+      "description": "发布阻断，不能进入 READY / READY_WITH_RISK。",
+      "creates": [
+        "release_blocker"
+      ],
+      "updates": [
+        "GATE-LEDGER",
+        "CHECKPOINT-LEDGER"
+      ],
+      "invalidates": [
+        "CP8_release_context"
+      ],
+      "next_allowed_stage": "blocked"
+    },
+    "waive_with_risk_acceptance": {
+      "description": "可豁免检查项，但必须有 scope / expiry / approval_ref，并强制风险接受状态。",
+      "creates": [
+        "waiver_record",
+        "risk_acceptance_item"
+      ],
+      "updates": [
+        "GATE-LEDGER",
+        "CHECKPOINT-LEDGER"
+      ],
+      "invalidates": [],
+      "next_allowed_stage": "CP8"
+    }
+  },
+  "severity_route_requirements": {
+    "BLOCKER": "required",
+    "HIGH": "required",
+    "MEDIUM": "recommended",
+    "LOW": "optional",
+    "INFO": "optional"
+  }
+}

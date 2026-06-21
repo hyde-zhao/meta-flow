@@ -1,0 +1,36 @@
+{
+  "active_cr": {
+    "default_context": "summary_plus_active_packets",
+    "keep": "full_until_closed"
+  },
+  "audit_appendix": {
+    "allowed_when": [
+      "runtime-high-risk",
+      "human_audit",
+      "deep_review"
+    ],
+    "default_context": "high-risk-only"
+  },
+  "closed_cr": {
+    "default_context": "summary_only",
+    "full_doc_read_allowed_when": [
+      "human_audit",
+      "deep_review",
+      "field_conflict"
+    ]
+  },
+  "cp_results": {
+    "audit_appendix": "high-risk-only",
+    "json_truth": "keep",
+    "summary": "generated"
+  },
+  "ledgers": {
+    "append_only": true,
+    "default_context": "latest-window-or-index"
+  },
+  "schema_version": 1,
+  "story_packets": {
+    "keep_latest_in_default_context": true,
+    "older_versions": "deny_default"
+  }
+}

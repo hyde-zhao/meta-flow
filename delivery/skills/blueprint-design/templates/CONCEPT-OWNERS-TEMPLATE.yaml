@@ -1,0 +1,11 @@
+{
+  "concept_owners": {
+    "<concept_id>": {
+      "conflict_keys": [],
+      "forbidden_aliases": [],
+      "legacy_aliases": [],
+      "owner": "<canonical.module.owner>"
+    }
+  },
+  "schema_version": 1
+}

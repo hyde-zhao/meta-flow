@@ -1,0 +1,25 @@
+{
+  "artifacts": [],
+  "changed_files": [
+    {
+      "change_type": "added",
+      "path": "tests/fixtures/context_budgeted/e2e_fixture.py"
+    }
+  ],
+  "commands": [
+    {
+      "command": "pytest tests/test_context_budgeted_flow_e2e.py",
+      "result": "pass"
+    }
+  ],
+  "cr_id": "CR-001",
+  "design_delta_ref": null,
+  "return_ref": "process/returns/STORY-MF013-S01.CP6.return.json",
+  "risks": [],
+  "schema_version": 1,
+  "stage": "CP6",
+  "story_id": "STORY-MF013-S01",
+  "tests": [],
+  "waivers": []
+}
+

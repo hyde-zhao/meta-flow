@@ -1,0 +1,19 @@
+{
+  "profiles": {
+    "process-lite": {
+      "human_gates": [
+        "CP8-lite"
+      ],
+      "max_context_tokens": 12000,
+      "stages": [
+        "CP0",
+        "CP2-lite",
+        "CP6-lite",
+        "CP7-lite",
+        "CP8-lite"
+      ]
+    }
+  },
+  "schema_version": 1
+}
+

@@ -37,34 +37,37 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 - 修改 `REQUIREMENTS.md` 或 `ARCHITECTURE-DECISION.md`
 - 决定是否放行到文档阶段（这是 host-orchestrator 的决定）
 
+## 统一上下文与输出契约
+
+必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`。
+
+### Input Contract
+
+- CP7 先读 `process/context/CP7-VERIFICATION-CONTEXT.yaml` 或 Story CP7 verify packet；CP8 先读 `process/context/CP8-DELIVERY-CONTEXT.yaml` 与 `process/release/RELEASE-CONTEXT.yaml`。
+- 默认机器状态只读 `process/state/STATE.current.json`；验证证据优先读 Story Return Packet、Evidence Index、CP result JSON 和 ledger refs。
+- 只能默认读取 context / packet `allowed_reads`。完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW、完整 diff、全量 Story 和 `process/STATE.md` 属于 `do_not_read_by_default`。
+- 需要深查全文时必须写 `full_doc_read_reason` 和 `read_expansion_log`。
+
+### Output Contract
+
+- 验证输出优先写 Verification Return Packet、Evidence Index、CP7 result JSON、TEST-REPORT / REVIEW 摘要和 release context；不得复制完整日志或完整 review 正文。
+- `release_decision=READY|READY_WITH_RISK|NOT_READY` 只表示交付就绪；`RELEASED|FAILED` 必须有独立真实发布授权。
+
+### Handoff Contract
+
+- 交接给 meta-doc 或 host-orchestrator 时只传 `context_ref`、`verification_return_ref`、`evidence_ref`、`cp_result_ref`、`release_context_ref`、风险 refs 和不授权项摘要。
+
 ## 默认加载内容
 
-- `process/context/CP7-VERIFICATION-CONTEXT.yaml`（Story / Feature 验证阶段优先读取）
+- `process/context/CP7-VERIFICATION-CONTEXT.yaml` 或 Story CP7 verify packet（Story / Feature 验证阶段优先读取）
 - `process/context/CP8-DELIVERY-CONTEXT.yaml`（交付就绪阶段优先读取）
-- `process/VALIDATION-ENV.yaml`（`validation_mode=runtime|mixed` 且需要真实运行时必须；其他模式可记录等价验证方式和 N/A 理由）
-- 已批准 Story 卡片（当前批次）
-- 已完成实现的产物文件
-- `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md`
-- `process/stories/STORY-{id}-{story_slug}-IMPLEMENTATION.md`、`docs/features/<feature>/IMPLEMENTATION.md`，或 Story 卡片 `implementation_context` / DEV-LOG 中的低风险实现摘要
-- `docs/quality/TEST-STRATEGY.md`（若存在；首次验证时生成）
-- `docs/quality/VERIFICATION-REPORT.md`（若存在；复验或发布准备时读取）
-- `delivery/doc/PLATFORM-CONTRACTS.yaml`
-- `process/PLATFORM-INSTALL-SPEC.md`
-- 活跃 `process/changes/CR-*.md`（若验证对象来自变更）
-- `docs/product/SCENARIOS.yaml` 与 `docs/product/TEST-MATRIX.md`（若存在）
-- `docs/quality/TEST-REPORT.md` / `docs/quality/REVIEW.md`（发布准备时必须读取）
-- `docs/quality/FIXES.md`（若存在 findings）
-- `process/evals/runs/<run-id>/run-summary.json`、`docs/quality/EVAL-SUITE-HEALTH.md`、`docs/quality/FAILURE-BACKLOG.md`（当 `workflow_eval_required=true`）
-- `docs/release/RELEASE-NOTES.md`（发布准备时必须读取或生成）
-- `docs/release/DEPLOY-CHECKLIST.md`（发布准备时必须读取或生成）
-- `docs/release/ROLLBACK.md`（发布准备时必须读取或生成）
-- `docs/release/MIGRATION.md`（发布准备时必须读取或生成）
-- `docs/release/FEEDBACK.md`（发布准备时必须读取或生成）
+- `process/state/STATE.current.json`
+- context / packet `allowed_reads` 中列出的 `process/VALIDATION-ENV.yaml`、Story Return Packet、Evidence Index、CP6 result、实现摘要、测试策略摘要、eval run summary、CR summary、release context 和平台契约
 - `process/release/RELEASE-CONTEXT.yaml`（发布准备时优先读取或生成；不得用完整上游文档替代）
 
-**不加载**：历史草稿、早期失败轮次的产物、完整会话 transcript、无关 Story、无关 LLD 和完整 diff。
+**do_not_read_by_default**：`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、历史草稿、早期失败轮次的产物、完整会话 transcript、无关 Story、无关 LLD、完整 diff、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW。
 
-若 CP7 / CP8 capsule 已能说明验证或发布范围，不要额外读取完整 HLD、全部 LLD、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW 或完整 release 文档；必须展开读取时，把原因写入 `STATE.md.context_budget.read_expansion_log[]` 或 capsule `read_expansion_log[]`。
+若 CP7 / CP8 capsule 已能说明验证或发布范围，不要额外读取完整 HLD、全部 LLD、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW 或完整 release 文档；必须展开读取时，把原因写入 context `read_expansion_log` 或 `process/state/READ-EXPANSION-LEDGER.ndjson`。
 
 ## 质量评审与发布准备 Skill
 

@@ -1,0 +1,11 @@
+{
+  "policies": {
+    "NO_CREDENTIAL_READ": {
+      "default": "denied",
+      "requires": "explicit_per_run_authorization",
+      "title": "No credential/env/account read"
+    }
+  },
+  "schema_version": 1
+}
+

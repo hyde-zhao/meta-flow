@@ -11,7 +11,9 @@ status: active
 
 ## 目标
 
-读取并更新 `process/STATE.md`，根据当前阶段的退出条件判断是否可推进、是否需要回退、下一步应唤醒哪个 Agent，并保持状态机与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致。
+读取并更新轻量运行态、ledger 和 legacy 状态摘要，根据当前阶段的退出条件判断是否可推进、是否需要回退、下一步应唤醒哪个 Agent，并保持状态机与 `skills/state-router/templates/STATE-TEMPLATE.md` 及 `delivery/rules/AGENT-SKILL-CONTRACT.md` 一致。
+
+默认机器状态入口是 `process/state/STATE.current.json`。`STATE.md 是人类摘要` 和 legacy fallback；新项目不得把巨型 `process/STATE.md` 作为子 agent 默认读取入口。
 
 ## 适用场景
 
@@ -30,16 +32,18 @@ status: active
 ## 前置条件
 
 - [ ] `process` 路由已检查：已存在健康 `process/STATE.md`，或已通过 `meta-flow workspace link` / 等价动作建立外置过程目录与软链接
-- [ ] `process/STATE.md` 已存在，或在 `process` 路由健康、外置目标已确认后允许由 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化
+- [ ] `process/state/STATE.current.json` 已存在，或 legacy `process/STATE.md` 已存在；首次初始化必须在 `process` 路由健康、外置目标已确认后执行
 - [ ] 当前阶段相关产物的存在性和确认状态可被检查
 
 ## 必须读取的输入
 
-- `process/STATE.md`（若已存在）
+- `process/state/STATE.current.json`（默认机器状态入口，若已存在）
+- `process/state/CR-LEDGER.ndjson`、`STORY-LEDGER.ndjson`、`GATE-LEDGER.ndjson`、`RUN-LEDGER.ndjson`、`CHECKPOINT-LEDGER.ndjson`、`HANDOFF-LEDGER.ndjson`、`AGENT-DISPATCH-LEDGER.ndjson`（按当前查询范围读取）
+- `process/STATE.md`（仅 legacy fallback、人类摘要、迁移兼容或 state v2 缺失时读取）
 - `skills/state-router/templates/STATE-TEMPLATE.md`
 - `skills/checkpoint-manager/SKILL.md`
 - `meta-flow check cr-tracking`（若存在）：CR 台账、正式 CR 和 `STATE.md.active_change` 一致性预检
-- `process/context/*-CONTEXT.yaml`：当前阶段上下文胶囊；默认优先读取
+- `process/context/*-CONTEXT.yaml` / `process/context/*.context.json` / `process/context/stories/*.json`：当前阶段上下文胶囊；默认优先读取
 - 与当前阶段直接相关的上游文档（仅在 capsule 缺失、冲突、字段不足、人工审计或深度评审触发时读取全文）：
   - `process/REQUEST.md`
   - `docs/product/USE-CASES.md`
@@ -72,7 +76,7 @@ status: active
   - `process/release/RELEASE-CONTEXT.yaml`
   - `README.md`
   - `USER-MANUAL.md`
-- Story 执行阶段需要读取 `process/stories/STORY-*.md`、`process/stories/STORY-*-LLD.md`、`process/stories/STORY-*-IMPLEMENTATION.md` 与 `process/STORY-STATUS.md`
+- Story 执行阶段默认读取 Story ledger、Story packet、return packet、evidence index 和 CP result；`process/stories/STORY-*.md`、`process/stories/STORY-*-LLD.md`、`process/stories/STORY-*-IMPLEMENTATION.md` 与 `process/STORY-STATUS.md` 仅在 context `allowed_reads` 指明、字段冲突、人工审计或 legacy fallback 时读取。
 
 ## 知识来源
 
@@ -88,6 +92,7 @@ status: active
 ### 1. 初始化或读取状态
 
 0. 读写 `process/STATE.md` 前必须先执行 `meta-flow workspace check` 或等价检查。若 `process` 缺失、断链、`process/STATE.md` 缺失且不是首次初始化、`project_name` 不匹配或路由元数据冲突，必须阻断流程；不得直接创建本地 `process/STATE.md` 绕过外置路由。
+0.1 新项目和已迁移项目必须优先读取 `process/state/STATE.current.json`，并使用 ledgers 作为 CR、Story、Gate、Run、Handoff 和 Dispatch 的机器真相源；`process/STATE.md` 只用于人类摘要渲染和 legacy fallback。
 1. 首次初始化时，若用户或项目规则已确认 `artifact_root` 和 `project_name`，必须先执行或等价完成 `meta-flow workspace link --artifact-root <artifact_root> --project-name <project_name>`，创建 `<artifact_root>/process/<project_name>/`、基础子目录和 `<project-root>/process` 软链接，再以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化 `process/STATE.md`。
 2. 若 `artifact_root` / `project_process_root` 未知，必须强制中断并要求用户提供目录；不得猜测 artifact 仓库位置，不得退回普通本地 `process/`。
 3. 仅当用户明确选择兼容模式，或当前仓库已存在未迁移的 legacy `process/` 且 `STATE.md.artifact_routing.routing_mode=local-directory`，才允许本地目录模式；必须写入 `artifact_routing.migration_status` 和后续迁移动作。

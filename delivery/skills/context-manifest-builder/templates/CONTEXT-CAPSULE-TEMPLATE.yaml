@@ -16,11 +16,16 @@ token_control:
   max_summary_items: 0
   full_doc_read_policy: "only-on-missing-conflict-audit-or-deep-review"
   full_doc_read_reason: ""
-  default_instruction: "Agent 必须先读取本 capsule；只有触发 full_doc_read_policy 时才读取完整正式文档，并在 read_expansion_log 记录原因。"
+  default_instruction: "Agent 必须先读取本 capsule，并且只读取 allowed_reads / must_read；只有触发 full_doc_read_policy 时才读取完整正式文档，并在 read_expansion_log 记录原因。"
+
+allowed_reads:
+  - path: "process/state/STATE.current.json"
+    reason: "轻量运行态、当前阶段、活跃变更和下一步"
+    required: true
 
 must_read:
-  - path: "process/STATE.md"
-    reason: "状态机、当前阶段、门禁和上下文预算"
+  - path: "process/state/STATE.current.json"
+    reason: "轻量运行态、当前阶段、门禁和上下文预算"
     required: true
 
 read_if_needed:
@@ -28,6 +33,14 @@ read_if_needed:
     trigger: "capsule 缺失字段、正式文档冲突、人工审计、深度评审或下游任务明确需要"
 
 do_not_read_by_default:
+  - path_or_pattern: "process/STATE.md"
+    reason: "人类摘要和 legacy fallback，不作为 agent 默认读取入口"
+  - path_or_pattern: "process/DEVELOPMENT-PLAN.yaml"
+    reason: "计划长文不属于默认上下文，应由 summary / Story packet 承载"
+  - path_or_pattern: "process/changes/CR-*.md"
+    reason: "默认读取 CR summary / CR ledger，全文只在审计或冲突时读取"
+  - path_or_pattern: "process/stories/*-LLD.md"
+    reason: "默认读取 Story packet / design summary，全文 LLD 只在实现或审计需要时读取"
   - path_or_pattern: "process/archive/**"
     reason: "历史归档不属于当前阶段默认上下文"
   - path_or_pattern: "process/discussions/**"

@@ -14,6 +14,8 @@ status: active
 
 确认“能发布”而不只是“测试通过”。发布阶段必须先形成精简 `Release Context Capsule`，采用 `capsule-first` 读取策略，再按 `release_artifact_profile` 裁剪发布产物，输出可路由的 `release_decision`。
 
+本 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`：发布准备默认消费 `process/release/RELEASE-CONTEXT.yaml`、CP result、evidence index 和摘要，不复制完整上游文档。
+
 发布结论只允许使用：
 
 | release_decision | 含义 | 是否需要独立真实发布授权 |
@@ -25,6 +27,8 @@ status: active
 | `FAILED` | 发布动作失败，需要修复、回滚或后续 CR | 是 |
 
 CP8 默认只允许推进到 `READY` / `READY_WITH_RISK` / `NOT_READY`。`RELEASED` / `FAILED` 必须有用户对真实发布、publish、live、外部接口、数据写入或生产操作的独立授权和执行证据；CP8 `approve` 不等于真实发布授权。
+
+风险接受和 waiver 必须服从 `process/policies/WAIVER-POLICY.json`。任何 `WAIVED` 检查项必须有 scope、expiry、approval_ref 和 forces_release_status；需要风险接受的 waiver 必须推动 `READY_WITH_RISK`，不得静默写成 `READY`。未授权 runtime、credential / secret、missing dispatch evidence、runtime-high-risk forbidden path、missing read expansion log、missing evidence 和 false runtime-ready capability claim 不可豁免，发布结论只能是 `NOT_READY` 或阻断。
 
 ## 发布产物 profile
 
@@ -61,6 +65,7 @@ CP8 默认只允许推进到 `READY` / `READY_WITH_RISK` / `NOT_READY`。`RELEAS
 默认只读取：
 
 - `process/release/RELEASE-CONTEXT.yaml`，若不存在则先生成。
+- `process/state/STATE.current.json` 中的当前阶段、active context 和 open risks。
 - `docs/quality/TEST-REPORT.md` 的结论段或摘要段。
 - `docs/quality/REVIEW.md` 的 findings 摘要。
 - diff / 变更文件清单摘要。
@@ -69,6 +74,7 @@ CP8 默认只允许推进到 `READY` / `READY_WITH_RISK` / `NOT_READY`。`RELEAS
 按需读取规则：
 
 - 不得默认读取完整 HLD、全部 LLD、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW 或完整 diff。
+- `process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 `process/changes/CR-*.md` 和全量 Story 也属于 `do_not_read_by_default`。
 - Capsule 字段缺失、证据路径不可读、结论冲突或用户要求深查时，才回读对应上游原文。
 - 回读原文后只抽取结论、风险 ID、证据路径和必要一句话摘要，不把长日志、全文 diff 或上游文档正文复制进发布产物。
 

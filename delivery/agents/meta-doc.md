@@ -26,22 +26,36 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob
 - 评估产物质量（这是 meta-qa 的职责）
 - 决定是否进入终验（这是 host-orchestrator 的职责）
 
+## 统一上下文与输出契约
+
+必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`。
+
+### Input Contract
+
+- 先读 `process/context/CP8-DELIVERY-CONTEXT.yaml` 和 `process/release/RELEASE-CONTEXT.yaml`；默认机器状态只读 `process/state/STATE.current.json`。
+- 只能默认读取 context `allowed_reads` / `must_read` 与安装清单列出的当前交付件。`process/STATE.md`、完整 Story LLD、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW、完整 diff 和完整会话 transcript 属于 `do_not_read_by_default`。
+- 需要全文读取时，必须写 `full_doc_read_reason` 和 `read_expansion_log`。
+
+### Output Contract
+
+- README / USER-MANUAL 只解释当前交付能力、安装方式、门禁协议、上下文预算和不授权边界；不得复述完整过程文档、完整 review 或 agent 推理。
+- 授权边界用 `authz_policy_refs` 或短摘要；不得在普通用户文档中重复展开 policy 全文。
+
+### Handoff Contract
+
+- 交还 host-orchestrator 时只传 `doc_paths`、`release_context_ref`、`evidence_ref`、文档缺口摘要和 CP8 终验输入。
+
 ## 默认加载内容
 
-- `process/context/CP8-DELIVERY-CONTEXT.yaml`（若存在，优先读取交付范围、风险、不授权项和文档缺口）
-- `delivery/agents/<主Agent>.md`（**必须**，工具的完整行为定义来源）
-- `delivery/doc/HLD.md`（**必须**，架构概览、核心概念、设计决策参考）
-- `docs/product/REQUIREMENTS.md`（**必须**，功能范围边界和验收标准）
-- `delivery/doc/INSTALL-MANIFEST.yaml`（若存在，从中提取 Skill/工具清单）
-- `docs/quality/VERIFICATION-REPORT.md` 或 Feature scoped 等价文件（若存在，提取验证范围、验证对象、剩余风险和失败模式）
+- `process/context/CP8-DELIVERY-CONTEXT.yaml` 或 CP8 context pack（若存在，优先读取交付范围、风险、不授权项和文档缺口）
+- `process/state/STATE.current.json`
 - `process/release/RELEASE-CONTEXT.yaml`（若存在，提取 `release_artifact_profile`、`release_decision`、版本号决策、发布范围、风险、不授权项和发布后观察计划）
-- `docs/design/ARCHITECTURE-DECISION.md`（若存在，角色定义和技术选型参考）
-- `process/stories/STORY-*-IMPLEMENTATION.md`、`docs/features/<feature>/IMPLEMENTATION.md` 或 CP6 中的低风险实现摘要（若存在，用于说明实现证据、验证输入和交付边界）
-- 所有 Skill 文件（从 `INSTALL-MANIFEST.yaml` 列表或 `delivery/skills/` 目录加载）
+- context `allowed_reads` / `must_read` 中列出的 `delivery/agents/<主Agent>.md`、HLD / ADR 摘要、requirements 摘要、verification summary、安装清单、Skill 清单和实现摘要
+- 所有 Skill 文件只从 `INSTALL-MANIFEST.yaml` 列表或当前交付范围加载；不得默认递归读取无关 Skill 历史版本
 
-**不加载**：CLARIFICATION-LOG.md、未被 CP6 引用的 Story 开发日志、LLD 文件、早期草稿、完整会话 transcript、完整 TEST-MATRIX、完整 REVIEW、完整 diff。
+**do_not_read_by_default**：`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、CLARIFICATION-LOG.md、未被 CP6 引用的 Story 开发日志、LLD 文件、早期草稿、完整会话 transcript、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW、完整 diff。
 
-若 CP8 capsule 或 `RELEASE-CONTEXT.yaml` 已能说明交付范围和风险，不要额外读取全部上游长文档；必须展开读取时，把原因写入 `STATE.md.context_budget.read_expansion_log[]` 或 capsule `read_expansion_log[]`。
+若 CP8 capsule 或 `RELEASE-CONTEXT.yaml` 已能说明交付范围和风险，不要额外读取全部上游长文档；必须展开读取时，把原因写入 context `read_expansion_log` 或 `process/state/READ-EXPANSION-LEDGER.ndjson`。
 
 当文档对象是 Meta Flow 自身或包含工作流治理时，允许只读加载 `process/checks/CP*.md`、`process/checkpoints/CP*.md` 的路径和结论摘要，用于解释追溯链；不得复述 agent 推理过程。
 

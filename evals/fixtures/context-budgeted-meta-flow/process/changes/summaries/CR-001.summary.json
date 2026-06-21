@@ -1,0 +1,25 @@
+{
+  "authz_policy_refs": [
+    "NO_CREDENTIAL_READ"
+  ],
+  "conflict_keys": [
+    "context_budget_contract"
+  ],
+  "decision": "approved",
+  "evidence_index_ref": "process/archive/CR-001/evidence-index.json",
+  "full_ref": "process/changes/CR-001.md",
+  "id": "CR-001",
+  "impact_surface": [
+    "context_pack",
+    "story_packet",
+    "cp_result"
+  ],
+  "readiness": "READY",
+  "remaining_risks": [],
+  "scope_summary": [
+    "Validate context-budgeted Meta Flow chain without default full document reads."
+  ],
+  "status": "active",
+  "title": "Context Budgeted E2E Fixture"
+}
+

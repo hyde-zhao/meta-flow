@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "story_id": "STORY-CR123-S01",
+  "feature_id": "data.manifest",
+  "delta_type": "patch",
+  "target_doc": "docs/features/data-manifest/DESIGN.md",
+  "changes": [
+    {
+      "section": "Schema Versioning",
+      "operation": "add",
+      "summary": "Add a compatibility rule for missing schema_version in legacy fixtures."
+    }
+  ],
+  "requires_feature_doc_update": true,
+  "status": "pending",
+  "merged_ref": null,
+  "deferred_reason": null
+}

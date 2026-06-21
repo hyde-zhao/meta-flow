@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "checkpoint": "CP6",
+  "checkpoint_id": "CP6-STORY-CR123-S01",
+  "profile": "standard-code",
+  "story_id": "STORY-CR123-S01",
+  "cr_id": "CR-123",
+  "context_ref": "process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+  "dispatch_refs": [
+    "ADE-0001"
+  ],
+  "evidence_ref": "process/evidence/STORY-CR123-S01.CP6.index.json",
+  "items": [
+    {
+      "id": "CP6-01",
+      "category": "implementation",
+      "name": "Implementation matches Story Context Contract",
+      "status": "PASS",
+      "severity": "BLOCKER",
+      "evidence_refs": [
+        "process/evidence/STORY-CR123-S01.CP6.index.json#changed_files"
+      ],
+      "owner": "meta-dev",
+      "route_on_fail": "rework_same_story",
+      "waiver_ref": null,
+      "notes": ""
+    }
+  ],
+  "blockers": [],
+  "waivers": [],
+  "read_expansion_refs": [],
+  "decision": "PASS",
+  "next_route": "CP7",
+  "checked_at": "2026-06-21T00:00:00+00:00"
+}

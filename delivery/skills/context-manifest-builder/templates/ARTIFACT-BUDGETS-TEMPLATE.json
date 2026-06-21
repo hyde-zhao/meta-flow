@@ -1,0 +1,33 @@
+{
+  "state_current_max_bytes": 20480,
+  "state_md_max_bytes": 12288,
+  "context_pack": {
+    "CP2": 12000,
+    "CP3": 16000,
+    "CP5": 22000,
+    "CP6": 16000,
+    "CP7": 18000,
+    "CP8": 14000
+  },
+  "artifact_max_bytes": {
+    "cr_summary": 4096,
+    "story_summary": 4096,
+    "compact_decision_brief": 12288,
+    "full_lld": 20480,
+    "cp_check_lite": 8192
+  },
+  "output_profiles": {
+    "story_return_summary": {
+      "max_words": 800
+    },
+    "cp_summary": {
+      "max_words": 600
+    },
+    "decision_brief_compact": {
+      "max_words": 1200
+    },
+    "feature_design_summary": {
+      "max_words": 1000
+    }
+  }
+}

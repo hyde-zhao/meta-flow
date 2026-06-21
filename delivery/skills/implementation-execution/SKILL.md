@@ -76,7 +76,9 @@ status: active
 8. **平台差异检查**：涉及 Claude / Codex / OpenClaw 时，检查平台专用 schema、AskUserQuestion、request_user_input 降级、安装路径和 dry-run。
 9. **整体验证**：运行适用的 `pytest`、guardrail、install dry-run、`git diff --check`、lint / format / 类型检查；未运行项必须说明原因。
 10. **输出实现交接摘要**：写入 `IMPLEMENTATION.md` 或 Story 实现摘要，列出完成内容、行为变化、受影响文件、验证、未运行检查、剩余风险和 QA / Review / Doc 关注点。
-11. **反馈设计缺口**：发现 Feature 边界、架构约束、Story 细节、用户确认点或测试验收不足时，写入设计缺口反馈；阻塞项交回 host-orchestrator。
+11. **输出 Story Return Packet**：写入 `process/returns/STORY-*.CP6.return.json`，记录 touched files、contract changes、boundary check、verification commands、risks、waivers 和 next route，并确保可通过 `meta-flow story return-check`。
+12. **生成 Evidence Index**：用 `meta-flow story evidence-index --return <return-packet>` 生成 `process/evidence/STORY-*.CP6.index.json`，CP6 摘要只引用该索引，不复制完整证据正文。
+13. **反馈设计缺口**：发现 Feature 边界、架构约束、Story 细节、用户确认点或测试验收不足时，写入设计缺口反馈；若改变长期 Feature DESIGN / ADR / HLD，写入 `process/design-deltas/STORY-*.delta.json`。
 
 ## 输出文件 / 输出模板
 
@@ -85,6 +87,9 @@ status: active
 | Story 实现说明 | `process/stories/STORY-{id}-{story_slug}-IMPLEMENTATION.md` | `skills/implementation-execution/templates/IMPLEMENTATION-TEMPLATE.md` |
 | Feature 实现说明 | `docs/features/<feature>/IMPLEMENTATION.md` | `skills/implementation-execution/templates/IMPLEMENTATION-TEMPLATE.md` |
 | 实现日志 | `DEV-LOG.md` 或 Story scoped DEV-LOG | Story / 项目既有约定 |
+| Story Return Packet | `process/returns/STORY-{id}.CP6.return.json` | `skills/context-manifest-builder/templates/STORY-RETURN-PACKET-TEMPLATE.json` |
+| Evidence Index | `process/evidence/STORY-{id}.CP6.index.json` | `skills/context-manifest-builder/templates/EVIDENCE-INDEX-TEMPLATE.json` |
+| Design Delta | `process/design-deltas/STORY-{id}.delta.json` | `skills/implementation-design/templates/DESIGN-DELTA-TEMPLATE.json` |
 | CP6 自动检查输入 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | `checkpoint-manager` |
 
 ## IMPLEMENTATION 生成规则
@@ -119,6 +124,9 @@ status: active
 - [ ] 平台差异检查完成或 N/A 原因明确。
 - [ ] 整体验证命令、结果和未运行项已记录。
 - [ ] 实现交接摘要包含 QA / Review / Doc 关注点。
+- [ ] `process/returns/STORY-*.CP6.return.json` 已记录实际 touched files、boundary check、verification commands 和 next route。
+- [ ] `process/evidence/STORY-*.CP6.index.json` 已生成，CP6 检查可引用该索引。
+- [ ] 如果实现改变长期设计，`process/design-deltas/STORY-*.delta.json` 已生成并指向目标 Feature DESIGN / ADR / HLD。
 - [ ] 设计缺口已反馈到正确层级，不被实现阶段静默吞掉。
 
 ## 不适用边界

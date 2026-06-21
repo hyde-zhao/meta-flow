@@ -41,3 +41,5 @@ package.json
 .agents/
 .claude/
 .codex/
+.AGENTS.md
+.CLAUDE.md

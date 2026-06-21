@@ -1,0 +1,106 @@
+{
+  "module_boundaries": {
+    "adapters": {
+      "may_import": [
+        "quant_lab.core"
+      ],
+      "must_not_import": [],
+      "optional_sdk_allowed": true,
+      "package": "quant_lab.adapters",
+      "paths": [
+        "quant_lab/adapters"
+      ],
+      "risk_profile": "runtime-high-risk"
+    },
+    "core": {
+      "may_import": [],
+      "must_not_import": [
+        "quant_lab.data",
+        "quant_lab.research",
+        "quant_lab.adapters",
+        "quant_lab.trading"
+      ],
+      "package": "quant_lab.core",
+      "paths": [
+        "quant_lab/core"
+      ],
+      "risk_profile": "standard-code"
+    },
+    "data": {
+      "may_import": [
+        "quant_lab.core"
+      ],
+      "must_not_import": [
+        "quant_lab.research",
+        "quant_lab.trading"
+      ],
+      "package": "quant_lab.data",
+      "paths": [
+        "quant_lab/data"
+      ],
+      "risk_profile": "standard-code"
+    },
+    "research": {
+      "may_import": [
+        "quant_lab.core",
+        "quant_lab.data"
+      ],
+      "must_not_import": [
+        "quant_lab.trading",
+        "quant_lab.adapters.qmt_terminal_direct",
+        "quant_lab.adapters.miniqmt_gateway"
+      ],
+      "package": "quant_lab.research",
+      "paths": [
+        "quant_lab/research"
+      ],
+      "risk_profile": "standard-code"
+    },
+    "trading": {
+      "may_import": [
+        "quant_lab.core"
+      ],
+      "must_not_import": [
+        "quant_lab.research"
+      ],
+      "package": "quant_lab.trading",
+      "paths": [
+        "quant_lab/trading"
+      ],
+      "risk_profile": "runtime-high-risk"
+    }
+  },
+  "risk_rings": {
+    "forbidden_imports": [
+      {
+        "from": "research",
+        "to": "trading"
+      },
+      {
+        "from": "core",
+        "to": "adapters"
+      },
+      {
+        "from": "core",
+        "to": "trading"
+      },
+      {
+        "from": "data",
+        "to": "trading"
+      },
+      {
+        "from": "strategies",
+        "to": "trading"
+      }
+    ],
+    "runtime_high_risk_if_touched": [
+      "trading/**",
+      "**/qmt*/**",
+      "**/miniqmt*/**",
+      "**/xtquant*/**",
+      "**/credentials/**",
+      "**/.env*"
+    ]
+  },
+  "schema_version": 1
+}

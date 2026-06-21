@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "story_id": "STORY-CR123-S01",
+  "cr_id": "CR-123",
+  "stage": "CP6",
+  "return_ref": "process/returns/STORY-CR123-S01.CP6.return.json",
+  "changed_files": [
+    {
+      "path": "src/example.py",
+      "change_type": "modified"
+    }
+  ],
+  "commands": [
+    {
+      "command": "pytest tests/example",
+      "result": "pass"
+    }
+  ],
+  "tests": [],
+  "artifacts": [],
+  "risks": [],
+  "waivers": [],
+  "design_delta_ref": null
+}

@@ -1,0 +1,12 @@
+{
+  "cli_name": "<cli-name>",
+  "legacy_aliases": [],
+  "package_mode": true,
+  "product_name": "<product-name>",
+  "public_api_files": [
+    "<package>/__init__.py"
+  ],
+  "python_import": "<package>",
+  "repo_name": "<repo-name>",
+  "schema_version": 1
+}

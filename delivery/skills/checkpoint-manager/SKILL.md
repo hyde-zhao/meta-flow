@@ -21,6 +21,8 @@ status: active
 - 关键决策门控：CP2 / CP3 / CP5 / CP8 生成人工审查稿和 Decision Brief；CP4 只生成自动预检并汇入 CP5。
 - 上下文门控：CP2 / CP3 / CP5 / CP6 / CP7 / CP8 必须检查对应 `process/context/*-CONTEXT.yaml`，或记录 `N/A` / `WAIVED` / `BLOCKED` 原因。
 
+本 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`：CP 机器真相源优先使用 result JSON、evidence index、ledger 和 context refs；Markdown 只作为人类摘要或人工门禁入口。
+
 所有检查点必须采用 IPD 风格的四段结构：
 
 1. Entry Criteria
@@ -32,6 +34,8 @@ status: active
 
 | 类型 | 路径 | 说明 |
 |---|---|---|
+| 机器检查结果 | `process/checks/CP{n}-{slug}.result.json` | CP 检查机器真相源，必须符合 `schemas/CP-RESULT.schema.json`，可用 `meta-flow cp result-check` 校验 |
+| 人类检查摘要 | `process/checks/CP{n}-{slug}.summary.md` | 由 result JSON 渲染的人类摘要，可用 `meta-flow cp render-summary` 生成 |
 | 自动检查结果 | `process/checks/CP{n}-{slug}.md` | 由 agent 填写，必须包含逐项 PASS / FAIL / N/A / WAIVED |
 | 讨论日志 | `process/discussions/CP{n}-*-DISCUSSION-LOG.md` | CP2 / CP3 人类审计与恢复日志；不替代正式产物 |
 | 讨论恢复点 | `process/checks/CP{n}-DISCUSSION-CHECKPOINT.json` | CP2 / CP3 中断恢复状态；缺失时自动检查必须说明 N/A 或 blocked 原因 |
@@ -40,6 +44,14 @@ status: active
 | Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
 | Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
 | 阶段上下文胶囊 | `process/context/CP*-*-CONTEXT.yaml` | 默认读取入口；checkpoint 记录其状态和读取扩展理由 |
+| Story Context Contract | `process/context/stories/*.json` | Story 级 CP6 / CP7 默认读取入口 |
+| Evidence Index | `process/evidence/*.index.json` | CP6 / CP7 默认证据入口，避免复制完整日志和实现正文 |
+| Story Return Packet | `process/returns/*.return.json` | Story 实现 / 验证返回结果，供 CP result 消费 |
+| Checkpoint Ledger | `process/state/CHECKPOINT-LEDGER.ndjson` | 每个 CP result 追加一行 `checkpoint_result` 事件 |
+| Handoff Ledger | `process/state/HANDOFF-LEDGER.ndjson` | 每次阶段 / Story 交接追加一行 handoff 事件 |
+| Agent Dispatch Ledger | `process/state/AGENT-DISPATCH-LEDGER.ndjson` | 每次真实子 agent 调度追加一行 dispatch 事件 |
+| Failure Routing Policy | `process/policies/FAILURE-ROUTING.json` | `route_on_fail` 的机器枚举、creates / updates / invalidates / next_allowed_stage |
+| Waiver Policy | `process/policies/WAIVER-POLICY.json` | waiver 的 scope / expiry / approval_ref / non-waivable 规则 |
 
 `process/checks/` 属于运行态检查证据；`process/checkpoints/` 属于人工确认态文件。人工审查时，host-orchestrator 必须在用户提示中给出具体 `process/checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
 
@@ -67,7 +79,86 @@ status: active
 
 自动检查点存在任一 `FAIL` 且未被 `WAIVED` 时，结论必须为 `FAIL` 或 `BLOCKED`，不得进入人工确认。
 
+失败项不能只写自然语言处理意见。`BLOCKER` / `HIGH` 且状态为 `FAIL` / `BLOCKED` 的检查项必须设置 `route_on_fail`，且只能使用：
+
+```text
+rework_same_story
+reopen_cp5_design
+require_user_decision
+create_followup_candidate
+escalate_runtime_high_risk
+block_release
+waive_with_risk_acceptance
+```
+
+每个 route 的副作用由 `process/policies/FAILURE-ROUTING.json` 定义，至少包含 `creates`、`updates`、`invalidates` 和 `next_allowed_stage`。检查命令为：
+
+```bash
+meta-flow failure policy-check --project-root .
+meta-flow failure route-check --result process/checks/CP7-STORY.result.json --project-root .
+meta-flow check failure-routing --result process/checks/CP7-STORY.result.json --project-root .
+```
+
+`WAIVED` 不是万能通过。每个 `WAIVED` item 必须有 `waiver_ref`，并在 result `waivers[]` 中提供包含 `waiver_id`、`applies_to`、`scope`、`expires_at`、`approval_ref` 和 `forces_release_status` 的 waiver record。以下事项不可豁免：未授权 runtime access、credential / secret exposure、缺少真实 dispatch evidence、runtime-high-risk forbidden path、缺少 runtime-high-risk human gate、缺少 deny-default read expansion log、证据路径不存在、高风险 forbidden path、未授权或 fixture-only 能力被写成 runtime-ready / implemented。检查命令为：
+
+```bash
+meta-flow waiver policy-check --project-root .
+meta-flow waiver check --result process/checks/CP8-DELIVERY.result.json --project-root .
+meta-flow check waiver-policy --result process/checks/CP8-DELIVERY.result.json --project-root .
+```
+
 CP7 是验证完成滚动门，允许使用更细的路由结论：`PASS`、`PASS_WITH_RISK`、`WAIVED`、`NEEDS_REWORK`、`NEEDS_DESIGN_CLARIFICATION`、`BLOCKED`。其中 `PASS_WITH_RISK` 可推进但必须汇入 CP8 风险接受输入；`NEEDS_REWORK` 路由回 meta-dev；`NEEDS_DESIGN_CLARIFICATION` 路由回 meta-se / host-orchestrator；`BLOCKED` 停止推进。
+
+## CP Result Schema
+
+CP 检查应优先产出机器可读 `*.result.json`，Markdown 只作为摘要或人工审查入口。`*.result.json` 至少包含：
+
+```json
+{
+  "schema_version": 1,
+  "checkpoint": "CP6",
+  "checkpoint_id": "CP6-STORY-CR123-S01",
+  "story_id": "STORY-CR123-S01",
+  "cr_id": "CR-123",
+  "context_ref": "process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+  "dispatch_refs": ["ADE-0001"],
+  "evidence_ref": "process/evidence/STORY-CR123-S01.CP6.index.json",
+  "items": [
+    {
+      "id": "CP6-01",
+      "category": "implementation",
+      "name": "Implementation matches Story Context Contract",
+      "status": "PASS",
+      "severity": "BLOCKER",
+      "evidence_refs": ["process/evidence/STORY-CR123-S01.CP6.index.json#changed_files"],
+      "owner": "meta-dev",
+      "route_on_fail": "rework_same_story",
+      "waiver_ref": null,
+      "notes": ""
+    }
+  ],
+  "blockers": [],
+  "waivers": [],
+  "read_expansion_refs": [],
+  "decision": "PASS",
+  "next_route": "CP7"
+}
+```
+
+检查命令：
+
+```bash
+meta-flow cp result-check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+meta-flow cp render-summary --result process/checks/CP6-STORY-CR123-S01.result.json
+meta-flow cp ledger-append --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint
+meta-flow failure route-check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+meta-flow waiver check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+```
+
+CP6 / CP7 的 result JSON 必须包含 `story_id`、`context_ref`、`dispatch_refs` 和 `evidence_ref`。存在 blocker 或未豁免的高严重度失败时，`decision` 不得为 `PASS` / `PASS_WITH_RISK`。
+
+CP6 / CP7 不得默认把完整 Story LLD、完整 IMPLEMENTATION、完整 TEST-REPORT、完整 REVIEW、完整 diff 或完整 agent transcript 复制进 Markdown 检查文件；只写 `context_ref`、`return_packet_ref`、`evidence_ref`、`dispatch_refs`、检查项结论和必要的一句话摘要。需要审计全文时，记录 `full_doc_read_reason`。
 
 ## 通用检查结果模板
 
@@ -654,6 +745,9 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 15 | 状态回写 | Story 状态、任务清单、偏差记录、implementation evidence 路径已更新 |
 | 16 | 无缓存产物 | `__pycache__`、构建缓存等不进入交付物 |
 | 17 | Agent Dispatch Evidence | 存在 meta-dev 的 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
+| 18 | Story Return Packet | `process/returns/STORY-*.CP6.return.json` 存在，并通过 `meta-flow story return-check`；touched files 未越过 Story Work Packet 的 `allowed_write_paths` / `forbidden_write_paths` |
+| 19 | Evidence Index | `process/evidence/STORY-*.CP6.index.json` 存在，并通过 `meta-flow story evidence-check`；CP6 Markdown 只引用索引，不复制完整证据正文 |
+| 20 | Design Delta | 若 `design_delta_required=true`，`process/design-deltas/STORY-*.delta.json` 存在，并通过 `meta-flow design delta-check` |
 
 ### Exit Criteria
 
@@ -669,6 +763,9 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - 代码变更
 - `process/stories/STORY-{id}-{story_slug}-IMPLEMENTATION.md`（强制场景）或 Story 实现摘要 / `DEV-LOG.md`（普通场景）
 - `DEV-LOG.md`
+- `process/returns/STORY-{id}.CP6.return.json`
+- `process/evidence/STORY-{id}.CP6.index.json`
+- `process/design-deltas/STORY-{id}.delta.json`（仅设计 delta 存在时）
 - `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md`
 - 更新后的 Story 状态
 - 对应 meta-dev handoff 的 `dispatch` 记录
@@ -714,6 +811,9 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 17 | 问题与剩余风险分级 | `BLOCKER` / `HIGH` / `MEDIUM` / `LOW` / `INFO` 已记录 owner、状态和下一步 |
 | 18 | 阶段决策合法 | CP7 结论只使用 `PASS` / `PASS_WITH_RISK` / `BLOCKED` / `NEEDS_REWORK` / `NEEDS_DESIGN_CLARIFICATION` / `WAIVED`，并带路由 |
 | 19 | Agent Dispatch Evidence | 存在 meta-qa 的 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
+| 20 | Story Return Packet | `process/returns/STORY-*.CP7.return.json` 存在，并通过 `meta-flow story return-check` |
+| 21 | Evidence Index | `process/evidence/STORY-*.CP7.index.json` 存在，并通过 `meta-flow story evidence-check`；CP7 Markdown 只引用索引，不复制完整证据正文 |
+| 22 | Design Delta 回写 | 需要 Feature DESIGN / ADR / HLD 回写的 design delta 在 CP8 前必须通过 `meta-flow design delta-check --require-merged`，否则路由到 `NEEDS_DESIGN_CLARIFICATION` 或 CP8 BLOCKED |
 
 ### Exit Criteria
 
@@ -729,6 +829,8 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `docs/quality/TEST-REPORT.md`（或 Story / Feature scoped 等价文件）
 - `docs/quality/REVIEW.md`（或 Story / Feature scoped 等价文件）
 - `docs/quality/FIXES.md`（若存在 findings；无 findings 时写 N/A 理由）
+- `process/returns/STORY-{id}.CP7.return.json`
+- `process/evidence/STORY-{id}.CP7.index.json`
 - `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md`
 - 缺陷记录或风险接受记录
 - 更新后的 `STORY-STATUS.md`
@@ -809,7 +911,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 4. 如果用户直接在对话中回复 `approve`，host-orchestrator 也必须补写人工审查结果文件，不能只改状态。`1/通过` 可作为历史兼容别名解析，但新提示不得再把多个等价别名混排给用户。
 5. `changes_requested` 必须路由给对应 agent 修订，并在重提时保留旧检查结果作为历史证据。
 6. `rejected` 必须回退到检查点定义的目标阶段或 Story 状态。
-7. CP6 / CP7 必须包含 `## Agent Dispatch Evidence` 小节；若缺少真实子 agent 证据且没有用户批准的 `inline-fallback`，结论只能是 `FAIL` 或 `BLOCKED`。
+7. CP6 / CP7 必须包含 `## Agent Dispatch Evidence` 小节；若缺少真实子 agent 证据且没有用户批准的 `inline-fallback`，结论只能是 `FAIL` 或 `BLOCKED`。CP6 / CP7 还必须引用 Story Return Packet 与 Evidence Index；Markdown 检查文件不得替代结构化 return / evidence 真相源。
 8. CP4 自动预检失败时不得进入 CP5；CP4 通过时不得单独要求人工确认，必须把摘要并入 CP5。
 9. CP2 / CP3 人工检查点发起前必须校验 discussion log / checkpoint 存在；若缺失且没有 N/A 理由，结论只能是 `BLOCKED`。
 10. CP5 人工检查点发起前必须校验 `STATE.md.parallel_execution.lld_clarification_queue`。存在未回答 `blocks_lld=true` item 时，CP5 结论只能是 `BLOCKED`；用户明确接受转 OPEN / Spike 的 item 必须写入 Decision Brief、LLD 第 12.1 节或 Story 技术说明，以及 DEV-LOG。

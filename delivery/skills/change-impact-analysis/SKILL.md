@@ -13,6 +13,8 @@ status: active
 
 受理变更请求，创建标准化 `CR-*.md` 或 fast-lane 轻量变更记录，执行五维度影响分析，判定 `rollback_to`、审批要求与是否需要从 `fast-lane` 升级到 `standard`，并同步更新当前工作流状态。CR 关闭或 CP8 终验时若产生后续事项，维护 follow-up tracking 台账和 CR 跟踪索引；只有用户决定推进某一候选项时，才从台账转为正式 CR 文件。
 
+本 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`：CR 长文只承载本次变更决策，默认上下文读取 CR summary / ledger；关闭 CR 后不得继续污染 active state。
+
 ## 适用场景
 
 - 用户直接提出需求变更
@@ -23,15 +25,17 @@ status: active
 ## 前置条件
 
 - [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
-- [ ] `process/STATE.md` 已存在且当前阶段明确
+- [ ] `process/state/STATE.current.json` 或 legacy `process/STATE.md` 已存在且当前阶段明确
 - [ ] 变更原因和影响范围已提供，或可从 ISSUE / RUN-EXEC 推断
 
 ## 必须读取的输入
 
-- `process/STATE.md`
+- `process/state/STATE.current.json`（默认机器状态入口）
+- `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.json|yaml`、`process/changes/summaries/*.summary.json`（若存在）
+- `process/STATE.md`（仅 legacy fallback、人类摘要或 state v2 缺失时读取）
 - 当前变更描述
 - 相关 ISSUE / RUN-EXEC / 上游文档（若存在）
-- 受影响的正式对象（如 `REQUIREMENTS.md`、`HLD.md`、`DEVELOPMENT-PLAN.yaml` 等）
+- 受影响正式对象的 summary / context refs；全文 `REQUIREMENTS.md`、`HLD.md`、`DEVELOPMENT-PLAN.yaml` 等仅在 `field_conflict`、`human_audit` 或 `deep_review` 时读取
 
 ## 知识来源
 
@@ -39,7 +43,7 @@ status: active
 - `skills/change-impact-analysis/templates/FOLLOW-UP-TRACKING-TEMPLATE.md`：CP8 后续事项台账结构基线
 - `skills/change-impact-analysis/templates/CR-INDEX-TEMPLATE.yaml`：CR 跟踪索引结构基线
 - `skills/change-impact-analysis/templates/CURRENT-REQUIREMENT-BASELINE-TEMPLATE.yaml`：当前需求基线结构基线
-- `meta-flow check cr-tracking`：`STATE.md.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性检查
+- `meta-flow cr check` / `meta-flow check cr-tracking`：`STATE.current.json.active_change`、CR ledger、正式 CR、summary、follow-up 台账和 `CR-INDEX` 的一致性检查
 - 当前工作流状态与正式文档：影响分析的事实来源
 - `AGENTS.md`：阶段、门控与回退语义
 
@@ -54,14 +58,14 @@ status: active
 7. 若当前为 `workflow_mode=fast-lane`，先执行快速模式升级判定：命中架构、权限、安装路径、外部接口、文件所有权冲突、多 Story 依赖或不可逆迁移时，必须升级为 `standard`。
 8. 给出 `impact_level`、`rollback_to`、`workflow_mode_after_change` 和审批结论。
 9. 将活跃变更单写回状态对象，并明确后续收敛路径。
-10. 若 CP8 或变更收敛阶段出现后续事项，只维护 `process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，并同步 `process/STATE.md.cr_tracking` 与 `process/changes/CR-INDEX.yaml`；不得预创建尚未启动的正式 CR 文件。新候选编号使用 `FU-CR{id}-NNN`、Spike 候选使用 `SP-CR{id}-NNN`、运行授权候选使用 `RA-CR{id}-NNN`，历史 `CR-020` 类候选编号只写入 `legacy_ids`。
-11. 当用户决定推进某一候选项时，先执行 CR 冲突预检：读取台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`、所有 `status=open|active|blocked` 的正式 CR，以及候选项的影响面。
+10. 若 CP8 或变更收敛阶段出现后续事项，只维护 `process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，并同步 `process/state/CR-LEDGER.ndjson`、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json`；legacy 项目可同步 `process/STATE.md.cr_tracking`。不得预创建尚未启动的正式 CR 文件。新候选编号使用 `FU-CR{id}-NNN`、Spike 候选使用 `SP-CR{id}-NNN`、运行授权候选使用 `RA-CR{id}-NNN`，历史 `CR-020` 类候选编号只写入 `legacy_ids`。
+11. 当用户决定推进某一候选项时，先执行 CR 冲突预检：读取台账、`STATE.current.json.active_change`、CR ledger、`process/changes/CR-INDEX.yaml|json`、所有 `status=open|active|blocked` 的正式 CR summary，以及候选项的影响面。
 12. 冲突预检必须比较：受影响正式文档、Story / LLD 批次、文件 owner、外部接口、权限 / 安全边界、运行授权、风险接受项和来源决策 ID。
 13. `candidate` / `spike_candidate` 不占执行锁；转为正式 CR 后才允许把台账状态改为 `active`。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或标记 `superseded` 中选择。
-14. 冲突预检通过后，再创建正式 `process/changes/CR-0xx-<slug>-YYYY-MM-DD.md`，并把台账中对应状态改为 `active`，链接正式 CR 文件，同时刷新 `STATE.md.cr_tracking` 与 `CR-INDEX.yaml`。
+14. 冲突预检通过后，再创建正式 `process/changes/CR-0xx-<slug>-YYYY-MM-DD.md`，并把台账中对应状态改为 `active`，链接正式 CR 文件，同时刷新 CR ledger、`STATE.current.json.active_change` 与 `CR-INDEX.yaml|json`。
 15. 正式 CR 创建后，台账只保留索引字段：`lifecycle_status`、`readiness_status`、`gate_status`、正式 CR 路径、阻塞原因、下一步、相关 active CR / blocked_by / superseded_by；详细需求、影响分析和文档处理决策放入正式 CR 文件。
-16. 正式 CR 关闭后回写台账状态为 `closed`，并同步 `STATE.md.cr_tracking`、`CR-INDEX.yaml` 和 CR frontmatter；候选项取消时写 `cancelled` 或 `superseded`，不得删除原行。
-17. 每次新增台账、启动候选 CR、关闭 CR 或状态查询发现冲突后，若存在 `meta-flow check cr-tracking`，必须运行或记录跳过原因；发现 `STATE.md.active_change` 指向已关闭 CR、多个 active CR 未授权、台账 candidate 已有正式 CR 文件等问题时，先修正索引或发起人工决策。
+16. 正式 CR 关闭后生成 summary，回写台账状态为 `closed`，并同步 CR ledger、`STATE.current.json`、`CR-INDEX.yaml|json` 和 CR frontmatter；候选项取消时写 `cancelled` 或 `superseded`，不得删除原行。
+17. 每次新增台账、启动候选 CR、关闭 CR 或状态查询发现冲突后，若存在 `meta-flow cr check` / `meta-flow check cr-tracking`，必须运行或记录跳过原因；发现 `STATE.current.json.active_change` 或 legacy `STATE.md.active_change` 指向已关闭 CR、多个 active CR 未授权、台账 candidate 已有正式 CR 文件等问题时，先修正索引或发起人工决策。
 18. 关闭或重解释历史 CR 时，若当前需求真相发生变化，必须更新 `process/baseline/CURRENT-REQUIREMENT-BASELINE.yaml` 的相关小节；不得要求后续 Agent 只靠历史 CR 推断当前需求。
 19. 已关闭 CR 被新事实修正时，不改写历史正文；在 CR frontmatter 或 `CR-INDEX.yaml.items[]` 中写入 `historical_baseline_status=reframed`、`reframed_by` 和 `reframe_summary`。
 
@@ -85,7 +89,7 @@ status: active
 - CR 必须统一复用 `skills/change-impact-analysis/templates/CR-TEMPLATE.md` 口径
 - 后续 CR 候选只能先进入 follow-up tracking 台账，机器状态优先使用 `lifecycle_status` / `readiness_status` / `gate_status`；legacy `status` 只作为兼容摘要，取值为 `candidate`、`active`、`blocked`、`spike_candidate`、`converted-to-spike`、`closed`、`cancelled`、`superseded`
 - 台账不得承载长需求正文；正式 CR 创建后，台账只保留索引，不重复详细内容
-- `process/changes/CR-INDEX.yaml` 或 `STATE.md.cr_tracking` 必须能机器读取 active / blocked / candidate / spike_candidate / stale_status_conflicts，不能只依赖 Markdown 正文归纳
+- `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml|json` 或 legacy `STATE.md.cr_tracking` 必须能机器读取 active / blocked / candidate / spike_candidate / stale_status_conflicts，不能只依赖 Markdown 正文归纳
 - 新 CR 创建或候选 CR 转 active 前必须完成 CR 冲突预检；影响面重叠时不得静默并行推进
 - `process/STATE.md.active_change` 非空时，新 CR 默认进入候选 / blocked 等待，除非冲突预检证明影响面完全不重叠且用户确认可并行
 - 需求 / 场景变更默认采用增量更新；不得用新草案整体替换旧基线
@@ -100,7 +104,7 @@ status: active
 - [ ] 原文档更新已说明旧基线保留方式，并要求目标文档包含 `## 修订记录`
 - [ ] `rollback_to` 与审批结论已填写
 - [ ] 若影响 Story / LLD / 实现设计，LLD 设计批次边界和批次确认门禁已填写
-- [ ] 当前状态已记录活跃变更单
+- [ ] 当前状态已用 `STATE.current.json.active_change` / CR ledger 记录活跃变更单，legacy 项目可同步 `STATE.md`
 - [ ] CP8 后续事项已按关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项分流
 - [ ] 后续 CR 候选只进入 follow-up tracking 台账，未预创建尚未启动的正式 CR 文件
 - [ ] 候选 CR 转 active 或新 CR 创建前已完成冲突预检，并记录处理结论

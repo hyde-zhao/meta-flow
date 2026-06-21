@@ -1,0 +1,121 @@
+{
+  "human_summary_ref": "docs/design/SOURCE-OF-TRUTH-MAP.md",
+  "machine_policy_ref": "process/policies/SOURCE-OF-TRUTH-MAP.yaml",
+  "objects": {
+    "cp_result": {
+      "default_context": "summary-or-index",
+      "edit_policy": "tool-generated",
+      "machine_truth": true,
+      "path": "process/checks/*.result.json",
+      "truth_role": "machine_truth"
+    },
+    "cp_summary": {
+      "default_context": "human-only",
+      "edit_policy": "tool-generated",
+      "generated_from": [
+        "process/checks/*.result.json"
+      ],
+      "machine_truth": false,
+      "path": "process/checks/*.summary.md",
+      "truth_role": "generated_summary"
+    },
+    "cr_lifecycle": {
+      "append_only": true,
+      "default_context": "summary-or-index",
+      "derived_outputs": [
+        "process/changes/CR-INDEX.json",
+        "process/changes/summaries/*.summary.json"
+      ],
+      "edit_policy": "append-only",
+      "machine_truth": true,
+      "path": "process/state/CR-LEDGER.ndjson",
+      "truth_role": "append_only_event_log"
+    },
+    "current_runtime_state": {
+      "default_context": "allowed",
+      "edit_policy": "tool-generated",
+      "machine_truth": true,
+      "path": "process/state/STATE.current.json",
+      "truth_role": "machine_truth"
+    },
+    "context_pack": {
+      "default_context": "entrypoint",
+      "edit_policy": "tool-generated-versioned",
+      "generated_from": [
+        "process/state/STATE.current.json",
+        "process/policies/READ-POLICY.json",
+        "process/changes/summaries/*.summary.json"
+      ],
+      "machine_truth": false,
+      "path": "process/context/*.context.json",
+      "truth_role": "generated_packet"
+    },
+    "evidence_index": {
+      "default_context": "summary-or-index",
+      "edit_policy": "tool-generated",
+      "generated_from": [
+        "process/returns/*.return.json"
+      ],
+      "machine_truth": true,
+      "path": "process/evidence/*.index.json",
+      "truth_role": "evidence_index"
+    },
+    "feature_design": {
+      "default_context": "summary-first",
+      "edit_policy": "manual-edit",
+      "machine_truth": true,
+      "paired_truth": [
+        "docs/design/FEATURE-REGISTRY.yaml"
+      ],
+      "path": "docs/features/<feature>/DESIGN.md",
+      "truth_role": "human_authored_truth"
+    },
+    "feature_registry": {
+      "default_context": "summary-or-index",
+      "edit_policy": "manual-edit",
+      "machine_truth": true,
+      "paired_truth": [
+        "docs/features/<feature>/DESIGN.md"
+      ],
+      "path": "docs/design/FEATURE-REGISTRY.yaml",
+      "truth_role": "machine_truth"
+    },
+    "human_state_summary": {
+      "default_context": "deny-default",
+      "edit_policy": "tool-generated",
+      "generated_from": [
+        "process/state/STATE.current.json"
+      ],
+      "machine_truth": false,
+      "path": "process/STATE.md",
+      "truth_role": "generated_summary"
+    },
+    "story_lifecycle": {
+      "append_only": true,
+      "default_context": "summary-or-index",
+      "edit_policy": "append-only",
+      "machine_truth": true,
+      "path": "process/state/STORY-LEDGER.ndjson",
+      "truth_role": "append_only_event_log"
+    },
+    "story_packet": {
+      "default_context": "entrypoint",
+      "edit_policy": "tool-generated-versioned",
+      "generated_from": [
+        "process/stories/STORY-*.md",
+        "docs/design/FEATURE-REGISTRY.yaml"
+      ],
+      "machine_truth": false,
+      "path": "process/context/stories/*.json",
+      "truth_role": "generated_packet"
+    },
+    "story_return": {
+      "default_context": "summary-or-index",
+      "edit_policy": "tool-generated",
+      "machine_truth": true,
+      "path": "process/returns/*.return.json",
+      "truth_role": "agent_return"
+    }
+  },
+  "schema_version": 1
+}

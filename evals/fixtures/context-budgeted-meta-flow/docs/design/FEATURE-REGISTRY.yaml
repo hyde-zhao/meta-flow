@@ -1,0 +1,11 @@
+features:
+  - feature_id: meta.context_budgeted_flow
+    title: Context Budgeted Flow
+    owner_context: meta_flow.context
+    status: implemented
+    risk_profile: process-lite
+    design_doc: docs/features/context-budgeted-flow/DESIGN.md
+    module_paths:
+      - meta_flow/context_pack
+      - tests/fixtures/context_budgeted
+

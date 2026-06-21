@@ -1,0 +1,2 @@
+{"dispatch_id":"ADE-MF013-001","event_type":"agent_dispatch","canonical_role":"meta-dev","tool_name":"fixture","status":"completed","spawned_at":"2026-06-21T00:00:00+00:00","completed_at":"2026-06-21T00:01:00+00:00","result_ref":"process/returns/STORY-MF013-S01.CP6.return.json"}
+

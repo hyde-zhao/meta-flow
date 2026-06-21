@@ -1,0 +1,23 @@
+{
+  "active_change": "CR-001",
+  "active_context_ref": null,
+  "active_story": "STORY-MF013-S01",
+  "authz_policy_refs": [
+    "NO_CREDENTIAL_READ"
+  ],
+  "blocked": false,
+  "current_phase": "story-execution",
+  "next_action": {
+    "text": "build CP6 context and validate Story return",
+    "type": "run_fixture"
+  },
+  "open_risks": [],
+  "pending_gate": null,
+  "project_id": "context-budgeted-meta-flow",
+  "routing_ref": "process/.meta-flow-process.yaml",
+  "schema_version": 2,
+  "source_refs": [],
+  "updated_at": "2026-06-21T00:00:00+00:00",
+  "workflow_mode": "standard"
+}
+

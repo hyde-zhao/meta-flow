@@ -76,6 +76,508 @@ SOFTWARE_WORKFLOW_REQUIRED_FILES = (
     "delivery/skills/story-planning/templates/RELEASE-SLICES-TEMPLATE.md",
     "delivery/skills/story-planning/templates/BACKLOG-TEMPLATE.md",
 )
+AGENT_SKILL_CONTRACT_REQUIRED_FILES = (
+    "delivery/rules/AGENT-SKILL-CONTRACT.md",
+)
+CONTEXT_BUDGETED_E2E_REQUIRED_FILES = (
+    "evals/fixtures/context-budgeted-meta-flow/README.md",
+    "evals/fixtures/context-budgeted-meta-flow/process/state/STATE.current.json",
+    "evals/fixtures/context-budgeted-meta-flow/process/state/CR-LEDGER.ndjson",
+    "evals/fixtures/context-budgeted-meta-flow/process/state/AGENT-DISPATCH-LEDGER.ndjson",
+    "evals/fixtures/context-budgeted-meta-flow/process/state/CHECKPOINT-LEDGER.ndjson",
+    "evals/fixtures/context-budgeted-meta-flow/process/policies/READ-POLICY.json",
+    "evals/fixtures/context-budgeted-meta-flow/process/changes/summaries/CR-001.summary.json",
+    "evals/fixtures/context-budgeted-meta-flow/process/changes/CR-001.md",
+    "evals/fixtures/context-budgeted-meta-flow/process/STATE.md",
+    "evals/fixtures/context-budgeted-meta-flow/process/DEVELOPMENT-PLAN.yaml",
+    "evals/fixtures/context-budgeted-meta-flow/process/stories/STORY-MF013-S01.md",
+    "evals/fixtures/context-budgeted-meta-flow/process/returns/STORY-MF013-S01.CP6.return.json",
+    "evals/fixtures/context-budgeted-meta-flow/process/evidence/STORY-MF013-S01.CP6.index.json",
+    "evals/fixtures/context-budgeted-meta-flow/process/checks/CP6-STORY-MF013-S01.result.json",
+    "evals/fixtures/context-budgeted-meta-flow/docs/design/FEATURE-REGISTRY.yaml",
+    "evals/fixtures/context-budgeted-meta-flow/docs/features/context-budgeted-flow/DESIGN.md",
+    "tests/test_context_budgeted_flow_e2e.py",
+)
+GOVERNANCE_LIFECYCLE_REQUIRED_FILES = (
+    "meta_flow/policies/governance.py",
+    "delivery/skills/context-manifest-builder/templates/SOURCE-OF-TRUTH-MAP-TEMPLATE.yaml",
+    "delivery/skills/context-manifest-builder/templates/SOURCE-OF-TRUTH-MAP-DOC-TEMPLATE.md",
+    "delivery/skills/context-manifest-builder/templates/RETENTION-POLICY-TEMPLATE.json",
+    "delivery/skills/implementation-design/templates/FEATURE-REGISTRY-TEMPLATE.yaml",
+    "delivery/skills/blueprint-design/templates/CONCEPT-OWNERS-TEMPLATE.yaml",
+    "delivery/skills/change-impact-analysis/templates/CR-TEMPLATE.md",
+    "tests/test_governance_policies.py",
+)
+GOVERNANCE_LIFECYCLE_TOKEN_TARGETS = {
+    "meta_flow/policies/governance.py": (
+        "SOURCE_OF_TRUTH_REL",
+        "RETENTION_POLICY_REL",
+        "process/STATE.md must not be machine_truth",
+        "closed_cr.default_context must be summary_only",
+        "truth-map-check",
+        "truth-map-render",
+        "retention-check",
+    ),
+    "meta_flow/cli.py": (
+        "governance Validate source-of-truth and retention lifecycle policies",
+        "truth-map",
+        "retention-policy",
+        "_run_governance",
+    ),
+    "delivery/skills/context-manifest-builder/templates/SOURCE-OF-TRUTH-MAP-TEMPLATE.yaml": (
+        "process/policies/SOURCE-OF-TRUTH-MAP.yaml",
+        "process/state/STATE.current.json",
+        "process/STATE.md",
+        "append_only_event_log",
+        "generated_summary",
+        "process/checks/*.result.json",
+    ),
+    "delivery/skills/context-manifest-builder/templates/RETENTION-POLICY-TEMPLATE.json": (
+        "summary_only",
+        "keep_latest_in_default_context",
+        "high-risk-only",
+        "latest-window-or-index",
+    ),
+    "delivery/skills/implementation-design/templates/FEATURE-REGISTRY-TEMPLATE.yaml": (
+        "product_domain",
+        "capability",
+        "design_doc_policy",
+    ),
+    "delivery/skills/blueprint-design/templates/CONCEPT-OWNERS-TEMPLATE.yaml": (
+        "conflict_keys",
+        "legacy_aliases",
+        "forbidden_aliases",
+    ),
+    "delivery/skills/change-impact-analysis/templates/CR-TEMPLATE.md": (
+        "cr_type",
+        "product-scope",
+        "architecture",
+        "runtime-high-risk",
+    ),
+    "delivery/README.md": (
+        "Governance Truth Map",
+        "process/policies/SOURCE-OF-TRUTH-MAP.yaml",
+        "RETENTION-POLICY.json",
+        "design_doc_policy",
+        "cr_type",
+    ),
+    "docs/release/RELEASE-NOTES.md": (
+        "Governance Truth Map",
+        "Retention Policy",
+        "cr_type",
+        "conflict_keys",
+    ),
+    "tests/test_governance_policies.py": (
+        "validate_truth_map",
+        "validate_retention_policy",
+        "truth-map-render",
+        "process/STATE.md must not be machine_truth",
+    ),
+}
+CONTEXT_SUFFICIENCY_REQUIRED_FILES = (
+    "meta_flow/context_pack/read_expansion.py",
+    "meta_flow/checks/context_doctor.py",
+    "delivery/skills/context-manifest-builder/templates/STORY-CONTEXT-PACKET-TEMPLATE.json",
+    "delivery/skills/context-manifest-builder/templates/READ-POLICY-TEMPLATE.json",
+    "delivery/skills/context-manifest-builder/templates/ARTIFACT-BUDGETS-TEMPLATE.json",
+    "tests/test_context_sufficiency_read_expansion.py",
+)
+CONTEXT_SUFFICIENCY_TOKEN_TARGETS = {
+    "meta_flow/context_pack/story_contract.py": (
+        "validate_context_sufficiency",
+        "STRICT_SUFFICIENCY_PROFILES",
+        "feature_contract_summary",
+        "cr_delta.summary",
+        "dependency_inputs",
+        "sufficiency-check",
+    ),
+    "meta_flow/context_pack/read_expansion.py": (
+        "READ_EXPANSION_LEDGER_REL",
+        "read_expansion",
+        "full_doc_read_allowed_when",
+        "estimated_tokens",
+        "summary_update_recommendations",
+        "read-log-check",
+    ),
+    "meta_flow/checks/context_doctor.py": (
+        "frequently_expanded_files",
+        "frequently_expanded_features",
+        "missing_context_slots",
+        "expansion_reason_distribution",
+        "summary_update_recommendations",
+    ),
+    "meta_flow/checks/cp_result.py": (
+        "read_expansion_refs",
+        "deny-default references require read_expansion_refs",
+        "READ-EXPANSION-LEDGER",
+    ),
+    "meta_flow/checks/token_budget.py": (
+        "output_profiles",
+        "story_return_summary",
+        "feature_design_summary",
+    ),
+    "meta_flow/workflow/story_evidence.py": (
+        "partial",
+        "needs_user_decision",
+        "no_op",
+        "superseded",
+    ),
+    "meta_flow/cli.py": (
+        "doctor context",
+        "sufficiency-check",
+        "read-log",
+        "read-expansion",
+    ),
+    "delivery/skills/context-manifest-builder/templates/STORY-CONTEXT-PACKET-TEMPLATE.json": (
+        "feature_contract_summary",
+        "feature_design_summary_ref",
+        "cr_delta",
+        "dependency_inputs",
+        "context_sufficiency",
+    ),
+    "delivery/skills/context-manifest-builder/templates/READ-POLICY-TEMPLATE.json": (
+        "process/state/READ-EXPANSION-LEDGER.ndjson",
+    ),
+    "delivery/skills/context-manifest-builder/templates/ARTIFACT-BUDGETS-TEMPLATE.json": (
+        "output_profiles",
+        "story_return_summary",
+        "cp_summary",
+        "decision_brief_compact",
+        "feature_design_summary",
+    ),
+    "delivery/README.md": (
+        "上下文足够性",
+        "READ-EXPANSION-LEDGER",
+        "summary_update_recommendations",
+    ),
+    "docs/release/RELEASE-NOTES.md": (
+        "Context sufficiency / read expansion governance",
+        "READ-EXPANSION-LEDGER",
+        "output profile budgets",
+    ),
+    "tests/test_context_sufficiency_read_expansion.py": (
+        "test_strict_profile_missing_sufficiency_slots_fails",
+        "test_read_log_writes_and_check_accepts_allowed_reason",
+        "test_context_doctor_reports_summary_feedback",
+        "test_cp_result_requires_read_expansion_refs_for_deny_default_refs",
+    ),
+}
+FAILURE_WAIVER_REQUIRED_FILES = (
+    "meta_flow/policies/failure_routing.py",
+    "delivery/skills/checkpoint-manager/templates/FAILURE-ROUTING-TEMPLATE.json",
+    "delivery/skills/checkpoint-manager/templates/WAIVER-POLICY-TEMPLATE.json",
+    "tests/test_failure_routing_waiver.py",
+)
+FAILURE_WAIVER_TOKEN_TARGETS = {
+    "meta_flow/policies/failure_routing.py": (
+        "FAILURE_ROUTING_REL",
+        "WAIVER_POLICY_REL",
+        "rework_same_story",
+        "reopen_cp5_design",
+        "require_user_decision",
+        "create_followup_candidate",
+        "escalate_runtime_high_risk",
+        "block_release",
+        "waive_with_risk_acceptance",
+        "non_waivable",
+        "approval_ref",
+        "forces_release_status",
+        "READY_WITH_RISK",
+    ),
+    "meta_flow/checks/cp_result.py": (
+        "validate_result_governance",
+        "failure_routing",
+    ),
+    "meta_flow/cli.py": (
+        "failure    Validate failure routing policy",
+        "waiver     Validate waiver policy",
+        "failure-routing",
+        "waiver-policy",
+        "_run_failure",
+        "_run_waiver",
+    ),
+    "delivery/skills/checkpoint-manager/templates/FAILURE-ROUTING-TEMPLATE.json": (
+        "creates",
+        "updates",
+        "invalidates",
+        "next_allowed_stage",
+        "escalate_runtime_high_risk",
+    ),
+    "delivery/skills/checkpoint-manager/templates/WAIVER-POLICY-TEMPLATE.json": (
+        "non_waivable",
+        "missing_dispatch_evidence",
+        "missing_read_expansion_log",
+        "approval_ref",
+        "forces_release_status",
+    ),
+    "delivery/skills/checkpoint-manager/SKILL.md": (
+        "Failure Routing Policy",
+        "Waiver Policy",
+        "rework_same_story",
+        "waive_with_risk_acceptance",
+        "non-waivable",
+    ),
+    "delivery/rules/AGENT-SKILL-CONTRACT.md": (
+        "FAILURE-ROUTING.json",
+        "WAIVER-POLICY.json",
+        "forces_release_status",
+        "不可豁免项",
+    ),
+    "delivery/skills/release-readiness/SKILL.md": (
+        "WAIVER-POLICY.json",
+        "READY_WITH_RISK",
+        "不可豁免",
+        "NOT_READY",
+    ),
+    "delivery/README.md": (
+        "Failure Routing / Waiver Governance",
+        "FAILURE-ROUTING.json",
+        "WAIVER-POLICY.json",
+        "non-waivable",
+    ),
+    "docs/release/RELEASE-NOTES.md": (
+        "Failure routing / waiver governance",
+        "FAILURE-ROUTING.json",
+        "WAIVER-POLICY.json",
+        "不可豁免",
+    ),
+    "tests/test_failure_routing_waiver.py": (
+        "test_blocker_failure_requires_route_on_fail",
+        "test_non_waivable_item_cannot_be_waived",
+        "test_ready_with_risk_waiver_cannot_silent_pass",
+        "test_cp_result_check_includes_failure_and_waiver_governance",
+    ),
+}
+CONTEXT_BUDGETED_E2E_TOKEN_TARGETS = {
+    "evals/fixtures/context-budgeted-meta-flow/README.md": (
+        "STATE.current.json -> CR summary -> context pack -> Story packet -> Story return -> evidence index -> CP result -> checkpoint ledger",
+        "deny-default",
+        "process/STATE.md",
+        "process/DEVELOPMENT-PLAN.yaml",
+        "process/changes/CR-001.md",
+    ),
+    "evals/fixtures/context-budgeted-meta-flow/process/policies/READ-POLICY.json": (
+        "process/STATE.md",
+        "process/DEVELOPMENT-PLAN.yaml",
+        "process/changes/*.md",
+        "process/stories/*-LLD.md",
+        "capsule_missing",
+        "field_conflict",
+        "human_audit",
+        "deep_review",
+        "schema_validation_failed",
+    ),
+    "evals/fixtures/context-budgeted-meta-flow/process/stories/STORY-MF013-S01.md": (
+        "feature_refs:",
+        "feature_design_refs:",
+        "lld_policy:",
+        "allowed_write_paths:",
+        "forbidden_write_paths:",
+        "acceptance:",
+        "verification_plan:",
+    ),
+    "evals/fixtures/context-budgeted-meta-flow/process/returns/STORY-MF013-S01.CP6.return.json": (
+        '"packet_type": "story_return_packet"',
+        '"touched_files"',
+        '"boundary_check"',
+        '"design_delta_required": false',
+        '"next_stage_recommendation": "ready_for_cp7"',
+    ),
+    "evals/fixtures/context-budgeted-meta-flow/process/evidence/STORY-MF013-S01.CP6.index.json": (
+        '"schema_version": 1',
+        '"return_ref"',
+        '"changed_files"',
+        '"commands"',
+    ),
+    "evals/fixtures/context-budgeted-meta-flow/process/checks/CP6-STORY-MF013-S01.result.json": (
+        '"checkpoint": "CP6"',
+        '"decision": "PASS"',
+        '"context_ref"',
+        '"dispatch_refs"',
+        '"evidence_ref"',
+    ),
+    "tests/test_context_budgeted_flow_e2e.py": (
+        "build_context_pack",
+        "validate_context_pack",
+        "build_story_packet",
+        "validate_story_packet",
+        "validate_return_packet",
+        "build_evidence_index",
+        "validate_cp_result",
+        "append_checkpoint_ledger",
+        "validate_event_ledger",
+        "assert_no_denied_allowed_reads",
+        "process/STATE.md",
+        "process/DEVELOPMENT-PLAN.yaml",
+        "process/changes/CR-001.md",
+    ),
+    "README.md": (
+        "evals/fixtures/context-budgeted-meta-flow/",
+        "tests/test_context_budgeted_flow_e2e.py",
+        "STATE.current.json -> CR summary -> context pack -> Story packet -> Story return -> evidence index -> CP result -> checkpoint ledger",
+    ),
+    "delivery/README.md": (
+        "evals/fixtures/context-budgeted-meta-flow/",
+        "tests/test_context_budgeted_flow_e2e.py",
+        "STATE.current.json -> CR summary -> context pack -> Story packet -> Story return -> evidence index -> CP result -> checkpoint ledger",
+    ),
+}
+AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
+    "delivery/rules/AGENT-SKILL-CONTRACT.md": (
+        "Input Contract",
+        "Output Contract",
+        "Handoff Contract",
+        "Skill Contract",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+        "do_not_read_by_default",
+        "full_doc_read_reason",
+        "capsule_missing",
+        "field_conflict",
+        "human_audit",
+        "deep_review",
+        "schema_validation_failed",
+        "authz_policy_refs",
+        "process/returns/*.return.json",
+        "process/evidence/*.index.json",
+        "process/checks/*.result.json",
+    ),
+    "delivery/agents/meta-pm.md": (
+        "Input Contract",
+        "Output Contract",
+        "Handoff Contract",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+        "do_not_read_by_default",
+        "full_doc_read_reason",
+    ),
+    "delivery/agents/meta-se.md": (
+        "Input Contract",
+        "Output Contract",
+        "Handoff Contract",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+        "do_not_read_by_default",
+        "feature_design_refs",
+    ),
+    "delivery/agents/meta-dev.md": (
+        "Input Contract",
+        "Output Contract",
+        "Handoff Contract",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+        "do_not_read_by_default",
+        "process/returns",
+        "process/evidence",
+        "Design Delta",
+    ),
+    "delivery/agents/meta-qa.md": (
+        "Input Contract",
+        "Output Contract",
+        "Handoff Contract",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+        "do_not_read_by_default",
+        "Evidence Index",
+        "CP7 result JSON",
+    ),
+    "delivery/agents/meta-doc.md": (
+        "Input Contract",
+        "Output Contract",
+        "Handoff Contract",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+        "do_not_read_by_default",
+    ),
+    "delivery/skills/context-handoff/SKILL.md": (
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+        "do_not_read_by_default",
+        "story_packet_ref",
+        "HANDOFF-LEDGER",
+        "AGENT-DISPATCH-LEDGER",
+    ),
+    "delivery/skills/context-manifest-builder/SKILL.md": (
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+        "do_not_read_by_default",
+        "full_doc_read_reason",
+    ),
+    "delivery/skills/context-manifest-builder/templates/CONTEXT-CAPSULE-TEMPLATE.yaml": (
+        "allowed_reads:",
+        "process/state/STATE.current.json",
+        "process/STATE.md",
+        "do_not_read_by_default:",
+    ),
+    "delivery/skills/state-router/SKILL.md": (
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "STATE.md 是人类摘要",
+        "Story packet",
+    ),
+    "delivery/skills/change-impact-analysis/SKILL.md": (
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "CR-LEDGER",
+        "CR summary",
+    ),
+    "delivery/skills/checkpoint-manager/SKILL.md": (
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "result JSON",
+        "Evidence Index",
+        "Story Return Packet",
+        "full_doc_read_reason",
+    ),
+    "delivery/skills/review-artifact-protocol/SKILL.md": (
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "allowed_reads",
+        "evidence index",
+        "do_not_read_by_default",
+    ),
+    "delivery/skills/release-readiness/SKILL.md": (
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "do_not_read_by_default",
+        "RELEASE-CONTEXT.yaml",
+    ),
+    "delivery/README.md": (
+        "Agent / Skill Contract",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "do_not_read_by_default",
+    ),
+    "README.md": (
+        "Agent / Skill",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "do_not_read_by_default",
+    ),
+    "AGENTS.md": (
+        "Agent / Skill Contract Slimming",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+    ),
+    "delivery/rules/AGENTS.md": (
+        "Agent / Skill Contract Slimming",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+    ),
+    "delivery/rules/CLAUDE.md": (
+        "Agent / Skill Contract Slimming",
+        "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "process/state/STATE.current.json",
+        "allowed_reads",
+    ),
+}
 SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
     "delivery/agents/meta-pm.md": ("scenario-expansion", "story-planning", "docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "SGQ-*", "用户可见场景确认"),
     "delivery/agents/meta-se.md": ("blueprint-design", "implementation-design", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "feature_design_refs", "lld_policy"),
@@ -1201,6 +1703,111 @@ def collect_context_capsule_protocol_errors() -> list[str]:
     return errors
 
 
+def collect_agent_skill_contract_errors() -> list[str]:
+    errors: list[str] = []
+
+    for rel_path in AGENT_SKILL_CONTRACT_REQUIRED_FILES:
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing agent/skill contract file: {rel_path}")
+
+    for rel_path, required_tokens in AGENT_SKILL_CONTRACT_TOKEN_TARGETS.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing agent/skill contract target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(f"{rel_path} missing agent/skill contract tokens: {', '.join(missing)}")
+
+    return errors
+
+
+def collect_context_budgeted_e2e_errors() -> list[str]:
+    errors: list[str] = []
+
+    for rel_path in CONTEXT_BUDGETED_E2E_REQUIRED_FILES:
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing context-budgeted e2e artifact file: {rel_path}")
+
+    for rel_path, required_tokens in CONTEXT_BUDGETED_E2E_TOKEN_TARGETS.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing context-budgeted e2e token target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(f"{rel_path} missing context-budgeted e2e tokens: {', '.join(missing)}")
+
+    return errors
+
+
+def collect_governance_lifecycle_errors() -> list[str]:
+    errors: list[str] = []
+
+    for rel_path in GOVERNANCE_LIFECYCLE_REQUIRED_FILES:
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing governance lifecycle artifact file: {rel_path}")
+
+    for rel_path, required_tokens in GOVERNANCE_LIFECYCLE_TOKEN_TARGETS.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing governance lifecycle token target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(f"{rel_path} missing governance lifecycle tokens: {', '.join(missing)}")
+
+    return errors
+
+
+def collect_context_sufficiency_errors() -> list[str]:
+    errors: list[str] = []
+
+    for rel_path in CONTEXT_SUFFICIENCY_REQUIRED_FILES:
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing context sufficiency artifact file: {rel_path}")
+
+    for rel_path, required_tokens in CONTEXT_SUFFICIENCY_TOKEN_TARGETS.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing context sufficiency token target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(f"{rel_path} missing context sufficiency tokens: {', '.join(missing)}")
+
+    return errors
+
+
+def collect_failure_waiver_errors() -> list[str]:
+    errors: list[str] = []
+
+    for rel_path in FAILURE_WAIVER_REQUIRED_FILES:
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing failure/waiver governance artifact file: {rel_path}")
+
+    for rel_path, required_tokens in FAILURE_WAIVER_TOKEN_TARGETS.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing failure/waiver governance token target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(f"{rel_path} missing failure/waiver governance tokens: {', '.join(missing)}")
+
+    return errors
+
+
 def collect_delivery_asset_lifecycle_errors() -> list[str]:
     errors: list[str] = []
 
@@ -1268,6 +1875,11 @@ def collect_errors() -> list[str]:
     errors.extend(collect_revision_record_errors())
     errors.extend(collect_software_workflow_artifact_errors())
     errors.extend(collect_context_capsule_protocol_errors())
+    errors.extend(collect_agent_skill_contract_errors())
+    errors.extend(collect_context_budgeted_e2e_errors())
+    errors.extend(collect_governance_lifecycle_errors())
+    errors.extend(collect_context_sufficiency_errors())
+    errors.extend(collect_failure_waiver_errors())
     errors.extend(collect_delivery_asset_lifecycle_errors())
 
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):

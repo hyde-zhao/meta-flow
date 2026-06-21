@@ -1,0 +1,24 @@
+{
+  "features": [
+    {
+      "authz_policy_refs": [],
+      "capability": "<capability>",
+      "design_doc": "docs/features/<feature-id>/DESIGN.md",
+      "design_doc_policy": "full-design",
+      "feature_id": "<bounded-context>.<feature>",
+      "forbidden_dependencies": [],
+      "module_paths": [
+        "src/<module>"
+      ],
+      "owner_context": "<bounded-context>",
+      "product_domain": "<product-domain>",
+      "public_api": [],
+      "risk_profile": "standard-code",
+      "status": "planned",
+      "tasks_doc": "docs/features/<feature-id>/TASKS.md",
+      "test_plan": "docs/features/<feature-id>/TEST-PLAN.md",
+      "title": "<Feature title>"
+    }
+  ],
+  "schema_version": 1
+}

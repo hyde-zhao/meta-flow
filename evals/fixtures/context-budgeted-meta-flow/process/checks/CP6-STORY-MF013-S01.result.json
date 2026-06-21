@@ -1,0 +1,31 @@
+{
+  "blockers": [],
+  "checkpoint": "CP6",
+  "checkpoint_id": "CP6-STORY-MF013-S01",
+  "context_ref": "process/context/stories/STORY-MF013-S01.CP6.work-packet.json",
+  "cr_id": "CR-001",
+  "decision": "PASS",
+  "dispatch_refs": [
+    "ADE-MF013-001"
+  ],
+  "evidence_ref": "process/evidence/STORY-MF013-S01.CP6.index.json",
+  "items": [
+    {
+      "category": "context_budget",
+      "evidence_refs": [
+        "process/evidence/STORY-MF013-S01.CP6.index.json"
+      ],
+      "id": "CP6-CTX-01",
+      "name": "Story return stays within context contract",
+      "owner": "meta-dev",
+      "route_on_fail": "rework_same_story",
+      "severity": "BLOCKER",
+      "status": "PASS",
+      "waiver_ref": null
+    }
+  ],
+  "next_route": "CP7",
+  "schema_version": 1,
+  "story_id": "STORY-MF013-S01",
+  "waivers": []
+}

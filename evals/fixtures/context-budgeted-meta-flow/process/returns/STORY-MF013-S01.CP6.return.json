@@ -1,0 +1,42 @@
+{
+  "artifacts": [],
+  "boundary_check": {
+    "allowed_paths_only": true,
+    "forbidden_paths_touched": [],
+    "unexpected_imports": []
+  },
+  "contract_changes": {
+    "data_contract_changed": false,
+    "design_delta_ref": null,
+    "design_delta_required": false,
+    "public_api_changed": false
+  },
+  "cr_id": "CR-001",
+  "evidence_refs": [],
+  "next_stage_recommendation": "ready_for_cp7",
+  "open_questions": [],
+  "packet_type": "story_return_packet",
+  "risks": [],
+  "schema_version": 1,
+  "stage": "CP6",
+  "status": "implemented",
+  "story_id": "STORY-MF013-S01",
+  "touched_files": [
+    {
+      "change_type": "added",
+      "path": "tests/fixtures/context_budgeted/e2e_fixture.py"
+    }
+  ],
+  "verification": {
+    "commands_run": [
+      {
+        "command": "pytest tests/test_context_budgeted_flow_e2e.py",
+        "result": "pass"
+      }
+    ],
+    "skipped": [],
+    "tests": []
+  },
+  "waivers": []
+}
+

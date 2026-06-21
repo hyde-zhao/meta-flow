@@ -25,7 +25,7 @@
 | `process/` | 运行时文档（gitignored，STATE.md / REQUEST.md / plans / stories / CR / discussions / checks 等） |
 | `process/discussions/` | CP2 / CP3 讨论日志（gitignored，用于人类审计和中断恢复，不替代正式产物） |
 | `process/checks/` | 自动检查点结果（gitignored，CP0-CP8 自检证据） |
-| `process/context/` | 阶段上下文胶囊（gitignored，CP2/CP3/CP5/CP6/CP7/CP8 的默认读取入口，用于减少子 agent token 消耗） |
+| `process/context/` | 阶段上下文胶囊 / context pack（gitignored，CP2/CP3/CP5/CP6/CP7/CP8 的默认读取入口，用于减少子 agent token 消耗） |
 | `process/checkpoints/` | 人工检查点审查稿（gitignored，CP2/CP3/CP5/CP8 Decision Brief、checklist 与审查结果；CP4 仅自动预检） |
 
 ## 输出隔离原则
@@ -39,7 +39,8 @@
 - 源码仓库还保留根 README、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和平台契约等产品/安装入口。
 - `process/` 承载运行过程文档：状态、计划、Story 执行态、讨论日志、handoff、CR、自动检查结果。
 - `process/` 是运行态入口；迁移到外置过程仓库后，它应是指向 `<artifact-root>/process/<project-name>/` 的软链接。
-- `process/context/` 承载阶段上下文胶囊：下游 Agent、人工门禁、验证和发布准备默认先读 capsule；只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档。
+- `process/context/` 承载阶段上下文胶囊 / context pack：下游 Agent、人工门禁、验证和发布准备默认先读 context pack，只读取 `allowed_reads`；只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档，并记录允许枚举内的全文读取理由。
+- Agent / Skill 共享瘦身契约写在 `delivery/rules/AGENT-SKILL-CONTRACT.md`。功能 Agent 必须先读阶段 context pack 或 Story packet，默认机器状态入口是 `process/state/STATE.current.json`；`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 CR、全量 Story LLD、完整 TEST-REPORT / REVIEW / diff 属于 `do_not_read_by_default`。Handoff 只传 `context_ref` / `story_packet_ref` / `evidence_ref` / `result_ref`，真实执行证据写入 ledger。
 - `process/checkpoints/` 承载人工确认态：CP2 / CP3 / CP5 / CP8 Decision Brief、checklist 和人工审查结果。
 - 旧项目中的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等只作为 legacy fallback 读取；新生成默认写入 `docs/...` 和 `process/checkpoints/...`。
 
@@ -69,10 +70,56 @@ process/STATE.md.artifact_routing
 ```bash
 meta-flow workspace check
 meta-flow doctor
+meta-flow doctor tokens --project-root .
+meta-flow doctor context --project-root .
+meta-flow doctor artifacts --project-root .
+meta-flow state check --project-root .
+meta-flow cr check --project-root .
+meta-flow context build --stage CP6 --profile standard-code --cr CR-101 --project-root .
+meta-flow context check --context process/context/CP6-CR101.context.json --project-root .
+meta-flow context build-story-packet --story process/stories/STORY-CR123-S01.md --stage CP6 --project-root .
+meta-flow context check-story-packet --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --project-root .
+meta-flow context sufficiency-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json
+meta-flow context read-log --path process/STATE.md --reason human_audit --stage CP6 --agent meta-dev --context-ref process/context/stories/STORY-CR123-S01.CP6.work-packet.json --project-root .
+meta-flow context read-log-check --project-root .
+meta-flow cp result-check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+meta-flow cp render-summary --result process/checks/CP6-STORY-CR123-S01.result.json
+meta-flow cp ledger-append --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint
+meta-flow story return-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .
+meta-flow story evidence-index --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .
+meta-flow story verify-packet --from-return process/returns/STORY-CR123-S01.CP6.return.json --story process/stories/STORY-CR123-S01.md --project-root .
+meta-flow design delta-check --delta process/design-deltas/STORY-CR123-S01.delta.json --project-root .
+meta-flow design delta-check --delta process/design-deltas/STORY-CR123-S01.delta.json --require-merged --project-root .
+meta-flow feature build --project-root .
+meta-flow feature check --project-root .
+meta-flow feature trace --project-root .
+meta-flow module init --project-root .
+meta-flow check module-boundaries --project-root .
+meta-flow check imports --project-root .
+meta-flow check architecture-fitness --project-root .
+meta-flow check risk-rings --changed-files quant_lab/trading/order.py --project-root .
+meta-flow capability check --artifact README.md --project-root .
+meta-flow concept check --changed-files quant_lab/engine/contracts.py --project-root .
+meta-flow identity check --project-root .
+meta-flow gate classify --changed-files README.md
+meta-flow gate classify --impact QMT credential runtime
+meta-flow gate plan --profile process-lite --project-root .
+meta-flow governance init --project-root .
+meta-flow governance truth-map-check --project-root .
+meta-flow governance retention-check --project-root .
+meta-flow policy list --project-root .
+meta-flow policy check --artifact process/changes/summaries/CR-101.summary.json --project-root .
 meta-flow next
 ```
 
 `meta-flow next` 只输出可直接复制的下一步准确提示词，例如 `approve`、`修改: <具体修改点>`、`reject`、`执行下一步: <具体动作>` 或 `处理阻塞: <具体处理方式>`；不会要求用户只回复“同意”“继续”等模糊词。
+
+Context-budgeted 端到端回归 fixture 位于 `evals/fixtures/context-budgeted-meta-flow/`，用于验证 `STATE.current.json -> CR summary -> context pack -> Story packet -> Story return -> evidence index -> CP result -> checkpoint ledger` 这条链。对应测试为 `tests/test_context_budgeted_flow_e2e.py`，会证明默认 `allowed_reads` 不包含 `process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 CR 或全量 Story LLD。
+
+MF-016 增加了上下文足够性和实际扩展读取审计。Story packet 除了 token budget 和 deny-default，还必须能说明 Feature context、CR delta、dependency inputs、读写边界、acceptance、verification plan、authz policy refs 和 expected return packet；`meta-flow context sufficiency-check` 会检查这些槽位。所有 deny-default 全文读取应通过 `meta-flow context read-log` 写入 `process/state/READ-EXPANSION-LEDGER.ndjson`，再由 `meta-flow context read-log-check` 与 `meta-flow doctor context` 校验；Context Doctor 会输出高频展开文件、Feature、原因分布、缺失槽位和摘要更新建议。
+
+MF-017 增加 Failure Routing / Waiver Governance。`meta-flow failure route-check --result <CP-result> --project-root .` 校验 `route_on_fail` 是否属于固定动作枚举，并确保高严重度失败可路由；`meta-flow waiver check --result <CP-result> --project-root .` 校验 waiver 的 scope、expiry、approval_ref、forces_release_status 和不可豁免项。不可豁免项包括未授权 runtime access、credential / secret exposure、missing dispatch evidence、runtime-high-risk forbidden path、missing read expansion log 和 false runtime-ready capability claim；风险接受型 waiver 不得静默 PASS，必须进入 `PASS_WITH_RISK` 或 `READY_WITH_RISK`。
 
 新工作区链接命令：
 
@@ -112,6 +159,23 @@ meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name m
 │   ├── discussions/
 │   ├── checks/
 │   ├── context/
+│   │   └── stories/              # Story Context Contract / Work Packet / Verify Packet
+│   ├── returns/                  # Story Return Packet，记录 agent 实际完成内容
+│   ├── evidence/                 # Evidence Index，索引命令、文件、风险和 waiver
+│   ├── design-deltas/            # Story 对 Feature DESIGN / ADR / HLD 的设计回写请求
+│   ├── policies/
+│   │   ├── READ-POLICY.json
+│   │   ├── ARTIFACT-BUDGETS.json
+│   │   ├── SOURCE-OF-TRUTH-MAP.yaml
+│   │   └── RETENTION-POLICY.json
+│   ├── state/
+│   │   ├── STATE.current.json
+│   │   ├── CR-LEDGER.ndjson
+│   │   ├── CHECKPOINT-LEDGER.ndjson
+│   │   ├── HANDOFF-LEDGER.ndjson
+│   │   ├── AGENT-DISPATCH-LEDGER.ndjson
+│   │   ├── GATE-LEDGER.ndjson
+│   │   └── RUN-LEDGER.ndjson
 │   ├── checkpoints/
 │   ├── changes/
 │   └── stories/                  # Story 卡片、LLD 和 Story 级 IMPLEMENTATION.md
@@ -455,6 +519,33 @@ CLI 也提供只读辅助入口：
 meta-flow status
 meta-flow next
 meta-flow doctor
+meta-flow doctor tokens --project-root .
+meta-flow state check --project-root .
+meta-flow cr check --project-root .
+meta-flow context build --stage CP6 --profile standard-code --cr CR-101 --project-root .
+meta-flow context check --context process/context/CP6-CR101.context.json --project-root .
+meta-flow context build-story-packet --story process/stories/STORY-CR123-S01.md --stage CP6 --project-root .
+meta-flow context check-story-packet --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --project-root .
+meta-flow cp result-check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+meta-flow cp render-summary --result process/checks/CP6-STORY-CR123-S01.result.json
+meta-flow cp ledger-append --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint
+meta-flow story return-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .
+meta-flow story evidence-index --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .
+meta-flow story verify-packet --from-return process/returns/STORY-CR123-S01.CP6.return.json --story process/stories/STORY-CR123-S01.md --project-root .
+meta-flow design delta-check --delta process/design-deltas/STORY-CR123-S01.delta.json --project-root .
+meta-flow design delta-check --delta process/design-deltas/STORY-CR123-S01.delta.json --require-merged --project-root .
+meta-flow feature check --project-root .
+meta-flow feature trace --project-root .
+meta-flow check imports --project-root .
+meta-flow check risk-rings --changed-files quant_lab/trading/order.py --project-root .
+meta-flow check capability-claims --artifact README.md --project-root .
+meta-flow check concept-overlap --changed-files quant_lab/engine/contracts.py --project-root .
+meta-flow check package-identity --project-root .
+meta-flow gate classify --changed-files README.md
+meta-flow governance truth-map-check --project-root .
+meta-flow governance retention-check --project-root .
+meta-flow policy list --project-root .
 ```
 
 如果当前是在优化 meta-flow 本身，而不是为目标产物交付方案，请显式声明：

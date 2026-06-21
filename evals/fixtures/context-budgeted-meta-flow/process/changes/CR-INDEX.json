@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "full_ref": "process/changes/CR-001.md",
+      "id": "CR-001",
+      "status": "active",
+      "summary_ref": "process/changes/summaries/CR-001.summary.json",
+      "title": "Context Budgeted E2E Fixture"
+    }
+  ],
+  "schema_version": 1
+}
+

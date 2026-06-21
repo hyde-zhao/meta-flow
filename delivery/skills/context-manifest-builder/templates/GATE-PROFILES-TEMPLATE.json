@@ -1,0 +1,130 @@
+{
+  "profiles": {
+    "architecture-major": {
+      "description": "项目重构、边界重划、核心设计变更",
+      "human_gates": [
+        "CP2",
+        "CP3",
+        "CP5",
+        "CP8"
+      ],
+      "max_context_tokens": 30000,
+      "stages": [
+        "CP0",
+        "CP1",
+        "CP2",
+        "CP3",
+        "CP4",
+        "CP5",
+        "CP6",
+        "CP7",
+        "CP8"
+      ]
+    },
+    "docs-lite": {
+      "description": "README、用户文档、说明性文档",
+      "human_gates": [
+        "CP8-lite"
+      ],
+      "max_context_tokens": 10000,
+      "stages": [
+        "CP0",
+        "CP2-lite",
+        "CP8-lite"
+      ]
+    },
+    "micro": {
+      "description": "小型机械修改，不影响接口、运行时、凭据、外部系统",
+      "human_gates": [],
+      "max_context_tokens": 8000,
+      "stages": [
+        "CP0",
+        "CP6-lite",
+        "CP7-lite",
+        "CP8-lite"
+      ]
+    },
+    "process-lite": {
+      "description": "process ledger、checker、索引、归档、非业务逻辑流程修复",
+      "human_gates": [
+        "CP8-lite"
+      ],
+      "max_context_tokens": 12000,
+      "stages": [
+        "CP0",
+        "CP2-lite",
+        "CP6-lite",
+        "CP7-lite",
+        "CP8-lite"
+      ]
+    },
+    "runtime-high-risk": {
+      "description": "凭据、NAS、外部系统、真实运行、交易、发布等高风险变更",
+      "human_gates": [
+        "CP2",
+        "CP3",
+        "CP5",
+        "CP8"
+      ],
+      "max_context_tokens": 40000,
+      "requires_explicit_authorization": true,
+      "stages": [
+        "CP0",
+        "CP1",
+        "CP2",
+        "CP3",
+        "CP4",
+        "CP5",
+        "CP6",
+        "CP7",
+        "CP8"
+      ]
+    },
+    "standard-code": {
+      "description": "普通代码功能、测试、内部模块调整",
+      "human_gates": [
+        "CP2",
+        "CP5",
+        "CP8"
+      ],
+      "max_context_tokens": 20000,
+      "stages": [
+        "CP0",
+        "CP2",
+        "CP3-lite",
+        "CP5",
+        "CP6",
+        "CP7",
+        "CP8"
+      ]
+    }
+  },
+  "risk_rules": {
+    "force_architecture_major_if_any": [
+      "public_contract",
+      "package_contract",
+      "manifest_schema",
+      "adapter_boundary",
+      "runner_boundary",
+      "cross_platform_target"
+    ],
+    "force_runtime_high_risk_if_any": [
+      "credential",
+      "secret",
+      ".env",
+      "nas",
+      "qmt",
+      "miniqmt",
+      "xtquant",
+      "gateway",
+      "live",
+      "trading",
+      "submit_order",
+      "cancel_order",
+      "provider_publish",
+      "lake_write",
+      "catalog_publish"
+    ]
+  },
+  "schema_version": 1
+}

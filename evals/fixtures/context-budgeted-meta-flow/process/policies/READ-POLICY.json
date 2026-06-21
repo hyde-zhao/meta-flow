@@ -1,0 +1,33 @@
+{
+  "allow_summary_reads": [
+    "process/context/*.context.json",
+    "process/context/stories/*.json",
+    "process/changes/summaries/*.summary.json",
+    "process/state/STATE.current.json",
+    "process/changes/CR-INDEX.json",
+    "process/policies/AUTHZ-POLICY.json",
+    "docs/design/FEATURE-REGISTRY.yaml"
+  ],
+  "default_entrypoint": "context_pack",
+  "deny_default_reads": [
+    "process/STATE.md",
+    "process/DEVELOPMENT-PLAN.yaml",
+    "process/STORY-STATUS.md",
+    "process/changes/*.md",
+    "process/stories/*-LLD.md",
+    "process/stories/*-IMPLEMENTATION.md"
+  ],
+  "full_doc_read_allowed_when": [
+    "capsule_missing",
+    "field_conflict",
+    "human_audit",
+    "deep_review",
+    "schema_validation_failed"
+  ],
+  "required_full_doc_read_log": "process/state/READ-EXPANSION-LEDGER.ndjson",
+  "rules": [
+    "agent must start from context pack",
+    "agent reads allowed_reads only by default"
+  ],
+  "schema_version": 1
+}

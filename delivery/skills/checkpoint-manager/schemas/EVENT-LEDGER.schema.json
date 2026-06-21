@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Meta Flow Event Ledger Entry",
+  "type": "object",
+  "required": [
+    "event_type"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "dispatch_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "decision": {
+      "type": "string"
+    },
+    "result": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "checked_at": {
+      "type": "string"
+    },
+    "spawned_at": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "anyOf": [
+    {
+      "required": [
+        "event_id"
+      ]
+    },
+    {
+      "required": [
+        "dispatch_id"
+      ]
+    },
+    {
+      "required": [
+        "run_id"
+      ]
+    }
+  ]
+}

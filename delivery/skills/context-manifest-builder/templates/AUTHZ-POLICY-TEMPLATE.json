@@ -1,0 +1,35 @@
+{
+  "policies": {
+    "NO_CREDENTIAL_READ": {
+      "default": "denied",
+      "expanded_text": "不授权读取凭据、.env、账户、token、secret、原始日志中的敏感字段。",
+      "requires": "explicit_per_run_authorization",
+      "title": "No credential/env/account read"
+    },
+    "NO_NAS_ACCESS": {
+      "default": "denied",
+      "expanded_text": "不授权真实 NAS list/read/copy/write/delete/publish。",
+      "requires": "explicit_per_run_authorization",
+      "title": "No NAS access"
+    },
+    "NO_ORDER_WRITE": {
+      "default": "denied",
+      "expanded_text": "不授权 submit/cancel/order-write/simulation/live/trading。",
+      "requires": "explicit_high_risk_gate",
+      "title": "No order write"
+    },
+    "NO_PROVIDER_LAKE_PUBLISH": {
+      "default": "denied",
+      "expanded_text": "不授权 provider、data lake、catalog 发布或真实数据写入。",
+      "requires": "explicit_release_gate",
+      "title": "No provider/lake/catalog publish"
+    },
+    "NO_RUNTIME_CONNECTION": {
+      "default": "denied",
+      "expanded_text": "不授权连接 QMT/MiniQMT/XtQuant/gateway/runtime。",
+      "requires": "explicit_per_run_authorization",
+      "title": "No runtime connection"
+    }
+  },
+  "schema_version": 1
+}

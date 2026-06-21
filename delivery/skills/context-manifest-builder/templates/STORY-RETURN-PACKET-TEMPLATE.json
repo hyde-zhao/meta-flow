@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "packet_type": "story_return_packet",
+  "stage": "CP6",
+  "cr_id": "CR-123",
+  "story_id": "STORY-CR123-S01",
+  "status": "implemented",
+  "allowed_statuses": [
+    "implemented",
+    "implemented_with_risk",
+    "verified",
+    "verified_with_risk",
+    "partial",
+    "blocked",
+    "needs_design_clarification",
+    "needs_user_decision",
+    "needs_rework",
+    "no_op",
+    "superseded",
+    "waived"
+  ],
+  "touched_files": [
+    {
+      "path": "src/example.py",
+      "change_type": "modified"
+    }
+  ],
+  "contract_changes": {
+    "public_api_changed": false,
+    "data_contract_changed": false,
+    "design_delta_required": false,
+    "design_delta_ref": null
+  },
+  "boundary_check": {
+    "allowed_paths_only": true,
+    "forbidden_paths_touched": [],
+    "unexpected_imports": []
+  },
+  "verification": {
+    "commands_run": [
+      {
+        "command": "pytest tests/example",
+        "result": "pass"
+      }
+    ],
+    "tests": [],
+    "skipped": []
+  },
+  "open_questions": [],
+  "risks": [],
+  "waivers": [],
+  "next_stage_recommendation": "ready_for_cp7"
+}

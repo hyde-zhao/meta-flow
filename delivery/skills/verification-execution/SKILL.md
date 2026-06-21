@@ -92,6 +92,9 @@ status: active
 10. **执行人工 / 语义质量审查**：检查需求理解、场景覆盖、Prompt 边界、文档可用性、风险低估和 happy path 偏差。
 11. **分级记录问题和剩余风险**：按 `BLOCKER` / `HIGH` / `MEDIUM` / `LOW` / `INFO` 记录问题；剩余风险必须有 owner、接受条件和后续动作。
 12. **输出阶段决策**：结论只能使用 `PASS`、`PASS_WITH_RISK`、`BLOCKED`、`NEEDS_REWORK`、`NEEDS_DESIGN_CLARIFICATION`、`WAIVED`。
+13. **输出 Story Return Packet**：写入 `process/returns/STORY-*.CP7.return.json`，记录验证 touched files、verification commands、risks、waivers、open questions 和 next route，并确保可通过 `meta-flow story return-check`。
+14. **生成 Evidence Index**：用 `meta-flow story evidence-index --return <return-packet>` 生成 `process/evidence/STORY-*.CP7.index.json`，CP7 摘要只引用该索引，不复制完整证据正文。
+15. **检查设计回写状态**：若 CP6 / CP7 return 或 design delta 标记 `requires_feature_doc_update=true`，在 CP8 前必须运行 `meta-flow design delta-check --require-merged`，未合并不得静默进入 READY。
 
 ## 输出文件 / 输出模板
 
@@ -101,6 +104,8 @@ status: active
 | 测试报告 | `docs/quality/TEST-REPORT.md` 或 Feature scoped 等价文件 | `quality-review` |
 | 评审报告 | `docs/quality/REVIEW.md` 或 Feature scoped 等价文件 | `quality-review` |
 | 修复输入 | `docs/quality/FIXES.md` | `quality-review` |
+| Story Return Packet | `process/returns/STORY-{id}.CP7.return.json` | `skills/context-manifest-builder/templates/STORY-RETURN-PACKET-TEMPLATE.json` |
+| Evidence Index | `process/evidence/STORY-{id}.CP7.index.json` | `skills/context-manifest-builder/templates/EVIDENCE-INDEX-TEMPLATE.json` |
 | CP7 检查结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | `checkpoint-manager` |
 
 ## 验证报告生成规则
@@ -153,6 +158,9 @@ status: active
 - [ ] 设计契约验证清单有来源、验证方式、阻塞性和结果。
 - [ ] 分层验证计划包含必跑、条件触发、N/A、未覆盖风险和阻塞条件。
 - [ ] 自动化、fixture、dry-run、人工审查证据已记录。
+- [ ] `process/returns/STORY-*.CP7.return.json` 已记录验证结论、风险、waiver 和 next route。
+- [ ] `process/evidence/STORY-*.CP7.index.json` 已生成，CP7 检查可引用该索引。
+- [ ] 需要回写长期设计的 Story design delta 已标记 merged，或 CP8 明确 BLOCKED / NEEDS_DESIGN_CLARIFICATION。
 - [ ] 问题清单和剩余风险有等级、owner、状态和下一步。
 - [ ] 阶段结论使用允许枚举，并能驱动 state-router 路由。
 
