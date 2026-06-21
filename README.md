@@ -77,6 +77,8 @@ process/STATE.md.artifact_routing
 
 ```bash
 meta-flow workspace check
+meta-flow workspace git-status --project-root .
+meta-flow workspace push --project-root .
 meta-flow doctor
 meta-flow doctor tokens --project-root .
 meta-flow doctor context --project-root .
@@ -120,6 +122,13 @@ meta-flow policy list --project-root .
 meta-flow policy check --artifact process/changes/summaries/CR-101.summary.json --project-root .
 meta-flow next
 ```
+
+外置 artifact 仓库启用后，项目交付包含两个 Git 工作区：源码仓库和 artifact 仓库。提交 / 推送时必须把两者作为同一个交付单元处理：
+
+- 提交前运行 `meta-flow workspace check --project-root .` 和 `meta-flow workspace git-status --project-root .`。
+- 源码改动提交到开发目录仓库；`process/`、checkpoint、ledger、handoff、context、CR 和内部归档提交到 artifact 仓库。
+- 推送项目时使用 `meta-flow workspace push --project-root .`，或提供等价的源码仓库 + artifact 仓库成对 `git push` 证据。
+- `meta-flow workspace push` 默认拒绝 dirty working tree；如果 artifact 仓库还有未提交过程文件，必须先提交，避免只推源码导致换机器后状态丢失。
 
 `meta-flow next` 只输出可直接复制的下一步准确提示词，例如 `approve`、`修改: <具体修改点>`、`reject`、`执行下一步: <具体动作>` 或 `处理阻塞: <具体处理方式>`；不会要求用户只回复“同意”“继续”等模糊词。
 

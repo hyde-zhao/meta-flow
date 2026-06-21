@@ -293,7 +293,7 @@ def _print_help() -> None:
         "  waiver     Validate waiver policy and CP waiver records.\n"
         "  ask-user   Generate exact user prompts or Codex request_user_input payloads.\n"
         "  state      Migrate, render, and validate lightweight runtime state v2.\n"
-        "  workspace  Check or link the external process workspace.\n"
+        "  workspace  Check, link, bootstrap, status, or push the external process workspace.\n"
         "  status     Show current process/STATE.md summary.\n"
         "  next       Show the exact next prompt; never falls back to vague continue/agree wording.\n"
         "  doctor     Check local Meta Flow runtime structure, token budgets, context expansion, or artifacts.\n\n"
@@ -333,6 +333,8 @@ def _print_help() -> None:
         "  meta-flow workspace check\n"
         "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
         "  meta-flow workspace bootstrap --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
+        "  meta-flow workspace git-status --project-root .\n"
+        "  meta-flow workspace push --project-root .\n"
         "  meta-flow doctor adoption --project-root .\n"
         "  meta-flow cr bootstrap --id CR-001 --title \"project adoption bootstrap\" --scope \"Initialize Meta Flow adoption readiness.\" --project-root .\n"
         "  meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml\n"
@@ -511,11 +513,16 @@ def _print_workspace_help() -> None:
         "Commands:\n"
         "  check      Print process route health.\n"
         "  link       Create process -> <artifact-root>/process/<project-name> and process scaffold.\n"
-        "  bootstrap  Link process and initialize STATE.current.json, STATE.md, and base ledgers.\n\n"
+        "  bootstrap  Link process and initialize STATE.current.json, STATE.md, and base ledgers.\n"
+        "  git-status Print project and artifact git status together.\n"
+        "  push       Push project and artifact git repositories together.\n\n"
+        "Push refuses dirty working trees by default so process artifacts cannot be missed silently.\n\n"
         "Examples:\n"
         "  meta-flow workspace check\n"
         "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
         "  meta-flow workspace bootstrap --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
+        "  meta-flow workspace git-status --project-root .\n"
+        "  meta-flow workspace push --project-root .\n"
     )
 
 
@@ -578,7 +585,51 @@ def _run_workspace(args: list[str]) -> None:
             print(line)
         print("- NEXT: run meta-flow doctor adoption --project-root . before starting a target-project CR.")
         raise SystemExit(1 if health.blocking else 0)
-    raise SystemExit(f"未知 workspace 命令: {command}. 目前支持: check, link, bootstrap")
+    if command == "git-status":
+        import argparse
+
+        from meta_flow.workspace.git_sync import format_git_status, workspace_repositories
+
+        parser = argparse.ArgumentParser(
+            prog="meta-flow workspace git-status",
+            description="Print project and external artifact git status together.",
+        )
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parsed = parser.parse_args(args[1:])
+        repos, warnings = workspace_repositories(parsed.project_root)
+        for line in format_git_status(repos, warnings):
+            print(line)
+        raise SystemExit(1 if any(not repo.is_git_repo or repo.error for repo in repos) else 0)
+    if command == "push":
+        import argparse
+
+        from meta_flow.workspace.git_sync import push_workspace
+
+        parser = argparse.ArgumentParser(
+            prog="meta-flow workspace push",
+            description="Push project and external artifact git repositories together.",
+        )
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--remote", default="origin")
+        parser.add_argument("--branch", default=None)
+        parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument(
+            "--allow-dirty",
+            action="store_true",
+            help="Allow pushing committed refs while either working tree is dirty.",
+        )
+        parsed = parser.parse_args(args[1:])
+        status, lines = push_workspace(
+            parsed.project_root,
+            remote=parsed.remote,
+            branch=parsed.branch,
+            dry_run=parsed.dry_run,
+            allow_dirty=parsed.allow_dirty,
+        )
+        for line in lines:
+            print(line)
+        raise SystemExit(status)
+    raise SystemExit(f"未知 workspace 命令: {command}. 目前支持: check, link, bootstrap, git-status, push")
 
 
 def _run_eval(args: list[str]) -> None:

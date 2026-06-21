@@ -59,6 +59,7 @@ CP8 默认只允许推进到 `READY` / `READY_WITH_RISK` / `NOT_READY`。`RELEAS
 - [ ] `docs/quality/REVIEW.md` 已存在，且 BLOCKING findings 为 0 或有明确风险接受决策。
 - [ ] 变更文件清单、配置变化和发布目标可读取，或已有 diff 摘要。
 - [ ] `release_artifact_profile` 已判定。
+- [ ] 若项目使用外置 artifact repo，已运行 `meta-flow workspace git-status --project-root .`，并把源码仓库与 artifact 仓库作为同一个发布 / 推送单元检查。
 
 ## 必须读取的输入
 
@@ -114,8 +115,9 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 6. **生成迁移与兼容性判断**：状态 schema、模板字段、配置、安装路径、Agent frontmatter、Skill 输出格式、命令参数和数据结构逐项判定；无迁移时写短 N/A。
 7. **生成回滚方案**：说明回滚目标版本、范围、步骤、验证、不可回滚项和责任人；无状态 / 无迁移时写 N/A 原因。
 8. **生成反馈与观察计划**：默认并入 `FEEDBACK.md`，记录发布后观察信号、触发阈值和分流；仅 `full` profile 或用户要求时才建议独立 `POST-RELEASE-OBSERVATION.md`。
-9. **输出 release_decision**：`READY` / `READY_WITH_RISK` / `NOT_READY` 可进入 CP8；`RELEASED` / `FAILED` 只在独立真实发布授权后写入。
-10. 若反馈或遗留项需要后续 CR 跟踪，只写入 CP8 follow-up tracking 台账候选；`FEEDBACK.md` 不替代正式台账，也不表示候选 CR 已启动。
+9. **检查双仓库交付状态**：外置过程仓库模式下，发布准备必须记录 `meta-flow workspace git-status --project-root .` 结果；项目推送必须使用 `meta-flow workspace push --project-root .` 或等价的源码仓库 + artifact 仓库成对推送证据，不能只推开发目录。
+10. **输出 release_decision**：`READY` / `READY_WITH_RISK` / `NOT_READY` 可进入 CP8；`RELEASED` / `FAILED` 只在独立真实发布授权后写入。
+11. 若反馈或遗留项需要后续 CR 跟踪，只写入 CP8 follow-up tracking 台账候选；`FEEDBACK.md` 不替代正式台账，也不表示候选 CR 已启动。
 
 ## 输出文件 / 输出模板
 
@@ -136,6 +138,7 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 - 不默认新增 `CHANGELOG.md`、`INSTALL.md`、`TROUBLESHOOTING.md`、`POST-RELEASE-OBSERVATION.md`；仅 `full` profile 或用户明确要求时生成。
 - 不复制完整 TEST-REPORT、REVIEW、TEST-MATRIX、HLD、LLD、日志或全文 diff；只写摘要、计数、风险 ID 和证据路径。
 - `FEEDBACK.md` 只记录反馈回流入口；CP8 后续 CR 候选必须进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并由 host-orchestrator 同步 `STATE.md.cr_tracking`。
+- 使用外置 artifact repo 时，不得把 `git push` 当前源码仓库当作完整项目推送；必须同时处理源码仓库和 artifact 仓库。`meta-flow workspace push` 默认拒绝 dirty working tree，发现未提交过程文件时应先提交 artifact 仓库。
 
 ## 验收标准
 
@@ -148,6 +151,7 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 - [ ] 回滚方案可执行，或明确说明无状态 / 无迁移导致 N/A。
 - [ ] 发布后观察计划已并入 `FEEDBACK.md`；需要后续 CR 的反馈项已标注为 follow-up tracking candidate。
 - [ ] 风险接受、不授权项和真实发布授权边界已进入 CP8 Decision Brief。
+- [ ] 外置 artifact repo 模式下，已记录源码仓库和 artifact 仓库的 git 状态；若执行项目推送，已有双仓库推送证据或明确 N/A 原因。
 
 ## 不适用边界
 
@@ -162,3 +166,4 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 - `minimal` 不是跳过发布门；它只减少文档厚度，仍需 capsule、release_decision、风险、不授权项和 CP8 摘要。
 - 反馈回流必须分类，否则后续 CR 会把缺陷、新需求、场景缺口和技术债混在一起。
 - follow-up tracking 台账才是后续 CR 的执行入口；`FEEDBACK.md` 只是输入来源之一。
+- 外置 `process` 是另一个 Git 工作区时，源码仓库干净不代表项目交付完整；过程文件 dirty 或未推送会导致换机器后 CR / checkpoint / ledger 丢失。

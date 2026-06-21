@@ -169,6 +169,16 @@ meta-flow check cp-result --result process/checks/CP0-CR-001-BOOTSTRAP.result.js
 
 上述流程不授权 credentials、runtime、SaaS、production write、trading、publish 或 CR-033 runtime follow-up。正式编号使用 `CR-xxx`；`MF-xxx` 仅作为历史别名。
 
+外置 `process` 路由启用后，源码仓库和 artifact 仓库必须成对检查、提交和推送：
+
+```bash
+meta-flow workspace check --project-root .
+meta-flow workspace git-status --project-root .
+meta-flow workspace push --project-root .
+```
+
+`workspace git-status` 会同时显示开发目录 Git 仓库和 artifact Git 仓库的 branch、upstream、dirty、ahead、behind。`workspace push` 会顺序推送两个仓库，并默认拒绝 dirty working tree；若 `process/`、checkpoint、ledger、handoff、context、CR 或内部归档还有未提交内容，应先在 artifact 仓库提交，再执行项目推送。
+
 ### 6.0.2 初始化质量治理 Policy
 
 新项目需要启用轻量质量治理时，先初始化默认 policy：
