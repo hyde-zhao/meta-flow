@@ -1054,13 +1054,17 @@ def install_rules(
     generated: str,
     manifest_entries: list[dict[str, str]],
 ) -> None:
-    if platform == "codex" and layout.agents_rule:
+    if platform == "codex":
+        if not layout.agents_rule:
+            fail("缺少 Codex rules 源文件：delivery/rules/AGENTS.md。请重新安装或更新 meta-flow 交付包。")
         dest = target_path(contracts, platform, scope, "rules", workspace_root)
         upsert_managed_block(dest, layout.agents_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated)
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
         return
 
-    if platform == "claude" and layout.claude_rule:
+    if platform == "claude":
+        if not layout.claude_rule:
+            fail("缺少 Claude rules 源文件：delivery/rules/CLAUDE.md。请重新安装或更新 meta-flow 交付包。")
         dest = target_path(contracts, platform, scope, "rules", workspace_root)
         upsert_managed_block(dest, layout.claude_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated)
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
