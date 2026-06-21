@@ -53,6 +53,7 @@ class CRLifecycleTests(unittest.TestCase):
                 cr_id="CR-001",
                 title="target adoption bootstrap",
                 scope="Initialize target project adoption readiness.",
+                readiness="ready_with_risk",
             )
 
             self.assertTrue(paths["cr"].is_file())
@@ -66,8 +67,10 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual("process/context/CP0-CR001.context.json", current_state["active_context_ref"])
             index = json.loads((root / "process" / "changes" / "CR-INDEX.json").read_text(encoding="utf-8"))
             self.assertEqual("CR-001", index["items"][0]["id"])
+            self.assertEqual("ready_with_risk", index["items"][0]["readiness"])
             legacy_index = (root / "process" / "changes" / "CR-INDEX.yaml").read_text(encoding="utf-8")
             self.assertIn('active_crs: ["CR-001"]', legacy_index)
+            self.assertIn('readiness_status: "ready_with_risk"', legacy_index)
             context_errors, _context_warnings = builder.validate_context_pack(paths["context"], project_root=root)
             self.assertEqual([], context_errors)
             cp0_errors, _cp0_warnings = cp_result.validate_cp_result(paths["cp0_result"], project_root=root)
@@ -78,7 +81,11 @@ class CRLifecycleTests(unittest.TestCase):
                 if line.strip()
             ]
             self.assertEqual("active", events[0]["event"])
+            self.assertEqual("ready_with_risk", events[0]["readiness"])
             self.assertEqual("process/checks/CP0-CR-001-BOOTSTRAP.result.json", events[0]["cp0_result_ref"])
+
+            cr_text = paths["cr"].read_text(encoding="utf-8")
+            self.assertIn('readiness_status: "ready_with_risk"', cr_text)
 
     def test_index_and_summary_generate_machine_readable_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

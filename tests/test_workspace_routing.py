@@ -55,6 +55,19 @@ def test_workspace_bootstrap_initializes_state_summary_and_ledgers(tmp_path: Pat
     assert str(tmp_path) not in metadata
 
 
+def test_workspace_bootstrap_resolves_relative_artifact_root_against_project_root(tmp_path: Path) -> None:
+    project_root = tmp_path / "target-project"
+    project_root.mkdir()
+
+    health = bootstrap_process_workspace(project_root, Path("../artifacts"), "target-project")
+
+    expected_artifact_root = tmp_path / "artifacts"
+    assert health.ok
+    assert health.artifact_root == expected_artifact_root.resolve()
+    assert health.project_process_root == (expected_artifact_root / "process" / "target-project").resolve()
+    assert (expected_artifact_root / "process" / "target-project" / ".meta-flow-process.yaml").is_file()
+
+
 def test_workspace_check_resolves_relative_state_routing(tmp_path: Path) -> None:
     project_root = tmp_path / "meta-flow"
     artifact_root = tmp_path / "meta-flow-artifacts"

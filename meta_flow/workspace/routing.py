@@ -150,6 +150,13 @@ def _resolve_recorded_path(value: str, anchor: Path) -> Path:
     return (anchor / path).resolve(strict=False)
 
 
+def _resolve_input_path(value: Path, *, anchor: Path) -> Path:
+    path = value.expanduser()
+    if path.is_absolute():
+        return path.resolve(strict=False)
+    return (anchor / path).resolve(strict=False)
+
+
 def _find_git_root(path: Path) -> Path | None:
     current = path.resolve(strict=False)
     for candidate in (current, *current.parents):
@@ -364,7 +371,7 @@ def write_route_metadata(
 
 def link_process_workspace(project_root: Path, artifact_root: Path, project_name: str) -> ProcessRouteHealth:
     project_root = project_root.resolve()
-    artifact_root = artifact_root.expanduser().resolve(strict=False)
+    artifact_root = _resolve_input_path(artifact_root, anchor=project_root)
     process_root = artifact_root / "process" / project_name
     link_path = project_root / "process"
     process_root.mkdir(parents=True, exist_ok=True)

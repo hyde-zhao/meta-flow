@@ -357,6 +357,7 @@ def _write_bootstrap_cr_file(
     title: str,
     scope: str,
     gate_status: str,
+    readiness: str,
 ) -> Path:
     if not re.fullmatch(r"CR-\d{3,}", cr_id):
         raise ValueError("bootstrap CR id must use CR-xxx naming, for example CR-001")
@@ -369,7 +370,7 @@ cr_id: "{cr_id}"
 cr_type: "process"
 title: "{title}"
 lifecycle_status: "active"
-readiness_status: "not_ready"
+readiness_status: "{readiness}"
 gate_status: "{gate_status}"
 gate_profile: "standard"
 conflict_keys: ["bootstrap", "adoption-readiness"]
@@ -466,6 +467,7 @@ def bootstrap_cr(
     title: str,
     scope: str,
     gate_status: str = "cp2_pending",
+    readiness: str = "READY",
 ) -> dict[str, Path]:
     project_root = project_root.resolve()
     from meta_flow.context_pack import builder
@@ -480,6 +482,7 @@ def bootstrap_cr(
         title=title,
         scope=scope,
         gate_status=gate_status,
+        readiness=readiness,
     )
     summary = summary_from_cr_file(project_root, cr_path)
     summary_path = write_summary(project_root, cr_id, summary)
@@ -686,6 +689,7 @@ def main(argv: list[str] | None = None) -> int:
             title=parsed.title,
             scope=parsed.scope,
             gate_status=parsed.gate_status,
+            readiness=parsed.readiness,
         )
         for key, path in paths.items():
             print(f"{key}: {path}")
