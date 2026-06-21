@@ -128,6 +128,17 @@ def _resolve_link_target(link_path: Path) -> Path | None:
     return target.resolve(strict=False)
 
 
+def _relative_path(path: Path, base: Path) -> str:
+    return os.path.relpath(path.resolve(strict=False), base.resolve(strict=False))
+
+
+def _resolve_recorded_path(value: str, anchor: Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve(strict=False)
+    return (anchor / path).resolve(strict=False)
+
+
 def _find_git_root(path: Path) -> Path | None:
     current = path.resolve(strict=False)
     for candidate in (current, *current.parents):
@@ -253,20 +264,21 @@ def check_process_route(project_root: Path) -> ProcessRouteHealth:
         )
         status = "project_mismatch"
 
+    artifact_root = None
+    if state_routing.get("artifact_root"):
+        artifact_root = _resolve_recorded_path(state_routing["artifact_root"], project_root)
+    elif metadata.get("artifact_root"):
+        artifact_root = _resolve_recorded_path(metadata["artifact_root"], project_root)
+
     state_process_root = state_routing.get("project_process_root")
     if actual_target is not None and state_process_root:
-        expected_target = Path(state_process_root).expanduser().resolve(strict=False)
+        process_anchor = artifact_root or project_root
+        expected_target = _resolve_recorded_path(state_process_root, process_anchor)
         if expected_target != actual_target:
             errors.append(
                 f"STATE artifact_routing.project_process_root={expected_target} does not match symlink target={actual_target}"
             )
             status = "route_mismatch"
-
-    artifact_root = None
-    if state_routing.get("artifact_root"):
-        artifact_root = Path(state_routing["artifact_root"]).expanduser().resolve(strict=False)
-    elif metadata.get("artifact_root"):
-        artifact_root = Path(metadata["artifact_root"]).expanduser().resolve(strict=False)
 
     project_process_root = actual_target or link_path
     if routing_mode == "local-directory":
@@ -300,7 +312,7 @@ def require_process_health(project_root: Path) -> ProcessRouteHealth:
             *health.format_lines(),
             "",
             "Provide a valid artifact root and relink the workspace, for example:",
-            "  meta-flow workspace link --artifact-root /path/to/meta-flow-artifacts --project-name <project-name>",
+            "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name <project-name>",
             "",
             "Do not recreate process/STATE.md unless you explicitly intend to initialize a new workflow state.",
         ]
@@ -318,12 +330,20 @@ def write_route_metadata(
 ) -> Path:
     metadata_path = process_root / ROUTE_METADATA_NAME
     created_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    artifact_root_rel = _relative_path(artifact_root, project_root)
+    process_root_rel = _relative_path(process_root, artifact_root)
+    link_path_rel = _relative_path(link_path, project_root)
     text = (
         f'project_name: "{project_name}"\n'
-        f'project_root: "{project_root.resolve()}"\n'
-        f'artifact_root: "{artifact_root.resolve()}"\n'
-        f'process_root: "{process_root.resolve()}"\n'
-        f'link_path: "{link_path}"\n'
+        'path_format: "portable-relative-v1"\n'
+        'project_root: "."\n'
+        f'artifact_root: "{artifact_root_rel}"\n'
+        'artifact_root_anchor: "project_root"\n'
+        f'project_process_root: "{process_root_rel}"\n'
+        f'process_root: "{process_root_rel}"\n'
+        'process_root_anchor: "artifact_root"\n'
+        f'link_path: "{link_path_rel}"\n'
+        'link_path_anchor: "project_root"\n'
         'routing_mode: "symlink"\n'
         f'created_at: "{created_at}"\n'
     )
@@ -354,7 +374,8 @@ def link_process_workspace(project_root: Path, artifact_root: Path, project_name
                 f"Requested target: {process_root.resolve(strict=False)}"
             )
     else:
-        link_path.symlink_to(process_root, target_is_directory=True)
+        link_target = _relative_path(process_root, link_path.parent)
+        link_path.symlink_to(link_target, target_is_directory=True)
 
     write_route_metadata(
         project_root=project_root,

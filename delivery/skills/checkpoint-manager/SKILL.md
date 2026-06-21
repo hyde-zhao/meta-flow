@@ -55,7 +55,7 @@ status: active
 
 `process/checks/` 属于运行态检查证据；`process/checkpoints/` 属于人工确认态文件。人工审查时，host-orchestrator 必须在用户提示中给出具体 `process/checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
 
-所有 `process/*` 检查点路径都必须先经过 process 路由健康检查。外置模式下，CP0 前必须存在 `<project-root>/process -> <artifact-root>/process/<project-name>` 软链接、`process/.meta-flow-process.yaml` 和与之匹配的 `STATE.md.artifact_routing`；缺失、断链、项目名不匹配或路由冲突时，检查点结论只能是 `BLOCKED`。
+所有 `process/*` 检查点路径都必须先经过 process 路由健康检查。外置模式下，CP0 前必须存在 `<project-root>/process -> <artifact-root>/process/<project-name>` 软链接、`process/.meta-flow-process.yaml` 和与之匹配的 `STATE.md.artifact_routing`；路由记录必须使用锚点 + 相对路径，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。缺失、断链、项目名不匹配或路由冲突时，检查点结论只能是 `BLOCKED`。
 
 ## 结果状态
 
@@ -420,7 +420,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 2 | 目标对象明确 | 区分新工作流、修改 meta-flow 本身、外部 production 交付 |
 | 3 | engagement mode 明确 | `production` 或 `meta-self-dev` 已设置 |
 | 4 | 输出位置明确 | 运行态、确认态、交付态路径可判定 |
-| 5 | process 软链接契约明确 | 外置模式下 `process/.meta-flow-process.yaml` 与 `STATE.md.artifact_routing` 的 `artifact_root`、`project_process_root`、`project_name` 一致；首次初始化前缺 artifact 目录时先向用户索取 |
+| 5 | process 软链接契约明确 | 外置模式下 `process/.meta-flow-process.yaml` 与 `STATE.md.artifact_routing` 的 `artifact_root`、`project_process_root`、`link_path`、`project_name` 一致，且路径以锚点 + 相对路径记录；首次初始化前缺 artifact 目录时先向用户索取 |
 | 6 | 干系人或决策人明确 | 至少能判定谁负责人工确认 |
 | 7 | 初始优先级明确 | Must / Should / Could 或等价优先级已记录 |
 | 8 | 明显冲突已暴露 | 与现有规则冲突的内容已登记为开放问题 |

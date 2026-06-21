@@ -93,10 +93,11 @@ status: active
 
 0. 读写 `process/STATE.md` 前必须先执行 `meta-flow workspace check` 或等价检查。若 `process` 缺失、断链、`process/STATE.md` 缺失且不是首次初始化、`project_name` 不匹配或路由元数据冲突，必须阻断流程；不得直接创建本地 `process/STATE.md` 绕过外置路由。
 0.1 新项目和已迁移项目必须优先读取 `process/state/STATE.current.json`，并使用 ledgers 作为 CR、Story、Gate、Run、Handoff 和 Dispatch 的机器真相源；`process/STATE.md` 只用于人类摘要渲染和 legacy fallback。
-1. 首次初始化时，若用户或项目规则已确认 `artifact_root` 和 `project_name`，必须先执行或等价完成 `meta-flow workspace link --artifact-root <artifact_root> --project-name <project_name>`，创建 `<artifact_root>/process/<project_name>/`、基础子目录和 `<project-root>/process` 软链接，再以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化 `process/STATE.md`。
-2. 若 `artifact_root` / `project_process_root` 未知，必须强制中断并要求用户提供目录；不得猜测 artifact 仓库位置，不得退回普通本地 `process/`。
-3. 仅当用户明确选择兼容模式，或当前仓库已存在未迁移的 legacy `process/` 且 `STATE.md.artifact_routing.routing_mode=local-directory`，才允许本地目录模式；必须写入 `artifact_routing.migration_status` 和后续迁移动作。
-4. 初始化 `process/STATE.md` 后，必须回填 `artifact_routing.routing_mode`、`artifact_root`、`project_process_root`、`link_path`、`project_name`、`health_status`、`migration_status` 和 `route_metadata`，并创建 `process/checks/`、`process/checkpoints/`、`process/context/`、`process/changes/`。
+1. 首次初始化时，若用户或项目规则已确认 `artifact_root` 和 `project_name`，必须先执行或等价完成 `meta-flow workspace link --artifact-root <artifact_root> --project-name <project_name>`，创建 `<artifact-root>/process/<project-name>/`、基础子目录和 `<project-root>/process` 软链接，再以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化 `process/STATE.md`。
+2. `artifact_root`、`project_process_root`、`link_path` 必须以锚点 + 相对路径记录，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。若无法用相对路径表达，必须先让用户确认新的 artifact 根路径或重新执行 `workspace link`。
+3. 若 `artifact_root` / `project_process_root` 未知，必须强制中断并要求用户提供目录；不得猜测 artifact 仓库位置，不得退回普通本地 `process/`。
+4. 仅当用户明确选择兼容模式，或当前仓库已存在未迁移的 legacy `process/` 且 `STATE.md.artifact_routing.routing_mode=local-directory`，才允许本地目录模式；必须写入 `artifact_routing.migration_status` 和后续迁移动作。
+5. 初始化 `process/STATE.md` 后，必须回填 `artifact_routing.routing_mode`、`path_format`、`artifact_root`、`artifact_root_anchor`、`project_process_root`、`project_process_root_anchor`、`link_path`、`link_path_anchor`、`project_name`、`health_status`、`migration_status` 和 `route_metadata`，并创建 `process/checks/`、`process/checkpoints/`、`process/context/`、`process/changes/`。
 5. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`delegated_interaction`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`human_gate_decisions`、`cr_tracking`、`decision_briefs`、`discussion_checkpoints`、`history`。
 6. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 7. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。

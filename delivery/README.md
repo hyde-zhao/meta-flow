@@ -19,6 +19,8 @@
 
 旧项目里的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流在无目标项目约定时默认生成到 `docs/...` 与 `process/checkpoints/...`。如果目标项目已有交付目录或 README/docs 已定义自己的文档目录，production 模式必须优先遵守目标约定；无约定时由 host-orchestrator 提出路由建议并等待用户确认。
 
+外置 process / docs 路由必须使用锚点 + 相对路径，不能把 `/home/...`、盘符或设备专属根目录写入 `STATE.md.artifact_routing`、`process/.meta-flow-process.yaml` 或发布 / 迁移文档。默认记录方式为：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。例如源码仓库旁边放置 artifact 仓库时，记录 `artifact_root=../meta-flow-artifacts`、`project_process_root=process/<project-name>`、`link_path=process`。
+
 ## CP2 / CP3 讨论增强
 
 标准模式下，Meta Flow 会在两个关键人工门前加强讨论，但不新增 CP 编号或独立人工门：

@@ -23,8 +23,8 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 范围 | 内容 | 证据 |
 |---|---|---|
 | Workflow eval governance | `meta-flow eval validate/run/suite-health`、eval contracts、fixture、suite health、optional adapter policy | CR-018..CR-023 |
-| Process artifact routing | `process/` 外置到 `/home/hyde/projects/meta-flow-artifacts/process/meta-flow`，源码仓库保留 symlink | CR-024、CR-026 |
-| Docs artifact routing | `docs/` 外置到 `/home/hyde/projects/meta-flow-artifacts/docs/meta-flow`，源码仓库保留 symlink | CR-027 |
+| Process artifact routing | `process/` 外置到 `<artifact-root>/process/meta-flow`，其中 `artifact_root` 以相对项目根记录，例如 `../meta-flow-artifacts` | CR-024、CR-026 |
+| Docs artifact routing | 内部 docs 外置到 `<artifact-root>/docs/meta-flow`，其中 `artifact_root` 以相对项目根记录，例如 `../meta-flow-artifacts` | CR-027、CR-030 |
 | Eval runner hardening | 新增 grader、case results 和 expected failure 语义，新增 advanced fixture | CR-028 |
 | Context-budgeted governance | `STATE.current.json`、CR ledger/summary、context pack/read policy、gate/authz policy、Feature/Module/Capability/Package/Concept governance、Story Context Contract、Story Return/Evidence/Design Delta、CP Result/Event Ledger | MF-001..MF-013 |
 | End-to-end regression fixture | `evals/fixtures/context-budgeted-meta-flow/` 与 `tests/test_context_budgeted_flow_e2e.py` 覆盖默认上下文最小化链路 | MF-013 |
@@ -55,7 +55,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 ## 兼容性
 
 - 安装器 CLI 未破坏。
-- 已 clone 的源码仓库需要同时准备 artifact repo，或由 `meta-flow workspace link` 指向正确 artifact root。
+- 已 clone 的源码仓库需要同时准备 artifact repo，或由 `meta-flow workspace link --artifact-root <relative-artifact-root>` 指向正确 artifact root；运行态记录不得固化设备相关绝对路径。
 - 纯代码项目不强制 workflow eval。
 - 外部 adapters 默认 disabled，真实运行需要独立 runtime authorization。
 - 既有 `process/STATE.md` 仍可作为人类摘要或 legacy fallback，但新流程默认机器入口是 `process/state/STATE.current.json`。
@@ -68,6 +68,6 @@ created_at: "2026-06-17T13:49:25+08:00"
 |---|---|---|
 | 本地 eval runner 使用保守 YAML-like parser | LOW | 保持 eval config 简单；复杂嵌套需要后续 CR 引入正式 parser |
 | 外部 adapters 只定义 policy | INFO | 真实运行前创建 runtime_authorization CR 或 Spike |
-| `process/` 和 `docs/` 依赖 symlink | MEDIUM | 缺失或断链时 hard-stop，由用户提供 artifact 目录后再继续 |
+| `process/` 和内部 docs 依赖 symlink | MEDIUM | 缺失或断链时 hard-stop，由用户提供相对项目根的 artifact 目录后再继续 |
 | context-budgeted governance 是新命令面 | MEDIUM | 已用 84 项 pytest、delivery guardrail 和端到端 fixture 验证；建议先用 quant-lab redesign bootstrap 进行真实项目试运行 |
 | 旧项目迁移仍需项目级判断 | MEDIUM | 本次不强制移动历史 artifact；未来项目默认使用 ledger、summary、packet 和 result JSON 治理 |

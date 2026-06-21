@@ -16,7 +16,9 @@ These files are tracked in the `meta-flow` source repository:
 Internal design, quality, release-readiness and process notes are archived in:
 
 ```text
-/home/hyde/projects/meta-flow-artifacts/docs/meta-flow
+<artifact-root>/docs/meta-flow
+
+`artifact-root` 必须通过项目根的相对路径记录，例如 `../meta-flow-artifacts`，不得在文档或运行态元数据中固化 `/home/...` 这类设备相关绝对路径。
 ```
 
 For local continuity, these paths may exist as ignored symlinks:

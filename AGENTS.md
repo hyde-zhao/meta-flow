@@ -141,7 +141,7 @@ init（host-orchestrator）                                                   [C
 > **所有由元工作流产生的文件必须按层输出到 `docs/`（长期产品 / 设计 / 质量 / 发布文档）、`process/`（运行态）、`process/checks/`（自动检查结果）、`process/checkpoints/`（确认态）和经确认的交付出口。**
 > `docs/product/` 承载 USE-CASES / REQUIREMENTS / SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE / RELEASE-SLICES / BACKLOG；`docs/design/` 承载 BLUEPRINT / DOMAIN-MAP / DEPENDENCY-MAP / HLD / ARCHITECTURE-DECISION / FEATURE-DESIGN-MATRIX；`docs/features/` 承载 Feature 级 DESIGN / TEST-PLAN / TASKS；`docs/quality/` 承载 TEST-STRATEGY / VERIFICATION-REPORT / TEST-REPORT / REVIEW / FIXES；`docs/release/` 承载 RELEASE-NOTES / DEPLOY-CHECKLIST / ROLLBACK / MIGRATION / FEEDBACK。
 > `process/` 只承载运行状态、计划、Story 执行态、discussion、handoff、CR 和自动检查等过程文档；旧 `process/*.md` 技术文档路径与根目录 `checkpoints/CP*.md` 仅作为 legacy fallback 读取，不作为新生成默认路径。
-> `process/` 是项目运行态入口，不要求真实存储在当前源码仓库内。外置模式下，初始化必须创建 `<artifact-root>/process/<project-name>/` 并将 `<project-root>/process` 软链接到该目录，同时写入 `process/.meta-flow-process.yaml` 和 `STATE.md.artifact_routing`。健康检查发现 `process` 缺失、断链、`process/STATE.md` 缺失、`project_name` 不匹配或路由元数据冲突时，必须强制中断当前工作流，由用户提供有效 `artifact_root` / `process_root` 后继续；不得静默重建新的 `STATE.md`。当前未迁移仓库可使用 `routing_mode=local-directory` 兼容模式，直到迁移 CR 切换为 `symlink`。
+> `process/` 是项目运行态入口，不要求真实存储在当前源码仓库内。外置模式下，初始化必须创建 `<artifact-root>/process/<project-name>/` 并将 `<project-root>/process` 软链接到该目录，同时写入 `process/.meta-flow-process.yaml` 和 `STATE.md.artifact_routing`。路由记录必须使用锚点 + 相对路径，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`；运行时由当前设备上的项目根和 artifact 根解析。健康检查发现 `process` 缺失、断链、`process/STATE.md` 缺失、`project_name` 不匹配、相对路径解析不一致或路由元数据冲突时，必须强制中断当前工作流，由用户提供有效 artifact 根或重新执行 `meta-flow workspace link --artifact-root <relative-artifact-root> --project-name <project-name>` 后继续；不得静默重建新的 `STATE.md`。当前未迁移仓库可使用 `routing_mode=local-directory` 兼容模式，直到迁移 CR 切换为 `symlink`。
 > 当前 meta-flow 源码仓库的 `docs/` 分为公开文档和内部归档文档：源码仓库跟踪 `docs/README.md`、`docs/release/RELEASE-NOTES.md` 和 `docs/USER-MANUAL.md` 等用户可见入口；`docs/design`、`docs/features`、`docs/quality`、内部 release 审查文档、修改记录和偏好类文档由 artifact repo 跟踪，并可在本机通过 ignored symlink 保持旧路径可读。production 项目仍按目标 README/docs 约定或用户确认路由，不得把 meta-flow 自身 docs 分层策略强加给目标项目。
 > 只有 `engagement_mode=meta-self-dev` 或用户明确说明优化 meta-flow 本身时，才默认把交付物写入当前仓库 `delivery/`。
 > production 项目必须先扫描目标项目已有交付目录，以及 `README.md` / `README.*` / `docs/` 中的交付物、发布、构建或包结构约定；存在则遵守并写入 `STATE.md.delivery_routing`，不得再按 Meta Flow 默认路径另建交付目录；不存在则先提出建议并等待用户确认。
@@ -236,7 +236,7 @@ init（host-orchestrator）                                                   [C
 - **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...` 表达
 - **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
 - **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器生成缓存不是交付物，不得提交
-- **护栏静态检查**：`scripts/check_delivery_guardrails.py` 是 meta-flow 自身仓库 guardrail；仅当当前仓库存在该文件时，提交前运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`。外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`，应改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
+- **护栏静态检查**：`scripts/check_delivery_guardrails.py` 是 meta-flow 自身仓库 guardrail；仅当当前仓库存在该文件时，提交前运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`。外部 production 项目不得硬引用 `<project-root>/scripts/check_delivery_guardrails.py` 或任意设备绝对路径，应改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 - **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 - **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
 - **工作流模式默认值**：默认 `workflow_mode=standard`；`fast-lane` 仅适用于低风险轻量实现，不能跳过 CP6 / CP7、Agent Dispatch Evidence 或 CP8 终验摘要；命中架构、权限、安全、平台安装、外部接口、文件所有权冲突或多 Story 依赖时必须升级 standard。
@@ -254,8 +254,8 @@ init（host-orchestrator）                                                   [C
 > 本项目同时保留原有防火墙测试元工作流说明，两套系统并行存在，互不干扰。
 > 当前统一编排入口：Host Orchestrator 主进程。Codex/Claude Code/OpenClaw 只安装功能子 agent；不安装主编排子 agent。
 
-<!-- myflow:managed:begin v=1 commit=6ea421f generated=2026-06-21T03:19:26Z -->
-<!-- myflow-managed: version=1.0.0 canonical-commit=6ea421f generated=2026-06-21T03:19:26Z -->
+<!-- myflow:managed:begin v=1 commit=bbb9776 generated=2026-06-21T06:20:16Z -->
+<!-- myflow-managed: version=1.0.0 canonical-commit=bbb9776 generated=2026-06-21T06:20:16Z -->
 
 # Meta Flow 元工作流 — Agent 声明
 
@@ -400,7 +400,7 @@ init（host-orchestrator）                                                   [C
 > **所有由元工作流产生的文件必须按层输出到 `docs/`（长期产品 / 设计 / 质量 / 发布文档）、`process/`（运行态）、`process/checks/`（自动检查结果）、`process/checkpoints/`（确认态）和经确认的交付出口。**
 > `docs/product/` 承载 USE-CASES / REQUIREMENTS / SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE / RELEASE-SLICES / BACKLOG；`docs/design/` 承载 BLUEPRINT / DOMAIN-MAP / DEPENDENCY-MAP / HLD / ARCHITECTURE-DECISION / FEATURE-DESIGN-MATRIX；`docs/features/` 承载 Feature 级 DESIGN / TEST-PLAN / TASKS；`docs/quality/` 承载 TEST-STRATEGY / VERIFICATION-REPORT / TEST-REPORT / REVIEW / FIXES；`docs/release/` 承载 RELEASE-NOTES / DEPLOY-CHECKLIST / ROLLBACK / MIGRATION / FEEDBACK。
 > `process/` 只承载运行状态、计划、Story 执行态、discussion、handoff、CR 和自动检查等过程文档；旧 `process/*.md` 技术文档路径与根目录 `checkpoints/CP*.md` 仅作为 legacy fallback 读取，不作为新生成默认路径。
-> `process/` 是项目运行态入口，不要求真实存储在当前源码仓库内。外置模式下，初始化必须创建 `<artifact-root>/process/<project-name>/` 并将 `<project-root>/process` 软链接到该目录，同时写入 `process/.meta-flow-process.yaml` 和 `STATE.md.artifact_routing`。健康检查发现 `process` 缺失、断链、`process/STATE.md` 缺失、`project_name` 不匹配或路由元数据冲突时，必须强制中断当前工作流，由用户提供有效 `artifact_root` / `process_root` 后继续；不得静默重建新的 `STATE.md`。当前未迁移仓库可使用 `routing_mode=local-directory` 兼容模式，直到迁移 CR 切换为 `symlink`。
+> `process/` 是项目运行态入口，不要求真实存储在当前源码仓库内。外置模式下，初始化必须创建 `<artifact-root>/process/<project-name>/` 并将 `<project-root>/process` 软链接到该目录，同时写入 `process/.meta-flow-process.yaml` 和 `STATE.md.artifact_routing`。路由记录必须使用锚点 + 相对路径，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`；运行时由当前设备上的项目根和 artifact 根解析。健康检查发现 `process` 缺失、断链、`process/STATE.md` 缺失、`project_name` 不匹配、相对路径解析不一致或路由元数据冲突时，必须强制中断当前工作流，由用户提供有效 artifact 根或重新执行 `meta-flow workspace link --artifact-root <relative-artifact-root> --project-name <project-name>` 后继续；不得静默重建新的 `STATE.md`。当前未迁移仓库可使用 `routing_mode=local-directory` 兼容模式，直到迁移 CR 切换为 `symlink`。
 > 当前 meta-flow 源码仓库的 `docs/` 分为公开文档和内部归档文档：源码仓库跟踪 `docs/README.md`、`docs/release/RELEASE-NOTES.md` 和 `docs/USER-MANUAL.md` 等用户可见入口；`docs/design`、`docs/features`、`docs/quality`、内部 release 审查文档、修改记录和偏好类文档由 artifact repo 跟踪，并可在本机通过 ignored symlink 保持旧路径可读。production 项目仍按目标 README/docs 约定或用户确认路由，不得把 meta-flow 自身 docs 分层策略强加给目标项目。
 > 只有 `engagement_mode=meta-self-dev` 或用户明确说明优化 meta-flow 本身时，才默认把交付物写入当前仓库 `delivery/`。
 > production 项目必须先扫描目标项目已有交付目录，以及 `README.md` / `README.*` / `docs/` 中的交付物、发布、构建或包结构约定；存在则遵守并写入 `STATE.md.delivery_routing`，不得再按 Meta Flow 默认路径另建交付目录；不存在则先提出建议并等待用户确认。
@@ -502,7 +502,7 @@ init（host-orchestrator）                                                   [C
 - **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...` 表达
 - **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
 - **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器生成缓存不是交付物，不得提交
-- **护栏静态检查**：`scripts/check_delivery_guardrails.py` 是 meta-flow 自身仓库 guardrail；仅当当前仓库存在该文件时，提交前运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`。外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`，应改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
+- **护栏静态检查**：`scripts/check_delivery_guardrails.py` 是 meta-flow 自身仓库 guardrail；仅当当前仓库存在该文件时，提交前运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`。外部 production 项目不得硬引用 `<project-root>/scripts/check_delivery_guardrails.py` 或任意设备绝对路径，应改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 - **调研前置**：meta-pm 在场景发现前执行阶段零快速调研，记录至 CLARIFICATION-LOG.md
 - **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
 - **工作流模式默认值**：默认 `workflow_mode=standard`；`fast-lane` 仅适用于低风险轻量实现，不能跳过 CP6 / CP7、Agent Dispatch Evidence 或 CP8 终验摘要；命中架构、权限、安全、平台安装、外部接口、文件所有权冲突或多 Story 依赖时必须升级 standard。

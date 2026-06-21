@@ -43,9 +43,13 @@ delivery_routing:
     validation_errors: []
 artifact_routing:
   routing_mode: "local-directory" # local-directory | symlink
-  artifact_root: "" # 外置过程仓库根目录；symlink 模式默认包含 process/<project_name>
-  project_process_root: "" # <artifact_root>/process/<project_name>
-  link_path: "process"
+  path_format: "portable-relative-v1"
+  artifact_root: "" # 相对项目根的 artifact 仓库根路径，例如 ../meta-flow-artifacts；不得写设备相关绝对路径
+  artifact_root_anchor: "project_root"
+  project_process_root: "" # 相对 artifact_root 的过程目录，例如 process/<project_name>
+  project_process_root_anchor: "artifact_root"
+  link_path: "process" # 相对项目根的 process 链接路径
+  link_path_anchor: "project_root"
   project_name: ""
   health_status: "unchecked" # unchecked | ok | missing | broken_link | state_missing | project_mismatch | route_mismatch | permission_denied
   migration_status: "local-compatible" # local-compatible | pending-migration | migrated | blocked

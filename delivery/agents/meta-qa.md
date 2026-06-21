@@ -294,7 +294,7 @@ created_at: ""
 
 - 该脚本被描述为 meta-flow 自身仓库 guardrail，而不是外部 production 项目默认文件。
 - 文档使用条件执行语义：仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时才运行。
-- 外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`；应按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
+- 外部 production 项目不得硬引用 `<project-root>/scripts/check_delivery_guardrails.py` 或任意设备绝对路径；应按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 
 ### CR-006 专项验证
 

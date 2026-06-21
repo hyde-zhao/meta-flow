@@ -63,6 +63,14 @@ process/STATE.md.artifact_routing
 
 健康检查会在读取状态、CR tracking 和推进检查点前验证 `process` 路由。若发现 `process` 缺失、软链接断裂、`process/STATE.md` 缺失、项目名不匹配或路由元数据冲突，当前工作流必须中断；用户需要提供有效 `artifact_root` / `process_root` 后继续，不得静默重建新的 `STATE.md`。
 
+路由记录必须可迁移，不能写入 `/home/...` 这类设备相关绝对路径。`STATE.md.artifact_routing` 与 `process/.meta-flow-process.yaml` 使用锚点 + 相对路径：
+
+- `artifact_root`：相对 `project_root`，例如 `../meta-flow-artifacts`
+- `project_process_root`：相对 `artifact_root`，例如 `process/meta-flow`
+- `link_path`：相对 `project_root`，例如 `process`
+
+同一项目换设备后，只要源码仓库和 artifact 仓库保持相同相对布局，路由记录无需改写；布局变化时重新执行 `meta-flow workspace link --artifact-root <relative-artifact-root> --project-name <project-name>`。
+
 当前仓库在迁移前允许 `routing_mode=local-directory` 兼容模式。迁移到软链接后，`.gitignore` 应使用 `/process`；不要使用 `/process/`，因为带尾斜杠的规则不会忽略 symlink 本身。
 
 路由检查命令：
@@ -137,13 +145,15 @@ meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name m
 <project-root>/docs/quality                   # 本地 ignored symlink -> <artifact-root>/docs/<project-name>/quality
 ```
 
-当前仓库对应：
+当前仓库对应的可迁移记录示例：
 
 ```text
-/home/hyde/projects/meta-flow/docs/design
-  -> /home/hyde/projects/meta-flow-artifacts/docs/meta-flow/design
-/home/hyde/projects/meta-flow/docs/quality
-  -> /home/hyde/projects/meta-flow-artifacts/docs/meta-flow/quality
+<project-root>/docs/design
+  -> <artifact-root>/docs/meta-flow/design
+  where artifact_root = ../meta-flow-artifacts
+<project-root>/docs/quality
+  -> <artifact-root>/docs/meta-flow/quality
+  where artifact_root = ../meta-flow-artifacts
 ```
 
 源码仓库保留的文档入口为根 `README.md`、`docs/README.md`、`docs/release/RELEASE-NOTES.md`、`docs/USER-MANUAL.md`、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和 `delivery/doc/PLATFORM-CONTRACTS.yaml`；`docs/` 下的设计、Feature、质量、内部发布审查、修改记录和偏好类过程文档由 artifact repo 跟踪。
@@ -486,7 +496,7 @@ meta-flow 自身仓库级静态检查命令：
 uv run --python 3.11 python scripts/check_delivery_guardrails.py
 ```
 
-该脚本不属于外部 production 项目的默认交付物。仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时才运行上述命令。若在其他项目使用 meta-flow 生成或安装工作流，而目标项目没有该脚本，外部 production 项目不得硬引用 `/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py`；应按目标项目 README/docs 中的测试、构建、安装 dry-run 或用户确认的验证命令执行。
+该脚本不属于外部 production 项目的默认交付物。仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时才运行上述命令。若在其他项目使用 meta-flow 生成或安装工作流，而目标项目没有该脚本，外部 production 项目不得硬引用 `<project-root>/scripts/check_delivery_guardrails.py` 或任意设备绝对路径；应按目标项目 README/docs 中的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 
 命名规则：
 

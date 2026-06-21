@@ -1064,8 +1064,8 @@ def collect_guardrail_command_scope_errors() -> list[str]:
         missing = [token for token in GUARDRAIL_CONDITION_TOKENS if token not in text]
         if missing:
             errors.append(f"{target.relative_to(ROOT)} references check_delivery_guardrails.py without conditional scope tokens: {', '.join(missing)}")
-        if "/home/hyde/projects/meta-flow/scripts/check_delivery_guardrails.py" in text and "不得硬引用" not in text:
-            errors.append(f"{target.relative_to(ROOT)} must not hard-code the meta-flow guardrail absolute path")
+        if re.search(r"/home/[^`\s]*/scripts/check_delivery_guardrails\.py", text) and "不得硬引用" not in text:
+            errors.append(f"{target.relative_to(ROOT)} must not hard-code a guardrail absolute path")
     return errors
 
 
