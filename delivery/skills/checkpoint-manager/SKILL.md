@@ -245,6 +245,16 @@ target:
 
 ## Decision Brief
 
+### 审批者摘要
+
+| 字段 | 内容 |
+|---|---|
+| 本次确认服务的整体目标 | `<用一句话说明本检查点 / CR / 批次服务的用户目标>` |
+| 推荐动作 | `approve / 修改 / reject` 及推荐理由 |
+| approve 后会发生什么 | `<进入下一阶段、启动哪些实现、关闭哪些范围或接受哪些风险>` |
+| approve 不授权什么 | `<真实运行 / 凭据 / 外部写入 / publish / live / production write 等必须单独授权>` |
+| 不确认会阻塞什么 | `<阻塞阶段、CR、Story、发布或后续验证>` |
+
 ### Context Capsule Summary
 
 | 字段 | 内容 |
@@ -268,6 +278,15 @@ target:
 | 用户显式选择题 | 当前对话 / REQUEST / CR | scanned / missing / n/a | 0 | 0 |  |
 
 > 发起人工确认前必须证明所有适用来源已扫描。若某来源缺失或 N/A，必须写明原因；不得让用户再打开长文档自行查找未收集的问题。
+
+### 决策分层
+
+| 分类 | 数量 | 处理方式 |
+|---|---:|---|
+| 必须用户决策 | 0 | 进入下方待人工决策清单 |
+| 高风险策略确认 | 0 | 涉及 runtime、凭据、外部写入、publish、live、production write 时必须显式展示 |
+| agent 默认处理 | 0 | 低风险、可逆、局部实现细节由 agent 采用推荐默认并留审计摘要 |
+| 仅审计记录 | 0 | 已按项目规则处理且不需要用户拍板，只保留证据路径 |
 
 ### 待人工决策清单
 
@@ -342,8 +361,19 @@ host-orchestrator 发起人工检查时必须提示：
 请审查：process/checkpoints/CP{n}-{slug}.md
 自动预检结论：PASS / WAIVED
 上下文胶囊：process/context/CP{n}-*-CONTEXT.yaml（read_profile=<minimal|compact|full>，完整来源见 checklist）
+审批者摘要：
+- 本次确认服务的整体目标：...
+- 推荐动作：approve / 修改 / reject
+- approve 后会发生什么：...
+- approve 不授权什么：...
+- 不确认会阻塞什么：...
 本轮待人工决策项：N
 决策收集覆盖：已扫描 <S> 个来源，发现候选问题 <C> 个，纳入待决策 <D> 个；N/A / 缺失来源 <M> 个，原因见 checklist 的 Decision Collection Coverage。
+决策分层：
+- 必须用户决策：N
+- 高风险策略确认：M
+- agent 默认处理：K
+- 仅审计记录：A
 如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作。
 待人工决策清单：
 | 决策 ID | 决策类型 | 待确认问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 |

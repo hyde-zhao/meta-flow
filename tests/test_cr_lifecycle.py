@@ -13,7 +13,15 @@ from meta_flow.checks import cp_result
 from meta_flow.workflow import cr_lifecycle
 
 
-def write_cr(root: Path, cr_id: str, *, status: str = "active", conflict_keys: str = "", impact_surface: str = "") -> Path:
+def write_cr(
+    root: Path,
+    cr_id: str,
+    *,
+    status: str = "active",
+    conflict_keys: str = "",
+    impact_surface: str = "",
+    extra_frontmatter: str = "",
+) -> Path:
     path = root / "process" / "changes" / f"{cr_id}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -29,6 +37,7 @@ conflict_keys: [{conflict_keys}]
 impact_surface: [{impact_surface}]
 authz_policy_refs: [NO_CREDENTIAL_READ]
 risk_refs: [RISK-001]
+{extra_frontmatter}
 ---
 
 ## 变更描述
@@ -90,7 +99,13 @@ class CRLifecycleTests(unittest.TestCase):
     def test_index_and_summary_generate_machine_readable_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            write_cr(root, "CR-101", conflict_keys="data_contract", impact_surface="quant_lab/data")
+            write_cr(
+                root,
+                "CR-101",
+                conflict_keys="data_contract",
+                impact_surface="quant_lab/data",
+                extra_frontmatter='goal_ref: "GOAL-001"\ngoal_statement: "建立目标导向 CR 汇总"\napproval_focus: "确认目标包而不是细任务"\ndecision_burden: "medium"\nsplit_rationale: "需要独立审计"\napprove_effect: "进入实现"\nnot_authorized_by_approve: ["runtime", "publish"]',
+            )
 
             self.assertEqual(0, cr_lifecycle.main(["index", "--project-root", str(root)]))
             self.assertEqual(0, cr_lifecycle.main(["summary", "--id", "CR-101", "--project-root", str(root)]))
@@ -99,12 +114,40 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual("CR-101", index["items"][0]["id"])
             self.assertEqual("architecture", index["items"][0]["cr_type"])
             self.assertEqual(["data_contract"], index["items"][0]["conflict_keys"])
+            self.assertEqual("GOAL-001", index["items"][0]["goal_ref"])
+            self.assertEqual("确认目标包而不是细任务", index["items"][0]["approval_focus"])
+            self.assertEqual("medium", index["items"][0]["decision_burden"])
             summary = json.loads(
                 (root / "process" / "changes" / "summaries" / "CR-101.summary.json").read_text(encoding="utf-8")
             )
             self.assertEqual("CR-101", summary["id"])
             self.assertEqual("architecture", summary["cr_type"])
             self.assertEqual("process/changes/CR-101.md", summary["full_ref"])
+            self.assertEqual("建立目标导向 CR 汇总", summary["goal_statement"])
+            self.assertEqual("cp6_pending", summary["gate_status"])
+            self.assertEqual("确认目标包而不是细任务", summary["approval_focus"])
+            self.assertEqual("需要独立审计", summary["split_rationale"])
+            self.assertEqual(["runtime", "publish"], summary["not_authorized_by_approve"])
+
+    def test_brief_and_goal_brief_render_goal_oriented_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(
+                root,
+                "CR-101",
+                extra_frontmatter='goal_ref: "GOAL-001"\ngoal_statement: "降低人工确认理解成本"\nuser_goal_impact: "用户先看目标影响"\ndecision_burden: "low"\nsplit_rationale: "与 runtime 授权边界不同"\napprove_effect: "进入 CP5"\nreject_effect: "回退需求澄清"\nnot_authorized_by_approve: ["credentials", "production_write"]',
+            )
+            cr_lifecycle.write_summary(root, "CR-101", cr_lifecycle.summary_from_cr_file(root, root / "process" / "changes" / "CR-101.md"))
+            cr_lifecycle.write_index(root)
+
+            brief = cr_lifecycle.render_cr_brief(root, "CR-101")
+            goal_brief = cr_lifecycle.render_goal_brief(root, "GOAL-001")
+
+            self.assertIn("降低人工确认理解成本", brief)
+            self.assertIn("与 runtime 授权边界不同", brief)
+            self.assertIn("credentials", brief)
+            self.assertIn("CR-101", goal_brief)
+            self.assertIn("用户先看目标影响", goal_brief)
 
     def test_close_writes_summary_evidence_index_and_ledger_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

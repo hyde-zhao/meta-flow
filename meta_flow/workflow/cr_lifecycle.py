@@ -70,6 +70,17 @@ class CRRecord:
     impact_surface: list[str]
     authz_policy_refs: list[str]
     risk_refs: list[str]
+    goal_ref: str
+    goal_statement: str
+    user_goal_impact: str
+    split_rationale: str
+    why_not_merge_with_parent: str
+    why_not_story_or_task: str
+    approval_focus: str
+    decision_burden: str
+    approve_effect: str
+    reject_effect: str
+    not_authorized_by_approve: list[str]
 
 
 def now_utc() -> str:
@@ -159,6 +170,11 @@ def _section_summary(text: str, heading: str, *, max_items: int = 3) -> list[str
     return values
 
 
+def _first_section_summary(text: str, heading: str) -> str:
+    values = _section_summary(text, heading, max_items=1)
+    return values[0] if values else ""
+
+
 def discover_formal_crs(project_root: Path) -> dict[str, Path]:
     root = project_root / "process" / "changes"
     if not root.is_dir():
@@ -197,6 +213,17 @@ def record_from_cr_file(project_root: Path, path: Path) -> CRRecord:
         impact_surface=parse_inline_list(fields.get("impact_surface", "")),
         authz_policy_refs=parse_inline_list(fields.get("authz_policy_refs", "")),
         risk_refs=parse_inline_list(fields.get("risk_refs", "")),
+        goal_ref=fields.get("goal_ref", ""),
+        goal_statement=fields.get("goal_statement", ""),
+        user_goal_impact=fields.get("user_goal_impact", ""),
+        split_rationale=fields.get("split_rationale", ""),
+        why_not_merge_with_parent=fields.get("why_not_merge_with_parent", ""),
+        why_not_story_or_task=fields.get("why_not_story_or_task", ""),
+        approval_focus=fields.get("approval_focus", ""),
+        decision_burden=fields.get("decision_burden", ""),
+        approve_effect=fields.get("approve_effect", ""),
+        reject_effect=fields.get("reject_effect", ""),
+        not_authorized_by_approve=parse_inline_list(fields.get("not_authorized_by_approve", "")),
     )
 
 
@@ -209,6 +236,8 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
         "title": record.title,
         "status": record.status,
         "readiness": readiness or record.readiness,
+        "gate_status": record.gate_status,
+        "gate_profile": record.gate_profile,
         "decision": "pending",
         "scope_summary": _section_summary(text, "## 变更描述") or [record.title],
         "impact_surface": record.impact_surface,
@@ -216,6 +245,17 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
         "remaining_risks": record.risk_refs,
         "followup_candidates": [],
         "authz_policy_refs": record.authz_policy_refs,
+        "goal_ref": record.goal_ref,
+        "goal_statement": record.goal_statement or _first_section_summary(text, "## 目标影响摘要"),
+        "user_goal_impact": record.user_goal_impact,
+        "split_rationale": record.split_rationale or _first_section_summary(text, "## 拆分理由"),
+        "why_not_merge_with_parent": record.why_not_merge_with_parent,
+        "why_not_story_or_task": record.why_not_story_or_task,
+        "approval_focus": record.approval_focus,
+        "decision_burden": record.decision_burden,
+        "approve_effect": record.approve_effect or _first_section_summary(text, "## approve 后果"),
+        "reject_effect": record.reject_effect,
+        "not_authorized_by_approve": record.not_authorized_by_approve or _section_summary(text, "## 不授权范围"),
         "full_ref": record.full_ref,
         "evidence_index_ref": (CR_ARCHIVE_ROOT_REL / record.cr_id / "evidence-index.json").as_posix(),
         "updated_at": now_utc(),
@@ -284,6 +324,10 @@ def build_index(project_root: Path) -> dict[str, Any]:
                 "gate_profile": record.gate_profile,
                 "full_ref": record.full_ref,
                 "summary_ref": record.summary_ref if summary_path.is_file() else "",
+                "goal_ref": record.goal_ref,
+                "goal_statement": record.goal_statement,
+                "approval_focus": record.approval_focus,
+                "decision_burden": record.decision_burden,
                 "conflict_keys": record.conflict_keys,
                 "impact_surface": record.impact_surface,
                 "authz_policy_refs": record.authz_policy_refs,
@@ -330,6 +374,9 @@ def write_legacy_index(project_root: Path) -> Path:
                 f'    readiness_status: "{item.get("readiness")}"',
                 f'    gate_status: "{item.get("gate_status")}"',
                 f'    gate_profile: "{item.get("gate_profile")}"',
+                f'    goal_ref: "{item.get("goal_ref", "")}"',
+                f'    approval_focus: "{item.get("approval_focus", "")}"',
+                f'    decision_burden: "{item.get("decision_burden", "")}"',
                 f'    formal_cr_path: "{item.get("full_ref")}"',
                 f'    summary_ref: "{item.get("summary_ref")}"',
             ]
@@ -645,6 +692,74 @@ def conflict_report(project_root: Path, cr_id: str) -> tuple[list[str], list[str
     return conflicts, warnings
 
 
+def _load_summary(project_root: Path, cr_id: str) -> dict[str, Any]:
+    path = project_root / CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json"
+    if not path.is_file():
+        crs = discover_formal_crs(project_root)
+        if cr_id not in crs:
+            raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
+        return summary_from_cr_file(project_root, crs[cr_id])
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def render_cr_brief(project_root: Path, cr_id: str) -> str:
+    summary = _load_summary(project_root.resolve(), cr_id)
+    lines = [
+        f"# {summary.get('id')} {summary.get('title')}",
+        "",
+        "| 字段 | 内容 |",
+        "|---|---|",
+        f"| 目标 | {summary.get('goal_statement') or summary.get('scope_summary', [''])[0]} |",
+        f"| 目标引用 | {summary.get('goal_ref') or '-'} |",
+        f"| 用户目标影响 | {summary.get('user_goal_impact') or '-'} |",
+        f"| CR 类型 / 状态 | {summary.get('cr_type')} / {summary.get('status')} |",
+        f"| gate / readiness | {summary.get('gate_status') or '-'} / {summary.get('readiness') or '-'} |",
+        f"| 审批重点 | {summary.get('approval_focus') or '-'} |",
+        f"| 决策负担 | {summary.get('decision_burden') or '-'} |",
+        f"| 拆分理由 | {summary.get('split_rationale') or '-'} |",
+        f"| approve 后果 | {summary.get('approve_effect') or '-'} |",
+        f"| reject 后果 | {summary.get('reject_effect') or '-'} |",
+        f"| 完整 CR | `{summary.get('full_ref')}` |",
+    ]
+    not_authorized = summary.get("not_authorized_by_approve") or []
+    if not_authorized:
+        lines.extend(["", "## approve 不授权", ""])
+        lines.extend(f"- {item}" for item in not_authorized)
+    if summary.get("impact_surface"):
+        lines.extend(["", "## 影响面", ""])
+        lines.extend(f"- {item}" for item in summary.get("impact_surface", []))
+    return "\n".join(lines) + "\n"
+
+
+def render_goal_brief(project_root: Path, goal_ref: str) -> str:
+    index = load_index(project_root.resolve())
+    items = [
+        item
+        for item in index.get("items", [])
+        if isinstance(item, dict) and item.get("goal_ref") == goal_ref
+    ]
+    if not items:
+        raise FileNotFoundError(f"CR-INDEX.json 中未找到 goal_ref={goal_ref!r} 的 CR；请先运行 meta-flow cr index")
+    lines = [
+        f"# Goal Brief: {goal_ref}",
+        "",
+        "| CR | 状态 | 类型 | 目标贡献 | 决策负担 | gate |",
+        "|---|---|---|---|---|---|",
+    ]
+    for item in items:
+        summary: dict[str, Any]
+        try:
+            summary = _load_summary(project_root, str(item["id"]))
+        except (FileNotFoundError, json.JSONDecodeError):
+            summary = item
+        contribution = summary.get("user_goal_impact") or summary.get("goal_statement") or item.get("title") or "-"
+        lines.append(
+            f"| `{item.get('id')}` | {item.get('status')} | {item.get('cr_type')} | {contribution} | "
+            f"{item.get('decision_burden') or '-'} | {item.get('gate_status') or '-'} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _print_cr_help() -> None:
     print(
         "usage: meta-flow cr <command> [options]\n\n"
@@ -652,6 +767,8 @@ def _print_cr_help() -> None:
         "  bootstrap  Create an active bootstrap CR plus summary, index, ledger, CP0 result, and context.\n"
         "  index      Rebuild process/changes/CR-INDEX.json from formal CR files.\n"
         "  summary    Generate process/changes/summaries/<CR>.summary.json.\n"
+        "  brief      Print a goal-oriented CR brief from summary/frontmatter.\n"
+        "  goal-brief Print all CRs attached to one goal_ref.\n"
         "  close      Close a CR logically: summary + evidence index + ledger event.\n"
         "  check      Validate CR ledger, index, summaries, and active state refs.\n"
         "  conflicts  Compare active/proposed/blocked CR conflict keys from CR-INDEX.json.\n\n"
@@ -659,6 +776,8 @@ def _print_cr_help() -> None:
         "  meta-flow cr bootstrap --id CR-001 --title \"target adoption bootstrap\" --scope \"Initialize Meta Flow adoption readiness.\" --project-root .\n"
         "  meta-flow cr index --project-root .\n"
         "  meta-flow cr summary --id CR-101 --project-root .\n"
+        "  meta-flow cr brief --id CR-101 --project-root .\n"
+        "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow cr close --id CR-101 --readiness READY_WITH_RISK --project-root .\n"
         "  meta-flow cr conflicts --id CR-102 --project-root .\n"
     )
@@ -677,6 +796,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", default="Bootstrap Meta Flow adoption readiness for this target project.")
     parser.add_argument("--gate-status", default="cp2_pending")
     parser.add_argument("--readiness", default="READY")
+    parser.add_argument("--goal-ref", default="")
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
@@ -708,6 +828,16 @@ def main(argv: list[str] | None = None) -> int:
         path = write_summary(project_root, parsed.cr_id, summary)
         print(f"wrote: {path}")
         return 0
+    if command == "brief":
+        if not parsed.cr_id:
+            raise SystemExit("--id is required")
+        print(render_cr_brief(project_root, parsed.cr_id), end="")
+        return 0
+    if command == "goal-brief":
+        if not parsed.goal_ref:
+            raise SystemExit("--goal-ref is required")
+        print(render_goal_brief(project_root, parsed.goal_ref), end="")
+        return 0
     if command == "close":
         if not parsed.cr_id:
             raise SystemExit("--id is required")
@@ -731,7 +861,9 @@ def main(argv: list[str] | None = None) -> int:
         for conflict in conflicts:
             print(f"- CONFLICT: {conflict}")
         return 1 if conflicts else 0
-    raise SystemExit(f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, close, check, conflicts")
+    raise SystemExit(
+        f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, close, check, conflicts"
+    )
 
 
 if __name__ == "__main__":

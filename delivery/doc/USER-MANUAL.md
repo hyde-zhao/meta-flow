@@ -223,7 +223,7 @@ Meta Flow 生成的文档默认分为三类：
 
 ### 6.2 检查点文件
 
-所有检查点都包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须写入逐项检查结果；CP2 / CP3 / CP5 / CP8 人工检查点必须有可审查的 Decision Brief、待人工决策清单和 checklist 文件。待人工决策清单会汇总本轮所有需要你确认的问题，状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`；每项包含决策 ID、决策类型、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
+所有检查点都包含 Entry Criteria、Checklist、Exit Criteria、Deliverables。自动检查点必须写入逐项检查结果；CP2 / CP3 / CP5 / CP8 人工检查点必须有可审查的 Decision Brief、审批者摘要、决策分层、待人工决策清单和 checklist 文件。审批者摘要先说明本次确认服务的整体目标、推荐动作、`approve` 后会发生什么、`approve` 不授权什么、不确认会阻塞什么；决策分层再区分必须用户决策、高风险策略确认、agent 默认处理和仅审计记录。待人工决策清单会汇总本轮所有需要你确认的问题，状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`；每项包含决策 ID、决策类型、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件。
 
 CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后会生成 `process/context/*-CONTEXT.yaml` 阶段上下文胶囊。它不替代正式文档，也不需要用户手工维护；作用是让下游 Agent 先读取摘要、证据路径、决策项、风险和不授权项，只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档，从而减少 token 消耗。
 
@@ -339,7 +339,7 @@ reject                   # 不通过并回退
 
 用户直接在对话中确认时，host-orchestrator 仍必须把结论回填到对应 `process/checkpoints/CP*.md`。
 
-人工门禁消息本身也会被校验：必须包含 checklist 路径、自动预检结论、Context Capsule 摘要、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。对应 checklist 的 Decision Brief 必须完整，并包含 `Decision Collection Coverage`，列出已扫描来源、候选问题数、纳入待决策数和 N/A / 缺失原因；这样你不需要再打开长文档自行查找是否还有遗漏问题。对话消息可按 `decision_brief_profile=full|compact|summary` 压缩，但不能省略高风险 / 阻断决策、不授权项和完整 checklist 路径。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须列为不授权项；`approve` 只接受表内推荐方案，不代表授权这些操作。
+人工门禁消息本身也会被校验：必须包含 checklist 路径、自动预检结论、Context Capsule 摘要、审批者摘要、决策分层、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。对应 checklist 的 Decision Brief 必须完整，并包含 `Decision Collection Coverage`，列出已扫描来源、候选问题数、纳入待决策数和 N/A / 缺失原因；这样你不需要再打开长文档自行查找是否还有遗漏问题。对话消息可按 `decision_brief_profile=full|compact|summary` 压缩，但不能省略整体目标、`approve` 后果、高风险 / 阻断决策、不授权项、阻塞影响和完整 checklist 路径。低风险、可回退、实现细节类事项默认归入 agent 默认处理或仅审计记录，不进入你的主确认表。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须列为不授权项；`approve` 只接受表内推荐方案，不代表授权这些操作。
 
 ### 6.5.1 CP8 follow-up tracking
 

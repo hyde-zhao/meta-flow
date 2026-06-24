@@ -22,6 +22,14 @@ ALLOWED_DECISION_TYPES = {
 
 EMPTY_VALUES = {"", "-", "—", "n/a", "N/A", "无", "无备选", "不适用"}
 OLD_CONFIRMATION_ALIASES = ("1/通过", "2/修改", "3/不通过", "确认通过", "需要修改", "确认不通过")
+APPROVAL_SUMMARY_TOKENS = (
+    "本次确认服务的整体目标",
+    "推荐动作",
+    "approve 后会发生什么",
+    "approve 不授权什么",
+    "不确认会阻塞什么",
+)
+DECISION_LAYER_TOKENS = ("必须用户决策", "高风险策略确认", "agent 默认处理", "仅审计记录")
 
 
 @dataclass
@@ -65,7 +73,7 @@ def find_decision_table(text: str) -> tuple[list[str], list[DecisionRow]]:
     lines = text.splitlines()
     start = None
     for index, line in enumerate(lines):
-        if "待人工决策清单" in line:
+        if line.strip().startswith("### 待人工决策清单"):
             start = index
             break
     if start is None:
@@ -106,10 +114,25 @@ def is_empty(value: str) -> bool:
     return value.strip().strip("`") in EMPTY_VALUES
 
 
-def collect_checkpoint_errors(path: Path, text: str) -> tuple[list[str], list[DecisionRow]]:
+def collect_checkpoint_errors(path: Path, text: str, *, legacy: bool = False) -> tuple[list[str], list[DecisionRow]]:
     errors: list[str] = []
     if "## Decision Brief" not in text:
         errors.append("missing section: ## Decision Brief")
+    if not legacy:
+        if "### 审批者摘要" not in text:
+            errors.append("missing section: ### 审批者摘要")
+        else:
+            approval_section = text.split("### 审批者摘要", 1)[1].split("### Context Capsule Summary", 1)[0]
+            for token in APPROVAL_SUMMARY_TOKENS:
+                if token not in approval_section:
+                    errors.append(f"审批者摘要 missing token: {token}")
+        if "### 决策分层" not in text:
+            errors.append("missing section: ### 决策分层")
+        else:
+            layer_section = text.split("### 决策分层", 1)[1].split("### 待人工决策清单", 1)[0]
+            for token in DECISION_LAYER_TOKENS:
+                if token not in layer_section:
+                    errors.append(f"决策分层 missing token: {token}")
     if "### Context Capsule Summary" not in text:
         errors.append("missing section: ### Context Capsule Summary")
     else:
@@ -184,7 +207,7 @@ def collect_checkpoint_errors(path: Path, text: str) -> tuple[list[str], list[De
     return errors, rows
 
 
-def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow]) -> list[str]:
+def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow], *, legacy: bool = False) -> list[str]:
     errors: list[str] = []
     checkpoint_ref = path.as_posix()
     if checkpoint_ref not in text and path.name not in text:
@@ -195,6 +218,10 @@ def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow]
     for alias in OLD_CONFIRMATION_ALIASES:
         if alias in text:
             errors.append(f"launch message must not show legacy confirmation alias: {alias}")
+    if not legacy:
+        for token in ("审批者摘要", *APPROVAL_SUMMARY_TOKENS, "决策分层", *DECISION_LAYER_TOKENS):
+            if token not in text:
+                errors.append(f"launch message missing approval-oriented token: {token}")
 
     count_match = re.search(r"本轮待人工决策项[：:]\s*(\d+)", text)
     if not count_match:
@@ -232,20 +259,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate human gate Decision Brief and launch message.")
     parser.add_argument("--checkpoint", required=True, type=Path, help="Path to process/checkpoints/CP*.md")
     parser.add_argument("--launch-message-file", type=Path, help="Optional file containing the message to send to the user")
+    parser.add_argument("--legacy", action="store_true", help="Validate the pre-CR036 legacy human-gate protocol.")
     args = parser.parse_args(argv)
 
     if not args.checkpoint.is_file():
         print(f"ERROR: checkpoint file not found: {args.checkpoint}", file=sys.stderr)
         return 1
     checkpoint_text = args.checkpoint.read_text(encoding="utf-8")
-    errors, rows = collect_checkpoint_errors(args.checkpoint, checkpoint_text)
+    errors, rows = collect_checkpoint_errors(args.checkpoint, checkpoint_text, legacy=args.legacy)
 
     if args.launch_message_file:
         if not args.launch_message_file.is_file():
             errors.append(f"launch message file not found: {args.launch_message_file}")
         else:
             message_text = args.launch_message_file.read_text(encoding="utf-8")
-            errors.extend(collect_launch_message_errors(args.checkpoint, message_text, rows))
+            errors.extend(collect_launch_message_errors(args.checkpoint, message_text, rows, legacy=args.legacy))
 
     if errors:
         for error in errors:

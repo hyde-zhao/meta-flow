@@ -15,6 +15,16 @@ CHECKPOINT_TEXT = """# CP3 HLD Review
 
 ## Decision Brief
 
+### 审批者摘要
+
+| 字段 | 内容 |
+|---|---|
+| 本次确认服务的整体目标 | 验证新人工门禁消息可直接说明目标 |
+| 推荐动作 | approve |
+| approve 后会发生什么 | 进入下一阶段 |
+| approve 不授权什么 | 不授权真实运行、凭据、publish 或 production write |
+| 不确认会阻塞什么 | 阻塞 CP3 后续推进 |
+
 ### Context Capsule Summary
 
 - capsule: `process/context/CP3-HLD-CONTEXT.yaml`
@@ -27,6 +37,15 @@ CHECKPOINT_TEXT = """# CP3 HLD Review
 | 来源 | 扫描状态 | 候选问题数 | 纳入待决策数 | 分类 / N/A 原因 |
 |---|---|---:|---:|---|
 | HLD | scanned | 1 | 1 | architecture decision |
+
+### 决策分层
+
+| 分类 | 数量 | 处理方式 |
+|---|---:|---|
+| 必须用户决策 | 1 | 展示到待人工决策清单 |
+| 高风险策略确认 | 0 | 本轮无 |
+| agent 默认处理 | 0 | 本轮无 |
+| 仅审计记录 | 0 | 本轮无 |
 
 ### 待人工决策清单
 

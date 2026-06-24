@@ -52,9 +52,9 @@ Meta Flow 的交互路径分两类：
 
 ## 工作流检查点
 
-安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；阶段上下文胶囊写入 `process/context/*-CONTEXT.yaml`；关键人工审查稿写入 `process/checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `host-orchestrator` 发起人工确认，发起前必须生成 Context Capsule、Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
+安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；阶段上下文胶囊写入 `process/context/*-CONTEXT.yaml`；关键人工审查稿写入 `process/checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `host-orchestrator` 发起人工确认，发起前必须生成 Context Capsule、Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。Decision Brief 必须包含审批者摘要和决策分层：审批者摘要说明本次确认服务的整体目标、推荐动作、`approve` 后会发生什么、`approve` 不授权什么、不确认会阻塞什么；决策分层区分必须用户决策、高风险策略确认、agent 默认处理和仅审计记录。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
 
-人工门禁发起消息必须同时合规：包含 checklist 路径、自动预检结论、Context Capsule 摘要、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。checkpoint 文件中的 Decision Brief 必须完整；对话可按 `decision_brief_profile=full|compact|summary` 压缩。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须作为不授权项单独列出；`approve` 不代表授权这些操作。CP8 必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
+人工门禁发起消息必须同时合规：包含 checklist 路径、自动预检结论、Context Capsule 摘要、审批者摘要、决策分层、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。checkpoint 文件中的 Decision Brief 必须完整；对话可按 `decision_brief_profile=full|compact|summary` 压缩，但不能省略整体目标、`approve` 后果、不授权边界和阻塞影响。低风险、可回退、实现细节类事项默认归入 agent 默认处理或仅审计记录，不进入用户主确认表。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须作为不授权项单独列出；`approve` 不代表授权这些操作。CP8 必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
 
 阶段任务、检查点、Story 实现 / 验证或 CR 收敛完成后，Host Orchestrator 必须给出可直接复制的“下一步准确提示词”，例如 `approve`、`修改: <具体修改点>`、`reject`、`执行下一步: <具体动作>` 或 `处理阻塞: <具体处理方式>`；不得只提示用户回复“同意”“继续”“可以”。`meta-flow next` 遵守同一输出规则。
 

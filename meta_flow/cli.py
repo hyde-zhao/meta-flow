@@ -337,6 +337,8 @@ def _print_help() -> None:
         "  meta-flow workspace push --project-root .\n"
         "  meta-flow doctor adoption --project-root .\n"
         "  meta-flow cr bootstrap --id CR-001 --title \"project adoption bootstrap\" --scope \"Initialize Meta Flow adoption readiness.\" --project-root .\n"
+        "  meta-flow cr brief --id CR-001 --project-root .\n"
+        "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml\n"
         "  meta-flow status\n"
     )

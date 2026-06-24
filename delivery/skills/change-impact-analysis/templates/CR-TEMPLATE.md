@@ -33,11 +33,42 @@ current_requirement_baseline_path: "process/baseline/CURRENT-REQUIREMENT-BASELIN
 historical_baseline_status: "active"
 reframed_by: []
 reframe_summary: ""
+goal_ref: ""
+goal_statement: ""
+user_goal_impact: ""
+approval_focus: "scope|architecture|security|implementation|runtime|risk|follow_up"
+split_rationale: ""
+why_not_merge_with_parent: ""
+why_not_story_or_task: ""
+decision_burden: "none|low|medium|high"
+approve_effect: ""
+reject_effect: ""
+not_authorized_by_approve: []
 ---
 
 ## 变更描述
 
 [用户或 Agent 提出的变更内容]
+
+## 目标影响摘要
+
+| 字段 | 内容 |
+|---|---|
+| 目标引用 | `goal_ref` |
+| 整体目标 | `goal_statement` |
+| 用户目标影响 | `user_goal_impact` |
+| 本 CR 为什么值得独立推进 | `split_rationale` |
+| approve 后会发生什么 | `approve_effect` |
+| reject / 不确认会阻塞什么 | `reject_effect` |
+| 决策负担 | `decision_burden` |
+
+## 拆分理由
+
+| 问题 | 结论 |
+|---|---|
+| 为什么不合并到 parent / active CR | `why_not_merge_with_parent` |
+| 为什么不是 Story / task / follow-up | `why_not_story_or_task` |
+| 触发独立 CR 的边界 | 目标 / 风险 / 授权 / 发布 / 回滚 / 审计 / 文件 owner |
 
 ## CP8 Follow-up 来源
 
@@ -82,6 +113,7 @@ reframe_summary: ""
 ## 结构化权限策略
 
 > 默认不授权真实运行、凭据读取、NAS 访问、publish 或交易写入。任何下游任务、脚本、测试或 runbook 要求超出本策略时，必须阻断并转入 `runtime-authorization` CR 或重新发起人工门禁。
+> `approve` 只接受本 CR 中的推荐方案；`not_authorized_by_approve` 中的事项必须单独授权。
 
 ```yaml
 authorization_policy:
