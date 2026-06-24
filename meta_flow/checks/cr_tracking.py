@@ -63,6 +63,7 @@ class FormalCR:
     path: Path
     source: str
     parent_cr: str
+    source_follow_up_id: str
     historical_baseline_status: str
     reframed_by: str
 
@@ -78,6 +79,7 @@ class FollowUpRow:
     gate_profile: str
     kind: str
     formal_path: str
+    relationship_text: str
     source_path: Path
     line_no: int
     source: str
@@ -143,6 +145,10 @@ def normalize_header(header: str) -> str:
         "名称": "标题",
         "CR 路径": "正式 CR 路径",
         "正式路径": "正式 CR 路径",
+        "相关 active CR / blocked_by / superseded_by": "关联",
+        "相关 active CR": "关联",
+        "blocked_by": "关联",
+        "superseded_by": "关联",
     }
     return aliases.get(header.strip().strip("`"), header.strip().strip("`"))
 
@@ -230,6 +236,22 @@ def normalize_path(value: str) -> str:
     return value.strip().strip("`").strip()
 
 
+def relation_text_from_cells(headers: list[str], cells: list[str]) -> str:
+    relation_parts: list[str] = []
+    for pos, header in enumerate(headers):
+        if pos >= len(cells):
+            continue
+        header_text = header.strip()
+        if (
+            header_text == "关联"
+            or "blocked_by" in header_text
+            or "superseded_by" in header_text
+            or ("相关" in header_text and "CR" in header_text)
+        ):
+            relation_parts.append(cells[pos].strip())
+    return "; ".join(part for part in relation_parts if part)
+
+
 def resolve_project_path(project_root: Path, value: str) -> Path:
     path = Path(value)
     if path.is_absolute():
@@ -276,6 +298,7 @@ def discover_formal_crs(change_root: Path) -> dict[str, FormalCR]:
             path=path,
             source=fields.get("source", ""),
             parent_cr=fields.get("parent_cr", ""),
+            source_follow_up_id=strip_scalar(fields.get("source_follow_up_id", "")),
             historical_baseline_status=strip_scalar(fields.get("historical_baseline_status", "")),
             reframed_by=strip_scalar(fields.get("reframed_by", "")),
         )
@@ -327,6 +350,7 @@ def parse_follow_up_rows(path: Path) -> list[FollowUpRow]:
                         formal_path=normalize_path(cells[header_map.get("正式 CR 路径", -1)])
                         if "正式 CR 路径" in header_map
                         else "",
+                        relationship_text=relation_text_from_cells(headers, cells),
                         source_path=path,
                         line_no=data_index + 1,
                         source="table",
@@ -381,6 +405,7 @@ def follow_up_row_from_mapping(mapping: dict[str, str], path: Path, line_no: int
         gate_profile=strip_scalar(mapping.get("gate_profile", "")).lower(),
         kind=kind,
         formal_path=normalize_path(strip_scalar(mapping.get("formal_cr_path", ""))),
+        relationship_text=strip_scalar(mapping.get("blocked_by", "")),
         source_path=path,
         line_no=line_no,
         source=source,
@@ -479,6 +504,30 @@ def format_rel(project_root: Path, path: Path) -> str:
         return path.relative_to(project_root).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def formal_cr_for_follow_up_row(project_root: Path, formal_crs: dict[str, FormalCR], row: FollowUpRow) -> FormalCR | None:
+    if row.formal_path in PATH_EMPTY_VALUES:
+        return None
+    resolved = resolve_project_path(project_root, row.formal_path).resolve()
+    for formal in formal_crs.values():
+        if formal.path.resolve() == resolved:
+            return formal
+    return None
+
+
+def formal_row_points_to_cr(project_root: Path, row: FollowUpRow, formal: FormalCR) -> bool:
+    if row.formal_path in PATH_EMPTY_VALUES:
+        return False
+    return resolve_project_path(project_root, row.formal_path).resolve() == formal.path.resolve()
+
+
+def is_formal_active(formal: FormalCR) -> bool:
+    return formal.status == "active" or formal.lifecycle_status == "active"
+
+
+def is_formal_finished(formal: FormalCR) -> bool:
+    return formal.status in FINISHED_FORMAL_STATUSES or formal.lifecycle_status in {"closed", "cancelled", "superseded"}
 
 
 def collect_errors_and_warnings(
@@ -604,11 +653,60 @@ def collect_errors_and_warnings(
             if row.lifecycle_status == "closed" and formal.status not in FINISHED_FORMAL_STATUSES:
                 errors.append(f"{location} {row.item_id} is closed in tracking but formal status={formal.status}")
 
+        linked_formal = formal_cr_for_follow_up_row(project_root, formal_crs, row)
+        if row.item_id.startswith("FU-") and not formal_path_missing and linked_formal is None:
+            errors.append(f"{location} {row.item_id} formal CR path is not a discovered formal CR: {row.formal_path}")
+        if row.item_id.startswith("FU-") and linked_formal is not None:
+            if row.lifecycle_status == "active" and not is_formal_active(linked_formal):
+                errors.append(
+                    f"{location} {row.item_id} is active but linked formal CR {linked_formal.cr_id} "
+                    f"is status={linked_formal.status or '<empty>'} lifecycle_status={linked_formal.lifecycle_status or '<empty>'}"
+                )
+            if row.lifecycle_status == "active" and f"related_active_cr={linked_formal.cr_id}" not in row.relationship_text:
+                errors.append(
+                    f"{location} {row.item_id} active follow-up row must include "
+                    f"related_active_cr={linked_formal.cr_id}"
+                )
+            if row.lifecycle_status == "closed" and not is_formal_finished(linked_formal):
+                errors.append(
+                    f"{location} {row.item_id} is closed but linked formal CR {linked_formal.cr_id} "
+                    f"is status={linked_formal.status or '<empty>'} lifecycle_status={linked_formal.lifecycle_status or '<empty>'}"
+                )
+
     for cr in formal_crs.values():
-        if cr.source == "cp8-follow-up" and cr.cr_id not in rows_by_id:
-            warnings.append(
-                f"{format_rel(project_root, cr.path)} source=cp8-follow-up but no matching follow-up tracking row"
+        if cr.source != "cp8-follow-up":
+            continue
+        location = format_rel(project_root, cr.path)
+        if cr.cr_id not in rows_by_id:
+            warnings.append(f"{location} source=cp8-follow-up but no matching follow-up tracking row")
+        if not cr.source_follow_up_id:
+            continue
+        source_rows = rows_by_id.get(cr.source_follow_up_id, [])
+        if not source_rows:
+            errors.append(f"{location} source_follow_up_id={cr.source_follow_up_id} has no matching follow-up row")
+            continue
+        linked_source_rows = [row for row in source_rows if formal_row_points_to_cr(project_root, row, cr)]
+        if not linked_source_rows:
+            errors.append(
+                f"{location} source_follow_up_id={cr.source_follow_up_id} has no follow-up row pointing to this CR"
             )
+            continue
+        for row in linked_source_rows:
+            row_location = f"{format_rel(project_root, row.source_path)}:{row.line_no}"
+            if is_formal_active(cr):
+                if row.lifecycle_status != "active":
+                    errors.append(
+                        f"{row_location} {row.item_id} must be active while source formal CR {cr.cr_id} is active"
+                    )
+                if f"related_active_cr={cr.cr_id}" not in row.relationship_text:
+                    errors.append(
+                        f"{row_location} {row.item_id} active source follow-up row must include "
+                        f"related_active_cr={cr.cr_id}"
+                    )
+            if is_formal_finished(cr) and row.lifecycle_status != "closed":
+                errors.append(
+                    f"{row_location} {row.item_id} must be closed while source formal CR {cr.cr_id} is finished"
+                )
 
     index_path = project_root / "process" / "changes" / "CR-INDEX.yaml"
     index_by_id = {item.item_id: item for item in index_items if item.item_id}
