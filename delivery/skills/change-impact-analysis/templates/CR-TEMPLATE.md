@@ -44,6 +44,14 @@ decision_burden: "none|low|medium|high"
 approve_effect: ""
 reject_effect: ""
 not_authorized_by_approve: []
+product_baseline_refresh_required: false
+required_phase: ""
+required_agent: ""
+required_gate: ""
+block_story_decomposition_until: ""
+affected_product_docs: []
+affected_use_cases: []
+routing_design_ref: ""
 ---
 
 ## 变更描述
@@ -144,6 +152,7 @@ authorization_policy:
 
 > 每个受影响正式文档必须填写一行。处理方式只能为：新增 / 原文档更新 / 归档 / 不变。
 > 若选择“原文档更新”，必须说明旧内容保留方式，并在目标文档追加 `## 修订记录`。
+> 若本 CR 影响 `USE-CASES.md`、`REQUIREMENTS.md`、`SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md` 或产品范围基线，frontmatter 必须设置 `product_baseline_refresh_required=true`、`required_phase="requirement-clarification"`、`required_agent="meta-pm"`、`required_gate="CP2"`、`block_story_decomposition_until="CP2-approved"`，并填写 `affected_product_docs`。
 
 | 受影响文档 | 处理方式 | 旧基线保留方式 | 修订记录位置 | 批准状态 |
 |---|---|---|---|---|
@@ -171,6 +180,26 @@ authorization_policy:
 - 影响范围：局部 / 全局
 - 回退到阶段：`rollback_to`
 - 需要重新确认的对象：
+
+## 产品基线重整门禁
+
+> 需求 / 场景 / 范围类 CR 只作为审计外壳，不替代产品发现、需求澄清、HLD 或 Story 拆分。CP2 未通过前不得进入 Story 拆解、LLD 设计批次或实现。
+
+- 是否需要产品基线重整：`product_baseline_refresh_required`
+- 必须回到阶段：`required_phase`
+- 责任 Agent：`required_agent`
+- 必须通过门禁：`required_gate`
+- Story / LLD / 实现阻断条件：`block_story_decomposition_until`
+- 受影响产品文档：`affected_product_docs`
+- 受影响 use case：`affected_use_cases`
+- 分流设计引用：`routing_design_ref`
+
+| 分流类型 | 适用条件 | 默认路径 | CR 拆分策略 |
+|---|---|---|---|
+| 大块集中需求 / 目标包 | 同一目标下多个需求点，影响多个 use case / feature / story，或需要 HLD / 多 Story 才能交付 | parent CR / Change Package -> requirement-clarification -> CP2 -> solution-design -> CP3 -> story-planning | 默认不逐条拆 CR；普通开发工作拆 Story |
+| 单点产品变更 | 只影响一个明确需求或局部行为，验收边界清晰，风险和授权边界单一 | 单个 CR + 必要的增量 CP2 | 不拆多个 CR |
+| 零散后续事项 | 来自 CP8 / feedback / deferred idea，尚未决定推进 | follow-up tracking，用户启动后再冲突预检 | 不预创建正式 CR |
+| 运行授权 / 安全接受 | 涉及凭据、真实运行、生产写入、publish、live / trading 或风险接受 | 独立 runtime_authorization / security 决策项 | 不混入普通产品 CR |
 
 ## fast-lane 判定
 

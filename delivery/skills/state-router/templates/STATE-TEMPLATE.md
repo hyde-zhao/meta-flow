@@ -666,6 +666,22 @@ cr_tracking:
   follow_up_candidates: []
   spike_candidates: []
   stale_status_conflicts: []
+requirement_intake_routing:
+  status: "none|pending-product-baseline-refresh|cp2-approved|blocked"
+  source_cr: ""
+  product_baseline_refresh_required: false
+  required_phase: "requirement-clarification"
+  required_agent: "meta-pm"
+  required_gate: "CP2"
+  block_story_decomposition_until: "CP2-approved"
+  affected_product_docs: []
+  affected_use_cases: []
+  routing_design_ref: ""
+  next_action_type: "delegate_product_baseline_refresh"
+  forbidden_until_unblocked:
+    - "story_decomposition"
+    - "lld_design"
+    - "story_execution"
   status_model:
     lifecycle_statuses:
       - "candidate"

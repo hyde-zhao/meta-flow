@@ -81,6 +81,14 @@ class CRRecord:
     approve_effect: str
     reject_effect: str
     not_authorized_by_approve: list[str]
+    product_baseline_refresh_required: bool
+    required_phase: str
+    required_agent: str
+    required_gate: str
+    block_story_decomposition_until: str
+    affected_product_docs: list[str]
+    affected_use_cases: list[str]
+    routing_design_ref: str
 
 
 def now_utc() -> str:
@@ -117,6 +125,11 @@ def parse_inline_list(value: str) -> list[str]:
     if raw.startswith("[") and raw.endswith("]"):
         raw = raw[1:-1].strip()
     return [item.strip().strip('"').strip("'") for item in raw.split(",") if item.strip()]
+
+
+def parse_bool(value: str) -> bool:
+    raw = _strip_scalar(value).lower()
+    return raw in {"true", "yes", "y", "1"}
 
 
 def normalize_cr_type(value: str) -> str:
@@ -224,6 +237,14 @@ def record_from_cr_file(project_root: Path, path: Path) -> CRRecord:
         approve_effect=fields.get("approve_effect", ""),
         reject_effect=fields.get("reject_effect", ""),
         not_authorized_by_approve=parse_inline_list(fields.get("not_authorized_by_approve", "")),
+        product_baseline_refresh_required=parse_bool(fields.get("product_baseline_refresh_required", "")),
+        required_phase=fields.get("required_phase", ""),
+        required_agent=fields.get("required_agent", ""),
+        required_gate=fields.get("required_gate", ""),
+        block_story_decomposition_until=fields.get("block_story_decomposition_until", ""),
+        affected_product_docs=parse_inline_list(fields.get("affected_product_docs", "")),
+        affected_use_cases=parse_inline_list(fields.get("affected_use_cases", "")),
+        routing_design_ref=fields.get("routing_design_ref", ""),
     )
 
 
@@ -256,6 +277,14 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
         "approve_effect": record.approve_effect or _first_section_summary(text, "## approve 后果"),
         "reject_effect": record.reject_effect,
         "not_authorized_by_approve": record.not_authorized_by_approve or _section_summary(text, "## 不授权范围"),
+        "product_baseline_refresh_required": record.product_baseline_refresh_required,
+        "required_phase": record.required_phase,
+        "required_agent": record.required_agent,
+        "required_gate": record.required_gate,
+        "block_story_decomposition_until": record.block_story_decomposition_until,
+        "affected_product_docs": record.affected_product_docs,
+        "affected_use_cases": record.affected_use_cases,
+        "routing_design_ref": record.routing_design_ref,
         "full_ref": record.full_ref,
         "evidence_index_ref": (CR_ARCHIVE_ROOT_REL / record.cr_id / "evidence-index.json").as_posix(),
         "updated_at": now_utc(),
@@ -332,6 +361,14 @@ def build_index(project_root: Path) -> dict[str, Any]:
                 "impact_surface": record.impact_surface,
                 "authz_policy_refs": record.authz_policy_refs,
                 "risk_refs": record.risk_refs,
+                "product_baseline_refresh_required": record.product_baseline_refresh_required,
+                "required_phase": record.required_phase,
+                "required_agent": record.required_agent,
+                "required_gate": record.required_gate,
+                "block_story_decomposition_until": record.block_story_decomposition_until,
+                "affected_product_docs": record.affected_product_docs,
+                "affected_use_cases": record.affected_use_cases,
+                "routing_design_ref": record.routing_design_ref,
             }
         )
     return {
@@ -377,6 +414,11 @@ def write_legacy_index(project_root: Path) -> Path:
                 f'    goal_ref: "{item.get("goal_ref", "")}"',
                 f'    approval_focus: "{item.get("approval_focus", "")}"',
                 f'    decision_burden: "{item.get("decision_burden", "")}"',
+                f'    product_baseline_refresh_required: "{str(item.get("product_baseline_refresh_required", False)).lower()}"',
+                f'    required_phase: "{item.get("required_phase", "")}"',
+                f'    required_agent: "{item.get("required_agent", "")}"',
+                f'    required_gate: "{item.get("required_gate", "")}"',
+                f'    block_story_decomposition_until: "{item.get("block_story_decomposition_until", "")}"',
                 f'    formal_cr_path: "{item.get("full_ref")}"',
                 f'    summary_ref: "{item.get("summary_ref")}"',
             ]
@@ -816,7 +858,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "index":
         path = write_index(project_root)
+        legacy_path = write_legacy_index(project_root)
         print(f"wrote: {path}")
+        print(f"wrote: {legacy_path}")
         return 0
     if command == "summary":
         if not parsed.cr_id:

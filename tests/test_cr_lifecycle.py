@@ -104,7 +104,7 @@ class CRLifecycleTests(unittest.TestCase):
                 "CR-101",
                 conflict_keys="data_contract",
                 impact_surface="quant_lab/data",
-                extra_frontmatter='goal_ref: "GOAL-001"\ngoal_statement: "建立目标导向 CR 汇总"\napproval_focus: "确认目标包而不是细任务"\ndecision_burden: "medium"\nsplit_rationale: "需要独立审计"\napprove_effect: "进入实现"\nnot_authorized_by_approve: ["runtime", "publish"]',
+                extra_frontmatter='goal_ref: "GOAL-001"\ngoal_statement: "建立目标导向 CR 汇总"\napproval_focus: "确认目标包而不是细任务"\ndecision_burden: "medium"\nsplit_rationale: "需要独立审计"\napprove_effect: "进入实现"\nnot_authorized_by_approve: ["runtime", "publish"]\nproduct_baseline_refresh_required: true\nrequired_phase: "requirement-clarification"\nrequired_agent: "meta-pm"\nrequired_gate: "CP2"\nblock_story_decomposition_until: "CP2-approved"\naffected_product_docs: ["docs/product/USE-CASES.md", "docs/product/REQUIREMENTS.md"]\naffected_use_cases: ["UC-08"]\nrouting_design_ref: "process/USE-CASES.md#UC-08"',
             )
 
             self.assertEqual(0, cr_lifecycle.main(["index", "--project-root", str(root)]))
@@ -117,6 +117,14 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual("GOAL-001", index["items"][0]["goal_ref"])
             self.assertEqual("确认目标包而不是细任务", index["items"][0]["approval_focus"])
             self.assertEqual("medium", index["items"][0]["decision_burden"])
+            self.assertTrue(index["items"][0]["product_baseline_refresh_required"])
+            self.assertEqual("requirement-clarification", index["items"][0]["required_phase"])
+            self.assertEqual("meta-pm", index["items"][0]["required_agent"])
+            self.assertEqual("CP2", index["items"][0]["required_gate"])
+            self.assertEqual("CP2-approved", index["items"][0]["block_story_decomposition_until"])
+            self.assertEqual(["docs/product/USE-CASES.md", "docs/product/REQUIREMENTS.md"], index["items"][0]["affected_product_docs"])
+            self.assertEqual(["UC-08"], index["items"][0]["affected_use_cases"])
+            self.assertEqual("process/USE-CASES.md#UC-08", index["items"][0]["routing_design_ref"])
             summary = json.loads(
                 (root / "process" / "changes" / "summaries" / "CR-101.summary.json").read_text(encoding="utf-8")
             )
@@ -128,6 +136,20 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual("确认目标包而不是细任务", summary["approval_focus"])
             self.assertEqual("需要独立审计", summary["split_rationale"])
             self.assertEqual(["runtime", "publish"], summary["not_authorized_by_approve"])
+            self.assertTrue(summary["product_baseline_refresh_required"])
+            self.assertEqual("requirement-clarification", summary["required_phase"])
+            self.assertEqual("meta-pm", summary["required_agent"])
+            self.assertEqual("CP2", summary["required_gate"])
+            self.assertEqual("CP2-approved", summary["block_story_decomposition_until"])
+            self.assertEqual(["docs/product/USE-CASES.md", "docs/product/REQUIREMENTS.md"], summary["affected_product_docs"])
+            self.assertEqual(["UC-08"], summary["affected_use_cases"])
+            self.assertEqual("process/USE-CASES.md#UC-08", summary["routing_design_ref"])
+            legacy_index = (root / "process" / "changes" / "CR-INDEX.yaml").read_text(encoding="utf-8")
+            self.assertIn('product_baseline_refresh_required: "true"', legacy_index)
+            self.assertIn('required_phase: "requirement-clarification"', legacy_index)
+            self.assertIn('required_agent: "meta-pm"', legacy_index)
+            self.assertIn('required_gate: "CP2"', legacy_index)
+            self.assertIn('block_story_decomposition_until: "CP2-approved"', legacy_index)
 
     def test_brief_and_goal_brief_render_goal_oriented_summary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

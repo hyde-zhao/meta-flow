@@ -196,6 +196,8 @@ init（host-orchestrator）                                                   [C
 - **回写规则**：每一阶段结束必须回写 `STATE.md`
 - **变更规则**：需求或设计变动必须先创建 `CR-*.md` 再修改正式对象
 - **需求 / 场景变更追溯**：修改 `USE-CASES.md` / `REQUIREMENTS.md` 前，必须在 CR 中填写文档处理决策（新增 / 原文档更新 / 归档 / 不变）；默认增量更新、保留旧基线并追加 `## 修订记录`，不得用新草案整体替换旧文档
+- **CR first 不等于跳过产品澄清**：需求 / 场景 / 范围类变更必须先创建 CR 记录审计边界，但 CR 创建后必须回到 `requirement-clarification`，由 `meta-pm` 执行 CR 触发的增量 `use-case-discovery`、`requirement-extraction`、`requirement-clarifier`、SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE 更新，并通过 CP1 / CP2；CP2 未通过前不得进行 CR Story 分解、LLD 或实现。
+- **大块集中需求入口分流**：同一目标、同一 persona / user journey、共享 HLD、同一 release value 或需要多个 Story 才能交付的需求集合，默认作为目标包 / parent CR / Change Package 处理，先完整走用户场景发现、需求澄清、HLD 和 Story 拆分；只有目标、审批人、风险授权、交付节奏、回滚策略或审计边界不同，才允许拆出子 CR；普通开发工作拆 Story，不逐条拆 CR。
 - **检查点结构**：CP0-CP8 均必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables；自动检查点必须在 `process/checks/CP*.md` 写入逐项结果，人工检查点必须在 `process/checkpoints/CP*.md` 写入 checklist 和“人工审查结果”。
 - **全阶段 Context Capsule**：CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后必须生成或检查 `process/context/*-CONTEXT.yaml`。子 agent、人工门禁、验证和发布准备默认先读取 capsule；只有 capsule 缺失、冲突、字段不足、人工审计、深度评审或用户明确要求时，才读取完整正式文档，并在 `STATE.md.context_budget.read_expansion_log[]` 或 capsule `read_expansion_log[]` 写明 `full_doc_read_reason`。
 - **Story Return / Evidence / Design Delta**：CP6 / CP7 Story agent 完成后必须写入 `process/returns/STORY-*.return.json`，并用 `meta-flow story return-check` 校验 Story / stage 匹配、写入路径、禁止路径、unexpected imports、验证证据和设计 delta 引用。CP6 / CP7 检查默认消费 `process/evidence/STORY-*.index.json` 证据索引，不复制完整证据正文。Story 修改长期 Feature DESIGN / ADR / HLD 时必须写 `process/design-deltas/STORY-*.delta.json`；CP8 前对需要回写的 delta 运行 `meta-flow design delta-check --require-merged`。

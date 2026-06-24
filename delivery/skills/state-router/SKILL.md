@@ -148,6 +148,26 @@ state-router 每次推进前必须刷新 `workflow_health`：
 
 任一计数器超过阈值时，`workflow_health.status` 必须变为 `stalled`、`blocked` 或 `requires-human-arbitration`，并把下一步写成决策项；不得继续静默重试消耗 token。
 
+### 2.0 CR 产品基线重整优先路由
+
+按阶段推进前，state-router 必须先读取 active CR 的 summary / CR-INDEX。若任一 active CR 命中以下条件，不得进入 Story 拆解、LLD 设计批次、story-planning 或 story-execution：
+
+- `product_baseline_refresh_required=true`
+- `required_gate=CP2`
+- `gate_status=cp2_pending`
+- `impact_surface` 包含 `use-cases` / `requirements` / `scope` / `product` / `product-baseline`
+- `affected_product_docs` 包含 `USE-CASES.md`、`REQUIREMENTS.md`、`SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md`
+
+命中后下一步固定为：
+
+- `current_phase=requirement-clarification`
+- `current_agent=meta-pm`
+- `next_action.type=delegate_product_baseline_refresh`
+- `next_action.text` 必须说明基于哪个 CR / Change Package 执行增量场景发现、需求澄清和 CP2
+- `block_story_decomposition_until=CP2-approved`
+
+大块集中需求默认归类为目标包，而不是 CR 列表。同一目标、同一 persona / user journey、共享 HLD、同一 release value 或需要多个 Story 才能交付的需求集合，必须先创建 / 复用 parent CR 或 Change Package 作为审计外壳，再委托 `meta-pm` 完整执行用户场景发现、需求澄清、SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE，并在 CP2 通过后进入 `solution-design`。只有目标、审批人、风险授权、交付节奏、回滚策略或审计边界不同，才允许拆出子 CR；普通开发工作拆 Story，不逐条拆 CR。
+
 ### 2. 按阶段检查退出条件
 
 | 当前阶段 | 退出条件 | 下一阶段 | 默认唤醒 Agent |
@@ -422,6 +442,7 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 - 同一 Wave 内也可能因文件冲突串行；不同 Wave 的 Story 可以提前写 LLD，但不得在全量 CP5 通过前进入开发
 - fast-lane 只能减少文档厚度和人工门数量，不能跳过 CP6 / CP7、`verification-execution` 证据摘要、Agent Dispatch Evidence 或 CP8 终验摘要
 - 当存在活跃 `CR-*` 时，应优先收敛变更影响，再判断是否允许推进
+- 当 active CR 命中产品基线重整条件时，必须优先路由到 `requirement-clarification` / `meta-pm` / CP2；CP2 approved 前不得进入 Story 拆解、LLD 设计批次或实现
 - “唯一 active CR”不等于“没有后续 CR 候选”；follow-up tracking 中的 candidate / spike_candidate 必须作为 backlog 显式展示
 - 当 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计时，必须先形成 CR 影响范围的 `lld_design_batch`，批次确认前不得进入开发
 - 首次初始化时只允许从 `skills/state-router/templates/STATE-TEMPLATE.md` 复制，不允许凭空脑补字段

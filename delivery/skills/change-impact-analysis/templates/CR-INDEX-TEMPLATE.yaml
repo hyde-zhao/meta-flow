@@ -72,6 +72,14 @@ items:
     readiness_status: "n/a"
     gate_status: "not_started"
     gate_profile: "standard"
+    product_baseline_refresh_required: false
+    required_phase: ""
+    required_agent: ""
+    required_gate: ""
+    block_story_decomposition_until: ""
+    affected_product_docs: []
+    affected_use_cases: []
+    routing_design_ref: ""
     status: "candidate" # legacy compatibility; prefer lifecycle_status/readiness_status/gate_status
     type: "CR" # legacy compatibility; prefer kind
     source_tracking: "process/changes/CR-000-FOLLOW-UP-TRACKING-YYYY-MM-DD.md"

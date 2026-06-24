@@ -1475,6 +1475,136 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
     return errors
 
 
+def collect_requirement_intake_routing_errors() -> list[str]:
+    errors: list[str] = []
+    token_targets = {
+        "cr-lifecycle": (
+            ROOT / "meta_flow" / "workflow" / "cr_lifecycle.py",
+            (
+                "product_baseline_refresh_required",
+                "required_phase",
+                "required_agent",
+                "required_gate",
+                "block_story_decomposition_until",
+                "affected_product_docs",
+                "affected_use_cases",
+                "routing_design_ref",
+                "write_legacy_index",
+            ),
+        ),
+        "cr-lifecycle-tests": (
+            ROOT / "tests" / "test_cr_lifecycle.py",
+            (
+                "product_baseline_refresh_required",
+                "requirement-clarification",
+                "meta-pm",
+                "CP2-approved",
+                "affected_product_docs",
+                "routing_design_ref",
+            ),
+        ),
+        "change-impact-analysis": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "SKILL.md",
+            (
+                "CR first 不等于跳过产品澄清",
+                "大块集中需求默认是目标包",
+                "product_baseline_refresh_required",
+                "required_phase=requirement-clarification",
+                "required_agent=meta-pm",
+                "required_gate=CP2",
+                "block_story_decomposition_until=CP2-approved",
+            ),
+        ),
+        "cr-template": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-TEMPLATE.md",
+            (
+                "product_baseline_refresh_required",
+                "required_phase",
+                "required_agent",
+                "required_gate",
+                "block_story_decomposition_until",
+                "affected_product_docs",
+                "affected_use_cases",
+                "routing_design_ref",
+                "产品基线重整门禁",
+            ),
+        ),
+        "cr-index-template": (
+            DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-INDEX-TEMPLATE.yaml",
+            (
+                "product_baseline_refresh_required",
+                "required_phase",
+                "required_agent",
+                "required_gate",
+                "block_story_decomposition_until",
+                "affected_product_docs",
+                "affected_use_cases",
+                "routing_design_ref",
+            ),
+        ),
+        "state-router": (
+            DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
+            (
+                "CR 产品基线重整优先路由",
+                "product_baseline_refresh_required=true",
+                "delegate_product_baseline_refresh",
+                "block_story_decomposition_until=CP2-approved",
+                "大块集中需求默认归类为目标包",
+            ),
+        ),
+        "state-template": (
+            DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
+            (
+                "requirement_intake_routing",
+                "pending-product-baseline-refresh",
+                "product_baseline_refresh_required",
+                "delegate_product_baseline_refresh",
+                "CP2-approved",
+                "story_decomposition",
+            ),
+        ),
+        "delivery-agents-rule": (
+            DELIVERY_ROOT / "rules" / "AGENTS.md",
+            (
+                "CR first 不等于跳过产品澄清",
+                "大块集中需求入口分流",
+                "meta-pm",
+                "CP2",
+                "目标包",
+            ),
+        ),
+        "delivery-claude-rule": (
+            DELIVERY_ROOT / "rules" / "CLAUDE.md",
+            (
+                "CR first 不等于跳过产品澄清",
+                "大块集中需求入口分流",
+                "meta-pm",
+                "CP2",
+                "目标包",
+            ),
+        ),
+        "root-agents-rule": (
+            ROOT / "AGENTS.md",
+            (
+                "CR first 不等于跳过产品澄清",
+                "大块集中需求入口分流",
+                "meta-pm",
+                "CP2",
+                "目标包",
+            ),
+        ),
+    }
+    for label, (target, tokens) in token_targets.items():
+        if not target.is_file():
+            errors.append(f"missing requirement intake routing target {label}: {target.relative_to(ROOT)}")
+            continue
+        text = target.read_text(encoding="utf-8")
+        missing = [token for token in tokens if token not in text]
+        if missing:
+            errors.append(f"{target.relative_to(ROOT)} missing requirement intake routing tokens: {', '.join(missing)}")
+    return errors
+
+
 def parse_frontmatter(content: str) -> dict[str, str]:
     match = FRONTMATTER_RE.match(content)
     if not match:
@@ -1872,6 +2002,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_agent_display_profile_errors())
     errors.extend(collect_human_gate_protocol_errors())
     errors.extend(collect_cr_tracking_protocol_errors())
+    errors.extend(collect_requirement_intake_routing_errors())
     errors.extend(collect_revision_record_errors())
     errors.extend(collect_software_workflow_artifact_errors())
     errors.extend(collect_context_capsule_protocol_errors())
