@@ -38,8 +38,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VALID_PLATFORMS = ("claude", "codex", "openclaw")
-PLATFORM_ALIASES = {"claude-code": "claude"}
+VALID_PLATFORMS = ("claude", "codex", "openclaw", "qoder")
+PLATFORM_ALIASES = {"claude-code": "claude", "qoder-cli": "qoder", "qodercli": "qoder"}
 VALID_SCOPES = ("project", "user")
 VALID_CONTENTS = ("all", "agents", "skills", "rules")
 VALID_COMPONENTS = ("rules", "agent", "full")
@@ -69,6 +69,8 @@ CODEX_OPTIONAL_AGENT_FIELDS = frozenset(
 CODEX_ALLOWED_AGENT_FIELDS = frozenset(CODEX_REQUIRED_AGENT_FIELDS) | CODEX_OPTIONAL_AGENT_FIELDS
 CODEX_NICKNAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
 CLAUDE_AGENT_COLORS = frozenset({"red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"})
+QODER_EFFORT_VALUES = frozenset({"low", "medium", "high", "xhigh", "max"})
+EFFORT_TO_QODER_MAP: dict[str, str] = {"minimal": "low", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"}
 AGENT_DISPLAY_PROFILES: dict[str, dict[str, object]] = {
     "meta-pm": {"codex_nicknames": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"], "claude_color": "orange"},
     "meta-se": {"codex_nicknames": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"], "claude_color": "yellow"},
@@ -700,6 +702,32 @@ def validate_codex_agent_render(content: str, agent: AgentDefinition) -> None:
         fail(f"Codex agent 渲染结果包含非官方 schema 字段: {agent.source} -> {', '.join(unsupported)}")
 
 
+def render_qoder_agent(agent: AgentDefinition, commit: str, generated: str) -> str:
+    display_profile = AGENT_DISPLAY_PROFILES.get(agent.name, {})
+    color = str(display_profile.get("claude_color", "")).strip()
+    if color and color not in CLAUDE_AGENT_COLORS:
+        fail(f"Qoder agent color 非法: {agent.name} -> {color}")
+    effort = EFFORT_TO_QODER_MAP.get(agent.model_reasoning_effort) if agent.model_reasoning_effort else None
+    if agent.model_reasoning_effort and not effort:
+        fail(f"Qoder agent effort 映射失败: {agent.name} -> {agent.model_reasoning_effort}")
+
+    frontmatter = [
+        "---",
+        f"name: {yaml_scalar(agent.name)}",
+        f"description: {yaml_scalar(agent.description)}",
+    ]
+    if agent.model:
+        frontmatter.append(f"model: {yaml_scalar(agent.model)}")
+    if agent.tools:
+        frontmatter.append(f"tools: {yaml_scalar(agent.tools)}")
+    if effort:
+        frontmatter.append(f"effort: {effort}")
+    if color:
+        frontmatter.append(f"color: {yaml_scalar(color)}")
+    frontmatter.append("---")
+    return "\n".join(frontmatter) + f"\n{markdown_audit(commit, generated)}\n\n{agent.instructions.rstrip()}\n"
+
+
 def build_openclaw_manifest(agent_entries: list[dict[str, str]], skill_entries: list[dict[str, str]]) -> str:
     payload = {
         "version": "1.0",
@@ -803,22 +831,57 @@ def rollback_transaction(transaction: Transaction) -> None:
         path.write_text(original, encoding="utf-8")
 
 
-def managed_block_markers(commit: str, generated: str) -> tuple[str, str]:
-    begin = f"{MANAGED_BLOCK_BEGIN} v=1 commit={commit} generated={generated} -->"
-    end = MANAGED_BLOCK_END
+def managed_block_begin_prefix(platform: str) -> str:
+    return f"{MANAGED_BLOCK_BEGIN} platform={platform} "
+
+
+def managed_block_end_marker(platform: str) -> str:
+    return f"<!-- myflow:managed:end platform={platform} -->"
+
+
+def managed_block_markers(commit: str, generated: str, platform: str) -> tuple[str, str]:
+    begin = f"{MANAGED_BLOCK_BEGIN} platform={platform} v=1 commit={commit} generated={generated} -->"
+    end = managed_block_end_marker(platform)
     return begin, end
 
 
-def render_managed_block(content: str, commit: str, generated: str) -> str:
-    begin, end = managed_block_markers(commit, generated)
+def render_managed_block(content: str, commit: str, generated: str, platform: str) -> str:
+    begin, end = managed_block_markers(commit, generated, platform)
     managed_content = inject_markdown_audit(content.rstrip() + "\n", commit, generated).rstrip()
     return f"{begin}\n{managed_content}\n{end}"
 
 
-def upsert_managed_block(path: Path, canonical_content: str, transaction: Transaction, dry_run: bool, commit: str, generated: str) -> None:
-    block = render_managed_block(canonical_content, commit, generated)
-    begin_prefix = MANAGED_BLOCK_BEGIN
-    end_marker = MANAGED_BLOCK_END
+def find_managed_block_range(content: str, platform: str) -> tuple[int, int] | None:
+    begin_prefix = managed_block_begin_prefix(platform)
+    end_marker = managed_block_end_marker(platform)
+
+    begin_index = content.find(begin_prefix)
+    end_index = content.find(end_marker)
+
+    if begin_index != -1 and end_index != -1:
+        if begin_index > end_index:
+            fail(f"managed block 哨兵顺序错误，请先手工修复: platform={platform}")
+        return begin_index, end_index + len(end_marker)
+
+    if begin_index != -1 or end_index != -1:
+        fail(f"managed block 哨兵损坏，请先手工修复: platform={platform}")
+
+    legacy_begin = content.find(f"{MANAGED_BLOCK_BEGIN} v=")
+    legacy_end = content.find(MANAGED_BLOCK_END)
+
+    if legacy_begin != -1 and legacy_end != -1:
+        if legacy_begin > legacy_end:
+            fail("managed block 哨兵顺序错误，请先手工修复 (legacy)")
+        return legacy_begin, legacy_end + len(MANAGED_BLOCK_END)
+
+    if legacy_begin != -1 or legacy_end != -1:
+        fail("managed block 哨兵损坏，请先手工修复 (legacy)")
+
+    return None
+
+
+def upsert_managed_block(path: Path, canonical_content: str, transaction: Transaction, dry_run: bool, commit: str, generated: str, platform: str) -> None:
+    block = render_managed_block(canonical_content, commit, generated, platform)
 
     ensure_file_target(path, dry_run)
     if not path.exists():
@@ -826,57 +889,50 @@ def upsert_managed_block(path: Path, canonical_content: str, transaction: Transa
         return
 
     existing = path.read_text(encoding="utf-8")
-    begin_index = existing.find(begin_prefix)
-    end_index = existing.find(end_marker)
-    if (begin_index == -1) ^ (end_index == -1):
-        fail(f"managed block 哨兵损坏，请先手工修复: {path}")
+    found = find_managed_block_range(existing, platform)
 
-    if begin_index == -1 and end_index == -1:
+    if found is None:
         separator = "\n\n" if existing and not existing.endswith("\n\n") else ""
         merged = existing.rstrip() + separator + block + "\n"
         write_text(path, merged if existing.strip() else block + "\n", transaction, dry_run)
         return
 
-    if begin_index > end_index:
-        fail(f"managed block 哨兵顺序错误，请先手工修复: {path}")
-
-    end_index += len(end_marker)
+    begin_index, end_index = found
     replaced = existing[:begin_index].rstrip()
     suffix = existing[end_index:].lstrip("\r\n")
     parts = [part for part in [replaced, block, suffix.rstrip()] if part]
     write_text(path, "\n\n".join(parts) + "\n", transaction, dry_run)
 
 
-def clear_managed_block(path: Path, transaction: Transaction, dry_run: bool) -> None:
-    begin_prefix = MANAGED_BLOCK_BEGIN
-    end_marker = MANAGED_BLOCK_END
+def clear_managed_block(path: Path, transaction: Transaction, dry_run: bool, platform: str) -> None:
     if not path.exists():
         return
     ensure_file_target(path, dry_run)
 
     existing = path.read_text(encoding="utf-8")
-    begin_index = existing.find(begin_prefix)
-    end_index = existing.find(end_marker)
-    if begin_index == -1 or end_index == -1:
+    found = find_managed_block_range(existing, platform)
+    if found is None:
         return
-    if begin_index > end_index:
-        fail(f"managed block 哨兵顺序错误，请先手工修复: {path}")
 
-    end_index += len(end_marker)
+    begin_index, end_index = found
     prefix = existing[:begin_index].rstrip()
     suffix = existing[end_index:].lstrip("\r\n")
     parts = [part for part in [prefix, suffix.rstrip()] if part]
     write_text(path, "\n\n".join(parts) + "\n", transaction, dry_run)
 
 
-def has_managed_block(path: Path) -> bool:
+def has_managed_block(path: Path, platform: str | None = None) -> bool:
     if not path.is_file():
         return False
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return False
-    return MANAGED_BLOCK_BEGIN in text and MANAGED_BLOCK_END in text
+    if platform:
+        if managed_block_begin_prefix(platform) in text and managed_block_end_marker(platform) in text:
+            return True
+        return f"{MANAGED_BLOCK_BEGIN} v=" in text and MANAGED_BLOCK_END in text
+    return MANAGED_BLOCK_BEGIN in text and "<!-- myflow:managed:end" in text
 
 
 def copy_skill_tree(src_dir: Path, dest_dir: Path, transaction: Transaction, dry_run: bool, commit: str, generated: str) -> None:
@@ -898,7 +954,7 @@ def copy_skill_tree(src_dir: Path, dest_dir: Path, transaction: Transaction, dry
 
 
 def counterpart_paths(platform: str, workspace_root: Path, contracts: dict[str, object]) -> dict[str, Path]:
-    if platform not in {"codex", "claude"}:
+    if platform not in {"codex", "claude", "qoder"}:
         return {}
     return {
         "agent-user": target_path(contracts, platform, "user", "agents", workspace_root),
@@ -971,6 +1027,16 @@ def runtime_override_warnings(platform: str, scope: str, workspace_root: Path, c
         ]:
             if candidate.exists():
                 warnings.append(f"检测到可能覆盖用户级 Claude Code 安装的项目层对象: {candidate}")
+    if platform == "qoder":
+        for candidate in [
+            workspace_root / "AGENTS.md",
+            workspace_root / "AGENTS.local.md",
+            target_path(contracts, "qoder", "project", "rules", workspace_root),
+            target_path(contracts, "qoder", "project", "agents", workspace_root),
+            target_path(contracts, "qoder", "project", "skills", workspace_root),
+        ]:
+            if candidate.exists():
+                warnings.append(f"检测到可能覆盖用户级 Qoder 安装的项目层对象: {candidate}")
     return warnings
 
 
@@ -1058,7 +1124,15 @@ def install_rules(
         if not layout.agents_rule:
             fail("缺少 Codex rules 源文件：delivery/rules/AGENTS.md。请重新安装或更新 meta-flow 交付包。")
         dest = target_path(contracts, platform, scope, "rules", workspace_root)
-        upsert_managed_block(dest, layout.agents_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated)
+        upsert_managed_block(dest, layout.agents_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated, platform)
+        manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
+        return
+
+    if platform == "qoder":
+        if not layout.agents_rule:
+            fail("缺少 Qoder rules 源文件：delivery/rules/AGENTS.md。请重新安装或更新 meta-flow 交付包。")
+        dest = target_path(contracts, platform, scope, "rules", workspace_root)
+        upsert_managed_block(dest, layout.agents_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated, platform)
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
         return
 
@@ -1066,7 +1140,7 @@ def install_rules(
         if not layout.claude_rule:
             fail("缺少 Claude rules 源文件：delivery/rules/CLAUDE.md。请重新安装或更新 meta-flow 交付包。")
         dest = target_path(contracts, platform, scope, "rules", workspace_root)
-        upsert_managed_block(dest, layout.claude_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated)
+        upsert_managed_block(dest, layout.claude_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated, platform)
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
 
 
@@ -1095,6 +1169,16 @@ def install_agents(
         for agent in selected_agents:
             dest = base_dir / f"{agent.name}.md"
             write_text(dest, render_claude_agent(agent, commit, generated), transaction, dry_run)
+            installed_names.append(agent.name)
+            manifest_entries.append({"kind": "agent", "name": agent.name, "path": str(dest), "remove_path": str(dest)})
+        return installed_names
+
+    if platform == "qoder":
+        base_dir = target_path(contracts, platform, scope, "agents", workspace_root)
+        for agent in codex_install_agent_definitions(selected_agents):
+            dest = base_dir / f"{agent.name}.md"
+            content = render_qoder_agent(agent, commit, generated)
+            write_text(dest, content, transaction, dry_run)
             installed_names.append(agent.name)
             manifest_entries.append({"kind": "agent", "name": agent.name, "path": str(dest), "remove_path": str(dest)})
         return installed_names
@@ -1181,7 +1265,7 @@ def scan_managed_component_entries(
 
     if "managed-block" in kinds:
         rules_path = target_path(contracts, platform, scope, "rules", workspace_root)
-        if has_managed_block(rules_path):
+        if has_managed_block(rules_path, platform):
             entries.append({"kind": "managed-block", "path": str(rules_path), "remove_path": str(rules_path)})
 
     if "agent" in kinds:
@@ -1216,10 +1300,10 @@ def scan_managed_component_entries(
     return entries
 
 
-def remove_manifest_entry(entry: dict[str, object], transaction: Transaction, dry_run: bool) -> None:
+def remove_manifest_entry(entry: dict[str, object], transaction: Transaction, dry_run: bool, platform: str) -> None:
     remove_target = Path(str(entry["remove_path"]))
     if entry["kind"] == "managed-block":
-        clear_managed_block(remove_target, transaction, dry_run)
+        clear_managed_block(remove_target, transaction, dry_run, platform)
         return
     remove_path(remove_target, transaction, dry_run)
 
@@ -1250,7 +1334,7 @@ def prune_stale_manifest_entries(
         remove_path_value = str(entry.get("remove_path", ""))
         if not remove_path_value or str(Path(remove_path_value)) in current_remove_paths:
             continue
-        remove_manifest_entry(entry, transaction, dry_run)
+        remove_manifest_entry(entry, transaction, dry_run, platform)
         pruned += 1
     return pruned
 
@@ -1302,7 +1386,7 @@ def uninstall_platform(
                 remaining_entries.append(entry)
                 continue
 
-            remove_manifest_entry(entry, transaction, dry_run)
+            remove_manifest_entry(entry, transaction, dry_run, platform)
             removed_paths.add(str(Path(str(entry["remove_path"]))))
             removed_count += 1
 
@@ -1310,7 +1394,7 @@ def uninstall_platform(
         remove_path_value = str(Path(entry["remove_path"]))
         if remove_path_value in removed_paths:
             continue
-        remove_manifest_entry(entry, transaction, dry_run)
+        remove_manifest_entry(entry, transaction, dry_run, platform)
         removed_paths.add(remove_path_value)
         removed_count += 1
 
@@ -1383,12 +1467,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog=display_prog,
         usage=usage,
-        description=f"{action_text} Meta Flow assets for claude, codex, or openclaw.",
+        description=f"{action_text} Meta Flow assets for claude, codex, openclaw, or qoder.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=epilog,
     )
     platform_choices = (*VALID_PLATFORMS, *PLATFORM_ALIASES)
-    parser.add_argument("platform_arg", nargs="?", choices=platform_choices, metavar="platform", help="目标平台：claude|codex|openclaw")
+    parser.add_argument("platform_arg", nargs="?", choices=platform_choices, metavar="platform", help="目标平台：claude|codex|openclaw|qoder")
     parser.add_argument("--platform", dest="platform_option", choices=platform_choices, help="Legacy 目标平台选项；新命令优先使用位置参数")
     parser.add_argument("--scope", default="project", choices=VALID_SCOPES, help="安装范围")
     parser.add_argument("--project-dir", default=None, help="WORKSPACE_ROOT；project scope 未提供时交互确认当前目录或输入目录")
@@ -1431,7 +1515,7 @@ def parse_args() -> argparse.Namespace:
 
     platform = args.platform_arg or args.platform_option
     if not platform:
-        parser.error("必须指定目标平台：claude|codex|openclaw，例如 `meta-flow install codex`。")
+        parser.error("必须指定目标平台：claude|codex|openclaw|qoder，例如 `meta-flow install codex`。")
 
     args.mode = mode
     args.platform = normalize_platform(platform)

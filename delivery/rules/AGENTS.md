@@ -43,7 +43,7 @@ Host Orchestrator 的职责：
 
 ### Agent 命令与显示映射
 
-canonical role 仅包含功能 Agent，用于状态机、handoff、检查点和审计。平台展示按下表安装；主编排器由主进程承担，不安装 Codex / Claude Code agent 文件：
+canonical role 仅包含功能 Agent，用于状态机、handoff、检查点和审计。平台展示按下表安装；主编排器由主进程承担，不安装 Codex / Claude Code / Qoder agent 文件：
 
 | canonical role | Codex 命令 / nickname_candidates | Codex `model_reasoning_effort` | Claude Code color |
 |---|---|---|---|
@@ -64,6 +64,8 @@ Codex 动态思考 profile 只改变实际 custom agent 名称，不改变 canon
 | `meta-qa` | `meta-qa` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、高风险验证 | `meta-qa-critical` | `xhigh` |
 
 Codex 主进程必须在 `STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch` 记录工具面探测结果。若当前工具面暴露 `spawn_agent` / `resume_agent` / `send_input` 且 `orchestrator_session.subagent_auto_dispatch=enabled`，创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具，并在 `active_agents[]` 与 handoff `dispatch` 中记录 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`tool_name`、`agent_id/thread_id`；只写 handoff 不算拉起子 agent。
+
+Qoder 复用 Codex 的 agent 定义和 reasoning profile（含 `meta-dev-debugger` / `meta-se-critical` / `meta-qa-critical`），输出为 `.qoder/agents/*.md`（Markdown + YAML frontmatter）。Qoder 不使用 `nickname_candidates`，改用 `effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`，其余 1:1），并复用 Claude Code 的 `color` 字段。Qoder 与 Codex 在 project scope 共享 `AGENTS.md`，安装器使用 platform-tagged managed block 隔离各平台内容。
 
 ## 工作流阶段与 Agent 对应关系
 
@@ -263,7 +265,7 @@ init（host-orchestrator）                                                   [C
 ## 防火墙测试工作流（现有，独立运行）
 
 > 本项目同时保留原有防火墙测试元工作流说明，两套系统并行存在，互不干扰。
-> 当前统一编排入口：Host Orchestrator 主进程。Codex/Claude Code/OpenClaw 只安装功能子 agent；不安装主编排子 agent。
+> 当前统一编排入口：Host Orchestrator 主进程。Codex/Claude Code/OpenClaw/Qoder 只安装功能子 agent；不安装主编排子 agent。
 
 ## LLD 消费契约补充
 

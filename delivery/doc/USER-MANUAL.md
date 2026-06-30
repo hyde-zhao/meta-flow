@@ -15,6 +15,7 @@
 uv tool install --editable .
 meta-flow install codex --scope user
 meta-flow install codex --scope project --project-dir /path/to/project
+meta-flow install qoder --scope project --project-dir /path/to/project
 ```
 
 项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
@@ -25,6 +26,7 @@ meta-flow install codex --scope project --project-dir /path/to/project
 meta-flow --help
 meta-flow install --help
 meta-flow install codex --help
+meta-flow install qoder --help
 meta-flow uninstall --help
 meta-flow uninstall codex --help
 ```
@@ -35,6 +37,7 @@ meta-flow uninstall codex --help
 uv run --python 3.11 python delivery/scripts/install.py claude
 uv run --python 3.11 python delivery/scripts/install.py codex --project-dir /path/to/project
 uv run --python 3.11 python delivery/scripts/install.py openclaw --dry-run
+uv run --python 3.11 python delivery/scripts/install.py qoder --dry-run
 ```
 
 从 `delivery/` 目录执行：
@@ -93,6 +96,8 @@ Codex 还会安装动态思考 profile，但 canonical role 不变：
 
 Host Orchestrator 调度时必须在 `active_agents[]` 与 handoff `dispatch` 记录 `canonical_role`、`codex_agent_name`、`reasoning_profile` 和 `dispatch_trigger`。Codex 工具面有 `spawn_agent` / `resume_agent` / `send_input` 时，创建 `mode=subagent` handoff 后必须调用对应工具；只创建 handoff 不算子 agent 已执行。
 
+Qoder 安装器复用 Codex 的 agent 定义和 reasoning profile（含 `meta-dev-debugger` / `meta-se-critical` / `meta-qa-critical`），但输出为 Markdown + YAML frontmatter 格式（`.qoder/agents/*.md`）。Qoder 不使用 `nickname_candidates`，改用 `effort` 字段映射 Codex 的 `model_reasoning_effort`（`minimal` → `low`，其余 1:1），并复用 Claude Code 的 `color` 字段区分角色。
+
 ## 4. DryRun 与卸载
 
 全局命令方式：
@@ -101,6 +106,7 @@ Host Orchestrator 调度时必须在 `active_agents[]` 与 handoff `dispatch` �
 meta-flow uninstall codex --scope user
 meta-flow uninstall codex --scope project --project-dir /path/to/project
 meta-flow uninstall claude --scope user --component rules --dry-run
+meta-flow uninstall qoder --scope project --project-dir /path/to/project
 ```
 
 脚本入口方式：
@@ -125,8 +131,11 @@ uv tool uninstall meta-flow
 | Claude Code | `<project>/.claude/agents/` | `<project>/.claude/skills/` | `~/.claude/agents/` | `~/.claude/skills/` |
 | Codex | `<project>/.codex/agents/` | `<project>/.agents/skills/` | `~/.codex/agents/` | `~/.agents/skills/` |
 | OpenClaw | `<project>/.openclaw/agents/` | `<project>/.openclaw/skills/` | `~/.openclaw/agents/` | `~/.openclaw/skills/` |
+| Qoder | `<project>/.qoder/agents/` | `<project>/.qoder/skills/` | `~/.qoder/agents/` | `~/.qoder/skills/` |
 
 Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-run 和 guardrail 会检查这个负向断言。
+
+Qoder 与 Codex 在 project scope 共享 `AGENTS.md`。安装器使用 platform-tagged managed block（`<!-- myflow:managed:begin platform=qoder -->` / `<!-- myflow:managed:end platform=qoder -->`）隔离各平台内容；卸载 Qoder 只清除 Qoder 的 block，不影响 Codex 已安装的内容。旧的无 platform 标签 managed block 在下次安装时自动迁移为带标签格式。
 
 如果安装失败并提示 `安装路径被非目录占用: <path>`，说明目标安装目录的某一级已被普通文件占用。请删除、移动或重命名该文件后重试。
 
@@ -137,7 +146,7 @@ Codex Skill 不安装到 `.codex/skills` 或 `~/.codex/skills`；安装器 dry-r
 ```text
 开始
 目标：为 <agent / skill / workflow 名称> 产出正式方案
-平台：Claude Code、Codex
+平台：Claude Code、Codex、Qoder
 要求：先澄清需求，再给我 HLD，确认后再拆 Story
 ```
 

@@ -244,6 +244,7 @@ uv run --python 3.11 python scripts/install.py claude
 - `claude`
 - `codex`
 - `openclaw`
+- `qoder`
 
 常用示例：
 
@@ -252,7 +253,10 @@ meta-flow install codex --scope user --component rules
 meta-flow install codex --scope project --component full --project-dir /path/to/project
 meta-flow uninstall codex --scope project --component rules --project-dir /path/to/project
 uv run --python 3.11 python delivery/scripts/install.py claude --dry-run
+meta-flow install qoder --scope project --project-dir /path/to/project
 ```
+
+> **注意**：Qoder 与 Codex 在 project scope 共享 `AGENTS.md`。安装器使用 platform-tagged managed block（`<!-- myflow:managed:begin platform=qoder -->`）隔离各平台内容，卸载一个平台不影响另一个平台的已安装内容。
 
 legacy 兼容示例：
 

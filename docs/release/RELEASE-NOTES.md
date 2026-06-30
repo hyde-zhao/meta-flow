@@ -19,6 +19,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.5 | 2026-06-21 | host-orchestrator | 增加 Failure Routing / Waiver Governance、不可豁免项和风险接受状态约束 |
 | 1.6 | 2026-06-21 | host-orchestrator | 增加 Quality Model / Eval Matrix、quality init、quality / workflow doctor 和 delivery 模板路由 |
 | 1.7 | 2026-06-21 | host-orchestrator | CR-034 增加目标项目 adoption readiness、workspace bootstrap、identity scan、adoption doctor 和 bootstrap CR / CP0 context 链路 |
+| 1.8 | 2026-06-29 | host-orchestrator | 新增 Qoder 平台安装支持、platform-tagged managed block 机制和 agent effort/color 映射 |
 
 ## 发布范围
 
@@ -35,6 +36,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | Failure routing / waiver governance | `process/policies/FAILURE-ROUTING.json`、`process/policies/WAIVER-POLICY.json`、`meta-flow failure *`、`meta-flow waiver *`、CP result route / waiver 联动校验 | MF-017 |
 | Quality / eval governance | `process/policies/QUALITY-MODEL.yaml`、`process/policies/EVAL-MATRIX.yaml`、`meta-flow quality init/model-check/eval-check`、`meta-flow doctor quality/workflow`、delivery quality/eval templates | MF-018 |
 | Target project adoption readiness | `meta-flow workspace bootstrap`、`meta-flow identity scan`、`meta-flow doctor adoption`、`meta-flow cr bootstrap`、CP0 result/summary/context、CR-xxx bootstrap naming | CR-034 |
+| Qoder 平台安装支持 | `meta-flow install qoder`、platform-tagged managed block、`render_qoder_agent`、effort/color 映射、guardrail 检查 | — |
 
 ## 用户可见变化
 
@@ -62,10 +64,15 @@ created_at: "2026-06-17T13:49:25+08:00"
 - 新增 `meta-flow identity scan --project-root .`，只读报告 package identity 和 README/docs delivery routing 建议，不自动写 production 项目路由。
 - 新增 `meta-flow doctor adoption --project-root .`，聚合 workspace、state、CR tracking、identity、quality、workflow ledger 和 human gate readiness；该命令不读取凭据、不执行 runtime、不写业务文件。
 - 新增 `meta-flow cr bootstrap --id CR-001 ...`，创建 active bootstrap CR、CR summary/index/ledger、CP0 result/summary 和 CP0 context。正式新编号统一 `CR-xxx`，`MF-xxx` 仅作为历史别名。
+- 新增 Qoder 平台安装支持：`meta-flow install qoder` / `meta-flow uninstall qoder`，project scope 安装到 `.qoder/agents/*.md` 和 `.qoder/skills/`，user scope 安装到 `~/.qoder/`。
+- 新增 platform-tagged managed block 机制：Qoder 与 Codex 在 project scope 共享 `AGENTS.md` 时，使用 `<!-- myflow:managed:begin platform=qoder -->` 标签隔离各平台内容；卸载一个平台不影响另一个平台的已安装内容。旧的无标签 managed block 自动迁移。
+- Qoder agent 复用 Codex agent 定义和 reasoning profile，输出为 Markdown + YAML frontmatter；`effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`），`color` 字段复用 Claude Code 调色板。
+- Guardrail 检查扩展：`collect_platform_contract_errors` 增加 Qoder 路径断言，`collect_agent_display_profile_errors` 增加 Qoder effort/color 验证，`collect_installer_component_errors` 增加 Qoder dry-run 和 path conflict 测试。
 
 ## 兼容性
 
 - 安装器 CLI 未破坏。
+- Qoder 与 Codex 共享 `AGENTS.md` 不产生冲突：platform-tagged managed block 保证各平台内容独立隔离，旧的无标签 block 在下次安装时自动迁移为带标签格式。
 - 已 clone 的源码仓库需要同时准备 artifact repo，或由 `meta-flow workspace link --artifact-root <relative-artifact-root>` 指向正确 artifact root；运行态记录不得固化设备相关绝对路径。
 - 纯代码项目不强制 workflow eval。
 - 外部 adapters 默认 disabled，真实运行需要独立 runtime authorization。

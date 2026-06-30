@@ -444,6 +444,9 @@ meta-flow install codex --scope project
 # 显式安装完整组件
 meta-flow install codex --scope project --component full --project-dir /path/to/project
 
+# Qoder 安装（project scope 共享 AGENTS.md，使用 platform-tagged managed block 隔离）
+meta-flow install qoder --scope project --project-dir /path/to/project
+
 # 卸载安装记录中的组件，默认卸载 full
 meta-flow uninstall codex --scope project --project-dir /path/to/project
 meta-flow uninstall codex --scope project --component rules --project-dir /path/to/project
@@ -488,6 +491,8 @@ canonical role 名称仅用于功能子 agent 的状态机、handoff 和检查�
 
 Codex 还会安装动态思考 profile，但 canonical role 不变：`meta-dev-debugger` 用于重复失败和复杂追因（`high`），`meta-se-critical` 用于架构冻结 / contract / 重大 ADR（`xhigh`），`meta-qa-critical` 用于 CP5 / CP7 / CP8、发布前和高风险验证（`xhigh`）。Host Orchestrator 调度时必须在 `active_agents[]` 与 handoff `dispatch` 记录 `canonical_role`、`codex_agent_name`、`reasoning_profile` 和 `dispatch_trigger`。
 
+Qoder 复用 Codex agent 定义和 reasoning profile，但输出为 `.qoder/agents/*.md`（Markdown + YAML frontmatter）。Qoder 不使用 `nickname_candidates`，改用 `effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`），并复用 Claude Code 的 `color` 字段。
+
 Codex 主进程启动正式工作流后默认授权真实子 agent 调度；若当前工具面有 `spawn_agent` / `resume_agent` / `send_input`，创建 `mode=subagent` handoff 后必须调用对应工具。只创建 handoff 不能算子 agent 已执行；工具不可用时必须阻断并记录 `subagent_dispatch.available=false`，除非用户明确批准 `inline-fallback`。
 
 ## 交付护栏
@@ -519,7 +524,7 @@ uv run --python 3.11 python scripts/check_delivery_guardrails.py
 ```text
 开始
 目标：为 <agent / skill / workflow 名称> 产出正式方案
-平台：Claude Code、Codex
+平台：Claude Code、Codex、Qoder
 要求：先澄清需求，再给我 HLD，确认后再拆 Story
 ```
 

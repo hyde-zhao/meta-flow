@@ -691,14 +691,17 @@ def collect_platform_contract_errors(payload: dict[str, object]) -> list[str]:
     try:
         codex = payload["contracts"]["codex"]  # type: ignore[index]
         claude = payload["contracts"]["claude"]  # type: ignore[index]
+        qoder = payload["contracts"]["qoder"]  # type: ignore[index]
         project = codex["scopes"]["project"]  # type: ignore[index]
         user = codex["scopes"]["user"]  # type: ignore[index]
         claude_project = claude["scopes"]["project"]  # type: ignore[index]
         claude_user = claude["scopes"]["user"]  # type: ignore[index]
+        qoder_project = qoder["scopes"]["project"]  # type: ignore[index]
+        qoder_user = qoder["scopes"]["user"]  # type: ignore[index]
         forbidden_project = codex["forbidden"]["project"]  # type: ignore[index]
         forbidden_user = codex["forbidden"]["user"]  # type: ignore[index]
     except (AttributeError, KeyError, TypeError):
-        return ["platform contract missing codex/claude scopes or codex forbidden entries"]
+        return ["platform contract missing codex/claude/qoder scopes or codex forbidden entries"]
 
     expected = {
         "claude project rules": (claude_project.get("rules"), "CLAUDE.md"),
@@ -711,6 +714,12 @@ def collect_platform_contract_errors(payload: dict[str, object]) -> list[str]:
         "codex project skills": (project.get("skills"), ".agents/skills"),
         "codex user agents": (user.get("agents"), "~/.codex/agents"),
         "codex user skills": (user.get("skills"), "~/.agents/skills"),
+        "qoder project rules": (qoder_project.get("rules"), "AGENTS.md"),
+        "qoder project agents": (qoder_project.get("agents"), ".qoder/agents"),
+        "qoder project skills": (qoder_project.get("skills"), ".qoder/skills"),
+        "qoder user rules": (qoder_user.get("rules"), "~/.qoder/AGENTS.md"),
+        "qoder user agents": (qoder_user.get("agents"), "~/.qoder/agents"),
+        "qoder user skills": (qoder_user.get("skills"), "~/.qoder/skills"),
     }
     for label, (actual, required) in expected.items():
         if actual != required:
@@ -795,6 +804,37 @@ def collect_codex_dry_run_errors(payload: dict[str, object]) -> list[str]:
             errors.append("codex path conflict must report a clear occupied-path error")
         if "Traceback" in conflict_output or "NotADirectoryError" in conflict_output:
             errors.append("codex path conflict must not expose a Python traceback")
+
+        qoder_conflict_root = project_root / "qoder-path-conflict"
+        qoder_conflict_root.mkdir()
+        qoder_blocker = qoder_conflict_root / ".qoder"
+        qoder_blocker.write_text("file occupying a directory path\n", encoding="utf-8")
+        qoder_conflict_result = subprocess.run(
+            [
+                sys.executable,
+                str(install_script),
+                "qoder",
+                "--scope",
+                "project",
+                "--project-dir",
+                str(qoder_conflict_root),
+                "--content",
+                "agents",
+                "--agent",
+                "meta-pm",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        qoder_conflict_output = qoder_conflict_result.stdout + qoder_conflict_result.stderr
+        if qoder_conflict_result.returncode == 0:
+            errors.append("qoder project install must fail when .qoder is a file")
+        if "安装路径被非目录占用:" not in qoder_conflict_output or str(qoder_blocker) not in qoder_conflict_output:
+            errors.append("qoder path conflict must report a clear occupied-path error")
+        if "Traceback" in qoder_conflict_output or "NotADirectoryError" in qoder_conflict_output:
+            errors.append("qoder path conflict must not expose a Python traceback")
 
     contract_errors = collect_platform_contract_errors(payload)
     errors.extend(contract_errors)
@@ -935,6 +975,18 @@ def collect_installer_component_errors() -> list[str]:
                 "args": ["--platform", "codex", "--scope", "project", "--project-dir", str(project_root), "--component", "rules", "--dry-run"],
                 "required": ["Component: rules", str(project_root / "AGENTS.md")],
                 "forbidden": [".codex/skills"],
+            },
+            {
+                "label": "qoder project default",
+                "args": ["qoder", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
+                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".qoder" / "agents" / "meta-pm.md"), str(project_root / ".qoder" / "skills")],
+                "forbidden": [str(project_root / ".qoder" / "agents" / "meta-po.md"), str(project_root / ".qoder" / "agents" / "host-orchestrator.md")],
+            },
+            {
+                "label": "qoder user default",
+                "args": ["qoder", "--scope", "user", "--project-dir", str(project_root), "--dry-run"],
+                "required": ["Component: rules", str(Path.home() / ".qoder" / "AGENTS.md")],
+                "forbidden": [str(Path.home() / ".qoder" / "agents" / "meta-po.md")],
             },
         ]
 
@@ -1190,6 +1242,9 @@ def collect_agent_display_profile_errors() -> list[str]:
         "claude_color",
         "pm-wu",
         "doc-wei",
+        "render_qoder_agent",
+        "EFFORT_TO_QODER_MAP",
+        "QODER_EFFORT_VALUES",
     ):
         if token not in source_text:
             errors.append(f"{install_script.relative_to(ROOT)} missing display profile token: {token}")
@@ -1199,7 +1254,7 @@ def collect_agent_display_profile_errors() -> list[str]:
         isolated_home = project_root / "home"
         isolated_home.mkdir()
         subprocess_env = {**os.environ, "HOME": str(isolated_home)}
-        for platform in ("codex", "claude"):
+        for platform in ("codex", "claude", "qoder"):
             result = subprocess.run(
                 [
                     sys.executable,
@@ -1257,6 +1312,38 @@ def collect_agent_display_profile_errors() -> list[str]:
             fields = parse_frontmatter(text)
             if "nickname_candidates" in fields:
                 errors.append(f"{agent_path.relative_to(project_root)} frontmatter must not contain Codex nickname_candidates")
+            actual_color = fields.get("color")
+            if actual_color != expected_color:
+                errors.append(f"{agent_path.relative_to(project_root)} color must be {expected_color}, got {actual_color}")
+            tools = {item.strip() for item in fields.get("tools", "").split(",") if item.strip()}
+            if agent_name in CLAUDE_DIRECT_ASK_AGENTS and "AskUserQuestion" not in tools:
+                errors.append(f"{agent_path.relative_to(project_root)} direct-ask agent must include AskUserQuestion in tools")
+            if agent_name in CLAUDE_NO_DIRECT_ASK_AGENTS and "AskUserQuestion" in tools:
+                errors.append(f"{agent_path.relative_to(project_root)} non-direct-ask agent must not include AskUserQuestion in tools")
+
+        for agent_name, expected_effort in EXPECTED_CODEX_REASONING_EFFORTS.items():
+            agent_path = project_root / ".qoder" / "agents" / f"{agent_name}.md"
+            if not agent_path.is_file():
+                errors.append(f"missing qoder agent for effort check: {agent_path}")
+                continue
+            text = agent_path.read_text(encoding="utf-8")
+            fields = parse_frontmatter(text)
+            if "nickname_candidates" in fields:
+                errors.append(f"{agent_path.relative_to(project_root)} frontmatter must not contain Codex nickname_candidates")
+            actual_effort = fields.get("effort")
+            if actual_effort != expected_effort:
+                errors.append(
+                    f"{agent_path.relative_to(project_root)} effort must be "
+                    f"{expected_effort}, got {actual_effort}"
+                )
+
+        for agent_name, expected_color in EXPECTED_CLAUDE_COLORS.items():
+            agent_path = project_root / ".qoder" / "agents" / f"{agent_name}.md"
+            if not agent_path.is_file():
+                errors.append(f"missing qoder agent for color check: {agent_path}")
+                continue
+            text = agent_path.read_text(encoding="utf-8")
+            fields = parse_frontmatter(text)
             actual_color = fields.get("color")
             if actual_color != expected_color:
                 errors.append(f"{agent_path.relative_to(project_root)} color must be {expected_color}, got {actual_color}")

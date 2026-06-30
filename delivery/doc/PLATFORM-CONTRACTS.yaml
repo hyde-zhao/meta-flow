@@ -59,6 +59,25 @@
         "project": [],
         "user": []
       }
+    },
+    "qoder": {
+      "source": "https://docs.qoder.com/zh/cli/memory, https://docs.qoder.com/en/cli/subagent, https://docs.qoder.com/en/cli/Skills",
+      "scopes": {
+        "project": {
+          "rules": "AGENTS.md",
+          "agents": ".qoder/agents",
+          "skills": ".qoder/skills"
+        },
+        "user": {
+          "rules": "~/.qoder/AGENTS.md",
+          "agents": "~/.qoder/agents",
+          "skills": "~/.qoder/skills"
+        }
+      },
+      "forbidden": {
+        "project": [],
+        "user": []
+      }
     }
   }
 }

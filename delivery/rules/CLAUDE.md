@@ -10,7 +10,7 @@
 - **功能 Agent**（按需启用）：`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`
 - **所有任务均通过 host-orchestrator 发起**；`meta-pm` / `meta-se` 在阶段委托期间可直接与用户多轮沟通，阶段交还后仍由 host-orchestrator 发起 CP2 / CP3 正式人工确认
 - **调度证据优先**：handoff 文件只表示交接，不表示功能 Agent 已执行。功能 Agent 完成必须有平台 Task/Subagent 证据，或用户明确批准的 `inline-fallback`。
-- **显示区分**：Claude Code 文件型功能 subagent 不使用 nickname；安装器通过 `color` 字段区分角色：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。Codex 侧为功能 subagent 写入 `nickname_candidates` 与 `model_reasoning_effort`，并额外生成 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 三个动态思考 profile；profile 不改变 canonical role。
+- **显示区分**：Claude Code 文件型功能 subagent 不使用 nickname；安装器通过 `color` 字段区分角色：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。Codex 侧为功能 subagent 写入 `nickname_candidates` 与 `model_reasoning_effort`，并额外生成 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 三个动态思考 profile；profile 不改变 canonical role。Qoder 复用 Codex agent 定义和 reasoning profile，输出为 `.qoder/agents/*.md`（Markdown + YAML frontmatter），使用 `effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`），并复用 Claude Code 的 `color` 字段。
 
 ## Skill 发现路径
 
@@ -115,7 +115,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 14. **Agent/Skill 关系维护**：开发或修改 Agent、Skill 时，若影响调用、适用或归属关系，必须同步更新 `skills/README.md`
 15. **交付脚本边界**：`delivery/scripts/` 只允许安装器入口；Skill 运行时脚本必须放到 `delivery/skills/<skill>/scripts/`
 16. **Skill 资产同树安装**：active Skill 引用的 `templates/`、`scripts/`、`schemas/`、`examples/` 资产必须与 Skill 同树存放，并使用 Skill 相对路径或 `<skill-root>/...`
-17. **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex 在 project 与 user scope 下安装后可直接执行
+17. **脚本安装验证**：active Skill 一旦新增脚本资产，必须验证 Claude Code / Codex / Qoder 在 project 与 user scope 下安装后可直接执行
 18. **缓存文件禁入库**：`__pycache__/`、`*.pyc` 及其他解释器缓存不是交付物，不得提交
 19. **护栏静态检查**：`scripts/check_delivery_guardrails.py` 是 meta-flow 自身仓库 guardrail；仅当当前仓库存在该文件时，提交前运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`。外部 production 项目不得硬引用 `<project-root>/scripts/check_delivery_guardrails.py` 或任意设备绝对路径，应改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
 20. **模式默认值**：若用户未显式声明“meta 工作流优化 / 自我开发”，工作流默认 `engagement_mode=production`
