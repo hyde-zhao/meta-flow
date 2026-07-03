@@ -64,6 +64,21 @@ Codex 平台没有 Claude Code frontmatter `tools: AskUserQuestion` 的同构 ag
 
 状态查询必须列出 `active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate` 和 `stale_status_conflicts`，不能只返回唯一 active CR。若目标项目存在 `meta-flow check cr-tracking`，host-orchestrator 在状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后运行或记录跳过原因；该脚本会检查 `STATE.md.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性。
 
+CR lifecycle 的机器入口是 `process/changes/CR-INDEX.json`、`process/changes/summaries/CR-*.summary.json`、`process/state/CR-LEDGER.ndjson` 和 `process/state/CHECKPOINT-LEDGER.ndjson`。完整 `process/changes/CR-*.md` 只在人工审计、冲突排查、深度评审或用户明确要求时展开。常用命令：
+
+```bash
+meta-flow cr summary --id CR-101 --project-root .
+meta-flow cr index --project-root .
+meta-flow cr brief --id CR-101 --project-root .
+meta-flow cr brief --id CR-101 --mode enforce --project-root .
+meta-flow cr impact-report --project-root .
+meta-flow cr impact-report --mode enforce --project-root .
+meta-flow cr check --project-root .
+meta-flow cr conflicts --id CR-101 --project-root .
+```
+
+新 CR 应优先写结构化影响面字段：`impact_capability_refs`、`impact_feature_refs`、`impact_module_paths`、`impact_policy_refs`、`impact_process_refs`、`impact_runtime_refs`、`impact_data_refs`。旧 `impact_surface` 兼容读取，但迁移报告必须暴露无法分类的 `uncategorized_legacy`，并把需要人工分类的条目变成 follow-up candidate 或显式风险。项目可用 `process/project/IMPACT-SURFACE-RULES.yaml` 配置 legacy impact 分类规则；配置修改后必须重新运行 impact report、CR lifecycle check 和相关测试。
+
 上下文预算检查使用 `meta-flow doctor tokens --project-root .`、`meta-flow doctor context --project-root .` 和 `meta-flow doctor artifacts --project-root .`。第一阶段采用零依赖估算 `ceil(char_count / 4)`，用于发现默认读取集合中的大文件、检查 `STATE.md` / summary / LLD / CP check 等 artifact 是否超出 `process/policies/ARTIFACT-BUDGETS.json` 或内置默认预算。`doctor context` 会读取 `process/state/READ-EXPANSION-LEDGER.ndjson`，统计 `frequently_expanded_files`、`frequently_expanded_features`、`missing_context_slots`、`expansion_reason_distribution`、`estimated_extra_tokens` 和 `summary_update_recommendations`，用高频全文读取反推 Feature summary 或 Story packet 缺口。
 
 Context pack 使用 `meta-flow context build --stage <CP2|CP3|CP5|CP6|CP7|CP8> --profile <profile> --cr <CR-ID> --project-root .` 生成，并用 `meta-flow context check --context <path> --project-root .` 校验。context pack 必须包含 `STATE.current.json`、CR index / CR summary、read policy、预算信息、deny-default 集合和全文读取理由枚举；`allowed_reads` 不得包含 `process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 `process/changes/CR-*.md` 或全量 Story LLD / IMPLEMENTATION。`process/policies/READ-POLICY.json` 是默认读取策略的机器真相源；缺失时 `context build` 会写入内置默认策略。

@@ -20,6 +20,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.6 | 2026-06-21 | host-orchestrator | 增加 Quality Model / Eval Matrix、quality init、quality / workflow doctor 和 delivery 模板路由 |
 | 1.7 | 2026-06-21 | host-orchestrator | CR-034 增加目标项目 adoption readiness、workspace bootstrap、identity scan、adoption doctor 和 bootstrap CR / CP0 context 链路 |
 | 1.8 | 2026-06-29 | host-orchestrator | 新增 Qoder 平台安装支持、platform-tagged managed block 机制和 agent effort/color 映射 |
+| 1.9 | 2026-07-03 | host-orchestrator | CR-036 recovery closure 与 CR-037 impact surface governance 收束；新增结构化影响面、migration report、uncategorized legacy 和 configurable legacy classification rules |
 
 ## 发布范围
 
@@ -37,6 +38,8 @@ created_at: "2026-06-17T13:49:25+08:00"
 | Quality / eval governance | `process/policies/QUALITY-MODEL.yaml`、`process/policies/EVAL-MATRIX.yaml`、`meta-flow quality init/model-check/eval-check`、`meta-flow doctor quality/workflow`、delivery quality/eval templates | MF-018 |
 | Target project adoption readiness | `meta-flow workspace bootstrap`、`meta-flow identity scan`、`meta-flow doctor adoption`、`meta-flow cr bootstrap`、CP0 result/summary/context、CR-xxx bootstrap naming | CR-034 |
 | Qoder 平台安装支持 | `meta-flow install qoder`、platform-tagged managed block、`render_qoder_agent`、effort/color 映射、guardrail 检查 | — |
+| CR impact surface governance | `meta-flow cr impact-report`、结构化 `impact_*` split fields、capability resolver-backed report、`uncategorized_legacy`、follow-up candidate、`process/project/IMPACT-SURFACE-RULES.yaml` legacy 分类规则 | CR-037 |
+| Historical CR recovery | CR036 recovery stub、CP0 recovery verification、CP8 recovery closure、CR ledger / checkpoint ledger recovery events | CR-036 |
 
 ## 用户可见变化
 
@@ -68,6 +71,11 @@ created_at: "2026-06-17T13:49:25+08:00"
 - 新增 platform-tagged managed block 机制：Qoder 与 Codex 在 project scope 共享 `AGENTS.md` 时，使用 `<!-- myflow:managed:begin platform=qoder -->` 标签隔离各平台内容；卸载一个平台不影响另一个平台的已安装内容。旧的无标签 managed block 自动迁移。
 - Qoder agent 复用 Codex agent 定义和 reasoning profile，输出为 Markdown + YAML frontmatter；`effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`），`color` 字段复用 Claude Code 调色板。
 - Guardrail 检查扩展：`collect_platform_contract_errors` 增加 Qoder 路径断言，`collect_agent_display_profile_errors` 增加 Qoder effort/color 验证，`collect_installer_component_errors` 增加 Qoder dry-run 和 path conflict 测试。
+- 新增 `meta-flow cr impact-report --project-root .`，用于把旧 `impact_surface` 迁移为结构化影响面字段，并输出 capability resolver 结果、未分类 legacy 值和 follow-up candidate。
+- `meta-flow cr brief --id <CR-ID> --mode enforce --project-root .` 可用 enforce 模式展示 capability blockers；默认 audit 模式适合盘点。
+- 正式 CR 支持结构化影响面字段：`impact_capability_refs`、`impact_feature_refs`、`impact_module_paths`、`impact_policy_refs`、`impact_process_refs`、`impact_runtime_refs`、`impact_data_refs`。
+- 项目可通过 `process/project/IMPACT-SURFACE-RULES.yaml` 配置 legacy impact 分类规则；修改规则后应重新运行 impact report、CR lifecycle check 和相关测试。
+- CR036 已以 recovery stub 形式关闭为 `READY_WITH_RISK`，保留原始 planning / handoff / formal decision artifact 缺失风险；CR037 已关闭为 `READY`。
 
 ## 兼容性
 
@@ -90,3 +98,4 @@ created_at: "2026-06-17T13:49:25+08:00"
 | `process/` 和内部 docs 依赖 symlink | MEDIUM | 缺失或断链时 hard-stop，由用户提供相对项目根的 artifact 目录后再继续 |
 | context-budgeted governance 是新命令面 | MEDIUM | 已用 84 项 pytest、delivery guardrail 和端到端 fixture 验证；建议先用 quant-lab redesign bootstrap 进行真实项目试运行 |
 | 旧项目迁移仍需项目级判断 | MEDIUM | 本次不强制移动历史 artifact；未来项目默认使用 ledger、summary、packet 和 result JSON 治理 |
+| 历史 CR process artifacts 不完整 | MEDIUM | CR036 已完成 recovery closure；CR033-CR035 等更早 CR 是否需要同类 sweep 需后续治理项判断 |

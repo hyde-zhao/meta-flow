@@ -385,6 +385,49 @@ host-orchestrator 会执行以下动作：
 
 候选项没有启动时只是 backlog，不会和新的 CR 冲突。已启动但未完成的 CR 会占用执行语义：如果新 CR 与它影响同一正式文档、Story、文件 owner、外部接口、安全 / 运行授权或风险接受项，host-orchestrator 不得静默并行推进，必须发起冲突决策。可选处理包括：合并到现有 CR、保持候选等待、标记为 `blocked`、拆分无冲突子集先做、或标记为 `superseded` 并链接替代 CR。
 
+### 6.5.2 CR lifecycle 与影响面迁移
+
+正式 CR 的完整记录写在 `process/changes/CR-*.md`，但默认机器入口是 summary、index 和 ledger：
+
+```bash
+meta-flow cr summary --id CR-101 --project-root .
+meta-flow cr index --project-root .
+meta-flow cr brief --id CR-101 --project-root .
+meta-flow cr brief --id CR-101 --mode enforce --project-root .
+meta-flow cr check --project-root .
+meta-flow cr conflicts --id CR-101 --project-root .
+```
+
+`cr brief --mode enforce` 会用 enforce 模式解析 capability refs；默认 `audit` 模式适合盘点，`enforce` 模式适合发起人工确认或阻断 deprecated / unresolved capability refs。
+
+新 CR 应优先写结构化影响面字段：
+
+| 字段 | 用途 |
+|---|---|
+| `impact_capability_refs` | capability registry refs |
+| `impact_feature_refs` | Feature / bounded context refs |
+| `impact_module_paths` | 源码、测试或模块路径 |
+| `impact_policy_refs` | 授权、门禁或治理 policy refs |
+| `impact_process_refs` | process artifact / ledger / checkpoint refs |
+| `impact_runtime_refs` | runtime surface refs；只记录影响，不授权执行 |
+| `impact_data_refs` | data surface refs；只记录影响，不授权写入 |
+
+旧 `impact_surface` 仍兼容读取。迁移时运行：
+
+```bash
+meta-flow cr impact-report --project-root .
+meta-flow cr impact-report --mode enforce --project-root .
+```
+
+报告会合并显式 split fields 和 legacy 推导字段，解析 capability refs，并输出 `uncategorized_legacy`。`uncategorized_legacy` 非空表示旧 `impact_surface` 中存在无法自动分类的值，应创建人工分类 follow-up candidate 或在 CR 风险中说明。项目级 legacy 分类规则可写入 `process/project/IMPACT-SURFACE-RULES.yaml`，用于补充本项目命名约定；规则修改后应重新运行 impact report、`cr check` 和相关测试。
+
+CR036 / CR037 的当前参考状态：
+
+| CR | 状态 | 说明 |
+|---|---|---|
+| `CR-036` | `closed / READY_WITH_RISK / cp8_recovery_closed` | approval-oriented human gate protocol 已完成 recovery closure；原始 planning / handoff / formal decision artifact 缺失风险保留 |
+| `CR-037` | `closed / READY / cp8_closed` | impact surface split、migration report、uncategorized legacy reporting 和 configurable legacy impact classification rules 已完成 |
+
 查看当前 CR 时，使用：
 
 ```text

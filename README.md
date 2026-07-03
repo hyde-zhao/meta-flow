@@ -399,6 +399,42 @@ meta-flow check cr-tracking --project-root .
 
 该脚本用于发现 `STATE.md.active_change` 指向已关闭 CR、多个 active CR 未授权、follow-up candidate 已有正式 CR 文件、台账 active 项缺正式 CR 路径等问题。
 
+### CR lifecycle 与 impact governance
+
+正式 CR 使用 `process/changes/CR-*.md` 作为完整审计记录，`process/changes/summaries/CR-*.summary.json` 和 `process/changes/CR-INDEX.json` 作为默认机器入口。CR 的状态和关闭证据必须进入 `process/state/CR-LEDGER.ndjson`，检查点结果必须进入 `process/state/CHECKPOINT-LEDGER.ndjson`。关闭或恢复历史 CR 后，运行：
+
+```bash
+meta-flow cr summary --id CR-036 --project-root .
+meta-flow cr index --project-root .
+meta-flow cr check --project-root .
+meta-flow cr brief --id CR-036 --project-root .
+meta-flow cr brief --id CR-036 --mode enforce --project-root .
+```
+
+CR 影响面应优先写结构化字段，而不是只写旧的 `impact_surface`。支持的结构化字段包括：
+
+- `impact_capability_refs`
+- `impact_feature_refs`
+- `impact_module_paths`
+- `impact_policy_refs`
+- `impact_process_refs`
+- `impact_runtime_refs`
+- `impact_data_refs`
+
+旧 `impact_surface` 仍兼容读取。迁移和审计时使用：
+
+```bash
+meta-flow cr impact-report --project-root .
+meta-flow cr impact-report --mode enforce --project-root .
+```
+
+`impact-report` 会合并显式结构化字段与 legacy 推导字段，解析 capability refs，并报告 `uncategorized_legacy`。未分类 legacy 项不得静默丢弃，应进入 follow-up candidate 或人工分类。legacy impact 分类规则默认内置，也可通过 `process/project/IMPACT-SURFACE-RULES.yaml` 配置项目级规则。规则文件属于 process governance artifact；更新后应重新运行 `meta-flow cr impact-report`、`meta-flow cr check` 和相关测试。
+
+CR036 / CR037 的当前治理状态：
+
+- `CR-036`: `closed / READY_WITH_RISK / cp8_recovery_closed`，源码锚点为 `34beb2d Improve approval-oriented CR gates`，剩余风险是原始 CR036 planning / handoff / formal decision artifact 缺失。
+- `CR-037`: `closed / READY / cp8_closed`，源码提交为 `c2f5068 Implement CR037 impact surface governance`，覆盖 impact surface split、migration report、uncategorized legacy reporting 和 configurable legacy impact classification rules。
+
 CP2 会额外检查 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md` 和 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`，用于追溯 Scenario Gray Areas、用户选择、freeform 确认和 Deferred Ideas。CP3 会额外检查 `process/discussions/CP3-HLD-DISCUSSION-LOG.md` 和 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`，用于追溯 Architecture Gray Areas、advisor table、方案形成输入、核心 ADR 早确认、HLD 后审查意见和切换条件。Discussion Log 用于审计和恢复，不作为默认下游输入；下游先消费 `process/context/*-CONTEXT.yaml`，必要时再读取 `USE-CASES.md`、`REQUIREMENTS.md`、`SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md`、`BLUEPRINT.md`、`DOMAIN-MAP.md`、`DEPENDENCY-MAP.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、`FEATURE-DESIGN-MATRIX.md` 或 Decision Brief。
 
 异步 power mode（例如 `process/discussions/CP2-QUESTIONS.json/html` 或 `CP3-QUESTIONS.json/html`）是后续可选增强，本轮不作为默认产物或验收前置。
