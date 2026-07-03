@@ -286,8 +286,10 @@ def _print_help() -> None:
         "  gate       Classify and validate gate profiles.\n"
         "  governance Validate source-of-truth and retention lifecycle policies.\n"
         "  identity   Validate product/package/import/CLI identity.\n"
+        "  ledger     Plan or apply retention/archive compaction for NDJSON event ledgers.\n"
         "  module     Validate module boundaries, imports, risk rings, and architecture fitness.\n"
         "  policy     List, expand, and validate authorization policies.\n"
+        "  project    Scaffold and validate process/project governance state.\n"
         "  quality    Validate quality model and eval matrix policies.\n"
         "  story      Validate Story return packets and evidence indexes.\n"
         "  waiver     Validate waiver policy and CP waiver records.\n"
@@ -311,6 +313,7 @@ def _print_help() -> None:
         "  meta-flow doctor context --project-root .\n"
         "  meta-flow cp result-check --result process/checks/CP6-STORY.result.json --project-root .\n"
         "  meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint\n"
+        "  meta-flow ledger compact --ledger process/state/CHECKPOINT-LEDGER.ndjson --project-root .\n"
         "  meta-flow capability check --artifact README.md --project-root .\n"
         "  meta-flow concept check --changed-files quant_lab/engine/contracts.py --project-root .\n"
         "  meta-flow identity check --project-root .\n"
@@ -327,6 +330,8 @@ def _print_help() -> None:
         "  meta-flow gate classify --changed-files README.md\n"
         "  meta-flow governance truth-map-check --project-root .\n"
         "  meta-flow policy list --project-root .\n"
+        "  meta-flow project scaffold --project-root .\n"
+        "  meta-flow project check --project-root .\n"
         "  meta-flow quality model-check --project-root .\n"
         "  meta-flow quality eval-check --project-root .\n"
         "  meta-flow check cr-tracking --project-root .\n"
@@ -670,6 +675,12 @@ def _run_event(args: list[str]) -> None:
     raise SystemExit(event_ledger.main(args))
 
 
+def _run_ledger(args: list[str]) -> None:
+    from meta_flow.state import ledger_compaction
+
+    raise SystemExit(ledger_compaction.main(args))
+
+
 def _run_story(args: list[str]) -> None:
     from meta_flow.workflow import story_evidence
 
@@ -742,6 +753,32 @@ def _run_policy(args: list[str]) -> None:
     raise SystemExit(authz.main(args))
 
 
+def _run_project(args: list[str]) -> None:
+    if not args or args[0] in {"-h", "--help"}:
+        print(
+            "usage: meta-flow project <command> [options]\n\n"
+            "Commands:\n"
+            "  scaffold  Preview or apply process/project/PROJECT.current.json scaffold.\n"
+            "  check     Validate PROJECT.current.json, PROJECT-SCALE, ROADMAP, and MILESTONES.\n\n"
+            "Examples:\n"
+            "  meta-flow project scaffold --project-root .\n"
+            "  meta-flow project scaffold --project-root . --apply\n"
+            "  meta-flow project check --project-root .\n"
+        )
+        return
+    command = args[0]
+    forwarded = args[1:]
+    if command == "scaffold":
+        from meta_flow.project import scaffold
+
+        raise SystemExit(scaffold.main(forwarded))
+    if command == "check":
+        from meta_flow.project import state
+
+        raise SystemExit(state.main(forwarded))
+    raise SystemExit(f"未知 project 命令: {command}. 目前支持: scaffold, check")
+
+
 def _run_quality(args: list[str]) -> None:
     from meta_flow.checks import quality_governance
 
@@ -809,6 +846,9 @@ def main() -> None:
     if command == "policy":
         _run_policy(args[1:])
         return
+    if command == "project":
+        _run_project(args[1:])
+        return
     if command == "quality":
         _run_quality(args[1:])
         return
@@ -833,6 +873,9 @@ def main() -> None:
     if command == "event":
         _run_event(args[1:])
         return
+    if command == "ledger":
+        _run_ledger(args[1:])
+        return
     if command == "story":
         _run_story(args[1:])
         return
@@ -841,10 +884,8 @@ def main() -> None:
         return
     raise SystemExit(
         "未知命令: "
-        "install, uninstall, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, identity, "
-        "governance, module, policy, quality, story, waiver, ask-user, state, status, next, doctor"
+        "install, uninstall, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, identity, ledger, "
+        "governance, module, policy, project, quality, story, waiver, ask-user, state, status, next, doctor"
     )
-
-
 if __name__ == "__main__":
     main()

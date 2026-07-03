@@ -24,6 +24,17 @@ LEDGER_REQUIRED_FIELDS = {
     "run": ("event_id", "event_type", "command", "result"),
     "gate": ("event_id", "event_type", "gate", "status"),
 }
+COMPACT_MARKER_REQUIRED_FIELDS = (
+    "event_id",
+    "event_type",
+    "timestamp",
+    "source_ledger",
+    "archive_ref",
+    "index_ref",
+    "backup_ref",
+    "event_count",
+    "hash_before",
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -99,7 +110,8 @@ def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[st
     seen_ids: set[str] = set()
     for event in events:
         line_no = int(event.get("_line_no") or 0)
-        for field in required:
+        fields = COMPACT_MARKER_REQUIRED_FIELDS if event.get("event_type") == "ledger_compacted" else required
+        for field in fields:
             if not event.get(field):
                 errors.append(f"line {line_no}: missing required field: {field}")
         event_id = str(event.get("event_id") or event.get("dispatch_id") or event.get("run_id") or "")

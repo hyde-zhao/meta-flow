@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from meta_flow.state import current
+
 
 CR_LEDGER_REL = Path("process/state/CR-LEDGER.ndjson")
 CR_INDEX_REL = Path("process/changes/CR-INDEX.json")
@@ -494,19 +496,21 @@ created_by: "meta-flow cr bootstrap"
 
 
 def _update_current_active_change(project_root: Path, cr_id: str, context_ref: str) -> None:
-    current_path = project_root / STATE_CURRENT_REL
-    if not current_path.is_file():
-        return
-    state = json.loads(current_path.read_text(encoding="utf-8"))
-    state["active_change"] = cr_id
-    state["active_context_ref"] = context_ref
-    state["current_phase"] = "init"
-    state["next_action"] = {
-        "type": "cp0_ready",
-        "text": f"Review CP0 bootstrap readiness for {cr_id}, then launch the first human gate.",
-    }
-    state["updated_at"] = now_utc()
-    current_path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    current.update_current_state(
+        project_root,
+        {
+            "active_change": cr_id,
+            "active_context_ref": context_ref,
+            "current_phase": "init",
+            "next_action": {
+                "type": "cp0_ready",
+                "text": f"Review CP0 bootstrap readiness for {cr_id}, then launch the first human gate.",
+            },
+            "updated_at": now_utc(),
+        },
+        actor="meta_flow.workflow.cr_lifecycle",
+        reason="bootstrap active change",
+    )
 
 
 def _write_cp0_result(project_root: Path, cr_id: str, context_ref: str) -> Path:
@@ -561,7 +565,6 @@ def bootstrap_cr(
     project_root = project_root.resolve()
     from meta_flow.context_pack import builder
     from meta_flow.policies import failure_routing
-    from meta_flow.state import current
 
     failure_routing.write_default_failure_routing_policy(project_root)
     failure_routing.write_default_waiver_policy(project_root)

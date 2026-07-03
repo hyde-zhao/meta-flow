@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from meta_flow.state import current
 from meta_flow.context_pack import builder
@@ -95,6 +96,25 @@ class CRLifecycleTests(unittest.TestCase):
 
             cr_text = paths["cr"].read_text(encoding="utf-8")
             self.assertIn('readiness_status: "ready_with_risk"', cr_text)
+
+    def test_update_current_active_change_uses_controlled_state_api(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = current.default_current_state(root, project_id="target-project")
+            current.write_current_state(root, state)
+
+            with patch.object(cr_lifecycle.current, "update_current_state", wraps=current.update_current_state) as update:
+                cr_lifecycle._update_current_active_change(root, "CR-001", "process/context/CP0-CR001.context.json")
+
+            update.assert_called_once()
+            _project_root, patch_payload = update.call_args.args
+            self.assertEqual("CR-001", patch_payload["active_change"])
+            self.assertEqual("process/context/CP0-CR001.context.json", patch_payload["active_context_ref"])
+            self.assertEqual("meta_flow.workflow.cr_lifecycle", update.call_args.kwargs["actor"])
+            self.assertEqual("bootstrap active change", update.call_args.kwargs["reason"])
+            current_state = current.load_current_state(root)
+            self.assertEqual("CR-001", current_state["active_change"])
+            self.assertEqual("process/context/CP0-CR001.context.json", current_state["active_context_ref"])
 
     def test_index_and_summary_generate_machine_readable_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -39,6 +39,30 @@
 5. 当前状态只保存轻量字段、refs、计数和 blocker ID；不得把 CR 长字段、Story LLD、测试日志、review 全文或 policy 全文写入 current state。
 6. 不可豁免项不得通过 waiver 绕过，包括未授权 runtime access、credential / secret exposure、missing dispatch evidence、runtime-high-risk forbidden path、missing read expansion log、missing evidence 和 false runtime-ready capability claim。
 
+## Current State Write Contract
+
+`process/state/STATE.current.json` 是轻量机器状态投影，不是通用状态数据库。任何 Agent、Skill、脚本或人工修复步骤都不得直接编辑 `STATE.current.json` 的未约定字段、非 allowlist 字段或超出 field budget 的长内容；不得绕过 current-state v2 校验把完整 CR、完整 LLD、完整测试日志、review 全文、policy 全文、长决策说明、完整 diff 或运行时输出写入 current state。
+
+合法更新入口必须是受控 writer：优先使用 `current.update_current_state()`，或使用 host-orchestrator / `meta-flow state` 提供的等价受控命令。受控入口必须执行 allowlist、field budget、`audit` / `enforce` 模式校验，并在落盘前验证候选完整状态；校验失败时不得写入或部分写入 `STATE.current.json`。
+
+受控 patch 语义必须与 CR037-S01 / CR037-S02 保持一致：
+
+- allowlist 外字段在 `audit` 中只能作为漂移风险暴露，在 `enforce` 中必须阻断。
+- field budget 覆盖字符串长度、列表数量、列表项长度和对象总量；超预算字段不得落盘。
+- dict patch 使用 deep-merge；列表、标量和 `null` 使用替换语义。
+- `null` 不是删除操作；需要删除字段必须通过已定义的受控命令或后续明确契约处理。
+- 任一未知字段、预算超限、secret-like 内容或候选状态校验失败时，必须 failure no-write，不得创建半更新状态。
+
+重型状态必须进入合适的正式落点，而不是塞入 current state：
+
+- 面向人的长摘要进入 `process/STATE.md` 人类摘要或对应检查点摘要。
+- 事件事实进入 `process/state/*-LEDGER.ndjson`。
+- CP 门禁事实进入 `process/checks/*.result.json` 与 `*.summary.md`。
+- 阶段 / Story 执行上下文进入 `process/context/*` 或 `process/context/stories/*`。
+- Story 交付证据进入 `process/returns/*.return.json` 与 `process/evidence/*.index.json`。
+- 项目级长状态或可延展引用进入 `PROJECT.current` refs 或 `project_state_ref` 指向的项目状态文件。
+- 非阻断后续事项进入 follow-up tracking、风险台账或 Design Delta。
+
 ## Handoff Contract
 
 1. Handoff 只传 `context_ref`、`story_packet_ref`、`return_packet_ref`、`evidence_ref`、`result_ref` 和必要的 dispatch metadata。

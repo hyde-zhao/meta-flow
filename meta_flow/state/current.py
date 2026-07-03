@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,61 @@ DISALLOWED_CURRENT_KEYS = {
     "human_gate_decisions",
     "checkpoints",
 }
+CURRENT_REQUIRED_KEYS = {
+    "schema_version",
+    "project_id",
+    "workflow_mode",
+    "current_phase",
+    "blocked",
+    "next_action",
+    "routing_ref",
+    "updated_at",
+}
+CURRENT_OPTIONAL_KEYS = {
+    "active_change",
+    "active_story",
+    "pending_gate",
+    "active_context_ref",
+    "authz_policy_refs",
+    "open_risks",
+    "source_refs",
+    "pending_checklist_path",
+    "project_state_ref",
+}
+CURRENT_ALLOWED_KEYS = CURRENT_REQUIRED_KEYS | CURRENT_OPTIONAL_KEYS
+SECRET_LIKE_KEY_PARTS = (
+    "credential",
+    "secret",
+    "token",
+    "cookie",
+    "private_key",
+    "private-key",
+)
+CURRENT_FIELD_BUDGETS = {
+    "next_action": {"kind": "object", "max_text_bytes": 512, "max_json_bytes": 768},
+    "source_refs": {"kind": "list", "max_items": 24, "max_item_json_bytes": 256, "max_json_bytes": 4096},
+    "open_risks": {"kind": "list", "max_items": 16, "max_item_json_bytes": 256, "max_json_bytes": 2048},
+    "authz_policy_refs": {"kind": "list[str]", "max_items": 16, "max_item_json_bytes": 128, "max_json_bytes": 1024},
+    "routing_ref": {"kind": "scalar", "max_bytes": 256},
+    "active_context_ref": {"kind": "scalar", "max_bytes": 256},
+    "pending_checklist_path": {"kind": "scalar", "max_bytes": 256},
+    "project_state_ref": {"kind": "scalar", "max_bytes": 256},
+}
+
+
+@dataclass(frozen=True)
+class CurrentStateFinding:
+    severity: str
+    code: str
+    message: str
+    key: str | None = None
+
+    def as_cli_line(self) -> str:
+        return f"{self.message}"
+
+
+class StateValidationError(ValueError):
+    """Raised when a controlled current-state update fails validation."""
 
 
 def now_utc() -> str:
@@ -89,6 +146,218 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def _json_size(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+
+
+def _text_size(value: str) -> int:
+    return len(value.encode("utf-8"))
+
+
+def _is_absent_optional(value: Any) -> bool:
+    return value is None or value == "" or value == []
+
+
+def _is_scalar_or_absent(value: Any) -> bool:
+    return _is_absent_optional(value) or isinstance(value, str)
+
+
+def _is_relative_state_ref(value: str) -> bool:
+    path = Path(value)
+    if not value or path.is_absolute():
+        return False
+    if ".." in path.parts:
+        return False
+    if value.startswith("process/quant-lab/") or value == "process/quant-lab":
+        return False
+    return True
+
+
+def _contains_secret_like_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_text = str(key).lower()
+            if any(part in key_text for part in SECRET_LIKE_KEY_PARTS):
+                return True
+            if _contains_secret_like_key(nested):
+                return True
+    if isinstance(value, list):
+        return any(_contains_secret_like_key(item) for item in value)
+    return False
+
+
+def _finding(
+    findings: list[CurrentStateFinding],
+    severity: str,
+    code: str,
+    message: str,
+    *,
+    key: str | None = None,
+) -> None:
+    findings.append(CurrentStateFinding(severity=severity, code=code, message=message, key=key))
+
+
+def _budget_severity(mode: str) -> str:
+    return "ERROR" if mode == "enforce" else "WARN"
+
+
+def _validate_budget_field(state: dict[str, Any], key: str, findings: list[CurrentStateFinding], *, mode: str) -> None:
+    if key not in state:
+        return
+    value = state[key]
+    budget = CURRENT_FIELD_BUDGETS[key]
+    kind = budget["kind"]
+    if kind == "scalar":
+        if not _is_scalar_or_absent(value):
+            _finding(findings, "ERROR", "field_type", f"{key} must be a scalar string or null/empty", key=key)
+            return
+    elif kind == "list[str]":
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            _finding(findings, "ERROR", "field_type", f"{key} must be a list of strings", key=key)
+            return
+    elif kind == "list":
+        if not isinstance(value, list):
+            _finding(findings, "ERROR", "field_type", f"{key} must be a list", key=key)
+            return
+    elif kind == "object":
+        if not isinstance(value, (dict, str)) and not _is_absent_optional(value):
+            _finding(findings, "ERROR", "field_type", f"{key} must be an object, string, or null/empty", key=key)
+            return
+
+    severity = _budget_severity(mode)
+    max_bytes = budget.get("max_bytes")
+    if max_bytes is not None and isinstance(value, str):
+        actual_bytes = _text_size(value)
+        if actual_bytes > int(max_bytes):
+            _finding(
+                findings,
+                severity,
+                "field_budget",
+                f"{key} exceeds budget: {format_bytes(actual_bytes)} > {format_bytes(int(max_bytes))}",
+                key=key,
+            )
+
+    max_text_bytes = budget.get("max_text_bytes")
+    if max_text_bytes is not None:
+        text_value = value.get("text") if isinstance(value, dict) else value if isinstance(value, str) else None
+        if isinstance(text_value, str):
+            actual_text_bytes = _text_size(text_value)
+            if actual_text_bytes > int(max_text_bytes):
+                _finding(
+                    findings,
+                    severity,
+                    "field_budget",
+                    f"{key}.text exceeds budget: {format_bytes(actual_text_bytes)} > {format_bytes(int(max_text_bytes))}",
+                    key=key,
+                )
+
+    max_json_bytes = budget.get("max_json_bytes")
+    actual_json_bytes = _json_size(value)
+    if max_json_bytes is not None and actual_json_bytes > int(max_json_bytes):
+        _finding(
+            findings,
+            severity,
+            "field_budget",
+            f"{key} exceeds budget: {format_bytes(actual_json_bytes)} > {format_bytes(int(max_json_bytes))}",
+            key=key,
+        )
+    max_items = budget.get("max_items")
+    if max_items is not None and isinstance(value, list) and len(value) > int(max_items):
+        _finding(findings, severity, "field_budget", f"{key} exceeds item budget: {len(value)} > {max_items}", key=key)
+    max_item_json_bytes = budget.get("max_item_json_bytes")
+    if max_item_json_bytes is not None and isinstance(value, list):
+        for index, item in enumerate(value):
+            item_size = _json_size(item)
+            if item_size > int(max_item_json_bytes):
+                _finding(
+                    findings,
+                    severity,
+                    "field_budget",
+                    f"{key}[{index}] exceeds item budget: {format_bytes(item_size)} > {format_bytes(int(max_item_json_bytes))}",
+                    key=key,
+                )
+
+
+def validate_current_state_payload(state: dict[str, Any], *, mode: str = "audit") -> list[CurrentStateFinding]:
+    if mode not in {"audit", "enforce"}:
+        raise ValueError(f"unknown current-state validation mode: {mode}")
+    findings: list[CurrentStateFinding] = []
+    if state.get("schema_version") != STATE_SCHEMA_VERSION:
+        _finding(findings, "ERROR", "schema_version", f"schema_version must be {STATE_SCHEMA_VERSION}", key="schema_version")
+    for key in sorted(CURRENT_REQUIRED_KEYS):
+        if key not in state:
+            _finding(findings, "ERROR", "missing_required", f"missing required field: {key}", key=key)
+    unknown_keys = sorted(set(state) - CURRENT_ALLOWED_KEYS)
+    for key in unknown_keys:
+        severity = "ERROR" if mode == "enforce" else "WARN"
+        _finding(findings, severity, "unknown_key", f"STATE.current.json contains unknown field: {key}", key=key)
+    for key in sorted(DISALLOWED_CURRENT_KEYS):
+        if key in state:
+            _finding(findings, "ERROR", "disallowed_key", f"STATE.current.json must not store long-running field: {key}", key=key)
+    if _contains_secret_like_key(state):
+        _finding(findings, "ERROR", "secret_like_key", "STATE.current.json must not store credential/secret/token/cookie/private-key fields")
+    project_state_ref = state.get("project_state_ref")
+    if isinstance(project_state_ref, str) and project_state_ref:
+        if not _is_relative_state_ref(project_state_ref):
+            _finding(
+                findings,
+                "ERROR",
+                "ref_path",
+                "project_state_ref must be a project-relative path and must not escape project root",
+                key="project_state_ref",
+            )
+    for key in CURRENT_FIELD_BUDGETS:
+        _validate_budget_field(state, key, findings, mode=mode)
+    return findings
+
+
+def validate_current_state_for_write(state: dict[str, Any]) -> None:
+    findings = validate_current_state_payload(state, mode="enforce")
+    errors = [finding for finding in findings if finding.severity == "ERROR"]
+    if errors:
+        messages = "; ".join(finding.message for finding in errors)
+        raise ValueError(f"STATE.current.json enforce validation failed: {messages}")
+
+
+def validate_current_patch(patch: dict[str, Any], *, mode: str = "enforce") -> list[CurrentStateFinding]:
+    if mode not in {"audit", "enforce"}:
+        raise ValueError(f"unknown current-state validation mode: {mode}")
+    findings: list[CurrentStateFinding] = []
+    unknown_keys = sorted(set(patch) - CURRENT_ALLOWED_KEYS)
+    for key in unknown_keys:
+        severity = "ERROR" if mode == "enforce" else "WARN"
+        _finding(findings, severity, "unknown_patch_key", f"current-state patch contains unknown field: {key}", key=key)
+    for key in sorted(DISALLOWED_CURRENT_KEYS):
+        if key in patch:
+            _finding(findings, "ERROR", "disallowed_patch_key", f"current-state patch must not store long-running field: {key}", key=key)
+    return findings
+
+
+def _raise_on_error(findings: list[CurrentStateFinding], *, subject: str, actor: str = "", reason: str = "") -> None:
+    errors = [finding for finding in findings if finding.severity == "ERROR"]
+    if not errors:
+        return
+    context_parts = []
+    if actor:
+        context_parts.append(f"actor={actor[:128]}")
+    if reason:
+        context_parts.append(f"reason={reason[:256]}")
+    context = f" ({'; '.join(context_parts)})" if context_parts else ""
+    messages = "; ".join(f"{finding.code}: {finding.message}" for finding in errors)
+    raise StateValidationError(f"{subject} validation failed{context}: {messages}")
+
+
+def _deep_merge_current_state(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    candidate = copy.deepcopy(base)
+    for key, value in patch.items():
+        existing = candidate.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            candidate[key] = _deep_merge_current_state(existing, value)
+        else:
+            candidate[key] = copy.deepcopy(value)
+    return candidate
 
 
 def current_state_path(project_root: Path) -> Path:
@@ -188,14 +457,52 @@ def write_current_state(project_root: Path, state: dict[str, Any], *, force: boo
     path = current_state_path(project_root)
     if path.exists() and not force:
         raise FileExistsError(f"{path} 已存在；如需覆盖请使用 --force")
+    validate_current_state_for_write(state)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_current_state_file(path, state)
     ensure_base_ledgers(project_root)
     return path
 
 
+def _write_current_state_file(path: Path, state: dict[str, Any]) -> None:
+    text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    tmp_path.replace(path)
+
+
 def load_current_state(project_root: Path) -> dict[str, Any]:
     return _read_json(current_state_path(project_root.resolve()))
+
+
+def update_current_state(
+    project_root: Path,
+    patch: dict[str, Any],
+    *,
+    actor: str = "",
+    reason: str = "",
+    mode: str = "enforce",
+    render: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(patch, dict):
+        raise StateValidationError("current-state patch validation failed: invalid_patch: patch must be a dict")
+    project_root = project_root.resolve()
+    path = current_state_path(project_root)
+    if not path.is_file():
+        raise FileNotFoundError(f"STATE.current.json missing: {path}")
+
+    patch_findings = validate_current_patch(patch, mode=mode)
+    _raise_on_error(patch_findings, subject="current-state patch", actor=actor, reason=reason)
+    base = json.loads(path.read_text(encoding="utf-8"))
+    candidate = _deep_merge_current_state(base, patch)
+    candidate_findings = validate_current_state_payload(candidate, mode=mode)
+    _raise_on_error(candidate_findings, subject="STATE.current.json candidate", actor=actor, reason=reason)
+
+    _write_current_state_file(path, candidate)
+    ensure_base_ledgers(project_root)
+    if render:
+        render_state_file(project_root, force=True)
+    return candidate
 
 
 def render_state_markdown(state: dict[str, Any]) -> str:
@@ -265,7 +572,7 @@ def render_state_file(project_root: Path, *, force: bool = False) -> Path:
     return path
 
 
-def check_current_state(project_root: Path) -> tuple[list[str], list[str]]:
+def check_current_state(project_root: Path, *, mode: str = "audit") -> tuple[list[str], list[str]]:
     project_root = project_root.resolve()
     errors: list[str] = []
     warnings: list[str] = []
@@ -286,19 +593,19 @@ def check_current_state(project_root: Path) -> tuple[list[str], list[str]]:
     current_size = state_path.stat().st_size
     if current_size > current_max:
         errors.append(f"STATE.current.json too large: {format_bytes(current_size)} > {format_bytes(current_max)}")
-    if state.get("schema_version") != STATE_SCHEMA_VERSION:
-        errors.append(f"schema_version must be {STATE_SCHEMA_VERSION}")
-    for key in ("project_id", "workflow_mode", "current_phase", "blocked", "next_action", "updated_at"):
-        if key not in state:
-            errors.append(f"missing required field: {key}")
-    for key in sorted(DISALLOWED_CURRENT_KEYS):
-        if key in state:
-            errors.append(f"STATE.current.json must not store long-running field: {key}")
-    authz_refs = state.get("authz_policy_refs", [])
-    if not isinstance(authz_refs, list) or not all(isinstance(ref, str) for ref in authz_refs):
-        errors.append("authz_policy_refs must be a list of policy ID strings")
+    findings = validate_current_state_payload(state, mode=mode)
+    warnings.extend(finding.as_cli_line() for finding in findings if finding.severity == "WARN")
+    errors.extend(finding.as_cli_line() for finding in findings if finding.severity == "ERROR")
     if "expanded_text" in json.dumps(state, ensure_ascii=False):
         errors.append("STATE.current.json must reference policy IDs, not expanded policy text")
+    project_state_ref = state.get("project_state_ref")
+    if isinstance(project_state_ref, str) and project_state_ref:
+        try:
+            project_state_exists = (project_root / project_state_ref).is_file()
+        except OSError:
+            project_state_exists = False
+        if not project_state_exists:
+            errors.append(f"project_state_ref points to missing file: {project_state_ref}")
     for ledger_rel in BASE_LEDGER_RELS:
         ledger_path = project_root / ledger_rel
         if not ledger_path.is_file():
@@ -325,12 +632,13 @@ def _print_state_help() -> None:
         "  migrate-v2  Create process/state/STATE.current.json from legacy process/STATE.md.\n"
         "  render      Render process/STATE.md as a human summary from STATE.current.json.\n"
         "  check       Validate STATE.current.json and generated STATE.md budgets.\n"
-        "  compact     Render the human summary and run state check.\n\n"
+        "  compact     Render the human summary and run state check; it does not compact NDJSON ledgers.\n\n"
         "Examples:\n"
         "  meta-flow state init --project-root . --project-id my-project\n"
         "  meta-flow state migrate-v2 --project-root .\n"
         "  meta-flow state render --project-root . --force\n"
-        "  meta-flow state check --project-root .\n"
+        "  meta-flow state check --project-root . --mode audit\n"
+        "  meta-flow state check --project-root . --mode enforce\n"
     )
 
 
@@ -340,10 +648,17 @@ def main(argv: list[str] | None = None) -> int:
         _print_state_help()
         return 0
     command = args[0]
-    parser = argparse.ArgumentParser(prog=f"meta-flow state {command}")
+    description = (
+        "Render process/STATE.md from STATE.current.json and run state check; "
+        "this command does not compact NDJSON event ledgers."
+        if command == "compact"
+        else None
+    )
+    parser = argparse.ArgumentParser(prog=f"meta-flow state {command}", description=description)
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--project-id", default=None)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--mode", choices=("audit", "enforce"), default="audit")
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
@@ -361,7 +676,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote: {path}")
         return 0
     if command == "check":
-        errors, warnings = check_current_state(project_root)
+        errors, warnings = check_current_state(project_root, mode=parsed.mode)
         print("State v2 Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
@@ -370,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if errors else 0
     if command == "compact":
         render_state_file(project_root, force=parsed.force)
-        errors, warnings = check_current_state(project_root)
+        errors, warnings = check_current_state(project_root, mode=parsed.mode)
         print("State v2 Compact: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")

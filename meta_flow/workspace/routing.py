@@ -15,6 +15,7 @@ PROCESS_SCAFFOLD_DIRS = (
     "checkpoints",
     "context",
     "changes",
+    "project",
     "state",
     "policies",
     "returns",
