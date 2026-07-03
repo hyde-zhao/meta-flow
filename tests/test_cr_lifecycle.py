@@ -50,6 +50,86 @@ risk_refs: [RISK-001]
     return path
 
 
+def write_feature_registry(root: Path) -> Path:
+    path = root / "docs" / "design" / "FEATURE-REGISTRY.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "features": [
+                    {
+                        "id": "FEAT-PG-004",
+                        "feature_id": "FEAT-PG-004",
+                        "title": "Capability / Feature Registry",
+                        "owner_context": "project-governance",
+                        "status": "active",
+                        "risk_profile": "standard-code",
+                        "design_doc_policy": "registry-only",
+                        "module_paths": ["meta_flow/design/feature_registry.py"],
+                        "public_api": ["meta_flow.design.feature_registry.resolve_refs"],
+                        "forbidden_dependencies": [],
+                        "authz_policy_refs": [],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_capability_registry(root: Path, *, status: str = "active") -> Path:
+    path = root / "docs" / "design" / "CAPABILITY-REGISTRY.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "capabilities": [
+                    {
+                        "id": "CAP-PG-REGISTRY-REFS",
+                        "name": "Registry-backed refs",
+                        "domain": "project-governance",
+                        "status": status,
+                        "owner_context": "project-governance",
+                        "feature_refs": ["FEAT-PG-004"],
+                        "aliases": ["registry refs"],
+                        "deprecated_by": "CAP-PG-REGISTRY-REFS-V2" if status == "deprecated" else "",
+                        "source_refs": ["CR037-S07"],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_impact_rules(root: Path, rules: list[dict]) -> Path:
+    path = root / "process" / "project" / "IMPACT-SURFACE-RULES.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "rules": rules,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 class CRLifecycleTests(unittest.TestCase):
     def test_bootstrap_cr_writes_active_cr_cp0_context_and_state_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -171,6 +251,48 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertIn('required_gate: "CP2"', legacy_index)
             self.assertIn('block_story_decomposition_until: "CP2-approved"', legacy_index)
 
+    def test_index_summary_and_brief_include_split_impact_fields_with_capability_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            write_cr(
+                root,
+                "CR-201",
+                extra_frontmatter=(
+                    'impact_capability_refs: ["registry refs"]\n'
+                    'impact_feature_refs: ["FEAT-PG-004"]\n'
+                    'impact_module_paths: ["meta_flow/workflow/cr_lifecycle.py"]\n'
+                    'impact_policy_refs: ["NO_RUNTIME"]\n'
+                    'impact_process_refs: ["process/changes"]\n'
+                    'impact_runtime_refs: ["runtime:none"]\n'
+                    'impact_data_refs: ["data:none"]'
+                ),
+            )
+
+            self.assertEqual(0, cr_lifecycle.main(["index", "--project-root", str(root)]))
+            self.assertEqual(0, cr_lifecycle.main(["summary", "--id", "CR-201", "--project-root", str(root)]))
+
+            index = json.loads((root / "process" / "changes" / "CR-INDEX.json").read_text(encoding="utf-8"))
+            item = index["items"][0]
+            self.assertEqual(["registry refs"], item["impact_capability_refs"])
+            self.assertEqual(["FEAT-PG-004"], item["impact_feature_refs"])
+            self.assertEqual(["meta_flow/workflow/cr_lifecycle.py"], item["impact_module_paths"])
+            self.assertEqual(["CAP-PG-REGISTRY-REFS"], item["impact_capability_normalized"])
+            self.assertEqual("resolved", item["impact_capability_resolution"]["results"][0]["status"])
+            self.assertEqual("alias", item["impact_capability_resolution"]["results"][0]["source"])
+
+            summary = json.loads(
+                (root / "process" / "changes" / "summaries" / "CR-201.summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(["NO_RUNTIME"], summary["impact_policy_refs"])
+            self.assertEqual(["CAP-PG-REGISTRY-REFS"], summary["impact_capability_normalized"])
+
+            brief = cr_lifecycle.render_cr_brief(root, "CR-201")
+            self.assertIn("capability: registry refs", brief)
+            self.assertIn("module: meta_flow/workflow/cr_lifecycle.py", brief)
+            self.assertIn("capability.normalized: CAP-PG-REGISTRY-REFS", brief)
+
     def test_brief_and_goal_brief_render_goal_oriented_summary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -243,6 +365,183 @@ class CRLifecycleTests(unittest.TestCase):
 
             self.assertEqual(1, exit_code)
             self.assertIn("CR-102 overlaps CR-101", output.getvalue())
+
+    def test_conflicts_detect_split_field_capability_overlap_after_alias_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            write_cr(root, "CR-201", extra_frontmatter='impact_capability_refs: ["registry refs"]')
+            write_cr(root, "CR-202", extra_frontmatter='impact_capability_refs: ["CAP-PG-REGISTRY-REFS"]')
+            cr_lifecycle.write_index(root)
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cr_lifecycle.main(["conflicts", "--id", "CR-202", "--project-root", str(root)])
+
+            self.assertEqual(1, exit_code)
+            self.assertIn("CR-202 overlaps CR-201", output.getvalue())
+            self.assertIn("CAP-PG-REGISTRY-REFS", output.getvalue())
+
+    def test_impact_report_marks_unresolved_capability_refs_as_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            write_cr(root, "CR-201", extra_frontmatter='impact_capability_refs: ["CAP-PG-UNKNOWN"]')
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cr_lifecycle.main(["impact-report", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            report = json.loads(output.getvalue())
+            self.assertEqual("enforce", report["mode"])
+            self.assertEqual(1, report["summary"]["blocker_count"])
+            self.assertEqual("CAP-PG-UNKNOWN", report["items"][0]["blockers"][0]["input_ref"])
+            self.assertEqual("unresolved", report["items"][0]["blockers"][0]["status"])
+            self.assertEqual("E_REF_UNRESOLVED", report["items"][0]["blockers"][0]["code"])
+
+    def test_impact_report_preserves_uncategorized_legacy_surface_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            write_cr(root, "CR-201", impact_surface='"CAP-PG-REGISTRY-REFS", "some_custom_domain"')
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cr_lifecycle.main(["impact-report", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            report = json.loads(output.getvalue())
+            self.assertEqual(1, report["summary"]["uncategorized_cr_count"])
+            self.assertEqual(1, report["summary"]["uncategorized_legacy_count"])
+            item = report["items"][0]
+            self.assertEqual(["CAP-PG-REGISTRY-REFS"], item["derived_from_legacy"]["impact_capability_refs"])
+            self.assertEqual(["some_custom_domain"], item["uncategorized_legacy"])
+            self.assertEqual(
+                [
+                    {
+                        "candidate_id": "CR-201-IMPACT-UNCATEGORIZED",
+                        "kind": "manual-impact-classification",
+                        "summary": "CR-201: manually classify uncategorized legacy impact_surface values",
+                        "input_refs": ["some_custom_domain"],
+                        "recommended_action": "Add explicit impact_* split fields or extend classification rules in a follow-up Story.",
+                        "write_policy": "candidate-only",
+                    }
+                ],
+                item["followup_candidates"],
+            )
+
+    def test_brief_shows_uncategorized_legacy_impact_followup_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            write_cr(root, "CR-201", impact_surface='"CAP-PG-REGISTRY-REFS", "some_custom_domain"')
+            cr_lifecycle.write_summary(root, "CR-201", cr_lifecycle.summary_from_cr_file(root, root / "process" / "changes" / "CR-201.md"))
+
+            brief = cr_lifecycle.render_cr_brief(root, "CR-201")
+
+            self.assertIn("## 未分类 legacy impact_surface", brief)
+            self.assertIn("- some_custom_domain", brief)
+            self.assertIn("follow-up candidate: CR-201-IMPACT-UNCATEGORIZED", brief)
+
+    def test_brief_can_enforce_capability_resolution_mode_for_deprecated_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root, status="deprecated")
+            write_cr(root, "CR-201", extra_frontmatter='impact_capability_refs: ["CAP-PG-REGISTRY-REFS"]')
+            cr_lifecycle.write_summary(root, "CR-201", cr_lifecycle.summary_from_cr_file(root, root / "process" / "changes" / "CR-201.md"))
+
+            audit_brief = cr_lifecycle.render_cr_brief(root, "CR-201")
+            enforce_brief = cr_lifecycle.render_cr_brief(root, "CR-201", mode="enforce")
+
+            self.assertIn("capability.resolution_mode: audit", audit_brief)
+            self.assertNotIn("capability ref blockers", audit_brief)
+            self.assertIn("capability.resolution_mode: enforce", enforce_brief)
+            self.assertIn("CAP-PG-REGISTRY-REFS: deprecated E_REF_DEPRECATED", enforce_brief)
+
+    def test_impact_report_applies_project_legacy_classification_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            write_impact_rules(
+                root,
+                [
+                    {
+                        "match": "prefix",
+                        "pattern": "MOD-",
+                        "target_field": "impact_module_paths",
+                        "strip_prefix": True,
+                    },
+                    {
+                        "match": "prefix",
+                        "pattern": "SVC-",
+                        "target_field": "impact_runtime_refs",
+                    },
+                ],
+            )
+            write_cr(root, "CR-201", impact_surface='"MOD-meta_flow/project/rules.py", "SVC-order-router"')
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cr_lifecycle.main(["impact-report", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            item = json.loads(output.getvalue())["items"][0]
+            self.assertEqual(["meta_flow/project/rules.py"], item["derived_from_legacy"]["impact_module_paths"])
+            self.assertEqual(["SVC-order-router"], item["derived_from_legacy"]["impact_runtime_refs"])
+            self.assertEqual([], item["uncategorized_legacy"])
+            self.assertEqual([], item["followup_candidates"])
+
+    def test_brief_uses_project_legacy_classification_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            write_impact_rules(
+                root,
+                [
+                    {
+                        "match": "prefix",
+                        "pattern": "MOD-",
+                        "target_field": "impact_module_paths",
+                        "strip_prefix": True,
+                    }
+                ],
+            )
+            write_cr(root, "CR-201", impact_surface='"MOD-meta_flow/project/rules.py"')
+            cr_lifecycle.write_summary(root, "CR-201", cr_lifecycle.summary_from_cr_file(root, root / "process" / "changes" / "CR-201.md"))
+
+            brief = cr_lifecycle.render_cr_brief(root, "CR-201")
+
+            self.assertNotIn("## 未分类 legacy impact_surface", brief)
+
+    def test_invalid_impact_rule_target_field_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            write_impact_rules(
+                root,
+                [
+                    {
+                        "match": "prefix",
+                        "pattern": "MOD-",
+                        "target_field": "impact_unknown_refs",
+                    }
+                ],
+            )
+            write_cr(root, "CR-201", impact_surface='"MOD-meta_flow/project/rules.py"')
+
+            with self.assertRaises(ValueError) as raised:
+                cr_lifecycle.build_impact_report(root)
+
+            self.assertIn("target_field is invalid", str(raised.exception))
 
     def test_check_rejects_invalid_cr_type_from_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

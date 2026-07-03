@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from meta_flow.design import feature_registry
+from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import current
 
 
@@ -19,6 +21,7 @@ CR_INDEX_REL = Path("process/changes/CR-INDEX.json")
 LEGACY_CR_INDEX_REL = Path("process/changes/CR-INDEX.yaml")
 CR_SUMMARY_ROOT_REL = Path("process/changes/summaries")
 CR_ARCHIVE_ROOT_REL = Path("process/archive")
+IMPACT_SURFACE_RULES_REL = Path("process/project/IMPACT-SURFACE-RULES.yaml")
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
 CR_ID_RE = re.compile(r"CR-\d+")
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
@@ -55,6 +58,15 @@ CR_TYPE_ALIASES = {
     "ledger-maintenance": "process",
     "spike": "experiment",
 }
+IMPACT_SPLIT_FIELDS = (
+    "impact_capability_refs",
+    "impact_feature_refs",
+    "impact_module_paths",
+    "impact_policy_refs",
+    "impact_process_refs",
+    "impact_runtime_refs",
+    "impact_data_refs",
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +82,14 @@ class CRRecord:
     summary_ref: str
     conflict_keys: list[str]
     impact_surface: list[str]
+    impact_capability_refs: list[str]
+    impact_feature_refs: list[str]
+    impact_module_paths: list[str]
+    impact_policy_refs: list[str]
+    impact_process_refs: list[str]
+    impact_runtime_refs: list[str]
+    impact_data_refs: list[str]
+    impact_capability_resolution: dict[str, Any]
     authz_policy_refs: list[str]
     risk_refs: list[str]
     goal_ref: str
@@ -97,8 +117,8 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _strip_scalar(value: str) -> str:
-    raw = value.strip()
+def _strip_scalar(value: Any) -> str:
+    raw = str(value).strip()
     if " #" in raw:
         raw = raw.split(" #", 1)[0].rstrip()
     return raw.strip().strip("`").strip('"').strip("'")
@@ -109,18 +129,27 @@ def _frontmatter(text: str) -> str:
     return match.group(1) if match else ""
 
 
-def parse_frontmatter(text: str) -> dict[str, str]:
-    values: dict[str, str] = {}
+def parse_frontmatter(text: str) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    current_list_key = ""
     for line in _frontmatter(text).splitlines():
+        if line.startswith("  - ") and current_list_key:
+            values.setdefault(current_list_key, []).append(_strip_scalar(line.strip()[2:]))
+            continue
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or ":" not in stripped:
             continue
         key, value = stripped.split(":", 1)
-        values[key.strip()] = _strip_scalar(value)
+        key = key.strip()
+        value = value.strip()
+        current_list_key = key
+        values[key] = _strip_scalar(value) if value else []
     return values
 
 
-def parse_inline_list(value: str) -> list[str]:
+def parse_inline_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [_strip_scalar(item) for item in value if _strip_scalar(item)]
     raw = _strip_scalar(value)
     if not raw or raw in {"[]", "{}"}:
         return []
@@ -129,12 +158,12 @@ def parse_inline_list(value: str) -> list[str]:
     return [item.strip().strip('"').strip("'") for item in raw.split(",") if item.strip()]
 
 
-def parse_bool(value: str) -> bool:
+def parse_bool(value: Any) -> bool:
     raw = _strip_scalar(value).lower()
     return raw in {"true", "yes", "y", "1"}
 
 
-def normalize_cr_type(value: str) -> str:
+def normalize_cr_type(value: Any) -> str:
     raw = _strip_scalar(value)
     if not raw:
         return "feature"
@@ -151,6 +180,191 @@ def _rel(project_root: Path, path: Path) -> str:
 def _cr_id_from_path(path: Path) -> str:
     match = CR_ID_RE.search(path.name)
     return match.group(0) if match else ""
+
+
+def _resolve_capability_refs(project_root: Path, refs: list[str], *, mode: str = "audit") -> dict[str, Any]:
+    return feature_registry.resolve_refs(project_root, refs, kind="capability", mode=mode)
+
+
+def _normalized_capability_refs(resolution: dict[str, Any]) -> list[str]:
+    normalized: list[str] = []
+    for result in resolution.get("results", []):
+        if isinstance(result, dict) and result.get("status") == "resolved" and result.get("canonical_id"):
+            normalized.append(str(result["canonical_id"]))
+    return normalized
+
+
+def _capability_blockers(resolution: dict[str, Any]) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    mode = str(resolution.get("mode") or "audit")
+    for result in resolution.get("results", []):
+        if not isinstance(result, dict):
+            continue
+        status = result.get("status")
+        is_blocker = status in {"unresolved", "conflict"} or (mode == "enforce" and status == "deprecated")
+        if is_blocker:
+            blockers.append(
+                {
+                    "input_ref": result.get("input_ref", ""),
+                    "status": status or "",
+                    "code": result.get("code", ""),
+                    "severity": result.get("severity", ""),
+                    "canonical_id": result.get("canonical_id", ""),
+                    "deprecated_by": result.get("deprecated_by", ""),
+                    "candidates": result.get("candidates", []),
+                }
+            )
+    return blockers
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique_values: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+    return unique_values
+
+
+def _impact_split_payload(record: CRRecord) -> dict[str, list[str]]:
+    return {
+        "impact_capability_refs": record.impact_capability_refs,
+        "impact_feature_refs": record.impact_feature_refs,
+        "impact_module_paths": record.impact_module_paths,
+        "impact_policy_refs": record.impact_policy_refs,
+        "impact_process_refs": record.impact_process_refs,
+        "impact_runtime_refs": record.impact_runtime_refs,
+        "impact_data_refs": record.impact_data_refs,
+    }
+
+
+def _categorized_legacy_impact(impact_surface: list[str], *, project_root: Path | None = None) -> dict[str, list[str]]:
+    derived: dict[str, list[str]] = {field: [] for field in IMPACT_SPLIT_FIELDS}
+    for value in impact_surface:
+        category = _legacy_impact_category(value, project_root=project_root)
+        if category is not None:
+            field, normalized = category
+            derived[field].append(normalized)
+    return {key: _unique(values) for key, values in derived.items()}
+
+
+def _legacy_impact_category(value: str, *, project_root: Path | None = None) -> tuple[str, str] | None:
+    builtin = _builtin_legacy_impact_category(value, include_generic_module=False)
+    if builtin is not None:
+        return builtin
+    if project_root is None:
+        return _builtin_legacy_impact_category(value, include_generic_module=True)
+    project_rule = _project_legacy_impact_category(project_root, value)
+    if project_rule is not None:
+        return project_rule
+    return _builtin_legacy_impact_category(value, include_generic_module=True)
+
+
+def _builtin_legacy_impact_category(value: str, *, include_generic_module: bool = True) -> tuple[str, str] | None:
+    lowered = value.lower()
+    if value.startswith("CAP-") or lowered.startswith("capability:"):
+        return "impact_capability_refs", value.split(":", 1)[-1]
+    if value.startswith("FEAT-") or lowered.startswith("feature:"):
+        return "impact_feature_refs", value.split(":", 1)[-1]
+    if value.startswith("NO_") or value.startswith("AUTHZ-") or lowered.startswith("policy:"):
+        return "impact_policy_refs", value.split(":", 1)[-1]
+    if lowered.startswith("process") or lowered.startswith("workflow:"):
+        return "impact_process_refs", value.split(":", 1)[-1]
+    if any(marker in lowered for marker in ("runtime", "trading", "live", "publish")):
+        return "impact_runtime_refs", value
+    if lowered.startswith("data:") or lowered.startswith("data/") or "/data" in lowered or "data_" in lowered:
+        return "impact_data_refs", value.split(":", 1)[-1]
+    if include_generic_module and ("/" in value or value.endswith(".py")):
+        return "impact_module_paths", value
+    return None
+
+
+def _project_legacy_impact_category(project_root: Path, value: str) -> tuple[str, str] | None:
+    rules_path = project_root.resolve() / IMPACT_SURFACE_RULES_REL
+    if not rules_path.is_file():
+        return None
+    data = load_yaml_object(rules_path)
+    if data.get("schema_version") != 1:
+        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} schema_version must be 1")
+    rules = data.get("rules", [])
+    if not isinstance(rules, list):
+        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules must be a list")
+    for index, rule in enumerate(rules, start=1):
+        field, normalized = _apply_impact_rule(rule, value, index=index)
+        if field:
+            return field, normalized
+    return None
+
+
+def _apply_impact_rule(rule: Any, value: str, *, index: int) -> tuple[str, str]:
+    if not isinstance(rule, dict):
+        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}] must be an object")
+    target_field = str(rule.get("target_field") or "")
+    if target_field not in IMPACT_SPLIT_FIELDS:
+        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].target_field is invalid: {target_field}")
+    match = str(rule.get("match") or "prefix")
+    pattern = str(rule.get("pattern") or "")
+    if not pattern:
+        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].pattern must be non-empty")
+    matched = False
+    if match == "prefix":
+        matched = value.startswith(pattern)
+    elif match == "exact":
+        matched = value == pattern
+    elif match == "contains":
+        matched = pattern in value
+    elif match == "suffix":
+        matched = value.endswith(pattern)
+    elif match == "regex":
+        try:
+            matched = re.search(pattern, value) is not None
+        except re.error as exc:
+            raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].pattern invalid regex: {exc}") from exc
+    else:
+        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].match is invalid: {match}")
+    if not matched:
+        return "", ""
+    normalized = value
+    if rule.get("strip_prefix") is True and value.startswith(pattern):
+        normalized = value[len(pattern):]
+    if isinstance(rule.get("replacement"), str) and rule.get("replacement"):
+        normalized = str(rule["replacement"])
+    return target_field, normalized
+
+
+def _uncategorized_legacy_impact(impact_surface: list[str], *, project_root: Path | None = None) -> list[str]:
+    return _unique([value for value in impact_surface if _legacy_impact_category(value, project_root=project_root) is None])
+
+
+def _impact_followup_candidates(cr_id: str, uncategorized_legacy: list[str]) -> list[dict[str, Any]]:
+    if not uncategorized_legacy:
+        return []
+    return [
+        {
+            "candidate_id": f"{cr_id}-IMPACT-UNCATEGORIZED",
+            "kind": "manual-impact-classification",
+            "summary": f"{cr_id}: manually classify uncategorized legacy impact_surface values",
+            "input_refs": uncategorized_legacy,
+            "recommended_action": "Add explicit impact_* split fields or extend classification rules in a follow-up Story.",
+            "write_policy": "candidate-only",
+        }
+    ]
+
+
+def _merge_impact_fields(base: dict[str, list[str]], extra: dict[str, list[str]]) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for field in IMPACT_SPLIT_FIELDS:
+        merged[field] = _unique([*base.get(field, []), *extra.get(field, [])])
+    return merged
+
+
+def _effective_impact_fields(record: CRRecord, *, project_root: Path | None = None) -> dict[str, list[str]]:
+    return _merge_impact_fields(
+        _impact_split_payload(record),
+        _categorized_legacy_impact(record.impact_surface, project_root=project_root),
+    )
 
 
 def _extract_section_lines(text: str, heading: str) -> list[str]:
@@ -214,6 +428,8 @@ def record_from_cr_file(project_root: Path, path: Path) -> CRRecord:
     if status == "open":
         status = "active"
     summary_ref = (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
+    impact_capability_refs = parse_inline_list(fields.get("impact_capability_refs", ""))
+    capability_resolution = _resolve_capability_refs(project_root, impact_capability_refs, mode="audit")
     return CRRecord(
         cr_id=cr_id,
         cr_type=normalize_cr_type(fields.get("cr_type") or fields.get("cr_kind") or "feature"),
@@ -226,6 +442,14 @@ def record_from_cr_file(project_root: Path, path: Path) -> CRRecord:
         summary_ref=summary_ref,
         conflict_keys=parse_inline_list(fields.get("conflict_keys", "")),
         impact_surface=parse_inline_list(fields.get("impact_surface", "")),
+        impact_capability_refs=impact_capability_refs,
+        impact_feature_refs=parse_inline_list(fields.get("impact_feature_refs", "")),
+        impact_module_paths=parse_inline_list(fields.get("impact_module_paths", "")),
+        impact_policy_refs=parse_inline_list(fields.get("impact_policy_refs", "")),
+        impact_process_refs=parse_inline_list(fields.get("impact_process_refs", "")),
+        impact_runtime_refs=parse_inline_list(fields.get("impact_runtime_refs", "")),
+        impact_data_refs=parse_inline_list(fields.get("impact_data_refs", "")),
+        impact_capability_resolution=capability_resolution,
         authz_policy_refs=parse_inline_list(fields.get("authz_policy_refs", "")),
         risk_refs=parse_inline_list(fields.get("risk_refs", "")),
         goal_ref=fields.get("goal_ref", ""),
@@ -264,6 +488,9 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
         "decision": "pending",
         "scope_summary": _section_summary(text, "## 变更描述") or [record.title],
         "impact_surface": record.impact_surface,
+        **_impact_split_payload(record),
+        "impact_capability_resolution": record.impact_capability_resolution,
+        "impact_capability_normalized": _normalized_capability_refs(record.impact_capability_resolution),
         "conflict_keys": record.conflict_keys,
         "remaining_risks": record.risk_refs,
         "followup_candidates": [],
@@ -361,6 +588,9 @@ def build_index(project_root: Path) -> dict[str, Any]:
                 "decision_burden": record.decision_burden,
                 "conflict_keys": record.conflict_keys,
                 "impact_surface": record.impact_surface,
+                **_impact_split_payload(record),
+                "impact_capability_resolution": record.impact_capability_resolution,
+                "impact_capability_normalized": _normalized_capability_refs(record.impact_capability_resolution),
                 "authz_policy_refs": record.authz_policy_refs,
                 "risk_refs": record.risk_refs,
                 "product_baseline_refresh_required": record.product_baseline_refresh_required,
@@ -709,6 +939,15 @@ def collect_check_errors(project_root: Path) -> list[str]:
     return errors
 
 
+def _conflict_surface(item: dict[str, Any]) -> set[str]:
+    values: list[str] = []
+    values.extend(str(value) for value in item.get("impact_surface") or [] if str(value))
+    for field in IMPACT_SPLIT_FIELDS:
+        values.extend(str(value) for value in item.get(field) or [] if str(value))
+    values.extend(str(value) for value in item.get("impact_capability_normalized") or [] if str(value))
+    return set(values)
+
+
 def conflict_report(project_root: Path, cr_id: str) -> tuple[list[str], list[str]]:
     project_root = project_root.resolve()
     index = load_index(project_root)
@@ -717,7 +956,7 @@ def conflict_report(project_root: Path, cr_id: str) -> tuple[list[str], list[str
     if not target:
         raise FileNotFoundError(f"CR index 中未找到 {cr_id}；请先运行 meta-flow cr index")
     target_keys = set(target.get("conflict_keys") or [])
-    target_surface = set(target.get("impact_surface") or [])
+    target_surface = _conflict_surface(target)
     conflicts: list[str] = []
     warnings: list[str] = []
     for item in items:
@@ -727,14 +966,78 @@ def conflict_report(project_root: Path, cr_id: str) -> tuple[list[str], list[str
         if item.get("status") not in {"active", "blocked", "proposed"}:
             continue
         key_overlap = target_keys.intersection(item.get("conflict_keys") or [])
-        surface_overlap = target_surface.intersection(item.get("impact_surface") or [])
+        surface_overlap = target_surface.intersection(_conflict_surface(item))
         if key_overlap or surface_overlap:
             conflicts.append(
                 f"{cr_id} overlaps {other_id}: conflict_keys={sorted(key_overlap)} impact_surface={sorted(surface_overlap)}"
             )
     if not target_keys and not target_surface:
-        warnings.append(f"{cr_id} has no conflict_keys or impact_surface; conflict detection is weak")
+        warnings.append(f"{cr_id} has no conflict_keys or impact fields; conflict detection is weak")
     return conflicts, warnings
+
+
+def build_impact_report(project_root: Path, *, mode: str = "enforce") -> dict[str, Any]:
+    project_root = project_root.resolve()
+    if mode not in {"audit", "enforce"}:
+        raise ValueError("mode must be audit or enforce")
+    items: list[dict[str, Any]] = []
+    blocker_count = 0
+    uncategorized_cr_count = 0
+    uncategorized_legacy_count = 0
+    for cr_id, path in discover_formal_crs(project_root).items():
+        record = record_from_cr_file(project_root, path)
+        explicit = _impact_split_payload(record)
+        derived_from_legacy = _categorized_legacy_impact(record.impact_surface, project_root=project_root)
+        uncategorized_legacy = _uncategorized_legacy_impact(record.impact_surface, project_root=project_root)
+        if uncategorized_legacy:
+            uncategorized_cr_count += 1
+            uncategorized_legacy_count += len(uncategorized_legacy)
+        effective = _effective_impact_fields(record, project_root=project_root)
+        capability_resolution = _resolve_capability_refs(
+            project_root,
+            effective["impact_capability_refs"],
+            mode=mode,
+        )
+        blockers = _capability_blockers(capability_resolution)
+        blocker_count += len(blockers)
+        items.append(
+            {
+                "id": cr_id,
+                "title": record.title,
+                "status": record.status,
+                "full_ref": record.full_ref,
+                "old_impact_surface": record.impact_surface,
+                "explicit_split_fields": explicit,
+                "derived_from_legacy": derived_from_legacy,
+                "uncategorized_legacy": uncategorized_legacy,
+                "effective_split_fields": effective,
+                "impact_capability_resolution": capability_resolution,
+                "impact_capability_normalized": _normalized_capability_refs(capability_resolution),
+                "blockers": blockers,
+                "followup_candidates": _impact_followup_candidates(cr_id, uncategorized_legacy),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "kind": "cr-impact-surface-migration-report",
+        "generated_at": now_utc(),
+        "mode": mode,
+        "write_policy": "side-effect-free",
+        "canonical_registry_written": False,
+        "summary": {
+            "cr_count": len(items),
+            "blocker_count": blocker_count,
+            "uncategorized_cr_count": uncategorized_cr_count,
+            "uncategorized_legacy_count": uncategorized_legacy_count,
+        },
+        "items": sorted(items, key=lambda item: item["id"]),
+    }
+
+
+def write_impact_report(path: Path, report: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 def _load_summary(project_root: Path, cr_id: str) -> dict[str, Any]:
@@ -747,8 +1050,22 @@ def _load_summary(project_root: Path, cr_id: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def render_cr_brief(project_root: Path, cr_id: str) -> str:
-    summary = _load_summary(project_root.resolve(), cr_id)
+def render_cr_brief(project_root: Path, cr_id: str, *, mode: str = "audit") -> str:
+    if mode not in {"audit", "enforce"}:
+        raise ValueError("mode must be audit or enforce")
+    root = project_root.resolve()
+    summary = _load_summary(root, cr_id)
+    record: CRRecord | None = None
+    crs = discover_formal_crs(root)
+    if cr_id in crs:
+        record = record_from_cr_file(root, crs[cr_id])
+    capability_refs = (
+        _effective_impact_fields(record, project_root=root)["impact_capability_refs"]
+        if record is not None
+        else [str(item) for item in summary.get("impact_capability_refs") or [] if str(item)]
+    )
+    capability_resolution = _resolve_capability_refs(root, capability_refs, mode=mode)
+    capability_normalized = _normalized_capability_refs(capability_resolution)
     lines = [
         f"# {summary.get('id')} {summary.get('title')}",
         "",
@@ -773,6 +1090,43 @@ def render_cr_brief(project_root: Path, cr_id: str) -> str:
     if summary.get("impact_surface"):
         lines.extend(["", "## 影响面", ""])
         lines.extend(f"- {item}" for item in summary.get("impact_surface", []))
+    uncategorized_legacy = (
+        _uncategorized_legacy_impact(record.impact_surface, project_root=root)
+        if record is not None
+        else _uncategorized_legacy_impact(
+            [str(item) for item in summary.get("impact_surface") or [] if str(item)],
+            project_root=root,
+        )
+    )
+    split_lines: list[str] = []
+    split_labels = {
+        "impact_capability_refs": "capability",
+        "impact_feature_refs": "feature",
+        "impact_module_paths": "module",
+        "impact_policy_refs": "policy",
+        "impact_process_refs": "process",
+        "impact_runtime_refs": "runtime",
+        "impact_data_refs": "data",
+    }
+    for field, label in split_labels.items():
+        for value in summary.get(field) or []:
+            split_lines.append(f"- {label}: {value}")
+    for value in capability_normalized:
+        split_lines.append(f"- capability.normalized: {value}")
+    if capability_refs:
+        split_lines.append(f"- capability.resolution_mode: {mode}")
+    if split_lines:
+        lines.extend(["", "## 结构化影响面", ""])
+        lines.extend(split_lines)
+    if uncategorized_legacy:
+        lines.extend(["", "## 未分类 legacy impact_surface", ""])
+        lines.extend(f"- {item}" for item in uncategorized_legacy)
+        for candidate in _impact_followup_candidates(str(summary.get("id") or cr_id), uncategorized_legacy):
+            lines.append(f"- follow-up candidate: {candidate['candidate_id']}")
+    capability_blockers = _capability_blockers(capability_resolution)
+    if capability_blockers:
+        lines.extend(["", "## capability ref blockers", ""])
+        lines.extend(f"- {item['input_ref']}: {item['status']} {item['code']}" for item in capability_blockers)
     return "\n".join(lines) + "\n"
 
 
@@ -814,6 +1168,7 @@ def _print_cr_help() -> None:
         "  summary    Generate process/changes/summaries/<CR>.summary.json.\n"
         "  brief      Print a goal-oriented CR brief from summary/frontmatter.\n"
         "  goal-brief Print all CRs attached to one goal_ref.\n"
+        "  impact-report Print a side-effect-free impact surface migration report as JSON.\n"
         "  close      Close a CR logically: summary + evidence index + ledger event.\n"
         "  check      Validate CR ledger, index, summaries, and active state refs.\n"
         "  conflicts  Compare active/proposed/blocked CR conflict keys from CR-INDEX.json.\n\n"
@@ -822,7 +1177,9 @@ def _print_cr_help() -> None:
         "  meta-flow cr index --project-root .\n"
         "  meta-flow cr summary --id CR-101 --project-root .\n"
         "  meta-flow cr brief --id CR-101 --project-root .\n"
+        "  meta-flow cr brief --id CR-101 --mode enforce --project-root .\n"
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
+        "  meta-flow cr impact-report --project-root .\n"
         "  meta-flow cr close --id CR-101 --readiness READY_WITH_RISK --project-root .\n"
         "  meta-flow cr conflicts --id CR-102 --project-root .\n"
     )
@@ -842,6 +1199,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gate-status", default="cp2_pending")
     parser.add_argument("--readiness", default="READY")
     parser.add_argument("--goal-ref", default="")
+    parser.add_argument("--mode", choices=["audit", "enforce"], default=None)
+    parser.add_argument("--output", type=Path, default=None)
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
@@ -878,12 +1237,21 @@ def main(argv: list[str] | None = None) -> int:
     if command == "brief":
         if not parsed.cr_id:
             raise SystemExit("--id is required")
-        print(render_cr_brief(project_root, parsed.cr_id), end="")
+        print(render_cr_brief(project_root, parsed.cr_id, mode=parsed.mode or "audit"), end="")
         return 0
     if command == "goal-brief":
         if not parsed.goal_ref:
             raise SystemExit("--goal-ref is required")
         print(render_goal_brief(project_root, parsed.goal_ref), end="")
+        return 0
+    if command == "impact-report":
+        report = build_impact_report(project_root, mode=parsed.mode or "enforce")
+        rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        if parsed.output:
+            path = write_impact_report(parsed.output, report)
+            print(f"wrote: {path}")
+        else:
+            print(rendered, end="")
         return 0
     if command == "close":
         if not parsed.cr_id:
@@ -909,7 +1277,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- CONFLICT: {conflict}")
         return 1 if conflicts else 0
     raise SystemExit(
-        f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, close, check, conflicts"
+        f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, close, check, conflicts"
     )
 
 
