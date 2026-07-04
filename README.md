@@ -40,7 +40,7 @@
 - `process/` 承载运行过程文档：状态、计划、Story 执行态、讨论日志、handoff、CR、自动检查结果。
 - `process/` 是运行态入口；迁移到外置过程仓库后，它应是指向 `<artifact-root>/process/<project-name>/` 的软链接。
 - `process/context/` 承载阶段上下文胶囊 / context pack：下游 Agent、人工门禁、验证和发布准备默认先读 context pack，只读取 `allowed_reads`；只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档，并记录允许枚举内的全文读取理由。
-- Agent / Skill 共享瘦身契约写在 `delivery/rules/AGENT-SKILL-CONTRACT.md`。功能 Agent 必须先读阶段 context pack 或 Story packet，默认机器状态入口是 `process/state/STATE.current.json`；`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 CR、全量 Story LLD、完整 TEST-REPORT / REVIEW / diff 属于 `do_not_read_by_default`。Handoff 只传 `context_ref` / `story_packet_ref` / `evidence_ref` / `result_ref`，真实执行证据写入 ledger。
+- Agent / Skill 共享瘦身契约写在 `delivery/rules/AGENT-SKILL-CONTRACT.md`，目录与分区契约写在 `delivery/rules/DIRECTORY-CONTRACT.md` / `.yaml`。功能 Agent 必须先读阶段 context pack 或 Story packet，默认机器状态入口是 `process/state/STATE.current.json`，默认文件系统发现入口是 `process/current/CURRENT.json`；`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 CR、全量 Story LLD、`process/archive/**`、完整 TEST-REPORT / REVIEW / diff 属于 `do_not_read_by_default`。Handoff 只传 `context_ref` / `story_packet_ref` / `evidence_ref` / `result_ref`，真实执行证据写入 ledger。
 - `process/checkpoints/` 承载人工确认态：CP2 / CP3 / CP5 / CP8 Decision Brief、checklist 和人工审查结果。
 - 旧项目中的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等只作为 legacy fallback 读取；新生成默认写入 `docs/...` 和 `process/checkpoints/...`。
 

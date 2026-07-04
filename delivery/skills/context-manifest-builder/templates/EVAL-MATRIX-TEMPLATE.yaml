@@ -31,4 +31,4 @@ cases:
     eval_ref: meta-flow doctor workflow
     blocking_policy: advisory
     applies_to: [CP2, CP3, CP5, CP6, CP7, CP8]
-    evidence_refs: [process/context/*.context.json, process/context/READ-EXPANSION-LEDGER.ndjson, process/state/*-LEDGER.ndjson]
+    evidence_refs: [process/context/*.context.json, process/state/READ-EXPANSION-LEDGER.ndjson, process/state/*-LEDGER.ndjson]

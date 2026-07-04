@@ -1,0 +1,113 @@
+schema_version: 1
+contract_id: meta-flow-directory-contract-v1
+roots:
+  docs:
+    zone: warm
+    purpose: long-lived product, design, quality, and release documentation
+  process:
+    zone: hot-warm-cold
+    purpose: runtime state, context, checks, checkpoints, ledgers, CRs, Story work, evidence, handoffs, and archives
+  delivery:
+    zone: warm
+    purpose: installable Meta Flow agents, skills, rules, docs, and scripts
+  ".agents":
+    zone: warm
+    purpose: Meta Flow self-development source agents and skills
+process_groups:
+  state_and_routing:
+    zone: hot
+    directories:
+      - process/state
+      - process/current
+      - process/context
+      - process/handoffs
+  checks_and_gates:
+    zone: warm
+    directories:
+      - process/checks
+      - process/checkpoints
+      - process/discussions
+  changes_and_stories:
+    zone: warm
+    directories:
+      - process/changes
+      - process/stories
+      - process/returns
+      - process/evidence
+      - process/design-deltas
+  release_and_archive:
+    zone: cold
+    directories:
+      - process/release
+      - process/archive
+  policy_and_config:
+    zone: warm
+    directories:
+      - process/policies
+      - process/constraints
+      - process/registers
+  support:
+    zone: warm
+    directories:
+      - process/backups
+      - process/baseline
+      - process/plans
+      - process/reviews
+      - process/runbooks
+      - process/docs
+current_discovery:
+  directory: process/current
+  entry: process/current/CURRENT.json
+  generated_by:
+    - meta-flow state current-refresh
+    - meta-flow state render
+  states:
+    - idle
+    - active
+    - awaiting_gate
+    - blocked
+  health_values:
+    - ok
+    - stale_refs
+    - incomplete
+  refs:
+    state_ref: process/state/STATE.current.json
+    cr_index_ref: process/changes/CR-INDEX.json|process/changes/CR-INDEX.yaml
+    context_ref: process/context/*
+    checkpoint_ref: process/checkpoints/*
+    story_packet_ref: process/context/stories/*
+    release_context_ref: process/release/RELEASE-CONTEXT*
+    handoff_ref: process/handoffs/NEXT-SESSION-*.md
+  file_outputs:
+    - process/current/CURRENT.json
+    - process/current/*.ref
+    - process/current/* symlink if supported by the filesystem
+zone_read_rules:
+  hot:
+    default_read: true
+    examples:
+      - process/state/STATE.current.json
+      - process/current/CURRENT.json
+      - current context capsule or Story packet
+  warm:
+    default_read: context-listed-only
+    examples:
+      - process/checks/*.result.json
+      - process/checkpoints/CP*.md
+      - process/changes/summaries/*.summary.json
+      - process/evidence/*.index.json
+  cold:
+    default_read: deny-default
+    examples:
+      - process/archive/**
+      - historical discussion logs
+    expansion_required:
+      - full_doc_read_reason
+      - process/state/READ-EXPANSION-LEDGER.ndjson
+compatibility:
+  cr_index_format_priority:
+    - process/changes/CR-INDEX.json
+    - process/changes/CR-INDEX.yaml
+  legacy_fallbacks:
+    - process/STATE.md
+    - process/DEVELOPMENT-PLAN.yaml

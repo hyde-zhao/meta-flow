@@ -80,6 +80,8 @@ SOFTWARE_WORKFLOW_REQUIRED_FILES = (
 )
 AGENT_SKILL_CONTRACT_REQUIRED_FILES = (
     "delivery/rules/AGENT-SKILL-CONTRACT.md",
+    "delivery/rules/DIRECTORY-CONTRACT.md",
+    "delivery/rules/DIRECTORY-CONTRACT.yaml",
 )
 CONTEXT_BUDGETED_E2E_REQUIRED_FILES = (
     "evals/fixtures/context-budgeted-meta-flow/README.md",
@@ -431,9 +433,12 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "Handoff Contract",
         "Skill Contract",
         "process/state/STATE.current.json",
+        "process/current/CURRENT.json",
         "allowed_reads",
+        "must_read",
         "do_not_read_by_default",
         "full_doc_read_reason",
+        "process/archive/**",
         "capsule_missing",
         "field_conflict",
         "human_audit",
@@ -443,6 +448,24 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/returns/*.return.json",
         "process/evidence/*.index.json",
         "process/checks/*.result.json",
+    ),
+    "delivery/rules/DIRECTORY-CONTRACT.md": (
+        "Current Discovery",
+        "process/current/CURRENT.json",
+        "idle",
+        "handoff_ref",
+        "CR-INDEX.json",
+        "CR-INDEX.yaml",
+        "process/archive/**",
+        "READ-EXPANSION-LEDGER.ndjson",
+    ),
+    "delivery/rules/DIRECTORY-CONTRACT.yaml": (
+        "current_discovery",
+        "process/current/CURRENT.json",
+        "idle",
+        "handoff_ref",
+        "CR-INDEX.json|process/changes/CR-INDEX.yaml",
+        "zone_read_rules",
     ),
     "delivery/agents/meta-pm.md": (
         "Input Contract",
@@ -514,8 +537,11 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
     ),
     "delivery/skills/context-manifest-builder/templates/CONTEXT-CAPSULE-TEMPLATE.yaml": (
         "allowed_reads:",
+        "must_read:",
         "process/state/STATE.current.json",
+        "process/current/CURRENT.json",
         "process/STATE.md",
+        "process/archive/**",
         "do_not_read_by_default:",
     ),
     "delivery/skills/state-router/SKILL.md": (
@@ -552,31 +578,41 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
     "delivery/README.md": (
         "Agent / Skill Contract",
         "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "delivery/rules/DIRECTORY-CONTRACT.md",
         "process/state/STATE.current.json",
+        "process/current/CURRENT.json",
         "do_not_read_by_default",
     ),
     "README.md": (
         "Agent / Skill",
         "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "delivery/rules/DIRECTORY-CONTRACT.md",
         "process/state/STATE.current.json",
+        "process/current/CURRENT.json",
         "do_not_read_by_default",
     ),
     "AGENTS.md": (
         "Agent / Skill Contract Slimming",
         "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "delivery/rules/DIRECTORY-CONTRACT.md",
         "process/state/STATE.current.json",
+        "process/current/CURRENT.json",
         "allowed_reads",
     ),
     "delivery/rules/AGENTS.md": (
         "Agent / Skill Contract Slimming",
         "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "delivery/rules/DIRECTORY-CONTRACT.md",
         "process/state/STATE.current.json",
+        "process/current/CURRENT.json",
         "allowed_reads",
     ),
     "delivery/rules/CLAUDE.md": (
         "Agent / Skill Contract Slimming",
         "delivery/rules/AGENT-SKILL-CONTRACT.md",
+        "delivery/rules/DIRECTORY-CONTRACT.md",
         "process/state/STATE.current.json",
+        "process/current/CURRENT.json",
         "allowed_reads",
     ),
 }
@@ -1805,6 +1841,8 @@ def collect_context_capsule_protocol_errors() -> list[str]:
             "must_read:",
             "read_if_needed:",
             "do_not_read_by_default:",
+            "process/current/CURRENT.json",
+            "process/archive/**",
             "risks_and_decisions:",
             "read_expansion_log:",
         ):

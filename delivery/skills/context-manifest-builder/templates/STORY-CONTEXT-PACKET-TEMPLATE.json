@@ -15,7 +15,23 @@
     "process/STORY-STATUS.md",
     "process/changes/*.md",
     "process/stories/*-LLD.md",
-    "process/stories/*-IMPLEMENTATION.md"
+    "process/stories/*-IMPLEMENTATION.md",
+    "process/archive/**",
+    "process/discussions/**"
+  ],
+  "do_not_read_by_default": [
+    {
+      "path_or_pattern": "process/STATE.md",
+      "reason": "human summary / legacy fallback"
+    },
+    {
+      "path_or_pattern": "process/archive/**",
+      "reason": "cold historical archive"
+    },
+    {
+      "path_or_pattern": "process/discussions/**",
+      "reason": "audit / recovery only"
+    }
   ],
   "design_refs": {
     "feature_registry": "docs/design/FEATURE-REGISTRY.yaml",
@@ -51,6 +67,29 @@
     "read_policy": "process/policies/READ-POLICY.json"
   },
   "project_id": "<project-id>",
+  "must_read": [
+    {
+      "path": "process/state/STATE.current.json",
+      "mode": "full",
+      "estimated_tokens": 0,
+      "required": true,
+      "reason": "machine_state"
+    },
+    {
+      "path": "process/current/CURRENT.json",
+      "mode": "full",
+      "estimated_tokens": 0,
+      "required": true,
+      "reason": "current_entrypoint"
+    },
+    {
+      "path": "process/stories/<story>.md",
+      "mode": "full",
+      "estimated_tokens": 0,
+      "required": true,
+      "reason": "story_card"
+    }
+  ],
   "read_if_needed": [],
   "required_full_doc_read_log": "process/state/READ-EXPANSION-LEDGER.ndjson",
   "context_sufficiency": {

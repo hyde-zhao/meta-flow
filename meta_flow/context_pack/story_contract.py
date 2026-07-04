@@ -24,7 +24,7 @@ from meta_flow.design.module_boundaries import MODULE_BOUNDARIES_REL
 from meta_flow.design.product_governance import CAPABILITY_STATUS_REL, CONCEPT_OWNERS_REL, PACKAGE_IDENTITY_REL
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
-from meta_flow.state.current import STATE_CURRENT_REL, load_current_state
+from meta_flow.state.current import STATE_CURRENT_ENTRY_REL, STATE_CURRENT_REL, load_current_state, refresh_current_entry
 from meta_flow.workflow.cr_lifecycle import CR_SUMMARY_ROOT_REL
 
 
@@ -154,6 +154,20 @@ def _append_unique(entries: list[dict[str, Any]], entry: dict[str, Any]) -> None
     entries.append(entry)
 
 
+def _deny_default_entries(patterns: list[str]) -> list[dict[str, str]]:
+    reasons = {
+        "process/STATE.md": "human summary / legacy fallback，不作为 agent 默认机器入口",
+        "process/DEVELOPMENT-PLAN.yaml": "计划长文由 Story packet / context 摘要承载",
+        "process/STORY-STATUS.md": "legacy status 汇总，不作为当前 Story 真相源",
+        "process/changes/*.md": "默认读取 CR summary / CR ledger，完整 CR 只用于审计或冲突恢复",
+        "process/stories/*-LLD.md": "默认读取 Story packet / design summary，完整 LLD 按需展开",
+        "process/stories/*-IMPLEMENTATION.md": "实现长证据默认通过 return/evidence index 消费",
+        "process/archive/**": "历史归档属于冷区，默认禁止读取",
+        "process/discussions/**": "讨论日志只用于审计 / 恢复，不替代正式产物",
+    }
+    return [{"path_or_pattern": pattern, "reason": reasons.get(pattern, "deny-default full document read")} for pattern in patterns]
+
+
 def _story_id_from_path(path: Path, data: dict[str, Any]) -> str:
     return str(data.get("story_id") or data.get("id") or path.stem)
 
@@ -227,16 +241,24 @@ def build_story_packet(
         write_default_read_policy(project_root)
     read_policy = load_read_policy(project_root)
     state = load_current_state(project_root)
+    if state:
+        refresh_current_entry(project_root)
     story = story_data_from_file(story_path)
     story_id = str(story["story_id"])
     effective_cr_id = cr_id or str(story.get("cr_id") or "")
     story_rel = _rel(project_root, story_path)
     allowed_reads: list[dict[str, Any]] = []
+    must_read: list[dict[str, Any]] = []
     read_if_needed: list[dict[str, Any]] = []
 
     _append_unique(allowed_reads, _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="runtime_state"))
+    _append_unique(allowed_reads, _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_discovery_entry"))
     _append_unique(allowed_reads, _read_entry(project_root, story_rel, required=True, reason="story_card"))
     _append_unique(allowed_reads, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
+    _append_unique(must_read, _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="machine_state"))
+    _append_unique(must_read, _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_entrypoint"))
+    _append_unique(must_read, _read_entry(project_root, story_rel, required=True, reason="story_card"))
+    _append_unique(must_read, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
     if effective_cr_id:
         cr_summary = (CR_SUMMARY_ROOT_REL / f"{effective_cr_id}.summary.json").as_posix()
         _append_unique(allowed_reads, _read_entry(project_root, cr_summary, required=True, reason="cr_summary"))
@@ -305,8 +327,12 @@ def build_story_packet(
         "dependency_inputs": _as_list(story.get("dependency_inputs") or story.get("blocking_dependencies")),
         "lld_policy": lld_policy or None,
         "risk_profile": str(story.get("risk_profile") or ""),
+        "must_read": must_read,
         "allowed_reads": allowed_reads,
         "read_if_needed": read_if_needed,
+        "do_not_read_by_default": _deny_default_entries(
+            list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS)
+        ),
         "denied_default_reads": list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS),
         "allowed_write_paths": _as_list(story.get("allowed_write_paths") or story.get("allowed_paths")),
         "forbidden_write_paths": _as_list(story.get("forbidden_write_paths") or story.get("forbidden_paths")),
@@ -360,7 +386,16 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
         errors.append(f"invalid packet_type: {packet.get('packet_type')}")
     if packet.get("stage") not in ALLOWED_STAGES:
         errors.append(f"invalid stage: {packet.get('stage')}")
-    for key in ("story_id", "story_ref", "feature_refs", "feature_design_refs", "allowed_reads", "denied_default_reads"):
+    for key in (
+        "story_id",
+        "story_ref",
+        "feature_refs",
+        "feature_design_refs",
+        "must_read",
+        "allowed_reads",
+        "do_not_read_by_default",
+        "denied_default_reads",
+    ):
         if key not in packet:
             errors.append(f"missing required field: {key}")
     budget = packet.get("budget") or {}
@@ -371,11 +406,23 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
     if estimated_tokens > max_tokens:
         errors.append(f"estimated_tokens exceeds budget: {estimated_tokens} > {max_tokens}")
     denied = list(packet.get("denied_default_reads") or DEFAULT_READ_DENY_PATTERNS)
+    must_read = packet.get("must_read") or []
+    if not isinstance(must_read, list) or not must_read:
+        errors.append("must_read must be a non-empty list")
+        must_read = []
+    do_not_read_by_default = packet.get("do_not_read_by_default") or []
+    if not isinstance(do_not_read_by_default, list) or not do_not_read_by_default:
+        errors.append("do_not_read_by_default must be a non-empty list")
+    do_not_patterns = [
+        str(entry.get("path_or_pattern") or entry.get("path") or "")
+        for entry in do_not_read_by_default
+        if isinstance(entry, dict)
+    ]
     allowed_reads = packet.get("allowed_reads") or []
     if not isinstance(allowed_reads, list) or not allowed_reads:
         errors.append("allowed_reads must be a non-empty list")
         allowed_reads = []
-    for entry in allowed_reads:
+    for entry in [*must_read, *allowed_reads, *(packet.get("read_if_needed") or [])]:
         if not isinstance(entry, dict):
             errors.append("allowed_reads entries must be objects")
             continue
@@ -387,6 +434,8 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
             errors.append(f"allowed_reads contains deny-default path: {rel_path}")
         if entry.get("required") is True and not (root / rel_path).is_file():
             errors.append(f"required allowed_read missing on disk: {rel_path}")
+    if "process/archive/**" not in denied and "process/archive/**" not in do_not_patterns:
+        errors.append("do_not_read_by_default must include process/archive/**")
     if packet.get("stage") in {"CP6", "CP7"} and not packet.get("parent_context_ref"):
         errors.append("parent_context_ref is required for CP6/CP7 story packets")
     if packet.get("stage") == "CP6" and not packet.get("expected_return_packet"):

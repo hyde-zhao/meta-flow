@@ -72,10 +72,17 @@ class ContextPackTests(unittest.TestCase):
             self.assertTrue((root / "process" / "policies" / "READ-POLICY.json").is_file())
             context = json.loads(output.read_text(encoding="utf-8"))
             allowed = {entry["path"] for entry in context["allowed_reads"]}
+            must = {entry["path"] for entry in context["must_read"]}
+            do_not = {entry["path_or_pattern"] for entry in context["do_not_read_by_default"]}
             self.assertIn("process/state/STATE.current.json", allowed)
+            self.assertIn("process/current/CURRENT.json", allowed)
+            self.assertIn("process/state/STATE.current.json", must)
+            self.assertIn("process/current/CURRENT.json", must)
             self.assertIn("process/changes/summaries/CR-101.summary.json", allowed)
             self.assertIn("process/policies/READ-POLICY.json", allowed)
             self.assertIn("process/STATE.md", context["denied_default_reads"])
+            self.assertIn("process/archive/**", context["denied_default_reads"])
+            self.assertIn("process/archive/**", do_not)
 
     def test_check_passes_for_valid_generated_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -158,6 +165,27 @@ class ContextPackTests(unittest.TestCase):
 
             self.assertIn("required allowed_read missing on disk: process/changes/summaries/CR-404.summary.json", errors)
             self.assertIn("cr_summary_ref missing on disk: process/changes/summaries/CR-404.summary.json", errors)
+
+    def test_check_rejects_empty_zone_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_minimal_state(root)
+            write_cr_summary(root, "CR-101")
+            context, output = builder.build_context_pack(
+                root,
+                stage="CP6",
+                profile="standard-code",
+                cr_id="CR-101",
+                budget=16000,
+            )
+            context["must_read"] = []
+            context["do_not_read_by_default"] = []
+            output.write_text(json.dumps(context, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            errors, _warnings = builder.validate_context_pack(output, project_root=root)
+
+            self.assertIn("must_read must be a non-empty list", errors)
+            self.assertIn("do_not_read_by_default must be a non-empty list", errors)
 
 
 if __name__ == "__main__":

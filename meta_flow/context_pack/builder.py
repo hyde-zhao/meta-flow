@@ -21,7 +21,7 @@ from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
 from meta_flow.design.feature_registry import FEATURE_DESIGN_MATRIX_REL, FEATURE_REGISTRY_REL
 from meta_flow.design.module_boundaries import MODULE_BOUNDARIES_REL
 from meta_flow.design.product_governance import CAPABILITY_STATUS_REL, CONCEPT_OWNERS_REL, PACKAGE_IDENTITY_REL
-from meta_flow.state.current import STATE_CURRENT_REL, load_current_state
+from meta_flow.state.current import STATE_CURRENT_ENTRY_REL, STATE_CURRENT_REL, load_current_state, refresh_current_entry
 from meta_flow.workflow.cr_lifecycle import CR_INDEX_REL, CR_SUMMARY_ROOT_REL
 
 
@@ -97,7 +97,9 @@ def default_read_policy() -> dict[str, Any]:
             "process/changes/summaries/*.summary.json",
             "process/stories/summaries/*.summary.json",
             "process/state/STATE.current.json",
+            "process/current/CURRENT.json",
             "process/changes/CR-INDEX.json",
+            "process/changes/CR-INDEX.yaml",
             "process/policies/AUTHZ-POLICY.json",
             "process/policies/GATE-PROFILES.json",
             "docs/design/FEATURE-REGISTRY.yaml",
@@ -114,6 +116,7 @@ def default_read_policy() -> dict[str, Any]:
             "agent 默认只读取 allowed_reads",
             "全文读取必须记录 full_doc_read_reason，且原因必须属于允许枚举",
             "普通 artifact 只能引用 authz policy ID，不复制 policy 全文",
+            "process/current/CURRENT.json 是文件系统发现层；状态真相仍以 STATE.current.json 为准",
         ],
     }
 
@@ -170,6 +173,20 @@ def _append_unique(entries: list[ReadEntry], entry: ReadEntry) -> None:
     entries.append(entry)
 
 
+def _deny_default_entries(patterns: list[str]) -> list[dict[str, str]]:
+    reasons = {
+        "process/STATE.md": "human summary / legacy fallback，不作为 agent 默认机器入口",
+        "process/DEVELOPMENT-PLAN.yaml": "计划长文由 Story packet / context 摘要承载",
+        "process/STORY-STATUS.md": "legacy status 汇总，不作为当前 Story 真相源",
+        "process/changes/*.md": "默认读取 CR summary / CR ledger，完整 CR 只用于审计或冲突恢复",
+        "process/stories/*-LLD.md": "默认读取 Story packet / design summary，完整 LLD 按需展开",
+        "process/stories/*-IMPLEMENTATION.md": "实现长证据默认通过 return/evidence index 消费",
+        "process/archive/**": "历史归档属于冷区，默认禁止读取",
+        "process/discussions/**": "讨论日志只用于审计 / 恢复，不替代正式产物",
+    }
+    return [{"path_or_pattern": pattern, "reason": reasons.get(pattern, "deny-default full document read")} for pattern in patterns]
+
+
 def _stage_budget(project_root: Path, stage: str, explicit_budget: int | None) -> int:
     if explicit_budget is not None:
         return explicit_budget
@@ -205,12 +222,25 @@ def build_context_pack(
         write_default_read_policy(project_root)
     read_policy = load_read_policy(project_root)
     state = load_current_state(project_root)
+    if state:
+        refresh_current_entry(project_root)
     project_id = str(state.get("project_id") or project_root.name)
     allowed_reads: list[ReadEntry] = []
+    must_read: list[ReadEntry] = []
+    read_if_needed: list[ReadEntry] = []
 
     _append_unique(
         allowed_reads,
         _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="lightweight_runtime_state"),
+    )
+    _append_unique(
+        allowed_reads,
+        _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_discovery_entry"),
+    )
+    _append_unique(must_read, _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="machine_state"))
+    _append_unique(
+        must_read,
+        _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_entrypoint"),
     )
     _append_unique(allowed_reads, _read_entry(project_root, CR_INDEX_REL.as_posix(), required=False, reason="cr_index"))
     if cr_id:
@@ -221,8 +251,9 @@ def build_context_pack(
         _append_unique(allowed_reads, _read_entry(project_root, story_summary_rel, required=False, reason="story_summary"))
     for rel_path in DEFAULT_STAGE_READS.get(stage, ()):
         if (project_root / rel_path).is_file():
-            _append_unique(allowed_reads, _read_entry(project_root, rel_path, required=False, reason=f"{stage.lower()}_stage_source"))
+            _append_unique(read_if_needed, _read_entry(project_root, rel_path, required=False, reason=f"{stage.lower()}_stage_source"))
     _append_unique(allowed_reads, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
+    _append_unique(must_read, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
     if (project_root / ARTIFACT_BUDGETS_REL).is_file():
         _append_unique(
             allowed_reads,
@@ -263,6 +294,7 @@ def build_context_pack(
 
     estimated_tokens = sum(entry.estimated_tokens for entry in allowed_reads)
     max_tokens = _stage_budget(project_root, stage, budget)
+    denied_default_reads = list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS)
     context = {
         "schema_version": 1,
         "project_id": project_id,
@@ -294,8 +326,11 @@ def build_context_pack(
             "package_identity": PACKAGE_IDENTITY_REL.as_posix(),
         },
         "read_policy_ref": READ_POLICY_REL.as_posix(),
+        "must_read": [entry.as_dict() for entry in must_read],
         "allowed_reads": [entry.as_dict() for entry in allowed_reads],
-        "denied_default_reads": list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS),
+        "read_if_needed": [entry.as_dict() for entry in read_if_needed],
+        "do_not_read_by_default": _deny_default_entries(denied_default_reads),
+        "denied_default_reads": denied_default_reads,
         "full_doc_read_allowed_when": list(read_policy.get("full_doc_read_allowed_when") or DEFAULT_FULL_DOC_READ_REASONS),
         "required_full_doc_read_log": str(read_policy.get("required_full_doc_read_log") or READ_EXPANSION_LEDGER_REL.as_posix()),
     }
@@ -339,7 +374,18 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
 
     if context.get("schema_version") != 1:
         errors.append("schema_version must be 1")
-    for key in ("project_id", "stage", "profile", "budget", "read_policy_ref", "allowed_reads", "denied_default_reads"):
+    for key in (
+        "project_id",
+        "stage",
+        "profile",
+        "budget",
+        "read_policy_ref",
+        "must_read",
+        "allowed_reads",
+        "read_if_needed",
+        "do_not_read_by_default",
+        "denied_default_reads",
+    ):
         if key not in context:
             errors.append(f"missing required field: {key}")
 
@@ -353,21 +399,42 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
 
     denied_patterns = list(context.get("denied_default_reads") or DEFAULT_READ_DENY_PATTERNS)
     allowed_reads = context.get("allowed_reads") or []
+    must_read = context.get("must_read") or []
+    read_if_needed = context.get("read_if_needed") or []
+    do_not_read_by_default = context.get("do_not_read_by_default") or []
+    if not isinstance(must_read, list) or not must_read:
+        errors.append("must_read must be a non-empty list")
+        must_read = []
+    if not isinstance(read_if_needed, list):
+        errors.append("read_if_needed must be a list")
+        read_if_needed = []
+    if not isinstance(do_not_read_by_default, list) or not do_not_read_by_default:
+        errors.append("do_not_read_by_default must be a non-empty list")
+        do_not_read_by_default = []
+    do_not_patterns = [
+        str(entry.get("path_or_pattern") or entry.get("path") or "")
+        for entry in do_not_read_by_default
+        if isinstance(entry, dict)
+    ]
     if not isinstance(allowed_reads, list) or not allowed_reads:
         errors.append("allowed_reads must be a non-empty list")
         allowed_reads = []
-    for entry in allowed_reads:
+    for entry in [*must_read, *allowed_reads, *read_if_needed]:
         if not isinstance(entry, dict):
-            errors.append("allowed_reads entries must be objects")
+            errors.append("read entries must be objects")
             continue
         rel_path = str(entry.get("path") or "")
         if not rel_path:
-            errors.append("allowed_reads entry missing path")
+            errors.append("read entry missing path")
             continue
         if _matches_any(rel_path, denied_patterns):
             errors.append(f"allowed_reads contains deny-default path: {rel_path}")
+        if entry in read_if_needed and _matches_any(rel_path, denied_patterns):
+            errors.append(f"read_if_needed contains deny-default path without read expansion log policy: {rel_path}")
         if entry.get("required") is True and not (root / rel_path).is_file():
             errors.append(f"required allowed_read missing on disk: {rel_path}")
+    if "process/archive/**" not in denied_patterns and "process/archive/**" not in do_not_patterns:
+        errors.append("do_not_read_by_default must include process/archive/**")
 
     if not context.get("state_ref"):
         errors.append("state_ref missing")
@@ -402,6 +469,8 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
         warnings.append("denied_default_reads does not include process/STATE.md")
     if "process/DEVELOPMENT-PLAN.yaml" not in denied_patterns:
         warnings.append("denied_default_reads does not include process/DEVELOPMENT-PLAN.yaml")
+    if "process/current/CURRENT.json" not in [str(entry.get("path") or "") for entry in must_read if isinstance(entry, dict)]:
+        warnings.append("must_read does not include process/current/CURRENT.json")
     return errors, warnings
 
 

@@ -22,10 +22,16 @@ allowed_reads:
   - path: "process/state/STATE.current.json"
     reason: "轻量运行态、当前阶段、活跃变更和下一步"
     required: true
+  - path: "process/current/CURRENT.json"
+    reason: "文件系统级当前入口发现层，含 idle / active / gate 状态和 handoff 指针"
+    required: true
 
 must_read:
   - path: "process/state/STATE.current.json"
     reason: "轻量运行态、当前阶段、门禁和上下文预算"
+    required: true
+  - path: "process/current/CURRENT.json"
+    reason: "当前 context / checkpoint / story / release / handoff 指针"
     required: true
 
 read_if_needed:

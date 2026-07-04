@@ -44,6 +44,8 @@ DEFAULT_READ_DENY_PATTERNS = (
     "process/changes/*.md",
     "process/stories/*-LLD.md",
     "process/stories/*-IMPLEMENTATION.md",
+    "process/archive/**",
+    "process/discussions/**",
 )
 
 DEFAULT_SCAN_ROOTS = ("process", "docs", "delivery", "meta_flow", "tests")

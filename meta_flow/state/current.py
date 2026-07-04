@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,10 +18,14 @@ from meta_flow.checks.token_budget import DEFAULT_BUDGETS, format_bytes, load_bu
 
 STATE_SCHEMA_VERSION = 2
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
+STATE_CURRENT_DIR_REL = Path("process/current")
+STATE_CURRENT_ENTRY_REL = STATE_CURRENT_DIR_REL / "CURRENT.json"
 STATE_MD_REL = Path("process/STATE.md")
 STATE_HISTORY_REL = Path("process/state/HISTORY.md")
 STATE_ARCHIVE_ROOT_REL = Path("process/archive/state")
 ROUTING_REL = Path("process/.meta-flow-process.yaml")
+CR_INDEX_JSON_REL = Path("process/changes/CR-INDEX.json")
+CR_INDEX_YAML_REL = Path("process/changes/CR-INDEX.yaml")
 BASE_LEDGER_RELS = (
     Path("process/state/CR-LEDGER.ndjson"),
     Path("process/state/STORY-LEDGER.ndjson"),
@@ -60,6 +65,7 @@ CURRENT_OPTIONAL_KEYS = {
     "artifact_routing_ref",
     "authz_policy_refs",
     "delivery_routing_ref",
+    "next_session_handoff_ref",
     "open_risks",
     "release_context_ref",
     "source_refs",
@@ -78,7 +84,7 @@ SECRET_LIKE_KEY_PARTS = (
     "private-key",
 )
 CURRENT_FIELD_BUDGETS = {
-    "next_action": {"kind": "object", "max_text_bytes": 512, "max_json_bytes": 768},
+    "next_action": {"kind": "object", "max_text_bytes": 160, "max_json_bytes": 384},
     "source_refs": {"kind": "list", "max_items": 24, "max_item_json_bytes": 256, "max_json_bytes": 4096},
     "open_risks": {"kind": "list", "max_items": 16, "max_item_json_bytes": 256, "max_json_bytes": 2048},
     "authz_policy_refs": {"kind": "list[str]", "max_items": 16, "max_item_json_bytes": 128, "max_json_bytes": 1024},
@@ -88,6 +94,7 @@ CURRENT_FIELD_BUDGETS = {
     "active_question_batch_ref": {"kind": "scalar", "max_bytes": 256},
     "artifact_routing_ref": {"kind": "scalar", "max_bytes": 256},
     "delivery_routing_ref": {"kind": "scalar", "max_bytes": 256},
+    "next_session_handoff_ref": {"kind": "scalar", "max_bytes": 256},
     "pending_checklist_path": {"kind": "scalar", "max_bytes": 256},
     "project_state_ref": {"kind": "scalar", "max_bytes": 256},
     "release_context_ref": {"kind": "scalar", "max_bytes": 256},
@@ -281,11 +288,11 @@ def _latest_text(value: Any) -> str:
     if isinstance(value, dict):
         for key in ("text", "summary", "next_action", "action", "title"):
             if value.get(key):
-                return _compact_scalar(value[key], max_bytes=512)
+                return _compact_scalar(value[key], max_bytes=160)
     if isinstance(value, list) and value:
         return _latest_text(value[-1])
     if value:
-        return _compact_scalar(value, max_bytes=512)
+        return _compact_scalar(value, max_bytes=160)
     return ""
 
 
@@ -495,6 +502,10 @@ def current_state_path(project_root: Path) -> Path:
     return project_root / STATE_CURRENT_REL
 
 
+def current_entry_path(project_root: Path) -> Path:
+    return project_root / STATE_CURRENT_ENTRY_REL
+
+
 def state_md_path(project_root: Path) -> Path:
     return project_root / STATE_MD_REL
 
@@ -515,6 +526,7 @@ def default_current_state(project_root: Path, *, project_id: str | None = None) 
         },
         "routing_ref": ROUTING_REL.as_posix(),
         "active_context_ref": None,
+        "next_session_handoff_ref": None,
         "authz_policy_refs": [],
         "open_risks": [],
         "updated_at": now_utc(),
@@ -568,6 +580,7 @@ def migrate_legacy_state(project_root: Path) -> dict[str, Any]:
         },
         "routing_ref": ROUTING_REL.as_posix(),
         "active_context_ref": _scalar_value(frontmatter, "active_context_ref") or None,
+        "next_session_handoff_ref": _scalar_value(frontmatter, "next_session_handoff_ref") or None,
         "authz_policy_refs": [],
         "open_risks": [],
         "updated_at": now_utc(),
@@ -604,6 +617,217 @@ def _write_current_state_file(path: Path, state: dict[str, Any]) -> None:
 
 def load_current_state(project_root: Path) -> dict[str, Any]:
     return _read_json(current_state_path(project_root.resolve()))
+
+
+def _existing_rel(project_root: Path, rel_path: Path) -> str | None:
+    path = project_root / rel_path
+    return rel_path.as_posix() if path.is_file() else None
+
+
+def _available_cr_index_refs(project_root: Path) -> list[str]:
+    refs: list[str] = []
+    for rel_path in (CR_INDEX_JSON_REL, CR_INDEX_YAML_REL):
+        existing = _existing_rel(project_root, rel_path)
+        if existing:
+            refs.append(existing)
+    return refs
+
+
+def _latest_matching_ref(project_root: Path, pattern: str) -> str | None:
+    candidates = [path for path in project_root.glob(pattern) if path.is_file()]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda path: (path.stat().st_mtime, path.as_posix()))
+    return candidates[-1].relative_to(project_root).as_posix()
+
+
+def _state_status(state: dict[str, Any]) -> str:
+    if bool(state.get("blocked", False)):
+        return "blocked"
+    if state.get("pending_gate") or state.get("pending_checklist_path"):
+        return "awaiting_gate"
+    if state.get("active_change") or state.get("active_story"):
+        return "active"
+    return "idle"
+
+
+def _is_existing_ref(project_root: Path, rel_path: str) -> bool:
+    if not rel_path:
+        return False
+    path = Path(rel_path)
+    if path.is_absolute() or ".." in path.parts:
+        return False
+    return (project_root / path).is_file()
+
+
+def _record_stale_ref(stale_refs: list[dict[str, str]], field: str, rel_path: str, *, reason: str = "missing") -> None:
+    if rel_path:
+        stale_refs.append({"field": field, "path": rel_path, "reason": reason})
+
+
+def _choose_release_ref(project_root: Path, state: dict[str, Any], status: str, stale_refs: list[dict[str, str]]) -> str | None:
+    release_ref = str(state.get("release_context_ref") or "")
+    active_context_ref = str(state.get("active_context_ref") or "")
+    if not release_ref and status == "idle" and "RELEASE-CONTEXT" in active_context_ref:
+        release_ref = active_context_ref
+    if release_ref:
+        if not _is_existing_ref(project_root, release_ref):
+            _record_stale_ref(stale_refs, "release_context_ref", release_ref)
+        return release_ref
+    return (
+        _latest_matching_ref(project_root, "process/release/RELEASE-CONTEXT*.yaml")
+        or _latest_matching_ref(project_root, "process/release/RELEASE-CONTEXT*.yml")
+        or _latest_matching_ref(project_root, "process/release/RELEASE-CONTEXT*.json")
+    )
+
+
+def _choose_handoff_ref(project_root: Path, state: dict[str, Any], stale_refs: list[dict[str, str]]) -> str | None:
+    handoff_ref = str(state.get("next_session_handoff_ref") or "")
+    if handoff_ref:
+        if not _is_existing_ref(project_root, handoff_ref):
+            _record_stale_ref(stale_refs, "next_session_handoff_ref", handoff_ref)
+        return handoff_ref
+    return _latest_matching_ref(project_root, "process/handoffs/NEXT-SESSION-*.md") or _latest_matching_ref(
+        project_root,
+        "process/handoffs/*.md",
+    )
+
+
+def _choose_story_packet_ref(project_root: Path, state: dict[str, Any]) -> str | None:
+    explicit = str(state.get("active_story_packet_ref") or "")
+    if explicit:
+        return explicit
+    active_story = str(state.get("active_story") or "")
+    if not active_story:
+        return None
+    escaped = active_story.replace("/", "")
+    return (
+        _latest_matching_ref(project_root, f"process/context/stories/*{escaped}*.work-packet.json")
+        or _latest_matching_ref(project_root, f"process/context/stories/*{escaped}*.verify-packet.json")
+        or _latest_matching_ref(project_root, f"process/context/stories/*{escaped}*.context.json")
+    )
+
+
+def _choose_checkpoint_ref(project_root: Path, state: dict[str, Any], stale_refs: list[dict[str, str]]) -> str | None:
+    checkpoint_ref = str(state.get("pending_checklist_path") or "")
+    if checkpoint_ref and not _is_existing_ref(project_root, checkpoint_ref):
+        _record_stale_ref(stale_refs, "pending_checklist_path", checkpoint_ref)
+    return checkpoint_ref or None
+
+
+def _choose_context_ref(project_root: Path, state: dict[str, Any], status: str, stale_refs: list[dict[str, str]]) -> str | None:
+    if status == "idle":
+        return None
+    context_ref = str(state.get("active_context_ref") or "")
+    if context_ref and not _is_existing_ref(project_root, context_ref):
+        _record_stale_ref(stale_refs, "active_context_ref", context_ref)
+    return context_ref or None
+
+
+def _change_ref(project_root: Path, active_change: str, stale_refs: list[dict[str, str]]) -> str | None:
+    if not active_change:
+        return None
+    rel_path = f"process/changes/{active_change}.md"
+    if not _is_existing_ref(project_root, rel_path):
+        _record_stale_ref(stale_refs, "active_change", rel_path)
+    return rel_path
+
+
+def build_current_entry(project_root: Path) -> dict[str, Any]:
+    project_root = project_root.resolve()
+    state = load_current_state(project_root)
+    if not state:
+        raise FileNotFoundError(f"STATE.current.json missing: {current_state_path(project_root)}")
+    status = _state_status(state)
+    stale_refs: list[dict[str, str]] = []
+    active_change = state.get("active_change") or None
+    active_story = state.get("active_story") or None
+    pending_gate = state.get("pending_gate") or None
+    available_index_refs = _available_cr_index_refs(project_root)
+    context_ref = _choose_context_ref(project_root, state, status, stale_refs)
+    checkpoint_ref = _choose_checkpoint_ref(project_root, state, stale_refs)
+    story_packet_ref = _choose_story_packet_ref(project_root, state)
+    if story_packet_ref and not _is_existing_ref(project_root, story_packet_ref):
+        _record_stale_ref(stale_refs, "story_packet_ref", story_packet_ref)
+    release_context_ref = _choose_release_ref(project_root, state, status, stale_refs)
+    handoff_ref = _choose_handoff_ref(project_root, state, stale_refs)
+    change_ref = _change_ref(project_root, str(active_change or ""), stale_refs)
+    health = "ok"
+    if not available_index_refs and active_change:
+        health = "incomplete"
+    if stale_refs:
+        health = "stale_refs"
+    return {
+        "schema_version": 1,
+        "status": status,
+        "health": health,
+        "active_change": active_change,
+        "active_story": active_story,
+        "pending_gate": pending_gate,
+        "state_ref": STATE_CURRENT_REL.as_posix(),
+        "cr_index_ref": available_index_refs[0] if available_index_refs else None,
+        "available_index_refs": available_index_refs,
+        "change_ref": change_ref,
+        "context_ref": context_ref,
+        "checkpoint_ref": checkpoint_ref,
+        "story_packet_ref": story_packet_ref,
+        "release_context_ref": release_context_ref,
+        "handoff_ref": handoff_ref,
+        "routing_ref": state.get("routing_ref") or ROUTING_REL.as_posix(),
+        "updated_at": now_utc(),
+        "stale_refs": stale_refs,
+    }
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{_archive_timestamp()}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _clear_pointer(current_dir: Path, name: str) -> None:
+    for path in (current_dir / f"{name}.ref", current_dir / name):
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+        except OSError:
+            pass
+
+
+def _write_pointer(current_dir: Path, project_root: Path, name: str, rel_ref: str | None) -> None:
+    if not rel_ref:
+        _clear_pointer(current_dir, name)
+        return
+    ref_path = current_dir / f"{name}.ref"
+    ref_path.write_text(rel_ref + "\n", encoding="utf-8")
+    link_path = current_dir / name
+    try:
+        if link_path.is_symlink() or link_path.is_file():
+            link_path.unlink()
+        if (project_root / rel_ref).exists():
+            relative_target = os.path.relpath(project_root / rel_ref, start=current_dir)
+            link_path.symlink_to(relative_target)
+    except OSError:
+        pass
+
+
+def refresh_current_entry(project_root: Path) -> Path:
+    project_root = project_root.resolve()
+    entry = build_current_entry(project_root)
+    current_dir = project_root / STATE_CURRENT_DIR_REL
+    current_dir.mkdir(parents=True, exist_ok=True)
+    path = project_root / STATE_CURRENT_ENTRY_REL
+    _write_json(path, entry)
+    _write_pointer(current_dir, project_root, "state", entry["state_ref"])
+    _write_pointer(current_dir, project_root, "cr-index", entry.get("cr_index_ref"))
+    _write_pointer(current_dir, project_root, "change", entry.get("change_ref"))
+    _write_pointer(current_dir, project_root, "context", entry.get("context_ref"))
+    _write_pointer(current_dir, project_root, "checkpoint", entry.get("checkpoint_ref"))
+    _write_pointer(current_dir, project_root, "story", entry.get("story_packet_ref"))
+    _write_pointer(current_dir, project_root, "release", entry.get("release_context_ref"))
+    _write_pointer(current_dir, project_root, "handoff", entry.get("handoff_ref"))
+    return path
 
 
 def update_current_state(
@@ -690,11 +914,26 @@ def _extract_active_context_ref(state: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_ref_field(state: dict[str, Any], *, existing_key: str, archive_key: str, timestamp: str) -> str:
+def _extract_ref_field(state: dict[str, Any], *, existing_key: str, archive_key: str) -> str:
     if state.get(existing_key):
         return _compact_scalar(state[existing_key])
-    if archive_key in state:
-        return _relative_archive_ref(timestamp, f"{archive_key}.json")
+    archived_value = state.get(archive_key)
+    if isinstance(archived_value, dict):
+        candidate_keys = (
+            existing_key,
+            f"{archive_key}_ref",
+            f"active_{archive_key}_ref",
+            "ref",
+            "path",
+            "context_ref",
+            "release_context_ref",
+            "active_release_context_ref",
+            "summary_ref",
+            "report_ref",
+        )
+        for key in candidate_keys:
+            if archived_value.get(key):
+                return _compact_scalar(archived_value[key])
     return ""
 
 
@@ -734,6 +973,9 @@ def _slim_state_payload(state: dict[str, Any], *, project_root: Path, timestamp:
     base["next_action"] = _slim_next_action(state)
     base["routing_ref"] = _compact_scalar(state.get("routing_ref") or ROUTING_REL.as_posix())
     base["active_context_ref"] = _extract_active_context_ref(state) or None
+    base["next_session_handoff_ref"] = (
+        _compact_scalar(state["next_session_handoff_ref"]) if state.get("next_session_handoff_ref") else None
+    )
     base["authz_policy_refs"] = _bounded_list(state.get("authz_policy_refs"), max_items=16)
     base["open_risks"] = _bounded_list(state.get("open_risks"), max_items=16, active_only=True)
     base["source_refs"] = _slim_source_refs(state, timestamp=timestamp)
@@ -749,7 +991,7 @@ def _slim_state_payload(state: dict[str, Any], *, project_root: Path, timestamp:
         "workflow_health_ref": "workflow_health",
     }
     for state_key, archive_key in optional_archive_refs.items():
-        value = _extract_ref_field(state, existing_key=state_key, archive_key=archive_key, timestamp=timestamp)
+        value = _extract_ref_field(state, existing_key=state_key, archive_key=archive_key)
         if value:
             base[state_key] = value
     if state.get("project_state_ref"):
@@ -886,6 +1128,7 @@ def render_state_file(project_root: Path, *, force: bool = False) -> Path:
             raise FileExistsError(f"{path} 已存在且不是 state render 生成物；如需覆盖请使用 --force")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_state_markdown(state), encoding="utf-8")
+    refresh_current_entry(project_root)
     return path
 
 
@@ -1040,6 +1283,7 @@ def _print_state_help() -> None:
         "  init        Create a fresh process/state/STATE.current.json and base ledgers.\n"
         "  migrate-v2  Create process/state/STATE.current.json from legacy process/STATE.md.\n"
         "  render      Render process/STATE.md as a human summary from STATE.current.json.\n"
+        "  current-refresh Refresh process/current/CURRENT.json and current *.ref/symlink pointers.\n"
         "  history-render Render process/state/HISTORY.md as a deny-default audit view from ledgers.\n"
         "  slim        Archive legacy long fields and rewrite STATE.current.json as v2 refs/scalars.\n"
         "  check       Validate STATE.current.json and generated STATE.md budgets.\n"
@@ -1048,6 +1292,7 @@ def _print_state_help() -> None:
         "  meta-flow state init --project-root . --project-id my-project\n"
         "  meta-flow state migrate-v2 --project-root .\n"
         "  meta-flow state render --project-root . --force\n"
+        "  meta-flow state current-refresh --project-root .\n"
         "  meta-flow state slim --project-root . --dry-run\n"
         "  meta-flow state slim --project-root . --apply --render\n"
         "  meta-flow state check --project-root . --mode audit\n"
@@ -1091,6 +1336,10 @@ def main(argv: list[str] | None = None) -> int:
         path = render_state_file(project_root, force=parsed.force)
         print(f"wrote: {path}")
         return 0
+    if command == "current-refresh":
+        path = refresh_current_entry(project_root)
+        print(f"wrote: {path}")
+        return 0
     if command == "history-render":
         path = render_history_file(project_root, force=parsed.force)
         print(f"wrote: {path}")
@@ -1130,7 +1379,10 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"- ERROR: {error}")
         return 1 if errors else 0
-    raise SystemExit(f"未知 state 命令: {command}. 目前支持: init, migrate-v2, render, history-render, slim, check, compact")
+    raise SystemExit(
+        "未知 state 命令: "
+        f"{command}. 目前支持: init, migrate-v2, render, current-refresh, history-render, slim, check, compact"
+    )
 
 
 if __name__ == "__main__":

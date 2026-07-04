@@ -104,6 +104,63 @@ class StateV2Tests(unittest.TestCase):
             self.assertIn("Project: demo-project", text)
             self.assertIn("Active CR: CR-123", text)
             self.assertIn("process/state/STATE.current.json", text)
+            entry = json.loads((root / "process" / "current" / "CURRENT.json").read_text(encoding="utf-8"))
+            self.assertEqual("active", entry["status"])
+            self.assertEqual("process/state/STATE.current.json", entry["state_ref"])
+
+    def test_current_refresh_handles_idle_state_with_release_and_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "process" / "release" / "RELEASE-CONTEXT-CR154.yaml"
+            handoff = root / "process" / "handoffs" / "NEXT-SESSION-CR154-20260702.md"
+            index_json = root / "process" / "changes" / "CR-INDEX.json"
+            index_yaml = root / "process" / "changes" / "CR-INDEX.yaml"
+            release.parent.mkdir(parents=True, exist_ok=True)
+            handoff.parent.mkdir(parents=True, exist_ok=True)
+            index_json.parent.mkdir(parents=True, exist_ok=True)
+            release.write_text("schema_version: 1\n", encoding="utf-8")
+            handoff.write_text("# Next Session\n", encoding="utf-8")
+            index_json.write_text('{"schema_version": 1, "items": []}\n', encoding="utf-8")
+            index_yaml.write_text("schema_version: 1\nitems: []\n", encoding="utf-8")
+            state = current.default_current_state(root)
+            state["current_phase"] = "delivered"
+            state["active_change"] = None
+            state["active_context_ref"] = "process/release/RELEASE-CONTEXT-CR154.yaml"
+            state["next_session_handoff_ref"] = "process/handoffs/NEXT-SESSION-CR154-20260702.md"
+            current.write_current_state(root, state)
+
+            exit_code = current.main(["current-refresh", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            entry = json.loads((root / "process" / "current" / "CURRENT.json").read_text(encoding="utf-8"))
+            self.assertEqual("idle", entry["status"])
+            self.assertEqual("ok", entry["health"])
+            self.assertIsNone(entry["context_ref"])
+            self.assertEqual("process/release/RELEASE-CONTEXT-CR154.yaml", entry["release_context_ref"])
+            self.assertEqual("process/handoffs/NEXT-SESSION-CR154-20260702.md", entry["handoff_ref"])
+            self.assertEqual("process/changes/CR-INDEX.json", entry["cr_index_ref"])
+            self.assertEqual(
+                ["process/changes/CR-INDEX.json", "process/changes/CR-INDEX.yaml"],
+                entry["available_index_refs"],
+            )
+            self.assertEqual(
+                "process/handoffs/NEXT-SESSION-CR154-20260702.md\n",
+                (root / "process" / "current" / "handoff.ref").read_text(encoding="utf-8"),
+            )
+
+    def test_current_refresh_falls_back_to_yaml_cr_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            index_yaml = root / "process" / "changes" / "CR-INDEX.yaml"
+            index_yaml.parent.mkdir(parents=True, exist_ok=True)
+            index_yaml.write_text("schema_version: 1\nitems: []\n", encoding="utf-8")
+            current.write_current_state(root, current.default_current_state(root))
+
+            current.refresh_current_entry(root)
+
+            entry = json.loads((root / "process" / "current" / "CURRENT.json").read_text(encoding="utf-8"))
+            self.assertEqual("process/changes/CR-INDEX.yaml", entry["cr_index_ref"])
+            self.assertEqual(["process/changes/CR-INDEX.yaml"], entry["available_index_refs"])
 
     def test_check_fails_when_current_state_contains_long_running_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -205,7 +262,7 @@ class StateV2Tests(unittest.TestCase):
 
     def test_current_state_field_budgets_cover_all_budgeted_fields(self) -> None:
         cases = {
-            "next_action": {"type": "continue", "text": "x" * 513},
+            "next_action": {"type": "continue", "text": "x" * 161},
             "source_refs": [{"path": f"process/context/{index}.json", "kind": "context"} for index in range(25)],
             "open_risks": [{"id": f"R-{index}", "summary": "x"} for index in range(17)],
             "authz_policy_refs": [f"POLICY-{index}" for index in range(17)],
@@ -213,6 +270,7 @@ class StateV2Tests(unittest.TestCase):
             "active_context_ref": "x" * 257,
             "pending_checklist_path": "x" * 257,
             "project_state_ref": "x" * 257,
+            "next_session_handoff_ref": "x" * 257,
         }
         for field, value in cases.items():
             with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
@@ -233,7 +291,7 @@ class StateV2Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             state = current.default_current_state(root)
-            state["next_action"] = {"type": "continue", "text": "x" * 513}
+            state["next_action"] = {"type": "continue", "text": "x" * 161}
             write_state_fixture(root, state)
 
             audit_output = StringIO()
@@ -249,7 +307,7 @@ class StateV2Tests(unittest.TestCase):
             self.assertIn("- ERROR: next_action.text exceeds budget", enforce_output.getvalue())
 
     def test_current_state_budget_values_match_cp5_approved_contract(self) -> None:
-        self.assertEqual({"max_text_bytes": 512, "max_json_bytes": 768}, {
+        self.assertEqual({"max_text_bytes": 160, "max_json_bytes": 384}, {
             "max_text_bytes": current.CURRENT_FIELD_BUDGETS["next_action"]["max_text_bytes"],
             "max_json_bytes": current.CURRENT_FIELD_BUDGETS["next_action"]["max_json_bytes"],
         })
@@ -266,6 +324,7 @@ class StateV2Tests(unittest.TestCase):
         self.assertEqual(256, current.CURRENT_FIELD_BUDGETS["active_context_ref"]["max_bytes"])
         self.assertEqual(256, current.CURRENT_FIELD_BUDGETS["pending_checklist_path"]["max_bytes"])
         self.assertEqual(256, current.CURRENT_FIELD_BUDGETS["project_state_ref"]["max_bytes"])
+        self.assertEqual(256, current.CURRENT_FIELD_BUDGETS["next_session_handoff_ref"]["max_bytes"])
 
     def test_secret_like_current_state_fields_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -370,7 +429,7 @@ class StateV2Tests(unittest.TestCase):
             before = path.read_text(encoding="utf-8")
 
             with self.assertRaises(current.StateValidationError) as raised:
-                current.update_current_state(root, {"next_action": {"text": "x" * 513}})
+                current.update_current_state(root, {"next_action": {"text": "x" * 161}})
 
             self.assertIn("field_budget", str(raised.exception))
             self.assertEqual(before, path.read_text(encoding="utf-8"))
@@ -415,7 +474,10 @@ class StateV2Tests(unittest.TestCase):
                     "follow_through_tracking": {"items": [{"id": "FU-1", "detail": "x" * 400}]},
                     "story_execution": {"wave": "W1", "detail": "x" * 400},
                     "agent_lifecycle": {"active_agents": [{"role": "meta-dev", "detail": "x" * 400}]},
-                    "release": {"release_context": "x" * 400},
+                    "release": {
+                        "release_context": "x" * 400,
+                        "release_context_ref": "process/release/RELEASE-CONTEXT-CR154.yaml",
+                    },
                     "context_budget": {"read_expansion_log": [{"path": "process/STATE.md", "reason": "audit"}]},
                     "cr_tracking": {"active_change": "CR-154", "items": [{"id": "CR-100", "status": "closed"}]},
                     "orchestrator_session": {"pending_gate": "CP5", "pending_checklist_path": "process/checkpoints/CP5.md"},
@@ -449,6 +511,8 @@ class StateV2Tests(unittest.TestCase):
             self.assertNotIn("human_gate_decisions", slimmed)
             self.assertNotIn("checkpoints", slimmed)
             self.assertNotIn("history", slimmed)
+            self.assertEqual("process/release/RELEASE-CONTEXT-CR154.yaml", slimmed["release_context_ref"])
+            self.assertNotEqual("process/archive/state", str(slimmed["release_context_ref"])[:21])
             archive_refs = [item for item in slimmed["source_refs"] if isinstance(item, dict) and item.get("kind") == "state-slim-archive"]
             self.assertEqual(1, len(archive_refs))
             archive_path = root / archive_refs[0]["path"]

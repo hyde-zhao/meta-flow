@@ -17,13 +17,13 @@ from meta_flow.state import event_ledger
 
 QUALITY_MODEL_REL = Path("process/policies/QUALITY-MODEL.yaml")
 EVAL_MATRIX_REL = Path("process/policies/EVAL-MATRIX.yaml")
-READ_EXPANSION_REL = Path("process/context/READ-EXPANSION-LEDGER.ndjson")
+READ_EXPANSION_REL = Path("process/state/READ-EXPANSION-LEDGER.ndjson")
 ALLOWED_GATES = {f"CP{index}" for index in range(9)}
 ALLOWED_BLOCKING_POLICIES = {"always", "on-release", "advisory"}
 DERIVED_SOURCE_NEEDLES = (
     "process/checks/*.result.json",
     "process/state/*-LEDGER.ndjson",
-    "process/context/READ-EXPANSION-LEDGER.ndjson",
+    "process/state/READ-EXPANSION-LEDGER.ndjson",
 )
 FORBIDDEN_MANUAL_SOURCE_NEEDLES = (
     "WORKFLOW-METRICS",
@@ -46,7 +46,7 @@ metric_derivation:
   allowed_sources:
     - process/checks/*.result.json
     - process/state/*-LEDGER.ndjson
-    - process/context/READ-EXPANSION-LEDGER.ndjson
+    - process/state/READ-EXPANSION-LEDGER.ndjson
 dimensions:
   - id: requirements_traceability
     owner: meta-pm
@@ -109,7 +109,7 @@ cases:
     eval_ref: meta-flow doctor workflow
     blocking_policy: advisory
     applies_to: [CP2, CP3, CP5, CP6, CP7, CP8]
-    evidence_refs: [process/context/*.context.json, process/context/READ-EXPANSION-LEDGER.ndjson, process/state/*-LEDGER.ndjson]
+    evidence_refs: [process/context/*.context.json, process/state/READ-EXPANSION-LEDGER.ndjson, process/state/*-LEDGER.ndjson]
 """
 
 

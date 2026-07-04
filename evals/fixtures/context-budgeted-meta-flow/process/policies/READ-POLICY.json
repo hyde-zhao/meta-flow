@@ -4,7 +4,9 @@
     "process/context/stories/*.json",
     "process/changes/summaries/*.summary.json",
     "process/state/STATE.current.json",
+    "process/current/CURRENT.json",
     "process/changes/CR-INDEX.json",
+    "process/changes/CR-INDEX.yaml",
     "process/policies/AUTHZ-POLICY.json",
     "docs/design/FEATURE-REGISTRY.yaml"
   ],
@@ -15,7 +17,9 @@
     "process/STORY-STATUS.md",
     "process/changes/*.md",
     "process/stories/*-LLD.md",
-    "process/stories/*-IMPLEMENTATION.md"
+    "process/stories/*-IMPLEMENTATION.md",
+    "process/archive/**",
+    "process/discussions/**"
   ],
   "full_doc_read_allowed_when": [
     "capsule_missing",

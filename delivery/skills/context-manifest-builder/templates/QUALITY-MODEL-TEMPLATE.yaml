@@ -8,7 +8,7 @@ metric_derivation:
   allowed_sources:
     - process/checks/*.result.json
     - process/state/*-LEDGER.ndjson
-    - process/context/READ-EXPANSION-LEDGER.ndjson
+    - process/state/READ-EXPANSION-LEDGER.ndjson
 dimensions:
   - id: requirements_traceability
     owner: meta-pm

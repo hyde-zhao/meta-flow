@@ -7,12 +7,14 @@
 1. 必须先读取本阶段 context pack 或 Story packet：
    - 阶段入口：`process/context/CP*-*.context.json` 或 legacy `process/context/*-CONTEXT.yaml`
    - Story 入口：`process/context/stories/*.json`
-2. 默认机器状态入口是 `process/state/STATE.current.json`。`process/STATE.md` 只作为人类摘要、迁移兼容或人工审计输入，不得作为子 agent 默认读取入口。
+2. 默认机器状态入口是 `process/state/STATE.current.json`；默认文件系统发现入口是 `process/current/CURRENT.json`，其 status 必须能表达 `idle`、`active`、`awaiting_gate` 或 `blocked`。`process/STATE.md` 只作为人类摘要、迁移兼容或人工审计输入，不得作为子 agent 默认读取入口。
 3. 只能默认读取 context / packet 中的 `allowed_reads`、`must_read` 或明确的 stage summary。以下对象必须进入 `do_not_read_by_default`：
    - `process/STATE.md`
    - `process/DEVELOPMENT-PLAN.yaml`
    - 完整 `process/changes/CR-*.md`
    - 全量 `process/stories/*-LLD.md`
+   - `process/archive/**`
+   - `process/discussions/**`
    - 完整 `docs/quality/TEST-REPORT.md`、`docs/quality/REVIEW.md`、完整 diff、完整会话 transcript
 4. 需要读取全文档时，必须记录 `full_doc_read_reason`，且原因只能是：
    - `capsule_missing`
@@ -74,9 +76,9 @@
 
 高频 Skill 必须遵守同一读取边界：
 
-- `context-manifest-builder` 生成 `allowed_reads`、`read_if_needed`、`do_not_read_by_default`，并校验 token budget。
+- `context-manifest-builder` 生成 `must_read`、`allowed_reads`、`read_if_needed`、`do_not_read_by_default`，并校验 token budget。
 - `context-handoff` 只传 context / packet 引用和读取策略，不传长文档集合。
-- `state-router` 优先读取 `STATE.current.json`、ledgers、context pack 和 CP result；`STATE.md` 仅作 human summary / legacy fallback。
+- `state-router` 优先读取 `STATE.current.json`、`process/current/CURRENT.json`、ledgers、context pack 和 CP result；`STATE.md` 仅作 human summary / legacy fallback。
 - `checkpoint-manager` 优先消费 CP result JSON、evidence index、ledger 和 context refs；Markdown 只作为摘要或人工门禁入口。
 - `change-impact-analysis` 优先写 CR ledger / summary / index；关闭 CR 后不得继续把全文放入 active state。
 - `review-artifact-protocol`、`release-readiness` 和质量类 Skill 只输出 findings / release / evidence 摘要和引用。
@@ -86,4 +88,5 @@
 - 五个功能 Agent 均显式遵守 Input Contract、Output Contract 和 Handoff Contract。
 - 关键 Skill 不再要求默认读取巨型 `process/STATE.md`。
 - 所有默认读取集合都能表达 `allowed_reads` 和 `do_not_read_by_default`。
+- `process/current/CURRENT.json` 能在 active 和 idle 状态下指向 current context / checkpoint / story / release / handoff 入口，并接受 `CR-INDEX.json` 优先、`CR-INDEX.yaml` fallback。
 - 需要全文读取时必须能落到允许枚举和日志位置。

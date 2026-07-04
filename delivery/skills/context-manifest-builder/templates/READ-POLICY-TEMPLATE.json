@@ -4,7 +4,9 @@
     "process/changes/summaries/*.summary.json",
     "process/stories/summaries/*.summary.json",
     "process/state/STATE.current.json",
+    "process/current/CURRENT.json",
     "process/changes/CR-INDEX.json",
+    "process/changes/CR-INDEX.yaml",
     "process/policies/AUTHZ-POLICY.json",
     "process/policies/GATE-PROFILES.json",
     "docs/design/FEATURE-REGISTRY.yaml",
@@ -21,7 +23,9 @@
     "process/STORY-STATUS.md",
     "process/changes/*.md",
     "process/stories/*-LLD.md",
-    "process/stories/*-IMPLEMENTATION.md"
+    "process/stories/*-IMPLEMENTATION.md",
+    "process/archive/**",
+    "process/discussions/**"
   ],
   "full_doc_read_allowed_when": [
     "capsule_missing",
@@ -35,7 +39,8 @@
     "agent 必须先读取本阶段 context pack",
     "agent 默认只读取 allowed_reads",
     "全文读取必须记录 full_doc_read_reason，且原因必须属于允许枚举",
-    "普通 artifact 只能引用 authz policy ID，不复制 policy 全文"
+    "普通 artifact 只能引用 authz policy ID，不复制 policy 全文",
+    "process/current/CURRENT.json 是文件系统发现层；状态真相仍以 STATE.current.json 为准"
   ],
   "schema_version": 1
 }
