@@ -24,6 +24,12 @@
       "requires": "explicit_release_gate",
       "title": "No provider/lake/catalog publish"
     },
+    "NO_REPOSITORY_PUBLICATION": {
+      "default": "denied",
+      "expanded_text": "不授权 git push、远端仓库推送或源码 / 过程仓库发布。",
+      "requires": "post_cr_repository_publication_authorization",
+      "title": "No repository publication"
+    },
     "NO_RUNTIME_CONNECTION": {
       "default": "denied",
       "expanded_text": "不授权连接 QMT/MiniQMT/XtQuant/gateway/runtime。",

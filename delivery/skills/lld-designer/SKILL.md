@@ -21,6 +21,7 @@ status: active
 - `lld_policy.required_level=full-lld`，需要形成可评审的 Story 级实现蓝图
 - `lld_policy.required_level=technical-note`，低风险 Story 只需要在 Story 卡片中形成可审查技术说明
 - `lld_policy.required_level=waived`，需要校验豁免理由、风险接受和重访条件
+- `gate_profile=standard-lite` / compact artifact CR 且多个低到中风险 Story 共享同一实现面，需要用一个 Batch LLD 承载多 Story 的设计证据，降低重复 LLD 文件数量但不降低 CP5 审查强度
 
 ## 前置条件
 
@@ -41,10 +42,12 @@ status: active
 - `process/context/CP5-LLD-CONTEXT.yaml lld_design_batch`（若已存在）
 - `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref（并行 LLD 写作期间必须读取 / 更新）
 - 相关前置 Story、平台约束、共享设计片段或 `CR-*.md`（若存在）
+- `process/policies/GATE-PROFILES.json` 或 context 中的 `gate_profile` / `profile`（判断是否允许 `batch-lld`）
 
 ## 知识来源
 
 - `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md`
+- `skills/lld-designer/templates/BATCH-LLD-TEMPLATE.md`
 - Story 卡片中的验收标准与设计约束
 - `FEATURE-DESIGN-MATRIX.md` 中的 `lld_policy` 判定和 required / waived 理由
 - Feature DESIGN / TEST-PLAN / TASKS 中的下游消费契约
@@ -62,18 +65,24 @@ status: active
    - `full-lld`：进入完整 14 章节 LLD。
    - `technical-note`：仅更新 Story 卡片 `## 技术说明`，但必须覆盖文件影响、接口 / 数据、失败路径、测试入口、风险和偏离记录。
    - `waived`：不生成 LLD，校验 Story 卡片存在豁免理由、影响范围、风险接受和重访条件。
-4. 若缺少关键输入，立即进入 `blocked`，写清缺失对象和缺失原因。
+4. 判断是否允许 `batch-lld`：
+   - 仅当 `gate_profile=standard-lite` 或 context / gate profile 明确 `allows_batch_lld=true` 时允许。
+   - 全部纳入 batch 的 Story 必须共享同一 Feature DESIGN / 发布切片 / 实现面，且每个 Story 在 Batch LLD 中有独立锚点与 `evidence_path`。
+   - 任一 Story 命中 runtime-high-risk、credential、真实运行、交易、生产写入、provider/lake/catalog publish、外部接口高风险、不可逆迁移、跨安全边界或复杂并发一致性时，必须拆回独立 `STORY-{id}-{story_slug}-LLD.md`。
+5. 若缺少关键输入，立即进入 `blocked`，写清缺失对象和缺失原因。
 
 ### 阶段 2：Scope Extraction
 
 1. 提炼 Story 范围、输出文件、平台目标、依赖 Story、Feature 设计引用和设计约束。
 2. 若存在共享设计片段、Feature DESIGN 或 `CR-*.md`，在范围提炼阶段显式登记引用。
 3. 对 `technical-note` / `waived` 再次确认未命中数据、安全、外部接口、并发、迁移、跨 Story 契约等 `full-lld` 触发条件；命中则升级为 `full-lld` 并写明原因。
+4. 对 `batch-lld` 再次确认 batch 范围内没有被降级的高风险 Story；若发现任一 Story 不满足 batch 条件，只将该 Story 拆出为独立 LLD，不得让整个 batch 静默降级为技术说明。
 
 ### 阶段 3：Contract Mapping
 
 1. 将 Story 约束映射到所需设计证据：
    - `full-lld` 映射到 14 个章节。
+   - `batch-lld` 映射到 Batch LLD 模板的 batch 级约束、每 Story 独立小节、跨 Story 依赖和 CP5 自动预检映射。
    - `technical-note` 映射到 Story `## 技术说明` 的最小字段。
    - `waived` 映射到豁免证据和重访条件。
 2. 逐项建立配对关系：
@@ -84,9 +93,10 @@ status: active
 ### 阶段 4：Drafting
 
 1. 若为 `full-lld`，按 14 个规定章节生成 LLD。
-2. 若为 `technical-note`，更新 Story 卡片 `## 技术说明`，至少包含：设计依据、文件影响、接口 / 数据 / 权限变化、异常和回退、测试入口、已知风险、偏离记录。
-3. 若为 `waived`，更新 Story 卡片 `lld_gate`，写明豁免理由、影响范围、风险接受、重访条件和 CP5 证据路径。
-4. 对无数据模型、无图示、无平台差异等场景必须显式写“无新增”或“不适用”，不得留空。
+2. 若为 `batch-lld`，按 Batch LLD 模板生成一个批次文件；每个 Story 必须有独立 `### Story: ...` 小节、锚点、`design_evidence_type=batch-lld`、`lld_policy_required_level`、文件影响、接口 / 数据 / 权限、失败路径、测试、TASK-ID、风险和 DoD。
+3. 若为 `technical-note`，更新 Story 卡片 `## 技术说明`，至少包含：设计依据、文件影响、接口 / 数据 / 权限变化、异常和回退、测试入口、已知风险、偏离记录。
+4. 若为 `waived`，更新 Story 卡片 `lld_gate`，写明豁免理由、影响范围、风险接受、重访条件和 CP5 证据路径。
+5. 对无数据模型、无图示、无平台差异等场景必须显式写“无新增”或“不适用”，不得留空。
 
 ### 阶段 5：Review Prep
 
@@ -99,10 +109,11 @@ status: active
 
 1. 复用 Story 卡片中的 `story_slug`：
    - `full-lld` 写入 `process/stories/STORY-{id}-{story_slug}-LLD.md`。
+   - `batch-lld` 写入 `process/stories/BATCH-{cr_id-or-batch_id}-{slug}-LLD.md`，并在 `lld_design_batch.items[].evidence_path` 中为每个 Story 指向 `#story-story-{id}` 锚点。
    - `technical-note` 更新 `process/stories/STORY-{id}-{story_slug}.md` 的 `## 技术说明`。
    - `waived` 更新 Story 卡片中的豁免证据。
 2. 若存在 `blocks_lld=true` 且未回答的 clarification item，不得生成通过态 CP5 自动预检；将 Story 标记为 blocked 或 waiting-clarification，并等待 host-orchestrator broker。
-3. 将 Story 推进到 `lld-ready-for-review`，并在 CP5 自动预检中标明 `design_evidence_type=full-lld|technical-note|waived`。
+3. 将 Story 推进到 `lld-ready-for-review`，并在 CP5 自动预检中标明 `design_evidence_type=full-lld|batch-lld|technical-note|waived`。
 4. 停止在全部目标 Story 的设计证据统一确认前，不进入实现。
 
 ## 输出文件 / 输出模板
@@ -110,14 +121,17 @@ status: active
 | 文件 | 路径 | 模板 |
 |---|---|---|
 | Story LLD（仅 `full-lld`） | `process/stories/STORY-{id}-{story_slug}-LLD.md` | `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` |
+| Batch LLD（仅 `batch-lld`） | `process/stories/BATCH-{cr_id-or-batch_id}-{slug}-LLD.md` | `skills/lld-designer/templates/BATCH-LLD-TEMPLATE.md` |
 | Story 技术说明（仅 `technical-note`） | `process/stories/STORY-{id}-{story_slug}.md` 的 `## 技术说明` | `skills/story-manager/templates/STORY-TEMPLATE.md` |
 | Story 豁免证据（仅 `waived`） | `process/stories/STORY-{id}-{story_slug}.md` 的 `lld_gate` / `## 技术说明` | `skills/story-manager/templates/STORY-TEMPLATE.md` |
 
 ## 约束
 
 - `full-lld` 的 14 个章节必须与 `skills/lld-designer/templates/STORY-LLD-TEMPLATE.md` 一一对应
+- `batch-lld` 只能在 `standard-lite` / `allows_batch_lld=true` 下使用；每个 Story 的 section 必须可作为 CP5 独立证据被引用
 - Story 设计证据 `confirmed=false`、全量 CP5 人工确认未通过、`dev_gate` 未满足或文件所有权冲突时不得进入实现
 - 不得为了节省 token 把高风险 Story 降级为 `technical-note`；数据、安全、外部接口、并发、迁移或跨 Story 契约命中时默认 `full-lld`
+- 不得为了节省文件数量把高风险 Story 放入 `batch-lld`；命中高风险触发条件时必须拆出独立 LLD
 - 不超出当前 Story 范围
 - 发现未决技术点时，必须输出 `OPEN` 或 Spike，禁止伪确定
 - 发现实现灰区时，必须优先写入 LLD Clarification Queue；并行 LLD 阶段不得让多个 meta-dev 直接问用户；queue item 必须可被 host-orchestrator 直接汇入 CP5 待人工决策清单
@@ -127,7 +141,7 @@ status: active
 
 ## 验收标准
 
-- [ ] `full-lld` 覆盖 14 个规定章节；`technical-note` 覆盖最小技术说明字段；`waived` 覆盖豁免理由和重访条件
+- [ ] `full-lld` 覆盖 14 个规定章节；`batch-lld` 覆盖 batch 级约束和每 Story 独立设计小节；`technical-note` 覆盖最小技术说明字段；`waived` 覆盖豁免理由和重访条件
 - [ ] 文件影响范围、接口、测试与实施步骤可直接指导编码
 - [ ] 回滚与发布策略明确
 - [ ] 输入契约覆盖 Story / HLD / ADR / Feature Matrix / Feature DESIGN / 依赖 / 平台 / CR
@@ -146,5 +160,6 @@ status: active
 - 详细设计不是实现日志，必须保持“可实施”而不是“已完成”
 - `ARCHITECTURE-DECISION.md` 是条件必需输入：只要 Story 命中关键取舍、接口边界或平台规范，就必须显式读取
 - `full-lld` 的正式输出是 `STORY-{id}-{story_slug}-LLD.md`；`technical-note` 和 `waived` 的正式输出在 Story 卡片里，不要把关键信息只留在会话说明里
+- `batch-lld` 的正式输出是一个 batch 文件加每 Story 锚点，不是把多个 Story 合并成一个不可追溯的大段说明；CP5 必须能逐 Story 定位证据
 - 降级为 `technical-note` 的目的只是减少不必要 token，不是降低 CP5 审查强度
 - clarification queue 的答案必须落回 LLD 和 DEV-LOG；只在对话中答复不能作为 CP5 证据

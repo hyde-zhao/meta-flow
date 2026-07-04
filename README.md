@@ -99,8 +99,10 @@ meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type che
 meta-flow story return-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .
 meta-flow story evidence-index --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .
 meta-flow story verify-packet --from-return process/returns/STORY-CR123-S01.CP6.return.json --story process/stories/STORY-CR123-S01.md --project-root .
+meta-flow story plan-check --project-root .
 meta-flow design delta-check --delta process/design-deltas/STORY-CR123-S01.delta.json --project-root .
 meta-flow design delta-check --delta process/design-deltas/STORY-CR123-S01.delta.json --require-merged --project-root .
+meta-flow validation run --cr CR-155 --profile real-lake-readonly --reruns 2 --project-root .
 meta-flow feature build --project-root .
 meta-flow feature check --project-root .
 meta-flow feature trace --project-root .
@@ -173,8 +175,8 @@ meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name m
 │   ├── REQUEST.md
 │   ├── INPUT-INDEX.md
 │   ├── CLARIFICATION-LOG.md
-│   ├── STORY-BACKLOG.md
-│   ├── DEVELOPMENT-PLAN.yaml
+│   ├── DEVELOPMENT-PLAN.yaml     # Story 管理机器真相源
+│   ├── STORY-BACKLOG.md          # 可选 legacy / generated view
 │   ├── discussions/
 │   ├── checks/
 │   ├── context/
@@ -347,7 +349,7 @@ cd delivery && uv run --python 3.11 python scripts/install.py claude --dry-run
 3. CP2 通过后，`host-orchestrator` 将 HLD 设计阶段委托给 `meta-se`。用户直接与 `meta-se` 讨论 Architecture Gray Areas 和 advisor table，并使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格形成方案输入；随后 `meta-se` 输出含适用性矩阵、Use Case → Architecture Traceability 和场景模拟的 `HLD.md`。用户确认“HLD 草案可提交给 host-orchestrator 发起 CP3”后交还，host-orchestrator 生成 `process/context/CP3-DESIGN-CONTEXT.yaml` 并发起 CP3。
 4. `meta-se` 写入 CP4 自动预检；CP4 不再单独人工确认，结果汇入 CP5 批量 LLD 决策摘要。
 5. CP3 通过后，`meta-se` 先生成 `docs/design/FEATURE-DESIGN-MATRIX.md`，判定哪些 Feature 需要 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`，并为每个 Story 标记 `feature_design_refs` 与 `lld_policy=full-lld|technical-note|waived`。
-6. `meta-dev` 并行输出全部目标 Story 的设计证据和 CP5 自动预检：高风险 Story 输出完整 LLD，低风险 Story 在 Story 卡片中补 `## 技术说明`，明确豁免的 Story 写 waived 证据。遇到实现灰区时只写 `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref。`host-orchestrator` 作为 question broker 合并问题、批量询问用户、回填答案，然后生成 `process/context/CP5-LLD-CONTEXT.yaml` 和 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`，一次性确认全部设计证据、CP4 摘要、clarification 队列、依赖门控和文件所有权。
+6. `meta-dev` 并行输出全部目标 Story 的设计证据和 CP5 自动预检：高风险 Story 输出完整 LLD，`standard-lite` / `allows_batch_lld=true` 下低中风险且共享实现面的 Story 可进入 Batch LLD 并拥有独立 `BATCH-*-LLD.md#story-story-{id}` 证据锚点，低风险 Story 在 Story 卡片中补 `## 技术说明`，明确豁免的 Story 写 waived 证据。遇到实现灰区时只写 `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref。`host-orchestrator` 作为 question broker 合并问题、批量询问用户、回填答案，然后生成 `process/context/CP5-LLD-CONTEXT.yaml` 和 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`，一次性确认全部设计证据、CP4 摘要、clarification 队列、依赖门控和文件所有权。
 7. 全量 CP5 确认且 `dev_gate` 满足后，`host-orchestrator` 按 Wave / Story DAG 自动调度 `meta-dev` 并记录证据；交接前生成或更新 `process/context/CP6-IMPLEMENTATION-CONTEXT.yaml`。`meta-dev` 使用 `implementation-execution` 产出实现对象清单、设计契约映射、测试 / Fixture 计划、最小实现切片、平台差异和交接摘要。复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 写完整 `IMPLEMENTATION.md`，低风险 Story 可写 Story 摘要或 DEV-LOG；实现完成后写入 CP6 编码完成结果。
 8. Story CP6 通过后，`host-orchestrator` 自动调度 `meta-qa` 并记录证据；交接前生成或更新 `process/context/CP7-VERIFICATION-CONTEXT.yaml`。`meta-qa` 使用 `verification-execution` 消费 CP6 实现执行证据、设计证据和 `TEST-MATRIX.md` 摘要，输出验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险，再用 `quality-review` 固化 TEST-REPORT / REVIEW / FIXES 并写入 CP7。CP7 结论为 `PASS` / `WAIVED` 时进入 verified，`PASS_WITH_RISK` 时可推进但风险进入 CP8，`NEEDS_REWORK` 回 meta-dev，`NEEDS_DESIGN_CLARIFICATION` 回 meta-se / host-orchestrator，`BLOCKED` 阻断。
 9. 所有目标 Story 验证后，`host-orchestrator` 自动调度 `meta-doc` 完成文档，`meta-qa` 使用 `release-readiness` 先生成 `process/release/RELEASE-CONTEXT.yaml` 和 `process/context/CP8-DELIVERY-CONTEXT.yaml`，再按 `release_artifact_profile=minimal|compact|full` 裁剪发布文档并写入 CP8 自动预检。CP8 的 `release_decision=READY|READY_WITH_RISK` 才可发起人工终验，`NOT_READY` 阻断，`RELEASED|FAILED` 必须有独立真实发布授权；CP8 Decision Brief 人工终验通过后进入 delivered。
@@ -449,7 +451,7 @@ CP6 / CP7 还必须包含 `Agent Dispatch Evidence` 小节。`process/handoffs/*
 
 `handoff/context delegated_interaction ref or STATE.current.json.active_delegation_ref` 记录当前阶段委托：`phase`、`agent_role`、`agent_id/thread_id`、`handoff_path`、`status`、`started_at`、`returned_at` 和 `return_summary_path`。委托只表示阶段内交互权移交，不表示 CP2 / CP3 已确认。`meta-pm` / `meta-se` 可直接与用户讨论本阶段草案；正式人工门仍由 `host-orchestrator` 发起。
 
-`process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref 记录并行 LLD 阶段的实现灰区。每个 item 至少包含 `id/story_id/owner_agent/question/options/recommendation/pros_cons/impact_surface/blocks_lld/answer/status`，其中 `options` 必须能表达 1 个推荐方案和至少 1 个备选方案。多个 `meta-dev` 不直接并发问用户；`host-orchestrator` 合并同类问题后一次性询问用户，并把答案回填到 queue、LLD 和 DEV-LOG。存在未回答 `blocks_lld=true` 项时不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief 中暴露。
+`process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref 记录并行 LLD 阶段的实现灰区。每个 item 至少包含 `id/story_id/owner_agent/question/options/recommendation/pros_cons/impact_surface/blocks_lld/answer/status`，其中 `options` 必须能表达 1 个推荐方案和至少 1 个备选方案。多个 `meta-dev` 不直接并发问用户；`host-orchestrator` 合并同类问题后一次性询问用户，并把答案回填到 queue、独立 LLD 或 Batch LLD Story 锚点、DEV-LOG。存在未回答 `blocks_lld=true` 项时不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief 中暴露。
 
 ## fast-lane 快速模式
 

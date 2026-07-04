@@ -417,7 +417,7 @@ last_updated: ""
 | init | CP0 自动检查通过 | requirement-clarification | CP0 原始请求受理门 |
 | requirement-clarification | CP1 自动检查通过 + CP2 人工确认通过，且 SCENARIOS / STORY-MAP / MVP-SCOPE 存在或有 N/A / WAIVED 原因 | solution-design | CP1 用户场景完备门；CP2 需求 / 场景 / 范围基线门 |
 | solution-design | CP3 人工确认通过，且 BLUEPRINT / DOMAIN-MAP / DEPENDENCY-MAP 已生成并被 HLD 消费，或有 N/A / WAIVED 原因 | story-planning | CP3 蓝图 / HLD 架构评审门 |
-| story-planning | CP4 自动预检通过，Story DAG 与并行计划可校验，全部目标 Story 的完整 LLD / 技术说明 / waived 证据通过全量 CP5 | story-execution | CP4 Story 拆解与并行安全自动门；CP5 全量设计证据确认 |
+| story-planning | CP4 自动预检通过，Story DAG 与并行计划可校验，全部目标 Story 的独立 LLD / Batch LLD Story 锚点 / 技术说明 / waived 证据通过全量 CP5 | story-execution | CP4 Story 拆解与并行安全自动门；CP5 全量设计证据确认 |
 | story-execution | 全部目标 Story 通过 CP6、CP7 并到达 verified / verified-with-risk | documentation | CP6 编码完成、CP7 验证完成检查 |
 | documentation | CP8 自动预检与人工终验通过 | delivered | CP8 交付就绪门 |
 

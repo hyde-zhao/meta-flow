@@ -10,6 +10,72 @@ from typing import Any
 
 
 AUTHZ_POLICY_REL = Path("process/policies/AUTHZ-POLICY.json")
+AUTHZ_CAPABILITY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "NO_REAL_LAKE_READ_OR_WRITE": {
+        "forbidden": ("real_lake_read", "lake_write"),
+        "allowed": (),
+    },
+    "NO_REAL_LAKE_READ": {
+        "forbidden": ("real_lake_read",),
+        "allowed": (),
+    },
+    "REAL_LAKE_READONLY": {
+        "forbidden": ("lake_write",),
+        "allowed": ("real_lake_read",),
+    },
+    "NO_NAS_ACCESS": {
+        "forbidden": ("nas_access",),
+        "allowed": (),
+    },
+    "NAS_READONLY": {
+        "forbidden": ("nas_write",),
+        "allowed": ("nas_access",),
+    },
+    "NO_RUNTIME": {
+        "forbidden": ("runtime_connection",),
+        "allowed": (),
+    },
+    "NO_RUNTIME_CONNECTION": {
+        "forbidden": ("runtime_connection",),
+        "allowed": (),
+    },
+    "NO_TRADING": {
+        "forbidden": ("trading", "order_write"),
+        "allowed": (),
+    },
+    "NO_ORDER_WRITE": {
+        "forbidden": ("order_write",),
+        "allowed": (),
+    },
+    "NO_PRODUCTION_WRITE": {
+        "forbidden": ("production_write",),
+        "allowed": (),
+    },
+    "NO_PROVIDER_LAKE_PUBLISH": {
+        "forbidden": ("lake_write", "provider_publish", "catalog_publish"),
+        "allowed": (),
+    },
+    "NO_REPOSITORY_PUBLICATION": {
+        "forbidden": ("repository_publication",),
+        "allowed": (),
+    },
+    "REPOSITORY_PUBLICATION_ALLOWED": {
+        "forbidden": (),
+        "allowed": ("repository_publication",),
+    },
+}
+REQUIRED_EVIDENCE_CAPABILITIES: dict[str, tuple[str, ...]] = {
+    "real_lake_validation": ("real_lake_read",),
+    "historical_backtest": ("historical_data_read",),
+    "oos_walkforward": ("historical_data_read",),
+    "rerun_consistency": ("validation_run",),
+    "admission_package": ("validation_result", "rerun_consistency_result"),
+}
+CAPABILITY_PREREQUISITES: dict[str, tuple[str, ...]] = {
+    "historical_data_read": ("real_lake_read",),
+    "validation_result": ("validation_run",),
+    "rerun_consistency_result": ("validation_run",),
+}
 HIGH_RISK_POLICY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "NO_CREDENTIAL_READ": ("credential", "credentials", "secret", "token", ".env", "account", "凭据", "密钥", "账户"),
     "NO_NAS_ACCESS": ("nas", "网络盘"),
@@ -36,7 +102,105 @@ HIGH_RISK_POLICY_KEYWORDS: dict[str, tuple[str, ...]] = {
         "publish",
         "发布",
     ),
+    "NO_REPOSITORY_PUBLICATION": (
+        "git push",
+        "repository publication",
+        "repository push",
+        "repo publication",
+        "repo push",
+        "remote push",
+        "source repo",
+        "artifact repo",
+        "仓库推送",
+        "远端推送",
+        "源码仓库",
+        "过程仓库",
+    ),
 }
+REPOSITORY_PUBLICATION_CONTEXT = HIGH_RISK_POLICY_KEYWORDS["NO_REPOSITORY_PUBLICATION"]
+DATA_PUBLICATION_CONTEXT = (
+    "provider",
+    "provider_publish",
+    "lake_write",
+    "catalog_publish",
+    "data lake",
+    "catalog",
+    "lake",
+    "数据湖",
+    "目录",
+)
+
+
+def _normalize_token(value: Any) -> str:
+    return str(value or "").strip().strip('"').strip("'")
+
+
+def normalize_capability_aliases(values: list[str]) -> dict[str, list[str]]:
+    """Normalize authz policy IDs/aliases into allowed and forbidden capabilities."""
+
+    allowed: list[str] = []
+    forbidden: list[str] = []
+    unknown: list[str] = []
+    for value in values:
+        token = _normalize_token(value)
+        if not token:
+            continue
+        alias = AUTHZ_CAPABILITY_ALIASES.get(token)
+        if not alias:
+            unknown.append(token)
+            continue
+        allowed.extend(alias.get("allowed", ()))
+        forbidden.extend(alias.get("forbidden", ()))
+    return {
+        "allowed": sorted(set(allowed)),
+        "forbidden": sorted(set(forbidden)),
+        "unknown": sorted(set(unknown)),
+    }
+
+
+def required_capabilities_for_evidence(required_evidence: list[str]) -> dict[str, list[str]]:
+    direct: list[str] = []
+    prerequisites: list[str] = []
+    unknown: list[str] = []
+    for evidence in required_evidence:
+        key = _normalize_token(evidence)
+        if not key:
+            continue
+        capabilities = REQUIRED_EVIDENCE_CAPABILITIES.get(key)
+        if not capabilities:
+            unknown.append(key)
+            continue
+        direct.extend(capabilities)
+        for capability in capabilities:
+            prerequisites.extend(CAPABILITY_PREREQUISITES.get(capability, ()))
+    return {
+        "direct": sorted(set(direct)),
+        "prerequisites": sorted(set(prerequisites)),
+        "all": sorted(set([*direct, *prerequisites])),
+        "unknown": sorted(set(unknown)),
+    }
+
+
+def infer_required_evidence_from_text(text: str) -> list[str]:
+    """Infer likely required evidence from prose.
+
+    This is a fallback hint for review and consistency checks. A structured
+    CR/CP2 ``required_evidence`` field remains the authoritative source.
+    """
+
+    lowered = text.lower()
+    evidence: list[str] = []
+    if "real lake" in lowered or "真实 lake" in lowered or "真实lake" in lowered:
+        evidence.append("real_lake_validation")
+    if "historical backtest" in lowered or "历史回测" in lowered:
+        evidence.append("historical_backtest")
+    if "walk-forward" in lowered or "walk forward" in lowered or "oos" in lowered or "样本外" in lowered:
+        evidence.append("oos_walkforward")
+    if "rerun" in lowered or "re-run" in lowered or "重跑" in lowered or "一致性" in lowered:
+        evidence.append("rerun_consistency")
+    if "admission" in lowered or "准入" in lowered:
+        evidence.append("admission_package")
+    return sorted(set(evidence))
 
 
 def default_authz_policy() -> dict[str, Any]:
@@ -72,6 +236,12 @@ def default_authz_policy() -> dict[str, Any]:
                 "default": "denied",
                 "requires": "explicit_release_gate",
                 "expanded_text": "不授权 provider、data lake、catalog 发布或真实数据写入。",
+            },
+            "NO_REPOSITORY_PUBLICATION": {
+                "title": "No repository publication",
+                "default": "denied",
+                "requires": "post_cr_repository_publication_authorization",
+                "expanded_text": "不授权 git push、远端仓库推送或源码 / 过程仓库发布。",
             },
         },
     }
@@ -135,6 +305,10 @@ def required_policy_refs_for_text(text: str) -> list[str]:
     for policy_id, keywords in HIGH_RISK_POLICY_KEYWORDS.items():
         if any(keyword.lower() in lowered for keyword in keywords):
             refs.append(policy_id)
+    repository_context = any(keyword.lower() in lowered for keyword in REPOSITORY_PUBLICATION_CONTEXT)
+    data_context = any(keyword.lower() in lowered for keyword in DATA_PUBLICATION_CONTEXT)
+    if repository_context and not data_context:
+        refs = [ref for ref in refs if ref != "NO_PROVIDER_LAKE_PUBLISH"]
     return refs
 
 
@@ -237,4 +411,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

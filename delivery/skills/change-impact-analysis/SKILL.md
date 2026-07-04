@@ -57,7 +57,7 @@ status: active
 5. 若处理方式为“原文档更新”，必须写明旧基线保留方式，并要求目标文档追加 `## 修订记录`。
 6. 若变更影响需求层、场景层、产品范围基线，或文档处理决策涉及 `USE-CASES.md`、`REQUIREMENTS.md`、`SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md`，必须设置 `product_baseline_refresh_required=true`、`required_phase=requirement-clarification`、`required_agent=meta-pm`、`required_gate=CP2`、`block_story_decomposition_until=CP2-approved`，并把受影响产品文档写入 `affected_product_docs`。CP2 通过前不得进入 Story 拆解、LLD 设计批次或实现。
 7. 若用户输入是一组围绕同一目标的集中需求，默认先创建 / 复用一个 parent CR 或 Change Package 作为审计外壳，并路由到完整产品发现和 HLD；不得逐条创建正式 CR。只有目标、审批人、风险授权、交付节奏、回滚策略或审计边界不同，才允许拆出子 CR。
-8. 若变更影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须先确认是否已通过产品基线重整门；未通过 CP2 的需求 / 场景类 CR 不得形成 LLD 批次。已通过产品基线门后，列出 CR 影响范围内全部 Story，形成设计证据批次；批次内全部 full-lld / technical-note / waived 证据和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
+8. 若变更影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须先确认是否已通过产品基线重整门；未通过 CP2 的需求 / 场景类 CR 不得形成 LLD 批次。已通过产品基线门后，列出 CR 影响范围内全部 Story，形成设计证据批次；批次内全部 full-lld / batch-lld / technical-note / waived 证据和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
 9. 若当前为 `workflow_mode=fast-lane`，先执行快速模式升级判定：命中架构、权限、安装路径、外部接口、文件所有权冲突、多 Story 依赖或不可逆迁移时，必须升级为 `standard`。
 10. 给出 `impact_level`、`rollback_to`、`workflow_mode_after_change` 和审批结论。
 11. 将活跃变更单写回状态对象，并明确后续收敛路径。

@@ -1,12 +1,17 @@
 ---
 last_updated: ""
+generated_from: "process/DEVELOPMENT-PLAN.yaml"
+story_management_truth_source: "process/DEVELOPMENT-PLAN.yaml"
+view_type: "legacy-generated-summary"
 ---
 
 ## Story 状态汇总
 
+> 本文件是从 `process/DEVELOPMENT-PLAN.yaml` 派生的人类汇总视图，不是 Story 状态机器真相源。更新 Story 状态、Wave、任务、依赖或文件所有权时，先更新 `DEVELOPMENT-PLAN.yaml`，再刷新本文件，并运行 `meta-flow story plan-check --project-root .`。
+
 | Story ID | 标题 | Wave | 状态 | 设计证据 | lld_policy | Dev Gate | 负责人 | 阻塞 |
 |----------|------|------|------|----------|------------|----------|--------|------|
-| STORY-001 | | W1 | draft | not-started | full-lld / technical-note / waived | blocked | meta-dev | 否 |
+| STORY-001 | | W1 | draft | not-started | full-lld / batch-lld / technical-note / waived | blocked | meta-dev | 否 |
 
 ## 并行队列
 

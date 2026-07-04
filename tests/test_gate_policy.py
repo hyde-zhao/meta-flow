@@ -20,6 +20,11 @@ class GateProfileTests(unittest.TestCase):
 
         self.assertEqual("process-lite", result["profile"])
 
+    def test_single_module_classifies_as_standard_lite(self) -> None:
+        result = gate_profiles.classify_gate_profile(["quant_lab/research/artifact.py"], ["compact_artifact"])
+
+        self.assertEqual("standard-lite", result["profile"])
+
     def test_runtime_terms_force_runtime_high_risk(self) -> None:
         result = gate_profiles.classify_gate_profile(["quant_lab/adapters/qmt/runtime.py"], ["credential"])
 
@@ -50,10 +55,10 @@ class GateProfileTests(unittest.TestCase):
 
             output = StringIO()
             with redirect_stdout(output):
-                exit_code = gate_profiles.main(["plan", "--profile", "process-lite", "--project-root", str(root)])
+                exit_code = gate_profiles.main(["plan", "--profile", "standard-lite", "--project-root", str(root)])
 
             self.assertEqual(0, exit_code)
-            self.assertIn('"profile": "process-lite"', output.getvalue())
+            self.assertIn('"profile": "standard-lite"', output.getvalue())
 
 
 class AuthzPolicyTests(unittest.TestCase):
@@ -130,6 +135,46 @@ class AuthzPolicyTests(unittest.TestCase):
 
             self.assertEqual(0, exit_code)
             self.assertIn("expanded_text", output.getvalue())
+
+    def test_repository_publication_alias_is_separate_from_runtime_and_data_publish(self) -> None:
+        normalized = authz.normalize_capability_aliases(
+            ["REPOSITORY_PUBLICATION_ALLOWED", "NO_REPOSITORY_PUBLICATION"]
+        )
+
+        self.assertEqual(["repository_publication"], normalized["allowed"])
+        self.assertEqual(["repository_publication"], normalized["forbidden"])
+        self.assertNotIn("provider_publish", normalized["allowed"])
+        self.assertNotIn("lake_write", normalized["allowed"])
+        self.assertNotIn("runtime_connection", normalized["allowed"])
+        self.assertNotIn("trading", normalized["allowed"])
+
+    def test_policy_check_distinguishes_git_push_from_lake_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authz.write_default_authz_policy(root)
+            artifact = root / "process" / "changes" / "summaries" / "CR-101.summary.json"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text('{"summary":"post-CR repository publication via git push"}\n', encoding="utf-8")
+
+            errors, _warnings = authz.check_artifact(root, artifact)
+
+            self.assertIn("artifact mentions high-risk surface but lacks authz policy ref: NO_REPOSITORY_PUBLICATION", errors)
+            self.assertFalse(any("NO_PROVIDER_LAKE_PUBLISH" in error for error in errors))
+
+    def test_policy_check_accepts_repository_publication_ref_without_data_publish_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authz.write_default_authz_policy(root)
+            artifact = root / "process" / "changes" / "summaries" / "CR-101.summary.json"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text(
+                '{"summary":"post-CR repository publication via git push","authz_policy_refs":["NO_REPOSITORY_PUBLICATION"]}\n',
+                encoding="utf-8",
+            )
+
+            errors, _warnings = authz.check_artifact(root, artifact)
+
+            self.assertEqual([], errors)
 
 
 if __name__ == "__main__":

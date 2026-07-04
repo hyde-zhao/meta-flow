@@ -37,7 +37,7 @@ Host Orchestrator 的职责：
 | **meta-pm** | `agents/meta-pm.md` | 被委托期间直接与用户完成快速调研（阶段零）+ Scenario Gray Areas 场景发现（USE-CASES.md，含画像/指标/候选理解、认知盲区、Deferred Ideas 与 trade-off）+ 需求结构化（REQUIREMENTS.md，含风险/里程碑）+ 工程验证场景（SCENARIOS.yaml / TEST-MATRIX.md）+ 产品规划输入（STORY-MAP.md / MVP-SCOPE.md / RELEASE-SLICES.md / BACKLOG.md）+ “可提交给 host-orchestrator”确认 + CP2 Decision Brief 输入 | 新请求进入、需求模糊、需求变更后重整 |
 | **meta-se** | `agents/meta-se.md` | 被委托期间直接与用户完成蓝图适用性判定、Architecture Gray Areas、advisor table-first 讨论和 HLD 草案确认 + 蓝图设计（BLUEPRINT.md / DOMAIN-MAP.md / DEPENDENCY-MAP.md）+ HLD 设计（含候选方案对比、适用性矩阵、Use Case → Architecture Traceability、场景模拟 + 技术选型理由）+ Story 拆解（含文件布局 + TASK-ID 任务清单）+ 必要的 Feature 级实现设计 + 开发计划（含完成准则） | CP2 需求 / 场景 / 范围基线已确认（solution-design 和 story-planning 两阶段均由 meta-se 执行） |
 | **meta-dm（归档）** | `process/archive/meta-dm.md` | 历史 Story 拆解与并行计划角色，职责已合并至 meta-se | 不得唤醒 / 不安装 |
-| **meta-dev** | `agents/meta-dev.md` | Story 设计证据输出与批量确认闭环（full-lld / technical-note / waived）+ LLD clarification item 写入 + 实现执行证据（对象清单 / 契约映射 / 测试 Fixture / 切片验证 / IMPLEMENTATION.md）+ Agent/Skill 文件实现 + TASK-ID 增量追踪 + CP7 `NEEDS_REWORK` 回修 | 存在 `lld-ready` Story，或存在已批准且可执行的 `dev-ready` Story |
+| **meta-dev** | `agents/meta-dev.md` | Story 设计证据输出与批量确认闭环（full-lld / batch-lld / technical-note / waived）+ LLD clarification item 写入 + 实现执行证据（对象清单 / 契约映射 / 测试 Fixture / 切片验证 / IMPLEMENTATION.md）+ Agent/Skill 文件实现 + TASK-ID 增量追踪 + CP7 `NEEDS_REWORK` 回修 | 存在 `lld-ready` Story，或存在已批准且可执行的 `dev-ready` Story |
 | **meta-qa** | `agents/meta-qa.md` | TEST-STRATEGY.md 输出（ISTQB/ISO 25010 + validation_mode）+ verification-execution 验证执行证据（对象清单 / 追踪矩阵 / 设计契约 / 分层计划 / fixture / dry-run / 风险 / 阶段决策）+ 8 维度验收 + TEST-MATRIX 覆盖验证 + 独立质量评审（TEST-REPORT.md / REVIEW.md / FIXES.md）+ 发布就绪检查（RELEASE-NOTES.md / DEPLOY-CHECKLIST.md / ROLLBACK.md / MIGRATION.md / FEEDBACK.md）+ 平台安装脚本交付 + 缺陷回修 / 设计澄清建议 | Story 进入 ready-for-verification + 验证环境或等价验证方式已就绪 |
 | **meta-doc** | `agents/meta-doc.md` | README（含架构概览 + 用户旅程 + 关键决策门控 / fast-lane / 自动调度说明）+ USER-MANUAL（含故障排除）+ 严重度分级文档缺口 | 核心产物已验证且安装脚本稳定 |
 
@@ -73,7 +73,7 @@ Qoder 复用 Codex 的 agent 定义和 reasoning profile（含 `meta-dev-debugge
 init（host-orchestrator）                                                   [CP0 自动]
  └─► requirement-clarification（host-orchestrator 委托 meta-pm 直连用户：Scenario Gray Areas → 场景发现 → 需求结构化 → SCENARIOS / STORY-MAP / MVP-SCOPE → 交还） [CP1 自动 + CP2 人工]
       └─► solution-design（host-orchestrator 委托 meta-se 直连用户：蓝图适用性 → Architecture Gray Areas → advisor discussion → HLD 草案 → 交还） [CP3 人工]
-           └─► story-planning（meta-se 生成 FEATURE-DESIGN-MATRIX / 必要 Feature 设计 / 拆解全部 Story → CP4 自动预检 → host-orchestrator 计算全量设计证据队列 → meta-dev 并行产出 full-lld / technical-note / waived 证据） [CP4 自动 + CP5 全量确认]
+           └─► story-planning（meta-se 生成 FEATURE-DESIGN-MATRIX / 必要 Feature 设计 / 拆解全部 Story → CP4 自动预检 → host-orchestrator 计算全量设计证据队列 → meta-dev 并行产出 full-lld / batch-lld / technical-note / waived 证据） [CP4 自动 + CP5 全量确认]
                 │    设计证据写作并行：全部目标 Story 的设计证据可按并发上限分轮起草
                 │    LLD 问题收敛：meta-dev 只写 clarification queue，host-orchestrator 合并后批量问用户并回填答案
                 │    设计证据确认全量化：CP4 摘要、全部 Story 设计证据与 CP5 自动预检完成后，统一人工确认
@@ -106,8 +106,8 @@ init（host-orchestrator）                                                   [C
 | `docs/design/HLD.md` | 高层设计文档（meta-se 产出） |
 | `docs/design/ARCHITECTURE-DECISION.md` | 架构决策（meta-se 产出） |
 | `docs/design/FEATURE-DESIGN-MATRIX.md` | Feature 设计适用性矩阵、Story `feature_design_refs` 与 `lld_policy`（implementation-design / meta-se 产出） |
-| `process/STORY-BACKLOG.md` | Story 列表（meta-se 产出） |
-| `process/DEVELOPMENT-PLAN.yaml` | Wave 执行计划（meta-se 产出，含完成准则） |
+| `process/DEVELOPMENT-PLAN.yaml` | Story 管理机器真相源：Story、Wave、状态、任务、依赖和文件所有权（meta-se / story-manager 产出） |
+| `process/STORY-BACKLOG.md` | 可选 legacy / generated Story 列表视图，不作为机器真相源 |
 | `docs/quality/TEST-STRATEGY.md` | 测试策略（meta-qa 产出，ISTQB/ISO 25010） |
 | `docs/quality/VERIFICATION-REPORT.md` | 验证执行报告（verification-execution / meta-qa 产出） |
 | `docs/quality/TEST-REPORT.md` | 测试报告（quality-review / meta-qa 产出） |
@@ -273,7 +273,7 @@ init（host-orchestrator）                                                   [C
 
 - `lld_policy.required_level=full-lld` 时，`STORY-*-LLD.md` 必须保持 **14 个可见章节**；`Tier-S` 只允许简化内容深度，不允许压缩章节数量。`technical-note` / `waived` Story 的正式设计证据写入 Story 卡片。
 - `tier`、`shared_fragments`、`open_items` 是强输入字段，meta-dev / meta-qa 不得跳过。
-- meta-dev 至少消费：文件影响范围、接口设计、异常处理、测试设计、实施步骤、回滚策略，并在全部目标 Story 的完整 LLD / 技术说明 / waived 证据统一确认且当前 Wave 的 `dev_gate` 满足后优先复用同一子 agent 继续实现。
+- meta-dev 至少消费：文件影响范围、接口设计、异常处理、测试设计、实施步骤、回滚策略，并在全部目标 Story 的独立 LLD / Batch LLD Story 锚点 / 技术说明 / waived 证据统一确认且当前 Wave 的 `dev_gate` 满足后优先复用同一子 agent 继续实现。
 - meta-qa 至少消费：接口设计、核心流程、测试设计、回滚策略、OPEN/Spike 状态、CP6 实现执行证据，并输出验证对象清单、验证追踪矩阵、设计契约验证和阶段决策。
 
 ## 实现执行证据补充
@@ -295,5 +295,5 @@ init（host-orchestrator）                                                   [C
 灰度顺序：
 
 1. 先覆盖 `HLD.md` 与 `STORY-*-LLD.md`
-2. 再覆盖 `ARCHITECTURE-DECISION.md` 与 `STORY-BACKLOG.md`
+2. 再覆盖 `ARCHITECTURE-DECISION.md` 与 `DEVELOPMENT-PLAN.yaml` / legacy Story 视图
 3. 最后覆盖 `README.md`、`USER-MANUAL.md` 等交付文档

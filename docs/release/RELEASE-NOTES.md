@@ -21,6 +21,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.7 | 2026-06-21 | host-orchestrator | CR-034 增加目标项目 adoption readiness、workspace bootstrap、identity scan、adoption doctor 和 bootstrap CR / CP0 context 链路 |
 | 1.8 | 2026-06-29 | host-orchestrator | 新增 Qoder 平台安装支持、platform-tagged managed block 机制和 agent effort/color 映射 |
 | 1.9 | 2026-07-03 | host-orchestrator | CR-036 recovery closure 与 CR-037 impact surface governance 收束；新增结构化影响面、migration report、uncategorized legacy 和 configurable legacy classification rules |
+| 1.10 | 2026-07-04 | host-orchestrator | CR-038..CR-044 收束 CR155 复盘 follow-up：CP0/CP7 硬门禁、CP8 fact diff、release docs 压缩、governance dependency warning、checker provenance、publication authz、CP1 分级、archive 隔离、real-lake validation wrapper 和 Story 管理真相源合并 |
 
 ## 发布范围
 
@@ -40,6 +41,9 @@ created_at: "2026-06-17T13:49:25+08:00"
 | Qoder 平台安装支持 | `meta-flow install qoder`、platform-tagged managed block、`render_qoder_agent`、effort/color 映射、guardrail 检查 | — |
 | CR impact surface governance | `meta-flow cr impact-report`、结构化 `impact_*` split fields、capability resolver-backed report、`uncategorized_legacy`、follow-up candidate、`process/project/IMPACT-SURFACE-RULES.yaml` legacy 分类规则 | CR-037 |
 | Historical CR recovery | CR036 recovery stub、CP0 recovery verification、CP8 recovery closure、CR ledger / checkpoint ledger recovery events | CR-036 |
+| CR155 follow-up hard gates | scope/authz L1/L2/L3 consistency check、CP2 `required_evidence` schema、CP7 promise-evidence alignment、missing vs negative evidence taxonomy、capsule zone/dedup check、standard-lite + batch LLD support | CR-038 |
+| CP8 and release compression | CP8 `fact_diff`、result-first derived consistency、release context first、minimal/compact/full release artifact profiles、DEFERRED_FOLLOW_UP risk handling | CR-039 |
+| Audit and efficiency follow-ups | governance dependency warning、checker provenance、repository publication authz、CP1 graded result、archive/backups isolation、`meta-flow validation run` real-lake-readonly task wrapper、`meta-flow story plan-check` 和 DEVELOPMENT-PLAN Story truth source | CR-040..CR-044 |
 
 ## 用户可见变化
 
@@ -76,6 +80,13 @@ created_at: "2026-06-17T13:49:25+08:00"
 - 正式 CR 支持结构化影响面字段：`impact_capability_refs`、`impact_feature_refs`、`impact_module_paths`、`impact_policy_refs`、`impact_process_refs`、`impact_runtime_refs`、`impact_data_refs`。
 - 项目可通过 `process/project/IMPACT-SURFACE-RULES.yaml` 配置 legacy impact 分类规则；修改规则后应重新运行 impact report、CR lifecycle check 和相关测试。
 - CR036 已以 recovery stub 形式关闭为 `READY_WITH_RISK`，保留原始 planning / handoff / formal decision artifact 缺失风险；CR037 已关闭为 `READY`。
+- CR155 复盘 follow-up 已完成：CP0 会阻断 scope/authz 矛盾，CP7 会把 CP2 commitments 与 evidence alignment 对齐，缺失 required evidence 不再能以 `PASS_WITH_RISK` 绕过。
+- CP8 result 支持 `fact_diff`，用于自动展示承诺、证据、状态、剩余风险和 release decision；release docs 默认从 `RELEASE-CONTEXT.yaml` 派生 compact 摘要，不复制完整 evidence 正文。
+- 新增 governance dependency warning：当业务 CR 依赖未关闭 governance CR 可能修改的 policy/authz/roadmap/process 基线时，CP0 可给出 `NEEDS_REVIEW` 级提示。
+- CP result 可记录 checker provenance；repository publication authz 与 CR runtime/lake/trading 授权分离，避免把 post-CR git push 误读为业务运行授权。
+- CP1 支持 existing use case extension 的分级速通；archive/backups 迁移可从业务 CR diff 中隔离为 housekeeping 风险或独立项。
+- 新增 `meta-flow validation run --profile real-lake-readonly`，为真实 lake readonly 验证生成 run ledger、evidence index、rerun comparison、admission summary 和 forbidden operation counter 摘要；默认不执行外部命令，`--execute --command` 需要独立授权。
+- Story 管理合并到 `process/DEVELOPMENT-PLAN.yaml` 作为 Story / Wave / status / task 机器真相源；`STORY-BACKLOG.md`、`STORY-STATUS.md` 和 Feature `TASKS.md` 只作为 optional legacy / generated views，并由 `meta-flow story plan-check` 检查 drift。
 
 ## 兼容性
 
@@ -88,6 +99,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 - 关闭 CR 的完整 Markdown 仍可归档追溯，但默认上下文应读取 CR summary / index。
 - 新增治理命令保持零运行时依赖；token 估算使用 `ceil(char_count / 4)`，后续如需精确 tokenizer 可作为可选增强。
 - 新增质量治理命令保持零运行时依赖；policy 模板为 YAML 子集，checker 使用仓库既有保守解析器。
+- 新增 CR follow-up 治理命令保持零运行时依赖；`validation run` 只有在显式传入 `--execute --command` 时才执行验证命令，并且不会提升 lake write、trading、broker 或 publish 授权。
 
 ## 已知风险
 
@@ -99,3 +111,4 @@ created_at: "2026-06-17T13:49:25+08:00"
 | context-budgeted governance 是新命令面 | MEDIUM | 已用 84 项 pytest、delivery guardrail 和端到端 fixture 验证；建议先用 quant-lab redesign bootstrap 进行真实项目试运行 |
 | 旧项目迁移仍需项目级判断 | MEDIUM | 本次不强制移动历史 artifact；未来项目默认使用 ledger、summary、packet 和 result JSON 治理 |
 | 历史 CR process artifacts 不完整 | MEDIUM | CR036 已完成 recovery closure；CR033-CR035 等更早 CR 是否需要同类 sweep 需后续治理项判断 |
+| Story legacy views 仍可能存在 | LOW | `DEVELOPMENT-PLAN.yaml` 是机器真相源；`STORY-BACKLOG.md` / `STORY-STATUS.md` / `TASKS.md` 作为 legacy / generated view 时必须用 `meta-flow story plan-check` 检查 drift |

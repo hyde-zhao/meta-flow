@@ -64,16 +64,24 @@ release_decision: NOT_READY
 |---|---|---|---|
 | R-001 | HIGH / MEDIUM / LOW | open / accepted / closed | <处理方式> |
 
-## 9. 回滚方式
+## 9. CP8 Fact Diff 摘要
+
+| Promise Ref | 状态 | 发布影响 | 证据 |
+|---|---|---|---|
+| REQ-001 | EXECUTED_POSITIVE_RESULT / EXECUTED_NEGATIVE_RESULT / MISSING_REQUIRED_EVIDENCE / DEFERRED_FOLLOW_UP | READY / READY_WITH_RISK / NOT_READY / NO_IMPACT | `process/release/RELEASE-CONTEXT.yaml#fact_diff` / Evidence Index |
+
+## 10. 回滚方式
 
 | 回滚触发 | 回滚入口 | 说明 |
 |---|---|---|
 | <条件> | `docs/release/ROLLBACK.md` | <摘要> |
 
-## 10. 参考链接
+## 11. 参考链接
 
 | 类型 | 路径 |
 |---|---|
 | Release Context | `process/release/RELEASE-CONTEXT.yaml` |
+| CP8 Fact Diff | `process/release/RELEASE-CONTEXT.yaml#fact_diff` |
+| Evidence Index | `process/evidence/<CR>.CP8.index.json` |
 | Test Report | `docs/quality/TEST-REPORT.md` |
 | Review | `docs/quality/REVIEW.md` |

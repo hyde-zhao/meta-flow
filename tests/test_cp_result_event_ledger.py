@@ -58,6 +58,27 @@ def write_cp6_result(root: Path, payload: dict[str, object] | None = None) -> Pa
     return path
 
 
+def write_cp8_result(root: Path, payload: dict[str, object] | None = None) -> Path:
+    path = root / "process" / "checks" / "CP8-CR123.result.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    base = cp6_result_payload()
+    base.update(
+        {
+            "checkpoint": "CP8",
+            "checkpoint_id": "CP8-CR123",
+            "story_id": "",
+            "context_ref": "process/context/CP8-CR123.context.json",
+            "dispatch_refs": [],
+            "evidence_ref": "process/evidence/CR123.CP8.index.json",
+            "release_decision": "READY",
+            "next_route": "delivered",
+        }
+    )
+    base.update(payload or {})
+    path.write_text(json.dumps(base, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 class CPResultEventLedgerTests(unittest.TestCase):
     def test_cp_result_check_passes_for_valid_cp6_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -108,6 +129,227 @@ class CPResultEventLedgerTests(unittest.TestCase):
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
 
             self.assertEqual([], errors)
+
+    def test_cp2_commitments_required_evidence_schema_is_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload["checkpoint"] = "CP2"
+            payload["checkpoint_id"] = "CP2-CR123"
+            payload["story_id"] = ""
+            payload["context_ref"] = "process/context/CP2-CR123.context.json"
+            payload["evidence_ref"] = ""
+            payload["dispatch_refs"] = []
+            payload["commitments"] = {
+                "required_evidence": [
+                    {
+                        "id": "REQ-EVID-REAL-LAKE",
+                        "kind": "real_lake_validation",
+                        "required_stage": "CP7",
+                        "minimum_evidence": {"run_refs_min": 2},
+                    }
+                ]
+            }
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertEqual([], errors)
+
+    def test_cp7_missing_required_evidence_blocks_pass_with_risk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload["checkpoint"] = "CP7"
+            payload["checkpoint_id"] = "CP7-STORY-CR123-S01"
+            payload["decision"] = "PASS_WITH_RISK"
+            payload["promise_evidence_alignment"] = [
+                {
+                    "promise_ref": "REQ-EVID-REAL-LAKE",
+                    "evidence_status": "MISSING_REQUIRED_EVIDENCE",
+                    "result": "BLOCKED",
+                    "evidence_refs": [],
+                }
+            ]
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertIn("CP7 decision must be BLOCKED when required evidence is missing", errors)
+
+    def test_cp7_executed_negative_result_can_pass_with_risk_when_evidenced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload["checkpoint"] = "CP7"
+            payload["checkpoint_id"] = "CP7-STORY-CR123-S01"
+            payload["decision"] = "PASS_WITH_RISK"
+            payload["promise_evidence_alignment"] = [
+                {
+                    "promise_ref": "REQ-EVID-ADMISSION",
+                    "evidence_status": "EXECUTED_NEGATIVE_RESULT",
+                    "result": "PASS_WITH_RISK",
+                    "evidence_refs": ["process/evidence/real-lake-validation.json#admission"],
+                }
+            ]
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertEqual([], errors)
+
+    def test_cp8_fact_diff_rejects_pass_when_required_evidence_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp8_result(
+                root,
+                {
+                    "decision": "PASS",
+                    "release_decision": "READY",
+                    "fact_diff": [
+                        {
+                            "promise_ref": "REQ-EVID-REAL-LAKE",
+                            "promise": "Real lake validation must execute",
+                            "status": "MISSING_REQUIRED_EVIDENCE",
+                            "decision_impact": "NOT_READY",
+                            "evidence_refs": [],
+                            "risk_ref": "R-REAL-LAKE-MISSING",
+                        }
+                    ],
+                },
+            )
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertIn("CP8 decision cannot be PASS/WAIVED when fact_diff has missing required evidence", errors)
+            self.assertIn("CP8 release_decision must be NOT_READY when fact_diff has missing required evidence", errors)
+
+    def test_cp8_fact_diff_allows_ready_with_risk_for_executed_negative_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp8_result(
+                root,
+                {
+                    "decision": "PASS",
+                    "release_decision": "READY_WITH_RISK",
+                    "fact_diff": [
+                        {
+                            "promise_ref": "REQ-EVID-ADMISSION",
+                            "promise": "Admission package exists",
+                            "status": "EXECUTED_NEGATIVE_RESULT",
+                            "decision_impact": "READY_WITH_RISK",
+                            "evidence_refs": ["process/evidence/CR123.CP7.index.json#admission"],
+                            "risk_ref": "R-ADMISSION-BLOCKED",
+                        }
+                    ],
+                },
+            )
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertEqual([], errors)
+
+    def test_cp8_fact_diff_rejects_ready_for_deferred_follow_up(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp8_result(
+                root,
+                {
+                    "decision": "PASS",
+                    "release_decision": "READY",
+                    "fact_diff": [
+                        {
+                            "promise_ref": "REQ-FOLLOW-UP-001",
+                            "promise": "Non-blocking follow-up must be tracked before closeout",
+                            "status": "DEFERRED_FOLLOW_UP",
+                            "decision_impact": "READY_WITH_RISK",
+                            "evidence_refs": ["process/changes/CR123-FOLLOW-UP-TRACKING.md#FU-001"],
+                            "risk_ref": "R-FOLLOW-UP-DEFERRED",
+                        }
+                    ],
+                },
+            )
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertIn("CP8 release_decision cannot be READY when fact_diff has risk or not-ready impacts", errors)
+
+    def test_checker_provenance_requires_review_ref_when_fallback_used(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload["checker_provenance"] = {
+                "checker_name": "meta-flow cp result-check",
+                "checker_version": "1.0.0",
+                "invocation": "meta-flow cp result-check --result process/checks/CP6.result.json",
+                "generated_by": "tool",
+                "fallback_used": True,
+                "fallback_reason": "checker unavailable in current checkout",
+            }
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertIn("checker_provenance fallback_used=true requires fallback_review_ref", errors)
+
+    def test_checker_provenance_is_rendered_and_added_to_checkpoint_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload["checker_provenance"] = {
+                "checker_name": "meta-flow cp result-check",
+                "checker_commit": "abc1234",
+                "invocation": "meta-flow cp result-check --result process/checks/CP6.result.json",
+                "generated_by": "tool",
+                "fallback_used": False,
+            }
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+            summary = cp_result.render_summary(cp_result.load_cp_result(result))
+            event = cp_result.build_checkpoint_event(root, result)
+
+            self.assertEqual([], errors)
+            self.assertIn("## Checker Provenance", summary)
+            self.assertEqual("meta-flow cp result-check", event["checker_provenance"]["checker_name"])
+
+    def test_render_summary_includes_cp8_release_decision_and_fact_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp8_result(
+                root,
+                {
+                    "decision": "PASS",
+                    "release_decision": "READY_WITH_RISK",
+                    "fact_diff": [
+                        {
+                            "promise_ref": "REQ-EVID-ADMISSION",
+                            "promise": "Admission package exists",
+                            "status": "EXECUTED_NEGATIVE_RESULT",
+                            "decision_impact": "READY_WITH_RISK",
+                            "evidence_refs": ["process/evidence/CR123.CP7.index.json#admission"],
+                            "risk_ref": "R-ADMISSION-BLOCKED",
+                        }
+                    ],
+                },
+            )
+
+            summary = cp_result.render_summary(cp_result.load_cp_result(result))
+
+            self.assertIn("Release Decision: READY_WITH_RISK", summary)
+            self.assertIn("## Fact Diff", summary)
+            self.assertIn("REQ-EVID-ADMISSION", summary)
+            self.assertIn("EXECUTED_NEGATIVE_RESULT", summary)
+
+    def test_result_check_consistency_rejects_stale_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+            result.with_suffix(".summary.md").write_text("# CP6 Summary\n\nDecision: FAIL\nCR: CR-123\n", encoding="utf-8")
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertTrue(any("summary decision does not match result JSON" in error for error in errors))
 
     def test_render_summary_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

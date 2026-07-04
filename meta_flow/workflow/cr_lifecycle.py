@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.design import feature_registry
+from meta_flow.policies import authz
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import current
 
@@ -67,6 +68,63 @@ IMPACT_SPLIT_FIELDS = (
     "impact_runtime_refs",
     "impact_data_refs",
 )
+OPEN_DEPENDENCY_STATUSES = {"active", "blocked", "proposed"}
+GOVERNANCE_BASELINE_MARKERS = (
+    "process/policies",
+    "process/policy",
+    "process/state",
+    "process/project",
+    "process/roadmap",
+    "roadmap",
+    "authz",
+    "policy",
+    "policies",
+    "gate_profile",
+    "gate_profiles",
+    "delivery/rules",
+    "agent-skill-contract",
+    "directory-contract",
+)
+CP1_PRODUCT_BASELINE_DOCS = (
+    "docs/product/use-cases.md",
+    "docs/product/requirements.md",
+    "docs/product/scenarios",
+    "docs/product/test-matrix",
+    "docs/product/story-map",
+    "docs/product/mvp-scope",
+    "docs/product/release-slices",
+    "docs/product/backlog",
+)
+CP1_FULL_REQUIRED_CHECKS = (
+    "use_case_completeness",
+    "requirements_traceability",
+    "scenario_coverage",
+    "story_map_alignment",
+    "mvp_scope_alignment",
+)
+CP1_LIGHTWEIGHT_REQUIRED_CHECKS = (
+    "cr_tracking",
+    "impact_surface",
+    "affected_use_case_refs",
+)
+ARCHIVE_BACKUP_PATH_MARKERS = (
+    "process/archive/",
+    "process/backups/",
+    "process/backup/",
+    "/archive/",
+    "/backups/",
+    "/backup/",
+)
+HOUSEKEEPING_CR_MARKERS = (
+    "housekeeping",
+    "archive",
+    "backup",
+    "retention",
+    "cleanup",
+    "clean-up",
+    "ledger-compaction",
+    "state-slim",
+)
 
 
 @dataclass(frozen=True)
@@ -111,6 +169,8 @@ class CRRecord:
     affected_product_docs: list[str]
     affected_use_cases: list[str]
     routing_design_ref: str
+    required_evidence: list[str]
+    required_capabilities: list[str]
 
 
 def now_utc() -> str:
@@ -399,6 +459,254 @@ def _section_summary(text: str, heading: str, *, max_items: int = 3) -> list[str
     return values
 
 
+def _body_text(text: str) -> str:
+    return FRONTMATTER_RE.sub("", text, count=1)
+
+
+def _record_required_evidence(record: CRRecord, text: str = "") -> list[str]:
+    inferred = authz.infer_required_evidence_from_text(
+        " ".join(
+            [
+                record.title,
+                record.goal_statement,
+                record.user_goal_impact,
+                " ".join(record.impact_data_refs),
+                " ".join(record.impact_runtime_refs),
+                _body_text(text),
+            ]
+        )
+    )
+    return _unique([*record.required_evidence, *inferred])
+
+
+def collect_scope_authz_findings(record: CRRecord, *, text: str = "") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return blocking conflicts and review findings for CR scope/authz consistency."""
+
+    required_evidence = _record_required_evidence(record, text)
+    authz_caps = authz.normalize_capability_aliases(record.authz_policy_refs + record.not_authorized_by_approve)
+    required_from_evidence = authz.required_capabilities_for_evidence(required_evidence)
+    forbidden = set(authz_caps["forbidden"])
+    allowed = set(authz_caps["allowed"])
+    required_capabilities = set(record.required_capabilities)
+    blockers: list[dict[str, Any]] = []
+    needs_review: list[dict[str, Any]] = []
+
+    explicit_overlap = sorted(required_capabilities.intersection(forbidden))
+    if explicit_overlap:
+        blockers.append(
+            {
+                "level": "L1",
+                "code": "explicit_scope_authz_conflict",
+                "required_capabilities": explicit_overlap,
+                "authz_policy_refs": record.authz_policy_refs,
+                "decision": "BLOCKED",
+            }
+        )
+
+    direct_evidence_overlap = sorted(set(required_from_evidence["direct"]).intersection(forbidden))
+    prerequisite_overlap = sorted(
+        set(required_from_evidence["prerequisites"]).intersection(forbidden) - set(direct_evidence_overlap)
+    )
+    if direct_evidence_overlap:
+        blockers.append(
+            {
+                "level": "L2",
+                "code": "required_evidence_forbidden_by_authz",
+                "required_evidence": required_evidence,
+                "required_capabilities": direct_evidence_overlap,
+                "authz_policy_refs": record.authz_policy_refs,
+                "decision": "BLOCKED",
+            }
+        )
+    if prerequisite_overlap:
+        needs_review.append(
+            {
+                "level": "L2",
+                "code": "required_evidence_prerequisite_authz_conflict",
+                "required_evidence": required_evidence,
+                "required_capabilities": prerequisite_overlap,
+                "authz_policy_refs": record.authz_policy_refs,
+                "decision": "NEEDS_REVIEW",
+            }
+        )
+
+    high_risk_evidence = {"real_lake_validation", "historical_backtest", "oos_walkforward"}
+    if high_risk_evidence.intersection(required_evidence) and "real_lake_read" not in allowed and "real_lake_read" not in forbidden:
+        needs_review.append(
+            {
+                "level": "L3",
+                "code": "high_risk_validation_authz_boundary_not_explicit",
+                "required_evidence": sorted(high_risk_evidence.intersection(required_evidence)),
+                "decision": "NEEDS_REVIEW",
+            }
+        )
+    if required_from_evidence["unknown"]:
+        needs_review.append(
+            {
+                "level": "L3",
+                "code": "unknown_required_evidence_kind",
+                "required_evidence": required_from_evidence["unknown"],
+                "decision": "NEEDS_REVIEW",
+            }
+        )
+    return blockers, needs_review
+
+
+def _governance_dependency_values(record: CRRecord, *, project_root: Path | None = None) -> list[str]:
+    effective = _effective_impact_fields(record, project_root=project_root)
+    values: list[str] = []
+    values.extend(record.conflict_keys)
+    values.extend(record.impact_surface)
+    values.extend(record.authz_policy_refs)
+    for field in IMPACT_SPLIT_FIELDS:
+        values.extend(effective.get(field, []))
+    return _unique([str(value) for value in values if str(value)])
+
+
+def _governance_markers(values: list[str]) -> set[str]:
+    markers: set[str] = set()
+    for value in values:
+        lowered = value.lower()
+        for marker in GOVERNANCE_BASELINE_MARKERS:
+            if marker in lowered:
+                markers.add(marker)
+    return markers
+
+
+def _is_open_governance_baseline_cr(record: CRRecord, *, project_root: Path | None = None) -> bool:
+    if record.status not in OPEN_DEPENDENCY_STATUSES or record.cr_type != "process":
+        return False
+    return bool(_governance_markers(_governance_dependency_values(record, project_root=project_root)))
+
+
+def collect_governance_dependency_findings(
+    project_root: Path,
+    target: CRRecord,
+) -> list[dict[str, Any]]:
+    """Return warning-only findings for CRs depending on open governance baseline changes."""
+
+    if target.status not in OPEN_DEPENDENCY_STATUSES:
+        return []
+    target_values = _governance_dependency_values(target, project_root=project_root)
+    target_markers = _governance_markers(target_values)
+    if not target_markers:
+        return []
+    findings: list[dict[str, Any]] = []
+    for cr_id, path in discover_formal_crs(project_root).items():
+        if cr_id == target.cr_id:
+            continue
+        other = record_from_cr_file(project_root, path)
+        if not _is_open_governance_baseline_cr(other, project_root=project_root):
+            continue
+        other_values = _governance_dependency_values(other, project_root=project_root)
+        other_markers = _governance_markers(other_values)
+        marker_overlap = sorted(target_markers.intersection(other_markers))
+        direct_overlap = sorted(set(target_values).intersection(other_values))
+        if marker_overlap or direct_overlap:
+            findings.append(
+                {
+                    "code": "open_governance_dependency_needs_review",
+                    "decision": "NEEDS_REVIEW",
+                    "blocking": False,
+                    "current_cr": target.cr_id,
+                    "governance_cr": other.cr_id,
+                    "governance_ref": other.full_ref,
+                    "marker_overlap": marker_overlap,
+                    "direct_overlap": direct_overlap,
+                    "reason": "open governance baseline CR may change policy/authz/roadmap/process-state assumptions",
+                }
+            )
+    return findings
+
+
+def classify_cp1_review_profile(record: CRRecord) -> dict[str, Any]:
+    """Classify how much CP1 use-case completeness review the CR needs."""
+
+    product_doc_values = [value.lower() for value in record.affected_product_docs]
+    impact_values = [value.lower() for value in record.impact_surface + record.impact_process_refs + record.impact_module_paths]
+    product_baseline_touched = record.product_baseline_refresh_required or any(
+        any(marker in value for marker in CP1_PRODUCT_BASELINE_DOCS)
+        for value in [*product_doc_values, *impact_values]
+    )
+    if product_baseline_touched:
+        return {
+            "profile": "full",
+            "decision": "FULL_CP1_REQUIRED",
+            "required_checks": list(CP1_FULL_REQUIRED_CHECKS),
+            "reason": "product baseline docs or product_baseline_refresh_required indicate use-case completeness must be rechecked",
+        }
+    if record.affected_use_cases:
+        return {
+            "profile": "lightweight_existing_use_case_extension",
+            "decision": "LIGHTWEIGHT_CP1",
+            "required_checks": list(CP1_LIGHTWEIGHT_REQUIRED_CHECKS),
+            "affected_use_cases": record.affected_use_cases,
+            "reason": "CR extends existing use-case refs without refreshing the product baseline",
+        }
+    if record.cr_type in {"process", "refactor", "bugfix", "docs", "runtime", "release"}:
+        return {
+            "profile": "not_applicable",
+            "decision": "CP1_NOT_REQUIRED",
+            "required_checks": ["cr_tracking", "impact_surface"],
+            "reason": "CR type does not change user scenarios or product baseline by default",
+        }
+    return {
+        "profile": "standard",
+        "decision": "STANDARD_CP1_REVIEW",
+        "required_checks": list(CP1_FULL_REQUIRED_CHECKS),
+        "reason": "CR may affect product behavior but does not provide enough evidence for lightweight CP1",
+    }
+
+
+def _archive_backup_refs(record: CRRecord, *, project_root: Path | None = None) -> list[str]:
+    effective = _effective_impact_fields(record, project_root=project_root)
+    values: list[str] = []
+    values.extend(record.impact_surface)
+    for field in (
+        "impact_module_paths",
+        "impact_process_refs",
+        "impact_data_refs",
+    ):
+        values.extend(effective.get(field, []))
+    refs: list[str] = []
+    for value in values:
+        normalized = str(value).strip().replace("\\", "/")
+        lowered = normalized.lower()
+        if any(marker in lowered for marker in ARCHIVE_BACKUP_PATH_MARKERS):
+            refs.append(normalized)
+    return _unique(refs)
+
+
+def _is_housekeeping_cr(record: CRRecord) -> bool:
+    values = [record.title, record.cr_type, *record.conflict_keys, *record.impact_surface]
+    lowered = " ".join(str(value).lower() for value in values if str(value))
+    return record.cr_type == "process" and any(marker in lowered for marker in HOUSEKEEPING_CR_MARKERS)
+
+
+def collect_archive_isolation_findings(
+    record: CRRecord,
+    *,
+    project_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Return warning-only findings for archive/backups paths mixed into business CR scope."""
+
+    if record.status not in OPEN_DEPENDENCY_STATUSES:
+        return []
+    archive_refs = _archive_backup_refs(record, project_root=project_root)
+    if not archive_refs or _is_housekeeping_cr(record):
+        return []
+    return [
+        {
+            "code": "archive_backup_scope_needs_isolation",
+            "decision": "NEEDS_REVIEW",
+            "blocking": False,
+            "current_cr": record.cr_id,
+            "archive_refs": archive_refs,
+            "reason": "archive/backups paths should be isolated in housekeeping CRs or explicitly justified",
+        }
+    ]
+
+
 def _first_section_summary(text: str, heading: str) -> str:
     values = _section_summary(text, heading, max_items=1)
     return values[0] if values else ""
@@ -471,6 +779,8 @@ def record_from_cr_file(project_root: Path, path: Path) -> CRRecord:
         affected_product_docs=parse_inline_list(fields.get("affected_product_docs", "")),
         affected_use_cases=parse_inline_list(fields.get("affected_use_cases", "")),
         routing_design_ref=fields.get("routing_design_ref", ""),
+        required_evidence=parse_inline_list(fields.get("required_evidence", "")),
+        required_capabilities=parse_inline_list(fields.get("required_capabilities", "")),
     )
 
 
@@ -514,9 +824,28 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
         "affected_product_docs": record.affected_product_docs,
         "affected_use_cases": record.affected_use_cases,
         "routing_design_ref": record.routing_design_ref,
+        "required_evidence": _record_required_evidence(record, text),
+        "required_capabilities": record.required_capabilities,
         "full_ref": record.full_ref,
         "evidence_index_ref": (CR_ARCHIVE_ROOT_REL / record.cr_id / "evidence-index.json").as_posix(),
         "updated_at": now_utc(),
+    }
+    blockers, needs_review = collect_scope_authz_findings(record, text=text)
+    summary["scope_authz_consistency"] = {
+        "decision": "BLOCKED" if blockers else "NEEDS_REVIEW" if needs_review else "PASS",
+        "blockers": blockers,
+        "needs_review": needs_review,
+    }
+    governance_findings = collect_governance_dependency_findings(project_root, record)
+    summary["governance_dependency_review"] = {
+        "decision": "NEEDS_REVIEW" if governance_findings else "PASS",
+        "findings": governance_findings,
+    }
+    archive_findings = collect_archive_isolation_findings(record, project_root=project_root)
+    summary["cp1_review_profile"] = classify_cp1_review_profile(record)
+    summary["archive_isolation_review"] = {
+        "decision": "NEEDS_REVIEW" if archive_findings else "PASS",
+        "findings": archive_findings,
     }
     return summary
 
@@ -601,6 +930,8 @@ def build_index(project_root: Path) -> dict[str, Any]:
                 "affected_product_docs": record.affected_product_docs,
                 "affected_use_cases": record.affected_use_cases,
                 "routing_design_ref": record.routing_design_ref,
+                "required_evidence": _record_required_evidence(record, path.read_text(encoding="utf-8")),
+                "required_capabilities": record.required_capabilities,
             }
         )
     return {
@@ -936,7 +1267,42 @@ def collect_check_errors(project_root: Path) -> list[str]:
         cr_type = item.get("cr_type")
         if cr_type and cr_type not in ALLOWED_CR_TYPES:
             errors.append(f"CR index item {item_id}: invalid cr_type {cr_type}")
+    for cr_id, path in discover_formal_crs(project_root).items():
+        text = path.read_text(encoding="utf-8")
+        record = record_from_cr_file(project_root, path)
+        blockers, _needs_review = collect_scope_authz_findings(record, text=text)
+        for blocker in blockers:
+            capabilities = ", ".join(blocker.get("required_capabilities") or [])
+            evidence = ", ".join(blocker.get("required_evidence") or [])
+            suffix = f" evidence={evidence}" if evidence else ""
+            errors.append(
+                f"{cr_id} scope/authz {blocker.get('level')} {blocker.get('code')}: "
+                f"required_capabilities={capabilities}{suffix}"
+            )
     return errors
+
+
+def collect_check_warnings(project_root: Path) -> list[str]:
+    project_root = project_root.resolve()
+    warnings: list[str] = []
+    for cr_id, path in discover_formal_crs(project_root).items():
+        record = record_from_cr_file(project_root, path)
+        for finding in collect_governance_dependency_findings(project_root, record):
+            markers = ", ".join(finding.get("marker_overlap") or [])
+            direct = ", ".join(finding.get("direct_overlap") or [])
+            overlap = markers or direct or "-"
+            warnings.append(
+                f"{cr_id} governance dependency {finding.get('code')}: "
+                f"governance_cr={finding.get('governance_cr')} overlap={overlap} "
+                f"decision={finding.get('decision')}"
+            )
+        for finding in collect_archive_isolation_findings(record, project_root=project_root):
+            refs = ", ".join(finding.get("archive_refs") or [])
+            warnings.append(
+                f"{cr_id} archive isolation {finding.get('code')}: "
+                f"archive_refs={refs or '-'} decision={finding.get('decision')}"
+            )
+    return warnings
 
 
 def _conflict_surface(item: dict[str, Any]) -> set[str]:
@@ -1262,7 +1628,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "check":
         errors = collect_check_errors(project_root)
+        warnings = collect_check_warnings(project_root)
         print("CR Lifecycle Check: " + ("FAIL" if errors else "OK"))
+        for warning in warnings:
+            print(f"- WARN: {warning}")
         for error in errors:
             print(f"- ERROR: {error}")
         return 1 if errors else 0

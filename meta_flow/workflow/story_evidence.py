@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
 from meta_flow.context_pack import story_contract
+from meta_flow.project.scale import load_yaml_object
 
 
 EVIDENCE_ROOT_REL = Path("process/evidence")
 DESIGN_DELTA_ROOT_REL = Path("process/design-deltas")
+DEVELOPMENT_PLAN_REL = Path("process/DEVELOPMENT-PLAN.yaml")
+LEGACY_STORY_BACKLOG_REL = Path("process/STORY-BACKLOG.md")
+LEGACY_STORY_STATUS_REL = Path("process/STORY-STATUS.md")
+FEATURE_TASKS_GLOB = "docs/features/*/TASKS.md"
 
 ALLOWED_RETURN_PACKET_TYPES = {"story_return_packet"}
 ALLOWED_RETURN_STAGES = {"CP6", "CP7"}
@@ -53,6 +59,25 @@ NON_TERMINAL_STATUSES = {
 }
 ALLOWED_DELTA_TYPES = {"none", "patch", "new_contract", "migration", "open_question"}
 ALLOWED_DELTA_STATUSES = {"pending", "merged", "deferred", "waived"}
+ALLOWED_STORY_PLAN_STATUSES = {
+    "draft",
+    "lld-ready",
+    "lld-in-progress",
+    "lld-ready-for-review",
+    "lld-batch-ready-for-review",
+    "lld-approved",
+    "dev-ready",
+    "in-development",
+    "ready-for-verification",
+    "verified",
+    "verified-with-risk",
+    "done",
+    "blocked",
+    "needs-rework",
+    "needs-design-clarification",
+    "waived",
+}
+STORY_ID_RE = re.compile(r"\bSTORY-[A-Za-z0-9][A-Za-z0-9._-]*\b")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -93,6 +118,10 @@ def _string_list(value: Any) -> list[str]:
     return [str(item) for item in _as_list(value) if str(item)]
 
 
+def _slug_status(value: Any) -> str:
+    return str(value or "").strip().lower().replace("_", "-")
+
+
 def _entry_path(entry: Any) -> str:
     if isinstance(entry, dict):
         return str(entry.get("path") or "")
@@ -117,6 +146,172 @@ def default_evidence_path(project_root: Path, story_id: str, stage: str) -> Path
 
 def default_design_delta_path(project_root: Path, story_id: str) -> Path:
     return project_root / DESIGN_DELTA_ROOT_REL / f"{story_id}.delta.json"
+
+
+def _iter_plan_story_entries(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for story in _as_list(plan.get("stories")):
+        if isinstance(story, dict):
+            item = dict(story)
+            if item.get("wave") is None:
+                item["wave"] = item.get("wave_id") or ""
+            entries.append(item)
+    for wave in _as_list(plan.get("waves")):
+        if not isinstance(wave, dict):
+            continue
+        wave_id = str(wave.get("wave") or wave.get("id") or wave.get("wave_id") or "")
+        for story in _as_list(wave.get("stories")):
+            if isinstance(story, dict):
+                item = dict(story)
+                if item.get("wave") is None:
+                    item["wave"] = wave_id
+                entries.append(item)
+    return entries
+
+
+def _task_ids_from_plan_story(story: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    for key in ("tasks", "task_refs", "task_ids"):
+        for entry in _as_list(story.get(key)):
+            if isinstance(entry, dict):
+                task_id = str(entry.get("task_id") or entry.get("id") or "")
+            else:
+                task_id = str(entry or "")
+            if task_id:
+                ids.add(task_id)
+    return ids
+
+
+def _legacy_story_ids(path: Path) -> set[str]:
+    if not path.is_file():
+        return set()
+    return set(STORY_ID_RE.findall(path.read_text(encoding="utf-8")))
+
+
+def _markdown_table_statuses(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    statuses: dict[str, str] = {}
+    header: list[str] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("|") or "STORY-" not in line:
+            if line.startswith("|") and ("Story ID" in line or "故事" in line):
+                header = [cell.strip().lower() for cell in line.strip("|").split("|")]
+            continue
+        cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
+        story_id = next((cell for cell in cells if STORY_ID_RE.fullmatch(cell)), "")
+        if not story_id:
+            continue
+        status_index = -1
+        for candidate in ("状态", "status"):
+            if candidate in header:
+                status_index = header.index(candidate)
+                break
+        if status_index < 0 or status_index >= len(cells):
+            continue
+        status = _slug_status(cells[status_index])
+        if status:
+            statuses[story_id] = status
+    return statuses
+
+
+def _task_ids_from_markdown(path: Path) -> set[str]:
+    if not path.is_file():
+        return set()
+    text = path.read_text(encoding="utf-8")
+    return set(re.findall(r"\b(?:TASK|T)-[A-Za-z0-9][A-Za-z0-9._-]*\b", text))
+
+
+def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, strict_legacy: bool = False) -> tuple[list[str], list[str]]:
+    root = project_root.resolve()
+    path = (plan_path or root / DEVELOPMENT_PLAN_REL).resolve()
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not path.is_file():
+        return [f"missing story management truth source: {_rel(root, path)}"], warnings
+    try:
+        plan = load_yaml_object(path)
+    except (OSError, ValueError) as exc:
+        return [f"invalid development plan: {exc}"], warnings
+    truth_source = str(plan.get("story_management_truth_source") or "").strip()
+    if truth_source and truth_source != DEVELOPMENT_PLAN_REL.as_posix():
+        errors.append(
+            f"story_management_truth_source must be {DEVELOPMENT_PLAN_REL.as_posix()}: {truth_source}"
+        )
+    if not truth_source:
+        warnings.append("story_management_truth_source is missing; defaulting to process/DEVELOPMENT-PLAN.yaml")
+
+    story_entries = _iter_plan_story_entries(plan)
+    if not story_entries:
+        errors.append("DEVELOPMENT-PLAN must contain stories under top-level stories or waves[*].stories")
+        return errors, warnings
+
+    plan_statuses: dict[str, str] = {}
+    plan_tasks: set[str] = set()
+    seen: set[str] = set()
+    for index, story in enumerate(story_entries, start=1):
+        story_id = str(story.get("story_id") or story.get("id") or "").strip()
+        if not story_id:
+            errors.append(f"story[{index}] missing story_id")
+            continue
+        if story_id in seen:
+            errors.append(f"duplicate story_id in DEVELOPMENT-PLAN: {story_id}")
+        seen.add(story_id)
+        title = str(story.get("title") or "").strip()
+        if not title:
+            errors.append(f"{story_id} missing title")
+        wave = str(story.get("wave") or story.get("wave_id") or "").strip()
+        if not wave:
+            errors.append(f"{story_id} missing wave")
+        status = _slug_status(story.get("status") or "draft")
+        if status not in ALLOWED_STORY_PLAN_STATUSES:
+            errors.append(f"{story_id} invalid status: {status}")
+        plan_statuses[story_id] = status
+        plan_tasks.update(_task_ids_from_plan_story(story))
+
+    legacy_paths = [
+        root / LEGACY_STORY_BACKLOG_REL,
+        root / LEGACY_STORY_STATUS_REL,
+        *sorted((root / "docs" / "features").glob("*/TASKS.md")),
+    ]
+    legacy_story_ids: dict[str, set[str]] = {
+        _rel(root, legacy): _legacy_story_ids(legacy) for legacy in legacy_paths if legacy.is_file()
+    }
+    unknown_refs: list[str] = []
+    for rel_path, story_ids in legacy_story_ids.items():
+        for story_id in sorted(story_ids - set(plan_statuses)):
+            unknown_refs.append(f"{rel_path}:{story_id}")
+    if unknown_refs:
+        message = "legacy story refs missing from DEVELOPMENT-PLAN: " + ", ".join(unknown_refs)
+        if strict_legacy:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
+    legacy_statuses = _markdown_table_statuses(root / LEGACY_STORY_STATUS_REL)
+    for story_id, legacy_status in sorted(legacy_statuses.items()):
+        plan_status = plan_statuses.get(story_id)
+        if plan_status and legacy_status != plan_status:
+            errors.append(
+                f"legacy STORY-STATUS status conflict for {story_id}: plan={plan_status} legacy={legacy_status}"
+            )
+
+    legacy_task_ids: dict[str, set[str]] = {
+        _rel(root, path): _task_ids_from_markdown(path)
+        for path in sorted((root / "docs" / "features").glob("*/TASKS.md"))
+    }
+    unknown_tasks: list[str] = []
+    for rel_path, task_ids in legacy_task_ids.items():
+        for task_id in sorted(task_ids - plan_tasks):
+            unknown_tasks.append(f"{rel_path}:{task_id}")
+    if unknown_tasks:
+        message = "legacy Feature TASKS refs missing from DEVELOPMENT-PLAN tasks: " + ", ".join(unknown_tasks)
+        if strict_legacy:
+            errors.append(message)
+        else:
+            warnings.append(message)
+    return errors, warnings
 
 
 def load_return_packet(path: Path) -> dict[str, Any]:
@@ -391,10 +586,12 @@ def _print_story_help() -> None:
         "  evidence-index  Build an Evidence Index from a Story Return Packet.\n"
         "  evidence-check  Validate an Evidence Index.\n"
         "  verify-packet   Build a CP7 Story Verify Packet from a CP6 Return Packet.\n\n"
+        "  plan-check      Validate DEVELOPMENT-PLAN as the Story management truth source.\n\n"
         "Examples:\n"
         "  meta-flow story return-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
         "  meta-flow story evidence-index --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
         "  meta-flow story verify-packet --from-return process/returns/STORY-CR123-S01.CP6.return.json --story process/stories/STORY-CR123-S01.md --project-root .\n"
+        "  meta-flow story plan-check --project-root .\n"
     )
 
 
@@ -459,6 +656,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"wrote: {path}")
         return 0
+    if command == "plan-check":
+        parser = argparse.ArgumentParser(prog="meta-flow story plan-check")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--plan", dest="plan_path", type=Path, default=None)
+        parser.add_argument("--strict-legacy", action="store_true")
+        parsed = parser.parse_args(args[1:])
+        errors, warnings = validate_story_plan(
+            parsed.project_root,
+            plan_path=parsed.plan_path,
+            strict_legacy=parsed.strict_legacy,
+        )
+        print("Story Plan Check: " + ("FAIL" if errors else "OK"))
+        for warning in warnings:
+            print(f"- WARN: {warning}")
+        for error in errors:
+            print(f"- ERROR: {error}")
+        return 1 if errors else 0
     raise SystemExit(f"未知 story 命令: {command}")
 
 

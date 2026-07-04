@@ -1308,7 +1308,7 @@ def main(argv: list[str] | None = None) -> int:
     command = args[0]
     description = (
         "Render process/STATE.md from STATE.current.json and run state check; "
-        "this command does not slim STATE.current.json or compact NDJSON event ledgers."
+        "this command does not compact NDJSON event ledgers or slim STATE.current.json."
         if command == "compact"
         else None
     )

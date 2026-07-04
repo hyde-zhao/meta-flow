@@ -73,14 +73,14 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 | `hld-design` | Architecture Gray Areas 已处理，或 fast-lane 明确 N/A | 调用 `hld-designer`，消费 advisor discussion 结果，输出 `docs/design/HLD.md`；同时生成 `docs/design/ARCHITECTURE-DECISION.md` draft，至少记录 CP3 需要确认的核心 ADR、备选方案、优劣分析和切换条件；并按 CP3 checklist 写入 `process/checks/CP3-HLD-CONSISTENCY.md` | 写完 CP3 自动预检输入后，请用户确认“HLD + 核心 ADR 草案可提交给 host-orchestrator 发起 CP3”，写交还摘要并停止 |
 | `waiting-for-hld-approval` | `docs/design/HLD.md` 已提交 | 不写下游规划文件，只等待人工确认 | 仅在 `docs/design/HLD.md confirmed=true` 后退出 |
 | `feature-design-planning` | CP3 人工确认通过 | 生成 `docs/design/FEATURE-DESIGN-MATRIX.md`，逐项判定 Feature 设计适用性、必要 Feature DESIGN / TEST-PLAN / TASKS、Story 引用关系和 `lld_policy=full-lld|technical-note|waived`；命中必需条件时调用 `implementation-design` 输出 Feature 级设计 | Feature 设计矩阵完成，所有 required Feature 设计已生成或有 WAIVED 决策 |
-| `story-planning` | Feature Design Matrix 完成，且 required Feature 设计已生成或 waived | 补充 / 更新 `docs/design/ARCHITECTURE-DECISION.md` 的落地映射，不得新增改变 HLD 推荐方案的核心 ADR；输出 `process/PLATFORM-INSTALL-SPEC.md`、`process/STORY-BACKLOG.md`、`process/DEVELOPMENT-PLAN.yaml`、`process/stories/STORY-*.md`；若涉及平台安装路径，同步引用 `delivery/doc/PLATFORM-CONTRACTS.yaml`；为 Story 标记依赖类型、文件所有权、`feature_design_refs`、`lld_policy`、`lld_gate`、`dev_gate` 与并行策略；按 CP4 checklist 写入 `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md` | CP4 自动预检通过后立即停止，交由 host-orchestrator 将 CP4 摘要汇入 CP5 批量设计证据 Decision Brief |
+| `story-planning` | Feature Design Matrix 完成，且 required Feature 设计已生成或 waived | 补充 / 更新 `docs/design/ARCHITECTURE-DECISION.md` 的落地映射，不得新增改变 HLD 推荐方案的核心 ADR；输出 `process/PLATFORM-INSTALL-SPEC.md`、`process/DEVELOPMENT-PLAN.yaml`、`process/stories/STORY-*.md`；`STORY-BACKLOG.md` / `STORY-STATUS.md` 仅作为从计划派生的 legacy 人类视图；若涉及平台安装路径，同步引用 `delivery/doc/PLATFORM-CONTRACTS.yaml`；为 Story 标记依赖类型、文件所有权、`feature_design_refs`、`lld_policy`、`lld_gate`、`dev_gate` 与并行策略；按 CP4 checklist 写入 `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md` | CP4 自动预检通过后立即停止，交由 host-orchestrator 将 CP4 摘要汇入 CP5 批量设计证据 Decision Brief |
 | `blocked` | 输入缺失、约束冲突、依赖图无效、文件冲突 | 记录阻塞原因、影响范围、需要的决策 | 写完阻塞说明后立即停止 |
 
 **硬性规则：**
 
 - 未完成问题定义前，不得直接给 HLD
 - 未评估 `BLUEPRINT.md` / `DOMAIN-MAP.md` / `DEPENDENCY-MAP.md` 是否适用前，不得把跨 Feature 边界、数据归属或依赖方向直接压进 HLD；若跳过蓝图，必须写明逐项 N/A 原因
-- 未经 CP3 人工确认，不得输出 `docs/design/FEATURE-DESIGN-MATRIX.md`、Feature 级设计、`process/PLATFORM-INSTALL-SPEC.md`、`process/STORY-BACKLOG.md`、`process/DEVELOPMENT-PLAN.yaml` 或 `process/stories/STORY-*.md`；但 CP3 前必须生成 `docs/design/ARCHITECTURE-DECISION.md` draft，用于尽早确认关键 ADR
+- 未经 CP3 人工确认，不得输出 `docs/design/FEATURE-DESIGN-MATRIX.md`、Feature 级设计、`process/PLATFORM-INSTALL-SPEC.md`、`process/DEVELOPMENT-PLAN.yaml`、派生 Story legacy 视图或 `process/stories/STORY-*.md`；但 CP3 前必须生成 `docs/design/ARCHITECTURE-DECISION.md` draft，用于尽早确认关键 ADR
 - `docs/design/HLD.md` 未确认前，不得拆解 Story
 - 进入 `blocked` 后不得继续推进下一阶段
 
@@ -123,7 +123,7 @@ meta-se 在正式生成 HLD 前，必须先输出 Architecture Gray Areas 和 ad
 | `phase-designer` | HLD 确认后，需要先划分执行阶段时 | 阶段划分结果 | HLD 未确认前不要调用 |
 | `dependency-mapper` | 需要建立 Story 依赖和文件所有权时 | 依赖图 | Story 草案未稳定前不要调用 |
 | `wave-planner` | 依赖图明确后，需要确定并行/串行分组时 | Wave 划分 | 依赖未稳定时不要调用 |
-| `story-manager` | 需要生成 Story 卡片与 Backlog 时 | `STORY-BACKLOG.md` 与 `STORY-*.md` | `dev_context` 不完整时不要调用 |
+| `story-manager` | 需要生成 Story 卡片、计划与状态时 | `DEVELOPMENT-PLAN.yaml`、`STORY-*.md`，按需派生 legacy `STORY-BACKLOG.md` / `STORY-STATUS.md` | `dev_context` 不完整时不要调用 |
 | `dag-validator` | `DEVELOPMENT-PLAN.yaml` 初稿完成后 | 无环依赖验证结果 | 计划未成型前不要调用 |
 | `checkpoint-manager` | HLD 完成或 Story 计划完成后 | CP3 / CP4 自动检查结果 | 不替代 host-orchestrator 发起人工确认 |
 
@@ -220,9 +220,9 @@ meta-se 输出的前置讨论输入必须使用 table-first 结构直接与用�
 2. `docs/design/ARCHITECTURE-DECISION.md`（CP3 后只允许补充落地映射；若新增会改变 HLD 推荐方案的核心 ADR，必须回退 CP3 或发起 CR）
 3. 必要的 `docs/features/<feature>/DESIGN.md`、`docs/features/<feature>/TEST-PLAN.md`、`docs/features/<feature>/TASKS.md`
 4. `process/PLATFORM-INSTALL-SPEC.md`
-5. `process/STORY-BACKLOG.md`
-6. `process/DEVELOPMENT-PLAN.yaml`
-7. `process/stories/STORY-{id}-{story_slug}.md`
+5. `process/DEVELOPMENT-PLAN.yaml`（Story 管理机器真相源）
+6. `process/stories/STORY-{id}-{story_slug}.md`
+7. 可选派生 legacy 视图：`process/STORY-BACKLOG.md` / `process/STORY-STATUS.md`
 
 若规划内容涉及平台路径、schema 或发现机制，必须以 `delivery/doc/PLATFORM-CONTRACTS.yaml` 或官方文档作为事实来源，禁止用同平台目录结构类比推断。
 
@@ -238,9 +238,9 @@ meta-se 输出的前置讨论输入必须使用 table-first 结构直接与用�
 - `## 设计确认点（需人工确认）`
 - `## 变更记录`
 
-#### `STORY-BACKLOG.md`
+#### `STORY-BACKLOG.md`（legacy / generated view）
 
-至少包含：
+若生成，只能作为 `process/DEVELOPMENT-PLAN.yaml` 的人类汇总视图，至少包含：
 
 - frontmatter：`version`、`last_updated`
 - `## Story 列表`
@@ -251,7 +251,7 @@ meta-se 输出的前置讨论输入必须使用 table-first 结构直接与用�
 
 至少包含：
 
-- 顶层字段：`project_id`、`version`、`created_at`、`waves`
+- 顶层字段：`project_id`、`version`、`created_at`、`story_management_truth_source: process/DEVELOPMENT-PLAN.yaml`、`waves`
 - 顶层字段：`parallel_policy.max_parallel_lld`、`parallel_policy.max_parallel_dev`、`parallel_policy.max_parallel_qa`
 - `waves[*]` 字段：`wave`、`parallel_lld`、`parallel_dev`、`stories`
 - `stories[*]` 字段：`story_id`、`title`、`priority`、`assignee`、`depends_on`、`dependency_type`、`status`、`output_files`、`file_ownership`、`lld_gate`、`dev_gate`
@@ -296,9 +296,9 @@ meta-se 输出的前置讨论输入必须使用 table-first 结构直接与用�
 
 ### Story 调度交接规则
 
-story-planning 不再以“Story 计划人工确认”单独结束。meta-se 必须把 Story 边界、优先级、依赖类型、输出文件、文件所有权、Feature 设计引用、LLD 策略、Wave 分组和并行策略整理为调度草案，交给 host-orchestrator。host-orchestrator 随后按 Story DAG 计算覆盖全部目标 Story 的 `lld_design_batch` / `lld_ready`，组织 meta-dev 为 `full-lld` Story 生成完整 LLD，为 `technical-note` Story 在 Story 卡片内补齐 `## 技术说明`，对 `waived` Story 检查 waived 理由和重访条件，并在全部 Story 的设计策略、CP4 自动摘要与 CP5 自动预检完成后统一发起全量 CP5 确认。确认通过后，host-orchestrator 再按 Wave 计算 `dev_ready` 并调度实现。
+story-planning 不再以“Story 计划人工确认”单独结束。meta-se 必须把 Story 边界、优先级、依赖类型、输出文件、文件所有权、Feature 设计引用、LLD 策略、Wave 分组和并行策略整理为调度草案，交给 host-orchestrator。host-orchestrator 随后按 Story DAG 计算覆盖全部目标 Story 的 `lld_design_batch` / `lld_ready`，组织 meta-dev 为 `full-lld` Story 生成完整 LLD；在 `standard-lite` / `allows_batch_lld=true` 且低到中风险 Story 共享实现面时生成 Batch LLD 并为每个 Story 提供独立锚点；为 `technical-note` Story 在 Story 卡片内补齐 `## 技术说明`；对 `waived` Story 检查 waived 理由和重访条件，并在全部 Story 的设计策略、CP4 自动摘要与 CP5 自动预检完成后统一发起全量 CP5 确认。确认通过后，host-orchestrator 再按 Wave 计算 `dev_ready` 并调度实现。
 
-全量确认仍是标准路径，但不再要求每个 Story 都生成完整 14 章 LLD。若全部 `full-lld` Story 的 LLD 写作超过并发上限，host-orchestrator 应按 `max_parallel_lld` 分轮拉起 meta-dev；CP5 人工确认必须等全部目标 Story 的 full LLD / technical note / waived 证据和自动预检完成后一次性发起。
+全量确认仍是标准路径，但不再要求每个 Story 都生成完整 14 章 LLD。若全部 `full-lld` Story 的 LLD 写作超过并发上限，host-orchestrator 应按 `max_parallel_lld` 分轮拉起 meta-dev；compact CR 可用 Batch LLD 减少重复文件，但每个 Story 必须有可独立审查的证据锚点；CP5 人工确认必须等全部目标 Story 的 full LLD / Batch LLD Story 锚点 / technical note / waived 证据和自动预检完成后一次性发起。
 
 ## 约束
 

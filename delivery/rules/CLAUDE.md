@@ -98,7 +98,7 @@ Skill 定义文件统一位于：`.agents/skills/<skill-name>/SKILL.md`
 1. **澄清锁**：CP2 需求 / 场景 / 范围基线门未通过前，不得输出正式设计对象；CP2 前必须形成 `SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md` 或明确 N/A / WAIVED 原因
 2. **HLD 锁**：CP3 蓝图 / HLD 架构评审门未通过前，不得进入 Story 拆解；跨 Feature / Epic、数据归属或依赖方向问题必须先完成 `BLUEPRINT.md` / `DOMAIN-MAP.md` / `DEPENDENCY-MAP.md` 或写明 N/A / WAIVED 原因
 3. **Feature 设计矩阵锁**：CP3 通过后、CP4 通过前必须生成 `docs/design/FEATURE-DESIGN-MATRIX.md`，并为每个 Story 写明 `feature_design_refs` 与 `lld_policy.required_level=full-lld|technical-note|waived`
-4. **Story 设计证据锁**：CP4 Story 计划自动预检未通过前，不得开始全量设计证据写作；Story 未进入 `lld-ready` / `package-draft` 等待设计状态前，不得开始对应 Story 的完整 LLD、技术说明或 waived 证据
+4. **Story 设计证据锁**：CP4 Story 计划自动预检未通过前，不得开始全量设计证据写作；Story 未进入 `lld-ready` / `package-draft` 等待设计状态前，不得开始对应 Story 的完整 LLD、Batch LLD Story 锚点、技术说明或 waived 证据
 5. **Story 开发锁**：全部目标 Story 的 CP5 Story 设计证据可实现性门未通过、尚未进入 `story-execution`、当前 Wave 不可执行、`dev_gate` 未满足、或文件所有权冲突时，不得开始任何 Story 实现
 5a. **实现执行证据锁**：Story 开发开始后，meta-dev 必须使用 `implementation-execution` 产出实现对象清单、设计契约映射、测试 / Fixture 计划、最小实现切片、平台差异检查、本地验证和交接摘要；复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 必须有完整 `IMPLEMENTATION.md`，低风险 N/A 必须写入 CP6 或 Story 卡片
 6. **验证锁**：`validation_mode=runtime|mixed` 且需要真实运行时，没有 `process/VALIDATION-ENV.yaml` 或 `approval.confirmed != true`，不得开始运行验证；`static-only` / `dry-run-only` / `review-only` 可使用等价验证方式，但必须在 CP7 写明 N/A 理由、未覆盖风险和证据
@@ -188,7 +188,7 @@ Claude Code 可继续使用结构化选择，但 direct ask agent 的 frontmatte
 
 Claude Code 全局规则不复制完整工作流状态机；完整状态机以 `AGENTS.md`、`host-orchestrator` 和 `state-router` 为准。本文件只保留执行边界摘要：
 
-- `story-planning`：CP4 自动预检通过后，完成全部目标 Story 的完整 LLD / 技术说明 / waived 证据、CP5 自动预检和 CP5 全量人工确认
+- `story-planning`：CP4 自动预检通过后，完成全部目标 Story 的独立 LLD / Batch LLD Story 锚点 / 技术说明 / waived 证据、CP5 自动预检和 CP5 全量人工确认
 - `story-execution`：进入时全量 CP5 必须已通过；本阶段只按 Wave 调度开发与验证，不再进行设计证据写作；每个 Story 在 CP6 前必须完成实现执行证据或写明低风险 N/A 理由
 
 Complex 模式下，LLD 写作、开发和验证均按 Story DAG 队列并行调度，但同一 Story 必须严格按：
@@ -242,4 +242,4 @@ CP7 结论只能使用 `PASS`、`PASS_WITH_RISK`、`BLOCKED`、`NEEDS_REWORK`、
 
 CP3 蓝图 / HLD 讨论中，`lane-product`、`lane-architecture`、`lane-quality` 是默认 advisor lane；`lane-docs` 的可解释性 / 可维护性作为汇总检查项纳入，不默认新增一次 subagent 调度。方案形成输入和 HLD 后评审意见必须分开记录。
 
-灰度顺序：先 `HLD.md` / `STORY-*-LLD.md`，后 `ARCHITECTURE-DECISION.md` / `STORY-BACKLOG.md`，最后 `README.md` / `USER-MANUAL.md`。
+灰度顺序：先 `HLD.md` / `STORY-*-LLD.md`，后 `ARCHITECTURE-DECISION.md` / `DEVELOPMENT-PLAN.yaml` / legacy Story 视图，最后 `README.md` / `USER-MANUAL.md`。

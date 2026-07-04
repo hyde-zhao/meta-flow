@@ -251,6 +251,248 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertIn('required_gate: "CP2"', legacy_index)
             self.assertIn('block_story_decomposition_until: "CP2-approved"', legacy_index)
 
+    def test_cr_check_blocks_required_real_lake_validation_forbidden_by_authz(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(
+                root,
+                "CR-155",
+                extra_frontmatter=(
+                    'authz_policy_refs: ["NO_REAL_LAKE_READ_OR_WRITE"]\n'
+                    'required_evidence: ["real_lake_validation"]'
+                ),
+            )
+            cr_lifecycle.write_index(root)
+
+            errors = cr_lifecycle.collect_check_errors(root)
+
+            self.assertTrue(any("required_evidence_forbidden_by_authz" in error for error in errors))
+
+    def test_cr_summary_records_l3_review_for_implicit_real_lake_authz_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_cr(
+                root,
+                "CR-156",
+                extra_frontmatter='required_evidence: ["real_lake_validation"]',
+            )
+
+            summary = cr_lifecycle.summary_from_cr_file(root, path)
+
+            self.assertEqual("NEEDS_REVIEW", summary["scope_authz_consistency"]["decision"])
+            self.assertEqual(
+                "high_risk_validation_authz_boundary_not_explicit",
+                summary["scope_authz_consistency"]["needs_review"][0]["code"],
+            )
+
+    def test_l2_prerequisite_conflict_requires_review_not_blocking_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_cr(
+                root,
+                "CR-157",
+                extra_frontmatter=(
+                    'authz_policy_refs: ["NO_REAL_LAKE_READ"]\n'
+                    'required_evidence: ["oos_walkforward"]'
+                ),
+            )
+            cr_lifecycle.write_index(root)
+
+            errors = cr_lifecycle.collect_check_errors(root)
+            summary = cr_lifecycle.summary_from_cr_file(root, path)
+
+            self.assertFalse(any("required_evidence_prerequisite_authz_conflict" in error for error in errors))
+            self.assertEqual("NEEDS_REVIEW", summary["scope_authz_consistency"]["decision"])
+            self.assertEqual(
+                "required_evidence_prerequisite_authz_conflict",
+                summary["scope_authz_consistency"]["needs_review"][0]["code"],
+            )
+
+    def test_cr_summary_records_governance_dependency_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(
+                root,
+                "CR-200",
+                extra_frontmatter=(
+                    'cr_type: "process"\n'
+                    'conflict_keys: ["governance-authz"]\n'
+                    'impact_process_refs: ["process/policies/AUTHZ.md"]'
+                ),
+            )
+            target = write_cr(
+                root,
+                "CR-201",
+                extra_frontmatter='impact_process_refs: ["process/policies/AUTHZ.md"]',
+            )
+
+            summary = cr_lifecycle.summary_from_cr_file(root, target)
+
+            self.assertEqual("NEEDS_REVIEW", summary["governance_dependency_review"]["decision"])
+            self.assertEqual(
+                "open_governance_dependency_needs_review",
+                summary["governance_dependency_review"]["findings"][0]["code"],
+            )
+            self.assertEqual("CR-200", summary["governance_dependency_review"]["findings"][0]["governance_cr"])
+
+    def test_cr_check_prints_governance_dependency_warning_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(
+                root,
+                "CR-200",
+                extra_frontmatter=(
+                    'cr_type: "process"\n'
+                    'conflict_keys: ["governance-authz"]\n'
+                    'impact_process_refs: ["process/policies/AUTHZ.md"]'
+                ),
+            )
+            write_cr(
+                root,
+                "CR-201",
+                extra_frontmatter='impact_process_refs: ["process/policies/AUTHZ.md"]',
+            )
+            cr_lifecycle.write_index(root)
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cr_lifecycle.main(["check", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            self.assertIn("CR Lifecycle Check: OK", output.getvalue())
+            self.assertIn("- WARN: CR-201 governance dependency open_governance_dependency_needs_review", output.getvalue())
+            self.assertIn("governance_cr=CR-200", output.getvalue())
+
+    def test_closed_governance_cr_does_not_warn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(
+                root,
+                "CR-200",
+                status="closed",
+                extra_frontmatter=(
+                    'cr_type: "process"\n'
+                    'conflict_keys: ["governance-authz"]\n'
+                    'impact_process_refs: ["process/policies/AUTHZ.md"]'
+                ),
+            )
+            target = write_cr(
+                root,
+                "CR-201",
+                extra_frontmatter='impact_process_refs: ["process/policies/AUTHZ.md"]',
+            )
+
+            summary = cr_lifecycle.summary_from_cr_file(root, target)
+
+            self.assertEqual("PASS", summary["governance_dependency_review"]["decision"])
+            self.assertEqual([], summary["governance_dependency_review"]["findings"])
+
+    def test_cp1_profile_is_lightweight_for_existing_use_case_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_cr(
+                root,
+                "CR-210",
+                extra_frontmatter=(
+                    'product_baseline_refresh_required: false\n'
+                    'affected_use_cases: ["UC-58"]\n'
+                    'impact_module_paths: ["meta_flow/workflow/cr_lifecycle.py"]'
+                ),
+            )
+
+            summary = cr_lifecycle.summary_from_cr_file(root, path)
+
+            self.assertEqual("LIGHTWEIGHT_CP1", summary["cp1_review_profile"]["decision"])
+            self.assertEqual(
+                ["cr_tracking", "impact_surface", "affected_use_case_refs"],
+                summary["cp1_review_profile"]["required_checks"],
+            )
+            self.assertEqual(["UC-58"], summary["cp1_review_profile"]["affected_use_cases"])
+
+    def test_cp1_profile_is_full_when_product_baseline_refresh_required(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_cr(
+                root,
+                "CR-211",
+                extra_frontmatter=(
+                    'product_baseline_refresh_required: true\n'
+                    'affected_use_cases: ["UC-58"]\n'
+                    'affected_product_docs: ["docs/product/USE-CASES.md"]'
+                ),
+            )
+
+            summary = cr_lifecycle.summary_from_cr_file(root, path)
+
+            self.assertEqual("FULL_CP1_REQUIRED", summary["cp1_review_profile"]["decision"])
+            self.assertIn("use_case_completeness", summary["cp1_review_profile"]["required_checks"])
+            self.assertIn("scenario_coverage", summary["cp1_review_profile"]["required_checks"])
+
+    def test_archive_isolation_warns_for_business_cr_archive_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_cr(
+                root,
+                "CR-212",
+                extra_frontmatter=(
+                    'cr_type: "feature"\n'
+                    'impact_process_refs: ["process/archive/legacy-migration/old.md"]'
+                ),
+            )
+
+            summary = cr_lifecycle.summary_from_cr_file(root, path)
+
+            self.assertEqual("NEEDS_REVIEW", summary["archive_isolation_review"]["decision"])
+            self.assertEqual(
+                "archive_backup_scope_needs_isolation",
+                summary["archive_isolation_review"]["findings"][0]["code"],
+            )
+            self.assertEqual(
+                ["process/archive/legacy-migration/old.md"],
+                summary["archive_isolation_review"]["findings"][0]["archive_refs"],
+            )
+
+    def test_archive_isolation_allows_housekeeping_process_cr(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_cr(
+                root,
+                "CR-213",
+                extra_frontmatter=(
+                    'cr_type: "process"\n'
+                    'title: "archive housekeeping cleanup"\n'
+                    'conflict_keys: ["housekeeping"]\n'
+                    'impact_process_refs: ["process/archive/legacy-migration/old.md"]'
+                ),
+            )
+
+            summary = cr_lifecycle.summary_from_cr_file(root, path)
+
+            self.assertEqual("PASS", summary["archive_isolation_review"]["decision"])
+            self.assertEqual([], summary["archive_isolation_review"]["findings"])
+
+    def test_cr_check_prints_archive_isolation_warning_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(
+                root,
+                "CR-212",
+                extra_frontmatter=(
+                    'cr_type: "feature"\n'
+                    'impact_process_refs: ["process/backups/stale-state.json"]'
+                ),
+            )
+            cr_lifecycle.write_index(root)
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cr_lifecycle.main(["check", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            self.assertIn("CR Lifecycle Check: OK", output.getvalue())
+            self.assertIn("- WARN: CR-212 archive isolation archive_backup_scope_needs_isolation", output.getvalue())
+            self.assertIn("process/backups/stale-state.json", output.getvalue())
+
     def test_index_summary_and_brief_include_split_impact_fields_with_capability_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

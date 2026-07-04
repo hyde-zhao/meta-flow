@@ -93,9 +93,15 @@ Story Return / Evidence / Design Delta 使用结构化产物闭合 Story 交接�
 
 CP Result / Event Ledger 使用机器可读结果和事件台账降低 CP 文档膨胀。`process/checks/CP*.result.json` 是 CP 自动检查机器真相源，`process/checks/CP*.summary.md` 是可渲染人类摘要；`meta-flow cp result-check --result <result> --project-root .` 校验 schema、状态枚举、blocker 与 decision 一致性，CP6 / CP7 还要求 `story_id`、`context_ref`、`dispatch_refs` 和 `evidence_ref`。`meta-flow cp render-summary --result <result>` 生成摘要，`meta-flow cp ledger-append --result <result> --project-root .` 追加 `process/state/CHECKPOINT-LEDGER.ndjson`。`meta-flow event check --ledger <ledger> --type checkpoint|handoff|dispatch|run|gate` 校验 NDJSON 事件台账；`HANDOFF-LEDGER` 记录交接事件，`AGENT-DISPATCH-LEDGER` 记录真实子 agent 调度证据，`RUN-LEDGER` 记录命令运行证据。Markdown 检查文件可保留审计摘要，但不得替代 result JSON、evidence index 和 ledger。
 
+CP8 result 可包含 `fact_diff`，用于把 CP2 承诺、CP7 evidence alignment、剩余风险和 release decision 放在同一张机器可读差异表里。`release-readiness` 先生成 `process/release/RELEASE-CONTEXT.yaml`，再按 `release_artifact_profile=minimal|compact|full` 裁剪 release notes、deploy、rollback、migration 和 feedback 文档；默认不把完整 evidence 正文复制进 release docs。`cp result-check --check-consistency` 会检查 result JSON 与 summary、CR index、STATE 和 checkpoint ledger 的派生状态是否一致。
+
 同一 CR 的 CP 不以内联章节作为真相源。`process/changes/CR-*.md` 只维护 `Checkpoint Index`、状态摘要和 ref；自动 CP 真相源是 `process/checks/CP*.result.json`，人工门禁真相源是 `process/checkpoints/CP*.md`，事件真相源是 `CHECKPOINT-LEDGER.ndjson` / `GATE-LEDGER.ndjson`。不得把 CP result、Decision Brief、review 全文或历史 checkpoint 详情复制进 CR 正文；关闭 CR 后只保留 status + ref 指针。
 
+Story 管理以 `process/DEVELOPMENT-PLAN.yaml` 作为 Story / Wave / status / task 机器真相源。`process/STORY-BACKLOG.md`、`process/STORY-STATUS.md` 和 Feature `TASKS.md` 只能作为 optional legacy / generated views；修改 Story 管理对象后运行 `meta-flow story plan-check --project-root .`，检查 Story 卡、Feature trace 和旧视图是否与 DEVELOPMENT-PLAN drift。
+
 Failure Routing / Waiver Governance 使用 `process/policies/FAILURE-ROUTING.json` 和 `process/policies/WAIVER-POLICY.json` 收敛失败处理与豁免。`meta-flow failure policy-check --project-root .` 校验 route policy，`meta-flow failure route-check --result <CP-result> --project-root .` 校验 `route_on_fail`，兼容入口为 `meta-flow check failure-routing --result <CP-result> --project-root .`。`BLOCKER` / `HIGH` 的 `FAIL` / `BLOCKED` item 必须声明动作式 route：`rework_same_story`、`reopen_cp5_design`、`require_user_decision`、`create_followup_candidate`、`escalate_runtime_high_risk`、`block_release` 或 `waive_with_risk_acceptance`；每个 route 必须定义 `creates`、`updates`、`invalidates` 和 `next_allowed_stage`。`meta-flow waiver policy-check --project-root .` 与 `meta-flow waiver check --result <CP-result> --project-root .` 校验 waiver 的 `scope`、`expires_at`、`approval_ref`、`forces_release_status` 和适用范围。未授权 runtime access、credential / secret exposure、missing dispatch evidence、runtime-high-risk forbidden path、missing human gate、missing read expansion log、missing evidence、false runtime-ready capability claim 等 non-waivable / 不可豁免；需要风险接受的 waiver 不能静默 PASS，必须推动 `PASS_WITH_RISK` 或 CP8 `READY_WITH_RISK`。
+
+真实数据验证可使用 `meta-flow validation run --cr <CR-ID> --profile real-lake-readonly --reruns 2 --project-root .` 生成 validation task、run ledger、evidence index、rerun comparison、admission summary 和 forbidden operation counter 摘要。默认不执行外部命令；只有传入 `--execute --command '<validation command>'` 并具备对应 runtime authorization 时，才会运行真实验证命令。该 wrapper 用于固化 CP7 证据，不授权 lake write、trading、broker、publish 或 credential 操作。
 
 Context-budgeted 端到端回归 fixture 位于 `evals/fixtures/context-budgeted-meta-flow/`，用于验证 `STATE.current.json -> CR summary -> context pack -> Story packet -> Story return -> evidence index -> CP result -> checkpoint ledger` 这条链。对应测试为 `tests/test_context_budgeted_flow_e2e.py`，会证明默认 `allowed_reads` 不包含 `process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 CR 或全量 Story LLD。
 
@@ -144,7 +150,7 @@ CP6 / CP7 必须包含 `Agent Dispatch Evidence`。handoff 文件只表示交接
 | CP2 | 需求基线门 | 自动预检 + 人工 |
 | CP3 | 蓝图 / HLD 架构评审门 | 自动预检 + 人工 |
 | CP4 | Story 拆解与并行安全门 | 自动预检（汇入 CP5） |
-| CP5 | Story 设计证据可实现性门 | 全量 / 批次自动预检 + 人工；含 full-lld / technical-note / waived 证据和 clarification queue 收敛检查 |
+| CP5 | Story 设计证据可实现性门 | 全量 / 批次自动预检 + 人工；含 full-lld / batch-lld / technical-note / waived 证据和 clarification queue 收敛检查 |
 | CP6 | Story 编码完成门 | 滚动自动；检查实现执行证据 |
 | CP7 | Story 验证完成门 | 滚动自动；检查验证执行证据和结论分级 |
 | CP8 | 交付就绪门 | 自动预检 + 人工 |

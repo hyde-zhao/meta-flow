@@ -67,6 +67,14 @@ def default_gate_profiles() -> dict[str, Any]:
                 "human_gates": ["CP2", "CP5", "CP8"],
                 "max_context_tokens": 20000,
             },
+            "standard-lite": {
+                "description": "单模块 / 小范围 artifact CR，保留 CP2/CP7/CP8 硬门禁但压缩设计和发布文档形态",
+                "stages": ["CP0", "CP2", "CP3-lite", "CP5-lite", "CP6", "CP7", "CP8"],
+                "human_gates": ["CP2", "CP8"],
+                "max_context_tokens": 16000,
+                "allows_batch_lld": True,
+                "requires_hard_gates": ["scope_authz_consistency", "promise_evidence_alignment"],
+            },
             "architecture-major": {
                 "description": "项目重构、边界重划、核心设计变更",
                 "stages": ["CP0", "CP1", "CP2", "CP3", "CP4", "CP5", "CP6", "CP7", "CP8"],
@@ -123,7 +131,7 @@ def validate_gate_profiles(project_root: Path) -> list[str]:
     profiles = data.get("profiles")
     if not isinstance(profiles, dict) or not profiles:
         return ["GATE-PROFILES profiles must be a non-empty object"]
-    for required in ("docs-lite", "process-lite", "standard-code", "architecture-major", "runtime-high-risk"):
+    for required in ("docs-lite", "process-lite", "standard-lite", "standard-code", "architecture-major", "runtime-high-risk"):
         if required not in profiles:
             errors.append(f"missing required profile: {required}")
     for profile, item in profiles.items():
@@ -181,6 +189,13 @@ def classify_gate_profile(changed_files: list[str] | None = None, impacts: list[
         return {"profile": "process-lite", "reason": "process_hygiene_change", "matched_terms": []}
     if files and all(path.startswith("tests/") for path in files):
         return {"profile": "micro", "reason": "tests_only_change", "matched_terms": []}
+    standard_lite_hits = _any_term(joined, ("standard-lite", "standard_lite", "compact_artifact", "single_artifact"))
+    if standard_lite_hits:
+        return {
+            "profile": "standard-lite",
+            "reason": "explicit_compact_artifact_keyword",
+            "matched_terms": standard_lite_hits,
+        }
     return {"profile": "standard-code", "reason": "default_standard_code", "matched_terms": []}
 
 

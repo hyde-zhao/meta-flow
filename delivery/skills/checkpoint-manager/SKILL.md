@@ -40,7 +40,7 @@ status: active
 | 讨论日志 | `process/discussions/CP{n}-*-DISCUSSION-LOG.md` | CP2 / CP3 人类审计与恢复日志；不替代正式产物 |
 | 讨论恢复点 | `process/checks/CP{n}-DISCUSSION-CHECKPOINT.json` | CP2 / CP3 中断恢复状态；缺失时自动检查必须说明 N/A 或 blocked 原因 |
 | 人工审查稿 | `process/checkpoints/CP{n}-{slug}.md` | 由 host-orchestrator 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
-| Story 设计证据人工审查稿 | `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 的完整 LLD / 技术说明 / waived 证据统一确认 |
+| Story 设计证据人工审查稿 | `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 的独立 LLD / Batch LLD Story 锚点 / 技术说明 / waived 证据统一确认 |
 | Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
 | Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
 | 阶段上下文胶囊 | `process/context/CP*-*-CONTEXT.yaml` | 默认读取入口；checkpoint 记录其状态和读取扩展理由 |
@@ -643,7 +643,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | CP3 通过 | HLD 已确认 |
 | Feature 设计矩阵存在 | `docs/design/FEATURE-DESIGN-MATRIX.md` 已生成，覆盖 Feature / Epic 适用性、required / waived / n/a 理由和 Story lld_policy 建议 |
 | 必要 Feature 设计已处理 | 矩阵中 `required` 的 Feature 已生成 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`，或写明 waived 决策和重访条件 |
-| Story 计划存在 | `STORY-BACKLOG.md`、`DEVELOPMENT-PLAN.yaml` 和 Story 卡片已生成 |
+| Story 计划存在 | `DEVELOPMENT-PLAN.yaml` 和 Story 卡片已生成；`STORY-BACKLOG.md` / `STORY-STATUS.md` 若存在只能作为派生 legacy 视图 |
 | 依赖信息存在 | `depends_on`、依赖类型和文件所有权已填写 |
 
 ### Checklist
@@ -666,6 +666,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 14 | required Feature 设计就绪 | `required` Feature 的 DESIGN / TEST-PLAN / TASKS 已生成，或 waived 决策已进入人工决策项 |
 | 15 | Story 设计引用完整 | 每个 Story 均有 `feature_design_refs`，指向 Feature 设计或 waived 证据 |
 | 16 | LLD 策略明确 | 每个 Story 均有 `lld_policy.required_level=full-lld|technical-note|waived`、触发原因和重访条件 |
+| 17 | Story 管理真相源一致 | `meta-flow story plan-check --project-root .` 通过，或 legacy 视图漂移已记录为风险 |
 
 ### Exit Criteria
 
@@ -680,10 +681,9 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 - `docs/design/FEATURE-DESIGN-MATRIX.md`
 - `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`（仅矩阵中 required 的 Feature；waived / n/a 写明原因）
-- `process/STORY-BACKLOG.md`
-- `process/DEVELOPMENT-PLAN.yaml`
+- `process/DEVELOPMENT-PLAN.yaml`（Story 管理机器真相源）
+- `process/STORY-BACKLOG.md` / `process/STORY-STATUS.md`（可选 legacy / generated view）
 - `process/stories/STORY-*.md`
-- `process/stories/STORY-STATUS.md`
 - `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`
 
 ## CP5 Story 设计证据可实现性门
@@ -699,7 +699,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 |---|---|
 | CP4 自动预检通过 | Story 拆解、依赖 DAG、文件所有权和并行计划已通过自动检查 |
 | 全部目标 Story 处于设计审查态 | 状态均为 `lld-ready-for-review` 或全量 `lld-batch-ready-for-review` |
-| 全部目标 Story 设计证据已生成 | `full-lld` 有 `STORY-{id}-{story_slug}-LLD.md`；`technical-note` 有 Story `## 技术说明`；`waived` 有豁免理由、风险接受和重访条件 |
+| 全部目标 Story 设计证据已生成 | `full-lld` 有 `STORY-{id}-{story_slug}-LLD.md`，或在 `standard-lite` / `allows_batch_lld=true` 下有 `BATCH-*-LLD.md#story-*` 锚点；`technical-note` 有 Story `## 技术说明`；`waived` 有豁免理由、风险接受和重访条件 |
 | LLD clarification 队列可读 | `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref 已初始化，且无未回答阻断项；若有 OPEN / Spike，已标注非阻断和重访条件 |
 
 ### Checklist
@@ -720,7 +720,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 12 | 偏差记录机制明确 | 实现偏离 LLD 时必须记录原因和影响 |
 | 13 | CP4 摘要已纳入 | Story 边界、DAG、并行安全、文件所有权和 OPEN 项已写入 Decision Brief |
 | 14 | clarification 队列已收敛 | 已回答项、转 OPEN / Spike 项、阻断项为 0、跨 Story 契约和 merge order 均已写入 Decision Brief |
-| 15 | lld_policy 分级合理 | `full-lld` / `technical-note` / `waived` 与触发原因一致，高风险 Story 未被降级 |
+| 15 | lld_policy 分级合理 | `full-lld` / `batch-lld` / `technical-note` / `waived` 与触发原因一致，高风险 Story 未被降级；`batch-lld` 仅用于 `standard-lite` / `allows_batch_lld=true` |
 | 16 | Feature 设计输入被消费 | Story 的 `feature_design_refs` 已在 LLD / 技术说明 / waived 证据中引用 |
 
 ### Exit Criteria
@@ -729,16 +729,18 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 |---|---|
 | 自动预检通过 | 全部目标 Story 的设计证据可实现性检查无阻断项 |
 | clarification 队列收敛 | `blocks_lld=true` 的未回答项为 0；非阻断 OPEN / Spike 已有 owner 和重访条件 |
-| 人工确认完成 | 全部目标 Story 的完整 LLD / 技术说明 / waived 证据被统一批准 |
+| 人工确认完成 | 全部目标 Story 的独立 LLD / Batch LLD Story 锚点 / 技术说明 / waived 证据被统一批准 |
 | dev_gate 可更新 | 全部目标 Story 可进入 `lld-approved`，当前 Wave 满足时进入 `dev_ready` |
 
 ### Deliverables
 
-- `process/stories/STORY-{id}-{story_slug}-LLD.md`（仅 `full-lld`）
+- `process/stories/STORY-{id}-{story_slug}-LLD.md`（仅独立 `full-lld`）
+- `process/stories/BATCH-{cr_id-or-batch_id}-{slug}-LLD.md#story-story-{id}`（仅 `standard-lite` / `batch-lld`，每个 Story 必须有独立锚点）
 - `process/stories/STORY-{id}-{story_slug}.md` 的 `## 技术说明` 或 waived 证据（仅 `technical-note` / `waived`）
 - `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
 - `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
-- 更新后的 `process/stories/STORY-STATUS.md`
+- 更新后的 `process/DEVELOPMENT-PLAN.yaml`
+- 可选派生的 `process/STORY-STATUS.md`
 
 ## CP6 Story 编码完成门
 
@@ -774,7 +776,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 12 | 文档同步 | README、USER-MANUAL、接口文档、配置说明、变更说明必要时更新 |
 | 13 | 实现交接摘要完整 | 完成内容、行为变化、受影响文件、验证、未运行检查、剩余风险、QA / Review / Doc 关注点已记录 |
 | 14 | 设计缺口反馈 | Feature / HLD / LLD / TEST-MATRIX / 决策队列缺口已反馈，不被实现阶段静默吞掉 |
-| 15 | 状态回写 | Story 状态、任务清单、偏差记录、implementation evidence 路径已更新 |
+| 15 | 状态回写 | `DEVELOPMENT-PLAN.yaml` 中的 Story 状态、任务清单、偏差记录、implementation evidence 路径已更新；legacy 视图不得独立维护不同状态 |
 | 16 | 无缓存产物 | `__pycache__`、构建缓存等不进入交付物 |
 | 17 | Agent Dispatch Evidence | 存在 meta-dev 的 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` 或 `resumed_at`、`completed_at`；或存在用户批准的 `dispatch.mode=inline-fallback` |
 | 18 | Story Return Packet | `process/returns/STORY-*.CP6.return.json` 存在，并通过 `meta-flow story return-check`；touched files 未越过 Story Work Packet 的 `allowed_write_paths` / `forbidden_write_paths` |
@@ -799,7 +801,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `process/evidence/STORY-{id}.CP6.index.json`
 - `process/design-deltas/STORY-{id}.delta.json`（仅设计 delta 存在时）
 - `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md`
-- 更新后的 Story 状态
+- 更新后的 `process/DEVELOPMENT-PLAN.yaml` Story 状态
 - 对应 meta-dev handoff 的 `dispatch` 记录
 
 ## CP7 Story 验证完成门
@@ -865,7 +867,8 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `process/evidence/STORY-{id}.CP7.index.json`
 - `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md`
 - 缺陷记录或风险接受记录
-- 更新后的 `STORY-STATUS.md`
+- 更新后的 `process/DEVELOPMENT-PLAN.yaml` Story 状态
+- 可选派生的 `STORY-STATUS.md`
 - 对应 meta-qa handoff 的 `dispatch` 记录
 
 ## CP8 交付就绪门

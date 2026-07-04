@@ -14,6 +14,7 @@ release_decision: NOT_READY
 | 输入 | 状态 | 证据路径 | 说明 |
 |---|---|---|---|
 | Release Context Capsule | PASS / FAIL | `process/release/RELEASE-CONTEXT.yaml` | <说明> |
+| CP8 Fact Diff | PASS / READY_WITH_RISK / NOT_READY | `process/release/RELEASE-CONTEXT.yaml#fact_diff` / Evidence Index | 承诺、证据、状态和发布影响已对齐 |
 | TEST-REPORT | PASS / PASS_WITH_RISK / BLOCKED / N/A | `docs/quality/TEST-REPORT.md` | <说明> |
 | REVIEW | PASS / RISK / BLOCKED / N/A | `docs/quality/REVIEW.md` | <说明> |
 | BLOCKER findings | 0 / N | <evidence> | <说明> |
@@ -52,6 +53,7 @@ release_decision: NOT_READY
 |---|---|
 | release_artifact_profile | minimal / compact / full |
 | release_decision | READY / READY_WITH_RISK / NOT_READY / RELEASED / FAILED |
+| fact_diff 结论 | delivered / missing_required / ready_with_risk / not_ready |
 | 阻断项 | <count / list> |
 | 风险接受项 | <risk id / N/A> |
 

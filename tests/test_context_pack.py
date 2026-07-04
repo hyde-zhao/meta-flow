@@ -41,6 +41,51 @@ def write_cr_summary(root: Path, cr_id: str) -> None:
     )
 
 
+def write_cp2_result_with_required_evidence(root: Path, cr_id: str) -> Path:
+    path = root / "process" / "checks" / f"CP2-{cr_id}.result.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "checkpoint": "CP2",
+                "checkpoint_id": f"CP2-{cr_id}",
+                "cr_id": cr_id,
+                "decision": "PASS",
+                "context_ref": f"process/context/CP2-{cr_id}.context.json",
+                "evidence_ref": "",
+                "dispatch_refs": [],
+                "items": [
+                    {
+                        "id": "CP2-01",
+                        "name": "scope approved",
+                        "status": "PASS",
+                        "severity": "INFO",
+                        "evidence_refs": [],
+                    }
+                ],
+                "blockers": [],
+                "waivers": [],
+                "commitments": {
+                    "required_evidence": [
+                        {
+                            "id": "REQ-EVID-REAL-LAKE",
+                            "kind": "real_lake_validation",
+                            "required_stage": "CP7",
+                            "minimum_evidence": {"run_refs_min": 2},
+                        }
+                    ]
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 class ContextPackTests(unittest.TestCase):
     def test_build_writes_context_pack_and_read_policy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -186,6 +231,74 @@ class ContextPackTests(unittest.TestCase):
 
             self.assertIn("must_read must be a non-empty list", errors)
             self.assertIn("do_not_read_by_default must be a non-empty list", errors)
+
+    def test_cp7_context_includes_required_evidence_from_cp2_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_minimal_state(root)
+            write_cr_summary(root, "CR-101")
+            write_cp2_result_with_required_evidence(root, "CR-101")
+
+            context, output = builder.build_context_pack(
+                root,
+                stage="CP7",
+                profile="standard-code",
+                cr_id="CR-101",
+                budget=16000,
+            )
+            errors, _warnings = builder.validate_context_pack(output, project_root=root)
+
+            self.assertEqual([], errors)
+            self.assertEqual("REQ-EVID-REAL-LAKE", context["must_verify"][0]["id"])
+            self.assertEqual("process/checks/CP2-CR-101.result.json", context["must_verify"][0]["source_result_ref"])
+
+    def test_context_check_warns_when_capsule_duplicates_checkpoint_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_minimal_state(root)
+            write_cr_summary(root, "CR-101")
+            context, output = builder.build_context_pack(
+                root,
+                stage="CP5",
+                profile="standard-code",
+                cr_id="CR-101",
+                budget=16000,
+            )
+            repeated = "Decision Brief\n" + ("This checkpoint paragraph is intentionally repeated. " * 12)
+            checkpoint = root / "process" / "checkpoints" / "CP5.md"
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint.write_text(repeated, encoding="utf-8")
+            context["checkpoint_ref"] = "process/checkpoints/CP5.md"
+            context["inline_decision_brief"] = repeated
+            output.write_text(json.dumps(context, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            _errors, warnings = builder.validate_context_pack(output, project_root=root)
+
+            self.assertTrue(any("capsule_content_redundant" in warning for warning in warnings))
+
+    def test_context_check_warns_when_single_paragraph_duplicates_checkpoint_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_minimal_state(root)
+            write_cr_summary(root, "CR-101")
+            context, output = builder.build_context_pack(
+                root,
+                stage="CP5",
+                profile="standard-code",
+                cr_id="CR-101",
+                budget=16000,
+            )
+            repeated = "This checkpoint paragraph is intentionally repeated without line breaks. " * 6
+            checkpoint = root / "process" / "checkpoints" / "CP5.md"
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint.write_text(repeated, encoding="utf-8")
+            context["checkpoint_ref"] = "process/checkpoints/CP5.md"
+            context["inline_decision_brief"] = repeated
+            output.write_text(json.dumps(context, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            _errors, warnings = builder.validate_context_pack(output, project_root=root)
+
+            self.assertTrue(any("capsule_content_redundant" in warning for warning in warnings))
 
 
 if __name__ == "__main__":

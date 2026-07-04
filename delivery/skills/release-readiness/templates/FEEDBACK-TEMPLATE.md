@@ -12,6 +12,7 @@ release_decision: NOT_READY
 | Feedback ID | 类型 | 来源 | 内容摘要 | 分流目标 | follow-up tracking 候选 | 状态 |
 |---|---|---|---|---|---|---|
 | FB-001 | defect / new-requirement / scenario-gap / tech-debt / incident | user / test / prod / review | <摘要，不复制长日志> | regression / backlog / scenarios / follow-up-tracking | yes / no | candidate |
+| FB-CP8-FACT-DIFF | release-risk / follow-up | CP8 fact_diff | <只写 promise_ref、status、risk_ref，不复制 evidence 正文> | follow-up-tracking / risk-acceptance | yes / no | candidate |
 
 ## 2. 发布后观察计划
 

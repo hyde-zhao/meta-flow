@@ -231,7 +231,7 @@ authorization_policy:
 
 ## LLD 设计批次门禁
 
-> 若本 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须填写本节。批次内全部 full-lld / technical-note / waived 证据和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
+> 若本 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计，必须填写本节。批次内全部 full-lld / batch-lld / technical-note / waived 证据和 CP5 自动预检完成并统一人工确认前，不得实施任何 Story。
 
 - 是否需要 LLD 设计批次：true / false
 - batch_id：`CR-{id}-LLD-BATCH`
@@ -240,7 +240,7 @@ authorization_policy:
   - `STORY-*`
 - 批次人工确认稿：`process/checkpoints/CP5-{batch_id}-LLD-BATCH.md`
 - 开发启动条件：
-  - [ ] 批次内全部 Story 设计证据已输出（full-lld / technical-note / waived）
+  - [ ] 批次内全部 Story 设计证据已输出（full-lld / batch-lld / technical-note / waived）
   - [ ] 批次内全部 Story CP5 自动预检已通过
   - [ ] 批次 CP5 人工确认结论为 `approved`
   - [ ] 批次内每个 Story 的 `dev_gate` 已满足

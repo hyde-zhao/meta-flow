@@ -35,7 +35,7 @@ confirmed_at: ""
 
 | Story ID | feature_design_refs | lld_policy.required_level | trigger_reasons | 设计证据 | CP5 审查方式 |
 |---|---|---|---|---|---|
-| STORY-001 | docs/features/<feature>/DESIGN.md | full-lld / technical-note / waived | data / security / cross-module / external / concurrency / migration / low-risk | LLD / Story 技术说明 / waived reason | CP5 自动预检 + 批量人工确认 |
+| STORY-001 | docs/features/<feature>/DESIGN.md | full-lld / technical-note / waived | data / security / cross-module / external / concurrency / migration / low-risk | LLD / Batch LLD Story 锚点 / Story 技术说明 / waived reason | CP5 自动预检 + 批量人工确认 |
 
 ## 提前确认的关键决策
 

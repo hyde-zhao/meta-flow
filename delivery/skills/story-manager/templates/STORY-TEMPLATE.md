@@ -22,7 +22,7 @@ file_ownership:
   forbidden: []
 lld_gate:
   required_inputs: ["HLD", "ADR", "FEATURE-DESIGN-MATRIX", "Story"]
-  design_evidence_type: "full-lld" # full-lld | technical-note | waived
+  design_evidence_type: "full-lld" # full-lld | batch-lld | technical-note | waived
   design_evidence_path: ""
   status: "not-started"
 implementation_gate:
@@ -154,7 +154,7 @@ updated_at: ""
 
 | 项目 | 内容 |
 |---|---|
-| 设计证据类型 | full-lld / technical-note / waived |
+| 设计证据类型 | full-lld / batch-lld / technical-note / waived |
 | 设计依据 | HLD / ADR / FEATURE-DESIGN-MATRIX / Feature DESIGN |
 | 文件影响 | <create / modify / delete 文件列表> |
 | 接口 / 数据 / 权限变化 | <无新增 / 具体变化> |

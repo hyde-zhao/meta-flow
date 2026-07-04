@@ -146,7 +146,7 @@ confirmed_at: ""
 
 | Story ID | feature_design_refs | lld_policy.required_level | 触发原因 | 必须进一步设计的问题 | 可用设计证据 |
 |---|---|---|---|---|---|
-| STORY-001 | docs/features/<feature>/DESIGN.md | full-lld / technical-note / waived | data / security / cross-module / external / concurrency / migration / low-risk | <问题> | LLD / Story 技术说明 / waived reason |
+| STORY-001 | docs/features/<feature>/DESIGN.md | full-lld / technical-note / waived | data / security / cross-module / external / concurrency / migration / low-risk | <问题> | LLD / Batch LLD Story 锚点 / Story 技术说明 / waived reason |
 
 ## 下游消费契约
 

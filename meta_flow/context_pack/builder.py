@@ -56,6 +56,8 @@ DEFAULT_STAGE_READS: dict[str, tuple[str, ...]] = {
         "process/release/RELEASE-CONTEXT.yaml",
     ),
 }
+CHECKPOINT_REF_KEYS = ("checkpoint_ref", "checkpoint_refs", "source_checkpoint_refs")
+CAPSULE_INLINE_DUPLICATE_MIN_CHARS = 160
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,50 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def _iter_cp2_results(project_root: Path, cr_id: str) -> list[Path]:
+    checks_root = project_root / "process" / "checks"
+    if not checks_root.is_dir() or not cr_id:
+        return []
+    compact_cr = cr_id.replace("-", "")
+    candidates = [
+        *checks_root.glob(f"CP2*{cr_id}*.result.json"),
+        *checks_root.glob(f"CP2*{compact_cr}*.result.json"),
+        *checks_root.glob("CP2*.result.json"),
+    ]
+    seen: set[Path] = set()
+    paths: list[Path] = []
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        data = _read_json(path)
+        if str(data.get("cr_id") or "") == cr_id or cr_id in path.name or compact_cr in path.name:
+            paths.append(path)
+    return sorted(paths)
+
+
+def _required_evidence_from_cp2(project_root: Path, cr_id: str) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for path in _iter_cp2_results(project_root, cr_id):
+        data = _read_json(path)
+        commitments = data.get("commitments") or {}
+        if not isinstance(commitments, dict):
+            continue
+        for entry in commitments.get("required_evidence") or []:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = str(entry.get("id") or "")
+            if not entry_id or entry_id in seen:
+                continue
+            seen.add(entry_id)
+            copied = dict(entry)
+            copied["source_result_ref"] = path.relative_to(project_root).as_posix()
+            entries.append(copied)
+    return entries
 
 
 def default_read_policy() -> dict[str, Any]:
@@ -185,6 +231,57 @@ def _deny_default_entries(patterns: list[str]) -> list[dict[str, str]]:
         "process/discussions/**": "讨论日志只用于审计 / 恢复，不替代正式产物",
     }
     return [{"path_or_pattern": pattern, "reason": reasons.get(pattern, "deny-default full document read")} for pattern in patterns]
+
+
+def _string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        strings: list[str] = []
+        for key, item in value.items():
+            if str(key).endswith("_ref") or str(key).endswith("_refs") or str(key) in {"path", "ref"}:
+                continue
+            strings.extend(_string_values(item))
+        return strings
+    if isinstance(value, list):
+        strings = []
+        for item in value:
+            strings.extend(_string_values(item))
+        return strings
+    return []
+
+
+def _checkpoint_refs(context: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    for key in CHECKPOINT_REF_KEYS:
+        raw = context.get(key)
+        if isinstance(raw, str) and raw:
+            refs.append(raw)
+        elif isinstance(raw, list):
+            refs.extend(str(item) for item in raw if str(item))
+    return sorted(set(refs))
+
+
+def _capsule_redundancy_warnings(root: Path, context: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    inline_strings = [
+        value.strip()
+        for value in _string_values(context)
+        if len(value.strip()) >= CAPSULE_INLINE_DUPLICATE_MIN_CHARS
+    ]
+    if not inline_strings:
+        return warnings
+    for ref in _checkpoint_refs(context):
+        path = root / ref
+        if not path.is_file():
+            continue
+        checkpoint_text = path.read_text(encoding="utf-8", errors="ignore")
+        repeated = [value for value in inline_strings if value in checkpoint_text]
+        if repeated:
+            warnings.append(
+                f"capsule_content_redundant: inline content duplicates checkpoint Markdown {ref}"
+            )
+    return warnings
 
 
 def _stage_budget(project_root: Path, stage: str, explicit_budget: int | None) -> int:
@@ -292,6 +389,7 @@ def build_context_pack(
         if (project_root / rel_path).is_file():
             _append_unique(allowed_reads, _read_entry(project_root, rel_path.as_posix(), required=False, reason=reason))
 
+    must_verify = _required_evidence_from_cp2(project_root, cr_id) if stage == "CP7" and cr_id else []
     estimated_tokens = sum(entry.estimated_tokens for entry in allowed_reads)
     max_tokens = _stage_budget(project_root, stage, budget)
     denied_default_reads = list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS)
@@ -329,6 +427,7 @@ def build_context_pack(
         "must_read": [entry.as_dict() for entry in must_read],
         "allowed_reads": [entry.as_dict() for entry in allowed_reads],
         "read_if_needed": [entry.as_dict() for entry in read_if_needed],
+        "must_verify": must_verify,
         "do_not_read_by_default": _deny_default_entries(denied_default_reads),
         "denied_default_reads": denied_default_reads,
         "full_doc_read_allowed_when": list(read_policy.get("full_doc_read_allowed_when") or DEFAULT_FULL_DOC_READ_REASONS),
@@ -401,6 +500,7 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
     allowed_reads = context.get("allowed_reads") or []
     must_read = context.get("must_read") or []
     read_if_needed = context.get("read_if_needed") or []
+    must_verify = context.get("must_verify") or []
     do_not_read_by_default = context.get("do_not_read_by_default") or []
     if not isinstance(must_read, list) or not must_read:
         errors.append("must_read must be a non-empty list")
@@ -408,6 +508,18 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
     if not isinstance(read_if_needed, list):
         errors.append("read_if_needed must be a list")
         read_if_needed = []
+    if "must_verify" in context and not isinstance(context.get("must_verify"), list):
+        errors.append("must_verify must be a list")
+        must_verify = []
+    for index, entry in enumerate(must_verify, 1):
+        if not isinstance(entry, dict):
+            errors.append(f"must_verify[{index}] must be an object")
+            continue
+        for key in ("id", "kind", "required_stage"):
+            if not entry.get(key):
+                errors.append(f"must_verify[{index}] missing {key}")
+        if entry.get("required_stage") and str(entry["required_stage"]) != "CP7":
+            errors.append(f"must_verify[{index}] required_stage must be CP7")
     if not isinstance(do_not_read_by_default, list) or not do_not_read_by_default:
         errors.append("do_not_read_by_default must be a non-empty list")
         do_not_read_by_default = []
@@ -464,6 +576,10 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
         summary_path = root / str(context["cr_summary_ref"])
         if not summary_path.is_file():
             errors.append(f"cr_summary_ref missing on disk: {context['cr_summary_ref']}")
+    if str(context.get("stage") or "").upper() == "CP7" and context.get("cr_id"):
+        cp2_required = _required_evidence_from_cp2(root, str(context["cr_id"]))
+        if cp2_required and not must_verify:
+            errors.append("CP7 context must include must_verify entries from CP2 required_evidence")
 
     if "process/STATE.md" not in denied_patterns:
         warnings.append("denied_default_reads does not include process/STATE.md")
@@ -471,6 +587,7 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
         warnings.append("denied_default_reads does not include process/DEVELOPMENT-PLAN.yaml")
     if "process/current/CURRENT.json" not in [str(entry.get("path") or "") for entry in must_read if isinstance(entry, dict)]:
         warnings.append("must_read does not include process/current/CURRENT.json")
+    warnings.extend(_capsule_redundancy_warnings(root, context))
     return errors, warnings
 
 

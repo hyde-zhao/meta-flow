@@ -33,6 +33,31 @@ quality_summary:
   accepted_risk_ids: []
   unresolved_findings: []
 
+fact_diff:
+  source_refs:
+    cr_scope_ref: ""
+    cp2_commitments_ref: ""
+    cp7_alignment_ref: ""
+    evidence_index_refs: []
+  items:
+    - promise_ref: ""
+      promise: ""
+      status: ""  # EXECUTED_POSITIVE_RESULT | EXECUTED_NEGATIVE_RESULT | MISSING_REQUIRED_EVIDENCE | DEFERRED_FOLLOW_UP | NOT_APPLICABLE | NEEDS_REVIEW
+      decision_impact: ""  # READY | READY_WITH_RISK | NOT_READY | NO_IMPACT
+      evidence_refs: []
+      risk_ref: ""
+      notes: ""
+  summary:
+    promised_count: 0
+    delivered_count: 0
+    missing_required_count: 0
+    ready_with_risk_count: 0
+    not_ready_count: 0
+  generation_policy:
+    source_of_truth: "CP8 result fact_diff or release context fact_diff"
+    copied_long_text: false
+    allowed_payload: "promise summary, status, decision impact, risk id, evidence path"
+
 affected_surface:
   platforms: []
   components: []

@@ -292,6 +292,7 @@ def _print_help() -> None:
         "  project    Scaffold and validate process/project governance state.\n"
         "  quality    Validate quality model and eval matrix policies.\n"
         "  story      Validate Story return packets and evidence indexes.\n"
+        "  validation Generate or execute profile-driven validation task evidence.\n"
         "  waiver     Validate waiver policy and CP waiver records.\n"
         "  ask-user   Generate exact user prompts or Codex request_user_input payloads.\n"
         "  state      Migrate, render, and validate lightweight runtime state v2.\n"
@@ -323,6 +324,7 @@ def _print_help() -> None:
         "  meta-flow failure route-check --result process/checks/CP7-STORY.result.json --project-root .\n"
         "  meta-flow waiver check --result process/checks/CP8-DELIVERY.result.json --project-root .\n"
         "  meta-flow story return-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
+        "  meta-flow validation run --cr CR-155 --profile real-lake-readonly --reruns 2 --project-root .\n"
         "  meta-flow design delta-check --delta process/design-deltas/STORY-CR123-S01.delta.json --project-root .\n"
         "  meta-flow check module-boundaries --project-root .\n"
         "  meta-flow check imports --project-root .\n"
@@ -693,6 +695,12 @@ def _run_design(args: list[str]) -> None:
     raise SystemExit(story_evidence.design_main(args))
 
 
+def _run_validation(args: list[str]) -> None:
+    from meta_flow.validation import task_runner
+
+    raise SystemExit(task_runner.main(args))
+
+
 def _run_context(args: list[str]) -> None:
     from meta_flow.context_pack import builder
 
@@ -879,13 +887,16 @@ def main() -> None:
     if command == "story":
         _run_story(args[1:])
         return
+    if command == "validation":
+        _run_validation(args[1:])
+        return
     if command == "design":
         _run_design(args[1:])
         return
     raise SystemExit(
         "未知命令: "
         "install, uninstall, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, identity, ledger, "
-        "governance, module, policy, project, quality, story, waiver, ask-user, state, status, next, doctor"
+        "governance, module, policy, project, quality, story, validation, waiver, ask-user, state, status, next, doctor"
     )
 if __name__ == "__main__":
     main()

@@ -15,6 +15,7 @@ release_decision: NOT_READY
 | 回滚范围 | <files / components / config / state> |
 | 是否涉及数据恢复 | yes / no |
 | 是否存在不可回滚项 | yes / no |
+| CP8 fact_diff 风险来源 | `process/release/RELEASE-CONTEXT.yaml#fact_diff` / N/A |
 | 决策人 | human / owner |
 
 ## 2. 回滚触发条件

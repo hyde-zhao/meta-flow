@@ -15,6 +15,7 @@ release_decision: NOT_READY
 | 是否自动迁移 | yes / no / N/A |
 | 是否保留兼容路径 | yes / no / N/A |
 | 是否可逆 | yes / no / N/A |
+| CP8 fact_diff 迁移影响 | `process/release/RELEASE-CONTEXT.yaml#fact_diff` / N/A |
 
 ## 2. 兼容性判断表
 

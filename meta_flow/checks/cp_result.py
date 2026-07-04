@@ -20,6 +20,16 @@ CHECKPOINT_LEDGER_REL = Path("process/state/CHECKPOINT-LEDGER.ndjson")
 ITEM_STATUSES = {"PASS", "FAIL", "BLOCKED", "N/A", "WAIVED"}
 GENERAL_DECISIONS = {"PASS", "FAIL", "BLOCKED", "WAIVED"}
 CP7_DECISIONS = GENERAL_DECISIONS | {"PASS_WITH_RISK", "NEEDS_REWORK", "NEEDS_DESIGN_CLARIFICATION"}
+EVIDENCE_STATUSES = {
+    "MISSING_REQUIRED_EVIDENCE",
+    "EXECUTED_NEGATIVE_RESULT",
+    "EXECUTED_POSITIVE_RESULT",
+    "DEFERRED_FOLLOW_UP",
+    "NOT_APPLICABLE",
+    "NEEDS_REVIEW",
+}
+RELEASE_DECISIONS = {"READY", "READY_WITH_RISK", "NOT_READY", "RELEASED", "FAILED"}
+FACT_DIFF_DECISION_IMPACTS = {"READY", "READY_WITH_RISK", "NOT_READY", "NO_IMPACT"}
 SEVERITIES = {"BLOCKER", "HIGH", "MEDIUM", "LOW", "INFO"}
 CHECKPOINT_RE = re.compile(r"^CP[0-8]$")
 
@@ -84,6 +94,216 @@ def _deny_default_refs(result: dict[str, Any]) -> list[str]:
     return sorted(set(refs))
 
 
+def _validate_cp2_commitments(result: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    commitments = result.get("commitments")
+    if commitments is None:
+        return errors
+    if not isinstance(commitments, dict):
+        return ["commitments must be an object"]
+    required_evidence = commitments.get("required_evidence", [])
+    if required_evidence is None:
+        return errors
+    if not isinstance(required_evidence, list):
+        return ["commitments.required_evidence must be a list"]
+    seen: set[str] = set()
+    for index, entry in enumerate(required_evidence, 1):
+        if not isinstance(entry, dict):
+            errors.append(f"commitments.required_evidence[{index}] must be an object")
+            continue
+        for key in ("id", "kind", "required_stage"):
+            if not entry.get(key):
+                errors.append(f"commitments.required_evidence[{index}] missing {key}")
+        evidence_id = str(entry.get("id") or "")
+        if evidence_id in seen:
+            errors.append(f"commitments.required_evidence[{index}] duplicate id: {evidence_id}")
+        seen.add(evidence_id)
+        if entry.get("required_stage") and str(entry["required_stage"]) != "CP7":
+            errors.append(f"commitments.required_evidence[{index}] required_stage must be CP7")
+        minimum = entry.get("minimum_evidence")
+        if minimum is not None and not isinstance(minimum, dict):
+            errors.append(f"commitments.required_evidence[{index}] minimum_evidence must be an object")
+    return errors
+
+
+def _validate_cp7_alignment(result: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    alignment = result.get("promise_evidence_alignment")
+    if alignment is None:
+        return errors
+    if not isinstance(alignment, list):
+        return ["promise_evidence_alignment must be a list"]
+    missing_required_seen = False
+    for index, item in enumerate(alignment, 1):
+        if not isinstance(item, dict):
+            errors.append(f"promise_evidence_alignment[{index}] must be an object")
+            continue
+        for key in ("promise_ref", "evidence_status", "result"):
+            if not item.get(key):
+                errors.append(f"promise_evidence_alignment[{index}] missing {key}")
+        status = str(item.get("evidence_status") or "")
+        if status and status not in EVIDENCE_STATUSES:
+            errors.append(f"promise_evidence_alignment[{index}] invalid evidence_status: {status}")
+        result_value = str(item.get("result") or "")
+        if result_value and result_value not in {"PASS", "FAIL", "BLOCKED", "NEEDS_REVIEW", "PASS_WITH_RISK"}:
+            errors.append(f"promise_evidence_alignment[{index}] invalid result: {result_value}")
+        evidence_refs = item.get("evidence_refs") or []
+        if evidence_refs and not isinstance(evidence_refs, list):
+            errors.append(f"promise_evidence_alignment[{index}] evidence_refs must be a list")
+        if status == "MISSING_REQUIRED_EVIDENCE":
+            missing_required_seen = True
+            if result_value != "BLOCKED":
+                errors.append(f"promise_evidence_alignment[{index}] missing required evidence must result BLOCKED")
+        if status == "EXECUTED_NEGATIVE_RESULT" and not evidence_refs:
+            errors.append(f"promise_evidence_alignment[{index}] executed negative result requires evidence_refs")
+    if missing_required_seen and str(result.get("decision") or "") != "BLOCKED":
+        errors.append("CP7 decision must be BLOCKED when required evidence is missing")
+    return errors
+
+
+def _validate_cp8_fact_diff(result: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    release_decision = str(result.get("release_decision") or "")
+    if release_decision and release_decision not in RELEASE_DECISIONS:
+        errors.append(f"invalid release_decision for CP8: {release_decision}")
+    fact_diff = result.get("fact_diff")
+    if fact_diff is None:
+        return errors
+    if not isinstance(fact_diff, list):
+        return ["fact_diff must be a list"]
+    missing_required_seen = False
+    risk_seen = False
+    not_ready_impact_seen = False
+    ready_with_risk_impact_seen = False
+    for index, item in enumerate(fact_diff, 1):
+        if not isinstance(item, dict):
+            errors.append(f"fact_diff[{index}] must be an object")
+            continue
+        for key in ("promise_ref", "promise", "status", "decision_impact"):
+            if not item.get(key):
+                errors.append(f"fact_diff[{index}] missing {key}")
+        status = str(item.get("status") or "")
+        if status and status not in EVIDENCE_STATUSES:
+            errors.append(f"fact_diff[{index}] invalid status: {status}")
+        decision_impact = str(item.get("decision_impact") or "")
+        if decision_impact and decision_impact not in FACT_DIFF_DECISION_IMPACTS:
+            errors.append(f"fact_diff[{index}] invalid decision_impact: {decision_impact}")
+        evidence_refs = item.get("evidence_refs") or []
+        if evidence_refs and not isinstance(evidence_refs, list):
+            errors.append(f"fact_diff[{index}] evidence_refs must be a list")
+        if status == "MISSING_REQUIRED_EVIDENCE":
+            missing_required_seen = True
+            if decision_impact != "NOT_READY":
+                errors.append(f"fact_diff[{index}] missing required evidence must have decision_impact NOT_READY")
+        if status in {"EXECUTED_NEGATIVE_RESULT", "DEFERRED_FOLLOW_UP", "NEEDS_REVIEW"}:
+            risk_seen = True
+            if status == "EXECUTED_NEGATIVE_RESULT" and not evidence_refs:
+                errors.append(f"fact_diff[{index}] executed negative result requires evidence_refs")
+        if decision_impact == "NOT_READY":
+            not_ready_impact_seen = True
+        if decision_impact == "READY_WITH_RISK":
+            ready_with_risk_impact_seen = True
+    decision = str(result.get("decision") or "")
+    if missing_required_seen:
+        if decision in {"PASS", "WAIVED"}:
+            errors.append("CP8 decision cannot be PASS/WAIVED when fact_diff has missing required evidence")
+        if release_decision and release_decision != "NOT_READY":
+            errors.append("CP8 release_decision must be NOT_READY when fact_diff has missing required evidence")
+    if release_decision == "READY":
+        if risk_seen or ready_with_risk_impact_seen or not_ready_impact_seen:
+            errors.append("CP8 release_decision cannot be READY when fact_diff has risk or not-ready impacts")
+    if release_decision == "READY_WITH_RISK" and not_ready_impact_seen:
+        errors.append("CP8 release_decision cannot be READY_WITH_RISK when fact_diff has NOT_READY impacts")
+    return errors
+
+
+def _validate_checker_provenance(result: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    provenance = result.get("checker_provenance")
+    if provenance is None:
+        return errors
+    if not isinstance(provenance, dict):
+        return ["checker_provenance must be an object"]
+    for key in ("checker_name", "invocation", "generated_by", "fallback_used"):
+        if key not in provenance:
+            errors.append(f"checker_provenance missing {key}")
+    if not (provenance.get("checker_version") or provenance.get("checker_commit")):
+        errors.append("checker_provenance requires checker_version or checker_commit")
+    if "fallback_used" in provenance and not isinstance(provenance.get("fallback_used"), bool):
+        errors.append("checker_provenance.fallback_used must be a boolean")
+    if provenance.get("fallback_used") is True:
+        for key in ("fallback_reason", "fallback_review_ref"):
+            if not provenance.get(key):
+                errors.append(f"checker_provenance fallback_used=true requires {key}")
+    fallback_keys = ("fallback_reason", "fallback_review_ref")
+    if provenance.get("fallback_used") is False and any(provenance.get(key) for key in fallback_keys):
+        errors.append("checker_provenance fallback fields require fallback_used=true")
+    return errors
+
+
+def _load_checkpoint_events(root: Path) -> list[dict[str, Any]]:
+    ledger_path = root / CHECKPOINT_LEDGER_REL
+    if not ledger_path.is_file():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in ledger_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events
+
+
+def _validate_derived_consistency(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    rel_result = _rel(root, result_path)
+    summary_path = result_path.with_suffix(".summary.md")
+    decision = str(result.get("decision") or "")
+    checkpoint = str(result.get("checkpoint") or result.get("checkpoint_id") or "")
+    cr_id = str(result.get("cr_id") or "")
+    if summary_path.is_file():
+        summary_text = summary_path.read_text(encoding="utf-8")
+        if f"Decision: {decision}" not in summary_text:
+            errors.append(f"summary decision does not match result JSON: {summary_path}")
+        if checkpoint and f"# {checkpoint} Summary" not in summary_text:
+            errors.append(f"summary checkpoint does not match result JSON: {summary_path}")
+        if cr_id and f"CR: {cr_id}" not in summary_text:
+            errors.append(f"summary CR does not match result JSON: {summary_path}")
+    for event in _load_checkpoint_events(root):
+        if str(event.get("result_ref") or "") != rel_result:
+            continue
+        for key in ("checkpoint", "decision", "cr_id", "context_ref", "evidence_ref"):
+            expected = result.get(key)
+            actual = event.get(key)
+            if expected and actual and str(expected) != str(actual):
+                errors.append(f"checkpoint ledger {key} does not match result JSON for {rel_result}")
+    cr_index_path = root / "process/changes/CR-INDEX.json"
+    if cr_id and cr_index_path.is_file():
+        try:
+            index = json.loads(cr_index_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            errors.append(f"{cr_index_path} invalid JSON: {exc}")
+        else:
+            items = [item for item in index.get("items", []) if isinstance(item, dict)]
+            if not any(item.get("id") == cr_id for item in items):
+                errors.append(f"CR-INDEX missing CR referenced by CP result: {cr_id}")
+    state_path = root / "process/state/STATE.current.json"
+    if cr_id and state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            errors.append(f"{state_path} invalid JSON: {exc}")
+        else:
+            active_change = state.get("active_change")
+            if active_change and str(active_change) != cr_id and checkpoint not in {"CP8"}:
+                errors.append(f"STATE.current.json active_change={active_change} differs from CP result cr_id={cr_id}")
+    return errors
+
+
 def allowed_decisions(checkpoint: str) -> set[str]:
     if checkpoint == "CP7":
         return CP7_DECISIONS
@@ -94,7 +314,12 @@ def load_cp_result(path: Path) -> dict[str, Any]:
     return _read_json(path.resolve())
 
 
-def validate_cp_result(result_path: Path, *, project_root: Path | None = None) -> tuple[list[str], list[str]]:
+def validate_cp_result(
+    result_path: Path,
+    *,
+    project_root: Path | None = None,
+    check_consistency: bool = False,
+) -> tuple[list[str], list[str]]:
     result_path = result_path.resolve()
     if not result_path.is_file():
         return [f"CP result missing: {result_path}"], []
@@ -152,6 +377,13 @@ def validate_cp_result(result_path: Path, *, project_root: Path | None = None) -
         errors.append("waivers must be a list")
     if (blocking_item_seen or blockers) and decision in {"PASS", "PASS_WITH_RISK"}:
         errors.append("decision cannot be PASS/PASS_WITH_RISK when blocking items exist")
+    if checkpoint == "CP2":
+        errors.extend(_validate_cp2_commitments(result))
+    if checkpoint == "CP7":
+        errors.extend(_validate_cp7_alignment(result))
+    if checkpoint == "CP8":
+        errors.extend(_validate_cp8_fact_diff(result))
+    errors.extend(_validate_checker_provenance(result))
     if checkpoint in {"CP6", "CP7"}:
         if not result.get("story_id"):
             errors.append(f"{checkpoint} result requires story_id")
@@ -187,7 +419,14 @@ def validate_cp_result(result_path: Path, *, project_root: Path | None = None) -
         rel = str(result.get(ref_key) or "")
         if rel and project_root and not (root / rel).exists():
             warnings.append(f"{ref_key} not found on disk: {rel}")
+    if check_consistency and project_root:
+        errors.extend(_validate_derived_consistency(root, result_path, result))
     return errors, warnings
+
+
+def _summary_cell(value: Any) -> str:
+    text = "-" if value is None or value == "" else str(value)
+    return text.replace("|", "\\|").replace("\n", " ")
 
 
 def render_summary(result: dict[str, Any]) -> str:
@@ -207,12 +446,39 @@ def render_summary(result: dict[str, Any]) -> str:
         "",
         "## Blocking Items",
     ]
+    release_decision = result.get("release_decision")
+    if release_decision:
+        lines.insert(3, f"Release Decision: {release_decision}")
     blockers = _as_list(result.get("blockers"))
     if blockers:
         for item in blockers:
             lines.append(f"- {item}")
     else:
         lines.append("None.")
+    provenance = result.get("checker_provenance")
+    if isinstance(provenance, dict):
+        lines.extend(
+            [
+                "",
+                "## Checker Provenance",
+                "",
+                "| Field | Value |",
+                "|---|---|",
+                f"| checker_name | {_summary_cell(provenance.get('checker_name'))} |",
+                f"| checker_version | {_summary_cell(provenance.get('checker_version'))} |",
+                f"| checker_commit | {_summary_cell(provenance.get('checker_commit'))} |",
+                f"| invocation | {_summary_cell(provenance.get('invocation'))} |",
+                f"| generated_by | {_summary_cell(provenance.get('generated_by'))} |",
+                f"| fallback_used | {_summary_cell(provenance.get('fallback_used'))} |",
+            ]
+        )
+        if provenance.get("fallback_used") is True:
+            lines.extend(
+                [
+                    f"| fallback_reason | {_summary_cell(provenance.get('fallback_reason'))} |",
+                    f"| fallback_review_ref | {_summary_cell(provenance.get('fallback_review_ref'))} |",
+                ]
+            )
     lines.extend(["", "## Check Items", "", "| ID | Status | Severity | Name |", "|---|---|---|---|"])
     for item in _as_list(result.get("items")):
         if not isinstance(item, dict):
@@ -220,6 +486,35 @@ def render_summary(result: dict[str, Any]) -> str:
         lines.append(
             f"| {item.get('id', '-')} | {item.get('status', '-')} | {item.get('severity', '-')} | {item.get('name', '-')} |"
         )
+    fact_diff = result.get("fact_diff")
+    if isinstance(fact_diff, list) and fact_diff:
+        lines.extend(
+            [
+                "",
+                "## Fact Diff",
+                "",
+                "| Promise Ref | Promise | Status | Decision Impact | Evidence | Risk |",
+                "|---|---|---|---|---|---|",
+            ]
+        )
+        for item in fact_diff:
+            if not isinstance(item, dict):
+                continue
+            evidence_refs = ", ".join(str(ref) for ref in _as_list(item.get("evidence_refs"))) or "-"
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _summary_cell(item.get("promise_ref")),
+                        _summary_cell(item.get("promise")),
+                        _summary_cell(item.get("status")),
+                        _summary_cell(item.get("decision_impact")),
+                        _summary_cell(evidence_refs),
+                        _summary_cell(item.get("risk_ref")),
+                    ]
+                )
+                + " |"
+            )
     lines.extend(["", "## Next", "", str(result.get("next_route") or "-"), ""])
     return "\n".join(lines)
 
@@ -250,6 +545,7 @@ def build_checkpoint_event(project_root: Path, result_path: Path) -> dict[str, A
         "context_ref": result.get("context_ref"),
         "evidence_ref": result.get("evidence_ref"),
         "dispatch_refs": _as_list(result.get("dispatch_refs")),
+        "checker_provenance": result.get("checker_provenance"),
         "checked_at": result.get("checked_at") or now_utc(),
     }
 
@@ -270,6 +566,7 @@ def _print_cp_help() -> None:
         "  ledger-append   Append a checkpoint_result event to CHECKPOINT-LEDGER.ndjson.\n\n"
         "Examples:\n"
         "  meta-flow cp result-check --result process/checks/CP6-STORY.result.json --project-root .\n"
+        "  meta-flow cp result-check --result process/checks/CP8-CR.result.json --project-root . --check-consistency\n"
         "  meta-flow cp render-summary --result process/checks/CP6-STORY.result.json\n"
         "  meta-flow cp ledger-append --result process/checks/CP6-STORY.result.json --project-root .\n"
     )
@@ -285,8 +582,13 @@ def main(argv: list[str] | None = None) -> int:
         parser = argparse.ArgumentParser(prog="meta-flow cp result-check")
         parser.add_argument("--project-root", type=Path, default=None)
         parser.add_argument("--result", dest="result_path", type=Path, required=True)
+        parser.add_argument("--check-consistency", action="store_true")
         parsed = parser.parse_args(args[1:])
-        errors, warnings = validate_cp_result(parsed.result_path, project_root=parsed.project_root)
+        errors, warnings = validate_cp_result(
+            parsed.result_path,
+            project_root=parsed.project_root,
+            check_consistency=parsed.check_consistency,
+        )
         print("CP Result Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")

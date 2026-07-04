@@ -16,6 +16,8 @@ status: active
 
 本 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`：发布准备默认消费 `process/release/RELEASE-CONTEXT.yaml`、CP result、evidence index 和摘要，不复制完整上游文档。
 
+CP8 必须生成或消费 `fact_diff`，把 CP2 / CR scope 承诺与 CP7 证据逐项对齐。`fact_diff` 只保存 `promise_ref`、`promise` 摘要、`status`、`decision_impact`、`evidence_refs`、`risk_ref`，不得复制完整 checkpoint、测试报告或 evidence 正文。若存在 `MISSING_REQUIRED_EVIDENCE`，`release_decision` 只能是 `NOT_READY`；若存在 `EXECUTED_NEGATIVE_RESULT`、`DEFERRED_FOLLOW_UP` 或 `NEEDS_REVIEW`，不能写成 `READY`，必须是 `READY_WITH_RISK` 或 `NOT_READY`。
+
 发布结论只允许使用：
 
 | release_decision | 含义 | 是否需要独立真实发布授权 |
@@ -90,6 +92,7 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 | `release_scope` | 版本、Feature / Story、In Scope / Out of Scope、用户可见变化、内部变化 |
 | `version_decision` | 当前版本、目标版本、MAJOR / MINOR / PATCH / alpha / beta / rc 判断和原因 |
 | `quality_summary` | CP7 / TEST-REPORT / REVIEW 结论，BLOCKER / HIGH 计数，风险接受 ID |
+| `fact_diff` | 承诺 vs 交付证据差异表，来源于 CP8 result 或 release context，不复制上游正文 |
 | `affected_surface` | 平台、组件、安装 scope、配置、权限、迁移、外部接口、状态 schema |
 | `install_validation_summary` | 只记录命令摘要、结果和日志路径，不复制日志 |
 | `release_documents` | 五份 release 文档的路径、profile、生成状态和 N/A 原因 |
@@ -108,16 +111,17 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 ## 执行步骤
 
 1. **生成 Release Context Capsule**：读取最小输入，汇总发布范围、质量结论、风险、影响面、安装验证摘要和待决策项。
-2. **判定 release_artifact_profile**：按 `minimal` / `compact` / `full` 裁剪发布产物，写入 capsule 和 CP8。
-3. **判定版本号**：使用 SemVer 或 alpha / beta / rc 规则，将版本号决策写入 capsule、`RELEASE-NOTES.md` 和 CP8 Decision Brief。
-4. **整理用户视角 Release Notes**：面向用户说明新增能力、行为变化、修复、破坏性变更、安装升级、迁移、已知问题和回滚方式；不得写成文件 diff 列表。
-5. **生成影响面驱动部署检查**：只覆盖 capsule 中受影响的平台、组件和 scope；安装、升级、重复安装幂等、dry-run、卸载 / 回滚按适用性检查。
-6. **生成迁移与兼容性判断**：状态 schema、模板字段、配置、安装路径、Agent frontmatter、Skill 输出格式、命令参数和数据结构逐项判定；无迁移时写短 N/A。
-7. **生成回滚方案**：说明回滚目标版本、范围、步骤、验证、不可回滚项和责任人；无状态 / 无迁移时写 N/A 原因。
-8. **生成反馈与观察计划**：默认并入 `FEEDBACK.md`，记录发布后观察信号、触发阈值和分流；仅 `full` profile 或用户要求时才建议独立 `POST-RELEASE-OBSERVATION.md`。
-9. **检查双仓库交付状态**：外置过程仓库模式下，发布准备必须记录 `meta-flow workspace git-status --project-root .` 结果；项目推送必须使用 `meta-flow workspace push --project-root .` 或等价的源码仓库 + artifact 仓库成对推送证据，不能只推开发目录。
-10. **输出 release_decision**：`READY` / `READY_WITH_RISK` / `NOT_READY` 可进入 CP8；`RELEASED` / `FAILED` 只在独立真实发布授权后写入。
-11. 若反馈或遗留项需要后续 CR 跟踪，只写入 CP8 follow-up tracking 台账候选；`FEEDBACK.md` 不替代正式台账，也不表示候选 CR 已启动。
+2. **生成 CP8 fact_diff**：对齐承诺、交付证据、状态、剩余风险和发布影响；缺失必需证据写 `MISSING_REQUIRED_EVIDENCE` 并强制 `NOT_READY`。
+3. **判定 release_artifact_profile**：按 `minimal` / `compact` / `full` 裁剪发布产物，写入 capsule 和 CP8。
+4. **判定版本号**：使用 SemVer 或 alpha / beta / rc 规则，将版本号决策写入 capsule、`RELEASE-NOTES.md` 和 CP8 Decision Brief。
+5. **整理用户视角 Release Notes**：面向用户说明新增能力、行为变化、修复、破坏性变更、安装升级、迁移、已知问题和回滚方式；不得写成文件 diff 列表；compact profile 只引用 `fact_diff` 和 evidence index。
+6. **生成影响面驱动部署检查**：只覆盖 capsule 中受影响的平台、组件和 scope；安装、升级、重复安装幂等、dry-run、卸载 / 回滚按适用性检查。
+7. **生成迁移与兼容性判断**：状态 schema、模板字段、配置、安装路径、Agent frontmatter、Skill 输出格式、命令参数和数据结构逐项判定；无迁移时写短 N/A。
+8. **生成回滚方案**：说明回滚目标版本、范围、步骤、验证、不可回滚项和责任人；无状态 / 无迁移时写 N/A 原因。
+9. **生成反馈与观察计划**：默认并入 `FEEDBACK.md`，记录发布后观察信号、触发阈值和分流；仅 `full` profile 或用户要求时才建议独立 `POST-RELEASE-OBSERVATION.md`。
+10. **检查双仓库交付状态**：外置过程仓库模式下，发布准备必须记录 `meta-flow workspace git-status --project-root .` 结果；项目推送必须使用 `meta-flow workspace push --project-root .` 或等价的源码仓库 + artifact 仓库成对推送证据，不能只推开发目录。
+11. **输出 release_decision**：`READY` / `READY_WITH_RISK` / `NOT_READY` 可进入 CP8；`RELEASED` / `FAILED` 只在独立真实发布授权后写入。
+12. 若反馈或遗留项需要后续 CR 跟踪，只写入 CP8 follow-up tracking 台账候选；`FEEDBACK.md` 不替代正式台账，也不表示候选 CR 已启动。
 
 ## 输出文件 / 输出模板
 
@@ -144,6 +148,7 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 
 - [ ] `process/release/RELEASE-CONTEXT.yaml` 已生成，且不复制长正文。
 - [ ] `release_artifact_profile` 已判定，并解释为何不是更厚 / 更薄的 profile。
+- [ ] CP8 `fact_diff` 已覆盖承诺、证据、状态、风险和 `decision_impact`；缺失必需证据不会进入 `READY` / `PASS`。
 - [ ] `release_decision` 只使用合法枚举，并区分 readiness 与真实 release execution。
 - [ ] 发布说明包含版本号决策、用户可见变化、行为变化、破坏性变更、安装升级、迁移、已知问题、回滚方式。
 - [ ] 部署检查按受影响平台 / 组件 / scope 生成安装、升级、重复安装幂等和 dry-run 矩阵。
