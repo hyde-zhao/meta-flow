@@ -113,13 +113,13 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 
 ### 维度 9：Production delivery route（BLOCKING）
 
-当 `STATE.md.delivery_routing.engagement_mode=production` 时，必须校验：
+当 `STATE.current.json.delivery_routing_ref.engagement_mode=production` 时，必须校验：
 
 - `target_project_root` 非空，并且不是当前 meta-flow 仓库根，除非用户明确要求优化 meta-flow 自身。
 - 已扫描目标项目已有交付目录、`README.md` / `README.*` / `docs/`，并记录在 `route_validation.scanned_sources[]`。
 - 若目标项目没有交付约定，`requires_user_confirmation=true`，且 `user_confirmed_output_route=true` 前不得写交付物。
 - 未经确认不得写入当前仓库 `delivery/agents`、`delivery/skills`、`delivery/rules` 或 `.agents`。
-- 禁止目录必须与 `STATE.md.delivery_routing.route_validation.forbidden_roots_when_production[]` 一致。
+- 禁止目录必须与 `STATE.current.json.delivery_routing_ref route_validation.forbidden_roots_when_production[]` 一致。
 - `route_validation.status` 必须为 `pass`，或在检查报告中列出 `requires-user-confirmation` / `blocked` 原因。
 - 对 production 项目，不得硬引用 meta-flow 本仓库的 `scripts/check_delivery_guardrails.py`；应使用目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令。
 
@@ -132,7 +132,7 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 5. 构造路径组件被文件占用的负向用例，确认安装器 fail fast 且无 traceback
 6. 若目标平台是 Codex，校验 subagent TOML schema、`nickname_candidates`、`model_reasoning_effort` 和动态思考 profile
 7. 若目标平台是 Claude Code，校验 subagent `color` 和 `AskUserQuestion` 工具权限
-8. 校验 `STATE.md.delivery_routing.route_validation` 和 production 禁止写入路径
+8. 校验 `STATE.current.json.delivery_routing_ref route_validation` 和 production 禁止写入路径
 9. 输出校验报告（含未通过项与修复建议）
 
 ## 输出格式

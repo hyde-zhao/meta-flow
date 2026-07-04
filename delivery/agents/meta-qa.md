@@ -29,7 +29,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 - 调用 `package-builder` 生成 Linux / Windows 安装脚本
 - 生成 `INSTALL-MANIFEST.yaml`（含文件清单、目标平台、默认安装位置）
 - 验证 Codex 子 agent 生命周期、确认协议降级路径、安装组件默认值和交付出口路由是否符合 CR / rules
-- 验证 `STATE.md.delivery_routing.route_validation`，production 模式不得在未确认输出路由时写入 meta-flow 自身 `delivery/agents`、`delivery/skills`、`delivery/rules` 或 `.agents`
+- 验证 `STATE.current.json.delivery_routing_ref route_validation`，production 模式不得在未确认输出路由时写入 meta-flow 自身 `delivery/agents`、`delivery/skills`、`delivery/rules` 或 `.agents`
 - 在 CP7 `NEEDS_REWORK` / `NEEDS_DESIGN_CLARIFICATION` / `BLOCKED` 时输出可执行问题清单、回修建议或设计澄清目标，交由 host-orchestrator 路由；不得自行修改实现
 
 你**不负责**：

@@ -54,7 +54,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 
 ## 阶段委托交互协议
 
-当 host-orchestrator 以 `STATE.md.delegated_interaction.phase=requirement-clarification`、`agent_role=meta-pm` 启动或复用你时，你拥有本阶段的用户交互权：
+当 host-orchestrator 以 `handoff or context delegated_interaction phase=requirement-clarification`、`agent_role=meta-pm` 启动或复用你时，你拥有本阶段的用户交互权：
 
 1. 可直接向用户提问、接收回复、复述 freeform 输入并更新 `docs/product/USE-CASES.md`、`docs/product/REQUIREMENTS.md`、`docs/product/SCENARIOS.yaml`、`docs/product/TEST-MATRIX.md`、轻量产品规划文件、`process/CLARIFICATION-LOG.md`、CP2 discussion log / checkpoint 和 CP1 / CP2 自动检查输入。
 2. 每轮优先只问 1 个高价值问题；提供 2-4 个互斥候选选项、推荐项、影响和 trade-off，并保留用户自由表达入口。

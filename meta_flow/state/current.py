@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ from meta_flow.checks.token_budget import DEFAULT_BUDGETS, format_bytes, load_bu
 STATE_SCHEMA_VERSION = 2
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
 STATE_MD_REL = Path("process/STATE.md")
+STATE_HISTORY_REL = Path("process/state/HISTORY.md")
+STATE_ARCHIVE_ROOT_REL = Path("process/archive/state")
 ROUTING_REL = Path("process/.meta-flow-process.yaml")
 BASE_LEDGER_RELS = (
     Path("process/state/CR-LEDGER.ndjson"),
@@ -52,11 +55,18 @@ CURRENT_OPTIONAL_KEYS = {
     "active_story",
     "pending_gate",
     "active_context_ref",
+    "active_delegation_ref",
+    "active_question_batch_ref",
+    "artifact_routing_ref",
     "authz_policy_refs",
+    "delivery_routing_ref",
     "open_risks",
+    "release_context_ref",
     "source_refs",
+    "target_project_profile_ref",
     "pending_checklist_path",
     "project_state_ref",
+    "workflow_health_ref",
 }
 CURRENT_ALLOWED_KEYS = CURRENT_REQUIRED_KEYS | CURRENT_OPTIONAL_KEYS
 SECRET_LIKE_KEY_PARTS = (
@@ -74,8 +84,39 @@ CURRENT_FIELD_BUDGETS = {
     "authz_policy_refs": {"kind": "list[str]", "max_items": 16, "max_item_json_bytes": 128, "max_json_bytes": 1024},
     "routing_ref": {"kind": "scalar", "max_bytes": 256},
     "active_context_ref": {"kind": "scalar", "max_bytes": 256},
+    "active_delegation_ref": {"kind": "scalar", "max_bytes": 256},
+    "active_question_batch_ref": {"kind": "scalar", "max_bytes": 256},
+    "artifact_routing_ref": {"kind": "scalar", "max_bytes": 256},
+    "delivery_routing_ref": {"kind": "scalar", "max_bytes": 256},
     "pending_checklist_path": {"kind": "scalar", "max_bytes": 256},
     "project_state_ref": {"kind": "scalar", "max_bytes": 256},
+    "release_context_ref": {"kind": "scalar", "max_bytes": 256},
+    "target_project_profile_ref": {"kind": "scalar", "max_bytes": 256},
+    "workflow_health_ref": {"kind": "scalar", "max_bytes": 256},
+}
+
+SLIM_ARCHIVE_KEYS = {
+    "agent_lifecycle",
+    "authorization_boundary",
+    "checkpoints",
+    "checkpoint_results",
+    "context_budget",
+    "cr_tracking",
+    "delegated_interaction",
+    "delivery_routing",
+    "artifact_routing",
+    "follow_through_tracking",
+    "history",
+    "human_gate_decisions",
+    "last_actions",
+    "next_actions",
+    "orchestrator_session",
+    "parallel_execution",
+    "release",
+    "source_refs",
+    "story_execution",
+    "target_project_profile",
+    "workflow_health",
 }
 
 
@@ -152,6 +193,11 @@ def _json_size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
 
 
+def _sha256_json(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _text_size(value: str) -> int:
     return len(value.encode("utf-8"))
 
@@ -173,6 +219,91 @@ def _is_relative_state_ref(value: str) -> bool:
     if value.startswith("process/quant-lab/") or value == "process/quant-lab":
         return False
     return True
+
+
+def _compact_scalar(value: Any, *, max_bytes: int = 256) -> str:
+    text = _strip_scalar(str(value)) if value is not None else ""
+    if _text_size(text) <= max_bytes:
+        return text
+    encoded = text.encode("utf-8")[: max(0, max_bytes - 3)]
+    return encoded.decode("utf-8", errors="ignore") + "..."
+
+
+def _compact_list_item(value: Any) -> Any:
+    if isinstance(value, str):
+        return _compact_scalar(value)
+    if not isinstance(value, dict):
+        return _compact_scalar(value)
+    preferred_keys = (
+        "id",
+        "cr_id",
+        "story_id",
+        "path",
+        "ref",
+        "context_ref",
+        "summary_ref",
+        "result_ref",
+        "ledger_ref",
+        "kind",
+        "status",
+        "severity",
+    )
+    compact: dict[str, Any] = {}
+    for key in preferred_keys:
+        if key in value and value[key] not in (None, "", [], {}):
+            compact[key] = _compact_scalar(value[key]) if not isinstance(value[key], (list, dict)) else value[key]
+    if not compact:
+        compact = {"summary": _compact_scalar(value.get("summary") or value.get("title") or value)}
+    while _json_size(compact) > 256 and compact:
+        compact.pop(next(reversed(compact)))
+    return compact or {"summary": _compact_scalar(value)}
+
+
+def _bounded_list(value: Any, *, max_items: int, active_only: bool = False) -> list[Any]:
+    raw_items = value if isinstance(value, list) else [] if value in (None, "", {}) else [value]
+    if active_only:
+        filtered = []
+        for item in raw_items:
+            if isinstance(item, dict) and str(item.get("status") or item.get("lifecycle_status") or "").lower() in {
+                "closed",
+                "cancelled",
+                "superseded",
+                "resolved",
+            }:
+                continue
+            filtered.append(item)
+        raw_items = filtered
+    compacted = [_compact_list_item(item) for item in raw_items[-max_items:]]
+    return compacted
+
+
+def _latest_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("text", "summary", "next_action", "action", "title"):
+            if value.get(key):
+                return _compact_scalar(value[key], max_bytes=512)
+    if isinstance(value, list) and value:
+        return _latest_text(value[-1])
+    if value:
+        return _compact_scalar(value, max_bytes=512)
+    return ""
+
+
+def _nested_dict(value: Any, key: str) -> dict[str, Any]:
+    if isinstance(value, dict) and isinstance(value.get(key), dict):
+        return value[key]
+    return {}
+
+
+def _nested_scalar(value: Any, *keys: str) -> str:
+    current_value = value
+    for key in keys:
+        if not isinstance(current_value, dict):
+            return ""
+        current_value = current_value.get(key)
+    if current_value in (None, "", [], {}):
+        return ""
+    return _compact_scalar(current_value)
 
 
 def _contains_secret_like_key(value: Any) -> bool:
@@ -505,6 +636,192 @@ def update_current_state(
     return candidate
 
 
+def _archive_timestamp() -> str:
+    return now_utc().replace(":", "").replace("+", "Z").replace("-", "").replace("T", "-")
+
+
+def _relative_archive_ref(timestamp: str, name: str) -> str:
+    return (STATE_ARCHIVE_ROOT_REL / timestamp / name).as_posix()
+
+
+def _archive_source_ref(timestamp: str) -> dict[str, str]:
+    return {
+        "kind": "state-slim-archive",
+        "path": _relative_archive_ref(timestamp, "archived-fields.json"),
+    }
+
+
+def _extract_active_change(state: dict[str, Any]) -> str:
+    if state.get("active_change"):
+        return _compact_scalar(state["active_change"])
+    cr_tracking = _nested_dict(state, "cr_tracking")
+    for key in ("active_change", "active_cr", "active_cr_id"):
+        if cr_tracking.get(key):
+            return _compact_scalar(cr_tracking[key])
+    orchestrator = _nested_dict(state, "orchestrator_session")
+    if orchestrator.get("active_change"):
+        return _compact_scalar(orchestrator["active_change"])
+    return ""
+
+
+def _extract_pending_gate(state: dict[str, Any]) -> str:
+    if state.get("pending_gate"):
+        return _compact_scalar(state["pending_gate"])
+    return _nested_scalar(state, "orchestrator_session", "pending_gate")
+
+
+def _extract_pending_checklist_path(state: dict[str, Any]) -> str:
+    if state.get("pending_checklist_path"):
+        return _compact_scalar(state["pending_checklist_path"])
+    return _nested_scalar(state, "orchestrator_session", "pending_checklist_path")
+
+
+def _extract_active_context_ref(state: dict[str, Any]) -> str:
+    if state.get("active_context_ref"):
+        return _compact_scalar(state["active_context_ref"])
+    for parent, key in (
+        ("context_budget", "active_context_ref"),
+        ("context_budget", "current_context_ref"),
+        ("orchestrator_session", "active_context_ref"),
+    ):
+        value = _nested_scalar(state, parent, key)
+        if value:
+            return value
+    return ""
+
+
+def _extract_ref_field(state: dict[str, Any], *, existing_key: str, archive_key: str, timestamp: str) -> str:
+    if state.get(existing_key):
+        return _compact_scalar(state[existing_key])
+    if archive_key in state:
+        return _relative_archive_ref(timestamp, f"{archive_key}.json")
+    return ""
+
+
+def _slim_next_action(state: dict[str, Any]) -> dict[str, str]:
+    next_action = state.get("next_action")
+    text = _latest_text(next_action)
+    if not text:
+        text = _latest_text(state.get("next_actions"))
+    if not text:
+        text = _latest_text(state.get("last_actions"))
+    if not text:
+        text = "Continue from current v2 state refs."
+    action_type = "continue"
+    if isinstance(next_action, dict) and next_action.get("type"):
+        action_type = _compact_scalar(next_action["type"], max_bytes=64)
+    return {"type": action_type, "text": text}
+
+
+def _slim_source_refs(state: dict[str, Any], *, timestamp: str) -> list[Any]:
+    refs = _bounded_list(state.get("source_refs"), max_items=23)
+    archived = [key for key in sorted(SLIM_ARCHIVE_KEYS) if key in state]
+    unknown = [key for key in sorted(set(state) - CURRENT_ALLOWED_KEYS - {"schema_version"}) if key not in SLIM_ARCHIVE_KEYS]
+    if archived or unknown:
+        refs.append(_archive_source_ref(timestamp))
+    return refs[-24:]
+
+
+def _slim_state_payload(state: dict[str, Any], *, project_root: Path, timestamp: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    base = default_current_state(project_root, project_id=str(state.get("project_id") or project_root.resolve().name))
+    base["workflow_mode"] = _compact_scalar(state.get("workflow_mode") or base["workflow_mode"], max_bytes=64)
+    base["current_phase"] = _compact_scalar(state.get("current_phase") or base["current_phase"], max_bytes=128)
+    base["blocked"] = bool(state.get("blocked", False))
+    base["active_change"] = _extract_active_change(state) or None
+    base["active_story"] = _compact_scalar(state.get("active_story"), max_bytes=128) if state.get("active_story") else None
+    base["pending_gate"] = _extract_pending_gate(state) or None
+    base["pending_checklist_path"] = _extract_pending_checklist_path(state) or None
+    base["next_action"] = _slim_next_action(state)
+    base["routing_ref"] = _compact_scalar(state.get("routing_ref") or ROUTING_REL.as_posix())
+    base["active_context_ref"] = _extract_active_context_ref(state) or None
+    base["authz_policy_refs"] = _bounded_list(state.get("authz_policy_refs"), max_items=16)
+    base["open_risks"] = _bounded_list(state.get("open_risks"), max_items=16, active_only=True)
+    base["source_refs"] = _slim_source_refs(state, timestamp=timestamp)
+    base["updated_at"] = now_utc()
+
+    optional_archive_refs = {
+        "active_delegation_ref": "delegated_interaction",
+        "active_question_batch_ref": "parallel_execution",
+        "artifact_routing_ref": "artifact_routing",
+        "delivery_routing_ref": "delivery_routing",
+        "release_context_ref": "release",
+        "target_project_profile_ref": "target_project_profile",
+        "workflow_health_ref": "workflow_health",
+    }
+    for state_key, archive_key in optional_archive_refs.items():
+        value = _extract_ref_field(state, existing_key=state_key, archive_key=archive_key, timestamp=timestamp)
+        if value:
+            base[state_key] = value
+    if state.get("project_state_ref"):
+        base["project_state_ref"] = _compact_scalar(state["project_state_ref"])
+
+    archived_fields = {
+        key: copy.deepcopy(state[key])
+        for key in sorted(SLIM_ARCHIVE_KEYS)
+        if key in state and state[key] not in (None, "", [], {})
+    }
+    unknown_fields = {
+        key: copy.deepcopy(state[key])
+        for key in sorted(set(state) - CURRENT_ALLOWED_KEYS - {"schema_version"})
+        if key not in SLIM_ARCHIVE_KEYS
+    }
+    archive = {
+        "schema_version": 1,
+        "generated_at": now_utc(),
+        "source": STATE_CURRENT_REL.as_posix(),
+        "source_sha256": _sha256_json(state),
+        "source_size_bytes": _json_size(state),
+        "archived_fields": archived_fields,
+        "unknown_fields": unknown_fields,
+    }
+    return base, archive
+
+
+def _slim_report(state: dict[str, Any], candidate: dict[str, Any], archive: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "generated_at": now_utc(),
+        "command": "state slim",
+        "source_ref": STATE_CURRENT_REL.as_posix(),
+        "source_sha256": archive["source_sha256"],
+        "source_size_bytes": archive["source_size_bytes"],
+        "projected_size_bytes": _json_size(candidate),
+        "archive_ref": _relative_archive_ref(timestamp, "archived-fields.json"),
+        "report_ref": _relative_archive_ref(timestamp, "slim-report.json"),
+        "archived_keys": sorted(archive["archived_fields"]),
+        "unknown_archived_keys": sorted(archive["unknown_fields"]),
+        "kept_keys": sorted(candidate),
+        "budget_bytes": int(DEFAULT_BUDGETS["state_current_max_bytes"]),
+    }
+
+
+def plan_slim_current_state(project_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
+    project_root = project_root.resolve()
+    path = current_state_path(project_root)
+    if not path.is_file():
+        raise FileNotFoundError(f"STATE.current.json missing: {path}")
+    state = json.loads(path.read_text(encoding="utf-8"))
+    timestamp = _archive_timestamp()
+    candidate, archive = _slim_state_payload(state, project_root=project_root, timestamp=timestamp)
+    validate_current_state_for_write(candidate)
+    report = _slim_report(state, candidate, archive, timestamp=timestamp)
+    return candidate, archive, report, timestamp
+
+
+def apply_slim_current_state(project_root: Path, *, render: bool = False) -> dict[str, Any]:
+    project_root = project_root.resolve()
+    candidate, archive, report, timestamp = plan_slim_current_state(project_root)
+    archive_dir = project_root / STATE_ARCHIVE_ROOT_REL / timestamp
+    archive_dir.mkdir(parents=True, exist_ok=False)
+    (archive_dir / "archived-fields.json").write_text(json.dumps(archive, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (archive_dir / "slim-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_current_state_file(current_state_path(project_root), candidate)
+    ensure_base_ledgers(project_root)
+    if render:
+        render_state_file(project_root, force=True)
+    return report
+
+
 def render_state_markdown(state: dict[str, Any]) -> str:
     next_action = state.get("next_action") or {}
     if isinstance(next_action, dict):
@@ -572,6 +889,95 @@ def render_state_file(project_root: Path, *, force: bool = False) -> Path:
     return path
 
 
+def _load_ndjson(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def render_history_markdown(project_root: Path) -> str:
+    project_root = project_root.resolve()
+    cr_events = _load_ndjson(project_root / "process/state/CR-LEDGER.ndjson")
+    checkpoint_events = _load_ndjson(project_root / "process/state/CHECKPOINT-LEDGER.ndjson")
+    lines = [
+        "# Meta Flow State History",
+        "",
+        "> Generated deny-default audit view. Machine truth remains in ledgers, CR index, summaries, checkpoint results, and archive files.",
+        "",
+        "## CR Events",
+        "",
+    ]
+    if cr_events:
+        lines.extend(
+            [
+                "| CR | Event | Status | Summary | Full Ref |",
+                "|---|---|---|---|---|",
+            ]
+        )
+        for event in cr_events:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(event.get("id") or event.get("cr_id") or "-"),
+                        str(event.get("event") or event.get("event_type") or "-"),
+                        str(event.get("status") or "-"),
+                        str(event.get("summary_ref") or "-"),
+                        str(event.get("full_ref") or "-"),
+                    ]
+                )
+                + " |"
+            )
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Checkpoint Events", ""])
+    if checkpoint_events:
+        lines.extend(
+            [
+                "| Checkpoint | Decision | Result | Context |",
+                "|---|---|---|---|",
+            ]
+        )
+        for event in checkpoint_events:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(event.get("checkpoint") or "-"),
+                        str(event.get("decision") or "-"),
+                        str(event.get("result_ref") or "-"),
+                        str(event.get("context_ref") or "-"),
+                    ]
+                )
+                + " |"
+            )
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("<!-- generated-by: meta-flow state history-render -->")
+    return "\n".join(lines) + "\n"
+
+
+def render_history_file(project_root: Path, *, force: bool = False) -> Path:
+    project_root = project_root.resolve()
+    path = project_root / STATE_HISTORY_REL
+    if path.exists() and not force:
+        existing = path.read_text(encoding="utf-8", errors="ignore")
+        if "generated-by: meta-flow state history-render" not in existing:
+            raise FileExistsError(f"{path} 已存在且不是 history-render 生成物；如需覆盖请使用 --force")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_history_markdown(project_root), encoding="utf-8")
+    return path
+
+
 def check_current_state(project_root: Path, *, mode: str = "audit") -> tuple[list[str], list[str]]:
     project_root = project_root.resolve()
     errors: list[str] = []
@@ -596,6 +1002,9 @@ def check_current_state(project_root: Path, *, mode: str = "audit") -> tuple[lis
     findings = validate_current_state_payload(state, mode=mode)
     warnings.extend(finding.as_cli_line() for finding in findings if finding.severity == "WARN")
     errors.extend(finding.as_cli_line() for finding in findings if finding.severity == "ERROR")
+    legacy_long_keys = (set(state) & SLIM_ARCHIVE_KEYS) - CURRENT_ALLOWED_KEYS
+    if legacy_long_keys or (set(state) - CURRENT_ALLOWED_KEYS - {"schema_version"}):
+        warnings.append("STATE.current.json contains legacy or long-running fields; run `meta-flow state slim --dry-run` and then `--apply` after review")
     if "expanded_text" in json.dumps(state, ensure_ascii=False):
         errors.append("STATE.current.json must reference policy IDs, not expanded policy text")
     project_state_ref = state.get("project_state_ref")
@@ -631,12 +1040,16 @@ def _print_state_help() -> None:
         "  init        Create a fresh process/state/STATE.current.json and base ledgers.\n"
         "  migrate-v2  Create process/state/STATE.current.json from legacy process/STATE.md.\n"
         "  render      Render process/STATE.md as a human summary from STATE.current.json.\n"
+        "  history-render Render process/state/HISTORY.md as a deny-default audit view from ledgers.\n"
+        "  slim        Archive legacy long fields and rewrite STATE.current.json as v2 refs/scalars.\n"
         "  check       Validate STATE.current.json and generated STATE.md budgets.\n"
-        "  compact     Render the human summary and run state check; it does not compact NDJSON ledgers.\n\n"
+        "  compact     Render the human summary and run state check; it does not slim state or compact ledgers.\n\n"
         "Examples:\n"
         "  meta-flow state init --project-root . --project-id my-project\n"
         "  meta-flow state migrate-v2 --project-root .\n"
         "  meta-flow state render --project-root . --force\n"
+        "  meta-flow state slim --project-root . --dry-run\n"
+        "  meta-flow state slim --project-root . --apply --render\n"
         "  meta-flow state check --project-root . --mode audit\n"
         "  meta-flow state check --project-root . --mode enforce\n"
     )
@@ -650,7 +1063,7 @@ def main(argv: list[str] | None = None) -> int:
     command = args[0]
     description = (
         "Render process/STATE.md from STATE.current.json and run state check; "
-        "this command does not compact NDJSON event ledgers."
+        "this command does not slim STATE.current.json or compact NDJSON event ledgers."
         if command == "compact"
         else None
     )
@@ -659,6 +1072,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-id", default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--mode", choices=("audit", "enforce"), default="audit")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--render", action="store_true")
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
@@ -674,6 +1090,28 @@ def main(argv: list[str] | None = None) -> int:
     if command == "render":
         path = render_state_file(project_root, force=parsed.force)
         print(f"wrote: {path}")
+        return 0
+    if command == "history-render":
+        path = render_history_file(project_root, force=parsed.force)
+        print(f"wrote: {path}")
+        return 0
+    if command == "slim":
+        if parsed.apply and parsed.dry_run:
+            raise SystemExit("--apply and --dry-run are mutually exclusive")
+        if parsed.apply:
+            report = apply_slim_current_state(project_root, render=parsed.render)
+            print("State v2 Slim: APPLIED")
+        else:
+            _candidate, _archive, report, _timestamp = plan_slim_current_state(project_root)
+            print("State v2 Slim: DRY-RUN")
+        print(f"- source_size: {format_bytes(int(report['source_size_bytes']))}")
+        print(f"- projected_size: {format_bytes(int(report['projected_size_bytes']))}")
+        print(f"- archive_ref: {report['archive_ref']}")
+        print("- archived_keys: " + (", ".join(report["archived_keys"]) if report["archived_keys"] else "none"))
+        max_bytes = int(load_budgets(project_root).get("state_current_max_bytes", DEFAULT_BUDGETS["state_current_max_bytes"]))
+        if int(report["projected_size_bytes"]) > max_bytes:
+            print(f"- ERROR: projected STATE.current.json exceeds budget: {format_bytes(int(report['projected_size_bytes']))} > {format_bytes(max_bytes)}")
+            return 1
         return 0
     if command == "check":
         errors, warnings = check_current_state(project_root, mode=parsed.mode)
@@ -692,7 +1130,7 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"- ERROR: {error}")
         return 1 if errors else 0
-    raise SystemExit(f"未知 state 命令: {command}. 目前支持: init, migrate-v2, render, check, compact")
+    raise SystemExit(f"未知 state 命令: {command}. 目前支持: init, migrate-v2, render, history-render, slim, check, compact")
 
 
 if __name__ == "__main__":

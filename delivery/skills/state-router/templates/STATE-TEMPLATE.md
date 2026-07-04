@@ -59,7 +59,7 @@ target_project_profile:
   project_kind: "unknown" # code-project | workflow-product | agentic-code-product | mixed | unknown
   confidence: "low" # high | medium | low
   source: "" # user | readme-scan | cr | inferred
-  delivery_routing_ref: "process/STATE.md.delivery_routing"
+  delivery_routing_ref: "STATE.current.json.delivery_routing_ref"
   validation_defaults:
     native_test_required: true
     workflow_eval_required: false
@@ -292,284 +292,36 @@ confirmation_adapter:
   platform: ""
   preferred_mode: "structured-select"
   fallback_mode: "exact-text"
-orchestrator_session:
+orchestrator:
   kind: "host"
   role: "host-orchestrator"
-  host_session_id: ""
-  agent_id: ""
-  agent_name: ""
-  thread_id: ""
-  status: "active"
-  workflow_id: ""
-  active_change: ""
-  pending_gate: ""
-  pending_checklist_path: ""
-  pending_user_decision: ""
-  next_exact_prompt: ""
-  next_exact_prompt_policy: "阶段任务、检查点、Story 实现 / 验证或 CR 收敛完成后必须给出可直接复制的下一步准确提示词；不得只提示同意、继续、可以等模糊词。"
-  pending_decision_ids: []
-  pending_non_authorized_items: []
   subagent_auto_dispatch: "enabled"
-  resume_instruction: "用户回复人工检查点结论后，由 Host Orchestrator 主进程重新读取 STATE、checkpoint 和相关产物后继续；不得 spawn / resume 编排子 agent"
-  spawned_at: ""
-  last_seen_at: ""
-  awaiting_since: ""
-  resumed_at: ""
-  closed_at: ""
-  previous_agent_id: ""
-  previous_thread_id: ""
-  superseded_by: ""
-  recovery_reason: ""
-delegated_interaction:
-  phase: ""
-  agent_role: ""
-  codex_agent_name: ""
-  reasoning_profile: ""
-  dispatch_trigger: ""
-  agent_id: ""
-  agent_name: ""
-  thread_id: ""
-  handoff_path: ""
-  status: "none|delegated|active|awaiting-user|returned|blocked|closed"
-  started_at: ""
-  returned_at: ""
-  return_summary_path: ""
-  pending_user_input: ""
-  routing_note: "requirement-clarification 委托 meta-pm、solution-design 委托 meta-se；正式人工检查点仍由 host-orchestrator 发起"
-agent_lifecycle:
-  orchestration_model: "host-orchestrated"
-  orchestrator_singleton: false
-  active_agents_scope: "functional-agents-only"
-  platform_capabilities:
-    subagent_dispatch:
-      available: false
-      checked_at: ""
-      method: "unverified|codex-tools|platform-task|unavailable"
-      required_tools:
-        - "spawn_agent"
-        - "resume_agent"
-        - "send_input"
-      limitation: "未完成平台子 agent 调度能力探测前，不得把下游任务标记为 completed；Codex 工具面可用时必须调用真实子 agent 工具，不得只写 handoff"
-    user_question:
-      available: false
-      checked_at: ""
-      method: "unverified|conversation|request_user_input|platform-task|relay-only"
-      structured_choice_available: false
-      codex_payload_command: "meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --format codex-json"
-      question_broker: "host-orchestrator"
-      allowed_direct_roles:
-        - "host-orchestrator"
-        - "meta-pm"
-        - "meta-se"
-      limitation: "ask_user 是语义动作；未确认平台用户提问能力前，子 agent 不得假设可直接向用户提问。Codex 仅在当前工具面明确提供 request_user_input 时允许结构化选择，否则使用 exact-text 或经 host-orchestrator relay。"
-  active_agents: []
-  active_agent_item_schema:
-    role: "meta-pm|meta-se|meta-dev|meta-qa|meta-doc"
-    canonical_role: "meta-pm|meta-se|meta-dev|meta-qa|meta-doc"
-    codex_agent_name: "meta-dev|meta-dev-debugger|meta-se|meta-se-critical|meta-qa|meta-qa-critical"
-    reasoning_profile: "default|debugger|critical"
-    dispatch_trigger: "phase-default|repeated-failure|architecture-freeze|critical-checkpoint|risk-review"
-    mode: "subagent|inline-fallback|handoff-only"
-    status: "handoff-created|spawn-requested|running|awaiting-user|completed|failed|closed"
-    agent_id: ""
-    thread_id: ""
-    tool_name: "spawn_agent|resume_agent|send_input|platform-task|user-approved-inline-fallback"
-    handoff_path: ""
-    spawned_at: ""
-    resumed_at: ""
-    completed_at: ""
-    evidence: "spawn_agent|resume_agent|send_input|platform-task|user-approved-inline-fallback"
-    note: "创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具；未调用前只能保持 handoff-created 或 spawn-requested"
-  codex_reasoning_profiles:
-    enabled: true
-    policy: "canonical role stays stable; codex_agent_name selects actual custom agent profile"
-    profiles:
-      meta-dev:
-        default:
-          codex_agent_name: "meta-dev"
-          reasoning_profile: "default"
-          model_reasoning_effort: "medium"
-        debugger:
-          codex_agent_name: "meta-dev-debugger"
-          reasoning_profile: "debugger"
-          model_reasoning_effort: "high"
-          triggers:
-            - "repeated-implementation-failure"
-            - "cp7-rework-loop"
-            - "cross-module-bug"
-            - "state-machine-bug"
-            - "pit-data-leakage-consistency-risk"
-            - "complex-flaky-test"
-      meta-se:
-        default:
-          codex_agent_name: "meta-se"
-          reasoning_profile: "default"
-          model_reasoning_effort: "high"
-        critical:
-          codex_agent_name: "meta-se-critical"
-          reasoning_profile: "critical"
-          model_reasoning_effort: "xhigh"
-          triggers:
-            - "architecture-freeze"
-            - "public-contract"
-            - "cross-module-boundary"
-            - "security-permission-boundary"
-            - "external-interface"
-            - "major-adr"
-      meta-qa:
-        default:
-          codex_agent_name: "meta-qa"
-          reasoning_profile: "default"
-          model_reasoning_effort: "high"
-        critical:
-          codex_agent_name: "meta-qa-critical"
-          reasoning_profile: "critical"
-          model_reasoning_effort: "xhigh"
-          triggers:
-            - "cp5-all-design-evidence"
-            - "cp7-final-verification"
-            - "cp8-delivery-readiness"
-            - "pre-release"
-            - "security-install-platform-risk"
-            - "workflow-harness-risk"
-  singleton_violation: false
-  singleton_resolution: ""
-  dispatch_evidence_required: true
-  allowed_statuses:
-    - "handoff-created"
-    - "spawn-requested"
-    - "running"
-    - "completed"
-    - "failed"
-    - "unavailable"
-    - "blocked"
-    - "closing"
-    - "closed"
-  reuse_policy: "same workflow/change/story reuses the same role thread; close after checkpoint or verified agent completion"
-  evidence_policy: "Agent Dispatch Evidence required: handoff files are not execution evidence; completed subagent work requires agent_id/thread_id plus tool evidence, unless user-approved inline-fallback is recorded"
-parallel_execution:
-  max_parallel_lld: 3
-  max_parallel_dev: 2
-  max_parallel_qa: 2
-  lld_design_batch:
-    batch_id: ""
-    source: "all-stories|change|manual"
-    stories: []
-    story_schema:
-      - "story_id"
-      - "story_slug"
-      - "design_evidence_type"
-      - "lld_policy_required_level"
-      - "feature_design_refs"
-      - "evidence_path"
-      - "status"
-      - "owner_agent"
-    status: "not-started|designing|ready-for-review|approved|blocked"
-    manual_review: ""
-    basis: "覆盖全部目标 Story；每项设计证据可为 full-lld、technical-note 或 waived，但均需进入 CP5 统一确认"
-  lld_ready: []
-  lld_running: []
-  lld_review: []
-  lld_batch_review: []
-  lld_clarification_queue:
-    status: "idle|collecting|batching|awaiting-user|answered|blocked|closed"
-    active_question_batch: ""
-    items: []
-    item_schema:
-      - "id"
-      - "story_id"
-      - "owner_agent"
-      - "question"
-      - "options"
-      - "recommendation"
-      - "impact_surface"
-      - "blocks_lld"
-      - "answer"
-      - "status"
-  dev_ready: []
-  dev_running: []
-  implementation_review: []
-  verify_ready: []
-  verify_running: []
-  blocked_by_dependency: []
-checkpoints:
-  profile: "default-cp0-cp8"
-  result_root: "process/checks"
-  manual_root: "process/checkpoints"
-  cp0_request_intake:
-    type: "auto"
-    status: "pending"
-    auto_result: "process/checks/CP0-REQUEST-INTAKE.md"
-    manual_review: ""
-    last_result: ""
-  cp1_use_case_completeness:
-    type: "auto"
-    status: "pending"
-    auto_result: "process/checks/CP1-USE-CASE-COMPLETENESS.md"
-    manual_review: ""
-    last_result: ""
-  cp2_requirements_baseline:
-    type: "auto_then_manual"
-    status: "pending"
-    auto_result: "process/checks/CP2-REQUIREMENTS-BASELINE.md"
-    manual_review: "process/checkpoints/CP2-REQUIREMENTS-BASELINE.md"
-    last_result: ""
-  cp3_hld_review:
-    type: "auto_then_manual"
-    status: "pending"
-    auto_result: "process/checks/CP3-HLD-CONSISTENCY.md"
-    manual_review: "process/checkpoints/CP3-HLD-REVIEW.md"
-    last_result: ""
-  cp4_story_plan_review:
-    type: "auto_precheck"
-    status: "pending"
-    auto_result: "process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md"
-    manual_review: ""
-    last_result: ""
-  cp5_story_lld_review:
-    type: "all_stories_auto_then_manual"
-    status: "per_workflow"
-    auto_result_pattern: "process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md"
-    manual_review_pattern: "process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md"
-    results: []
-  cp6_coding_done:
-    type: "rolling_auto"
-    status: "per_story"
-    auto_result_pattern: "process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md"
-    results: []
-  cp7_verification_done:
-    type: "rolling_auto"
-    status: "per_story"
-    auto_result_pattern: "process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md"
-    result_values:
-      - "PASS"
-      - "PASS_WITH_RISK"
-      - "BLOCKED"
-      - "NEEDS_REWORK"
-      - "NEEDS_DESIGN_CLARIFICATION"
-      - "WAIVED"
-    route_by_result:
-      PASS: "verified"
-      PASS_WITH_RISK: "verified-with-risk"
-      WAIVED: "verified"
-      NEEDS_REWORK: "meta-dev"
-      NEEDS_DESIGN_CLARIFICATION: "meta-se|host-orchestrator"
-      BLOCKED: "blocked"
-    results: []
-  cp8_delivery_readiness:
-    type: "auto_then_manual"
-    status: "pending"
-    auto_result: "process/checks/CP8-DELIVERY-READINESS.md"
-    manual_review: "process/checkpoints/CP8-DELIVERY-READINESS.md"
-    release_context: "process/release/RELEASE-CONTEXT.yaml"
-    allowed_readiness_decisions:
-      - "READY"
-      - "READY_WITH_RISK"
-      - "NOT_READY"
-    execution_decisions_require_independent_authorization:
-      - "RELEASED"
-      - "FAILED"
-    last_result: ""
+  resume_instruction: "用户回复人工检查点结论后，由 Host Orchestrator 主进程重新读取 STATE.current.json、checkpoint 和 ledgers 后继续；不得 spawn / resume 编排子 agent"
+active_change: ""
+pending_gate: ""
+pending_checklist_path: ""
+pending_user_decision: ""
+next_exact_prompt: ""
+pending_decision_ids: []
+pending_non_authorized_items: []
+active_delegation_ref: ""
+active_question_batch_ref: ""
+workflow_health_ref: "process/state/WORKFLOW-HEALTH.current.json"
+agent_dispatch_ref: "process/state/AGENT-DISPATCH-LEDGER.ndjson"
+active_agent_count: 0
+platform_capabilities_ref: "process/state/PLATFORM-CAPABILITIES.current.json"
+checkpoint_ledger_ref: "process/state/CHECKPOINT-LEDGER.ndjson"
+gate_decisions_ref: "process/state/GATE-LEDGER.ndjson"
+decision_collection_coverage_ref: "process/state/GATE-LEDGER.ndjson"
+follow_up_tracking_path: ""
+decision_brief_profile: "compact"
+cr_tracking_ref: "process/changes/CR-INDEX.yaml"
+cr_ledger_ref: "process/state/CR-LEDGER.ndjson"
+follow_up_candidates_ref: "process/changes/CR-INDEX.yaml"
+spike_candidates_ref: "process/changes/CR-INDEX.yaml"
+stale_status_conflicts_ref: "process/changes/CR-INDEX.yaml"
+read_expansion_ledger_ref: "process/state/READ-EXPANSION-LEDGER.ndjson"
+parallel_execution_ref: "process/context/CP5-LLD-QUEUE.context.json"
 decision_briefs:
   cp2_requirements_baseline: ""
   cp3_hld_review: ""
@@ -584,88 +336,6 @@ discussion_checkpoints:
     log: "process/discussions/CP3-HLD-DISCUSSION-LOG.md"
     checkpoint: "process/checks/CP3-DISCUSSION-CHECKPOINT.json"
     status: "pending"
-human_gate_decisions:
-  status: "idle|collecting|ready-for-gate|awaiting-user|answered|blocked|closed"
-  active_gate: ""
-  active_checkpoint: ""
-  active_launch_message: ""
-  decision_collection_coverage: []
-  pending_human_decisions: []
-  accepted_decision_ids: []
-  non_authorized_items: []
-  follow_up_tracking_path: ""
-  decision_brief_profile: "compact"
-  decision_brief_profile_values:
-    - "full"
-    - "compact"
-    - "summary"
-  chat_print_policy: "checkpoint 文件中的 Decision Brief 必须完整；对话中可按 profile 压缩，但必须打印 checklist 路径、自动预检结论、决策项总数、blocking/high-risk 摘要、不授权项和三个 exact 回复。"
-  compact_threshold: 6
-  summary_threshold: 12
-  item_schema:
-    - "id"
-    - "gate"
-    - "decision_type"
-    - "question"
-    - "recommendation"
-    - "alternatives"
-    - "pros_cons"
-    - "impact_risk"
-    - "rollback_switch"
-    - "status"
-    - "source"
-    - "owner_agent"
-    - "updated_at"
-    - "answer"
-  coverage_schema:
-    - "gate"
-    - "source_type"
-    - "source_path"
-    - "scan_status"
-    - "candidate_count"
-    - "included_decision_count"
-    - "classification_or_na_reason"
-  allowed_decision_types:
-    - "scope"
-    - "architecture"
-    - "security"
-    - "implementation"
-    - "runtime_authorization"
-    - "risk_acceptance"
-    - "follow_up_tracking"
-  allowed_statuses:
-    - "open"
-    - "ready-for-gate"
-    - "awaiting-user"
-    - "accepted"
-    - "changes-requested"
-    - "rejected"
-    - "resolved-by-user"
-    - "non-blocking-open"
-    - "converted-to-spike"
-    - "n/a-with-reason"
-  classification_policy: "CP2/CP3/CP5/CP8 前，所有 Q-*、OPEN、LCQ-*、O-*、权限/安全/运行授权/风险接受/外部接口/数据写入/publish/live/交易类问题必须分类；decision-item 写入 pending_human_decisions"
-  launch_protocol: "发起人工门禁消息必须包含 checklist 路径、自动预检结论、待决策项数量、待决策表格、三个 exact 回复，以及 approve 不代表授权禁止操作的复述"
-  follow_up_statuses:
-    - "candidate"
-    - "active"
-    - "blocked"
-    - "spike_candidate"
-    - "converted-to-spike"
-    - "closed"
-    - "cancelled"
-    - "superseded"
-cr_tracking:
-  status: "not-indexed|indexed|needs-sync|conflict|blocked"
-  index_path: "process/changes/CR-INDEX.yaml"
-  schema_version: 2
-  current_requirement_baseline_path: "process/baseline/CURRENT-REQUIREMENT-BASELINE.yaml"
-  last_consistency_check: ""
-  active_crs: []
-  blocked_crs: []
-  follow_up_candidates: []
-  spike_candidates: []
-  stale_status_conflicts: []
 requirement_intake_routing:
   status: "none|pending-product-baseline-refresh|cp2-approved|blocked"
   source_cr: ""
@@ -767,6 +437,6 @@ Story 生命周期（每个 Story 独立）：
 - user_question.available=false 或 method=relay-only 时，子 agent 不得直接向用户提问；meta-pm/meta-se 的阶段委托问题经 host-orchestrator relay，meta-dev 的实现灰区写入 lld_clarification_queue
 - delegated_interaction 仅记录阶段内用户交互权委托；不得代表 CP2 / CP3 已确认
 - lld_clarification_queue 存在 blocks_lld=true 且未回答的 item 时，不得发起 CP5 全量人工确认
-- human_gate_decisions.pending_human_decisions 是 CP2 / CP3 / CP5 / CP8 待人工决策清单的状态机对象；checkpoint 文件和对话发起消息必须从该队列聚合并保持一致
+- CP2 / CP3 / CP5 / CP8 待人工决策清单以 checkpoint Decision Brief 为完整载体，状态变更、发起和审批结果写入 `process/state/GATE-LEDGER.ndjson`；对话发起消息必须与 Decision Brief 和 gate event 保持一致
 - pending_non_authorized_items 用于记录本轮 approve 不代表授权的事项，尤其是真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类操作
 -->

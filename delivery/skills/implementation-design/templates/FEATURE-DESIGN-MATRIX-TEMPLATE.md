@@ -39,7 +39,7 @@ confirmed_at: ""
 
 ## 提前确认的关键决策
 
-> 仅登记如果延后会显著增加返工成本、影响架构 / 安全 / 权限 / 外部接口 / 运行授权的关键决策。每项必须进入 `STATE.md.human_gate_decisions.pending_human_decisions[]` 或写明 N/A 原因。
+> 仅登记如果延后会显著增加返工成本、影响架构 / 安全 / 权限 / 外部接口 / 运行授权的关键决策。每项必须进入 `process/checkpoints/CP*.md` Decision Brief 或 `process/state/GATE-LEDGER.ndjson`，或写明 N/A 原因。
 
 | Decision ID | 决策类型 | 问题 | 推荐方案 | 备选方案 | 优劣摘要 | 影响 / 风险 | 回退 / 切换条件 | 状态 |
 |---|---|---|---|---|---|---|---|---|

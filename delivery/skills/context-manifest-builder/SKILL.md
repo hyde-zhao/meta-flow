@@ -59,11 +59,11 @@ status: active
 ## 执行步骤
 
 1. 判定 capsule 类型：`cp2-requirement`、`cp3-design`、`cp5-lld`、`cp6-implementation`、`cp7-verification`、`cp8-delivery` 或 `final-manifest`。
-2. 读取 `STATE.current.json.active_context_ref`、`process/policies/READ-POLICY.json`、`process/policies/SOURCE-OF-TRUTH-MAP.yaml`、`process/policies/RETENTION-POLICY.json` 和 artifact budgets，确认本阶段 `read_profile`、`allowed_reads`、`max_source_files`、`full_doc_read_policy`、`full_doc_read_reason`、`process/state/READ-EXPANSION-LEDGER.ndjson`、machine truth / generated summary 关系和 closed CR / old packet 默认保留规则；legacy 项目缺少 state v2 时才读取 `STATE.md.context_budget`。
+2. 读取 `STATE.current.json.active_context_ref`、`process/policies/READ-POLICY.json`、`process/policies/SOURCE-OF-TRUTH-MAP.yaml`、`process/policies/RETENTION-POLICY.json` 和 artifact budgets，确认本阶段 `read_profile`、`allowed_reads`、`max_source_files`、`full_doc_read_policy`、`full_doc_read_reason`、`process/state/READ-EXPANSION-LEDGER.ndjson`、machine truth / generated summary 关系和 closed CR / old packet 默认保留规则；legacy 项目缺少 state v2 时才读取 `process/policies/READ-POLICY.json and context pack refs`。
 3. 从正式真相源提炼当前阶段最小事实：范围、关键决策、依赖、风险、不授权项、开放问题、下游需要读取的文件列表。
 4. 标记 `allowed_reads`、`must_read`、`read_if_needed`、`do_not_read_by_default`，并写明全文档读取触发条件。Story packet 还必须提供上下文足够性槽位：`objective.summary`、Feature context 摘要或 summary ref、`cr_delta.summary`、`dependency_inputs`、读写边界、acceptance、verification plan、authz policy refs 和 expected return packet。
 5. 将结果写入 `process/context/<CP>-<slug>-CONTEXT.yaml`；交付阶段如需最终清单，再写入 `delivery/doc/CONTEXT-MANIFEST.yaml` 或目标项目约定路径。
-6. 回写 `STATE.current.json.active_context_ref` 或相关 ledger / result refs；legacy 项目可同步回写 `STATE.md.context_budget.phase_capsules[]` 的路径、状态、生成时间和缺失 / 降级原因。
+6. 回写 `STATE.current.json.active_context_ref` 或相关 ledger / result refs；legacy 项目可同步回写 `process/context/*-CONTEXT.yaml refs` 的路径、状态、生成时间和缺失 / 降级原因。
 
 ## 输出文件 / 输出模板
 
@@ -103,7 +103,7 @@ status: active
 ## 验收标准
 
 - [ ] capsule 顶级字段完整
-- [ ] `read_profile` 与 `STATE.current.json` / read policy / legacy `STATE.md.context_budget` 一致
+- [ ] `read_profile` 与 `STATE.current.json` / read policy / legacy `process/policies/READ-POLICY.json and context pack refs` 一致
 - [ ] `allowed_reads` 和 `must_read` 不超过当前阶段必要真相源；超出时有理由
 - [ ] `read_if_needed` 与 `full_doc_read_policy` 有触发条件
 - [ ] `do_not_read_by_default` 明确排除历史草稿、失败轮次和无关 Story

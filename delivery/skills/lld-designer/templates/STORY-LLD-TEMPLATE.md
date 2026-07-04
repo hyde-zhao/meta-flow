@@ -124,7 +124,7 @@ open_items: 0
 
 ### 12.1 实现灰区与取舍记录
 
-> 并行 LLD 阶段遇到需要用户或上游决策的实现灰区时，先写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`，由 host-orchestrator 作为 question broker 批量询问。已回答或转 OPEN / Spike 的问题必须回填到本表。
+> 并行 LLD 阶段遇到需要用户或上游决策的实现灰区时，先写入 `process/state/QUESTION-LEDGER.ndjson entries`，由 host-orchestrator 作为 question broker 批量询问。已回答或转 OPEN / Spike 的问题必须回填到本表。
 
 | Clarification ID | 问题 | 选项与推荐 | 决策 / 答案 | 影响面 | 证据 | 重访条件 |
 |---|---|---|---|---|---|---|
@@ -172,7 +172,7 @@ open_items: 0
 | 3 | 文件影响范围明确 | 待检查 | 第 4 / 11 节 |
 | 4 | 接口契约完整 | 待检查 | 第 6 节 |
 | 5 | 测试与 dev_gate 可计算 | 待检查 | 第 10 / 14 节 |
-| 6 | clarification queue 已收敛 | 待检查 | 第 12.1 节 / `STATE.md.parallel_execution.lld_clarification_queue` |
+| 6 | clarification queue 已收敛 | 待检查 | 第 12.1 节 / `process/state/QUESTION-LEDGER.ndjson 或 CP5 context queue ref` |
 
 **人工确认回复**：
 

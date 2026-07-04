@@ -38,8 +38,8 @@ status: active
 - `docs/design/ARCHITECTURE-DECISION.md`
 - `docs/design/FEATURE-DESIGN-MATRIX.md`
 - Story `feature_design_refs` 指向的 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`（如适用）
-- `process/STATE.md.parallel_execution.lld_design_batch`（若已存在）
-- `process/STATE.md.parallel_execution.lld_clarification_queue`（并行 LLD 写作期间必须读取 / 更新）
+- `process/context/CP5-LLD-CONTEXT.yaml lld_design_batch`（若已存在）
+- `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref（并行 LLD 写作期间必须读取 / 更新）
 - 相关前置 Story、平台约束、共享设计片段或 `CR-*.md`（若存在）
 
 ## 知识来源

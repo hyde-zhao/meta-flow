@@ -258,7 +258,7 @@ authorization_policy:
 ## 后续事项台账
 
 > CP8 或 CR 收敛时若产生后续事项，只维护台账，不预创建尚未启动的正式 CR 文件。用户决定推进某一项后，再创建正式 CR，并把本节或独立台账中的状态改为 `active`。
-> 本节必须同步 `process/STATE.md.cr_tracking` 与 `process/changes/CR-INDEX.yaml`，不能只写 Markdown 台账。
+> 本节必须同步 `process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`，不能只写 Markdown 台账。
 
 - 是否存在后续事项：false
 - 台账路径：`process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`

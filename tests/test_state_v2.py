@@ -384,6 +384,122 @@ class StateV2Tests(unittest.TestCase):
 
             self.assertFalse((root / "process" / "state" / "STATE.current.json").exists())
 
+    def test_slim_archives_legacy_long_fields_and_keeps_current_state_under_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = current.default_current_state(root)
+            state.update(
+                {
+                    "active_change": "CR-154",
+                    "human_gate_decisions": {
+                        "pending_human_decisions": [
+                            {"id": f"DQ-{index}", "question": "x" * 200, "recommendation": "approve"}
+                            for index in range(60)
+                        ],
+                        "accepted_decision_ids": [f"DQ-{index}" for index in range(60)],
+                    },
+                    "checkpoints": {
+                        f"CP{index % 9}": {
+                            "status": "closed",
+                            "accepted_decision_ids": [f"DQ-{index}"],
+                            "review_corrections": "x" * 300,
+                            "context_ref": f"process/context/CP{index}.json",
+                        }
+                        for index in range(40)
+                    },
+                    "checkpoint_results": [{"checkpoint": "CP6", "detail": "x" * 300} for _ in range(10)],
+                    "source_refs": [{"path": f"process/context/{index}.json", "summary": "x" * 300} for index in range(205)],
+                    "history": [{"event": f"E-{index}", "detail": "x" * 400} for index in range(41)],
+                    "last_actions": [{"text": f"action-{index} " + "x" * 200} for index in range(40)],
+                    "open_risks": [{"id": f"R-{index}", "status": "closed" if index < 8 else "active", "summary": "x" * 200} for index in range(20)],
+                    "follow_through_tracking": {"items": [{"id": "FU-1", "detail": "x" * 400}]},
+                    "story_execution": {"wave": "W1", "detail": "x" * 400},
+                    "agent_lifecycle": {"active_agents": [{"role": "meta-dev", "detail": "x" * 400}]},
+                    "release": {"release_context": "x" * 400},
+                    "context_budget": {"read_expansion_log": [{"path": "process/STATE.md", "reason": "audit"}]},
+                    "cr_tracking": {"active_change": "CR-154", "items": [{"id": "CR-100", "status": "closed"}]},
+                    "orchestrator_session": {"pending_gate": "CP5", "pending_checklist_path": "process/checkpoints/CP5.md"},
+                    "delegated_interaction": {"phase": "requirement-clarification", "agent_role": "meta-pm"},
+                    "parallel_execution": {"lld_clarification_queue": {"items": [{"id": "LCQ-1"}]}},
+                    "target_project_profile": {"project_kind": "code-project"},
+                    "workflow_health": {"cp_retry_count": 2},
+                }
+            )
+            write_state_fixture(root, state)
+
+            dry_run_output = StringIO()
+            with redirect_stdout(dry_run_output):
+                dry_run_code = current.main(["slim", "--project-root", str(root), "--dry-run"])
+
+            self.assertEqual(0, dry_run_code, dry_run_output.getvalue())
+            self.assertIn("State v2 Slim: DRY-RUN", dry_run_output.getvalue())
+            self.assertIn("human_gate_decisions", dry_run_output.getvalue())
+            self.assertIn("human_gate_decisions", current.load_current_state(root))
+
+            apply_output = StringIO()
+            with redirect_stdout(apply_output):
+                apply_code = current.main(["slim", "--project-root", str(root), "--apply", "--render"])
+
+            self.assertEqual(0, apply_code, apply_output.getvalue())
+            slimmed = current.load_current_state(root)
+            self.assertLess((root / "process" / "state" / "STATE.current.json").stat().st_size, 20 * 1024)
+            self.assertEqual("CR-154", slimmed["active_change"])
+            self.assertEqual("CP5", slimmed["pending_gate"])
+            self.assertEqual("process/checkpoints/CP5.md", slimmed["pending_checklist_path"])
+            self.assertNotIn("human_gate_decisions", slimmed)
+            self.assertNotIn("checkpoints", slimmed)
+            self.assertNotIn("history", slimmed)
+            archive_refs = [item for item in slimmed["source_refs"] if isinstance(item, dict) and item.get("kind") == "state-slim-archive"]
+            self.assertEqual(1, len(archive_refs))
+            archive_path = root / archive_refs[0]["path"]
+            self.assertTrue(archive_path.is_file())
+            archive = json.loads(archive_path.read_text(encoding="utf-8"))
+            self.assertIn("human_gate_decisions", archive["archived_fields"])
+            self.assertIn("history", archive["archived_fields"])
+            self.assertIn("process/state/STATE.current.json", (root / "process" / "STATE.md").read_text(encoding="utf-8"))
+
+    def test_history_render_writes_deny_default_audit_view_from_ledgers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.write_current_state(root, current.default_current_state(root))
+            (root / "process" / "state" / "CR-LEDGER.ndjson").write_text(
+                '{"event":"closed","id":"CR-001","status":"closed","summary_ref":"process/changes/summaries/CR-001.summary.json"}\n',
+                encoding="utf-8",
+            )
+            (root / "process" / "state" / "CHECKPOINT-LEDGER.ndjson").write_text(
+                '{"event_type":"checkpoint_result","checkpoint":"CP8","decision":"PASS","result_ref":"process/checks/CP8.result.json"}\n',
+                encoding="utf-8",
+            )
+
+            exit_code = current.main(["history-render", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            text = (root / "process" / "state" / "HISTORY.md").read_text(encoding="utf-8")
+            self.assertIn("Generated deny-default audit view", text)
+            self.assertIn("| CR | Event | Status | Summary | Full Ref |", text)
+            self.assertIn("| Checkpoint | Decision | Result | Context |", text)
+            self.assertNotIn("|\n \nC\nR", text)
+            self.assertIn("CR-001", text)
+            self.assertIn("CP8", text)
+
+    def test_migrate_v2_does_not_recreate_legacy_machine_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = LEGACY_STATE.replace(
+                "# Legacy State",
+                "human_gate_decisions:\n  pending_human_decisions:\n    - id: DQ-1\nparallel_execution:\n  lld_clarification_queue:\n    items:\n      - id: LCQ-1\n# Legacy State",
+            )
+            (root / "process").mkdir()
+            (root / "process" / "STATE.md").write_text(legacy, encoding="utf-8")
+
+            exit_code = current.main(["migrate-v2", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            migrated = current.load_current_state(root)
+            self.assertNotIn("human_gate_decisions", migrated)
+            self.assertNotIn("parallel_execution", migrated)
+            self.assertLess((root / "process" / "state" / "STATE.current.json").stat().st_size, 20 * 1024)
+
 
 if __name__ == "__main__":
     unittest.main()

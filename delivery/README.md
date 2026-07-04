@@ -19,7 +19,7 @@
 
 旧项目里的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流在无目标项目约定时默认生成到 `docs/...` 与 `process/checkpoints/...`。如果目标项目已有交付目录或 README/docs 已定义自己的文档目录，production 模式必须优先遵守目标约定；无约定时由 host-orchestrator 提出路由建议并等待用户确认。
 
-外置 process / docs 路由必须使用锚点 + 相对路径，不能把 `/home/...`、盘符或设备专属根目录写入 `STATE.md.artifact_routing`、`process/.meta-flow-process.yaml` 或发布 / 迁移文档。默认记录方式为：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。例如源码仓库旁边放置 artifact 仓库时，记录 `artifact_root=../meta-flow-artifacts`、`project_process_root=process/<project-name>`、`link_path=process`。
+外置 process / docs 路由必须使用锚点 + 相对路径，不能把 `/home/...`、盘符或设备专属根目录写入 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`、`process/.meta-flow-process.yaml` 或发布 / 迁移文档。默认记录方式为：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。例如源码仓库旁边放置 artifact 仓库时，记录 `artifact_root=../meta-flow-artifacts`、`project_process_root=process/<project-name>`、`link_path=process`。
 
 ## CP2 / CP3 讨论增强
 
@@ -46,13 +46,13 @@ Meta Flow 的交互路径分两类：
 
 - `requirement-clarification`：host-orchestrator 启动或复用 `meta-pm` 后，将阶段内用户交互权委托给 `meta-pm`。用户可直接与 `meta-pm` 多轮讨论 Scenario Gray Areas、场景和需求草案；草案确认“可提交给 host-orchestrator 汇总”后，`meta-pm` 写交还摘要，host-orchestrator 回收并发起 CP2。
 - `solution-design`：host-orchestrator 启动或复用 `meta-se` 后，将阶段内用户交互权委托给 `meta-se`。用户可直接与 `meta-se` 讨论 Architecture Gray Areas、advisor table 和 HLD 草案；草案确认“可提交给 host-orchestrator 发起 CP3”后，`meta-se` 写交还摘要，host-orchestrator 回收并发起 CP3。
-- `story-planning` 的并行 LLD：多个 `meta-dev` 不直接并发问用户。实现灰区写入 `STATE.md.parallel_execution.lld_clarification_queue`，由 host-orchestrator 作为 question broker 合并、排序、批量询问用户、回填答案并分发给对应 `meta-dev`。
+- `story-planning` 的并行 LLD：多个 `meta-dev` 不直接并发问用户。实现灰区写入 `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref，由 host-orchestrator 作为 question broker 合并、排序、批量询问用户、回填答案并分发给对应 `meta-dev`。
 
-阶段委托状态写入 `STATE.md.delegated_interaction`。这只代表阶段内交互权委托，不代表 CP2 / CP3 已通过。LLD clarification 队列存在未回答 `blocks_lld=true` 项时，host-orchestrator 不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief、完整 LLD 或 Story 技术说明、DEV-LOG 中暴露。
+阶段委托状态写入 `handoff/context delegated_interaction ref or STATE.current.json.active_delegation_ref`。这只代表阶段内交互权委托，不代表 CP2 / CP3 已通过。LLD clarification 队列存在未回答 `blocks_lld=true` 项时，host-orchestrator 不得发起 CP5；转 OPEN / Spike 的项必须在 CP5 Decision Brief、完整 LLD 或 Story 技术说明、DEV-LOG 中暴露。
 
 ## 工作流检查点
 
-安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；阶段上下文胶囊写入 `process/context/*-CONTEXT.yaml`；关键人工审查稿写入 `process/checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `host-orchestrator` 发起人工确认，发起前必须生成 Context Capsule、Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。Decision Brief 必须包含审批者摘要和决策分层：审批者摘要说明本次确认服务的整体目标、推荐动作、`approve` 后会发生什么、`approve` 不授权什么、不确认会阻塞什么；决策分层区分必须用户决策、高风险策略确认、agent 默认处理和仅审计记录。待人工决策清单的状态机对象是 `STATE.md.human_gate_decisions.pending_human_decisions[]`，逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
+安装后的 Meta Flow 使用 CP0-CP8 检查点。自动检查结果写入目标项目的 `process/checks/CP*.md`；阶段上下文胶囊写入 `process/context/*-CONTEXT.yaml`；关键人工审查稿写入 `process/checkpoints/CP*.md`。CP2 / CP3 / CP5 / CP8 由 `host-orchestrator` 发起人工确认，发起前必须生成 Context Capsule、Decision Brief 和待人工决策清单，并提示具体 checklist 文件路径。Decision Brief 必须包含审批者摘要和决策分层：审批者摘要说明本次确认服务的整体目标、推荐动作、`approve` 后会发生什么、`approve` 不授权什么、不确认会阻塞什么；决策分层区分必须用户决策、高风险策略确认、agent 默认处理和仅审计记录。待人工决策清单的状态机对象是 `process/checkpoints/CP*.md` Decision Brief 与 `process/state/GATE-LEDGER.ndjson`，逐项列出决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件；用户回复 `approve` 表示接受清单内全部推荐方案。审查后必须回填“人工审查结果”。CP4 只生成自动预检并汇入 CP5。
 
 人工门禁发起消息必须同时合规：包含 checklist 路径、自动预检结论、Context Capsule 摘要、审批者摘要、决策分层、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。checkpoint 文件中的 Decision Brief 必须完整；对话可按 `decision_brief_profile=full|compact|summary` 压缩，但不能省略整体目标、`approve` 后果、不授权边界和阻塞影响。低风险、可回退、实现细节类事项默认归入 agent 默认处理或仅审计记录，不进入用户主确认表。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须作为不授权项单独列出；`approve` 不代表授权这些操作。CP8 必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
 
@@ -60,9 +60,9 @@ Meta Flow 的交互路径分两类：
 
 Codex 平台没有 Claude Code frontmatter `tools: AskUserQuestion` 的同构 agent 字段。Host Orchestrator 在当前 Codex 工具面明确提供 `request_user_input` 时，可用 `meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --format codex-json` 生成结构化提问负载；不可用时发送命令输出中的 exact-text fallback。生成或维护发起消息后，仍必须用 `meta-flow check human-gate --checkpoint <path> --launch-message-file <message>` 校验。
 
-启动台账中的后续 CR 时，在当前主进程会话中说明“启动后续 CR”并给出台账路径、候选编号和目标摘要。host-orchestrator 必须先读取台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和活跃 `process/changes/CR-*.md`，做 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；候选项转正式 CR 后才把台账状态、`cr_tracking` 和 `CR-INDEX.yaml` 改为 `active`，写入正式 CR 路径。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 中选择。
+启动台账中的后续 CR 时，在当前主进程会话中说明“启动后续 CR”并给出台账路径、候选编号和目标摘要。host-orchestrator 必须先读取台账、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml`（若存在）和活跃 `process/changes/CR-*.md`，做 CR 冲突预检。`candidate` / `spike_candidate` 不占执行锁；候选项转正式 CR 后才把台账状态、`CR-INDEX.yaml|json` 和 `CR-LEDGER.ndjson` 改为 `active`，写入正式 CR 路径。若已有未完成 CR 且影响面重叠，默认不得并行推进，必须让用户在合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded` 中选择。
 
-状态查询必须列出 `active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate` 和 `stale_status_conflicts`，不能只返回唯一 active CR。若目标项目存在 `meta-flow check cr-tracking`，host-orchestrator 在状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后运行或记录跳过原因；该脚本会检查 `STATE.md.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性。
+状态查询必须列出 `active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate` 和 `stale_status_conflicts`，不能只返回唯一 active CR。若目标项目存在 `meta-flow check cr-tracking`，host-orchestrator 在状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后运行或记录跳过原因；该脚本会检查 `STATE.current.json.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.yaml` 的一致性。
 
 CR lifecycle 的机器入口是 `process/changes/CR-INDEX.json`、`process/changes/summaries/CR-*.summary.json`、`process/state/CR-LEDGER.ndjson` 和 `process/state/CHECKPOINT-LEDGER.ndjson`。完整 `process/changes/CR-*.md` 只在人工审计、冲突排查、深度评审或用户明确要求时展开。常用命令：
 
@@ -304,7 +304,7 @@ uv run --python 3.11 python delivery/scripts/install.py codex --scope user --con
 
 canonical role 只覆盖功能子 agent，用于状态机、handoff 与检查点审计；Host Orchestrator 是主进程职责，不安装 Codex / Claude Code agent 文件。Codex 使用 `nickname_candidates` 作为命令别名，并显式写入 `model_reasoning_effort`；Claude Code 文件型 subagent 不使用 nickname，安装器写入 `color` 区分不同子 agent。主进程建议父会话在标准 / 复杂工作流中使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可使用 `medium`。
 
-Codex 还会安装动态思考 profile，但 canonical role 不变：`meta-dev-debugger` 用于重复失败和复杂追因（`high`），`meta-se-critical` 用于架构冻结 / contract / 重大 ADR（`xhigh`），`meta-qa-critical` 用于 CP5 / CP7 / CP8、发布前和高风险验证（`xhigh`）。Host Orchestrator 调度时必须在 `active_agents[]` 与 handoff `dispatch` 记录 `canonical_role`、`codex_agent_name`、`reasoning_profile` 和 `dispatch_trigger`。
+Codex 还会安装动态思考 profile，但 canonical role 不变：`meta-dev-debugger` 用于重复失败和复杂追因（`high`），`meta-se-critical` 用于架构冻结 / contract / 重大 ADR（`xhigh`），`meta-qa-critical` 用于 CP5 / CP7 / CP8、发布前和高风险验证（`xhigh`）。Host Orchestrator 调度时必须在 `AGENT-DISPATCH-LEDGER.ndjson` 或 handoff `dispatch` 记录 `canonical_role`、`codex_agent_name`、`reasoning_profile` 和 `dispatch_trigger`。
 
 Codex 主进程启动正式工作流后默认授权真实子 agent 调度；若当前工具面有 `spawn_agent` / `resume_agent` / `send_input`，创建 `mode=subagent` handoff 后必须调用对应工具。只创建 handoff 不能算子 agent 已执行；工具不可用时必须阻断并记录 `subagent_dispatch.available=false`，除非用户明确批准 `inline-fallback`。
 

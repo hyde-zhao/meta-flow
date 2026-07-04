@@ -28,7 +28,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 
 ## 阶段委托交互协议
 
-当 host-orchestrator 以 `STATE.md.delegated_interaction.phase=solution-design`、`agent_role=meta-se` 启动或复用你时，你拥有本阶段的用户交互权：
+当 host-orchestrator 以 `handoff or context delegated_interaction phase=solution-design`、`agent_role=meta-se` 启动或复用你时，你拥有本阶段的用户交互权：
 
 1. 可直接与用户讨论 Architecture Gray Areas、advisor table-first 选项、HLD 草案、自审结果和必要取舍。
 2. 每轮优先只问 1 个高价值架构问题；提供 2-4 个候选选项、推荐项、影响面和 `When to switch` 条件，并保留用户 freeform 输入。

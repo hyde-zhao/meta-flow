@@ -11,4 +11,4 @@ version: "1.0"
 
 ## 台账边界
 
-`BACKLOG.md` 是产品规划 backlog，不是 CP8 follow-up tracking 正式台账。若条目需要在交付后作为后续 CR 候选跟踪，必须由 CP8 分流写入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并同步 `STATE.md.cr_tracking`。
+`BACKLOG.md` 是产品规划 backlog，不是 CP8 follow-up tracking 正式台账。若条目需要在交付后作为后续 CR 候选跟踪，必须由 CP8 分流写入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并同步 `process/changes/CR-INDEX.yaml|json 与 process/state/CR-LEDGER.ndjson`。

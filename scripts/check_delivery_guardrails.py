@@ -12,6 +12,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 ROOT = Path(__file__).resolve().parent.parent
 DELIVERY_ROOT = ROOT / "delivery"
@@ -587,14 +589,13 @@ SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
     "delivery/skills/README.md": ("scenario-expansion", "story-planning", "blueprint-design", "implementation-design", "implementation-execution", "verification-execution", "quality-review", "release-readiness", "process/checkpoints/CP*.md", "FEATURE-DESIGN-MATRIX.md", "lld_policy", "STORY-*-IMPLEMENTATION.md", "VERIFICATION-REPORT.md"),
     "delivery/skills/blueprint-design/templates/BLUEPRINT-TEMPLATE.md": ("决策类型", "推荐 / 备选优劣", "runtime_authorization", "follow_up_tracking"),
     "delivery/skills/story-planning/templates/MVP-SCOPE-TEMPLATE.md": ("决策类型", "推荐 / 备选优劣", "runtime_authorization", "follow_up_tracking"),
-    "delivery/skills/story-planning/templates/BACKLOG-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "STATE.md.cr_tracking"),
-    "delivery/skills/release-readiness/SKILL.md": ("FEEDBACK.md", "follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "STATE.md.cr_tracking", "Release Context Capsule", "process/release/RELEASE-CONTEXT.yaml", "release_artifact_profile", "release_decision", "READY_WITH_RISK", "capsule-first"),
+    "delivery/skills/story-planning/templates/BACKLOG-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.yaml", "CR-LEDGER.ndjson"),
+    "delivery/skills/release-readiness/SKILL.md": ("FEEDBACK.md", "follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.yaml", "CR-LEDGER.ndjson", "Release Context Capsule", "process/release/RELEASE-CONTEXT.yaml", "release_artifact_profile", "release_decision", "READY_WITH_RISK", "capsule-first"),
     "delivery/skills/release-readiness/templates/RELEASE-CONTEXT-TEMPLATE.yaml": ("release_artifact_profile", "release_decision", "quality_summary", "affected_surface", "install_validation_summary", "token_control"),
     "delivery/skills/release-readiness/templates/RELEASE-NOTES-TEMPLATE.md": ("版本号决策", "release_artifact_profile", "release_decision", "安装与升级", "回滚方式"),
     "delivery/skills/release-readiness/templates/DEPLOY-CHECKLIST-TEMPLATE.md": ("发布候选快照", "安装 / 升级 / 幂等验证矩阵", "release_decision", "不授权项"),
     "delivery/skills/release-readiness/templates/MIGRATION-TEMPLATE.md": ("兼容性判断表", "STATE.md", "Agent frontmatter", "Skill 输出格式", "命令参数"),
-    "delivery/skills/release-readiness/templates/FEEDBACK-TEMPLATE.md": ("发布后观察计划", "follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "STATE.md.cr_tracking"),
-    "delivery/skills/release-readiness/templates/FEEDBACK-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "STATE.md.cr_tracking"),
+    "delivery/skills/release-readiness/templates/FEEDBACK-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.yaml", "CR-LEDGER.ndjson"),
     "delivery/skills/use-case-discovery/SKILL.md": ("scenario_confirmation_interactions", "SGQ-*", "不得静默场景发现", "用户可见场景确认"),
     "delivery/skills/use-case-discovery/templates/USE-CASES-TEMPLATE.md": ("用户可见场景确认证据", "SGQ-*", "confirmed", "静默生成场景"),
     "delivery/skills/implementation-execution/SKILL.md": ("IMPLEMENTATION", "实现对象清单", "设计契约映射", "测试 / Fixture", "最小实现切片", "平台差异", "handoff"),
@@ -603,8 +604,8 @@ SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
     "delivery/skills/verification-execution/templates/VERIFICATION-TEMPLATE.md": ("验证对象清单", "验证追踪矩阵", "设计契约验证清单", "分层验证计划", "Prompt / Skill Fixture", "阶段决策"),
     "delivery/skills/quality-review/SKILL.md": ("IMPLEMENTATION", "VERIFICATION", "实现执行证据", "验证对象清单", "设计契约映射", "Fixture", "阶段决策"),
     "delivery/skills/checkpoint-manager/SKILL.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "full-lld", "technical-note", "waived", "quality-review", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/*-CONTEXT.yaml", "decision_brief_profile", "release_artifact_profile", "release_decision", "实现执行证据", "IMPLEMENTATION", "验证对象清单", "PASS_WITH_RISK"),
-    "delivery/skills/state-router/SKILL.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "design_evidence", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/*-CONTEXT.yaml", "context_budget", "workflow_health", "release_artifact_profile", "release_decision", "implementation-execution", "verification-execution", "STORY-*-IMPLEMENTATION.md", "PASS_WITH_RISK"),
-    "delivery/skills/state-router/templates/STATE-TEMPLATE.md": ("artifacts:", "docs/product/SCENARIOS.yaml", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "context_budget:", "workflow_health:", "decision_brief_profile", "route_validation", "release_artifact_profile_values", "release_decision_values", "implementation:", "cp7_result_values"),
+    "delivery/skills/state-router/SKILL.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "design_evidence", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/*-CONTEXT.yaml", "read_expansion_log", "workflow_health_ref", "release_artifact_profile", "release_decision", "implementation-execution", "verification-execution", "STORY-*-IMPLEMENTATION.md", "PASS_WITH_RISK"),
+    "delivery/skills/state-router/templates/STATE-TEMPLATE.md": ("artifacts:", "docs/product/SCENARIOS.yaml", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/quality/VERIFICATION-REPORT.md", "docs/quality/TEST-REPORT.md", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "read_expansion_ledger_ref", "workflow_health_ref", "decision_brief_profile", "route_validation", "release_artifact_profile_values", "release_decision_values", "implementation:", "cp7_result_values"),
     "delivery/rules/AGENTS.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "docs/design/BLUEPRINT.md", "docs/design/DOMAIN-MAP.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/", "Context Capsule", "workflow_health", "decision_brief_profile", "release_artifact_profile", "release_decision", "process/checkpoints/", "implementation-execution", "verification-execution", "IMPLEMENTATION", "VERIFICATION-REPORT", "PASS_WITH_RISK"),
     "delivery/rules/CLAUDE.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "docs/design/BLUEPRINT.md", "docs/design/DOMAIN-MAP.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/", "Context Capsule", "workflow_health", "decision_brief_profile", "release_artifact_profile", "release_decision", "process/checkpoints/", "implementation-execution", "verification-execution", "IMPLEMENTATION", "VERIFICATION-REPORT", "PASS_WITH_RISK"),
     "AGENTS.md": ("docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "docs/design/BLUEPRINT.md", "docs/design/DOMAIN-MAP.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/", "Context Capsule", "workflow_health", "decision_brief_profile", "release_artifact_profile", "release_decision", "process/checkpoints/", "implementation-execution", "verification-execution", "IMPLEMENTATION", "VERIFICATION-REPORT", "PASS_WITH_RISK"),
@@ -664,7 +665,7 @@ CLAUDE_DIRECT_ASK_AGENTS = {"meta-pm", "meta-se"}
 CLAUDE_NO_DIRECT_ASK_AGENTS = {"meta-dev", "meta-qa", "meta-doc"}
 CODEX_NICKNAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
 ARCHIVED_AGENT_PATHS = {
-    "meta-dm": PROCESS_ROOT / "archive" / "meta-dm.md",
+    "meta-dm": DELIVERY_ROOT / "doc" / "archive" / "meta-dm.md",
 }
 LEGACY_ORCHESTRATOR_AGENT_NAMES = {"meta-po", "host-orchestrator"}
 NON_DELIVERED_SKILL_PLACEHOLDERS = ("vendor-profile-loader", "constraint-normalizer")
@@ -1079,7 +1080,7 @@ def collect_cr004_protocol_errors() -> list[str]:
     state_template = DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md"
     if state_template.is_file():
         state_text = state_template.read_text(encoding="utf-8")
-        for required in ("agent_lifecycle", "active_agents", "cp5_story_lld_review"):
+        for required in ("AGENT-DISPATCH-LEDGER.ndjson", "active_agent_count", "cp5_story_lld_review"):
             if required not in state_text:
                 errors.append(f"{state_template.relative_to(ROOT)} missing lifecycle/state token: {required}")
     else:
@@ -1088,7 +1089,7 @@ def collect_cr004_protocol_errors() -> list[str]:
     handoff_skill = DELIVERY_ROOT / "skills" / "context-handoff" / "SKILL.md"
     if handoff_skill.is_file():
         handoff_text = handoff_skill.read_text(encoding="utf-8")
-        for required in ("fork_context=false", "完整会话", "active_agents"):
+        for required in ("fork_context=false", "完整会话", "AGENT-DISPATCH-LEDGER.ndjson"):
             if required not in handoff_text:
                 errors.append(f"{handoff_skill.relative_to(ROOT)} missing context-budget token: {required}")
     else:
@@ -1125,7 +1126,6 @@ def collect_agent_dispatch_evidence_errors() -> list[str]:
     errors: list[str] = []
     targets = [
         DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
-        DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
         DELIVERY_ROOT / "skills" / "context-handoff" / "SKILL.md",
         DELIVERY_ROOT / "skills" / "checkpoint-manager" / "SKILL.md",
         DELIVERY_ROOT / "rules" / "AGENTS.md",
@@ -1180,10 +1180,8 @@ def collect_agent_dispatch_evidence_errors() -> list[str]:
 
     state_router = DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md"
     state_template = DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md"
-    for target in (state_router, state_template):
-        if not target.is_file():
-            continue
-        text = target.read_text(encoding="utf-8")
+    if state_router.is_file():
+        text = state_router.read_text(encoding="utf-8")
         for token in (
             "required_tools",
             "codex_reasoning_profiles",
@@ -1194,18 +1192,18 @@ def collect_agent_dispatch_evidence_errors() -> list[str]:
             "创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具",
         ):
             if token not in text:
-                errors.append(f"{target.relative_to(ROOT)} missing Codex dispatch/profile token: {token}")
+                errors.append(f"{state_router.relative_to(ROOT)} missing Codex dispatch/profile token: {token}")
 
     if state_template.is_file():
         text = state_template.read_text(encoding="utf-8")
         for token in (
-            "dispatch_evidence_required",
-            "active_agent_item_schema",
-            "handoff-created",
-            "spawn-requested",
+            "AGENT-DISPATCH-LEDGER.ndjson",
+            "active_agent_count",
+            "platform_capabilities_ref",
+            "subagent_auto_dispatch",
         ):
             if token not in text:
-                errors.append(f"{state_template.relative_to(ROOT)} missing dispatch state token: {token}")
+                errors.append(f"{state_template.relative_to(ROOT)} missing slim dispatch state token: {token}")
 
     for target in (ROOT / "AGENTS.md", DELIVERY_ROOT / "rules" / "AGENTS.md"):
         if not target.is_file():
@@ -1391,11 +1389,11 @@ def collect_human_gate_protocol_errors() -> list[str]:
         ),
         "state-router": (
             DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
-            ("human_gate_decisions", "pending_human_decisions", "decision_collection_coverage", "pending_non_authorized_items", "meta-flow check human-gate"),
+            ("GATE-LEDGER.ndjson", "Decision Brief", "decision_collection_coverage", "pending_non_authorized_items", "meta-flow check human-gate"),
         ),
         "state-template": (
             DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
-            ("human_gate_decisions", "pending_human_decisions", "decision_collection_coverage", "pending_non_authorized_items", "follow_up_tracking_path"),
+            ("GATE-LEDGER.ndjson", "Decision Brief", "decision_collection_coverage", "pending_non_authorized_items", "follow_up_tracking_path"),
         ),
         "human-gate-validator": (
             ROOT / "meta_flow" / "checks" / "human_gate.py",
@@ -1431,31 +1429,31 @@ def collect_human_gate_protocol_errors() -> list[str]:
         ),
         "skills-readme": (
             DELIVERY_ROOT / "skills" / "README.md",
-            ("pending_human_decisions", "Human Gate Launch Protocol", "follow-up tracking"),
+            ("GATE-LEDGER.ndjson", "Human Gate Launch Protocol", "follow-up tracking"),
         ),
         "delivery-agents-rule": (
             DELIVERY_ROOT / "rules" / "AGENTS.md",
-            ("Human Gate Launch Protocol", "pending_human_decisions", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
+            ("Human Gate Launch Protocol", "GATE-LEDGER.ndjson", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
         ),
         "delivery-claude-rule": (
             DELIVERY_ROOT / "rules" / "CLAUDE.md",
-            ("Human Gate Launch Protocol", "pending_human_decisions", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
+            ("Human Gate Launch Protocol", "GATE-LEDGER.ndjson", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
         ),
         "root-agents-rule": (
             ROOT / "AGENTS.md",
-            ("Human Gate Launch Protocol", "pending_human_decisions", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
+            ("Human Gate Launch Protocol", "GATE-LEDGER.ndjson", "不授权项", "FOLLOW-UP", "启动后续 CR", "冲突预检"),
         ),
         "readme": (
             ROOT / "README.md",
-            ("pending_human_decisions", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
+            ("GATE-LEDGER.ndjson", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
         ),
         "delivery-readme": (
             DELIVERY_ROOT / "README.md",
-            ("pending_human_decisions", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
+            ("GATE-LEDGER.ndjson", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
         ),
         "user-manual": (
             DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
-            ("pending_human_decisions", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
+            ("GATE-LEDGER.ndjson", "不授权项", "follow-up tracking", "启动后续 CR", "CR 冲突预检"),
         ),
     }
     for label, (target, tokens) in token_targets.items():
@@ -1504,19 +1502,19 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
         ),
         "state-template": (
             DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
-            ("cr_tracking", "follow_up_candidates", "spike_candidates", "stale_status_conflicts", "CR-INDEX.yaml"),
+            ("cr_tracking_ref", "follow_up_candidates_ref", "spike_candidates_ref", "stale_status_conflicts_ref", "CR-INDEX.yaml"),
         ),
         "change-impact-analysis": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "SKILL.md",
-            ("CR-INDEX-TEMPLATE.yaml", "meta-flow check cr-tracking", "STATE.md.cr_tracking", "stale_status_conflicts"),
+            ("CR-INDEX-TEMPLATE.yaml", "meta-flow check cr-tracking", "CR-LEDGER.ndjson", "stale_status_conflicts"),
         ),
         "cr-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-TEMPLATE.md",
-            ("cr_index_path", "STATE.md.cr_tracking", "CR-INDEX.yaml", "meta-flow check cr-tracking"),
+            ("cr_index_path", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "meta-flow check cr-tracking"),
         ),
         "follow-up-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "FOLLOW-UP-TRACKING-TEMPLATE.md",
-            ("cr_index_path", "STATE.md.cr_tracking", "CR-INDEX.yaml", "状态索引同步", "meta-flow check cr-tracking"),
+            ("cr_index_path", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "状态索引同步", "meta-flow check cr-tracking"),
         ),
         "cr-index-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-INDEX-TEMPLATE.yaml",
@@ -1524,19 +1522,19 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
         ),
         "skills-readme": (
             DELIVERY_ROOT / "skills" / "README.md",
-            ("cr_tracking", "CR-INDEX.yaml", "CR 跟踪一致性检查"),
+            ("CR-LEDGER.ndjson", "CR-INDEX.yaml", "CR 跟踪一致性检查"),
         ),
         "delivery-agents-rule": (
             DELIVERY_ROOT / "rules" / "AGENTS.md",
-            ("CR 跟踪状态查询", "cr_tracking", "CR-INDEX.yaml", "stale_status_conflicts"),
+            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "stale_status_conflicts"),
         ),
         "delivery-claude-rule": (
             DELIVERY_ROOT / "rules" / "CLAUDE.md",
-            ("CR 跟踪状态查询", "cr_tracking", "CR-INDEX.yaml", "stale_status_conflicts"),
+            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "stale_status_conflicts"),
         ),
         "root-agents-rule": (
             ROOT / "AGENTS.md",
-            ("CR 跟踪状态查询", "cr_tracking", "CR-INDEX.yaml", "stale_status_conflicts"),
+            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "stale_status_conflicts"),
         ),
         "readme": (
             ROOT / "README.md",
@@ -1817,11 +1815,11 @@ def collect_context_capsule_protocol_errors() -> list[str]:
     if state_template.is_file():
         text = state_template.read_text(encoding="utf-8")
         required_tokens = (
-            "context_budget:",
-            "require_capsule_first",
+            "read_expansion_ledger_ref",
+            "process/state/READ-EXPANSION-LEDGER.ndjson",
             "process/context/CP2-REQUIREMENT-CONTEXT.yaml",
             "process/context/CP8-DELIVERY-CONTEXT.yaml",
-            "workflow_health:",
+            "workflow_health_ref",
             "same_question_rounds_max",
             "decision_brief_profile",
             "route_validation",
@@ -1869,7 +1867,7 @@ def collect_context_capsule_protocol_errors() -> list[str]:
         "delivery/agents/meta-dev.md": ("CP5-LLD-CONTEXT.yaml", "CP6-IMPLEMENTATION-CONTEXT.yaml", "read_expansion_log"),
         "delivery/agents/meta-qa.md": ("CP7-VERIFICATION-CONTEXT.yaml", "CP8-DELIVERY-CONTEXT.yaml", "route_validation"),
         "delivery/agents/meta-doc.md": ("CP8-DELIVERY-CONTEXT.yaml", "read_expansion_log"),
-        "delivery/skills/README.md": ("process/context/*-CONTEXT.yaml", "context_budget", "workflow_health"),
+        "delivery/skills/README.md": ("process/context/*-CONTEXT.yaml", "READ-EXPANSION-LEDGER.ndjson", "workflow_health_ref"),
         "delivery/rules/AGENTS.md": ("全阶段 Context Capsule", "上下文预算", "Workflow Health", "Decision Brief 压缩"),
         "delivery/rules/CLAUDE.md": ("全阶段 Context Capsule", "上下文预算", "workflow_health", "Decision Brief 压缩"),
         "AGENTS.md": ("全阶段 Context Capsule", "上下文预算", "Workflow Health", "Decision Brief 压缩"),

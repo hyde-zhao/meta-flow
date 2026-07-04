@@ -14,7 +14,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 本台账只记录 CP8 或 CR 收敛后需要后续跟踪的候选事项。候选项未启动前不得预创建正式 CR 文件；只有用户决定推进某一项时，才在 `process/changes/` 下创建对应正式 CR，并把本台账中的状态改为 `active`。
 
-本台账不是唯一状态索引。每次新增、启动、关闭、取消或替代候选项后，必须同步 `process/STATE.md.cr_tracking` 与 `process/changes/CR-INDEX.yaml`，并运行或记录跳过 `meta-flow check cr-tracking` 的原因。
+本台账不是唯一状态索引。每次新增、启动、关闭、取消或替代候选项后，必须同步 `process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`，并运行或记录跳过 `meta-flow check cr-tracking` 的原因。
 
 ## 状态字段约定
 
@@ -93,19 +93,19 @@ follow_up_items:
 
 ## 启动候选 CR 流程
 
-用户决定推进某一候选项时，在当前主进程会话中说明“启动后续 CR”，并给出台账路径、候选编号和目标摘要。host-orchestrator 必须先读取本台账、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml` 和活跃正式 CR，完成冲突预检后，才能创建正式 CR 文件并把状态改为 `active`。
+用户决定推进某一候选项时，在当前主进程会话中说明“启动后续 CR”，并给出台账路径、候选编号和目标摘要。host-orchestrator 必须先读取本台账、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json 与 process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml` 和活跃正式 CR，完成冲突预检后，才能创建正式 CR 文件并把状态改为 `active`。
 
 ## CR 冲突预检
 
 | 检查项 | 结果 | 证据 | 处理结论 |
 |---|---|---|---|
-| 是否已有 `STATE.md.active_change` | PASS / BLOCKED | `process/STATE.md` |  |
+| 是否已有 `STATE.current.json.active_change` | PASS / BLOCKED | `process/STATE.md` |  |
 | 是否存在未关闭正式 CR | PASS / BLOCKED | `process/changes/CR-*.md` |  |
 | 正式文档影响面是否重叠 | PASS / BLOCKED | 文档处理决策 |  |
 | Story / LLD 批次是否重叠 | PASS / BLOCKED | Story / CR 影响分析 |  |
 | 文件 owner 是否冲突 | PASS / BLOCKED | Story file_ownership / CR 影响分析 |  |
 | 外部接口 / 安全 / 运行授权是否重叠 | PASS / BLOCKED | Decision Brief / CR |  |
-| `STATE.md.active_change` 是否指向已关闭 CR | PASS / BLOCKED | `meta-flow check cr-tracking` |  |
+| `STATE.current.json.active_change` 是否指向已关闭 CR | PASS / BLOCKED | `meta-flow check cr-tracking` |  |
 | 台账候选与正式 CR 文件是否同步 | PASS / BLOCKED | `meta-flow check cr-tracking` |  |
 
 若存在重叠，默认不得并行推进；必须在以下处理方式中选择并记录：合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集、或标记 `superseded` 并链接替代 CR。
@@ -114,7 +114,7 @@ follow_up_items:
 
 | 对象 | 路径 | 同步要求 | 当前状态 |
 |---|---|---|---|
-| 运行时状态 | `process/STATE.md.cr_tracking` | 记录 active、blocked、candidate、spike_candidate、stale_status_conflicts | pending |
+| 运行时状态 | `process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson` | 记录 active、blocked、candidate、spike_candidate、stale_status_conflicts | pending |
 | CR 索引 | `process/changes/CR-INDEX.yaml` | 记录每个候选项的状态、正式 CR 路径、影响面、blocked_by 和下一步 | pending |
 | 一致性检查 | `meta-flow check cr-tracking --project-root .` | 新增台账、启动候选、关闭 CR 或状态冲突修复后执行 | pending |
 

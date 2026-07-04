@@ -37,6 +37,10 @@ ALLOWED_GATE_STATUSES = {
     "cp5_pending",
     "cp7_pending",
     "cp8_pending",
+    "implementation_in_progress",
+    "verification_in_progress",
+    "cp8_closed",
+    "cp8_recovery_closed",
     "closed",
 }
 ALLOWED_CR_KINDS = {
@@ -47,7 +51,7 @@ ALLOWED_CR_KINDS = {
     "ledger-maintenance",
     "spike",
 }
-ALLOWED_GATE_PROFILES = {"full", "standard", "compact", "runtime", "spike"}
+ALLOWED_GATE_PROFILES = {"full", "standard", "standard-code", "compact", "runtime", "spike"}
 PATH_EMPTY_VALUES = {"", "-", "—", "n/a", "N/A", "无", "不适用"}
 
 

@@ -82,7 +82,7 @@ Meta Flow canonical agent 的授权边界：
 1. frontmatter `tools:` 包含 `AskUserQuestion`。
 2. 正文说明可直接提问的阶段、问题类型和禁止范围。
 3. `context-handoff` 的 `question_permission.can_ask_user=true` 且 `structured_choice_allowed=true`。
-4. `STATE.md.agent_lifecycle.platform_capabilities.user_question.method=direct`。
+4. `platform capability probe record method=direct`。
 
 否则必须走 Host Orchestrator relay、clarification queue 或 exact-text 协议，不得声称可直接使用用户提问工具。
 

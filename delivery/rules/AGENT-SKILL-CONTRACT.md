@@ -20,7 +20,7 @@
    - `human_audit`
    - `deep_review`
    - `schema_validation_failed`
-5. 全文读取日志写入 context / packet 的 `read_expansion_log`，或写入 `process/state/READ-EXPANSION-LEDGER.ndjson`。旧项目兼容时可同步到 `STATE.md.context_budget.read_expansion_log[]`。
+5. 全文读取日志写入 context / packet 的 `read_expansion_log`，或写入 `process/state/READ-EXPANSION-LEDGER.ndjson`。旧项目兼容时可同步到 `process/state/READ-EXPANSION-LEDGER.ndjson`。
 
 ## Output Contract
 

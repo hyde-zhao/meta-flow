@@ -39,7 +39,7 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 
 ## LLD Clarification Queue 协议
 
-并行 LLD 写作期间，meta-dev 默认不直接向用户提问。遇到实现灰区时，必须写入 `STATE.md.parallel_execution.lld_clarification_queue.items[]`，由 host-orchestrator 作为唯一 question broker 合并和批量询问用户。
+并行 LLD 写作期间，meta-dev 默认不直接向用户提问。遇到实现灰区时，必须写入 `process/state/QUESTION-LEDGER.ndjson entries`，由 host-orchestrator 作为唯一 question broker 合并和批量询问用户。
 
 clarification item 字段至少包含：
 
@@ -97,7 +97,7 @@ clarification item 字段至少包含：
 - `depends_on` 指向的前置 Story return packet / evidence index / CP result、依赖类型和门控状态
 - `file_ownership` 中的 `primary`、`shared`、`merge_owner`、`forbidden`
 - `process/state/STORY-LEDGER.ndjson`、`process/state/HANDOFF-LEDGER.ndjson`、`process/state/AGENT-DISPATCH-LEDGER.ndjson` 或 context 中的等价摘要，用于判断 `dev_running` 与并行限制
-- LLD 写作期间的 clarification queue：优先读取 `process/state/QUESTION-LEDGER.ndjson`；legacy 项目仅在 context `allowed_reads` 指明时读取 `STATE.md.parallel_execution.lld_clarification_queue`
+- LLD 写作期间的 clarification queue：优先读取 `process/state/QUESTION-LEDGER.ndjson`；legacy 项目仅在 context `allowed_reads` 指明时读取 `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref
 - Story 设计证据（当进入实现阶段时必须已确认）：`full-lld` 读取 `process/stories/STORY-{id}-{story_slug}-LLD.md`，`technical-note` / `waived` 读取 Story 卡片 `## 技术说明` 和 `lld_gate`
 - `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.result.json` / summary 与 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`（进入实现阶段时必须通过）
 - 最新 CP7 result JSON / verification return packet / 缺陷记录（进入修复阶段时必须读取）

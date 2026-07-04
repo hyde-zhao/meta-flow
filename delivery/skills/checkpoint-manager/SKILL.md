@@ -55,7 +55,7 @@ status: active
 
 `process/checks/` 属于运行态检查证据；`process/checkpoints/` 属于人工确认态文件。人工审查时，host-orchestrator 必须在用户提示中给出具体 `process/checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
 
-所有 `process/*` 检查点路径都必须先经过 process 路由健康检查。外置模式下，CP0 前必须存在 `<project-root>/process -> <artifact-root>/process/<project-name>` 软链接、`process/.meta-flow-process.yaml` 和与之匹配的 `STATE.md.artifact_routing`；路由记录必须使用锚点 + 相对路径，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。缺失、断链、项目名不匹配或路由冲突时，检查点结论只能是 `BLOCKED`。
+所有 `process/*` 检查点路径都必须先经过 process 路由健康检查。外置模式下，CP0 前必须存在 `<project-root>/process -> <artifact-root>/process/<project-name>` 软链接、`process/.meta-flow-process.yaml` 和与之匹配的 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`；路由记录必须使用锚点 + 相对路径，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。缺失、断链、项目名不匹配或路由冲突时，检查点结论只能是 `BLOCKED`。
 
 ## 结果状态
 
@@ -270,7 +270,7 @@ target:
 
 | 来源 | 路径 / 对象 | 扫描状态 | 候选问题数 | 纳入待决策数 | 分类 / N/A 原因 |
 |---|---|---:|---:|---:|---|
-| STATE pending queue | `STATE.md.human_gate_decisions.pending_human_decisions[]` | scanned / missing / n/a | 0 | 0 |  |
+| STATE pending queue | `process/checkpoints/CP*.md` Decision Brief 与 `process/state/GATE-LEDGER.ndjson` | scanned / missing / n/a | 0 | 0 |  |
 | 委托 Agent 交还摘要 | `process/handoffs/*RETURN-SUMMARY.md` | scanned / missing / n/a | 0 | 0 |  |
 | 自动预检结果 | `process/checks/CP*.md` | scanned / missing / n/a | 0 | 0 |  |
 | discussion log / checkpoint | `process/discussions/*` / `process/checks/*DISCUSSION-CHECKPOINT.json` | scanned / missing / n/a | 0 | 0 |  |
@@ -393,7 +393,7 @@ reject
 
 ### Decision Brief 压缩策略
 
-checkpoint 文件中的 Decision Brief 必须完整；对话发起消息可以按 `STATE.md.human_gate_decisions.decision_brief_profile` 压缩，以减少 token 消耗。
+checkpoint 文件中的 Decision Brief 必须完整；对话发起消息可以按 `process/policies/GATE-PROFILES.json or checkpoint decision_brief_profile` 压缩，以减少 token 消耗。
 
 允许值：full|compact|summary。
 
@@ -418,7 +418,7 @@ checkpoint 文件中的 Decision Brief 必须完整；对话发起消息可以�
 
 CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规和对话合规：
 
-1. 发起前必须从 `STATE.md.human_gate_decisions.pending_human_decisions[]`、委托 Agent 交还摘要、review summary、自动预检结果、discussion log / checkpoint、LLD clarification queue、OPEN / Spike 项、inline fallback 授权、预授权终验条件、用户显式提出的选择题和当前 gate 相关正式产物中聚合本轮 DQ。
+1. 发起前必须从 `process/checkpoints/CP*.md` Decision Brief 与 `process/state/GATE-LEDGER.ndjson`、委托 Agent 交还摘要、review summary、自动预检结果、discussion log / checkpoint、LLD clarification queue、OPEN / Spike 项、inline fallback 授权、预授权终验条件、用户显式提出的选择题和当前 gate 相关正式产物中聚合本轮 DQ。
 2. Decision Brief 必须包含 `### Decision Collection Coverage`，逐项列出适用来源、扫描状态、候选问题数、纳入待决策数和分类 / N/A 原因；缺少覆盖报告时不得发起人工确认。
 3. 若下游产物中存在 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类事项，必须先分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。
 4. `decision-item` 必须写入待人工决策清单；每项必须有 `decision_type`，取值为 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。
@@ -450,7 +450,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 2 | 目标对象明确 | 区分新工作流、修改 meta-flow 本身、外部 production 交付 |
 | 3 | engagement mode 明确 | `production` 或 `meta-self-dev` 已设置 |
 | 4 | 输出位置明确 | 运行态、确认态、交付态路径可判定 |
-| 5 | process 软链接契约明确 | 外置模式下 `process/.meta-flow-process.yaml` 与 `STATE.md.artifact_routing` 的 `artifact_root`、`project_process_root`、`link_path`、`project_name` 一致，且路径以锚点 + 相对路径记录；首次初始化前缺 artifact 目录时先向用户索取 |
+| 5 | process 软链接契约明确 | 外置模式下 `process/.meta-flow-process.yaml` 与 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml` 的 `artifact_root`、`project_process_root`、`link_path`、`project_name` 一致，且路径以锚点 + 相对路径记录；首次初始化前缺 artifact 目录时先向用户索取 |
 | 6 | 干系人或决策人明确 | 至少能判定谁负责人工确认 |
 | 7 | 初始优先级明确 | Must / Should / Could 或等价优先级已记录 |
 | 8 | 明显冲突已暴露 | 与现有规则冲突的内容已登记为开放问题 |
@@ -698,7 +698,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | CP4 自动预检通过 | Story 拆解、依赖 DAG、文件所有权和并行计划已通过自动检查 |
 | 全部目标 Story 处于设计审查态 | 状态均为 `lld-ready-for-review` 或全量 `lld-batch-ready-for-review` |
 | 全部目标 Story 设计证据已生成 | `full-lld` 有 `STORY-{id}-{story_slug}-LLD.md`；`technical-note` 有 Story `## 技术说明`；`waived` 有豁免理由、风险接受和重访条件 |
-| LLD clarification 队列可读 | `STATE.md.parallel_execution.lld_clarification_queue` 已初始化，且无未回答阻断项；若有 OPEN / Spike，已标注非阻断和重访条件 |
+| LLD clarification 队列可读 | `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref 已初始化，且无未回答阻断项；若有 OPEN / Spike，已标注非阻断和重访条件 |
 
 ### Checklist
 
@@ -752,7 +752,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | dev_gate 满足 | 依赖和文件所有权允许开发 |
 | 实现完成 | Story 任务清单已执行完 |
 | 实现执行证据存在 | Story 必需的 `IMPLEMENTATION.md`、Story 实现摘要或 `DEV-LOG.md` 已生成；复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / Guardrail / 平台适配必须有完整 IMPLEMENTATION |
-| meta-dev 调度证据存在 | `STATE.md.agent_lifecycle` 与 handoff `dispatch` 证明 meta-dev 已由子 agent 执行，或存在用户批准的 inline fallback |
+| meta-dev 调度证据存在 | `process/state/AGENT-DISPATCH-LEDGER.ndjson` 与 handoff `dispatch` 证明 meta-dev 已由子 agent 执行，或存在用户批准的 inline fallback |
 
 ### Checklist
 
@@ -816,7 +816,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 覆盖矩阵可用 | `TEST-MATRIX.md` 可读，或 CP7 自动检查写明 N/A / waived 原因 |
 | 验证执行证据可生成 | `verification-execution` 可输出验证范围、对象清单、追踪矩阵、设计契约验证、分层验证计划和阶段决策，或检查结果写明轻量 N/A 原因 |
 | 质量评审产物可生成 | `quality-review` 可输出 `docs/quality/TEST-REPORT.md` / `docs/quality/REVIEW.md` / `docs/quality/FIXES.md`，或检查结果写明不适用原因 |
-| meta-qa 调度证据存在 | `STATE.md.agent_lifecycle` 与 handoff `dispatch` 证明 meta-qa 已由子 agent 执行，或存在用户批准的 inline fallback |
+| meta-qa 调度证据存在 | `process/state/AGENT-DISPATCH-LEDGER.ndjson` 与 handoff `dispatch` 证明 meta-qa 已由子 agent 执行，或存在用户批准的 inline fallback |
 
 ### Checklist
 
@@ -934,7 +934,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 ## 执行规则
 
-1. 所有 CP 文件创建或更新后，必须回写 `process/STATE.md.checkpoints` 中的路径和结论。
+1. 所有 CP 文件创建或更新后，必须回写 `process/checks/CP*.result.json` 与 `process/state/CHECKPOINT-LEDGER.ndjson` 中的路径和结论。
 1. 写入任何 CP 文件前必须确认 `process` 路由健康。首次初始化只允许在已建立外置过程目录和软链接后写入 `STATE.md` / `REQUEST.md` / `INPUT-INDEX.md`；若 artifact 目录未知、软链接断裂或路由冲突，先写 `BLOCKED` 结论或中断并要求用户提供目录，不得静默创建新的本地 `process/`。
 2. 人工检查点的自动预检未 `PASS` 或 `WAIVED` 前，host-orchestrator 不得发起人工确认。
 3. 人工确认通过后，host-orchestrator 必须把人工结论写回对应 `process/checkpoints/CP*.md` 的“人工审查结果”，并同步更新 `STATE.md`。
@@ -944,7 +944,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 7. CP6 / CP7 必须包含 `## Agent Dispatch Evidence` 小节；若缺少真实子 agent 证据且没有用户批准的 `inline-fallback`，结论只能是 `FAIL` 或 `BLOCKED`。CP6 / CP7 还必须引用 Story Return Packet 与 Evidence Index；Markdown 检查文件不得替代结构化 return / evidence 真相源。
 8. CP4 自动预检失败时不得进入 CP5；CP4 通过时不得单独要求人工确认，必须把摘要并入 CP5。
 9. CP2 / CP3 人工检查点发起前必须校验 discussion log / checkpoint 存在；若缺失且没有 N/A 理由，结论只能是 `BLOCKED`。
-10. CP5 人工检查点发起前必须校验 `STATE.md.parallel_execution.lld_clarification_queue`。存在未回答 `blocks_lld=true` item 时，CP5 结论只能是 `BLOCKED`；用户明确接受转 OPEN / Spike 的 item 必须写入 Decision Brief、LLD 第 12.1 节或 Story 技术说明，以及 DEV-LOG。
+10. CP5 人工检查点发起前必须校验 `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref。存在未回答 `blocks_lld=true` item 时，CP5 结论只能是 `BLOCKED`；用户明确接受转 OPEN / Spike 的 item 必须写入 Decision Brief、LLD 第 12.1 节或 Story 技术说明，以及 DEV-LOG。
 
 CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 
@@ -958,7 +958,7 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 | Codex custom agent | PASS/FAIL/WAIVED | `dispatch.codex_agent_name` / `active_agents[].codex_agent_name` | `meta-dev` / `meta-dev-debugger` / `meta-qa` / `meta-qa-critical` |
 | reasoning profile | PASS/FAIL/WAIVED | `dispatch.reasoning_profile` / `active_agents[].reasoning_profile` | `default` / `debugger` / `critical` |
 | dispatch trigger | PASS/FAIL/WAIVED | `dispatch.dispatch_trigger` / `active_agents[].dispatch_trigger` | `phase-default` / `repeated-failure` / `critical-checkpoint` / `risk-review` 等可审计原因 |
-| agent 标识 | PASS/FAIL/WAIVED | `STATE.md.agent_lifecycle` | `agent_id` 或 `thread_id` |
+| agent 标识 | PASS/FAIL/WAIVED | `process/state/AGENT-DISPATCH-LEDGER.ndjson` | `agent_id` 或 `thread_id` |
 | 平台工具证据 | PASS/FAIL/WAIVED | `tool_name` | `spawn_agent` / `resume_agent` / `send_input` / platform task |
 | 完成时间 | PASS/FAIL/WAIVED | `completed_at` | 子 agent 返回完成结果的时间 |
 | inline fallback 授权 | N/A/WAIVED/FAIL | `approved_by`、`approved_at` | 仅 fallback 时允许 WAIVED |
@@ -974,7 +974,7 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 - [ ] 发起消息已复述 `approve` 接受哪些 DQ，且不授权项已独立列出
 - [ ] `meta-flow check human-gate` 校验 checkpoint 文件和发起消息通过
 - [ ] 人工审查后对应 `process/checkpoints/CP*.md` 已填入结论
-- [ ] `STATE.md.checkpoints` 与检查文件状态一致
+- [ ] `process/checks/CP*.result.json` 与 `process/state/CHECKPOINT-LEDGER.ndjson` 与检查文件状态一致
 
 ## Gotchas
 

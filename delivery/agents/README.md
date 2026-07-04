@@ -31,7 +31,7 @@ Host Orchestrator 是当前会话主进程职责，不在本目录安装为平�
 
 ## Codex Reasoning Profiles
 
-以下 profile 仅在 Codex 安装时生成。它们不新增 canonical role；`STATE.md.agent_lifecycle.active_agents[].role` 仍写基础角色，实际调用的 custom agent 写入 `codex_agent_name`。
+以下 profile 仅在 Codex 安装时生成。它们不新增 canonical role；`process/state/AGENT-DISPATCH-LEDGER.ndjson role` 仍写基础角色，实际调用的 custom agent 写入 `codex_agent_name`。
 
 | Codex profile agent | canonical role | `model_reasoning_effort` | 触发条件 |
 |---|---|---|---|

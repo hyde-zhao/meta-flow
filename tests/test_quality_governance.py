@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -15,10 +14,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def copy_policy_templates(root: Path) -> None:
-    target = root / "process" / "policies"
-    target.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(REPO_ROOT / "process" / "policies" / "QUALITY-MODEL.yaml", target / "QUALITY-MODEL.yaml")
-    shutil.copyfile(REPO_ROOT / "process" / "policies" / "EVAL-MATRIX.yaml", target / "EVAL-MATRIX.yaml")
+    exit_code = quality_governance.quality_main(["init", "--project-root", str(root)])
+    if exit_code != 0:
+        raise AssertionError(f"quality init failed with exit code {exit_code}")
 
 
 def write_cp1_result(root: Path) -> Path:

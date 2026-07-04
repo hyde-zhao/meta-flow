@@ -22,7 +22,7 @@ status: active
 - Story 执行阶段内的 LLD 设计批次、开发队列、验证队列和依赖门控判断
 - `requirement-clarification` / `solution-design` 阶段内的用户交互权委托状态判断
 - 并行 LLD 写作期间的 `lld_clarification_queue` 收敛检查
-- CP2 / CP3 / CP5 / CP8 前的 `human_gate_decisions.pending_human_decisions[]` 状态队列维护
+- CP2 / CP3 / CP5 / CP8 前的 Decision Brief、`GATE-LEDGER.ndjson` 和当前 gate scalar/ref 维护
 - CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后的 `context_budget`、`process/context/*-CONTEXT.yaml` 和全文档读取理由维护
 - `workflow_health` 循环 / 卡顿 / 反复回修信号维护
 - CP0-CP8 检查点状态、自动检查结果路径和人工审查结果路径维护
@@ -42,7 +42,7 @@ status: active
 - `process/STATE.md`（仅 legacy fallback、人类摘要、迁移兼容或 state v2 缺失时读取）
 - `skills/state-router/templates/STATE-TEMPLATE.md`
 - `skills/checkpoint-manager/SKILL.md`
-- `meta-flow check cr-tracking`（若存在）：CR 台账、正式 CR 和 `STATE.md.active_change` 一致性预检
+- `meta-flow check cr-tracking`（若存在）：CR 台账、正式 CR 和 `STATE.current.json.active_change` 一致性预检
 - `process/context/*-CONTEXT.yaml` / `process/context/*.context.json` / `process/context/stories/*.json`：当前阶段上下文胶囊；默认优先读取
 - 与当前阶段直接相关的上游文档（仅在 capsule 缺失、冲突、字段不足、人工审计或深度评审触发时读取全文）：
   - `process/REQUEST.md`
@@ -96,19 +96,19 @@ status: active
 1. 首次初始化时，若用户或项目规则已确认 `artifact_root` 和 `project_name`，必须先执行或等价完成 `meta-flow workspace link --artifact-root <artifact_root> --project-name <project_name>`，创建 `<artifact-root>/process/<project-name>/`、基础子目录和 `<project-root>/process` 软链接，再以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化 `process/STATE.md`。
 2. `artifact_root`、`project_process_root`、`link_path` 必须以锚点 + 相对路径记录，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。若无法用相对路径表达，必须先让用户确认新的 artifact 根路径或重新执行 `workspace link`。
 3. 若 `artifact_root` / `project_process_root` 未知，必须强制中断并要求用户提供目录；不得猜测 artifact 仓库位置，不得退回普通本地 `process/`。
-4. 仅当用户明确选择兼容模式，或当前仓库已存在未迁移的 legacy `process/` 且 `STATE.md.artifact_routing.routing_mode=local-directory`，才允许本地目录模式；必须写入 `artifact_routing.migration_status` 和后续迁移动作。
+4. 仅当用户明确选择兼容模式，或当前仓库已存在未迁移的 legacy `process/` 且 ``STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`.routing_mode=local-directory`，才允许本地目录模式；必须写入 `artifact_routing.migration_status` 和后续迁移动作。
 5. 初始化 `process/STATE.md` 后，必须回填 `artifact_routing.routing_mode`、`path_format`、`artifact_root`、`artifact_root_anchor`、`project_process_root`、`project_process_root_anchor`、`link_path`、`link_path_anchor`、`project_name`、`health_status`、`migration_status` 和 `route_metadata`，并创建 `process/checks/`、`process/checkpoints/`、`process/context/`、`process/changes/`。
-5. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`orchestrator_session`、`delegated_interaction`、`agent_lifecycle`、`checkpoints`、`parallel_execution`、`human_gate_decisions`、`cr_tracking`、`decision_briefs`、`discussion_checkpoints`、`history`。
+5. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`pending_gate`、`pending_checklist_path`、`active_delegation_ref`、`active_question_batch_ref`、`agent_dispatch_ref`、`checkpoint_ledger_ref`、`gate_decisions_ref`、`cr_tracking_ref`、`cr_ledger_ref`、`workflow_health_ref`、`decision_briefs` 和 `discussion_checkpoints`。
 6. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 7. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。
-8. 若 `agent_lifecycle.platform_capabilities.subagent_dispatch` 缺失，必须先补齐并将 `available=false`、`method=unverified` 写入状态；能力未探测前，不得把需要功能 Agent 的任务标记为 `completed`。
-9. 若 `orchestrator_session` 缺失，必须先按模板补齐并写入 `history`；补齐动作只表示状态结构升级，不表示允许重复启动 `host-orchestrator`。
-10. 若用户启动正式工作流且未显式禁用自动调度，`orchestrator_session.subagent_auto_dispatch` 默认为 `enabled`；该授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
+8. 若 `platform_capabilities_ref` 或 `agent_dispatch_ref` 缺失，必须写入轻量 ref 并把能力探测结果追加到 `process/state/AGENT-DISPATCH-LEDGER.ndjson` 或平台能力摘要；能力未探测前，不得把需要功能 Agent 的任务标记为 `completed`。
+9. 若发现 legacy `orchestrator_session`，必须迁移为当前 scalar 字段和 dispatch / handoff ledger ref；迁移动作只表示状态结构升级，不表示允许重复启动 `host-orchestrator`。
+10. 若用户启动正式工作流且未显式禁用自动调度，`subagent_auto_dispatch` 默认为 `enabled`；该授权只覆盖真实子 agent 调度，不覆盖 inline fallback。
 11. 若 `discussion_checkpoints` 缺失，必须按模板补齐 CP2 / CP3 discussion log 和 checkpoint 路径；补齐路径不代表讨论已完成。
 12. 若 `delegated_interaction` 缺失，必须按模板补齐，默认 `status=none`；补齐不代表已经委托成功。
-13. 若 `parallel_execution.lld_clarification_queue` 缺失，必须按模板补齐，默认 `status=idle`、`items=[]`；补齐不代表问题已收敛。
-14. 若 `human_gate_decisions` 缺失，必须按模板补齐，默认 `status=idle`、`pending_human_decisions=[]`；补齐不代表当前没有待决策项，发起人工门禁前仍必须从正式产物重新聚合。
-15. 若 `cr_tracking` 缺失，必须按模板补齐，默认 `status=not-indexed`、`active_crs=[]`、`blocked_crs=[]`、`follow_up_candidates=[]`、`spike_candidates=[]`、`stale_status_conflicts=[]`；补齐不代表当前没有后续候选 CR，状态查询前仍必须读取台账和正式 CR 文件。
+13. 若 LLD clarification queue ref 缺失，必须写入 `active_question_batch_ref` 或 `process/state/QUESTION-LEDGER.ndjson` ref；补齐不代表问题已收敛。
+14. 若 gate 决策 ref 缺失，必须写入 `gate_decisions_ref=process/state/GATE-LEDGER.ndjson`；补齐不代表当前没有待决策项，发起人工门禁前仍必须从正式产物重新聚合 Decision Brief。
+15. 若 CR tracking ref 缺失，必须写入 `cr_tracking_ref=process/changes/CR-INDEX.yaml` 和 `cr_ledger_ref=process/state/CR-LEDGER.ndjson`；补齐不代表当前没有后续候选 CR，状态查询前仍必须读取台账和正式 CR 文件。
 16. 若 `context_budget` 缺失，必须按模板补齐，默认 `require_capsule_first=true`；补齐不代表 capsule 已生成。CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前必须检查对应 `process/context/*-CONTEXT.yaml` 的存在性、状态和 `read_profile`。
 17. 若 `workflow_health` 缺失，必须按模板补齐，默认 `status=healthy` 和计数器为 0；每次推进、回退、重试、用户问题重复、CP 失败或 Story 回修时刷新对应计数器。
 
@@ -177,10 +177,10 @@ state-router 每次推进前必须刷新 `workflow_health`：
 | `solution-design` | 阶段委托已交还，CP3 自动预检通过且 `process/checkpoints/CP3-HLD-REVIEW.md` 人工结论为 `approved`；`docs/design/BLUEPRINT.md`、`docs/design/DOMAIN-MAP.md`、`docs/design/DEPENDENCY-MAP.md` 已生成并被 HLD 消费，`docs/design/ARCHITECTURE-DECISION.md` 的核心 ADR 已确认，或 CP3 自动检查逐项写明 `N/A` / `WAIVED` 原因 | `story-planning` | `meta-se` |
 | `story-planning` | `docs/design/FEATURE-DESIGN-MATRIX.md` 已生成，required Feature 设计已生成或 waived，CP4 自动预检通过，`lld_clarification_queue` 无未回答阻断项，全部目标 Story 的完整 LLD / 技术说明 / waived 证据通过 CP5 自动预检且 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` 人工结论为 `approved` | `story-execution` | `meta-dev` |
 | `story-execution` | 全部目标 Story 均通过 CP6、CP7，并到达 `verified` 或 `verified-with-risk`，且 CP6 包含实现执行证据路径 / N/A 原因，CP6/CP7 包含 Agent Dispatch Evidence；CP7 通过 `verification-execution` 产出 `docs/quality/VERIFICATION-REPORT.md` 或等价摘要，包含验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划和合法阶段决策；`TEST-MATRIX.md` 可追溯到 `VERIFICATION-REPORT.md` / `TEST-REPORT.md` / `REVIEW.md`，或 CP7 写明 `N/A` / `WAIVED` 原因 | `documentation` | `meta-dev` / `meta-qa` / `meta-doc` |
-| `documentation` | CP8 自动预检通过且 `process/checkpoints/CP8-DELIVERY-READINESS.md` 人工结论为 `approved`；`process/release/RELEASE-CONTEXT.yaml` 已生成且 `release_artifact_profile=minimal|compact|full`、`release_decision=READY|READY_WITH_RISK`；`NOT_READY` 不得发起人工终验；`RELEASED` / `FAILED` 只能在独立真实发布授权后写入；`docs/release/RELEASE-NOTES.md`、`docs/release/DEPLOY-CHECKLIST.md`、`docs/release/ROLLBACK.md`、`docs/release/MIGRATION.md`、`docs/release/FEEDBACK.md` 已按 profile 生成或 CP8 写明 `N/A` / `WAIVED` 原因；CP8 后续事项已按关闭范围 / 不授权范围 / 风险接受项 / 后续 CR 候选项 / 取消或 deferred 项分流，必要时 `human_gate_decisions.follow_up_tracking_path` 可读 | `delivered` | `host-orchestrator` |
+| `documentation` | CP8 自动预检通过且 `process/checkpoints/CP8-DELIVERY-READINESS.md` 人工结论为 `approved`；`process/release/RELEASE-CONTEXT.yaml` 已生成且 `release_artifact_profile=minimal|compact|full`、`release_decision=READY|READY_WITH_RISK`；`NOT_READY` 不得发起人工终验；`RELEASED` / `FAILED` 只能在独立真实发布授权后写入；`docs/release/RELEASE-NOTES.md`、`docs/release/DEPLOY-CHECKLIST.md`、`docs/release/ROLLBACK.md`、`docs/release/MIGRATION.md`、`docs/release/FEEDBACK.md` 已按 profile 生成或 CP8 写明 `N/A` / `WAIVED` 原因；CP8 后续事项已按关闭范围 / 不授权范围 / 风险接受项 / 后续 CR 候选项 / 取消或 deferred 项分流，必要时 `follow_up_tracking_path` 可读 | `delivered` | `host-orchestrator` |
 | `delivered` | 只读归档 | — | — |
 
-推进时只允许读取检查点结果文件和 `STATE.md.checkpoints` 的同步状态；若两者冲突，以检查点结果文件为准，并把冲突写入 `history`。
+推进时只允许读取检查点结果文件和 `process/checks/CP*.result.json` 与 `process/state/CHECKPOINT-LEDGER.ndjson` 的同步状态；若两者冲突，以检查点结果文件为准，并把冲突写入 `history`。
 
 ### 2.1 阶段委托交互检查
 
@@ -196,13 +196,13 @@ state-router 每次推进前必须刷新 `workflow_health`：
 
 ### 2.2 当前状态 / CR 盘点查询
 
-当用户询问“当前状态”“还有哪些 CR 需要推进”“建议如何推进”“待跟踪 CR”等问题时，state-router 不得只返回 `STATE.md.active_change` 或唯一 `status=active` 的正式 CR；必须生成 CR 盘点视图：
+当用户询问“当前状态”“还有哪些 CR 需要推进”“建议如何推进”“待跟踪 CR”等问题时，state-router 不得只返回 `STATE.current.json.active_change` 或唯一 `status=active` 的正式 CR；必须生成 CR 盘点视图：
 
-1. 读取 `process/STATE.md.active_change`、`STATE.md.orchestrator_session.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）、全部 `process/changes/CR-*.md` 正式 CR 和全部 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md` 台账。
+1. 读取 `process/state/STATE.current.json.active_change`、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml`（若存在）、全部 `process/changes/CR-*.md` 正式 CR 和全部 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md` 台账。
 2. 若存在 `meta-flow check cr-tracking`，运行或要求运行该脚本检查 `--project-root .`；若无法运行，必须在回答中说明跳过原因。
 3. 输出必须固定分为五类：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。
 4. `candidate` / `spike_candidate` 是 backlog，不占执行锁，但必须在“还有哪些 CR 需要推进”回答中列出标题、优先级、阻塞前置、下一步和不授权边界。
-5. 若 `STATE.md.active_change` 指向已关闭 CR，或与正式 `status=active` 的 CR 不一致，必须先列为 `stale_status_conflicts`；不得因为状态冲突而隐藏 follow-up 台账候选项。
+5. 若 `STATE.current.json.active_change` 指向已关闭 CR，或与正式 `status=active` 的 CR 不一致，必须先列为 `stale_status_conflicts`；不得因为状态冲突而隐藏 follow-up 台账候选项。
 6. 若存在独立 active CR（例如未占用 follow-up 候选编号的临时 CR），必须要求其在台账或 `CR-INDEX.yaml` 中建立 `related_active_cr`、`blocked_by`、`superseded_by` 或等价关系，否则列为同步缺口。
 7. 推进建议必须先收敛 active / blocked 正式 CR，再说明哪些 candidate 可启动、哪些必须等待前置 CR、哪些只适合 Spike。
 
@@ -216,10 +216,10 @@ state-router 每次推进前必须刷新 `workflow_health`：
 
 当用户请求从 follow-up tracking 台账启动候选 CR 时，state-router 必须先做冲突预检，再允许 `change-impact-analysis` 创建正式 CR：
 
-1. 读取台账路径、候选编号、`STATE.md.active_change`、`STATE.md.cr_tracking`、`process/changes/CR-INDEX.yaml`（若存在）和所有未关闭 `process/changes/CR-*.md`。
+1. 读取台账路径、候选编号、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml`（若存在）和所有未关闭 `process/changes/CR-*.md`。
 2. `candidate` / `spike_candidate` 不占执行锁；`active` / `blocked` 的正式 CR 视为未完成。
 3. 比较受影响正式文档、Story / LLD 批次、文件 owner、外部接口、权限 / 安全边界、运行授权、风险接受项和来源决策 ID。
-4. 若无重叠，允许创建正式 CR，并把台账状态和 `cr_tracking` / `CR-INDEX.yaml` 改为 `active`。
+4. 若无重叠，允许创建正式 CR，并把台账状态、`CR-INDEX.yaml|json` 和 `CR-LEDGER.ndjson` 改为 `active`。
 5. 若存在重叠，返回 `blocked` 下一步，不得静默并行推进；host-orchestrator 必须发起人工决策，选项包括合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded`。
 
 ### 4. 回写状态
@@ -249,18 +249,18 @@ CP2 / CP3 / CP5 / CP8 人工检查点文件缺失、未填“人工审查结果�
 
 CP2 推进前必须确认 `discussion_checkpoints.cp2_scenario_discussion` 指向的 log / checkpoint 已存在，或 CP2 自动检查明确写明 N/A / blocked 原因；同时确认 `SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md` 的存在性或逐项 N/A / WAIVED 证据。CP3 推进前同理检查 `discussion_checkpoints.cp3_hld_discussion`，并确认蓝图适用性判定、`BLUEPRINT.md` / `DOMAIN-MAP.md` / `DEPENDENCY-MAP.md` 的存在性或逐项 N/A / WAIVED 证据；核心 ADR 必须在 CP3 Decision Brief 中以关键决策项形式确认，包含推荐、备选、优劣、影响 / 风险和回退 / 切换条件；不得只看 `HLD.md confirmed=true`。
 
-CP2 / CP3 / CP5 / CP8 发起前必须额外确认 `human_gate_decisions`：
+CP2 / CP3 / CP5 / CP8 发起前必须额外确认 Decision Brief 与 gate ledger：
 
 - 所有 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类事项已分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。
-- `decision-item` 均已写入 `pending_human_decisions[]`，并含 `id/gate/decision_type/question/recommendation/alternatives/pros_cons/impact_risk/rollback_switch/status/source`。
+- `decision-item` 均已写入本轮 checkpoint Decision Brief，并通过 `GATE-LEDGER.ndjson` 或 gate launch event 记录 `id/gate/decision_type/question/recommendation/alternatives/pros_cons/impact_risk/rollback_switch/status/source`。
 - `decision_collection_coverage[]` 已记录本轮 gate 的来源扫描覆盖，包含每个适用来源的 `source_type/source_path/scan_status/candidate_count/included_decision_count/classification_or_na_reason`。
-- 本轮 `pending_human_decisions[]` 与 `process/checkpoints/CP*.md` 的 Decision Brief 决策表一致；若不一致，不得把 `orchestrator_session.status` 置为 `awaiting-user`。
+- 本轮发起消息、`pending_decision_ids` 与 `process/checkpoints/CP*.md` 的 Decision Brief 决策表一致；若不一致，不得把当前 gate 状态置为 `awaiting-user`。
 - 门禁消息草稿通过 `meta-flow check human-gate --checkpoint <process/checkpoints/CP*.md> --launch-message-file <path>` 校验后，才能发起人工确认。
 - 若用户修订了范围、安全、运行授权或风险接受含义，必须把相关 DQ 退回 `open`，重新生成 Decision Brief 和发起消息。
 
 ### 5. Story 并行调度队列
 
-story-planning 和 story-execution 阶段必须维护 `parallel_execution`。标准开发时，`lld_design_batch` 必须覆盖全部目标 Story，但每个 Story 的设计证据按 `lld_policy.required_level` 分为 `full-lld`、`technical-note`、`waived`，并在 story-planning 内完成全量 CP5 确认；CR 触发时，`lld_design_batch` 默认等于 CR 影响范围内全部受影响 Story。Wave 只用于进入 story-execution 后的开发/验证调度。
+story-planning 和 story-execution 阶段必须维护并行执行上下文或 queue ref。标准开发时，`lld_design_batch` 必须覆盖全部目标 Story，但每个 Story 的设计证据按 `lld_policy.required_level` 分为 `full-lld`、`technical-note`、`waived`，并在 story-planning 内完成全量 CP5 确认；CR 触发时，`lld_design_batch` 默认等于 CR 影响范围内全部受影响 Story。Wave 只用于进入 story-execution 后的开发/验证调度。
 
 1. `lld_design_batch`：本轮必须先完成设计证据的 Story 集合；标准开发使用 `batch_id=all-stories`、`source=all-stories` 并列出全部目标 Story，CR 使用 `source=change` 并列出全部受影响 Story；每项必须含 `story_id`、`design_evidence_type=full-lld|technical-note|waived`、`evidence_path`、`lld_policy_required_level`。
 2. `lld_ready`：全量设计证据批次内 Story 边界稳定、HLD/ADR/FEATURE-DESIGN-MATRIX 已确认、Feature 设计输入满足且没有 design_evidence_confirmed=true。
@@ -294,18 +294,18 @@ CP5 发起前必须额外检查 `lld_clarification_queue`：
 
 ### 6. Agent 生命周期登记
 
-Codex 多 agent 模式下，state-router 必须维护 `agent_lifecycle.active_agents`。该列表只登记功能子 agent，不登记 Host Orchestrator 主进程：
+Codex 多 agent 模式下，state-router 必须维护 `AGENT-DISPATCH-LEDGER.ndjson` 和 handoff dispatch 证据。active agent 视图只登记功能子 agent，不登记 Host Orchestrator 主进程：
 
 1. 新 agent 启动前，按 `role + workflow_id + change_id + story_id + wave_id` 精确查找可复用线程；批次级确认按 `role + workflow_id + change_id + batch_id` 追踪。
 2. 命中可复用线程时返回 resume / send_input 建议，不允许重复 spawn。
 3. 关键人工检查点通过、Story LLD 确认完成、实现交接验证、验证报告交付或文档终验完成后，标记对应功能子 agent 线程 `status=closing` 并提示 Host Orchestrator close。
-4. `active_agents[]` 中不得出现 `host-orchestrator` 或 `host-orchestrator`；发现时必须标记为 legacy/stale 并迁出，不得继续当作可调度功能 agent。
-5. `active_agents` 失活或用户手动关闭时，必须在 `history` 记录重建原因，不能静默生成新线程。
-6. 若旧 `STATE.md` 缺少 `agent_lifecycle`，必须先按模板补齐结构；补齐本身不代表允许新建编排子 agent。
+4. active agent 视图中不得出现 `host-orchestrator`；发现时必须标记为 legacy/stale 并迁出到 archive 或 dispatch ledger，不得继续当作可调度功能 agent。
+5. active agent 失活或用户手动关闭时，必须在 dispatch ledger 记录重建原因，不能静默生成新线程。
+6. 若旧 `STATE.md` 存在 `agent_lifecycle`，必须迁移为 `AGENT-DISPATCH-LEDGER.ndjson` 与 `platform_capabilities_ref`；迁移本身不代表允许新建编排子 agent。
 7. Codex 工具面暴露 `spawn_agent` / `resume_agent` / `send_input` 时，必须将 `platform_capabilities.subagent_dispatch.available=true`、`method=codex-tools` 写入 `STATE.md`；若工具面不可用，必须写 `available=false`、`method=unavailable`、`limitation` 并阻断需要功能 Agent 的任务。
-8. `orchestrator_session.subagent_auto_dispatch=enabled` 且 `subagent_dispatch.available=true` 时，创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具；不得只写 handoff 后继续由 Host Orchestrator 代做。
-9. Codex 动态思考 profile 只能改变实际 `codex_agent_name`，不能改变 canonical `role`；`active_agents[].role` 仍写 `meta-dev` / `meta-se` / `meta-qa`。
-10. `STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch.required_tools` 必须列出 `spawn_agent` / `resume_agent` / `send_input`；`STATE.md.agent_lifecycle.codex_reasoning_profiles` 必须保存 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 的默认 / 升级映射。
+8. `subagent_auto_dispatch=enabled` 且 `subagent_dispatch.available=true` 时，创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具；不得只写 handoff 后继续由 Host Orchestrator 代做。
+9. Codex 动态思考 profile 只能改变实际 `codex_agent_name`，不能改变 canonical `role`；dispatch event 的 `role` 仍写 `meta-dev` / `meta-se` / `meta-qa`。
+10. ``process/state/AGENT-DISPATCH-LEDGER.ndjson` platform capability event.required_tools` 必须列出 `spawn_agent` / `resume_agent` / `send_input`；`process/state/AGENT-DISPATCH-LEDGER.ndjson codex_reasoning_profiles event` 必须保存 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 的默认 / 升级映射。
 
 ### 6.0 Codex 动态思考 Profile 调度
 
@@ -317,7 +317,7 @@ Codex 下按下表选择实际 custom agent；Claude Code / OpenClaw 暂不应�
 | `meta-se` | `meta-se` | `default` | 架构冻结、公共 contract、跨模块边界、安全权限、外部接口、长期维护成本或重大 ADR 决策 | `meta-se-critical` | `critical` |
 | `meta-qa` | `meta-qa` | `default` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、安全 / 安装 / 平台路径 / workflow harness 高风险验证 | `meta-qa-critical` | `critical` |
 
-调度记录必须同时写入 `STATE.md.agent_lifecycle.active_agents[]` 与 handoff `dispatch`：
+调度记录必须同时写入 `process/state/AGENT-DISPATCH-LEDGER.ndjson` dispatch events 与 handoff `dispatch`：
 
 - `role` / `canonical_role`：状态机角色，不随 profile 改名
 - `codex_agent_name`：实际调用的 Codex custom agent
@@ -329,7 +329,7 @@ Codex 下按下表选择实际 custom agent；Claude Code / OpenClaw 暂不应�
 
 ### 6.1 Orchestrator Session 登记
 
-Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得写入 `active_agents[]`。
+Host Orchestrator 主进程会话只保留当前 scalar/ref，不得写入 active agent dispatch 视图。
 
 | 字段 | 说明 |
 |---|---|
@@ -343,7 +343,7 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 | `pending_checklist_path` | 已提示给用户的人工审查稿路径 |
 | `pending_user_decision` | 允许的用户输入与当前等待事项，例如 `approve`、`修改: ...`、`reject`；`1/通过`、`2/修改: ...`、`3/不通过` 仅作历史兼容别名 |
 | `next_exact_prompt` | 阶段任务、检查点、Story 实现 / 验证或 CR 收敛完成后给用户的可复制下一步准确提示词；不得只写“同意”“继续”“可以”等模糊词 |
-| `pending_decision_ids` | 本轮发起消息中实际展示给用户的 DQ ID；必须与 Decision Brief 和 `human_gate_decisions.pending_human_decisions[]` 一致 |
+| `pending_decision_ids` | 本轮发起消息中实际展示给用户的 DQ ID；必须与 Decision Brief 和 `GATE-LEDGER.ndjson` gate event 一致 |
 | `pending_non_authorized_items` | 本轮 approve 不代表授权的事项，尤其是真实运行、凭据、外部接口、数据写入、publish、live / 交易类操作 |
 | `resume_instruction` | 用户回复后由同一主进程继续读取 `STATE.md`、回填 checkpoint 并推进；不得 spawn 编排子 agent |
 | `subagent_auto_dispatch` | `enabled` / `disabled`；同工作流真实子 agent 调度授权状态 |
@@ -357,11 +357,11 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 1. 发起 CP2 / CP3 / CP5 / CP8 关键人工检查点时，必须将 `status=awaiting-user`，并写入 `pending_gate`、`pending_checklist_path`、`pending_user_decision`、`next_exact_prompt`、`pending_decision_ids`、`pending_non_authorized_items`、`resume_instruction` 和 `awaiting_since`。Codex 可用 `meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --format codex-json` 生成 `request_user_input` 负载；不可用时发送 exact-text fallback。
 2. 用户确认、修改或拒绝后，Host Orchestrator 必须在当前主进程中重新读取 `STATE.md` 和相关检查点，回填人工结果并继续；不得使用 `spawn_agent` / `resume_agent` / `send_input` 启动或恢复编排子 agent。
 3. 回填人工结果、关闭 CR、推进阶段或推进 `delivered` 前，必须重新读取 `STATE.md`、对应 `process/checks/CP*.md`、`process/checkpoints/CP*.md`、活跃 `CR-*.md` 和下游输出，并把结果写入 `history`。
-4. 若发现旧 `host-orchestrator` 编排子 agent 状态，必须迁移为 `orchestrator_session.kind=host`，将旧 agent 标识写入 `previous_agent_id` / `previous_thread_id`，并在 `history` 记录迁移原因。
+4. 若发现旧 `host-orchestrator` 编排子 agent 状态，必须迁移为 host scalar/ref，将旧 agent 标识写入 archive 或 dispatch ledger，并记录迁移原因。
 5. 若同时发现多个活跃的 legacy 编排子 agent 记录，必须阻断推进，要求人工选择保留的状态来源并关闭 / 标记其余记录为 `superseded`。
 6. 若 CR 模板的自动终验授权字段有效，且 CP8 自动预检 `PASS`、无 `BLOCKING` / `REQUIRED`，允许将人工结果写为 `approved` 并标注 `approval_source=user-preauthorized`；否则仍按默认人工确认处理。
 
-`active_agents[]` 中每条记录必须使用以下字段。平台没有提供的字段可以为空，但 `completed` 状态必须满足证据规则。
+dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段。平台没有提供的字段可以为空，但 `completed` 状态必须满足证据规则。
 
 | 字段 | 说明 |
 |---|---|
@@ -386,7 +386,7 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 1. `status=completed` 且 `evidence` 为 `spawn_agent` / `resume_agent` / `send_input` / `platform-task` 时，`agent_id` 或 `thread_id` 必须非空，`tool_name` 必须非空，`completed_at` 必须非空。
 2. `status=completed` 且 `evidence=user-approved-inline-fallback` 时，必须存在 `fallback_reason`，并在对应 handoff 的 `dispatch.mode` 中写明 `inline-fallback`。
 3. 只有 `handoff_path` 或 `to_agent`，但缺少上述证据时，只能标记为 `handoff-created`、`blocked` 或 `unavailable`，不得标记为 `completed`。
-4. CP6 / CP7 推进前必须交叉检查 `STATE.md.agent_lifecycle.active_agents` 与对应 handoff frontmatter；任一方缺失证据时，检查点必须失败。
+4. CP6 / CP7 推进前必须交叉检查 `process/state/AGENT-DISPATCH-LEDGER.ndjson` dispatch events 与对应 handoff frontmatter；任一方缺失证据时，检查点必须失败。
 
 ## 输出文件 / 输出模板
 
@@ -414,7 +414,7 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 - [ ] `STATE.md` 的阶段与下一步动作与实际产物状态一致
 - [ ] 初始化前已完成 process 路由健康检查；外置模式下 `process` 是指向 `<artifact-root>/process/<project_name>` 的健康软链接
 - [ ] 初始化时结构与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致，且 `artifact_routing` 与 `.meta-flow-process.yaml` 一致
-- [ ] `STATE.md.checkpoints` 与 `process/checks/CP*.md`、`process/checkpoints/CP*.md` 的结论一致
+- [ ] `process/checks/CP*.result.json` 与 `process/state/CHECKPOINT-LEDGER.ndjson` 与 `process/checks/CP*.md`、`process/checkpoints/CP*.md` 的结论一致
 - [ ] 推进 / 回退操作均追加 `history`
 - [ ] 同一任务同角色不会重复登记活动 agent，检查点完成后有关闭动作
 - [ ] `lld_ready` / `dev_ready` / `verify_ready` 的每个 Story 均能解释依赖和文件所有权依据
@@ -426,7 +426,7 @@ Host Orchestrator 主进程会话必须登记在 `orchestrator_session`，不得
 - [ ] `lld_clarification_queue` 无未回答阻断项时才允许进入 CP5
 - [ ] 阻塞状态下返回明确阻塞原因
 - [ ] 状态查询必须列出 active formal CR、blocked formal CR、follow-up candidate、spike_candidate 和 stale_status_conflicts
-- [ ] `meta-flow check cr-tracking` 能识别 `STATE.md.active_change` 指向已关闭 CR、多个 active CR、台账候选与正式 CR 文件不同步等问题
+- [ ] `meta-flow check cr-tracking` 能识别 `STATE.current.json.active_change` 指向已关闭 CR、多个 active CR、台账候选与正式 CR 文件不同步等问题
 
 ## 不适用边界
 

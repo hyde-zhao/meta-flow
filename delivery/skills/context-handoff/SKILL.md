@@ -27,7 +27,7 @@ status: active
 - [ ] 若本 skill 需要写入任何 `process/*` 文件，必须先确认 Host Orchestrator 已完成 process route health check；未确认时先交还 Host Orchestrator 执行 `meta-flow workspace check`，不得自行创建、修复或重建 `process`。
 - [ ] 目标 Agent 已明确
 - [ ] `process/` 下相关输入文档已生成
-- [ ] `process/state/STATE.current.json`、`process/state/AGENT-DISPATCH-LEDGER.ndjson` 或 legacy `process/STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch` 已完成探测或明确标记为 unavailable
+- [ ] `process/state/STATE.current.json`、`process/state/AGENT-DISPATCH-LEDGER.ndjson` 或 legacy `process/state/AGENT-DISPATCH-LEDGER.ndjson` platform capability event 已完成探测或明确标记为 unavailable
 - [ ] 若当前阶段已进入 CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后，必须存在对应 `process/context/*-CONTEXT.yaml`，或在 handoff 中写明缺失 / waived 理由
 
 ## 必须读取的输入
@@ -49,13 +49,13 @@ status: active
 ## 执行步骤
 
 1. 识别目标 Agent 的职责边界。
-2. 读取 `STATE.current.json.active_context_ref`、read policy 和当前阶段 / Story packet，定位 capsule 路径、`allowed_reads` 和 `read_profile`；legacy 项目缺少 state v2 时才读取 `STATE.md.context_budget`。
+2. 读取 `STATE.current.json.active_context_ref`、read policy 和当前阶段 / Story packet，定位 capsule 路径、`allowed_reads` 和 `read_profile`；legacy 项目缺少 state v2 时才读取 `process/policies/READ-POLICY.json and context pack refs`。
 3. 优先装配 `process/context/*-CONTEXT.yaml`、`.context.json` 或 Story packet；若 capsule 缺失、冲突或字段不足，写入 `context_policy.full_doc_read_reason`，再选择必要正式对象。
 4. 选择该 Agent 完成当前任务所需的最小文件集合，并按 `allowed_reads`、`must_read`、`read_if_needed`、`do_not_read_by_default` 分类。
 5. 显式列出不应加载的历史草稿、中间推理、完整 transcript、无关 Story / Wave 和无关产物。
 6. 若存在活跃变更单或当前 Story，补入对应上下文。
 7. Codex 下默认 `fork_context=false`，只发送本 Skill 产出的上下文包；不得传递完整会话历史，只有并行收益明确且经 host-orchestrator 记录理由时，才允许 fork。
-8. 输出子 agent 复用键：`role + workflow_id + change_id + story_id + wave_id`，供 host-orchestrator 查询 `AGENT-DISPATCH-LEDGER` 或 legacy `STATE.md.agent_lifecycle.active_agents`。
+8. 输出子 agent 复用键：`role + workflow_id + change_id + story_id + wave_id`，供 host-orchestrator 查询 `AGENT-DISPATCH-LEDGER` 或 legacy `process/state/AGENT-DISPATCH-LEDGER.ndjson` dispatch events。
 9. 输出 handoff frontmatter 的 `semantic` 与 `dispatch` 区，并追加 `HANDOFF-LEDGER` 事件；handoff 文件不得自行声明目标 agent 已完成，除非已有平台调度证据。
 10. 读取平台能力摘要，输出本次 handoff 的 `question_permission`。若用户提问能力未验证、不可用或仅支持 relay，不得让目标子 agent 假设能直接使用 `ask_user` / `request_user_input`。
 
@@ -67,7 +67,7 @@ status: active
 | `delegated-user-interaction` | `meta-pm` 的需求澄清阶段、`meta-se` 的 HLD 设计阶段 | 平台支持时由目标 Agent 直接向用户提问；不支持时经 host-orchestrator relay | 目标 Agent 写 `return_summary_path`，host-orchestrator 回收后发起 CP2 / CP3 |
 | `lld-clarification-broker` | 多个 meta-dev 并行 LLD 写作时收集实现灰区 | meta-dev 不直接并发问用户；host-orchestrator 作为 question broker 统一提问 | host-orchestrator 写回 `lld_clarification_queue.items[].answer` 并分发给对应 meta-dev |
 
-当 `semantic=delegated-user-interaction` 时，handoff 必须引用 `STATE.current.json` / ledger 中的委托状态字段来源；legacy 项目可同步写入 `STATE.md.delegated_interaction`。当 `semantic=lld-clarification-broker` 时，handoff 必须引用 `process/state/QUESTION-LEDGER.ndjson` 或 legacy `STATE.md.parallel_execution.lld_clarification_queue` 和当前 `active_question_batch`。
+当 `semantic=delegated-user-interaction` 时，handoff 必须引用 `STATE.current.json` / ledger 中的委托状态字段来源；legacy 项目可同步写入 `handoff/context delegated_interaction ref or STATE.current.json.active_delegation_ref`。当 `semantic=lld-clarification-broker` 时，handoff 必须引用 `process/state/QUESTION-LEDGER.ndjson` 或 legacy `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref 和当前 `active_question_batch`。
 
 ## Handoff Dispatch Frontmatter 与 Agent Dispatch Evidence
 
@@ -139,7 +139,7 @@ context_policy:
 - `can_ask_user=true` 只表示允许提出本阶段澄清问题，不表示允许发起正式人工门禁或运行授权。
 - `structured_choice_allowed=true` 只能在当前平台工具面明确支持结构化选择时填写；Codex 下对应 `request_user_input` 可用性，未提供时必须使用 exact-text 或 relay。
 - `mode=relay-via-host-orchestrator` 时，目标 Agent 写出问题、推荐方案、备选方案、影响面和阻塞状态，由 host-orchestrator 代为询问并回填答案。
-- `mode=queue-only` 主要用于并行 LLD；meta-dev 只能写入 `process/state/QUESTION-LEDGER.ndjson` 或 legacy `STATE.md.parallel_execution.lld_clarification_queue.items[]`。
+- `mode=queue-only` 主要用于并行 LLD；meta-dev 只能写入 `process/state/QUESTION-LEDGER.ndjson` 或 legacy `process/state/QUESTION-LEDGER.ndjson entries`。
 - `context_policy.capsule_first=true` 表示目标 Agent 必须先读 capsule；若 `full_doc_read_reason` 为空，不得默认读取完整上游正式文档。
 
 完成判定：
@@ -156,14 +156,14 @@ context_policy:
 
 - 只加载正式对象，不加载其他 Agent 的历史推理过程
 - 已有阶段 capsule 时，handoff 的默认输入必须是 capsule；不得把完整正式对象列表直接塞给目标 Agent
-- 读取全文档必须记录 `full_doc_read_reason`，并回写 context / packet `read_expansion_log`、`process/state/READ-EXPANSION-LEDGER.ndjson` 或 legacy `STATE.md.context_budget.read_expansion_log[]`
+- 读取全文档必须记录 `full_doc_read_reason`，并回写 context / packet `read_expansion_log`、`process/state/READ-EXPANSION-LEDGER.ndjson` 或 legacy `process/state/READ-EXPANSION-LEDGER.ndjson`
 - 活跃 `CR-*`、当前 Story 与当前阶段状态必须优先纳入
 - 只使用当前工作区路径（`docs/`、`process/`、`process/checkpoints/`、`delivery/`）
 - 不得把完整对话、全量 `process/stories/`、历史失败轮次或无关 HLD 批量传给子 agent
 - 不得把 `ask_user` 当成总是可用的工具；它只是语义动作，必须按 `platform_capabilities.user_question` 映射到 direct、relay、queue 或 exact-text
 - production 项目交付前必须携带 `delivery_routing` 决策；未确认输出路径时，下游不得写交付件
 - handoff 文件只是调度输入和审计载体；不得用 handoff 文档代替 `spawn_agent` / `resume_agent` / `send_input` 或平台 Task/Subagent 调用
-- Codex 若 `STATE.md.agent_lifecycle.platform_capabilities.subagent_dispatch.available=true` 且 `orchestrator_session.subagent_auto_dispatch=enabled`，创建 `mode=subagent` handoff 后必须立即调用 `spawn_agent`、`resume_agent` 或 `send_input`；未调用前只能标记为 `handoff-created` 或 `spawn-requested`，不得进入 `running/completed`
+- Codex 若 ``process/state/AGENT-DISPATCH-LEDGER.ndjson` platform capability event.available=true` 且 `orchestrator_session.subagent_auto_dispatch=enabled`，创建 `mode=subagent` handoff 后必须立即调用 `spawn_agent`、`resume_agent` 或 `send_input`；未调用前只能标记为 `handoff-created` 或 `spawn-requested`，不得进入 `running/completed`
 - Codex 若当前工具面没有 `spawn_agent` / `resume_agent` / `send_input`，必须把 `subagent_dispatch.available=false`、`method=unavailable`、`limitation` 写入 `STATE.md` 和 handoff，并阻断下游任务；只有用户明确批准后才允许 `inline-fallback`
 
 ## 验收标准
@@ -174,8 +174,8 @@ context_policy:
 - [ ] 不包含无关阶段草稿或历史失败轮次
 - [ ] 活跃变更与当前 Story 上下文已纳入
 - [ ] Codex 子 agent 上下文包包含复用键和明确的关闭时机
-- [ ] 阶段委托 handoff 能对应 `STATE.current.json` / ledger 或 legacy `STATE.md.delegated_interaction`
-- [ ] LLD clarification broker handoff 能对应 `QUESTION-LEDGER` 或 legacy `STATE.md.parallel_execution.lld_clarification_queue`
+- [ ] 阶段委托 handoff 能对应 `STATE.current.json` / ledger 或 legacy `handoff/context delegated_interaction ref or STATE.current.json.active_delegation_ref`
+- [ ] LLD clarification broker handoff 能对应 `QUESTION-LEDGER` 或 legacy `process/state/QUESTION-LEDGER.ndjson` 或 CP5 context queue ref
 - [ ] handoff frontmatter 含 `dispatch` 区，且能区分子 agent 执行、仅交接、用户批准的 inline fallback
 - [ ] handoff frontmatter 含 `question_permission` 区，且能区分 direct、relay-via-host-orchestrator、queue-only 和 none
 

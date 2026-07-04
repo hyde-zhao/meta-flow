@@ -51,7 +51,7 @@ status: active
 - `docs/design/ARCHITECTURE-DECISION.md`
 - `docs/design/FEATURE-DESIGN-MATRIX.md`
 - `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`（如适用）
-- `process/STATE.md.parallel_execution`
+- `process/state/QUESTION-LEDGER.ndjson`
 - 当前源码、Prompt / Skill、模板、脚本、测试、guardrail 和文档现状
 - `delivery/doc/PLATFORM-CONTRACTS.yaml`（涉及平台路径、安装器或 agent / skill 安装时）
 - 最新 CP7 / FIXES / REVIEW（验证失败回修时）
