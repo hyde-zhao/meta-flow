@@ -38,8 +38,9 @@
    - Ledger 事件：`process/state/CHECKPOINT-LEDGER.ndjson`
    - Failure route：`route_on_fail` 必须使用 `process/policies/FAILURE-ROUTING.json` 中的动作式枚举
    - Waiver record：`WAIVED` item 必须提供 result `waivers[]` 中可解析的 scope / expiry / approval_ref / forces_release_status，并符合 `process/policies/WAIVER-POLICY.json`
-5. 当前状态只保存轻量字段、refs、计数和 blocker ID；不得把 CR 长字段、Story LLD、测试日志、review 全文或 policy 全文写入 current state。
-6. 不可豁免项不得通过 waiver 绕过，包括未授权 runtime access、credential / secret exposure、missing dispatch evidence、runtime-high-risk forbidden path、missing read expansion log、missing evidence 和 false runtime-ready capability claim。
+5. 同一 CR 的 CP 不以内联章节作为真相源。CR 正文只能维护 `Checkpoint Index`，记录 CP 状态摘要和 `process/checks/CP*.result.json`、`process/checkpoints/CP*.md`、context、ledger refs；不得复制 CP result、Decision Brief、review 全文或历史 checkpoint 详情。
+6. 当前状态只保存轻量字段、refs、计数和 blocker ID；不得把 CR 长字段、Story LLD、测试日志、review 全文或 policy 全文写入 current state。
+7. 不可豁免项不得通过 waiver 绕过，包括未授权 runtime access、credential / secret exposure、missing dispatch evidence、runtime-high-risk forbidden path、missing read expansion log、missing evidence 和 false runtime-ready capability claim。
 
 ## Current State Write Contract
 
@@ -80,7 +81,7 @@
 - `context-handoff` 只传 context / packet 引用和读取策略，不传长文档集合。
 - `state-router` 优先读取 `STATE.current.json`、`process/current/CURRENT.json`、ledgers、context pack 和 CP result；`STATE.md` 仅作 human summary / legacy fallback。
 - `checkpoint-manager` 优先消费 CP result JSON、evidence index、ledger 和 context refs；Markdown 只作为摘要或人工门禁入口。
-- `change-impact-analysis` 优先写 CR ledger / summary / index；关闭 CR 后不得继续把全文放入 active state。
+- `change-impact-analysis` 优先写 CR ledger / summary / index；CR 文档只维护 Checkpoint Index、状态摘要和 ref，关闭 CR 后不得继续把全文放入 active state。
 - `review-artifact-protocol`、`release-readiness` 和质量类 Skill 只输出 findings / release / evidence 摘要和引用。
 
 ## Acceptance
@@ -89,4 +90,5 @@
 - 关键 Skill 不再要求默认读取巨型 `process/STATE.md`。
 - 所有默认读取集合都能表达 `allowed_reads` 和 `do_not_read_by_default`。
 - `process/current/CURRENT.json` 能在 active 和 idle 状态下指向 current context / checkpoint / story / release / handoff 入口，并接受 `CR-INDEX.json` 优先、`CR-INDEX.yaml` fallback。
+- CR 模板包含 `Checkpoint Index`，并声明自动 CP 真相源是 `process/checks/CP*.result.json`、人工门禁真相源是 `process/checkpoints/CP*.md`。
 - 需要全文读取时必须能落到允许枚举和日志位置。

@@ -55,6 +55,8 @@ status: active
 
 `process/checks/` 属于运行态检查证据；`process/checkpoints/` 属于人工确认态文件。人工审查时，host-orchestrator 必须在用户提示中给出具体 `process/checkpoints/...` 路径。CP4 不再生成独立人工审查稿；其自动预检摘要必须写入 CP5 人工审查稿。
 
+同一 CR 的 CP 不以内联章节作为真相源。CR 文档只能维护 `Checkpoint Index`、状态摘要和 ref；自动 CP 真相源是 `process/checks/CP*.result.json`，人工门禁真相源是 `process/checkpoints/CP*.md`，事件真相源是 `process/state/CHECKPOINT-LEDGER.ndjson` / `process/state/GATE-LEDGER.ndjson`。checkpoint-manager 不得把 CP result、Decision Brief、review 全文或历史 checkpoint 详情复制进 CR 正文。
+
 所有 `process/*` 检查点路径都必须先经过 process 路由健康检查。外置模式下，CP0 前必须存在 `<project-root>/process -> <artifact-root>/process/<project-name>` 软链接、`process/.meta-flow-process.yaml` 和与之匹配的 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`；路由记录必须使用锚点 + 相对路径，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。缺失、断链、项目名不匹配或路由冲突时，检查点结论只能是 `BLOCKED`。
 
 ## 结果状态

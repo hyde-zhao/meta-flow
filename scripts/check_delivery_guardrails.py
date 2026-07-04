@@ -157,6 +157,11 @@ GOVERNANCE_LIFECYCLE_TOKEN_TARGETS = {
         "product-scope",
         "architecture",
         "runtime-high-risk",
+        "Checkpoint Index",
+        "process/checks/CP*.result.json",
+        "process/checkpoints/CP*.md",
+        "CHECKPOINT-LEDGER.ndjson",
+        "GATE-LEDGER.ndjson",
     ),
     "delivery/README.md": (
         "Governance Truth Map",
@@ -448,6 +453,9 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/returns/*.return.json",
         "process/evidence/*.index.json",
         "process/checks/*.result.json",
+        "Checkpoint Index",
+        "process/checkpoints/CP*.md",
+        "不得复制 CP result",
     ),
     "delivery/rules/DIRECTORY-CONTRACT.md": (
         "Current Discovery",
@@ -555,6 +563,9 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/state/STATE.current.json",
         "CR-LEDGER",
         "CR summary",
+        "Checkpoint Index",
+        "process/checks/CP*.result.json",
+        "process/checkpoints/CP*.md",
     ),
     "delivery/skills/checkpoint-manager/SKILL.md": (
         "delivery/rules/AGENT-SKILL-CONTRACT.md",
@@ -562,6 +573,8 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "Evidence Index",
         "Story Return Packet",
         "full_doc_read_reason",
+        "Checkpoint Index",
+        "不得把 CP result",
     ),
     "delivery/skills/review-artifact-protocol/SKILL.md": (
         "delivery/rules/AGENT-SKILL-CONTRACT.md",
@@ -582,6 +595,7 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/state/STATE.current.json",
         "process/current/CURRENT.json",
         "do_not_read_by_default",
+        "Checkpoint Index",
     ),
     "README.md": (
         "Agent / Skill",
@@ -590,6 +604,7 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/state/STATE.current.json",
         "process/current/CURRENT.json",
         "do_not_read_by_default",
+        "Checkpoint Index",
     ),
     "AGENTS.md": (
         "Agent / Skill Contract Slimming",
@@ -598,6 +613,7 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/state/STATE.current.json",
         "process/current/CURRENT.json",
         "allowed_reads",
+        "CR Checkpoint Index",
     ),
     "delivery/rules/AGENTS.md": (
         "Agent / Skill Contract Slimming",
@@ -606,6 +622,7 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/state/STATE.current.json",
         "process/current/CURRENT.json",
         "allowed_reads",
+        "CR Checkpoint Index",
     ),
     "delivery/rules/CLAUDE.md": (
         "Agent / Skill Contract Slimming",
@@ -614,6 +631,7 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/state/STATE.current.json",
         "process/current/CURRENT.json",
         "allowed_reads",
+        "CR Checkpoint Index",
     ),
 }
 SOFTWARE_WORKFLOW_TOKEN_TARGETS = {

@@ -403,6 +403,8 @@ meta-flow check cr-tracking --project-root .
 
 正式 CR 使用 `process/changes/CR-*.md` 作为完整审计记录，`process/changes/summaries/CR-*.summary.json` 和 `process/changes/CR-INDEX.json` 作为默认机器入口。CR 的状态和关闭证据必须进入 `process/state/CR-LEDGER.ndjson`，检查点结果必须进入 `process/state/CHECKPOINT-LEDGER.ndjson`。关闭或恢复历史 CR 后，运行：
 
+同一 CR 的 CP 不以内联章节作为真相源。CR 文档只维护 `Checkpoint Index`、状态摘要和 ref；自动 CP 真相源是 `process/checks/CP*.result.json`，人工门禁真相源是 `process/checkpoints/CP*.md`，事件真相源是 `CHECKPOINT-LEDGER.ndjson` / `GATE-LEDGER.ndjson`。不得把 CP result、Decision Brief、review 全文或历史 checkpoint 详情复制进 CR 正文；关闭 CR 后只保留 status + ref 指针。
+
 ```bash
 meta-flow cr summary --id CR-036 --project-root .
 meta-flow cr index --project-root .

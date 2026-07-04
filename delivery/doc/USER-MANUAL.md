@@ -254,6 +254,8 @@ Meta Flow 生成的文档默认分为三类：
 
 CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后会生成 `process/context/*-CONTEXT.yaml` 阶段上下文胶囊。它不替代正式文档，也不需要用户手工维护；作用是让下游 Agent 先读取摘要、证据路径、决策项、风险和不授权项，只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档，从而减少 token 消耗。
 
+同一 CR 的 CP 不以内联章节作为真相源。`process/changes/CR-*.md` 只维护 `Checkpoint Index`、状态摘要和 ref；自动 CP 真相源是 `process/checks/CP*.result.json`，人工门禁真相源是 `process/checkpoints/CP*.md`，事件真相源是 `CHECKPOINT-LEDGER.ndjson` / `GATE-LEDGER.ndjson`。如果需要看完整 CP 详情，应打开 index 中的 ref，而不是要求 CR 正文复制 CP result、Decision Brief 或 review 全文。
+
 | CP | 名称 | 类型 | 文件 |
 |----|------|------|------|
 | CP0 | 原始请求受理门 | 自动 | `process/checks/CP0-REQUEST-INTAKE.md` |

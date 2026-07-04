@@ -118,6 +118,24 @@ routing_design_ref: ""
 | `release` | 发布、安装、迁移、回滚、交付收敛 | `standard-code` / `runtime-high-risk` |
 | `experiment` | 受控探索，不承诺交付 | `process-lite` |
 
+## Checkpoint Index
+
+> 本节只维护同一 CR 下 CP0-CP8 的状态摘要和 ref，不以内联章节作为检查点真相源。
+> 自动 CP 的机器真相源必须是 `process/checks/CP*.result.json`；人工门禁 CP 的完整审查稿必须是 `process/checkpoints/CP*.md`；状态事件必须进入 `process/state/CHECKPOINT-LEDGER.ndjson` 或 `process/state/GATE-LEDGER.ndjson`。
+> 不得把 CP result、Decision Brief、review 全文或历史 checkpoint 详情复制进 CR 正文。关闭 CR 后，本节仅保留 status + ref 指针。
+
+| CP | 状态 | 机器结果 ref | 人工门禁 ref | Context ref | Ledger event ref | 摘要 |
+|---|---|---|---|---|---|---|
+| CP0 | pending / pass / fail / blocked / waived | `process/checks/CP0-*.result.json` | N/A | `process/context/CP0-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
+| CP1 | pending / pass / fail / blocked / waived | `process/checks/CP1-*.result.json` | N/A | `process/context/CP1-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
+| CP2 | pending / approved / rejected / blocked / waived | `process/checks/CP2-*.result.json` | `process/checkpoints/CP2-*.md` | `process/context/CP2-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
+| CP3 | pending / approved / rejected / blocked / waived | `process/checks/CP3-*.result.json` | `process/checkpoints/CP3-*.md` | `process/context/CP3-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
+| CP4 | pending / pass / fail / blocked / waived | `process/checks/CP4-*.result.json` | N/A | `process/context/CP4-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` | 汇入 CP5 |
+| CP5 | pending / approved / rejected / blocked / waived | `process/checks/CP5-*.result.json` | `process/checkpoints/CP5-*.md` | `process/context/CP5-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
+| CP6 | pending / pass / fail / blocked / waived | `process/checks/CP6-*.result.json` | N/A | `process/context/stories/*.CP6.work-packet.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
+| CP7 | pending / pass / pass_with_risk / fail / blocked / waived | `process/checks/CP7-*.result.json` | N/A | `process/context/stories/*.CP7.verify-packet.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
+| CP8 | pending / ready / ready_with_risk / not_ready / released / failed | `process/checks/CP8-*.result.json` | `process/checkpoints/CP8-*.md` | `process/context/CP8-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
+
 ## 结构化权限策略
 
 > 默认不授权真实运行、凭据读取、NAS 访问、publish 或交易写入。任何下游任务、脚本、测试或 runbook 要求超出本策略时，必须阻断并转入 `runtime-authorization` CR 或重新发起人工门禁。

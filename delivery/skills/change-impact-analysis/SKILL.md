@@ -14,6 +14,7 @@ status: active
 受理变更请求，创建标准化 `CR-*.md` 或 fast-lane 轻量变更记录，执行五维度影响分析，判定 `rollback_to`、审批要求与是否需要从 `fast-lane` 升级到 `standard`，并同步更新当前工作流状态。CR 关闭或 CP8 终验时若产生后续事项，维护 follow-up tracking 台账和 CR 跟踪索引；只有用户决定推进某一候选项时，才从台账转为正式 CR 文件。
 
 本 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`：CR 长文只承载本次变更决策，默认上下文读取 CR summary / ledger；关闭 CR 后不得继续污染 active state。
+同一 CR 的 CP 不以内联章节作为真相源；正式 CR 只维护 `Checkpoint Index`、状态摘要和 ref。自动 CP 真相源是 `process/checks/CP*.result.json`，人工门禁真相源是 `process/checkpoints/CP*.md`，事件真相源是 `process/state/CHECKPOINT-LEDGER.ndjson` / `process/state/GATE-LEDGER.ndjson`。
 
 ## 适用场景
 
@@ -92,6 +93,7 @@ status: active
 - `impact_level`、`rollback_to`、审批结论必须显式落地
 - fast-lane 只允许低风险轻量实现；命中升级条件时必须切回 `standard`
 - CR 必须统一复用 `skills/change-impact-analysis/templates/CR-TEMPLATE.md` 口径
+- CR 文档必须包含 `Checkpoint Index`，且该 index 只写 CP 状态摘要和 ref；不得把 CP result、Decision Brief、review 全文或历史 checkpoint 详情复制进 CR 正文
 - 后续 CR 候选只能先进入 follow-up tracking 台账，机器状态优先使用 `lifecycle_status` / `readiness_status` / `gate_status`；legacy `status` 只作为兼容摘要，取值为 `candidate`、`active`、`blocked`、`spike_candidate`、`converted-to-spike`、`closed`、`cancelled`、`superseded`
 - 台账不得承载长需求正文；正式 CR 创建后，台账只保留索引，不重复详细内容
 - `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml|json` 或 legacy `process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson` 必须能机器读取 active / blocked / candidate / spike_candidate / stale_status_conflicts，不能只依赖 Markdown 正文归纳
@@ -104,6 +106,7 @@ status: active
 ## 验收标准
 
 - [ ] `CR-*.md` frontmatter 完整
+- [ ] `CR-*.md` 包含 `Checkpoint Index`，并且 CP 详情只以 `process/checks/CP*.result.json`、`process/checkpoints/CP*.md`、context 和 ledger refs 表达
 - [ ] 五个维度均有明确结论
 - [ ] 每个受影响正式文档均填写文档处理决策
 - [ ] 原文档更新已说明旧基线保留方式，并要求目标文档包含 `## 修订记录`
