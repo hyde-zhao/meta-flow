@@ -174,7 +174,19 @@ meta-flow context check --context process/context/CP0-CR001.context.json --proje
 meta-flow check cp-result --result process/checks/CP0-CR-001-BOOTSTRAP.result.json --project-root .
 ```
 
-`workspace bootstrap` 会建立外置 `process` 路由、`STATE.current.json`、`STATE.md` 人类摘要和基础 ledgers。`identity scan` 只读扫描 `PACKAGE-IDENTITY.yaml`、`pyproject.toml`、README 和 docs 交付约定，不自动写 production 交付路由。`doctor adoption` 只聚合 readiness，不写文件；`cr bootstrap` 只写 `process/` 内的 active CR、summary/index/ledger、CP0 result/summary 和 CP0 context。
+`workspace bootstrap` 会建立外置 `process` 路由、`STATE.current.json`、`STATE.md` 人类摘要、`process/current/CURRENT.json` 当前入口发现层和基础 ledgers。`identity scan` 只读扫描 `PACKAGE-IDENTITY.yaml`、`pyproject.toml`、README 和 docs 交付约定，不自动写 production 交付路由。`doctor adoption` 只聚合 readiness，不写文件；`cr bootstrap` 只写 `process/` 内的 active CR、summary/index/ledger、CP0 result/summary 和 CP0 context。
+
+`STATE.current.json` 是轻量机器状态，不是历史数据库；关闭 CR 的长字段、历史 checkpoint、human gate 决策、source refs、last actions 和 workflow health 详情应进入 ledger、summary、checkpoint 或 `process/archive/state/<timestamp>/`。如果旧项目的 `STATE.current.json` 已经膨胀，可先审计再应用 slim：
+
+```bash
+meta-flow state slim --project-root . --dry-run
+meta-flow state slim --project-root . --apply
+meta-flow state render --project-root . --force
+meta-flow state current-refresh --project-root .
+meta-flow state check --project-root . --mode enforce
+```
+
+`process/current/CURRENT.json` 会表达 `idle`、`active`、`awaiting_gate` 或 `blocked`，并指向当前 `state_ref`、`cr_index_ref`、`context_ref`、`checkpoint_ref`、`story_packet_ref`、`release_context_ref` 和 `handoff_ref`。空闲期会显示 `status: "idle"`；这表示当前没有活跃 CR，Agent 应优先读取最新 release context、handoff 和 CR index，而不是误把已关闭 CR 的上下文当成活跃工作。
 
 上述流程不授权 credentials、runtime、SaaS、production write、trading、publish 或 CR-033 runtime follow-up。正式编号使用 `CR-xxx`；`MF-xxx` 仅作为历史别名。
 
@@ -218,6 +230,12 @@ Meta Flow 生成的文档默认分为三类：
 | 人工确认态 | `process/checkpoints/` | `process/checkpoints/CP2-REQUIREMENTS-BASELINE.md`、`process/checkpoints/CP3-HLD-REVIEW.md`、`process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`、`process/checkpoints/CP8-DELIVERY-READINESS.md` |
 
 旧项目中已经存在的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流在无目标项目约定时默认写入 `docs/...` 和 `process/checkpoints/...`。production 项目如果已有交付目录或 README/docs 约定，优先按目标项目约定输出。
+
+`process/` 下的目录按热 / 温 / 冷分区读取，完整 contract 见 `delivery/rules/DIRECTORY-CONTRACT.md` / `.yaml`：
+
+- 热区：`process/state/STATE.current.json`、`process/current/CURRENT.json`、当前 context capsule 或 Story packet。只有被 context / packet 列入 `must_read` 或 `allowed_reads` 时才默认读取。
+- 温区：`process/checks/*.result.json`、`process/checkpoints/CP*.md`、`process/changes/summaries/*.summary.json`、`process/evidence/*.index.json`、当前 release context。默认通过 context / packet 列表读取，避免扫全量目录。
+- 冷区：`process/archive/**`、历史 discussion log、legacy 长状态和历史长计划。默认进入 `do_not_read_by_default`；确需读取时必须有 `full_doc_read_reason`，并通过 `process/state/READ-EXPANSION-LEDGER.ndjson` 记录。
 
 ### 6.1 标准推进顺序
 
