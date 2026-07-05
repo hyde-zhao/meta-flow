@@ -6,6 +6,16 @@ lifecycle_status: "active"
 readiness_status: "not_ready"
 gate_status: "cp2_pending"
 gate_profile: "full"
+route_plan_ref: ""
+cr_trait_uses_existing_evidence_only: false
+cr_trait_has_new_design: false
+cr_trait_has_new_implementation: false
+cr_trait_has_new_verification: ""
+cr_trait_requires_architecture_review: false
+cr_trait_requires_story_decomposition: false
+cr_trait_requires_subagent_dispatch: false
+cr_trait_verification_waiver_reason: ""
+cr_trait_verification_waiver_ref: ""
 status: "open" # legacy compatibility; prefer lifecycle_status/readiness_status/gate_status
 impact_level: "low|medium|high"
 workflow_mode_before: "standard|fast-lane"
@@ -28,7 +38,7 @@ owner: ""
 revisit_condition: ""
 acceptance_criteria: ""
 close_condition: ""
-cr_index_path: "process/changes/CR-INDEX.yaml"
+cr_index_path: "process/changes/CR-INDEX.json"
 current_requirement_baseline_path: "process/baseline/CURRENT-REQUIREMENT-BASELINE.yaml"
 historical_baseline_status: "active"
 reframed_by: []
@@ -104,6 +114,7 @@ routing_design_ref: ""
 | 就绪状态 | `readiness_status` |
 | 门禁状态 | `gate_status` |
 | 门禁模板 | `gate_profile` |
+| Route plan | `route_plan_ref` |
 
 | CR 类型 | 用途 | 默认门禁模板 |
 |---|---|---|
@@ -118,6 +129,26 @@ routing_design_ref: ""
 | `release` | 发布、安装、迁移、回滚、交付收敛 | `standard-code` / `runtime-high-risk` |
 | `experiment` | 受控探索，不承诺交付 | `process-lite` |
 
+### CR Trait 与实际路由
+
+> CP0 必须从 `cr_type`、`cr_trait_*` 和 `gate_profile` 生成 `route_plan`。`gate_profile` 表达治理强度和默认最大路径；`route_plan.stages[]` 是本 CR 的实际执行路径。`CPx-lite` 只表示 `mode=lite`，不得写入 CP result 的 `checkpoint` 字段。
+
+| trait 字段 | 值 | 路由含义 |
+|---|---|---|
+| uses existing evidence only | `cr_trait_uses_existing_evidence_only` | 为 true 时 CP3 / CP4 / CP5 / CP6 / CP7 全部 `N/A`；CP2 仍按 scope / authz 风险决定是否人工确认 |
+| has new design | `cr_trait_has_new_design` | 为 true 时 CP3 / CP4 / CP5 适用 |
+| has new implementation | `cr_trait_has_new_implementation` | 为 true 时 CP6 适用，并默认推导 CP7 适用 |
+| has new verification | `cr_trait_has_new_verification` | 空值表示由 route_plan 自动推导；显式 false 且有 waiver reason 时 CP7 可 `WAIVED` |
+| requires architecture review | `cr_trait_requires_architecture_review` | 为 true 时 CP3 必须 `mode=standard` 且 `human_gate=required` |
+| requires story decomposition | `cr_trait_requires_story_decomposition` | 为 true 时 CP4 / CP5 适用，CP3 至少 `lite` |
+| requires subagent dispatch | `cr_trait_requires_subagent_dispatch` | 为 true 时必须有真实子 agent 调度证据，或经批准 inline-fallback |
+| verification waiver reason/ref | `cr_trait_verification_waiver_reason` / `cr_trait_verification_waiver_ref` | 仅用于 CP7 适用但显式豁免的场景，不得替代 N/A |
+
+```bash
+meta-flow route plan --cr-type <cr_type> --gate-profile <gate_profile> --cr-trait '{"uses_existing_evidence_only": true}'
+meta-flow route plan --from-cr process/changes/CR-XXX.md --output process/checks/CP0-CRXXX.route-plan.json --project-root .
+```
+
 ## Checkpoint Index
 
 > 本节只维护同一 CR 下 CP0-CP8 的状态摘要和 ref，不以内联章节作为检查点真相源。
@@ -126,14 +157,14 @@ routing_design_ref: ""
 
 | CP | 状态 | 机器结果 ref | 人工门禁 ref | Context ref | Ledger event ref | 摘要 |
 |---|---|---|---|---|---|---|
-| CP0 | pending / pass / fail / blocked / waived | `process/checks/CP0-*.result.json` | N/A | `process/context/CP0-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
-| CP1 | pending / pass / fail / blocked / waived | `process/checks/CP1-*.result.json` | N/A | `process/context/CP1-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
-| CP2 | pending / approved / rejected / blocked / waived | `process/checks/CP2-*.result.json` | `process/checkpoints/CP2-*.md` | `process/context/CP2-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
-| CP3 | pending / approved / rejected / blocked / waived | `process/checks/CP3-*.result.json` | `process/checkpoints/CP3-*.md` | `process/context/CP3-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
-| CP4 | pending / pass / fail / blocked / waived | `process/checks/CP4-*.result.json` | N/A | `process/context/CP4-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` | 汇入 CP5 |
-| CP5 | pending / approved / rejected / blocked / waived | `process/checks/CP5-*.result.json` | `process/checkpoints/CP5-*.md` | `process/context/CP5-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
-| CP6 | pending / pass / fail / blocked / waived | `process/checks/CP6-*.result.json` | N/A | `process/context/stories/*.CP6.work-packet.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
-| CP7 | pending / pass / pass_with_risk / fail / blocked / waived | `process/checks/CP7-*.result.json` | N/A | `process/context/stories/*.CP7.verify-packet.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
+| CP0 | pending / pass / fail / blocked / n/a / waived | `process/checks/CP0-*.result.json` | N/A | `process/context/CP0-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
+| CP1 | pending / pass / fail / blocked / n/a / waived | `process/checks/CP1-*.result.json` | N/A | `process/context/CP1-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
+| CP2 | pending / approved / rejected / blocked / n/a / waived | `process/checks/CP2-*.result.json` | `process/checkpoints/CP2-*.md` | `process/context/CP2-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
+| CP3 | pending / approved / rejected / blocked / n/a / waived | `process/checks/CP3-*.result.json` | `process/checkpoints/CP3-*.md` | `process/context/CP3-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
+| CP4 | pending / pass / fail / blocked / n/a / waived | `process/checks/CP4-*.result.json` | N/A | `process/context/CP4-*.context.json` | `process/state/CHECKPOINT-LEDGER.ndjson` | 汇入 CP5 |
+| CP5 | pending / approved / rejected / blocked / n/a / waived | `process/checks/CP5-*.result.json` | `process/checkpoints/CP5-*.md` | `process/context/CP5-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
+| CP6 | pending / pass / fail / blocked / n/a / waived | `process/checks/CP6-*.result.json` | N/A | `process/context/stories/*.CP6.work-packet.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
+| CP7 | pending / pass / pass_with_risk / fail / blocked / n/a / waived | `process/checks/CP7-*.result.json` | N/A | `process/context/stories/*.CP7.verify-packet.json` | `process/state/CHECKPOINT-LEDGER.ndjson` |  |
 | CP8 | pending / ready / ready_with_risk / not_ready / released / failed | `process/checks/CP8-*.result.json` | `process/checkpoints/CP8-*.md` | `process/context/CP8-*-CONTEXT.yaml` | `process/state/GATE-LEDGER.ndjson` |  |
 
 ## 结构化权限策略
@@ -276,11 +307,11 @@ authorization_policy:
 ## 后续事项台账
 
 > CP8 或 CR 收敛时若产生后续事项，只维护台账，不预创建尚未启动的正式 CR 文件。用户决定推进某一项后，再创建正式 CR，并把本节或独立台账中的状态改为 `active`。
-> 本节必须同步 `process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`，不能只写 Markdown 台账。
+> 本节必须同步 `process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson`，不能只写 Markdown 台账。`CR-INDEX.yaml` 仅作 legacy read-only fallback。
 
 - 是否存在后续事项：false
 - 台账路径：`process/changes/CR-{id}-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`
-- CR 索引路径：`process/changes/CR-INDEX.yaml`
+- CR 索引路径：`process/changes/CR-INDEX.json`
 - 一致性检查：`meta-flow check cr-tracking --project-root .`
 - 旧状态取值：`candidate` / `active` / `blocked` / `spike_candidate` / `converted-to-spike` / `closed` / `cancelled` / `superseded`
 - 新状态字段：`lifecycle_status` / `readiness_status` / `gate_status`

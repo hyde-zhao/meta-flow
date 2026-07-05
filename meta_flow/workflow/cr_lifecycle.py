@@ -12,14 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.design import feature_registry
-from meta_flow.policies import authz
+from meta_flow.policies import authz, route_plan
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import current
 
 
 CR_LEDGER_REL = Path("process/state/CR-LEDGER.ndjson")
 CR_INDEX_REL = Path("process/changes/CR-INDEX.json")
-LEGACY_CR_INDEX_REL = Path("process/changes/CR-INDEX.yaml")
 CR_SUMMARY_ROOT_REL = Path("process/changes/summaries")
 CR_ARCHIVE_ROOT_REL = Path("process/archive")
 IMPACT_SURFACE_RULES_REL = Path("process/project/IMPACT-SURFACE-RULES.yaml")
@@ -906,10 +905,13 @@ def build_index(project_root: Path) -> dict[str, Any]:
                 "cr_type": record.cr_type,
                 "title": record.title,
                 "status": record.status,
+                "lifecycle_status": record.status,
                 "readiness": record.readiness,
+                "readiness_status": record.readiness,
                 "gate_status": record.gate_status,
                 "gate_profile": record.gate_profile,
                 "full_ref": record.full_ref,
+                "formal_cr_path": record.full_ref,
                 "summary_ref": record.summary_ref if summary_path.is_file() else "",
                 "goal_ref": record.goal_ref,
                 "goal_statement": record.goal_statement,
@@ -946,49 +948,6 @@ def write_index(project_root: Path) -> Path:
     path = project_root / CR_INDEX_REL
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(build_index(project_root), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def write_legacy_index(project_root: Path) -> Path:
-    project_root = project_root.resolve()
-    index = build_index(project_root)
-    active = [item["id"] for item in index.get("items", []) if item.get("status") == "active"]
-    blocked = [item["id"] for item in index.get("items", []) if item.get("status") == "blocked"]
-    items = index.get("items", [])
-    lines = [
-        'schema_version: "1"',
-        f'generated_at: "{index.get("generated_at", now_utc())}"',
-        "active_crs: [" + ", ".join(f'"{item}"' for item in active) + "]",
-        "blocked_crs: [" + ", ".join(f'"{item}"' for item in blocked) + "]",
-        "follow_up_candidates: []",
-        "spike_candidates: []",
-        "stale_status_conflicts: []",
-        "items:",
-    ]
-    for item in items:
-        lines.extend(
-            [
-                f'  - id: "{item.get("id")}"',
-                f'    status: "{item.get("status")}"',
-                f'    lifecycle_status: "{item.get("status")}"',
-                f'    readiness_status: "{item.get("readiness")}"',
-                f'    gate_status: "{item.get("gate_status")}"',
-                f'    gate_profile: "{item.get("gate_profile")}"',
-                f'    goal_ref: "{item.get("goal_ref", "")}"',
-                f'    approval_focus: "{item.get("approval_focus", "")}"',
-                f'    decision_burden: "{item.get("decision_burden", "")}"',
-                f'    product_baseline_refresh_required: "{str(item.get("product_baseline_refresh_required", False)).lower()}"',
-                f'    required_phase: "{item.get("required_phase", "")}"',
-                f'    required_agent: "{item.get("required_agent", "")}"',
-                f'    required_gate: "{item.get("required_gate", "")}"',
-                f'    block_story_decomposition_until: "{item.get("block_story_decomposition_until", "")}"',
-                f'    formal_cr_path: "{item.get("full_ref")}"',
-                f'    summary_ref: "{item.get("summary_ref")}"',
-            ]
-        )
-    path = project_root / LEGACY_CR_INDEX_REL
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 
@@ -1141,7 +1100,6 @@ def bootstrap_cr(
     summary_path = write_summary(project_root, cr_id, summary)
     evidence_path = write_evidence_index(project_root, cr_id, summary)
     index_path = write_index(project_root)
-    legacy_index_path = write_legacy_index(project_root)
     context, context_path = builder.build_context_pack(
         project_root,
         stage="CP0",
@@ -1180,7 +1138,6 @@ def bootstrap_cr(
         "summary": summary_path,
         "evidence_index": evidence_path,
         "index": index_path,
-        "legacy_index": legacy_index_path,
         "context": context_path,
         "cp0_result": cp0_result_path,
         "cp0_summary": cp0_summary_path,
@@ -1269,7 +1226,14 @@ def collect_check_errors(project_root: Path) -> list[str]:
             errors.append(f"CR index item {item_id}: invalid cr_type {cr_type}")
     for cr_id, path in discover_formal_crs(project_root).items():
         text = path.read_text(encoding="utf-8")
+        frontmatter_fields = parse_frontmatter(text)
         record = record_from_cr_file(project_root, path)
+        has_route_contract = bool(frontmatter_fields.get("route_plan_ref")) or any(
+            str(key).startswith("cr_trait_") for key in frontmatter_fields
+        )
+        if record.status not in FINISHED_STATUSES and has_route_contract:
+            route_errors, _route_warnings = route_plan.validate_route_plan_for_cr(project_root, path)
+            errors.extend(route_errors)
         blockers, _needs_review = collect_scope_authz_findings(record, text=text)
         for blocker in blockers:
             capabilities = ", ".join(blocker.get("required_capabilities") or [])
@@ -1286,7 +1250,14 @@ def collect_check_warnings(project_root: Path) -> list[str]:
     project_root = project_root.resolve()
     warnings: list[str] = []
     for cr_id, path in discover_formal_crs(project_root).items():
+        frontmatter_fields = parse_frontmatter(path.read_text(encoding="utf-8"))
         record = record_from_cr_file(project_root, path)
+        has_route_contract = bool(frontmatter_fields.get("route_plan_ref")) or any(
+            str(key).startswith("cr_trait_") for key in frontmatter_fields
+        )
+        if record.status not in FINISHED_STATUSES and has_route_contract:
+            _route_errors, route_warnings = route_plan.validate_route_plan_for_cr(project_root, path)
+            warnings.extend(route_warnings)
         for finding in collect_governance_dependency_findings(project_root, record):
             markers = ", ".join(finding.get("marker_overlap") or [])
             direct = ", ".join(finding.get("direct_overlap") or [])
@@ -1586,9 +1557,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "index":
         path = write_index(project_root)
-        legacy_path = write_legacy_index(project_root)
         print(f"wrote: {path}")
-        print(f"wrote: {legacy_path}")
         return 0
     if command == "summary":
         if not parsed.cr_id:

@@ -475,7 +475,7 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/current/CURRENT.json",
         "idle",
         "handoff_ref",
-        "CR-INDEX.json|process/changes/CR-INDEX.yaml",
+        "CR-INDEX.json",
         "zone_read_rules",
     ),
     "delivery/agents/meta-pm.md": (
@@ -646,14 +646,14 @@ SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
     "delivery/skills/README.md": ("scenario-expansion", "story-planning", "blueprint-design", "implementation-design", "implementation-execution", "verification-execution", "quality-review", "release-readiness", "process/checkpoints/CP*.md", "FEATURE-DESIGN-MATRIX.md", "lld_policy", "batch-lld", "Batch LLD", "STORY-*-IMPLEMENTATION.md", "VERIFICATION-REPORT.md"),
     "delivery/skills/blueprint-design/templates/BLUEPRINT-TEMPLATE.md": ("决策类型", "推荐 / 备选优劣", "runtime_authorization", "follow_up_tracking"),
     "delivery/skills/story-planning/templates/MVP-SCOPE-TEMPLATE.md": ("决策类型", "推荐 / 备选优劣", "runtime_authorization", "follow_up_tracking"),
-    "delivery/skills/story-planning/templates/BACKLOG-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.yaml", "CR-LEDGER.ndjson"),
-    "delivery/skills/release-readiness/SKILL.md": ("FEEDBACK.md", "follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.yaml", "CR-LEDGER.ndjson", "Release Context Capsule", "process/release/RELEASE-CONTEXT.yaml", "release_artifact_profile", "release_decision", "READY_WITH_RISK", "NOT_READY", "capsule-first", "fact_diff", "promise_ref", "decision_impact"),
+    "delivery/skills/story-planning/templates/BACKLOG-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.json", "CR-LEDGER.ndjson"),
+    "delivery/skills/release-readiness/SKILL.md": ("FEEDBACK.md", "follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.json", "CR-LEDGER.ndjson", "Release Context Capsule", "process/release/RELEASE-CONTEXT.yaml", "release_artifact_profile", "release_decision", "READY_WITH_RISK", "NOT_READY", "capsule-first", "fact_diff", "promise_ref", "decision_impact"),
     "delivery/skills/release-readiness/templates/RELEASE-CONTEXT-TEMPLATE.yaml": ("release_artifact_profile", "release_decision", "quality_summary", "fact_diff", "promised_count", "missing_required_count", "evidence_index_refs", "affected_surface", "install_validation_summary", "token_control"),
     "delivery/skills/release-readiness/templates/RELEASE-NOTES-TEMPLATE.md": ("版本号决策", "release_artifact_profile", "release_decision", "安装与升级", "CP8 Fact Diff", "Evidence Index", "回滚方式"),
     "delivery/skills/release-readiness/templates/DEPLOY-CHECKLIST-TEMPLATE.md": ("发布候选快照", "CP8 Fact Diff", "安装 / 升级 / 幂等验证矩阵", "release_decision", "fact_diff 结论", "不授权项"),
     "delivery/skills/release-readiness/templates/ROLLBACK-TEMPLATE.md": ("回滚目标版本", "CP8 fact_diff", "不可回滚项"),
     "delivery/skills/release-readiness/templates/MIGRATION-TEMPLATE.md": ("兼容性判断表", "CP8 fact_diff", "STATE.md", "Agent frontmatter", "Skill 输出格式", "命令参数"),
-    "delivery/skills/release-readiness/templates/FEEDBACK-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.yaml", "CR-LEDGER.ndjson", "CP8 fact_diff"),
+    "delivery/skills/release-readiness/templates/FEEDBACK-TEMPLATE.md": ("follow-up tracking", "CR-*-FOLLOW-UP-TRACKING", "CR-INDEX.json", "CR-LEDGER.ndjson", "CP8 fact_diff"),
     "delivery/skills/context-manifest-builder/templates/AUTHZ-POLICY-TEMPLATE.json": ("NO_REPOSITORY_PUBLICATION", "post_cr_repository_publication_authorization", "git push"),
     "meta_flow/checks/cp_result.py": ("fact_diff", "release_decision", "MISSING_REQUIRED_EVIDENCE", "decision_impact", "checker_provenance", "fallback_review_ref"),
     "meta_flow/policies/authz.py": ("NO_REPOSITORY_PUBLICATION", "REPOSITORY_PUBLICATION_ALLOWED", "repository_publication", "post_cr_repository_publication_authorization"),
@@ -1548,7 +1548,7 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
         output = result.stdout + result.stderr
         if result.returncode != 0:
             errors.append(f"CR tracking validator --help failed with exit {result.returncode}: {output.strip()}")
-        for token in ("STATE.active_change", "follow-up", "CR-INDEX.yaml", "--project-root"):
+        for token in ("STATE.active_change", "follow-up", "CR-INDEX.json", "--project-root"):
             if token not in output:
                 errors.append(f"CR tracking validator help missing token: {token}")
 
@@ -1563,11 +1563,11 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
     token_targets = {
         "state-router": (
             DELIVERY_ROOT / "skills" / "state-router" / "SKILL.md",
-            ("cr_tracking", "CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
+            ("cr_tracking", "CR-INDEX.json", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
         ),
         "state-template": (
             DELIVERY_ROOT / "skills" / "state-router" / "templates" / "STATE-TEMPLATE.md",
-            ("cr_tracking_ref", "follow_up_candidates_ref", "spike_candidates_ref", "stale_status_conflicts_ref", "CR-INDEX.yaml"),
+            ("cr_tracking_ref", "follow_up_candidates_ref", "spike_candidates_ref", "stale_status_conflicts_ref", "CR-INDEX.json"),
         ),
         "change-impact-analysis": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "SKILL.md",
@@ -1575,11 +1575,11 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
         ),
         "cr-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-TEMPLATE.md",
-            ("cr_index_path", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "meta-flow check cr-tracking"),
+            ("cr_index_path", "CR-LEDGER.ndjson", "CR-INDEX.json", "meta-flow check cr-tracking"),
         ),
         "follow-up-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "FOLLOW-UP-TRACKING-TEMPLATE.md",
-            ("cr_index_path", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "状态索引同步", "meta-flow check cr-tracking"),
+            ("cr_index_path", "CR-LEDGER.ndjson", "CR-INDEX.json", "状态索引同步", "meta-flow check cr-tracking"),
         ),
         "cr-index-template": (
             DELIVERY_ROOT / "skills" / "change-impact-analysis" / "templates" / "CR-INDEX-TEMPLATE.yaml",
@@ -1587,31 +1587,31 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
         ),
         "skills-readme": (
             DELIVERY_ROOT / "skills" / "README.md",
-            ("CR-LEDGER.ndjson", "CR-INDEX.yaml", "CR 跟踪一致性检查"),
+            ("CR-LEDGER.ndjson", "CR-INDEX.json", "CR 跟踪一致性检查"),
         ),
         "delivery-agents-rule": (
             DELIVERY_ROOT / "rules" / "AGENTS.md",
-            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "stale_status_conflicts"),
+            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.json", "stale_status_conflicts"),
         ),
         "delivery-claude-rule": (
             DELIVERY_ROOT / "rules" / "CLAUDE.md",
-            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "stale_status_conflicts"),
+            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.json", "stale_status_conflicts"),
         ),
         "root-agents-rule": (
             ROOT / "AGENTS.md",
-            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.yaml", "stale_status_conflicts"),
+            ("CR 跟踪状态查询", "CR-LEDGER.ndjson", "CR-INDEX.json", "stale_status_conflicts"),
         ),
         "readme": (
             ROOT / "README.md",
-            ("CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
+            ("CR-INDEX.json", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
         ),
         "delivery-readme": (
             DELIVERY_ROOT / "README.md",
-            ("CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
+            ("CR-INDEX.json", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
         ),
         "user-manual": (
             DELIVERY_ROOT / "doc" / "USER-MANUAL.md",
-            ("CR-INDEX.yaml", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
+            ("CR-INDEX.json", "meta-flow check cr-tracking", "active formal CR", "stale_status_conflicts"),
         ),
     }
     for label, (target, tokens) in token_targets.items():
@@ -1639,7 +1639,7 @@ def collect_requirement_intake_routing_errors() -> list[str]:
                 "affected_product_docs",
                 "affected_use_cases",
                 "routing_design_ref",
-                "write_legacy_index",
+                "CR_INDEX_REL",
             ),
         ),
         "cr-lifecycle-tests": (

@@ -272,6 +272,7 @@ def _print_help() -> None:
         "Commands:\n"
         "  install    Install Meta Flow assets into Claude Code, Codex, or OpenClaw.\n"
         "  uninstall  Uninstall Meta Flow assets recorded in INSTALL-MANIFEST.\n"
+        "  reinstall  Uninstall then install Meta Flow assets for the target platform.\n"
         "  check      Run packaged Meta Flow validators.\n"
         "  capability Validate capability status and docs claims.\n"
         "  concept    Validate concept ownership and overlap.\n"
@@ -284,6 +285,7 @@ def _print_help() -> None:
         "  feature    Manage Feature Registry and Story-to-Feature traceability.\n"
         "  failure    Validate failure routing policy and CP route_on_fail values.\n"
         "  gate       Classify and validate gate profiles.\n"
+        "  route      Derive CR-aware checkpoint route plans.\n"
         "  governance Validate source-of-truth and retention lifecycle policies.\n"
         "  identity   Validate product/package/import/CLI identity.\n"
         "  ledger     Plan or apply retention/archive compaction for NDJSON event ledgers.\n"
@@ -304,8 +306,9 @@ def _print_help() -> None:
         "  meta-flow install codex --scope user --component rules\n"
         "  meta-flow install claude --scope project --project-dir /path/to/repo\n"
         "  meta-flow uninstall codex --scope user\n"
+        "  meta-flow reinstall codex --scope user --component rules\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
-        "  meta-flow ask-user human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md --format codex-json\n"
+        "  meta-flow ask-user human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md --replay --format codex-json\n"
         "  meta-flow context build --stage CP6 --profile standard-code --cr CR-101 --project-root .\n"
         "  meta-flow context check --context process/context/CP6-CR101.context.json --project-root .\n"
         "  meta-flow context sufficiency-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json\n"
@@ -330,6 +333,7 @@ def _print_help() -> None:
         "  meta-flow check imports --project-root .\n"
         "  meta-flow check risk-rings --changed-files quant_lab/trading/order.py --project-root .\n"
         "  meta-flow gate classify --changed-files README.md\n"
+        "  meta-flow route plan --cr-type process --gate-profile process-lite --cr-trait '{\"uses_existing_evidence_only\": true}'\n"
         "  meta-flow governance truth-map-check --project-root .\n"
         "  meta-flow policy list --project-root .\n"
         "  meta-flow project scaffold --project-root .\n"
@@ -365,6 +369,55 @@ def _run_installer(command: str, args: list[str]) -> None:
         sys.argv = original_argv
 
 
+def _print_reinstall_help() -> None:
+    print(
+        "usage: meta-flow reinstall <platform> [options]\n\n"
+        "Uninstall then install Meta Flow assets for the target platform.\n"
+        "The uninstall phase receives only platform, --scope, --project-dir, --component, and --dry-run;\n"
+        "the install phase receives the full argument list.\n\n"
+        "Examples:\n"
+        "  meta-flow reinstall codex --scope user --component rules\n"
+        "  meta-flow reinstall claude --scope project --project-dir /path/to/repo\n"
+    )
+
+
+def _reinstall_uninstall_args(args: list[str]) -> list[str]:
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("platform_arg", nargs="?")
+    parser.add_argument("--platform", dest="platform_option", default="")
+    parser.add_argument("--scope", default="")
+    parser.add_argument("--project-dir", default="")
+    parser.add_argument("--component", default="")
+    parser.add_argument("--dry-run", action="store_true")
+    parsed, _unknown = parser.parse_known_args(args)
+    platform = parsed.platform_arg or parsed.platform_option
+    if not platform:
+        raise SystemExit("reinstall requires a target platform, for example `meta-flow reinstall codex`.")
+    uninstall_args = [platform]
+    if parsed.scope:
+        uninstall_args.extend(["--scope", parsed.scope])
+    if parsed.project_dir:
+        uninstall_args.extend(["--project-dir", parsed.project_dir])
+    if parsed.component:
+        uninstall_args.extend(["--component", parsed.component])
+    if parsed.dry_run:
+        uninstall_args.append("--dry-run")
+    return uninstall_args
+
+
+def _run_reinstaller(args: list[str]) -> None:
+    if not args or args[0] in {"-h", "--help"}:
+        _print_reinstall_help()
+        return
+    uninstall_args = _reinstall_uninstall_args(args)
+    print("Reinstall step 1/2: uninstall")
+    _run_installer("uninstall", uninstall_args)
+    print("Reinstall step 2/2: install")
+    _run_installer("install", args)
+
+
 def _print_check_help() -> None:
     print(
         "usage: meta-flow check <validator> [options]\n\n"
@@ -375,6 +428,7 @@ def _print_check_help() -> None:
         "  story-to-feature-trace Validate Story feature refs and LLD policy.\n\n"
         "  story-return          Validate Story Return Packet against Story context packet.\n"
         "  evidence-index        Validate Story Evidence Index.\n"
+        "  lld-structure         Validate LLD / technical-note / waived evidence structure.\n"
         "  design-delta          Validate Story design delta structure and write-back status.\n\n"
         "  cp-result             Validate CP result JSON machine truth source.\n"
         "  event-ledger          Validate NDJSON event ledger structure.\n"
@@ -398,6 +452,7 @@ def _print_check_help() -> None:
         "  meta-flow check story-to-feature-trace --project-root .\n"
         "  meta-flow check story-return --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
         "  meta-flow check evidence-index --index process/evidence/STORY-CR123-S01.CP6.index.json --project-root .\n"
+        "  meta-flow check lld-structure --lld process/stories/STORY-CR123-S01-LLD.md --project-root .\n"
         "  meta-flow check design-delta --delta process/design-deltas/STORY-CR123-S01.delta.json --project-root .\n"
         "  meta-flow check cp-result --result process/checks/CP6-STORY.result.json --project-root .\n"
         "  meta-flow check event-ledger --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint\n"
@@ -446,6 +501,10 @@ def _run_check(args: list[str]) -> None:
         from meta_flow.workflow import story_evidence
 
         raise SystemExit(story_evidence.main(["evidence-check", *forwarded]))
+    if validator == "lld-structure":
+        from meta_flow.workflow import story_evidence
+
+        raise SystemExit(story_evidence.main(["lld-check", *forwarded]))
     if validator == "design-delta":
         from meta_flow.workflow import story_evidence
 
@@ -509,7 +568,7 @@ def _run_check(args: list[str]) -> None:
     raise SystemExit(
         "未知检查器: "
         f"{validator}. 目前支持: human-gate, cr-tracking, design-ownership, story-to-feature-trace, "
-        "story-return, evidence-index, design-delta, cp-result, event-ledger, read-expansion, "
+        "story-return, evidence-index, lld-structure, design-delta, cp-result, event-ledger, read-expansion, "
         "failure-routing, waiver-policy, "
         "module-boundaries, imports, architecture-fitness, risk-rings, capability-claims, concept-overlap, "
         "package-identity, truth-map, retention-policy"
@@ -731,6 +790,12 @@ def _run_gate(args: list[str]) -> None:
     raise SystemExit(gate_profiles.main(args))
 
 
+def _run_route(args: list[str]) -> None:
+    from meta_flow.policies import route_plan
+
+    raise SystemExit(route_plan.main(args))
+
+
 def _run_failure(args: list[str]) -> None:
     from meta_flow.policies import failure_routing
 
@@ -818,6 +883,9 @@ def main() -> None:
     if command in {"install", "uninstall"}:
         _run_installer(command, args[1:])
         return
+    if command == "reinstall":
+        _run_reinstaller(args[1:])
+        return
     if command == "check":
         _run_check(args[1:])
         return
@@ -841,6 +909,9 @@ def main() -> None:
         return
     if command == "gate":
         _run_gate(args[1:])
+        return
+    if command == "route":
+        _run_route(args[1:])
         return
     if command == "governance":
         _run_governance(args[1:])
@@ -895,7 +966,7 @@ def main() -> None:
         return
     raise SystemExit(
         "未知命令: "
-        "install, uninstall, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, identity, ledger, "
+        "install, uninstall, reinstall, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, route, identity, ledger, "
         "governance, module, policy, project, quality, story, validation, waiver, ask-user, state, status, next, doctor"
     )
 if __name__ == "__main__":

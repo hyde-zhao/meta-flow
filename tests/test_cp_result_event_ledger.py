@@ -92,6 +92,20 @@ class CPResultEventLedgerTests(unittest.TestCase):
             self.assertEqual(0, exit_code)
             self.assertIn("CP Result Check: OK", stream.getvalue())
 
+    def test_cp_result_check_silent_mode_prints_single_pass_line(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                exit_code = cp_result.main(
+                    ["result-check", "--result", str(result), "--project-root", str(root), "--mode", "silent"]
+                )
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual("PASS", stream.getvalue().strip())
+
     def test_cp_result_rejects_pass_with_blocking_item(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -129,6 +143,68 @@ class CPResultEventLedgerTests(unittest.TestCase):
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
 
             self.assertEqual([], errors)
+
+    def test_na_cp6_result_does_not_require_story_dispatch_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload.update(
+                {
+                    "checkpoint": "CP6",
+                    "checkpoint_id": "CP6-CR123",
+                    "decision": "N/A",
+                    "story_id": "",
+                    "context_ref": "",
+                    "dispatch_refs": [],
+                    "evidence_ref": "",
+                    "not_applicable_reason": "route_plan marks CP6 N/A because this CR has no new implementation",
+                    "items": [
+                        {
+                            "id": "CP6-NA",
+                            "category": "route_plan",
+                            "name": "CP6 applicability",
+                            "status": "N/A",
+                            "severity": "INFO",
+                            "evidence_refs": [],
+                            "owner": "host-orchestrator",
+                            "route_on_fail": "",
+                            "waiver_ref": None,
+                            "notes": "No implementation stage applies.",
+                        }
+                    ],
+                    "next_route": "CP8",
+                }
+            )
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertEqual([], errors)
+
+    def test_na_cp_result_requires_applicability_reason_or_route_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload.update({"checkpoint": "CP3", "checkpoint_id": "CP3-CR123", "decision": "N/A"})
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertIn(
+                "decision=N/A requires not_applicable_reason, route_plan_ref, or checkpoint_applicability",
+                errors,
+            )
+
+    def test_waived_cp_result_requires_waiver_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload.update({"decision": "WAIVED", "waivers": []})
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
+
+            self.assertIn("decision=WAIVED requires waivers", errors)
 
     def test_cp2_commitments_required_evidence_schema_is_validated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -374,6 +450,151 @@ class CPResultEventLedgerTests(unittest.TestCase):
             self.assertTrue(ledger.is_file())
             self.assertEqual([], errors)
             self.assertEqual([], warnings)
+
+    def test_cp_result_consistency_rejects_missing_dispatch_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertIn("dispatch_refs require AGENT-DISPATCH-LEDGER entries: ADE-0001", errors)
+
+    def test_cp_result_consistency_accepts_dispatch_ref_in_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+            event = event_ledger.build_inline_fallback_event(
+                dispatch_id="ADE-0001",
+                canonical_role="meta-dev",
+                fallback_reason="fixture inline implementation",
+                approved_by="test",
+                cr_id="CR-123",
+                checkpoint="CP6",
+                result_ref="process/checks/CP6-STORY-CR123-S01.result.json",
+                created_at="2026-07-05T00:00:00+00:00",
+            )
+            event_ledger.append_dispatch_event(root, event)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertNotIn("dispatch_refs require AGENT-DISPATCH-LEDGER entries: ADE-0001", errors)
+            self.assertFalse(any("dispatch_refs missing" in error for error in errors))
+
+    def test_event_ledger_check_silent_mode_prints_single_pass_line(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_minimal_state(root)
+            result = write_cp6_result(root)
+            cp_result.render_summary_file(result)
+            ledger = cp_result.append_checkpoint_ledger(root, result_path=result)
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                exit_code = event_ledger.main(["check", "--ledger", str(ledger), "--type", "checkpoint", "--mode", "silent"])
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual("PASS", stream.getvalue().strip())
+
+    def test_applicability_aggregate_build_and_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route_plan = root / "process" / "checks" / "CP0-CR156.route-plan.json"
+            aggregate = root / "process" / "checks" / "CP8-CR156.applicability.json"
+            route_plan.parent.mkdir(parents=True, exist_ok=True)
+            route_plan.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "decision": "PASS",
+                        "stages": [{"checkpoint": "CP0", "mode": "standard", "human_gate": "none"}],
+                        "checkpoint_applicability": {
+                            "CP0": {"applies": True, "mode": "standard", "human_gate": "none"},
+                            "CP3": {"applies": False, "decision": "N/A", "reason": "uses existing evidence only"},
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            output = cp_result.write_applicability_aggregate(root, route_plan, aggregate, cr_id="CR-156")
+            errors, warnings = cp_result.validate_applicability_aggregate(root, output)
+
+            self.assertTrue(output.is_file())
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+
+    def test_applicability_aggregate_rejects_stale_route_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route_plan = root / "process" / "checks" / "CP0-CR156.route-plan.json"
+            aggregate = root / "process" / "checks" / "CP8-CR156.applicability.json"
+            route_plan.parent.mkdir(parents=True, exist_ok=True)
+            route_plan.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "decision": "PASS",
+                        "stages": [],
+                        "checkpoint_applicability": {
+                            "CP3": {"applies": False, "decision": "N/A", "reason": "uses existing evidence only"},
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cp_result.write_applicability_aggregate(root, route_plan, aggregate, cr_id="CR-156")
+            payload = json.loads(aggregate.read_text(encoding="utf-8"))
+            payload["checkpoint_applicability"]["CP3"]["decision"] = "WAIVED"
+            aggregate.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            errors, _warnings = cp_result.validate_applicability_aggregate(root, aggregate)
+
+            self.assertIn("checkpoint_applicability does not match source route plan", errors)
+
+    def test_dispatch_not_required_event_uses_structured_required_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger = root / "process" / "state" / "AGENT-DISPATCH-LEDGER.ndjson"
+            event = event_ledger.build_dispatch_not_required_event(
+                dispatch_id="ADE-NA-001",
+                canonical_role="meta-dev",
+                reason="route_plan marks CP6 N/A",
+                created_at="2026-07-05T00:00:00+00:00",
+            )
+            event_ledger.append_dispatch_event(root, event, ledger=ledger)
+
+            errors, warnings = event_ledger.validate_event_ledger(ledger, ledger_type="dispatch")
+
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+
+    def test_inline_fallback_dispatch_event_requires_approval_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger = root / "process" / "state" / "AGENT-DISPATCH-LEDGER.ndjson"
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            ledger.write_text(
+                json.dumps(
+                    {
+                        "dispatch_id": "ADE-INLINE-001",
+                        "event_type": "inline_fallback",
+                        "canonical_role": "meta-dev",
+                        "dispatch_mode": "inline-fallback",
+                        "fallback_reason": "current platform has no subagent dispatch tool",
+                        "status": "completed",
+                        "created_at": "2026-07-05T00:00:00+00:00",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            errors, _warnings = event_ledger.validate_event_ledger(ledger, ledger_type="dispatch")
+
+            self.assertIn("line 1: missing required field: approved_by", errors)
 
     def test_event_ledger_check_rejects_missing_required_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

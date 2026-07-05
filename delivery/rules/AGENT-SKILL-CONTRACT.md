@@ -89,6 +89,6 @@
 - 五个功能 Agent 均显式遵守 Input Contract、Output Contract 和 Handoff Contract。
 - 关键 Skill 不再要求默认读取巨型 `process/STATE.md`。
 - 所有默认读取集合都能表达 `allowed_reads` 和 `do_not_read_by_default`。
-- `process/current/CURRENT.json` 能在 active 和 idle 状态下指向 current context / checkpoint / story / release / handoff 入口，并接受 `CR-INDEX.json` 优先、`CR-INDEX.yaml` fallback。
+- `process/current/CURRENT.json` 能在 active 和 idle 状态下指向 current context / checkpoint / story / release / handoff 入口，并只把 `CR-INDEX.json` 作为新流程 CR index；`CR-INDEX.yaml` 仅是 legacy read-only fallback。
 - CR 模板包含 `Checkpoint Index`，并声明自动 CP 真相源是 `process/checks/CP*.result.json`、人工门禁真相源是 `process/checkpoints/CP*.md`。
 - 需要全文读取时必须能落到允许枚举和日志位置。

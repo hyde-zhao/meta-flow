@@ -78,6 +78,19 @@ ALLOWED_STORY_PLAN_STATUSES = {
     "waived",
 }
 STORY_ID_RE = re.compile(r"\bSTORY-[A-Za-z0-9][A-Za-z0-9._-]*\b")
+FULL_LLD_REQUIRED_SECTION_PREFIXES = tuple(f"## {index}." for index in range(15))
+BATCH_LLD_REQUIRED_SECTION_PREFIXES = tuple(f"## {index}." for index in range(10))
+TECHNICAL_NOTE_REQUIRED_TOKENS = (
+    "设计依据",
+    "文件影响",
+    "接口",
+    "数据",
+    "权限",
+    "失败",
+    "测试",
+    "风险",
+)
+WAIVED_REQUIRED_TOKENS = ("豁免", "理由", "风险", "重访")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -122,6 +135,22 @@ def _slug_status(value: Any) -> str:
     return str(value or "").strip().lower().replace("_", "-")
 
 
+def _markdown_frontmatter(text: str) -> dict[str, str]:
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}
+    values: dict[str, str] = {}
+    for line in text[4:end].splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
 def _entry_path(entry: Any) -> str:
     if isinstance(entry, dict):
         return str(entry.get("path") or "")
@@ -134,6 +163,77 @@ def _changed_file_path(entry: Any) -> str:
 
 def _matches_any(rel_path: str, patterns: list[str]) -> bool:
     return any(rel_path == pattern or fnmatch(rel_path, pattern) for pattern in patterns)
+
+
+def _infer_lld_evidence_type(path: Path, text: str, explicit: str = "") -> str:
+    value = explicit.strip().lower()
+    if value:
+        return value
+    lowered = text.lower()
+    if "design_evidence_type: \"batch-lld\"" in lowered or "design_evidence_type: batch-lld" in lowered:
+        return "batch-lld"
+    if path.name.startswith("BATCH-"):
+        return "batch-lld"
+    if "design_evidence_type: \"waived\"" in lowered or "required_level: \"waived\"" in lowered:
+        return "waived"
+    if "## 技术说明" in text or "technical-note" in lowered:
+        return "technical-note"
+    if path.name.endswith("-LLD.md"):
+        return "full-lld"
+    return "unknown"
+
+
+def _missing_section_prefixes(text: str, prefixes: tuple[str, ...]) -> list[str]:
+    lines = [line.strip() for line in text.splitlines()]
+    return [prefix for prefix in prefixes if not any(line.startswith(prefix) for line in lines)]
+
+
+def validate_lld_structure(
+    lld_path: Path,
+    *,
+    evidence_type: str = "",
+    project_root: Path | None = None,
+) -> tuple[list[str], list[str]]:
+    path = lld_path.resolve()
+    root = project_root.resolve() if project_root else _infer_project_root(path)
+    if not path.is_file():
+        return [f"LLD evidence missing: {_rel(root, path)}"], []
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    frontmatter = _markdown_frontmatter(text)
+    inferred = _infer_lld_evidence_type(path, text, evidence_type)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    story_id = frontmatter.get("story_id") or ""
+    filename_story_ids = STORY_ID_RE.findall(path.name)
+    if story_id and story_id not in path.stem:
+        errors.append(f"story_id does not match filename: story_id={story_id} file={path.name}")
+
+    if inferred == "full-lld":
+        missing = _missing_section_prefixes(text, FULL_LLD_REQUIRED_SECTION_PREFIXES)
+        errors.extend(f"full-lld missing required section prefix: {prefix}" for prefix in missing)
+        if not story_id and not filename_story_ids:
+            warnings.append("full-lld has no detectable STORY-* id in frontmatter or filename")
+    elif inferred == "batch-lld":
+        missing = _missing_section_prefixes(text, BATCH_LLD_REQUIRED_SECTION_PREFIXES)
+        errors.extend(f"batch-lld missing required section prefix: {prefix}" for prefix in missing)
+        if "### Story:" not in text and not STORY_ID_RE.search(text):
+            errors.append("batch-lld must include at least one Story marker or STORY-* id")
+        for token in ("design_evidence_type", "lld_policy_required_level"):
+            if token not in text:
+                warnings.append(f"batch-lld should include {token}")
+    elif inferred == "technical-note":
+        if "## 技术说明" not in text and "technical-note" not in text.lower():
+            errors.append("technical-note evidence must include ## 技术说明 or technical-note marker")
+        missing_tokens = [token for token in TECHNICAL_NOTE_REQUIRED_TOKENS if token not in text]
+        errors.extend(f"technical-note missing required evidence token: {token}" for token in missing_tokens)
+    elif inferred == "waived":
+        missing_tokens = [token for token in WAIVED_REQUIRED_TOKENS if token not in text]
+        errors.extend(f"waived evidence missing required token: {token}" for token in missing_tokens)
+    else:
+        errors.append("unable to infer LLD evidence type; pass --evidence-type full-lld|batch-lld|technical-note|waived")
+
+    return errors, warnings
 
 
 def default_return_path(project_root: Path, story_id: str, stage: str) -> Path:
@@ -587,11 +687,13 @@ def _print_story_help() -> None:
         "  evidence-check  Validate an Evidence Index.\n"
         "  verify-packet   Build a CP7 Story Verify Packet from a CP6 Return Packet.\n\n"
         "  plan-check      Validate DEVELOPMENT-PLAN as the Story management truth source.\n\n"
+        "  lld-check       Validate full-lld, batch-lld, technical-note, or waived evidence structure.\n\n"
         "Examples:\n"
         "  meta-flow story return-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
         "  meta-flow story evidence-index --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
         "  meta-flow story verify-packet --from-return process/returns/STORY-CR123-S01.CP6.return.json --story process/stories/STORY-CR123-S01.md --project-root .\n"
         "  meta-flow story plan-check --project-root .\n"
+        "  meta-flow story lld-check --lld process/stories/STORY-CR123-S01-LLD.md --project-root .\n"
     )
 
 
@@ -668,6 +770,23 @@ def main(argv: list[str] | None = None) -> int:
             strict_legacy=parsed.strict_legacy,
         )
         print("Story Plan Check: " + ("FAIL" if errors else "OK"))
+        for warning in warnings:
+            print(f"- WARN: {warning}")
+        for error in errors:
+            print(f"- ERROR: {error}")
+        return 1 if errors else 0
+    if command == "lld-check":
+        parser = argparse.ArgumentParser(prog="meta-flow story lld-check")
+        parser.add_argument("--project-root", type=Path, default=None)
+        parser.add_argument("--lld", dest="lld_path", type=Path, required=True)
+        parser.add_argument("--evidence-type", default="")
+        parsed = parser.parse_args(args[1:])
+        errors, warnings = validate_lld_structure(
+            parsed.lld_path,
+            evidence_type=parsed.evidence_type,
+            project_root=parsed.project_root,
+        )
+        print("LLD Structure Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
         for error in errors:

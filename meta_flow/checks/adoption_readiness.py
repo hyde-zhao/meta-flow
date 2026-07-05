@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -68,21 +69,46 @@ def _state_item(root: Path) -> ReadinessItem:
 
 
 def _cr_tracking_item(root: Path) -> ReadinessItem:
-    index = root / "process" / "changes" / "CR-INDEX.yaml"
+    index = root / "process" / "changes" / "CR-INDEX.json"
+    legacy_index = root / "process" / "changes" / "CR-INDEX.yaml"
     if index.is_file():
-        text = index.read_text(encoding="utf-8", errors="ignore")
         status = "PASS"
         messages: list[str] = []
-        if "blocked_crs:" in text and "[]" not in text.split("blocked_crs:", 1)[1].splitlines()[0]:
+        try:
+            data = json.loads(index.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            data = {}
+            status = "FAIL"
+            messages.append(f"CR-INDEX.json invalid JSON: {exc}")
+        blocked = [
+            str(item.get("id") or item.get("cr_id") or "")
+            for item in data.get("items", [])
+            if isinstance(item, dict)
+            and str(item.get("lifecycle_status") or item.get("status") or "").strip().lower() == "blocked"
+        ]
+        if blocked and status != "FAIL":
             status = "WARN"
-            messages.append("blocked_crs is not empty; resolve or explicitly carry the blocked CR before adoption.")
+            messages.append("blocked CRs are present in CR-INDEX.json; resolve or explicitly carry them before adoption.")
+        if legacy_index.is_file():
+            messages.append("legacy CR-INDEX.yaml is present; CR-INDEX.json is canonical and YAML is read-only legacy fallback.")
+            if status == "PASS":
+                status = "WARN"
         return ReadinessItem(
             item_id="cr-tracking",
             status=status,
-            evidence=["process/changes/CR-INDEX.yaml"],
-            impact="CR index prevents conflicting active or blocked formal CRs.",
+            evidence=["process/changes/CR-INDEX.json"],
+            impact="CR-INDEX.json prevents conflicting active or blocked formal CRs.",
             next_action="Run meta-flow check cr-tracking --project-root . after creating or updating bootstrap CR records.",
             messages=messages,
+        )
+    if legacy_index.is_file():
+        return ReadinessItem(
+            item_id="cr-tracking",
+            status="WARN",
+            evidence=["process/changes/CR-INDEX.yaml"],
+            impact="A legacy YAML CR index exists, but new Meta Flow tracking is JSON-only.",
+            next_action="Run meta-flow cr index --project-root . to generate CR-INDEX.json, then treat YAML as read-only legacy fallback.",
+            messages=["CR-INDEX.json missing; legacy CR-INDEX.yaml is not a new-flow truth source"],
         )
     return ReadinessItem(
         item_id="cr-tracking",
@@ -90,7 +116,7 @@ def _cr_tracking_item(root: Path) -> ReadinessItem:
         evidence=["process/changes/"],
         impact="No CR index exists yet; this is acceptable before the first bootstrap CR but must be closed before execution.",
         next_action="Create a bootstrap CR with CR-xxx naming and run meta-flow check cr-tracking --project-root .",
-        messages=["CR-INDEX.yaml missing"],
+        messages=["CR-INDEX.json missing"],
     )
 
 
@@ -192,4 +218,3 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parsed = parser.parse_args(list(argv or []))
     return run_adoption_doctor(parsed.project_root)
-

@@ -168,7 +168,7 @@ class ModuleBoundaryTests(unittest.TestCase):
                 changed_files=["quant_lab/runtime_ext/local.py"],
             )
 
-            self.assertEqual("standard-code", details["classification"]["profile"])
+            self.assertEqual("standard-lite", details["classification"]["profile"])
             self.assertIn("touching runtime-high-risk boundary requires runtime-high-risk profile: runtime_ext", errors)
 
     def test_check_alias_imports_uses_module_checker(self) -> None:

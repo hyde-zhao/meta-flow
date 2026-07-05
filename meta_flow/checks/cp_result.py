@@ -18,7 +18,7 @@ from meta_flow.state.current import now_utc
 
 CHECKPOINT_LEDGER_REL = Path("process/state/CHECKPOINT-LEDGER.ndjson")
 ITEM_STATUSES = {"PASS", "FAIL", "BLOCKED", "N/A", "WAIVED"}
-GENERAL_DECISIONS = {"PASS", "FAIL", "BLOCKED", "WAIVED"}
+GENERAL_DECISIONS = {"PASS", "FAIL", "BLOCKED", "N/A", "WAIVED"}
 CP7_DECISIONS = GENERAL_DECISIONS | {"PASS_WITH_RISK", "NEEDS_REWORK", "NEEDS_DESIGN_CLARIFICATION"}
 EVIDENCE_STATUSES = {
     "MISSING_REQUIRED_EVIDENCE",
@@ -258,6 +258,33 @@ def _load_checkpoint_events(root: Path) -> list[dict[str, Any]]:
     return events
 
 
+def _load_dispatch_events(root: Path) -> list[dict[str, Any]]:
+    ledger_path = event_ledger.ledger_path(root, "dispatch")
+    if not ledger_path.is_file():
+        return []
+    events, _errors = event_ledger.load_events(ledger_path)
+    return events
+
+
+def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
+    refs = [str(ref) for ref in _as_list(result.get("dispatch_refs")) if str(ref)]
+    if not refs:
+        return []
+    events = _load_dispatch_events(root)
+    if not events:
+        return ["dispatch_refs require AGENT-DISPATCH-LEDGER entries: " + ", ".join(refs)]
+    event_ids = {
+        str(value)
+        for event in events
+        for value in (event.get("dispatch_id"), event.get("event_id"))
+        if value
+    }
+    missing = sorted(set(refs) - event_ids)
+    if missing:
+        return ["dispatch_refs missing from AGENT-DISPATCH-LEDGER: " + ", ".join(missing)]
+    return []
+
+
 def _validate_derived_consistency(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     rel_result = _rel(root, result_path)
@@ -281,6 +308,7 @@ def _validate_derived_consistency(root: Path, result_path: Path, result: dict[st
             actual = event.get(key)
             if expected and actual and str(expected) != str(actual):
                 errors.append(f"checkpoint ledger {key} does not match result JSON for {rel_result}")
+    errors.extend(_validate_dispatch_refs(root, result))
     cr_index_path = root / "process/changes/CR-INDEX.json"
     if cr_id and cr_index_path.is_file():
         try:
@@ -377,6 +405,10 @@ def validate_cp_result(
         errors.append("waivers must be a list")
     if (blocking_item_seen or blockers) and decision in {"PASS", "PASS_WITH_RISK"}:
         errors.append("decision cannot be PASS/PASS_WITH_RISK when blocking items exist")
+    if decision == "N/A" and not any(result.get(key) for key in ("not_applicable_reason", "route_plan_ref", "checkpoint_applicability")):
+        errors.append("decision=N/A requires not_applicable_reason, route_plan_ref, or checkpoint_applicability")
+    if decision == "WAIVED" and not waivers:
+        errors.append("decision=WAIVED requires waivers")
     if checkpoint == "CP2":
         errors.extend(_validate_cp2_commitments(result))
     if checkpoint == "CP7":
@@ -384,7 +416,7 @@ def validate_cp_result(
     if checkpoint == "CP8":
         errors.extend(_validate_cp8_fact_diff(result))
     errors.extend(_validate_checker_provenance(result))
-    if checkpoint in {"CP6", "CP7"}:
+    if checkpoint in {"CP6", "CP7"} and decision != "N/A":
         if not result.get("story_id"):
             errors.append(f"{checkpoint} result requires story_id")
         if not result.get("context_ref"):
@@ -557,18 +589,101 @@ def append_checkpoint_ledger(project_root: Path, *, result_path: Path, ledger: P
     return event_ledger.append_event(ledger_path, event)
 
 
+def build_applicability_aggregate(
+    project_root: Path,
+    route_plan_path: Path,
+    *,
+    cr_id: str = "",
+) -> dict[str, Any]:
+    root = project_root.resolve()
+    route_plan_path = route_plan_path.resolve()
+    route_plan = _read_json(route_plan_path)
+    try:
+        route_ref = route_plan_path.relative_to(root).as_posix()
+    except ValueError:
+        route_ref = route_plan_path.as_posix()
+    return {
+        "schema_version": 1,
+        "kind": "checkpoint_applicability_aggregate",
+        "cr_id": cr_id or str(route_plan.get("cr_id") or ""),
+        "source_route_plan_ref": route_ref,
+        "checkpoint_applicability": route_plan.get("checkpoint_applicability") or {},
+        "stages": route_plan.get("stages") or [],
+        "decision": "PASS" if route_plan.get("decision") != "BLOCKED" else "BLOCKED",
+        "generated_at": now_utc(),
+    }
+
+
+def write_applicability_aggregate(
+    project_root: Path,
+    route_plan_path: Path,
+    output: Path,
+    *,
+    cr_id: str = "",
+) -> Path:
+    aggregate = build_applicability_aggregate(project_root, route_plan_path, cr_id=cr_id)
+    _write_json(output, aggregate)
+    return output
+
+
+def validate_applicability_aggregate(
+    project_root: Path,
+    aggregate_path: Path,
+) -> tuple[list[str], list[str]]:
+    root = project_root.resolve()
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not aggregate_path.is_file():
+        return [f"applicability aggregate missing: {aggregate_path}"], warnings
+    try:
+        aggregate = _read_json(aggregate_path)
+    except ValueError as exc:
+        return [str(exc)], warnings
+    if aggregate.get("schema_version") != 1:
+        errors.append("schema_version must be 1")
+    if aggregate.get("kind") != "checkpoint_applicability_aggregate":
+        errors.append("kind must be checkpoint_applicability_aggregate")
+    route_ref = _ref_path(aggregate.get("source_route_plan_ref"))
+    if not route_ref:
+        errors.append("source_route_plan_ref is required")
+        return errors, warnings
+    route_path = root / route_ref
+    if not route_path.is_file():
+        errors.append(f"source_route_plan_ref missing on disk: {route_ref}")
+        return errors, warnings
+    try:
+        route_plan = _read_json(route_path)
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors, warnings
+    expected = route_plan.get("checkpoint_applicability") or {}
+    actual = aggregate.get("checkpoint_applicability") or {}
+    if actual != expected:
+        errors.append("checkpoint_applicability does not match source route plan")
+    if (aggregate.get("stages") or []) != (route_plan.get("stages") or []):
+        errors.append("stages do not match source route plan")
+    if route_plan.get("decision") == "BLOCKED":
+        warnings.append("source route plan decision is BLOCKED")
+    return errors, warnings
+
+
 def _print_cp_help() -> None:
     print(
-        "usage: meta-flow cp <result-check|render-summary|ledger-append> [options]\n\n"
+        "usage: meta-flow cp <result-check|render-summary|ledger-append|applicability-build|applicability-check> [options]\n\n"
         "Commands:\n"
         "  result-check    Validate a machine-readable CP result JSON.\n"
         "  render-summary  Render a compact Markdown summary from CP result JSON.\n"
         "  ledger-append   Append a checkpoint_result event to CHECKPOINT-LEDGER.ndjson.\n\n"
+        "  applicability-build  Build a CP8 checkpoint applicability aggregate from a route plan.\n"
+        "  applicability-check  Validate a CP8 checkpoint applicability aggregate against its route plan.\n\n"
         "Examples:\n"
         "  meta-flow cp result-check --result process/checks/CP6-STORY.result.json --project-root .\n"
+        "  meta-flow cp result-check --result process/checks/CP6-STORY.result.json --project-root . --mode silent\n"
         "  meta-flow cp result-check --result process/checks/CP8-CR.result.json --project-root . --check-consistency\n"
         "  meta-flow cp render-summary --result process/checks/CP6-STORY.result.json\n"
         "  meta-flow cp ledger-append --result process/checks/CP6-STORY.result.json --project-root .\n"
+        "  meta-flow cp applicability-build --route-plan process/checks/CP0-CR156.route-plan.json --output process/checks/CP8-CR156.applicability.json --project-root .\n"
+        "  meta-flow cp applicability-check --aggregate process/checks/CP8-CR156.applicability.json --project-root .\n"
     )
 
 
@@ -583,12 +698,19 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--project-root", type=Path, default=None)
         parser.add_argument("--result", dest="result_path", type=Path, required=True)
         parser.add_argument("--check-consistency", action="store_true")
+        parser.add_argument("--mode", choices=("normal", "silent", "verbose"), default="normal")
         parsed = parser.parse_args(args[1:])
         errors, warnings = validate_cp_result(
             parsed.result_path,
             project_root=parsed.project_root,
             check_consistency=parsed.check_consistency,
         )
+        if parsed.mode == "silent":
+            if errors:
+                print("FAIL: " + "; ".join(errors))
+            else:
+                print("PASS")
+            return 1 if errors else 0
         print("CP Result Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
@@ -612,6 +734,40 @@ def main(argv: list[str] | None = None) -> int:
         path = append_checkpoint_ledger(parsed.project_root, result_path=parsed.result_path, ledger=parsed.ledger)
         print(f"appended: {path}")
         return 0
+    if command == "applicability-build":
+        parser = argparse.ArgumentParser(prog="meta-flow cp applicability-build")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--route-plan", type=Path, required=True)
+        parser.add_argument("--output", type=Path, required=True)
+        parser.add_argument("--cr-id", default="")
+        parsed = parser.parse_args(args[1:])
+        path = write_applicability_aggregate(
+            parsed.project_root,
+            parsed.route_plan,
+            parsed.output,
+            cr_id=parsed.cr_id,
+        )
+        print(f"wrote: {path}")
+        return 0
+    if command == "applicability-check":
+        parser = argparse.ArgumentParser(prog="meta-flow cp applicability-check")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--aggregate", type=Path, required=True)
+        parser.add_argument("--mode", choices=("normal", "silent", "verbose"), default="normal")
+        parsed = parser.parse_args(args[1:])
+        errors, warnings = validate_applicability_aggregate(parsed.project_root, parsed.aggregate)
+        if parsed.mode == "silent":
+            if errors:
+                print("FAIL: " + "; ".join(errors))
+            else:
+                print("PASS")
+            return 1 if errors else 0
+        print("CP Applicability Check: " + ("FAIL" if errors else "OK"))
+        for warning in warnings:
+            print(f"- WARN: {warning}")
+        for error in errors:
+            print(f"- ERROR: {error}")
+        return 1 if errors else 0
     raise SystemExit(f"未知 cp 命令: {command}")
 
 

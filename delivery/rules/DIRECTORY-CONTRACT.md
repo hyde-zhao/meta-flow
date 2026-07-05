@@ -55,10 +55,11 @@ Generated outputs:
 
 Idle state is explicit. When `active_change`, `active_story`, and `pending_gate` are empty, `CURRENT.json.status` is `idle`; `context_ref`, `checkpoint_ref`, and `story_packet_ref` are normally `null`, while `release_context_ref` and `handoff_ref` point to the latest closed-CR release and next-session handoff when available.
 
-CR index format priority is:
+CR index canonical source is:
 
 1. `process/changes/CR-INDEX.json`
-2. `process/changes/CR-INDEX.yaml`
+
+`process/changes/CR-INDEX.yaml` is legacy read-only fallback for migration only and must not be created by new flows.
 
 ## Zone Read Rules
 

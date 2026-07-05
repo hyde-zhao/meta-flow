@@ -22,10 +22,10 @@ STATE_CURRENT_DIR_REL = Path("process/current")
 STATE_CURRENT_ENTRY_REL = STATE_CURRENT_DIR_REL / "CURRENT.json"
 STATE_MD_REL = Path("process/STATE.md")
 STATE_HISTORY_REL = Path("process/state/HISTORY.md")
+WORKFLOW_HEALTH_REL = Path("process/state/WORKFLOW-HEALTH.json")
 STATE_ARCHIVE_ROOT_REL = Path("process/archive/state")
 ROUTING_REL = Path("process/.meta-flow-process.yaml")
 CR_INDEX_JSON_REL = Path("process/changes/CR-INDEX.json")
-CR_INDEX_YAML_REL = Path("process/changes/CR-INDEX.yaml")
 BASE_LEDGER_RELS = (
     Path("process/state/CR-LEDGER.ndjson"),
     Path("process/state/STORY-LEDGER.ndjson"),
@@ -36,6 +36,15 @@ BASE_LEDGER_RELS = (
     Path("process/state/RUN-LEDGER.ndjson"),
     Path("process/state/READ-EXPANSION-LEDGER.ndjson"),
 )
+WORKFLOW_HEALTH_COUNTER_KEYS = {
+    "repeated_issue_count",
+    "hld_revision_count",
+    "lld_clarification_count",
+    "cp_retry_count",
+    "story_rework_count",
+    "artifact_hash_unchanged_count",
+    "phase_round_count",
+}
 DISALLOWED_CURRENT_KEYS = {
     "closed_crs",
     "cr_tracking",
@@ -626,7 +635,7 @@ def _existing_rel(project_root: Path, rel_path: Path) -> str | None:
 
 def _available_cr_index_refs(project_root: Path) -> list[str]:
     refs: list[str] = []
-    for rel_path in (CR_INDEX_JSON_REL, CR_INDEX_YAML_REL):
+    for rel_path in (CR_INDEX_JSON_REL,):
         existing = _existing_rel(project_root, rel_path)
         if existing:
             refs.append(existing)
@@ -828,6 +837,65 @@ def refresh_current_entry(project_root: Path) -> Path:
     _write_pointer(current_dir, project_root, "release", entry.get("release_context_ref"))
     _write_pointer(current_dir, project_root, "handoff", entry.get("handoff_ref"))
     return path
+
+
+def load_workflow_health(project_root: Path) -> dict[str, Any]:
+    path = project_root.resolve() / WORKFLOW_HEALTH_REL
+    if not path.is_file():
+        return {
+            "schema_version": 1,
+            "updated_at": now_utc(),
+            "phase_counters": {},
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.setdefault("schema_version", 1)
+    payload.setdefault("phase_counters", {})
+    return payload
+
+
+def update_workflow_health(
+    project_root: Path,
+    *,
+    phase: str,
+    increments: dict[str, int],
+) -> tuple[dict[str, Any], Path]:
+    if not phase:
+        raise ValueError("phase is required")
+    unknown = sorted(set(increments) - WORKFLOW_HEALTH_COUNTER_KEYS)
+    if unknown:
+        raise ValueError("unknown workflow health counters: " + ", ".join(unknown))
+    project_root = project_root.resolve()
+    payload = load_workflow_health(project_root)
+    phase_counters = payload.setdefault("phase_counters", {})
+    if not isinstance(phase_counters, dict):
+        phase_counters = {}
+        payload["phase_counters"] = phase_counters
+    counters = phase_counters.setdefault(phase, {})
+    if not isinstance(counters, dict):
+        counters = {}
+        phase_counters[phase] = counters
+    for key, delta in increments.items():
+        counters[key] = int(counters.get(key) or 0) + int(delta)
+    payload["updated_at"] = now_utc()
+    path = project_root / WORKFLOW_HEALTH_REL
+    _write_json(path, payload)
+    if current_state_path(project_root).is_file():
+        update_current_state(
+            project_root,
+            {
+                "workflow_health_ref": WORKFLOW_HEALTH_REL.as_posix(),
+                "updated_at": now_utc(),
+            },
+            actor="meta_flow.state.current",
+            reason="workflow health counter update",
+            mode="enforce",
+        )
+    return payload, path
 
 
 def update_current_state(
@@ -1285,6 +1353,7 @@ def _print_state_help() -> None:
         "  render      Render process/STATE.md as a human summary from STATE.current.json.\n"
         "  current-refresh Refresh process/current/CURRENT.json and current *.ref/symlink pointers.\n"
         "  history-render Render process/state/HISTORY.md as a deny-default audit view from ledgers.\n"
+        "  health-update Update phase-level workflow health counters.\n"
         "  slim        Archive legacy long fields and rewrite STATE.current.json as v2 refs/scalars.\n"
         "  check       Validate STATE.current.json and generated STATE.md budgets.\n"
         "  compact     Render the human summary and run state check; it does not slim state or compact ledgers.\n\n"
@@ -1293,6 +1362,7 @@ def _print_state_help() -> None:
         "  meta-flow state migrate-v2 --project-root .\n"
         "  meta-flow state render --project-root . --force\n"
         "  meta-flow state current-refresh --project-root .\n"
+        "  meta-flow state health-update --project-root . --phase CP5 --increment cp_retry_count=1\n"
         "  meta-flow state slim --project-root . --dry-run\n"
         "  meta-flow state slim --project-root . --apply --render\n"
         "  meta-flow state check --project-root . --mode audit\n"
@@ -1320,6 +1390,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--render", action="store_true")
+    parser.add_argument("--phase", default="")
+    parser.add_argument("--increment", action="append", default=[])
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
@@ -1343,6 +1415,23 @@ def main(argv: list[str] | None = None) -> int:
     if command == "history-render":
         path = render_history_file(project_root, force=parsed.force)
         print(f"wrote: {path}")
+        return 0
+    if command == "health-update":
+        increments: dict[str, int] = {}
+        for item in parsed.increment:
+            if "=" not in item:
+                raise SystemExit(f"--increment must use key=value: {item}")
+            key, raw_value = item.split("=", 1)
+            try:
+                increments[key] = int(raw_value)
+            except ValueError as exc:
+                raise SystemExit(f"--increment value must be an integer: {item}") from exc
+        if not increments:
+            raise SystemExit("health-update requires at least one --increment key=value")
+        payload, path = update_workflow_health(project_root, phase=parsed.phase, increments=increments)
+        print(f"wrote: {path}")
+        print(f"phase: {parsed.phase}")
+        print("counters: " + json.dumps(payload.get("phase_counters", {}).get(parsed.phase, {}), ensure_ascii=False, sort_keys=True))
         return 0
     if command == "slim":
         if parsed.apply and parsed.dry_run:
@@ -1381,7 +1470,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if errors else 0
     raise SystemExit(
         "未知 state 命令: "
-        f"{command}. 目前支持: init, migrate-v2, render, current-refresh, history-render, slim, check, compact"
+        f"{command}. 目前支持: init, migrate-v2, render, current-refresh, history-render, health-update, slim, check, compact"
     )
 
 

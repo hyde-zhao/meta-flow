@@ -114,14 +114,12 @@ class StateV2Tests(unittest.TestCase):
             release = root / "process" / "release" / "RELEASE-CONTEXT-CR154.yaml"
             handoff = root / "process" / "handoffs" / "NEXT-SESSION-CR154-20260702.md"
             index_json = root / "process" / "changes" / "CR-INDEX.json"
-            index_yaml = root / "process" / "changes" / "CR-INDEX.yaml"
             release.parent.mkdir(parents=True, exist_ok=True)
             handoff.parent.mkdir(parents=True, exist_ok=True)
             index_json.parent.mkdir(parents=True, exist_ok=True)
             release.write_text("schema_version: 1\n", encoding="utf-8")
             handoff.write_text("# Next Session\n", encoding="utf-8")
             index_json.write_text('{"schema_version": 1, "items": []}\n', encoding="utf-8")
-            index_yaml.write_text("schema_version: 1\nitems: []\n", encoding="utf-8")
             state = current.default_current_state(root)
             state["current_phase"] = "delivered"
             state["active_change"] = None
@@ -139,16 +137,13 @@ class StateV2Tests(unittest.TestCase):
             self.assertEqual("process/release/RELEASE-CONTEXT-CR154.yaml", entry["release_context_ref"])
             self.assertEqual("process/handoffs/NEXT-SESSION-CR154-20260702.md", entry["handoff_ref"])
             self.assertEqual("process/changes/CR-INDEX.json", entry["cr_index_ref"])
-            self.assertEqual(
-                ["process/changes/CR-INDEX.json", "process/changes/CR-INDEX.yaml"],
-                entry["available_index_refs"],
-            )
+            self.assertEqual(["process/changes/CR-INDEX.json"], entry["available_index_refs"])
             self.assertEqual(
                 "process/handoffs/NEXT-SESSION-CR154-20260702.md\n",
                 (root / "process" / "current" / "handoff.ref").read_text(encoding="utf-8"),
             )
 
-    def test_current_refresh_falls_back_to_yaml_cr_index(self) -> None:
+    def test_current_refresh_does_not_use_yaml_cr_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             index_yaml = root / "process" / "changes" / "CR-INDEX.yaml"
@@ -159,8 +154,34 @@ class StateV2Tests(unittest.TestCase):
             current.refresh_current_entry(root)
 
             entry = json.loads((root / "process" / "current" / "CURRENT.json").read_text(encoding="utf-8"))
-            self.assertEqual("process/changes/CR-INDEX.yaml", entry["cr_index_ref"])
-            self.assertEqual(["process/changes/CR-INDEX.yaml"], entry["available_index_refs"])
+            self.assertIsNone(entry["cr_index_ref"])
+            self.assertEqual([], entry["available_index_refs"])
+
+    def test_health_update_writes_phase_counters_and_state_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.write_current_state(root, current.default_current_state(root))
+
+            exit_code = current.main(
+                [
+                    "health-update",
+                    "--project-root",
+                    str(root),
+                    "--phase",
+                    "CP5",
+                    "--increment",
+                    "cp_retry_count=1",
+                    "--increment",
+                    "lld_clarification_count=2",
+                ]
+            )
+
+            self.assertEqual(0, exit_code)
+            health = json.loads((root / "process" / "state" / "WORKFLOW-HEALTH.json").read_text(encoding="utf-8"))
+            self.assertEqual(1, health["phase_counters"]["CP5"]["cp_retry_count"])
+            self.assertEqual(2, health["phase_counters"]["CP5"]["lld_clarification_count"])
+            state = current.load_current_state(root)
+            self.assertEqual("process/state/WORKFLOW-HEALTH.json", state["workflow_health_ref"])
 
     def test_check_fails_when_current_state_contains_long_running_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

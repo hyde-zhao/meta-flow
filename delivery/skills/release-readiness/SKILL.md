@@ -141,7 +141,7 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 - 不扩大本轮交付范围；后续事项进入 feedback / follow-up / backlog。
 - 不默认新增 `CHANGELOG.md`、`INSTALL.md`、`TROUBLESHOOTING.md`、`POST-RELEASE-OBSERVATION.md`；仅 `full` profile 或用户明确要求时生成。
 - 不复制完整 TEST-REPORT、REVIEW、TEST-MATRIX、HLD、LLD、日志或全文 diff；只写摘要、计数、风险 ID 和证据路径。
-- `FEEDBACK.md` 只记录反馈回流入口；CP8 后续 CR 候选必须进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并由 host-orchestrator 同步 `process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`。
+- `FEEDBACK.md` 只记录反馈回流入口；CP8 后续 CR 候选必须进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并由 host-orchestrator 同步 `process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson`。
 - 使用外置 artifact repo 时，不得把 `git push` 当前源码仓库当作完整项目推送；必须同时处理源码仓库和 artifact 仓库。`meta-flow workspace push` 默认拒绝 dirty working tree，发现未提交过程文件时应先提交 artifact 仓库。
 
 ## 验收标准

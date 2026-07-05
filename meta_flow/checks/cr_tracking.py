@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from meta_flow.policies import gate_profiles
 from meta_flow.workspace.routing import require_process_health
 
 
@@ -51,8 +53,13 @@ ALLOWED_CR_KINDS = {
     "ledger-maintenance",
     "spike",
 }
-ALLOWED_GATE_PROFILES = {"full", "standard", "standard-code", "compact", "runtime", "spike"}
+LEGACY_GATE_PROFILES = {"full", "standard", "compact", "runtime", "spike"}
+ALLOWED_GATE_PROFILES = set(gate_profiles.default_gate_profiles().get("profiles", {})) | LEGACY_GATE_PROFILES
 PATH_EMPTY_VALUES = {"", "-", "—", "n/a", "N/A", "无", "不适用"}
+LEGACY_CR_INDEX_RELS = (
+    Path("process/changes/CR-INDEX.yaml"),
+    Path("process/changes/CR-INDEX.yml"),
+)
 
 
 @dataclass
@@ -432,6 +439,16 @@ def discover_follow_up_rows(project_root: Path, explicit_tracking: list[Path]) -
 def parse_cr_index_items(index_path: Path) -> list[IndexItem]:
     if not index_path.is_file():
         return []
+    if index_path.suffix == ".json":
+        data = json.loads(read_text(index_path))
+        items = []
+        for offset, item in enumerate(data.get("items", []), 1):
+            mapping = {key: json.dumps(value) if isinstance(value, (list, dict)) else str(value) for key, value in item.items()}
+            mapping.setdefault("lifecycle_status", str(item.get("lifecycle_status") or item.get("status") or ""))
+            mapping.setdefault("readiness_status", str(item.get("readiness_status") or item.get("readiness") or ""))
+            mapping.setdefault("formal_cr_path", str(item.get("formal_cr_path") or item.get("full_ref") or ""))
+            items.append(index_item_from_mapping(mapping, offset))
+        return items
     items: list[IndexItem] = []
     lines = read_text(index_path).splitlines()
     in_items = False
@@ -462,9 +479,19 @@ def parse_cr_index_items(index_path: Path) -> list[IndexItem]:
     return items
 
 
+def find_legacy_cr_index_paths(project_root: Path) -> list[Path]:
+    return [project_root / rel for rel in LEGACY_CR_INDEX_RELS if (project_root / rel).is_file()]
+
+
 def parse_next_action_candidates(index_path: Path) -> list[tuple[str, int]]:
     if not index_path.is_file():
         return []
+    if index_path.suffix == ".json":
+        data = json.loads(read_text(index_path))
+        refs = []
+        for offset, item in enumerate(data.get("next_action_queue", []), 1):
+            refs.append((strip_scalar(str(item.get("candidate_id", ""))), offset))
+        return refs
     refs: list[tuple[str, int]] = []
     in_queue = False
     for line_no, line in enumerate(read_text(index_path).splitlines(), 1):
@@ -712,19 +739,24 @@ def collect_errors_and_warnings(
                     f"{row_location} {row.item_id} must be closed while source formal CR {cr.cr_id} is finished"
                 )
 
-    index_path = project_root / "process" / "changes" / "CR-INDEX.yaml"
     index_by_id = {item.item_id: item for item in index_items if item.item_id}
-    if index_path.is_file():
-        for cr in active_formal:
-            if not any(item.item_id == cr.cr_id or item.formal_path == format_rel(project_root, cr.path) for item in index_items):
-                warnings.append(f"CR-INDEX.yaml does not mention active formal CR {cr.cr_id}")
+    for cr in active_formal:
+        if not any(item.item_id == cr.cr_id or item.formal_path == format_rel(project_root, cr.path) for item in index_items):
+            warnings.append(f"CR-INDEX.json does not mention active formal CR {cr.cr_id}")
 
     for item in index_items:
-        location = f"process/changes/CR-INDEX.yaml:{item.line_no}"
+        location = f"process/changes/CR-INDEX.json:{item.line_no}"
         if not CANDIDATE_ID_RE.fullmatch(item.item_id):
             errors.append(f"{location} invalid CR index item id format: {item.item_id}")
         if item.lifecycle_status not in ALLOWED_LIFECYCLE_STATUSES:
-            errors.append(f"{location} invalid lifecycle_status for {item.item_id}: {item.lifecycle_status}")
+            formal = formal_crs.get(item.item_id)
+            if formal and is_formal_finished(formal):
+                warnings.append(
+                    f"{location} historical lifecycle_status for closed {item.item_id} is legacy value: "
+                    f"{item.lifecycle_status}"
+                )
+            else:
+                errors.append(f"{location} invalid lifecycle_status for {item.item_id}: {item.lifecycle_status}")
         if item.readiness_status not in ALLOWED_READINESS_STATUSES:
             errors.append(f"{location} invalid readiness_status for {item.item_id}: {item.readiness_status}")
         if item.gate_status and item.gate_status not in ALLOWED_GATE_STATUSES:
@@ -751,7 +783,7 @@ def collect_errors_and_warnings(
 
     for item_id, row_group in rows_by_id.items():
         if item_id not in index_by_id:
-            warnings.append(f"{format_rel(project_root, row_group[0].source_path)}:{row_group[0].line_no} {item_id} missing from CR-INDEX.yaml items")
+            warnings.append(f"{format_rel(project_root, row_group[0].source_path)}:{row_group[0].line_no} {item_id} missing from CR-INDEX.json items")
             continue
         index_item = index_by_id[item_id]
         for row in row_group:
@@ -765,7 +797,7 @@ def collect_errors_and_warnings(
         if not candidate_id or candidate_id in PATH_EMPTY_VALUES or "000" in candidate_id:
             continue
         if candidate_id not in index_by_id:
-            warnings.append(f"CR-INDEX.yaml:{line_no} next_action_queue candidate_id={candidate_id} is not in CR-INDEX.yaml items")
+            warnings.append(f"CR-INDEX.json:{line_no} next_action_queue candidate_id={candidate_id} is not in CR-INDEX.json items")
 
     return errors, warnings
 
@@ -792,7 +824,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Validate CR tracking consistency across STATE.active_change, formal CR files, "
-            "follow-up tracking tables, and optional CR-INDEX.yaml."
+            "follow-up tracking tables, and CR-INDEX.json."
         )
     )
     parser.add_argument("--project-root", type=Path, default=Path("."), help="Project root containing process/STATE.md")
@@ -804,6 +836,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional follow-up tracking file. Defaults to process/changes/CR-*-FOLLOW-UP-TRACKING-*.md",
     )
     parser.add_argument("--allow-multiple-active", action="store_true", help="Allow more than one formal CR with status=active")
+    parser.add_argument(
+        "--allow-legacy-yaml",
+        action="store_true",
+        help="Allow CR-INDEX.yaml/yml as read-only legacy fallback during migration. New flows must use CR-INDEX.json.",
+    )
     parser.add_argument("--strict-warnings", action="store_true", help="Treat warnings as errors")
     args = parser.parse_args(argv)
 
@@ -811,7 +848,7 @@ def main(argv: list[str] | None = None) -> int:
     require_process_health(project_root)
     state_path = project_root / "process" / "STATE.md"
     change_root = project_root / "process" / "changes"
-    index_path = change_root / "CR-INDEX.yaml"
+    index_path = change_root / "CR-INDEX.json"
     formal_crs = discover_formal_crs(change_root)
     follow_up_rows = discover_follow_up_rows(project_root, args.tracking)
     index_items = parse_cr_index_items(index_path)
@@ -826,6 +863,18 @@ def main(argv: list[str] | None = None) -> int:
         state_refs=state_refs,
         allow_multiple_active=args.allow_multiple_active,
     )
+    legacy_index_paths = find_legacy_cr_index_paths(project_root)
+    if legacy_index_paths and not args.allow_legacy_yaml:
+        errors.extend(
+            f"legacy CR index is not allowed in canonical JSON mode: {format_rel(project_root, path)}; "
+            "migrate/delete it or pass --allow-legacy-yaml for read-only legacy fallback"
+            for path in legacy_index_paths
+        )
+    elif legacy_index_paths:
+        warnings.extend(
+            f"legacy CR index present as read-only fallback: {format_rel(project_root, path)}; CR-INDEX.json remains canonical"
+            for path in legacy_index_paths
+        )
 
     print_summary(formal_crs, follow_up_rows, index_items)
     for warning in warnings:

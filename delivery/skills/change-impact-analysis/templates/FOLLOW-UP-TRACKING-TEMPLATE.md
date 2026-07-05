@@ -5,7 +5,7 @@ created_at: ""
 created_by: "host-orchestrator"
 updated_at: ""
 checkpoint_source: "CP8"
-cr_index_path: "process/changes/CR-INDEX.yaml"
+cr_index_path: "process/changes/CR-INDEX.json"
 ---
 
 # CR-{id} 后续事项跟踪台账
@@ -14,7 +14,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 本台账只记录 CP8 或 CR 收敛后需要后续跟踪的候选事项。候选项未启动前不得预创建正式 CR 文件；只有用户决定推进某一项时，才在 `process/changes/` 下创建对应正式 CR，并把本台账中的状态改为 `active`。
 
-本台账不是唯一状态索引。每次新增、启动、关闭、取消或替代候选项后，必须同步 `process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`，并运行或记录跳过 `meta-flow check cr-tracking` 的原因。
+本台账不是唯一状态索引。每次新增、启动、关闭、取消或替代候选项后，必须同步 `process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson`，并运行或记录跳过 `meta-flow check cr-tracking` 的原因。`CR-INDEX.yaml` 仅作 legacy read-only fallback。
 
 ## 状态字段约定
 
@@ -39,7 +39,7 @@ cr_index_path: "process/changes/CR-INDEX.yaml"
 
 ## 结构化候选项
 
-> 本 fenced YAML 与 `process/changes/CR-INDEX.yaml.items[]` 同步；机器读取优先使用 YAML，下面的 Markdown 表格只做人读摘要。候选编号未来默认使用 `FU-CR{id}-001`、`SP-CR{id}-001`、`RA-CR{id}-001`，历史 `CR-020` 类编号写入 `legacy_ids`。
+> 本 fenced YAML 是台账局部结构，不是 CR 索引真相源；机器 CR 索引优先使用 `process/changes/CR-INDEX.json`，下面的 Markdown 表格只做人读摘要。候选编号未来默认使用 `FU-CR{id}-001`、`SP-CR{id}-001`、`RA-CR{id}-001`，历史 `CR-020` 类编号写入 `legacy_ids`。
 
 ```yaml
 follow_up_items:
@@ -93,7 +93,7 @@ follow_up_items:
 
 ## 启动候选 CR 流程
 
-用户决定推进某一候选项时，在当前主进程会话中说明“启动后续 CR”，并给出台账路径、候选编号和目标摘要。host-orchestrator 必须先读取本台账、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json 与 process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml` 和活跃正式 CR，完成冲突预检后，才能创建正式 CR 文件并把状态改为 `active`。
+用户决定推进某一候选项时，在当前主进程会话中说明“启动后续 CR”，并给出台账路径、候选编号和目标摘要。host-orchestrator 必须先读取本台账、`STATE.current.json.active_change`、`process/changes/CR-INDEX.json`、`process/state/CR-LEDGER.ndjson` 和活跃正式 CR，完成冲突预检后，才能创建正式 CR 文件并把状态改为 `active`。`CR-INDEX.yaml` 若存在，只能作为 legacy read-only fallback。
 
 ## CR 冲突预检
 
@@ -114,8 +114,8 @@ follow_up_items:
 
 | 对象 | 路径 | 同步要求 | 当前状态 |
 |---|---|---|---|
-| 运行时状态 | `process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson` | 记录 active、blocked、candidate、spike_candidate、stale_status_conflicts | pending |
-| CR 索引 | `process/changes/CR-INDEX.yaml` | 记录每个候选项的状态、正式 CR 路径、影响面、blocked_by 和下一步 | pending |
+| 运行时状态 | `process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson` | 记录 active、blocked、candidate、spike_candidate、stale_status_conflicts | pending |
+| CR 索引 | `process/changes/CR-INDEX.json` | 记录每个候选项的状态、正式 CR 路径、影响面、blocked_by 和下一步 | pending |
 | 一致性检查 | `meta-flow check cr-tracking --project-root .` | 新增台账、启动候选、关闭 CR 或状态冲突修复后执行 | pending |
 
 ## 不授权范围

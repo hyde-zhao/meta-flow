@@ -90,6 +90,39 @@ class AskUserTests(unittest.TestCase):
             self.assertEqual("human_gate_decision", question["id"])
             self.assertIn("approve (Recommended)", [option["label"] for option in question["options"]])
 
+    def test_human_gate_replay_regenerates_without_persisted_launch_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "CP3-HLD-REVIEW.md"
+            checkpoint.write_text(CHECKPOINT_TEXT, encoding="utf-8")
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = ask_user.main(["human-gate", "--checkpoint", str(checkpoint), "--replay"])
+
+            self.assertEqual(0, exit_code)
+            self.assertIn("请审查人工门禁", output.getvalue())
+            self.assertFalse((Path(directory) / "CP3-LAUNCH-MESSAGE.md").exists())
+
+    def test_human_gate_replay_rejects_persisted_launch_file_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "CP3-HLD-REVIEW.md"
+            launch = Path(directory) / "CP3-LAUNCH-MESSAGE.md"
+            checkpoint.write_text(CHECKPOINT_TEXT, encoding="utf-8")
+            launch.write_text("legacy launch", encoding="utf-8")
+
+            exit_code = ask_user.main(
+                [
+                    "human-gate",
+                    "--checkpoint",
+                    str(checkpoint),
+                    "--launch-message-file",
+                    str(launch),
+                    "--replay",
+                ]
+            )
+
+            self.assertEqual(1, exit_code)
+
 
 if __name__ == "__main__":
     unittest.main()

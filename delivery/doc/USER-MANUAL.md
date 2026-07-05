@@ -397,7 +397,7 @@ host-orchestrator 会执行以下动作：
 
 | 步骤 | 动作 | 输出 |
 |---|---|---|
-| 1 | 读取台账候选项、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`、`CR-INDEX.yaml` 和活跃 CR | 判断是否已有未完成 CR |
+| 1 | 读取台账候选项、`STATE.current.json.active_change`、`process/changes/CR-INDEX.json`、`process/state/CR-LEDGER.ndjson` 和活跃 CR；`CR-INDEX.yaml` 仅作 legacy read-only fallback | 判断是否已有未完成 CR |
 | 2 | 执行 CR 冲突预检 | 输出影响面、重叠对象和推荐处理 |
 | 3 | 无冲突或用户确认处理方式后创建正式 CR | `process/changes/CR-0xx-<slug>-YYYY-MM-DD.md` |
 | 4 | 回写台账 | 状态改为 `active`，填写正式 CR 路径、当前门控、阻塞原因和下一步 |
@@ -455,7 +455,7 @@ CR036 / CR037 的当前参考状态：
 检查还有哪些 CR 需要推进，建议如何推进
 ```
 
-host-orchestrator 必须输出五类清单：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。`candidate` 和 `spike_candidate` 不是执行锁，但必须作为 backlog 展示；如果 `STATE.current.json.active_change` 指向已关闭 CR，或正式 active CR 没有回写台账 / `CR-INDEX.yaml`，必须先列为状态冲突。存在 `meta-flow check cr-tracking` 时，可用以下命令独立检查：
+host-orchestrator 必须输出五类清单：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。`candidate` 和 `spike_candidate` 不是执行锁，但必须作为 backlog 展示；如果 `STATE.current.json.active_change` 指向已关闭 CR，或正式 active CR 没有回写台账 / `CR-INDEX.json`，必须先列为状态冲突。存在 `meta-flow check cr-tracking` 时，可用以下命令独立检查：
 
 ```bash
 meta-flow check cr-tracking --project-root .

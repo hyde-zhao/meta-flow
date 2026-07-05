@@ -37,6 +37,17 @@ ARCHITECTURE_MAJOR_TERMS = (
 )
 DOC_PATH_PREFIXES = ("docs/", "README", "CHANGELOG", "LICENSE")
 PROCESS_LITE_PREFIXES = ("process/", "scripts/check_", "meta_flow/checks/", "meta_flow/context_pack/", "meta_flow/state/")
+STANDARD_LITE_BLOCKING_TERMS = (
+    "requires_story_decomposition",
+    "story_decomposition",
+    "requires_architecture_review",
+    "product_baseline_refresh_required",
+    "authz_policy_refs",
+    "runtime_authorization",
+    "migration",
+    "cross_module",
+    "cross-module",
+)
 
 
 def default_gate_profiles() -> dict[str, Any]:
@@ -195,6 +206,13 @@ def classify_gate_profile(changed_files: list[str] | None = None, impacts: list[
             "profile": "standard-lite",
             "reason": "explicit_compact_artifact_keyword",
             "matched_terms": standard_lite_hits,
+        }
+    standard_lite_blockers = _any_term(joined, STANDARD_LITE_BLOCKING_TERMS)
+    if files and len(files) <= 5 and not standard_lite_blockers:
+        return {
+            "profile": "standard-lite",
+            "reason": "small_scope_standard_lite",
+            "matched_terms": [],
         }
     return {"profile": "standard-code", "reason": "default_standard_code", "matched_terms": []}
 

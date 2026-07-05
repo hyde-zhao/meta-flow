@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
+from meta_flow.checks import cr_tracking
 from meta_flow.policies import authz, gate_profiles
 
 
@@ -24,6 +25,12 @@ class GateProfileTests(unittest.TestCase):
         result = gate_profiles.classify_gate_profile(["quant_lab/research/artifact.py"], ["compact_artifact"])
 
         self.assertEqual("standard-lite", result["profile"])
+
+    def test_small_scope_code_defaults_to_standard_lite(self) -> None:
+        result = gate_profiles.classify_gate_profile(["quant_lab/research/artifact.py"], [])
+
+        self.assertEqual("standard-lite", result["profile"])
+        self.assertEqual("small_scope_standard_lite", result["reason"])
 
     def test_runtime_terms_force_runtime_high_risk(self) -> None:
         result = gate_profiles.classify_gate_profile(["quant_lab/adapters/qmt/runtime.py"], ["credential"])
@@ -59,6 +66,20 @@ class GateProfileTests(unittest.TestCase):
 
             self.assertEqual(0, exit_code)
             self.assertIn('"profile": "standard-lite"', output.getvalue())
+
+    def test_cr_tracking_allowed_gate_profiles_follow_default_registry(self) -> None:
+        profile_names = set(gate_profiles.default_gate_profiles()["profiles"])
+
+        self.assertTrue(profile_names.issubset(cr_tracking.ALLOWED_GATE_PROFILES))
+
+    def test_cr_tracking_detects_legacy_yaml_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "process" / "changes" / "CR-INDEX.yaml"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("schema_version: 1\nitems: []\n", encoding="utf-8")
+
+            self.assertEqual([legacy], cr_tracking.find_legacy_cr_index_paths(root))
 
 
 class AuthzPolicyTests(unittest.TestCase):

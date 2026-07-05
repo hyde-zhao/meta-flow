@@ -147,6 +147,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     human_gate.add_argument("--checkpoint", required=True, type=Path, help="Path to process/checkpoints/CP*.md")
     human_gate.add_argument("--launch-message-file", type=Path, help="Validate and emit an existing launch message")
+    human_gate.add_argument(
+        "--replay",
+        action="store_true",
+        help="Regenerate the launch message from checkpoint content instead of requiring a persisted launch-message file.",
+    )
     human_gate.add_argument("--format", choices=("markdown", "codex-json"), default="markdown")
     human_gate.add_argument("--output", type=Path, help="Write generated output to this file instead of stdout")
 
@@ -156,7 +161,9 @@ def main(argv: list[str] | None = None) -> int:
 
     _, rows, errors = _load_checkpoint(args.checkpoint)
     message = ""
-    if args.launch_message_file:
+    if args.launch_message_file and args.replay:
+        errors.append("--replay cannot be combined with --launch-message-file")
+    elif args.launch_message_file:
         if not args.launch_message_file.is_file():
             errors.append(f"launch message file not found: {args.launch_message_file}")
         else:

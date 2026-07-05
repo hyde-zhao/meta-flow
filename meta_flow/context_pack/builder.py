@@ -145,7 +145,6 @@ def default_read_policy() -> dict[str, Any]:
             "process/state/STATE.current.json",
             "process/current/CURRENT.json",
             "process/changes/CR-INDEX.json",
-            "process/changes/CR-INDEX.yaml",
             "process/policies/AUTHZ-POLICY.json",
             "process/policies/GATE-PROFILES.json",
             "docs/design/FEATURE-REGISTRY.yaml",

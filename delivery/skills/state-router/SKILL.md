@@ -44,6 +44,8 @@ status: active
 - `skills/checkpoint-manager/SKILL.md`
 - `meta-flow check cr-tracking`（若存在）：CR 台账、正式 CR 和 `STATE.current.json.active_change` 一致性预检
 - `process/context/*-CONTEXT.yaml` / `process/context/*.context.json` / `process/context/stories/*.json`：当前阶段上下文胶囊；默认优先读取
+- `process/checks/CP0-*.result.json` 中的 `route_plan`，或正式 CR frontmatter / summary 中的 `cr_type`、`cr_trait_*`、`gate_profile`：用于判定当前 CR 的实际 CP 路径
+- `meta-flow route plan`：当 CP0 result 尚未固化 route_plan，但已有 CR type / trait / gate profile 时，用可执行策略预览或重建 route_plan
 - 与当前阶段直接相关的上游文档（仅在 capsule 缺失、冲突、字段不足、人工审计或深度评审触发时读取全文）：
   - `process/REQUEST.md`
   - `docs/product/USE-CASES.md`
@@ -83,7 +85,7 @@ status: active
 - `skills/state-router/templates/STATE-TEMPLATE.md`：状态对象结构与阶段机基线
 - `AGENTS.md` / `rules/AGENTS.md`：阶段定义、人工检查点与角色职责
 - 各阶段产物 frontmatter 与文件存在性：退出条件的事实来源
-- `process/changes/CR-INDEX.yaml` 与 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md`：CR 跟踪索引和后续候选台账
+- `process/changes/CR-INDEX.json` 与 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md`：CR 跟踪索引和后续候选台账；`CR-INDEX.yaml` 仅作 legacy read-only fallback
 - `context-manifest-builder`：阶段上下文胶囊和最终上下文清单契约；capsule 是默认读取入口，不替代正式产物
 - `scenario-expansion` / `story-planning` / `blueprint-design` / `implementation-design` / `implementation-execution` / `verification-execution` / `quality-review` / `release-readiness`：软件开发工作流新增产物契约；模板存在不代表运行态产物已完成
 
@@ -108,7 +110,7 @@ status: active
 12. 若 `delegated_interaction` 缺失，必须按模板补齐，默认 `status=none`；补齐不代表已经委托成功。
 13. 若 LLD clarification queue ref 缺失，必须写入 `active_question_batch_ref` 或 `process/state/QUESTION-LEDGER.ndjson` ref；补齐不代表问题已收敛。
 14. 若 gate 决策 ref 缺失，必须写入 `gate_decisions_ref=process/state/GATE-LEDGER.ndjson`；补齐不代表当前没有待决策项，发起人工门禁前仍必须从正式产物重新聚合 Decision Brief。
-15. 若 CR tracking ref 缺失，必须写入 `cr_tracking_ref=process/changes/CR-INDEX.yaml` 和 `cr_ledger_ref=process/state/CR-LEDGER.ndjson`；补齐不代表当前没有后续候选 CR，状态查询前仍必须读取台账和正式 CR 文件。
+15. 若 CR tracking ref 缺失，必须写入 `cr_tracking_ref=process/changes/CR-INDEX.json` 和 `cr_ledger_ref=process/state/CR-LEDGER.ndjson`；补齐不代表当前没有后续候选 CR，状态查询前仍必须读取台账和正式 CR 文件。`CR-INDEX.yaml` 只能在 legacy 迁移场景只读参考。
 16. 若 `context_budget` 缺失，必须按模板补齐，默认 `require_capsule_first=true`；补齐不代表 capsule 已生成。CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前必须检查对应 `process/context/*-CONTEXT.yaml` 的存在性、状态和 `read_profile`。
 17. 若 `workflow_health` 缺失，必须按模板补齐，默认 `status=healthy` 和计数器为 0；每次推进、回退、重试、用户问题重复、CP 失败或 Story 回修时刷新对应计数器。
 
@@ -150,6 +152,64 @@ state-router 每次推进前必须刷新 `workflow_health`：
 
 ### 2.0 CR 产品基线重整优先路由
 
+CR 路由必须由可执行 `route_plan` 驱动，而不是固定全量 CP0-CP8 模板。state-router 读取顺序为：
+
+1. 优先读取 CP0 result JSON 中已固化的 `route_plan`。
+2. 若正式 CR 写有 `route_plan_ref`，优先读取该 JSON artifact，例如 `process/checks/CP0-CR045.route-plan.json`。
+3. 若 CP0 result / route_plan_ref 未固化 route_plan，则从正式 CR frontmatter / summary 读取 `cr_type`、`cr_trait_*`、`gate_profile`，调用或等价执行 `meta-flow route plan --from-cr <CR.md>` 生成草稿 route_plan。
+4. 若 CR 尚未创建，CP0 intake 先由 host-orchestrator 评估草稿 `cr_type`、`cr_trait`、`gate_profile`，再生成草稿 route_plan；CP0 PASS 后回填正式 CR frontmatter。
+
+route_plan 的优先级：
+
+- `gate_profile` 表达治理强度和默认最大路径。
+- `route_plan.stages[]` 是本 CR 的实际执行路径，按 CP0..CP8 顺序推进。
+- `route_plan.checkpoint_applicability[CPx]` 是 CP 是否需要 result/checkpoint 的机器判断。
+- `cr_trait_*` 扁平 frontmatter 字段必须通过统一桥接逻辑转成 `derive_route_plan()` 消费的 `cr_trait` dict；不得让各模块自行解析。
+- `CPx-lite` 不得作为 CP result 的 `checkpoint` 值；`-lite` 只表示 `mode: "lite"`，checkpoint ID 仍为标准 `CP0`..`CP8`。
+- `decision=N/A` 的 CP 不适用于当前 CR，state-router 不得为该 CP 构造 result path、不得因缺少 CP result 而 BLOCKED；后续聚合校验可从 route_plan 或 aggregate applicability JSON 重建决策链。
+- `decision=WAIVED` 表示 CP 适用但被显式豁免，必须有 waiver reason/ref，不能当作 N/A 使用。
+- route_plan 可以因产品基线或 trait 添加 gate_profile 默认 stages 之外的 CP，但不得静默降级治理强度。CP2 / CP3 / CP5 / CP8 在 profile 外新增时必须保留标准 human gate 语义；若当前 profile 不能承载该硬门禁，route_plan 必须写入 `profile_upgrade_required[]` 并 BLOCKED。
+- 典型升级规则：`requires_architecture_review=true` 至少升级到 `architecture-major`；`requires_story_decomposition=true` 至少升级到能保留 CP5 设计确认的代码 profile；`docs-lite + has_new_implementation=true` 必须升级到 `standard-code`；`micro + has_new_design=true` 必须 BLOCKED 并要求升级。
+
+state-router 仍维护阶段机，但阶段序列必须从 `route_plan.stages[]` 推导，不得按全量阶段固定推进。推导规则为：
+
+| CP | phase |
+|---|---|
+| CP0 | `init` |
+| CP1 / CP2 | `requirement-clarification` |
+| CP3 | `solution-design` |
+| CP4 / CP5 | `story-planning` |
+| CP6 / CP7 | `story-execution` |
+| CP8 | `documentation` |
+
+`route_plan.phase_sequence` 是该映射去重后的结果；若 artifact 未包含该字段，state-router 必须按上表即时推导。某阶段全部 CP 均为 `N/A` 时，该阶段不进入推进序列；某阶段有任一 CP 适用或 waived，则该阶段保留并只检查适用 CP。
+
+CP 适用性由 `cr_trait` 决定：
+
+| cr_trait 字段 | 为 false / 空时影响 | 为 true 时影响 |
+|---|---|---|
+| `uses_existing_evidence_only` | 不触发特殊裁剪 | CP3 / CP4 / CP5 / CP6 / CP7 全部 `N/A`；CP2 仍按 scope / authz 风险决定是否人工确认 |
+| `has_new_design` | CP3 / CP4 / CP5 默认 `N/A` | CP3 / CP4 / CP5 必须适用，除非更细字段裁剪 |
+| `requires_architecture_review` | CP3 可 `lite` 或 `N/A` | CP3 必须 `mode=standard` 且 `human_gate=required` |
+| `requires_story_decomposition` | CP4 / CP5 默认 `N/A` | CP4 / CP5 必须适用，CP3 至少 `lite` |
+| `has_new_implementation` | CP6 默认 `N/A` | CP6 必须适用，并自动推导 CP7，除非存在显式 verification waiver |
+| `has_new_verification` | 无新实现时 CP7 默认 `N/A` | CP7 必须适用 |
+| `requires_subagent_dispatch` | dispatch 可以记录为 not-required / inline-fallback | 必须存在真实子 agent 调度证据，或有批准的 inline-fallback |
+
+CP1 不由 `cr_trait` 直接控制，而由 gate profile 与产品基线规则控制：`architecture-major`、`runtime-high-risk` 或 `product_baseline_refresh_required=true` 时 CP1 required；其他 profile 默认 CP1 N/A。
+
+CP2 的 `human_gate` 使用三级语义：
+
+| human_gate | 含义 |
+|---|---|
+| `required` | 必须人工确认，缺失则 BLOCKED |
+| `optional` | 自动预检可通过；存在 scope / authz / product-baseline 灰区时升级为 required |
+| `none` | 无人工门禁，仅限明确低风险 profile |
+
+CP2 升级为 required 的触发条件包括：`cr_type` 为 `product-scope` / `architecture` / `runtime`，`product_baseline_refresh_required=true`，`impact_surface` 包含 use-cases / requirements / scope / product-baseline，存在未关闭 scope/authz OPEN/LCQ，或授权边界发生变化。
+
+`human_gate=optional` 只有同时满足以下条件时可自动推进并记录 `approval_source=auto-clean-gate`：自动预检 `PASS` 或 `WAIVED`、Decision Brief 无待人工决策项、`meta-flow check human-gate` 无 ERROR、context check 无 ERROR、无 blocking/high-risk open item、无 scope/authz/product-baseline 灰区、用户未要求显式审查。任一条件不满足时必须升级为 `required` 并等待用户确认；自动推进后若用户在后续 24h 内要求回看，必须允许回退到该 CP 重新审阅。
+
 按阶段推进前，state-router 必须先读取 active CR 的 summary / CR-INDEX。若任一 active CR 命中以下条件，不得进入 Story 拆解、LLD 设计批次、story-planning 或 story-execution：
 
 - `product_baseline_refresh_required=true`
@@ -169,6 +229,8 @@ state-router 每次推进前必须刷新 `workflow_health`：
 大块集中需求默认归类为目标包，而不是 CR 列表。同一目标、同一 persona / user journey、共享 HLD、同一 release value 或需要多个 Story 才能交付的需求集合，必须先创建 / 复用 parent CR 或 Change Package 作为审计外壳，再委托 `meta-pm` 完整执行用户场景发现、需求澄清、SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE，并在 CP2 通过后进入 `solution-design`。只有目标、审批人、风险授权、交付节奏、回滚策略或审计边界不同，才允许拆出子 CR；普通开发工作拆 Story，不逐条拆 CR。
 
 ### 2. 按阶段检查退出条件
+
+下表是标准全量路径的阶段基线。存在 active CR route_plan 时，以 `route_plan.stages[]` 作为实际推进路径；表中不适用的 CP 必须由 `route_plan.checkpoint_applicability` 标记为 `N/A`，不得为跳过的 CP 生成仪式性 result JSON。
 
 | 当前阶段 | 退出条件 | 下一阶段 | 默认唤醒 Agent |
 |---|---|---|---|
@@ -198,12 +260,12 @@ state-router 每次推进前必须刷新 `workflow_health`：
 
 当用户询问“当前状态”“还有哪些 CR 需要推进”“建议如何推进”“待跟踪 CR”等问题时，state-router 不得只返回 `STATE.current.json.active_change` 或唯一 `status=active` 的正式 CR；必须生成 CR 盘点视图：
 
-1. 读取 `process/state/STATE.current.json.active_change`、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml`（若存在）、全部 `process/changes/CR-*.md` 正式 CR 和全部 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md` 台账。
+1. 读取 `process/state/STATE.current.json.active_change`、`process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson`、全部 `process/changes/CR-*.md` 正式 CR 和全部 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md` 台账；`process/changes/CR-INDEX.yaml` 若存在，只能作为 legacy read-only fallback 并应列为迁移警告。
 2. 若存在 `meta-flow check cr-tracking`，运行或要求运行该脚本检查 `--project-root .`；若无法运行，必须在回答中说明跳过原因。
 3. 输出必须固定分为五类：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。
 4. `candidate` / `spike_candidate` 是 backlog，不占执行锁，但必须在“还有哪些 CR 需要推进”回答中列出标题、优先级、阻塞前置、下一步和不授权边界。
 5. 若 `STATE.current.json.active_change` 指向已关闭 CR，或与正式 `status=active` 的 CR 不一致，必须先列为 `stale_status_conflicts`；不得因为状态冲突而隐藏 follow-up 台账候选项。
-6. 若存在独立 active CR（例如未占用 follow-up 候选编号的临时 CR），必须要求其在台账或 `CR-INDEX.yaml` 中建立 `related_active_cr`、`blocked_by`、`superseded_by` 或等价关系，否则列为同步缺口。
+6. 若存在独立 active CR（例如未占用 follow-up 候选编号的临时 CR），必须要求其在台账或 `CR-INDEX.json` 中建立 `related_active_cr`、`blocked_by`、`superseded_by` 或等价关系，否则列为同步缺口。
 7. 推进建议必须先收敛 active / blocked 正式 CR，再说明哪些 candidate 可启动、哪些必须等待前置 CR、哪些只适合 Spike。
 
 ### 3. 处理回退
@@ -216,10 +278,10 @@ state-router 每次推进前必须刷新 `workflow_health`：
 
 当用户请求从 follow-up tracking 台账启动候选 CR 时，state-router 必须先做冲突预检，再允许 `change-impact-analysis` 创建正式 CR：
 
-1. 读取台账路径、候选编号、`STATE.current.json.active_change`、`process/changes/CR-INDEX.yaml|json` 与 `process/state/CR-LEDGER.ndjson`、`process/changes/CR-INDEX.yaml`（若存在）和所有未关闭 `process/changes/CR-*.md`。
+1. 读取台账路径、候选编号、`STATE.current.json.active_change`、`process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson` 和所有未关闭 `process/changes/CR-*.md`；`CR-INDEX.yaml` 若存在，只能作为 legacy read-only fallback。
 2. `candidate` / `spike_candidate` 不占执行锁；`active` / `blocked` 的正式 CR 视为未完成。
 3. 比较受影响正式文档、Story / LLD 批次、文件 owner、外部接口、权限 / 安全边界、运行授权、风险接受项和来源决策 ID。
-4. 若无重叠，允许创建正式 CR，并把台账状态、`CR-INDEX.yaml|json` 和 `CR-LEDGER.ndjson` 改为 `active`。
+4. 若无重叠，允许创建正式 CR，并把台账状态、`CR-INDEX.json` 和 `CR-LEDGER.ndjson` 改为 `active`。
 5. 若存在重叠，返回 `blocked` 下一步，不得静默并行推进；host-orchestrator 必须发起人工决策，选项包括合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded`。
 
 ### 4. 回写状态
@@ -231,7 +293,7 @@ state-router 每次推进前必须刷新 `workflow_health`：
 
 ### 4.1 检查点结果同步
 
-每次推进前必须按 `checkpoint-manager` 契约读取检查点结果：
+每次推进前必须按 `checkpoint-manager` 契约读取检查点结果。若 active CR 有 route_plan，则本表只适用于 `checkpoint_applicability[CPx].applies=true` 的 CP；`decision=N/A` 的 CP 不读取必读文件、不调用 `meta-flow cp result-check`、不因文件不存在阻断推进。若存在历史 N/A result JSON，可以校验其 `not_applicable_reason` / `route_plan_ref`，但不得要求 CP6 / CP7 的 story dispatch 字段。
 
 | 检查点 | 必读文件 | 通过条件 |
 |---|---|---|
@@ -394,7 +456,7 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 |---|---|---|
 | 运行时状态 | `process/STATE.md` | 当前状态机实例 |
 | 状态模板 | `skills/state-router/templates/STATE-TEMPLATE.md` | 初始化与结构基线 |
-| CR 跟踪索引 | `process/changes/CR-INDEX.yaml` | active / blocked / candidate / spike_candidate / conflict 的机器可查询索引 |
+| CR 跟踪索引 | `process/changes/CR-INDEX.json` | active / blocked / candidate / spike_candidate / conflict 的机器可查询索引 |
 | 自动检查结果 | `process/checks/CP*.md` | 自动检查点和自动预检证据 |
 | 人工审查稿 | `process/checkpoints/CP*.md` | 人工检查点 checklist 与审查结果 |
 

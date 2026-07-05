@@ -26,6 +26,6 @@ release_decision: NOT_READY
 
 ## 3. 台账边界
 
-`FEEDBACK.md` 是反馈回流入口，不是正式 follow-up tracking 台账。`follow-up tracking 候选=yes` 的条目必须由 CP8 分流写入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并同步 `process/changes/CR-INDEX.yaml|json 与 process/state/CR-LEDGER.ndjson` 后，才可作为后续 CR 候选推进。
+`FEEDBACK.md` 是反馈回流入口，不是正式 follow-up tracking 台账。`follow-up tracking 候选=yes` 的条目必须由 CP8 分流写入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并同步 `process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson` 后，才可作为后续 CR 候选推进。
 
 默认不生成独立 `POST-RELEASE-OBSERVATION.md`；仅 `release_artifact_profile=full` 或用户明确要求时，才把本文件的观察计划拆出为独立文档。

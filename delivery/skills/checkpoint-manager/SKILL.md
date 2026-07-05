@@ -77,7 +77,10 @@ status: active
 | `PASS` | 满足出口条件，可推进 |
 | `FAIL` | 不满足出口条件，不可推进 |
 | `BLOCKED` | 缺少输入或存在阻断，需回退或补充 |
+| `N/A` | 该 CP 对当前 CR 类型不适用，通常来自 `route_plan.checkpoint_applicability`，必须写明不适用原因 |
 | `WAIVED` | 人工接受风险后放行 |
+
+`N/A` 与 `WAIVED` 必须严格区分：`N/A` 表示检查点本身不适用于当前 CR，不需要也不应产生该 CP 的设计 / 实现 / 验证证据；`WAIVED` 表示检查点适用，但经明确风险接受跳过或放行。
 
 自动检查点存在任一 `FAIL` 且未被 `WAIVED` 时，结论必须为 `FAIL` 或 `BLOCKED`，不得进入人工确认。
 
@@ -151,14 +154,22 @@ CP 检查应优先产出机器可读 `*.result.json`，Markdown 只作为摘要�
 
 ```bash
 meta-flow cp result-check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
+meta-flow cp result-check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root . --mode silent
 meta-flow cp render-summary --result process/checks/CP6-STORY-CR123-S01.result.json
 meta-flow cp ledger-append --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
 meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint
+meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint --mode silent
 meta-flow failure route-check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
 meta-flow waiver check --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .
 ```
 
-CP6 / CP7 的 result JSON 必须包含 `story_id`、`context_ref`、`dispatch_refs` 和 `evidence_ref`。存在 blocker 或未豁免的高严重度失败时，`decision` 不得为 `PASS` / `PASS_WITH_RISK`。
+CP6 / CP7 的 result JSON 必须包含 `story_id`、`context_ref`、`dispatch_refs` 和 `evidence_ref`。若 `route_plan.checkpoint_applicability.CP6|CP7.decision=N/A`，state-router 不应为该 CP 构造 result 路径或调用 result-check；若已有历史 N/A result JSON，则必须包含 `not_applicable_reason`、`route_plan_ref` 或 `checkpoint_applicability`，且不要求 story / context / dispatch / evidence 字段。存在 blocker 或未豁免的高严重度失败时，`decision` 不得为 `PASS` / `PASS_WITH_RISK`。
+
+`AGENT-DISPATCH-LEDGER.ndjson` 必须区分三类 dispatch 事实：
+
+- 真实子 agent 调度：`event_type=dispatch`，保留 `canonical_role`、`tool_name`、`status` 等字段。
+- 不需要调度：`event_type=dispatch_not_required`，必须包含 `dispatch_id`、`canonical_role`、`dispatch_mode=not-required`、`reason`、`status`。
+- inline fallback：`event_type=inline_fallback`，必须包含 `dispatch_id`、`canonical_role`、`dispatch_mode=inline-fallback`、`fallback_reason`、`approved_by`、`status`；没有批准字段时不得把缺失子 agent 伪装成已调度。
 
 CP6 / CP7 不得默认把完整 Story LLD、完整 IMPLEMENTATION、完整 TEST-REPORT、完整 REVIEW、完整 diff 或完整 agent transcript 复制进 Markdown 检查文件；只写 `context_ref`、`return_packet_ref`、`evidence_ref`、`dispatch_refs`、检查项结论和必要的一句话摘要。需要审计全文时，记录 `full_doc_read_reason`。
 
@@ -171,7 +182,7 @@ CP6 / CP7 不得默认把完整 Story LLD、完整 IMPLEMENTATION、完整 TEST-
 checkpoint_id: "CP{n}"
 checkpoint_name: ""
 type: "auto | auto_precheck | rolling_auto | batch_auto_then_manual"
-status: "PASS | FAIL | BLOCKED | WAIVED"
+status: "PASS | FAIL | BLOCKED | N/A | WAIVED"
 owner: ""
 created_at: ""
 checked_at: ""
@@ -210,7 +221,7 @@ manual_checkpoint: ""
 
 ## 结论
 
-- 结论：`PASS | FAIL | BLOCKED | WAIVED`（CP7 可使用 `PASS | PASS_WITH_RISK | WAIVED | NEEDS_REWORK | NEEDS_DESIGN_CLARIFICATION | BLOCKED`）
+- 结论：`PASS | FAIL | BLOCKED | N/A | WAIVED`（CP7 可使用 `PASS | PASS_WITH_RISK | N/A | WAIVED | NEEDS_REWORK | NEEDS_DESIGN_CLARIFICATION | BLOCKED`）
 - 阻断项：
 - 豁免项：
 - 下一步：

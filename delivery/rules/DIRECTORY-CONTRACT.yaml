@@ -72,7 +72,7 @@ current_discovery:
     - incomplete
   refs:
     state_ref: process/state/STATE.current.json
-    cr_index_ref: process/changes/CR-INDEX.json|process/changes/CR-INDEX.yaml
+    cr_index_ref: process/changes/CR-INDEX.json
     context_ref: process/context/*
     checkpoint_ref: process/checkpoints/*
     story_packet_ref: process/context/stories/*
@@ -107,7 +107,7 @@ zone_read_rules:
 compatibility:
   cr_index_format_priority:
     - process/changes/CR-INDEX.json
-    - process/changes/CR-INDEX.yaml
   legacy_fallbacks:
+    - process/changes/CR-INDEX.yaml
     - process/STATE.md
     - process/DEVELOPMENT-PLAN.yaml
