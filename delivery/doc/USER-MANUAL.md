@@ -243,10 +243,17 @@ Meta Flow 生成的文档默认分为三类：
 2. `host-orchestrator` 将需求澄清阶段委托给 `meta-pm`。你可以直接与 `meta-pm` 多轮讨论 Scenario Gray Areas：先识别 3-4 个会影响交付的灰区，让你选择 1-3 个重点讨论；标准模式下至少会出现 1 个 `SGQ-*` 用户可见场景确认问题，并记录你的回答和复述确认；未选但有价值的想法进入 Deferred Ideas。随后沉淀 `USE-CASES.md` 和 `REQUIREMENTS.md`，写入 CP1 / CP2 自动检查结果，并在你确认“可提交给 host-orchestrator 汇总”后交还。
 3. CP2 Decision Brief 人工确认通过后，`host-orchestrator` 将 HLD 设计阶段委托给 `meta-se`。你可以直接与 `meta-se` 讨论 Architecture Gray Areas 和 advisor table；advisor lane 使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格形成候选方案输入。随后 `meta-se` 输出 `BLUEPRINT.md`、`DOMAIN-MAP.md`、`DEPENDENCY-MAP.md`，并生成包含适用性矩阵、Use Case → Architecture Traceability 和关键场景模拟的 `HLD.md` 与 CP3 自动预检；当你确认“HLD 草案可提交给 host-orchestrator 发起 CP3”后交还。
 4. CP3 人工确认通过后，`meta-se` 先输出 `docs/design/FEATURE-DESIGN-MATRIX.md`，判断哪些 Feature 需要 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`，并为每个 Story 标记 `feature_design_refs` 与 `lld_policy=full-lld|technical-note|waived`；随后输出 `process/DEVELOPMENT-PLAN.yaml`（Story / Wave / status / task 机器真相源）、Story 卡片和 CP4 自动预检。`STORY-BACKLOG.md` / `STORY-STATUS.md` 只作为 optional legacy / generated views，并用 `meta-flow story plan-check --project-root .` 检查 drift。CP4 不再单独人工确认，其摘要汇入 CP5。
-5. `host-orchestrator` 仍处于 story-planning，按 Story DAG 确定覆盖全部目标 Story 的设计证据批次，组织 `meta-dev` 并行输出设计证据：高风险 Story 生成完整 `STORY-{id}-{story_slug}-LLD.md`，`standard-lite` / `allows_batch_lld=true` 下低中风险且共享实现面的 Story 可写入 `BATCH-{cr_id-or-batch_id}-{slug}-LLD.md#story-story-{id}`，低风险 Story 可在 Story 卡片内补 `## 技术说明`，明确豁免的 Story 写 waived 证据，并全部生成 CP5 自动预检。多个 `meta-dev` 遇到实现灰区时只写 clarification queue，由 `host-orchestrator` 合并后一次性问你，再把答案分发回对应 `meta-dev`。队列收敛后，host-orchestrator 发起一次全量人工确认。
+5. `host-orchestrator` 仍处于 story-planning，按 Story DAG 确定覆盖全部目标 Story 的设计证据批次，组织 `meta-dev` 并行输出设计证据：高风险 Story 生成完整 `STORY-{id}-{story_slug}-LLD.md`，`standard-lite` / `allows_batch_lld=true` 下低风险、同质且共享实现面的 Story 可写入 `BATCH-{cr_id-or-batch_id}-{slug}-LLD.md#story-story-{id}`，低风险 Story 可在 Story 卡片内补 `## 技术说明`，明确豁免的 Story 写 waived 证据，并全部生成 CP5 自动预检。`full-lld` 必须覆盖工程依据、目标、需求、模块拆分、代码结构、数据模型、API、流程、技术细节、安全、测试、实施、风险和 DoD 等 14 段语义要点；`batch-lld` 必须标注 batch scope、homogeneous story pattern、risk level 和 shared contract，且不得用于 runtime / security / credential / production-write 等高风险 Story。多个 `meta-dev` 遇到实现灰区时只写 clarification queue，由 `host-orchestrator` 合并后一次性问你，再把答案分发回对应 `meta-dev`。队列收敛后，host-orchestrator 先执行 CP5 capsule-first 和 LLD 结构检查，再发起一次全量人工确认。
 6. 全量 CP5 确认后进入 story-execution；当前 Wave Story 的 `dev_gate` 满足后，`host-orchestrator` 自动按 Wave 调度 `meta-dev`，并在 `process/state/AGENT-DISPATCH-LEDGER.ndjson` 与 handoff `dispatch` 中记录证据。`meta-dev` 先用 `implementation-execution` 形成实现对象清单、设计契约映射、测试 / Fixture 计划、最小实现切片、平台差异和交接摘要；复杂 / 高风险 / Prompt-Skill / Workflow / 安装器 / 护栏 / 平台适配 / 发布相关 Story 写完整 `IMPLEMENTATION.md`，低风险 Story 可写 Story 摘要或 DEV-LOG。实现完成后写入 CP6 编码完成检查结果。
 7. 每个 Story 开发完成且 CP6 通过后，`host-orchestrator` 自动调度 `meta-qa` 执行验证，并记录调度证据。验证时 `meta-qa` 会使用 `verification-execution` 消费 CP6 实现执行证据、设计证据和 `TEST-MATRIX.md`，输出验证对象清单、验证追踪矩阵、设计契约验证、分层验证计划、fixture / dry-run / 人工审查、问题和剩余风险，再使用 `quality-review` 固化 TEST-REPORT / REVIEW / FIXES 并写入 CP7。CP7 结论为 `PASS` / `WAIVED` 时进入 verified，`PASS_WITH_RISK` 时可推进但风险进入 CP8，`NEEDS_REWORK` 回 meta-dev，`NEEDS_DESIGN_CLARIFICATION` 回 meta-se / host-orchestrator，`BLOCKED` 阻断。
 8. `meta-doc` 最后输出 README 和 USER-MANUAL。随后 `meta-qa` 使用 `release-readiness` 先生成 `process/release/RELEASE-CONTEXT.yaml` 和 `process/context/CP8-DELIVERY-CONTEXT.yaml`，再按 `release_artifact_profile=minimal|compact|full` 裁剪发布文档。CP8 的 `release_decision=READY|READY_WITH_RISK` 才可发起人工终验，`NOT_READY` 阻断，`RELEASED|FAILED` 必须有独立真实发布授权；CP8 Decision Brief 和人工终验通过后进入 delivered。
+
+人工门禁 approve 或自动 CP `PASS` / `WAIVED` 后，回填审批结果不是本轮终点。host-orchestrator 必须继续消费 active CR 的 route plan，自动执行所有 `human_gate=none` 的 CP / 阶段准备，直到下一个 required human gate、delivered、失败路由、授权边界或 workflow health 阈值才停。典型例子是 CP3 approve 后应穿过 CP4 自动预检并打开 CP5，而不是等待用户再说“继续推进 CP5”。该行为可用以下命令回归检查：
+
+```bash
+meta-flow check state-transition --route-plan process/checks/CP0-CR158.route-plan.json --result process/checks/CP4-CR158.result.json --project-root .
+meta-flow check state-transition --route-plan process/checks/CP0-CR158.route-plan.json --approved-gate CP3 --project-root .
+```
 
 ### 6.2 检查点文件
 
@@ -255,6 +262,16 @@ Meta Flow 生成的文档默认分为三类：
 CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后会生成 `process/context/*-CONTEXT.yaml` 阶段上下文胶囊。它不替代正式文档，也不需要用户手工维护；作用是让下游 Agent 先读取摘要、证据路径、决策项、风险和不授权项，只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档，从而减少 token 消耗。
 
 同一 CR 的 CP 不以内联章节作为真相源。`process/changes/CR-*.md` 只维护 `Checkpoint Index`、状态摘要和 ref；自动 CP 真相源是 `process/checks/CP*.result.json`，人工门禁真相源是 `process/checkpoints/CP*.md`，事件真相源是 `CHECKPOINT-LEDGER.ndjson` / `GATE-LEDGER.ndjson`。如果需要看完整 CP 详情，应打开 index 中的 ref，而不是要求 CR 正文复制 CP result、Decision Brief 或 review 全文。
+
+CP result 和事件台账应使用机器可读命令闭环：
+
+```bash
+meta-flow cp result-check --result process/checks/CP4-CR158.result.json --check-consistency --project-root .
+meta-flow cp ledger-append --result process/checks/CP4-CR158.result.json --project-root .
+meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint
+```
+
+`--check-consistency` 会在存在 `STATE.current.json` 和 route plan 时同步执行 state-transition 检查，防止自动 CP 通过后状态停在等待用户继续。
 
 | CP | 名称 | 类型 | 文件 |
 |----|------|------|------|
@@ -289,6 +306,16 @@ CP6 / CP7 自动检查结果必须包含 `Agent Dispatch Evidence` 小节，用�
 | CP6 | `process/context/CP6-IMPLEMENTATION-CONTEXT.yaml` | 当前 Wave / Story 的实现输入和设计契约摘要 |
 | CP7 | `process/context/CP7-VERIFICATION-CONTEXT.yaml` | 验证范围、实现证据、测试矩阵和风险摘要 |
 | CP8 | `process/context/CP8-DELIVERY-CONTEXT.yaml` | 发布准备、文档缺口、风险接受、不授权项和 follow-up 摘要 |
+
+CP5 发起前必须额外通过 capsule-first 与 LLD 结构检查：
+
+```bash
+meta-flow story cp5-context-check --context process/context/CP5-LLD-CONTEXT.yaml --project-root .
+meta-flow story lld-check --lld process/stories/STORY-S01-example-LLD.md --evidence-type full-lld --project-root .
+meta-flow story lld-check --lld process/stories/BATCH-CR123-adapters-LLD.md --evidence-type batch-lld --project-root .
+```
+
+`cp5-context-check` 会阻止 CP5 默认读取完整 HLD / ADR / TEST-MATRIX / TEST-REPORT / REVIEW，除非 context capsule 写明 `full_doc_read_reason` 或 `read_expansion_log`。`lld-check` 负责机械结构和分级约束；内容一致性仍由 CP5 审查判断。
 
 CP2 / CP3 还会生成讨论追溯文件：
 
@@ -369,6 +396,15 @@ reject                   # 不通过并回退
 用户直接在对话中确认时，host-orchestrator 仍必须把结论回填到对应 `process/checkpoints/CP*.md`。
 
 人工门禁消息本身也会被校验：必须包含 checklist 路径、自动预检结论、Context Capsule 摘要、审批者摘要、决策分层、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。对应 checklist 的 Decision Brief 必须完整，并包含 `Decision Collection Coverage`，列出已扫描来源、候选问题数、纳入待决策数和 N/A / 缺失原因；这样你不需要再打开长文档自行查找是否还有遗漏问题。对话消息可按 `decision_brief_profile=full|compact|summary` 压缩，但不能省略整体目标、`approve` 后果、高风险 / 阻断决策、不授权项、阻塞影响和完整 checklist 路径。低风险、可回退、实现细节类事项默认归入 agent 默认处理或仅审计记录，不进入你的主确认表。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须列为不授权项；`approve` 只接受表内推荐方案，不代表授权这些操作。
+
+发起人工门禁前，建议先用命令生成并自检 launch message，再用 human-gate checker 强制校验 checkpoint 与发起消息：
+
+```bash
+meta-flow ask-user human-gate --checkpoint process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md --output process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.launch.md --check-output
+meta-flow check human-gate --checkpoint process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md --launch-message-file process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.launch.md --require-launch-message
+```
+
+如果 `--require-launch-message` 未提供发起消息文件，或发起消息缺少 checklist 路径、待决策项数量、决策表或 exact 回复，检查会失败；不得先发起人工门再事后补格式。
 
 ### 6.5.1 CP8 follow-up tracking
 
@@ -460,6 +496,17 @@ host-orchestrator 必须输出五类清单：`active formal CR`、`blocked forma
 ```bash
 meta-flow check cr-tracking --project-root .
 ```
+
+CP approval、CP result 通过、CR close 或状态修复后，应使用 status-sync 自动刷新 CR frontmatter、summary、CR-INDEX、`STATE.current.json` 和 lifecycle ledger，避免手工更新遗漏：
+
+```bash
+meta-flow cr status-sync --id CR-158 --status closed --readiness READY_WITH_RISK --gate-status cp8_approved --project-root .
+meta-flow cr summary --id CR-158 --project-root .
+meta-flow cr index --project-root .
+meta-flow cr check --project-root .
+```
+
+`status-sync` 不复制 CP result 或 Decision Brief 正文到 CR；CR 正文仍只保留 checkpoint refs 和状态摘要。
 
 ### 6.6 何时显式声明 meta-self-dev
 

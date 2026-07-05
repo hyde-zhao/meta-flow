@@ -435,7 +435,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 2. Decision Brief 必须包含 `### Decision Collection Coverage`，逐项列出适用来源、扫描状态、候选问题数、纳入待决策数和分类 / N/A 原因；缺少覆盖报告时不得发起人工确认。
 3. 若下游产物中存在 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类事项，必须先分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`。
 4. `decision-item` 必须写入待人工决策清单；每项必须有 `decision_type`，取值为 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。
-5. 发起前必须运行 `meta-flow check human-gate` 校验 checkpoint 文件；如果存在待发送消息草稿，必须同时用 `--launch-message-file` 校验对话内容包含 checklist 路径、自动预检结论、决策收集覆盖摘要、待决策项数量、待决策表格和三个 exact 回复。
+5. 发起前必须运行 `meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --output <launch-message> --check-output` 生成并自检发起消息，并运行 `meta-flow check human-gate --checkpoint <process/checkpoints/CP*.md> --launch-message-file <launch-message> --require-launch-message` 校验 checkpoint 文件和对话内容；对话内容必须包含 checklist 路径、自动预检结论、决策收集覆盖摘要、待决策项数量、待决策表格和三个 exact 回复。
 6. 若待决策项数量大于 0 但发起消息未打印表格，检查点视为发起失败；若待决策项为 0，消息必须打印 `本轮待人工决策项：0` 并说明原因。
 7. 用户对关键语义做出修订后，必须更新 DQ、重新生成 Decision Brief 和 Decision Collection Coverage，并重新发起确认，不得仅在后续文档静默修正。
 
@@ -733,12 +733,15 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 14 | clarification 队列已收敛 | 已回答项、转 OPEN / Spike 项、阻断项为 0、跨 Story 契约和 merge order 均已写入 Decision Brief |
 | 15 | lld_policy 分级合理 | `full-lld` / `batch-lld` / `technical-note` / `waived` 与触发原因一致，高风险 Story 未被降级；`batch-lld` 仅用于 `standard-lite` / `allows_batch_lld=true` |
 | 16 | Feature 设计输入被消费 | Story 的 `feature_design_refs` 已在 LLD / 技术说明 / waived 证据中引用 |
+| 17 | CP5 context capsule-first 通过 | 已运行 `meta-flow story cp5-context-check --context <process/context/CP5-*-CONTEXT.yaml> --project-root .`；默认读取集合未包含完整 HLD / ADR / TEST-MATRIX / TEST-REPORT / REVIEW，除非写明 `full_doc_read_reason` 或 `read_expansion_log` |
+| 18 | LLD 结构自动检查通过 | 每份设计证据已运行 `meta-flow story lld-check --lld <evidence> --evidence-type full-lld|batch-lld|technical-note|waived`；`full-lld` 覆盖 14 段语义要点，`batch-lld` 包含 batch scope / homogeneous pattern / risk level / shared contract，且高风险 Story 未使用 batch-lld |
 
 ### Exit Criteria
 
 | 条目 | 说明 |
 |---|---|
 | 自动预检通过 | 全部目标 Story 的设计证据可实现性检查无阻断项 |
+| CP5 token policy 通过 | CP5 context capsule-first 检查无 ERROR，全文档扩展均有理由，机械结构检查由 `lld-check` 覆盖 |
 | clarification 队列收敛 | `blocks_lld=true` 的未回答项为 0；非阻断 OPEN / Spike 已有 owner 和重访条件 |
 | 人工确认完成 | 全部目标 Story 的独立 LLD / Batch LLD Story 锚点 / 技术说明 / waived 证据被统一批准 |
 | dev_gate 可更新 | 全部目标 Story 可进入 `lld-approved`，当前 Wave 满足时进入 `dev_ready` |
@@ -988,7 +991,7 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 - [ ] 人工检查稿包含 Decision Brief
 - [ ] host-orchestrator 发起关键人工确认时明确提示 checklist 文件路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复
 - [ ] 发起消息已复述 `approve` 接受哪些 DQ，且不授权项已独立列出
-- [ ] `meta-flow check human-gate` 校验 checkpoint 文件和发起消息通过
+- [ ] `meta-flow ask-user human-gate --output <launch-message> --check-output` 与 `meta-flow check human-gate --require-launch-message` 校验 checkpoint 文件和发起消息通过
 - [ ] 人工审查后对应 `process/checkpoints/CP*.md` 已填入结论
 - [ ] `process/checks/CP*.result.json` 与 `process/state/CHECKPOINT-LEDGER.ndjson` 与检查文件状态一致
 

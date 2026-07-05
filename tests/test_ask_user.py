@@ -8,6 +8,7 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow import ask_user
+from meta_flow.checks import human_gate
 from meta_flow.checks.human_gate import collect_launch_message_errors, collect_checkpoint_errors
 
 
@@ -122,6 +123,28 @@ class AskUserTests(unittest.TestCase):
             )
 
             self.assertEqual(1, exit_code)
+
+    def test_human_gate_check_can_require_launch_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "CP3-HLD-REVIEW.md"
+            checkpoint.write_text(CHECKPOINT_TEXT, encoding="utf-8")
+
+            exit_code = human_gate.main(["--checkpoint", str(checkpoint), "--require-launch-message"])
+
+            self.assertEqual(1, exit_code)
+
+    def test_ask_user_output_can_self_check_generated_launch_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "CP3-HLD-REVIEW.md"
+            output = Path(directory) / "CP3-LAUNCH-MESSAGE.md"
+            checkpoint.write_text(CHECKPOINT_TEXT, encoding="utf-8")
+
+            exit_code = ask_user.main(
+                ["human-gate", "--checkpoint", str(checkpoint), "--output", str(output), "--check-output"]
+            )
+
+            self.assertEqual(0, exit_code)
+            self.assertTrue(output.is_file())
 
 
 if __name__ == "__main__":

@@ -423,7 +423,8 @@ def _print_check_help() -> None:
         "usage: meta-flow check <validator> [options]\n\n"
         "Validators:\n"
         "  human-gate   Validate CP2/CP3/CP5/CP8 Decision Brief and optional launch message.\n"
-        "  cr-tracking  Validate CR tracking consistency across STATE, CR files, follow-up tables, and CR-INDEX.\n\n"
+        "  cr-tracking       Validate CR tracking consistency across STATE, CR files, follow-up tables, and CR-INDEX.\n"
+        "  state-transition  Validate approve/auto-CP advance-to-next-gate behavior.\n\n"
         "  design-ownership       Validate FEATURE-REGISTRY ownership fields.\n"
         "  story-to-feature-trace Validate Story feature refs and LLD policy.\n\n"
         "  story-return          Validate Story Return Packet against Story context packet.\n"
@@ -448,6 +449,8 @@ def _print_check_help() -> None:
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP5-STORY-DESIGN-REVIEW.md --launch-message-file process/checkpoints/CP5-LAUNCH-MESSAGE.md\n"
         "  meta-flow check cr-tracking --project-root .\n"
+        "  meta-flow check state-transition --route-plan process/checks/CP0-CR158.route-plan.json --result process/checks/CP4-CR158.result.json --project-root .\n"
+        "  meta-flow check state-transition --route-plan process/checks/CP0-CR158.route-plan.json --approved-gate CP3 --project-root .\n"
         "  meta-flow check design-ownership --project-root .\n"
         "  meta-flow check story-to-feature-trace --project-root .\n"
         "  meta-flow check story-return --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
@@ -485,6 +488,10 @@ def _run_check(args: list[str]) -> None:
         from meta_flow.checks import cr_tracking
 
         raise SystemExit(cr_tracking.main(forwarded))
+    if validator == "state-transition":
+        from meta_flow.checks import state_transition
+
+        raise SystemExit(state_transition.main(forwarded))
     if validator == "design-ownership":
         from meta_flow.design import feature_registry
 
@@ -568,7 +575,7 @@ def _run_check(args: list[str]) -> None:
     raise SystemExit(
         "未知检查器: "
         f"{validator}. 目前支持: human-gate, cr-tracking, design-ownership, story-to-feature-trace, "
-        "story-return, evidence-index, lld-structure, design-delta, cp-result, event-ledger, read-expansion, "
+        "state-transition, story-return, evidence-index, lld-structure, design-delta, cp-result, event-ledger, read-expansion, "
         "failure-routing, waiver-policy, "
         "module-boundaries, imports, architecture-fitness, risk-rings, capability-claims, concept-overlap, "
         "package-identity, truth-map, retention-policy"

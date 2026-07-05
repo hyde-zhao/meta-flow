@@ -188,6 +188,13 @@ def _frontmatter(text: str) -> str:
     return match.group(1) if match else ""
 
 
+def _replace_frontmatter(text: str, frontmatter: str) -> str:
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        return f"---\n{frontmatter.rstrip()}\n---\n\n{text}"
+    return f"---\n{frontmatter.rstrip()}\n---\n" + text[match.end() :]
+
+
 def parse_frontmatter(text: str) -> dict[str, Any]:
     values: dict[str, Any] = {}
     current_list_key = ""
@@ -204,6 +211,44 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
         current_list_key = key
         values[key] = _strip_scalar(value) if value else []
     return values
+
+
+def _format_frontmatter_value(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def update_frontmatter_fields(path: Path, updates: dict[str, str]) -> bool:
+    """Update scalar frontmatter fields, preserving unrelated body content."""
+
+    clean_updates = {key: value for key, value in updates.items() if value != ""}
+    if not clean_updates:
+        return False
+    text = path.read_text(encoding="utf-8")
+    frontmatter = _frontmatter(text)
+    lines = frontmatter.splitlines()
+    seen: set[str] = set()
+    next_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if ":" not in stripped or stripped.startswith("#") or line.startswith((" ", "\t")):
+            next_lines.append(line)
+            continue
+        key = stripped.split(":", 1)[0].strip()
+        if key in clean_updates:
+            indent = line[: len(line) - len(line.lstrip())]
+            next_lines.append(f"{indent}{key}: {_format_frontmatter_value(clean_updates[key])}")
+            seen.add(key)
+        else:
+            next_lines.append(line)
+    for key, value in clean_updates.items():
+        if key not in seen:
+            next_lines.append(f"{key}: {_format_frontmatter_value(value)}")
+    updated = _replace_frontmatter(text, "\n".join(next_lines))
+    if updated == text:
+        return False
+    path.write_text(updated, encoding="utf-8")
+    return True
 
 
 def parse_inline_list(value: Any) -> list[str]:
@@ -1179,6 +1224,99 @@ def close_cr(project_root: Path, cr_id: str, *, readiness: str) -> dict[str, Pat
     }
 
 
+def sync_cr_status(
+    project_root: Path,
+    cr_id: str,
+    *,
+    status: str = "",
+    readiness: str = "",
+    gate_status: str = "",
+) -> dict[str, Path]:
+    project_root = project_root.resolve()
+    crs = discover_formal_crs(project_root)
+    if cr_id not in crs:
+        raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
+    cr_path = crs[cr_id]
+    frontmatter_updates: dict[str, str] = {}
+    if status:
+        frontmatter_updates["lifecycle_status"] = status
+        existing = parse_frontmatter(cr_path.read_text(encoding="utf-8"))
+        if "status" in existing:
+            frontmatter_updates["status"] = status
+    if readiness:
+        frontmatter_updates["readiness_status"] = readiness
+    if gate_status:
+        frontmatter_updates["gate_status"] = gate_status
+    frontmatter_changed = update_frontmatter_fields(cr_path, frontmatter_updates)
+
+    summary = summary_from_cr_file(project_root, cr_path, readiness=readiness or None)
+    if status:
+        summary["status"] = status
+    if gate_status:
+        summary["gate_status"] = gate_status
+    summary_path = write_summary(project_root, cr_id, summary)
+    evidence_path = write_evidence_index(project_root, cr_id, summary)
+    index_path = write_index(project_root)
+    state_path = project_root / STATE_CURRENT_REL
+    if state_path.is_file():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        patch: dict[str, Any] = {"updated_at": now_utc()}
+        if status in FINISHED_STATUSES and state.get("active_change") == cr_id:
+            patch.update(
+                {
+                    "active_change": None,
+                    "active_context_ref": None,
+                    "current_phase": "delivered" if status == "closed" else str(state.get("current_phase") or "delivered"),
+                    "pending_gate": None,
+                    "pending_checklist_path": None,
+                    "next_action": {
+                        "type": "done",
+                        "text": f"{cr_id} status synced as {status}; choose next CR.",
+                    },
+                }
+            )
+        elif status in {"active", "proposed", "blocked"} and not state.get("active_change"):
+            patch.update(
+                {
+                    "active_change": cr_id,
+                    "next_action": {
+                        "type": "status_synced",
+                        "text": f"{cr_id} status synced as {status}; continue from route plan.",
+                    },
+                }
+            )
+        if len(patch) > 1:
+            current.update_current_state(
+                project_root,
+                patch,
+                actor="meta_flow.workflow.cr_lifecycle",
+                reason=f"status-sync {cr_id}",
+            )
+    ledger_path = append_ledger_event(
+        project_root,
+        {
+            "event": "status_sync",
+            "id": cr_id,
+            "cr_type": summary.get("cr_type"),
+            "status": summary.get("status"),
+            "readiness": summary.get("readiness"),
+            "gate_status": summary.get("gate_status"),
+            "summary_ref": _rel(project_root, summary_path),
+            "full_ref": summary.get("full_ref"),
+            "evidence_index_ref": _rel(project_root, evidence_path),
+            "frontmatter_changed": frontmatter_changed,
+            "synced_at": now_utc(),
+        },
+    )
+    return {
+        "cr": cr_path,
+        "summary": summary_path,
+        "evidence_index": evidence_path,
+        "index": index_path,
+        "ledger": ledger_path,
+    }
+
+
 def collect_check_errors(project_root: Path) -> list[str]:
     project_root = project_root.resolve()
     errors: list[str] = []
@@ -1506,6 +1644,7 @@ def _print_cr_help() -> None:
         "  brief      Print a goal-oriented CR brief from summary/frontmatter.\n"
         "  goal-brief Print all CRs attached to one goal_ref.\n"
         "  impact-report Print a side-effect-free impact surface migration report as JSON.\n"
+        "  status-sync Sync one CR frontmatter, summary, CR-INDEX, ledger, and active STATE pointer.\n"
         "  close      Close a CR logically: summary + evidence index + ledger event.\n"
         "  check      Validate CR ledger, index, summaries, and active state refs.\n"
         "  conflicts  Compare active/proposed/blocked CR conflict keys from CR-INDEX.json.\n\n"
@@ -1517,6 +1656,7 @@ def _print_cr_help() -> None:
         "  meta-flow cr brief --id CR-101 --mode enforce --project-root .\n"
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow cr impact-report --project-root .\n"
+        "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_approved --project-root .\n"
         "  meta-flow cr close --id CR-101 --readiness READY_WITH_RISK --project-root .\n"
         "  meta-flow cr conflicts --id CR-102 --project-root .\n"
     )
@@ -1535,6 +1675,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", default="Bootstrap Meta Flow adoption readiness for this target project.")
     parser.add_argument("--gate-status", default="cp2_pending")
     parser.add_argument("--readiness", default="READY")
+    parser.add_argument("--status", default="")
     parser.add_argument("--goal-ref", default="")
     parser.add_argument("--mode", choices=["audit", "enforce"], default=None)
     parser.add_argument("--output", type=Path, default=None)
@@ -1595,6 +1736,19 @@ def main(argv: list[str] | None = None) -> int:
         for key, path in paths.items():
             print(f"{key}: {path}")
         return 0
+    if command == "status-sync":
+        if not parsed.cr_id:
+            raise SystemExit("--id is required")
+        paths = sync_cr_status(
+            project_root,
+            parsed.cr_id,
+            status=parsed.status,
+            readiness=parsed.readiness if "--readiness" in args else "",
+            gate_status=parsed.gate_status if "--gate-status" in args else "",
+        )
+        for key, path in paths.items():
+            print(f"{key}: {path}")
+        return 0
     if command == "check":
         errors = collect_check_errors(project_root)
         warnings = collect_check_warnings(project_root)
@@ -1615,7 +1769,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- CONFLICT: {conflict}")
         return 1 if conflicts else 0
     raise SystemExit(
-        f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, close, check, conflicts"
+        f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, status-sync, close, check, conflicts"
     )
 
 

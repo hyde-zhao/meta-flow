@@ -317,7 +317,7 @@ CP2 / CP3 / CP5 / CP8 发起前必须额外确认 Decision Brief 与 gate ledger
 - `decision-item` 均已写入本轮 checkpoint Decision Brief，并通过 `GATE-LEDGER.ndjson` 或 gate launch event 记录 `id/gate/decision_type/question/recommendation/alternatives/pros_cons/impact_risk/rollback_switch/status/source`。
 - `decision_collection_coverage[]` 已记录本轮 gate 的来源扫描覆盖，包含每个适用来源的 `source_type/source_path/scan_status/candidate_count/included_decision_count/classification_or_na_reason`。
 - 本轮发起消息、`pending_decision_ids` 与 `process/checkpoints/CP*.md` 的 Decision Brief 决策表一致；若不一致，不得把当前 gate 状态置为 `awaiting-user`。
-- 门禁消息草稿通过 `meta-flow check human-gate --checkpoint <process/checkpoints/CP*.md> --launch-message-file <path>` 校验后，才能发起人工确认。
+- 门禁消息必须通过 `meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --output <launch-message> --check-output` 生成并自检，并通过 `meta-flow check human-gate --checkpoint <process/checkpoints/CP*.md> --launch-message-file <launch-message> --require-launch-message` 校验后，才能发起人工确认。
 - 若用户修订了范围、安全、运行授权或风险接受含义，必须把相关 DQ 退回 `open`，重新生成 Decision Brief 和发起消息。
 
 ### 5. Story 并行调度队列
@@ -345,6 +345,8 @@ CP5 发起前必须额外检查 `lld_clarification_queue`：
 - 任一 item 满足 `blocks_lld=true` 且 `status` 不是 `answered|resolved|converted-to-spike|waived` 时，不得发起 CP5。
 - 非阻断 OPEN / Spike 可进入 CP5，但必须在 `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` 的 Decision Brief 中暴露其影响、owner、重访条件和是否影响跨 Story 契约。
 - 用户回答后，host-orchestrator 必须把答案写回 item 的 `answer/status`，再通过 `resume_agent` 或 `send_input` 分发给对应 `owner_agent`。
+- CP5 context 必须通过 `meta-flow story cp5-context-check --context <process/context/CP5-*-CONTEXT.yaml> --project-root .`；默认读取集合不得包含完整 HLD / ADR / TEST-MATRIX / TEST-REPORT / REVIEW，除非 capsule 写明 `full_doc_read_reason` 或 `read_expansion_log`。
+- 每份 Story 设计证据必须通过 `meta-flow story lld-check --lld <evidence> --evidence-type full-lld|batch-lld|technical-note|waived`；`full-lld` 必须覆盖 14 段语义要点，`batch-lld` 必须标注 batch scope / homogeneous pattern / risk level / shared contract，且不得用于 runtime / security / credential / production-write 等高风险 Story。
 
 依赖门控规则：
 
@@ -418,10 +420,14 @@ Host Orchestrator 主进程会话只保留当前 scalar/ref，不得写入 activ
 
 1. 发起 CP2 / CP3 / CP5 / CP8 关键人工检查点时，必须将 `status=awaiting-user`，并写入 `pending_gate`、`pending_checklist_path`、`pending_user_decision`、`next_exact_prompt`、`pending_decision_ids`、`pending_non_authorized_items`、`resume_instruction` 和 `awaiting_since`。Codex 可用 `meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --format codex-json` 生成 `request_user_input` 负载；不可用时发送 exact-text fallback。
 2. 用户确认、修改或拒绝后，Host Orchestrator 必须在当前主进程中重新读取 `STATE.md` 和相关检查点，回填人工结果并继续；不得使用 `spawn_agent` / `resume_agent` / `send_input` 启动或恢复编排子 agent。
-3. 回填人工结果、关闭 CR、推进阶段或推进 `delivered` 前，必须重新读取 `STATE.md`、对应 `process/checks/CP*.md`、`process/checkpoints/CP*.md`、活跃 `CR-*.md` 和下游输出，并把结果写入 `history`。
-4. 若发现旧 `host-orchestrator` 编排子 agent 状态，必须迁移为 host scalar/ref，将旧 agent 标识写入 archive 或 dispatch ledger，并记录迁移原因。
-5. 若同时发现多个活跃的 legacy 编排子 agent 记录，必须阻断推进，要求人工选择保留的状态来源并关闭 / 标记其余记录为 `superseded`。
-6. 若 CR 模板的自动终验授权字段有效，且 CP8 自动预检 `PASS`、无 `BLOCKING` / `REQUIRED`，允许将人工结果写为 `approved` 并标注 `approval_source=user-preauthorized`；否则仍按默认人工确认处理。
+3. 回填 `approve` 或自动 CP `PASS` / `WAIVED` 后必须执行 post-approval transition loop：读取 active CR 的 `route_plan`，连续执行后续所有 `human_gate=none` 且未被阻塞的 CP / 阶段准备，直到到达下一个 `human_gate=required` 的 CP2 / CP3 / CP5 / CP8、`delivered`、`FAIL` / `BLOCKED` / `NEEDS_REWORK` / `NEEDS_DESIGN_CLARIFICATION`、授权边界或 workflow health 阈值。停下时必须在 `STATE.current.json.next_action.stop_reason` 或等价状态中写入 `required_human_gate`、`blocked`、`needs_rework`、`needs_design_clarification`、`authorization_required`、`workflow_health_threshold`、`delivered` 或 `no_remaining_route`；只写 approval ledger 不算完成。
+4. CP4 是 `human_gate=none` 的自动 CP；当 route plan 中 CP4 `decision=PASS` 且后续 CP5 `human_gate=required` 时，当前状态不得停在“等待用户继续 / 推进 CP5”，必须已打开 CP5 gate，或写明合法 `stop_reason`。该规则用 `meta-flow check state-transition --route-plan <route-plan.json> --result <CP4-result.json> --project-root .` 回归验证。
+5. CP2 / CP3 / CP5 / CP8 人工门禁 approve 后，必须用 `meta-flow check state-transition --route-plan <route-plan.json> --approved-gate CP{n} --project-root .` 验证已经推进到下一个 required gate、`delivered` 或合法 `stop_reason`。
+6. CP result 通过、人工门禁 approve、关闭 CR、推进阶段或推进 `delivered` 后，必须运行 `meta-flow cp result-check --result <process/checks/CP*.result.json> --check-consistency --project-root .` 和 `meta-flow cr status-sync --id <CR> --status <status> --project-root .`，确保 CR frontmatter、summary、index、`STATE.current.json` 和 lifecycle ledger 同步。
+7. 回填人工结果、关闭 CR、推进阶段或推进 `delivered` 前，必须重新读取 `STATE.md`、对应 `process/checks/CP*.md`、`process/checkpoints/CP*.md`、活跃 `CR-*.md` 和下游输出，并把结果写入 `history`。
+8. 若发现旧 `host-orchestrator` 编排子 agent 状态，必须迁移为 host scalar/ref，将旧 agent 标识写入 archive 或 dispatch ledger，并记录迁移原因。
+9. 若同时发现多个活跃的 legacy 编排子 agent 记录，必须阻断推进，要求人工选择保留的状态来源并关闭 / 标记其余记录为 `superseded`。
+10. 若 CR 模板的自动终验授权字段有效，且 CP8 自动预检 `PASS`、无 `BLOCKING` / `REQUIRED`，允许将人工结果写为 `approved` 并标注 `approval_source=user-preauthorized`；否则仍按默认人工确认处理。
 
 dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段。平台没有提供的字段可以为空，但 `completed` 状态必须满足证据规则。
 
@@ -466,6 +472,7 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 - 推进前必须验证当前阶段退出条件，不能用“默认通过”代替检查
 - 推进前必须验证对应 CP 结果文件；不能只看文档 frontmatter 的 `confirmed=true`
 - CP4 只作为自动预检门；不得要求 `process/checkpoints/CP4-STORY-PLAN-REVIEW.md` 才推进
+- `approve` 回填和自动 CP 通过不是本轮终点；除非遇到 required human gate、delivery 或合法 `stop_reason`，不得把状态停在等待用户“继续”
 - 回退必须记录原因、发起方和目标阶段
 - Agent 复用必须使用 exact key，不得用模糊角色名匹配替代
 - 并行队列必须由 Story DAG、依赖类型和文件所有权计算，不得只按 Wave 名称粗略并行
@@ -477,6 +484,8 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 - [ ] 初始化前已完成 process 路由健康检查；外置模式下 `process` 是指向 `<artifact-root>/process/<project_name>` 的健康软链接
 - [ ] 初始化时结构与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致，且 `artifact_routing` 与 `.meta-flow-process.yaml` 一致
 - [ ] `process/checks/CP*.result.json` 与 `process/state/CHECKPOINT-LEDGER.ndjson` 与 `process/checks/CP*.md`、`process/checkpoints/CP*.md` 的结论一致
+- [ ] `approve` 或自动 CP `PASS` 后已通过 `meta-flow check state-transition`，证明状态推进到下一个 required gate、`delivered` 或合法 `stop_reason`
+- [ ] CP result / CR 状态变更后已运行 `meta-flow cp result-check --check-consistency` 和 `meta-flow cr status-sync --id <CR>`
 - [ ] 推进 / 回退操作均追加 `history`
 - [ ] 同一任务同角色不会重复登记活动 agent，检查点完成后有关闭动作
 - [ ] `lld_ready` / `dev_ready` / `verify_ready` 的每个 Story 均能解释依赖和文件所有权依据
@@ -486,6 +495,7 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 - [ ] CP7 推进前会检查 `verification-execution` 证据、`docs/quality/VERIFICATION-REPORT.md` 或等价摘要，以及 `TEST-MATRIX.md` 到 `VERIFICATION-REPORT.md` / `TEST-REPORT.md` / `REVIEW.md` 的追溯，或 CP7 N/A / WAIVED 证据
 - [ ] CP8 推进前会检查 `process/release/RELEASE-CONTEXT.yaml`、`release_artifact_profile`、`release_decision`、`RELEASE-NOTES.md`、`DEPLOY-CHECKLIST.md`、`ROLLBACK.md`、`MIGRATION.md`、`FEEDBACK.md`，或 CP8 N/A / WAIVED 证据
 - [ ] `lld_clarification_queue` 无未回答阻断项时才允许进入 CP5
+- [ ] CP5 发起前已通过 `meta-flow story cp5-context-check` 和每份设计证据的 `meta-flow story lld-check`
 - [ ] 阻塞状态下返回明确阻塞原因
 - [ ] 状态查询必须列出 active formal CR、blocked formal CR、follow-up candidate、spike_candidate 和 stale_status_conflicts
 - [ ] `meta-flow check cr-tracking` 能识别 `STATE.current.json.active_change` 指向已关闭 CR、多个 active CR、台账候选与正式 CR 文件不同步等问题

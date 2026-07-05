@@ -80,6 +80,44 @@ ALLOWED_STORY_PLAN_STATUSES = {
 STORY_ID_RE = re.compile(r"\bSTORY-[A-Za-z0-9][A-Za-z0-9._-]*\b")
 FULL_LLD_REQUIRED_SECTION_PREFIXES = tuple(f"## {index}." for index in range(15))
 BATCH_LLD_REQUIRED_SECTION_PREFIXES = tuple(f"## {index}." for index in range(10))
+FULL_LLD_REQUIRED_SEMANTIC_TOKENS = (
+    "工程依据",
+    "目标",
+    "需求",
+    "模块拆分",
+    "代码结构",
+    "数据模型",
+    "API",
+    "流程",
+    "技术细节",
+    "安全",
+    "测试",
+    "实施",
+    "风险",
+    "DoD",
+)
+BATCH_LLD_REQUIRED_TOKENS = (
+    "design_evidence_type",
+    "lld_policy_required_level",
+    "batch_scope",
+    "homogeneous_story_pattern",
+    "risk_level",
+    "shared_contract",
+)
+BATCH_LLD_FORBIDDEN_HIGH_RISK_TOKENS = (
+    "runtime-high-risk",
+    "security-high",
+    "external-write",
+    "credential",
+    "production-write",
+)
+CP5_DENY_DEFAULT_REFS = (
+    "docs/design/HLD.md",
+    "docs/design/ARCHITECTURE-DECISION.md",
+    "docs/product/TEST-MATRIX.md",
+    "docs/quality/TEST-REPORT.md",
+    "docs/quality/REVIEW.md",
+)
 TECHNICAL_NOTE_REQUIRED_TOKENS = (
     "设计依据",
     "文件影响",
@@ -212,6 +250,8 @@ def validate_lld_structure(
     if inferred == "full-lld":
         missing = _missing_section_prefixes(text, FULL_LLD_REQUIRED_SECTION_PREFIXES)
         errors.extend(f"full-lld missing required section prefix: {prefix}" for prefix in missing)
+        missing_tokens = [token for token in FULL_LLD_REQUIRED_SEMANTIC_TOKENS if token not in text]
+        errors.extend(f"full-lld missing required semantic token: {token}" for token in missing_tokens)
         if not story_id and not filename_story_ids:
             warnings.append("full-lld has no detectable STORY-* id in frontmatter or filename")
     elif inferred == "batch-lld":
@@ -219,9 +259,12 @@ def validate_lld_structure(
         errors.extend(f"batch-lld missing required section prefix: {prefix}" for prefix in missing)
         if "### Story:" not in text and not STORY_ID_RE.search(text):
             errors.append("batch-lld must include at least one Story marker or STORY-* id")
-        for token in ("design_evidence_type", "lld_policy_required_level"):
+        for token in BATCH_LLD_REQUIRED_TOKENS:
             if token not in text:
-                warnings.append(f"batch-lld should include {token}")
+                errors.append(f"batch-lld missing required batching token: {token}")
+        for token in BATCH_LLD_FORBIDDEN_HIGH_RISK_TOKENS:
+            if token in text.lower():
+                errors.append(f"batch-lld contains high-risk marker requiring full-lld review: {token}")
     elif inferred == "technical-note":
         if "## 技术说明" not in text and "technical-note" not in text.lower():
             errors.append("technical-note evidence must include ## 技术说明 or technical-note marker")
@@ -233,6 +276,73 @@ def validate_lld_structure(
     else:
         errors.append("unable to infer LLD evidence type; pass --evidence-type full-lld|batch-lld|technical-note|waived")
 
+    return errors, warnings
+
+
+def _load_context_payload(path: Path) -> dict[str, Any]:
+    if path.suffix.lower() == ".json":
+        return _read_json(path)
+    payload = load_yaml_object(path)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _context_values(payload: dict[str, Any], key: str) -> list[str]:
+    values = payload.get(key)
+    if isinstance(values, list):
+        result: list[str] = []
+        for item in values:
+            if isinstance(item, dict):
+                result.append(str(item.get("path") or item.get("ref") or item.get("id") or ""))
+            else:
+                result.append(str(item or ""))
+        return [item for item in result if item]
+    if isinstance(values, dict):
+        return [str(item) for item in values.values() if str(item)]
+    if values:
+        return [str(values)]
+    return []
+
+
+def _has_read_expansion_reason(payload: dict[str, Any]) -> bool:
+    if payload.get("full_doc_read_reason"):
+        return True
+    log = payload.get("read_expansion_log") or payload.get("read_expansion_refs")
+    return bool(log)
+
+
+def validate_cp5_context_capsule(context_path: Path, *, project_root: Path | None = None) -> tuple[list[str], list[str]]:
+    path = context_path.resolve()
+    root = project_root.resolve() if project_root else _infer_project_root(path)
+    if not path.is_file():
+        return [f"CP5 context missing: {_rel(root, path)}"], []
+    try:
+        payload = _load_context_payload(path)
+    except (OSError, ValueError) as exc:
+        return [str(exc)], []
+    errors: list[str] = []
+    warnings: list[str] = []
+    checkpoint = str(payload.get("checkpoint") or payload.get("stage") or "")
+    if checkpoint and "CP5" not in checkpoint:
+        errors.append(f"context checkpoint/stage must be CP5, got {checkpoint}")
+    read_profile = str(payload.get("read_profile") or "").strip()
+    if not read_profile:
+        errors.append("CP5 context missing read_profile")
+    elif read_profile == "full" and not _has_read_expansion_reason(payload):
+        errors.append("CP5 context read_profile=full requires full_doc_read_reason or read_expansion_log")
+    if not any(payload.get(key) for key in ("allowed_reads", "must_read", "read_if_needed", "context_refs", "evidence_refs")):
+        errors.append("CP5 context must declare allowed/must/read-if-needed refs or evidence refs")
+    expanded_without_reason = not _has_read_expansion_reason(payload)
+    for key in ("allowed_reads", "must_read"):
+        refs = _context_values(payload, key)
+        for ref in refs:
+            for denied in CP5_DENY_DEFAULT_REFS:
+                if ref.split("#", 1)[0] == denied and expanded_without_reason:
+                    errors.append(f"CP5 capsule-first violation: {key} includes deny-default full doc without expansion reason: {denied}")
+            if ref.endswith("-LLD.md") and expanded_without_reason:
+                warnings.append(f"CP5 context {key} includes full LLD by default; prefer evidence index or read_if_needed: {ref}")
+    do_not_read = set(_context_values(payload, "do_not_read_by_default"))
+    if not do_not_read.intersection(CP5_DENY_DEFAULT_REFS):
+        warnings.append("CP5 context should list full design/test docs in do_not_read_by_default")
     return errors, warnings
 
 
@@ -687,13 +797,15 @@ def _print_story_help() -> None:
         "  evidence-check  Validate an Evidence Index.\n"
         "  verify-packet   Build a CP7 Story Verify Packet from a CP6 Return Packet.\n\n"
         "  plan-check      Validate DEVELOPMENT-PLAN as the Story management truth source.\n\n"
-        "  lld-check       Validate full-lld, batch-lld, technical-note, or waived evidence structure.\n\n"
+        "  lld-check       Validate full-lld, batch-lld, technical-note, or waived evidence structure.\n"
+        "  cp5-context-check Validate CP5 capsule-first context policy.\n\n"
         "Examples:\n"
         "  meta-flow story return-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
         "  meta-flow story evidence-index --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
         "  meta-flow story verify-packet --from-return process/returns/STORY-CR123-S01.CP6.return.json --story process/stories/STORY-CR123-S01.md --project-root .\n"
         "  meta-flow story plan-check --project-root .\n"
         "  meta-flow story lld-check --lld process/stories/STORY-CR123-S01-LLD.md --project-root .\n"
+        "  meta-flow story cp5-context-check --context process/context/CP5-LLD-CONTEXT.yaml --project-root .\n"
     )
 
 
@@ -787,6 +899,18 @@ def main(argv: list[str] | None = None) -> int:
             project_root=parsed.project_root,
         )
         print("LLD Structure Check: " + ("FAIL" if errors else "OK"))
+        for warning in warnings:
+            print(f"- WARN: {warning}")
+        for error in errors:
+            print(f"- ERROR: {error}")
+        return 1 if errors else 0
+    if command == "cp5-context-check":
+        parser = argparse.ArgumentParser(prog="meta-flow story cp5-context-check")
+        parser.add_argument("--project-root", type=Path, default=None)
+        parser.add_argument("--context", dest="context_path", type=Path, required=True)
+        parsed = parser.parse_args(args[1:])
+        errors, warnings = validate_cp5_context_capsule(parsed.context_path, project_root=parsed.project_root)
+        print("CP5 Context Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
         for error in errors:

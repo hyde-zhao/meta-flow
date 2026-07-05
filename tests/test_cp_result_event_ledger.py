@@ -460,6 +460,53 @@ class CPResultEventLedgerTests(unittest.TestCase):
 
             self.assertIn("dispatch_refs require AGENT-DISPATCH-LEDGER entries: ADE-0001", errors)
 
+    def test_cp_result_consistency_runs_state_transition_when_route_plan_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = current.default_current_state(root)
+            state["project_id"] = "fixture-project"
+            state["active_change"] = "CR-123"
+            state["current_phase"] = "story-planning"
+            state["next_action"] = {"type": "continue", "text": "manual continue to CP5"}
+            current.write_current_state(root, state)
+            route_path = root / "process" / "checks" / "CP0-CR123.route-plan.json"
+            route_path.parent.mkdir(parents=True, exist_ok=True)
+            route_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "decision": "PASS",
+                        "stages": [
+                            {"checkpoint": "CP3", "mode": "standard", "human_gate": "required"},
+                            {"checkpoint": "CP4", "mode": "standard", "human_gate": "none"},
+                            {"checkpoint": "CP5", "mode": "standard", "human_gate": "required"},
+                        ],
+                        "checkpoint_applicability": {},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            payload = cp6_result_payload()
+            payload.update(
+                {
+                    "checkpoint": "CP4",
+                    "checkpoint_id": "CP4-CR123",
+                    "story_id": "",
+                    "context_ref": "process/context/CP4.context.json",
+                    "dispatch_refs": [],
+                    "evidence_ref": "",
+                    "route_plan_ref": "process/checks/CP0-CR123.route-plan.json",
+                }
+            )
+            result = write_cp6_result(root, payload)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertTrue(any("pending_gate=CP5" in error for error in errors))
+
     def test_cp_result_consistency_accepts_dispatch_ref_in_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

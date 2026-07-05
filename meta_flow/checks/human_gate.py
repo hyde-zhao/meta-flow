@@ -259,6 +259,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate human gate Decision Brief and launch message.")
     parser.add_argument("--checkpoint", required=True, type=Path, help="Path to process/checkpoints/CP*.md")
     parser.add_argument("--launch-message-file", type=Path, help="Optional file containing the message to send to the user")
+    parser.add_argument(
+        "--require-launch-message",
+        action="store_true",
+        help="Fail unless --launch-message-file is provided and validates. Use before opening a human gate.",
+    )
     parser.add_argument("--legacy", action="store_true", help="Validate the pre-CR036 legacy human-gate protocol.")
     args = parser.parse_args(argv)
 
@@ -268,6 +273,8 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint_text = args.checkpoint.read_text(encoding="utf-8")
     errors, rows = collect_checkpoint_errors(args.checkpoint, checkpoint_text, legacy=args.legacy)
 
+    if args.require_launch_message and not args.launch_message_file:
+        errors.append("--require-launch-message requires --launch-message-file")
     if args.launch_message_file:
         if not args.launch_message_file.is_file():
             errors.append(f"launch message file not found: {args.launch_message_file}")

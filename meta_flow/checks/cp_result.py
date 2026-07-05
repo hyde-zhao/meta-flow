@@ -11,6 +11,7 @@ from typing import Any
 
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS
 from meta_flow.context_pack import read_expansion
+from meta_flow.checks import state_transition
 from meta_flow.policies import failure_routing
 from meta_flow.state import event_ledger
 from meta_flow.state.current import now_utc
@@ -332,6 +333,45 @@ def _validate_derived_consistency(root: Path, result_path: Path, result: dict[st
     return errors
 
 
+def _candidate_route_plan_paths(root: Path, result: dict[str, Any]) -> list[Path]:
+    refs: list[str] = []
+    explicit = str(result.get("route_plan_ref") or "")
+    if explicit:
+        refs.append(explicit.split("#", 1)[0])
+    cr_id = str(result.get("cr_id") or "")
+    if cr_id:
+        refs.extend(
+            path.relative_to(root).as_posix()
+            for path in sorted((root / "process" / "checks").glob(f"CP0-*{cr_id}*.route-plan.json"))
+            if path.is_file()
+        )
+    paths: list[Path] = []
+    for ref in refs:
+        path = Path(ref)
+        paths.append(path if path.is_absolute() else root / path)
+    return paths
+
+
+def _validate_post_cp_transition(root: Path, result: dict[str, Any]) -> tuple[list[str], list[str]]:
+    checkpoint = str(result.get("checkpoint") or result.get("checkpoint_id") or "")
+    decision = str(result.get("decision") or "")
+    state_path = root / "process" / "state" / "STATE.current.json"
+    if not state_path.is_file():
+        return [], ["state-transition skipped: STATE.current.json missing"]
+    route_paths = _candidate_route_plan_paths(root, result)
+    if not route_paths:
+        return [], ["state-transition skipped: route_plan_ref missing and no CP0 route-plan artifact found"]
+    for route_path in route_paths:
+        if route_path.is_file():
+            return state_transition.validate_transition(
+                route_plan_path=route_path,
+                state_path=state_path,
+                checkpoint=checkpoint,
+                decision=decision,
+            )
+    return [], ["state-transition skipped: route_plan artifact missing"]
+
+
 def allowed_decisions(checkpoint: str) -> set[str]:
     if checkpoint == "CP7":
         return CP7_DECISIONS
@@ -453,6 +493,9 @@ def validate_cp_result(
             warnings.append(f"{ref_key} not found on disk: {rel}")
     if check_consistency and project_root:
         errors.extend(_validate_derived_consistency(root, result_path, result))
+        transition_errors, transition_warnings = _validate_post_cp_transition(root, result)
+        errors.extend(transition_errors)
+        warnings.extend(transition_warnings)
     return errors, warnings
 
 

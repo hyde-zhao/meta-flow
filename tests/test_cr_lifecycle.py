@@ -576,6 +576,43 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual("closed", events[0]["event"])
             self.assertEqual("process/changes/summaries/CR-101.summary.json", events[0]["summary_ref"])
 
+    def test_status_sync_updates_frontmatter_summary_index_ledger_and_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.write_current_state(root, current.default_current_state(root))
+            current.update_current_state(
+                root,
+                {
+                    "active_change": "CR-101",
+                    "current_phase": "documentation",
+                    "next_action": {"type": "await_user", "text": "review CP8"},
+                },
+            )
+            write_cr(root, "CR-101", status="active")
+
+            paths = cr_lifecycle.sync_cr_status(
+                root,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="cp8_approved",
+            )
+
+            self.assertTrue(paths["summary"].is_file())
+            text = (root / "process" / "changes" / "CR-101.md").read_text(encoding="utf-8")
+            self.assertIn('lifecycle_status: "closed"', text)
+            self.assertIn('readiness_status: "READY_WITH_RISK"', text)
+            self.assertIn('gate_status: "cp8_approved"', text)
+            summary = json.loads(paths["summary"].read_text(encoding="utf-8"))
+            self.assertEqual("closed", summary["status"])
+            self.assertEqual("READY_WITH_RISK", summary["readiness"])
+            index = json.loads(paths["index"].read_text(encoding="utf-8"))
+            self.assertEqual("closed", index["items"][0]["status"])
+            state = current.load_current_state(root)
+            self.assertIsNone(state["active_change"])
+            events = cr_lifecycle.load_ledger_events(root)
+            self.assertEqual("status_sync", events[-1]["event"])
+
     def test_check_fails_when_closed_cr_is_still_active_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

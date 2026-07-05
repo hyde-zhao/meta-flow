@@ -154,6 +154,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     human_gate.add_argument("--format", choices=("markdown", "codex-json"), default="markdown")
     human_gate.add_argument("--output", type=Path, help="Write generated output to this file instead of stdout")
+    human_gate.add_argument(
+        "--check-output",
+        action="store_true",
+        help="After writing --output, run launch-message validation against the generated content.",
+    )
 
     args = parser.parse_args(argv)
     if args.command != "human-gate":
@@ -190,6 +195,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(output, encoding="utf-8")
+        if args.check_output:
+            launch_errors = collect_launch_message_errors(args.checkpoint, output, rows)
+            if launch_errors:
+                for error in launch_errors:
+                    print(f"ERROR: generated output invalid: {error}", file=sys.stderr)
+                return 1
     else:
         print(output, end="")
     return 0
