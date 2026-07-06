@@ -201,6 +201,11 @@ init（host-orchestrator）                                                   [C
 - **CR first 不等于跳过产品澄清**：需求 / 场景 / 范围类变更必须先创建 CR 记录审计边界，但 CR 创建后必须回到 `requirement-clarification`，由 `meta-pm` 执行 CR 触发的增量 `use-case-discovery`、`requirement-extraction`、`requirement-clarifier`、SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE 更新，并通过 CP1 / CP2；CP2 未通过前不得进行 CR Story 分解、LLD 或实现。
 - **大块集中需求入口分流**：同一目标、同一 persona / user journey、共享 HLD、同一 release value 或需要多个 Story 才能交付的需求集合，默认作为目标包 / parent CR / Change Package 处理，先完整走用户场景发现、需求澄清、HLD 和 Story 拆分；只有目标、审批人、风险授权、交付节奏、回滚策略或审计边界不同，才允许拆出子 CR；普通开发工作拆 Story，不逐条拆 CR。
 - **检查点结构**：CP0-CP8 均必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables；自动检查点必须在 `process/checks/CP*.md` 写入逐项结果，人工检查点必须在 `process/checkpoints/CP*.md` 写入 checklist 和“人工审查结果”。
+- **澄清锁**：CP2 需求 / 场景 / 范围基线门未通过前，不得输出正式设计对象；CP2 前必须形成 `SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md` 或明确 N/A / WAIVED 原因
+- **验证锁**：`validation_mode=runtime|mixed` 且需要真实运行时，没有 `process/VALIDATION-ENV.yaml` 或 `approval.confirmed != true`，不得开始运行验证；`static-only` / `dry-run-only` / `review-only` 可使用等价验证方式，但必须在 CP7 写明 N/A 理由、未覆盖风险和证据
+- **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
+- **禁止越级改写**：`meta-dev` 不修改 `REQUIREMENTS.md`、`MVP-SCOPE.md`、`BLUEPRINT.md`、`HLD.md`；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
+- **检查点文件优先**：推进阶段前必须读取对应 `process/checks/CP*.md` 与 `process/checkpoints/CP*.md`；不能只看产物 frontmatter 的 `confirmed=true`
 - **全阶段 Context Capsule**：CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后必须生成或检查 `process/context/*-CONTEXT.yaml`。子 agent、人工门禁、验证和发布准备默认先读取 capsule；只有 capsule 缺失、冲突、字段不足、人工审计、深度评审或用户明确要求时，才读取完整正式文档，并在 `process/state/READ-EXPANSION-LEDGER.ndjson` 或 capsule `read_expansion_log[]` 写明 `full_doc_read_reason`。
 - **Story Return / Evidence / Design Delta**：CP6 / CP7 Story agent 完成后必须写入 `process/returns/STORY-*.return.json`，并用 `meta-flow story return-check` 校验 Story / stage 匹配、写入路径、禁止路径、unexpected imports、验证证据和设计 delta 引用。CP6 / CP7 检查默认消费 `process/evidence/STORY-*.index.json` 证据索引，不复制完整证据正文。Story 修改长期 Feature DESIGN / ADR / HLD 时必须写 `process/design-deltas/STORY-*.delta.json`；CP8 前对需要回写的 delta 运行 `meta-flow design delta-check --require-merged`。
 - **CP Result / Event Ledger**：CP 自动检查应优先写入 `process/checks/CP*.result.json` 作为机器真相源，并用 `meta-flow cp result-check --check-consistency --project-root .` 校验；`process/checks/CP*.summary.md` 或旧 Markdown 检查文件只作为人类摘要。每个 CP result 应通过 `meta-flow cp ledger-append` 追加 `process/state/CHECKPOINT-LEDGER.ndjson`；handoff、agent dispatch、run、gate 事件分别写入 `HANDOFF-LEDGER.ndjson`、`AGENT-DISPATCH-LEDGER.ndjson`、`RUN-LEDGER.ndjson`、`GATE-LEDGER.ndjson`，并用 `meta-flow event check` 校验。Markdown 摘要不得替代 result JSON、evidence index 或 event ledger。
@@ -292,6 +297,8 @@ init（host-orchestrator）                                                   [C
 | `lane-implementation` | `meta-dev` | 可实现性、文件归属、平台约束 |
 | `lane-quality` | `meta-qa` | 可验证性、风险、安全、安装约束 |
 | `lane-docs` | `meta-doc` | 面向用户的可读性与交付完整性 |
+
+CP3 蓝图 / HLD 讨论中，`lane-product`、`lane-architecture`、`lane-quality` 是默认 advisor lane；`lane-docs` 的可解释性 / 可维护性作为汇总检查项纳入，不默认新增一次 subagent 调度。方案形成输入和 HLD 后评审意见必须分开记录。
 
 灰度顺序：
 
