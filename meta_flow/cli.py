@@ -433,6 +433,7 @@ def _print_check_help() -> None:
         "  design-delta          Validate Story design delta structure and write-back status.\n\n"
         "  cp-result             Validate CP result JSON machine truth source.\n"
         "  event-ledger          Validate NDJSON event ledger structure.\n"
+        "  handoff-dispatch      Validate dispatch evidence in process/handoffs/*.md.\n"
         "  read-expansion        Validate READ-EXPANSION-LEDGER.ndjson.\n\n"
         "  failure-routing      Validate failure route_on_fail governance.\n"
         "  waiver-policy        Validate waiver scope / expiry / approval_ref governance.\n\n"
@@ -459,6 +460,7 @@ def _print_check_help() -> None:
         "  meta-flow check design-delta --delta process/design-deltas/STORY-CR123-S01.delta.json --project-root .\n"
         "  meta-flow check cp-result --result process/checks/CP6-STORY.result.json --project-root .\n"
         "  meta-flow check event-ledger --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint\n"
+        "  meta-flow check handoff-dispatch --project-root .\n"
         "  meta-flow check read-expansion --project-root .\n"
         "  meta-flow check failure-routing --result process/checks/CP7-STORY.result.json --project-root .\n"
         "  meta-flow check waiver-policy --result process/checks/CP8-DELIVERY.result.json --project-root .\n"
@@ -524,6 +526,10 @@ def _run_check(args: list[str]) -> None:
         from meta_flow.state import event_ledger
 
         raise SystemExit(event_ledger.main(["check", *forwarded]))
+    if validator == "handoff-dispatch":
+        from meta_flow.checks import handoff_dispatch
+
+        raise SystemExit(handoff_dispatch.main(forwarded))
     if validator == "read-expansion":
         from meta_flow.context_pack import read_expansion
 
@@ -575,7 +581,7 @@ def _run_check(args: list[str]) -> None:
     raise SystemExit(
         "未知检查器: "
         f"{validator}. 目前支持: human-gate, cr-tracking, design-ownership, story-to-feature-trace, "
-        "state-transition, story-return, evidence-index, lld-structure, design-delta, cp-result, event-ledger, read-expansion, "
+        "state-transition, story-return, evidence-index, lld-structure, design-delta, cp-result, event-ledger, handoff-dispatch, read-expansion, "
         "failure-routing, waiver-policy, "
         "module-boundaries, imports, architecture-fitness, risk-rings, capability-claims, concept-overlap, "
         "package-identity, truth-map, retention-policy"

@@ -688,5 +688,134 @@ class CPResultEventLedgerTests(unittest.TestCase):
             self.assertIn("HE-0001\thandoff\tcreated", stream.getvalue())
 
 
+class DispatchEvidenceTests(unittest.TestCase):
+    """subagent dispatch 事件字段完整性 + cp_result dispatch_refs 强化校验。"""
+
+    def _write_dispatch_event(self, ledger: Path, event: dict) -> None:
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+    def test_complete_subagent_dispatch_event_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            ledger = Path(d) / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
+            self._write_dispatch_event(ledger, {
+                "dispatch_id": "ADE-001",
+                "event_type": "dispatch",
+                "canonical_role": "meta-dev",
+                "tool_name": "spawn_agent",
+                "status": "completed",
+                "dispatch_trigger": "phase-default",
+                "agent_id": "a-123",
+                "spawned_at": "2026-07-05T00:00:00+00:00",
+                "completed_at": "2026-07-05T00:05:00+00:00",
+            })
+            errors, _warnings = event_ledger.validate_event_ledger(ledger, ledger_type="dispatch")
+            self.assertEqual([], errors)
+
+    def test_subagent_dispatch_event_missing_agent_id_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            ledger = Path(d) / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
+            self._write_dispatch_event(ledger, {
+                "dispatch_id": "ADE-001",
+                "event_type": "dispatch",
+                "canonical_role": "meta-dev",
+                "tool_name": "spawn_agent",
+                "status": "completed",
+                "dispatch_trigger": "phase-default",
+                "spawned_at": "2026-07-05T00:00:00+00:00",
+                "completed_at": "2026-07-05T00:05:00+00:00",
+            })
+            errors, _warnings = event_ledger.validate_event_ledger(ledger, ledger_type="dispatch")
+            self.assertIn("line 1: dispatch event requires agent_id or thread_id", errors)
+
+    def test_subagent_dispatch_event_missing_spawned_at_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            ledger = Path(d) / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
+            self._write_dispatch_event(ledger, {
+                "dispatch_id": "ADE-001",
+                "event_type": "dispatch",
+                "canonical_role": "meta-dev",
+                "tool_name": "spawn_agent",
+                "status": "completed",
+                "dispatch_trigger": "phase-default",
+                "thread_id": "t-1",
+                "completed_at": "2026-07-05T00:05:00+00:00",
+            })
+            errors, _warnings = event_ledger.validate_event_ledger(ledger, ledger_type="dispatch")
+            self.assertIn("line 1: dispatch event requires spawned_at or resumed_at", errors)
+
+    def test_subagent_dispatch_event_missing_dispatch_trigger_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            ledger = Path(d) / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
+            self._write_dispatch_event(ledger, {
+                "dispatch_id": "ADE-001",
+                "event_type": "dispatch",
+                "canonical_role": "meta-dev",
+                "tool_name": "spawn_agent",
+                "status": "completed",
+                "agent_id": "a-1",
+                "spawned_at": "2026-07-05T00:00:00+00:00",
+                "completed_at": "2026-07-05T00:05:00+00:00",
+            })
+            errors, _warnings = event_ledger.validate_event_ledger(ledger, ledger_type="dispatch")
+            self.assertIn("line 1: missing required field: dispatch_trigger", errors)
+
+    def test_cp_result_rejects_dispatch_ref_with_incomplete_subagent_event(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            result = write_cp6_result(root)
+            ledger = root / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
+            self._write_dispatch_event(ledger, {
+                "dispatch_id": "ADE-0001",
+                "event_type": "dispatch",
+                "canonical_role": "meta-dev",
+                "tool_name": "spawn_agent",
+                "status": "completed",
+                "dispatch_trigger": "phase-default",
+                "spawned_at": "2026-07-05T00:00:00+00:00",
+                "completed_at": "2026-07-05T00:05:00+00:00",
+            })  # 缺 agent_id/thread_id
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+            self.assertTrue(any("ADE-0001" in e and "agent_id or thread_id" in e for e in errors))
+
+    def test_cp_result_accepts_dispatch_ref_with_complete_subagent_event(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            result = write_cp6_result(root)
+            ledger = root / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
+            self._write_dispatch_event(ledger, {
+                "dispatch_id": "ADE-0001",
+                "event_type": "dispatch",
+                "canonical_role": "meta-dev",
+                "tool_name": "spawn_agent",
+                "status": "completed",
+                "dispatch_trigger": "phase-default",
+                "agent_id": "a-123",
+                "spawned_at": "2026-07-05T00:00:00+00:00",
+                "completed_at": "2026-07-05T00:05:00+00:00",
+            })
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+            self.assertFalse(any("ADE-0001" in e and "subagent event missing" in e for e in errors))
+
+    def test_cp_result_does_not_require_subagent_fields_for_inline_fallback_ref(self) -> None:
+        # inline_fallback 事件不应被 subagent 字段校验误判
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            result = write_cp6_result(root)
+            event = event_ledger.build_inline_fallback_event(
+                dispatch_id="ADE-0001",
+                canonical_role="meta-dev",
+                fallback_reason="fixture inline implementation",
+                approved_by="test",
+                cr_id="CR-123",
+                checkpoint="CP6",
+                result_ref="process/checks/CP6-STORY-CR123-S01.result.json",
+                created_at="2026-07-05T00:00:00+00:00",
+            )
+            event_ledger.append_dispatch_event(root, event)
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+            self.assertFalse(any("subagent event missing" in e for e in errors))
+
+
 if __name__ == "__main__":
     unittest.main()

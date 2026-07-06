@@ -37,6 +37,18 @@ COMPACT_MARKER_REQUIRED_FIELDS = (
     "hash_before",
 )
 DISPATCH_EVENT_REQUIRED_FIELDS = {
+    # 真实子 agent 调度事件（mode=subagent）。agent_id/thread_id、
+    # spawned_at/resumed_at 为二选一字段，由 validate_event_ledger 交叉校验，
+    # 不在此处强制全部非空，避免误判只有 thread_id 的平台。
+    "dispatch": (
+        "dispatch_id",
+        "event_type",
+        "canonical_role",
+        "tool_name",
+        "status",
+        "dispatch_trigger",
+        "completed_at",
+    ),
     "dispatch_not_required": (
         "dispatch_id",
         "event_type",
@@ -218,6 +230,14 @@ def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[st
         for field in fields:
             if not event.get(field):
                 errors.append(f"line {line_no}: missing required field: {field}")
+        # subagent dispatch 事件必须携带可审计的调度证据：agent_id 或 thread_id
+        # 至少一个、spawned_at 或 resumed_at 至少一个。缺这些字段时只有 handoff
+        # 没有真实调度，不得判定为 completed，避免调度证据断链。
+        if ledger_type == "dispatch" and event.get("event_type") == "dispatch":
+            if not (event.get("agent_id") or event.get("thread_id")):
+                errors.append(f"line {line_no}: dispatch event requires agent_id or thread_id")
+            if not (event.get("spawned_at") or event.get("resumed_at")):
+                errors.append(f"line {line_no}: dispatch event requires spawned_at or resumed_at")
         event_id = str(event.get("event_id") or event.get("dispatch_id") or event.get("run_id") or "")
         if event_id:
             if event_id in seen_ids:

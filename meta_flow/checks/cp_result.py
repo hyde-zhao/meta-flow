@@ -283,7 +283,31 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
     missing = sorted(set(refs) - event_ids)
     if missing:
         return ["dispatch_refs missing from AGENT-DISPATCH-LEDGER: " + ", ".join(missing)]
-    return []
+    # 强化：subagent dispatch 事件必须有完整调度证据，防止"只有 handoff 没有
+    # 真实调度"的断链。inline_fallback / dispatch_not_required 的字段完整性
+    # 由 `meta-flow event check` 负责，这里只校验 subagent 证据。
+    errors: list[str] = []
+    for ref in refs:
+        matched = next(
+            (
+                event
+                for event in events
+                if str(event.get("dispatch_id") or event.get("event_id") or "") == ref
+            ),
+            None,
+        )
+        if matched is None:
+            continue
+        if str(matched.get("event_type") or "") != "dispatch":
+            continue
+        if not (matched.get("agent_id") or matched.get("thread_id")):
+            errors.append(f"dispatch_ref {ref}: subagent event missing agent_id or thread_id")
+        if not (matched.get("spawned_at") or matched.get("resumed_at")):
+            errors.append(f"dispatch_ref {ref}: subagent event missing spawned_at or resumed_at")
+        for field in ("canonical_role", "tool_name", "completed_at", "dispatch_trigger"):
+            if not matched.get(field):
+                errors.append(f"dispatch_ref {ref}: subagent event missing {field}")
+    return errors
 
 
 def _validate_derived_consistency(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:
