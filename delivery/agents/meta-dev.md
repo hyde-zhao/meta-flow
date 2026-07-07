@@ -292,7 +292,7 @@ clarification item 字段至少包含：
 3. `docs/design/HLD.md` / `docs/design/ARCHITECTURE-DECISION.md`：架构边界与条件必需决策
 4. `docs/design/FEATURE-DESIGN-MATRIX.md` 与 `docs/features/<feature>/DESIGN.md` / `TEST-PLAN.md` / `TASKS.md`：Feature 边界、下游消费契约和测试计划
 5. `process/PLATFORM-INSTALL-SPEC.md`：平台路径、安装约束
-6. 平台规则文件：`delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md`
+6. 平台规则文件：`delivery/rules/AGENTS.md`（唯一 canonical 源；claude 平台安装时生成 CLAUDE.md）
 
 实现时必须保证：
 

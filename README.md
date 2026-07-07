@@ -9,7 +9,7 @@
 | `delivery/` | **meta-flow 自身可独立交付的包**（可推送为独立 Git 仓库）；外部 production 项目的交付出口需按目标 README/docs 或用户确认路由 |
 | `delivery/agents/` | 交付 Agent 定义（安装脚本从此读取，`<name>.md`） |
 | `delivery/skills/` | 交付 Skill 定义（结构为 `<name>/SKILL.md`；模板位于 `<name>/templates/`） |
-| `delivery/rules/` | 平台规则文件（`AGENTS.md`、`CLAUDE.md`） |
+| `delivery/rules/` | 平台规则源（`AGENTS.md` 唯一源；claude 安装时生成 `CLAUDE.md`） |
 | `delivery/scripts/` | 安装脚本入口（`install.py` / `install.sh` / `install.ps1`）；需随 Skill 一起安装的私有脚本应放在对应 `delivery/skills/<skill>/scripts/` 下 |
 | `scripts/` | 仓库级检查/构建脚本（不随 `delivery/` 一起安装到目标平台） |
 | `.agents/agents/` | 元工作流引擎 Agent 定义（不参与安装） |
@@ -324,7 +324,7 @@ Promptfoo、DeepEval、Langfuse 和 Garak 只作为可选 adapter，默认 disab
 1. 使用 `uv` 安装和选择 Python 解释器，不以系统 Python 作为默认入口。
 2. 运行仓库内 Python 脚本时，优先使用 `uv run --python <version> python <script>`；安装入口优先使用 `meta-flow install`。
 3. 一次性工具与临时依赖优先使用 `uvx` 或 `uv run --with <package>`，不把裸 `pip install` 作为日常流程。
-4. 安装到目标项目的 uv 规范统一通过 `delivery/rules/AGENTS.md`、`delivery/rules/CLAUDE.md` 传播。
+4. 安装到目标项目的 uv 规范统一通过 `delivery/rules/AGENTS.md` 传播（claude 平台安装时生成 CLAUDE.md）。
 
 示例：
 
@@ -511,7 +511,7 @@ uv run --python 3.11 python scripts/install.py claude
 
 组件语义：
 
-- `rules`：只安装平台规则入口（如 `AGENTS.md` / `CLAUDE.md`）
+- `rules`：只安装平台规则入口（AGENTS.md 为唯一源；claude 平台生成 CLAUDE.md）
 - `agent`：安装 agents + skills
 - `full`：同时安装 rules 与 agent 组件
 - `meta-flow uninstall <platform>` 未指定 `--component` 时默认卸载 `full`；可用 `--component rules|agent|full` 精确卸载组件

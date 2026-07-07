@@ -98,6 +98,101 @@ class InstallerRulesTests(unittest.TestCase):
 
             self.assertEqual(1, raised.exception.code)
 
+    def test_claude_rules_install_generates_claude_md_from_agents_md(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_rule = root / "source" / "rules" / "AGENTS.md"
+            source_rule.parent.mkdir(parents=True)
+            source_rule.write_text("# Canonical Rules\n", encoding="utf-8")
+            # 确认不存在 CLAUDE.md 源；claude 入口必须从 AGENTS.md 生成
+            self.assertFalse((root / "source" / "rules" / "CLAUDE.md").exists())
+            target = root / "target"
+            target.mkdir()
+            contracts = {
+                "contracts": {
+                    "claude": {
+                        "scopes": {
+                            "project": {
+                                "rules": "CLAUDE.md",
+                                "agents": ".claude/agents",
+                                "skills": ".claude/skills",
+                            }
+                        }
+                    }
+                }
+            }
+            layout = install.SourceLayout(
+                root=root / "source",
+                canonical_agents_dir=root / "source" / "agents",
+                canonical_skills_dir=root / "source" / "skills",
+                platform_contracts=root / "source" / "doc" / "PLATFORM-CONTRACTS.yaml",
+                agents_rule=source_rule,
+            )
+            manifest_entries: list[dict[str, str]] = []
+
+            install.install_rules(
+                "claude",
+                "project",
+                target,
+                contracts,
+                layout,
+                install.Transaction(),
+                False,
+                "test-commit",
+                "2026-06-21T00:00:00Z",
+                manifest_entries,
+            )
+
+            claude_md = target / "CLAUDE.md"
+            self.assertTrue(claude_md.is_file())
+            content = claude_md.read_text(encoding="utf-8")
+            self.assertIn("myflow:managed:begin platform=claude", content)
+            self.assertIn("myflow:managed:end platform=claude", content)
+            self.assertIn("# Canonical Rules", content)
+            self.assertEqual([{"kind": "managed-block", "path": str(claude_md), "remove_path": str(claude_md)}], manifest_entries)
+
+    def test_claude_rules_install_fails_when_agents_source_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.mkdir()
+            contracts = {
+                "contracts": {
+                    "claude": {
+                        "scopes": {
+                            "project": {
+                                "rules": "CLAUDE.md",
+                                "agents": ".claude/agents",
+                                "skills": ".claude/skills",
+                            }
+                        }
+                    }
+                }
+            }
+            layout = install.SourceLayout(
+                root=root / "source",
+                canonical_agents_dir=root / "source" / "agents",
+                canonical_skills_dir=root / "source" / "skills",
+                platform_contracts=root / "source" / "doc" / "PLATFORM-CONTRACTS.yaml",
+                agents_rule=None,
+            )
+
+            with self.assertRaises(SystemExit) as raised:
+                install.install_rules(
+                    "claude",
+                    "project",
+                    target,
+                    contracts,
+                    layout,
+                    install.Transaction(),
+                    True,
+                    "test-commit",
+                    "2026-06-21T00:00:00Z",
+                    [],
+                )
+
+            self.assertEqual(1, raised.exception.code)
+
 
 class QoderInstallerTests(unittest.TestCase):
     def _make_layout(self, root: Path, agents_rule: Path | None) -> install.SourceLayout:

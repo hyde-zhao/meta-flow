@@ -18,8 +18,6 @@ import shutil
 import sys
 from pathlib import Path
 
-import yaml
-
 PLATFORM_CONFIGS = {
     "claude": {
         "root": ".claude",
@@ -97,6 +95,8 @@ def convert_md_to_toml(md_path: Path, agent_name: str) -> str:
 
 
 def build_openclaw_manifest(agents_dir: Path, skills_dir: Path) -> str:
+    import yaml
+
     agents = []
     skills = []
     if agents_dir.exists():

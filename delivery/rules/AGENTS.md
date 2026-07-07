@@ -130,7 +130,7 @@ init（host-orchestrator）                                                   [C
 | `process/changes/` | 变更单（CR-*.md） |
 | `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
 | `delivery/skills/` | 交付 Skill 定义文件（canonical 源，同时是 meta-dev 产出目录） |
-| `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md） |
+| `delivery/rules/` | 唯一规则源 AGENTS.md（CLAUDE.md 安装时生成） |
 | `delivery/scripts/` | 仅安装器入口（install.py / install.sh / install.ps1） |
 | `scripts/` | 仓库级检查与构建脚本（不属于交付包） |
 | `delivery/README.md` | 产物 README（meta-doc 产出） |
@@ -268,7 +268,7 @@ init（host-orchestrator）                                                   [C
 - **精确匹配优先**：涉及对象定位、版本对齐、规则命中或平台路径判定时，默认采用 exact 语义，不使用模糊匹配作为默认行为
 - **平台契约优先**：安装器、DryRun、guardrail 与交付文档必须共同引用 `delivery/doc/PLATFORM-CONTRACTS.yaml`；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
 - **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
-- **安装命令与组件默认值**：安装 CLI 使用 `meta-flow install <platform>`，卸载使用 `meta-flow uninstall <platform>`；`--platform` 与 `install --uninstall` 仅作 legacy 兼容。组件使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md / CLAUDE.md 等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
+- **安装命令与组件默认值**：安装 CLI 使用 `meta-flow install <platform>`，卸载使用 `meta-flow uninstall <platform>`；`--platform` 与 `install --uninstall` 仅作 legacy 兼容。组件使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md（claude 平台生成 CLAUDE.md）等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
 
 ## 防火墙测试工作流（现有，独立运行）
 
