@@ -60,7 +60,7 @@ bash scripts/install.sh claude --dry-run
 
 ## 3. 安装内容
 
-- `rules`：平台规则入口（AGENTS.md / CLAUDE.md 等）
+- `rules`：平台规则入口（AGENTS.md 为唯一 canonical 源；claude 平台安装时从 AGENTS.md 生成 CLAUDE.md）
 - `agent`：平台 Agent 定义 + Skill 定义与 Skill 私有运行时资产
 - `full`：同时安装 rules 与 agent
 

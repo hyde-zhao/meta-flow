@@ -911,7 +911,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 2 | Story 闭环 | 目标 Story 均 verified |
 | 3 | 文档齐套 | README、USER-MANUAL、必要规则说明完成 |
 | 4 | 安装验证通过 | Codex / Claude、project / user scope 按适用范围验证 |
-| 5 | 平台规则一致 | AGENTS.md / CLAUDE.md 与实际交付内容一致 |
+| 5 | 平台规则一致 | AGENTS.md（CLAUDE.md 由其生成）与实际交付内容一致 |
 | 6 | 交付目录合规 | `delivery/agents`、`delivery/skills`、`delivery/rules`、`delivery/scripts` 边界正确 |
 | 7 | 缓存和临时文件清理 | 无 `__pycache__`、临时构建产物 |
 | 8 | guardrail 通过 | 当前仓库存在 guardrail 时必须通过 |
