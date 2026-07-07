@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts import package_builder
+# scripts/ 不是安装包也无 __init__.py，pytest collection（非 -m 模式）下
+# `from scripts import package_builder` 不可靠。用文件路径直接加载模块。
+PACKAGE_BUILDER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "package_builder.py"
+_spec = importlib.util.spec_from_file_location("package_builder", PACKAGE_BUILDER_PATH)
+assert _spec is not None and _spec.loader is not None
+package_builder = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(package_builder)
 
 
 class PackageBuilderClaudeEntryTests(unittest.TestCase):
