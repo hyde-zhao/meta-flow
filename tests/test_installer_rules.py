@@ -35,7 +35,6 @@ class InstallerRulesTests(unittest.TestCase):
                 canonical_skills_dir=root / "source" / "skills",
                 platform_contracts=root / "source" / "doc" / "PLATFORM-CONTRACTS.yaml",
                 agents_rule=source_rule,
-                claude_rule=None,
             )
             manifest_entries: list[dict[str, str]] = []
 
@@ -81,7 +80,6 @@ class InstallerRulesTests(unittest.TestCase):
                 canonical_skills_dir=root / "source" / "skills",
                 platform_contracts=root / "source" / "doc" / "PLATFORM-CONTRACTS.yaml",
                 agents_rule=None,
-                claude_rule=None,
             )
 
             with self.assertRaises(SystemExit) as raised:
@@ -109,7 +107,6 @@ class QoderInstallerTests(unittest.TestCase):
             canonical_skills_dir=root / "source" / "skills",
             platform_contracts=root / "source" / "doc" / "PLATFORM-CONTRACTS.yaml",
             agents_rule=agents_rule,
-            claude_rule=None,
         )
 
     def _make_contracts(self) -> dict:
