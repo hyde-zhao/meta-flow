@@ -719,6 +719,16 @@ EXPECTED_CODEX_REASONING_EFFORTS = {
     "meta-qa-critical": "xhigh",
     "meta-doc": "low",
 }
+EXPECTED_CODEX_MODELS = {
+    "meta-pm": "gpt-5.6-terra",
+    "meta-se": "gpt-5.6-terra",
+    "meta-se-critical": "gpt-5.6-sol",
+    "meta-dev": "gpt-5.6-terra",
+    "meta-dev-debugger": "gpt-5.6-sol",
+    "meta-qa": "gpt-5.6-terra",
+    "meta-qa-critical": "gpt-5.6-sol",
+    "meta-doc": "gpt-5.6-luna",
+}
 EXPECTED_CLAUDE_COLORS = {
     "meta-pm": "orange",
     "meta-se": "yellow",
@@ -1297,6 +1307,7 @@ def collect_agent_display_profile_errors() -> list[str]:
         "AGENT_DISPLAY_PROFILES",
         "CODEX_NICKNAME_RE",
         "nickname_candidates",
+        "CODEX_AGENT_MODELS",
         "model_reasoning_effort",
         "CODEX_AGENT_REASONING_PROFILES",
         "meta-dev-debugger",
@@ -1364,6 +1375,13 @@ def collect_agent_display_profile_errors() -> list[str]:
                 errors.append(
                     f"{agent_path.relative_to(project_root)} model_reasoning_effort must be "
                     f"{expected_effort}, got {actual_effort}"
+                )
+            expected_model = EXPECTED_CODEX_MODELS[agent_name]
+            actual_model = payload.get("model")
+            if actual_model != expected_model:
+                errors.append(
+                    f"{agent_path.relative_to(project_root)} model must be "
+                    f"{expected_model}, got {actual_model}"
                 )
 
         for agent_name, expected_color in EXPECTED_CLAUDE_COLORS.items():

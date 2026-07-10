@@ -8,6 +8,41 @@ from delivery.scripts import install
 
 
 class InstallerRulesTests(unittest.TestCase):
+    def test_codex_model_routing_is_explicit_and_platform_specific(self) -> None:
+        source_agents = [
+            install.AgentDefinition(
+                source=Path(f"{name}.md"),
+                name=name,
+                description=f"{name} agent",
+                instructions=f"You are {name}.",
+                model=None,
+                model_reasoning_effort="medium",
+                tools=None,
+                extra_fields=(),
+            )
+            for name in ("meta-pm", "meta-se", "meta-dev", "meta-qa", "meta-doc")
+        ]
+
+        rendered_agents = install.codex_install_agent_definitions(source_agents)
+        models = {agent.name: agent.model for agent in rendered_agents}
+
+        self.assertEqual("gpt-5.6-terra", models["meta-pm"])
+        self.assertEqual("gpt-5.6-terra", models["meta-se"])
+        self.assertEqual("gpt-5.6-terra", models["meta-dev"])
+        self.assertEqual("gpt-5.6-terra", models["meta-qa"])
+        self.assertEqual("gpt-5.6-luna", models["meta-doc"])
+        self.assertEqual("gpt-5.6-sol", models["meta-dev-debugger"])
+        self.assertEqual("gpt-5.6-sol", models["meta-se-critical"])
+        self.assertEqual("gpt-5.6-sol", models["meta-qa-critical"])
+        self.assertTrue(all(agent.model is None for agent in source_agents))
+
+        codex_toml = install.render_codex_agent(rendered_agents[0], "abc", "2026-07-10T00:00:00Z")
+        self.assertIn('model = "gpt-5.6-terra"', codex_toml)
+        claude_markdown = install.render_claude_agent(source_agents[0], "abc", "2026-07-10T00:00:00Z")
+        qoder_markdown = install.render_qoder_agent(source_agents[0], "abc", "2026-07-10T00:00:00Z")
+        self.assertNotIn("gpt-5.6-", claude_markdown)
+        self.assertNotIn("gpt-5.6-", qoder_markdown)
+
     def test_codex_rules_install_creates_agents_md_when_source_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

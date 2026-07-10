@@ -46,11 +46,11 @@ status: active
 2. 生成 `install.py`、`install.ps1`、`install.sh`。
 3. 若目标包含 Codex，必须从 `delivery/doc/PLATFORM-CONTRACTS.yaml` 取路径：subagent 写入 `.codex/agents/<name>.toml` 或 `~/.codex/agents/<name>.toml`；Skill 写入 `.agents/skills/<skill>/SKILL.md` 或 `~/.agents/skills/<skill>/SKILL.md`。
 4. Codex subagent 严格遵循官方 schema：必填 `name`、`description`、`developer_instructions`；仅允许官方可选字段 `nickname_candidates`、`model`、`model_reasoning_effort`、`sandbox_mode`、`mcp_servers`、`skills.config`；不得写 `version`、`instructions` 或其他非标准顶层字段。
-5. Codex 安装时必须仅为功能 canonical subagent 写入 `nickname_candidates` 命令别名，并写入角色级 `model_reasoning_effort`：`meta-pm=medium`、`meta-se=high`、`meta-dev=medium`、`meta-qa=high`、`meta-doc=low`。命令别名按百家姓顺序依次分配：`meta-pm -> pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`meta-se -> se-chu/se-wei/se-jiang/se-shen/se-han`、`meta-dev -> dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`meta-qa -> qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`meta-doc -> doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`。Codex 还必须额外安装三个动态思考 profile：`meta-dev-debugger=high`、`meta-se-critical=xhigh`、`meta-qa-critical=xhigh`；profile 不新增 canonical role。
+5. Codex 安装时必须仅为功能 canonical subagent 写入 `nickname_candidates` 命令别名、Codex-only `model` 和角色级 `model_reasoning_effort`：`meta-pm/meta-se/meta-dev/meta-qa=gpt-5.6-terra`，`meta-doc=gpt-5.6-luna`，推理等级仍为 `meta-pm=medium`、`meta-se=high`、`meta-dev=medium`、`meta-qa=high`、`meta-doc=low`。命令别名按百家姓顺序依次分配：`meta-pm -> pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`meta-se -> se-chu/se-wei/se-jiang/se-shen/se-han`、`meta-dev -> dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`meta-qa -> qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`meta-doc -> doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`。Codex 还必须额外安装三个 `gpt-5.6-sol` 动态思考 profile：`meta-dev-debugger=high`、`meta-se-critical=xhigh`、`meta-qa-critical=xhigh`；profile 不新增 canonical role。模型覆盖只能在 Codex 渲染时应用，不能写入 Claude Code 或 Qoder 产物。
 6. Claude Code 文件型 subagent 不使用 nickname；安装时必须写入不同 `color`：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。
 7. 安装器必须封装 `ensure_directory()` / `ensure_file_target()`：写入任何文件、复制任何树、生成 manifest 前，逐级检查父路径组件；存在且为目录则继续，不存在则创建，存在但不是目录则输出明确错误并终止。
 8. 安装 CLI 必须支持 `meta-flow install <platform>` 与 `meta-flow uninstall <platform>`；`--platform` 仅作为 legacy 兼容入口保留。`meta-flow install --help`、`meta-flow install <platform> --help`、`meta-flow uninstall --help`、`meta-flow uninstall <platform> --help` 都必须输出可读帮助。
-9. 用 `platform-validator` 校验 DryRun 输出、目录结构、Codex subagent schema、Codex nickname、Codex `model_reasoning_effort`、Codex 动态思考 profile、Claude Code color、Codex `.codex/skills` 负向断言和路径组件冲突场景。
+9. 用 `platform-validator` 校验 DryRun 输出、目录结构、Codex subagent schema、Codex nickname、Codex `model`、Codex `model_reasoning_effort`、Codex 动态思考 profile、Claude Code color、Codex-only 模型不泄漏至其他平台、Codex `.codex/skills` 负向断言和路径组件冲突场景。
 
 ## 输出文件 / 输出模板
 
@@ -71,7 +71,7 @@ status: active
 - Codex subagent 的指令正文必须写入 `developer_instructions`；canonical agent Markdown 正文映射到该字段，不得另造 `instructions` 顶层字段
 - 若 canonical source 或渲染结果出现 `version` 等非官方 Codex subagent 顶层字段，必须视为错误并阻断交付
 - canonical agent 的 `name` 不因命令别名改变；`pm-wu` 等只进入 Codex `nickname_candidates`，不得替换 `meta-pm`、`meta-dev` 等状态机角色名；Host Orchestrator 是主进程职责，不生成平台 subagent
-- Codex 动态思考 profile 只作为实际 custom agent 名称使用；状态机、handoff 和 `active_agents[].role` 仍使用 canonical role，并通过 `codex_agent_name`、`reasoning_profile`、`dispatch_trigger` 记录实际调度
+- Codex 动态思考 profile 只作为实际 custom agent 名称使用；状态机、handoff 和 `active_agents[].role` 仍使用 canonical role，并通过 `codex_agent_name`、`reasoning_profile`、`dispatch_trigger` 记录实际调度。`model` 由 Codex-only 路由确定，Qoder 只复用 profile 的名称、指令和推理等级。
 - Claude Code 只用 `color` 区分 subagent，不新增伪 nickname 字段
 - Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`，guardrail 必须覆盖负向断言
 - 目标路径任一父级组件被普通文件占用时，安装器必须 fail fast，输出 `安装路径被非目录占用: <path>` 和可操作修复提示，不得暴露 Python traceback
@@ -82,7 +82,7 @@ status: active
 - [ ] 支持 claude / codex / openclaw 与 project / user 两类安装
 - [ ] DryRun 输出可被 `platform-validator` 校验
 - [ ] `meta-flow install <platform>` 与 `meta-flow uninstall <platform>` 可用，多层级 `-h` / `--help` 可用
-- [ ] Codex 安装产物中的 `.codex/agents/*.toml` 仅包含官方 schema 字段，`developer_instructions` 非空，且功能 subagent 与动态 profile 的 `model_reasoning_effort` 符合角色映射
+- [ ] Codex 安装产物中的 `.codex/agents/*.toml` 仅包含官方 schema 字段，`developer_instructions` 非空，且功能 subagent 与动态 profile 的 `model`、`model_reasoning_effort` 符合角色映射
 - [ ] Codex Skill dry-run 输出包含 `.agents/skills/<skill>/SKILL.md` 或 `~/.agents/skills/<skill>/SKILL.md`，且不包含 `.codex/skills`
 - [ ] 目标路径被文件占用时，安装器必须 fail fast，并输出可操作修复提示；例如 `<target>/.codex` 为普通文件时，Codex project agent 安装不得出现 `Traceback` 或 `NotADirectoryError`
 

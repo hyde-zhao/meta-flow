@@ -375,11 +375,11 @@ Codex 多 agent 模式下，state-router 必须维护 `AGENT-DISPATCH-LEDGER.ndj
 
 Codex 下按下表选择实际 custom agent；Claude Code / OpenClaw 暂不应用该表。
 
-| canonical role | 默认 `codex_agent_name` | 默认 profile | 升级条件 | 升级 `codex_agent_name` | 升级 profile |
+| canonical role | 默认 `codex_agent_name` / 模型 | 默认 profile | 升级条件 | 升级 `codex_agent_name` / 模型 | 升级 profile |
 |---|---|---|---|---|---|
-| `meta-dev` | `meta-dev` | `default` | 实现失败超过 2 轮、CP7 回修反复、跨模块 bug、状态机异常、PIT / 数据泄漏 / 数据一致性风险、复杂 flaky test | `meta-dev-debugger` | `debugger` |
-| `meta-se` | `meta-se` | `default` | 架构冻结、公共 contract、跨模块边界、安全权限、外部接口、长期维护成本或重大 ADR 决策 | `meta-se-critical` | `critical` |
-| `meta-qa` | `meta-qa` | `default` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、安全 / 安装 / 平台路径 / workflow harness 高风险验证 | `meta-qa-critical` | `critical` |
+| `meta-dev` | `meta-dev` / `gpt-5.6-terra` | `default` | 实现失败超过 2 轮、CP7 回修反复、跨模块 bug、状态机异常、PIT / 数据泄漏 / 数据一致性风险、复杂 flaky test | `meta-dev-debugger` / `gpt-5.6-sol` | `debugger` |
+| `meta-se` | `meta-se` / `gpt-5.6-terra` | `default` | 架构冻结、公共 contract、跨模块边界、安全权限、外部接口、长期维护成本或重大 ADR 决策 | `meta-se-critical` / `gpt-5.6-sol` | `critical` |
+| `meta-qa` | `meta-qa` / `gpt-5.6-terra` | `default` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、安全 / 安装 / 平台路径 / workflow harness 高风险验证 | `meta-qa-critical` / `gpt-5.6-sol` | `critical` |
 
 调度记录必须同时写入 `process/state/AGENT-DISPATCH-LEDGER.ndjson` dispatch events 与 handoff `dispatch`：
 

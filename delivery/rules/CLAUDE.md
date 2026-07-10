@@ -10,7 +10,7 @@
 - **功能 Agent**（按需启用）：`meta-pm`、`meta-se`、`meta-dev`、`meta-qa`、`meta-doc`
 - **所有任务均通过 host-orchestrator 发起**；`meta-pm` / `meta-se` 在阶段委托期间可直接与用户多轮沟通，阶段交还后仍由 host-orchestrator 发起 CP2 / CP3 正式人工确认
 - **调度证据优先**：handoff 文件只表示交接，不表示功能 Agent 已执行。功能 Agent 完成必须有平台 Task/Subagent 证据，或用户明确批准的 `inline-fallback`。
-- **显示区分**：Claude Code 文件型功能 subagent 不使用 nickname；安装器通过 `color` 字段区分角色：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。Codex 侧为功能 subagent 写入 `nickname_candidates` 与 `model_reasoning_effort`，并额外生成 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 三个动态思考 profile；profile 不改变 canonical role。Qoder 复用 Codex agent 定义和 reasoning profile，输出为 `.qoder/agents/*.md`（Markdown + YAML frontmatter），使用 `effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`），并复用 Claude Code 的 `color` 字段。
+- **显示区分**：Claude Code 文件型功能 subagent 不使用 nickname；安装器通过 `color` 字段区分角色：`meta-pm=orange`、`meta-se=yellow`、`meta-dev=green`、`meta-qa=cyan`、`meta-doc=purple`。Codex 侧为功能 subagent 写入 `nickname_candidates`、Codex-only GPT-5.6 模型路由和 `model_reasoning_effort`，并额外生成 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 三个动态思考 profile；profile 不改变 canonical role。Qoder 复用 canonical Agent 定义和 reasoning profile，但不接收 Codex-only GPT-5.6 模型字段；输出为 `.qoder/agents/*.md`（Markdown + YAML frontmatter），使用 `effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`），并复用 Claude Code 的 `color` 字段。
 
 ## Skill 发现路径
 

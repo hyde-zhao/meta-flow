@@ -33,10 +33,9 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-
 
 VALID_PLATFORMS = ("claude", "codex", "openclaw", "qoder")
 PLATFORM_ALIASES = {"claude-code": "claude", "qoder-cli": "qoder", "qodercli": "qoder"}
@@ -109,11 +108,21 @@ AGENT_DISPLAY_PROFILES: dict[str, dict[str, object]] = {
     "meta-qa-critical": {"codex_nicknames": ["qa-critical-he", "qa-critical-lv", "qa-critical-shi"]},
     "meta-doc": {"codex_nicknames": ["doc-cao", "doc-yan", "doc-hua", "doc-jin", "doc-wei"], "claude_color": "purple"},
 }
+
+# canonical Agent Markdown 同时供 Claude Code 与 Qoder 使用；OpenAI 模型只在 Codex 渲染时覆盖。
+CODEX_AGENT_MODELS: dict[str, str] = {
+    "meta-pm": "gpt-5.6-terra",
+    "meta-se": "gpt-5.6-terra",
+    "meta-dev": "gpt-5.6-terra",
+    "meta-qa": "gpt-5.6-terra",
+    "meta-doc": "gpt-5.6-luna",
+}
 CODEX_AGENT_REASONING_PROFILES: dict[str, tuple[dict[str, str], ...]] = {
     "meta-dev": (
         {
             "name": "meta-dev-debugger",
             "description": "Meta Flow 元工作流的开发故障追因专家。用于重复失败、跨模块 bug、状态机异常和数据一致性问题。",
+            "model": "gpt-5.6-sol",
             "model_reasoning_effort": "high",
             "instructions": """
 ## Codex reasoning profile: meta-dev-debugger
@@ -133,6 +142,7 @@ CODEX_AGENT_REASONING_PROFILES: dict[str, tuple[dict[str, str], ...]] = {
         {
             "name": "meta-se-critical",
             "description": "Meta Flow 元工作流的关键架构审查 profile。用于架构冻结、公共契约、跨模块边界和长期风险决策。",
+            "model": "gpt-5.6-sol",
             "model_reasoning_effort": "xhigh",
             "instructions": """
 ## Codex reasoning profile: meta-se-critical
@@ -152,6 +162,7 @@ CODEX_AGENT_REASONING_PROFILES: dict[str, tuple[dict[str, str], ...]] = {
         {
             "name": "meta-qa-critical",
             "description": "Meta Flow 元工作流的关键质量门 profile。用于 CP5/CP7/CP8、发布前和高风险验证裁决。",
+            "model": "gpt-5.6-sol",
             "model_reasoning_effort": "xhigh",
             "instructions": """
 ## Codex reasoning profile: meta-qa-critical
@@ -464,6 +475,11 @@ def select_agent_definitions(definitions: list[AgentDefinition], requested: list
     return selected
 
 
+def codex_agent_definition(agent: AgentDefinition) -> AgentDefinition:
+    """返回仅用于 Codex 渲染的 Agent 定义，避免污染其他平台的模型字段。"""
+    return replace(agent, model=CODEX_AGENT_MODELS.get(agent.name, agent.model))
+
+
 def codex_profile_agent_definitions(agent: AgentDefinition) -> list[AgentDefinition]:
     profiles: list[AgentDefinition] = []
     for profile in CODEX_AGENT_REASONING_PROFILES.get(agent.name, ()):
@@ -479,7 +495,7 @@ def codex_profile_agent_definitions(agent: AgentDefinition) -> list[AgentDefinit
                 name=profile_name,
                 description=profile["description"],
                 instructions=f"{agent.instructions.rstrip()}\n\n{profile['instructions'].strip()}\n",
-                model=agent.model,
+                model=profile.get("model", agent.model),
                 model_reasoning_effort=profile_effort,
                 tools=agent.tools,
                 extra_fields=agent.extra_fields,
@@ -491,8 +507,9 @@ def codex_profile_agent_definitions(agent: AgentDefinition) -> list[AgentDefinit
 def codex_install_agent_definitions(selected_agents: list[AgentDefinition]) -> list[AgentDefinition]:
     install_agents: list[AgentDefinition] = []
     for agent in selected_agents:
-        install_agents.append(agent)
-        install_agents.extend(codex_profile_agent_definitions(agent))
+        codex_agent = codex_agent_definition(agent)
+        install_agents.append(codex_agent)
+        install_agents.extend(codex_profile_agent_definitions(codex_agent))
     return install_agents
 
 

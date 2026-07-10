@@ -76,27 +76,27 @@ legacy `--content agents|skills|rules|all` 保留兼容，但新文档优先使�
 
 canonical role 只覆盖功能子 agent，用于状态机、handoff、检查点和审计。Host Orchestrator 是当前会话主进程职责，不安装为 Codex / Claude Code agent 文件。平台展示按下表安装：
 
-| canonical role | Codex 命令 / nickname_candidates | Codex `model_reasoning_effort` | Claude Code color |
-|---|---|---|---|
-| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `medium` | `orange` |
-| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `high` | `yellow` |
-| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `medium` | `green` |
-| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `high` | `cyan` |
-| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `low` | `purple` |
+| canonical role | Codex 命令 / nickname_candidates | Codex 模型 | Codex `model_reasoning_effort` | Claude Code color |
+|---|---|---|---|---|
+| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `gpt-5.6-terra` | `medium` | `orange` |
+| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `gpt-5.6-terra` | `high` | `yellow` |
+| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `gpt-5.6-terra` | `medium` | `green` |
+| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `gpt-5.6-terra` | `high` | `cyan` |
+| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `gpt-5.6-luna` | `low` | `purple` |
 
-Codex 安装器把命令别名写入 `.codex/agents/*.toml` 的 `nickname_candidates`，并写入上表的 `model_reasoning_effort`。Claude Code 文件型 subagent 不使用 nickname，安装器写入 `color` 字段，通过颜色区分不同子 agent。主进程建议父会话在标准 / 复杂工作流中使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可使用 `medium`。
+Codex 安装器把命令别名、Codex-only 模型路由和推理等级写入 `.codex/agents/*.toml`。Claude Code 文件型 subagent 不使用 nickname，安装器写入 `color` 字段，通过颜色区分不同子 agent；OpenAI 模型名不会写入 Claude Code 或 Qoder Agent。主进程建议父会话在标准 / 复杂工作流中使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可使用 `medium`。
 
 Codex 还会安装动态思考 profile，但 canonical role 不变：
 
-| Codex profile agent | canonical role | `model_reasoning_effort` | 典型触发 |
-|---|---|---|---|
-| `meta-dev-debugger` | `meta-dev` | `high` | 重复失败、复杂追因、跨模块 bug、状态机 / 数据一致性问题 |
-| `meta-se-critical` | `meta-se` | `xhigh` | 架构冻结、公共 contract、重大 ADR、长期边界风险 |
-| `meta-qa-critical` | `meta-qa` | `xhigh` | CP5 / CP7 / CP8、发布前、高风险验证和证据链裁决 |
+| Codex profile agent | canonical role | Codex 模型 | `model_reasoning_effort` | 典型触发 |
+|---|---|---|---|---|
+| `meta-dev-debugger` | `meta-dev` | `gpt-5.6-sol` | `high` | 重复失败、复杂追因、跨模块 bug、状态机 / 数据一致性问题 |
+| `meta-se-critical` | `meta-se` | `gpt-5.6-sol` | `xhigh` | 架构冻结、公共 contract、重大 ADR、长期边界风险 |
+| `meta-qa-critical` | `meta-qa` | `gpt-5.6-sol` | `xhigh` | CP5 / CP7 / CP8、发布前、高风险验证和证据链裁决 |
 
 Host Orchestrator 调度时必须在 `AGENT-DISPATCH-LEDGER.ndjson` 或 handoff `dispatch` 记录 `canonical_role`、`codex_agent_name`、`reasoning_profile` 和 `dispatch_trigger`。Codex 工具面有 `spawn_agent` / `resume_agent` / `send_input` 时，创建 `mode=subagent` handoff 后必须调用对应工具；只创建 handoff 不算子 agent 已执行。
 
-Qoder 安装器复用 Codex 的 agent 定义和 reasoning profile（含 `meta-dev-debugger` / `meta-se-critical` / `meta-qa-critical`），但输出为 Markdown + YAML frontmatter 格式（`.qoder/agents/*.md`）。Qoder 不使用 `nickname_candidates`，改用 `effort` 字段映射 Codex 的 `model_reasoning_effort`（`minimal` → `low`，其余 1:1），并复用 Claude Code 的 `color` 字段区分角色。
+Qoder 安装器复用 canonical Agent 定义和 reasoning profile（含 `meta-dev-debugger` / `meta-se-critical` / `meta-qa-critical`），但不复用 Codex-only GPT-5.6 模型路由；输出为 Markdown + YAML frontmatter 格式（`.qoder/agents/*.md`）。Qoder 不使用 `nickname_candidates`，改用 `effort` 字段映射 Codex 的 `model_reasoning_effort`（`minimal` → `low`，其余 1:1），并复用 Claude Code 的 `color` 字段区分角色。
 
 ## 4. DryRun 与卸载
 

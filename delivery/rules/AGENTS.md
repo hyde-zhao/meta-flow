@@ -25,7 +25,7 @@ Host Orchestrator 的职责：
 - 记录子 agent 调度证据：handoff 文件只表示交接，不表示目标 agent 已执行；meta-dev / meta-qa 等下游完成必须有 `spawn_agent` / `resume_agent` / `send_input` 或平台 Task/Subagent 证据，或用户批准的 `inline-fallback`
 - 维护阶段委托交互：`meta-pm` / `meta-se` 在各自阶段内可直接与用户多轮沟通，host-orchestrator 记录委托状态并在阶段交还后发起 CP2 / CP3
 - 维护 LLD Clarification Queue：并行 LLD 阶段由 meta-dev 写入 clarification item，host-orchestrator 作为唯一 question broker 合并、批量询问用户、回填答案并分发
-- 维护 Agent 命令、显示与 Codex 思考等级区分：Codex 功能 agent 使用 `nickname_candidates`（如 `dev-yang`）区分显示，并使用 `model_reasoning_effort` 配置角色级思考等级；Claude Code 功能 subagent 不使用 nickname，改用不同 `color` 区分；主编排器不安装平台子 agent
+- 维护 Agent 命令、显示、模型与 Codex 思考等级区分：Codex 功能 agent 使用 `nickname_candidates`（如 `dev-yang`）区分显示，并由 Codex-only 路由写入角色级 `model` 与 `model_reasoning_effort`；Claude Code 功能 subagent 不使用 nickname，改用不同 `color` 区分；主编排器不安装平台子 agent
 - 受理变更请求，创建 `process/changes/CR-*.md`，执行五维度影响分析
 - 判定 `standard` / `fast-lane` 模式；fast-lane 仅用于低风险轻量实现，仍必须保留验证、终验摘要和追溯证据
 - **失败模式识别**：识别需求循环、HLD 僵局、LLD 僵局、开发卡顿等常见失败信号
@@ -45,27 +45,27 @@ Host Orchestrator 的职责：
 
 canonical role 仅包含功能 Agent，用于状态机、handoff、检查点和审计。平台展示按下表安装；主编排器由主进程承担，不安装 Codex / Claude Code / Qoder agent 文件：
 
-| canonical role | Codex 命令 / nickname_candidates | Codex `model_reasoning_effort` | Claude Code color |
-|---|---|---|---|
-| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `medium` | `orange` |
-| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `high` | `yellow` |
-| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `medium` | `green` |
-| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `high` | `cyan` |
-| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `low` | `purple` |
+| canonical role | Codex 命令 / nickname_candidates | Codex 模型 | Codex `model_reasoning_effort` | Claude Code color |
+|---|---|---|---|---|
+| `meta-pm` | `pm-wu`、`pm-zheng`、`pm-wang`、`pm-feng`、`pm-chen` | `gpt-5.6-terra` | `medium` | `orange` |
+| `meta-se` | `se-chu`、`se-wei`、`se-jiang`、`se-shen`、`se-han` | `gpt-5.6-terra` | `high` | `yellow` |
+| `meta-dev` | `dev-yang`、`dev-zhu`、`dev-qin`、`dev-you`、`dev-xu`、`dev-he`、`dev-lv`、`dev-shi`、`dev-zhang`、`dev-kong` | `gpt-5.6-terra` | `medium` | `green` |
+| `meta-qa` | `qa-he`、`qa-lv`、`qa-shi`、`qa-zhang`、`qa-kong`、`qa-cao`、`qa-yan`、`qa-hua`、`qa-jin`、`qa-wei` | `gpt-5.6-terra` | `high` | `cyan` |
+| `meta-doc` | `doc-cao`、`doc-yan`、`doc-hua`、`doc-jin`、`doc-wei` | `gpt-5.6-luna` | `low` | `purple` |
 
-主进程 Host Orchestrator 不安装为 Codex custom agent；标准 / 复杂工作流建议父会话使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可降为 `medium`。功能子 agent 的 Codex TOML 显式写入上表等级；若某个字段省略，则继承父会话配置。
+主进程 Host Orchestrator 不安装为 Codex custom agent；标准 / 复杂工作流建议父会话使用 `model_reasoning_effort="high"`，fast-lane 或小范围机械修改可降为 `medium`。功能子 agent 的 Codex TOML 由安装器显式写入上表模型与等级；模型映射只作用于 Codex，不得写入 Claude Code 或 Qoder 的 canonical Agent front matter。
 
 Codex 动态思考 profile 只改变实际 custom agent 名称，不改变 canonical role：
 
-| canonical role | 默认 Codex agent | 升级触发 | 升级 Codex agent | 升级 effort |
+| canonical role | 默认 Codex agent / 模型 | 升级触发 | 升级 Codex agent / 模型 | 升级 effort |
 |---|---|---|---|---|
-| `meta-dev` | `meta-dev` | 实现失败超过 2 轮、CP7 回修反复、跨模块 bug、状态机异常、PIT / 数据泄漏 / 数据一致性风险、复杂 flaky test | `meta-dev-debugger` | `high` |
-| `meta-se` | `meta-se` | 架构冻结、公共 contract、跨模块边界、安全权限、外部接口、重大 ADR | `meta-se-critical` | `xhigh` |
-| `meta-qa` | `meta-qa` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、高风险验证 | `meta-qa-critical` | `xhigh` |
+| `meta-dev` | `meta-dev` / `gpt-5.6-terra` | 实现失败超过 2 轮、CP7 回修反复、跨模块 bug、状态机异常、PIT / 数据泄漏 / 数据一致性风险、复杂 flaky test | `meta-dev-debugger` / `gpt-5.6-sol` | `high` |
+| `meta-se` | `meta-se` / `gpt-5.6-terra` | 架构冻结、公共 contract、跨模块边界、安全权限、外部接口、重大 ADR | `meta-se-critical` / `gpt-5.6-sol` | `xhigh` |
+| `meta-qa` | `meta-qa` / `gpt-5.6-terra` | CP5 全量设计证据确认、CP7 最终验证、CP8 交付就绪、发布前、高风险验证 | `meta-qa-critical` / `gpt-5.6-sol` | `xhigh` |
 
 Codex 主进程必须在平台能力探测记录、`process/state/AGENT-DISPATCH-LEDGER.ndjson` 或 handoff `dispatch` 中记录子 agent 调度能力。若当前工具面暴露 `spawn_agent` / `resume_agent` / `send_input` 且当前会话配置允许自动调度，创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具，并在 dispatch 事件与 handoff `dispatch` 中记录 `canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`tool_name`、`agent_id/thread_id`；只写 handoff 不算拉起子 agent。
 
-Qoder 复用 Codex 的 agent 定义和 reasoning profile（含 `meta-dev-debugger` / `meta-se-critical` / `meta-qa-critical`），输出为 `.qoder/agents/*.md`（Markdown + YAML frontmatter）。Qoder 不使用 `nickname_candidates`，改用 `effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`，其余 1:1），并复用 Claude Code 的 `color` 字段。Qoder 与 Codex 在 project scope 共享 `AGENTS.md`，安装器使用 platform-tagged managed block 隔离各平台内容。
+Qoder 复用 canonical Agent 定义和 reasoning profile（含 `meta-dev-debugger` / `meta-se-critical` / `meta-qa-critical`），但不复用 Codex-only GPT-5.6 模型路由；输出为 `.qoder/agents/*.md`（Markdown + YAML frontmatter）。Qoder 不使用 `nickname_candidates`，改用 `effort` 字段映射 `model_reasoning_effort`（`minimal` → `low`，其余 1:1），并复用 Claude Code 的 `color` 字段。Qoder 与 Codex 在 project scope 共享 `AGENTS.md`，安装器使用 platform-tagged managed block 隔离各平台内容。
 
 ## 工作流阶段与 Agent 对应关系
 

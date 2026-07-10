@@ -60,7 +60,9 @@ status: active
 - 不得出现 `version`、`instructions` 或其他非标准顶层字段
 - `nickname_candidates` 必须符合功能子 agent 命令别名映射：`pm-wu/pm-zheng/pm-wang/pm-feng/pm-chen`、`se-chu/se-wei/se-jiang/se-shen/se-han`、`dev-yang/dev-zhu/dev-qin/dev-you/dev-xu/dev-he/dev-lv/dev-shi/dev-zhang/dev-kong`、`qa-he/qa-lv/qa-shi/qa-zhang/qa-kong/qa-cao/qa-yan/qa-hua/qa-jin/qa-wei`、`doc-cao/doc-yan/doc-hua/doc-jin/doc-wei`
 - `model_reasoning_effort` 必须符合功能子 agent 思考等级映射：`meta-pm=medium`、`meta-se=high`、`meta-dev=medium`、`meta-qa=high`、`meta-doc=low`
+- `model` 必须符合 Codex-only 模型映射：`meta-pm/meta-se/meta-dev/meta-qa=gpt-5.6-terra`、`meta-doc=gpt-5.6-luna`、`meta-dev-debugger/meta-se-critical/meta-qa-critical=gpt-5.6-sol`
 - 动态思考 profile 必须存在且符合：`meta-dev-debugger=high`、`meta-se-critical=xhigh`、`meta-qa-critical=xhigh`；这些 profile 只作为 Codex custom agent 名称，不得作为新的 canonical role 写入状态机
+- Claude Code 与 Qoder 渲染产物不得出现 Codex-only 的 `gpt-5.6-*` 模型字段
 
 ### 维度 5.1：Claude Code subagent color（仅 claude，REQUIRED）
 
@@ -130,7 +132,7 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 3. 校验安装脚本默认参数与 DryRun 输出
 4. 校验目标目录结构与关键入口文件
 5. 构造路径组件被文件占用的负向用例，确认安装器 fail fast 且无 traceback
-6. 若目标平台是 Codex，校验 subagent TOML schema、`nickname_candidates`、`model_reasoning_effort` 和动态思考 profile
+6. 若目标平台是 Codex，校验 subagent TOML schema、`nickname_candidates`、`model`、`model_reasoning_effort` 和动态思考 profile；同时确认 Claude Code 与 Qoder 没有泄漏 Codex-only 模型字段
 7. 若目标平台是 Claude Code，校验 subagent `color` 和 `AskUserQuestion` 工具权限
 8. 校验 `STATE.current.json.delivery_routing_ref route_validation` 和 production 禁止写入路径
 9. 输出校验报告（含未通过项与修复建议）
@@ -176,7 +178,7 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 - [ ] 未通过项有具体路径和修复建议
 - [ ] 已检查安装脚本 DryRun 行为
 - [ ] Codex 目标已检查 subagent TOML schema（若平台为 codex）
-- [ ] Codex 目标已检查 `nickname_candidates` 命令别名、`model_reasoning_effort` 思考等级和动态思考 profile（若平台为 codex）
+- [ ] Codex 目标已检查 `nickname_candidates` 命令别名、`model` 路由、`model_reasoning_effort` 思考等级和动态思考 profile（若平台为 codex）
 - [ ] Claude Code 目标已检查 subagent `color`（若平台为 claude）
 - [ ] Claude Code 目标已检查 direct ask agent 的 `AskUserQuestion` 工具权限（若平台为 claude）
 - [ ] Codex 目标已检查 `.codex/skills` / `~/.codex/skills` 负向断言（若平台为 codex）
@@ -188,7 +190,7 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 - Codex Skill 的安装路径是 `.agents/skills` 或 `~/.agents/skills`，不是 `.codex/skills` 或 `~/.codex/skills`；dry-run 和真实安装都必须按同一契约检查。
 - dry-run 只证明安装计划，不证明文件已经写入目标目录；需要验证实际安装时必须执行非 dry-run 并检查目标文件内容。
 - `--scope user` 默认只安装 `rules`，`--scope project` 默认安装 `full`；验证默认行为时不要手动补 `--component` 后再声称覆盖默认值。
-- Claude Code 使用 `color` 展示角色，Codex 使用 `nickname_candidates` 命令别名并使用 `model_reasoning_effort` 配置思考等级；两者不能互相类比或混写。
+- Claude Code 使用 `color` 展示角色，Codex 使用 `nickname_candidates` 命令别名、Codex-only `model` 路由和 `model_reasoning_effort` 配置思考等级；两者不能互相类比或混写。
 - Claude Code 的 `AskUserQuestion` 必须写入需要 direct ask 的 subagent frontmatter `tools:`；只在正文里写“可直接问用户”不够。
 - 路径组件冲突检查要覆盖父路径被普通文件占用的情况，不能只检查最终目标文件是否存在。
 - production 项目路由失败不是安装器问题；它表示 host-orchestrator 尚未获得目标项目输出目录确认，不应通过安装 dry-run 掩盖。
