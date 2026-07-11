@@ -271,19 +271,62 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
     refs = [str(ref) for ref in _as_list(result.get("dispatch_refs")) if str(ref)]
     if not refs:
         return []
+    checkpoint = str(result.get("checkpoint") or "")
+    expected_roles = {"CP6": "meta-dev", "CP7": "meta-qa"}
+    expected_role = expected_roles.get(checkpoint)
+    if expected_role is None or str(result.get("decision") or "") == "N/A":
+        return []
     events = _load_dispatch_events(root)
     if not events:
         return ["dispatch_refs require AGENT-DISPATCH-LEDGER entries: " + ", ".join(refs)]
-    event_ids = {
-        str(value)
-        for event in events
-        for value in (event.get("dispatch_id"), event.get("event_id"))
-        if value
-    }
-    missing = sorted(set(refs) - event_ids)
-    if missing:
-        return ["dispatch_refs missing from AGENT-DISPATCH-LEDGER: " + ", ".join(missing)]
-    return []
+    events_by_id: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        for value in (event.get("dispatch_id"), event.get("event_id")):
+            if value:
+                events_by_id.setdefault(str(value), []).append(event)
+
+    successful_statuses = {"completed", "success", "succeeded", "passed"}
+    errors: list[str] = []
+    for ref in refs:
+        matching = events_by_id.get(ref, [])
+        if not matching:
+            errors.append(f"dispatch_refs missing from AGENT-DISPATCH-LEDGER: {ref}")
+            continue
+        semantic_errors: list[str] = []
+        for event in matching:
+            event_errors: list[str] = []
+            event_type = str(event.get("event_type") or "")
+            if event_type == "dispatch_not_required":
+                event_errors.append("dispatch_not_required is invalid for applicable CP6/CP7")
+            if str(event.get("canonical_role") or "") != expected_role:
+                event_errors.append(f"canonical_role must be {expected_role}")
+            if str(event.get("checkpoint") or "") != checkpoint:
+                event_errors.append(f"checkpoint must be {checkpoint}")
+            if str(event.get("status") or "").lower() not in successful_statuses:
+                event_errors.append("status must be terminal and successful")
+
+            if event_type == "inline_fallback":
+                if str(event.get("dispatch_mode") or "") != "inline-fallback":
+                    event_errors.append("inline fallback requires dispatch_mode=inline-fallback")
+                for field in ("fallback_reason", "approved_by", "tool_name"):
+                    if not str(event.get(field) or "").strip():
+                        event_errors.append(f"inline fallback requires {field}")
+            elif event_type == "dispatch":
+                if str(event.get("dispatch_mode") or "") in {"not-required", "inline-fallback"}:
+                    event_errors.append("real dispatch has incompatible dispatch_mode")
+                if not str(event.get("tool_name") or "").strip():
+                    event_errors.append("real dispatch requires tool_name")
+                if not any(str(event.get(field) or "").strip() for field in ("agent_id", "thread_id")):
+                    event_errors.append("real dispatch requires agent_id or thread_id")
+            elif event_type != "dispatch_not_required":
+                event_errors.append("event_type must be dispatch or inline_fallback")
+
+            if not event_errors:
+                break
+            semantic_errors.extend(event_errors)
+        else:
+            errors.append(f"dispatch_ref {ref} is not valid for {checkpoint}: " + "; ".join(dict.fromkeys(semantic_errors)))
+    return errors
 
 
 def _validate_derived_consistency(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:

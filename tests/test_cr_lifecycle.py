@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from meta_flow.state import current
 from meta_flow.context_pack import builder
-from meta_flow.checks import cp_result
+from meta_flow.checks import cp_result, cr_tracking
 from meta_flow.workflow import cr_lifecycle
 
 
@@ -568,6 +568,12 @@ class CRLifecycleTests(unittest.TestCase):
             )
             self.assertEqual("closed", summary["status"])
             self.assertEqual("READY_WITH_RISK", summary["readiness"])
+            self.assertEqual("cp8_closed", summary["gate_status"])
+            formal_text = (root / "process/changes/CR-101.md").read_text(encoding="utf-8")
+            self.assertIn('lifecycle_status: "closed"', formal_text)
+            self.assertIn('gate_status: "cp8_closed"', formal_text)
+            index = json.loads((root / "process/changes/CR-INDEX.json").read_text(encoding="utf-8"))
+            self.assertEqual("cp8_closed", index["items"][0]["gate_status"])
             self.assertTrue((root / "process" / "archive" / "CR-101" / "evidence-index.json").is_file())
             events = [
                 json.loads(line)
@@ -595,23 +601,55 @@ class CRLifecycleTests(unittest.TestCase):
                 "CR-101",
                 status="closed",
                 readiness="READY_WITH_RISK",
-                gate_status="cp8_approved",
+                gate_status="cp8_closed",
             )
 
             self.assertTrue(paths["summary"].is_file())
             text = (root / "process" / "changes" / "CR-101.md").read_text(encoding="utf-8")
             self.assertIn('lifecycle_status: "closed"', text)
             self.assertIn('readiness_status: "READY_WITH_RISK"', text)
-            self.assertIn('gate_status: "cp8_approved"', text)
+            self.assertIn('gate_status: "cp8_closed"', text)
             summary = json.loads(paths["summary"].read_text(encoding="utf-8"))
             self.assertEqual("closed", summary["status"])
             self.assertEqual("READY_WITH_RISK", summary["readiness"])
+            self.assertEqual("cp8_closed", summary["gate_status"])
             index = json.loads(paths["index"].read_text(encoding="utf-8"))
             self.assertEqual("closed", index["items"][0]["status"])
             state = current.load_current_state(root)
             self.assertIsNone(state["active_change"])
+            self.assertEqual("delivered", state["current_phase"])
+            self.assertEqual("delivered", state["next_action"]["stop_reason"])
             events = cr_lifecycle.load_ledger_events(root)
             self.assertEqual("status_sync", events[-1]["event"])
+
+    def test_status_sync_closed_defaults_gate_status_to_cp8_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-101", status="active")
+
+            paths = cr_lifecycle.sync_cr_status(root, "CR-101", status="closed")
+
+            text = (root / "process/changes/CR-101.md").read_text(encoding="utf-8")
+            self.assertIn('gate_status: "cp8_closed"', text)
+            summary = json.loads(paths["summary"].read_text(encoding="utf-8"))
+            self.assertEqual("cp8_closed", summary["gate_status"])
+            self.assertIn(summary["gate_status"], cr_tracking.ALLOWED_GATE_STATUSES)
+
+    def test_status_sync_closed_rejects_noncanonical_gate_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-101", status="active")
+
+            with self.assertRaisesRegex(ValueError, "status=closed requires gate_status=cp8_closed"):
+                cr_lifecycle.sync_cr_status(root, "CR-101", status="closed", gate_status="cp8_approved")
+
+    def test_cr_help_uses_canonical_closed_gate_status(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output):
+            cr_lifecycle.main(["--help"])
+
+        self.assertIn("--gate-status cp8_closed", output.getvalue())
+        self.assertNotIn("cp8_approved", output.getvalue())
 
     def test_check_fails_when_closed_cr_is_still_active_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -129,6 +129,94 @@ class StateTransitionTests(unittest.TestCase):
             self.assertEqual([], errors)
             self.assertEqual([], warnings)
 
+    def test_approved_cp8_accepts_true_delivered_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route = write_route_plan(root)
+            state = write_state(
+                root,
+                {
+                    "current_phase": "delivered",
+                    "active_change": None,
+                    "pending_gate": None,
+                    "next_action": {"type": "done", "text": "workflow delivered", "stop_reason": "delivered"},
+                },
+            )
+
+            errors, warnings = state_transition.validate_transition(
+                route_plan_path=route,
+                state_path=state,
+                approved_gate="CP8",
+            )
+
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+
+    def test_approved_cp8_rejects_incomplete_or_false_delivered_state(self) -> None:
+        invalid_states = (
+            {
+                "current_phase": "delivered",
+                "active_change": None,
+                "pending_gate": None,
+                "next_action": {"type": "done", "stop_reason": "no_remaining_route"},
+            },
+            {
+                "current_phase": "delivered",
+                "active_change": None,
+                "pending_gate": "CP7",
+                "next_action": {"type": "done", "stop_reason": "delivered"},
+            },
+            {
+                "current_phase": "delivered",
+                "active_change": "CR-158",
+                "pending_gate": None,
+                "next_action": {"type": "done", "stop_reason": "delivered"},
+            },
+            {
+                "current_phase": "documentation",
+                "active_change": None,
+                "pending_gate": None,
+                "next_action": {"type": "done", "stop_reason": "delivered"},
+            },
+        )
+        for state_patch in invalid_states:
+            with self.subTest(state_patch=state_patch), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                route = write_route_plan(root)
+                state = write_state(root, state_patch)
+
+                errors, _warnings = state_transition.validate_transition(
+                    route_plan_path=route,
+                    state_path=state,
+                    approved_gate="CP8",
+                )
+
+                self.assertTrue(any("true delivered terminal state" in error for error in errors))
+
+    def test_approved_cp8_accepts_legitimate_interrupt_without_pending_gate(self) -> None:
+        for stop_reason in ("authorization_required", "workflow_health_threshold"):
+            with self.subTest(stop_reason=stop_reason), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                route = write_route_plan(root)
+                state = write_state(
+                    root,
+                    {
+                        "current_phase": "documentation",
+                        "active_change": "CR-158",
+                        "pending_gate": None,
+                        "next_action": {"type": "blocked", "text": "legitimate interruption", "stop_reason": stop_reason},
+                    },
+                )
+
+                errors, warnings = state_transition.validate_transition(
+                    route_plan_path=route,
+                    state_path=state,
+                    approved_gate="CP8",
+                )
+
+                self.assertEqual([], errors)
+                self.assertEqual([], warnings)
+
     def test_explicit_stop_reason_allows_blocked_transition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -151,6 +239,214 @@ class StateTransitionTests(unittest.TestCase):
             )
 
             self.assertEqual([], errors)
+
+    def test_cp7_pass_like_decisions_reject_stale_failure_stop_reasons(self) -> None:
+        for decision in ("PASS", "PASS_WITH_RISK"):
+            for stop_reason in ("needs_rework", "needs_design_clarification", "blocked"):
+                with self.subTest(decision=decision, stop_reason=stop_reason), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    route = write_route_plan(root)
+                    state = write_state(
+                        root,
+                        {
+                            "next_action": {
+                                "type": "blocked",
+                                "text": "stale failure state",
+                                "stop_reason": stop_reason,
+                            }
+                        },
+                    )
+
+                    errors, _warnings = state_transition.validate_transition(
+                        route_plan_path=route,
+                        state_path=state,
+                        checkpoint="CP7",
+                        decision=decision,
+                    )
+
+                    self.assertTrue(any("cannot retain failure stop_reason" in error for error in errors))
+                    self.assertTrue(any("pending_gate=CP8" in error for error in errors))
+
+    def test_cp7_pass_like_decisions_accept_pending_cp8(self) -> None:
+        for decision in ("PASS", "PASS_WITH_RISK"):
+            with self.subTest(decision=decision), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                route = write_route_plan(root)
+                state = write_state(
+                    root,
+                    {
+                        "current_phase": "documentation",
+                        "pending_gate": "CP8",
+                        "pending_checklist_path": "process/checkpoints/CP8-DELIVERY-READINESS.md",
+                        "next_action": {"type": "await_user", "text": "review CP8"},
+                    },
+                )
+
+                errors, warnings = state_transition.validate_transition(
+                    route_plan_path=route,
+                    state_path=state,
+                    checkpoint="CP7",
+                    decision=decision,
+                )
+
+                self.assertEqual([], errors)
+                self.assertEqual([], warnings)
+
+    def test_cp7_pass_accepts_decision_compatible_interrupts(self) -> None:
+        for stop_reason in ("authorization_required", "workflow_health_threshold"):
+            with self.subTest(stop_reason=stop_reason), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                route = write_route_plan(root)
+                state = write_state(
+                    root,
+                    {
+                        "next_action": {
+                            "type": "blocked",
+                            "text": "legitimate workflow interruption",
+                            "stop_reason": stop_reason,
+                        }
+                    },
+                )
+
+                errors, _warnings = state_transition.validate_transition(
+                    route_plan_path=route,
+                    state_path=state,
+                    checkpoint="CP7",
+                    decision="PASS",
+                )
+
+                self.assertEqual([], errors)
+
+    def test_historical_pass_like_result_accepts_true_delivered_terminal_replay(self) -> None:
+        for checkpoint in ("CP4", "CP7"):
+            for decision in ("PASS", "PASS_WITH_RISK"):
+                with self.subTest(checkpoint=checkpoint, decision=decision), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    route = write_route_plan(root)
+                    state = write_state(
+                        root,
+                        {
+                            "current_phase": "delivered",
+                            "active_change": None,
+                            "pending_gate": None,
+                            "next_action": {"type": "done", "text": "workflow delivered", "stop_reason": "delivered"},
+                        },
+                    )
+
+                    errors, warnings = state_transition.validate_transition(
+                        route_plan_path=route,
+                        state_path=state,
+                        checkpoint=checkpoint,
+                        decision=decision,
+                    )
+
+                    self.assertEqual([], errors)
+                    self.assertEqual([], warnings)
+
+    def test_pass_like_terminal_replay_requires_complete_delivered_state(self) -> None:
+        invalid_states = (
+            {"current_phase": "delivered", "active_change": "CR-158", "next_action": {"stop_reason": "delivered"}},
+            {"current_phase": "delivered", "active_change": None, "pending_gate": "CP8", "next_action": {"stop_reason": "delivered"}},
+            {"current_phase": "delivered", "active_change": None, "next_action": {"stop_reason": "no_remaining_route"}},
+            {"current_phase": "documentation", "active_change": None, "next_action": {"stop_reason": "delivered"}},
+        )
+        for state_patch in invalid_states:
+            with self.subTest(state_patch=state_patch), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                route = write_route_plan(root)
+                state = write_state(root, state_patch)
+
+                errors, _warnings = state_transition.validate_transition(
+                    route_plan_path=route,
+                    state_path=state,
+                    checkpoint="CP7",
+                    decision="PASS",
+                )
+
+                self.assertTrue(errors)
+
+    def test_failure_result_replay_rejects_delivered_stop_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route = write_route_plan(root)
+            state = write_state(
+                root,
+                {
+                    "current_phase": "delivered",
+                    "active_change": None,
+                    "pending_gate": None,
+                    "next_action": {"type": "done", "text": "workflow delivered", "stop_reason": "delivered"},
+                },
+            )
+
+            errors, _warnings = state_transition.validate_transition(
+                route_plan_path=route,
+                state_path=state,
+                checkpoint="CP7",
+                decision="NEEDS_REWORK",
+            )
+
+            self.assertTrue(any("stop_reason in {needs_rework}" in error for error in errors))
+
+    def test_failure_decisions_accept_decision_compatible_stop_reasons(self) -> None:
+        cases = (
+            ("FAIL", "blocked"),
+            ("BLOCKED", "blocked"),
+            ("BLOCKED", "authorization_required"),
+            ("BLOCKED", "workflow_health_threshold"),
+            ("NEEDS_REWORK", "needs_rework"),
+            ("NEEDS_DESIGN_CLARIFICATION", "needs_design_clarification"),
+        )
+        for decision, stop_reason in cases:
+            with self.subTest(decision=decision), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                route = write_route_plan(root)
+                state = write_state(
+                    root,
+                    {"next_action": {"type": "blocked", "text": "failure", "stop_reason": stop_reason}},
+                )
+
+                errors, _warnings = state_transition.validate_transition(
+                    route_plan_path=route,
+                    state_path=state,
+                    checkpoint="CP7",
+                    decision=decision,
+                )
+
+                self.assertEqual([], errors)
+
+    def test_failure_decisions_reject_incompatible_stop_reasons(self) -> None:
+        cases = (
+            ("FAIL", "authorization_required"),
+            ("FAIL", "workflow_health_threshold"),
+            ("BLOCKED", "needs_rework"),
+            ("BLOCKED", "needs_design_clarification"),
+            ("NEEDS_REWORK", "blocked"),
+            ("NEEDS_REWORK", "authorization_required"),
+            ("NEEDS_REWORK", "workflow_health_threshold"),
+            ("NEEDS_REWORK", "needs_design_clarification"),
+            ("NEEDS_DESIGN_CLARIFICATION", "blocked"),
+            ("NEEDS_DESIGN_CLARIFICATION", "authorization_required"),
+            ("NEEDS_DESIGN_CLARIFICATION", "workflow_health_threshold"),
+            ("NEEDS_DESIGN_CLARIFICATION", "needs_rework"),
+        )
+        for decision, stop_reason in cases:
+            with self.subTest(decision=decision, stop_reason=stop_reason), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                route = write_route_plan(root)
+                state = write_state(
+                    root,
+                    {"next_action": {"type": "blocked", "text": "wrong failure", "stop_reason": stop_reason}},
+                )
+
+                errors, _warnings = state_transition.validate_transition(
+                    route_plan_path=route,
+                    state_path=state,
+                    checkpoint="CP7",
+                    decision=decision,
+                )
+
+                self.assertTrue(any("must leave matching stop_reason" in error for error in errors))
 
     def test_cli_reports_state_transition_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

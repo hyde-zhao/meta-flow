@@ -417,10 +417,13 @@ def derive_route_plan(
                     PROFILE_UPGRADE_TARGETS["implementation"],
                 )
             if has_new_verification is False:
-                if waiver_reason:
+                if waiver_reason and waiver_ref:
                     applicability["CP7"] = _waived("new implementation verification explicitly waived", waiver_ref)
                 else:
-                    blockers.append("has_new_implementation=true requires CP7 unless verification_waiver_reason is set")
+                    blockers.append(
+                        "has_new_implementation=true requires CP7 unless both "
+                        "verification_waiver_reason and verification_waiver_ref are set"
+                    )
             else:
                 if has_new_verification is None:
                     warnings.append("has_new_verification auto-derived from has_new_implementation")

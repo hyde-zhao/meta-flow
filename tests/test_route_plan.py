@@ -78,9 +78,37 @@ class RoutePlanTests(unittest.TestCase):
 
         self.assertEqual("BLOCKED", plan["decision"])
         self.assertIn(
-            "has_new_implementation=true requires CP7 unless verification_waiver_reason is set",
+            "has_new_implementation=true requires CP7 unless both verification_waiver_reason and verification_waiver_ref are set",
             plan["blockers"],
         )
+
+    def test_new_implementation_with_verification_waiver_reason_only_blocks(self) -> None:
+        plan = route_plan.derive_route_plan(
+            cr_type="process",
+            gate_profile="process-lite",
+            cr_trait={
+                "has_new_implementation": True,
+                "has_new_verification": False,
+                "verification_waiver_reason": "reason without approval reference",
+            },
+        )
+
+        self.assertEqual("BLOCKED", plan["decision"])
+        self.assertNotEqual("WAIVED", plan["checkpoint_applicability"]["CP7"].get("decision"))  # type: ignore[index]
+
+    def test_new_implementation_with_verification_waiver_ref_only_blocks(self) -> None:
+        plan = route_plan.derive_route_plan(
+            cr_type="process",
+            gate_profile="process-lite",
+            cr_trait={
+                "has_new_implementation": True,
+                "has_new_verification": False,
+                "verification_waiver_ref": "process/checkpoints/CP8.md#DQ-001",
+            },
+        )
+
+        self.assertEqual("BLOCKED", plan["decision"])
+        self.assertNotEqual("WAIVED", plan["checkpoint_applicability"]["CP7"].get("decision"))  # type: ignore[index]
 
     def test_new_implementation_with_verification_waiver_marks_cp7_waived(self) -> None:
         plan = route_plan.derive_route_plan(

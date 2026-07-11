@@ -21,6 +21,14 @@ ALLOWED_STOP_REASONS = {
     "no_remaining_route",
 }
 AWAIT_USER_ACTION_TYPES = {"await_user", "human_gate", "required_human_gate"}
+FAILURE_STOP_REASONS = {
+    "FAIL": {"blocked"},
+    "BLOCKED": {"blocked", "authorization_required", "workflow_health_threshold"},
+    "NEEDS_REWORK": {"needs_rework"},
+    "NEEDS_DESIGN_CLARIFICATION": {"needs_design_clarification"},
+}
+PASS_COMPATIBLE_INTERRUPT_REASONS = {"authorization_required", "workflow_health_threshold"}
+STALE_FAILURE_STOP_REASONS = {"blocked", "needs_rework", "needs_design_clarification"}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -83,9 +91,34 @@ def _stop_reason(state: dict[str, Any]) -> str:
     return reason.strip()
 
 
-def _has_valid_stop_reason(state: dict[str, Any], expected: dict[str, str]) -> bool:
+def _is_true_delivered_terminal(state: dict[str, Any]) -> bool:
+    return (
+        str(state.get("current_phase") or "") == "delivered"
+        and not state.get("active_change")
+        and not state.get("pending_gate")
+        and _stop_reason(state) == "delivered"
+    )
+
+
+def _decision_compatible_stop_reasons(decision: str, expected: dict[str, str]) -> set[str]:
+    if decision in FAILURE_STOP_REASONS:
+        return set(FAILURE_STOP_REASONS[decision])
+    if decision in PASS_LIKE_DECISIONS:
+        reasons = set(PASS_COMPATIBLE_INTERRUPT_REASONS)
+        expected_kind = expected.get("kind") or ""
+        if expected_kind == "required_human_gate":
+            reasons.add("required_human_gate")
+        elif expected_kind == "delivered":
+            reasons.add("delivered")
+        elif expected_kind == "no_remaining_required_gate":
+            reasons.add("no_remaining_route")
+        return reasons
+    return set(ALLOWED_STOP_REASONS)
+
+
+def _has_valid_stop_reason(state: dict[str, Any], expected: dict[str, str], *, decision: str = "") -> bool:
     reason = _stop_reason(state)
-    if reason not in ALLOWED_STOP_REASONS:
+    if reason not in _decision_compatible_stop_reasons(decision, expected):
         return False
     if reason == "required_human_gate":
         return bool(state.get("pending_gate")) and str(state.get("pending_gate")) == expected.get("checkpoint")
@@ -94,7 +127,7 @@ def _has_valid_stop_reason(state: dict[str, Any], expected: dict[str, str]) -> b
     return True
 
 
-def _state_matches_expected_stop(state: dict[str, Any], expected: dict[str, str]) -> list[str]:
+def _state_matches_expected_stop(state: dict[str, Any], expected: dict[str, str], *, decision: str = "") -> list[str]:
     errors: list[str] = []
     kind = expected.get("kind") or ""
     expected_gate = expected.get("checkpoint") or ""
@@ -109,7 +142,7 @@ def _state_matches_expected_stop(state: dict[str, Any], expected: dict[str, str]
             if action_type and action_type not in AWAIT_USER_ACTION_TYPES:
                 errors.append(f"{expected_gate} pending gate should use await_user next_action.type, got {action_type}")
             return errors
-        if _has_valid_stop_reason(state, expected):
+        if _has_valid_stop_reason(state, expected, decision=decision):
             return errors
         errors.append(
             f"post-transition must advance to pending_gate={expected_gate} or record a valid stop_reason; "
@@ -118,14 +151,17 @@ def _state_matches_expected_stop(state: dict[str, Any], expected: dict[str, str]
         return errors
 
     if kind == "delivered":
-        if str(state.get("current_phase") or "") == "delivered" and not state.get("active_change"):
+        if _is_true_delivered_terminal(state):
             return errors
-        if _has_valid_stop_reason(state, expected):
+        if not pending_gate and _stop_reason(state) in PASS_COMPATIBLE_INTERRUPT_REASONS:
             return errors
-        errors.append("CP8 approval must close the active CR and advance current_phase=delivered, or record a valid stop_reason")
+        errors.append(
+            "CP8 approval must reach a true delivered terminal state with no active_change/pending_gate "
+            "and stop_reason=delivered, or record authorization_required/workflow_health_threshold"
+        )
         return errors
 
-    if _has_valid_stop_reason(state, expected):
+    if _has_valid_stop_reason(state, expected, decision=decision):
         return errors
     if action_type in {"await_user", "continue", "wait_user"} and not pending_gate:
         errors.append("route has no remaining required gate; state must continue automatically, deliver, or record a valid stop_reason")
@@ -147,8 +183,14 @@ def validate_auto_cp_transition(
         return [f"{checkpoint} is not present in route_plan.stages"], warnings
     human_gate = str(stages[index].get("human_gate") or "none")
     if decision in FAILURE_DECISIONS:
-        if not _has_valid_stop_reason(state, {"kind": "failure", "checkpoint": ""}):
-            errors.append(f"{checkpoint} decision={decision} must leave a valid stop_reason")
+        expected_failure = {"kind": "failure", "checkpoint": ""}
+        if not _has_valid_stop_reason(state, expected_failure, decision=decision):
+            errors.append(
+                f"{checkpoint} decision={decision} must leave matching "
+                "stop_reason in {"
+                + ", ".join(sorted(FAILURE_STOP_REASONS[decision]))
+                + "}"
+            )
         return errors, warnings
     if decision not in PASS_LIKE_DECISIONS:
         warnings.append(f"{checkpoint} decision={decision} is not pass-like; transition guard did not enforce auto-advance")
@@ -156,8 +198,15 @@ def validate_auto_cp_transition(
     if human_gate != "none":
         warnings.append(f"{checkpoint} human_gate={human_gate}; use --approved-gate after human approval is recorded")
         return errors, warnings
+    if _is_true_delivered_terminal(state):
+        return errors, warnings
     expected = expected_post_transition(route, checkpoint)
-    errors.extend(_state_matches_expected_stop(state, expected))
+    stale_failure_reason = _stop_reason(state)
+    if stale_failure_reason in STALE_FAILURE_STOP_REASONS:
+        errors.append(
+            f"{checkpoint} decision={decision} cannot retain failure stop_reason={stale_failure_reason}"
+        )
+    errors.extend(_state_matches_expected_stop(state, expected, decision=decision))
     return errors, warnings
 
 

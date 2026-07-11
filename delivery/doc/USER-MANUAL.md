@@ -250,6 +250,8 @@ Meta Flow 生成的文档默认分为三类：
 
 人工门禁 approve 或自动 CP `PASS` / `WAIVED` 后，回填审批结果不是本轮终点。host-orchestrator 必须继续消费 active CR 的 route plan，自动执行所有 `human_gate=none` 的 CP / 阶段准备，直到下一个 required human gate、delivered、失败路由、授权边界或 workflow health 阈值才停。典型例子是 CP3 approve 后应穿过 CP4 自动预检并打开 CP5，而不是等待用户再说“继续推进 CP5”。该行为可用以下命令回归检查：
 
+route plan 的 CP applicability 来自 CR type、route traits 和 gate profile。`applies=false` 的 checkpoint 使用 `N/A`，表示该门不属于本次路径；`WAIVED` 只表示本来适用但经显式审批豁免，两者不得互换。状态推进还会校验 decision 与 stop reason 的兼容性：rework / design clarification 必须保留精确失败原因，授权边界和 workflow-health 阈值可安全停止 pass-like 路径，任何 required human gate 都不得被自动越过。
+
 ```bash
 meta-flow check state-transition --route-plan process/checks/CP0-CR158.route-plan.json --result process/checks/CP4-CR158.result.json --project-root .
 meta-flow check state-transition --route-plan process/checks/CP0-CR158.route-plan.json --approved-gate CP3 --project-root .
@@ -500,7 +502,7 @@ meta-flow check cr-tracking --project-root .
 CP approval、CP result 通过、CR close 或状态修复后，应使用 status-sync 自动刷新 CR frontmatter、summary、CR-INDEX、`STATE.current.json` 和 lifecycle ledger，避免手工更新遗漏：
 
 ```bash
-meta-flow cr status-sync --id CR-158 --status closed --readiness READY_WITH_RISK --gate-status cp8_approved --project-root .
+meta-flow cr status-sync --id CR-158 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --project-root .
 meta-flow cr summary --id CR-158 --project-root .
 meta-flow cr index --project-root .
 meta-flow cr check --project-root .

@@ -528,6 +528,120 @@ class CPResultEventLedgerTests(unittest.TestCase):
             self.assertNotIn("dispatch_refs require AGENT-DISPATCH-LEDGER entries: ADE-0001", errors)
             self.assertFalse(any("dispatch_refs missing" in error for error in errors))
 
+    def test_cp_result_consistency_rejects_wrong_dispatch_role(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+            event = event_ledger.build_inline_fallback_event(
+                dispatch_id="ADE-0001", canonical_role="meta-qa", fallback_reason="fixture",
+                approved_by="test", checkpoint="CP6",
+            )
+            event_ledger.append_dispatch_event(root, event)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertTrue(any("canonical_role must be meta-dev" in error for error in errors))
+
+    def test_cp_result_consistency_rejects_wrong_dispatch_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+            event = event_ledger.build_inline_fallback_event(
+                dispatch_id="ADE-0001", canonical_role="meta-dev", fallback_reason="fixture",
+                approved_by="test", checkpoint="CP7",
+            )
+            event_ledger.append_dispatch_event(root, event)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertTrue(any("checkpoint must be CP6" in error for error in errors))
+
+    def test_cp_result_consistency_rejects_failed_and_running_dispatches(self) -> None:
+        for status in ("failed", "running"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result = write_cp6_result(root)
+                event = event_ledger.build_inline_fallback_event(
+                    dispatch_id="ADE-0001", canonical_role="meta-dev", fallback_reason="fixture",
+                    approved_by="test", checkpoint="CP6", status=status,
+                )
+                event_ledger.append_dispatch_event(root, event)
+
+                errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+                self.assertTrue(any("status must be terminal and successful" in error for error in errors))
+
+    def test_cp_result_consistency_rejects_dispatch_not_required(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+            event = event_ledger.build_dispatch_not_required_event(
+                dispatch_id="ADE-0001", canonical_role="meta-dev", reason="fixture",
+                checkpoint="CP6", status="completed",
+            )
+            event_ledger.append_dispatch_event(root, event)
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertTrue(any("dispatch_not_required is invalid" in error for error in errors))
+
+    def test_cp_result_consistency_rejects_incomplete_inline_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+            ledger = root / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            ledger.write_text(json.dumps({
+                "dispatch_id": "ADE-0001", "event_type": "inline_fallback",
+                "dispatch_mode": "inline-fallback", "canonical_role": "meta-dev",
+                "checkpoint": "CP6", "fallback_reason": "fixture", "tool_name": "host-inline",
+                "status": "completed",
+            }) + "\n", encoding="utf-8")
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertTrue(any("inline fallback requires approved_by" in error for error in errors))
+
+    def test_cp7_result_consistency_accepts_valid_real_spawn_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload.update({
+                "checkpoint": "CP7", "checkpoint_id": "CP7-STORY-CR123-S01",
+                "dispatch_refs": ["ADE-0001"],
+                "promise_evidence_alignment": [{"promise_ref": "P-1", "evidence_status": "EXECUTED_POSITIVE_RESULT", "result": "PASS", "evidence_refs": ["evidence"]}],
+            })
+            result = write_cp6_result(root, payload)
+            event_ledger.append_dispatch_event(root, {
+                "dispatch_id": "ADE-0001", "event_type": "dispatch", "canonical_role": "meta-qa",
+                "checkpoint": "CP7", "tool_name": "spawn_agent", "agent_id": "/root/qa",
+                "status": "completed", "spawned_at": "2026-07-05T00:00:00+00:00",
+            })
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertFalse(any("dispatch_ref ADE-0001" in error for error in errors))
+
+    def test_cp7_result_consistency_rejects_wrong_real_dispatch_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload.update({
+                "checkpoint": "CP7", "checkpoint_id": "CP7-STORY-CR123-S01",
+                "dispatch_refs": ["ADE-0001"],
+                "promise_evidence_alignment": [{"promise_ref": "P-1", "evidence_status": "EXECUTED_POSITIVE_RESULT", "result": "PASS", "evidence_refs": ["evidence"]}],
+            })
+            result = write_cp6_result(root, payload)
+            event_ledger.append_dispatch_event(root, {
+                "dispatch_id": "ADE-0001", "event_type": "dispatch", "dispatch_mode": "inline-fallback",
+                "canonical_role": "meta-qa", "checkpoint": "CP7", "tool_name": "spawn_agent",
+                "agent_id": "/root/qa", "status": "completed", "spawned_at": "2026-07-05T00:00:00+00:00",
+            })
+
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
+
+            self.assertTrue(any("incompatible dispatch_mode" in error for error in errors))
+
     def test_event_ledger_check_silent_mode_prints_single_pass_line(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from meta_flow.checks import cr_tracking
 from meta_flow.design import feature_registry
 from meta_flow.policies import authz, route_plan
 from meta_flow.project.scale import load_yaml_object
@@ -38,6 +39,7 @@ ALLOWED_LIFECYCLE_STATUSES = {
     "blocked",
 }
 FINISHED_STATUSES = {"closed", "superseded", "cancelled"}
+CLOSED_GATE_STATUS = "cp8_closed"
 ALLOWED_CR_TYPES = {
     "product-scope",
     "architecture",
@@ -1195,8 +1197,18 @@ def close_cr(project_root: Path, cr_id: str, *, readiness: str) -> dict[str, Pat
     crs = discover_formal_crs(project_root)
     if cr_id not in crs:
         raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
-    summary = summary_from_cr_file(project_root, crs[cr_id], readiness=readiness)
+    cr_path = crs[cr_id]
+    update_frontmatter_fields(
+        cr_path,
+        {
+            "lifecycle_status": "closed",
+            "readiness_status": readiness,
+            "gate_status": CLOSED_GATE_STATUS,
+        },
+    )
+    summary = summary_from_cr_file(project_root, cr_path, readiness=readiness)
     summary["status"] = "closed"
+    summary["gate_status"] = CLOSED_GATE_STATUS
     summary_path = write_summary(project_root, cr_id, summary)
     evidence_path = write_evidence_index(project_root, cr_id, summary)
     index_path = write_index(project_root)
@@ -1208,6 +1220,7 @@ def close_cr(project_root: Path, cr_id: str, *, readiness: str) -> dict[str, Pat
             "cr_type": summary.get("cr_type"),
             "status": "closed",
             "readiness": readiness,
+            "gate_status": CLOSED_GATE_STATUS,
             "summary_ref": _rel(project_root, summary_path),
             "full_ref": summary.get("full_ref"),
             "evidence_index_ref": _rel(project_root, evidence_path),
@@ -1236,6 +1249,12 @@ def sync_cr_status(
     crs = discover_formal_crs(project_root)
     if cr_id not in crs:
         raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
+    if status == "closed":
+        if gate_status and gate_status != CLOSED_GATE_STATUS:
+            raise ValueError(f"status=closed requires gate_status={CLOSED_GATE_STATUS}")
+        gate_status = CLOSED_GATE_STATUS
+    elif gate_status and gate_status not in cr_tracking.ALLOWED_GATE_STATUSES:
+        raise ValueError(f"invalid gate_status: {gate_status}")
     cr_path = crs[cr_id]
     frontmatter_updates: dict[str, str] = {}
     if status:
@@ -1272,6 +1291,7 @@ def sync_cr_status(
                     "next_action": {
                         "type": "done",
                         "text": f"{cr_id} status synced as {status}; choose next CR.",
+                        "stop_reason": "delivered" if status == "closed" else "no_remaining_route",
                     },
                 }
             )
@@ -1656,7 +1676,7 @@ def _print_cr_help() -> None:
         "  meta-flow cr brief --id CR-101 --mode enforce --project-root .\n"
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow cr impact-report --project-root .\n"
-        "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_approved --project-root .\n"
+        "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --project-root .\n"
         "  meta-flow cr close --id CR-101 --readiness READY_WITH_RISK --project-root .\n"
         "  meta-flow cr conflicts --id CR-102 --project-root .\n"
     )
@@ -1673,7 +1693,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--id", dest="cr_id", default="")
     parser.add_argument("--title", default="Meta Flow adoption bootstrap")
     parser.add_argument("--scope", default="Bootstrap Meta Flow adoption readiness for this target project.")
-    parser.add_argument("--gate-status", default="cp2_pending")
+    parser.add_argument(
+        "--gate-status",
+        default="cp2_pending",
+        help="Gate status; status-sync --status closed uses and requires cp8_closed.",
+    )
     parser.add_argument("--readiness", default="READY")
     parser.add_argument("--status", default="")
     parser.add_argument("--goal-ref", default="")
