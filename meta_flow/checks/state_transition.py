@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,243 @@ FAILURE_STOP_REASONS = {
 }
 PASS_COMPATIBLE_INTERRUPT_REASONS = {"authorization_required", "workflow_health_threshold"}
 STALE_FAILURE_STOP_REASONS = {"blocked", "needs_rework", "needs_design_clarification"}
+
+
+@dataclass(frozen=True)
+class ChronologyNode:
+    """A typed, timezone-aware timestamp from canonical workflow evidence."""
+
+    kind: str
+    occurred_at: str | datetime | None
+    source_ref: str
+
+
+@dataclass(frozen=True)
+class ChronologyFinding:
+    """Stable, machine-consumable chronology validation output."""
+
+    code: str
+    object_ref: str
+    field: str
+    message: str
+    source_refs: tuple[str, ...] = ()
+
+
+CHRONOLOGY_KINDS = {
+    "producer-complete",
+    "checkpoint-created",
+    "gate-opened",
+    "conditional-received",
+    "conditions-satisfied",
+    "reviewed",
+    "approved",
+    "downstream-dispatch",
+}
+PRECEDENCE_EDGES = (
+    ("producer-complete", "checkpoint-created"),
+    ("checkpoint-created", "gate-opened"),
+    ("gate-opened", "reviewed"),
+    # Review is optional for compatibility, but a final approval must still
+    # occur after the gate was formally opened when no review node is present.
+    ("gate-opened", "approved"),
+    ("reviewed", "approved"),
+    ("approved", "downstream-dispatch"),
+    ("conditional-received", "conditions-satisfied"),
+    ("conditions-satisfied", "approved"),
+)
+
+
+def _parse_chronology_time(value: str | datetime | None) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        token = value.strip()
+        if token.endswith("Z"):
+            token = f"{token[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(token)
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _chronology_finding(
+    code: str,
+    node: ChronologyNode,
+    field: str,
+    message: str,
+    *refs: str,
+) -> ChronologyFinding:
+    return ChronologyFinding(
+        code=code,
+        object_ref=node.source_ref,
+        field=field,
+        message=message,
+        source_refs=tuple(ref for ref in refs if ref),
+    )
+
+
+def validate_chronology(nodes: list[ChronologyNode]) -> list[ChronologyFinding]:
+    """Validate the partial order of one canonical workflow attempt.
+
+    Optional nodes are not fabricated.  Multiple nodes of the same kind are
+    accepted only when they agree; a conflicting duplicate is surfaced as a
+    deterministic temporal finding instead of being silently selected.
+    """
+
+    findings: list[ChronologyFinding] = []
+    indexed: dict[str, tuple[ChronologyNode, datetime]] = {}
+    conditional_present = False
+    for node in nodes:
+        if node.kind not in CHRONOLOGY_KINDS:
+            findings.append(_chronology_finding("UNKNOWN_CHRONOLOGY_KIND", node, "kind", "unknown chronology kind"))
+            continue
+        if not node.source_ref.strip():
+            findings.append(
+                _chronology_finding(
+                    "INVALID_SOURCE_REF",
+                    node,
+                    "source_ref",
+                    "chronology nodes require a non-empty canonical source_ref",
+                )
+            )
+            continue
+        if node.kind == "conditional-received":
+            conditional_present = True
+        parsed = _parse_chronology_time(node.occurred_at)
+        if parsed is None:
+            findings.append(
+                _chronology_finding(
+                    "UNPARSEABLE_TIMESTAMP",
+                    node,
+                    "occurred_at",
+                    "chronology timestamps must be RFC3339 values with an explicit timezone",
+                )
+            )
+            continue
+        existing = indexed.get(node.kind)
+        if existing is not None and existing[1] != parsed:
+            findings.append(
+                _chronology_finding(
+                    "TEMPORAL_ORDER_VIOLATION",
+                    node,
+                    "occurred_at",
+                    f"conflicting duplicate timestamp for {node.kind}",
+                    existing[0].source_ref,
+                )
+            )
+            continue
+        indexed[node.kind] = (node, parsed)
+
+    for earlier_kind, later_kind in PRECEDENCE_EDGES:
+        earlier = indexed.get(earlier_kind)
+        later = indexed.get(later_kind)
+        if earlier is None or later is None:
+            continue
+        if earlier[1] > later[1]:
+            findings.append(
+                _chronology_finding(
+                    "TEMPORAL_ORDER_VIOLATION",
+                    later[0],
+                    "occurred_at",
+                    f"{earlier_kind} must not occur after {later_kind}",
+                    earlier[0].source_ref,
+                )
+            )
+
+    approved = indexed.get("approved")
+    gate_opened = indexed.get("gate-opened")
+    if approved is not None and gate_opened is None:
+        findings.append(
+            _chronology_finding(
+                "APPROVAL_BEFORE_GATE",
+                approved[0],
+                "occurred_at",
+                "final approval requires a prior gate-opened event",
+            )
+        )
+    if conditional_present and approved is not None and "conditions-satisfied" not in indexed:
+        findings.append(
+            _chronology_finding(
+                "CONDITIONS_UNSATISFIED",
+                approved[0],
+                "occurred_at",
+                "conditional approval requires a conditions-satisfied event before final approval",
+            )
+        )
+    return sorted(findings, key=lambda item: (item.code, item.object_ref, item.field, item.message))
+
+
+def derive_gate_decision(events: list[ChronologyNode]) -> tuple[str, list[ChronologyFinding]]:
+    """Return the gate state without promoting a conditional instruction to approval."""
+
+    findings = validate_chronology(events)
+    kinds = {event.kind for event in events}
+    if findings:
+        return "pending", findings
+    if "approved" in kinds:
+        return "approved", findings
+    if "conditions-satisfied" in kinds:
+        return "conditions-satisfied", findings
+    if "conditional-received" in kinds:
+        return "conditional", findings
+    return "pending", findings
+
+
+def validate_phase_gate_state(state: dict[str, Any], gate_events: list[ChronologyNode]) -> list[ChronologyFinding]:
+    """Keep phase work in progress separate from an opened human gate."""
+
+    findings: list[ChronologyFinding] = []
+    decision, chronology_findings = derive_gate_decision(gate_events)
+    findings.extend(chronology_findings)
+    pending_gate = str(state.get("pending_gate") or "")
+    kinds = {event.kind for event in gate_events}
+    approved_nodes = [event for event in gate_events if event.kind == "approved"]
+    reference = approved_nodes[0] if approved_nodes else ChronologyNode("gate-opened", None, "STATE.current.json")
+
+    if "gate-opened" not in kinds and {"reviewed", "approved"} & kinds:
+        observed = next(event for event in gate_events if event.kind in {"reviewed", "approved"})
+        findings.append(
+            _chronology_finding(
+                "PHASE_GATE_CONFLATION",
+                observed,
+                "kind",
+                "formal review or approval cannot be recorded while gate-open is false",
+            )
+        )
+
+    if decision in {"conditional", "conditions-satisfied"} and not pending_gate:
+        findings.append(
+            _chronology_finding(
+                "PHASE_GATE_CONFLATION",
+                reference,
+                "pending_gate",
+                "an unresolved conditional gate must remain represented by pending_gate",
+            )
+        )
+    if decision == "approved":
+        has_downstream_dispatch = "downstream-dispatch" in kinds
+        if pending_gate:
+            findings.append(
+                _chronology_finding(
+                    "PHASE_GATE_CONFLATION",
+                    reference,
+                    "pending_gate",
+                    "a final approved gate cannot remain pending",
+                )
+            )
+        elif not has_downstream_dispatch:
+            findings.append(
+                _chronology_finding(
+                    "PHASE_GATE_CONFLATION",
+                    reference,
+                    "pending_gate",
+                    "an approved gate without pending_gate requires a downstream transition record",
+                )
+            )
+    return sorted(findings, key=lambda item: (item.code, item.object_ref, item.field, item.message))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -62,6 +301,16 @@ def _next_required_gate(stages: list[dict[str, Any]], checkpoint: str) -> str:
         if str(stage.get("human_gate") or "none") == "required":
             return str(stage.get("checkpoint") or "")
     return ""
+
+
+def _has_automatic_stage_before_gate(stages: list[dict[str, Any]], checkpoint: str, gate: str) -> bool:
+    """Return whether a route has real automatic work before its next human gate."""
+
+    start = _stage_index(stages, checkpoint)
+    end = _stage_index(stages, gate)
+    if start < 0 or end <= start:
+        return False
+    return any(str(stage.get("human_gate") or "none") == "none" for stage in stages[start + 1 : end])
 
 
 def expected_post_transition(route: dict[str, Any], checkpoint: str) -> dict[str, str]:
@@ -168,6 +417,37 @@ def _state_matches_expected_stop(state: dict[str, Any], expected: dict[str, str]
     return errors
 
 
+def _is_automatic_phase_in_progress(
+    *,
+    route: dict[str, Any],
+    state: dict[str, Any],
+    checkpoint: str,
+    expected: dict[str, str],
+) -> bool:
+    """Accept actual automatic work instead of forcing a future gate into STATE.
+
+    A gate approval may legitimately be followed by CP6/CP7 work.  The state
+    is not allowed to claim the later gate before its checklist exists, but it
+    also must not fail merely because the automatic work has not finished.
+    """
+
+    if expected.get("kind") != "required_human_gate" or checkpoint not in {"CP5", "CP6", "CP7"}:
+        return False
+    stages = [stage for stage in route.get("stages") or [] if isinstance(stage, dict)]
+    if checkpoint != "CP7" and not _has_automatic_stage_before_gate(stages, checkpoint, expected.get("checkpoint") or ""):
+        return False
+    if state.get("pending_gate") or str(state.get("current_phase") or "") != "story-execution":
+        return False
+    if checkpoint == "CP7" and not state.get("active_story"):
+        # CP7 is rolling.  The final Story must clear active_story and open
+        # CP8; an earlier Story may advance the dependency graph instead.
+        return False
+    action_type = str(_next_action(state).get("type") or "")
+    if action_type in AWAIT_USER_ACTION_TYPES or action_type in {"blocked", "done"}:
+        return False
+    return bool(state.get("active_change")) and bool(str(state.get("current_phase") or "").strip())
+
+
 def validate_auto_cp_transition(
     *,
     route: dict[str, Any],
@@ -206,7 +486,8 @@ def validate_auto_cp_transition(
         errors.append(
             f"{checkpoint} decision={decision} cannot retain failure stop_reason={stale_failure_reason}"
         )
-    errors.extend(_state_matches_expected_stop(state, expected, decision=decision))
+    if not _is_automatic_phase_in_progress(route=route, state=state, checkpoint=checkpoint, expected=expected):
+        errors.extend(_state_matches_expected_stop(state, expected, decision=decision))
     return errors, warnings
 
 
@@ -230,7 +511,8 @@ def validate_approved_gate_transition(
         errors.append(f"{checkpoint} approval was recorded but STATE.current.json still waits on the same pending_gate")
         return errors, warnings
     expected = expected_post_transition(route, checkpoint)
-    errors.extend(_state_matches_expected_stop(state, expected))
+    if not _is_automatic_phase_in_progress(route=route, state=state, checkpoint=checkpoint, expected=expected):
+        errors.extend(_state_matches_expected_stop(state, expected))
     return errors, warnings
 
 
@@ -262,15 +544,70 @@ def main(argv: list[str] | None = None) -> int:
         description="Validate that approve/auto-CP transitions run until the next required gate, delivery, or an explicit stop_reason.",
     )
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
-    parser.add_argument("--route-plan", type=Path, required=True)
+    parser.add_argument("--route-plan", type=Path, default=None)
     parser.add_argument("--state", type=Path, default=None)
     parser.add_argument("--result", type=Path, default=None, help="CP result JSON for automatic CP PASS/WAIVED transitions")
     parser.add_argument("--checkpoint", default="", help="Checkpoint id when --result is not supplied")
     parser.add_argument("--decision", default="", help="Decision when --result is not supplied")
     parser.add_argument("--approved-gate", default="", help="Required human gate that was just approved, for example CP3")
+    parser.add_argument(
+        "--chronology-events",
+        type=Path,
+        default=None,
+        help="JSON object containing events[] and optional state for chronology-only validation",
+    )
+    parser.add_argument("--output", choices=("text", "json"), default="text")
     parsed = parser.parse_args(argv)
 
     project_root = parsed.project_root.resolve()
+    if parsed.chronology_events:
+        try:
+            payload = _read_json(parsed.chronology_events)
+            raw_events = payload.get("events")
+            if not isinstance(raw_events, list):
+                raise ValueError("chronology events payload requires events[]")
+            nodes = [
+                ChronologyNode(
+                    kind=str(item.get("kind") or ""),
+                    occurred_at=item.get("occurred_at"),
+                    source_ref=str(item.get("source_ref") or ""),
+                )
+                for item in raw_events
+                if isinstance(item, dict)
+            ]
+            if len(nodes) != len(raw_events):
+                raise ValueError("chronology events[] entries must be JSON objects")
+            findings = validate_phase_gate_state(payload.get("state") or {}, nodes)
+            decision, _ = derive_gate_decision(nodes)
+            errors = [finding.message for finding in findings]
+            warnings: list[str] = []
+        except ValueError as exc:
+            findings = []
+            decision = "pending"
+            errors, warnings = [str(exc)], []
+        if parsed.output == "json":
+            print(
+                json.dumps(
+                    {
+                        "decision": decision,
+                        "findings": [asdict(finding) for finding in findings],
+                        "status": "FAIL" if errors else "OK",
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+        else:
+            print("State Transition Check: " + ("FAIL" if errors else "OK"))
+            print(f"- gate_decision: {decision}")
+            for finding in findings:
+                print(f"- ERROR: {finding.code} {finding.object_ref}.{finding.field}: {finding.message}")
+            for error in errors if not findings else []:
+                print(f"- ERROR: {error}")
+        return 1 if errors else 0
+
+    if parsed.route_plan is None:
+        parser.error("--route-plan is required unless --chronology-events is supplied")
     state_path = _state_path(project_root, parsed.state)
     try:
         errors, warnings = validate_transition(
@@ -283,11 +620,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         errors, warnings = [str(exc)], []
-    print("State Transition Check: " + ("FAIL" if errors else "OK"))
-    for warning in warnings:
-        print(f"- WARN: {warning}")
-    for error in errors:
-        print(f"- ERROR: {error}")
+    if parsed.output == "json":
+        print(json.dumps({"errors": errors, "status": "FAIL" if errors else "OK", "warnings": warnings}, ensure_ascii=False, sort_keys=True))
+    else:
+        print("State Transition Check: " + ("FAIL" if errors else "OK"))
+        for warning in warnings:
+            print(f"- WARN: {warning}")
+        for error in errors:
+            print(f"- ERROR: {error}")
     return 1 if errors else 0
 
 

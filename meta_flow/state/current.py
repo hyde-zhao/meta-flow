@@ -457,6 +457,19 @@ def validate_current_state_payload(state: dict[str, Any], *, mode: str = "audit"
             )
     for key in CURRENT_FIELD_BUDGETS:
         _validate_budget_field(state, key, findings, mode=mode)
+    # A delivered state is intentionally encoded by the three canonical
+    # pointers below.  Do not infer it from a historical transition event's
+    # stop_reason: the current-state payload is its own truth source.
+    if state.get("current_phase") == "delivered":
+        for key in ("active_change", "pending_gate", "active_story", "active_context_ref", "active_delegation_ref"):
+            if not _is_absent_optional(state.get(key)):
+                _finding(
+                    findings,
+                    "ERROR",
+                    "delivered_active_reference",
+                    f"delivered state must not retain {key}",
+                    key=key,
+                )
     return findings
 
 
@@ -1326,6 +1339,18 @@ def check_current_state(project_root: Path, *, mode: str = "audit") -> tuple[lis
             project_state_exists = False
         if not project_state_exists:
             errors.append(f"project_state_ref points to missing file: {project_state_ref}")
+    workflow_health_ref = state.get("workflow_health_ref")
+    if isinstance(workflow_health_ref, str) and workflow_health_ref:
+        health_path = project_root / workflow_health_ref
+        if not _is_relative_state_ref(workflow_health_ref) or not health_path.is_file():
+            errors.append(f"workflow_health_ref points to missing or unsafe file: {workflow_health_ref}")
+        else:
+            try:
+                health = json.loads(health_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                health = None
+            if not isinstance(health, dict) or not isinstance(health.get("phase_counters"), dict):
+                errors.append(f"workflow_health_ref is not a valid workflow health report: {workflow_health_ref}")
     for ledger_rel in BASE_LEDGER_RELS:
         ledger_path = project_root / ledger_rel
         if not ledger_path.is_file():

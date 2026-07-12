@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -33,6 +34,7 @@ RELEASE_DECISIONS = {"READY", "READY_WITH_RISK", "NOT_READY", "RELEASED", "FAILE
 FACT_DIFF_DECISION_IMPACTS = {"READY", "READY_WITH_RISK", "NOT_READY", "NO_IMPACT"}
 SEVERITIES = {"BLOCKER", "HIGH", "MEDIUM", "LOW", "INFO"}
 CHECKPOINT_RE = re.compile(r"^CP[0-8]$")
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -329,6 +331,81 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:
+    """Validate new attempt/hash evidence without fabricating legacy facts."""
+
+    if str(result.get("checkpoint") or "") not in {"CP6", "CP7"} or str(result.get("decision") or "") == "N/A":
+        return []
+    findings: list[str] = []
+    attempt = result.get("check_attempt")
+    if not isinstance(attempt, int) or attempt < 1:
+        findings.append("LEGACY_ATTEMPT_UNAVAILABLE: check_attempt must be a positive integer")
+    elif attempt > 1:
+        ref = str(result.get("supersedes_result_ref") or "")
+        previous = (root / ref).resolve() if ref else None
+        if not ref or previous is None or not previous.is_file():
+            findings.append("RESULT_SUPERSEDES_MISSING: check_attempt>1 requires existing supersedes_result_ref")
+        else:
+            try:
+                prior = _read_json(previous)
+            except ValueError:
+                findings.append("RESULT_SUPERSEDES_INVALID: supersedes_result_ref is not a result object")
+            else:
+                if prior.get("cr_id") != result.get("cr_id") or prior.get("checkpoint") != result.get("checkpoint") or prior.get("story_id") != result.get("story_id"):
+                    findings.append("RESULT_SUPERSEDES_IDENTITY_MISMATCH: prior result must share CR/checkpoint/story")
+                if not isinstance(prior.get("check_attempt"), int) or int(prior["check_attempt"]) >= attempt:
+                    findings.append("RESULT_SUPERSEDES_ORDER_INVALID: prior check_attempt must be smaller")
+    hashes = result.get("input_artifact_hashes")
+    if not isinstance(hashes, dict) or not hashes:
+        findings.append("LEGACY_INPUT_HASH_UNAVAILABLE: input_artifact_hashes must be non-empty")
+    else:
+        for ref, declared in sorted(hashes.items()):
+            path = Path(str(ref))
+            if path.is_absolute() or ".." in path.parts:
+                findings.append(f"INPUT_HASH_PATH_INVALID: {ref}")
+                continue
+            candidate = (root / path).resolve()
+            try:
+                candidate.relative_to(root.resolve())
+            except ValueError:
+                findings.append(f"INPUT_HASH_PATH_ESCAPE: {ref}")
+                continue
+            if not candidate.is_file():
+                findings.append(f"INPUT_HASH_MISSING: {ref}")
+                continue
+            if not SHA256_RE.fullmatch(str(declared)):
+                findings.append(f"INPUT_HASH_FORMAT_INVALID: {ref}")
+                continue
+            actual = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
+            if actual != declared:
+                findings.append(f"INPUT_HASH_MISMATCH: {ref}")
+    refs = [str(ref) for ref in _as_list(result.get("dispatch_refs")) if str(ref)]
+    if refs:
+        events = _load_dispatch_events(root)
+        by_dispatch: dict[str, list[dict[str, Any]]] = {}
+        for event in events:
+            if event.get("dispatch_id"):
+                by_dispatch.setdefault(str(event["dispatch_id"]), []).append(event)
+        for dispatch_id in refs:
+            typed = [event for event in by_dispatch.get(dispatch_id, []) if event.get("attempt_id")]
+            if not typed:
+                findings.append(f"FINAL_ATTEMPT_UNAVAILABLE: {dispatch_id}")
+                continue
+            terminal = [
+                event for event in typed
+                if str(event.get("status") or "").lower() in {"completed", "success", "succeeded", "passed"}
+                and str(event.get("terminal_result") or "").upper() in {"PASS", "SUCCESS", "SUCCEEDED", "COMPLETED"}
+            ]
+            if len(terminal) != 1:
+                findings.append(f"FINAL_ATTEMPT_NOT_UNIQUE_SUCCESS: {dispatch_id}")
+    for event in _load_checkpoint_events(root):
+        if str(event.get("result_ref") or "") != _rel(root, result_path):
+            continue
+        if str(event.get("decision") or "") != str(result.get("decision") or ""):
+            findings.append("CHECKPOINT_RESULT_DECISION_MISMATCH")
+    return findings
+
+
 def _validate_derived_consistency(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     rel_result = _rel(root, result_path)
@@ -430,6 +507,7 @@ def validate_cp_result(
     *,
     project_root: Path | None = None,
     check_consistency: bool = False,
+    correlation_profile: str = "compat",
 ) -> tuple[list[str], list[str]]:
     result_path = result_path.resolve()
     if not result_path.is_file():
@@ -441,6 +519,8 @@ def validate_cp_result(
     except ValueError as exc:
         return [str(exc)], []
     root = project_root.resolve() if project_root else result_path.parent.parent.parent
+    if correlation_profile not in {"compat", "audit", "strict"}:
+        return ["correlation_profile must be compat, audit or strict"], []
 
     if result.get("schema_version") != 1:
         errors.append("schema_version must be 1")
@@ -498,6 +578,11 @@ def validate_cp_result(
         errors.extend(_validate_cp7_alignment(result))
     if checkpoint == "CP8":
         errors.extend(_validate_cp8_fact_diff(result))
+    correlation = _correlation_findings(root, result_path, result)
+    if correlation_profile == "strict":
+        errors.extend(correlation)
+    elif correlation_profile == "audit":
+        warnings.extend(correlation)
     errors.extend(_validate_checker_provenance(result))
     if checkpoint in {"CP6", "CP7"} and decision != "N/A":
         if not result.get("story_id"):
@@ -784,12 +869,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--project-root", type=Path, default=None)
         parser.add_argument("--result", dest="result_path", type=Path, required=True)
         parser.add_argument("--check-consistency", action="store_true")
+        parser.add_argument("--correlation-profile", choices=("audit", "strict"), default="audit")
         parser.add_argument("--mode", choices=("normal", "silent", "verbose"), default="normal")
         parsed = parser.parse_args(args[1:])
         errors, warnings = validate_cp_result(
             parsed.result_path,
             project_root=parsed.project_root,
             check_consistency=parsed.check_consistency,
+            correlation_profile=parsed.correlation_profile,
         )
         if parsed.mode == "silent":
             if errors:

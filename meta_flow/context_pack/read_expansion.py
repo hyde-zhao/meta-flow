@@ -95,6 +95,7 @@ def build_event(
     cr_id: str = "",
     feature_id: str = "",
     notes: str = "",
+    authorization_ref: str = "",
 ) -> dict[str, Any]:
     root = project_root.resolve()
     rel_path = _rel(root, requested_path)
@@ -102,6 +103,7 @@ def build_event(
     allowed_reasons = set(str(item) for item in read_policy.get("full_doc_read_allowed_when") or DEFAULT_FULL_DOC_READ_REASONS)
     deny_patterns = list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS)
     allowed_by_policy = reason in allowed_reasons
+    outside_default_read_set = _matches_any(rel_path, deny_patterns)
     event_id = f"RE-{now_utc().replace(':', '').replace('-', '').replace('+', 'Z')}-{uuid.uuid4().hex[:8]}"
     return {
         "event_id": event_id,
@@ -115,6 +117,13 @@ def build_event(
         "reason": reason,
         "allowed_by_policy": allowed_by_policy,
         "deny_default_match": _matches_any(rel_path, deny_patterns),
+        # Keep policy membership distinct from the fact that a read is outside
+        # the capsule/default set.  A future producer must not use a prose
+        # reason to turn an unauthorized expansion into a permitted one.
+        "outside_default_read_set": outside_default_read_set,
+        "expansion_authorized": (not outside_default_read_set) or allowed_by_policy or bool(authorization_ref),
+        "authorization_reason": reason if outside_default_read_set and (allowed_by_policy or authorization_ref) else None,
+        "authorization_ref": authorization_ref or None,
         "estimated_tokens": _path_tokens(root, rel_path),
         "context_ref": context_ref,
         "created_at": now_utc(),
@@ -134,6 +143,7 @@ def append_event(
     cr_id: str = "",
     feature_id: str = "",
     notes: str = "",
+    authorization_ref: str = "",
     ledger: Path | None = None,
 ) -> tuple[dict[str, Any], Path]:
     root = project_root.resolve()
@@ -148,6 +158,7 @@ def append_event(
         cr_id=cr_id,
         feature_id=feature_id,
         notes=notes,
+        authorization_ref=authorization_ref,
     )
     ledger_path = ledger.resolve() if ledger else default_ledger_path(root)
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,6 +185,14 @@ def validate_event(event: dict[str, Any], *, allowed_reasons: set[str], line_num
     requested_path = str(event.get("requested_path") or "")
     if not requested_path:
         errors.append(f"line {line_number}: requested_path must be non-empty")
+    outside_default = event.get("outside_default_read_set")
+    if outside_default is not None and not isinstance(outside_default, bool):
+        errors.append(f"line {line_number}: outside_default_read_set must be boolean")
+    if outside_default is True:
+        if event.get("expansion_authorized") is not True:
+            errors.append(f"line {line_number}: outside-default read requires expansion_authorized=true")
+        if not event.get("authorization_reason"):
+            errors.append(f"line {line_number}: outside-default read requires authorization_reason")
     return errors
 
 
@@ -195,6 +214,8 @@ def validate_ledger(project_root: Path, *, ledger: Path | None = None) -> tuple[
         if event_id:
             seen_ids.add(event_id)
         requested_path = str(event.get("requested_path") or "")
+        if "outside_default_read_set" not in event:
+            warnings.append(f"line {line_number}: legacy read-expansion event has no explicit authorization semantics")
         if requested_path and not _matches_any(requested_path, deny_patterns):
             warnings.append(f"line {line_number}: requested_path is not deny-default; read expansion may be unnecessary: {requested_path}")
     return errors, warnings

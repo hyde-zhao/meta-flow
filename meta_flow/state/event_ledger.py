@@ -206,7 +206,8 @@ def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[st
         warnings.append("event ledger is empty")
         return errors, warnings
     required = LEDGER_REQUIRED_FIELDS.get(ledger_type, ("event_type",))
-    seen_ids: set[str] = set()
+    seen_event_ids: set[str] = set()
+    typed_attempt_events: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for event in events:
         line_no = int(event.get("_line_no") or 0)
         if event.get("event_type") == "ledger_compacted":
@@ -218,25 +219,48 @@ def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[st
         for field in fields:
             if not event.get(field):
                 errors.append(f"line {line_no}: missing required field: {field}")
-        event_id = str(event.get("event_id") or event.get("dispatch_id") or event.get("run_id") or "")
+        event_id = str(event.get("event_id") or "")
         if event_id:
-            if event_id in seen_ids:
-                errors.append(f"line {line_no}: duplicate event id: {event_id}")
-            seen_ids.add(event_id)
-        else:
-            errors.append(f"line {line_no}: missing event_id/dispatch_id/run_id")
+            if event_id in seen_event_ids:
+                errors.append(f"line {line_no}: duplicate event_id: {event_id}")
+            seen_event_ids.add(event_id)
+        elif ledger_type == "dispatch" and event.get("event_type") == "dispatch":
+            # Legacy dispatch rows may lack event_id.  They remain readable,
+            # but dispatch_id/run_id may never be used as semantic event-id
+            # fallbacks because one attempt naturally has several events.
+            warnings.append(f"line {line_no}: legacy dispatch event lacks event_id; identity is self-declared-unverifiable")
+        elif ledger_type != "dispatch":
+            errors.append(f"line {line_no}: missing event_id")
+
+        if ledger_type == "dispatch" and event.get("attempt_id"):
+            dispatch_id = str(event.get("dispatch_id") or "")
+            attempt_id = str(event.get("attempt_id") or "")
+            status = str(event.get("status") or "")
+            if not event_id:
+                errors.append(f"line {line_no}: typed dispatch attempt requires event_id")
+            if not dispatch_id or not attempt_id:
+                errors.append(f"line {line_no}: typed dispatch attempt requires dispatch_id and attempt_id")
+            if status in {"completed", "failed", "interrupted", "cancelled", "superseded"} and not event.get("terminal_result"):
+                errors.append(f"line {line_no}: terminal typed dispatch attempt requires terminal_result")
+            typed_attempt_events.setdefault((dispatch_id, attempt_id), []).append(event)
         if not any(event.get(field) for field in ("created_at", "checked_at", "spawned_at", "completed_at", "timestamp")):
             warnings.append(f"line {line_no}: event has no timestamp field")
+    if ledger_type == "dispatch":
+        for (dispatch_id, attempt_id), events_for_attempt in sorted(typed_attempt_events.items()):
+            statuses = {str(event.get("status") or "") for event in events_for_attempt}
+            if not statuses & {"completed", "failed", "interrupted", "cancelled", "superseded"}:
+                errors.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing terminal closure")
     return errors, warnings
 
 
 def _print_event_help() -> None:
     print(
-        "usage: meta-flow event <append|dispatch-not-required|inline-fallback|check|list> [options]\n\n"
+        "usage: meta-flow event <append|dispatch-not-required|inline-fallback|dispatch-check|check|list> [options]\n\n"
         "Commands:\n"
         "  append  Append one JSON event to an NDJSON ledger.\n"
         "  dispatch-not-required  Append a structured dispatch_not_required event.\n"
         "  inline-fallback        Append a structured inline_fallback dispatch event.\n"
+        "  dispatch-check  Validate typed dispatch event/attempt closure evidence.\n"
         "  check   Validate a known or generic NDJSON event ledger.\n"
         "  list    Print compact event lines from a ledger.\n\n"
         "Examples:\n"
@@ -342,6 +366,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- WARN: {warning}")
         for error in errors:
             print(f"- ERROR: {error}")
+        return 1 if errors else 0
+    if command == "dispatch-check":
+        parser = argparse.ArgumentParser(prog="meta-flow event dispatch-check")
+        parser.add_argument("--ledger", type=Path, default=Path("process/state/AGENT-DISPATCH-LEDGER.ndjson"))
+        parser.add_argument("--mode", choices=("normal", "silent"), default="normal")
+        parsed = parser.parse_args(args[1:])
+        errors, warnings = validate_event_ledger(parsed.ledger, ledger_type="dispatch")
+        if parsed.mode == "silent":
+            print("PASS" if not errors else "FAIL: " + "; ".join(errors))
+        else:
+            print("Dispatch Evidence Check: " + ("FAIL" if errors else "OK"))
+            for warning in warnings:
+                print(f"- WARN: {warning}")
+            for error in errors:
+                print(f"- ERROR: {error}")
         return 1 if errors else 0
     if command == "list":
         parser = argparse.ArgumentParser(prog="meta-flow event list")

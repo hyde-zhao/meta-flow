@@ -53,6 +53,78 @@ def write_state(root: Path, payload: dict) -> Path:
 
 
 class StateTransitionTests(unittest.TestCase):
+    def test_chronology_accepts_complete_timezone_aware_order(self) -> None:
+        nodes = [
+            state_transition.ChronologyNode("producer-complete", "2026-07-12T00:00:00Z", "producer"),
+            state_transition.ChronologyNode("checkpoint-created", "2026-07-12T00:01:00Z", "checkpoint"),
+            state_transition.ChronologyNode("gate-opened", "2026-07-12T00:02:00Z", "gate"),
+            state_transition.ChronologyNode("reviewed", "2026-07-12T00:03:00Z", "review"),
+            state_transition.ChronologyNode("approved", "2026-07-12T00:04:00Z", "approval"),
+            state_transition.ChronologyNode("downstream-dispatch", "2026-07-12T00:05:00Z", "dispatch"),
+        ]
+        self.assertEqual([], state_transition.validate_chronology(nodes))
+
+    def test_chronology_rejects_each_core_order_violation(self) -> None:
+        nodes = [
+            state_transition.ChronologyNode("producer-complete", "2026-07-12T00:02:00Z", "producer"),
+            state_transition.ChronologyNode("checkpoint-created", "2026-07-12T00:01:00Z", "checkpoint"),
+        ]
+        findings = state_transition.validate_chronology(nodes)
+        self.assertEqual(["TEMPORAL_ORDER_VIOLATION"], [finding.code for finding in findings])
+
+    def test_conditional_approval_requires_conditions_satisfied(self) -> None:
+        nodes = [
+            state_transition.ChronologyNode("gate-opened", "2026-07-12T00:00:00Z", "gate"),
+            state_transition.ChronologyNode("conditional-received", "2026-07-12T00:01:00Z", "conditional"),
+            state_transition.ChronologyNode("approved", "2026-07-12T00:02:00Z", "approval"),
+        ]
+        decision, findings = state_transition.derive_gate_decision(nodes)
+        self.assertEqual("pending", decision)
+        self.assertIn("CONDITIONS_UNSATISFIED", [finding.code for finding in findings])
+
+    def test_conditional_approval_with_conditions_and_dispatch_is_approved(self) -> None:
+        nodes = [
+            state_transition.ChronologyNode("gate-opened", "2026-07-12T00:00:00Z", "gate"),
+            state_transition.ChronologyNode("conditional-received", "2026-07-12T00:01:00Z", "conditional"),
+            state_transition.ChronologyNode("conditions-satisfied", "2026-07-12T00:02:00Z", "conditions"),
+            state_transition.ChronologyNode("approved", "2026-07-12T00:03:00Z", "approval"),
+            state_transition.ChronologyNode("downstream-dispatch", "2026-07-12T00:04:00Z", "dispatch"),
+        ]
+        decision, findings = state_transition.derive_gate_decision(nodes)
+        self.assertEqual("approved", decision)
+        self.assertEqual([], findings)
+        self.assertEqual([], state_transition.validate_phase_gate_state({"pending_gate": None}, nodes))
+
+    def test_phase_work_without_gate_is_not_a_future_gate_fact(self) -> None:
+        findings = state_transition.validate_phase_gate_state(
+            {"current_phase": "solution-design", "pending_gate": None},
+            [],
+        )
+        self.assertEqual([], findings)
+
+    def test_review_without_opened_gate_is_rejected(self) -> None:
+        findings = state_transition.validate_phase_gate_state(
+            {"current_phase": "story-execution", "pending_gate": None},
+            [state_transition.ChronologyNode("reviewed", "2026-07-12T00:00:00Z", "review")],
+        )
+        self.assertIn("PHASE_GATE_CONFLATION", [finding.code for finding in findings])
+
+    def test_approved_gate_without_downstream_transition_is_rejected(self) -> None:
+        findings = state_transition.validate_phase_gate_state(
+            {"current_phase": "story-execution", "pending_gate": None},
+            [
+                state_transition.ChronologyNode("gate-opened", "2026-07-12T00:00:00Z", "gate"),
+                state_transition.ChronologyNode("reviewed", "2026-07-12T00:01:00Z", "review"),
+                state_transition.ChronologyNode("approved", "2026-07-12T00:02:00Z", "approval"),
+            ],
+        )
+        self.assertIn("PHASE_GATE_CONFLATION", [finding.code for finding in findings])
+
+    def test_timezone_is_required_for_chronology(self) -> None:
+        findings = state_transition.validate_chronology(
+            [state_transition.ChronologyNode("gate-opened", "2026-07-12T00:00:00", "gate")]
+        )
+        self.assertEqual(["UNPARSEABLE_TIMESTAMP"], [finding.code for finding in findings])
     def test_cp4_pass_requires_auto_advance_to_cp5_gate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -117,6 +189,29 @@ class StateTransitionTests(unittest.TestCase):
                     "pending_gate": "CP8",
                     "pending_checklist_path": "process/checkpoints/CP8-DELIVERY-READINESS.md",
                     "next_action": {"type": "await_user", "text": "review CP8"},
+                },
+            )
+
+            errors, warnings = state_transition.validate_transition(
+                route_plan_path=route,
+                state_path=state,
+                approved_gate="CP5",
+            )
+
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+
+    def test_approved_cp5_accepts_story_execution_before_cp8_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route = write_route_plan(root)
+            state = write_state(
+                root,
+                {
+                    "current_phase": "story-execution",
+                    "active_change": "CR-158",
+                    "pending_gate": None,
+                    "next_action": {"type": "inline_implementation", "text": "implement CP6 work"},
                 },
             )
 
@@ -291,6 +386,31 @@ class StateTransitionTests(unittest.TestCase):
 
                 self.assertEqual([], errors)
                 self.assertEqual([], warnings)
+
+    def test_cp7_pass_like_decision_accepts_next_story_before_final_cp8(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route = write_route_plan(root)
+            state = write_state(
+                root,
+                {
+                    "current_phase": "story-execution",
+                    "active_change": "CR-158",
+                    "active_story": "STORY-NEXT",
+                    "pending_gate": None,
+                    "next_action": {"type": "inline_implementation", "text": "advance dependency graph"},
+                },
+            )
+
+            errors, warnings = state_transition.validate_transition(
+                route_plan_path=route,
+                state_path=state,
+                checkpoint="CP7",
+                decision="PASS_WITH_RISK",
+            )
+
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
 
     def test_cp7_pass_accepts_decision_compatible_interrupts(self) -> None:
         for stop_reason in ("authorization_required", "workflow_health_threshold"):
@@ -472,6 +592,35 @@ class StateTransitionTests(unittest.TestCase):
             self.assertEqual(1, exit_code)
             self.assertIn("State Transition Check: FAIL", output.getvalue())
             self.assertIn("pending_gate=CP5", output.getvalue())
+
+    def test_cli_reports_chronology_findings_as_stable_json(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload_path = root / "chronology.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "events": [
+                            {"kind": "gate-opened", "occurred_at": "2026-07-12T00:01:00Z", "source_ref": "gate"},
+                            {"kind": "approved", "occurred_at": "2026-07-12T00:00:00Z", "source_ref": "approval"},
+                        ],
+                        "state": {"pending_gate": None},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = state_transition.main(
+                    ["--chronology-events", str(payload_path), "--output", "json"]
+                )
+
+            result = json.loads(output.getvalue())
+            self.assertEqual(1, exit_code)
+            self.assertEqual("FAIL", result["status"])
+            self.assertEqual("pending", result["decision"])
+            self.assertEqual("TEMPORAL_ORDER_VIOLATION", result["findings"][0]["code"])
 
 
 if __name__ == "__main__":

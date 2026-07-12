@@ -123,7 +123,9 @@ class StateV2Tests(unittest.TestCase):
             state = current.default_current_state(root)
             state["current_phase"] = "delivered"
             state["active_change"] = None
-            state["active_context_ref"] = "process/release/RELEASE-CONTEXT-CR154.yaml"
+            # Delivered state may retain discoverable release artifacts, but
+            # it must not advertise an *active* execution context.
+            state["active_context_ref"] = None
             state["next_session_handoff_ref"] = "process/handoffs/NEXT-SESSION-CR154-20260702.md"
             current.write_current_state(root, state)
 

@@ -39,6 +39,34 @@
       "forbidden": {
         "project": [".codex/skills"],
         "user": ["~/.codex/skills"]
+      },
+      "runtime_subagents": {
+        "contract_version": "cr046-draft-v1",
+        "normative_appendix": "docs/design/CR046-CODEX-SUBAGENT-PLATFORM-CONTRACT.md",
+        "officially_documented": {
+          "source": "https://developers.openai.com/codex/subagents#custom-agents",
+          "custom_agent_identity": "TOML name field",
+          "config_layers_for_spawned_sessions": true,
+          "supported_agent_config_keys": ["model", "model_reasoning_effort", "sandbox_mode", "mcp_servers", "skills.config"],
+          "orchestration_scope": ["spawn", "follow-up instructions", "wait", "close threads"]
+        },
+        "session_observed": {
+          "observed_at": "2026-07-12",
+          "spawn_request_fields": ["task_name", "message", "fork_turns"],
+          "followup_request_fields": ["target", "message"],
+          "custom_profile_selector_exposed": false,
+          "profile_discovery_api_exposed": false,
+          "resolved_profile_model_receipt_exposed": false,
+          "evidence_ceiling": "session-observed/repository-unverifiable"
+        },
+        "required_extension": {
+          "discovery": ["list_agent_profiles or resolve_agent_profile dry-run", "session-bound capability receipt", "discovered name and config hash"],
+          "spawn_request": ["agent_type or profile", "dispatch_id", "attempt_id", "requested_agent_profile", "agent_config_hash", "profile_requirement"],
+          "spawn_receipt": ["receipt_id", "issued_at", "dispatch_id", "attempt_id", "agent_id", "thread_id", "requested_agent_profile", "resolved_agent_profile", "resolved_model", "resolved_reasoning_effort", "agent_config_hash", "resolution_status"],
+          "followup_receipt": ["receipt_id", "thread_id", "operation", "inherited_spawn_receipt_ref", "resolved_agent_profile", "resolved_model", "resolved_reasoning_effort", "agent_config_hash"],
+          "reuse_invariant": "followup/resume/send-input inherits immutable thread runtime identity; profile escalation requires a new spawn",
+          "fallback": "required blocks; preferred requires explicit user-approved degraded-unattested execution"
+        }
       }
     },
     "openclaw": {

@@ -106,6 +106,38 @@ class CPResultEventLedgerTests(unittest.TestCase):
             self.assertEqual(0, exit_code)
             self.assertEqual("PASS", stream.getvalue().strip())
 
+    def test_strict_correlation_requires_attempt_and_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = write_cp6_result(root)
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, correlation_profile="strict")
+            self.assertIn("LEGACY_ATTEMPT_UNAVAILABLE: check_attempt must be a positive integer", errors)
+            self.assertIn("LEGACY_INPUT_HASH_UNAVAILABLE: input_artifact_hashes must be non-empty", errors)
+
+    def test_strict_correlation_rejects_stale_input_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "artifact.txt"
+            artifact.write_text("current", encoding="utf-8")
+            payload = cp6_result_payload()
+            payload["check_attempt"] = 1
+            payload["input_artifact_hashes"] = {"artifact.txt": "sha256:" + "0" * 64}
+            result = write_cp6_result(root, payload)
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, correlation_profile="strict")
+            self.assertIn("INPUT_HASH_MISMATCH: artifact.txt", errors)
+
+    def test_strict_correlation_rejects_missing_typed_final_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "artifact.txt"
+            artifact.write_text("current", encoding="utf-8")
+            payload = cp6_result_payload()
+            payload["check_attempt"] = 1
+            payload["input_artifact_hashes"] = {"artifact.txt": "sha256:" + __import__("hashlib").sha256(b"current").hexdigest()}
+            result = write_cp6_result(root, payload)
+            errors, _warnings = cp_result.validate_cp_result(result, project_root=root, correlation_profile="strict")
+            self.assertIn("FINAL_ATTEMPT_UNAVAILABLE: ADE-0001", errors)
+
     def test_cp_result_rejects_pass_with_blocking_item(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

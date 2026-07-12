@@ -422,7 +422,7 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
     if not isinstance(allowed_reads, list) or not allowed_reads:
         errors.append("allowed_reads must be a non-empty list")
         allowed_reads = []
-    for entry in [*must_read, *allowed_reads, *(packet.get("read_if_needed") or [])]:
+    for entry in [*must_read, *allowed_reads]:
         if not isinstance(entry, dict):
             errors.append("allowed_reads entries must be objects")
             continue
@@ -434,6 +434,19 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
             errors.append(f"allowed_reads contains deny-default path: {rel_path}")
         if entry.get("required") is True and not (root / rel_path).is_file():
             errors.append(f"required allowed_read missing on disk: {rel_path}")
+    for entry in packet.get("read_if_needed") or []:
+        if not isinstance(entry, dict):
+            errors.append("read_if_needed entries must be objects")
+            continue
+        rel_path = str(entry.get("path") or "")
+        if not rel_path:
+            errors.append("read_if_needed entry missing path")
+            continue
+        # A full LLD remains deny-default; it may appear only as an explicit
+        # on-demand read, never as a default allowed read.  The caller must
+        # still write a read-expansion event when it is actually expanded.
+        if _matches_any(rel_path, denied) and not str(entry.get("trigger") or ""):
+            errors.append(f"read_if_needed deny-default path lacks explicit trigger: {rel_path}")
     if "process/archive/**" not in denied and "process/archive/**" not in do_not_patterns:
         errors.append("do_not_read_by_default must include process/archive/**")
     if packet.get("stage") in {"CP6", "CP7"} and not packet.get("parent_context_ref"):

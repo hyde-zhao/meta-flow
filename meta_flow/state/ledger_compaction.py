@@ -188,9 +188,39 @@ def _event_range(events: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     return {
         "first_line": first.get("_line_no"),
         "last_line": last.get("_line_no"),
-        "first_event_id": first.get("event_id") or first.get("dispatch_id") or first.get("run_id") or "",
-        "last_event_id": last.get("event_id") or last.get("dispatch_id") or last.get("run_id") or "",
+        # event_id is the ledger-row identity.  dispatch_id and run_id are
+        # semantic references, not substitutes for a missing event identity.
+        "first_event_id": first.get("event_id") or "",
+        "last_event_id": last.get("event_id") or "",
     }
+
+
+def semantic_manifest(events: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> dict[str, Any]:
+    """Return a stable, typed compaction digest without identity fallback.
+
+    This deliberately does not use display labels or interchange event_id,
+    dispatch_id and run_id.  A legacy event may appear with null typed fields,
+    but it cannot be silently upgraded into a different namespace.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for event in events:
+        rows.append(
+            {
+                "event_id": event.get("event_id") or None,
+                "event_type": event.get("event_type") or None,
+                "dispatch": {"dispatch_id": event.get("dispatch_id") or None, "attempt_id": event.get("attempt_id") or None},
+                "run_id": event.get("run_id") or None,
+                "thread_id": event.get("thread_id") or None,
+                "status": event.get("status") or None,
+                "terminal_result": event.get("terminal_result") or None,
+                "supersedes": event.get("supersedes_attempt_id") or event.get("supersedes_ref") or None,
+                "workflow_health_ref": event.get("workflow_health_ref") or None,
+                "correction_id": event.get("correction_id") or None,
+            }
+        )
+    payload = json.dumps(rows, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return {"schema_version": 1, "event_count": len(rows), "sha256": f"sha256:{_sha256_bytes(payload)}", "rows": rows}
 
 
 def plan_ledger_compaction(
@@ -254,7 +284,7 @@ def _build_summary(plan: CompactPlan, *, created_at: str, backup_ref: str, index
     for event in plan.archived_events:
         event_type = str(event.get("event_type") or "-")
         event_types[event_type] = event_types.get(event_type, 0) + 1
-        event_id = event.get("event_id") or event.get("dispatch_id") or event.get("run_id")
+        event_id = event.get("event_id")
         if event_id and len(ids) < 20:
             ids.append(str(event_id))
     return {
@@ -322,6 +352,10 @@ def apply_compaction(plan: CompactPlan) -> dict[str, Any]:
     backup_ref = _rel(plan.project_root, backup_path)
     index_ref = _rel(plan.project_root, index_path)
     original_payload = plan.ledger_path.read_bytes()
+    original_events, original_errors = event_ledger.load_events(plan.ledger_path)
+    if original_errors:
+        raise LedgerCompactionError("source ledger cannot produce semantic manifest: " + "; ".join(original_errors))
+    original_manifest = semantic_manifest(original_events)
     marker = _marker_event(
         plan,
         created_at=created_at,
@@ -336,7 +370,11 @@ def apply_compaction(plan: CompactPlan) -> dict[str, Any]:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         index_path.parent.mkdir(parents=True, exist_ok=True)
         backup_path.write_bytes(original_payload)
+        restored_events, restore_errors = event_ledger.load_events(backup_path)
+        if restore_errors or semantic_manifest(restored_events)["sha256"] != original_manifest["sha256"]:
+            raise LedgerCompactionError("restore candidate semantic manifest differs from source; aborting without ledger mutation")
         summary = _build_summary(plan, created_at=created_at, backup_ref=backup_ref, index_ref=index_ref)
+        summary["semantic_manifest"] = {key: value for key, value in original_manifest.items() if key != "rows"}
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         entry = {
             "created_at": created_at,
