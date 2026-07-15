@@ -7,7 +7,6 @@ import argparse
 import sys
 from pathlib import Path
 
-
 REQUIRED = {
     "findings": {
         "frontmatter": {"artifact", "reviewer", "lane", "round", "status"},

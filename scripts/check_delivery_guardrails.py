@@ -677,6 +677,78 @@ SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
     "README.md": ("docs/product/SCENARIOS.yaml", "docs/product/MVP-SCOPE.md", "docs/design/BLUEPRINT.md", "docs/design/FEATURE-DESIGN-MATRIX.md", "lld_policy", "docs/release/DEPLOY-CHECKLIST.md", "process/release/RELEASE-CONTEXT.yaml", "process/context/", "decision_brief_profile", "release_artifact_profile", "release_decision", "process/checkpoints/", "implementation-execution", "verification-execution", "IMPLEMENTATION", "VERIFICATION-REPORT"),
 }
 CACHE_SCAN_EXCLUDED_DIRS = {".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+OPTIONAL_GENERATED_ROOT_RULE = ROOT / "AGENTS.md"
+RUNTIME_WARNINGS: list[str] = []
+
+
+def is_optional_generated_root_rule(path: Path) -> bool:
+    return path == OPTIONAL_GENERATED_ROOT_RULE
+
+
+def cache_hygiene_severity(
+    rel_path: Path,
+    *,
+    tracked: bool,
+    ignored: bool,
+    package_input: bool | None = None,
+) -> str:
+    """Classify cache evidence with package-input precedence over ignore state."""
+
+    if tracked:
+        return "BLOCK"
+    if package_input is None:
+        package_input = rel_path.parts[:1] in {("meta_flow",), ("delivery",)} and not ignored
+    if package_input:
+        return "BLOCK"
+    if ignored:
+        return "WARN"
+    return "BLOCK"
+
+
+def _git_path_flag(args: list[str], rel_path: Path) -> bool:
+    result = subprocess.run(
+        ["git", *args, "--", rel_path.as_posix()],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def collect_cache_hygiene_errors() -> list[str]:
+    errors: list[str] = []
+    cache_dirs = [
+        path
+        for path in ROOT.rglob("__pycache__")
+        if path.is_dir() and not is_under_excluded_cache_dir(path)
+    ]
+    candidates = list(cache_dirs)
+    candidates.extend(
+        path
+        for path in ROOT.rglob("*.pyc")
+        if path.is_file()
+        and not is_under_excluded_cache_dir(path)
+        and not any(path.is_relative_to(cache_dir) for cache_dir in cache_dirs)
+    )
+    for path in sorted(set(candidates)):
+        rel_path = path.relative_to(ROOT)
+        tracked = _git_path_flag(["ls-files", "--error-unmatch"], rel_path)
+        ignored = _git_path_flag(["check-ignore", "-q"], rel_path)
+        package_input = rel_path.parts[:1] in {("meta_flow",), ("delivery",)} and not ignored
+        severity = cache_hygiene_severity(
+            rel_path,
+            tracked=tracked,
+            ignored=ignored,
+            package_input=package_input,
+        )
+        kind = "directory" if path.is_dir() else "file"
+        message = f"python cache {kind}: {rel_path}"
+        if severity == "BLOCK":
+            errors.append(message)
+        else:
+            RUNTIME_WARNINGS.append(f"ignored local {message}")
+    return errors
 EXPECTED_CODEX_NICKNAMES = {
     "meta-pm": ["pm-wu", "pm-zheng", "pm-wang", "pm-feng", "pm-chen"],
     "meta-se": ["se-chu", "se-wei", "se-jiang", "se-shen", "se-han"],
@@ -1145,6 +1217,8 @@ def collect_cr004_protocol_errors() -> list[str]:
     ]
     for target in routing_targets:
         if not target.is_file():
+            if is_optional_generated_root_rule(target):
+                continue
             errors.append(f"missing delivery routing target: {target.relative_to(ROOT)}")
             continue
         text = target.read_text(encoding="utf-8")
@@ -1225,6 +1299,8 @@ def collect_agent_dispatch_evidence_errors() -> list[str]:
     )
     for target in targets:
         if not target.is_file():
+            if is_optional_generated_root_rule(target):
+                continue
             errors.append(f"missing agent dispatch evidence target: {target.relative_to(ROOT)}")
             continue
         text = target.read_text(encoding="utf-8")
@@ -1541,6 +1617,8 @@ def collect_human_gate_protocol_errors() -> list[str]:
     }
     for label, (target, tokens) in token_targets.items():
         if not target.is_file():
+            if is_optional_generated_root_rule(target):
+                continue
             errors.append(f"missing human gate protocol target {label}: {target.relative_to(ROOT)}")
             continue
         text = target.read_text(encoding="utf-8")
@@ -1634,6 +1712,8 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
     }
     for label, (target, tokens) in token_targets.items():
         if not target.is_file():
+            if is_optional_generated_root_rule(target):
+                continue
             errors.append(f"missing CR tracking protocol target {label}: {target.relative_to(ROOT)}")
             continue
         text = target.read_text(encoding="utf-8")
@@ -1764,6 +1844,8 @@ def collect_requirement_intake_routing_errors() -> list[str]:
     }
     for label, (target, tokens) in token_targets.items():
         if not target.is_file():
+            if is_optional_generated_root_rule(target):
+                continue
             errors.append(f"missing requirement intake routing target {label}: {target.relative_to(ROOT)}")
             continue
         text = target.read_text(encoding="utf-8")
@@ -1852,6 +1934,8 @@ def collect_software_workflow_artifact_errors() -> list[str]:
     for rel_path, required_tokens in SOFTWARE_WORKFLOW_TOKEN_TARGETS.items():
         path = ROOT / rel_path
         if not path.is_file():
+            if is_optional_generated_root_rule(path):
+                continue
             errors.append(f"missing software workflow token target: {rel_path}")
             continue
         text = path.read_text(encoding="utf-8")
@@ -1963,6 +2047,8 @@ def collect_context_capsule_protocol_errors() -> list[str]:
     for rel_path, tokens in targets.items():
         path = ROOT / rel_path
         if not path.is_file():
+            if is_optional_generated_root_rule(path):
+                continue
             errors.append(f"missing context protocol target: {rel_path}")
             continue
         text = path.read_text(encoding="utf-8")
@@ -2014,6 +2100,8 @@ def collect_agent_skill_contract_errors() -> list[str]:
     for rel_path, required_tokens in AGENT_SKILL_CONTRACT_TOKEN_TARGETS.items():
         path = ROOT / rel_path
         if not path.is_file():
+            if is_optional_generated_root_rule(path):
+                continue
             errors.append(f"missing agent/skill contract target: {rel_path}")
             continue
         text = path.read_text(encoding="utf-8")
@@ -2161,6 +2249,7 @@ def collect_delivery_asset_lifecycle_errors() -> list[str]:
 
 
 def collect_errors() -> list[str]:
+    RUNTIME_WARNINGS.clear()
     errors: list[str] = []
     platform_contracts = load_platform_contracts(errors)
     if platform_contracts:
@@ -2187,16 +2276,7 @@ def collect_errors() -> list[str]:
         if child.name not in ALLOWED_DELIVERY_DIRS:
             errors.append(f"delivery top-level directory not allowed: {child.relative_to(ROOT)}")
 
-    for path in ROOT.rglob("__pycache__"):
-        if is_under_excluded_cache_dir(path):
-            continue
-        if path.is_dir():
-            errors.append(f"python cache directory must not exist: {path.relative_to(ROOT)}")
-    for path in ROOT.rglob("*.pyc"):
-        if is_under_excluded_cache_dir(path):
-            continue
-        if path.is_file():
-            errors.append(f"python bytecode file must not exist: {path.relative_to(ROOT)}")
+    errors.extend(collect_cache_hygiene_errors())
 
     delivery_scripts = DELIVERY_ROOT / "scripts"
     for path in sorted(delivery_scripts.glob("*")):
@@ -2258,6 +2338,8 @@ def collect_errors() -> list[str]:
 
 def main() -> int:
     errors = collect_errors()
+    for warning in RUNTIME_WARNINGS:
+        print(f"WARN: {warning}", file=sys.stderr)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)

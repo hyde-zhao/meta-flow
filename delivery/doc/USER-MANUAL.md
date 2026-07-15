@@ -20,6 +20,46 @@ meta-flow install qoder --scope project --project-dir /path/to/project
 
 项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
 
+CI / Agent 等非交互环境请使用三平台等价 dry-run；三条命令都只计算安装计划，不写目标项目：
+
+```bash
+uv run --python 3.11 meta-flow install codex --scope project --component full --project-dir . --dry-run
+uv run --python 3.11 meta-flow install claude --scope project --component full --project-dir . --dry-run
+uv run --python 3.11 meta-flow install qoder --scope project --component full --project-dir . --dry-run
+```
+
+meta-flow 源码仓的发布前 preflight：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q
+uv run --python 3.11 ruff check .
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow doctor all --project-root .
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow check cr-tracking --project-root .
+```
+
+必须逐门读取原始退出码和 warning。`OK_WITH_WARNINGS` 仍是带风险结论；任一 blocker 或非零退出码都会阻断发布准备。
+
+CI / Agent 等非交互环境请使用三平台等价 dry-run；三条命令都只计算安装计划，不写目标项目：
+
+```bash
+uv run --python 3.11 meta-flow install codex --scope project --component full --project-dir . --dry-run
+uv run --python 3.11 meta-flow install claude --scope project --component full --project-dir . --dry-run
+uv run --python 3.11 meta-flow install qoder --scope project --component full --project-dir . --dry-run
+```
+
+meta-flow 源码仓的发布前 preflight：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q
+uv run --python 3.11 ruff check .
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow doctor all --project-root .
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow check cr-tracking --project-root .
+```
+
+必须逐门读取原始退出码和 warning。`OK_WITH_WARNINGS` 仍是带风险结论；任一 blocker 或非零退出码都会阻断发布准备。
+
 多层级帮助：
 
 ```bash

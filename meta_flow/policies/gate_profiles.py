@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 GATE_PROFILES_REL = Path("process/policies/GATE-PROFILES.json")
 RUNTIME_HIGH_RISK_TERMS = (
     "credential",

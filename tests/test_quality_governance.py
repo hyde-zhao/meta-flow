@@ -9,7 +9,6 @@ from pathlib import Path
 
 from meta_flow.checks import quality_governance
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 

@@ -9,7 +9,6 @@ from typing import Any
 
 from meta_flow.policies import gate_profiles
 
-
 PROJECT_SCALE_REL = Path("process/project/PROJECT-SCALE.yaml")
 PROJECT_SCALE_SCHEMA_VERSION = 1
 SCALE_LEVELS = {"lite", "standard", "full"}
@@ -160,7 +159,7 @@ def load_yaml_object(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     try:
         data = json.loads(text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         prepared: list[tuple[int, str]] = []
         for raw_line in text.splitlines():
             line = _strip_comment(raw_line).rstrip()
@@ -169,7 +168,7 @@ def load_yaml_object(path: Path) -> dict[str, Any]:
             prepared.append((len(line) - len(line.lstrip(" ")), line.strip()))
         data, index = _parse_yaml_lines(prepared, 0, prepared[0][0] if prepared else 0)
         if index != len(prepared):
-            raise ValueError(f"{path} contains unsupported YAML structure")
+            raise ValueError(f"{path} contains unsupported YAML structure") from exc
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a YAML object")
     return data

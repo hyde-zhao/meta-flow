@@ -5,17 +5,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from meta_flow.evals.runner import parse_yaml_subset
 from meta_flow.state import event_ledger
 from meta_flow.state.current import BASE_LEDGER_RELS, now_utc
-
 
 DEFAULT_POLICY_REL = Path("process/policies/LEDGER-RETENTION.yaml")
 ARCHIVE_ROOT_REL = Path("process/archive/ledger")
@@ -147,8 +145,8 @@ def _parse_timestamp(event: dict[str, Any]) -> datetime | None:
         text = str(raw).replace("Z", "+00:00")
         parsed = datetime.fromisoformat(text)
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     except ValueError:
         return None
 
@@ -163,7 +161,7 @@ def _event_cr_ref(event: dict[str, Any]) -> str:
 
 def _kept_indices(events: list[dict[str, Any]], policy: RetentionPolicy) -> set[int]:
     kept: set[int] = set(range(max(0, len(events) - policy.keep_latest_n_events), len(events)))
-    cutoff = datetime.now(timezone.utc) - timedelta(days=policy.window_days)
+    cutoff = datetime.now(UTC) - timedelta(days=policy.window_days)
     for index, event in enumerate(events):
         timestamp = _parse_timestamp(event)
         if timestamp and timestamp >= cutoff:
@@ -409,7 +407,7 @@ def select_ledgers(selector: str, *, project_root: Path) -> list[tuple[Path, str
     if selector == "all":
         selected: list[tuple[Path, str]] = []
         seen: set[Path] = set()
-        for ledger_type, rel in sorted(KNOWN_LEDGER_RELS.items()):
+        for _ledger_type, rel in sorted(KNOWN_LEDGER_RELS.items()):
             path = root / rel
             resolved = path.resolve()
             if path.is_file() and resolved not in seen:

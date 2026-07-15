@@ -8,8 +8,7 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow.checks import cp_result
-from meta_flow.state import current
-from meta_flow.state import event_ledger
+from meta_flow.state import current, event_ledger
 
 
 def write_minimal_state(root: Path) -> None:

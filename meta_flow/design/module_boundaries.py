@@ -12,7 +12,6 @@ from typing import Any
 
 from meta_flow.policies.gate_profiles import classify_gate_profile
 
-
 MODULE_BOUNDARIES_REL = Path("docs/design/MODULE-BOUNDARIES.yaml")
 SKIP_DIRS = {
     ".git",

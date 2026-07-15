@@ -5,12 +5,10 @@ from __future__ import annotations
 import hashlib
 import tomllib
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from .dispatch import EvidenceFinding, ThreadRuntimeIdentity, validate_thread_identity_change
-
 
 FRESHNESS_CODES = (
     "CAPABILITY_EXPIRED",
@@ -105,8 +103,8 @@ class ReuseDecision:
 
 
 def _now(value: datetime | None = None) -> datetime:
-    current = value or datetime.now(timezone.utc)
-    return current if current.tzinfo else current.replace(tzinfo=timezone.utc)
+    current = value or datetime.now(UTC)
+    return current if current.tzinfo else current.replace(tzinfo=UTC)
 
 
 def _finding(code: str, ref: str, field: str, message: str, *refs: str) -> EvidenceFinding:

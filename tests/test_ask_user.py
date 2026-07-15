@@ -9,8 +9,7 @@ from pathlib import Path
 
 from meta_flow import ask_user
 from meta_flow.checks import human_gate
-from meta_flow.checks.human_gate import collect_launch_message_errors, collect_checkpoint_errors
-
+from meta_flow.checks.human_gate import collect_checkpoint_errors, collect_launch_message_errors
 
 CHECKPOINT_TEXT = """# CP3 HLD Review
 

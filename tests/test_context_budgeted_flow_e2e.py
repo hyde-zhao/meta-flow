@@ -12,7 +12,6 @@ from meta_flow.context_pack import builder, story_contract
 from meta_flow.state import event_ledger
 from meta_flow.workflow import story_evidence
 
-
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "evals" / "fixtures" / "context-budgeted-meta-flow"
 
 

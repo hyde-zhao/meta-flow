@@ -13,7 +13,6 @@ from typing import Any
 from meta_flow.context_pack import story_contract
 from meta_flow.project.scale import load_yaml_object
 
-
 EVIDENCE_ROOT_REL = Path("process/evidence")
 DESIGN_DELTA_ROOT_REL = Path("process/design-deltas")
 DEVELOPMENT_PLAN_REL = Path("process/DEVELOPMENT-PLAN.yaml")

@@ -3,7 +3,7 @@ contract_id: meta-flow-directory-contract-v1
 roots:
   docs:
     zone: warm
-    purpose: long-lived product, design, quality, and release documentation
+    purpose: public tracked documentation; meta-flow self-development internal docs are canonical only under process/docs
   process:
     zone: hot-warm-cold
     purpose: runtime state, context, checks, checkpoints, ledgers, CRs, Story work, evidence, handoffs, and archives
@@ -105,6 +105,18 @@ zone_read_rules:
       - full_doc_read_reason
       - process/state/READ-EXPANSION-LEDGER.ndjson
 compatibility:
+  meta_flow_self_development_docs:
+    canonical_root: process/docs
+    allowed_public_tracked_files:
+      - docs/README.md
+      - docs/USER-MANUAL.md
+      - docs/release/RELEASE-NOTES.md
+      - docs/release/DEPLOY-CHECKLIST-*.md
+      - docs/release/ROLLBACK-*.md
+      - docs/release/MIGRATION-*.md
+      - docs/release/FEEDBACK-*.md
+    generated_or_ignored_root_internal_views: false
+    expected_internal_canonical_copies: 1
   cr_index_format_priority:
     - process/changes/CR-INDEX.json
   legacy_fallbacks:

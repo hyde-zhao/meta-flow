@@ -251,6 +251,24 @@ meta-flow uninstall codex --help
 
 项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
 
+非交互环境的三平台项目级 dry-run：
+
+```bash
+uv run --python 3.11 meta-flow install codex --scope project --component full --project-dir . --dry-run
+uv run --python 3.11 meta-flow install claude --scope project --component full --project-dir . --dry-run
+uv run --python 3.11 meta-flow install qoder --scope project --component full --project-dir . --dry-run
+```
+
+meta-flow 源码仓发布前 preflight 固定为 pytest、Ruff、delivery guardrail、Doctor、CR tracking 五门；逐门保留真实退出码、warning 和 risk ref，不把 warning 美化为 PASS：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q
+uv run --python 3.11 ruff check .
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow doctor all --project-root .
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow check cr-tracking --project-root .
+```
+
 从仓库根目录运行：
 
 ```bash

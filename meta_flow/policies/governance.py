@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 SOURCE_OF_TRUTH_REL = Path("process/policies/SOURCE-OF-TRUTH-MAP.yaml")
 SOURCE_OF_TRUTH_DOC_REL = Path("docs/design/SOURCE-OF-TRUTH-MAP.md")
 RETENTION_POLICY_REL = Path("process/policies/RETENTION-POLICY.json")

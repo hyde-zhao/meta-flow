@@ -7,8 +7,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from meta_flow.context_pack import builder
-from meta_flow.context_pack import story_contract
+from meta_flow.context_pack import builder, story_contract
 from meta_flow.state import current
 
 

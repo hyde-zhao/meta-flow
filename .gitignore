@@ -37,7 +37,8 @@ node_modules/
 package-lock.json
 package.json
 
-# Claude Code / Codex runtime
+# Claude Code / Codex runtime. Root AGENTS.md/CLAUDE.md are generated wrappers;
+# delivery/rules/AGENTS.md and delivery/rules/CLAUDE.md are tracked canonical sources.
 .agents/
 .claude/
 .codex/

@@ -34,7 +34,7 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 VALID_PLATFORMS = ("claude", "codex", "openclaw", "qoder")
@@ -595,7 +595,7 @@ def canonical_commit(root: Path) -> str:
 
 
 def iso_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def yaml_scalar(value: str) -> str:

@@ -10,8 +10,8 @@ from .platform_contract import (
     SpawnRequestEvidence,
     SpawnVerification,
 )
-from .telemetry import TokenUsage
 from .replay import ReplayOutcome
+from .telemetry import TokenUsage
 
 __all__ = [
     "AttemptTransition",

@@ -7,7 +7,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,6 @@ from meta_flow.design import feature_registry
 from meta_flow.policies import authz, route_plan
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import current
-
 
 CR_LEDGER_REL = Path("process/state/CR-LEDGER.ndjson")
 CR_INDEX_REL = Path("process/changes/CR-INDEX.json")
@@ -175,7 +174,7 @@ class CRRecord:
 
 
 def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _strip_scalar(value: Any) -> str:
@@ -899,7 +898,12 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
 def write_summary(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Path:
     path = project_root / CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # CR summaries are hot/warm routing objects with a 4 KiB budget.  Compact
+    # JSON preserves the schema while avoiding formatting-only budget drift.
+    path.write_text(
+        json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
     return path
 
 
@@ -943,6 +947,7 @@ def load_ledger_events(project_root: Path) -> list[dict[str, Any]]:
 def build_index(project_root: Path) -> dict[str, Any]:
     project_root = project_root.resolve()
     items: list[dict[str, Any]] = []
+    formal_ids = set(discover_formal_crs(project_root))
     for cr_id, path in discover_formal_crs(project_root).items():
         record = record_from_cr_file(project_root, path)
         summary_path = project_root / record.summary_ref
@@ -983,6 +988,26 @@ def build_index(project_root: Path) -> dict[str, Any]:
                 "required_capabilities": record.required_capabilities,
             }
         )
+
+    # Candidate rows may intentionally precede a formal CR file.  Rebuilding the
+    # canonical JSON index must not silently discard those follow-up decisions.
+    # Only non-formal candidate rows are preserved; every formal CR is always
+    # regenerated from its source-owned Markdown record above.
+    existing_path = project_root / CR_INDEX_REL
+    if existing_path.is_file():
+        try:
+            existing_index = json.loads(existing_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{existing_path} invalid JSON: {exc}") from exc
+        for existing in existing_index.get("items", []):
+            if not isinstance(existing, dict):
+                continue
+            item_id = str(existing.get("id", ""))
+            lifecycle = str(existing.get("lifecycle_status") or existing.get("status") or "")
+            formal_ref = str(existing.get("formal_cr_path") or existing.get("full_ref") or "")
+            if item_id in formal_ids or lifecycle != "candidate" or formal_ref:
+                continue
+            items.append(existing)
     return {
         "schema_version": 1,
         "generated_at": now_utc(),

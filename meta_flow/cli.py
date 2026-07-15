@@ -249,9 +249,7 @@ def _run_doctor(args: list[str]) -> None:
     if command == "all":
         import argparse
 
-        from meta_flow.checks import context_doctor
-        from meta_flow.checks import quality_governance
-        from meta_flow.checks import token_budget
+        from meta_flow.checks import context_doctor, quality_governance, token_budget
 
         workspace_status = _run_workspace_doctor()
         tokens_status = token_budget.main(["--mode", "tokens", *forwarded])

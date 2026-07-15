@@ -8,9 +8,9 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from meta_flow.state import current
-from meta_flow.context_pack import builder
 from meta_flow.checks import cp_result, cr_tracking
+from meta_flow.context_pack import builder
+from meta_flow.state import current
 from meta_flow.workflow import cr_lifecycle
 
 
@@ -131,6 +131,42 @@ def write_impact_rules(root: Path, rules: list[dict]) -> Path:
 
 
 class CRLifecycleTests(unittest.TestCase):
+    def test_index_rebuild_preserves_non_formal_candidate_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-047")
+            index_path = root / "process" / "changes" / "CR-INDEX.json"
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "items": [
+                            {
+                                "id": "CR-033",
+                                "status": "candidate",
+                                "lifecycle_status": "candidate",
+                                "readiness_status": "n/a",
+                                "gate_status": "not_started",
+                                "gate_profile": "runtime",
+                                "kind": "runtime-authorization",
+                                "formal_cr_path": "",
+                                "source_tracking": "process/changes/FOLLOW-UP.md",
+                            }
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            cr_lifecycle.write_index(root)
+
+            rebuilt = json.loads(index_path.read_text(encoding="utf-8"))
+            by_id = {item["id"]: item for item in rebuilt["items"]}
+            self.assertEqual({"CR-033", "CR-047"}, set(by_id))
+            self.assertEqual("candidate", by_id["CR-033"]["lifecycle_status"])
+            self.assertEqual("", by_id["CR-033"]["formal_cr_path"])
+
     def test_bootstrap_cr_writes_active_cr_cp0_context_and_state_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

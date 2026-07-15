@@ -5,10 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 KNOWN_LEDGER_RELS = {
     "checkpoint": Path("process/state/CHECKPOINT-LEDGER.ndjson"),
@@ -87,7 +86,7 @@ def ledger_path(project_root: Path, ledger_type: str) -> Path:
 
 
 def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def load_events(path: Path) -> tuple[list[dict[str, Any]], list[str]]:

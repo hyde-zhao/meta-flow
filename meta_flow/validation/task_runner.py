@@ -9,10 +9,9 @@ import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 VALIDATION_ROOT_REL = Path("process/validation")
 EVIDENCE_ROOT_REL = Path("process/evidence")
@@ -59,7 +58,7 @@ class ValidationRunResult:
 
 
 def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _rel(project_root: Path, path: Path) -> str:

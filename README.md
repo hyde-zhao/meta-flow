@@ -248,7 +248,7 @@ meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name m
 安装测试优先使用全局命令或 `uv run`：
 
 ```bash
-meta-flow install codex --scope project --component full --dry-run
+uv run --python 3.11 meta-flow install codex --scope project --component full --project-dir . --dry-run
 uv run --python 3.11 python delivery/scripts/install.py codex --dry-run
 ```
 
@@ -492,6 +492,14 @@ meta-flow uninstall codex --scope project --project-dir /path/to/project
 meta-flow uninstall codex --scope project --component rules --project-dir /path/to/project
 ```
 
+非交互环境的三平台项目级 dry-run 必须显式提供 `--project-dir`：
+
+```bash
+uv run --python 3.11 meta-flow install codex --scope project --component full --project-dir . --dry-run
+uv run --python 3.11 meta-flow install claude --scope project --component full --project-dir . --dry-run
+uv run --python 3.11 meta-flow install qoder --scope project --component full --project-dir . --dry-run
+```
+
 兼容运行方式：
 
 ```bash
@@ -548,6 +556,16 @@ meta-flow 自身仓库级静态检查命令：
 
 ```bash
 uv run --python 3.11 python scripts/check_delivery_guardrails.py
+```
+
+发布前 preflight 使用以下五门固定入口；每门的原始退出码、warning 和风险都必须保留，不能把 `OK_WITH_WARNINGS` 改写成全绿：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q
+uv run --python 3.11 ruff check .
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow doctor all --project-root .
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow check cr-tracking --project-root .
 ```
 
 该脚本不属于外部 production 项目的默认交付物。仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时才运行上述命令。若在其他项目使用 meta-flow 生成或安装工作流，而目标项目没有该脚本，外部 production 项目不得硬引用 `<project-root>/scripts/check_delivery_guardrails.py` 或任意设备绝对路径；应按目标项目 README/docs 中的测试、构建、安装 dry-run 或用户确认的验证命令执行。

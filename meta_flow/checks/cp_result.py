@@ -10,13 +10,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from meta_flow.checks import state_transition
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS
 from meta_flow.context_pack import read_expansion
-from meta_flow.checks import state_transition
 from meta_flow.policies import failure_routing
 from meta_flow.state import event_ledger
 from meta_flow.state.current import now_utc
-
 
 CHECKPOINT_LEDGER_REL = Path("process/state/CHECKPOINT-LEDGER.ndjson")
 ITEM_STATUSES = {"PASS", "FAIL", "BLOCKED", "N/A", "WAIVED"}

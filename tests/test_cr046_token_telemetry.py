@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from meta_flow.evidence.telemetry import TokenUsage, aggregate_usage, usage_from_event, validate_usage
+from meta_flow.evidence.telemetry import (
+    TokenUsage,
+    aggregate_usage,
+    usage_from_event,
+    validate_usage,
+)
 
 
 class TokenTelemetryTests(unittest.TestCase):

@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 FAILURE_ROUTING_REL = Path("process/policies/FAILURE-ROUTING.json")
 WAIVER_POLICY_REL = Path("process/policies/WAIVER-POLICY.json")
 FAILURE_ROUTES = {

@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
-
 
 DEFAULT_BUDGETS = {
     "state_current_max_bytes": 20480,
@@ -91,6 +91,20 @@ class FileBudgetInfo:
     @property
     def over_budget(self) -> bool:
         return self.budget_bytes is not None and self.byte_count > self.budget_bytes
+
+
+@dataclass(frozen=True)
+class BudgetDisposition:
+    row: FileBudgetInfo
+    lifecycle_class: str
+    read_class: str
+    severity: str
+    remediation_ref: str
+    related_cr: str = ""
+
+    @property
+    def blocking(self) -> bool:
+        return self.severity == "BLOCKER"
 
 
 def estimate_tokens(text: str) -> int:
@@ -213,6 +227,77 @@ def scan_workspace(project_root: Path) -> list[FileBudgetInfo]:
     return rows
 
 
+def _active_change(project_root: Path) -> str:
+    state = _load_json(project_root / "process" / "state" / "STATE.current.json")
+    return str(state.get("active_change") or "")
+
+
+def _related_cr(rel_path: str) -> str:
+    match = re.search(r"CR-?(\d{3})", rel_path, flags=re.IGNORECASE)
+    if match:
+        return f"CR-{match.group(1)}"
+    if "ST-EI-" in rel_path:
+        return "CR-046"
+    return ""
+
+
+def _remediation_ref(project_root: Path, related_cr: str) -> str:
+    if related_cr:
+        archive_ref = f"process/archive/{related_cr}/evidence-index.json"
+        if (project_root / archive_ref).is_file():
+            return archive_ref
+        summary_ref = f"process/changes/summaries/{related_cr}.summary.json"
+        if (project_root / summary_ref).is_file():
+            return summary_ref
+    return "process/policies/LEDGER-RETENTION.yaml"
+
+
+def classify_over_budget(project_root: Path, row: FileBudgetInfo) -> BudgetDisposition:
+    """Classify an over-budget object without rewriting historical evidence."""
+
+    root = project_root.resolve()
+    active_change = _active_change(root)
+    related_cr = _related_cr(row.rel_path)
+    remediation_ref = _remediation_ref(root, related_cr)
+    if related_cr and related_cr == active_change:
+        return BudgetDisposition(
+            row=row,
+            lifecycle_class="active",
+            read_class="default-required",
+            severity="BLOCKER",
+            remediation_ref=remediation_ref,
+            related_cr=related_cr,
+        )
+    if related_cr:
+        return BudgetDisposition(
+            row=row,
+            lifecycle_class="closed-or-non-active",
+            read_class="reference-only",
+            severity="WARN",
+            remediation_ref=remediation_ref,
+            related_cr=related_cr,
+        )
+    if re.search(r"(?:^|/)(?:MF-\d+)[.-]", row.rel_path, flags=re.IGNORECASE):
+        return BudgetDisposition(
+            row=row,
+            lifecycle_class="legacy",
+            read_class="reference-only",
+            severity="WARN",
+            remediation_ref=remediation_ref,
+        )
+    return BudgetDisposition(
+        row=row,
+        lifecycle_class="unclassified",
+        read_class="default-required",
+        severity="BLOCKER",
+        remediation_ref=remediation_ref,
+    )
+
+
+def classify_over_budget_rows(project_root: Path, rows: list[FileBudgetInfo]) -> list[BudgetDisposition]:
+    return [classify_over_budget(project_root, row) for row in rows if row.over_budget]
+
+
 def format_bytes(size: int) -> str:
     if size >= 1024 * 1024:
         return f"{size / (1024 * 1024):.2f} MB"
@@ -269,34 +354,57 @@ def _print_output_profiles(project_root: Path) -> list[str]:
 
 
 def run_tokens(project_root: Path, *, limit: int) -> int:
+    project_root = project_root.resolve()
     rows = scan_workspace(project_root)
     denied_rows = [row for row in rows if row.default_read_status == "DENY_DEFAULT"]
-    over_budget = [row for row in rows if row.over_budget]
-    status = "FAIL" if over_budget else "OK"
+    dispositions = classify_over_budget_rows(project_root, rows)
+    blocking = [item for item in dispositions if item.blocking]
+    status = "FAIL" if blocking else "OK"
     print(f"Token Doctor: {status}")
-    print(f"project_root: {project_root.resolve()}")
+    print(f"project_root: {project_root}")
     print(f"scanned_files: {len(rows)}")
     print(f"deny_default_files: {len(denied_rows)}")
+    print(f"over_budget_observed: {len(dispositions)}")
+    print(f"over_budget_blocking_active_or_default_required: {len(blocking)}")
+    print(f"over_budget_unclassified: {sum(item.lifecycle_class == 'unclassified' for item in dispositions)}")
     _print_top_files(rows, limit=limit)
-    if over_budget:
-        print("Over-budget artifacts:")
-        for row in sorted(over_budget, key=lambda item: item.byte_count, reverse=True):
+    if dispositions:
+        print("Over-budget artifact classifications:")
+        for item in sorted(dispositions, key=lambda value: value.row.byte_count, reverse=True):
+            row = item.row
             assert row.budget_bytes is not None
-            print(f"- {row.rel_path}: {format_bytes(row.byte_count)} > {format_bytes(row.budget_bytes)}")
-    return 1 if over_budget else 0
+            print(
+                f"- {item.severity} {row.rel_path}: {format_bytes(row.byte_count)} > "
+                f"{format_bytes(row.budget_bytes)}; lifecycle={item.lifecycle_class}; "
+                f"read_class={item.read_class}; remediation_ref={item.remediation_ref}"
+            )
+    return 1 if blocking else 0
 
 
 def run_artifacts(project_root: Path) -> int:
+    project_root = project_root.resolve()
     rows = scan_workspace(project_root)
     print("Artifact Doctor:")
-    print(f"project_root: {project_root.resolve()}")
+    print(f"project_root: {project_root}")
     over_budget = _print_artifact_budgets(rows)
+    dispositions = classify_over_budget_rows(project_root, rows)
+    blocking = [item for item in dispositions if item.blocking]
+    print(f"over_budget_observed: {len(dispositions)}")
+    print(f"over_budget_blocking_active_or_default_required: {len(blocking)}")
+    for item in dispositions:
+        print(
+            f"- {item.severity}: {item.row.rel_path}; lifecycle={item.lifecycle_class}; "
+            f"read_class={item.read_class}; remediation_ref={item.remediation_ref}"
+        )
     output_errors = _print_output_profiles(project_root)
-    if over_budget or output_errors:
+    if blocking or output_errors:
         for error in output_errors:
             print(f"- ERROR: {error}")
         print("Artifact Doctor: FAIL")
         return 1
+    if over_budget:
+        print("Artifact Doctor: OK_WITH_WARNINGS")
+        return 0
     print("Artifact Doctor: OK")
     return 0
 

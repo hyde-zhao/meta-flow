@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 
 ROUTE_METADATA_NAME = ".meta-flow-process.yaml"
 PROCESS_SCAFFOLD_DIRS = (
@@ -178,8 +177,7 @@ def _git_dirty_state(path: Path | None) -> str:
             ["git", "status", "--short"],
             cwd=git_root,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
     except OSError:
@@ -348,7 +346,8 @@ def write_route_metadata(
     link_path: Path,
 ) -> Path:
     metadata_path = process_root / ROUTE_METADATA_NAME
-    created_at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    existing = _read_key_values(metadata_path)
+    created_at = existing.get("created_at") or datetime.now(UTC).astimezone().isoformat(timespec="seconds")
     artifact_root_rel = _relative_path(artifact_root, project_root)
     process_root_rel = _relative_path(process_root, artifact_root)
     link_path_rel = os.path.relpath(link_path.absolute(), project_root.absolute())
@@ -366,7 +365,8 @@ def write_route_metadata(
         'routing_mode: "symlink"\n'
         f'created_at: "{created_at}"\n'
     )
-    metadata_path.write_text(text, encoding="utf-8")
+    if not metadata_path.is_file() or metadata_path.read_text(encoding="utf-8") != text:
+        metadata_path.write_text(text, encoding="utf-8")
     return metadata_path
 
 

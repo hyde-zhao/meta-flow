@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from meta_flow.evidence.dispatch import DispatchAttempt, ThreadRuntimeIdentity, advance_attempt, validate_attempt_graph
+from meta_flow.evidence.dispatch import (
+    DispatchAttempt,
+    ThreadRuntimeIdentity,
+    advance_attempt,
+    validate_attempt_graph,
+)
 from meta_flow.evidence.platform_contract import (
     CapabilityProbe,
     ProfileConfig,
@@ -20,8 +25,7 @@ from meta_flow.evidence.platform_contract import (
 )
 from meta_flow.state import event_ledger
 
-
-NOW = datetime(2026, 7, 12, 4, 40, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 12, 4, 40, tzinfo=UTC)
 
 
 def config() -> ProfileConfig:

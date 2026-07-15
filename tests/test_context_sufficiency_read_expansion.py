@@ -7,10 +7,8 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from meta_flow.checks import context_doctor
-from meta_flow.checks import cp_result
-from meta_flow.context_pack import read_expansion
-from meta_flow.context_pack import story_contract
+from meta_flow.checks import context_doctor, cp_result
+from meta_flow.context_pack import read_expansion, story_contract
 from meta_flow.state import current
 
 

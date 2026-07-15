@@ -11,7 +11,6 @@ from typing import Any
 
 from meta_flow.policies import gate_profiles
 
-
 CHECKPOINTS = tuple(f"CP{index}" for index in range(9))
 HUMAN_GATE_CHECKPOINTS = {"CP2", "CP3", "CP5", "CP8"}
 CP_TO_PHASE = {

@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
-import hashlib
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from meta_flow.checks.audit_report import build_audit_report
-from meta_flow.checks.correction import append_correction, replay_corrections, validate_correction_event
+from meta_flow.checks.correction import (
+    append_correction,
+    replay_corrections,
+    validate_correction_event,
+)
 from meta_flow.evidence.pilot_adapter import build_pilot_manifest, preflight_pilot
-from meta_flow.evidence.replay import admission_requires_reprobe, legacy_profile_annotation, replay_outcome
 from meta_flow.evidence.platform_contract import CapabilityProbe
-from datetime import datetime, timedelta, timezone
+from meta_flow.evidence.replay import (
+    admission_requires_reprobe,
+    legacy_profile_annotation,
+    replay_outcome,
+)
 
 
 class ReplayCorrectionTests(unittest.TestCase):
@@ -52,7 +60,7 @@ class ReplayCorrectionTests(unittest.TestCase):
         self.assertIsNone(annotation["resolved_model"])
 
     def test_freshness_and_dry_run_pilot_are_fail_closed(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         probe = CapabilityProbe("d0", "s", "e", now, now + timedelta(seconds=10), "h", "v1", "0", "platform-reported", "receipt")
         admission = admission_requires_reprobe(probe, now=now, session_id="different", session_epoch="e", config_sha256="h", selector_schema_version="v1", reload_generation="0")
         self.assertTrue(admission["reprobe_required"])

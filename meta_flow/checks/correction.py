@@ -14,7 +14,6 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-
 REQUIRED_CORRECTION_FIELDS = (
     "schema_version", "event_id", "target_ref", "patch", "author", "reason", "evidence_refs", "created_at",
 )

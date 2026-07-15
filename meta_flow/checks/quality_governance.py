@@ -10,14 +10,15 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.checks import cp_result
+from meta_flow.checks.correction import validate_correction_event
 from meta_flow.context_pack import read_expansion
 from meta_flow.evals.runner import parse_yaml_subset
 from meta_flow.state import event_ledger
 
-
 QUALITY_MODEL_REL = Path("process/policies/QUALITY-MODEL.yaml")
 EVAL_MATRIX_REL = Path("process/policies/EVAL-MATRIX.yaml")
 READ_EXPANSION_REL = Path("process/state/READ-EXPANSION-LEDGER.ndjson")
+READ_EXPANSION_CORRECTION_REL = Path("process/corrections/CR047-LEGACY-READ-EXPANSION.ndjson")
 ALLOWED_GATES = {f"CP{index}" for index in range(9)}
 ALLOWED_BLOCKING_POLICIES = {"always", "on-release", "advisory"}
 DERIVED_SOURCE_NEEDLES = (
@@ -319,13 +320,57 @@ def run_quality_doctor(project_root: Path) -> int:
     return 1 if model_errors or eval_errors else 0
 
 
+def _load_read_expansion_corrections(root: Path) -> tuple[dict[str, str], list[str]]:
+    path = root / READ_EXPANSION_CORRECTION_REL
+    if not path.is_file():
+        return {}, []
+    targets: dict[str, str] = {}
+    errors: list[str] = []
+    chain: list[dict[str, Any]] = []
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            errors.append(f"{READ_EXPANSION_CORRECTION_REL.as_posix()}:{line_no}: invalid JSON: {exc}")
+            continue
+        findings = validate_correction_event(event, chain=chain)
+        if findings:
+            errors.extend(
+                f"{READ_EXPANSION_CORRECTION_REL.as_posix()}:{line_no}: {finding}" for finding in findings
+            )
+            continue
+        target = event.get("target_ref") or {}
+        if target.get("namespace") != "cp-result":
+            errors.append(
+                f"{READ_EXPANSION_CORRECTION_REL.as_posix()}:{line_no}: target namespace must be cp-result"
+            )
+            continue
+        target_id = str(target.get("id") or "")
+        targets[target_id] = str(event.get("event_id") or "")
+        chain.append(event)
+    return targets, errors
+
+
 def _load_cp_results(root: Path) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     results: list[dict[str, Any]] = []
     errors: list[str] = []
     warnings: list[str] = []
+    corrected_targets, correction_errors = _load_read_expansion_corrections(root)
+    errors.extend(correction_errors)
     for result_path in sorted((root / "process" / "checks").glob("*.result.json")):
         result_errors, result_warnings = cp_result.validate_cp_result(result_path, project_root=root)
-        errors.extend(f"{result_path.relative_to(root).as_posix()}: {error}" for error in result_errors)
+        rel_path = result_path.relative_to(root).as_posix()
+        correction_id = corrected_targets.get(rel_path)
+        if correction_id:
+            warnings.extend(
+                f"{rel_path}: legacy/unavailable read-expansion provenance retained by append-only correction "
+                f"{correction_id}; original finding remains non-PASS: {error}"
+                for error in result_errors
+            )
+        else:
+            errors.extend(f"{rel_path}: {error}" for error in result_errors)
         warnings.extend(f"{result_path.relative_to(root).as_posix()}: {warning}" for warning in result_warnings)
         try:
             results.append(cp_result.load_cp_result(result_path))

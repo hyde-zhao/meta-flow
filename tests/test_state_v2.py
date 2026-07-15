@@ -10,7 +10,6 @@ from pathlib import Path
 from meta_flow import cli
 from meta_flow.state import current
 
-
 LEGACY_STATE = """---
 project_id: "demo-project"
 workflow_mode: "standard"

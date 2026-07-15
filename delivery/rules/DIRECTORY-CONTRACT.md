@@ -6,7 +6,7 @@ This contract defines the file-system layout used by Meta Flow agents and skills
 
 | Root | Zone | Purpose |
 |---|---|---|
-| `docs/` | warm | Long-lived product, design, quality, and release documentation. |
+| `docs/` | warm | Public tracked documentation. For meta-flow self-development, internal product/design/quality documents are canonical only under `process/docs/`. |
 | `process/` | hot / warm / cold | Runtime state, context, checks, checkpoints, ledgers, CRs, Story work, evidence, handoffs, and archives. |
 | `delivery/` | warm | Installable Meta Flow agents, skills, rules, docs, and scripts. |
 | `.agents/` | warm | Meta Flow self-development source agents and skills. |
@@ -21,6 +21,12 @@ This contract defines the file-system layout used by Meta Flow agents and skills
 | Release and archive | `process/release/`, `process/archive/` | release warm, archive cold |
 | Policy and config | `process/policies/`, `process/constraints/`, `process/registers/` | warm |
 | Support | `process/backups/`, `process/baseline/`, `process/plans/`, `process/reviews/`, `process/runbooks/`, `process/docs/` | warm |
+
+## Meta-flow Self-development Canonical Docs
+
+For this repository, `process/docs/**` is the only writable canonical location for internal product, design, feature, quality, and internal release evidence. The tracked root `docs/` tree is limited to public entry points and public release documents. Do not create ignored copies or compatibility symlinks for `docs/product`, `docs/design`, `docs/features`, or `docs/quality`; the expected internal canonical copy count is exactly one.
+
+Production projects continue to follow their own documented delivery layout. This repository-specific rule must not be projected onto a production repository without an explicit routing decision.
 
 ## Current Discovery
 

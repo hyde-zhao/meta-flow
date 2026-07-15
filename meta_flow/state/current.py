@@ -9,12 +9,11 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from meta_flow.checks.token_budget import DEFAULT_BUDGETS, format_bytes, load_budgets
-
 
 STATE_SCHEMA_VERSION = 2
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
@@ -152,7 +151,7 @@ class StateValidationError(ValueError):
 
 
 def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _frontmatter(text: str) -> str:
@@ -799,6 +798,83 @@ def build_current_entry(project_root: Path) -> dict[str, Any]:
         "updated_at": now_utc(),
         "stale_refs": stale_refs,
     }
+
+
+def validate_current_projection(project_root: Path) -> list[CurrentStateFinding]:
+    """Validate that ``process/current/CURRENT.json`` projects state v2.
+
+    The projection is deliberately read-only: State remains the workflow
+    owner and CURRENT remains a discoverability view.  This check therefore
+    reports drift without trying to repair either object.
+    """
+
+    project_root = project_root.resolve()
+    state = load_current_state(project_root)
+    if not state:
+        return [
+            CurrentStateFinding(
+                severity="ERROR",
+                code="state_missing",
+                message=f"STATE.current.json missing: {current_state_path(project_root)}",
+            )
+        ]
+    entry_path = current_entry_path(project_root)
+    if not entry_path.is_file():
+        return [
+            CurrentStateFinding(
+                severity="ERROR",
+                code="current_projection_missing",
+                message=f"CURRENT.json missing: {entry_path}",
+            )
+        ]
+    entry = _read_json(entry_path)
+    if not entry:
+        return [
+            CurrentStateFinding(
+                severity="ERROR",
+                code="current_projection_invalid",
+                message=f"CURRENT.json is empty or invalid JSON: {entry_path}",
+            )
+        ]
+
+    expected = build_current_entry(project_root)
+    findings: list[CurrentStateFinding] = []
+    relationship_fields = (
+        "active_change",
+        "active_story",
+        "pending_gate",
+        "change_ref",
+        "context_ref",
+        "checkpoint_ref",
+        "story_packet_ref",
+        "cr_index_ref",
+        "status",
+        "health",
+    )
+    for key in relationship_fields:
+        if entry.get(key) != expected.get(key):
+            findings.append(
+                CurrentStateFinding(
+                    severity="ERROR",
+                    code="current_projection_drift",
+                    message=(
+                        f"CURRENT.json {key}={entry.get(key)!r} does not match "
+                        f"STATE-derived value {expected.get(key)!r}"
+                    ),
+                    key=key,
+                )
+            )
+    stale_refs = entry.get("stale_refs")
+    if isinstance(stale_refs, list) and stale_refs:
+        findings.append(
+            CurrentStateFinding(
+                severity="ERROR",
+                code="current_projection_stale_ref",
+                message=f"CURRENT.json contains stale refs: {stale_refs}",
+                key="stale_refs",
+            )
+        )
+    return findings
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

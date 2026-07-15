@@ -13,7 +13,6 @@ from meta_flow.checks.token_budget import format_bytes
 from meta_flow.project import roadmap as project_roadmap
 from meta_flow.project import scale as project_scale
 
-
 PROJECT_CURRENT_REL = Path("process/project/PROJECT.current.json")
 PROJECT_CURRENT_SCHEMA_VERSION = 1
 PROJECT_CURRENT_MAX_BYTES = 16 * 1024

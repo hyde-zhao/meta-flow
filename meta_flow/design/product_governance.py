@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
-
 
 CAPABILITY_STATUS_REL = Path("docs/design/CAPABILITY-STATUS.yaml")
 CONCEPT_OWNERS_REL = Path("docs/design/CONCEPT-OWNERS.yaml")

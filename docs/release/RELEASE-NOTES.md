@@ -24,6 +24,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.10 | 2026-07-04 | host-orchestrator | CR-038..CR-044 收束 CR155 复盘 follow-up：CP0/CP7 硬门禁、CP8 fact diff、release docs 压缩、governance dependency warning、checker provenance、publication authz、CP1 分级、archive 隔离、real-lake validation wrapper 和 Story 管理真相源合并 |
 | 1.11 | 2026-07-11 | meta-doc | CR-045 增加 CR-aware route plan、N/A / WAIVED 语义与 route-driven state transition；记录 CP2 / CP5 事后恢复审批和 CP7 四项 HIGH finding 闭环 |
 | 1.12 | 2026-07-11 | host-orchestrator | CR-045 更新至最终 R6 证据（9/9、17/113/329），精确标注 `next_action.stop_reason`，披露 dispatch receipt 限制，并记录后续 commit/push 授权 |
+| 1.13 | 2026-07-15 | host-orchestrator-inline/meta-qa | CR-047 收敛 workflow truth、portable routing、Doctor/guardrail/Ruff/installer preflight 与 CR-046 protected-object firewall；CP8 候选为 `READY_WITH_RISK`。 |
 
 ## 发布范围
 
@@ -47,6 +48,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | CP8 and release compression | CP8 `fact_diff`、result-first derived consistency、release context first、minimal/compact/full release artifact profiles、DEFERRED_FOLLOW_UP risk handling | CR-039 |
 | Audit and efficiency follow-ups | governance dependency warning、checker provenance、repository publication authz、CP1 graded result、archive/backups isolation、`meta-flow validation run` real-lake-readonly task wrapper、`meta-flow story plan-check` 和 DEVELOPMENT-PLAN Story truth source | CR-040..CR-044 |
 | CR-aware workflow routing | 按 CR type / traits / gate profile 生成 checkpoint route；显式区分 N/A 与 WAIVED；审批或自动 CP 后按 route plan 推进至下一人工门或明确 stop reason | CR-045；`process/release/RELEASE-CONTEXT-CR045.yaml` |
+| Workflow truth and delivery governance remediation | State v2/CR JSON/CURRENT 关系校验、CR-033 candidate retention、路由幂等、Doctor 历史分类、clean-clone/cache guardrail、Ruff 0、三平台非交互 dry-run、CR-046 object-identity firewall | CR-047；`process/release/RELEASE-CONTEXT-CR047.yaml` |
 
 ## 用户可见变化
 
@@ -91,6 +93,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 - 新增 `meta-flow validation run --profile real-lake-readonly`，为真实 lake readonly 验证生成 run ledger、evidence index、rerun comparison、admission summary 和 forbidden operation counter 摘要；默认不执行外部命令，`--execute --command` 需要独立授权。
 - Story 管理合并到 `process/DEVELOPMENT-PLAN.yaml` 作为 Story / Wave / status / task 机器真相源；`STORY-BACKLOG.md`、`STORY-STATUS.md` 和 Feature `TASKS.md` 只作为 optional legacy / generated views，并由 `meta-flow story plan-check` 检查 drift。
 - CR-045 新增确定性的 CR-aware route planning：未适用 checkpoint 记录为 N/A，不再用 WAIVED 代替；pass-like、失败、授权和 workflow-health stop reason 由 route-driven state transition 做一致性校验。最终 CP7-R6 已关闭全部实现 finding，approved-CP8 边界矩阵 9/9、17 / 113 / 329 分层测试通过。终态 stop reason 的精确路径是 `STATE.current.json.next_action.stop_reason`；dispatch 执行虽为会话观察到的真实任务，但仓库缺少平台签发 receipt，严格 provenance 移交 CR-A S01。
+- CR-047 使 stale State/CR/CURRENT、legacy CR index、非幂等 route metadata、clean-clone 根 wrapper 依赖、未分类历史预算和非交互安装示例进入确定性检查；publication preflight 增加 ledger 对象身份回归后，最终本地基线为 401 tests + 70 subtests、Ruff 0、五门 exit 0、3/3 dry-run。没有独立 QA/platform receipt/token telemetry/真实 pilot 时结论保持 `READY_WITH_RISK`。
 
 ## 兼容性
 
@@ -120,3 +123,5 @@ created_at: "2026-06-17T13:49:25+08:00"
 | CR-045 recovery gate ordering | MEDIUM | CP2 / CP5 为历史 CP6 后的事后恢复审批，审计顺序永久保留且未倒填；CP8 需明示接受该过程风险 |
 | CR-045 test cache hygiene | INFO | CP7 发现 ignored Python test caches；Host 在 CP8 前例行清理并重跑 delivery guardrail，重复出现才进入 follow-up tracking |
 | CR-045 dispatch platform receipt | MEDIUM | 当前证据为 session-observed，仓库不可独立验证平台调用真实性；移交 CR-A S01 producer contract，不倒填历史 receipt |
+| CR-047 inline CP7 / paired Git publication | MEDIUM | 7/7 功能验证通过，但无独立 meta-qa/platform receipt；用户在 CP8 批准消息中另行授权 `meta-flow` 与 `meta-flow-artifacts` 配对 commit/push，结论仍保持 `READY_WITH_RISK`。 |
+| CR-047 historical/reference-only warnings | LOW | Doctor exit 0 且 blocker/unclassified=0；21 个 closed/reference-only 超预算和 legacy provenance warning 保持可见，不伪造为无风险。 |

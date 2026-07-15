@@ -8,7 +8,6 @@ from typing import Any
 
 from meta_flow.project.scale import ProjectFinding, add_finding, load_yaml_object
 
-
 ROADMAP_REL = Path("process/project/ROADMAP.yaml")
 MILESTONES_REL = Path("process/project/MILESTONES.yaml")
 ROADMAP_SCHEMA_VERSION = 1

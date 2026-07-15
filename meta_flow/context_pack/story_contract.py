@@ -10,23 +10,30 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS, estimate_tokens, load_budgets
+from meta_flow.context_pack import read_expansion
 from meta_flow.context_pack.builder import (
     DEFAULT_FULL_DOC_READ_REASONS,
-    READ_POLICY_REL,
     READ_EXPANSION_LEDGER_REL,
-    default_read_policy,
+    READ_POLICY_REL,
     load_read_policy,
     write_default_read_policy,
 )
-from meta_flow.context_pack import read_expansion
 from meta_flow.design.feature_registry import FEATURE_REGISTRY_REL
 from meta_flow.design.module_boundaries import MODULE_BOUNDARIES_REL
-from meta_flow.design.product_governance import CAPABILITY_STATUS_REL, CONCEPT_OWNERS_REL, PACKAGE_IDENTITY_REL
+from meta_flow.design.product_governance import (
+    CAPABILITY_STATUS_REL,
+    CONCEPT_OWNERS_REL,
+    PACKAGE_IDENTITY_REL,
+)
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
-from meta_flow.state.current import STATE_CURRENT_ENTRY_REL, STATE_CURRENT_REL, load_current_state, refresh_current_entry
+from meta_flow.state.current import (
+    STATE_CURRENT_ENTRY_REL,
+    STATE_CURRENT_REL,
+    load_current_state,
+    refresh_current_entry,
+)
 from meta_flow.workflow.cr_lifecycle import CR_SUMMARY_ROOT_REL
-
 
 STORY_CONTEXT_ROOT_REL = Path("process/context/stories")
 STORY_RETURN_ROOT_REL = Path("process/returns")

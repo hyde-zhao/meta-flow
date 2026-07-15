@@ -4,15 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from meta_flow.policies import gate_profiles
+from meta_flow.state import current
 from meta_flow.workspace.routing import require_process_health
-
 
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 CR_ID_RE = re.compile(r"CR-\d+")
@@ -59,6 +62,16 @@ PATH_EMPTY_VALUES = {"", "-", "—", "n/a", "N/A", "无", "不适用"}
 LEGACY_CR_INDEX_RELS = (
     Path("process/changes/CR-INDEX.yaml"),
     Path("process/changes/CR-INDEX.yml"),
+)
+PROTECTED_LEDGER_RELS = (
+    Path("process/state/CR-LEDGER.ndjson"),
+    Path("process/state/STORY-LEDGER.ndjson"),
+    Path("process/state/CHECKPOINT-LEDGER.ndjson"),
+    Path("process/state/HANDOFF-LEDGER.ndjson"),
+    Path("process/state/AGENT-DISPATCH-LEDGER.ndjson"),
+    Path("process/state/GATE-LEDGER.ndjson"),
+    Path("process/state/RUN-LEDGER.ndjson"),
+    Path("process/state/READ-EXPANSION-LEDGER.ndjson"),
 )
 
 
@@ -123,6 +136,185 @@ class StateRef:
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _safe_project_file(project_root: Path, rel_path: str) -> Path:
+    root = project_root.resolve()
+    relative = Path(rel_path)
+    if relative.is_absolute() or ".." in relative.parts or relative.parts[:2] == ("process", "quant-lab"):
+        raise ValueError(f"protected object escapes project boundary: {rel_path}")
+    path = (root / rel_path).resolve(strict=True)
+    process_root = (root / "process").resolve(strict=True) if (root / "process").exists() else root / "process"
+    within_allowed_root = path.is_relative_to(root) or (
+        relative.parts[:1] == ("process",) and path.is_relative_to(process_root)
+    )
+    if not within_allowed_root or not path.is_file():
+        raise ValueError(f"protected object escapes project root or is not a file: {rel_path}")
+    return path
+
+
+def _ledger_event_identity(event: dict[str, Any]) -> str:
+    return str(event.get("event_id") or event.get("dispatch_id") or "")
+
+
+def _ledger_event_belongs_to_cr(event: dict[str, Any], cr_id: str) -> bool:
+    for key in ("cr_id", "change_id", "id", "active_change"):
+        if str(event.get(key) or "") == cr_id:
+            return True
+    identity = _ledger_event_identity(event)
+    compact_id = cr_id.replace("-", "")
+    return cr_id in identity or compact_id in identity
+
+
+def _ledger_cr_event_payload(path: Path, cr_id: str) -> tuple[bytes, list[str]]:
+    selected_lines: list[str] = []
+    event_ids: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not _ledger_event_belongs_to_cr(event, cr_id):
+            continue
+        selected_lines.append(line)
+        event_ids.append(_ledger_event_identity(event))
+    payload = ("\n".join(selected_lines) + ("\n" if selected_lines else "")).encode("utf-8")
+    return payload, event_ids
+
+
+def _ledger_event_id_payload(path: Path, expected_ids: list[str]) -> tuple[bytes, list[str]]:
+    """Select an already-manifested event set by exact object identity."""
+
+    expected = set(expected_ids)
+    selected_lines: list[str] = []
+    event_ids: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        identity = _ledger_event_identity(event)
+        if identity not in expected:
+            continue
+        selected_lines.append(line)
+        event_ids.append(identity)
+    payload = ("\n".join(selected_lines) + ("\n" if selected_lines else "")).encode("utf-8")
+    return payload, event_ids
+
+
+def build_protected_object_manifest(project_root: Path, *, cr_id: str, story_id: str) -> dict[str, Any]:
+    """Build an object-identity manifest for a closed CR's original evidence."""
+
+    root = project_root.resolve()
+    compact_id = cr_id.replace("-", "")
+    candidate_paths: set[Path] = {
+        Path(f"process/changes/{cr_id}.md"),
+        Path(f"process/changes/summaries/{cr_id}.summary.json"),
+        Path(f"process/archive/{cr_id}/evidence-index.json"),
+    }
+    checks_root = root / "process" / "checks"
+    if checks_root.is_dir():
+        candidate_paths.update(
+            path.relative_to(root)
+            for path in checks_root.glob("*.result.json")
+            if compact_id in path.name or cr_id in path.name
+        )
+    stories_root = root / "process" / "stories"
+    if stories_root.is_dir():
+        candidate_paths.update(
+            path.relative_to(root) for path in stories_root.glob("STORY-ST-EI-*-IMPLEMENTATION.md")
+        )
+    evidence_root = root / "process" / "evidence"
+    if evidence_root.is_dir():
+        candidate_paths.update(path.relative_to(root) for path in evidence_root.glob("ST-EI-*.index.json"))
+
+    objects: list[dict[str, Any]] = []
+    for rel_path in sorted(candidate_paths, key=lambda item: item.as_posix()):
+        path = _safe_project_file(root, rel_path.as_posix())
+        objects.append(
+            {
+                "path": rel_path.as_posix(),
+                "object_type": "protected_file",
+                "original_sha256": _sha256_bytes(path.read_bytes()),
+                "immutable": True,
+                "allowed_operation": "read|reference",
+                "identity_source_ref": f"closed-cr:{cr_id}",
+            }
+        )
+    for rel_path in PROTECTED_LEDGER_RELS:
+        path = root / rel_path
+        if not path.is_file():
+            continue
+        payload, event_ids = _ledger_cr_event_payload(path, cr_id)
+        if not event_ids:
+            continue
+        objects.append(
+            {
+                "path": rel_path.as_posix(),
+                "object_type": "ledger_cr_event_set",
+                "identity_selector": {"cr_id": cr_id, "event_ids": event_ids},
+                "selected_event_count": len(event_ids),
+                "original_sha256": _sha256_bytes(payload),
+                "immutable": True,
+                "allowed_operation": "read|reference|append-unrelated",
+                "identity_source_ref": f"closed-cr-ledger-events:{cr_id}",
+            }
+        )
+    return {
+        "schema_version": 1,
+        "cr_id": cr_id,
+        "story_id": story_id,
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "identity_mode": "object-identity",
+        "path_prefix_only_identification": False,
+        "source_index_refs": [
+            f"process/archive/{cr_id}/evidence-index.json",
+            f"process/changes/summaries/{cr_id}.summary.json",
+        ],
+        "objects": sorted(objects, key=lambda item: (item["path"], item["object_type"])),
+    }
+
+
+def verify_protected_object_manifest(project_root: Path, manifest: dict[str, Any]) -> list[str]:
+    """Return object-level findings; an empty list means byte identity holds."""
+
+    root = project_root.resolve()
+    cr_id = str(manifest.get("cr_id") or "")
+    findings: list[str] = []
+    if manifest.get("identity_mode") != "object-identity" or manifest.get("path_prefix_only_identification") is not False:
+        findings.append("manifest must use object identity and prohibit path-prefix-only identification")
+    for item in manifest.get("objects") or []:
+        if not isinstance(item, dict):
+            findings.append("manifest object is not a mapping")
+            continue
+        rel_path = str(item.get("path") or "")
+        try:
+            path = _safe_project_file(root, rel_path)
+        except (OSError, ValueError) as exc:
+            findings.append(str(exc))
+            continue
+        if item.get("object_type") == "ledger_cr_event_set":
+            expected_ids = (item.get("identity_selector") or {}).get("event_ids") or []
+            if expected_ids and all(expected_ids):
+                payload, event_ids = _ledger_event_id_payload(path, expected_ids)
+            else:
+                payload, event_ids = _ledger_cr_event_payload(path, cr_id)
+            observed = _sha256_bytes(payload)
+            if event_ids != expected_ids:
+                findings.append(f"protected ledger event identity changed: {rel_path}")
+        else:
+            observed = _sha256_bytes(path.read_bytes())
+        if observed != item.get("original_sha256"):
+            findings.append(f"protected original hash changed: {rel_path}")
+    return findings
 
 
 def parse_frontmatter(text: str) -> dict[str, str]:
@@ -218,7 +410,7 @@ def normalize_readiness_status(value: str) -> str:
 
 def normalize_gate_status(value: str, *, fallback_gate: str = "") -> str:
     gate = strip_scalar(value or fallback_gate).lower().replace("-", "_")
-    if gate in {"not_started", "not_started", "未启动"}:
+    if gate in {"not_started", "未启动"}:
         return "not_started"
     if gate in {"not-started"}:
         return "not_started"
@@ -281,6 +473,25 @@ def find_state_refs(state_path: Path) -> list[StateRef]:
         key = "active_change" if not match.group("indent") else "nested.active_change"
         refs.append(StateRef(key=key, value=match.group("value").strip(), line_no=line_no))
     return refs
+
+
+def find_state_v2_refs(state_path: Path) -> list[StateRef]:
+    """Read the canonical active change from State v2.
+
+    ``STATE.md`` is a rendered human view and is only used as a legacy
+    fallback when the v2 object is absent.
+    """
+
+    if not state_path.is_file():
+        return []
+    try:
+        payload = json.loads(read_text(state_path))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    value = payload.get("active_change")
+    return [StateRef(key="active_change", value=str(value or ""), line_no=1)]
 
 
 def discover_formal_crs(change_root: Path) -> dict[str, FormalCR]:
@@ -644,6 +855,19 @@ def collect_errors_and_warnings(
                 f"STATE active_change={top_value} does not match active formal CR(s): {', '.join(sorted(active_ids))}"
             )
 
+    index_by_id = {item.item_id: item for item in index_items if item.item_id}
+    for ref in top_refs:
+        if not ref.value:
+            continue
+        indexed = index_by_id.get(ref.value)
+        if indexed is None:
+            errors.append(f"STATE active_change={ref.value} is missing from canonical CR-INDEX.json")
+            continue
+        if indexed.lifecycle_status in {"closed", "cancelled", "superseded"}:
+            errors.append(
+                f"STATE active_change={ref.value} points to terminal CR-INDEX lifecycle_status={indexed.lifecycle_status}"
+            )
+
     rows_by_id: dict[str, list[FollowUpRow]] = {}
     for row in rows:
         rows_by_id.setdefault(row.item_id, []).append(row)
@@ -739,7 +963,6 @@ def collect_errors_and_warnings(
                     f"{row_location} {row.item_id} must be closed while source formal CR {cr.cr_id} is finished"
                 )
 
-    index_by_id = {item.item_id: item for item in index_items if item.item_id}
     for cr in active_formal:
         if not any(item.item_id == cr.cr_id or item.formal_path == format_rel(project_root, cr.path) for item in index_items):
             warnings.append(f"CR-INDEX.json does not mention active formal CR {cr.cr_id}")
@@ -846,6 +1069,7 @@ def main(argv: list[str] | None = None) -> int:
 
     project_root = args.project_root.resolve()
     require_process_health(project_root)
+    state_v2_path = project_root / "process" / "state" / "STATE.current.json"
     state_path = project_root / "process" / "STATE.md"
     change_root = project_root / "process" / "changes"
     index_path = change_root / "CR-INDEX.json"
@@ -853,7 +1077,7 @@ def main(argv: list[str] | None = None) -> int:
     follow_up_rows = discover_follow_up_rows(project_root, args.tracking)
     index_items = parse_cr_index_items(index_path)
     next_action_refs = parse_next_action_candidates(index_path)
-    state_refs = find_state_refs(state_path)
+    state_refs = find_state_v2_refs(state_v2_path) if state_v2_path.is_file() else find_state_refs(state_path)
     errors, warnings = collect_errors_and_warnings(
         project_root=project_root,
         formal_crs=formal_crs,
@@ -875,6 +1099,14 @@ def main(argv: list[str] | None = None) -> int:
             f"legacy CR index present as read-only fallback: {format_rel(project_root, path)}; CR-INDEX.json remains canonical"
             for path in legacy_index_paths
         )
+
+    if state_v2_path.is_file():
+        for finding in current.validate_current_projection(project_root):
+            message = f"{finding.code}: {finding.message}"
+            if finding.severity == "ERROR":
+                errors.append(message)
+            else:
+                warnings.append(message)
 
     print_summary(formal_crs, follow_up_rows, index_items)
     for warning in warnings:

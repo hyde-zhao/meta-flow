@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from meta_flow.workspace.routing import bootstrap_process_workspace, check_process_route, link_process_workspace
+from meta_flow.workspace.routing import (
+    bootstrap_process_workspace,
+    check_process_route,
+    link_process_workspace,
+)
 
 
 def test_workspace_link_writes_portable_relative_metadata(tmp_path: Path) -> None:

@@ -7,9 +7,9 @@ field, or a ledger declaration into a resolved runtime fact.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from typing import Any, Iterable
-
+from typing import Any
 
 TERMINAL_ATTEMPT_STATUSES = frozenset({"completed", "failed", "interrupted", "cancelled", "superseded"})
 NONTERMINAL_ATTEMPT_STATUSES = frozenset({"submitted", "running", "retrying"})

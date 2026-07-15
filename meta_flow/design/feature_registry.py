@@ -9,7 +9,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-
 FEATURE_REGISTRY_REL = Path("docs/design/FEATURE-REGISTRY.yaml")
 CAPABILITY_REGISTRY_REL = Path("docs/design/CAPABILITY-REGISTRY.yaml")
 FEATURE_DESIGN_MATRIX_REL = Path("docs/design/FEATURE-DESIGN-MATRIX.yaml")

@@ -12,9 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS, estimate_tokens
-from meta_flow.context_pack.builder import DEFAULT_FULL_DOC_READ_REASONS, READ_EXPANSION_LEDGER_REL, load_read_policy
+from meta_flow.context_pack.builder import (
+    DEFAULT_FULL_DOC_READ_REASONS,
+    READ_EXPANSION_LEDGER_REL,
+    load_read_policy,
+)
 from meta_flow.state.current import now_utc
-
 
 REQUIRED_EVENT_FIELDS = {
     "event_id",

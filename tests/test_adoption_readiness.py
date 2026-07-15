@@ -5,9 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from meta_flow.checks import adoption_readiness
-from meta_flow.checks import quality_governance
-from meta_flow.design import product_governance
+from meta_flow.checks import adoption_readiness, quality_governance
 from meta_flow.workspace.routing import bootstrap_process_workspace
 
 

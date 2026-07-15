@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 AUTHZ_POLICY_REL = Path("process/policies/AUTHZ-POLICY.json")
 AUTHZ_CAPABILITY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
     "NO_REAL_LAKE_READ_OR_WRITE": {

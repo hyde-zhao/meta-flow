@@ -19,10 +19,9 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
-
 
 REQUIRED_WORKFLOW_EVAL_KEYS = {
     "schema_version",
@@ -120,7 +119,7 @@ class EvalIssue:
 
 
 def now_iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
 
 
 def read_text(path: Path) -> str:
@@ -191,7 +190,7 @@ def parse_timestamp(value: object) -> dt.datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        parsed = parsed.replace(tzinfo=dt.UTC)
     return parsed
 
 
@@ -1245,7 +1244,6 @@ def run_table_structure(root: Path, grader: dict[str, object]) -> tuple[str, lis
                 file_ok = False
                 continue
 
-            header = table[0]
             sep = table[1]
             data_rows = table[2:]
 
@@ -1797,7 +1795,7 @@ def runtime_eval_run(
 ) -> tuple[int, dict[str, object]]:
     root, grader, sample, failures = find_runtime_sample_for_eval(eval_path, sample_id)
     out_dir.mkdir(parents=True, exist_ok=True)
-    run_exec_id = f"RUN-EXEC-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{safe_id_component(sample_id)}"
+    run_exec_id = f"RUN-EXEC-{dt.datetime.now(dt.UTC).strftime('%Y%m%dT%H%M%SZ')}-{safe_id_component(sample_id)}"
     if failures:
         status = "BLOCKED"
         sample = {"id": sample_id}
@@ -2265,7 +2263,7 @@ def run_eval(
         and all(case.get("expected_match", True) for case in case_results)
         else "FAIL"
     )
-    run_id = f"eval-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    run_id = f"eval-{dt.datetime.now(dt.UTC).strftime('%Y%m%dT%H%M%SZ')}"
     summary: dict[str, object] = {
         "run_id": run_id,
         "created_at": now_iso(),
@@ -2580,7 +2578,7 @@ def suite_health(
         if len(set(statuses)) > 1 and "PASS" in statuses and any(status != "PASS" for status in statuses)
     )
 
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     stale_cases: list[str] = []
     for case in cases:
         verified_at = parse_timestamp(case.get("last_verified_at"))
@@ -3134,7 +3132,7 @@ def normalize_one_feedback(path: Path, source_dir: Path, index: int) -> dict[str
     stage = str((existing or {}).get("stage") or infer_feedback_stage(raw_text))
     coverage_status = str((existing or {}).get("coverage_status") or infer_coverage_status(raw_text, category))
     source_path = str((existing or {}).get("source_path") or relative(source_dir, path))
-    run_exec_id = str((existing or {}).get("run_exec_id") or f"RUN-EXEC-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d')}-{index:03d}")
+    run_exec_id = str((existing or {}).get("run_exec_id") or f"RUN-EXEC-{dt.datetime.now(dt.UTC).strftime('%Y%m%d')}-{index:03d}")
     excerpt = mask_sensitive(" ".join(raw_text.strip().split()))[:500]
     payload: dict[str, object] = {
         "run_exec_id": run_exec_id,
@@ -3253,7 +3251,7 @@ def feedback_triage(runs_dir: Path, out_dir: Path) -> tuple[int, dict[str, objec
     issue_drafts: list[dict[str, object]] = []
     gaps: list[dict[str, object]] = []
     backlog_items: list[dict[str, object]] = []
-    today = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
+    today = dt.datetime.now(dt.UTC).strftime("%Y%m%d")
 
     for idx, payload in enumerate(run_execs, 1):
         triage_type = triage_type_for_run_exec(payload)
