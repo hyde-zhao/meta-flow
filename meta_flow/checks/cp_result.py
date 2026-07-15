@@ -281,10 +281,13 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
     if not events:
         return ["dispatch_refs require AGENT-DISPATCH-LEDGER entries: " + ", ".join(refs)]
     events_by_id: dict[str, list[dict[str, Any]]] = {}
+    events_by_dispatch: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         for value in (event.get("dispatch_id"), event.get("event_id")):
             if value:
                 events_by_id.setdefault(str(value), []).append(event)
+        if event.get("dispatch_id"):
+            events_by_dispatch.setdefault(str(event["dispatch_id"]), []).append(event)
 
     successful_statuses = {"completed", "success", "succeeded", "passed"}
     errors: list[str] = []
@@ -317,8 +320,33 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
                     event_errors.append("real dispatch has incompatible dispatch_mode")
                 if not str(event.get("tool_name") or "").strip():
                     event_errors.append("real dispatch requires tool_name")
-                if not any(str(event.get(field) or "").strip() for field in ("agent_id", "thread_id")):
+
+                # A real dispatch may be represented by several event rows.  The
+                # terminal row proves completion while the running/spawn row may
+                # carry the platform identity and start timestamp.  Validate the
+                # whole attempt instead of accepting or rejecting the first row.
+                dispatch_id = str(event.get("dispatch_id") or "")
+                attempt_id = str(event.get("attempt_id") or "")
+                related = events_by_dispatch.get(dispatch_id, matching) if dispatch_id else matching
+                if attempt_id:
+                    related = [candidate for candidate in related if str(candidate.get("attempt_id") or "") == attempt_id]
+                related_dispatch = [candidate for candidate in related if str(candidate.get("event_type") or "") == "dispatch"]
+                if not any(
+                    str(candidate.get(field) or "").strip()
+                    for candidate in related_dispatch
+                    for field in ("agent_id", "thread_id")
+                ):
                     event_errors.append("real dispatch requires agent_id or thread_id")
+                if not any(
+                    str(candidate.get(field) or "").strip()
+                    for candidate in related_dispatch
+                    for field in ("spawned_at", "resumed_at")
+                ):
+                    event_errors.append("real dispatch requires spawned_at or resumed_at")
+                if not any(str(candidate.get("dispatch_trigger") or "").strip() for candidate in related_dispatch):
+                    event_errors.append("real dispatch requires dispatch_trigger")
+                if not str(event.get("completed_at") or "").strip():
+                    event_errors.append("successful real dispatch requires completed_at on terminal event")
             elif event_type != "dispatch_not_required":
                 event_errors.append("event_type must be dispatch or inline_fallback")
 

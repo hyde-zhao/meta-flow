@@ -220,7 +220,7 @@ class DispatchAttestationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ledger = Path(directory) / "AGENT-DISPATCH-LEDGER.ndjson"
             for event in (
-                {"event_id": "event-running", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "status": "running", "created_at": "2026-07-12T00:00:00Z"},
+                {"event_id": "event-running", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "dispatch_trigger": "phase-default", "agent_id": "agent-1", "status": "running", "spawned_at": "2026-07-12T00:00:00Z"},
                 {"event_id": "event-completed", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "status": "completed", "terminal_result": "PASS", "completed_at": "2026-07-12T00:01:00Z"},
             ):
                 event_ledger.append_event(ledger, event)

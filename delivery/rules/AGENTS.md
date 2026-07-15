@@ -1,4 +1,4 @@
-# Meta Flow 元工作流 — Agent 声明
+# Meta Flow 元工作流 — 规则
 
 > 本项目运行 **Meta Flow** 通用 Agent/Skill 工作流产物工厂。
 > 主编排由当前会话的 **Host Orchestrator（主进程编排器）** 承担；不再安装或启动 `host-orchestrator` / `meta-po` 编排子 agent。
@@ -130,7 +130,7 @@ init（host-orchestrator）                                                   [C
 | `process/changes/` | 变更单（CR-*.md） |
 | `delivery/agents/` | 交付 Agent 提示词文件（canonical 源，同时是 meta-dev 产出目录） |
 | `delivery/skills/` | 交付 Skill 定义文件（canonical 源，同时是 meta-dev 产出目录） |
-| `delivery/rules/` | 各平台规则文件（AGENTS.md / CLAUDE.md） |
+| `delivery/rules/` | 唯一规则源 AGENTS.md（CLAUDE.md 安装时生成） |
 | `delivery/scripts/` | 仅安装器入口（install.py / install.sh / install.ps1） |
 | `scripts/` | 仓库级检查与构建脚本（不属于交付包） |
 | `delivery/README.md` | 产物 README（meta-doc 产出） |
@@ -201,6 +201,11 @@ init（host-orchestrator）                                                   [C
 - **CR first 不等于跳过产品澄清**：需求 / 场景 / 范围类变更必须先创建 CR 记录审计边界，但 CR 创建后必须回到 `requirement-clarification`，由 `meta-pm` 执行 CR 触发的增量 `use-case-discovery`、`requirement-extraction`、`requirement-clarifier`、SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE 更新，并通过 CP1 / CP2；CP2 未通过前不得进行 CR Story 分解、LLD 或实现。
 - **大块集中需求入口分流**：同一目标、同一 persona / user journey、共享 HLD、同一 release value 或需要多个 Story 才能交付的需求集合，默认作为目标包 / parent CR / Change Package 处理，先完整走用户场景发现、需求澄清、HLD 和 Story 拆分；只有目标、审批人、风险授权、交付节奏、回滚策略或审计边界不同，才允许拆出子 CR；普通开发工作拆 Story，不逐条拆 CR。
 - **检查点结构**：CP0-CP8 均必须包含 Entry Criteria、Checklist、Exit Criteria、Deliverables；自动检查点必须在 `process/checks/CP*.md` 写入逐项结果，人工检查点必须在 `process/checkpoints/CP*.md` 写入 checklist 和“人工审查结果”。
+- **澄清锁**：CP2 需求 / 场景 / 范围基线门未通过前，不得输出正式设计对象；CP2 前必须形成 `SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md` 或明确 N/A / WAIVED 原因
+- **验证锁**：`validation_mode=runtime|mixed` 且需要真实运行时，没有 `process/VALIDATION-ENV.yaml` 或 `approval.confirmed != true`，不得开始运行验证；`static-only` / `dry-run-only` / `review-only` 可使用等价验证方式，但必须在 CP7 写明 N/A 理由、未覆盖风险和证据
+- **文档锁**：未完成验证和安装脚本生成，不得输出最终版 `README.md` 与 `USER-MANUAL.md`
+- **禁止越级改写**：`meta-dev` 不修改 `REQUIREMENTS.md`、`MVP-SCOPE.md`、`BLUEPRINT.md`、`HLD.md`；`meta-qa` 不改设计对象；`meta-doc` 不改实现对象
+- **检查点文件优先**：推进阶段前必须读取对应 `process/checks/CP*.md` 与 `process/checkpoints/CP*.md`；不能只看产物 frontmatter 的 `confirmed=true`
 - **全阶段 Context Capsule**：CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后必须生成或检查 `process/context/*-CONTEXT.yaml`。子 agent、人工门禁、验证和发布准备默认先读取 capsule；只有 capsule 缺失、冲突、字段不足、人工审计、深度评审或用户明确要求时，才读取完整正式文档，并在 `process/state/READ-EXPANSION-LEDGER.ndjson` 或 capsule `read_expansion_log[]` 写明 `full_doc_read_reason`。
 - **Story Return / Evidence / Design Delta**：CP6 / CP7 Story agent 完成后必须写入 `process/returns/STORY-*.return.json`，并用 `meta-flow story return-check` 校验 Story / stage 匹配、写入路径、禁止路径、unexpected imports、验证证据和设计 delta 引用。CP6 / CP7 检查默认消费 `process/evidence/STORY-*.index.json` 证据索引，不复制完整证据正文。Story 修改长期 Feature DESIGN / ADR / HLD 时必须写 `process/design-deltas/STORY-*.delta.json`；CP8 前对需要回写的 delta 运行 `meta-flow design delta-check --require-merged`。
 - **CP Result / Event Ledger**：CP 自动检查应优先写入 `process/checks/CP*.result.json` 作为机器真相源，并用 `meta-flow cp result-check --check-consistency --project-root .` 校验；`process/checks/CP*.summary.md` 或旧 Markdown 检查文件只作为人类摘要。每个 CP result 应通过 `meta-flow cp ledger-append` 追加 `process/state/CHECKPOINT-LEDGER.ndjson`；handoff、agent dispatch、run、gate 事件分别写入 `HANDOFF-LEDGER.ndjson`、`AGENT-DISPATCH-LEDGER.ndjson`、`RUN-LEDGER.ndjson`、`GATE-LEDGER.ndjson`，并用 `meta-flow event check` 校验。Markdown 摘要不得替代 result JSON、evidence index 或 event ledger。
@@ -214,7 +219,7 @@ init（host-orchestrator）                                                   [C
 - **待人工决策清单**：工作流程中所有需要人工确定的信息都必须形成决策项；每项必须包含决策 ID、决策类型、待确认问题、推荐方案、至少 1 个备选方案（优先 2 个）、推荐 / 备选优劣分析、影响 / 风险和回退 / 切换条件。决策类型只能使用 `scope`、`architecture`、`security`、`implementation`、`runtime_authorization`、`risk_acceptance`、`follow_up_tracking`。host-orchestrator 发起人工确认时必须收集所有未决人工决策项，去重后打印给用户统一决策；用户回复 `approve` 表示接受清单内全部推荐方案。
 - **结构化人工决策队列**：CP2 / CP3 / CP5 / CP8 待人工决策清单的完整载体是 `process/checkpoints/CP*.md` Decision Brief；状态变更、发起和审批结果写入 `process/state/GATE-LEDGER.ndjson`。`STATE.current.json` 只保留 `pending_gate`、`pending_checklist_path` 等当前路由字段。meta-pm / meta-se / meta-dev / meta-qa 发现需要用户决定的问题时，必须写入本轮 Decision Brief、gate event 或交还给 host-orchestrator 汇总；不得只留在对话、discussion log 或下游 Markdown 中。
 - **灰区问题分类**：进入 CP2 / CP3 / CP5 / CP8 前，所有 `Q-*`、`OPEN`、`LCQ-*`、`O-*`、权限 / 安全边界、风险接受、运行授权、外部接口、数据写入、publish、live / 交易类问题必须分类为 `resolved-by-user`、`decision-item`、`non-blocking-open`、`converted-to-spike` 或 `n/a-with-reason`；其中 `decision-item` 必须进入待人工决策清单。
-- **CP2 场景讨论追溯**：标准模式下，CP2 前必须处理 `Scenario Gray Areas`，并至少产生 1 条 `SGQ-*` 用户可见场景确认交互（问题、候选选项或 freeform、用户回答、复述确认、影响面）；将讨论日志写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`，将恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`；缺少 SGQ 证据时 CP2 只能 `FAIL` / `BLOCKED`，fast-lane N/A 必须写明原因。
+- **CP2 场景讨论追溯**：标准模式下，CP2 前必须处理 `Scenario Gray Areas`，先识别 3-4 个会影响交付的灰区，让用户选择 1-3 个重点讨论，未选项进入 Deferred Ideas，并至少产生 1 条 `SGQ-*` 用户可见场景确认交互（问题、候选选项或 freeform、用户回答、复述确认、影响面）；将讨论日志写入 `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`，将恢复点写入 `process/checks/CP2-DISCUSSION-CHECKPOINT.json`；缺少 SGQ 证据时 CP2 只能 `FAIL` / `BLOCKED`，fast-lane N/A 必须写明原因。
 - **CP3 架构讨论追溯**：HLD 正式生成前必须处理 `Architecture Gray Areas`，advisor lane 使用 `Option | Pros | Cons | Impact Surface | Recommendation | Assumptions / When to switch` 表格优先输出；讨论日志写入 `process/discussions/CP3-HLD-DISCUSSION-LOG.md`，恢复点写入 `process/checks/CP3-DISCUSSION-CHECKPOINT.json`，缺失时必须在 CP3 自动检查中记录 `N/A` 或阻断原因。
 - **讨论日志消费边界**：Discussion Log 用于人类审计和中断恢复，不作为下游唯一输入；下游正式消费仍以 `USE-CASES.md`、`REQUIREMENTS.md`、`SCENARIOS.yaml`、`TEST-MATRIX.md`、`STORY-MAP.md`、`MVP-SCOPE.md`、`RELEASE-SLICES.md`、`BACKLOG.md`、`BLUEPRINT.md`、`DOMAIN-MAP.md`、`DEPENDENCY-MAP.md`、`HLD.md`、`ARCHITECTURE-DECISION.md`、`FEATURE-DESIGN-MATRIX.md`、Decision Brief 或必要的 `HLD-CONTEXT.md` 为准。
 - **异步讨论模式边界**：`process/discussions/CP2-QUESTIONS.json/html` 与 `CP3-QUESTIONS.json/html` 属于后续可选增强，不作为当前默认产物或检查点前置条件。
@@ -224,7 +229,7 @@ init（host-orchestrator）                                                   [C
 - **Decision Brief 压缩**：checkpoint 文件中的 Decision Brief 必须完整；对话发起消息可按 `process/policies/GATE-PROFILES.json`、checkpoint frontmatter 或 launch-message profile 中的 `decision_brief_profile=full|compact|summary` 压缩。无论如何，对话仍必须包含 checklist 路径、自动预检结论、Context Capsule 摘要、审批者摘要、决策分层、决策收集覆盖摘要、待决策项总数、blocking / high-risk 决策、不授权项和 `approve` / `修改: <具体修改点>` / `reject` 三个 exact 回复。
 - **用户视角复述与不授权项**：人工门禁消息必须说明“如果你回复 approve，表示你接受以下 N 项推荐方案，不表示授权以下 M 项禁止操作”。对真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项，必须独立列出不授权项；设计通过不得被误读为运行授权。
 - **决策修订再发布**：用户纠正范围、安全、运行授权或风险接受含义后，host-orchestrator 必须更新相关 DQ、重新计算影响面、重新生成 Decision Brief 和待决策表，并重新发起确认；不得只在后续 HLD / LLD / CP 文件中静默修正。
-- **阶段委托交互**：`requirement-clarification` 默认委托 `meta-pm` 直接与用户完成场景和需求草案；`solution-design` 默认委托 `meta-se` 直接与用户完成架构灰区、advisor table 和 HLD 草案。委托状态写入 handoff、context capsule 的 `delegated_interaction` 摘要或 `STATE.current.json.active_delegation_ref` 指向的生成物；被委托 Agent 不得推进跨阶段状态，不得发起 CP2 / CP3 正式人工检查点；阶段收敛后写交还摘要，由 host-orchestrator 回收并发起 Decision Brief。
+- **阶段委托交互**：`requirement-clarification` 默认委托 `meta-pm` 直接与用户完成场景、需求、工程验证场景和产品规划输入草案；`solution-design` 默认委托 `meta-se` 直接与用户完成蓝图适用性、架构灰区、advisor table 和 HLD 草案。委托状态写入 handoff、context capsule 的 `delegated_interaction` 摘要或 `STATE.current.json.active_delegation_ref` 指向的生成物；被委托 Agent 不得推进跨阶段状态，不得发起 CP2 / CP3 正式人工检查点；阶段收敛后写交还摘要，由 host-orchestrator 回收并发起 Decision Brief。
 - **子 agent 调度证据**：host-orchestrator 调用功能 Agent 必须使用平台子 agent 调度能力。Codex 新任务使用 `spawn_agent`，复用任务使用 `resume_agent` 或 `send_input`；Claude Code/OpenClaw 使用对应 Task/Subagent 能力。`process/handoffs/*.md` 必须包含 `dispatch` 区，记录 `mode`、`canonical_role`、`codex_agent_name`、`reasoning_profile`、`dispatch_trigger`、`agent_id` / `thread_id`、`tool_name`、`spawned_at` / `resumed_at`、`completed_at`。缺少这些字段时，只能判定为 `handoff-created` 或 `spawn-requested`，不得写成目标 agent 已完成。
 - **子 agent 自动调度**：用户启动正式工作流后，同工作流内默认授权 `host-orchestrator` 按阶段自动拉起 `meta-pm` / `meta-se` / `meta-dev` / `meta-qa` / `meta-doc`；自动授权只覆盖真实子 agent 调度，不覆盖 inline fallback。Codex 下若 `spawn_agent` / `resume_agent` / `send_input` 工具面可用，Host Orchestrator 必须真实调用工具；若不可用，必须标记 `subagent_dispatch.available=false` 并阻断，不得静默用 handoff 代执行。
 - **inline fallback 门禁**：当前平台无法拉起子 agent 时，host-orchestrator 必须阻断并说明原因；只有用户明确批准后才能用 `dispatch.mode=inline-fallback` 代执行，并记录 `fallback_reason`、`approved_by`、`approved_at`。inline fallback 结果必须表述为 host-orchestrator 代执行，不得表述为 meta-dev / meta-qa 独立完成。
@@ -256,14 +261,14 @@ init（host-orchestrator）                                                   [C
 - **工作流模式默认值**：默认 `workflow_mode=standard`；`fast-lane` 仅适用于低风险轻量实现，不能跳过 CP6 / CP7、Agent Dispatch Evidence 或 CP8 终验摘要；命中架构、权限、安全、平台安装、外部接口、文件所有权冲突或多 Story 依赖时必须升级 standard。
 - **场景主体默认值**：若用户未显式声明 meta 优化，`USE-CASES.md` 默认 `scenario_subject_type=target-artifact`，不得把当前仓库 / 当前工作流当成默认场景主体
 - **确定性语言**：meta-se 与 meta-dev 产出使用确定性动词（创建/修改/删除）和量化条件，禁止模糊表述
-- **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查，并确认 `feature_design_refs`、`lld_policy` 和 Story 设计证据已获批
+- **就绪检查**：meta-dev 开始实现前必须通过 Story 卡片完整性检查，并确认 `feature_design_refs`、`lld_policy` 和 Story 设计证据已获批、依赖门控满足、文件所有权不冲突
 - **测试策略与质量评审前置**：meta-qa 验收前先输出 `docs/quality/TEST-STRATEGY.md`，声明 `validation_mode=runtime|static-only|dry-run-only|review-only|mixed`。验证时先使用 `verification-execution` 消费 `SCENARIOS.yaml` / `TEST-MATRIX.md`、设计证据和 CP6 实现执行证据，输出 `docs/quality/VERIFICATION-REPORT.md`，确认验证对象、设计契约、测试 / Fixture、最小切片、平台差异、人工审查、问题和风险闭环；随后使用 `quality-review` 固化 TEST-REPORT / REVIEW，发布前使用 `release-readiness` 固化发布、部署、回滚、迁移和反馈回流
 - **发布准备 capsule-first**：发布前 `release-readiness` 必须先生成 `process/release/RELEASE-CONTEXT.yaml`，并判定 `release_artifact_profile=minimal|compact|full` 与 `release_decision=READY|READY_WITH_RISK|NOT_READY|RELEASED|FAILED`。CP8 默认只允许 `READY` / `READY_WITH_RISK` / `NOT_READY`；`RELEASED` / `FAILED` 必须有独立真实发布授权和执行证据。发布阶段不得默认读取完整 HLD、全部 LLD、完整 TEST-MATRIX、完整 TEST-REPORT、完整 REVIEW 或完整 diff；只消费摘要、计数、风险 ID、决策 ID 和证据路径。`CHANGELOG.md`、`INSTALL.md`、`TROUBLESHOOTING.md`、`POST-RELEASE-OBSERVATION.md` 不作为默认产物，仅 `full` profile 或用户明确要求时生成。
 - **方案收敛优先**：涉及方案设计、整改规划或跨平台治理时，默认优先最简方案与内联策略；除非事实或验收要求证明不足，不新增共享模板体系或多余抽象层
 - **精确匹配优先**：涉及对象定位、版本对齐、规则命中或平台路径判定时，默认采用 exact 语义，不使用模糊匹配作为默认行为
 - **平台契约优先**：安装器、DryRun、guardrail 与交付文档必须共同引用 `delivery/doc/PLATFORM-CONTRACTS.yaml`；Codex Skill 禁止写入 `.codex/skills` 或 `~/.codex/skills`
 - **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
-- **安装命令与组件默认值**：安装 CLI 使用 `meta-flow install <platform>`，卸载使用 `meta-flow uninstall <platform>`；`--platform` 与 `install --uninstall` 仅作 legacy 兼容。组件使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md / CLAUDE.md 等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
+- **安装命令与组件默认值**：安装 CLI 使用 `meta-flow install <platform>`，卸载使用 `meta-flow uninstall <platform>`；`--platform` 与 `install --uninstall` 仅作 legacy 兼容。组件使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md（claude 平台生成 CLAUDE.md）等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
 
 ## 防火墙测试工作流（现有，独立运行）
 
@@ -292,6 +297,8 @@ init（host-orchestrator）                                                   [C
 | `lane-implementation` | `meta-dev` | 可实现性、文件归属、平台约束 |
 | `lane-quality` | `meta-qa` | 可验证性、风险、安全、安装约束 |
 | `lane-docs` | `meta-doc` | 面向用户的可读性与交付完整性 |
+
+CP3 蓝图 / HLD 讨论中，`lane-product`、`lane-architecture`、`lane-quality` 是默认 advisor lane；`lane-docs` 的可解释性 / 可维护性作为汇总检查项纳入，不默认新增一次 subagent 调度。方案形成输入和 HLD 后评审意见必须分开记录。
 
 灰度顺序：
 

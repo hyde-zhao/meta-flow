@@ -231,7 +231,20 @@ def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[st
         elif ledger_type != "dispatch":
             errors.append(f"line {line_no}: missing event_id")
 
-        if ledger_type == "dispatch" and event.get("attempt_id"):
+        if ledger_type == "dispatch" and event.get("event_type") == "dispatch" and not event.get("attempt_id"):
+            # Untyped rows predate the attempt contract.  Preserve them as
+            # append-only history, but disclose evidence gaps instead of
+            # fabricating identity or timing fields.
+            if not (event.get("agent_id") or event.get("thread_id")):
+                warnings.append(f"line {line_no}: legacy dispatch event lacks agent_id or thread_id")
+            if not (event.get("spawned_at") or event.get("resumed_at")):
+                warnings.append(f"line {line_no}: legacy dispatch event lacks spawned_at or resumed_at")
+            if not event.get("dispatch_trigger"):
+                warnings.append(f"line {line_no}: legacy dispatch event lacks dispatch_trigger")
+            if str(event.get("status") or "").lower() in {"completed", "success", "succeeded", "passed"} and not event.get("completed_at"):
+                warnings.append(f"line {line_no}: legacy successful dispatch event lacks completed_at")
+
+        if ledger_type == "dispatch" and event.get("event_type") == "dispatch" and event.get("attempt_id"):
             dispatch_id = str(event.get("dispatch_id") or "")
             attempt_id = str(event.get("attempt_id") or "")
             status = str(event.get("status") or "")
@@ -249,6 +262,16 @@ def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[st
             statuses = {str(event.get("status") or "") for event in events_for_attempt}
             if not statuses & {"completed", "failed", "interrupted", "cancelled", "superseded"}:
                 errors.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing terminal closure")
+            if not any(event.get("agent_id") or event.get("thread_id") for event in events_for_attempt):
+                warnings.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing agent_id or thread_id")
+            if not any(event.get("spawned_at") or event.get("resumed_at") for event in events_for_attempt):
+                warnings.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing spawned_at or resumed_at")
+            if not any(event.get("dispatch_trigger") for event in events_for_attempt):
+                warnings.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing dispatch_trigger")
+            for event in events_for_attempt:
+                if str(event.get("status") or "").lower() in {"completed", "success", "succeeded", "passed"} and not event.get("completed_at"):
+                    line_no = int(event.get("_line_no") or 0)
+                    errors.append(f"line {line_no}: successful typed dispatch terminal event requires completed_at")
     return errors, warnings
 
 

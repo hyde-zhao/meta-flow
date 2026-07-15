@@ -309,7 +309,7 @@ uv run --python 3.11 python delivery/scripts/install.py codex --scope user --con
 
 组件参数：
 
-- `rules`：只安装平台规则入口（如 AGENTS.md / CLAUDE.md）。
+- `rules`：只安装平台规则入口（AGENTS.md 为唯一源；claude 平台安装时生成 CLAUDE.md）。
 - `agent`：安装 agents + skills。
 - `full`：同时安装 rules 与 agent 组件。
 

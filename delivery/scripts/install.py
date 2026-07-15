@@ -188,7 +188,6 @@ class SourceLayout:
     canonical_skills_dir: Path
     platform_contracts: Path
     agents_rule: Path | None
-    claude_rule: Path | None
 
 
 @dataclass(frozen=True)
@@ -286,7 +285,6 @@ def detect_source_layout(root: Path) -> SourceLayout:
         canonical_skills_dir=canonical_skills,
         platform_contracts=root / PLATFORM_CONTRACTS_PATH,
         agents_rule=choose_existing(rules_dir / "AGENTS.md", root / "AGENTS.md"),
-        claude_rule=choose_existing(rules_dir / "CLAUDE.md", root / "CLAUDE.md", root / ".claude" / "CLAUDE.md"),
     )
 
 
@@ -1154,10 +1152,10 @@ def install_rules(
         return
 
     if platform == "claude":
-        if not layout.claude_rule:
-            fail("缺少 Claude rules 源文件：delivery/rules/CLAUDE.md。请重新安装或更新 meta-flow 交付包。")
+        if not layout.agents_rule:
+            fail("缺少 rules 源文件：delivery/rules/AGENTS.md。请重新安装或更新 meta-flow 交付包。")
         dest = target_path(contracts, platform, scope, "rules", workspace_root)
-        upsert_managed_block(dest, layout.claude_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated, platform)
+        upsert_managed_block(dest, layout.agents_rule.read_text(encoding="utf-8"), transaction, dry_run, commit, generated, platform)
         manifest_entries.append({"kind": "managed-block", "path": str(dest), "remove_path": str(dest)})
 
 

@@ -16,8 +16,6 @@ import shutil
 import sys
 from pathlib import Path
 
-import yaml
-
 PLATFORM_CONFIGS = {
     "claude": {
         "root": ".claude",
@@ -95,6 +93,8 @@ def convert_md_to_toml(md_path: Path, agent_name: str) -> str:
 
 
 def build_openclaw_manifest(agents_dir: Path, skills_dir: Path) -> str:
+    import yaml
+
     agents = []
     skills = []
     if agents_dir.exists():
@@ -109,10 +109,8 @@ def build_openclaw_manifest(agents_dir: Path, skills_dir: Path) -> str:
 
 
 def resolve_platform_entry(platform: str, entry_src: Path | None) -> Path | None:
-    if platform == "claude" and entry_src and entry_src.name == "AGENTS.md":
-        claude_entry = entry_src.with_name("CLAUDE.md")
-        if claude_entry.exists():
-            return claude_entry
+    # 单源：AGENTS.md 是唯一 canonical 源。claude 平台安装时直接用 AGENTS.md
+    # 作为内容源，由 build_platform 复制为 CLAUDE.md（config["entry_file"]）。
     return entry_src
 
 
