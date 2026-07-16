@@ -1690,6 +1690,10 @@ def _print_cr_help() -> None:
         "  goal-brief Print all CRs attached to one goal_ref.\n"
         "  impact-report Print a side-effect-free impact surface migration report as JSON.\n"
         "  status-sync Sync one CR frontmatter, summary, CR-INDEX, ledger, and active STATE pointer.\n"
+        "  branch-open Open paired project/artifact CR branches from fresh remote defaults.\n"
+        "  branch-publish Publish existing committed CR refs; never stage or commit.\n"
+        "  branch-merge Explicitly fast-forward paired remote defaults from published tips.\n"
+        "  branch-finish Re-prove merge facts, retain recovery refs, then clean CR branches.\n"
         "  close      Close a CR logically: summary + evidence index + ledger event.\n"
         "  check      Validate CR ledger, index, summaries, and active state refs.\n"
         "  conflicts  Compare active/proposed/blocked CR conflict keys from CR-INDEX.json.\n\n"
@@ -1702,6 +1706,10 @@ def _print_cr_help() -> None:
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow cr impact-report --project-root .\n"
         "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --project-root .\n"
+        "  meta-flow cr branch-open --id CR-101 --slug safe-change --dry-run --project-root .\n"
+        "  meta-flow cr branch-publish --id CR-101 --branch cr/cr-101-safe-change --dry-run --project-root .\n"
+        "  meta-flow cr branch-merge --id CR-101 --branch cr/cr-101-safe-change --publish-result publish.json --dry-run --project-root .\n"
+        "  meta-flow cr branch-finish --id CR-101 --branch cr/cr-101-safe-change --merge-result merge.json --dry-run --project-root .\n"
         "  meta-flow cr close --id CR-101 --readiness READY_WITH_RISK --project-root .\n"
         "  meta-flow cr conflicts --id CR-102 --project-root .\n"
     )
@@ -1713,6 +1721,10 @@ def main(argv: list[str] | None = None) -> int:
         _print_cr_help()
         return 0
     command = args[0]
+    if command in {"branch-open", "branch-publish", "branch-merge", "branch-finish"}:
+        from meta_flow.workflow.git_branch_lifecycle import branch_main
+
+        return branch_main(command, args[1:])
     parser = argparse.ArgumentParser(prog=f"meta-flow cr {command}")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--id", dest="cr_id", default="")
@@ -1818,7 +1830,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- CONFLICT: {conflict}")
         return 1 if conflicts else 0
     raise SystemExit(
-        f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, status-sync, close, check, conflicts"
+        f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, "
+        "status-sync, branch-open, branch-publish, branch-merge, branch-finish, close, check, conflicts"
     )
 
 

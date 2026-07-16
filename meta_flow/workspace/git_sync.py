@@ -1,9 +1,10 @@
-"""Git status and push helpers for project plus external process artifacts."""
+"""Git status and typed command helpers for paired workspace repositories."""
 
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 from meta_flow.workspace.routing import check_process_route
@@ -26,6 +27,21 @@ class GitRepoStatus:
         return self.is_git_repo and bool(self.branch)
 
 
+@dataclass(frozen=True)
+class GitCommandResult:
+    """Bounded subprocess result used by branch-lifecycle planners and executors."""
+
+    argv: tuple[str, ...]
+    cwd: Path
+    returncode: int
+    stdout: str
+    stderr: str
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
+
+
 def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
@@ -36,11 +52,103 @@ def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _git_root(path: Path) -> Path | None:
-    result = _git(["rev-parse", "--show-toplevel"], cwd=path)
-    if result.returncode != 0:
+def run_git(args: list[str], *, cwd: Path, timeout: float = 30.0) -> GitCommandResult:
+    """Run Git without a shell and return a stable, typed result.
+
+    Callers must validate ref-like user input before it reaches this helper.  The
+    function intentionally does not raise for ordinary Git rejection so a paired
+    operation can preserve the first repository's observed outcome.
+    """
+
+    argv = ("git", *args)
+    try:
+        completed = subprocess.run(
+            list(argv),
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return GitCommandResult(
+            argv=argv,
+            cwd=cwd,
+            returncode=124,
+            stdout=str(exc.stdout or ""),
+            stderr="git command timed out",
+        )
+    return GitCommandResult(
+        argv=argv,
+        cwd=cwd,
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+def git_root(path: Path) -> Path | None:
+    """Return the resolved repository root, or ``None`` outside a Git worktree."""
+
+    result = run_git(["rev-parse", "--show-toplevel"], cwd=path.resolve())
+    if not result.ok:
         return None
     return Path(result.stdout.strip()).resolve()
+
+
+def git_stdout(args: list[str], *, cwd: Path, timeout: float = 30.0) -> str:
+    """Return stripped stdout, raising a concise error for failed read probes."""
+
+    result = run_git(args, cwd=cwd, timeout=timeout)
+    if not result.ok:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise ValueError(detail)
+    return result.stdout.strip()
+
+
+def repo_fingerprint(root: Path) -> str:
+    """Produce a stable local identity without exposing a remote URL."""
+
+    resolved = root.resolve().as_posix().encode("utf-8")
+    return sha256(resolved).hexdigest()[:16]
+
+
+def remote_ref_oid(root: Path, remote: str, ref: str) -> str:
+    """Query one exact remote ref without updating remote-tracking refs."""
+
+    result = run_git(["ls-remote", "--refs", remote, ref], cwd=root)
+    if not result.ok:
+        detail = result.stderr.strip() or f"exit {result.returncode}"
+        raise ValueError(f"remote query failed: {detail}")
+    rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
+    matches = [row[0] for row in rows if len(row) >= 2 and row[1] == ref]
+    if len(matches) > 1:
+        raise ValueError(f"remote ref is ambiguous: {ref}")
+    return matches[0] if matches else ""
+
+
+def remote_default_branch(root: Path, remote: str, override: str = "") -> str:
+    """Resolve the remote symbolic HEAD, requiring an override when unavailable."""
+
+    if override:
+        return override
+    result = run_git(["ls-remote", "--symref", remote, "HEAD"], cwd=root)
+    if not result.ok:
+        detail = result.stderr.strip() or f"exit {result.returncode}"
+        raise ValueError(f"remote HEAD query failed: {detail}")
+    prefix = "ref: refs/heads/"
+    branches = {
+        line.split("\t", 1)[0][len(prefix) :]
+        for line in result.stdout.splitlines()
+        if line.startswith(prefix) and line.endswith("\tHEAD")
+    }
+    if len(branches) != 1:
+        raise ValueError("remote symbolic HEAD is missing or ambiguous; pass --default-branch")
+    return next(iter(branches))
+
+
+def _git_root(path: Path) -> Path | None:
+    return git_root(path)
 
 
 def _rev_count(root: Path, revision_range: str) -> int:
