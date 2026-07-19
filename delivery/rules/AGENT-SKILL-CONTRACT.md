@@ -4,6 +4,10 @@
 
 ## vNext Work-first Contract
 
+### Binding-only 路径兼容门
+
+需要过程仓的 vNext `project/work/retrospective/evolution` Python 命令通过 `.meta-flow/workspace.yaml` 的统一 resolver 定位，不读取 Agent/Skill 提示词；`repository` 命令继续要求显式单仓 `--repo-root`。当前仍存在按字面量访问 `process/...` 的 legacy CP0-CP8 Agent/Skill；它们在 `route_mode=sibling-binding` 下不兼容，调用前必须 BLOCKED，不得猜测 sibling 或自行拼路径。确需运行这些 legacy 资产时，只能在初始化 dry-run 明确显示后选择 `--process-link-mode relative-symlink` 兼容模式。后续 route-aware prompt 迁移完成并有测试证明前，不得宣称 binding-only 支持完整 legacy 工作流。
+
 当独立过程库根存在 `PROJECT.yaml` 且当前对象为 `works/<work-id>/WORK.yaml` 时，本节优先于下方 legacy CP/context-pack 规则：
 
 1. 默认入口只读 `PROJECT.yaml`、当前 `WORK.yaml`、当前 `REQUEST.md` 和用户问题直接需要的 Phase/证据引用；总对象数、读写、检查和 token 不得超过 Work 的 G profile 与 scope。

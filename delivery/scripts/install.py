@@ -575,8 +575,16 @@ def meta_flow_root(workspace_root: Path) -> Path:
     return Path.home() / ".meta-flow"
 
 
-def manifest_path(workspace_root: Path) -> Path:
-    return meta_flow_root(workspace_root) / "delivery" / "doc" / "INSTALL-MANIFEST.yaml"
+def install_state_root(workspace_root: Path, scope: str) -> Path:
+    if scope == "project":
+        return workspace_root / ".meta-flow"
+    return meta_flow_root(workspace_root)
+
+
+def manifest_path(workspace_root: Path, scope: str) -> Path:
+    if scope == "project":
+        return install_state_root(workspace_root, scope) / "INSTALL-MANIFEST.yaml"
+    return install_state_root(workspace_root, scope) / "delivery" / "doc" / "INSTALL-MANIFEST.yaml"
 
 
 def canonical_commit(root: Path) -> str:
@@ -1578,7 +1586,7 @@ def main() -> None:
     platform_contracts = load_platform_contracts(layout.platform_contracts)
     commit = canonical_commit(repo_root)
     generated = iso_now()
-    target_manifest_path = manifest_path(workspace_root)
+    target_manifest_path = manifest_path(workspace_root, args.scope)
 
     requested_agents = parse_csv(args.agent)
     requested_skills = parse_csv(args.skill)
@@ -1612,8 +1620,7 @@ def main() -> None:
                 args.dry_run,
                 resolved_component,
             )
-            if not args.dry_run:
-                save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)
+            save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)
         except Exception:
             if not args.dry_run:
                 rollback_transaction(transaction)
@@ -1685,7 +1692,7 @@ def main() -> None:
             "status": "installed",
             "installed_at": generated,
             "workspace_root": str(workspace_root),
-            "meta_flow_root": str(meta_flow_root(workspace_root)),
+            "meta_flow_root": str(install_state_root(workspace_root, args.scope)),
             "canonical_commit": commit,
             "warnings": warnings
             + [
@@ -1721,8 +1728,7 @@ def main() -> None:
         if legacy_pruned_count:
             print(f"Pruned {legacy_pruned_count} legacy orchestrator agent file(s).")
         upsert_manifest_entry(manifest_payload, entry)
-        if not args.dry_run:
-            save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)
+        save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)
     except Exception:
         if not args.dry_run:
             rollback_transaction(transaction)

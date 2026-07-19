@@ -2,12 +2,50 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 from delivery.scripts import install
 
 
 class InstallerRulesTests(unittest.TestCase):
+    def test_project_manifest_is_routed_inside_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            self.assertEqual(
+                root / ".meta-flow" / "INSTALL-MANIFEST.yaml",
+                install.manifest_path(root, "project"),
+            )
+            self.assertEqual(root / ".meta-flow", install.install_state_root(root, "project"))
+
+    def test_user_manifest_keeps_user_scoped_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            self.assertEqual(
+                Path.home() / ".meta-flow" / "delivery" / "doc" / "INSTALL-MANIFEST.yaml",
+                install.manifest_path(root, "user"),
+            )
+            self.assertEqual(Path.home() / ".meta-flow", install.install_state_root(root, "user"))
+
+    def test_manifest_dry_run_reports_write_without_creating_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".meta-flow" / "INSTALL-MANIFEST.yaml"
+            output = StringIO()
+
+            with redirect_stdout(output):
+                install.save_manifest(
+                    path,
+                    {"manifest_version": 1, "installs": []},
+                    install.Transaction(),
+                    True,
+                )
+
+            self.assertIn(f"[DryRun] write -> {path}", output.getvalue())
+            self.assertFalse(path.exists())
+
     def test_codex_model_routing_is_explicit_and_platform_specific(self) -> None:
         source_agents = [
             install.AgentDefinition(

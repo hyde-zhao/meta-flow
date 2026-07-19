@@ -858,6 +858,7 @@ def _run_project(args: list[str]) -> None:
             "  check     Validate vNext binding when present; otherwise validate legacy project governance.\n\n"
             "Examples:\n"
             "  meta-flow project init --project-root . --project-id demo\n"
+            "  meta-flow project init --project-root . --project-id demo --process-link-mode relative-symlink\n"
             "  meta-flow project init --project-root . --project-id demo --apply\n"
             "  meta-flow project adopt --project-id demo --source-id legacy --source-process-root ../legacy --target-process-root ../demo-process --include-ref PROJECT.yaml\n"
             "  meta-flow project status --project-root .\n"

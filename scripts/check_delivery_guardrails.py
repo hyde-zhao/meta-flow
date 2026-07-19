@@ -44,6 +44,8 @@ CODEX_CONFIRMATION_TOKENS = (
 )
 DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
+BINDING_ALL_PROFILES_TOKEN = "vNext binding-only 适用于 G0/G1/G2"
+BINDING_LEGACY_SELECTION_TOKEN = "人工门显式选择"
 SOFTWARE_WORKFLOW_REQUIRED_FILES = (
     "delivery/skills/blueprint-design/SKILL.md",
     "delivery/skills/blueprint-design/templates/BLUEPRINT-TEMPLATE.md",
@@ -1067,7 +1069,11 @@ def collect_installer_component_errors() -> list[str]:
             {
                 "label": "codex user default",
                 "args": ["codex", "--scope", "user", "--project-dir", str(project_root), "--dry-run"],
-                "required": ["Component: rules", str(Path.home() / ".codex" / "AGENTS.md")],
+                "required": [
+                    "Component: rules",
+                    str(Path.home() / ".codex" / "AGENTS.md"),
+                    str(Path.home() / ".meta-flow" / "delivery" / "doc" / "INSTALL-MANIFEST.yaml"),
+                ],
                 "forbidden": [
                     str(Path.home() / ".codex" / "agents" / "meta-po.toml"),
                     str(Path.home() / ".codex" / "agents" / "host-orchestrator.toml"),
@@ -1077,20 +1083,20 @@ def collect_installer_component_errors() -> list[str]:
             {
                 "label": "codex project default",
                 "args": ["codex", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
-                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-pm.toml"), str(project_root / ".agents" / "skills")],
-                "forbidden": [".codex/skills", str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".codex" / "agents" / "host-orchestrator.toml")],
+                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-pm.toml"), str(project_root / ".agents" / "skills"), str(project_root / ".meta-flow" / "INSTALL-MANIFEST.yaml")],
+                "forbidden": [".codex/skills", str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".codex" / "agents" / "host-orchestrator.toml"), str(Path.home() / ".meta-flow" / "delivery" / "doc" / "INSTALL-MANIFEST.yaml")],
             },
             {
                 "label": "claude project default",
                 "args": ["claude", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
-                "required": ["Component: full", str(project_root / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-pm.md"), str(project_root / ".claude" / "skills")],
-                "forbidden": [str(project_root / ".claude" / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-po.md"), str(project_root / ".claude" / "agents" / "host-orchestrator.md")],
+                "required": ["Component: full", str(project_root / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-pm.md"), str(project_root / ".claude" / "skills"), str(project_root / ".meta-flow" / "INSTALL-MANIFEST.yaml")],
+                "forbidden": [str(project_root / ".claude" / "CLAUDE.md"), str(project_root / ".claude" / "agents" / "meta-po.md"), str(project_root / ".claude" / "agents" / "host-orchestrator.md"), str(Path.home() / ".meta-flow" / "delivery" / "doc" / "INSTALL-MANIFEST.yaml")],
             },
             {
                 "label": "codex full component",
                 "args": ["codex", "--scope", "project", "--project-dir", str(project_root), "--component", "full", "--dry-run"],
-                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-pm.toml"), str(project_root / ".agents" / "skills")],
-                "forbidden": [".codex/skills", str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".codex" / "agents" / "host-orchestrator.toml")],
+                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".codex" / "agents" / "meta-pm.toml"), str(project_root / ".agents" / "skills"), str(project_root / ".meta-flow" / "INSTALL-MANIFEST.yaml")],
+                "forbidden": [".codex/skills", str(project_root / ".codex" / "agents" / "meta-po.toml"), str(project_root / ".codex" / "agents" / "host-orchestrator.toml"), str(Path.home() / ".meta-flow" / "delivery" / "doc" / "INSTALL-MANIFEST.yaml")],
             },
             {
                 "label": "legacy skills content",
@@ -1118,8 +1124,8 @@ def collect_installer_component_errors() -> list[str]:
             {
                 "label": "qoder project default",
                 "args": ["qoder", "--scope", "project", "--project-dir", str(project_root), "--dry-run"],
-                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".qoder" / "agents" / "meta-pm.md"), str(project_root / ".qoder" / "skills")],
-                "forbidden": [str(project_root / ".qoder" / "agents" / "meta-po.md"), str(project_root / ".qoder" / "agents" / "host-orchestrator.md")],
+                "required": ["Component: full", str(project_root / "AGENTS.md"), str(project_root / ".qoder" / "agents" / "meta-pm.md"), str(project_root / ".qoder" / "skills"), str(project_root / ".meta-flow" / "INSTALL-MANIFEST.yaml")],
+                "forbidden": [str(project_root / ".qoder" / "agents" / "meta-po.md"), str(project_root / ".qoder" / "agents" / "host-orchestrator.md"), str(Path.home() / ".meta-flow" / "delivery" / "doc" / "INSTALL-MANIFEST.yaml")],
             },
             {
                 "label": "qoder user default",
@@ -2241,6 +2247,13 @@ def collect_errors() -> list[str]:
     errors.extend(collect_failure_waiver_errors())
     errors.extend(collect_delivery_asset_lifecycle_errors())
 
+    binding_profile_documents = {
+        relative: (ROOT / relative).read_text(encoding="utf-8")
+        for relative in ("README.md", "delivery/rules/AGENTS.md")
+        if (ROOT / relative).is_file()
+    }
+    errors.extend(binding_profile_contract_errors(binding_profile_documents))
+
     for child in sorted(path for path in DELIVERY_ROOT.iterdir() if path.is_dir()):
         if child.name not in ALLOWED_DELIVERY_DIRS:
             errors.append(f"delivery top-level directory not allowed: {child.relative_to(ROOT)}")
@@ -2301,7 +2314,77 @@ def collect_errors() -> list[str]:
         for required in ("__pycache__/", "*.pyc"):
             if required not in text:
                 errors.append(f".gitignore missing python cache rule: {required}")
+        if "/.meta-flow/INSTALL-MANIFEST.yaml" not in text:
+            errors.append(".gitignore must ignore only the project-local Meta Flow install manifest")
+        if re.search(r"(?m)^/?\.meta-flow/?$", text):
+            errors.append(".gitignore must not ignore the whole .meta-flow directory; workspace.yaml is tracked truth")
 
+    binding_contract_tokens = {
+        "README.md": (
+            "route_mode=sibling-binding",
+            "--process-link-mode relative-symlink",
+            ".meta-flow/workspace.yaml",
+        ),
+        "delivery/README.md": (
+            "route_mode=sibling-binding",
+            "legacy Agent/Skill",
+            "workspace_root",
+        ),
+        "delivery/doc/USER-MANUAL.md": (
+            "--process-link-mode none",
+            "reciprocal sibling",
+            ".meta-flow/INSTALL-MANIFEST.yaml",
+        ),
+        "delivery/rules/AGENTS.md": (
+            "route_mode=sibling-binding",
+            "relative-symlink",
+            "声称 binding-only 已兼容全部 legacy Skill",
+        ),
+        "delivery/rules/AGENT-SKILL-CONTRACT.md": (
+            "Binding-only 路径兼容门",
+            "调用前必须 BLOCKED",
+            "route-aware prompt",
+        ),
+        "delivery/rules/DIRECTORY-CONTRACT.md": (
+            "reciprocal portable bindings",
+            "workspace_parent",
+            "human navigation only",
+        ),
+    }
+    for relative, required_tokens in binding_contract_tokens.items():
+        path = ROOT / relative
+        if not path.is_file():
+            errors.append(f"missing binding contract file: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        for token in required_tokens:
+            if token not in content:
+                errors.append(f"binding contract missing token: {relative} -> {token}")
+
+    return errors
+
+
+def binding_profile_contract_errors(documents: dict[str, str]) -> list[str]:
+    """校验 binding-only 与 G2/legacy 扩展流程的语义边界。"""
+
+    errors: list[str] = []
+    for relative in ("README.md", "delivery/rules/AGENTS.md"):
+        content = documents.get(relative, "")
+        if not content:
+            errors.append(f"missing binding profile contract file: {relative}")
+            continue
+        if BINDING_ALL_PROFILES_TOKEN not in content:
+            errors.append(
+                f"binding profile contract must allow G0/G1/G2: {relative}"
+            )
+        if BINDING_LEGACY_SELECTION_TOKEN not in content:
+            errors.append(
+                f"binding profile contract must make legacy G2 selection explicit: {relative}"
+            )
+        if re.search(r"vNext binding-only\s+G0/G1(?:\s|，)", content):
+            errors.append(
+                f"binding profile contract must not restrict binding-only to G0/G1: {relative}"
+            )
     return errors
 
 

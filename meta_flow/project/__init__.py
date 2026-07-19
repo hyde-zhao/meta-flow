@@ -10,6 +10,7 @@ from meta_flow.project.onboarding import (
     apply_project_init,
     check_independent_process_route,
     plan_project_init,
+    resolve_process_repo_root,
 )
 from meta_flow.project.scaffold import apply_project_scaffold, build_project_scaffold_plan
 from meta_flow.project.state import (
@@ -28,6 +29,7 @@ __all__ = [
     "load_project",
     "load_project_snapshot",
     "plan_project_init",
+    "resolve_process_repo_root",
     "validate_project_payload",
     "validate_project_current",
     "validate_project_objects",

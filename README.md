@@ -4,16 +4,19 @@
 
 ## vNext：默认使用每项目独立双仓与轻量 Work
 
-Meta Flow 的新默认不再是共享 artifact worktree、双 leg 或每项变化都跑 CP0-CP8。每个项目拥有一个发布库和一个独立过程库，发布库中的 `process` 是指向 sibling `<project>-process` 的相对软链接；因此项目 A 切分支不会改变项目 B 看到的过程文档。
+Meta Flow 的新默认不再是共享 artifact worktree、双 leg 或每项变化都跑 CP0-CP8。每个项目拥有一个发布库和一个独立过程库；发布库用 tracked 的 `.meta-flow/workspace.yaml` 定位 sibling `<project>-process`，过程库用 `.meta-flow-process.yaml` 反向绑定发布库。默认 `route_mode=sibling-binding`，不创建 `process` 软链接；因此项目 A 切分支不会改变项目 B 看到的过程文档。
 
-`project init` 会复用已有发布 Git 根；若目标路径不存在或为空目录，则只在显式 `--apply` 时初始化本地 `main` 发布库。非空非 Git 目录始终 fail closed。
+`project init` 会复用已有发布 Git 根；若目标路径不存在或为空目录，则只在显式 `--apply` 时初始化本地 `main` 发布库。非空非 Git 目录始终 fail closed。当前 `anchor=workspace_parent` 只支持同一父目录下的 sibling 双仓，不会扫描其他 sibling，也不接受绝对路径或 `..`；非 sibling 布局需要未来独立设计的 `workspace_root` 锚点，当前直接阻断。
 
 ```bash
 # 1. 只读预览；默认不修改文件
 meta-flow project init --project-root . --project-id demo
 
-# 2. 用户确认后才在本地建立独立过程仓与相对链接
+# 2. 用户确认后才在本地建立独立过程仓与双向 binding，不创建软链接
 meta-flow project init --project-root . --project-id demo --apply
+
+# 只有仍需运行字面量访问 process/... 的 legacy Agent/Skill 时才选择兼容链接
+meta-flow project init --project-root . --project-id demo --process-link-mode relative-symlink --apply
 
 # 3. 确认需求后解释 Work/CR 与 G0/G1/G2 判定
 meta-flow work classify --change-kind documentation --touched-path-count 1
@@ -48,7 +51,8 @@ meta-flow project query --project-root .
 | `.agents/agents/` | 元工作流引擎 Agent 定义（不参与安装） |
 | `.agents/skills/` | 元工作流引擎 Skill 定义（不参与安装） |
 | `.input/` | 只读输入目录（用户提供的原始材料） |
-| `~/.meta-flow/` | 安装器状态目录（仅保存安装 manifest，不作为当前元工作流运行态输出目录） |
+| `<project>/.meta-flow/` | vNext workspace binding 与项目级安装器状态；`workspace.yaml` 必须跟踪，`INSTALL-MANIFEST.yaml` 是本机状态且必须忽略 |
+| `~/.meta-flow/` | 用户级安装器状态目录（仅保存 user-scope 安装 manifest，不作为当前元工作流运行态输出目录） |
 | `docs/` | 公开文档入口；源码仓库跟踪用户可见文档，内部设计 / 质量 / 发布审查文档通过本地 symlink 指向外置 artifact repo（生产项目按目标 README/docs 约定或用户确认路由） |
 | `docs/product/` | 场景、需求、测试矩阵、Story Map、MVP 范围、发布切片和 backlog |
 | `docs/design/` | 蓝图、领域图、依赖图、HLD 和架构决策 |
@@ -71,7 +75,7 @@ meta-flow project query --project-root .
 - 内部设计、Feature、质量、发布审查、修改记录和偏好类文档归档到 artifact repo，并可通过本地 ignored symlink 保持 `docs/design`、`docs/quality` 等旧路径可读。
 - 源码仓库还保留根 README、`delivery/README.md`、`delivery/doc/USER-MANUAL.md` 和平台契约等产品/安装入口。
 - `process/` 承载运行过程文档：状态、计划、Story 执行态、讨论日志、handoff、CR、自动检查结果。
-- `process/` 是运行态入口；迁移到外置过程仓库后，它应是指向 `<artifact-root>/process/<project-name>/` 的软链接。
+- vNext binding-only 适用于 G0/G1/G2，默认不创建 `process` 入口，直接从 workspace binding 解析独立过程仓。只有 legacy 项目，或当前 G2/正式 CR 的人工门显式选择 legacy/shared-artifact 扩展控制项时，`process/` 才作为兼容运行态入口；旧 shared-artifact 外置模式下它是指向 `<artifact-root>/process/<project-name>/` 的软链接。
 - `process/context/` 承载阶段上下文胶囊 / context pack：下游 Agent、人工门禁、验证和发布准备默认先读 context pack，只读取 `allowed_reads`；只有缺失、冲突、字段不足、人工审计或深度评审时才展开读取完整正式文档，并记录允许枚举内的全文读取理由。
 - Agent / Skill 共享瘦身契约写在 `delivery/rules/AGENT-SKILL-CONTRACT.md`，目录与分区契约写在 `delivery/rules/DIRECTORY-CONTRACT.md` / `.yaml`。功能 Agent 必须先读阶段 context pack 或 Story packet，默认机器状态入口是 `process/state/STATE.current.json`，默认文件系统发现入口是 `process/current/CURRENT.json`；`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 CR、全量 Story LLD、`process/archive/**`、完整 TEST-REPORT / REVIEW / diff 属于 `do_not_read_by_default`。Handoff 只传 `context_ref` / `story_packet_ref` / `evidence_ref` / `result_ref`，真实执行证据写入 ledger。
 - `process/checkpoints/` 承载人工确认态：CP2 / CP3 / CP5 / CP8 Decision Brief、checklist 和人工审查结果。
@@ -344,13 +348,13 @@ Promptfoo、DeepEval、Langfuse 和 Garak 只作为可选 adapter，默认 disab
 
 `~/.meta-flow/` 当前不承载 Meta Flow 的运行态文档，也不是 `process/`、`process/checks/`、`process/checkpoints/` 或交付出口的替代目录。当前规则要求元工作流运行态仍写入仓库根目录下的 `process/`、自动检查结果写入 `process/checks/`、人工审查稿写入 `process/checkpoints/`；交付态按 engagement mode 路由，meta-flow 自身改进写当前仓库 `delivery/`，外部 production 项目按目标项目约定或用户确认输出。
 
-当前实现中，`delivery/scripts/install.py` 会把安装状态写入 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。该 manifest 记录已安装的平台、scope、安装时间、canonical commit、目标路径和卸载所需的 remove path。`meta-flow uninstall <platform>` 与 `delivery/scripts/install.py uninstall <platform>` 依赖这个文件精确卸载。
+当前实现按 scope 隔离安装状态：项目级安装写入目标项目的 `.meta-flow/INSTALL-MANIFEST.yaml`，用户级安装才写入 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。manifest 记录已安装的平台、scope、安装时间、canonical commit、目标路径和卸载所需的 remove path；对应 scope 的 `meta-flow uninstall <platform>` 与 `delivery/scripts/install.py uninstall <platform>` 依赖各自 manifest 精确卸载。
 
 因此：
 
-1. 若仍需要通过安装器执行精确卸载，应保留 `~/.meta-flow/`。
-2. 若确认不再需要历史安装记录或安装器卸载能力，可以删除 `~/.meta-flow/`，但会丢失既有安装记录。
-3. `~/.meta-flow/` 位于用户主目录，不属于当前仓库跟踪范围；不应作为项目运行态文档或交付出口使用。
+1. 若仍需要通过安装器执行项目级精确卸载，应保留目标项目的 `.meta-flow/INSTALL-MANIFEST.yaml`；该本机状态文件应保持 gitignored。
+2. 若仍需要执行用户级精确卸载，应保留 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。
+3. 删除对应 manifest 会丢失该 scope 的安装记录，但不会授权删除已安装资产；`~/.meta-flow/` 仍不属于任何项目的运行态文档或交付出口。
 
 ## Python 环境规范（uv）
 
