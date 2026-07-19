@@ -7,8 +7,8 @@
 
 > 本节是新项目和新 Work 的默认协议。下方 CP0-CP8、全量产品基线、Story/LLD、shared artifact、双 leg 与 aggregate 条款只适用于已采用该协议的 legacy 项目，或当前 Work 明确判为 G2/正式 CR 且人工门选择了对应控制项；不得把 legacy 重流程重新投射到 G0/G1。
 
-1. 每个项目使用两个独立 Git 仓：发布库管理代码与发布文档，过程库管理 `PROJECT.yaml`、可选 Roadmap/Phase、Work、复盘和进化记录。发布库 `process` 只使用相对软链接指向 sibling `<project>-process`；不同项目不得共享 working tree、index、branch 或可写过程根。
-2. 新项目先运行 `meta-flow project init` dry-run，再由用户决定是否 `--apply`。已有项目只允许 snapshot-only 接入：复制当前有效 Project/Phase/Work 快照，旧来源只读保留；不重写 Git 历史、不批量转换旧 CP/CR/Story、不双写。
+1. 每个项目使用两个独立 Git 仓：发布库管理代码与发布文档，过程库管理 `PROJECT.yaml`、可选 Roadmap/Phase、Work、复盘和进化记录。发布库 tracked 的 `.meta-flow/workspace.yaml` 与过程库 `.meta-flow-process.yaml` 是双向机器真相源；默认 `route_mode=sibling-binding` 且不创建 `process` 软链接。只有仍按字面量访问 `process/...` 的 legacy Agent/Skill 才可显式选择 `relative-symlink` 兼容模式；不同项目不得共享 working tree、index、branch 或可写过程根。
+2. 新项目先运行 `meta-flow project init` dry-run，再由用户决定是否 `--apply`。已有项目只允许 snapshot-only 接入：复制当前有效 Project/Phase/Work 快照，旧来源只读保留；不重写 Git 历史、不批量转换旧 CP/CR/Story、不双写。legacy shared-artifact 子目录不满足当前 `project adopt` source 契约时不得调用 adopt，只能在成功 init apply 后以 `legacy/LEGACY-SOURCE.yaml` 记录远端 URL、`git ls-remote` exact OID、子路径和只读语义。
 3. 日常变化默认建立 Work；只有公共契约/架构边界、安全权限、不可逆迁移、生产写、正式发布、强审计、风险接受或跨阶段重构才建立正式 CR。未知高风险事实必须阻断，用户可升级但不得静默降级。
 4. 风险档位决定流程：G0 无独立设计评审，只做目标检查；G1 最多一次 Work 范围轻量评审并运行必要构建/定向检查；G2 才强制 HLD/ADR、人工设计门、独立 QA 和经批准的全量验证。G0/G1 不强制 CP0-CP8 或八份产品基线。
 5. G0 硬上限为 `8 reads / 8 writes / 3 check groups / 32k token`，G1 为 `20 / 24 / 8 / 96k`；G2 必须逐项显式批准预算。所有读、写、检查都必须先通过当前 `WORK.yaml` 的 deny-default scope；token 标记 `measured|proxy|unavailable`，unavailable 不得记为 0。
@@ -19,6 +19,8 @@
 10. Project、关键 Phase 或发布切片结束后可生成六维复盘：价值、规范/证据、质量/恢复、流动效率、token/context、Meta Flow 适配性。事实、推断、待人工判断必须分开；复盘报告不授权实现或发布。
 11. 每条改进建议单独记录 `accepted|changed|deferred|rejected`。accepted 只生成 `approved_not_started` 进化包；事实确认、建议批准、实现启动、commit/push/production 授权互不替代。进化必须作为正常 Work/CR 在 fixture/dogfood/canary 中重现、验证、回退；不得递归自动触发下一代。
 12. 旧 `workspace bootstrap/push`、shared artifact worktree、project integration branch、dual-leg 和 `cr aggregate` 保留为 legacy read/operation 能力，不再是新项目默认路径。真实迁移、当前 `process` 切换、远端创建/推送、生产写、凭据与破坏性 Git 始终需要单独人工授权。
+13. 需要过程仓的 vNext Python CLI 统一通过 workspace binding 解析，不依赖 `.agents/` / `delivery/` 提示词；`repository` 命令继续要求显式单仓 `--repo-root`。binding-only 项目若要调用仍硬编码 `process/...` 的 legacy CP0-CP8 Agent/Skill，必须先停止并改用经 dry-run 确认的 `relative-symlink` 兼容初始化；不得猜测 sibling、手工拼接路径或声称 binding-only 已兼容全部 legacy Skill。
+14. `anchor=workspace_parent` 当前只允许同一父目录下的 sibling 双仓；绝对路径、`..`、sibling discovery 和非同父目录布局必须阻断。`.meta-flow/workspace.yaml` 必须跟踪，`.meta-flow/INSTALL-MANIFEST.yaml` 必须忽略。旧/缺失 layout metadata 和缺失 `PROJECT.yaml` 不得静默降级或自动接管。
 
 ---
 
@@ -160,7 +162,7 @@ init（host-orchestrator）                                                   [C
 > **所有由元工作流产生的文件必须按层输出到 `docs/`（长期产品 / 设计 / 质量 / 发布文档）、`process/`（运行态）、`process/checks/`（自动检查结果）、`process/checkpoints/`（确认态）和经确认的交付出口。**
 > `docs/product/` 承载 USE-CASES / REQUIREMENTS / SCENARIOS / TEST-MATRIX / STORY-MAP / MVP-SCOPE / RELEASE-SLICES / BACKLOG；`docs/design/` 承载 BLUEPRINT / DOMAIN-MAP / DEPENDENCY-MAP / HLD / ARCHITECTURE-DECISION / FEATURE-DESIGN-MATRIX；`docs/features/` 承载 Feature 级 DESIGN / TEST-PLAN / TASKS；`docs/quality/` 承载 TEST-STRATEGY / VERIFICATION-REPORT / TEST-REPORT / REVIEW / FIXES；`docs/release/` 承载 RELEASE-NOTES / DEPLOY-CHECKLIST / ROLLBACK / MIGRATION / FEEDBACK。
 > `process/` 只承载运行状态、计划、Story 执行态、discussion、handoff、CR 和自动检查等过程文档；旧 `process/*.md` 技术文档路径与根目录 `checkpoints/CP*.md` 仅作为 legacy fallback 读取，不作为新生成默认路径。
-> `process/` 是项目运行态入口，不要求真实存储在当前源码仓库内。外置模式下，初始化必须创建 `<artifact-root>/process/<project-name>/` 并将 `<project-root>/process` 软链接到该目录，同时写入 `process/.meta-flow-process.yaml`，并在 `STATE.current.json.artifact_routing_ref` 保留轻量引用。健康检查发现 `process` 缺失、断链、`process/STATE.md` 缺失、`project_name` 不匹配或路由元数据冲突时，必须强制中断当前工作流，由用户提供有效 `artifact_root` / `process_root` 后继续；不得静默重建新的 `STATE.md`。当前未迁移仓库可使用 `routing_mode=local-directory` 兼容模式，直到迁移 CR 切换为 `symlink`。
+> 本段只约束 legacy shared-artifact 扩展流程，以及当前 G2/正式 CR 经人工门显式选择该扩展控制项的场景；vNext binding-only 适用于 G0/G1/G2，默认使用上方双向 binding 规则且不创建 `process`。legacy 扩展流程中，`process/` 是项目运行态入口，不要求真实存储在当前源码仓库内。外置模式下，初始化必须创建 `<artifact-root>/process/<project-name>/` 并将 `<project-root>/process` 软链接到该目录，同时写入 `process/.meta-flow-process.yaml`，并在 `STATE.current.json.artifact_routing_ref` 保留轻量引用。健康检查发现 `process` 缺失、断链、`process/STATE.md` 缺失、`project_name` 不匹配或路由元数据冲突时，必须强制中断当前工作流，由用户提供有效 `artifact_root` / `process_root` 后继续；不得静默重建新的 `STATE.md`。当前未迁移仓库可使用 `routing_mode=local-directory` 兼容模式，直到迁移 CR 切换为 `symlink`。
 > 当前 meta-flow 源码仓库的 `docs/` 分为公开文档和内部归档文档：源码仓库跟踪 `docs/README.md`、`docs/release/RELEASE-NOTES.md` 和 `docs/USER-MANUAL.md` 等用户可见入口；`docs/design`、`docs/features`、`docs/quality`、内部 release 审查文档、修改记录和偏好类文档由 artifact repo 跟踪，并可在本机通过 ignored symlink 保持旧路径可读。production 项目仍按目标 README/docs 约定或用户确认路由，不得把 meta-flow 自身 docs 分层策略强加给目标项目。
 > 只有 `engagement_mode=meta-self-dev` 或用户明确说明优化 meta-flow 本身时，才默认把交付物写入当前仓库 `delivery/`。
 > production 项目必须先扫描目标项目已有交付目录，以及 `README.md` / `README.*` / `docs/` 中的交付物、发布、构建或包结构约定；存在则遵守并写入目标项目路由记录或 `STATE.current.json.delivery_routing_ref` 指向的过程元数据，不得再按 Meta Flow 默认路径另建交付目录；不存在则先提出建议并等待用户确认。

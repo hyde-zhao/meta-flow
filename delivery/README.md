@@ -10,13 +10,15 @@
 
 ## vNext 默认工作方式
 
-新项目默认采用每项目独立发布库与过程库：`<project>/process -> ../<project>-process`。过程库只为当前项目维护最小 `PROJECT.yaml`、可选 Roadmap/Phase、`works/<id>/WORK.yaml`、复盘和进化记录；不同项目不共享 working tree、index、branch 或可写过程根。
+新项目默认采用每项目独立发布库与过程库。发布库 tracked 的 `.meta-flow/workspace.yaml` 与过程库 `.meta-flow-process.yaml` 组成双向 binding，默认 `route_mode=sibling-binding`，不创建 `process` 软链接。过程库只为当前项目维护最小 `PROJECT.yaml`、可选 Roadmap/Phase、`works/<id>/WORK.yaml`、复盘和进化记录；不同项目不共享 working tree、index、branch 或可写过程根。
 
 - 日常变化默认 Work，重大变化才正式 CR；G0/G1 不强制 CP0-CP8、八份产品基线或全量 Story/LLD。
 - G0 上限 `8/8/3/32k`，G1 上限 `20/24/8/96k`，G2 预算逐项批准；risk、deny-default scope、budget 必须同时通过。
 - `project/work/retrospective/evolution/repository` CLI 默认 dry-run；本地初始化要显式 `--apply`，进化启动与真实 commit/push 还需要对应 typed authorization。
 - 发布库和过程库独立 commit/push，部分成功真实披露，不用双 leg/aggregate，也不自动回滚成功一侧。
 - 六维复盘只生成事实、推断、人工判断和改进候选；accepted 建议只生成未执行进化包，不等于实现或 publication 授权。
+- 需要过程仓的 Python vNext CLI（`project/work/retrospective/evolution`）统一从 binding 解析，不读取 `.agents/` / `delivery/` 提示词；`repository` 命令继续要求显式 `--repo-root`。仍按字面量访问 `process/...` 的 legacy Agent/Skill 只能在显式 `--process-link-mode relative-symlink` 兼容模式下运行；binding-only 下必须阻断，不能自行拼 sibling 路径。
+- 当前 `workspace_parent` 锚点只允许 sibling 双仓；非同父目录布局和已初始化项目的 route mode 切换分别留给后续 `workspace_root` / `project relink` 设计，不在初始化时静默放宽。
 
 下方 CP/context-pack/shared artifacts 章节继续作为 legacy/G2 扩展能力说明，不是 G0/G1 默认清单。
 
@@ -31,7 +33,7 @@
 
 旧项目里的 `process/USE-CASES.md`、`process/HLD.md`、根目录 `checkpoints/CP*.md` 等路径只作为 legacy fallback 读取；新工作流在无目标项目约定时默认生成到 `docs/...` 与 `process/checkpoints/...`。如果目标项目已有交付目录或 README/docs 已定义自己的文档目录，production 模式必须优先遵守目标约定；无约定时由 host-orchestrator 提出路由建议并等待用户确认。
 
-外置 process / docs 路由必须使用锚点 + 相对路径，不能把 `/home/...`、盘符或设备专属根目录写入 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`、`process/.meta-flow-process.yaml` 或发布 / 迁移文档。默认记录方式为：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。例如源码仓库旁边放置 artifact 仓库时，记录 `artifact_root=../meta-flow-artifacts`、`project_process_root=process/<project-name>`、`link_path=process`。
+以下外置 process / docs 路由字段只适用于 legacy/G2 shared-artifact 扩展流程：必须使用锚点 + 相对路径，不能把 `/home/...`、盘符或设备专属根目录写入 `STATE.current.json.artifact_routing_ref`、`process/.meta-flow-process.yaml` 或发布 / 迁移文档。记录方式为：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。例如源码仓库旁边放置 artifact 仓库时，记录 `artifact_root=../meta-flow-artifacts`、`project_process_root=process/<project-name>`、`link_path=process`。vNext binding-only 不使用这些 legacy link 字段。
 
 ## Legacy：源码仓库与共享产物仓库的 Git 周期
 
@@ -295,6 +297,8 @@ meta-flow uninstall codex --help
 ```
 
 项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
+
+安装状态按 scope 隔离：project scope 使用目标项目内 gitignored 的 `.meta-flow/INSTALL-MANIFEST.yaml`，user scope 使用 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。project scope 的 install、uninstall 与 reinstall 不读写用户级 manifest。
 
 非交互环境的三平台项目级 dry-run：
 

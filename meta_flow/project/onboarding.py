@@ -26,6 +26,14 @@ LAYOUT_VERSION = "independent-process-repo-v1"
 WORKSPACE_BINDING_REL = Path(".meta-flow/workspace.yaml")
 PROCESS_METADATA_REL = Path(".meta-flow-process.yaml")
 PROCESS_LINK_REL = Path("process")
+PROCESS_LINK_MODE_NONE = "none"
+PROCESS_LINK_MODE_RELATIVE_SYMLINK = "relative-symlink"
+ROUTE_MODE_SIBLING_BINDING = "sibling-binding"
+ROUTE_MODE_RELATIVE_SYMLINK = "relative-symlink"
+_PROCESS_LINK_MODES = {
+    PROCESS_LINK_MODE_NONE,
+    PROCESS_LINK_MODE_RELATIVE_SYMLINK,
+}
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -35,6 +43,7 @@ class ProjectInitRequest:
     project_id: str
     project_name: str
     process_repo_root: Path | None = None
+    process_link_mode: str = PROCESS_LINK_MODE_NONE
 
 
 @dataclass(frozen=True)
@@ -99,6 +108,7 @@ class ProjectInitPlan:
             "project_name": self.request.project_name,
             "project_root": str(self.project_root),
             "process_repo_root": str(self.process_repo_root),
+            "process_link_mode": self.request.process_link_mode,
             "release_repo": self.release_repo.as_dict(),
             "process_repo": self.process_repo.as_dict(),
             "actions": [action.__dict__ for action in self.actions],
@@ -139,6 +149,7 @@ class IndependentProcessHealth:
     project_id: str
     project_root: Path
     process_repo_root: Path | None
+    route_mode: str
     link_text: str
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
@@ -156,6 +167,7 @@ class IndependentProcessHealth:
             "project_id": self.project_id,
             "project_root": str(self.project_root),
             "process_repo_root": str(self.process_repo_root) if self.process_repo_root else "",
+            "route_mode": self.route_mode,
             "link_text": self.link_text,
             "errors": list(self.errors),
             "warnings": list(self.warnings),
@@ -208,28 +220,49 @@ def _relative_single_component(path: Path, parent: Path) -> str:
     return resolved.name
 
 
-def _binding_payload(project_id: str, process_repo_name: str) -> dict[str, Any]:
-    return {
+def _route_mode_for_link_mode(process_link_mode: str) -> str:
+    if process_link_mode == PROCESS_LINK_MODE_NONE:
+        return ROUTE_MODE_SIBLING_BINDING
+    if process_link_mode == PROCESS_LINK_MODE_RELATIVE_SYMLINK:
+        return ROUTE_MODE_RELATIVE_SYMLINK
+    raise ValueError("process_link_mode must be none or relative-symlink")
+
+
+def _binding_payload(
+    project_id: str,
+    process_repo_name: str,
+    process_link_mode: str,
+) -> dict[str, Any]:
+    route_mode = _route_mode_for_link_mode(process_link_mode)
+    payload: dict[str, Any] = {
         "schema_version": 1,
         "layout_version": LAYOUT_VERSION,
         "workflow_model": "vnext",
         "project_id": project_id,
         "repo_role": "release",
-        "process_link": PROCESS_LINK_REL.as_posix(),
+        "route_mode": route_mode,
         "process_repo": {
             "anchor": "workspace_parent",
             "relative_path": process_repo_name,
         },
     }
+    if process_link_mode == PROCESS_LINK_MODE_RELATIVE_SYMLINK:
+        payload["process_link"] = PROCESS_LINK_REL.as_posix()
+    return payload
 
 
-def _process_metadata_payload(project_id: str, release_repo_name: str) -> dict[str, Any]:
+def _process_metadata_payload(
+    project_id: str,
+    release_repo_name: str,
+    route_mode: str,
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "layout_version": LAYOUT_VERSION,
         "workflow_model": "vnext",
         "project_id": project_id,
         "repo_role": "process",
+        "route_mode": route_mode,
         "release_repo": {
             "anchor": "workspace_parent",
             "relative_path": release_repo_name,
@@ -289,6 +322,14 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
     actions: list[InitAction] = []
     conflicts: list[InitConflict] = []
 
+    if request.process_link_mode not in _PROCESS_LINK_MODES:
+        conflicts.append(
+            InitConflict(
+                "invalid_process_link_mode",
+                "process_link_mode",
+                "process_link_mode must be none or relative-symlink",
+            )
+        )
     if not _SAFE_ID_RE.fullmatch(request.project_id):
         conflicts.append(InitConflict("invalid_project_id", "project_id", "project_id must use 1-64 safe ID characters"))
     if not request.project_name.strip():
@@ -357,7 +398,15 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
     else:
         actions.append(InitAction("create", str(project_path), "write minimal PROJECT.yaml"))
 
-    binding = _binding_payload(request.project_id, process_repo_name)
+    try:
+        route_mode = _route_mode_for_link_mode(request.process_link_mode)
+    except ValueError:
+        route_mode = ROUTE_MODE_SIBLING_BINDING
+    binding = (
+        _binding_payload(request.project_id, process_repo_name, request.process_link_mode)
+        if request.process_link_mode in _PROCESS_LINK_MODES
+        else {}
+    )
     binding_path = project_root / WORKSPACE_BINDING_REL
     if binding_path.exists() or binding_path.is_symlink():
         if _same_payload(binding_path, binding):
@@ -367,7 +416,7 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
     else:
         actions.append(InitAction("create", str(binding_path), "write portable release-repo binding"))
 
-    metadata = _process_metadata_payload(request.project_id, project_root.name)
+    metadata = _process_metadata_payload(request.project_id, project_root.name, route_mode)
     metadata_path = process_root / PROCESS_METADATA_REL
     if metadata_path.exists() or metadata_path.is_symlink():
         if _same_payload(metadata_path, metadata):
@@ -377,29 +426,38 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
     else:
         actions.append(InitAction("create", str(metadata_path), "write portable process-repo metadata"))
 
-    gitignore_path = project_root / ".gitignore"
-    if _gitignore_has_process_entry(gitignore_path):
-        actions.append(InitAction("noop", str(gitignore_path), "process link is already ignored"))
-    elif gitignore_path.exists() and gitignore_path.is_file():
-        actions.append(InitAction("append", str(gitignore_path), "ignore local process link"))
-    elif gitignore_path.exists() or gitignore_path.is_symlink():
-        conflicts.append(InitConflict("gitignore_conflict", str(gitignore_path), ".gitignore is not a regular file"))
-    else:
-        actions.append(InitAction("create", str(gitignore_path), "create ignore rule for local process link"))
-
     link_path = project_root / PROCESS_LINK_REL
     link_text, actual_target = _link_target(link_path)
-    if link_path.is_symlink():
-        if Path(link_text).is_absolute():
-            conflicts.append(InitConflict("absolute_process_link", str(link_path), "process link must be relative"))
-        elif actual_target != process_root:
-            conflicts.append(InitConflict("process_link_conflict", str(link_path), "process link targets a different repository"))
+    if request.process_link_mode == PROCESS_LINK_MODE_RELATIVE_SYMLINK:
+        gitignore_path = project_root / ".gitignore"
+        if _gitignore_has_process_entry(gitignore_path):
+            actions.append(InitAction("noop", str(gitignore_path), "process link is already ignored"))
+        elif gitignore_path.exists() and gitignore_path.is_file():
+            actions.append(InitAction("append", str(gitignore_path), "ignore local process link"))
+        elif gitignore_path.exists() or gitignore_path.is_symlink():
+            conflicts.append(InitConflict("gitignore_conflict", str(gitignore_path), ".gitignore is not a regular file"))
         else:
-            actions.append(InitAction("noop", str(link_path), "matching relative process link already exists"))
-    elif link_path.exists():
-        conflicts.append(InitConflict("process_path_conflict", str(link_path), "process path exists and is not a symlink"))
-    else:
-        actions.append(InitAction("create-link", str(link_path), "create local relative link to process repo"))
+            actions.append(InitAction("create", str(gitignore_path), "create ignore rule for local process link"))
+
+        if link_path.is_symlink():
+            if Path(link_text).is_absolute():
+                conflicts.append(InitConflict("absolute_process_link", str(link_path), "process link must be relative"))
+            elif actual_target != process_root:
+                conflicts.append(InitConflict("process_link_conflict", str(link_path), "process link targets a different repository"))
+            else:
+                actions.append(InitAction("noop", str(link_path), "matching relative process link already exists"))
+        elif link_path.exists():
+            conflicts.append(InitConflict("process_path_conflict", str(link_path), "process path exists and is not a symlink"))
+        else:
+            actions.append(InitAction("create-link", str(link_path), "create local relative link to process repo"))
+    elif link_path.exists() or link_path.is_symlink():
+        conflicts.append(
+            InitConflict(
+                "unexpected_process_entry",
+                str(link_path),
+                "binding-only mode requires the release process entry to be absent",
+            )
+        )
 
     digest_source = {
         "schema_version": 1,
@@ -407,6 +465,7 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
         "project_name": request.project_name,
         "project_root": str(project_root),
         "process_repo_root": str(process_root),
+        "process_link_mode": request.process_link_mode,
         "release_head_oid": release_repo.head_oid,
         "process_head_oid": process_repo.head_oid,
         "actions": [action.__dict__ for action in actions],
@@ -492,25 +551,26 @@ def apply_project_init(plan: ProjectInitPlan) -> ProjectInitReceipt:
             created.append(str(binding_path))
             mutations += 1
 
-        gitignore_path = plan.project_root / ".gitignore"
-        if not _gitignore_has_process_entry(gitignore_path):
-            if gitignore_path.exists():
-                _append_process_ignore(gitignore_path)
-            else:
-                gitignore_path.write_text("/process\n", encoding="utf-8")
-                created.append(str(gitignore_path))
-            mutations += 1
+        if plan.request.process_link_mode == PROCESS_LINK_MODE_RELATIVE_SYMLINK:
+            gitignore_path = plan.project_root / ".gitignore"
+            if not _gitignore_has_process_entry(gitignore_path):
+                if gitignore_path.exists():
+                    _append_process_ignore(gitignore_path)
+                else:
+                    gitignore_path.write_text("/process\n", encoding="utf-8")
+                    created.append(str(gitignore_path))
+                mutations += 1
 
-        link_path = plan.project_root / PROCESS_LINK_REL
-        if not link_path.is_symlink():
-            link_text = os.path.relpath(plan.process_repo_root, start=plan.project_root)
-            temporary = plan.project_root / f".process.meta-flow-init-{plan.plan_digest[:12]}"
-            if temporary.exists() or temporary.is_symlink():
-                raise FileExistsError(f"temporary link path already exists: {temporary}")
-            temporary.symlink_to(link_text, target_is_directory=True)
-            os.replace(temporary, link_path)
-            created.append(str(link_path))
-            mutations += 1
+            link_path = plan.project_root / PROCESS_LINK_REL
+            if not link_path.is_symlink():
+                link_text = os.path.relpath(plan.process_repo_root, start=plan.project_root)
+                temporary = plan.project_root / f".process.meta-flow-init-{plan.plan_digest[:12]}"
+                if temporary.exists() or temporary.is_symlink():
+                    raise FileExistsError(f"temporary link path already exists: {temporary}")
+                temporary.symlink_to(link_text, target_is_directory=True)
+                os.replace(temporary, link_path)
+                created.append(str(link_path))
+                mutations += 1
 
         health = check_independent_process_route(plan.project_root)
         if not health.ok:
@@ -548,7 +608,50 @@ def _safe_sibling_from_binding(project_root: Path, binding: dict[str, Any]) -> P
     relative = repo.get("relative_path")
     if not isinstance(relative, str) or not _SAFE_ID_RE.fullmatch(relative):
         raise ValueError("process_repo.relative_path must be one safe sibling name")
-    return (project_root.parent / relative).resolve()
+    workspace_parent = project_root.parent.resolve()
+    resolved = (workspace_parent / relative).resolve()
+    if resolved.parent != workspace_parent:
+        raise ValueError("process_repo.relative_path must resolve to one sibling under workspace parent")
+    return resolved
+
+
+def resolve_process_repo_root(
+    project_root: Path,
+    binding: dict[str, Any] | None = None,
+) -> Path:
+    """从发布仓 binding 解析唯一过程仓根；不做 sibling discovery。"""
+
+    root = project_root.resolve()
+    payload = binding
+    if payload is None:
+        binding_path = root / WORKSPACE_BINDING_REL
+        if not binding_path.is_file():
+            raise ValueError(
+                "vNext project is not initialized: .meta-flow/workspace.yaml is missing; "
+                "run meta-flow project init and review the dry-run before --apply"
+            )
+        payload = load_yaml_object(binding_path)
+    if payload.get("schema_version") != 1:
+        raise ValueError("workspace binding schema_version must be 1")
+    if payload.get("layout_version") != LAYOUT_VERSION:
+        raise ValueError(
+            "workspace binding is not a supported vNext layout; expected "
+            "independent-process-repo-v1. New workspaces must use project init; "
+            "legacy shared-subdirectory sources require a compatible snapshot-only migration flow"
+        )
+    if payload.get("repo_role") != "release" or payload.get("workflow_model") != "vnext":
+        raise ValueError("workspace binding role/model mismatch")
+    project_id = payload.get("project_id")
+    if not isinstance(project_id, str) or not _SAFE_ID_RE.fullmatch(project_id):
+        raise ValueError("workspace binding project_id is invalid")
+    route_mode = payload.get("route_mode")
+    if route_mode not in {ROUTE_MODE_SIBLING_BINDING, ROUTE_MODE_RELATIVE_SYMLINK}:
+        raise ValueError("workspace binding route_mode must be sibling-binding or relative-symlink")
+    if route_mode == ROUTE_MODE_SIBLING_BINDING and "process_link" in payload:
+        raise ValueError("sibling-binding workspace binding must not declare process_link")
+    if route_mode == ROUTE_MODE_RELATIVE_SYMLINK and payload.get("process_link") != PROCESS_LINK_REL.as_posix():
+        raise ValueError("relative-symlink workspace binding process_link must be process")
+    return _safe_sibling_from_binding(root, payload)
 
 
 def check_independent_process_route(project_root: Path) -> IndependentProcessHealth:
@@ -556,8 +659,22 @@ def check_independent_process_route(project_root: Path) -> IndependentProcessHea
     errors: list[str] = []
     warnings: list[str] = []
     project_id = ""
+    route_mode = ""
     expected_process: Path | None = None
     binding_path = root / WORKSPACE_BINDING_REL
+    if not binding_path.is_file():
+        return IndependentProcessHealth(
+            status="not_initialized",
+            project_id="",
+            project_root=root,
+            process_repo_root=None,
+            route_mode="",
+            link_text="",
+            errors=(
+                "vNext project is not initialized: .meta-flow/workspace.yaml is missing; "
+                "run meta-flow project init and review the dry-run before --apply",
+            ),
+        )
     try:
         binding = load_yaml_object(binding_path)
     except (OSError, ValueError) as exc:
@@ -566,33 +683,31 @@ def check_independent_process_route(project_root: Path) -> IndependentProcessHea
             project_id="",
             project_root=root,
             process_repo_root=None,
+            route_mode="",
             link_text="",
             errors=(str(exc),),
         )
-    if binding.get("schema_version") != 1 or binding.get("layout_version") != LAYOUT_VERSION:
-        errors.append("workspace binding schema/layout is not independent-process-repo-v1")
-    if binding.get("repo_role") != "release" or binding.get("workflow_model") != "vnext":
-        errors.append("workspace binding role/model mismatch")
     project_id = str(binding.get("project_id") or "")
-    if not _SAFE_ID_RE.fullmatch(project_id):
-        errors.append("workspace binding project_id is invalid")
-    if binding.get("process_link") != PROCESS_LINK_REL.as_posix():
-        errors.append("workspace binding process_link must be process")
+    route_mode = str(binding.get("route_mode") or "")
     try:
-        expected_process = _safe_sibling_from_binding(root, binding)
-    except ValueError as exc:
+        expected_process = resolve_process_repo_root(root, binding)
+    except (OSError, ValueError) as exc:
         errors.append(str(exc))
 
     link_path = root / PROCESS_LINK_REL
     link_text, actual_process = _link_target(link_path)
-    if not link_path.is_symlink():
-        errors.append("process entry is missing or is not a symlink")
-    elif Path(link_text).is_absolute():
-        errors.append("process symlink must be relative")
-    elif expected_process is not None and actual_process != expected_process:
-        errors.append("process symlink target does not match workspace binding")
+    if route_mode == ROUTE_MODE_SIBLING_BINDING:
+        if link_path.exists() or link_path.is_symlink():
+            errors.append("binding-only route requires the release process entry to be absent")
+    elif route_mode == ROUTE_MODE_RELATIVE_SYMLINK:
+        if not link_path.is_symlink():
+            errors.append("process entry is missing or is not a symlink")
+        elif Path(link_text).is_absolute():
+            errors.append("process symlink must be relative")
+        elif expected_process is not None and actual_process != expected_process:
+            errors.append("process symlink target does not match workspace binding")
 
-    process_root = actual_process or expected_process
+    process_root = expected_process
     if process_root is not None:
         release_repo = _observe_repo(root)
         process_repo = _observe_repo(process_root)
@@ -614,23 +729,40 @@ def check_independent_process_route(project_root: Path) -> IndependentProcessHea
                 errors.append("process metadata role/model mismatch")
             if metadata.get("project_id") != project_id:
                 errors.append("process metadata project_id mismatch")
+            if metadata.get("route_mode") != route_mode:
+                errors.append("release/process binding route_mode mismatch")
             release = metadata.get("release_repo")
-            if not isinstance(release, dict) or release.get("anchor") != "workspace_parent" or release.get("relative_path") != root.name:
+            if (
+                not isinstance(release, dict)
+                or release.get("anchor") != "workspace_parent"
+                or not isinstance(release.get("relative_path"), str)
+                or not _SAFE_ID_RE.fullmatch(release["relative_path"])
+                or release.get("relative_path") != root.name
+                or (process_root.parent / release.get("relative_path", "")).resolve() != root
+            ):
                 errors.append("process metadata release_repo route mismatch")
-        try:
-            project = load_project(process_root)
-        except (OSError, ValueError) as exc:
-            errors.append(str(exc))
+        project_path = process_root / PROJECT_FILE
+        if not project_path.is_file():
+            errors.append(
+                "process repository is not initialized: PROJECT.yaml is missing; "
+                "run meta-flow project init --apply"
+            )
         else:
-            if project.project_id != project_id:
-                errors.append("PROJECT.yaml project_id mismatch")
-    if not _gitignore_has_process_entry(root / ".gitignore"):
+            try:
+                project = load_project(process_root)
+            except (OSError, ValueError) as exc:
+                errors.append(str(exc))
+            else:
+                if project.project_id != project_id:
+                    errors.append("PROJECT.yaml project_id mismatch")
+    if route_mode == ROUTE_MODE_RELATIVE_SYMLINK and not _gitignore_has_process_entry(root / ".gitignore"):
         warnings.append("release repo does not ignore local process symlink")
     return IndependentProcessHealth(
         status="healthy" if not errors else "route_conflict",
         project_id=project_id,
         project_root=root,
         process_repo_root=process_root,
+        route_mode=route_mode,
         link_text=link_text,
         errors=tuple(errors),
         warnings=tuple(warnings),
@@ -643,6 +775,12 @@ def init_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-id", required=True)
     parser.add_argument("--project-name", default=None)
     parser.add_argument("--process-repo-root", type=Path, default=None)
+    parser.add_argument(
+        "--process-link-mode",
+        choices=sorted(_PROCESS_LINK_MODES),
+        default=PROCESS_LINK_MODE_NONE,
+        help="none uses portable binding only; relative-symlink enables legacy Agent/Skill path compatibility",
+    )
     parser.add_argument("--apply", action="store_true")
     parsed = parser.parse_args(argv or [])
     request = ProjectInitRequest(
@@ -650,6 +788,7 @@ def init_main(argv: list[str] | None = None) -> int:
         project_id=parsed.project_id,
         project_name=parsed.project_name or parsed.project_id,
         process_repo_root=parsed.process_repo_root,
+        process_link_mode=parsed.process_link_mode,
     )
     plan = plan_project_init(request)
     if not parsed.apply:

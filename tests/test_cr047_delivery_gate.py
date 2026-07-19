@@ -64,3 +64,32 @@ def test_unignored_local_cache_is_blocking() -> None:
         )
         == "BLOCK"
     )
+
+
+def test_binding_profile_contract_allows_g2_binding_only() -> None:
+    guardrail = _guardrail_module()
+    valid = {
+        "README.md": (
+            "vNext binding-only 适用于 G0/G1/G2；"
+            "当前 G2/正式 CR 只有经人工门显式选择才进入 legacy 扩展。"
+        ),
+        "delivery/rules/AGENTS.md": (
+            "vNext binding-only 适用于 G0/G1/G2；"
+            "legacy shared-artifact 需要人工门显式选择。"
+        ),
+    }
+
+    assert guardrail.binding_profile_contract_errors(valid) == []
+
+
+def test_binding_profile_contract_rejects_g0_g1_only_wording() -> None:
+    guardrail = _guardrail_module()
+    restricted = {
+        "README.md": "vNext binding-only G0/G1 不创建 process。",
+        "delivery/rules/AGENTS.md": "vNext binding-only G0/G1 适用双向 binding。",
+    }
+
+    errors = guardrail.binding_profile_contract_errors(restricted)
+
+    assert any("must allow G0/G1/G2" in error for error in errors)
+    assert any("must not restrict binding-only to G0/G1" in error for error in errors)

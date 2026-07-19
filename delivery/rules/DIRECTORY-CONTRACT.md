@@ -4,12 +4,11 @@ This contract defines the file-system layout used by Meta Flow agents and skills
 
 ## vNext Independent Project Roots
 
-New projects use two sibling Git roots and one local relative link:
+New projects use two sibling Git roots and reciprocal portable bindings. The default route has no local process link:
 
 ```text
 <project>/                 # release repository
-├── .meta-flow/workspace.yaml
-└── process -> ../<project>-process
+└── .meta-flow/workspace.yaml  # tracked release-side binding
 
 <project>-process/         # independent process repository, normally main-only
 ├── .meta-flow-process.yaml
@@ -21,7 +20,13 @@ New projects use two sibling Git roots and one local relative link:
 └── evolution/
 ```
 
-Roadmap and Phase are optional. The minimum valid governance chain is `Project -> Work`; long projects may use `Project -> Phase -> Work` or `Project -> Roadmap -> Phase -> Work`. Different projects must never resolve to the same writable process repository or Git common dir.
+The default is `route_mode=sibling-binding` with `--process-link-mode none`. `relative-symlink` is an explicit compatibility mode for legacy Agent/Skill assets that still access literal `process/...` paths. Binding-only mode requires the release `process` entry to be absent; compatibility mode requires `process -> ../<project>-process` and rejects absolute links.
+
+Both binding files must agree on schema, layout, project identity, route mode, and reciprocal sibling routes. The current `workspace_parent` anchor accepts exactly one safe sibling name and rejects absolute paths, `..`, sibling discovery, and non-sibling layouts. Roadmap and Phase are optional. The minimum valid governance chain is `Project -> Work`; long projects may use `Project -> Phase -> Work` or `Project -> Roadmap -> Phase -> Work`. Different projects must never resolve to the same writable process repository or Git common dir.
+
+`.meta-flow/workspace.yaml` is tracked machine truth. `.meta-flow/INSTALL-MANIFEST.yaml` is device-local installer state and must remain gitignored. A workspace-root README is human navigation only and must never be used for route resolution.
+
+For `fresh-vnext-bootstrap` from a legacy shared-artifact subdirectory, create `legacy/LEGACY-SOURCE.yaml` only after successful local init apply and before the first process-repository commit. Schema version 1 records `project_id`, `migration_mode`, `source_repo_url`, `source_ref`, the exact `source_oid` frozen by `git ls-remote`, `source_subpath`, `source_mode=read-only`, `copied_history=false`, `deletion_authorized=false`, `history_rewrite_authorized=false`, `snapshot_date`, and a short note. It must not contain a device-local absolute path or credentials. This source shape is not eligible for the current `project adopt`; no bulk legacy copy or history rewrite is allowed.
 
 The directory groups below describe legacy/G2 extended evidence locations and remain valid when selected by risk. They are not mandatory empty scaffolds for a G0/G1 Work.
 

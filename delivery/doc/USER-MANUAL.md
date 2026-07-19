@@ -6,9 +6,11 @@
 
 ```text
 <project>/                  # 发布库：代码和发布文档
-└── process -> ../<project>-process
+└── .meta-flow/
+    └── workspace.yaml      # tracked；指向 sibling 过程库
 
 <project>-process/          # 过程库：只服务当前项目
+├── .meta-flow-process.yaml # 反向绑定发布库
 ├── PROJECT.yaml
 ├── ROADMAP.yaml            # 可选
 ├── phases/                 # 可选
@@ -27,6 +29,32 @@ meta-flow project init --project-root . --project-id demo --apply
 meta-flow project check --project-root .
 meta-flow project query --project-root .
 ```
+
+默认 `--process-link-mode none`，即 `route_mode=sibling-binding`，不会创建 `process` 入口，也不会为它修改 `.gitignore`。只有仍需运行字面量访问 `process/...` 的 legacy CP0-CP8 Agent/Skill 时，才显式使用 `--process-link-mode relative-symlink`；该兼容模式只允许相对链接。需要过程仓的 vNext `project/work/retrospective/evolution` Python 命令不依赖 `.agents/` 提示词，统一从 binding 解析；`repository` 命令继续要求调用方显式提供单仓 `--repo-root`。
+
+两份 binding 必须在 `schema_version`、`layout_version`、`project_id`、`route_mode` 和 reciprocal sibling 路由上相互一致；任一不一致都会 BLOCKED。`workspace_parent` 当前只支持同一父目录的两个仓，绝对路径、`..`、sibling discovery 和非同父目录布局都不会被接受。缺少 `PROJECT.yaml` 时，`project status/check/query` 会报告过程仓尚未初始化；旧或缺失 layout metadata 不会静默降级为 vNext。
+
+版本控制策略是：`.meta-flow/workspace.yaml` 属于发布仓机器真相源，必须提交；`.meta-flow/INSTALL-MANIFEST.yaml` 只记录本机项目级安装状态，必须 gitignore。工作区根 README 只作人类导航，不参与路由判定。
+
+旧 shared artifact 子目录采用只读来源索引，不调用 `project adopt`，也不复制旧 CR/CP/Story/ledger。成功执行 `project init --apply` 后、过程仓首次提交前，人工创建 `legacy/LEGACY-SOURCE.yaml`：
+
+```yaml
+schema_version: 1
+project_id: meta-flow
+migration_mode: fresh-vnext-bootstrap
+source_repo_url: git@github.com:hyde-zhao/meta-flow-artifacts.git
+source_ref: refs/heads/main
+source_oid: <exact-oid-from-git-ls-remote>
+source_subpath: process/meta-flow
+source_mode: read-only
+copied_history: false
+deletion_authorized: false
+history_rewrite_authorized: false
+snapshot_date: <YYYY-MM-DD>
+note: 旧 CR/CP/Story/docs/ledger 保留在 legacy 仓；新工作从独立过程仓开始
+```
+
+`source_oid` 必须来自本次 preflight 的 `git ls-remote`，不得依赖本地缓存；文件不得记录本机绝对路径、用户名或凭据。`project adopt` 只适用于其 source 契约明确支持的 Git 根和新格式快照，不能用于 legacy shared artifacts 子目录。
 
 日常工作以用户确认过的最小 `REQUEST.md` 和一个 `WORK.yaml` 为中心。系统解释 Work/CR 和 G0/G1/G2 判定；用户可主动升级，但高风险不得静默降级：
 
@@ -83,25 +111,7 @@ meta-flow install qoder --scope project --project-dir /path/to/project
 
 项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
 
-CI / Agent 等非交互环境请使用三平台等价 dry-run；三条命令都只计算安装计划，不写目标项目：
-
-```bash
-uv run --python 3.11 meta-flow install codex --scope project --component full --project-dir . --dry-run
-uv run --python 3.11 meta-flow install claude --scope project --component full --project-dir . --dry-run
-uv run --python 3.11 meta-flow install qoder --scope project --component full --project-dir . --dry-run
-```
-
-meta-flow 源码仓的发布前 preflight：
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q
-uv run --python 3.11 ruff check .
-PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py
-PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow doctor all --project-root .
-PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow check cr-tracking --project-root .
-```
-
-必须逐门读取原始退出码和 warning。`OK_WITH_WARNINGS` 仍是带风险结论；任一 blocker 或非零退出码都会阻断发布准备。
+安装状态按 scope 隔离：project scope 使用目标项目内 gitignored 的 `.meta-flow/INSTALL-MANIFEST.yaml`，user scope 使用 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。project scope 的 install、uninstall 与 reinstall 不读写用户级 manifest。
 
 CI / Agent 等非交互环境请使用三平台等价 dry-run；三条命令都只计算安装计划，不写目标项目：
 
@@ -219,7 +229,7 @@ uv run --python 3.11 python delivery/scripts/install.py claude --dry-run
 uv run --python 3.11 python delivery/scripts/install.py uninstall codex --scope user
 ```
 
-`meta-flow uninstall <platform>` 依赖 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml` 中记录的 `platform + scope + workspace_root` 精确移除已安装文件。默认 `--component full`，也可以使用 `--component rules|agent|full` 卸载对应组件；项目级卸载必须传入和安装时一致的 `--project-dir`，否则无法匹配 manifest 里的 workspace。
+`meta-flow uninstall <platform>` 依赖当前 scope 的安装 manifest 精确移除已安装文件：project scope 读取目标项目 `.meta-flow/INSTALL-MANIFEST.yaml`，user scope 读取 `~/.meta-flow/delivery/doc/INSTALL-MANIFEST.yaml`。默认 `--component full`，也可以使用 `--component rules|agent|full` 卸载对应组件；项目级卸载必须传入和安装时一致的 `--project-dir`。
 
 如果要移除 `meta-flow` 这个全局命令本身，而不是卸载已写入 Claude Code / Codex / OpenClaw 的规则、Agent 或 Skill，使用：
 

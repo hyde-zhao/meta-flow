@@ -1,0 +1,9 @@
+schema_version: 1
+layout_version: independent-process-repo-v1
+workflow_model: vnext
+project_id: meta-flow
+repo_role: release
+route_mode: sibling-binding
+process_repo:
+  anchor: workspace_parent
+  relative_path: meta-flow-process
