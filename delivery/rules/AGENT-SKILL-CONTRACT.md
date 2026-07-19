@@ -2,6 +2,20 @@
 
 本文件是功能 Agent 与高频 Skill 的共享契约。目标是把“默认多读一点保险”改成“先读最小上下文包，按契约扩展读取，输出只写摘要和引用”。
 
+## vNext Work-first Contract
+
+当独立过程库根存在 `PROJECT.yaml` 且当前对象为 `works/<work-id>/WORK.yaml` 时，本节优先于下方 legacy CP/context-pack 规则：
+
+1. 默认入口只读 `PROJECT.yaml`、当前 `WORK.yaml`、当前 `REQUEST.md` 和用户问题直接需要的 Phase/证据引用；总对象数、读写、检查和 token 不得超过 Work 的 G profile 与 scope。
+2. `allowed_reads` 是最大允许集合，不是必读集合；禁止为了“保险”读取完整 HLD、全部历史 CR/Story、完整测试报告、全量 diff 或 transcript。
+3. G0 不创建独立评审/CP/context pack；G1 最多一次 Work 范围轻量评审；只有 G2/正式 CR 或用户明确要求时才使用下方 CP0-CP8、Story packet、完整 HLD/ADR/独立 QA 契约。
+4. 输出优先写回当前 Work 目录的最小 REQUEST、WORK、USAGE、HANDOFF、RESULT 或 evidence ref；不得复制已有长证据正文。
+5. 每次读/写/检查前分别校验 risk、scope、budget。任一条件不满足时停止并返回重分类、缩小范围或拆 Work 建议；不得用剩余 token 绕过 scope，也不得用 scope 绕过风险门。
+6. 项目查询最多读取 5 个直接引用对象；跨项目汇总、全历史审计和敏感证据必须升级并批准。
+7. 复盘报告、建议决策、进化包、实现启动和 publication 是不同对象；任何 Agent/Skill 都不得把上一步的 approve 扩张为下一步授权。
+
+下方契约继续服务 legacy 项目和 G2 profile，不得作为 G0/G1 默认开销。
+
 ## Input Contract
 
 1. 必须先读取本阶段 context pack 或 Story packet：

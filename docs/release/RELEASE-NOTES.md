@@ -25,6 +25,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.11 | 2026-07-11 | meta-doc | CR-045 增加 CR-aware route plan、N/A / WAIVED 语义与 route-driven state transition；记录 CP2 / CP5 事后恢复审批和 CP7 四项 HIGH finding 闭环 |
 | 1.12 | 2026-07-11 | host-orchestrator | CR-045 更新至最终 R6 证据（9/9、17/113/329），精确标注 `next_action.stop_reason`，披露 dispatch receipt 限制，并记录后续 commit/push 授权 |
 | 1.13 | 2026-07-15 | host-orchestrator-inline/meta-qa | CR-047 收敛 workflow truth、portable routing、Doctor/guardrail/Ruff/installer preflight 与 CR-046 protected-object firewall；CP8 候选为 `READY_WITH_RISK`。 |
+| 1.14-candidate | 2026-07-19 | host-orchestrator | CR-052 vNext 本地实现候选：每项目独立发布库/过程库、弹性 Project/Phase/Work、G0/G1/G2、scope/budget、snapshot-only adoption、单仓 publication、六维复盘和有界自进化；用户已单独授权把当前两仓整改成果普通 commit/push 到各自远端分支，真实迁移、tag、production/runtime 发布仍未授权。 |
 
 ## 发布范围
 
@@ -52,6 +53,9 @@ created_at: "2026-06-17T13:49:25+08:00"
 
 ## 用户可见变化
 
+- 新增 vNext 默认路径：`meta-flow project init/check/status/query`、`meta-flow work classify/init/status/review-plan/validation-plan/handoff/resume-check`、`meta-flow repository commit/push`、`meta-flow retrospective *` 与 `meta-flow evolution *`。新项目使用 sibling 独立过程库，不再默认使用 shared artifact worktree、双 leg 或 aggregate。
+- G0/G1 固定资源上限并强制 deny-default Work scope；G2 必须显式预算。复盘固定六维并区分事实/推断/人工判断与 measured/proxy/unavailable；复盘、建议批准、实现启动和 publication 授权严格分离。
+- 旧 `workspace bootstrap/push`、project integration、dual-leg 与 `cr aggregate` 保留为 legacy 能力；本候选未执行当前 meta-flow 真实路由切换、远端操作或任何破坏性 Git。
 - 新增 `meta-flow workspace check/link`，用于检查或建立外置 process 工作区。
 - `meta-flow status`、`meta-flow next`、`meta-flow doctor` 和 CR tracking 会先检查 process symlink health；断链或项目不匹配时阻断恢复。
 - 源码仓库不再跟踪 `process/` 和 `docs/` 普通过程目录；过程文件由 `meta-flow-artifacts` 仓库跟踪。
