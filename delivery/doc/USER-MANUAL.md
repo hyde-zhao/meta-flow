@@ -230,15 +230,76 @@ meta-flow state check --project-root . --mode enforce
 
 上述流程不授权 credentials、runtime、SaaS、production write、trading、publish 或 CR-033 runtime follow-up。正式编号使用 `CR-xxx`；`MF-xxx` 仅作为历史别名。
 
-外置 `process` 路由启用后，源码仓库和 artifact 仓库必须成对检查、提交和推送：
+#### 源码仓库与共享 artifacts 仓库的 Git 周期
+
+外置 `process` 路由只建立文件路由关系，不会把源码 / 交付仓库和共享 artifacts 仓库变成同一个 Git 仓库。两边使用同一个 CR ID 关联证据，但分支起点和完成目标不同：
+
+| leg | CR 开始前必须确认 | 短期 CR 分支 | CR 完成目标 |
+|---|---|---|---|
+| source | 源码仓库的 default branch（`main` 或 `master`）是本次采用的最新基线 | `refs/heads/cr/<cr-id>-<slug>` | 推送并按源码仓库流程合并回 default branch |
+| artifact | 当前项目 integration 是本次采用的最新项目基线 | `refs/heads/projects/<project>/cr/<cr-id>-<slug>` | 只回合到 `refs/heads/projects/<project>/integration` |
+
+共享 artifacts 仓库保留 shared `main`，但它只是共享集成基线，不是项目 worktree 的日常驻留分支，也不是单个 artifact CR 的目标分支：
+
+```text
+main（共享集成基线）
+  ├── projects/<project-a>/integration（项目 A 常驻）
+  │     └── projects/<project-a>/cr/<cr-id>-<slug>（短期）
+  └── projects/<project-b>/integration（项目 B 常驻）
+        └── projects/<project-b>/cr/<cr-id>-<slug>（短期）
+```
+
+每次创建 artifact CR 时，只要求从**最新的项目 integration** 派生短期分支。`main` → integration 和 integration → `main` 都是 CR 外的人工同步操作；单个 CR 不自动拉入 shared `main`，也不自动把项目累计产物回灌到 `main`。
+
+#### artifact worktree 驻留与切换
+
+- 空闲时：worktree 驻留 `projects/<project>/integration`。
+- CR 活动时：worktree 切到该项目的 `projects/<project>/cr/<cr-id>-<slug>`。
+- CR leg 完成后：目标是回合到项目 integration，再恢复空闲驻留状态；不触碰 shared `main`。
+- 切换前：要求 clean worktree、无进行中的 Git 操作，并完成容量、权限和 durable intent 预检。
+- 切换异常：fail-closed；通过 fresh observation 判断继续、恢复到 integration，或保留现场交给人工处理。分支切换不被宣称为底层原子事务。
+
+上述 project-first routing、worktree 恢复与 lifecycle 契约已实现，但当前仅由离线 fixture 验证；没有面向用户的 project-worktree 切换 CLI。只读迁移 preflight 也只提供 Python library / API，当前不存在 migration CLI。不要自行拼接未记录的命令。
+
+#### 双 leg 完成聚合
+
+source leg 与 artifact leg 各自独立完成，并把结果写入同一个 CR 的证据链。整体状态按以下优先级取最差值：
+
+```text
+BLOCKED > FAIL > IN_PROGRESS > PASS
+```
+
+只有两个 leg 都是 terminal `PASS` 时，CR 才能声明整体完成；任一 leg 未完成、失败或阻断时，整体不得宣称完成。一个 leg 已产生效果而另一个未成功时，聚合会保留 `PARTIAL` 事实，供恢复或人工裁决，不会把已发生的结果回写成“未发生”。已有聚合入口是：
+
+```bash
+meta-flow cr aggregate --id CR-051 --operation-id operation-001 --attempt 1 --source-handle source.json --artifact-handle artifact.json --dry-run --project-root .
+```
+
+`--dry-run` 只检查并展示聚合计划；聚合不创建、切换、合并或推送分支，也不执行 `main` ↔ integration 同步。
+
+#### 现有 workspace 命令的边界
+
+只读检查可以使用当前真实存在的命令：
 
 ```bash
 meta-flow workspace check --project-root .
 meta-flow workspace git-status --project-root .
-meta-flow workspace push --project-root .
 ```
 
-`workspace git-status` 会同时显示开发目录 Git 仓库和 artifact Git 仓库的 branch、upstream、dirty、ahead、behind。`workspace push` 会顺序推送两个仓库，并默认拒绝 dirty working tree；若 `process/`、checkpoint、ledger、handoff、context、CR 或内部归档还有未提交内容，应先在 artifact 仓库提交，再执行项目推送。
+`workspace git-status` 会分别展示两个仓库当前的 branch、upstream、dirty、ahead、behind，但不证明当前分支符合 source / artifact leg 契约，也不证明 integration 已与 shared `main` 同步。
+
+`meta-flow workspace push` 仍是通用的顺序推送辅助命令：它默认拒绝 dirty working tree，并分别推送两个仓库当前分支；它不是项目优先生命周期执行器，不会创建 integration / CR 分支，不会完成 CR → integration 或 `main` ↔ integration 合并，不会切换 worktree，也不会聚合双 leg。因两个仓库的目标分支不同，不应把该命令当成日常 CR 自动完成入口；任何真实推送仍需独立授权并先核对各仓库分支、upstream 和目标 ref。
+
+#### 能力与授权状态
+
+| 能力 | 当前状态 |
+|---|---|
+| 项目优先 routing、可恢复 worktree switch、异构双 leg lifecycle、多项目 selector | 已实现；仅通过离线 fixture 验证 |
+| 只读 migration preflight manifest | 已实现为 Python library / API；仅通过离线 fixture 验证，无用户 CLI |
+| 真实托管 remote / branch protection / Windows native pilot | `not-authorized`；未执行、未验证 |
+| 真实 worktree / ref mutation、迁移、复制、移动、软链接、同步与 publish | `not-authorized`；未执行 |
+
+CP7 的 `PASS_WITH_RISK` 与 CP8 的 `READY` / `READY_WITH_RISK` 只表示验证或交付就绪，不表示真实 Git、worktree、ref、remote、迁移、软链接、凭据、网络或 publish 已获授权。
 
 ### 6.0.2 初始化质量治理 Policy
 

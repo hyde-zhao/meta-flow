@@ -1017,6 +1017,107 @@ def update_current_state(
     return candidate
 
 
+def project_aggregate_completion(
+    project_root: Path,
+    *,
+    cr_id: str,
+    aggregate_id: str,
+    aggregate_ref: str,
+    payload_digest: str,
+    expected_updated_at: str,
+) -> dict[str, Any]:
+    """Project a persisted PASS aggregate as a completion candidate without closing the CR."""
+    project_root = project_root.resolve()
+    if not cr_id or not aggregate_id or not payload_digest:
+        raise StateValidationError("aggregate projection identity fields must be non-empty")
+    if not _is_relative_state_ref(aggregate_ref):
+        raise StateValidationError("aggregate_ref must be a safe project-relative state ref")
+    aggregate_path = (project_root / aggregate_ref).resolve()
+    try:
+        aggregate_path.relative_to(project_root)
+    except ValueError as exc:
+        raise StateValidationError("aggregate_ref escapes project root") from exc
+    if not aggregate_path.is_file():
+        raise StateValidationError(f"persisted aggregate is missing: {aggregate_ref}")
+    try:
+        aggregate_payload = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StateValidationError(f"persisted aggregate is unreadable: {exc}") from exc
+    if not isinstance(aggregate_payload, dict):
+        raise StateValidationError("persisted aggregate must be a JSON object")
+    expected_fields = {
+        "aggregate_id": aggregate_id,
+        "cr_id": cr_id,
+        "payload_digest": payload_digest,
+        "overall": "PASS",
+        "terminal": True,
+        "projection_decision": "ELIGIBLE",
+    }
+    for field, expected in expected_fields.items():
+        if aggregate_payload.get(field) != expected:
+            raise StateValidationError(
+                f"persisted aggregate projection guard mismatch for {field}"
+            )
+    canonical_payload = dict(aggregate_payload)
+    canonical_payload.pop("payload_digest", None)
+    canonical_digest = hashlib.sha256(
+        json.dumps(
+            canonical_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if canonical_digest != payload_digest:
+        raise StateValidationError("persisted aggregate canonical digest mismatch")
+    state = load_current_state(project_root)
+    if state.get("active_change") != cr_id:
+        raise StateValidationError(
+            f"aggregate projection active_change mismatch: expected {cr_id}, "
+            f"found {state.get('active_change') or '-'}"
+        )
+    source_refs = list(state.get("source_refs") or [])
+    if aggregate_ref in source_refs:
+        return {
+            "status": "idempotent-existing",
+            "cr_id": cr_id,
+            "aggregate_id": aggregate_id,
+            "aggregate_ref": aggregate_ref,
+            "payload_digest": payload_digest,
+            "state_updated_at": state.get("updated_at"),
+        }
+    if not expected_updated_at or state.get("updated_at") != expected_updated_at:
+        raise StateValidationError(
+            "aggregate projection current-state CAS mismatch: expected_updated_at is stale"
+        )
+    source_refs.append(aggregate_ref)
+    candidate = update_current_state(
+        project_root,
+        {
+            "source_refs": source_refs,
+            "next_action": {
+                "type": "aggregate_pass_persisted",
+                "text": (
+                    f"Aggregate {aggregate_id[:12]} is persisted and validated; "
+                    "continue verification without closing the CR."
+                ),
+            },
+            "updated_at": now_utc(),
+        },
+        actor="meta_flow.state.current.project_aggregate_completion",
+        reason=f"controlled aggregate projection for {cr_id}",
+        mode="enforce",
+    )
+    return {
+        "status": "projected",
+        "cr_id": cr_id,
+        "aggregate_id": aggregate_id,
+        "aggregate_ref": aggregate_ref,
+        "payload_digest": payload_digest,
+        "state_updated_at": candidate.get("updated_at"),
+    }
+
+
 def _archive_timestamp() -> str:
     return now_utc().replace(":", "").replace("+", "Z").replace("-", "").replace("T", "-")
 

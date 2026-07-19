@@ -1,9 +1,16 @@
+import json
+from dataclasses import replace
 from pathlib import Path
 
+from meta_flow.workspace.project_artifact_routing import (
+    load_project_artifact_config,
+    resolve_project_artifact_route,
+)
 from meta_flow.workspace.routing import (
     bootstrap_process_workspace,
     check_process_route,
     link_process_workspace,
+    project_route_to_process_health,
 )
 
 
@@ -102,3 +109,141 @@ artifact_routing:
     assert health.ok
     assert health.artifact_root == artifact_root.resolve()
     assert health.project_process_root == (artifact_root / "process" / "meta-flow").resolve()
+
+
+def test_project_route_projection_preserves_legacy_health_shape(tmp_path: Path) -> None:
+    project_root = tmp_path / "source" / "meta-flow"
+    project_root.mkdir(parents=True)
+    metadata_path = project_root / "project-artifact-route.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "project_id": "meta-flow",
+                "layout_version": "project-first-worktree-v1",
+                "artifact_control_root": {
+                    "anchor": "project_root",
+                    "relative_path": "artifact-control",
+                },
+                "sibling_root": {
+                    "anchor": "project_root",
+                    "relative_path": "artifact-worktrees",
+                },
+                "project_worktree": {
+                    "anchor": "sibling_root",
+                    "relative_path": "meta-flow",
+                },
+                "docs_relative": {
+                    "anchor": "project_worktree",
+                    "relative_path": "docs",
+                },
+                "process_relative": {
+                    "anchor": "project_worktree",
+                    "relative_path": "process",
+                },
+                "branch_namespace": "projects/meta-flow",
+                "owned_paths": ["docs", "process"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_project_artifact_config(
+        project_root=project_root,
+        requested_project_id="meta-flow",
+        metadata_path=metadata_path,
+    )
+    decision = resolve_project_artifact_route(
+        config,
+        project_root=project_root,
+        target_kind="process",
+        intent="write",
+    )
+
+    health = project_route_to_process_health(
+        config,
+        decision,
+        project_root=project_root,
+    )
+
+    assert health.ok
+    assert health.expected_project_name == "meta-flow"
+    assert health.routing_mode == "project-first-worktree-v1"
+    assert health.actual_target == (
+        project_root / "artifact-worktrees" / "meta-flow" / "process"
+    ).resolve()
+    assert health.project_process_root == health.actual_target
+    assert health.artifact_git_dirty == "unknown"
+
+
+def test_project_route_projection_rejects_cross_project_decision(tmp_path: Path) -> None:
+    project_root = tmp_path / "source" / "meta-flow"
+    project_root.mkdir(parents=True)
+    metadata_path = project_root / "project-artifact-route.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "project_id": "meta-flow",
+                "layout_version": "project-first-worktree-v1",
+                "artifact_control_root": {
+                    "anchor": "project_root",
+                    "relative_path": "artifact-control",
+                },
+                "sibling_root": {
+                    "anchor": "project_root",
+                    "relative_path": "artifact-worktrees",
+                },
+                "project_worktree": {
+                    "anchor": "sibling_root",
+                    "relative_path": "meta-flow",
+                },
+                "docs_relative": {
+                    "anchor": "project_worktree",
+                    "relative_path": "docs",
+                },
+                "process_relative": {
+                    "anchor": "project_worktree",
+                    "relative_path": "process",
+                },
+                "branch_namespace": "projects/meta-flow",
+                "owned_paths": ["docs", "process"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_project_artifact_config(
+        project_root=project_root,
+        requested_project_id="meta-flow",
+        metadata_path=metadata_path,
+    )
+    decision = resolve_project_artifact_route(
+        config,
+        project_root=project_root,
+        target_kind="process",
+        intent="write",
+    )
+    assert decision.write_target is not None
+    cross_project_target = replace(
+        decision.write_target,
+        runtime_path=project_root / "artifact-worktrees" / "other-project" / "process",
+    )
+    cross_project_decision = replace(
+        decision,
+        project_id="other-project",
+        write_target=cross_project_target,
+    )
+
+    health = project_route_to_process_health(
+        config,
+        cross_project_decision,
+        project_root=project_root,
+    )
+
+    assert not health.ok
+    assert health.status == "route_mismatch"
+    assert health.actual_target is None
+    assert health.project_process_root is None
+    assert any(
+        "decision project_id=other-project does not match config project_id=meta-flow" in error
+        for error in health.errors
+    )

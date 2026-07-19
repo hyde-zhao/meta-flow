@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -40,6 +41,163 @@ class GitCommandResult:
     @property
     def ok(self) -> bool:
         return self.returncode == 0
+
+
+GitRunner = Callable[[list[str], Path], GitCommandResult]
+
+
+@dataclass(frozen=True)
+class ExactRemoteRefObservation:
+    """精确远端 ref 观测；UNKNOWN 与 ABSENT 严格区分。"""
+
+    decision: str
+    ref: str
+    oid: str
+    reason: str
+    argv: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CreateOnlyRefResult:
+    """ordinary create-only push 的 fresh post-observation 结果。"""
+
+    decision: str
+    reason: str
+    ref: str
+    seed_oid: str
+    before_oid: str
+    after_oid: str
+    mutation_count: int
+    argv: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GitProbe:
+    decision: str
+    value: str
+    reason: str
+    argv: tuple[str, ...]
+
+
+def _default_runner(args: list[str], cwd: Path) -> GitCommandResult:
+    return run_git(args, cwd=cwd)
+
+
+def _validate_remote_and_ref(remote: str, ref: str) -> None:
+    if not remote or remote.startswith("-") or any(char in remote for char in "\x00\r\n"):
+        raise ValueError("remote must be a non-option token or path")
+    if (
+        not ref.startswith("refs/heads/")
+        or ref.startswith("-")
+        or any(char in ref for char in "\x00\r\n ~^:?*[\\")
+        or ".." in ref
+        or ref.endswith("/")
+    ):
+        raise ValueError("ref must be one exact safe heads ref")
+
+
+def query_exact_remote_ref(
+    root: Path,
+    remote: str,
+    ref: str,
+    *,
+    runner: GitRunner = _default_runner,
+) -> ExactRemoteRefObservation:
+    """只接受零或一个 exact ``ls-remote --refs`` 结果。"""
+
+    _validate_remote_and_ref(remote, ref)
+    args = ["ls-remote", "--refs", remote, ref]
+    result = runner(args, root)
+    if not result.ok:
+        return ExactRemoteRefObservation("UNKNOWN", ref, "", "remote_query_failed", result.argv)
+    rows: list[tuple[str, str]] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        columns = line.split()
+        if len(columns) != 2:
+            return ExactRemoteRefObservation("UNKNOWN", ref, "", "remote_query_malformed", result.argv)
+        rows.append((columns[0], columns[1]))
+    exact = [(oid, name) for oid, name in rows if name == ref]
+    if len(exact) > 1 or len(exact) != len(rows):
+        return ExactRemoteRefObservation("UNKNOWN", ref, "", "remote_query_ambiguous", result.argv)
+    if not exact:
+        return ExactRemoteRefObservation("ABSENT", ref, "", "exact_ref_absent", result.argv)
+    oid = exact[0][0]
+    if len(oid) not in {40, 64} or any(char not in "0123456789abcdefABCDEF" for char in oid):
+        return ExactRemoteRefObservation("UNKNOWN", ref, "", "remote_oid_invalid", result.argv)
+    return ExactRemoteRefObservation("PRESENT", ref, oid.lower(), "exact_ref_present", result.argv)
+
+
+def create_remote_ref_once(
+    root: Path,
+    remote: str,
+    ref: str,
+    seed_oid: str,
+    *,
+    runner: GitRunner = _default_runner,
+) -> CreateOnlyRefResult:
+    """从 exact OID 普通创建 ref；existing/race 永不 force、reset 或 delete。"""
+
+    _validate_remote_and_ref(remote, ref)
+    if len(seed_oid) not in {40, 64} or any(
+        char not in "0123456789abcdefABCDEF" for char in seed_oid
+    ):
+        raise ValueError("seed_oid must be one full hexadecimal object id")
+    seed_oid = seed_oid.lower()
+    before = query_exact_remote_ref(root, remote, ref, runner=runner)
+    if before.decision == "PRESENT":
+        return CreateOnlyRefResult(
+            "NO_CHANGE", "existing_ref", ref, seed_oid, before.oid, before.oid, 0, ()
+        )
+    if before.decision != "ABSENT":
+        return CreateOnlyRefResult(
+            "BLOCKED", "remote_observation_unknown", ref, seed_oid, "", "", 0, ()
+        )
+    args = ["push", remote, f"{seed_oid}:{ref}"]
+    result = runner(args, root)
+    after = query_exact_remote_ref(root, remote, ref, runner=runner)
+    if after.decision == "PRESENT" and after.oid == seed_oid:
+        reason = "created_exact_oid" if result.ok else "race_same_oid"
+        decision = "CREATED" if result.ok else "NO_CHANGE"
+        return CreateOnlyRefResult(
+            decision, reason, ref, seed_oid, "", after.oid, 1, result.argv
+        )
+    reason = (
+        "remote_race_conflict"
+        if after.decision == "PRESENT"
+        else "remote_observation_unknown"
+    )
+    return CreateOnlyRefResult(
+        "BLOCKED", reason, ref, seed_oid, "", after.oid, 1, result.argv
+    )
+
+
+def _read_probe(root: Path, args: list[str], runner: GitRunner) -> GitProbe:
+    result = runner(args, root)
+    if not result.ok:
+        return GitProbe("UNKNOWN", "", "git_probe_failed", result.argv)
+    return GitProbe("KNOWN", result.stdout.strip(), "git_probe_known", result.argv)
+
+
+def probe_common_git_dir(root: Path, *, runner: GitRunner = _default_runner) -> GitProbe:
+    return _read_probe(root, ["rev-parse", "--git-common-dir"], runner)
+
+
+def probe_symbolic_head(root: Path, *, runner: GitRunner = _default_runner) -> GitProbe:
+    return _read_probe(root, ["symbolic-ref", "-q", "HEAD"], runner)
+
+
+def probe_head_oid(root: Path, *, runner: GitRunner = _default_runner) -> GitProbe:
+    return _read_probe(root, ["rev-parse", "--verify", "HEAD^{commit}"], runner)
+
+
+def probe_status_porcelain(root: Path, *, runner: GitRunner = _default_runner) -> GitProbe:
+    return _read_probe(root, ["status", "--porcelain=v1", "--untracked-files=all"], runner)
+
+
+def probe_worktree_porcelain(root: Path, *, runner: GitRunner = _default_runner) -> GitProbe:
+    return _read_probe(root, ["worktree", "list", "--porcelain"], runner)
 
 
 def _git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:

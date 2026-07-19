@@ -7,6 +7,10 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from meta_flow.workspace.project_artifact_routing import ProjectArtifactConfig, RouteDecision
 
 ROUTE_METADATA_NAME = ".meta-flow-process.yaml"
 PROCESS_SCAFFOLD_DIRS = (
@@ -335,6 +339,63 @@ def require_process_health(project_root: Path) -> ProcessRouteHealth:
         ]
         raise SystemExit("\n".join(lines))
     return health
+
+
+def project_route_to_process_health(
+    config: ProjectArtifactConfig,
+    decision: RouteDecision,
+    *,
+    project_root: Path,
+) -> ProcessRouteHealth:
+    """把显式 project artifact route 单向投影为旧 health 结构。
+
+    该适配器不替代 ``check_process_route``，也不执行 Git、文件或软链接写入。
+    """
+
+    project_root = project_root.resolve(strict=False)
+    link_path = project_root / "process"
+    state_path = link_path / "STATE.md"
+    errors: list[str] = []
+    identity_matches = decision.project_id == config.project_id
+    if not identity_matches:
+        errors.append(
+            f"decision project_id={decision.project_id} does not match "
+            f"config project_id={config.project_id}; resolve a decision from the same config"
+        )
+    target = decision.write_target if identity_matches else None
+    if target is None and identity_matches:
+        target = next((item for item in decision.read_targets if item.role == "primary"), None)
+    if decision.target_kind != "process":
+        errors.append("project artifact decision target_kind must be process")
+    if decision.decision != "PASS":
+        if decision.error is None:
+            errors.append("project artifact route is blocked")
+        else:
+            errors.append(
+                f"{decision.error.code}: {decision.error.field}: {decision.error.message}; "
+                f"repair: {decision.error.repair_route}"
+            )
+    if target is None:
+        errors.append("project artifact decision has no process target")
+    status = "ok" if not errors else "route_mismatch"
+    artifact_root = (
+        project_root / config.artifact_control_root.relative_path
+    ).resolve(strict=False)
+    actual_target = target.runtime_path if target is not None else None
+    return ProcessRouteHealth(
+        status=status,
+        project_root=project_root,
+        link_path=link_path,
+        state_path=state_path,
+        routing_mode=config.layout_version,
+        expected_project_name=config.project_id,
+        actual_target=actual_target,
+        artifact_root=artifact_root,
+        project_process_root=actual_target,
+        errors=errors,
+        warnings=[],
+        artifact_git_dirty="unknown",
+    )
 
 
 def write_route_metadata(

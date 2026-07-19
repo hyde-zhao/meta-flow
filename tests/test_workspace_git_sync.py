@@ -1,7 +1,16 @@
 import subprocess
 from pathlib import Path
 
-from meta_flow.workspace.git_sync import push_workspace, workspace_repositories
+from meta_flow.workspace.git_sync import (
+    probe_common_git_dir,
+    probe_head_oid,
+    probe_status_porcelain,
+    probe_symbolic_head,
+    probe_worktree_porcelain,
+    push_workspace,
+    query_exact_remote_ref,
+    workspace_repositories,
+)
 from meta_flow.workspace.routing import bootstrap_process_workspace
 
 
@@ -106,3 +115,43 @@ def test_workspace_push_dry_run_targets_project_and_artifact_repositories(tmp_pa
     assert status == 0
     assert any("- project: git push --dry-run origin main" in line for line in lines)
     assert any("- artifact: git push --dry-run origin main" in line for line in lines)
+
+
+def test_exact_remote_ref_distinguishes_present_absent_and_unknown(tmp_path: Path) -> None:
+    remote = tmp_path / "remotes" / "project.git"
+    project = tmp_path / "project"
+    _init_bare(remote)
+    project.mkdir()
+    _init_repo(project, remote)
+    (project / "README.md").write_text("project\n", encoding="utf-8")
+    _commit_all(project, "initial")
+    _git(project, "push", "origin", "main")
+
+    present = query_exact_remote_ref(project, "origin", "refs/heads/main")
+    absent = query_exact_remote_ref(project, "origin", "refs/heads/missing")
+
+    assert present.decision == "PRESENT"
+    assert present.oid == _git(project, "rev-parse", "HEAD").stdout.strip()
+    assert absent.decision == "ABSENT"
+    assert absent.oid == ""
+
+
+def test_worktree_probes_are_read_only_and_typed(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    _init_repo(project)
+    (project / "README.md").write_text("project\n", encoding="utf-8")
+    _commit_all(project, "initial")
+    before = _git(project, "show-ref").stdout
+
+    common = probe_common_git_dir(project)
+    head = probe_symbolic_head(project)
+    oid = probe_head_oid(project)
+    status = probe_status_porcelain(project)
+    worktrees = probe_worktree_porcelain(project)
+
+    assert all(probe.decision == "KNOWN" for probe in (common, head, oid, status, worktrees))
+    assert head.value == "refs/heads/main"
+    assert oid.value == _git(project, "rev-parse", "HEAD").stdout.strip()
+    assert status.value == ""
+    assert before == _git(project, "show-ref").stdout

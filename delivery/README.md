@@ -21,6 +21,39 @@
 
 外置 process / docs 路由必须使用锚点 + 相对路径，不能把 `/home/...`、盘符或设备专属根目录写入 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`、`process/.meta-flow-process.yaml` 或发布 / 迁移文档。默认记录方式为：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。例如源码仓库旁边放置 artifact 仓库时，记录 `artifact_root=../meta-flow-artifacts`、`project_process_root=process/<project-name>`、`link_path=process`。
 
+## 源码仓库与共享产物仓库的 Git 周期
+
+源码 / 交付仓库与共享 artifacts 仓库是两个独立 Git 仓库，使用不同的分支目标。不能因为 `process` 或内部 `docs` 通过路由关联到 artifacts 仓库，就把两边解释为同一个 working tree、同一个当前分支或同一个默认合并目标。
+
+| 仓库 | 常驻基线 | CR 分支起点 | CR 完成目标 | 跨基线同步 |
+|---|---|---|---|---|
+| 源码 / 交付仓库 | 仓库自己的 default branch（`main` 或 `master`） | 最新 default branch | 推送并合并回该 default branch | 遵循源码仓库原有 review / merge 流程 |
+| 共享 artifacts 仓库 | shared `main` 只保留共享集成基线；每个项目常驻 `projects/<project>/integration` | 最新项目 integration | 只回合到同项目 integration | `main` 与项目 integration 的双向同步均为 CR 外人工操作 |
+
+项目优先的 artifacts 拓扑如下；单个 CR 不负责把 shared `main` 同步到项目 integration，也不负责把项目 integration 回灌到 `main`：
+
+```text
+main（共享集成基线）
+  ├── projects/quant-lab/integration（项目常驻）
+  │     └── projects/quant-lab/cr/cr-172-<slug>（短期）
+  └── projects/meta-flow/integration（项目常驻）
+        └── projects/meta-flow/cr/cr-051-<slug>（短期）
+```
+
+artifact worktree 空闲时驻留项目 integration；CR 活动期才切到该 CR 分支。切换契约要求 clean worktree、无进行中的 Git 操作、容量 / 权限预检、可持久化 intent、失败时 fail-closed，并通过重新观测决定恢复或继续。这里描述的是已实现且仅经离线 fixture 验证的库级能力；当前没有面向用户的 project-worktree 切换或 migration CLI。
+
+源码 leg 与 artifact leg 使用同一个 CR ID，但各自完成、各自保留证据。聚合状态采用 `BLOCKED > FAIL > IN_PROGRESS > PASS` 的最差状态；只有两个 leg 都是 terminal `PASS` 时，CR 才能声明整体完成。`meta-flow cr aggregate` 是已有的证据聚合入口，它不替代任一仓库的分支创建、合并、同步或发布授权。
+
+现有 `meta-flow workspace git-status --project-root .` 只读展示两个仓库各自的 branch、upstream、dirty、ahead 和 behind，不证明分支目标正确或已同步。`meta-flow workspace push` 是通用的顺序推送辅助命令，不是项目优先生命周期执行器：它不会创建 integration / CR 分支，不会执行 CR → integration 或 `main` ↔ integration 合并，也不会切换 worktree 或聚合双 leg；不得把它当作上述流程的自动化入口。
+
+| 能力 | 当前状态 |
+|---|---|
+| 项目优先路由、可恢复 worktree 切换、异构双 leg 生命周期、多项目 selector | 已实现；仅通过离线 fixture 验证 |
+| 只读迁移 preflight manifest | 已实现为 Python library / API；仅通过离线 fixture 验证，无用户 CLI |
+| 真实托管 remote、branch protection、Windows native、真实 worktree / ref、迁移、软链接与发布 | `not-authorized`；未执行、未验证 |
+
+`PASS_WITH_RISK`、`READY` 或 `READY_WITH_RISK` 只表示证据链或交付准备达到相应门槛，不授权真实 Git / worktree / ref / remote mutation、`main` ↔ integration 同步、迁移、软链接、凭据、网络或 publish。
+
 ## CP2 / CP3 讨论增强
 
 标准模式下，Meta Flow 会在两个关键人工门前加强讨论，但不新增 CP 编号或独立人工门：

@@ -177,6 +177,92 @@ def now_utc() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+class AggregateCompletionProjector:
+    """Project one persisted PASS aggregate through CR ledger and current-state writers."""
+
+    def __init__(self, *, project_root: Path, expected_state_updated_at: str) -> None:
+        self.project_root = project_root.resolve()
+        self.expected_state_updated_at = expected_state_updated_at
+
+    def project_aggregate(self, *, result: Any, receipt: Any) -> dict[str, Any]:
+        if not getattr(result, "cr_id", "") or not getattr(receipt, "aggregate_id", ""):
+            raise ValueError("aggregate projection receipt identity is missing")
+        if getattr(result, "aggregate_id", "") != getattr(receipt, "aggregate_id", ""):
+            raise ValueError("aggregate projection result/receipt identity mismatch")
+        if (
+            str(getattr(result, "overall", "")) != "PASS"
+            or getattr(result, "terminal", False) is not True
+            or str(getattr(result, "projection_decision", "")) != "ELIGIBLE"
+            or getattr(receipt, "readback_valid", False) is not True
+            or getattr(receipt, "current_selected", False) is not True
+        ):
+            raise ValueError("aggregate projection requires persisted/readback current 2/2 PASS")
+        cr_id = str(getattr(result, "cr_id", "") or "")
+        aggregate_ref = str(getattr(receipt, "aggregate_ref", "") or "")
+        writer_receipts: dict[str, Any] = {}
+        try:
+            state_receipt = current.project_aggregate_completion(
+                self.project_root,
+                cr_id=cr_id,
+                aggregate_id=str(result.aggregate_id),
+                aggregate_ref=aggregate_ref,
+                payload_digest=str(result.payload_digest),
+                expected_updated_at=self.expected_state_updated_at,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            return {
+                "status": "failed",
+                "writer_receipts": writer_receipts,
+                "error": f"state_current:{type(error).__name__}:{error}",
+            }
+        writer_receipts["state_current"] = state_receipt
+        existing_event = next(
+            (
+                event
+                for event in load_ledger_events(self.project_root)
+                if event.get("event") == "aggregate_projection"
+                and event.get("id") == cr_id
+                and event.get("aggregate_ref") == aggregate_ref
+            ),
+            None,
+        )
+        try:
+            if existing_event is None:
+                ledger_path = append_ledger_event(
+                    self.project_root,
+                    {
+                        "event": "aggregate_projection",
+                        "id": cr_id,
+                        "status": "active",
+                        "aggregate_id": result.aggregate_id,
+                        "aggregate_ref": aggregate_ref,
+                        "payload_digest": result.payload_digest,
+                        "projection_disposition": state_receipt.get("status"),
+                        "projected_at": now_utc(),
+                    },
+                )
+                ledger_receipt = {
+                    "status": "projected",
+                    "ledger_ref": _rel(self.project_root, ledger_path),
+                }
+            else:
+                ledger_receipt = {
+                    "status": "idempotent-existing",
+                    "ledger_ref": CR_LEDGER_REL.as_posix(),
+                }
+        except (OSError, RuntimeError, ValueError) as error:
+            return {
+                "status": "partial",
+                "writer_receipts": writer_receipts,
+                "error": f"cr_ledger:{type(error).__name__}:{error}",
+            }
+        writer_receipts["cr_ledger"] = ledger_receipt
+        return {
+            "status": "complete",
+            "writer_receipts": writer_receipts,
+        }
+
+
 def _strip_scalar(value: Any) -> str:
     raw = str(value).strip()
     if " #" in raw:
@@ -287,14 +373,20 @@ def _cr_id_from_path(path: Path) -> str:
     return match.group(0) if match else ""
 
 
-def _resolve_capability_refs(project_root: Path, refs: list[str], *, mode: str = "audit") -> dict[str, Any]:
+def _resolve_capability_refs(
+    project_root: Path, refs: list[str], *, mode: str = "audit"
+) -> dict[str, Any]:
     return feature_registry.resolve_refs(project_root, refs, kind="capability", mode=mode)
 
 
 def _normalized_capability_refs(resolution: dict[str, Any]) -> list[str]:
     normalized: list[str] = []
     for result in resolution.get("results", []):
-        if isinstance(result, dict) and result.get("status") == "resolved" and result.get("canonical_id"):
+        if (
+            isinstance(result, dict)
+            and result.get("status") == "resolved"
+            and result.get("canonical_id")
+        ):
             normalized.append(str(result["canonical_id"]))
     return normalized
 
@@ -306,7 +398,9 @@ def _capability_blockers(resolution: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(result, dict):
             continue
         status = result.get("status")
-        is_blocker = status in {"unresolved", "conflict"} or (mode == "enforce" and status == "deprecated")
+        is_blocker = status in {"unresolved", "conflict"} or (
+            mode == "enforce" and status == "deprecated"
+        )
         if is_blocker:
             blockers.append(
                 {
@@ -345,7 +439,9 @@ def _impact_split_payload(record: CRRecord) -> dict[str, list[str]]:
     }
 
 
-def _categorized_legacy_impact(impact_surface: list[str], *, project_root: Path | None = None) -> dict[str, list[str]]:
+def _categorized_legacy_impact(
+    impact_surface: list[str], *, project_root: Path | None = None
+) -> dict[str, list[str]]:
     derived: dict[str, list[str]] = {field: [] for field in IMPACT_SPLIT_FIELDS}
     for value in impact_surface:
         category = _legacy_impact_category(value, project_root=project_root)
@@ -355,7 +451,9 @@ def _categorized_legacy_impact(impact_surface: list[str], *, project_root: Path 
     return {key: _unique(values) for key, values in derived.items()}
 
 
-def _legacy_impact_category(value: str, *, project_root: Path | None = None) -> tuple[str, str] | None:
+def _legacy_impact_category(
+    value: str, *, project_root: Path | None = None
+) -> tuple[str, str] | None:
     builtin = _builtin_legacy_impact_category(value, include_generic_module=False)
     if builtin is not None:
         return builtin
@@ -367,7 +465,9 @@ def _legacy_impact_category(value: str, *, project_root: Path | None = None) -> 
     return _builtin_legacy_impact_category(value, include_generic_module=True)
 
 
-def _builtin_legacy_impact_category(value: str, *, include_generic_module: bool = True) -> tuple[str, str] | None:
+def _builtin_legacy_impact_category(
+    value: str, *, include_generic_module: bool = True
+) -> tuple[str, str] | None:
     lowered = value.lower()
     if value.startswith("CAP-") or lowered.startswith("capability:"):
         return "impact_capability_refs", value.split(":", 1)[-1]
@@ -379,7 +479,12 @@ def _builtin_legacy_impact_category(value: str, *, include_generic_module: bool 
         return "impact_process_refs", value.split(":", 1)[-1]
     if any(marker in lowered for marker in ("runtime", "trading", "live", "publish")):
         return "impact_runtime_refs", value
-    if lowered.startswith("data:") or lowered.startswith("data/") or "/data" in lowered or "data_" in lowered:
+    if (
+        lowered.startswith("data:")
+        or lowered.startswith("data/")
+        or "/data" in lowered
+        or "data_" in lowered
+    ):
         return "impact_data_refs", value.split(":", 1)[-1]
     if include_generic_module and ("/" in value or value.endswith(".py")):
         return "impact_module_paths", value
@@ -408,11 +513,15 @@ def _apply_impact_rule(rule: Any, value: str, *, index: int) -> tuple[str, str]:
         raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}] must be an object")
     target_field = str(rule.get("target_field") or "")
     if target_field not in IMPACT_SPLIT_FIELDS:
-        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].target_field is invalid: {target_field}")
+        raise ValueError(
+            f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].target_field is invalid: {target_field}"
+        )
     match = str(rule.get("match") or "prefix")
     pattern = str(rule.get("pattern") or "")
     if not pattern:
-        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].pattern must be non-empty")
+        raise ValueError(
+            f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].pattern must be non-empty"
+        )
     matched = False
     if match == "prefix":
         matched = value.startswith(pattern)
@@ -426,24 +535,38 @@ def _apply_impact_rule(rule: Any, value: str, *, index: int) -> tuple[str, str]:
         try:
             matched = re.search(pattern, value) is not None
         except re.error as exc:
-            raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].pattern invalid regex: {exc}") from exc
+            raise ValueError(
+                f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].pattern invalid regex: {exc}"
+            ) from exc
     else:
-        raise ValueError(f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].match is invalid: {match}")
+        raise ValueError(
+            f"{IMPACT_SURFACE_RULES_REL.as_posix()} rules[{index}].match is invalid: {match}"
+        )
     if not matched:
         return "", ""
     normalized = value
     if rule.get("strip_prefix") is True and value.startswith(pattern):
-        normalized = value[len(pattern):]
+        normalized = value[len(pattern) :]
     if isinstance(rule.get("replacement"), str) and rule.get("replacement"):
         normalized = str(rule["replacement"])
     return target_field, normalized
 
 
-def _uncategorized_legacy_impact(impact_surface: list[str], *, project_root: Path | None = None) -> list[str]:
-    return _unique([value for value in impact_surface if _legacy_impact_category(value, project_root=project_root) is None])
+def _uncategorized_legacy_impact(
+    impact_surface: list[str], *, project_root: Path | None = None
+) -> list[str]:
+    return _unique(
+        [
+            value
+            for value in impact_surface
+            if _legacy_impact_category(value, project_root=project_root) is None
+        ]
+    )
 
 
-def _impact_followup_candidates(cr_id: str, uncategorized_legacy: list[str]) -> list[dict[str, Any]]:
+def _impact_followup_candidates(
+    cr_id: str, uncategorized_legacy: list[str]
+) -> list[dict[str, Any]]:
     if not uncategorized_legacy:
         return []
     return [
@@ -458,14 +581,18 @@ def _impact_followup_candidates(cr_id: str, uncategorized_legacy: list[str]) -> 
     ]
 
 
-def _merge_impact_fields(base: dict[str, list[str]], extra: dict[str, list[str]]) -> dict[str, list[str]]:
+def _merge_impact_fields(
+    base: dict[str, list[str]], extra: dict[str, list[str]]
+) -> dict[str, list[str]]:
     merged: dict[str, list[str]] = {}
     for field in IMPACT_SPLIT_FIELDS:
         merged[field] = _unique([*base.get(field, []), *extra.get(field, [])])
     return merged
 
 
-def _effective_impact_fields(record: CRRecord, *, project_root: Path | None = None) -> dict[str, list[str]]:
+def _effective_impact_fields(
+    record: CRRecord, *, project_root: Path | None = None
+) -> dict[str, list[str]]:
     return _merge_impact_fields(
         _impact_split_payload(record),
         _categorized_legacy_impact(record.impact_surface, project_root=project_root),
@@ -524,11 +651,15 @@ def _record_required_evidence(record: CRRecord, text: str = "") -> list[str]:
     return _unique([*record.required_evidence, *inferred])
 
 
-def collect_scope_authz_findings(record: CRRecord, *, text: str = "") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def collect_scope_authz_findings(
+    record: CRRecord, *, text: str = ""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return blocking conflicts and review findings for CR scope/authz consistency."""
 
     required_evidence = _record_required_evidence(record, text)
-    authz_caps = authz.normalize_capability_aliases(record.authz_policy_refs + record.not_authorized_by_approve)
+    authz_caps = authz.normalize_capability_aliases(
+        record.authz_policy_refs + record.not_authorized_by_approve
+    )
     required_from_evidence = authz.required_capabilities_for_evidence(required_evidence)
     forbidden = set(authz_caps["forbidden"])
     allowed = set(authz_caps["allowed"])
@@ -550,7 +681,8 @@ def collect_scope_authz_findings(record: CRRecord, *, text: str = "") -> tuple[l
 
     direct_evidence_overlap = sorted(set(required_from_evidence["direct"]).intersection(forbidden))
     prerequisite_overlap = sorted(
-        set(required_from_evidence["prerequisites"]).intersection(forbidden) - set(direct_evidence_overlap)
+        set(required_from_evidence["prerequisites"]).intersection(forbidden)
+        - set(direct_evidence_overlap)
     )
     if direct_evidence_overlap:
         blockers.append(
@@ -576,7 +708,11 @@ def collect_scope_authz_findings(record: CRRecord, *, text: str = "") -> tuple[l
         )
 
     high_risk_evidence = {"real_lake_validation", "historical_backtest", "oos_walkforward"}
-    if high_risk_evidence.intersection(required_evidence) and "real_lake_read" not in allowed and "real_lake_read" not in forbidden:
+    if (
+        high_risk_evidence.intersection(required_evidence)
+        and "real_lake_read" not in allowed
+        and "real_lake_read" not in forbidden
+    ):
         needs_review.append(
             {
                 "level": "L3",
@@ -597,7 +733,9 @@ def collect_scope_authz_findings(record: CRRecord, *, text: str = "") -> tuple[l
     return blockers, needs_review
 
 
-def _governance_dependency_values(record: CRRecord, *, project_root: Path | None = None) -> list[str]:
+def _governance_dependency_values(
+    record: CRRecord, *, project_root: Path | None = None
+) -> list[str]:
     effective = _effective_impact_fields(record, project_root=project_root)
     values: list[str] = []
     values.extend(record.conflict_keys)
@@ -621,7 +759,9 @@ def _governance_markers(values: list[str]) -> set[str]:
 def _is_open_governance_baseline_cr(record: CRRecord, *, project_root: Path | None = None) -> bool:
     if record.status not in OPEN_DEPENDENCY_STATUSES or record.cr_type != "process":
         return False
-    return bool(_governance_markers(_governance_dependency_values(record, project_root=project_root)))
+    return bool(
+        _governance_markers(_governance_dependency_values(record, project_root=project_root))
+    )
 
 
 def collect_governance_dependency_findings(
@@ -668,7 +808,10 @@ def classify_cp1_review_profile(record: CRRecord) -> dict[str, Any]:
     """Classify how much CP1 use-case completeness review the CR needs."""
 
     product_doc_values = [value.lower() for value in record.affected_product_docs]
-    impact_values = [value.lower() for value in record.impact_surface + record.impact_process_refs + record.impact_module_paths]
+    impact_values = [
+        value.lower()
+        for value in record.impact_surface + record.impact_process_refs + record.impact_module_paths
+    ]
     product_baseline_touched = record.product_baseline_refresh_required or any(
         any(marker in value for marker in CP1_PRODUCT_BASELINE_DOCS)
         for value in [*product_doc_values, *impact_values]
@@ -725,7 +868,9 @@ def _archive_backup_refs(record: CRRecord, *, project_root: Path | None = None) 
 def _is_housekeeping_cr(record: CRRecord) -> bool:
     values = [record.title, record.cr_type, *record.conflict_keys, *record.impact_surface]
     lowered = " ".join(str(value).lower() for value in values if str(value))
-    return record.cr_type == "process" and any(marker in lowered for marker in HOUSEKEEPING_CR_MARKERS)
+    return record.cr_type == "process" and any(
+        marker in lowered for marker in HOUSEKEEPING_CR_MARKERS
+    )
 
 
 def collect_archive_isolation_findings(
@@ -782,7 +927,9 @@ def record_from_cr_file(project_root: Path, path: Path) -> CRRecord:
         status = "active"
     summary_ref = (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
     impact_capability_refs = parse_inline_list(fields.get("impact_capability_refs", ""))
-    capability_resolution = _resolve_capability_refs(project_root, impact_capability_refs, mode="audit")
+    capability_resolution = _resolve_capability_refs(
+        project_root, impact_capability_refs, mode="audit"
+    )
     return CRRecord(
         cr_id=cr_id,
         cr_type=normalize_cr_type(fields.get("cr_type") or fields.get("cr_kind") or "feature"),
@@ -816,7 +963,9 @@ def record_from_cr_file(project_root: Path, path: Path) -> CRRecord:
         approve_effect=fields.get("approve_effect", ""),
         reject_effect=fields.get("reject_effect", ""),
         not_authorized_by_approve=parse_inline_list(fields.get("not_authorized_by_approve", "")),
-        product_baseline_refresh_required=parse_bool(fields.get("product_baseline_refresh_required", "")),
+        product_baseline_refresh_required=parse_bool(
+            fields.get("product_baseline_refresh_required", "")
+        ),
         required_phase=fields.get("required_phase", ""),
         required_agent=fields.get("required_agent", ""),
         required_gate=fields.get("required_gate", ""),
@@ -829,7 +978,9 @@ def record_from_cr_file(project_root: Path, path: Path) -> CRRecord:
     )
 
 
-def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | None = None) -> dict[str, Any]:
+def summary_from_cr_file(
+    project_root: Path, path: Path, *, readiness: str | None = None
+) -> dict[str, Any]:
     record = record_from_cr_file(project_root, path)
     text = path.read_text(encoding="utf-8")
     summary = {
@@ -845,7 +996,9 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
         "impact_surface": record.impact_surface,
         **_impact_split_payload(record),
         "impact_capability_resolution": record.impact_capability_resolution,
-        "impact_capability_normalized": _normalized_capability_refs(record.impact_capability_resolution),
+        "impact_capability_normalized": _normalized_capability_refs(
+            record.impact_capability_resolution
+        ),
         "conflict_keys": record.conflict_keys,
         "remaining_risks": record.risk_refs,
         "followup_candidates": [],
@@ -860,7 +1013,8 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
         "decision_burden": record.decision_burden,
         "approve_effect": record.approve_effect or _first_section_summary(text, "## approve 后果"),
         "reject_effect": record.reject_effect,
-        "not_authorized_by_approve": record.not_authorized_by_approve or _section_summary(text, "## 不授权范围"),
+        "not_authorized_by_approve": record.not_authorized_by_approve
+        or _section_summary(text, "## 不授权范围"),
         "product_baseline_refresh_required": record.product_baseline_refresh_required,
         "required_phase": record.required_phase,
         "required_agent": record.required_agent,
@@ -872,7 +1026,9 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
         "required_evidence": _record_required_evidence(record, text),
         "required_capabilities": record.required_capabilities,
         "full_ref": record.full_ref,
-        "evidence_index_ref": (CR_ARCHIVE_ROOT_REL / record.cr_id / "evidence-index.json").as_posix(),
+        "evidence_index_ref": (
+            CR_ARCHIVE_ROOT_REL / record.cr_id / "evidence-index.json"
+        ).as_posix(),
         "updated_at": now_utc(),
     }
     blockers, needs_review = collect_scope_authz_findings(record, text=text)
@@ -917,7 +1073,9 @@ def write_evidence_index(project_root: Path, cr_id: str, summary: dict[str, Any]
         "evidence_refs": [],
         "created_at": now_utc(),
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return path
 
 
@@ -973,7 +1131,9 @@ def build_index(project_root: Path) -> dict[str, Any]:
                 "impact_surface": record.impact_surface,
                 **_impact_split_payload(record),
                 "impact_capability_resolution": record.impact_capability_resolution,
-                "impact_capability_normalized": _normalized_capability_refs(record.impact_capability_resolution),
+                "impact_capability_normalized": _normalized_capability_refs(
+                    record.impact_capability_resolution
+                ),
                 "authz_policy_refs": record.authz_policy_refs,
                 "risk_refs": record.risk_refs,
                 "product_baseline_refresh_required": record.product_baseline_refresh_required,
@@ -984,7 +1144,9 @@ def build_index(project_root: Path) -> dict[str, Any]:
                 "affected_product_docs": record.affected_product_docs,
                 "affected_use_cases": record.affected_use_cases,
                 "routing_design_ref": record.routing_design_ref,
-                "required_evidence": _record_required_evidence(record, path.read_text(encoding="utf-8")),
+                "required_evidence": _record_required_evidence(
+                    record, path.read_text(encoding="utf-8")
+                ),
                 "required_capabilities": record.required_capabilities,
             }
         )
@@ -1019,7 +1181,10 @@ def write_index(project_root: Path) -> Path:
     project_root = project_root.resolve()
     path = project_root / CR_INDEX_REL
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(build_index(project_root), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(build_index(project_root), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return path
 
 
@@ -1141,7 +1306,9 @@ def _write_cp0_result(project_root: Path, cr_id: str, context_ref: str) -> Path:
         "checked_at": now_utc(),
     }
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    result_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return result_path
 
 
@@ -1188,7 +1355,10 @@ def bootstrap_cr(
     cp0_summary_path = cp0_result_path.with_suffix(".summary.md")
     from meta_flow.checks import cp_result
 
-    cp0_summary_path.write_text(cp_result.render_summary(json.loads(cp0_result_path.read_text(encoding="utf-8"))), encoding="utf-8")
+    cp0_summary_path.write_text(
+        cp_result.render_summary(json.loads(cp0_result_path.read_text(encoding="utf-8"))),
+        encoding="utf-8",
+    )
     ledger_path = append_ledger_event(
         project_root,
         {
@@ -1310,7 +1480,9 @@ def sync_cr_status(
                 {
                     "active_change": None,
                     "active_context_ref": None,
-                    "current_phase": "delivered" if status == "closed" else str(state.get("current_phase") or "delivered"),
+                    "current_phase": "delivered"
+                    if status == "closed"
+                    else str(state.get("current_phase") or "delivered"),
                     "pending_gate": None,
                     "pending_checklist_path": None,
                     "next_action": {
@@ -1396,7 +1568,13 @@ def collect_check_errors(project_root: Path) -> list[str]:
                 errors.append(f"STATE.current.json active_change points to closed CR: {cr_id}")
         if cr_id and cr_id in items:
             index_status = items[cr_id].get("status")
-            if status == "closed" and index_status not in {"closed", "active", "implemented", "verified", "ready"}:
+            if status == "closed" and index_status not in {
+                "closed",
+                "active",
+                "implemented",
+                "verified",
+                "ready",
+            }:
                 errors.append(f"CR index status for {cr_id} is inconsistent: {index_status}")
     for item_id, item in items.items():
         status = item.get("status")
@@ -1415,7 +1593,9 @@ def collect_check_errors(project_root: Path) -> list[str]:
             str(key).startswith("cr_trait_") for key in frontmatter_fields
         )
         if record.status not in FINISHED_STATUSES and has_route_contract:
-            route_errors, _route_warnings = route_plan.validate_route_plan_for_cr(project_root, path)
+            route_errors, _route_warnings = route_plan.validate_route_plan_for_cr(
+                project_root, path
+            )
             errors.extend(route_errors)
         blockers, _needs_review = collect_scope_authz_findings(record, text=text)
         for blocker in blockers:
@@ -1439,7 +1619,9 @@ def collect_check_warnings(project_root: Path) -> list[str]:
             str(key).startswith("cr_trait_") for key in frontmatter_fields
         )
         if record.status not in FINISHED_STATUSES and has_route_contract:
-            _route_errors, route_warnings = route_plan.validate_route_plan_for_cr(project_root, path)
+            _route_errors, route_warnings = route_plan.validate_route_plan_for_cr(
+                project_root, path
+            )
             warnings.extend(route_warnings)
         for finding in collect_governance_dependency_findings(project_root, record):
             markers = ", ".join(finding.get("marker_overlap") or [])
@@ -1464,7 +1646,9 @@ def _conflict_surface(item: dict[str, Any]) -> set[str]:
     values.extend(str(value) for value in item.get("impact_surface") or [] if str(value))
     for field in IMPACT_SPLIT_FIELDS:
         values.extend(str(value) for value in item.get(field) or [] if str(value))
-    values.extend(str(value) for value in item.get("impact_capability_normalized") or [] if str(value))
+    values.extend(
+        str(value) for value in item.get("impact_capability_normalized") or [] if str(value)
+    )
     return set(values)
 
 
@@ -1492,7 +1676,9 @@ def conflict_report(project_root: Path, cr_id: str) -> tuple[list[str], list[str
                 f"{cr_id} overlaps {other_id}: conflict_keys={sorted(key_overlap)} impact_surface={sorted(surface_overlap)}"
             )
     if not target_keys and not target_surface:
-        warnings.append(f"{cr_id} has no conflict_keys or impact fields; conflict detection is weak")
+        warnings.append(
+            f"{cr_id} has no conflict_keys or impact fields; conflict detection is weak"
+        )
     return conflicts, warnings
 
 
@@ -1507,8 +1693,12 @@ def build_impact_report(project_root: Path, *, mode: str = "enforce") -> dict[st
     for cr_id, path in discover_formal_crs(project_root).items():
         record = record_from_cr_file(project_root, path)
         explicit = _impact_split_payload(record)
-        derived_from_legacy = _categorized_legacy_impact(record.impact_surface, project_root=project_root)
-        uncategorized_legacy = _uncategorized_legacy_impact(record.impact_surface, project_root=project_root)
+        derived_from_legacy = _categorized_legacy_impact(
+            record.impact_surface, project_root=project_root
+        )
+        uncategorized_legacy = _uncategorized_legacy_impact(
+            record.impact_surface, project_root=project_root
+        )
         if uncategorized_legacy:
             uncategorized_cr_count += 1
             uncategorized_legacy_count += len(uncategorized_legacy)
@@ -1556,7 +1746,9 @@ def build_impact_report(project_root: Path, *, mode: str = "enforce") -> dict[st
 
 def write_impact_report(path: Path, report: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return path
 
 
@@ -1641,12 +1833,17 @@ def render_cr_brief(project_root: Path, cr_id: str, *, mode: str = "audit") -> s
     if uncategorized_legacy:
         lines.extend(["", "## 未分类 legacy impact_surface", ""])
         lines.extend(f"- {item}" for item in uncategorized_legacy)
-        for candidate in _impact_followup_candidates(str(summary.get("id") or cr_id), uncategorized_legacy):
+        for candidate in _impact_followup_candidates(
+            str(summary.get("id") or cr_id), uncategorized_legacy
+        ):
             lines.append(f"- follow-up candidate: {candidate['candidate_id']}")
     capability_blockers = _capability_blockers(capability_resolution)
     if capability_blockers:
         lines.extend(["", "## capability ref blockers", ""])
-        lines.extend(f"- {item['input_ref']}: {item['status']} {item['code']}" for item in capability_blockers)
+        lines.extend(
+            f"- {item['input_ref']}: {item['status']} {item['code']}"
+            for item in capability_blockers
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -1658,7 +1855,9 @@ def render_goal_brief(project_root: Path, goal_ref: str) -> str:
         if isinstance(item, dict) and item.get("goal_ref") == goal_ref
     ]
     if not items:
-        raise FileNotFoundError(f"CR-INDEX.json 中未找到 goal_ref={goal_ref!r} 的 CR；请先运行 meta-flow cr index")
+        raise FileNotFoundError(
+            f"CR-INDEX.json 中未找到 goal_ref={goal_ref!r} 的 CR；请先运行 meta-flow cr index"
+        )
     lines = [
         f"# Goal Brief: {goal_ref}",
         "",
@@ -1671,12 +1870,131 @@ def render_goal_brief(project_root: Path, goal_ref: str) -> str:
             summary = _load_summary(project_root, str(item["id"]))
         except (FileNotFoundError, json.JSONDecodeError):
             summary = item
-        contribution = summary.get("user_goal_impact") or summary.get("goal_statement") or item.get("title") or "-"
+        contribution = (
+            summary.get("user_goal_impact")
+            or summary.get("goal_statement")
+            or item.get("title")
+            or "-"
+        )
         lines.append(
             f"| `{item.get('id')}` | {item.get('status')} | {item.get('cr_type')} | {contribution} | "
             f"{item.get('decision_burden') or '-'} | {item.get('gate_status') or '-'} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def aggregate_main(argv: list[str] | None = None) -> int:
+    """Run the explicit CR-051 aggregate evidence gate without implicit lifecycle actions."""
+    from meta_flow.workflow.artifact_aggregate import (
+        AggregateRequest,
+        FileAggregateStore,
+        PersistDisposition,
+        ProjectFileLegResultReader,
+        ProjectionStatus,
+        coordinate_aggregate,
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="meta-flow cr aggregate",
+        description=(
+            "Validate explicit source/artifact published handles, compute the aggregate, and "
+            "optionally persist or project a 2/2 PASS through controlled writers."
+        ),
+    )
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--id", dest="cr_id", required=True)
+    parser.add_argument("--project-id", default="")
+    parser.add_argument("--operation-id", required=True)
+    parser.add_argument("--attempt", type=int, required=True)
+    parser.add_argument("--source-handle", type=Path, required=True)
+    parser.add_argument("--artifact-handle", type=Path, required=True)
+    parser.add_argument("--source-mode", choices=("source-default",), default="source-default")
+    parser.add_argument(
+        "--artifact-mode",
+        choices=("shared-artifact-project-first",),
+        default="shared-artifact-project-first",
+    )
+    parser.add_argument("--policy-version", default="aggregate-v1")
+    parser.add_argument("--expected-current-ref", default=None)
+    parser.add_argument("--store-root", type=Path, default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--project-completion", action="store_true")
+    parser.add_argument("--expected-state-updated-at", default="")
+    parsed = parser.parse_args(list(argv or []))
+    if not CR_ID_RE.fullmatch(parsed.cr_id):
+        parser.error("--id must use CR-xxx naming")
+    if parsed.project_completion and parsed.dry_run:
+        parser.error("--project-completion cannot be combined with --dry-run")
+    if parsed.project_completion and not parsed.expected_state_updated_at:
+        parser.error("--expected-state-updated-at is required with --project-completion")
+
+    project_root = parsed.project_root.resolve()
+    handles: list[dict[str, Any]] = []
+    for label, path in (
+        ("source", parsed.source_handle),
+        ("artifact", parsed.artifact_handle),
+    ):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"unable to read {label} handle: {exc}")
+        if not isinstance(payload, dict):
+            parser.error(f"{label} handle must be a JSON object")
+        handles.append(payload)
+
+    request = AggregateRequest(
+        operation_id=parsed.operation_id,
+        logical_attempt=parsed.attempt,
+        cr_id=parsed.cr_id,
+        project_id=parsed.project_id or project_root.name,
+        required_legs=("source", "artifact"),
+        expected_modes=(
+            ("source", parsed.source_mode),
+            ("artifact", parsed.artifact_mode),
+        ),
+        policy_version=parsed.policy_version,
+    )
+    reader = ProjectFileLegResultReader(project_root)
+    store_root = parsed.store_root
+    if store_root is not None and not store_root.is_absolute():
+        store_root = project_root / store_root
+    store = (
+        None
+        if parsed.dry_run
+        else FileAggregateStore(project_root=project_root, store_root=store_root)
+    )
+    projector = (
+        AggregateCompletionProjector(
+            project_root=project_root,
+            expected_state_updated_at=parsed.expected_state_updated_at,
+        )
+        if parsed.project_completion
+        else None
+    )
+    command = coordinate_aggregate(
+        request,
+        handles,
+        reader=reader,
+        store=store,
+        projector=projector,
+        expected_current_ref=parsed.expected_current_ref,
+        dry_run=parsed.dry_run,
+        project=parsed.project_completion,
+    )
+    print(json.dumps(command.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    if command.validation_errors:
+        return 2
+    if command.write_receipt is not None and command.write_receipt.disposition in {
+        PersistDisposition.CONFLICT,
+        PersistDisposition.FAILED,
+    }:
+        return 3
+    if command.projection_receipt is not None and command.projection_receipt.status in {
+        ProjectionStatus.PARTIAL,
+        ProjectionStatus.FAILED,
+    }:
+        return 4
+    return 0
 
 
 def _print_cr_help() -> None:
@@ -1690,6 +2008,7 @@ def _print_cr_help() -> None:
         "  goal-brief Print all CRs attached to one goal_ref.\n"
         "  impact-report Print a side-effect-free impact surface migration report as JSON.\n"
         "  status-sync Sync one CR frontmatter, summary, CR-INDEX, ledger, and active STATE pointer.\n"
+        "  aggregate  Validate explicit published leg handles and persist/project a guarded aggregate.\n"
         "  branch-open Open paired project/artifact CR branches from fresh remote defaults.\n"
         "  branch-publish Publish existing committed CR refs; never stage or commit.\n"
         "  branch-merge Explicitly fast-forward paired remote defaults from published tips.\n"
@@ -1698,7 +2017,7 @@ def _print_cr_help() -> None:
         "  check      Validate CR ledger, index, summaries, and active state refs.\n"
         "  conflicts  Compare active/proposed/blocked CR conflict keys from CR-INDEX.json.\n\n"
         "Examples:\n"
-        "  meta-flow cr bootstrap --id CR-001 --title \"target adoption bootstrap\" --scope \"Initialize Meta Flow adoption readiness.\" --project-root .\n"
+        '  meta-flow cr bootstrap --id CR-001 --title "target adoption bootstrap" --scope "Initialize Meta Flow adoption readiness." --project-root .\n'
         "  meta-flow cr index --project-root .\n"
         "  meta-flow cr summary --id CR-101 --project-root .\n"
         "  meta-flow cr brief --id CR-101 --project-root .\n"
@@ -1706,6 +2025,7 @@ def _print_cr_help() -> None:
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow cr impact-report --project-root .\n"
         "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --project-root .\n"
+        "  meta-flow cr aggregate --id CR-051 --operation-id operation-001 --attempt 1 --source-handle source.json --artifact-handle artifact.json --dry-run --project-root .\n"
         "  meta-flow cr branch-open --id CR-101 --slug safe-change --dry-run --project-root .\n"
         "  meta-flow cr branch-publish --id CR-101 --branch cr/cr-101-safe-change --dry-run --project-root .\n"
         "  meta-flow cr branch-merge --id CR-101 --branch cr/cr-101-safe-change --publish-result publish.json --dry-run --project-root .\n"
@@ -1721,6 +2041,8 @@ def main(argv: list[str] | None = None) -> int:
         _print_cr_help()
         return 0
     command = args[0]
+    if command == "aggregate":
+        return aggregate_main(args[1:])
     if command in {"branch-open", "branch-publish", "branch-merge", "branch-finish"}:
         from meta_flow.workflow.git_branch_lifecycle import branch_main
 
@@ -1729,7 +2051,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--id", dest="cr_id", default="")
     parser.add_argument("--title", default="Meta Flow adoption bootstrap")
-    parser.add_argument("--scope", default="Bootstrap Meta Flow adoption readiness for this target project.")
+    parser.add_argument(
+        "--scope", default="Bootstrap Meta Flow adoption readiness for this target project."
+    )
     parser.add_argument(
         "--gate-status",
         default="cp2_pending",
@@ -1831,7 +2155,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if conflicts else 0
     raise SystemExit(
         f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, "
-        "status-sync, branch-open, branch-publish, branch-merge, branch-finish, close, check, conflicts"
+        "status-sync, aggregate, branch-open, branch-publish, branch-merge, branch-finish, close, check, conflicts"
     )
 
 
