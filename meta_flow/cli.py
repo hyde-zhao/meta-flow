@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import runpy
 import sys
@@ -280,6 +281,7 @@ def _print_help() -> None:
         "  design     Validate design deltas and long-lived design write-back status.\n"
         "  event      Append, list, and validate NDJSON process event ledgers.\n"
         "  eval       Validate and run local workflow evaluation packages.\n"
+        "  evolution  Review, package, start, and evaluate bounded Meta Flow evolution.\n"
         "  feature    Manage Feature Registry and Story-to-Feature traceability.\n"
         "  failure    Validate failure routing policy and CP route_on_fail values.\n"
         "  gate       Classify and validate gate profiles.\n"
@@ -291,12 +293,15 @@ def _print_help() -> None:
         "  policy     List, expand, and validate authorization policies.\n"
         "  project    Scaffold and validate process/project governance state.\n"
         "  quality    Validate quality model and eval matrix policies.\n"
+        "  repository Plan/apply one allowlisted commit or exact-OID fast-forward push.\n"
+        "  retrospective Build and validate evidence-based project or phase retrospectives.\n"
         "  story      Validate Story return packets and evidence indexes.\n"
         "  validation Generate or execute profile-driven validation task evidence.\n"
         "  waiver     Validate waiver policy and CP waiver records.\n"
+        "  work       Classify, create, check, and query vNext Work envelopes.\n"
         "  ask-user   Generate exact user prompts or Codex request_user_input payloads.\n"
         "  state      Migrate, render, and validate lightweight runtime state v2.\n"
-        "  workspace  Check, link, bootstrap, status, or push the external process workspace.\n"
+        "  workspace  Legacy shared-artifact route/push commands; new projects use project/repository.\n"
         "  status     Show current process/STATE.md summary.\n"
         "  next       Show the exact next prompt; never falls back to vague continue/agree wording.\n"
         "  doctor     Check local Meta Flow runtime structure, token budgets, context expansion, or artifacts.\n\n"
@@ -590,6 +595,8 @@ def _run_check(args: list[str]) -> None:
 def _print_workspace_help() -> None:
     print(
         "usage: meta-flow workspace <command> [options]\n\n"
+        "LEGACY: these commands manage the historical shared-artifact layout. "
+        "New projects should use `meta-flow project init` and `meta-flow repository commit|push`.\n\n"
         "Commands:\n"
         "  check      Print process route health.\n"
         "  link       Create process -> <artifact-root>/process/<project-name> and process scaffold.\n"
@@ -843,9 +850,18 @@ def _run_project(args: list[str]) -> None:
         print(
             "usage: meta-flow project <command> [options]\n\n"
             "Commands:\n"
+            "  init      Preview or apply a vNext independent process repository.\n"
+            "  adopt     Preview or explicitly authorize one snapshot-only project adoption.\n"
+            "  status    Check the vNext project binding and independent process route.\n"
+            "  query     Read at most five directly referenced Project/Phase/Work objects.\n"
             "  scaffold  Preview or apply process/project/PROJECT.current.json scaffold.\n"
-            "  check     Validate PROJECT.current.json, PROJECT-SCALE, ROADMAP, and MILESTONES.\n\n"
+            "  check     Validate vNext binding when present; otherwise validate legacy project governance.\n\n"
             "Examples:\n"
+            "  meta-flow project init --project-root . --project-id demo\n"
+            "  meta-flow project init --project-root . --project-id demo --apply\n"
+            "  meta-flow project adopt --project-id demo --source-id legacy --source-process-root ../legacy --target-process-root ../demo-process --include-ref PROJECT.yaml\n"
+            "  meta-flow project status --project-root .\n"
+            "  meta-flow project query --project-root .\n"
             "  meta-flow project scaffold --project-root .\n"
             "  meta-flow project scaffold --project-root . --apply\n"
             "  meta-flow project check --project-root .\n"
@@ -853,15 +869,62 @@ def _run_project(args: list[str]) -> None:
         return
     command = args[0]
     forwarded = args[1:]
+    if command == "init":
+        from meta_flow.project import onboarding
+
+        raise SystemExit(onboarding.init_main(forwarded))
+    if command == "adopt":
+        from meta_flow.project import adoption
+
+        raise SystemExit(adoption.main(forwarded))
+    if command == "status":
+        from meta_flow.project import onboarding
+
+        raise SystemExit(onboarding.status_main(forwarded))
+    if command == "query":
+        from meta_flow.project import query
+
+        raise SystemExit(query.main(forwarded))
     if command == "scaffold":
         from meta_flow.project import scaffold
 
         raise SystemExit(scaffold.main(forwarded))
     if command == "check":
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parsed, _unknown = parser.parse_known_args(forwarded)
+        if (parsed.project_root.resolve() / ".meta-flow" / "workspace.yaml").is_file():
+            from meta_flow.project import onboarding
+
+            raise SystemExit(onboarding.status_main(forwarded))
         from meta_flow.project import state
 
         raise SystemExit(state.main(forwarded))
-    raise SystemExit(f"未知 project 命令: {command}. 目前支持: scaffold, check")
+    raise SystemExit(f"未知 project 命令: {command}. 目前支持: init, adopt, status, query, scaffold, check")
+
+
+def _run_work(args: list[str]) -> None:
+    from meta_flow.work import cli as work_cli
+
+    raise SystemExit(work_cli.main(args))
+
+
+def _run_retrospective(args: list[str]) -> None:
+    from meta_flow import retrospective_cli
+
+    raise SystemExit(retrospective_cli.main(args))
+
+
+def _run_evolution(args: list[str]) -> None:
+    from meta_flow import evolution_cli
+
+    raise SystemExit(evolution_cli.main(args))
+
+
+def _run_repository(args: list[str]) -> None:
+    from meta_flow.repository import cli as repository_cli
+
+    raise SystemExit(repository_cli.main(args))
 
 
 def _run_quality(args: list[str]) -> None:
@@ -940,6 +1003,18 @@ def main() -> None:
     if command == "project":
         _run_project(args[1:])
         return
+    if command == "work":
+        _run_work(args[1:])
+        return
+    if command == "retrospective":
+        _run_retrospective(args[1:])
+        return
+    if command == "evolution":
+        _run_evolution(args[1:])
+        return
+    if command == "repository":
+        _run_repository(args[1:])
+        return
     if command == "quality":
         _run_quality(args[1:])
         return
@@ -979,7 +1054,7 @@ def main() -> None:
     raise SystemExit(
         "未知命令: "
         "install, uninstall, reinstall, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, route, identity, ledger, "
-        "governance, module, policy, project, quality, story, validation, waiver, ask-user, state, status, next, doctor"
+        "governance, module, policy, project, work, retrospective, evolution, repository, quality, story, validation, waiver, ask-user, state, status, next, doctor"
     )
 if __name__ == "__main__":
     main()

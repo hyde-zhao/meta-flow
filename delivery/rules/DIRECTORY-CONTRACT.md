@@ -2,6 +2,29 @@
 
 This contract defines the file-system layout used by Meta Flow agents and skills. It is a logical grouping contract, not a required physical migration of existing production `process/` directories.
 
+## vNext Independent Project Roots
+
+New projects use two sibling Git roots and one local relative link:
+
+```text
+<project>/                 # release repository
+├── .meta-flow/workspace.yaml
+└── process -> ../<project>-process
+
+<project>-process/         # independent process repository, normally main-only
+├── .meta-flow-process.yaml
+├── PROJECT.yaml
+├── ROADMAP.yaml           # optional
+├── phases/                # optional
+├── works/
+├── retrospectives/
+└── evolution/
+```
+
+Roadmap and Phase are optional. The minimum valid governance chain is `Project -> Work`; long projects may use `Project -> Phase -> Work` or `Project -> Roadmap -> Phase -> Work`. Different projects must never resolve to the same writable process repository or Git common dir.
+
+The directory groups below describe legacy/G2 extended evidence locations and remain valid when selected by risk. They are not mandatory empty scaffolds for a G0/G1 Work.
+
 ## Roots
 
 | Root | Zone | Purpose |

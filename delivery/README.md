@@ -8,6 +8,18 @@
 - `scripts/`：安装器入口
 - `doc/PLATFORM-CONTRACTS.yaml`：平台安装路径契约；安装器和校验脚本以此为路径真相源
 
+## vNext 默认工作方式
+
+新项目默认采用每项目独立发布库与过程库：`<project>/process -> ../<project>-process`。过程库只为当前项目维护最小 `PROJECT.yaml`、可选 Roadmap/Phase、`works/<id>/WORK.yaml`、复盘和进化记录；不同项目不共享 working tree、index、branch 或可写过程根。
+
+- 日常变化默认 Work，重大变化才正式 CR；G0/G1 不强制 CP0-CP8、八份产品基线或全量 Story/LLD。
+- G0 上限 `8/8/3/32k`，G1 上限 `20/24/8/96k`，G2 预算逐项批准；risk、deny-default scope、budget 必须同时通过。
+- `project/work/retrospective/evolution/repository` CLI 默认 dry-run；本地初始化要显式 `--apply`，进化启动与真实 commit/push 还需要对应 typed authorization。
+- 发布库和过程库独立 commit/push，部分成功真实披露，不用双 leg/aggregate，也不自动回滚成功一侧。
+- 六维复盘只生成事实、推断、人工判断和改进候选；accepted 建议只生成未执行进化包，不等于实现或 publication 授权。
+
+下方 CP/context-pack/shared artifacts 章节继续作为 legacy/G2 扩展能力说明，不是 G0/G1 默认清单。
+
 ## 输出分层
 
 生产项目中的默认输出分为三层：
@@ -21,7 +33,7 @@
 
 外置 process / docs 路由必须使用锚点 + 相对路径，不能把 `/home/...`、盘符或设备专属根目录写入 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`、`process/.meta-flow-process.yaml` 或发布 / 迁移文档。默认记录方式为：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。例如源码仓库旁边放置 artifact 仓库时，记录 `artifact_root=../meta-flow-artifacts`、`project_process_root=process/<project-name>`、`link_path=process`。
 
-## 源码仓库与共享产物仓库的 Git 周期
+## Legacy：源码仓库与共享产物仓库的 Git 周期
 
 源码 / 交付仓库与共享 artifacts 仓库是两个独立 Git 仓库，使用不同的分支目标。不能因为 `process` 或内部 `docs` 通过路由关联到 artifacts 仓库，就把两边解释为同一个 working tree、同一个当前分支或同一个默认合并目标。
 

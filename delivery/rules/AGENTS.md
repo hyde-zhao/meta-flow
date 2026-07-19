@@ -3,6 +3,23 @@
 > 本项目运行 **Meta Flow** 通用 Agent/Skill 工作流产物工厂。
 > 主编排由当前会话的 **Host Orchestrator（主进程编排器）** 承担；不再安装或启动 `host-orchestrator` / `meta-po` 编排子 agent。
 
+## vNext 默认治理协议（优先于下方 legacy CP 协议）
+
+> 本节是新项目和新 Work 的默认协议。下方 CP0-CP8、全量产品基线、Story/LLD、shared artifact、双 leg 与 aggregate 条款只适用于已采用该协议的 legacy 项目，或当前 Work 明确判为 G2/正式 CR 且人工门选择了对应控制项；不得把 legacy 重流程重新投射到 G0/G1。
+
+1. 每个项目使用两个独立 Git 仓：发布库管理代码与发布文档，过程库管理 `PROJECT.yaml`、可选 Roadmap/Phase、Work、复盘和进化记录。发布库 `process` 只使用相对软链接指向 sibling `<project>-process`；不同项目不得共享 working tree、index、branch 或可写过程根。
+2. 新项目先运行 `meta-flow project init` dry-run，再由用户决定是否 `--apply`。已有项目只允许 snapshot-only 接入：复制当前有效 Project/Phase/Work 快照，旧来源只读保留；不重写 Git 历史、不批量转换旧 CP/CR/Story、不双写。
+3. 日常变化默认建立 Work；只有公共契约/架构边界、安全权限、不可逆迁移、生产写、正式发布、强审计、风险接受或跨阶段重构才建立正式 CR。未知高风险事实必须阻断，用户可升级但不得静默降级。
+4. 风险档位决定流程：G0 无独立设计评审，只做目标检查；G1 最多一次 Work 范围轻量评审并运行必要构建/定向检查；G2 才强制 HLD/ADR、人工设计门、独立 QA 和经批准的全量验证。G0/G1 不强制 CP0-CP8 或八份产品基线。
+5. G0 硬上限为 `8 reads / 8 writes / 3 check groups / 32k token`，G1 为 `20 / 24 / 8 / 96k`；G2 必须逐项显式批准预算。所有读、写、检查都必须先通过当前 `WORK.yaml` 的 deny-default scope；token 标记 `measured|proxy|unavailable`，unavailable 不得记为 0。
+6. 需求确认采用短问询：确认痛点、用户、场景、排除项和风险后，只写当前 Work 的最小 `REQUEST.md`。除非 G2 或用户明确要求，不批量生成 USE-CASES/REQUIREMENTS/SCENARIOS/STORY-MAP/MVP 等全套文档。
+7. 暂停或阻塞时写 `works/<id>/HANDOFF.yaml`，只包含完成项、剩余项、阻塞、下一步、scope digest 和两仓 OID；恢复前必须核对 OID/scope，禁止传递完整 transcript 或默认重读全项目。
+8. 发布库和过程库分别进行 allowlist commit 与 exact-OID fast-forward push；真实 commit/push 需要对应单仓 typed authorization。两仓不做双 leg/aggregate，不声称原子性；部分成功必须真实报告，且不得自动回滚已成功一侧。
+9. 默认查询最多读取 `PROJECT.yaml` 及其直接 Phase/Work 引用，共不超过 5 个对象；不得 sibling discovery 或跨项目拼接。需要全历史审计时先升级并批准扩读范围。
+10. Project、关键 Phase 或发布切片结束后可生成六维复盘：价值、规范/证据、质量/恢复、流动效率、token/context、Meta Flow 适配性。事实、推断、待人工判断必须分开；复盘报告不授权实现或发布。
+11. 每条改进建议单独记录 `accepted|changed|deferred|rejected`。accepted 只生成 `approved_not_started` 进化包；事实确认、建议批准、实现启动、commit/push/production 授权互不替代。进化必须作为正常 Work/CR 在 fixture/dogfood/canary 中重现、验证、回退；不得递归自动触发下一代。
+12. 旧 `workspace bootstrap/push`、shared artifact worktree、project integration branch、dual-leg 和 `cr aggregate` 保留为 legacy read/operation 能力，不再是新项目默认路径。真实迁移、当前 `process` 切换、远端创建/推送、生产写、凭据与破坏性 Git 始终需要单独人工授权。
+
 ---
 
 ## 主进程编排器

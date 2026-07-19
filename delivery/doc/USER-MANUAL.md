@@ -1,5 +1,68 @@
 # Meta Flow USER-MANUAL
 
+## 0. vNext 默认治理：独立双仓、轻量 Work、按风险加流程
+
+新项目默认使用两个相互独立的 Git 仓库：
+
+```text
+<project>/                  # 发布库：代码和发布文档
+└── process -> ../<project>-process
+
+<project>-process/          # 过程库：只服务当前项目
+├── PROJECT.yaml
+├── ROADMAP.yaml            # 可选
+├── phases/                 # 可选
+├── works/
+├── retrospectives/
+└── evolution/
+```
+
+先预览，再显式应用本地初始化：
+
+`--project-root` 已是 Git 根时复用为发布库；路径不存在或为空目录时本地初始化 `main` 发布库。非空且不是 Git 根的目录会被阻断，不会接管其中的用户文件。
+
+```bash
+meta-flow project init --project-root . --project-id demo
+meta-flow project init --project-root . --project-id demo --apply
+meta-flow project check --project-root .
+meta-flow project query --project-root .
+```
+
+日常工作以用户确认过的最小 `REQUEST.md` 和一个 `WORK.yaml` 为中心。系统解释 Work/CR 和 G0/G1/G2 判定；用户可主动升级，但高风险不得静默降级：
+
+```bash
+meta-flow work classify --change-kind documentation --touched-path-count 1
+meta-flow work status --project-root . --work-id W-001
+meta-flow work review-plan --project-root . --work-id W-001
+meta-flow work validation-plan --project-root . --work-id W-001 --check-risk target-tests=覆盖当前功能风险
+meta-flow work pause --project-root . --work-id W-001
+meta-flow work resume-check --project-root . --work-id W-001
+meta-flow work resume --project-root . --work-id W-001
+```
+
+| 档位 | 资源硬上限 | 默认流程 |
+|---|---|---|
+| G0 | `8 reads / 8 writes / 3 check groups / 32k token` | 无独立设计评审；目标检查 + diff/status |
+| G1 | `20 / 24 / 8 / 96k` | 最多一次 Work 范围轻量评审；目标测试 + 必要构建/检查 |
+| G2 | 每项人工批准 | HLD/ADR、人工设计门、独立 QA、经批准的全量验证 |
+
+读取、写入和检查都必须同时满足 risk、`WORK.yaml.scope` 与 budget。token 只能标为 `measured`、`proxy` 或 `unavailable`；unavailable 不等于 0。默认项目查询最多读取 5 个直接引用对象，不扫描 sibling 项目或全历史。
+
+两仓提交/推送彼此独立：
+
+```bash
+# 默认都是 dry-run
+meta-flow repository commit ...
+meta-flow repository push ...
+```
+
+`--apply` 必须额外提供与单仓计划、operation 和 exact OID 匹配的 typed authorization。两仓不使用双 leg/aggregate，也不声称原子性；一侧失败时保留另一侧真实成功结果，不自动回滚。
+
+项目、关键 Phase 或发布切片完成后，使用 `meta-flow retrospective build|check|confirm-facts` 生成六维复盘：价值、规范/证据、质量/恢复、流动效率、token/context、Meta Flow 适配性。随后 `meta-flow evolution decision|package|check|start|result` 逐项审议并验证改进。事实确认、建议 accepted、实现启动、commit/push/production 授权是四种独立语义；复盘报告和进化结果都不能自动触发代码修改、publication 或下一代递归自进化。
+
+本手册后续关于 `workspace bootstrap/push`、共享 artifacts、project integration、双 leg、aggregate 和完整 CP0-CP8 的章节保留给 legacy 项目与明确选择的 G2/正式 CR，不再是 G0/G1 默认路径。
+
+
 ## 1. 安装前准备
 
 - Python 入口统一使用 `uv run --python 3.11 python ...`

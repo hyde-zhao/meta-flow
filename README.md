@@ -2,6 +2,39 @@
 
 > 通用 Agent/Skill 工作流产物工厂 — 从需求到交付的全流程编排。
 
+## vNext：默认使用每项目独立双仓与轻量 Work
+
+Meta Flow 的新默认不再是共享 artifact worktree、双 leg 或每项变化都跑 CP0-CP8。每个项目拥有一个发布库和一个独立过程库，发布库中的 `process` 是指向 sibling `<project>-process` 的相对软链接；因此项目 A 切分支不会改变项目 B 看到的过程文档。
+
+`project init` 会复用已有发布 Git 根；若目标路径不存在或为空目录，则只在显式 `--apply` 时初始化本地 `main` 发布库。非空非 Git 目录始终 fail closed。
+
+```bash
+# 1. 只读预览；默认不修改文件
+meta-flow project init --project-root . --project-id demo
+
+# 2. 用户确认后才在本地建立独立过程仓与相对链接
+meta-flow project init --project-root . --project-id demo --apply
+
+# 3. 确认需求后解释 Work/CR 与 G0/G1/G2 判定
+meta-flow work classify --change-kind documentation --touched-path-count 1
+
+# 4. 只读一个 Work 或最多五个直接引用的 Project/Phase/Work 对象
+meta-flow work status --project-root . --work-id W-001
+meta-flow project query --project-root .
+```
+
+日常变化默认用 Work；公共契约、架构、安全权限、不可逆迁移、生产写、正式发布、强审计、风险接受和跨阶段重构才升级正式 CR/G2。G0/G1 只生成当前 Work 必要的 `REQUEST.md`、`WORK.yaml`、usage/handoff/result，不强制八份产品基线、全量 HLD/LLD 或 CP0-CP8。
+
+| 档位 | 上限 | 评审与验证 |
+|---|---|---|
+| G0 | `8 reads / 8 writes / 3 check groups / 32k token` | 无独立设计评审；目标测试/静态检查 + diff/status |
+| G1 | `20 / 24 / 8 / 96k` | 最多一次 Work 范围轻量评审；目标测试 + 必要构建/定向检查 |
+| G2 | 每项显式批准 | HLD/ADR、人工设计门、独立 QA 和经批准的全量验证 |
+
+提交和推送也按仓库独立处理：`meta-flow repository commit|push` 默认只做 dry-run，真实动作必须提供与单仓计划和 exact OID 匹配的 typed authorization；一侧成功另一侧失败时报告 `PARTIAL`，不伪装原子性，也不自动回滚成功一侧。
+
+项目或关键 Phase 完成后，`meta-flow retrospective` 生成价值、规范/证据、质量/恢复、流动效率、token/context、Meta Flow 适配性六维复盘。`meta-flow evolution` 把事实确认、建议批准、实现启动和发布授权拆开；复盘报告不能直接修改 Meta Flow，也不能递归触发下一轮自进化。
+
 ## 目录结构
 
 | 目录 | 用途 |
@@ -46,7 +79,9 @@
 
 核心长期产物的 canonical 路径包括：`docs/product/SCENARIOS.yaml`、`docs/product/MVP-SCOPE.md`、`docs/design/BLUEPRINT.md`、`docs/release/DEPLOY-CHECKLIST.md`。
 
-## Artifact 外置路由
+## Legacy：共享 Artifact 外置路由
+
+> 本节保留给尚未迁移的项目和历史 CR 审计。新项目应使用上方 `project init` 的独立过程库，不应新增 shared artifact worktree、project integration branch、双 leg 或 aggregate。
 
 Meta Flow 支持把过程文件和过程文档从源码仓库中外置。`process/` 默认目标形态是：
 
