@@ -68,7 +68,7 @@ status: active
 ## 执行步骤
 
 1. 判定 capsule 类型：`cp2-requirement`、`cp3-design`、`cp5-lld`、`cp6-implementation`、`cp7-verification`、`cp8-delivery` 或 `final-manifest`。
-2. 读取 `STATE.current.json.active_context_ref`、`process/policies/READ-POLICY.json`、`process/policies/SOURCE-OF-TRUTH-MAP.yaml`、`process/policies/RETENTION-POLICY.json` 和 artifact budgets，确认本阶段 `read_profile`、`allowed_reads`、`max_source_files`、`full_doc_read_policy`、`full_doc_read_reason`、`process/state/READ-EXPANSION-LEDGER.ndjson`、machine truth / generated summary 关系和 closed CR / old packet 默认保留规则；legacy 项目缺少 state v2 时才读取 `process/policies/READ-POLICY.json and context pack refs`。
+2. 读取 `STATE.current.json.active_context_ref`、`process/policies/READ-POLICY.json`、`process/policies/SOURCE-OF-TRUTH-MAP.yaml`、`process/policies/RETENTION-POLICY.json` 和 artifact budgets，确认本阶段 `read_profile`、`allowed_reads`、`max_source_files`、`full_doc_read_policy`、`full_doc_read_reason`、`process/state/READ-EXPANSION-LEDGER.ndjson`、machine truth / generated summary 关系和 closed CR / old packet 默认保留规则；若 capsule 引用 native `CR-INDEX.json`，必须先校验 schema、数值 CR 顺序与 semantic digest，且只能把它当 formal CR 的派生投影。legacy 项目缺少 state v2 时才读取 `process/policies/READ-POLICY.json and context pack refs`。
 3. 从正式真相源提炼当前阶段最小事实：范围、关键决策、依赖、风险、不授权项、开放问题、下游需要读取的文件列表。
 4. 标记 `allowed_reads`、`must_read`、`read_if_needed`、`do_not_read_by_default`，并写明全文档读取触发条件。Story packet 还必须提供上下文足够性槽位：`objective.summary`、Feature context 摘要或 summary ref、`cr_delta.summary`、`dependency_inputs`、读写边界、acceptance、verification plan、authz policy refs 和 expected return packet。
 5. 将结果写入 `process/context/<CP>-<slug>-CONTEXT.yaml`；交付阶段如需最终清单，再写入 `delivery/doc/CONTEXT-MANIFEST.yaml` 或目标项目约定路径。
@@ -98,6 +98,7 @@ status: active
 - 阶段 capsule 必须遵循 `CONTEXT-CAPSULE-TEMPLATE.yaml`
 - 机器真相源策略必须以 `process/policies/SOURCE-OF-TRUTH-MAP.yaml` 为入口；`docs/design/SOURCE-OF-TRUTH-MAP.md` 只是人类说明
 - `process/STATE.md`、CP summary、context pack、Story packet、Evidence index 等生成物不得被当作上游机器真相源
+- `CR-INDEX.json` 不得成为 lifecycle 反向写入源；旧 index、summary 正文、ledger 或 legacy 仓不得参与 native index rebuild。semantic digest 不匹配时 capsule 构建必须 BLOCKED 或记录显式降级，不得继续传播 stale ref
 - Agent 默认先读 capsule / context pack，并且只读取 `allowed_reads`；只有 capsule 缺失、冲突、字段不足、人工审计或深度评审触发时，才读取完整上游文档
 - 读取完整文档时必须在 `full_doc_read_reason` 或 capsule `read_expansion_log` 中写明理由，并优先通过 `meta-flow context read-log` 写入 `process/state/READ-EXPANSION-LEDGER.ndjson`
 - `meta-flow context sufficiency-check` 必须能检查 Story packet 是否足够；`architecture-major`、`product-redesign`、`runtime-high-risk` 缺关键槽位时不得继续交接

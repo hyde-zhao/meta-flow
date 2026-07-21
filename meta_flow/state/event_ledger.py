@@ -122,6 +122,18 @@ def append_event(path: Path, event: dict[str, Any]) -> Path:
     return path
 
 
+def render_appended_event(path: Path, event: dict[str, Any]) -> str:
+    """Render append-only ledger content without mutating the ledger."""
+
+    if not isinstance(event, dict):
+        raise TypeError("event must be an object")
+    before = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if before and not before.endswith("\n"):
+        before += "\n"
+    payload = {key: value for key, value in event.items() if key != "_line_no"}
+    return before + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+
+
 def build_dispatch_not_required_event(
     *,
     dispatch_id: str,

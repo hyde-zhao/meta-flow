@@ -1,13 +1,66 @@
 {
+  "generated_at": "2026-07-21T09:40:32+00:00",
   "items": [
     {
+      "affected_product_docs": [],
+      "affected_use_cases": [],
+      "approval_focus": "",
+      "authz_policy_refs": [
+        "NO_CREDENTIAL_READ"
+      ],
+      "block_story_decomposition_until": "",
+      "conflict_keys": [
+        "context_budget_contract"
+      ],
+      "cr_type": "process",
+      "decision_burden": "",
+      "formal_cr_path": "process/changes/CR-001.md",
       "full_ref": "process/changes/CR-001.md",
+      "gate_profile": "process-lite",
+      "gate_status": "implementation_in_progress",
+      "goal_ref": "",
+      "goal_statement": "",
       "id": "CR-001",
+      "impact_capability_normalized": [],
+      "impact_capability_refs": [],
+      "impact_capability_resolution": {
+        "kind": "capability",
+        "mode": "audit",
+        "results": [],
+        "summary": {
+          "conflict": 0,
+          "deprecated": 0,
+          "resolved": 0,
+          "unresolved": 0
+        }
+      },
+      "impact_data_refs": [],
+      "impact_feature_refs": [],
+      "impact_module_paths": [],
+      "impact_policy_refs": [],
+      "impact_process_refs": [],
+      "impact_runtime_refs": [],
+      "impact_surface": [
+        "context_pack",
+        "story_packet",
+        "cp_result"
+      ],
+      "lifecycle_status": "active",
+      "product_baseline_refresh_required": false,
+      "readiness": "NOT_READY",
+      "readiness_status": "NOT_READY",
+      "required_agent": "",
+      "required_capabilities": [],
+      "required_evidence": [],
+      "required_gate": "",
+      "required_phase": "",
+      "risk_refs": [],
+      "routing_design_ref": "",
       "status": "active",
       "summary_ref": "process/changes/summaries/CR-001.summary.json",
       "title": "Context Budgeted E2E Fixture"
     }
   ],
-  "schema_version": 1
+  "schema_version": 1,
+  "semantic_digest": "1c181e66793c9702510c54e21e2f58649e956e3158a95a64d117c6dabbecadf0"
 }
-

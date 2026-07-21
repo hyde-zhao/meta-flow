@@ -21,6 +21,7 @@ from meta_flow.project.process_route import (
     resolve_ref_main,
 )
 from meta_flow.project.scale import dump_yaml, load_yaml_object
+from meta_flow.workflow import cr_lifecycle
 
 
 def _git(root: Path, *args: str) -> str:
@@ -208,7 +209,7 @@ def test_cr_tracking_main_uses_binding_only_route_without_process_link(
     changes = process / "changes"
     changes.mkdir()
     (changes / "CR-INDEX.json").write_text(
-        json.dumps({"schema_version": 1, "items": []}) + "\n",
+        json.dumps(cr_lifecycle.build_index(release), ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 

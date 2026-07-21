@@ -95,7 +95,11 @@ CR index canonical source is:
 
 1. `process/changes/CR-INDEX.json`
 
-`process/changes/CR-INDEX.yaml` is legacy read-only fallback for migration only and must not be created by new flows.
+The authoritative inputs are native `process/changes/CR-*.md` formal objects plus their PROJECT/WORK scope. `CR-INDEX.json` is a disposable projection: its items are numeric-CR ordered, carry a semantic digest, and are rebuilt without reading the previous index, summary bodies, ledgers, or any legacy repository. `process/changes/CR-INDEX.yaml` and legacy repository indexes are read-only migration inputs only; new flows must not copy or regenerate them.
+
+Status changes use `meta-flow cr status-sync` plan/apply/recovery. Transaction manifests and immutable before/after recovery payloads live only under the process repository Git common dir private Meta Flow area; they are not process artifacts and must not be committed. `process/changes/CR-INDEX.json` is the last worktree target written by a successful transaction.
+
+Decision Bundle evidence is append-only in `process/state/GATE-LEDGER.ndjson`: one bundle revision may have one user confirmation, while every subgate keeps independent precondition/result/evidence and stop events. Git scope inventories classify candidate paths into eight classes before freeze; tracked symlink, missing and ignored generated outputs remain validation-only and never enter a staged mutation set.
 
 ## Zone Read Rules
 

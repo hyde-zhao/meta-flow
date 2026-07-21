@@ -82,6 +82,13 @@ def _cr_tracking_item(root: Path, process_root: Path | None) -> ReadinessItem:
             data = {}
             status = "FAIL"
             messages.append(f"CR-INDEX.json invalid JSON: {exc}")
+        if status != "FAIL":
+            from meta_flow.workflow.cr_lifecycle import validate_index_payload
+
+            projection_errors = validate_index_payload(data)
+            if projection_errors:
+                status = "FAIL"
+                messages.extend(f"CR-INDEX.json projection error: {error}" for error in projection_errors)
         blocked = [
             str(item.get("id") or item.get("cr_id") or "")
             for item in data.get("items", [])
@@ -109,7 +116,7 @@ def _cr_tracking_item(root: Path, process_root: Path | None) -> ReadinessItem:
             status="WARN",
             evidence=["process/changes/CR-INDEX.yaml"],
             impact="A legacy YAML CR index exists, but new Meta Flow tracking is JSON-only.",
-            next_action="Run meta-flow cr index --project-root . to generate CR-INDEX.json, then treat YAML as read-only legacy fallback.",
+            next_action="Review `meta-flow cr index --project-root .`, then apply it with explicit --apply and expected process OID; YAML remains read-only legacy fallback.",
             messages=["CR-INDEX.json missing; legacy CR-INDEX.yaml is not a new-flow truth source"],
         )
     return ReadinessItem(
@@ -117,7 +124,7 @@ def _cr_tracking_item(root: Path, process_root: Path | None) -> ReadinessItem:
         status="WARN",
         evidence=["process/changes/"],
         impact="No CR index exists yet; this is acceptable before the first bootstrap CR but must be closed before execution.",
-        next_action="Create a bootstrap CR with CR-xxx naming and run meta-flow check cr-tracking --project-root .",
+        next_action="Create a formal CR, review `meta-flow cr index --project-root .`, then explicitly apply the projection before execution.",
         messages=["CR-INDEX.json missing"],
     )
 

@@ -89,6 +89,24 @@ current_discovery:
     story_packet_ref: process/context/stories/*
     release_context_ref: process/release/RELEASE-CONTEXT*
     handoff_ref: process/handoffs/NEXT-SESSION-*.md
+  cr_governance:
+    truth_inputs:
+      - PROJECT.yaml
+      - works/*/WORK.yaml
+      - process/changes/CR-*.md
+    projection: process/changes/CR-INDEX.json
+    projection_semantics: native-formal-only-numeric-order-semantic-digest
+    status_sync: plan-apply-recovery-index-last
+    decision_bundle_events: process/state/GATE-LEDGER.ndjson
+    git_scope_classes:
+      - tracked_regular
+      - tracked_symlink
+      - prospective_untracked
+      - ignored_generated
+      - missing
+      - submodule
+      - outside_repo
+      - duplicate
   file_outputs:
     - process/current/CURRENT.json
     - process/current/*.ref

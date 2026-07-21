@@ -465,6 +465,12 @@ def _validate_derived_consistency(root: Path, result_path: Path, result: dict[st
         except json.JSONDecodeError as exc:
             errors.append(f"{cr_index_path} invalid JSON: {exc}")
         else:
+            from meta_flow.workflow.cr_lifecycle import validate_index_payload
+
+            errors.extend(
+                f"CR-INDEX projection invalid: {message}"
+                for message in validate_index_payload(index)
+            )
             items = [item for item in index.get("items", []) if isinstance(item, dict)]
             if not any(item.get("id") == cr_id for item in items):
                 errors.append(f"CR-INDEX missing CR referenced by CP result: {cr_id}")

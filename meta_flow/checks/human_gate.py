@@ -9,6 +9,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from meta_flow.project.scale import load_yaml_object
+from meta_flow.work.decision_bundle import validate_bundle
+
 ALLOWED_DECISION_TYPES = {
     "scope",
     "architecture",
@@ -254,10 +257,21 @@ def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow]
     return errors
 
 
+def collect_decision_bundle_errors(path: Path) -> list[str]:
+    """Validate a merged confirmation envelope without treating it as subgate PASS."""
+
+    try:
+        payload = load_yaml_object(path)
+    except (OSError, ValueError) as exc:
+        return [f"decision bundle cannot be read: {exc}"]
+    return [f"decision bundle {finding.code}: {finding.message}" for finding in validate_bundle(payload)]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate human gate Decision Brief and launch message.")
     parser.add_argument("--checkpoint", required=True, type=Path, help="Path to process/checkpoints/CP*.md")
     parser.add_argument("--launch-message-file", type=Path, help="Optional file containing the message to send to the user")
+    parser.add_argument("--decision-bundle", type=Path, help="Optional revision-aware merged confirmation envelope")
     parser.add_argument(
         "--require-launch-message",
         action="store_true",
@@ -280,6 +294,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             message_text = args.launch_message_file.read_text(encoding="utf-8")
             errors.extend(collect_launch_message_errors(args.checkpoint, message_text, rows, legacy=args.legacy))
+    if args.decision_bundle:
+        if not args.decision_bundle.is_file():
+            errors.append(f"decision bundle file not found: {args.decision_bundle}")
+        else:
+            errors.extend(collect_decision_bundle_errors(args.decision_bundle))
 
     if errors:
         for error in errors:

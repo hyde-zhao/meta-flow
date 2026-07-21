@@ -32,7 +32,11 @@ from meta_flow.state.current import (
     load_current_state,
     refresh_current_entry,
 )
-from meta_flow.workflow.cr_lifecycle import CR_INDEX_REL, CR_SUMMARY_ROOT_REL
+from meta_flow.workflow.cr_lifecycle import (
+    CR_INDEX_REL,
+    CR_SUMMARY_ROOT_REL,
+    validate_index_payload,
+)
 
 READ_POLICY_REL = Path("process/policies/READ-POLICY.json")
 ARTIFACT_BUDGETS_REL = Path("process/policies/ARTIFACT-BUDGETS.json")
@@ -330,6 +334,12 @@ def build_context_pack(
     if state:
         refresh_current_entry(project_root)
     project_id = str(state.get("project_id") or project_root.name)
+    cr_index_semantic_digest: str | None = None
+    cr_index_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
+    if cr_index_path.is_file():
+        index_payload = _read_json(cr_index_path)
+        if not validate_index_payload(index_payload):
+            cr_index_semantic_digest = str(index_payload.get("semantic_digest") or "") or None
     allowed_reads: list[ReadEntry] = []
     must_read: list[ReadEntry] = []
     read_if_needed: list[ReadEntry] = []
@@ -415,6 +425,7 @@ def build_context_pack(
         },
         "state_ref": STATE_CURRENT_REL.as_posix(),
         "cr_index_ref": CR_INDEX_REL.as_posix(),
+        "cr_index_semantic_digest": cr_index_semantic_digest,
         "cr_summary_ref": (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix() if cr_id else None,
         "story_summary_ref": f"process/stories/summaries/{story_id}.summary.json" if story_id else None,
         "policy_refs": {
@@ -560,6 +571,13 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
         errors.append("state_ref missing")
     if not context.get("cr_index_ref"):
         errors.append("cr_index_ref missing")
+    index_path = _resolve_runtime_ref(root, str(context.get("cr_index_ref") or CR_INDEX_REL.as_posix()))
+    if index_path.is_file():
+        index_payload = _read_json(index_path)
+        index_errors = validate_index_payload(index_payload)
+        errors.extend(f"cr_index projection invalid: {error}" for error in index_errors)
+        if not index_errors and context.get("cr_index_semantic_digest") != index_payload.get("semantic_digest"):
+            errors.append("cr_index_semantic_digest does not match CR-INDEX.json")
     if context.get("cr_id") and not context.get("cr_summary_ref"):
         errors.append("cr_summary_ref missing for CR context")
     if not context.get("policy_refs"):

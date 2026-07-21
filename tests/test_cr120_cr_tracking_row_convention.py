@@ -146,3 +146,33 @@ def test_source_follow_up_row_must_close_when_formal_cr_is_finished(tmp_path: Pa
     _tracking(tmp_path, "related_active_cr=CR-120; blocked_by=cp5_pending")
 
     assert any("must be closed while source formal CR CR-120 is finished" in error for error in _errors(tmp_path))
+
+
+def test_native_formal_cr_requires_one_legal_status_tuple(tmp_path: Path) -> None:
+    path = _resolve_runtime_ref(tmp_path, "process/changes/CR-120-NATIVE.md")
+    _write(
+        path,
+        """---
+schema_version: 1
+cr_id: CR-120
+kind: cr
+title: native tuple fixture
+lifecycle_status: active
+readiness_status: READY
+gate_status: implementation_in_progress
+---
+""",
+    )
+    formal = cr_tracking.discover_formal_crs(path.parent)
+
+    errors, _warnings = cr_tracking.collect_errors_and_warnings(
+        project_root=tmp_path,
+        formal_crs=formal,
+        rows=[],
+        index_items=[],
+        next_action_refs=[],
+        state_refs=[],
+        allow_multiple_active=False,
+    )
+
+    assert any("illegal native status tuple" in error for error in errors)

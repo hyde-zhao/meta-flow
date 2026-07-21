@@ -1737,6 +1737,88 @@ def collect_cr_tracking_protocol_errors() -> list[str]:
     return errors
 
 
+def collect_native_cr_governance_errors() -> list[str]:
+    """校验 native CR、合并确认与 Git scope freeze 的 canonical 契约。"""
+
+    errors: list[str] = []
+    token_targets = {
+        "meta_flow/workflow/cr_lifecycle.py": (
+            "semantic_digest",
+            "plan_status_sync",
+            "apply_status_sync",
+            "inspect_status_sync_transactions",
+            "recover_status_sync_transaction",
+            "before_content_ref",
+            "index-last",
+        ),
+        "meta_flow/checks/cr_tracking.py": (
+            "validate_cr_index_projection",
+            "validate_native_transition",
+            "semantic_digest mismatch",
+        ),
+        "meta_flow/work/decision_bundle.py": (
+            "bundle_id",
+            "revision",
+            "subgate_idempotency_key",
+            "subgate_skipped_by_stop",
+        ),
+        "meta_flow/work/git_inventory.py": (
+            "tracked_regular",
+            "tracked_symlink",
+            "prospective_untracked",
+            "ignored_generated",
+            "outside_repo",
+            "staged_symmetric_difference",
+        ),
+        "delivery/rules/AGENTS.md": (
+            "可删除重建投影",
+            "Decision Bundle",
+            "Git index 八分类",
+            "禁止 `git add -f`",
+        ),
+        "delivery/rules/AGENT-SKILL-CONTRACT.md": (
+            "native index rebuild",
+            "Decision Bundle revision",
+            "staged symmetric difference",
+        ),
+        "delivery/rules/DIRECTORY-CONTRACT.md": (
+            "disposable projection",
+            "status-sync",
+            "Decision Bundle evidence",
+        ),
+        "delivery/doc/USER-MANUAL.md": (
+            "Native CR 状态与可重建索引",
+            "合并确认与 exact Git scope",
+            "status-sync-inspect",
+        ),
+        "tests/test_cr056_decision_bundle.py": (
+            "stop",
+            "revision",
+        ),
+        "tests/test_cr056_git_index_inventory.py": (
+            "tracked_symlink",
+            "ignored_generated",
+            "symmetric_difference",
+        ),
+    }
+    for relative, tokens in token_targets.items():
+        path = ROOT / relative
+        if not path.is_file():
+            errors.append(f"missing native CR governance target: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        missing = [token for token in tokens if token not in content]
+        if missing:
+            errors.append(
+                f"{relative} missing native CR governance tokens: {', '.join(missing)}"
+            )
+
+    manual_alias = ROOT / "docs" / "USER-MANUAL.md"
+    if not manual_alias.is_symlink() or manual_alias.readlink().as_posix() != "../delivery/doc/USER-MANUAL.md":
+        errors.append("docs/USER-MANUAL.md must remain the tracked delivery manual symlink alias")
+    return errors
+
+
 def collect_requirement_intake_routing_errors() -> list[str]:
     errors: list[str] = []
     token_targets = {
@@ -2322,6 +2404,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_agent_display_profile_errors())
     errors.extend(collect_human_gate_protocol_errors())
     errors.extend(collect_cr_tracking_protocol_errors())
+    errors.extend(collect_native_cr_governance_errors())
     errors.extend(collect_requirement_intake_routing_errors())
     errors.extend(collect_revision_record_errors())
     errors.extend(collect_software_workflow_artifact_errors())

@@ -15,9 +15,19 @@ from meta_flow.work.model import (
     write_work_create_only,
 )
 from meta_flow.work.risk import RiskFacts, classify_work
-from meta_flow.work.scope import WorkScope
+from meta_flow.work.scope import WorkScope, exact_scope_difference
 
 RELEASE_OID = "a" * 40
+
+
+def test_exact_scope_difference_never_treats_partial_staging_as_pass() -> None:
+    result = exact_scope_difference(
+        ("release/a.py", "process/WORK.yaml"),
+        ("release/a.py",),
+    )
+
+    assert result["decision"] == "BLOCKED"
+    assert result["missing"] == ["process/WORK.yaml"]
 
 
 def make_work(*, work_id: str = "W-001", profile: str = "G0"):

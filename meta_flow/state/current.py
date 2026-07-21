@@ -728,7 +728,16 @@ def _available_cr_index_refs(project_root: Path) -> list[str]:
     refs: list[str] = []
     for rel_path in (CR_INDEX_JSON_REL,):
         existing = _existing_rel(project_root, rel_path)
-        if existing:
+        if not existing:
+            continue
+        from meta_flow.workflow.cr_lifecycle import validate_index_payload
+
+        path = _resolve_runtime_path(project_root, rel_path)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not validate_index_payload(payload):
             refs.append(existing)
     return refs
 
@@ -1092,21 +1101,51 @@ def update_current_state(
         raise StateValidationError("current-state patch validation failed: invalid_patch: patch must be a dict")
     project_root = project_root.resolve()
     path = current_state_path(project_root)
-    if not path.is_file():
-        raise FileNotFoundError(f"STATE.current.json missing: {path}")
-
-    patch_findings = validate_current_patch(patch, mode=mode)
-    _raise_on_error(patch_findings, subject="current-state patch", actor=actor, reason=reason)
-    base = json.loads(path.read_text(encoding="utf-8"))
-    candidate = _deep_merge_current_state(base, patch)
-    candidate_findings = validate_current_state_payload(candidate, mode=mode)
-    _raise_on_error(candidate_findings, subject="STATE.current.json candidate", actor=actor, reason=reason)
+    candidate = build_current_state_candidate(
+        project_root,
+        patch,
+        actor=actor,
+        reason=reason,
+        mode=mode,
+    )
 
     _write_current_state_file(path, candidate)
     ensure_base_ledgers(project_root)
     if render:
         render_state_file(project_root, force=True)
     return candidate
+
+
+def build_current_state_candidate(
+    project_root: Path,
+    patch: dict[str, Any],
+    *,
+    actor: str = "",
+    reason: str = "",
+    mode: str = "enforce",
+) -> dict[str, Any]:
+    """Build and validate a current-state candidate without writing it."""
+
+    if not isinstance(patch, dict):
+        raise StateValidationError("current-state patch validation failed: invalid_patch: patch must be a dict")
+    project_root = project_root.resolve()
+    path = current_state_path(project_root)
+    if not path.is_file():
+        raise FileNotFoundError(f"STATE.current.json missing: {path}")
+    patch_findings = validate_current_patch(patch, mode=mode)
+    _raise_on_error(patch_findings, subject="current-state patch", actor=actor, reason=reason)
+    base = json.loads(path.read_text(encoding="utf-8"))
+    candidate = _deep_merge_current_state(base, patch)
+    candidate_findings = validate_current_state_payload(candidate, mode=mode)
+    _raise_on_error(candidate_findings, subject="STATE.current.json candidate", actor=actor, reason=reason)
+    return candidate
+
+
+def render_current_state_candidate(candidate: dict[str, Any]) -> str:
+    """Render an already validated candidate for a larger transaction."""
+
+    validate_current_state_for_write(candidate)
+    return json.dumps(candidate, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def project_aggregate_completion(

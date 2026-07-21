@@ -39,6 +39,28 @@ meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yam
 | G1 | `20 / 24 / 8 / 96k` | 最多一次 Work 范围轻量评审；目标测试 + 必要构建/定向检查 |
 | G2 | 每项显式批准 | HLD/ADR、人工设计门、独立 QA 和经批准的全量验证 |
 
+### Native CR、Decision Bundle 与 Git scope freeze
+
+vNext 正式 CR 以 `PROJECT.yaml`、当前 `WORK.yaml` 和 `process/changes/CR-*.md` 为真相源。`process/changes/CR-INDEX.json` 只是可删除重建的纯投影：只扫描 native formal CR，按数值 CR ID 排序，并用 `semantic_digest` 校验内容；它不读取旧 index items、summary 正文、ledger 或 legacy 仓来反推 CR。legacy `CR-INDEX.yaml` 与旧仓 `CR-INDEX.json` 只读保留，不复制、不重新生成，也不进入 native index。
+
+```bash
+# 默认只生成计划；损坏投影必须显式 --rebuild
+meta-flow cr index --project-root .
+meta-flow cr index --project-root . --apply --expected-process-oid <oid>
+meta-flow cr index --project-root . --rebuild --apply --expected-process-oid <oid>
+
+# 多对象状态更新同样先 plan，再在 exact OID 与 Work scope 未漂移时 apply
+meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK \
+  --gate-status cp8_closed --work-id CR-101 --project-root .
+meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK \
+  --gate-status cp8_closed --work-id CR-101 --project-root . \
+  --apply --expected-process-oid <oid>
+```
+
+`status-sync` 在 process Git common dir 的私有区准备 manifest、before/after digest、恢复载荷和逐目标 receipt；CR-INDEX 最后写。异常后普通 sync 必须停止，先用 `status-sync-inspect` 检查，再显式 `status-sync-resume` 或 `status-sync-rollback`；不得把 `RECOVERED` 或 `PARTIAL` 当成成功。
+
+一次用户确认可以覆盖一个冻结的 Decision Bundle revision，但不会合并子门：每个 subgate 仍分别检查前置、记录结果/证据，并在 `failed|blocked` 后停止后续门。范围冻结前使用 `meta-flow work git-inventory` 将候选路径恰好分为八类；只有 `tracked_regular` 与 `prospective_untracked` 是 mutation，tracked symlink、missing、ignored generated output 只验证，submodule/outside_repo/duplicate 一律阻断。提交前 release/process 两仓分别要求 staged symmetric difference 为 0，禁止 `git add -f`。
+
 提交和推送也按仓库独立处理：`meta-flow repository commit|push` 默认只做 dry-run，真实动作必须提供与单仓计划和 exact OID 匹配的 typed authorization；一侧成功另一侧失败时报告 `PARTIAL`，不伪装原子性，也不自动回滚成功一侧。
 
 项目或关键 Phase 完成后，`meta-flow retrospective` 生成价值、规范/证据、质量/恢复、流动效率、token/context、Meta Flow 适配性六维复盘。`meta-flow evolution` 把事实确认、建议批准、实现启动和发布授权拆开；复盘报告不能直接修改 Meta Flow，也不能递归触发下一轮自进化。

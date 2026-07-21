@@ -95,6 +95,7 @@ class FormalCR:
     source_follow_up_id: str
     historical_baseline_status: str
     reframed_by: str
+    native: bool = False
 
 
 @dataclass
@@ -422,6 +423,102 @@ def normalize_gate_status(value: str, *, fallback_gate: str = "") -> str:
     return gate
 
 
+def validate_native_status_tuple(
+    lifecycle_status: str,
+    readiness_status: str,
+    gate_status: str,
+) -> list[str]:
+    """Validate the canonical vNext lifecycle/readiness/gate tuple."""
+
+    lifecycle = normalize_lifecycle_status(lifecycle_status)
+    readiness = normalize_readiness_status(readiness_status)
+    gate = normalize_gate_status(gate_status)
+    if lifecycle == "candidate":
+        legal = readiness == "not_ready" and gate == "not_started"
+    elif lifecycle in {"active", "blocked"}:
+        legal = readiness == "not_ready" and gate in {
+            "cp2_pending",
+            "cp3_pending",
+            "cp5_pending",
+            "implementation_in_progress",
+            "verification_in_progress",
+            "cp7_pending",
+            "cp8_pending",
+        }
+    elif lifecycle == "closed":
+        legal = readiness in {"ready", "ready_with_risk"} and gate in {
+            "cp8_closed",
+            "cp8_recovery_closed",
+        }
+    elif lifecycle in {"cancelled", "superseded"}:
+        legal = readiness == "n/a" and gate == "closed"
+    else:
+        legal = False
+    if legal:
+        return []
+    return [f"illegal native status tuple: {lifecycle or '-'} / {readiness or '-'} / {gate or '-'}"]
+
+
+def validate_native_transition(
+    before: tuple[str, str, str],
+    after: tuple[str, str, str],
+    *,
+    historical_migration: bool = False,
+) -> list[str]:
+    """Validate one explicit native transition; terminal reactivation is never legal."""
+
+    target_errors = validate_native_status_tuple(*after)
+    if target_errors:
+        return target_errors
+    source = tuple(
+        (
+            normalize_lifecycle_status(before[0]),
+            normalize_readiness_status(before[1]),
+            normalize_gate_status(before[2]),
+        )
+    )
+    target = tuple(
+        (
+            normalize_lifecycle_status(after[0]),
+            normalize_readiness_status(after[1]),
+            normalize_gate_status(after[2]),
+        )
+    )
+    if historical_migration:
+        if target[0] == "active" and source[0] in {"closed", "cancelled", "superseded"}:
+            return ["historical migration must not reactivate a terminal CR"]
+        return []
+    if source == target:
+        return []
+    allowed: set[tuple[tuple[str, str, str], tuple[str, str, str]]] = set()
+    active_gates = [
+        "cp2_pending",
+        "cp3_pending",
+        "cp5_pending",
+        "implementation_in_progress",
+        "verification_in_progress",
+        "cp7_pending",
+        "cp8_pending",
+    ]
+    for left, right in zip(active_gates, active_gates[1:], strict=False):
+        allowed.add((("active", "not_ready", left), ("active", "not_ready", right)))
+    allowed.update(
+        {
+            (("candidate", "not_ready", "not_started"), ("active", "not_ready", "cp2_pending")),
+            (("candidate", "not_ready", "not_started"), ("active", "not_ready", "cp3_pending")),
+            (("active", "not_ready", "cp8_pending"), ("closed", "ready", "cp8_closed")),
+            (("active", "not_ready", "cp8_pending"), ("closed", "ready_with_risk", "cp8_closed")),
+            (("blocked", "not_ready", "cp8_pending"), ("closed", "ready_with_risk", "cp8_recovery_closed")),
+        }
+    )
+    for gate in active_gates:
+        allowed.add((("active", "not_ready", gate), ("blocked", "not_ready", gate)))
+        allowed.add((("blocked", "not_ready", gate), ("active", "not_ready", gate)))
+    if (source, target) not in allowed:
+        return [f"illegal native status transition: {'/'.join(source)} -> {'/'.join(target)}"]
+    return []
+
+
 def normalize_kind(value: str, *, fallback_status: str = "") -> str:
     kind = strip_scalar(value).lower()
     if kind in {"cr", "change", "follow-up", "follow_up"}:
@@ -511,6 +608,8 @@ def discover_formal_crs(change_root: Path) -> dict[str, FormalCR]:
         cr_id = fields.get("cr_id") or (CR_ID_RE.search(path.name).group(0) if CR_ID_RE.search(path.name) else "")
         if not cr_id:
             continue
+        if cr_id in crs:
+            raise ValueError(f"duplicate formal CR id {cr_id}: {crs[cr_id].path}, {path}")
         crs[cr_id] = FormalCR(
             cr_id=cr_id,
             status=normalize_status(fields.get("status", "")),
@@ -528,6 +627,7 @@ def discover_formal_crs(change_root: Path) -> dict[str, FormalCR]:
             source_follow_up_id=strip_scalar(fields.get("source_follow_up_id", "")),
             historical_baseline_status=strip_scalar(fields.get("historical_baseline_status", "")),
             reframed_by=strip_scalar(fields.get("reframed_by", "")),
+            native=(strip_scalar(fields.get("schema_version", "")) == "1" and strip_scalar(fields.get("kind", "")) == "cr"),
         )
     return crs
 
@@ -699,6 +799,60 @@ def parse_cr_index_items(index_path: Path) -> list[IndexItem]:
     return items
 
 
+def validate_cr_index_projection(
+    index_path: Path,
+    *,
+    expected_semantic_digest: str = "",
+) -> list[str]:
+    """Validate internal integrity and optional formal-truth rebuild equality."""
+
+    if not index_path.is_file():
+        return []
+    try:
+        payload = json.loads(read_text(index_path))
+    except json.JSONDecodeError as exc:
+        return [f"CR-INDEX.json invalid JSON: {exc}"]
+    if not isinstance(payload, dict):
+        return ["CR-INDEX.json must be an object"]
+    errors: list[str] = []
+    items = payload.get("items")
+    if payload.get("schema_version") != 1:
+        errors.append("CR-INDEX.json schema_version must be 1")
+    if not isinstance(items, list):
+        return [*errors, "CR-INDEX.json items must be a list"]
+    ids = [str(item.get("id") or "") for item in items if isinstance(item, dict)]
+    if len(ids) != len(items):
+        errors.append("CR-INDEX.json items must contain objects only")
+    if len(ids) != len(set(ids)):
+        errors.append("CR-INDEX.json contains duplicate CR IDs")
+    def numeric(value: str) -> tuple[int, str]:
+        return (
+            (int(value.split("-", 1)[1]), value)
+            if re.fullmatch(r"CR-\d+", value)
+            else (sys.maxsize, value)
+        )
+
+    if ids != sorted(ids, key=numeric):
+        errors.append("CR-INDEX.json items must be ordered by numeric CR ID")
+    semantic = json.dumps(
+        {"schema_version": payload.get("schema_version"), "items": items},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    expected = hashlib.sha256(semantic.encode("utf-8")).hexdigest()
+    if payload.get("semantic_digest") != expected:
+        errors.append("CR-INDEX.json semantic_digest mismatch")
+    if (
+        expected_semantic_digest
+        and payload.get("semantic_digest") != expected_semantic_digest
+    ):
+        errors.append(
+            "CR-INDEX.json stale projection differs from formal truth rebuild digest"
+        )
+    return errors
+
+
 def find_legacy_cr_index_paths(project_root: Path) -> list[Path]:
     return [
         _resolve_runtime_path(project_root, rel)
@@ -827,6 +981,15 @@ def collect_errors_and_warnings(
             errors.append(f"{location} invalid readiness_status for {cr.cr_id}: {cr.readiness_status}")
         if cr.gate_status and cr.gate_status not in ALLOWED_GATE_STATUSES:
             errors.append(f"{location} invalid gate_status for {cr.cr_id}: {cr.gate_status}")
+        if cr.native:
+            errors.extend(
+                f"{location} {cr.cr_id} {message}"
+                for message in validate_native_status_tuple(
+                    cr.lifecycle_status,
+                    cr.readiness_status,
+                    cr.gate_status,
+                )
+            )
         if cr.cr_kind and cr.cr_kind not in ALLOWED_CR_KINDS:
             errors.append(f"{location} invalid cr_kind for {cr.cr_id}: {cr.cr_kind}")
         if cr.gate_profile and cr.gate_profile not in ALLOWED_GATE_PROFILES:
@@ -997,6 +1160,31 @@ def collect_errors_and_warnings(
             errors.append(f"{location} invalid readiness_status for {item.item_id}: {item.readiness_status}")
         if item.gate_status and item.gate_status not in ALLOWED_GATE_STATUSES:
             errors.append(f"{location} invalid gate_status for {item.item_id}: {item.gate_status}")
+        formal = formal_crs.get(item.item_id)
+        if formal and formal.native:
+            errors.extend(
+                f"{location} {item.item_id} {message}"
+                for message in validate_native_status_tuple(
+                    item.lifecycle_status,
+                    item.readiness_status,
+                    item.gate_status,
+                )
+            )
+            if item.lifecycle_status != formal.lifecycle_status:
+                errors.append(
+                    f"{location} {item.item_id} lifecycle_status differs from formal CR truth: "
+                    f"{item.lifecycle_status} != {formal.lifecycle_status}"
+                )
+            if item.readiness_status != formal.readiness_status:
+                errors.append(
+                    f"{location} {item.item_id} readiness_status differs from formal CR truth: "
+                    f"{item.readiness_status} != {formal.readiness_status}"
+                )
+            if item.gate_status != formal.gate_status:
+                errors.append(
+                    f"{location} {item.item_id} gate_status differs from formal CR truth: "
+                    f"{item.gate_status} != {formal.gate_status}"
+                )
         if item.kind and item.kind not in ALLOWED_CR_KINDS:
             errors.append(f"{location} invalid kind for {item.item_id}: {item.kind}")
         if item.gate_profile and item.gate_profile not in ALLOWED_GATE_PROFILES:
@@ -1092,8 +1280,30 @@ def main(argv: list[str] | None = None) -> int:
     index_path = change_root / "CR-INDEX.json"
     formal_crs = discover_formal_crs(change_root)
     follow_up_rows = discover_follow_up_rows(project_root, args.tracking)
-    index_items = parse_cr_index_items(index_path)
-    next_action_refs = parse_next_action_candidates(index_path)
+    expected_semantic_digest = ""
+    projection_errors: list[str] = []
+    try:
+        # Local import avoids making the tracking parser a lifecycle dependency
+        # during module initialization while still comparing against formal truth.
+        from meta_flow.workflow import cr_lifecycle
+
+        expected_semantic_digest = str(
+            cr_lifecycle.build_index(project_root).get("semantic_digest") or ""
+        )
+    except ValueError as exc:
+        projection_errors.append(f"formal CR truth cannot build native index: {exc}")
+    projection_errors.extend(
+        validate_cr_index_projection(
+            index_path,
+            expected_semantic_digest=expected_semantic_digest,
+        )
+    )
+    try:
+        index_items = parse_cr_index_items(index_path)
+        next_action_refs = parse_next_action_candidates(index_path)
+    except json.JSONDecodeError:
+        index_items = []
+        next_action_refs = []
     state_refs = find_state_v2_refs(state_v2_path) if state_v2_path.is_file() else find_state_refs(state_path)
     errors, warnings = collect_errors_and_warnings(
         project_root=project_root,
@@ -1104,6 +1314,7 @@ def main(argv: list[str] | None = None) -> int:
         state_refs=state_refs,
         allow_multiple_active=args.allow_multiple_active,
     )
+    errors.extend(projection_errors)
     legacy_index_paths = find_legacy_cr_index_paths(project_root)
     if legacy_index_paths and not args.allow_legacy_yaml:
         errors.extend(
