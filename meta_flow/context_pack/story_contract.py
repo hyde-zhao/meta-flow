@@ -27,6 +27,7 @@ from meta_flow.design.product_governance import (
 )
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.state.current import (
     STATE_CURRENT_ENTRY_REL,
     STATE_CURRENT_REL,
@@ -136,7 +137,7 @@ def _rel(project_root: Path, path: Path) -> str:
 
 
 def _path_tokens(project_root: Path, rel_path: str) -> int:
-    path = project_root / rel_path
+    path = _resolve_runtime_path(project_root, rel_path)
     if not path.is_file():
         return 0
     try:
@@ -187,12 +188,12 @@ def story_data_from_file(path: Path) -> dict[str, Any]:
 
 def _story_output_path(project_root: Path, story_id: str, stage: str) -> Path:
     if stage == "BASE":
-        return project_root / STORY_CONTEXT_ROOT_REL / f"{story_id}.base.context.json"
+        return _resolve_runtime_ref(project_root, STORY_CONTEXT_ROOT_REL.as_posix()) / f"{story_id}.base.context.json"
     if stage == "CP6":
-        return project_root / STORY_CONTEXT_ROOT_REL / f"{story_id}.CP6.work-packet.json"
+        return _resolve_runtime_ref(project_root, STORY_CONTEXT_ROOT_REL.as_posix()) / f"{story_id}.CP6.work-packet.json"
     if stage == "CP7":
-        return project_root / STORY_CONTEXT_ROOT_REL / f"{story_id}.CP7.verify-packet.json"
-    return project_root / STORY_CONTEXT_ROOT_REL / f"{story_id}.{stage}.context.json"
+        return _resolve_runtime_ref(project_root, STORY_CONTEXT_ROOT_REL.as_posix()) / f"{story_id}.CP7.verify-packet.json"
+    return _resolve_runtime_ref(project_root, STORY_CONTEXT_ROOT_REL.as_posix()) / f"{story_id}.{stage}.context.json"
 
 
 def _return_ref(story_id: str, stage: str) -> str:
@@ -241,7 +242,7 @@ def build_story_packet(
     stage = stage.upper()
     if stage not in ALLOWED_STAGES:
         raise ValueError(f"unsupported Story context stage: {stage}")
-    story_path = (project_root / story_path).resolve() if not story_path.is_absolute() else story_path.resolve()
+    story_path = _resolve_runtime_path(project_root, story_path)
     if not story_path.is_file():
         raise FileNotFoundError(f"Story file missing: {story_path}")
     if write_policy:
@@ -278,7 +279,7 @@ def build_story_packet(
         (CONCEPT_OWNERS_REL.as_posix(), "concept_owners"),
         (PACKAGE_IDENTITY_REL.as_posix(), "package_identity"),
     ):
-        if (project_root / rel_path).is_file():
+        if _resolve_runtime_path(project_root, rel_path).is_file():
             _append_unique(allowed_reads, _read_entry(project_root, rel_path, required=False, reason=reason))
 
     lld_policy = str(story.get("lld_policy") or story.get("required_level") or "")
@@ -439,7 +440,7 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
             continue
         if _matches_any(rel_path, denied):
             errors.append(f"allowed_reads contains deny-default path: {rel_path}")
-        if entry.get("required") is True and not (root / rel_path).is_file():
+        if entry.get("required") is True and not _resolve_runtime_path(root, rel_path).is_file():
             errors.append(f"required allowed_read missing on disk: {rel_path}")
     for entry in packet.get("read_if_needed") or []:
         if not isinstance(entry, dict):

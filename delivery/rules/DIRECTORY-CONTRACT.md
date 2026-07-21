@@ -22,6 +22,8 @@ New projects use two sibling Git roots and reciprocal portable bindings. The def
 
 The default is `route_mode=sibling-binding` with `--process-link-mode none`. `relative-symlink` is an explicit compatibility mode for legacy Agent/Skill assets that still access literal `process/...` paths. Binding-only mode requires the release `process` entry to be absent; compatibility mode requires `process -> ../<project>-process` and rejects absolute links.
 
+Every `process/...` string consumed by an Agent or Skill is a logical ref. Before file-system I/O it must be resolved only through `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`. The returned absolute `resolved_path` is transient and must not be persisted. Exit code 2 is fail-closed; callers must not strip the prefix, discover siblings, recreate a link, or silently select a legacy route.
+
 Both binding files must agree on schema, layout, project identity, route mode, and reciprocal sibling routes. The current `workspace_parent` anchor accepts exactly one safe sibling name and rejects absolute paths, `..`, sibling discovery, and non-sibling layouts. Roadmap and Phase are optional. The minimum valid governance chain is `Project -> Work`; long projects may use `Project -> Phase -> Work` or `Project -> Roadmap -> Phase -> Work`. Different projects must never resolve to the same writable process repository or Git common dir.
 
 `.meta-flow/workspace.yaml` is tracked machine truth. `.meta-flow/INSTALL-MANIFEST.yaml` is device-local installer state and must remain gitignored. A workspace-root README is human navigation only and must never be used for route resolution.

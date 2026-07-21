@@ -14,6 +14,7 @@ from meta_flow.checks import state_transition
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS
 from meta_flow.context_pack import read_expansion
 from meta_flow.policies import failure_routing
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.state import event_ledger
 from meta_flow.state.current import now_utc
 
@@ -244,7 +245,7 @@ def _validate_checker_provenance(result: dict[str, Any]) -> list[str]:
 
 
 def _load_checkpoint_events(root: Path) -> list[dict[str, Any]]:
-    ledger_path = root / CHECKPOINT_LEDGER_REL
+    ledger_path = _resolve_runtime_ref(root, CHECKPOINT_LEDGER_REL.as_posix())
     if not ledger_path.is_file():
         return []
     events: list[dict[str, Any]] = []
@@ -369,7 +370,7 @@ def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any])
         findings.append("LEGACY_ATTEMPT_UNAVAILABLE: check_attempt must be a positive integer")
     elif attempt > 1:
         ref = str(result.get("supersedes_result_ref") or "")
-        previous = (root / ref).resolve() if ref else None
+        previous = _resolve_runtime_path(root, ref) if ref else None
         if not ref or previous is None or not previous.is_file():
             findings.append("RESULT_SUPERSEDES_MISSING: check_attempt>1 requires existing supersedes_result_ref")
         else:
@@ -391,7 +392,7 @@ def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any])
             if path.is_absolute() or ".." in path.parts:
                 findings.append(f"INPUT_HASH_PATH_INVALID: {ref}")
                 continue
-            candidate = (root / path).resolve()
+            candidate = _resolve_runtime_path(root, path)
             try:
                 candidate.relative_to(root.resolve())
             except ValueError:
@@ -457,7 +458,7 @@ def _validate_derived_consistency(root: Path, result_path: Path, result: dict[st
             if expected and actual and str(expected) != str(actual):
                 errors.append(f"checkpoint ledger {key} does not match result JSON for {rel_result}")
     errors.extend(_validate_dispatch_refs(root, result))
-    cr_index_path = root / "process/changes/CR-INDEX.json"
+    cr_index_path = _resolve_runtime_ref(root, "process/changes/CR-INDEX.json")
     if cr_id and cr_index_path.is_file():
         try:
             index = json.loads(cr_index_path.read_text(encoding="utf-8"))
@@ -467,7 +468,7 @@ def _validate_derived_consistency(root: Path, result_path: Path, result: dict[st
             items = [item for item in index.get("items", []) if isinstance(item, dict)]
             if not any(item.get("id") == cr_id for item in items):
                 errors.append(f"CR-INDEX missing CR referenced by CP result: {cr_id}")
-    state_path = root / "process/state/STATE.current.json"
+    state_path = _resolve_runtime_ref(root, "process/state/STATE.current.json")
     if cr_id and state_path.is_file():
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -489,20 +490,24 @@ def _candidate_route_plan_paths(root: Path, result: dict[str, Any]) -> list[Path
     if cr_id:
         refs.extend(
             path.relative_to(root).as_posix()
-            for path in sorted((root / "process" / "checks").glob(f"CP0-*{cr_id}*.route-plan.json"))
+            for path in sorted(
+                _resolve_runtime_ref(root, "process/checks").glob(
+                    f"CP0-*{cr_id}*.route-plan.json"
+                )
+            )
             if path.is_file()
         )
     paths: list[Path] = []
     for ref in refs:
         path = Path(ref)
-        paths.append(path if path.is_absolute() else root / path)
+        paths.append(_resolve_runtime_path(root, path))
     return paths
 
 
 def _validate_post_cp_transition(root: Path, result: dict[str, Any]) -> tuple[list[str], list[str]]:
     checkpoint = str(result.get("checkpoint") or result.get("checkpoint_id") or "")
     decision = str(result.get("decision") or "")
-    state_path = root / "process" / "state" / "STATE.current.json"
+    state_path = _resolve_runtime_ref(root, "process/state/STATE.current.json")
     if not state_path.is_file():
         return [], ["state-transition skipped: STATE.current.json missing"]
     route_paths = _candidate_route_plan_paths(root, result)
@@ -644,7 +649,7 @@ def validate_cp_result(
     warnings.extend(governance_warnings)
     for ref_key in ("context_ref", "evidence_ref"):
         rel = str(result.get(ref_key) or "")
-        if rel and project_root and not (root / rel).exists():
+        if rel and project_root and not _resolve_runtime_path(root, rel).exists():
             warnings.append(f"{ref_key} not found on disk: {rel}")
     if check_consistency and project_root:
         errors.extend(_validate_derived_consistency(root, result_path, result))
@@ -783,7 +788,11 @@ def build_checkpoint_event(project_root: Path, result_path: Path) -> dict[str, A
 def append_checkpoint_ledger(project_root: Path, *, result_path: Path, ledger: Path | None = None) -> Path:
     root = project_root.resolve()
     event = build_checkpoint_event(root, result_path)
-    ledger_path = ledger.resolve() if ledger else root / CHECKPOINT_LEDGER_REL
+    ledger_path = (
+        ledger.resolve()
+        if ledger
+        else _resolve_runtime_ref(root, CHECKPOINT_LEDGER_REL.as_posix())
+    )
     return event_ledger.append_event(ledger_path, event)
 
 
@@ -845,7 +854,7 @@ def validate_applicability_aggregate(
     if not route_ref:
         errors.append("source_route_plan_ref is required")
         return errors, warnings
-    route_path = root / route_ref
+    route_path = _resolve_runtime_path(root, route_ref)
     if not route_path.is_file():
         errors.append(f"source_route_plan_ref missing on disk: {route_ref}")
         return errors, warnings

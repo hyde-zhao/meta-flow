@@ -1,5 +1,16 @@
 schema_version: 1
 contract_id: meta-flow-directory-contract-v1
+vnext_process_routing:
+  route_truth: .meta-flow/workspace.yaml
+  logical_ref_prefix: process/
+  resolver_command: meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json
+  resolved_path_usage: transient-io-only
+  blocked_exit_code: 2
+  forbidden_fallbacks:
+    - sibling-discovery
+    - strip-process-prefix
+    - restore-symlink
+    - implicit-legacy-route
 roots:
   docs:
     zone: warm

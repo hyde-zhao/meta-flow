@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_ref
+
 SOURCE_OF_TRUTH_REL = Path("process/policies/SOURCE-OF-TRUTH-MAP.yaml")
 SOURCE_OF_TRUTH_DOC_REL = Path("docs/design/SOURCE-OF-TRUTH-MAP.md")
 RETENTION_POLICY_REL = Path("process/policies/RETENTION-POLICY.json")
@@ -74,15 +76,15 @@ def _as_list(value: Any) -> list[str]:
 
 
 def truth_map_path(project_root: Path) -> Path:
-    return project_root / SOURCE_OF_TRUTH_REL
+    return _resolve_runtime_ref(project_root, SOURCE_OF_TRUTH_REL.as_posix())
 
 
 def truth_map_doc_path(project_root: Path) -> Path:
-    return project_root / SOURCE_OF_TRUTH_DOC_REL
+    return project_root.resolve() / SOURCE_OF_TRUTH_DOC_REL
 
 
 def retention_policy_path(project_root: Path) -> Path:
-    return project_root / RETENTION_POLICY_REL
+    return _resolve_runtime_ref(project_root, RETENTION_POLICY_REL.as_posix())
 
 
 def default_source_of_truth_map() -> dict[str, Any]:

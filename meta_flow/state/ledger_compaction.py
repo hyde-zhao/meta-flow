@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.evals.runner import parse_yaml_subset
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.state import event_ledger
 from meta_flow.state.current import BASE_LEDGER_RELS, now_utc
 
@@ -80,7 +81,7 @@ def _rel(project_root: Path, path: Path) -> str:
 
 
 def _resolve_under_project(project_root: Path, value: Path) -> Path:
-    candidate = value if value.is_absolute() else project_root / value
+    candidate = _resolve_runtime_path(project_root, value)
     return candidate.resolve()
 
 
@@ -116,7 +117,7 @@ def load_retention_policy(path: Path | None = None, *, project_root: Path | None
     if path is None:
         if project_root is None:
             return _default_policy()
-        path = project_root.resolve() / DEFAULT_POLICY_REL
+        path = _resolve_runtime_ref(project_root, DEFAULT_POLICY_REL.as_posix())
     if not path.is_file():
         return _default_policy()
     data = parse_yaml_subset(path.read_text(encoding="utf-8"))
@@ -269,7 +270,7 @@ def _infer_ledger_type(path: Path) -> str:
 
 def _archive_paths(plan: CompactPlan, *, created_at: str) -> tuple[Path, Path, Path]:
     stamp = created_at.replace(":", "").replace("+", "Z").replace("-", "")
-    archive_root = plan.project_root / ARCHIVE_ROOT_REL
+    archive_root = _resolve_runtime_ref(plan.project_root, ARCHIVE_ROOT_REL.as_posix())
     summary = archive_root / plan.ledger_type / f"{plan.ledger_path.stem}-{stamp}.summary.json"
     backup = archive_root / "backups" / f"{plan.ledger_path.stem}-{plan.source_hash[:12]}-{stamp}.bak.ndjson"
     index = archive_root / "ledger-archive-index.json"
@@ -408,14 +409,21 @@ def select_ledgers(selector: str, *, project_root: Path) -> list[tuple[Path, str
         selected: list[tuple[Path, str]] = []
         seen: set[Path] = set()
         for _ledger_type, rel in sorted(KNOWN_LEDGER_RELS.items()):
-            path = root / rel
+            path = _resolve_runtime_path(root, rel)
             resolved = path.resolve()
             if path.is_file() and resolved not in seen:
                 seen.add(resolved)
                 selected.append((path, _infer_ledger_type(path)))
         return selected
     if selector in event_ledger.KNOWN_LEDGER_RELS:
-        return [(root / event_ledger.KNOWN_LEDGER_RELS[selector], selector)]
+        return [
+            (
+                _resolve_runtime_ref(
+                    root, event_ledger.KNOWN_LEDGER_RELS[selector].as_posix()
+                ),
+                selector,
+            )
+        ]
     path = guard_ledger_path(root, Path(selector))
     return [(path, _infer_ledger_type(path))]
 

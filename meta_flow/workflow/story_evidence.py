@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.context_pack import story_contract
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.project.scale import load_yaml_object
 
 EVIDENCE_ROOT_REL = Path("process/evidence")
@@ -346,15 +347,15 @@ def validate_cp5_context_capsule(context_path: Path, *, project_root: Path | Non
 
 
 def default_return_path(project_root: Path, story_id: str, stage: str) -> Path:
-    return project_root / "process" / "returns" / f"{story_id}.{stage}.return.json"
+    return _resolve_runtime_ref(project_root, f"process/returns/{story_id}.{stage}.return.json")
 
 
 def default_evidence_path(project_root: Path, story_id: str, stage: str) -> Path:
-    return project_root / EVIDENCE_ROOT_REL / f"{story_id}.{stage}.index.json"
+    return _resolve_runtime_ref(project_root, EVIDENCE_ROOT_REL.as_posix()) / f"{story_id}.{stage}.index.json"
 
 
 def default_design_delta_path(project_root: Path, story_id: str) -> Path:
-    return project_root / DESIGN_DELTA_ROOT_REL / f"{story_id}.delta.json"
+    return _resolve_runtime_ref(project_root, DESIGN_DELTA_ROOT_REL.as_posix()) / f"{story_id}.delta.json"
 
 
 def _iter_plan_story_entries(plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -434,7 +435,7 @@ def _task_ids_from_markdown(path: Path) -> set[str]:
 
 def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, strict_legacy: bool = False) -> tuple[list[str], list[str]]:
     root = project_root.resolve()
-    path = (plan_path or root / DEVELOPMENT_PLAN_REL).resolve()
+    path = _resolve_runtime_path(root, plan_path or DEVELOPMENT_PLAN_REL)
     errors: list[str] = []
     warnings: list[str] = []
     if not path.is_file():
@@ -480,8 +481,8 @@ def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, st
         plan_tasks.update(_task_ids_from_plan_story(story))
 
     legacy_paths = [
-        root / LEGACY_STORY_BACKLOG_REL,
-        root / LEGACY_STORY_STATUS_REL,
+        _resolve_runtime_ref(root, LEGACY_STORY_BACKLOG_REL.as_posix()),
+        _resolve_runtime_ref(root, LEGACY_STORY_STATUS_REL.as_posix()),
         *sorted((root / "docs" / "features").glob("*/TASKS.md")),
     ]
     legacy_story_ids: dict[str, set[str]] = {
@@ -498,7 +499,9 @@ def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, st
         else:
             warnings.append(message)
 
-    legacy_statuses = _markdown_table_statuses(root / LEGACY_STORY_STATUS_REL)
+    legacy_statuses = _markdown_table_statuses(
+        _resolve_runtime_ref(root, LEGACY_STORY_STATUS_REL.as_posix())
+    )
     for story_id, legacy_status in sorted(legacy_statuses.items()):
         plan_status = plan_statuses.get(story_id)
         if plan_status and legacy_status != plan_status:

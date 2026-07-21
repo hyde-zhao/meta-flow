@@ -1,7 +1,9 @@
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
+from meta_flow.workspace.legacy_route_adapter import _LegacyRouteAuthorization
 from meta_flow.workspace.project_artifact_routing import (
     load_project_artifact_config,
     resolve_project_artifact_route,
@@ -9,17 +11,62 @@ from meta_flow.workspace.project_artifact_routing import (
 from meta_flow.workspace.routing import (
     bootstrap_process_workspace,
     check_process_route,
+    legacy_workspace_plan,
     link_process_workspace,
     project_route_to_process_health,
 )
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)
+
+
+def _init_project(root: Path) -> None:
+    _git(root, "init", "-b", "main")
+    _git(root, "-c", "user.name=Meta Flow Test", "-c", "user.email=meta-flow@example.invalid", "commit", "--allow-empty", "-m", "initial")
+
+
+def _capability(
+    command: str,
+    project_root: Path,
+    artifact_root: Path,
+    project_name: str,
+    authorization_id: str,
+    *,
+    force: bool = False,
+) -> _LegacyRouteAuthorization:
+    plan = legacy_workspace_plan(
+        command, project_root, artifact_root, project_name, force=force
+    )
+    assert plan["decision"] == "READY"
+    return _LegacyRouteAuthorization(
+        schema_version=1,
+        authorization_id=authorization_id,
+        command=command,
+        authorization_source="typed-user-confirmation",
+        authorization_kind="workspace-operation",
+        decision_ref="works/TEST/GATE.yaml",
+        project_id=project_name,
+        operation_digest=str(plan["operation_digest"]),
+        expected_oids=dict(plan["expected_oids"]),
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
 
 
 def test_workspace_link_writes_portable_relative_metadata(tmp_path: Path) -> None:
     project_root = tmp_path / "meta-flow"
     artifact_root = tmp_path / "meta-flow-artifacts"
     project_root.mkdir()
+    _init_project(project_root)
 
-    health = link_process_workspace(project_root, artifact_root, "meta-flow")
+    health = link_process_workspace(
+        project_root,
+        artifact_root,
+        "meta-flow",
+        capability=_capability(
+            "workspace link", project_root, artifact_root, "meta-flow", "link-001"
+        ),
+    )
 
     process_link = project_root / "process"
     assert process_link.is_symlink()
@@ -41,8 +88,16 @@ def test_workspace_bootstrap_initializes_state_summary_and_ledgers(tmp_path: Pat
     project_root = tmp_path / "target-project"
     artifact_root = tmp_path / "artifacts"
     project_root.mkdir()
+    _init_project(project_root)
 
-    health = bootstrap_process_workspace(project_root, artifact_root, "target-project")
+    health = bootstrap_process_workspace(
+        project_root,
+        artifact_root,
+        "target-project",
+        capability=_capability(
+            "workspace bootstrap", project_root, artifact_root, "target-project", "bootstrap-001"
+        ),
+    )
 
     assert health.ok
     assert (project_root / "process").is_symlink()
@@ -69,8 +124,16 @@ def test_workspace_bootstrap_initializes_state_summary_and_ledgers(tmp_path: Pat
 def test_workspace_bootstrap_resolves_relative_artifact_root_against_project_root(tmp_path: Path) -> None:
     project_root = tmp_path / "target-project"
     project_root.mkdir()
+    _init_project(project_root)
 
-    health = bootstrap_process_workspace(project_root, Path("../artifacts"), "target-project")
+    health = bootstrap_process_workspace(
+        project_root,
+        Path("../artifacts"),
+        "target-project",
+        capability=_capability(
+            "workspace bootstrap", project_root, Path("../artifacts"), "target-project", "bootstrap-002"
+        ),
+    )
 
     expected_artifact_root = tmp_path / "artifacts"
     assert health.ok
@@ -83,7 +146,15 @@ def test_workspace_check_resolves_relative_state_routing(tmp_path: Path) -> None
     project_root = tmp_path / "meta-flow"
     artifact_root = tmp_path / "meta-flow-artifacts"
     project_root.mkdir()
-    link_process_workspace(project_root, artifact_root, "meta-flow")
+    _init_project(project_root)
+    link_process_workspace(
+        project_root,
+        artifact_root,
+        "meta-flow",
+        capability=_capability(
+            "workspace link", project_root, artifact_root, "meta-flow", "link-002"
+        ),
+    )
 
     state_path = artifact_root / "process" / "meta-flow" / "STATE.md"
     state_path.write_text(

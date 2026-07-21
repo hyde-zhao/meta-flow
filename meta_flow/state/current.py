@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.checks.token_budget import DEFAULT_BUDGETS, format_bytes, load_budgets
+from meta_flow.project.process_route import (
+    _resolve_injected_process_ref,
+    _resolve_runtime_path,
+    _resolve_runtime_ref,
+)
 
 STATE_SCHEMA_VERSION = 2
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
@@ -520,15 +525,15 @@ def _deep_merge_current_state(base: dict[str, Any], patch: dict[str, Any]) -> di
 
 
 def current_state_path(project_root: Path) -> Path:
-    return project_root / STATE_CURRENT_REL
+    return _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
 
 
 def current_entry_path(project_root: Path) -> Path:
-    return project_root / STATE_CURRENT_ENTRY_REL
+    return _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
 
 
 def state_md_path(project_root: Path) -> Path:
-    return project_root / STATE_MD_REL
+    return _resolve_runtime_ref(project_root, STATE_MD_REL.as_posix())
 
 
 def default_current_state(project_root: Path, *, project_id: str | None = None) -> dict[str, Any]:
@@ -557,7 +562,7 @@ def default_current_state(project_root: Path, *, project_id: str | None = None) 
 
 def ensure_base_ledgers(project_root: Path) -> None:
     for ledger_rel in BASE_LEDGER_RELS:
-        ledger_path = project_root.resolve() / ledger_rel
+        ledger_path = _resolve_runtime_ref(project_root, ledger_rel.as_posix())
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         ledger_path.touch(exist_ok=True)
 
@@ -569,6 +574,80 @@ def init_current_state(project_root: Path, *, project_id: str | None = None, for
         return path
     state = default_current_state(project_root.resolve(), project_id=project_id)
     return write_current_state(project_root, state, force=force)
+
+
+def _bootstrap_legacy_state_at_process_root(
+    project_root: Path,
+    process_root: Path,
+    *,
+    project_id: str,
+    force: bool = False,
+) -> tuple[Path, Path]:
+    """为已通过 typed capability 的 legacy bootstrap 显式初始化状态。
+
+    该入口只接受调用方已经验证出的物理过程根，不通过 ``release/process``
+    重新发现路由，因此不会把 legacy 软链接重新引入通用 runtime fallback。
+    """
+
+    release_root = project_root.resolve()
+    target_root = process_root.resolve()
+    state_path = target_root / STATE_CURRENT_REL.relative_to("process")
+    state = default_current_state(release_root, project_id=project_id)
+    validate_current_state_for_write(state)
+    if not state_path.exists() or force:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_current_state_file(state_path, state)
+    else:
+        state = _read_json(state_path)
+        if not state:
+            raise ValueError(f"legacy STATE.current.json is invalid: {state_path}")
+
+    for ledger_rel in BASE_LEDGER_RELS:
+        ledger_path = target_root / ledger_rel.relative_to("process")
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.touch(exist_ok=True)
+
+    summary_path = target_root / STATE_MD_REL.relative_to("process")
+    if summary_path.exists() and not force:
+        existing = summary_path.read_text(encoding="utf-8", errors="ignore")
+        if "generated-by: meta-flow state render" not in existing:
+            raise FileExistsError(
+                f"{summary_path} 已存在且不是 state render 生成物；如需覆盖请使用 --force"
+            )
+    else:
+        summary_path.write_text(render_state_markdown(state), encoding="utf-8")
+
+    current_dir = target_root / STATE_CURRENT_DIR_REL.relative_to("process")
+    entry_path = target_root / STATE_CURRENT_ENTRY_REL.relative_to("process")
+    entry = {
+        "schema_version": 1,
+        "status": _state_status(state),
+        "health": "ok",
+        "active_change": None,
+        "active_story": None,
+        "pending_gate": None,
+        "state_ref": STATE_CURRENT_REL.as_posix(),
+        "cr_index_ref": None,
+        "available_index_refs": [],
+        "change_ref": None,
+        "context_ref": None,
+        "checkpoint_ref": None,
+        "story_packet_ref": None,
+        "release_context_ref": None,
+        "handoff_ref": None,
+        "routing_ref": state.get("routing_ref") or ROUTING_REL.as_posix(),
+        "updated_at": now_utc(),
+        "stale_refs": [],
+    }
+    current_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(entry_path, entry)
+    state_ref = current_dir / "state.ref"
+    state_ref.write_text(STATE_CURRENT_REL.as_posix() + "\n", encoding="utf-8")
+    state_link = current_dir / "state"
+    if state_link.is_symlink() or state_link.is_file():
+        state_link.unlink()
+    state_link.symlink_to(os.path.relpath(state_path, start=current_dir))
+    return state_path, summary_path
 
 
 def migrate_legacy_state(project_root: Path) -> dict[str, Any]:
@@ -641,7 +720,7 @@ def load_current_state(project_root: Path) -> dict[str, Any]:
 
 
 def _existing_rel(project_root: Path, rel_path: Path) -> str | None:
-    path = project_root / rel_path
+    path = _resolve_runtime_path(project_root, rel_path)
     return rel_path.as_posix() if path.is_file() else None
 
 
@@ -655,11 +734,23 @@ def _available_cr_index_refs(project_root: Path) -> list[str]:
 
 
 def _latest_matching_ref(project_root: Path, pattern: str) -> str | None:
-    candidates = [path for path in project_root.glob(pattern) if path.is_file()]
+    if pattern.startswith("process/"):
+        process_root = _resolve_runtime_ref(project_root, "process/PROJECT.yaml").parent
+        candidates = [
+            path
+            for path in process_root.glob(pattern.removeprefix("process/"))
+            if path.is_file()
+        ]
+        prefix = "process/"
+        relative_root = process_root
+    else:
+        candidates = [path for path in project_root.glob(pattern) if path.is_file()]
+        prefix = ""
+        relative_root = project_root
     if not candidates:
         return None
     candidates.sort(key=lambda path: (path.stat().st_mtime, path.as_posix()))
-    return candidates[-1].relative_to(project_root).as_posix()
+    return prefix + candidates[-1].relative_to(relative_root).as_posix()
 
 
 def _state_status(state: dict[str, Any]) -> str:
@@ -678,7 +769,7 @@ def _is_existing_ref(project_root: Path, rel_path: str) -> bool:
     path = Path(rel_path)
     if path.is_absolute() or ".." in path.parts:
         return False
-    return (project_root / path).is_file()
+    return _resolve_runtime_path(project_root, path).is_file()
 
 
 def _record_stale_ref(stale_refs: list[dict[str, str]], field: str, rel_path: str, *, reason: str = "missing") -> None:
@@ -903,8 +994,9 @@ def _write_pointer(current_dir: Path, project_root: Path, name: str, rel_ref: st
     try:
         if link_path.is_symlink() or link_path.is_file():
             link_path.unlink()
-        if (project_root / rel_ref).exists():
-            relative_target = os.path.relpath(project_root / rel_ref, start=current_dir)
+        target = _resolve_runtime_path(project_root, rel_ref)
+        if target.exists():
+            relative_target = os.path.relpath(target, start=current_dir)
             link_path.symlink_to(relative_target)
     except OSError:
         pass
@@ -913,9 +1005,9 @@ def _write_pointer(current_dir: Path, project_root: Path, name: str, rel_ref: st
 def refresh_current_entry(project_root: Path) -> Path:
     project_root = project_root.resolve()
     entry = build_current_entry(project_root)
-    current_dir = project_root / STATE_CURRENT_DIR_REL
+    current_dir = _resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
     current_dir.mkdir(parents=True, exist_ok=True)
-    path = project_root / STATE_CURRENT_ENTRY_REL
+    path = _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
     _write_json(path, entry)
     _write_pointer(current_dir, project_root, "state", entry["state_ref"])
     _write_pointer(current_dir, project_root, "cr-index", entry.get("cr_index_ref"))
@@ -929,7 +1021,7 @@ def refresh_current_entry(project_root: Path) -> Path:
 
 
 def load_workflow_health(project_root: Path) -> dict[str, Any]:
-    path = project_root.resolve() / WORKFLOW_HEALTH_REL
+    path = _resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
     if not path.is_file():
         return {
             "schema_version": 1,
@@ -971,7 +1063,7 @@ def update_workflow_health(
     for key, delta in increments.items():
         counters[key] = int(counters.get(key) or 0) + int(delta)
     payload["updated_at"] = now_utc()
-    path = project_root / WORKFLOW_HEALTH_REL
+    path = _resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
     _write_json(path, payload)
     if current_state_path(project_root).is_file():
         update_current_state(
@@ -1032,7 +1124,7 @@ def project_aggregate_completion(
         raise StateValidationError("aggregate projection identity fields must be non-empty")
     if not _is_relative_state_ref(aggregate_ref):
         raise StateValidationError("aggregate_ref must be a safe project-relative state ref")
-    aggregate_path = (project_root / aggregate_ref).resolve()
+    aggregate_path = _resolve_runtime_path(project_root, aggregate_ref)
     try:
         aggregate_path.relative_to(project_root)
     except ValueError as exc:
@@ -1311,7 +1403,9 @@ def plan_slim_current_state(project_root: Path) -> tuple[dict[str, Any], dict[st
 def apply_slim_current_state(project_root: Path, *, render: bool = False) -> dict[str, Any]:
     project_root = project_root.resolve()
     candidate, archive, report, timestamp = plan_slim_current_state(project_root)
-    archive_dir = project_root / STATE_ARCHIVE_ROOT_REL / timestamp
+    archive_dir = _resolve_runtime_ref(
+        project_root, STATE_ARCHIVE_ROOT_REL.as_posix()
+    ) / timestamp
     archive_dir.mkdir(parents=True, exist_ok=False)
     (archive_dir / "archived-fields.json").write_text(json.dumps(archive, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (archive_dir / "slim-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1406,8 +1500,12 @@ def _load_ndjson(path: Path) -> list[dict[str, Any]]:
 
 def render_history_markdown(project_root: Path) -> str:
     project_root = project_root.resolve()
-    cr_events = _load_ndjson(project_root / "process/state/CR-LEDGER.ndjson")
-    checkpoint_events = _load_ndjson(project_root / "process/state/CHECKPOINT-LEDGER.ndjson")
+    cr_events = _load_ndjson(
+        _resolve_runtime_ref(project_root, "process/state/CR-LEDGER.ndjson")
+    )
+    checkpoint_events = _load_ndjson(
+        _resolve_runtime_ref(project_root, "process/state/CHECKPOINT-LEDGER.ndjson")
+    )
     lines = [
         "# Meta Flow State History",
         "",
@@ -1469,7 +1567,7 @@ def render_history_markdown(project_root: Path) -> str:
 
 def render_history_file(project_root: Path, *, force: bool = False) -> Path:
     project_root = project_root.resolve()
-    path = project_root / STATE_HISTORY_REL
+    path = _resolve_runtime_ref(project_root, STATE_HISTORY_REL.as_posix())
     if path.exists() and not force:
         existing = path.read_text(encoding="utf-8", errors="ignore")
         if "generated-by: meta-flow state history-render" not in existing:
@@ -1479,13 +1577,33 @@ def render_history_file(project_root: Path, *, force: bool = False) -> Path:
     return path
 
 
-def check_current_state(project_root: Path, *, mode: str = "audit") -> tuple[list[str], list[str]]:
+def check_current_state(
+    project_root: Path,
+    *,
+    mode: str = "audit",
+    process_root: Path | None = None,
+) -> tuple[list[str], list[str]]:
     project_root = project_root.resolve()
     errors: list[str] = []
     warnings: list[str] = []
-    budgets = load_budgets(project_root)
-    state_path = current_state_path(project_root)
-    markdown_path = state_md_path(project_root)
+    injected_root = process_root.resolve() if process_root is not None else None
+
+    def read_ref(logical_ref: str) -> Path:
+        if injected_root is not None:
+            return _resolve_injected_process_ref(injected_root, logical_ref)
+        return _resolve_runtime_ref(project_root, logical_ref)
+
+    def read_path(value: str | Path) -> Path:
+        candidate = Path(value)
+        if injected_root is not None and not candidate.is_absolute():
+            logical = candidate.as_posix()
+            if logical.startswith("process/"):
+                return _resolve_injected_process_ref(injected_root, logical)
+        return _resolve_runtime_path(project_root, candidate)
+
+    budgets = load_budgets(project_root, process_root=injected_root)
+    state_path = read_ref(STATE_CURRENT_REL.as_posix())
+    markdown_path = read_ref(STATE_MD_REL.as_posix())
     if not state_path.is_file():
         errors.append(f"STATE.current.json missing: {state_path}")
         return errors, warnings
@@ -1511,14 +1629,14 @@ def check_current_state(project_root: Path, *, mode: str = "audit") -> tuple[lis
     project_state_ref = state.get("project_state_ref")
     if isinstance(project_state_ref, str) and project_state_ref:
         try:
-            project_state_exists = (project_root / project_state_ref).is_file()
+            project_state_exists = read_path(project_state_ref).is_file()
         except OSError:
             project_state_exists = False
         if not project_state_exists:
             errors.append(f"project_state_ref points to missing file: {project_state_ref}")
     workflow_health_ref = state.get("workflow_health_ref")
     if isinstance(workflow_health_ref, str) and workflow_health_ref:
-        health_path = project_root / workflow_health_ref
+        health_path = read_path(workflow_health_ref)
         if not _is_relative_state_ref(workflow_health_ref) or not health_path.is_file():
             errors.append(f"workflow_health_ref points to missing or unsafe file: {workflow_health_ref}")
         else:
@@ -1529,7 +1647,7 @@ def check_current_state(project_root: Path, *, mode: str = "audit") -> tuple[lis
             if not isinstance(health, dict) or not isinstance(health.get("phase_counters"), dict):
                 errors.append(f"workflow_health_ref is not a valid workflow health report: {workflow_health_ref}")
     for ledger_rel in BASE_LEDGER_RELS:
-        ledger_path = project_root / ledger_rel
+        ledger_path = read_ref(ledger_rel.as_posix())
         if not ledger_path.is_file():
             errors.append(f"base ledger missing: {ledger_path}")
 

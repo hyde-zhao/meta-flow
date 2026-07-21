@@ -46,6 +46,34 @@ DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
 BINDING_ALL_PROFILES_TOKEN = "vNext binding-only 适用于 G0/G1/G2"
 BINDING_LEGACY_SELECTION_TOKEN = "人工门显式选择"
+PROCESS_ROUTE_CONTRACT_TOKENS = (
+    "## vNext 过程引用契约",
+    "meta-flow project resolve-ref",
+    "resolved_path",
+    "不得自行拼 sibling",
+    "不构造 legacy capability",
+)
+PROCESS_ROUTE_AGENT_TARGETS = (
+    "delivery/agents/README.md",
+    "delivery/agents/meta-dev.md",
+    "delivery/agents/meta-doc.md",
+    "delivery/agents/meta-pm.md",
+    "delivery/agents/meta-qa.md",
+    "delivery/agents/meta-se.md",
+)
+LEGACY_PROCESS_JOIN_ALLOWLIST = {
+    "meta_flow/checks/adoption_readiness.py",
+    "meta_flow/cli.py",
+    "meta_flow/project/scaffold.py",
+    "meta_flow/workspace/project_artifact_routing.py",
+    "meta_flow/workspace/routing.py",
+}
+NON_GIT_FIXTURE_JOIN_LINE = (
+    'legacy_link = root / "process"  # guardrail: legacy-non-git-fixture-only'
+)
+DIRECT_PROCESS_JOIN_RE = re.compile(
+    r"(?:project_root|root|artifact_root)\s*/\s*(?:Path\()?['\"]process(?:/|['\"])"
+)
 SOFTWARE_WORKFLOW_REQUIRED_FILES = (
     "delivery/skills/blueprint-design/SKILL.md",
     "delivery/skills/blueprint-design/templates/BLUEPRINT-TEMPLATE.md",
@@ -2223,6 +2251,64 @@ def collect_delivery_asset_lifecycle_errors() -> list[str]:
     return errors
 
 
+def collect_process_route_contract_errors() -> list[str]:
+    """阻止 vNext 消费方重新拼接发布仓 ``process`` 物理路径。"""
+
+    errors: list[str] = []
+    skill_files = sorted((DELIVERY_ROOT / "skills").glob("*/SKILL.md"))
+    process_consumers = [
+        path
+        for path in skill_files
+        if "process/" in path.read_text(encoding="utf-8")
+    ]
+    if len(process_consumers) != 29:
+        errors.append(
+            "binding-aware canonical Skill inventory must contain exactly 29 process consumers: "
+            f"found {len(process_consumers)}"
+        )
+    for path in process_consumers:
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in PROCESS_ROUTE_CONTRACT_TOKENS if token not in text]
+        if missing:
+            errors.append(
+                f"{path.relative_to(ROOT)} missing portable process route contract tokens: "
+                f"{', '.join(missing)}"
+            )
+
+    for rel_path in PROCESS_ROUTE_AGENT_TARGETS:
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing binding-aware Agent contract target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [
+            token
+            for token in ("meta-flow project resolve-ref", "resolved_path", "不得自行拼 sibling")
+            if token not in text
+        ]
+        if missing:
+            errors.append(
+                f"{rel_path} missing portable process route contract tokens: {', '.join(missing)}"
+            )
+
+    for path in sorted((ROOT / "meta_flow").rglob("*.py")):
+        rel_path = path.relative_to(ROOT).as_posix()
+        if rel_path in LEGACY_PROCESS_JOIN_ALLOWLIST:
+            continue
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if DIRECT_PROCESS_JOIN_RE.search(line):
+                if (
+                    rel_path == "meta_flow/project/process_route.py"
+                    and line.strip() == NON_GIT_FIXTURE_JOIN_LINE
+                ):
+                    continue
+                errors.append(
+                    f"{rel_path}:{line_no} directly joins a process physical path outside the closed legacy allowlist"
+                )
+
+    return errors
+
+
 def collect_errors() -> list[str]:
     RUNTIME_WARNINGS.clear()
     errors: list[str] = []
@@ -2246,6 +2332,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_context_sufficiency_errors())
     errors.extend(collect_failure_waiver_errors())
     errors.extend(collect_delivery_asset_lifecycle_errors())
+    errors.extend(collect_process_route_contract_errors())
 
     binding_profile_documents = {
         relative: (ROOT / relative).read_text(encoding="utf-8")

@@ -15,6 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol
 
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.workflow.artifact_policy import (
     ARTIFACT_MODE,
     SOURCE_MODE,
@@ -1069,12 +1070,17 @@ class FileAggregateStore:
         writer_id: str = "meta-flow-aggregate-writer",
     ) -> None:
         self.project_root = project_root.resolve()
-        candidate = store_root or (self.project_root / "process" / "evidence" / "aggregates")
+        self.process_root = _resolve_runtime_ref(
+            self.project_root, "process/PROJECT.yaml"
+        ).parent
+        candidate = store_root or (
+            _resolve_runtime_ref(self.project_root, "process/evidence") / "aggregates"
+        )
         self.store_root = candidate.resolve()
         try:
-            self.store_root.relative_to(self.project_root)
+            self.store_root.relative_to(self.process_root)
         except ValueError as exc:
-            raise ValueError("aggregate store root must remain inside project root") from exc
+            raise ValueError("aggregate store root must remain inside process repository") from exc
         self.writer_id = writer_id
 
     @property
@@ -1086,12 +1092,12 @@ class FileAggregateStore:
         return self.store_root / "current"
 
     def _relative_ref(self, path: Path) -> str:
-        return path.resolve().relative_to(self.project_root).as_posix()
+        return "process/" + path.resolve().relative_to(self.process_root).as_posix()
 
     def _resolve_ref(self, aggregate_ref: str) -> Path:
         if not aggregate_ref or Path(aggregate_ref).is_absolute():
             raise ValueError("aggregate_ref must be a non-empty project-relative path")
-        path = (self.project_root / aggregate_ref).resolve()
+        path = _resolve_runtime_path(self.project_root, aggregate_ref)
         try:
             path.relative_to(self._results_root.resolve())
         except ValueError as exc:

@@ -23,6 +23,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+
 REQUIRED_WORKFLOW_EVAL_KEYS = {
     "schema_version",
     "suite_id",
@@ -652,6 +654,14 @@ def validate_eval_package(eval_path: Path) -> tuple[Path, list[EvalIssue]]:
 def glob_paths(root: Path, patterns: Iterable[str]) -> list[Path]:
     matched: list[Path] = []
     for pattern in patterns:
+        if pattern.startswith("process/"):
+            process_root = _resolve_runtime_ref(root, "process/PROJECT.yaml").parent
+            matched.extend(
+                path
+                for path in process_root.glob(pattern.removeprefix("process/"))
+                if path.exists()
+            )
+            continue
         if pattern.startswith("../") or pattern.startswith("./") or "/" in pattern:
             matched.extend(path for path in root.glob(pattern) if path.exists())
             continue
@@ -667,7 +677,7 @@ def grader_target_paths(root: Path, grader: dict[str, object]) -> list[Path]:
     if target_globs:
         return glob_paths(root, target_globs)
     target = str(grader.get("target", ""))
-    return [root / target] if target else []
+    return [_resolve_runtime_path(root, target)] if target else []
 
 
 def check_required_patterns(text: str, patterns: Iterable[str], label: str = "pattern") -> list[str]:
@@ -1502,7 +1512,7 @@ def run_one_runtime_sample(root: Path, grader: dict[str, object], sample: dict[s
     combined_text = "\n".join(read_optional_text(path) for path in text_paths)
 
     for rel_path in required_paths:
-        candidate = workspace / rel_path
+        candidate = _resolve_runtime_path(workspace, rel_path)
         if not candidate.exists():
             message = f"{sample_id}: missing runtime path: {rel_path}"
             findings.append(message)
@@ -1514,13 +1524,27 @@ def run_one_runtime_sample(root: Path, grader: dict[str, object], sample: dict[s
                 findings.append(message)
                 failures.append({"sample_id": sample_id, "path": rel_path, "message": message})
 
-    state_candidate = workspace / state_path
+    state_candidate = _resolve_runtime_path(workspace, state_path)
     if not state_candidate.exists():
         fallback_candidates = []
         if state_path.endswith(".yaml"):
-            fallback_candidates.extend([workspace / state_path.removesuffix(".yaml"), workspace / f"{state_path.removesuffix('.yaml')}.md"])
+            fallback_candidates.extend(
+                [
+                    _resolve_runtime_path(workspace, state_path.removesuffix(".yaml")),
+                    _resolve_runtime_path(
+                        workspace, f"{state_path.removesuffix('.yaml')}.md"
+                    ),
+                ]
+            )
         if state_path.endswith(".yml"):
-            fallback_candidates.extend([workspace / state_path.removesuffix(".yml"), workspace / f"{state_path.removesuffix('.yml')}.md"])
+            fallback_candidates.extend(
+                [
+                    _resolve_runtime_path(workspace, state_path.removesuffix(".yml")),
+                    _resolve_runtime_path(
+                        workspace, f"{state_path.removesuffix('.yml')}.md"
+                    ),
+                ]
+            )
         for fallback in fallback_candidates:
             if fallback.exists():
                 state_candidate = fallback
@@ -1545,7 +1569,7 @@ def run_one_runtime_sample(root: Path, grader: dict[str, object], sample: dict[s
                 }
             )
 
-    skill_text = read_optional_text(workspace / skill_calls_path)
+    skill_text = read_optional_text(_resolve_runtime_path(workspace, skill_calls_path))
     for skill_name in required_skill_calls:
         if not re.search(rf"(^|[^A-Za-z0-9_-]){re.escape(skill_name)}([^A-Za-z0-9_-]|$)", skill_text):
             message = f"{sample_id}: missing required skill call: {skill_name}"
@@ -1568,7 +1592,7 @@ def run_one_runtime_sample(root: Path, grader: dict[str, object], sample: dict[s
         if not phase_id:
             continue
         if phase_path:
-            candidate = workspace / phase_path
+            candidate = _resolve_runtime_path(workspace, phase_path)
             if not candidate.exists():
                 message = f"{sample_id}: phase {phase_id} artifact missing: {phase_path}"
                 findings.append(message)
@@ -1591,7 +1615,11 @@ def run_one_runtime_sample(root: Path, grader: dict[str, object], sample: dict[s
                     }
                 )
         phase_patterns = as_list(phase.get("required_patterns"))
-        phase_text = read_optional_text(workspace / phase_path) if phase_path else combined_text
+        phase_text = (
+            read_optional_text(_resolve_runtime_path(workspace, phase_path))
+            if phase_path
+            else combined_text
+        )
         for pattern in phase_patterns:
             if not re.search(pattern, phase_text, re.IGNORECASE | re.DOTALL):
                 message = f"{sample_id}: phase {phase_id} missing pattern: {pattern}"
@@ -3953,12 +3981,13 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return exit_code
     if args.command == "runtime-run":
+        runtime_out = _resolve_runtime_path(Path.cwd(), args.out)
         exit_code, summary = runtime_eval_run(
             args.eval,
             args.sample,
             args.platform,
             args.workspace,
-            args.out,
+            runtime_out,
             mode=args.mode,
             agent=args.agent,
         )
@@ -3966,10 +3995,13 @@ def main(argv: list[str] | None = None) -> int:
         return exit_code
     if args.command == "install-check":
         if args.eval:
-            exit_code, summary = run_eval(args.eval, args.out, only_types={"install_mapping"})
+            install_out = _resolve_runtime_path(Path.cwd(), args.out)
+            exit_code, summary = run_eval(
+                args.eval, install_out, only_types={"install_mapping"}
+            )
             print(f"run_id: {summary['run_id']}")
             print(f"status: {summary['status']}")
-            print(f"out: {args.out}")
+            print(f"out: {install_out}")
             return exit_code
         direct_grader = {
             "id": "install-check-direct",

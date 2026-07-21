@@ -25,6 +25,7 @@ from meta_flow.project.onboarding import (
     resolve_process_repo_root,
     status_main,
 )
+from meta_flow.project.process_route import resolve_ref_main
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 
 
@@ -392,6 +393,36 @@ def test_cli_init_and_auto_detecting_project_check(tmp_path: Path, capsys: pytes
     auto_payload = json.loads(capsys.readouterr().out)
     assert raised.value.code == 0
     assert auto_payload["status"] == "healthy"
+
+
+def test_resolve_ref_cli_maps_logical_ref_without_process_entry(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release = init_release(tmp_path)
+    apply_project_init(plan_project_init(request_for(release)))
+    process = tmp_path / "demo-process"
+    work = process / "works" / "W-001" / "WORK.yaml"
+    work.parent.mkdir(parents=True)
+    work.write_text("schema_version: 1\n", encoding="utf-8")
+
+    exit_code = resolve_ref_main(
+        [
+            "--project-root",
+            str(release),
+            "--logical-ref",
+            "process/works/W-001/WORK.yaml",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["logical_ref"] == "process/works/W-001/WORK.yaml"
+    assert Path(payload["resolved_path"]) == work
+    assert not (release / "process").exists()
 
 
 def test_project_init_preserves_evolved_project_fields_on_rerun(tmp_path: Path) -> None:

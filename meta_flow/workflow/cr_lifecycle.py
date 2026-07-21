@@ -14,6 +14,7 @@ from typing import Any
 from meta_flow.checks import cr_tracking
 from meta_flow.design import feature_registry
 from meta_flow.policies import authz, route_plan
+from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import current
 
@@ -492,7 +493,7 @@ def _builtin_legacy_impact_category(
 
 
 def _project_legacy_impact_category(project_root: Path, value: str) -> tuple[str, str] | None:
-    rules_path = project_root.resolve() / IMPACT_SURFACE_RULES_REL
+    rules_path = _resolve_runtime_ref(project_root, IMPACT_SURFACE_RULES_REL.as_posix())
     if not rules_path.is_file():
         return None
     data = load_yaml_object(rules_path)
@@ -903,7 +904,7 @@ def _first_section_summary(text: str, heading: str) -> str:
 
 
 def discover_formal_crs(project_root: Path) -> dict[str, Path]:
-    root = project_root / "process" / "changes"
+    root = _resolve_runtime_ref(project_root, "process/changes")
     if not root.is_dir():
         return {}
     crs: dict[str, Path] = {}
@@ -1052,7 +1053,7 @@ def summary_from_cr_file(
 
 
 def write_summary(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Path:
-    path = project_root / CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json"
+    path = _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix()) / f"{cr_id}.summary.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     # CR summaries are hot/warm routing objects with a 4 KiB budget.  Compact
     # JSON preserves the schema while avoiding formatting-only budget drift.
@@ -1064,7 +1065,7 @@ def write_summary(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Pa
 
 
 def write_evidence_index(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Path:
-    path = project_root / CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json"
+    path = _resolve_runtime_ref(project_root, CR_ARCHIVE_ROOT_REL.as_posix()) / cr_id / "evidence-index.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "cr_id": cr_id,
@@ -1080,7 +1081,7 @@ def write_evidence_index(project_root: Path, cr_id: str, summary: dict[str, Any]
 
 
 def append_ledger_event(project_root: Path, event: dict[str, Any]) -> Path:
-    path = project_root / CR_LEDGER_REL
+    path = _resolve_runtime_ref(project_root, CR_LEDGER_REL.as_posix())
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
@@ -1088,7 +1089,7 @@ def append_ledger_event(project_root: Path, event: dict[str, Any]) -> Path:
 
 
 def load_ledger_events(project_root: Path) -> list[dict[str, Any]]:
-    path = project_root / CR_LEDGER_REL
+    path = _resolve_runtime_ref(project_root, CR_LEDGER_REL.as_posix())
     if not path.is_file():
         return []
     events: list[dict[str, Any]] = []
@@ -1155,7 +1156,7 @@ def build_index(project_root: Path) -> dict[str, Any]:
     # canonical JSON index must not silently discard those follow-up decisions.
     # Only non-formal candidate rows are preserved; every formal CR is always
     # regenerated from its source-owned Markdown record above.
-    existing_path = project_root / CR_INDEX_REL
+    existing_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
     if existing_path.is_file():
         try:
             existing_index = json.loads(existing_path.read_text(encoding="utf-8"))
@@ -1179,7 +1180,7 @@ def build_index(project_root: Path) -> dict[str, Any]:
 
 def write_index(project_root: Path) -> Path:
     project_root = project_root.resolve()
-    path = project_root / CR_INDEX_REL
+    path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(build_index(project_root), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -1189,7 +1190,7 @@ def write_index(project_root: Path) -> Path:
 
 
 def load_index(project_root: Path) -> dict[str, Any]:
-    path = project_root / CR_INDEX_REL
+    path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
     if not path.is_file():
         return {}
     try:
@@ -1209,7 +1210,7 @@ def _write_bootstrap_cr_file(
 ) -> Path:
     if not re.fullmatch(r"CR-\d{3,}", cr_id):
         raise ValueError("bootstrap CR id must use CR-xxx naming, for example CR-001")
-    path = project_root / "process" / "changes" / f"{cr_id}.md"
+    path = _resolve_runtime_ref(project_root, f"process/changes/{cr_id}.md")
     if path.exists():
         raise FileExistsError(f"CR already exists: {path}")
     created_at = now_utc()
@@ -1271,7 +1272,9 @@ def _update_current_active_change(project_root: Path, cr_id: str, context_ref: s
 
 
 def _write_cp0_result(project_root: Path, cr_id: str, context_ref: str) -> Path:
-    result_path = project_root / "process" / "checks" / f"CP0-{cr_id}-BOOTSTRAP.result.json"
+    result_path = _resolve_runtime_ref(
+        project_root, f"process/checks/CP0-{cr_id}-BOOTSTRAP.result.json"
+    )
     result = {
         "schema_version": 1,
         "checkpoint": "CP0",
@@ -1471,7 +1474,7 @@ def sync_cr_status(
     summary_path = write_summary(project_root, cr_id, summary)
     evidence_path = write_evidence_index(project_root, cr_id, summary)
     index_path = write_index(project_root)
-    state_path = project_root / STATE_CURRENT_REL
+    state_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
     if state_path.is_file():
         state = json.loads(state_path.read_text(encoding="utf-8"))
         patch: dict[str, Any] = {"updated_at": now_utc()}
@@ -1543,7 +1546,7 @@ def collect_check_errors(project_root: Path) -> list[str]:
         return [str(exc)]
     index = load_index(project_root)
     items = {item.get("id"): item for item in index.get("items", []) if isinstance(item, dict)}
-    current_path = project_root / STATE_CURRENT_REL
+    current_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
     current_state: dict[str, Any] = {}
     if current_path.is_file():
         try:
@@ -1753,7 +1756,7 @@ def write_impact_report(path: Path, report: dict[str, Any]) -> Path:
 
 
 def _load_summary(project_root: Path, cr_id: str) -> dict[str, Any]:
-    path = project_root / CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json"
+    path = _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix()) / f"{cr_id}.summary.json"
     if not path.is_file():
         crs = discover_formal_crs(project_root)
         if cr_id not in crs:

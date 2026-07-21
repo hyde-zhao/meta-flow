@@ -11,6 +11,15 @@ user-invokable: true
 status: active
 ---
 
+
+## vNext 过程引用契约
+
+- `process/...` 是过程仓逻辑引用，不是发布仓中的相对物理路径。
+- 首次文件系统 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`。
+- 只可瞬时使用成功 JSON 中的 `resolved_path`；不得把绝对路径写入治理文件、Prompt 产物或 Git。
+- 命令以退出码 2 返回 BLOCKED 时必须停止；不得自行拼 sibling、去掉 `process/`、恢复软链接或回退 legacy。
+- legacy-only 操作必须交还 Host Orchestrator，并使用独立 typed authorization；本 Skill 不构造 legacy capability。
+
 ## 目标
 
 基于 Story 卡片、已确认的 HLD / ADR、Feature 设计引用、`lld_policy`、依赖类型和文件所有权，输出可直接指导编码、评审与验证的 Story 级设计证据，并在全部目标 Story 的设计证据统一确认前停止，不进入实现。

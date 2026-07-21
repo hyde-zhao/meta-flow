@@ -10,6 +10,17 @@
 3. 已废弃或仅保留历史参考的 Agent 不纳入正式注册表。
 4. 软件开发工作流的长期产物默认写入 `docs/`：例如 `docs/product/TEST-MATRIX.md`、`docs/design/BLUEPRINT.md`、`docs/features/<feature>/DESIGN.md`、`docs/quality/TEST-REPORT.md`、`docs/release/DEPLOY-CHECKLIST.md`；过程态仍写 `process/`，人工确认态写 `process/checkpoints/`。发布准备优先写入 `process/release/RELEASE-CONTEXT.yaml` 作为 capsule-first 摘要，再按 `release_artifact_profile=minimal|compact|full` 裁剪发布文档。
 
+
+## vNext 过程仓访问
+
+`process/...` 一律是过程仓逻辑引用。执行任何文件系统 I/O 前，先调用：
+
+```bash
+meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json
+```
+
+只瞬时使用成功 JSON 的 `resolved_path`。退出码 2 表示 BLOCKED，必须停止；不得自行拼 sibling、去前缀、恢复软链接、回退 legacy，也不得把绝对路径写入产物。legacy-only 操作必须交还 Host Orchestrator 获取独立 typed authorization。
+
 ## Canonical Subagents
 
 Host Orchestrator 是当前会话主进程职责，不在本目录安装为平台 subagent。本表只列出会被安装器渲染的功能子 agent。

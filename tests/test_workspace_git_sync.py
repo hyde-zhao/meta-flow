@@ -11,7 +11,8 @@ from meta_flow.workspace.git_sync import (
     query_exact_remote_ref,
     workspace_repositories,
 )
-from meta_flow.workspace.routing import bootstrap_process_workspace
+from meta_flow.workspace.legacy_route_adapter import _LegacyRouteAuthorization
+from meta_flow.workspace.routing import bootstrap_process_workspace, legacy_workspace_plan
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -43,6 +44,34 @@ def _init_bare(path: Path) -> None:
     subprocess.run(["git", "init", "--bare", path.as_posix()], text=True, check=True)
 
 
+def _bootstrap(
+    project_root: Path,
+    artifact_root: Path,
+    authorization_id: str,
+) -> None:
+    plan = legacy_workspace_plan(
+        "workspace bootstrap", project_root, artifact_root, "meta-flow"
+    )
+    capability = _LegacyRouteAuthorization(
+        schema_version=1,
+        authorization_id=authorization_id,
+        command="workspace bootstrap",
+        authorization_source="typed-user-confirmation",
+        authorization_kind="workspace-operation",
+        decision_ref="works/TEST/GATE.yaml",
+        project_id="meta-flow",
+        operation_digest=str(plan["operation_digest"]),
+        expected_oids=dict(plan["expected_oids"]),
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+    bootstrap_process_workspace(
+        project_root,
+        artifact_root,
+        "meta-flow",
+        capability=capability,
+    )
+
+
 def test_workspace_git_status_reports_project_and_artifact_repositories(tmp_path: Path) -> None:
     project_root = tmp_path / "meta-flow"
     artifact_root = tmp_path / "meta-flow-artifacts"
@@ -51,7 +80,7 @@ def test_workspace_git_status_reports_project_and_artifact_repositories(tmp_path
     _init_repo(project_root)
     _commit_all(project_root, "init project")
 
-    bootstrap_process_workspace(project_root, artifact_root, "meta-flow")
+    _bootstrap(project_root, artifact_root, "git-sync-bootstrap-001")
     _init_repo(artifact_root)
     _commit_all(artifact_root, "init artifacts")
     (artifact_root / "process" / "meta-flow" / "checks" / "CP0.result.json").write_text("{}", encoding="utf-8")
@@ -74,7 +103,7 @@ def test_workspace_push_blocks_dirty_artifact_repository(tmp_path: Path) -> None
     _init_repo(project_root)
     _commit_all(project_root, "init project")
 
-    bootstrap_process_workspace(project_root, artifact_root, "meta-flow")
+    _bootstrap(project_root, artifact_root, "git-sync-bootstrap-002")
     _init_repo(artifact_root)
     _commit_all(artifact_root, "init artifacts")
     (artifact_root / "process" / "meta-flow" / "checks" / "CP0.result.json").write_text("{}", encoding="utf-8")
@@ -100,7 +129,7 @@ def test_workspace_push_dry_run_targets_project_and_artifact_repositories(tmp_pa
     _commit_all(project_root, "init project")
     _git(project_root, "push", "-u", "origin", "main")
 
-    bootstrap_process_workspace(project_root, artifact_root, "meta-flow")
+    _bootstrap(project_root, artifact_root, "git-sync-bootstrap-003")
     _init_repo(artifact_root, artifact_remote)
     _commit_all(artifact_root, "init artifacts")
     _git(artifact_root, "push", "-u", "origin", "main")

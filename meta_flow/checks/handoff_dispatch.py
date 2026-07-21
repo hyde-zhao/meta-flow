@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_ref
+
 # 已知 dispatch.mode 取值
 SUBAGENT_MODE = "subagent"
 INLINE_FALLBACK_MODE = "inline-fallback"
@@ -126,7 +128,7 @@ def validate_handoff_dispatch_dir(project_root: Path, *, strict_all: bool = Fals
     """
     errors: list[str] = []
     checked: list[str] = []
-    handoff_dir = project_root / "process" / "handoffs"
+    handoff_dir = _resolve_runtime_ref(project_root, "process/handoffs")
     if not handoff_dir.is_dir():
         return errors, checked  # 无 handoff 目录不算错误
     for path in sorted(handoff_dir.glob("*.md")):

@@ -7,8 +7,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from meta_flow.workspace.routing import check_process_route
+
+if TYPE_CHECKING:
+    from meta_flow.workspace.legacy_route_adapter import _LegacyRouteAuthorization
 
 
 @dataclass(frozen=True)
@@ -406,6 +410,65 @@ def format_git_status(repos: list[GitRepoStatus], warnings: list[str]) -> list[s
     return lines
 
 
+def legacy_workspace_push_plan(
+    project_root: Path,
+    *,
+    remote: str = "origin",
+    branch: str | None = None,
+    allow_dirty: bool = False,
+) -> dict[str, object]:
+    """生成 legacy workspace push 的只读授权摘要。"""
+
+    from meta_flow.workspace.legacy_route_adapter import (
+        current_git_oid,
+        workspace_operation_payload,
+    )
+
+    root = project_root.resolve()
+    if (root / ".meta-flow" / "workspace.yaml").exists():
+        return {
+            "schema_version": 1,
+            "decision": "BLOCKED",
+            "error_code": "legacy_policy_denied",
+            "message": "portable vNext binding is present; legacy workspace push is forbidden",
+            "mutation_count": 0,
+        }
+    repos, warnings = workspace_repositories(root)
+    problems: list[str] = []
+    for repo in repos:
+        if not repo.pushable:
+            problems.append(f"{repo.label}: {repo.error or 'not-pushable'}")
+        if repo.dirty and not allow_dirty:
+            problems.append(f"{repo.label}: dirty working tree")
+    if problems:
+        return {
+            "schema_version": 1,
+            "decision": "BLOCKED",
+            "error_code": "legacy_push_not_ready",
+            "message": "; ".join(problems),
+            "warnings": warnings,
+            "mutation_count": 0,
+        }
+    expected_oids = {repo.label: current_git_oid(repo.root) for repo in repos}
+    payload = workspace_operation_payload(
+        "workspace push",
+        project_root=root,
+        project_id=root.name,
+        parameters={
+            "remote": remote,
+            "branch": branch or "",
+            "allow_dirty": allow_dirty,
+            "repositories": [
+                {"label": repo.label, "branch": branch or repo.branch}
+                for repo in repos
+            ],
+        },
+        expected_oids=expected_oids,
+    )
+    payload["warnings"] = warnings
+    return payload
+
+
 def push_workspace(
     project_root: Path,
     *,
@@ -413,7 +476,13 @@ def push_workspace(
     branch: str | None = None,
     dry_run: bool = False,
     allow_dirty: bool = False,
+    capability: _LegacyRouteAuthorization | None = None,
 ) -> tuple[int, list[str]]:
+    if (project_root.resolve() / ".meta-flow" / "workspace.yaml").exists():
+        return 2, [
+            "workspace_push: BLOCKED",
+            "- ERROR: legacy_policy_denied: portable vNext binding is present",
+        ]
     repos, warnings = workspace_repositories(project_root)
     lines = format_git_status(repos, warnings)
 
@@ -428,20 +497,56 @@ def push_workspace(
         lines.extend(f"- ERROR: {problem}" for problem in problems)
         return 1, lines
 
+    claim = None
+    if not dry_run:
+        if capability is None:
+            raise ValueError("non-dry-run workspace push requires keyword-only capability")
+        from meta_flow.workspace.legacy_route_adapter import claim_legacy_authorization
+
+        plan = legacy_workspace_push_plan(
+            project_root,
+            remote=remote,
+            branch=branch,
+            allow_dirty=allow_dirty,
+        )
+        if plan.get("decision") != "READY":
+            raise ValueError(str(plan.get("message") or "legacy workspace push is blocked"))
+        claim = claim_legacy_authorization(
+            capability,
+            command="workspace push",
+            project_root=project_root,
+            project_id=project_root.resolve().name,
+            operation_digest_value=str(plan["operation_digest"]),
+            expected_oids=dict(plan["expected_oids"]),
+        )
+
     lines.append("workspace_push:")
-    for repo in repos:
-        target_branch = branch or repo.branch
-        args = ["push", remote, target_branch]
-        if dry_run:
-            args.insert(1, "--dry-run")
-        result = _git(args, cwd=repo.root)
-        lines.append(f"- {repo.label}: git {' '.join(args)}")
-        if result.stdout.strip():
-            lines.append(f"  stdout: {result.stdout.strip()}")
-        if result.stderr.strip():
-            lines.append(f"  stderr: {result.stderr.strip()}")
-        if result.returncode != 0:
-            lines.append(f"  status: FAIL ({result.returncode})")
-            return result.returncode, lines
-        lines.append("  status: PASS")
+    completed_pushes = 0
+    try:
+        for repo in repos:
+            target_branch = branch or repo.branch
+            args = ["push", remote, target_branch]
+            if dry_run:
+                args.insert(1, "--dry-run")
+            result = _git(args, cwd=repo.root)
+            lines.append(f"- {repo.label}: git {' '.join(args)}")
+            if result.stdout.strip():
+                lines.append(f"  stdout: {result.stdout.strip()}")
+            if result.stderr.strip():
+                lines.append(f"  stderr: {result.stderr.strip()}")
+            if result.returncode != 0:
+                lines.append(f"  status: FAIL ({result.returncode})")
+                if claim is not None:
+                    decision = "PARTIAL" if completed_pushes else "BLOCKED"
+                    claim.finish(decision, mutation_count=completed_pushes)
+                return result.returncode, lines
+            completed_pushes += 1
+            lines.append("  status: PASS")
+    except BaseException:
+        if claim is not None:
+            decision = "PARTIAL" if completed_pushes else "BLOCKED"
+            claim.finish(decision, mutation_count=completed_pushes)
+        raise
+    if claim is not None:
+        claim.finish("PASS", mutation_count=completed_pushes)
     return 0, lines

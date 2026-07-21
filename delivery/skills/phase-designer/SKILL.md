@@ -9,6 +9,15 @@ user-invokable: true
 status: active
 ---
 
+
+## vNext 过程引用契约
+
+- `process/...` 是过程仓逻辑引用，不是发布仓中的相对物理路径。
+- 首次文件系统 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`。
+- 只可瞬时使用成功 JSON 中的 `resolved_path`；不得把绝对路径写入治理文件、Prompt 产物或 Git。
+- 命令以退出码 2 返回 BLOCKED 时必须停止；不得自行拼 sibling、去掉 `process/`、恢复软链接或回退 legacy。
+- legacy-only 操作必须交还 Host Orchestrator，并使用独立 typed authorization；本 Skill 不构造 legacy capability。
+
 ## 目标
 
 根据需求、场景、风险和依赖关系，将执行活动组织为有序阶段（Phase），供后续 Wave 规划消费。
@@ -66,5 +75,4 @@ status: active
 
 - 阶段设计过细会导致后续 Wave 规划碎片化
 - 把高风险任务和普通任务混在同一阶段会削弱隔离效果
-
 

@@ -11,6 +11,15 @@ called-by: meta-pm
 output: docs/product/USE-CASES.md
 ---
 
+
+## vNext 过程引用契约
+
+- `process/...` 是过程仓逻辑引用，不是发布仓中的相对物理路径。
+- 首次文件系统 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`。
+- 只可瞬时使用成功 JSON 中的 `resolved_path`；不得把绝对路径写入治理文件、Prompt 产物或 Git。
+- 命令以退出码 2 返回 BLOCKED 时必须停止；不得自行拼 sibling、去掉 `process/`、恢复软链接或回退 legacy。
+- legacy-only 操作必须交还 Host Orchestrator，并使用独立 typed authorization；本 Skill 不构造 legacy capability。
+
 ## 目标
 
 与用户共同完成**产物类型感知**的渐进式场景发现：先锁定当前工作模式、场景主体和交付出口，再通过轻量头脑风暴与 `Scenario Gray Areas` 校准用户真实意图、认知盲区和交付影响面，随后建立基线场景并做 8 维后台覆盖扫描，最终生成或更新标准化 `USE-CASES.md`，并在 Phase 3 追加场景发现摘要到 `CLARIFICATION-LOG.md`。

@@ -107,7 +107,9 @@ def default_gate_profiles() -> dict[str, Any]:
 
 
 def profiles_path(project_root: Path) -> Path:
-    return project_root / GATE_PROFILES_REL
+    from meta_flow.project.process_route import _resolve_runtime_ref
+
+    return _resolve_runtime_ref(project_root, GATE_PROFILES_REL.as_posix())
 
 
 def _read_json(path: Path) -> dict[str, Any]:

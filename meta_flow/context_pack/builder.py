@@ -25,6 +25,7 @@ from meta_flow.design.product_governance import (
 )
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.state.current import (
     STATE_CURRENT_ENTRY_REL,
     STATE_CURRENT_REL,
@@ -98,7 +99,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _iter_cp2_results(project_root: Path, cr_id: str) -> list[Path]:
-    checks_root = project_root / "process" / "checks"
+    checks_root = _resolve_runtime_ref(project_root, "process/checks")
     if not checks_root.is_dir() or not cr_id:
         return []
     compact_cr = cr_id.replace("-", "")
@@ -175,7 +176,7 @@ def default_read_policy() -> dict[str, Any]:
 
 
 def read_policy_path(project_root: Path) -> Path:
-    return project_root / READ_POLICY_REL
+    return _resolve_runtime_ref(project_root, READ_POLICY_REL.as_posix())
 
 
 def load_read_policy(project_root: Path) -> dict[str, Any]:
@@ -306,7 +307,7 @@ def default_output_path(project_root: Path, *, stage: str, cr_id: str, story_id:
     if story_id:
         parts.append(story_id.replace("-", ""))
     slug = "-".join(parts)
-    return project_root / DEFAULT_OUTPUT_ROOT_REL / f"{slug}.context.json"
+    return _resolve_runtime_ref(project_root, DEFAULT_OUTPUT_ROOT_REL.as_posix()) / f"{slug}.context.json"
 
 
 def build_context_pack(
@@ -358,32 +359,32 @@ def build_context_pack(
             _append_unique(read_if_needed, _read_entry(project_root, rel_path, required=False, reason=f"{stage.lower()}_stage_source"))
     _append_unique(allowed_reads, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
     _append_unique(must_read, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
-    if (project_root / ARTIFACT_BUDGETS_REL).is_file():
+    if _resolve_runtime_path(project_root, ARTIFACT_BUDGETS_REL).is_file():
         _append_unique(
             allowed_reads,
             _read_entry(project_root, ARTIFACT_BUDGETS_REL.as_posix(), required=False, reason="artifact_budgets"),
         )
-    if (project_root / GATE_PROFILES_REL).is_file():
+    if _resolve_runtime_path(project_root, GATE_PROFILES_REL).is_file():
         _append_unique(
             allowed_reads,
             _read_entry(project_root, GATE_PROFILES_REL.as_posix(), required=False, reason="gate_profiles"),
         )
-    if (project_root / AUTHZ_POLICY_REL).is_file():
+    if _resolve_runtime_path(project_root, AUTHZ_POLICY_REL).is_file():
         _append_unique(
             allowed_reads,
             _read_entry(project_root, AUTHZ_POLICY_REL.as_posix(), required=False, reason="authz_policy_registry"),
         )
-    if (project_root / FEATURE_REGISTRY_REL).is_file():
+    if _resolve_runtime_path(project_root, FEATURE_REGISTRY_REL).is_file():
         _append_unique(
             allowed_reads,
             _read_entry(project_root, FEATURE_REGISTRY_REL.as_posix(), required=False, reason="feature_registry"),
         )
-    if (project_root / FEATURE_DESIGN_MATRIX_REL).is_file():
+    if _resolve_runtime_path(project_root, FEATURE_DESIGN_MATRIX_REL).is_file():
         _append_unique(
             allowed_reads,
             _read_entry(project_root, FEATURE_DESIGN_MATRIX_REL.as_posix(), required=False, reason="feature_design_matrix"),
         )
-    if (project_root / MODULE_BOUNDARIES_REL).is_file():
+    if _resolve_runtime_path(project_root, MODULE_BOUNDARIES_REL).is_file():
         _append_unique(
             allowed_reads,
             _read_entry(project_root, MODULE_BOUNDARIES_REL.as_posix(), required=False, reason="module_boundaries"),

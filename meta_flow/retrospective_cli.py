@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from meta_flow.project.onboarding import check_independent_process_route
+from meta_flow.project.process_route import require_process_route
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.retrospective import (
     confirm_retrospective_facts,
@@ -18,10 +18,7 @@ from meta_flow.retrospective import (
 
 
 def _process_root(project_root: Path) -> Path:
-    health = check_independent_process_route(project_root)
-    if not health.ok or health.process_repo_root is None:
-        raise ValueError("vNext project route is not healthy: " + "; ".join(health.errors))
-    return health.process_repo_root
+    return require_process_route(project_root).process_root
 
 
 def build_main(argv: list[str]) -> int:

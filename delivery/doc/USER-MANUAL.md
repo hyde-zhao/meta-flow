@@ -28,9 +28,10 @@ meta-flow project init --project-root . --project-id demo
 meta-flow project init --project-root . --project-id demo --apply
 meta-flow project check --project-root .
 meta-flow project query --project-root .
+meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yaml --format json
 ```
 
-默认 `--process-link-mode none`，即 `route_mode=sibling-binding`，不会创建 `process` 入口，也不会为它修改 `.gitignore`。只有仍需运行字面量访问 `process/...` 的 legacy CP0-CP8 Agent/Skill 时，才显式使用 `--process-link-mode relative-symlink`；该兼容模式只允许相对链接。需要过程仓的 vNext `project/work/retrospective/evolution` Python 命令不依赖 `.agents/` 提示词，统一从 binding 解析；`repository` 命令继续要求调用方显式提供单仓 `--repo-root`。
+默认 `--process-link-mode none`，即 `route_mode=sibling-binding`，不会创建 `process` 入口，也不会为它修改 `.gitignore`。Agent/Skill 中的 `process/...` 是逻辑引用，文件 I/O 前统一调用 `project resolve-ref`；成功结果的绝对 `resolved_path` 只瞬时使用，退出码 2 必须阻断，不得自行拼 sibling、去前缀、恢复软链接或回退 legacy。`relative-symlink` 仅保留给经独立 typed authorization 的 legacy 顶层操作。需要过程仓的 vNext `project/work/retrospective/evolution` Python 命令统一从 binding 解析；`repository` 命令继续要求调用方显式提供单仓 `--repo-root`。
 
 两份 binding 必须在 `schema_version`、`layout_version`、`project_id`、`route_mode` 和 reciprocal sibling 路由上相互一致；任一不一致都会 BLOCKED。`workspace_parent` 当前只支持同一父目录的两个仓，绝对路径、`..`、sibling discovery 和非同父目录布局都不会被接受。缺少 `PROJECT.yaml` 时，`project status/check/query` 会报告过程仓尚未初始化；旧或缺失 layout metadata 不会静默降级为 vNext。
 

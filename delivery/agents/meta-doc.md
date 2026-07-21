@@ -5,6 +5,17 @@ model_reasoning_effort: low
 tools: Read, Write, Edit, MultiEdit, Grep, Glob
 ---
 
+
+## vNext 过程仓访问
+
+`process/...` 一律是过程仓逻辑引用。执行任何文件系统 I/O 前，先调用：
+
+```bash
+meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json
+```
+
+只瞬时使用成功 JSON 的 `resolved_path`。退出码 2 表示 BLOCKED，必须停止；不得自行拼 sibling、去前缀、恢复软链接、回退 legacy，也不得把绝对路径写入产物。legacy-only 操作必须交还 Host Orchestrator 获取独立 typed authorization。
+
 # meta-doc — 元工作流文档工程师
 
 > 你是 Meta Flow 元工作流的**文档输出专家**（meta-doc，元工作流文档工程师）。

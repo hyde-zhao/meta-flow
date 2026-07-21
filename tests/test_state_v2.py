@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -8,6 +9,7 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow import cli
+from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
 from meta_flow.state import current
 
 LEGACY_STATE = """---
@@ -26,6 +28,32 @@ orchestrator_session:
 """
 
 
+def init_binding_project(root: Path) -> tuple[Path, Path]:
+    release = root / "fixture-release"
+    release.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=release, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Meta Flow Test",
+            "-c",
+            "user.email=meta-flow@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        cwd=release,
+        check=True,
+        capture_output=True,
+    )
+    apply_project_init(
+        plan_project_init(ProjectInitRequest(release, "fixture", "Fixture Project"))
+    )
+    return release, root / "fixture-process"
+
+
 def write_state_fixture(root: Path, state: dict) -> None:
     path = root / "process" / "state" / "STATE.current.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,6 +62,20 @@ def write_state_fixture(root: Path, state: dict) -> None:
 
 
 class StateV2Tests(unittest.TestCase):
+    def test_binding_only_state_writes_to_process_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_binding_project(Path(directory))
+
+            exit_code = current.main(
+                ["init", "--project-root", str(release), "--project-id", "fixture"]
+            )
+            current.render_state_file(release)
+
+            self.assertEqual(0, exit_code)
+            self.assertTrue((process / "state" / "STATE.current.json").is_file())
+            self.assertTrue((process / "STATE.md").is_file())
+            self.assertFalse((release / "process").exists())
+
     def test_init_creates_current_state_and_all_base_ledgers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

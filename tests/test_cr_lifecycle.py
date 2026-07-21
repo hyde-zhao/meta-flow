@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -10,8 +11,36 @@ from unittest.mock import patch
 
 from meta_flow.checks import cp_result, cr_tracking
 from meta_flow.context_pack import builder
+from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
+from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.state import current
 from meta_flow.workflow import cr_lifecycle
+
+
+def init_binding_project(root: Path) -> tuple[Path, Path]:
+    release = root / "fixture-release"
+    release.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=release, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Meta Flow Test",
+            "-c",
+            "user.email=meta-flow@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        cwd=release,
+        check=True,
+        capture_output=True,
+    )
+    apply_project_init(
+        plan_project_init(ProjectInitRequest(release, "fixture", "Fixture Project"))
+    )
+    return release, root / "fixture-process"
 
 
 def write_cr(
@@ -23,7 +52,7 @@ def write_cr(
     impact_surface: str = "",
     extra_frontmatter: str = "",
 ) -> Path:
-    path = root / "process" / "changes" / f"{cr_id}.md"
+    path = _resolve_runtime_ref(root, f"process/changes/{cr_id}.md")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"""---
@@ -131,6 +160,22 @@ def write_impact_rules(root: Path, rules: list[dict]) -> Path:
 
 
 class CRLifecycleTests(unittest.TestCase):
+    def test_binding_only_index_and_summary_write_to_process_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_binding_project(Path(directory))
+            cr_path = write_cr(release, "CR-055")
+
+            summary = cr_lifecycle.summary_from_cr_file(release, cr_path)
+            summary_path = cr_lifecycle.write_summary(release, "CR-055", summary)
+            index_path = cr_lifecycle.write_index(release)
+
+            self.assertEqual(
+                process / "changes" / "summaries" / "CR-055.summary.json",
+                summary_path,
+            )
+            self.assertEqual(process / "changes" / "CR-INDEX.json", index_path)
+            self.assertFalse((release / "process").exists())
+
     def test_index_rebuild_preserves_non_formal_candidate_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

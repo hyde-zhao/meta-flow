@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
+from meta_flow.project.process_route import (
+    _resolve_injected_process_ref,
+    _resolve_runtime_ref,
+)
+
 DEFAULT_BUDGETS = {
     "state_current_max_bytes": 20480,
     "state_md_max_bytes": 12288,
@@ -124,9 +129,17 @@ def _load_json(path: Path) -> dict:
         return {}
 
 
-def load_budgets(project_root: Path) -> dict:
+def load_budgets(project_root: Path, *, process_root: Path | None = None) -> dict:
     budgets = json.loads(json.dumps(DEFAULT_BUDGETS))
-    policy_path = project_root / "process" / "policies" / "ARTIFACT-BUDGETS.json"
+    policy_path = (
+        _resolve_injected_process_ref(
+            process_root, "process/policies/ARTIFACT-BUDGETS.json"
+        )
+        if process_root is not None
+        else _resolve_runtime_ref(
+            project_root, "process/policies/ARTIFACT-BUDGETS.json"
+        )
+    )
     configured = _load_json(policy_path)
     if not configured:
         return budgets
@@ -228,7 +241,7 @@ def scan_workspace(project_root: Path) -> list[FileBudgetInfo]:
 
 
 def _active_change(project_root: Path) -> str:
-    state = _load_json(project_root / "process" / "state" / "STATE.current.json")
+    state = _load_json(_resolve_runtime_ref(project_root, "process/state/STATE.current.json"))
     return str(state.get("active_change") or "")
 
 
@@ -244,10 +257,10 @@ def _related_cr(rel_path: str) -> str:
 def _remediation_ref(project_root: Path, related_cr: str) -> str:
     if related_cr:
         archive_ref = f"process/archive/{related_cr}/evidence-index.json"
-        if (project_root / archive_ref).is_file():
+        if _resolve_runtime_ref(project_root, archive_ref).is_file():
             return archive_ref
         summary_ref = f"process/changes/summaries/{related_cr}.summary.json"
-        if (project_root / summary_ref).is_file():
+        if _resolve_runtime_ref(project_root, summary_ref).is_file():
             return summary_ref
     return "process/policies/LEDGER-RETENTION.yaml"
 

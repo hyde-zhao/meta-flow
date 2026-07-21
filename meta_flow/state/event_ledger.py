@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+
 KNOWN_LEDGER_RELS = {
     "checkpoint": Path("process/state/CHECKPOINT-LEDGER.ndjson"),
     "handoff": Path("process/state/HANDOFF-LEDGER.ndjson"),
@@ -81,8 +83,8 @@ def _ledger_type_from_path(path: Path) -> str:
 def ledger_path(project_root: Path, ledger_type: str) -> Path:
     rel = KNOWN_LEDGER_RELS.get(ledger_type)
     if rel is None:
-        return project_root / ledger_type
-    return project_root / rel
+        return _resolve_runtime_path(project_root, ledger_type)
+    return _resolve_runtime_ref(project_root, rel.as_posix())
 
 
 def now_utc() -> str:

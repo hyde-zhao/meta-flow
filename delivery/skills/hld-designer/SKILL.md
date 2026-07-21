@@ -10,6 +10,15 @@ user-invokable: true
 status: active
 ---
 
+
+## vNext 过程引用契约
+
+- `process/...` 是过程仓逻辑引用，不是发布仓中的相对物理路径。
+- 首次文件系统 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`。
+- 只可瞬时使用成功 JSON 中的 `resolved_path`；不得把绝对路径写入治理文件、Prompt 产物或 Git。
+- 命令以退出码 2 返回 BLOCKED 时必须停止；不得自行拼 sibling、去掉 `process/`、恢复软链接或回退 legacy。
+- legacy-only 操作必须交还 Host Orchestrator，并使用独立 typed authorization；本 Skill 不构造 legacy capability。
+
 ## 目标
 
 基于已确认需求与场景输出 `docs/design/HLD.md`。正式写 HLD 前，先识别 `Architecture Gray Areas` 并输出 table-first advisor 输入；处于阶段委托时由 meta-se 直接与用户完成讨论，必要时再由 host-orchestrator 汇总 reviewer lane。HLD 完成后由 meta-se 使用 `checkpoint-manager` 生成 `process/checks/CP3-HLD-CONSISTENCY.md`，再由 host-orchestrator 汇总交还摘要、生成 CP3 Decision Brief，并在 `process/checkpoints/CP3-HLD-REVIEW.md` 中发起人工确认。

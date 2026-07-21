@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_ref
+
 PASS_LIKE_DECISIONS = {"PASS", "WAIVED", "PASS_WITH_RISK"}
 FAILURE_DECISIONS = {"FAIL", "BLOCKED", "NEEDS_REWORK", "NEEDS_DESIGN_CLARIFICATION"}
 ALLOWED_STOP_REASONS = {
@@ -283,7 +285,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _state_path(project_root: Path, explicit: Path | None = None) -> Path:
     if explicit:
         return explicit
-    return project_root / "process" / "state" / "STATE.current.json"
+    return _resolve_runtime_ref(project_root, "process/state/STATE.current.json")
 
 
 def _stage_index(stages: list[dict[str, Any]], checkpoint: str) -> int:

@@ -13,6 +13,10 @@ from meta_flow.checks import cp_result
 from meta_flow.checks.correction import validate_correction_event
 from meta_flow.context_pack import read_expansion
 from meta_flow.evals.runner import parse_yaml_subset
+from meta_flow.project.process_route import (
+    _resolve_injected_process_ref,
+    _resolve_runtime_ref,
+)
 from meta_flow.state import event_ledger
 
 QUALITY_MODEL_REL = Path("process/policies/QUALITY-MODEL.yaml")
@@ -147,12 +151,20 @@ def _contains_forbidden_source(value: Any) -> bool:
     return any(needle.lower() in lowered for needle in FORBIDDEN_MANUAL_SOURCE_NEEDLES)
 
 
-def quality_model_path(project_root: Path) -> Path:
-    return project_root.resolve() / QUALITY_MODEL_REL
+def quality_model_path(
+    project_root: Path, *, process_root: Path | None = None
+) -> Path:
+    if process_root is not None:
+        return _resolve_injected_process_ref(process_root, QUALITY_MODEL_REL.as_posix())
+    return _resolve_runtime_ref(project_root, QUALITY_MODEL_REL.as_posix())
 
 
-def eval_matrix_path(project_root: Path) -> Path:
-    return project_root.resolve() / EVAL_MATRIX_REL
+def eval_matrix_path(
+    project_root: Path, *, process_root: Path | None = None
+) -> Path:
+    if process_root is not None:
+        return _resolve_injected_process_ref(process_root, EVAL_MATRIX_REL.as_posix())
+    return _resolve_runtime_ref(project_root, EVAL_MATRIX_REL.as_posix())
 
 
 def write_default_quality_policies(project_root: Path, *, force: bool = False) -> list[Path]:
@@ -172,18 +184,28 @@ def write_default_quality_policies(project_root: Path, *, force: bool = False) -
     return written
 
 
-def load_quality_model(project_root: Path) -> dict[str, Any]:
-    data, _errors = _read_policy(quality_model_path(project_root))
+def load_quality_model(
+    project_root: Path, *, process_root: Path | None = None
+) -> dict[str, Any]:
+    data, _errors = _read_policy(
+        quality_model_path(project_root, process_root=process_root)
+    )
     return data
 
 
-def load_eval_matrix(project_root: Path) -> dict[str, Any]:
-    data, _errors = _read_policy(eval_matrix_path(project_root))
+def load_eval_matrix(
+    project_root: Path, *, process_root: Path | None = None
+) -> dict[str, Any]:
+    data, _errors = _read_policy(
+        eval_matrix_path(project_root, process_root=process_root)
+    )
     return data
 
 
-def validate_quality_model(project_root: Path) -> tuple[list[str], list[str]]:
-    path = quality_model_path(project_root)
+def validate_quality_model(
+    project_root: Path, *, process_root: Path | None = None
+) -> tuple[list[str], list[str]]:
+    path = quality_model_path(project_root, process_root=process_root)
     data, read_errors = _read_policy(path)
     if read_errors:
         return read_errors, []
@@ -240,8 +262,10 @@ def validate_quality_model(project_root: Path) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def validate_eval_matrix(project_root: Path) -> tuple[list[str], list[str]]:
-    path = eval_matrix_path(project_root)
+def validate_eval_matrix(
+    project_root: Path, *, process_root: Path | None = None
+) -> tuple[list[str], list[str]]:
+    path = eval_matrix_path(project_root, process_root=process_root)
     data, read_errors = _read_policy(path)
     if read_errors:
         return read_errors, []
@@ -257,7 +281,7 @@ def validate_eval_matrix(project_root: Path) -> tuple[list[str], list[str]]:
     if _contains_forbidden_source(data):
         errors.append("EVAL-MATRIX must not define dashboard, ranking, portfolio, or manual metrics truth sources")
 
-    model = load_quality_model(project_root)
+    model = load_quality_model(project_root, process_root=process_root)
     model_dimension_ids = {str(item.get("id")) for item in _as_dict_list(model.get("dimensions")) if item.get("id")}
     if not model_dimension_ids:
         warnings.append("EVAL-MATRIX could not load quality model dimensions for cross-check")
@@ -321,7 +345,7 @@ def run_quality_doctor(project_root: Path) -> int:
 
 
 def _load_read_expansion_corrections(root: Path) -> tuple[dict[str, str], list[str]]:
-    path = root / READ_EXPANSION_CORRECTION_REL
+    path = _resolve_runtime_ref(root, READ_EXPANSION_CORRECTION_REL.as_posix())
     if not path.is_file():
         return {}, []
     targets: dict[str, str] = {}
@@ -359,7 +383,8 @@ def _load_cp_results(root: Path) -> tuple[list[dict[str, Any]], list[str], list[
     warnings: list[str] = []
     corrected_targets, correction_errors = _load_read_expansion_corrections(root)
     errors.extend(correction_errors)
-    for result_path in sorted((root / "process" / "checks").glob("*.result.json")):
+    checks_root = _resolve_runtime_ref(root, "process/checks")
+    for result_path in sorted(checks_root.glob("*.result.json")):
         result_errors, result_warnings = cp_result.validate_cp_result(result_path, project_root=root)
         rel_path = result_path.relative_to(root).as_posix()
         correction_id = corrected_targets.get(rel_path)
@@ -402,9 +427,10 @@ def run_workflow_doctor(project_root: Path) -> int:
     root = project_root.resolve()
     cp_results, cp_errors, cp_warnings = _load_cp_results(root)
     ledger_counts, ledger_errors, ledger_warnings = _load_ledger_counts(root)
-    read_summary = read_expansion.summarize_events(root, ledger=root / READ_EXPANSION_REL)
-    read_errors, read_warnings = read_expansion.validate_ledger(root, ledger=root / READ_EXPANSION_REL)
-    if read_errors and not (root / READ_EXPANSION_REL).is_file():
+    read_ledger = _resolve_runtime_ref(root, READ_EXPANSION_REL.as_posix())
+    read_summary = read_expansion.summarize_events(root, ledger=read_ledger)
+    read_errors, read_warnings = read_expansion.validate_ledger(root, ledger=read_ledger)
+    if read_errors and not read_ledger.is_file():
         read_warnings.extend(read_errors)
         read_errors = []
 

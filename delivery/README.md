@@ -17,7 +17,8 @@
 - `project/work/retrospective/evolution/repository` CLI 默认 dry-run；本地初始化要显式 `--apply`，进化启动与真实 commit/push 还需要对应 typed authorization。
 - 发布库和过程库独立 commit/push，部分成功真实披露，不用双 leg/aggregate，也不自动回滚成功一侧。
 - 六维复盘只生成事实、推断、人工判断和改进候选；accepted 建议只生成未执行进化包，不等于实现或 publication 授权。
-- 需要过程仓的 Python vNext CLI（`project/work/retrospective/evolution`）统一从 binding 解析，不读取 `.agents/` / `delivery/` 提示词；`repository` 命令继续要求显式 `--repo-root`。仍按字面量访问 `process/...` 的 legacy Agent/Skill 只能在显式 `--process-link-mode relative-symlink` 兼容模式下运行；binding-only 下必须阻断，不能自行拼 sibling 路径。
+- 需要过程仓的 Python vNext CLI（`project/work/retrospective/evolution`）统一从 binding 解析，不读取 `.agents/` / `delivery/` 提示词；`repository` 命令继续要求显式 `--repo-root`。Agent/Skill 中的 `process/...` 是逻辑引用，任何文件 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`；不得自行拼 sibling、去前缀、恢复软链接或持久化绝对 `resolved_path`。
+- 这不表示可以把旧提示词中的 `workspace_root/process` 当成物理路径，也不表示 binding-only 自动兼容所有 legacy Agent/Skill。直接执行文件 I/O 的 Agent/Skill 必须先使用 resolver；只序列化 `process/...` 的模板继续把它当逻辑引用。legacy-only 顶层操作必须由 Host Orchestrator 持有独立 typed authorization。
 - 当前 `workspace_parent` 锚点只允许 sibling 双仓；非同父目录布局和已初始化项目的 route mode 切换分别留给后续 `workspace_root` / `project relink` 设计，不在初始化时静默放宽。
 
 下方 CP/context-pack/shared artifacts 章节继续作为 legacy/G2 扩展能力说明，不是 G0/G1 默认清单。
