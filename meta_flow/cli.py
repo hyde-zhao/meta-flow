@@ -3,17 +3,26 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import runpy
 import sys
 from pathlib import Path
 
+from meta_flow.project.process_route import (
+    ProcessRouteError,
+    _resolve_runtime_ref,
+    require_process_route,
+)
 from meta_flow.workspace.routing import (
     bootstrap_process_workspace,
     check_process_route,
+    legacy_workspace_plan,
     link_process_workspace,
-    require_process_health,
 )
+
+LEGACY_STATE_CURRENT_REL = Path("process/state/STATE.current.json")
+LEGACY_STATE_REL = Path("process/STATE.md")
 
 
 def _candidate_roots() -> list[Path]:
@@ -42,15 +51,16 @@ def _find_installer() -> Path:
 
 def _find_workspace_root() -> Path:
     for root in _candidate_roots():
-        if (root / "process" / "state" / "STATE.current.json").is_file() or (root / "process" / "STATE.md").is_file():
+        if (root / ".meta-flow" / "workspace.yaml").is_file():
+            return root
+        if (root / LEGACY_STATE_CURRENT_REL).is_file() or (root / LEGACY_STATE_REL).is_file():
             return root
     return Path.cwd()
 
 
 def _read_state() -> tuple[Path, str]:
     root = _find_workspace_root()
-    require_process_health(root)
-    state_path = root / "process" / "STATE.md"
+    state_path = _resolve_runtime_ref(root, LEGACY_STATE_REL.as_posix())
     if not state_path.is_file():
         raise SystemExit(f"未找到运行态文件: {state_path}")
     return state_path, state_path.read_text(encoding="utf-8")
@@ -77,7 +87,7 @@ def _scalar_value(frontmatter: str, key: str, *, nested: bool = False) -> str:
 
 def _state_summary() -> dict[str, str]:
     root = _find_workspace_root()
-    current_path = root / "process" / "state" / "STATE.current.json"
+    current_path = _resolve_runtime_ref(root, LEGACY_STATE_CURRENT_REL.as_posix())
     if current_path.is_file():
         from meta_flow.state.current import load_current_state
 
@@ -150,16 +160,41 @@ def _run_workspace_doctor() -> int:
     root = _find_workspace_root()
     problems: list[str] = []
     warnings: list[str] = []
-    health = check_process_route(root)
+    health = None
+    route_lines: list[str] = []
+    if (root / ".meta-flow" / "workspace.yaml").is_file():
+        try:
+            route = require_process_route(root)
+        except ProcessRouteError as exc:
+            problems.append(f"{exc.error_code}: {exc}")
+            state_path = root / LEGACY_STATE_REL
+            process_dirs: tuple[Path, ...] = ()
+        else:
+            state_path = route.resolve_ref(LEGACY_STATE_REL.as_posix())
+            process_dirs = (
+                route.resolve_ref("process/checks"),
+                route.resolve_ref("process/checkpoints"),
+            )
+            route_lines = [
+                "process_route_health: healthy",
+                f"- route_mode: {route.route_mode}",
+                f"- process_root: {route.process_root}",
+            ]
+    else:
+        health = check_process_route(root)
+        state_path = root / LEGACY_STATE_REL
+        process_dirs = (
+            root / Path("process/checks"),
+            root / Path("process/checkpoints"),
+        )
+        if health.blocking:
+            problems.extend(health.errors)
 
-    state_path = root / "process" / "STATE.md"
     if not state_path.is_file():
         problems.append(f"缺少 {state_path}")
-    if health.blocking:
-        problems.extend(health.errors)
-    for rel in ("process/checks", "process/checkpoints"):
-        if not (root / rel).is_dir():
-            warnings.append(f"缺少目录 {rel}")
+    for directory in process_dirs:
+        if not directory.is_dir():
+            warnings.append(f"缺少目录 {directory}")
     legacy_cp4 = root / "checkpoints" / "CP4-STORY-PLAN-REVIEW.md"
     if legacy_cp4.exists():
         warnings.append("发现旧 CP4 人工审查稿；当前规则下 CP4 只做自动预检并汇入 CP5。")
@@ -173,7 +208,9 @@ def _run_workspace_doctor() -> int:
 
     if problems:
         print("Doctor: FAIL")
-        for line in health.format_lines():
+        if health is not None:
+            route_lines = health.format_lines()
+        for line in route_lines:
             print(line)
         for item in problems:
             print(f"- ERROR: {item}")
@@ -182,7 +219,9 @@ def _run_workspace_doctor() -> int:
         return 1
 
     print("Doctor: OK")
-    for line in health.format_lines():
+    if health is not None:
+        route_lines = health.format_lines()
+    for line in route_lines:
         print(line)
     for item in warnings:
         print(f"- WARN: {item}")
@@ -599,14 +638,15 @@ def _print_workspace_help() -> None:
         "New projects should use `meta-flow project init` and `meta-flow repository commit|push`.\n\n"
         "Commands:\n"
         "  check      Print process route health.\n"
-        "  link       Create process -> <artifact-root>/process/<project-name> and process scaffold.\n"
-        "  bootstrap  Link process and initialize STATE.current.json, STATE.md, and base ledgers.\n"
+        "  link       Dry-run or explicitly authorize a legacy process link.\n"
+        "  bootstrap  Dry-run or explicitly authorize legacy state bootstrap.\n"
         "  git-status Print project and artifact git status together.\n"
         "  push       Push project and artifact git repositories together.\n\n"
         "Push refuses dirty working trees by default so process artifacts cannot be missed silently.\n\n"
         "Examples:\n"
         "  meta-flow workspace check\n"
         "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
+        "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow --apply --authorization AUTH.json\n"
         "  meta-flow workspace bootstrap --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
         "  meta-flow workspace git-status --project-root .\n"
         "  meta-flow workspace push --project-root .\n"
@@ -642,8 +682,33 @@ def _run_workspace(args: list[str]) -> None:
         parser.add_argument("--artifact-root", type=Path, required=True)
         parser.add_argument("--project-name", default=Path.cwd().name)
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--apply", action="store_true")
+        parser.add_argument("--authorization", type=Path, default=None)
         parsed = parser.parse_args(args[1:])
-        health = link_process_workspace(parsed.project_root, parsed.artifact_root, parsed.project_name)
+        plan = legacy_workspace_plan(
+            "workspace link",
+            parsed.project_root,
+            parsed.artifact_root,
+            parsed.project_name,
+        )
+        if not parsed.apply:
+            print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
+            raise SystemExit(0 if plan.get("decision") == "READY" else 2)
+        if parsed.authorization is None:
+            raise SystemExit("--apply requires --authorization")
+        from meta_flow.workspace.legacy_route_adapter import load_legacy_authorization
+
+        try:
+            capability = load_legacy_authorization(parsed.authorization)
+            health = link_process_workspace(
+                parsed.project_root,
+                parsed.artifact_root,
+                parsed.project_name,
+                capability=capability,
+            )
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"plan": plan, "error": str(exc)}, ensure_ascii=False, sort_keys=True))
+            raise SystemExit(2) from exc
         for line in health.format_lines():
             print(line)
         if health.status == "state_missing":
@@ -661,13 +726,35 @@ def _run_workspace(args: list[str]) -> None:
         parser.add_argument("--project-name", default=Path.cwd().name)
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
         parser.add_argument("--force", action="store_true")
+        parser.add_argument("--apply", action="store_true")
+        parser.add_argument("--authorization", type=Path, default=None)
         parsed = parser.parse_args(args[1:])
-        health = bootstrap_process_workspace(
+        plan = legacy_workspace_plan(
+            "workspace bootstrap",
             parsed.project_root,
             parsed.artifact_root,
             parsed.project_name,
             force=parsed.force,
         )
+        if not parsed.apply:
+            print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
+            raise SystemExit(0 if plan.get("decision") == "READY" else 2)
+        if parsed.authorization is None:
+            raise SystemExit("--apply requires --authorization")
+        from meta_flow.workspace.legacy_route_adapter import load_legacy_authorization
+
+        try:
+            capability = load_legacy_authorization(parsed.authorization)
+            health = bootstrap_process_workspace(
+                parsed.project_root,
+                parsed.artifact_root,
+                parsed.project_name,
+                force=parsed.force,
+                capability=capability,
+            )
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"plan": plan, "error": str(exc)}, ensure_ascii=False, sort_keys=True))
+            raise SystemExit(2) from exc
         for line in health.format_lines():
             print(line)
         print("- NEXT: run meta-flow doctor adoption --project-root . before starting a target-project CR.")
@@ -690,7 +777,7 @@ def _run_workspace(args: list[str]) -> None:
     if command == "push":
         import argparse
 
-        from meta_flow.workspace.git_sync import push_workspace
+        from meta_flow.workspace.git_sync import legacy_workspace_push_plan, push_workspace
 
         parser = argparse.ArgumentParser(
             prog="meta-flow workspace push",
@@ -700,19 +787,43 @@ def _run_workspace(args: list[str]) -> None:
         parser.add_argument("--remote", default="origin")
         parser.add_argument("--branch", default=None)
         parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument("--authorization", type=Path, default=None)
         parser.add_argument(
             "--allow-dirty",
             action="store_true",
             help="Allow pushing committed refs while either working tree is dirty.",
         )
         parsed = parser.parse_args(args[1:])
-        status, lines = push_workspace(
+        plan = legacy_workspace_push_plan(
             parsed.project_root,
             remote=parsed.remote,
             branch=parsed.branch,
-            dry_run=parsed.dry_run,
             allow_dirty=parsed.allow_dirty,
         )
+        capability = None
+        if not parsed.dry_run:
+            if parsed.authorization is None:
+                print(json.dumps({"plan": plan, "error": "push requires --authorization"}, ensure_ascii=False, sort_keys=True))
+                raise SystemExit(2)
+            from meta_flow.workspace.legacy_route_adapter import load_legacy_authorization
+
+            try:
+                capability = load_legacy_authorization(parsed.authorization)
+            except (OSError, ValueError) as exc:
+                print(json.dumps({"plan": plan, "error": str(exc)}, ensure_ascii=False, sort_keys=True))
+                raise SystemExit(2) from exc
+        try:
+            status, lines = push_workspace(
+                parsed.project_root,
+                remote=parsed.remote,
+                branch=parsed.branch,
+                dry_run=parsed.dry_run,
+                allow_dirty=parsed.allow_dirty,
+                capability=capability,
+            )
+        except ValueError as exc:
+            print(json.dumps({"plan": plan, "error": str(exc)}, ensure_ascii=False, sort_keys=True))
+            raise SystemExit(2) from exc
         for line in lines:
             print(line)
         raise SystemExit(status)
@@ -854,6 +965,7 @@ def _run_project(args: list[str]) -> None:
             "  adopt     Preview or explicitly authorize one snapshot-only project adoption.\n"
             "  status    Check the vNext project binding and independent process route.\n"
             "  query     Read at most five directly referenced Project/Phase/Work objects.\n"
+            "  resolve-ref  Resolve one process/... logical ref through the vNext binding.\n"
             "  scaffold  Preview or apply process/project/PROJECT.current.json scaffold.\n"
             "  check     Validate vNext binding when present; otherwise validate legacy project governance.\n\n"
             "Examples:\n"
@@ -863,6 +975,7 @@ def _run_project(args: list[str]) -> None:
             "  meta-flow project adopt --project-id demo --source-id legacy --source-process-root ../legacy --target-process-root ../demo-process --include-ref PROJECT.yaml\n"
             "  meta-flow project status --project-root .\n"
             "  meta-flow project query --project-root .\n"
+            "  meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yaml --format json\n"
             "  meta-flow project scaffold --project-root .\n"
             "  meta-flow project scaffold --project-root . --apply\n"
             "  meta-flow project check --project-root .\n"
@@ -886,6 +999,10 @@ def _run_project(args: list[str]) -> None:
         from meta_flow.project import query
 
         raise SystemExit(query.main(forwarded))
+    if command == "resolve-ref":
+        from meta_flow.project import process_route
+
+        raise SystemExit(process_route.resolve_ref_main(forwarded))
     if command == "scaffold":
         from meta_flow.project import scaffold
 
@@ -901,7 +1018,9 @@ def _run_project(args: list[str]) -> None:
         from meta_flow.project import state
 
         raise SystemExit(state.main(forwarded))
-    raise SystemExit(f"未知 project 命令: {command}. 目前支持: init, adopt, status, query, scaffold, check")
+    raise SystemExit(
+        f"未知 project 命令: {command}. 目前支持: init, adopt, status, query, resolve-ref, scaffold, check"
+    )
 
 
 def _run_work(args: list[str]) -> None:

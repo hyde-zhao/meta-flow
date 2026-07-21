@@ -357,7 +357,9 @@ def validate_project_scale_payload(
 
 
 def validate_project_scale(project_root: Path, ref: str | Path = PROJECT_SCALE_REL) -> tuple[ProjectScale | None, list[ProjectFinding]]:
-    path = project_root.resolve() / ref
+    from meta_flow.project.process_route import _resolve_runtime_path
+
+    path = _resolve_runtime_path(project_root, ref)
     if not path.is_file():
         return None, [ProjectFinding("ERROR", "E_PROJECT_SCALE_MISSING", f"PROJECT-SCALE.yaml missing: {path}")]
     try:

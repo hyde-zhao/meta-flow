@@ -148,8 +148,10 @@ def validate_project_ref(
         _finding(findings, "ERROR", "ref_path", f"{key} must be a project-relative path and must not escape project root", key=key)
         return
     if must_exist and project_root is not None:
+        from meta_flow.project.process_route import _resolve_runtime_path
+
         try:
-            target_exists = (project_root / value).is_file()
+            target_exists = _resolve_runtime_path(project_root, value).is_file()
         except OSError:
             target_exists = False
         if not target_exists:
@@ -248,7 +250,9 @@ def validate_project_current_payload(
 
 
 def project_current_path(project_root: Path) -> Path:
-    return project_root.resolve() / PROJECT_CURRENT_REL
+    from meta_flow.project.process_route import _resolve_runtime_ref
+
+    return _resolve_runtime_ref(project_root, PROJECT_CURRENT_REL.as_posix())
 
 
 def load_project_current(project_root: Path) -> dict[str, Any]:

@@ -7,9 +7,10 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from meta_flow.workspace.legacy_route_adapter import _LegacyRouteAuthorization
     from meta_flow.workspace.project_artifact_routing import ProjectArtifactConfig, RouteDecision
 
 ROUTE_METADATA_NAME = ".meta-flow-process.yaml"
@@ -431,7 +432,57 @@ def write_route_metadata(
     return metadata_path
 
 
-def link_process_workspace(project_root: Path, artifact_root: Path, project_name: str) -> ProcessRouteHealth:
+def legacy_workspace_plan(
+    command: str,
+    project_root: Path,
+    artifact_root: Path,
+    project_name: str,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """只读生成 link/bootstrap 的 typed-authorization 绑定摘要。"""
+
+    from meta_flow.workspace.legacy_route_adapter import (
+        current_git_oid,
+        workspace_operation_payload,
+    )
+
+    if command not in {"workspace link", "workspace bootstrap"}:
+        raise ValueError("legacy workspace plan command is invalid")
+    root = project_root.resolve()
+    if (root / ".meta-flow" / "workspace.yaml").exists():
+        return {
+            "schema_version": 1,
+            "decision": "BLOCKED",
+            "error_code": "legacy_policy_denied",
+            "message": "portable vNext binding is present; legacy route mutation is forbidden",
+            "mutation_count": 0,
+        }
+    resolved_artifact = _resolve_input_path(artifact_root, anchor=root)
+    expected_oids = {
+        "project": current_git_oid(root),
+        "artifact": current_git_oid(resolved_artifact) if resolved_artifact.exists() else "",
+    }
+    payload = workspace_operation_payload(
+        command,
+        project_root=root,
+        project_id=project_name,
+        parameters={
+            "artifact_root": str(resolved_artifact),
+            "project_name": project_name,
+            "force": force if command == "workspace bootstrap" else False,
+        },
+        expected_oids=expected_oids,
+    )
+    payload["target"] = f"artifact-root/process/{project_name}"
+    return payload
+
+
+def _link_process_workspace_unchecked(
+    project_root: Path,
+    artifact_root: Path,
+    project_name: str,
+) -> ProcessRouteHealth:
     project_root = project_root.resolve()
     artifact_root = _resolve_input_path(artifact_root, anchor=project_root)
     process_root = artifact_root / "process" / project_name
@@ -467,52 +518,87 @@ def link_process_workspace(project_root: Path, artifact_root: Path, project_name
     return check_process_route(project_root)
 
 
+def link_process_workspace(
+    project_root: Path,
+    artifact_root: Path,
+    project_name: str,
+    *,
+    capability: _LegacyRouteAuthorization,
+) -> ProcessRouteHealth:
+    """执行已确认的 legacy link；底层边界自身强制一次性 capability。"""
+
+    from meta_flow.workspace.legacy_route_adapter import claim_legacy_authorization
+
+    plan = legacy_workspace_plan(
+        "workspace link", project_root, artifact_root, project_name
+    )
+    if plan.get("decision") != "READY":
+        raise ValueError(str(plan.get("message") or "legacy workspace link is blocked"))
+    claim = claim_legacy_authorization(
+        capability,
+        command="workspace link",
+        project_root=project_root,
+        project_id=project_name,
+        operation_digest_value=str(plan["operation_digest"]),
+        expected_oids=dict(plan["expected_oids"]),
+    )
+    try:
+        health = _link_process_workspace_unchecked(
+            project_root, artifact_root, project_name
+        )
+    except BaseException:
+        claim.finish("PARTIAL")
+        raise
+    claim.finish("PASS", mutation_count=1)
+    return health
+
+
 def bootstrap_process_workspace(
     project_root: Path,
     artifact_root: Path,
     project_name: str,
     *,
     force: bool = False,
+    capability: _LegacyRouteAuthorization,
 ) -> ProcessRouteHealth:
+    from meta_flow.workspace.legacy_route_adapter import claim_legacy_authorization
+
     project_root = project_root.resolve()
-    health = link_process_workspace(project_root, artifact_root, project_name)
-
-    from meta_flow.state import current
-
-    current.init_current_state(project_root, project_id=project_name, force=force)
-    current.render_state_file(project_root, force=force)
-    state_errors, state_warnings = current.check_current_state(project_root)
-    health = check_process_route(project_root)
-    if state_errors:
-        return ProcessRouteHealth(
-            status="route_mismatch",
-            project_root=health.project_root,
-            link_path=health.link_path,
-            state_path=health.state_path,
-            routing_mode=health.routing_mode,
-            expected_project_name=health.expected_project_name,
-            actual_target=health.actual_target,
-            metadata_path=health.metadata_path,
-            artifact_root=health.artifact_root,
-            project_process_root=health.project_process_root,
-            errors=[*health.errors, *state_errors],
-            warnings=[*health.warnings, *state_warnings],
-            artifact_git_dirty=health.artifact_git_dirty,
+    plan = legacy_workspace_plan(
+        "workspace bootstrap",
+        project_root,
+        artifact_root,
+        project_name,
+        force=force,
+    )
+    if plan.get("decision") != "READY":
+        raise ValueError(str(plan.get("message") or "legacy workspace bootstrap is blocked"))
+    claim = claim_legacy_authorization(
+        capability,
+        command="workspace bootstrap",
+        project_root=project_root,
+        project_id=project_name,
+        operation_digest_value=str(plan["operation_digest"]),
+        expected_oids=dict(plan["expected_oids"]),
+    )
+    try:
+        health = _link_process_workspace_unchecked(
+            project_root, artifact_root, project_name
         )
-    if state_warnings:
-        return ProcessRouteHealth(
-            status=health.status,
-            project_root=health.project_root,
-            link_path=health.link_path,
-            state_path=health.state_path,
-            routing_mode=health.routing_mode,
-            expected_project_name=health.expected_project_name,
-            actual_target=health.actual_target,
-            metadata_path=health.metadata_path,
-            artifact_root=health.artifact_root,
-            project_process_root=health.project_process_root,
-            errors=health.errors,
-            warnings=[*health.warnings, *state_warnings],
-            artifact_git_dirty=health.artifact_git_dirty,
+
+        from meta_flow.state import current
+
+        if health.project_process_root is None:
+            raise ValueError("legacy workspace bootstrap did not resolve a process root")
+        current._bootstrap_legacy_state_at_process_root(
+            project_root,
+            health.project_process_root,
+            project_id=project_name,
+            force=force,
         )
+        health = check_process_route(project_root)
+    except BaseException:
+        claim.finish("PARTIAL")
+        raise
+    claim.finish("PASS", mutation_count=1)
     return health

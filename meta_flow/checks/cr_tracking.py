@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.policies import gate_profiles
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.state import current
 from meta_flow.workspace.routing import require_process_health
 
@@ -147,8 +148,8 @@ def _safe_project_file(project_root: Path, rel_path: str) -> Path:
     relative = Path(rel_path)
     if relative.is_absolute() or ".." in relative.parts or relative.parts[:2] == ("process", "quant-lab"):
         raise ValueError(f"protected object escapes project boundary: {rel_path}")
-    path = (root / rel_path).resolve(strict=True)
-    process_root = (root / "process").resolve(strict=True) if (root / "process").exists() else root / "process"
+    path = _resolve_runtime_path(root, rel_path).resolve(strict=True)
+    process_root = _resolve_runtime_ref(root, "process/PROJECT.yaml").parent
     within_allowed_root = path.is_relative_to(root) or (
         relative.parts[:1] == ("process",) and path.is_relative_to(process_root)
     )
@@ -220,19 +221,19 @@ def build_protected_object_manifest(project_root: Path, *, cr_id: str, story_id:
         Path(f"process/changes/summaries/{cr_id}.summary.json"),
         Path(f"process/archive/{cr_id}/evidence-index.json"),
     }
-    checks_root = root / "process" / "checks"
+    checks_root = _resolve_runtime_ref(root, "process/checks")
     if checks_root.is_dir():
         candidate_paths.update(
             path.relative_to(root)
             for path in checks_root.glob("*.result.json")
             if compact_id in path.name or cr_id in path.name
         )
-    stories_root = root / "process" / "stories"
+    stories_root = _resolve_runtime_ref(root, "process/stories")
     if stories_root.is_dir():
         candidate_paths.update(
             path.relative_to(root) for path in stories_root.glob("STORY-ST-EI-*-IMPLEMENTATION.md")
         )
-    evidence_root = root / "process" / "evidence"
+    evidence_root = _resolve_runtime_ref(root, "process/evidence")
     if evidence_root.is_dir():
         candidate_paths.update(path.relative_to(root) for path in evidence_root.glob("ST-EI-*.index.json"))
 
@@ -250,7 +251,7 @@ def build_protected_object_manifest(project_root: Path, *, cr_id: str, story_id:
             }
         )
     for rel_path in PROTECTED_LEDGER_RELS:
-        path = root / rel_path
+        path = _resolve_runtime_path(root, rel_path)
         if not path.is_file():
             continue
         payload, event_ids = _ledger_cr_event_payload(path, cr_id)
@@ -459,7 +460,7 @@ def resolve_project_path(project_root: Path, value: str) -> Path:
     path = Path(value)
     if path.is_absolute():
         return path
-    return project_root / path
+    return _resolve_runtime_path(project_root, path)
 
 
 def find_state_refs(state_path: Path) -> list[StateRef]:
@@ -636,9 +637,13 @@ def follow_up_row_from_mapping(mapping: dict[str, str], path: Path, line_no: int
 
 def discover_follow_up_rows(project_root: Path, explicit_tracking: list[Path]) -> list[FollowUpRow]:
     if explicit_tracking:
-        paths = [path if path.is_absolute() else project_root / path for path in explicit_tracking]
+        paths = [_resolve_runtime_path(project_root, path) for path in explicit_tracking]
     else:
-        paths = sorted((project_root / "process" / "changes").glob("CR-*-FOLLOW-UP-TRACKING-*.md"))
+        paths = sorted(
+            _resolve_runtime_ref(project_root, "process/changes").glob(
+                "CR-*-FOLLOW-UP-TRACKING-*.md"
+            )
+        )
     rows: list[FollowUpRow] = []
     for path in paths:
         if path.is_file():
@@ -691,7 +696,11 @@ def parse_cr_index_items(index_path: Path) -> list[IndexItem]:
 
 
 def find_legacy_cr_index_paths(project_root: Path) -> list[Path]:
-    return [project_root / rel for rel in LEGACY_CR_INDEX_RELS if (project_root / rel).is_file()]
+    return [
+        _resolve_runtime_path(project_root, rel)
+        for rel in LEGACY_CR_INDEX_RELS
+        if _resolve_runtime_path(project_root, rel).is_file()
+    ]
 
 
 def parse_next_action_candidates(index_path: Path) -> list[tuple[str, int]]:
@@ -1069,9 +1078,9 @@ def main(argv: list[str] | None = None) -> int:
 
     project_root = args.project_root.resolve()
     require_process_health(project_root)
-    state_v2_path = project_root / "process" / "state" / "STATE.current.json"
-    state_path = project_root / "process" / "STATE.md"
-    change_root = project_root / "process" / "changes"
+    state_v2_path = _resolve_runtime_ref(project_root, "process/state/STATE.current.json")
+    state_path = _resolve_runtime_ref(project_root, "process/STATE.md")
+    change_root = _resolve_runtime_ref(project_root, "process/changes")
     index_path = change_root / "CR-INDEX.json"
     formal_crs = discover_formal_crs(change_root)
     follow_up_rows = discover_follow_up_rows(project_root, args.tracking)

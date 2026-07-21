@@ -24,7 +24,12 @@ meta-flow work classify --change-kind documentation --touched-path-count 1
 # 4. 只读一个 Work 或最多五个直接引用的 Project/Phase/Work 对象
 meta-flow work status --project-root . --work-id W-001
 meta-flow project query --project-root .
+
+# Agent/Skill 在任何 process/... 文件 I/O 前使用唯一机器接口
+meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yaml --format json
 ```
+
+`process/...` 在 vNext 中是逻辑引用。`resolve-ref` 成功时返回的绝对 `resolved_path` 只用于本次 I/O，不得写入治理文件或 Git；退出码 2 表示路由/ref 契约阻断，调用方必须停止，不得自行拼 sibling、去前缀、恢复软链接或回退 legacy。
 
 日常变化默认用 Work；公共契约、架构、安全权限、不可逆迁移、生产写、正式发布、强审计、风险接受和跨阶段重构才升级正式 CR/G2。G0/G1 只生成当前 Work 必要的 `REQUEST.md`、`WORK.yaml`、usage/handoff/result，不强制八份产品基线、全量 HLD/LLD 或 CP0-CP8。
 

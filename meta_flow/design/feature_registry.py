@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+
 FEATURE_REGISTRY_REL = Path("docs/design/FEATURE-REGISTRY.yaml")
 CAPABILITY_REGISTRY_REL = Path("docs/design/CAPABILITY-REGISTRY.yaml")
 FEATURE_DESIGN_MATRIX_REL = Path("docs/design/FEATURE-DESIGN-MATRIX.yaml")
@@ -87,9 +89,9 @@ class ResolverResult:
 
 def registry_path(project_root: Path, kind: str = "feature") -> Path:
     if kind == "feature":
-        return project_root / FEATURE_REGISTRY_REL
+        return _resolve_runtime_path(project_root, FEATURE_REGISTRY_REL)
     if kind == "capability":
-        return project_root / CAPABILITY_REGISTRY_REL
+        return _resolve_runtime_path(project_root, CAPABILITY_REGISTRY_REL)
     raise ValueError(f"unknown registry kind: {kind}")
 
 
@@ -392,9 +394,9 @@ def validate_registry(project_root: Path, *, include_capabilities: bool = False)
         if requires_design_doc:
             if not design_doc:
                 errors.append(f"{feature_id} missing design_doc")
-            elif not (project_root / design_doc).is_file():
+            elif not _resolve_runtime_path(project_root, design_doc).is_file():
                 errors.append(f"{feature_id} design_doc missing on disk: {design_doc}")
-        elif design_doc and not (project_root / design_doc).is_file():
+        elif design_doc and not _resolve_runtime_path(project_root, design_doc).is_file():
             warnings.append(f"{feature_id} design_doc declared but missing on disk: {design_doc}")
         elif not design_doc:
             warnings.append(f"{feature_id} design_doc waived by status={status} design_doc_policy={design_doc_policy}")
@@ -491,7 +493,7 @@ def _story_id_from_path(path: Path, data: dict[str, Any]) -> str:
 
 
 def discover_story_files(project_root: Path) -> list[Path]:
-    root = project_root / STORY_ROOT_REL
+    root = _resolve_runtime_ref(project_root, STORY_ROOT_REL.as_posix())
     if not root.is_dir():
         return []
     files: list[Path] = []

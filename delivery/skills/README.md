@@ -17,6 +17,7 @@
 10. 长期产品、设计、质量和发布文档默认写入 `docs/product/`、`docs/design/`、`docs/features/`、`docs/quality/`、`docs/release/`；运行状态、计划、Story 执行态、discussion、handoff、CR 和自动检查仍写入 `process/`；人工检查点审查稿写入 `process/checkpoints/`。
 11. CP2 / CP3 / CP5 / CP6 / CP7 / CP8 前后的子 agent 交接和人工门禁默认先读取 `process/context/*-CONTEXT.yaml`；只有缺失、冲突、字段不足、人工审计或深度评审时才读取完整正式文档，并记录 `full_doc_read_reason`。
 12. 功能 Agent 与高频 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`。默认机器状态入口是 `process/state/STATE.current.json`，默认读取集合来自 context / packet 的 `allowed_reads` / `must_read`；`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 CR、全量 Story LLD、完整 TEST-REPORT / REVIEW / diff 属于 `do_not_read_by_default`。
+13. `process/...` 是过程仓逻辑引用。任何文件系统 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`；`resolved_path` 只可瞬时使用，退出码 2 必须阻断，不得自行拼 sibling、去前缀、恢复软链接或回退 legacy。
 
 ## Agent → Skill 关系
 

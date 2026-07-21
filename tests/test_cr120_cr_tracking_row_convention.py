@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from meta_flow.checks import cr_tracking
+from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
+from meta_flow.project.process_route import _resolve_runtime_ref
+
+
+def _init_binding_project(root: Path) -> tuple[Path, Path]:
+    release = root / "fixture-release"
+    release.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=release, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Meta Flow Test",
+            "-c",
+            "user.email=meta-flow@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        cwd=release,
+        check=True,
+        capture_output=True,
+    )
+    apply_project_init(
+        plan_project_init(ProjectInitRequest(release, "fixture", "Fixture Project"))
+    )
+    return release, root / "fixture-process"
 
 
 def _write(path: Path, text: str) -> None:
@@ -18,7 +47,9 @@ def _formal_cr(
     lifecycle_status: str = "active",
     source_follow_up_id: str = "FU-CR114-004",
 ) -> Path:
-    path = root / "process" / "changes" / f"{cr_id}-ROW-CONVENTION.md"
+    path = _resolve_runtime_ref(
+        root, f"process/changes/{cr_id}-ROW-CONVENTION.md"
+    )
     _write(
         path,
         f"""---
@@ -41,7 +72,9 @@ source_follow_up_id: "{source_follow_up_id}"
 
 
 def _tracking(root: Path, relation: str, *, formal_path: str = "process/changes/CR-120-ROW-CONVENTION.md") -> Path:
-    path = root / "process" / "changes" / "CR-116-FOLLOW-UP-TRACKING-2026-06-22.md"
+    path = _resolve_runtime_ref(
+        root, "process/changes/CR-116-FOLLOW-UP-TRACKING-2026-06-22.md"
+    )
     _write(
         path,
         f"""# Tracking
@@ -56,7 +89,9 @@ def _tracking(root: Path, relation: str, *, formal_path: str = "process/changes/
 
 
 def _errors(root: Path) -> list[str]:
-    formal = cr_tracking.discover_formal_crs(root / "process" / "changes")
+    formal = cr_tracking.discover_formal_crs(
+        _resolve_runtime_ref(root, "process/changes")
+    )
     rows = cr_tracking.discover_follow_up_rows(root, [])
     errors, _warnings = cr_tracking.collect_errors_and_warnings(
         project_root=root,
@@ -75,6 +110,16 @@ def test_active_source_follow_up_row_with_related_active_cr_passes(tmp_path: Pat
     _tracking(tmp_path, "related_active_cr=CR-120; blocked_by=cp5_pending")
 
     assert _errors(tmp_path) == []
+
+
+def test_binding_only_follow_up_rows_resolve_in_process_repository(tmp_path: Path) -> None:
+    release, process = _init_binding_project(tmp_path)
+    _formal_cr(release, "CR-120")
+    _tracking(release, "related_active_cr=CR-120; blocked_by=cp5_pending")
+
+    assert _errors(release) == []
+    assert (process / "changes" / "CR-120-ROW-CONVENTION.md").is_file()
+    assert not (release / "process").exists()
 
 
 def test_active_source_follow_up_row_requires_related_active_cr(tmp_path: Path) -> None:

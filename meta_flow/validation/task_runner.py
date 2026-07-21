@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_ref
+
 VALIDATION_ROOT_REL = Path("process/validation")
 EVIDENCE_ROOT_REL = Path("process/evidence")
 RUN_LEDGER_NAME = "run-ledger.ndjson"
@@ -268,7 +270,10 @@ def run_validation_task(
     command_parts = _parse_command(command) if command.strip() else []
     created_at = now_utc()
     run_id = f"{_safe_id(cr_id)}-{_safe_id(profile_name)}-{created_at.replace(':', '').replace('+', 'Z')}"
-    task_dir = (output_dir or (project_root / VALIDATION_ROOT_REL / cr_id / run_id)).resolve()
+    task_dir = (
+        output_dir
+        or (_resolve_runtime_ref(project_root, VALIDATION_ROOT_REL.as_posix()) / cr_id / run_id)
+    ).resolve()
     task_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = task_dir / RUN_LEDGER_NAME
     _append_ledger(
@@ -342,7 +347,8 @@ def run_validation_task(
     evidence_ref = _write_json(project_root, task_dir / EVIDENCE_INDEX_NAME, evidence_index)
     latest_ref = _write_json(
         project_root,
-        project_root / EVIDENCE_ROOT_REL / f"{cr_id}.{profile_name}.validation.index.json",
+        _resolve_runtime_ref(project_root, EVIDENCE_ROOT_REL.as_posix())
+        / f"{cr_id}.{profile_name}.validation.index.json",
         {**evidence_index, "source_evidence_ref": evidence_ref},
     )
     _append_ledger(

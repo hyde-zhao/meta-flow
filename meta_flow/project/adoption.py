@@ -11,11 +11,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from meta_flow.project.model import is_safe_ref, load_project
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.workspace.git_sync import run_git
+
+if TYPE_CHECKING:
+    from meta_flow.workspace.legacy_route_adapter import _LegacyRouteAuthorization
 
 ADOPTION_SCHEMA_VERSION = 1
 ADOPTION_INDEX_REL = Path("legacy/INDEX.yaml")
@@ -111,6 +114,7 @@ class AdoptionAuthorization:
     plan_digest: str
     source_oid: str
     target_oid: str
+    decision_ref: str
     expires_at: str
     single_use: bool = True
 
@@ -332,9 +336,6 @@ def _validate_authorization(plan: SnapshotAdoptionPlan, authorization: AdoptionA
         raise ValueError("authorization expires_at must include timezone")
     if expiry.astimezone(UTC) <= datetime.now(UTC):
         raise ValueError("adoption authorization is expired")
-    receipt_path = plan.target_root / ADOPTION_RECEIPT_DIR / f"{authorization.authorization_id}.json"
-    if receipt_path.exists() or receipt_path.is_symlink():
-        raise ValueError("adoption authorization was already consumed")
 
 
 def _copy_entry_create_only(source_root: Path, target_root: Path, entry: SnapshotEntry) -> None:
@@ -358,12 +359,33 @@ def _copy_entry_create_only(source_root: Path, target_root: Path, entry: Snapsho
 def apply_snapshot_adoption(
     plan: SnapshotAdoptionPlan,
     authorization: AdoptionAuthorization,
+    *,
+    capability: _LegacyRouteAuthorization,
 ) -> AdoptionReceipt:
     if plan.blocked:
         raise ValueError("snapshot adoption plan is blocked")
     _validate_authorization(plan, authorization)
+    from meta_flow.workspace.legacy_route_adapter import (
+        capability_for_adoption,
+        claim_legacy_authorization,
+    )
+
+    expected_capability = capability_for_adoption(authorization)
+    if capability != expected_capability:
+        raise ValueError("adoption capability does not match AdoptionAuthorization")
+    claim = claim_legacy_authorization(
+        capability,
+        command="project adopt",
+        project_root=plan.target_root,
+        project_id=plan.request.project_id,
+        operation_digest_value=plan.plan_digest,
+        expected_oids={"source": plan.source_oid, "target": plan.target_oid},
+        claim_repo_root=plan.target_root,
+        reject_binding=False,
+    )
     fresh = plan_snapshot_adoption(plan.request)
     if fresh.plan_digest != plan.plan_digest:
+        claim.finish("BLOCKED")
         raise ValueError("snapshot adoption plan is stale; rebuild plan and authorization")
     created: list[str] = []
     mutations = 0
@@ -395,8 +417,9 @@ def apply_snapshot_adoption(
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
         with receipt_path.open("x", encoding="utf-8") as stream:
             stream.write(json.dumps(receipt.as_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        claim.finish("PASS", mutation_count=receipt.mutation_count)
         return receipt
-    except Exception as exc:
+    except BaseException as exc:
         receipt = AdoptionReceipt(
             authorization_id=authorization.authorization_id,
             plan_digest=plan.plan_digest,
@@ -408,7 +431,10 @@ def apply_snapshot_adoption(
             legacy_source_mode="read-only",
             recovery_route="reobserve-and-build-new-plan-for-missing-entries",
         )
-        raise AdoptionApplyError(str(exc), receipt) from exc
+        claim.finish("PARTIAL" if mutations else "BLOCKED", mutation_count=mutations)
+        if isinstance(exc, Exception):
+            raise AdoptionApplyError(str(exc), receipt) from exc
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -447,7 +473,13 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(raw, dict):
             raise ValueError("authorization must be one JSON object")
         authorization = AdoptionAuthorization(**raw)
-        receipt = apply_snapshot_adoption(plan, authorization)
+        from meta_flow.workspace.legacy_route_adapter import capability_for_adoption
+
+        receipt = apply_snapshot_adoption(
+            plan,
+            authorization,
+            capability=capability_for_adoption(authorization),
+        )
     except (OSError, TypeError, ValueError, AdoptionApplyError) as exc:
         payload: dict[str, Any] = {"plan": plan.as_dict(), "error": str(exc)}
         if isinstance(exc, AdoptionApplyError):

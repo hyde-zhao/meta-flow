@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -8,7 +9,35 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow.context_pack import builder
+from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
+from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.state import current
+
+
+def init_binding_project(root: Path) -> tuple[Path, Path]:
+    release = root / "fixture-release"
+    release.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=release, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Meta Flow Test",
+            "-c",
+            "user.email=meta-flow@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        cwd=release,
+        check=True,
+        capture_output=True,
+    )
+    apply_project_init(
+        plan_project_init(ProjectInitRequest(release, "fixture", "Fixture Project"))
+    )
+    return release, root / "fixture-process"
 
 
 def write_minimal_state(root: Path) -> None:
@@ -18,7 +47,9 @@ def write_minimal_state(root: Path) -> None:
 
 
 def write_cr_summary(root: Path, cr_id: str) -> None:
-    path = root / "process" / "changes" / "summaries" / f"{cr_id}.summary.json"
+    path = _resolve_runtime_ref(
+        root, f"process/changes/summaries/{cr_id}.summary.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -33,16 +64,26 @@ def write_cr_summary(root: Path, cr_id: str) -> None:
         + "\n",
         encoding="utf-8",
     )
-    index = root / "process" / "changes" / "CR-INDEX.json"
+    index = _resolve_runtime_ref(root, "process/changes/CR-INDEX.json")
     index.write_text(
-        json.dumps({"schema_version": 1, "items": [{"id": cr_id, "summary_ref": path.relative_to(root).as_posix()}]})
+        json.dumps(
+            {
+                "schema_version": 1,
+                "items": [
+                    {
+                        "id": cr_id,
+                        "summary_ref": f"process/changes/summaries/{cr_id}.summary.json",
+                    }
+                ],
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
 
 
 def write_cp2_result_with_required_evidence(root: Path, cr_id: str) -> Path:
-    path = root / "process" / "checks" / f"CP2-{cr_id}.result.json"
+    path = _resolve_runtime_ref(root, f"process/checks/CP2-{cr_id}.result.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -87,6 +128,27 @@ def write_cp2_result_with_required_evidence(root: Path, cr_id: str) -> Path:
 
 
 class ContextPackTests(unittest.TestCase):
+    def test_build_routes_binding_only_context_to_process_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_binding_project(Path(directory))
+            write_minimal_state(release)
+            write_cr_summary(release, "CR-101")
+
+            context, output = builder.build_context_pack(
+                release,
+                stage="CP6",
+                profile="standard-code",
+                cr_id="CR-101",
+                budget=16000,
+            )
+
+            self.assertEqual(process / "context" / "CP6-CR101.context.json", output)
+            self.assertFalse((release / "process").exists())
+            self.assertEqual(
+                "process/state/STATE.current.json",
+                context["state_ref"],
+            )
+
     def test_build_writes_context_pack_and_read_policy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_ref
+
 FAILURE_ROUTING_REL = Path("process/policies/FAILURE-ROUTING.json")
 WAIVER_POLICY_REL = Path("process/policies/WAIVER-POLICY.json")
 FAILURE_ROUTES = {
@@ -56,11 +58,11 @@ def _normalize_text(value: Any) -> str:
 
 
 def failure_routing_path(project_root: Path) -> Path:
-    return project_root / FAILURE_ROUTING_REL
+    return _resolve_runtime_ref(project_root, FAILURE_ROUTING_REL.as_posix())
 
 
 def waiver_policy_path(project_root: Path) -> Path:
-    return project_root / WAIVER_POLICY_REL
+    return _resolve_runtime_ref(project_root, WAIVER_POLICY_REL.as_posix())
 
 
 def default_failure_routing_policy() -> dict[str, Any]:

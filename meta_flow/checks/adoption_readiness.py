@@ -9,7 +9,7 @@ from pathlib import Path
 
 from meta_flow.design import product_governance
 from meta_flow.state import current
-from meta_flow.workspace.routing import check_process_route
+from meta_flow.workspace.routing import ProcessRouteHealth, check_process_route
 
 
 @dataclass(frozen=True)
@@ -37,8 +37,7 @@ def _item_status(errors: list[str], warnings: list[str] | None = None, *, warnin
     return "PASS"
 
 
-def _workspace_item(root: Path) -> ReadinessItem:
-    health = check_process_route(root)
+def _workspace_item(root: Path, health: ProcessRouteHealth) -> ReadinessItem:
     messages = [*health.warnings, *health.errors]
     return ReadinessItem(
         item_id="workspace-route",
@@ -53,8 +52,10 @@ def _workspace_item(root: Path) -> ReadinessItem:
     )
 
 
-def _state_item(root: Path) -> ReadinessItem:
-    errors, warnings = current.check_current_state(root)
+def _state_item(root: Path, process_root: Path | None) -> ReadinessItem:
+    errors, warnings = current.check_current_state(
+        root, process_root=process_root
+    )
     return ReadinessItem(
         item_id="state-v2",
         status=_item_status(errors, warnings),
@@ -68,9 +69,10 @@ def _state_item(root: Path) -> ReadinessItem:
     )
 
 
-def _cr_tracking_item(root: Path) -> ReadinessItem:
-    index = root / "process" / "changes" / "CR-INDEX.json"
-    legacy_index = root / "process" / "changes" / "CR-INDEX.yaml"
+def _cr_tracking_item(root: Path, process_root: Path | None) -> ReadinessItem:
+    routed_root = process_root or (root / "process")
+    index = routed_root / "changes" / "CR-INDEX.json"
+    legacy_index = routed_root / "changes" / "CR-INDEX.yaml"
     if index.is_file():
         status = "PASS"
         messages: list[str] = []
@@ -132,11 +134,15 @@ def _identity_item(root: Path) -> ReadinessItem:
     )
 
 
-def _quality_item(root: Path) -> ReadinessItem:
+def _quality_item(root: Path, process_root: Path | None) -> ReadinessItem:
     from meta_flow.checks import quality_governance
 
-    model_errors, model_warnings = quality_governance.validate_quality_model(root)
-    eval_errors, eval_warnings = quality_governance.validate_eval_matrix(root)
+    model_errors, model_warnings = quality_governance.validate_quality_model(
+        root, process_root=process_root
+    )
+    eval_errors, eval_warnings = quality_governance.validate_eval_matrix(
+        root, process_root=process_root
+    )
     missing_only = [*model_errors, *eval_errors] and all("policy missing:" in error for error in [*model_errors, *eval_errors])
     errors = [] if missing_only else [*model_errors, *eval_errors]
     warnings = [*model_warnings, *eval_warnings, *([*model_errors, *eval_errors] if missing_only else [])]
@@ -153,8 +159,13 @@ def _quality_item(root: Path) -> ReadinessItem:
     )
 
 
-def _workflow_item(root: Path) -> ReadinessItem:
-    missing = [rel.as_posix() for rel in current.BASE_LEDGER_RELS if not (root / rel).is_file()]
+def _workflow_item(root: Path, process_root: Path | None) -> ReadinessItem:
+    routed_root = process_root or (root / "process")
+    missing = [
+        rel.as_posix()
+        for rel in current.BASE_LEDGER_RELS
+        if not (routed_root / rel.relative_to("process")).is_file()
+    ]
     return ReadinessItem(
         item_id="workflow-ledgers",
         status="FAIL" if missing else "PASS",
@@ -165,9 +176,14 @@ def _workflow_item(root: Path) -> ReadinessItem:
     )
 
 
-def _human_gate_item(root: Path) -> ReadinessItem:
+def _human_gate_item(root: Path, process_root: Path | None) -> ReadinessItem:
     required_dirs = [Path("process/checks"), Path("process/checkpoints"), Path("process/context")]
-    missing = [rel.as_posix() for rel in required_dirs if not (root / rel).is_dir()]
+    routed_root = process_root or (root / "process")
+    missing = [
+        rel.as_posix()
+        for rel in required_dirs
+        if not (routed_root / rel.relative_to("process")).is_dir()
+    ]
     return ReadinessItem(
         item_id="human-gate-readiness",
         status="FAIL" if missing else "PASS",
@@ -180,14 +196,16 @@ def _human_gate_item(root: Path) -> ReadinessItem:
 
 def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
     root = project_root.resolve()
+    health = check_process_route(root)
+    process_root = health.project_process_root if health.ok else None
     return [
-        _workspace_item(root),
-        _state_item(root),
-        _cr_tracking_item(root),
+        _workspace_item(root, health),
+        _state_item(root, process_root),
+        _cr_tracking_item(root, process_root),
         _identity_item(root),
-        _quality_item(root),
-        _workflow_item(root),
-        _human_gate_item(root),
+        _quality_item(root, process_root),
+        _workflow_item(root, process_root),
+        _human_gate_item(root, process_root),
     ]
 
 

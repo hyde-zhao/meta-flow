@@ -9,6 +9,15 @@ user-invokable: true
 status: active
 ---
 
+
+## vNext 过程引用契约
+
+- `process/...` 是过程仓逻辑引用，不是发布仓中的相对物理路径。
+- 首次文件系统 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`。
+- 只可瞬时使用成功 JSON 中的 `resolved_path`；不得把绝对路径写入治理文件、Prompt 产物或 Git。
+- 命令以退出码 2 返回 BLOCKED 时必须停止；不得自行拼 sibling、去掉 `process/`、恢复软链接或回退 legacy。
+- legacy-only 操作必须交还 Host Orchestrator，并使用独立 typed authorization；本 Skill 不构造 legacy capability。
+
 ## 目标
 
 受理变更请求，创建标准化 `CR-*.md` 或 fast-lane 轻量变更记录，执行五维度影响分析，判定 `rollback_to`、审批要求与是否需要从 `fast-lane` 升级到 `standard`，并同步更新当前工作流状态。CR 关闭或 CP8 终验时若产生后续事项，维护 follow-up tracking 台账和 CR 跟踪索引；只有用户决定推进某一候选项时，才从台账转为正式 CR 文件。

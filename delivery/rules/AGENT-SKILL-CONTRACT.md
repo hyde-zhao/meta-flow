@@ -4,9 +4,16 @@
 
 ## vNext Work-first Contract
 
+### Binding-only 逻辑引用门
+
+需要过程仓的 vNext `project/work/retrospective/evolution` Python 命令通过 `.meta-flow/workspace.yaml` 的统一 resolver 定位；`repository` 命令继续要求显式单仓 `--repo-root`。Agent/Skill 中的 `process/...` 是逻辑引用，不是发布仓相对物理路径。首次文件系统 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`，只瞬时使用成功 JSON 的 `resolved_path`。退出码 2 时必须 BLOCKED；不得猜测 sibling、去掉前缀、复刻 resolver、恢复软链接或回退 legacy，也不得把绝对路径写回任何产物。legacy-only 顶层操作必须交还 Host Orchestrator 获取独立 typed authorization。
+
 ### Binding-only 路径兼容门
 
-需要过程仓的 vNext `project/work/retrospective/evolution` Python 命令通过 `.meta-flow/workspace.yaml` 的统一 resolver 定位，不读取 Agent/Skill 提示词；`repository` 命令继续要求显式单仓 `--repo-root`。当前仍存在按字面量访问 `process/...` 的 legacy CP0-CP8 Agent/Skill；它们在 `route_mode=sibling-binding` 下不兼容，调用前必须 BLOCKED，不得猜测 sibling 或自行拼路径。确需运行这些 legacy 资产时，只能在初始化 dry-run 明确显示后选择 `--process-link-mode relative-symlink` 兼容模式。后续 route-aware prompt 迁移完成并有测试证明前，不得宣称 binding-only 支持完整 legacy 工作流。
+- route-aware prompt 必须把 `process/...` 明确标为逻辑引用，并在首次文件 I/O 前调用唯一 resolver。
+- resolver 返回退出码 2、binding 冲突或元数据不一致时，任何调用前必须 BLOCKED；不得改拼 sibling、恢复软链接或自动 fallback。
+- 只渲染逻辑引用的模板不执行 resolver；真正消费文件的 Agent/Skill 承担解析责任。
+- legacy 顶层操作的 typed capability 由 Host Orchestrator 提供，功能 Agent/Skill 不得自行构造。
 
 当独立过程库根存在 `PROJECT.yaml` 且当前对象为 `works/<work-id>/WORK.yaml` 时，本节优先于下方 legacy CP/context-pack 规则：
 

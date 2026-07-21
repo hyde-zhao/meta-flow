@@ -28,6 +28,7 @@ from meta_flow.project.scale import load_yaml_object
 from meta_flow.work.model import build_work, write_work_create_only
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
+from meta_flow.workspace.legacy_route_adapter import capability_for_adoption
 
 
 def git(root: Path, *args: str) -> str:
@@ -146,7 +147,16 @@ def authorize(plan, authorization_id: str = "auth-001") -> AdoptionAuthorization
         plan_digest=plan.plan_digest,
         source_oid=plan.source_oid,
         target_oid=plan.target_oid,
+        decision_ref="works/TEST/GATE.yaml",
         expires_at="2099-01-01T00:00:00+00:00",
+    )
+
+
+def apply_authorized(plan, authorization: AdoptionAuthorization):
+    return apply_snapshot_adoption(
+        plan,
+        authorization,
+        capability=capability_for_adoption(authorization),
     )
 
 
@@ -169,7 +179,7 @@ def test_authorized_snapshot_apply_copies_only_explicit_current_state(tmp_path: 
         "status": git(source, "status", "--porcelain=v1"),
     }
 
-    receipt = apply_snapshot_adoption(plan, authorize(plan))
+    receipt = apply_authorized(plan, authorize(plan))
 
     assert receipt.decision == "PASS"
     assert receipt.legacy_source_mode == "read-only"
@@ -195,7 +205,7 @@ def test_authorization_is_bound_to_plan_project_and_oids(tmp_path: Path) -> None
     invalid = replace(authorize(plan), plan_digest="0" * 64)
 
     with pytest.raises(ValueError, match="does not match"):
-        apply_snapshot_adoption(plan, invalid)
+        apply_authorized(plan, invalid)
 
     assert not (target / "PROJECT.yaml").exists()
 
@@ -204,12 +214,12 @@ def test_expired_or_non_single_use_authorization_is_rejected(tmp_path: Path) -> 
     _source, target, plan = make_plan(tmp_path)
 
     with pytest.raises(ValueError, match="expired"):
-        apply_snapshot_adoption(
+        apply_authorized(
             plan,
             replace(authorize(plan), expires_at="2000-01-01T00:00:00+00:00"),
         )
     with pytest.raises(ValueError, match="single-use"):
-        apply_snapshot_adoption(plan, replace(authorize(plan), single_use=False))
+        apply_authorized(plan, replace(authorize(plan), single_use=False))
 
     assert not (target / "PROJECT.yaml").exists()
 
@@ -217,10 +227,10 @@ def test_expired_or_non_single_use_authorization_is_rejected(tmp_path: Path) -> 
 def test_consumed_authorization_cannot_be_replayed(tmp_path: Path) -> None:
     _source, _target, plan = make_plan(tmp_path)
     authorization = authorize(plan)
-    apply_snapshot_adoption(plan, authorization)
+    apply_authorized(plan, authorization)
 
     with pytest.raises(ValueError, match="already consumed"):
-        apply_snapshot_adoption(plan, authorization)
+        apply_authorized(plan, authorization)
 
 
 def test_source_oid_drift_blocks_before_target_mutation(tmp_path: Path) -> None:
@@ -239,7 +249,7 @@ def test_source_oid_drift_blocks_before_target_mutation(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="stale"):
-        apply_snapshot_adoption(plan, authorize(plan))
+        apply_authorized(plan, authorize(plan))
 
     assert not (target / "PROJECT.yaml").exists()
 
@@ -285,7 +295,7 @@ def test_unselected_sibling_file_is_not_read_or_copied(tmp_path: Path) -> None:
     sibling.write_text("must not be copied\n", encoding="utf-8")
     before_stat = os.stat(sibling)
 
-    receipt = apply_snapshot_adoption(plan, authorize(plan))
+    receipt = apply_authorized(plan, authorize(plan))
 
     assert receipt.decision == "PASS"
     assert not (target / sibling.name).exists()

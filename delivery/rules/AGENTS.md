@@ -19,8 +19,15 @@
 10. Project、关键 Phase 或发布切片结束后可生成六维复盘：价值、规范/证据、质量/恢复、流动效率、token/context、Meta Flow 适配性。事实、推断、待人工判断必须分开；复盘报告不授权实现或发布。
 11. 每条改进建议单独记录 `accepted|changed|deferred|rejected`。accepted 只生成 `approved_not_started` 进化包；事实确认、建议批准、实现启动、commit/push/production 授权互不替代。进化必须作为正常 Work/CR 在 fixture/dogfood/canary 中重现、验证、回退；不得递归自动触发下一代。
 12. 旧 `workspace bootstrap/push`、shared artifact worktree、project integration branch、dual-leg 和 `cr aggregate` 保留为 legacy read/operation 能力，不再是新项目默认路径。真实迁移、当前 `process` 切换、远端创建/推送、生产写、凭据与破坏性 Git 始终需要单独人工授权。
-13. 需要过程仓的 vNext Python CLI 统一通过 workspace binding 解析，不依赖 `.agents/` / `delivery/` 提示词；`repository` 命令继续要求显式单仓 `--repo-root`。binding-only 项目若要调用仍硬编码 `process/...` 的 legacy CP0-CP8 Agent/Skill，必须先停止并改用经 dry-run 确认的 `relative-symlink` 兼容初始化；不得猜测 sibling、手工拼接路径或声称 binding-only 已兼容全部 legacy Skill。
+13. 需要过程仓的 vNext Python CLI 统一通过 workspace binding 解析，不依赖 `.agents/` / `delivery/` 提示词；`repository` 命令继续要求显式单仓 `--repo-root`。Agent/Skill 中的 `process/...` 是逻辑引用，首次文件系统 I/O 前必须调用 `meta-flow project resolve-ref --project-root <release-root> --logical-ref <process/...> --format json`；不得猜测 sibling、手工拼接路径或持久化 `resolved_path`。
+14. 不得因为 vNext CLI 已完成路由化就声称 binding-only 已兼容全部 legacy Skill。可驱动真实 I/O 的 active Skill 必须声明 resolver 契约；模板中的 `process/...` 只作为逻辑引用；四个 legacy 顶层能力仍只能在 typed authorization 下执行，不能自动 fallback。
 14. `anchor=workspace_parent` 当前只允许同一父目录下的 sibling 双仓；绝对路径、`..`、sibling discovery 和非同父目录布局必须阻断。`.meta-flow/workspace.yaml` 必须跟踪，`.meta-flow/INSTALL-MANIFEST.yaml` 必须忽略。旧/缺失 layout metadata 和缺失 `PROJECT.yaml` 不得静默降级或自动接管。
+
+### vNext 过程逻辑引用
+
+- `project resolve-ref` 成功退出码为 0；返回的绝对 `resolved_path` 只供本次 I/O，不能写入治理文件、Prompt 产物或 Git。
+- 退出码 2 表示契约型 BLOCKED；不得去掉 `process/`、恢复软链接或静默回退 legacy。
+- `workspace link/bootstrap/push` 与 `project adopt` 是 legacy-only 顶层命令；真实副作用必须具有与 dry-run digest、OID 和 decision ref 绑定的一次性 typed authorization。
 
 ---
 

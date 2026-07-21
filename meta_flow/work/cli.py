@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.model import load_project
-from meta_flow.project.onboarding import check_independent_process_route
+from meta_flow.project.process_route import require_process_route
 from meta_flow.work.assurance import build_review_plan, build_validation_plan
 from meta_flow.work.budget import BudgetLimit
 from meta_flow.work.handoff import (
@@ -107,10 +107,7 @@ def classify_main(argv: list[str] | None = None) -> int:
 
 def _resolve_roots(project_root: Path) -> tuple[Path, Path]:
     release_root = project_root.resolve()
-    health = check_independent_process_route(release_root)
-    if not health.ok or health.process_repo_root is None:
-        raise ValueError("vNext project route is not healthy: " + "; ".join(health.errors))
-    return release_root, health.process_repo_root
+    return release_root, require_process_route(release_root).process_root
 
 
 def _head_oid(root: Path) -> str:

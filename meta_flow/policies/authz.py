@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_ref
+
 AUTHZ_POLICY_REL = Path("process/policies/AUTHZ-POLICY.json")
 AUTHZ_CAPABILITY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
     "NO_REAL_LAKE_READ_OR_WRITE": {
@@ -247,7 +249,7 @@ def default_authz_policy() -> dict[str, Any]:
 
 
 def policy_path(project_root: Path) -> Path:
-    return project_root / AUTHZ_POLICY_REL
+    return _resolve_runtime_ref(project_root, AUTHZ_POLICY_REL.as_posix())
 
 
 def _read_json(path: Path) -> dict[str, Any]:

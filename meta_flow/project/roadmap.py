@@ -180,7 +180,9 @@ def validate_milestones_payload(payload: dict[str, Any]) -> tuple[Milestones | N
 
 
 def validate_roadmap(project_root: Path, ref: str | Path = ROADMAP_REL) -> tuple[Roadmap | None, list[ProjectFinding]]:
-    path = project_root.resolve() / ref
+    from meta_flow.project.process_route import _resolve_runtime_path
+
+    path = _resolve_runtime_path(project_root, ref)
     if not path.is_file():
         return None, [ProjectFinding("ERROR", "E_ROADMAP_MISSING", f"ROADMAP.yaml missing: {path}")]
     try:
@@ -191,7 +193,9 @@ def validate_roadmap(project_root: Path, ref: str | Path = ROADMAP_REL) -> tuple
 
 
 def validate_milestones(project_root: Path, ref: str | Path = MILESTONES_REL) -> tuple[Milestones | None, list[ProjectFinding]]:
-    path = project_root.resolve() / ref
+    from meta_flow.project.process_route import _resolve_runtime_path
+
+    path = _resolve_runtime_path(project_root, ref)
     if not path.is_file():
         return None, [ProjectFinding("ERROR", "E_MILESTONES_MISSING", f"MILESTONES.yaml missing: {path}")]
     try:

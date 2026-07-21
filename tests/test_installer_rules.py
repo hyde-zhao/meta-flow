@@ -10,6 +10,24 @@ from delivery.scripts import install
 
 
 class InstallerRulesTests(unittest.TestCase):
+    def test_process_consuming_canonical_skills_require_portable_resolver_contract(self) -> None:
+        skill_files = sorted(Path("delivery/skills").glob("*/SKILL.md"))
+        process_consumers = [
+            path
+            for path in skill_files
+            if "process/" in path.read_text(encoding="utf-8")
+        ]
+
+        self.assertEqual(29, len(process_consumers))
+        for path in process_consumers:
+            content = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.as_posix()):
+                self.assertIn("## vNext 过程引用契约", content)
+                self.assertIn("meta-flow project resolve-ref", content)
+                self.assertIn("resolved_path", content)
+                self.assertIn("不得自行拼 sibling", content)
+                self.assertIn("不构造 legacy capability", content)
+
     def test_project_manifest_is_routed_inside_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

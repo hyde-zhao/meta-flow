@@ -1,12 +1,52 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from meta_flow.checks import adoption_readiness, quality_governance
-from meta_flow.workspace.routing import bootstrap_process_workspace
+from meta_flow.workspace.legacy_route_adapter import _LegacyRouteAuthorization
+from meta_flow.workspace.routing import bootstrap_process_workspace, legacy_workspace_plan
+
+
+def init_git(root: Path) -> None:
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Meta Flow Test",
+            "-c",
+            "user.email=meta-flow@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+
+def bootstrap_capability(project_root: Path, artifact_root: Path, authorization_id: str) -> _LegacyRouteAuthorization:
+    plan = legacy_workspace_plan(
+        "workspace bootstrap", project_root, artifact_root, "target-project"
+    )
+    return _LegacyRouteAuthorization(
+        schema_version=1,
+        authorization_id=authorization_id,
+        command="workspace bootstrap",
+        authorization_source="typed-user-confirmation",
+        authorization_kind="workspace-operation",
+        decision_ref="works/TEST/GATE.yaml",
+        project_id="target-project",
+        operation_digest=str(plan["operation_digest"]),
+        expected_oids=dict(plan["expected_oids"]),
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
 
 
 def write_identity_fixture(root: Path) -> None:
@@ -43,6 +83,17 @@ def write_identity_fixture(root: Path) -> None:
     )
 
 
+def write_quality_fixture(process_root: Path) -> None:
+    policies = process_root / "policies"
+    policies.mkdir(parents=True, exist_ok=True)
+    (policies / "QUALITY-MODEL.yaml").write_text(
+        quality_governance.QUALITY_MODEL_TEMPLATE, encoding="utf-8"
+    )
+    (policies / "EVAL-MATRIX.yaml").write_text(
+        quality_governance.EVAL_MATRIX_TEMPLATE, encoding="utf-8"
+    )
+
+
 class AdoptionReadinessTests(unittest.TestCase):
     def test_adoption_doctor_passes_for_bootstrapped_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -50,9 +101,15 @@ class AdoptionReadinessTests(unittest.TestCase):
             project_root = tmp_path / "target-project"
             artifact_root = tmp_path / "artifacts"
             project_root.mkdir()
-            bootstrap_process_workspace(project_root, artifact_root, "target-project")
+            init_git(project_root)
+            bootstrap_process_workspace(
+                project_root,
+                artifact_root,
+                "target-project",
+                capability=bootstrap_capability(project_root, artifact_root, "adoption-001"),
+            )
             write_identity_fixture(project_root)
-            quality_governance.write_default_quality_policies(project_root)
+            write_quality_fixture(artifact_root / "process" / "target-project")
 
             items = adoption_readiness.collect_adoption_readiness(project_root)
 
@@ -82,8 +139,14 @@ class AdoptionReadinessTests(unittest.TestCase):
             project_root = tmp_path / "target-project"
             artifact_root = tmp_path / "artifacts"
             project_root.mkdir()
-            bootstrap_process_workspace(project_root, artifact_root, "target-project")
-            quality_governance.write_default_quality_policies(project_root)
+            init_git(project_root)
+            bootstrap_process_workspace(
+                project_root,
+                artifact_root,
+                "target-project",
+                capability=bootstrap_capability(project_root, artifact_root, "adoption-002"),
+            )
+            write_quality_fixture(artifact_root / "process" / "target-project")
 
             items = adoption_readiness.collect_adoption_readiness(project_root)
 
@@ -91,6 +154,27 @@ class AdoptionReadinessTests(unittest.TestCase):
             self.assertEqual("FAIL", package_item.status)
             self.assertTrue(any("PACKAGE-IDENTITY missing" in message for message in package_item.messages))
             self.assertEqual(1, adoption_readiness.run_adoption_doctor(project_root))
+
+    def test_legacy_adoption_doctor_does_not_enable_ordinary_quality_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            project_root = tmp_path / "target-project"
+            artifact_root = tmp_path / "artifacts"
+            project_root.mkdir()
+            init_git(project_root)
+            bootstrap_process_workspace(
+                project_root,
+                artifact_root,
+                "target-project",
+                capability=bootstrap_capability(
+                    project_root, artifact_root, "adoption-003"
+                ),
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "vNext project is not initialized"
+            ):
+                quality_governance.write_default_quality_policies(project_root)
 
 
 if __name__ == "__main__":
