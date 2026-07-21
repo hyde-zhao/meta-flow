@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from meta_flow import cli
+from meta_flow.checks import cr_tracking
 from meta_flow.project.onboarding import (
     PROCESS_METADATA_REL,
     ProjectInitRequest,
@@ -198,3 +199,37 @@ def test_top_level_project_dispatch_exposes_resolve_ref(
 
     assert raised.value.code == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_cr_tracking_main_uses_binding_only_route_without_process_link(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    release, process = _release(tmp_path)
+    changes = process / "changes"
+    changes.mkdir()
+    (changes / "CR-INDEX.json").write_text(
+        json.dumps({"schema_version": 1, "items": []}) + "\n",
+        encoding="utf-8",
+    )
+
+    code = cr_tracking.main(["--project-root", str(release)])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert "OK" in captured.out
+    assert "process_link_health" not in captured.err
+    assert not (release / "process").exists()
+
+
+def test_cr_tracking_main_fails_closed_when_binding_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    release, _process = _release(tmp_path)
+    (release / ".meta-flow" / "workspace.yaml").unlink()
+
+    code = cr_tracking.main(["--project-root", str(release)])
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "BLOCKED: route_not_initialized" in captured.err
+    assert "workspace link" not in captured.err

@@ -14,9 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.policies import gate_profiles
-from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.process_route import (
+    ProcessRouteError,
+    _resolve_runtime_path,
+    _resolve_runtime_ref,
+    require_process_route,
+)
 from meta_flow.state import current
-from meta_flow.workspace.routing import require_process_health
 
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 CR_ID_RE = re.compile(r"CR-\d+")
@@ -1077,10 +1081,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     project_root = args.project_root.resolve()
-    require_process_health(project_root)
-    state_v2_path = _resolve_runtime_ref(project_root, "process/state/STATE.current.json")
-    state_path = _resolve_runtime_ref(project_root, "process/STATE.md")
-    change_root = _resolve_runtime_ref(project_root, "process/changes")
+    try:
+        route = require_process_route(project_root)
+    except ProcessRouteError as exc:
+        print(f"BLOCKED: {exc.error_code}: {exc}", file=sys.stderr)
+        return 2
+    state_v2_path = route.resolve_ref("process/state/STATE.current.json")
+    state_path = route.resolve_ref("process/STATE.md")
+    change_root = route.resolve_ref("process/changes")
     index_path = change_root / "CR-INDEX.json"
     formal_crs = discover_formal_crs(change_root)
     follow_up_rows = discover_follow_up_rows(project_root, args.tracking)
