@@ -145,6 +145,22 @@ def require_process_route(project_root: Path) -> IndependentProcessRoute:
     )
 
 
+def require_project_process_route(
+    project_root: Path,
+    *,
+    project_id: str,
+) -> IndependentProcessRoute:
+    """返回与显式 project_id 一致的健康路由，供 mutation planner 使用。"""
+
+    route = require_process_route(project_root)
+    if route.project_id != project_id:
+        raise ProcessRouteError(
+            "route_project_mismatch",
+            "independent process route belongs to a different project_id",
+        )
+    return route
+
+
 def resolve_process_ref(project_root: Path, logical_ref: str) -> Path:
     """供 Python 顶层入口使用的单次 route + ref 解析捷径。"""
 
@@ -229,6 +245,7 @@ def resolve_ref_main(argv: list[str] | None = None) -> int:
 __all__ = [
     "IndependentProcessRoute",
     "ProcessRouteError",
+    "require_project_process_route",
     "require_process_route",
     "resolve_process_ref",
     "resolve_ref_main",

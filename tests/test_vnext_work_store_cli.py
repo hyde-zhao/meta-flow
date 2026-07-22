@@ -20,6 +20,11 @@ from meta_flow.project.onboarding import (
     apply_project_init,
     plan_project_init,
 )
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    OnboardingAuthorization,
+)
 from meta_flow.project.query import main as project_query_main
 from meta_flow.work.cli import (
     classify_main,
@@ -64,7 +69,23 @@ def init_project(root: Path) -> tuple[Path, Path]:
         "initial",
     )
     request = ProjectInitRequest(release, "demo", "Demo")
-    apply_project_init(plan_project_init(request))
+    plan = plan_project_init(request)
+    payload = plan.as_dict()
+    apply_project_init(
+        plan,
+        OnboardingAuthorization(
+            1,
+            "work-store-fixture",
+            AUTHORIZATION_SOURCE,
+            AUTHORIZATION_KIND,
+            payload["operation"],
+            payload["decision_ref"],
+            payload["project_id"],
+            payload["plan_digest"],
+            payload["base_oids"],
+            "2099-01-01T00:00:00+00:00",
+        ),
+    )
     return release, root / "demo-process"
 
 

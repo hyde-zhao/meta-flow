@@ -17,6 +17,11 @@ from meta_flow.evolution_cli import (
     start_main,
 )
 from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    OnboardingAuthorization,
+)
 from meta_flow.project.scale import dump_yaml
 from meta_flow.retrospective import (
     RETROSPECTIVE_DIMENSIONS,
@@ -59,8 +64,22 @@ def init_project(root: Path) -> tuple[Path, Path, str]:
         "-m",
         "initial",
     )
+    plan = plan_project_init(ProjectInitRequest(release, "demo", "Demo"))
+    payload = plan.as_dict()
     apply_project_init(
-        plan_project_init(ProjectInitRequest(release, "demo", "Demo"))
+        plan,
+        OnboardingAuthorization(
+            1,
+            "learning-cli-fixture",
+            AUTHORIZATION_SOURCE,
+            AUTHORIZATION_KIND,
+            payload["operation"],
+            payload["decision_ref"],
+            payload["project_id"],
+            payload["plan_digest"],
+            payload["base_oids"],
+            "2099-01-01T00:00:00+00:00",
+        ),
     )
     return release, root / "demo-process", git(release, "rev-parse", "HEAD")
 

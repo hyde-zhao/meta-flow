@@ -4,17 +4,19 @@ import json
 import os
 import stat
 import subprocess
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 
+from meta_flow.project import adoption
 from meta_flow.project.adoption import (
     ADOPTION_INDEX_REL,
     ADOPTION_RECEIPT_DIR,
-    AdoptionAuthorization,
+    AdoptionApplyError,
     SnapshotAdoptionRequest,
     apply_snapshot_adoption,
+    main,
     plan_snapshot_adoption,
 )
 from meta_flow.project.governance import (
@@ -24,11 +26,19 @@ from meta_flow.project.governance import (
     write_roadmap_create_only,
 )
 from meta_flow.project.model import Project, write_project_create_only
+from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    PLAN_FIELDS,
+    OnboardingAuthorization,
+    load_transaction_manifest,
+)
+from meta_flow.project.recovery import RecoveryRequest, apply_recovery, plan_recovery
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.work.model import build_work, write_work_create_only
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
-from meta_flow.workspace.legacy_route_adapter import capability_for_adoption
 
 
 def git(root: Path, *args: str) -> str:
@@ -127,47 +137,57 @@ def build_source(root: Path) -> tuple[Path, tuple[str, ...]]:
 
 def make_plan(tmp_path: Path):
     source, refs = build_source(tmp_path)
+    release = tmp_path / "release"
+    init_git(release, commit=True)
+    init_plan = plan_project_init(
+        ProjectInitRequest(
+            release,
+            "demo",
+            "Demo",
+            source_process_root=source,
+        )
+    )
+    apply_project_init(init_plan, authorize(init_plan, authorization_id="init-auth"))
     target = tmp_path / "demo-process"
-    init_git(target, commit=False)
     request = SnapshotAdoptionRequest(
         project_id="demo",
         source_id="legacy-meta-flow-artifacts",
         source_process_root=source,
         target_process_root=target,
         include_refs=refs,
+        project_root=release,
     )
     return source, target, plan_snapshot_adoption(request)
 
 
-def authorize(plan, authorization_id: str = "auth-001") -> AdoptionAuthorization:
-    return AdoptionAuthorization(
+def authorize(plan, authorization_id: str = "auth-001") -> OnboardingAuthorization:
+    payload = plan.as_dict()
+    return OnboardingAuthorization(
+        schema_version=1,
         authorization_id=authorization_id,
-        authorization_kind="local-fixture",
-        project_id="demo",
-        plan_digest=plan.plan_digest,
-        source_oid=plan.source_oid,
-        target_oid=plan.target_oid,
-        decision_ref="works/TEST/GATE.yaml",
+        authorization_source=AUTHORIZATION_SOURCE,
+        authorization_kind=AUTHORIZATION_KIND,
+        operation=payload["operation"],
+        project_id=payload["project_id"],
+        plan_digest=payload["plan_digest"],
+        expected_oids=payload["base_oids"],
+        decision_ref=payload["decision_ref"],
         expires_at="2099-01-01T00:00:00+00:00",
     )
 
 
-def apply_authorized(plan, authorization: AdoptionAuthorization):
-    return apply_snapshot_adoption(
-        plan,
-        authorization,
-        capability=capability_for_adoption(authorization),
-    )
+def apply_authorized(plan, authorization: OnboardingAuthorization):
+    return apply_snapshot_adoption(plan, authorization)
 
 
 def test_adoption_dry_run_has_manifest_and_zero_mutation(tmp_path: Path) -> None:
     source, target, plan = make_plan(tmp_path)
 
     assert not plan.blocked
-    assert plan.as_dict()["mutation_count"] == 0
+    assert set(plan.as_dict()) == set(PLAN_FIELDS)
     assert len(plan.entries) == 5
     assert all(entry.sha256 for entry in plan.entries)
-    assert not (target / "PROJECT.yaml").exists()
+    assert (target / "PROJECT.yaml").read_bytes() == (source / "PROJECT.yaml").read_bytes()
     assert not (target / ADOPTION_INDEX_REL).exists()
     assert git(source, "status", "--porcelain=v1") == ""
 
@@ -183,10 +203,9 @@ def test_authorized_snapshot_apply_copies_only_explicit_current_state(tmp_path: 
 
     assert receipt.decision == "PASS"
     assert receipt.legacy_source_mode == "read-only"
-    assert set(receipt.created_refs) == {
-        *(entry.ref for entry in plan.entries),
-        ADOPTION_INDEX_REL.as_posix(),
-    }
+    expected_created = {item.ref for item in plan.actions if item.action == "create"}
+    expected_created.add((ADOPTION_RECEIPT_DIR / "auth-001.json").as_posix())
+    assert set(receipt.created_refs) == expected_created
     assert not (target / "historical-CP.md").exists()
     assert git(source, "rev-parse", "HEAD") == source_before["oid"]
     assert git(source, "status", "--porcelain=v1") == source_before["status"]
@@ -197,21 +216,25 @@ def test_authorized_snapshot_apply_copies_only_explicit_current_state(tmp_path: 
     assert index["legacy_source_mode"] == "read-only"
     assert "source_root" not in index
     receipt_path = target / ADOPTION_RECEIPT_DIR / "auth-001.json"
-    assert json.loads(receipt_path.read_text(encoding="utf-8"))["decision"] == "PASS"
+    stored = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert stored["decision"] == "PASS"
+    assert set(stored) == set(PLAN_FIELDS)
 
 
 def test_authorization_is_bound_to_plan_project_and_oids(tmp_path: Path) -> None:
     _source, target, plan = make_plan(tmp_path)
+    project_before = (target / "PROJECT.yaml").read_bytes()
     invalid = replace(authorize(plan), plan_digest="0" * 64)
 
     with pytest.raises(ValueError, match="does not match"):
         apply_authorized(plan, invalid)
 
-    assert not (target / "PROJECT.yaml").exists()
+    assert (target / "PROJECT.yaml").read_bytes() == project_before
 
 
 def test_expired_or_non_single_use_authorization_is_rejected(tmp_path: Path) -> None:
     _source, target, plan = make_plan(tmp_path)
+    project_before = (target / "PROJECT.yaml").read_bytes()
 
     with pytest.raises(ValueError, match="expired"):
         apply_authorized(
@@ -221,7 +244,7 @@ def test_expired_or_non_single_use_authorization_is_rejected(tmp_path: Path) -> 
     with pytest.raises(ValueError, match="single-use"):
         apply_authorized(plan, replace(authorize(plan), single_use=False))
 
-    assert not (target / "PROJECT.yaml").exists()
+    assert (target / "PROJECT.yaml").read_bytes() == project_before
 
 
 def test_consumed_authorization_cannot_be_replayed(tmp_path: Path) -> None:
@@ -235,6 +258,7 @@ def test_consumed_authorization_cannot_be_replayed(tmp_path: Path) -> None:
 
 def test_source_oid_drift_blocks_before_target_mutation(tmp_path: Path) -> None:
     source, target, plan = make_plan(tmp_path)
+    project_before = (target / "PROJECT.yaml").read_bytes()
     (source / "new.txt").write_text("new\n", encoding="utf-8")
     git(source, "add", "new.txt")
     git(
@@ -251,7 +275,7 @@ def test_source_oid_drift_blocks_before_target_mutation(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="stale"):
         apply_authorized(plan, authorize(plan))
 
-    assert not (target / "PROJECT.yaml").exists()
+    assert (target / "PROJECT.yaml").read_bytes() == project_before
 
 
 def test_target_conflict_is_fail_closed_and_never_overwritten(tmp_path: Path) -> None:
@@ -272,16 +296,19 @@ def test_target_conflict_is_fail_closed_and_never_overwritten(tmp_path: Path) ->
 )
 def test_snapshot_allowlist_rejects_history_escape_and_unselected_shapes(tmp_path: Path, ref: str) -> None:
     source, _refs = build_source(tmp_path)
+    release = tmp_path / "release"
+    init_git(release, commit=True)
     target = tmp_path / "target"
     init_git(target, commit=False)
 
     plan = plan_snapshot_adoption(
         SnapshotAdoptionRequest(
-            "demo",
-            "legacy",
-            source,
-            target,
-            ("PROJECT.yaml", ref),
+            project_id="demo",
+            source_id="legacy",
+            source_process_root=source,
+            target_process_root=target,
+            include_refs=("PROJECT.yaml", ref),
+            project_root=release,
         )
     )
 
@@ -291,8 +318,7 @@ def test_snapshot_allowlist_rejects_history_escape_and_unselected_shapes(tmp_pat
 
 def test_unselected_sibling_file_is_not_read_or_copied(tmp_path: Path) -> None:
     source, target, plan = make_plan(tmp_path)
-    sibling = source / "other-project-private.txt"
-    sibling.write_text("must not be copied\n", encoding="utf-8")
+    sibling = source / "historical-CP.md"
     before_stat = os.stat(sibling)
 
     receipt = apply_authorized(plan, authorize(plan))
@@ -301,3 +327,118 @@ def test_unselected_sibling_file_is_not_read_or_copied(tmp_path: Path) -> None:
     assert not (target / sibling.name).exists()
     after_stat = os.stat(sibling)
     assert (after_stat.st_size, after_stat.st_mtime_ns) == (before_stat.st_size, before_stat.st_mtime_ns)
+
+
+def test_dirty_source_snapshot_is_blocked_before_target_mutation(tmp_path: Path) -> None:
+    source, target, plan = make_plan(tmp_path)
+    project_before = (target / "PROJECT.yaml").read_bytes()
+    (source / "uncommitted.txt").write_text("dirty\n", encoding="utf-8")
+
+    blocked = plan_snapshot_adoption(plan.request)
+
+    assert blocked.blocked
+    assert "source_dirty" in {item.code for item in blocked.conflicts}
+    assert (target / "PROJECT.yaml").read_bytes() == project_before
+
+
+def test_cli_uses_binding_target_and_second_run_is_noop(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source, target, plan = make_plan(tmp_path)
+    release = tmp_path / "release"
+    args = [
+        "--project-root",
+        str(release),
+        "--project-id",
+        "demo",
+        "--source-id",
+        "legacy-meta-flow-artifacts",
+        "--source-process-root",
+        str(source),
+    ]
+    for ref in plan.request.include_refs:
+        args.extend(["--include-ref", ref])
+
+    assert main(args) == 0
+    dry_run = json.loads(capsys.readouterr().out)
+    assert dry_run["decision"] == "READY"
+    assert dry_run["process_repo"]["relative_path"] == target.name
+
+    authorization_path = tmp_path / "adoption-authorization.json"
+    authorization_path.write_text(
+        json.dumps(asdict(authorize(plan)), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert main([*args, "--apply", "--authorization", str(authorization_path)]) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["receipt"]["decision"] == "PASS"
+
+    assert main(args) == 0
+    second = json.loads(capsys.readouterr().out)
+    assert second["decision"] == "NOOP"
+
+
+def test_terminal_partial_receipt_is_written_only_after_route_health_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _source, target, plan = make_plan(tmp_path)
+    monkeypatch.setattr(
+        adoption,
+        "check_independent_process_route",
+        lambda _root: type("Health", (), {"ok": False})(),
+    )
+
+    with pytest.raises(AdoptionApplyError) as raised:
+        apply_authorized(plan, authorize(plan, "route-failure"))
+
+    assert raised.value.receipt.decision == "PARTIAL"
+    receipt_path = target / ADOPTION_RECEIPT_DIR / "route-failure.json"
+    stored = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert stored["decision"] == "PARTIAL"
+    manifest = load_transaction_manifest(tmp_path / "release", "route-failure")
+    assert manifest["state"] == "bound_partial"
+    assert manifest["terminal_receipt"]["decision"] == "PARTIAL"
+
+
+def test_terminal_receipt_write_failure_marks_manifest_receipt_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, target, plan = make_plan(tmp_path)
+    receipt_path = target / ADOPTION_RECEIPT_DIR / "receipt-failure.json"
+    original_open = Path.open
+
+    def fail_receipt_open(path: Path, *args, **kwargs):
+        if path == receipt_path and args and args[0] == "x":
+            raise OSError("fixture terminal receipt failure")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_receipt_open)
+
+    with pytest.raises(AdoptionApplyError) as raised:
+        apply_authorized(plan, authorize(plan, "receipt-failure"))
+
+    assert raised.value.receipt.decision == "PARTIAL"
+    assert not receipt_path.exists()
+    manifest = load_transaction_manifest(tmp_path / "release", "receipt-failure")
+    assert manifest["state"] == "receipt_missing"
+    assert manifest["terminal_receipt"]["status"] == "missing"
+
+    monkeypatch.undo()
+    recover = plan_recovery(
+        RecoveryRequest(
+            tmp_path / "release",
+            "receipt-failure",
+            "resume",
+            source_process_root=source,
+        )
+    )
+    assert recover.envelope["decision"] == "READY"
+    recovered = apply_recovery(recover, authorize(recover, "receipt-recovery"))
+    assert recovered.decision == "PASS"
+    assert json.loads(receipt_path.read_text(encoding="utf-8"))["decision"] == "PASS"
+    manifest = load_transaction_manifest(tmp_path / "release", "receipt-failure")
+    assert manifest["state"] == "passed"
+    assert manifest["terminal_receipt"]["status"] == "recovered"

@@ -9,25 +9,51 @@ Meta Flow 的新默认不再是共享 artifact worktree、双 leg 或每项变�
 `project init` 会复用已有发布 Git 根；若目标路径不存在或为空目录，则只在显式 `--apply` 时初始化本地 `main` 发布库。非空非 Git 目录始终 fail closed。当前 `anchor=workspace_parent` 只支持同一父目录下的 sibling 双仓，不会扫描其他 sibling，也不接受绝对路径或 `..`；非 sibling 布局需要未来独立设计的 `workspace_root` 锚点，当前直接阻断。
 
 ```bash
-# 1. 只读预览；默认不修改文件
-meta-flow project init --project-root . --project-id demo
+# 1. 只读预览；默认不修改文件，并保存 12 字段计划供人工审核
+meta-flow project init --project-root . --project-id demo \
+  --decision-ref decisions/DQ-PROJECT-INIT.json > /tmp/project-init-plan.json
 
-# 2. 用户确认后才在本地建立独立过程仓与双向 binding，不创建软链接
-meta-flow project init --project-root . --project-id demo --apply
+# 2. 用与 operation、decision_ref、project_id、plan_digest 和 exact OID 绑定的
+#    一次性 typed authorization 执行；默认 binding-only，不创建 process 软链接
+meta-flow project init --project-root . --project-id demo \
+  --decision-ref decisions/DQ-PROJECT-INIT.json \
+  --apply --authorization /tmp/project-init-authorization.json
 
-# 只有仍需运行字面量访问 process/... 的 legacy Agent/Skill 时才选择兼容链接
-meta-flow project init --project-root . --project-id demo --process-link-mode relative-symlink --apply
+# 3. 已有项目先用只读、clean、已提交的 process snapshot seed 建立 binding；
+#    base_oids 会额外包含 source_snapshot，PROJECT 原始字节摘要进入 plan digest
+meta-flow project init --project-root . --project-id demo --project-name Demo \
+  --source-process-root ../snapshot-process \
+  --decision-ref decisions/DQ-PROJECT-INIT-SNAPSHOT.json
 
-# 3. 确认需求后解释 Work/CR 与 G0/G1/G2 判定
+# 4. init seed apply/route healthy 后，adopt 只补齐显式当前快照；
+#    相同 PROJECT 为 NOOP，目标 process 必须从 release binding 解析
+meta-flow project adopt --project-root . --project-id demo \
+  --source-id current-snapshot --source-process-root ../snapshot-process \
+  --include-ref PROJECT.yaml --include-ref ROADMAP.yaml \
+  --decision-ref decisions/DQ-PROJECT-ADOPT.json
+
+# 5. partial 后先只读 inspect；resume/cleanup/abandon 需新计划和新授权
+meta-flow project recover --project-root . \
+  --authorization-id auth-init-001 --action inspect
+
+# 6. 确认需求后解释 Work/CR 与 G0/G1/G2 判定
 meta-flow work classify --change-kind documentation --touched-path-count 1
 
-# 4. 只读一个 Work 或最多五个直接引用的 Project/Phase/Work 对象
+# 7. 只读一个 Work 或最多五个直接引用的 Project/Phase/Work 对象
 meta-flow work status --project-root . --work-id W-001
 meta-flow project query --project-root .
 
 # Agent/Skill 在任何 process/... 文件 I/O 前使用唯一机器接口
 meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yaml --format json
 ```
+
+`project init`、`project adopt` 与 `project recover` 共用 schema v2 envelope，顶层恰好是 `schema_version`、`operation`、`decision`、`decision_ref`、`project_id`、`release_repo`、`process_repo`、`base_oids`、`actions`、`conflicts`、`rollback_plan`、`plan_digest` 这 12 个字段。计划 digest 使用 canonical JSON SHA-256；release/process 在 dry-run、授权消费和 apply-final 各检查一次，共 6 个 OID 检查点。adopt source 与 init snapshot seed source 在同三阶段另做 3 次只读 OID 检查；init seed 还把 `source/PROJECT.yaml` 原始字节 SHA-256 绑定到计划，并在 apply-final 重算。`READY/PASS/NOOP` 退出码为 0，partial 或未知内部错误为 1，契约型 `BLOCKED` 为 2。
+
+typed authorization 是严格 JSON 对象，必须包含 `schema_version=1`、唯一 `authorization_id`、`authorization_source=typed-user-confirmation`、`authorization_kind=project-onboarding`、计划中的 `operation` / `decision_ref` / `project_id` / `plan_digest` / `base_oids`（写入 `expected_oids`）、带时区且仍有效的 `expires_at`，以及 `single_use=true`。授权输入不会被修改；claim 和 transaction manifest 只写入 release Git common dir 的私有区。第二次相同意图的计划返回 `NOOP`，不需要新授权，也不会新增 receipt。
+
+已有项目的 init seed 不执行历史迁移：source 必须是独立、clean、已提交的 Git 根，根级 `PROJECT.yaml` 必须与请求身份一致；source 路径只用于本次 I/O，manifest 只保存 portable `source/PROJECT.yaml`、exact OID 与摘要。source/target 内容不同会 BLOCKED，不会由 adopt 覆盖；受控替换是未实施备选。adopt 的 terminal receipt 每个事务恰好一份，只有所有 ref/index action 与后置 route health 通过后才写 PASS；失败写真实 PARTIAL，receipt 写失败则 manifest 标记 `receipt_missing`。
+
+`project init` 当前只接受 `--process-link-mode none`。`--process-link-mode relative-symlink` 仍只作为 legacy 顶层操作的兼容契约词存在，传给当前 `project init` 会被阻断，不是 GOV-004 的 init 验收路径；binding-only 不修改 `.gitignore`，也不创建 `process`。
 
 `process/...` 在 vNext 中是逻辑引用。`resolve-ref` 成功时返回的绝对 `resolved_path` 只用于本次 I/O，不得写入治理文件或 Git；退出码 2 表示路由/ref 契约阻断，调用方必须停止，不得自行拼 sibling、去前缀、恢复软链接或回退 legacy。
 

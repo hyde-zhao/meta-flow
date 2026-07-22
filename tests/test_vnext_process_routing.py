@@ -14,10 +14,16 @@ from meta_flow.project.onboarding import (
     apply_project_init,
     plan_project_init,
 )
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    OnboardingAuthorization,
+)
 from meta_flow.project.process_route import (
     ProcessRouteError,
     _resolve_runtime_ref,
     require_process_route,
+    require_project_process_route,
     resolve_ref_main,
 )
 from meta_flow.project.scale import dump_yaml, load_yaml_object
@@ -28,6 +34,22 @@ def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=root, text=True, capture_output=True, check=True
     ).stdout.strip()
+
+
+def _authorize(plan) -> OnboardingAuthorization:
+    payload = plan.as_dict()
+    return OnboardingAuthorization(
+        schema_version=1,
+        authorization_id=f"auth-{plan.plan_digest[:12]}",
+        authorization_source=AUTHORIZATION_SOURCE,
+        authorization_kind=AUTHORIZATION_KIND,
+        operation=payload["operation"],
+        decision_ref=payload["decision_ref"],
+        project_id=payload["project_id"],
+        plan_digest=payload["plan_digest"],
+        expected_oids=payload["base_oids"],
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
 
 
 def _release(tmp_path: Path) -> tuple[Path, Path]:
@@ -46,9 +68,8 @@ def _release(tmp_path: Path) -> tuple[Path, Path]:
         "-m",
         "initial",
     )
-    apply_project_init(
-        plan_project_init(ProjectInitRequest(release, "demo", "Demo"))
-    )
+    plan = plan_project_init(ProjectInitRequest(release, "demo", "Demo"))
+    apply_project_init(plan, _authorize(plan))
     return release, tmp_path / "demo-process"
 
 
@@ -63,6 +84,15 @@ def test_binding_only_route_resolves_process_ref_without_process_link(tmp_path: 
     assert route.process_root == process.resolve()
     assert route.resolve_ref("process/checks/CP0.json") == expected.resolve()
     assert route.source == ".meta-flow/workspace.yaml"
+
+
+def test_mutation_route_binds_explicit_project_id(tmp_path: Path) -> None:
+    release, _process = _release(tmp_path)
+
+    assert require_project_process_route(release, project_id="demo").project_id == "demo"
+    with pytest.raises(ProcessRouteError) as raised:
+        require_project_process_route(release, project_id="other")
+    assert raised.value.error_code == "route_project_mismatch"
 
 
 @pytest.mark.parametrize(

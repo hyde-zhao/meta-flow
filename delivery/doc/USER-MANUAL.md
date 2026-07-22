@@ -24,14 +24,90 @@
 `--project-root` 已是 Git 根时复用为发布库；路径不存在或为空目录时本地初始化 `main` 发布库。非空且不是 Git 根的目录会被阻断，不会接管其中的用户文件。
 
 ```bash
-meta-flow project init --project-root . --project-id demo
-meta-flow project init --project-root . --project-id demo --apply
+meta-flow project init --project-root . --project-id demo \
+  --decision-ref decisions/DQ-PROJECT-INIT.json
+meta-flow project init --project-root . --project-id demo \
+  --decision-ref decisions/DQ-PROJECT-INIT.json \
+  --apply --authorization /tmp/project-init-authorization.json
 meta-flow project check --project-root .
 meta-flow project query --project-root .
 meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yaml --format json
 ```
 
-默认 `--process-link-mode none`，即 `route_mode=sibling-binding`，不会创建 `process` 入口，也不会为它修改 `.gitignore`。Agent/Skill 中的 `process/...` 是逻辑引用，文件 I/O 前统一调用 `project resolve-ref`；成功结果的绝对 `resolved_path` 只瞬时使用，退出码 2 必须阻断，不得自行拼 sibling、去前缀、恢复软链接或回退 legacy。`relative-symlink` 仅保留给经独立 typed authorization 的 legacy 顶层操作。需要过程仓的 vNext `project/work/retrospective/evolution` Python 命令统一从 binding 解析；`repository` 命令继续要求调用方显式提供单仓 `--repo-root`。
+默认且当前唯一可由 `project init` 接受的模式是 `--process-link-mode none`，即 `route_mode=sibling-binding`：不会创建 `process` 入口，也不会修改 `.gitignore`。`relative-symlink` 仅保留为 legacy 顶层操作的兼容概念，不属于 GOV-004 init 验收路径。Agent/Skill 中的 `process/...` 是逻辑引用，文件 I/O 前统一调用 `project resolve-ref`；成功结果的绝对 `resolved_path` 只瞬时使用，退出码 2 必须阻断，不得自行拼 sibling、去前缀、恢复软链接或回退 legacy。需要过程仓的 vNext `project/work/retrospective/evolution` Python 命令统一从 binding 解析；`repository` 命令继续要求调用方显式提供单仓 `--repo-root`。
+
+### 0.1 统一计划与 typed authorization
+
+`project init`、`project adopt`、`project recover` 共用 schema v2 的 12 字段 envelope：`schema_version`、`operation`、`decision`、`decision_ref`、`project_id`、`release_repo`、`process_repo`、`base_oids`、`actions`、`conflicts`、`rollback_plan`、`plan_digest`。不得添加第 13 个顶层字段。`plan_digest` 是排除自身后的 canonical JSON SHA-256；release/process 在 dry-run、authorization-consume、apply-final 各核验一次，共 6 个检查点。adopt source 与 init snapshot seed source 在同三阶段另行只读核验，不计入这 6 个 mutation 检查点；init seed 还把 `source/PROJECT.yaml` 原始字节 SHA-256 纳入 action 与 plan digest，并在 apply-final 重算。
+
+非 `NOOP` apply 必须提供严格 JSON typed authorization：
+
+```json
+{
+  "schema_version": 1,
+  "authorization_id": "auth-init-001",
+  "authorization_source": "typed-user-confirmation",
+  "authorization_kind": "project-onboarding",
+  "operation": "project.init",
+  "decision_ref": "decisions/DQ-PROJECT-INIT.json",
+  "project_id": "demo",
+  "plan_digest": "<64-character-plan-digest>",
+  "expected_oids": {
+    "release": {"state": "commit", "oid": "<40-character-oid>"},
+    "process": {"state": "absent", "oid": ""}
+  },
+  "expires_at": "<future-RFC3339-time-with-timezone>",
+  "single_use": true
+}
+```
+
+`expected_oids` 必须逐字来自同一计划的 `base_oids`；repo observation 只允许 `absent`、`unborn`、`commit`，其中 `commit` 必须带 40 位小写 OID，另两态 OID 必须为空。授权输入不会被修改；排他 claim 与 transaction manifest 写入 release Git common dir 的 Meta Flow 私有区，不进入 tracked tree，也不记录绝对 process 路径。`READY/PASS/NOOP` 返回 0，`PARTIAL` 或未知内部错误返回 1，契约型 `BLOCKED` 返回 2。
+
+### 0.2 snapshot-only 接入与恢复
+
+已有项目的 source 必须是独立、clean、已提交的当前新格式过程快照 Git 根。先用 init snapshot seed 将 source 根级 `PROJECT.yaml` 的原始字节 create-only 写入新过程仓并建立 binding；source exact OID、PROJECT digest、plan digest 和 typed authorization 必须一致。source 的绝对路径不进入 binding、manifest 或 receipt：
+
+```bash
+meta-flow project init --project-root . --project-id demo --project-name Demo \
+  --source-process-root ../snapshot-process \
+  --decision-ref decisions/DQ-PROJECT-INIT-SNAPSHOT.json
+
+# 审核计划后，authorization.expected_oids 必须包含计划中的 source_snapshot
+meta-flow project init --project-root . --project-id demo --project-name Demo \
+  --source-process-root ../snapshot-process \
+  --decision-ref decisions/DQ-PROJECT-INIT-SNAPSHOT.json \
+  --apply --authorization /tmp/project-init-snapshot-authorization.json
+```
+
+init route healthy 后再运行 adopt。公共 CLI 不接受任意 `--target-process-root`，目标 process 只能从 `--project-root` 的 healthy binding 解析；相同 PROJECT 为 NOOP，不同 PROJECT 保持冲突，受控替换尚未实施。adopt 只复制明确列出的其余 allowlist ref，source tree 和 source Git 始终零写入：
+
+```bash
+meta-flow project adopt --project-root . --project-id demo \
+  --source-id current-snapshot --source-process-root ../snapshot-process \
+  --include-ref PROJECT.yaml --include-ref ROADMAP.yaml \
+  --decision-ref decisions/DQ-PROJECT-ADOPT.json
+
+# 审核计划后，用与该 adopt 计划完全绑定的新授权执行
+meta-flow project adopt --project-root . --project-id demo \
+  --source-id current-snapshot --source-process-root ../snapshot-process \
+  --include-ref PROJECT.yaml --include-ref ROADMAP.yaml \
+  --decision-ref decisions/DQ-PROJECT-ADOPT.json \
+  --apply --authorization /tmp/project-adopt-authorization.json
+```
+
+init/adopt 部分成功不会触发跨仓自动回滚。adopt 的 PASS terminal receipt 只在所有 ref/index action 和后置 route health 成功后写入；失败只记录真实 PARTIAL，receipt 自身写入失败时 transaction manifest 标记 `receipt_missing`，不得把上一时点的 PASS 当作终态。
+
+先只读 inspect，再选择 resume、cleanup 或 abandon；后三者若产生 mutation，必须基于新计划提供新的 `operation=project.recover` typed authorization。inspect 保持 12 个顶层字段，并在 `actions` 内逐侧报告 state、target、ownership、outcome、before/after digest、`digest_matches`、allowed next actions 和 blocked reason。manifest 缺失、损坏或摘要漂移会 fail closed，不猜 ownership、不消费授权。cleanup 只删除该事务创建且当前摘要仍等于 `after_digest` 的文件；`.git`、仓库目录、用户修改文件和无法证明 ownership 的对象不自动删除。snapshot-seeded init 的 resume 必须再次显式提供同一 `--source-process-root`，并匹配原事务的 source exact OID 与 PROJECT digest。
+
+```bash
+meta-flow project recover --project-root . \
+  --authorization-id auth-init-001 --action inspect
+meta-flow project recover --project-root . \
+  --authorization-id auth-init-001 --action resume \
+  --apply --authorization /tmp/project-recover-authorization.json
+```
+
+成功后的第二次同意图 dry-run 必须返回 `NOOP`、mutation=0，且无需授权。Linux/Python 3.11 是本阶段原生验收平台；Windows 保持 deferred/out-of-scope，不得据此声明 Windows 原生 PASS。
 
 两份 binding 必须在 `schema_version`、`layout_version`、`project_id`、`route_mode` 和 reciprocal sibling 路由上相互一致；任一不一致都会 BLOCKED。`workspace_parent` 当前只支持同一父目录的两个仓，绝对路径、`..`、sibling discovery 和非同父目录布局都不会被接受。缺少 `PROJECT.yaml` 时，`project status/check/query` 会报告过程仓尚未初始化；旧或缺失 layout metadata 不会静默降级为 vNext。
 
