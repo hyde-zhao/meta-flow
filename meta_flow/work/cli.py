@@ -9,8 +9,11 @@ from typing import Any
 
 from meta_flow.project.model import load_project
 from meta_flow.project.process_route import require_process_route
+from meta_flow.project.scale import load_yaml_object
 from meta_flow.work.assurance import build_review_plan, build_validation_plan
 from meta_flow.work.budget import BudgetLimit
+from meta_flow.work.decision_bundle import validate_bundle
+from meta_flow.work.git_inventory import InventoryCandidate, build_inventory
 from meta_flow.work.handoff import (
     build_handoff,
     load_handoff,
@@ -453,6 +456,63 @@ def usage_add_main(argv: list[str] | None = None) -> int:
     return 0 if result.decision in {"RECORDED", "NO_CHANGE"} else 1
 
 
+def decision_bundle_check_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work decision-bundle-check")
+    parser.add_argument("--bundle", type=Path, required=True)
+    parsed = parser.parse_args(argv or [])
+    try:
+        payload = load_yaml_object(parsed.bundle)
+        findings = validate_bundle(payload)
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
+        return 1
+    print(
+        json.dumps(
+            {
+                "decision": "PASS" if not findings else "BLOCKED",
+                "findings": [finding.__dict__ for finding in findings],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0 if not findings else 1
+
+
+def git_inventory_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work git-inventory")
+    parser.add_argument("--repo", action="append", default=[], help="repo-id=path")
+    parser.add_argument(
+        "--candidate",
+        action="append",
+        default=[],
+        help="repo-id:subgate:path or repo-id:subgate:path:missing",
+    )
+    parsed = parser.parse_args(argv or [])
+    try:
+        roots: dict[str, Path] = {}
+        for item in parsed.repo:
+            repo_id, separator, path = item.partition("=")
+            if not separator or not repo_id or repo_id in roots:
+                raise ValueError("--repo must use unique repo-id=path values")
+            roots[repo_id] = Path(path).resolve()
+        candidates: list[InventoryCandidate] = []
+        for item in parsed.candidate:
+            parts = item.split(":", 3)
+            if len(parts) < 3:
+                raise ValueError("--candidate must use repo-id:subgate:path[:missing]")
+            repo_id, subgate, path = parts[:3]
+            missing = len(parts) == 4 and parts[3] == "missing"
+            candidates.append(InventoryCandidate(repo_id, subgate, path, missing))
+        result = build_inventory(roots, candidates)
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 1 if result["execution_sets"]["forbidden"]["count"] else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = argv or []
     if not args or args[0] in {"-h", "--help"}:
@@ -471,6 +531,8 @@ def main(argv: list[str] | None = None) -> int:
             "  validation-plan Map every declared check to a concrete risk.\n"
             "  handoff    Persist one bounded paused/blocked Work handoff.\n"
             "  resume-check Verify release/process OIDs and scope before resuming.\n"
+            "  decision-bundle-check Validate one revision-aware Decision Bundle envelope.\n"
+            "  git-inventory Classify candidate paths from Git index facts into eight classes.\n"
             "  status    Read one Work without scanning project history.\n"
         )
         return 0
@@ -491,8 +553,12 @@ def main(argv: list[str] | None = None) -> int:
         return handoff_main(forwarded)
     if command == "resume-check":
         return resume_check_main(forwarded)
+    if command == "decision-bundle-check":
+        return decision_bundle_check_main(forwarded)
+    if command == "git-inventory":
+        return git_inventory_main(forwarded)
     if command in {"status", "check"}:
         return status_main(forwarded)
     raise SystemExit(
-        f"未知 work 命令: {command}. 目前支持: classify, init, start, pause, resume, block, close, usage-add, review-plan, validation-plan, handoff, resume-check, status, check"
+        f"未知 work 命令: {command}. 目前支持: classify, init, start, pause, resume, block, close, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
     )

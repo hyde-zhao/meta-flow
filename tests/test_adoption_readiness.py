@@ -95,6 +95,30 @@ def write_quality_fixture(process_root: Path) -> None:
 
 
 class AdoptionReadinessTests(unittest.TestCase):
+    def test_adoption_doctor_fails_on_cr_index_semantic_digest_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = root / "process"
+            index = process / "changes/CR-INDEX.json"
+            index.parent.mkdir(parents=True)
+            index.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "generated_at": "2026-07-21T00:00:00Z",
+                        "semantic_digest": "0" * 64,
+                        "items": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            item = adoption_readiness._cr_tracking_item(root, process)
+
+            self.assertEqual("FAIL", item.status)
+            self.assertTrue(any("semantic_digest" in message for message in item.messages))
+
     def test_adoption_doctor_passes_for_bootstrapped_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)

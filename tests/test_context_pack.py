@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -65,16 +66,33 @@ def write_cr_summary(root: Path, cr_id: str) -> None:
         encoding="utf-8",
     )
     index = _resolve_runtime_ref(root, "process/changes/CR-INDEX.json")
+    items = [
+        {
+            "id": cr_id,
+            "cr_type": "architecture",
+            "title": f"{cr_id} summary",
+            "status": "active",
+            "lifecycle_status": "active",
+            "readiness": "not_ready",
+            "readiness_status": "not_ready",
+            "gate_status": "cp5_pending",
+            "formal_cr_path": f"process/changes/{cr_id}.md",
+            "summary_ref": f"process/changes/summaries/{cr_id}.summary.json",
+        }
+    ]
+    semantic = json.dumps(
+        {"schema_version": 1, "items": items},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     index.write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "items": [
-                    {
-                        "id": cr_id,
-                        "summary_ref": f"process/changes/summaries/{cr_id}.summary.json",
-                    }
-                ],
+                "generated_at": "2026-07-21T00:00:00+00:00",
+                "semantic_digest": hashlib.sha256(semantic.encode("utf-8")).hexdigest(),
+                "items": items,
             }
         )
         + "\n",

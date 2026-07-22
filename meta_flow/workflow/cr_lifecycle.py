@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
+import shutil
+import stat
 import sys
-from dataclasses import dataclass
+import tempfile
+import uuid
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,12 +22,16 @@ from meta_flow.design import feature_registry
 from meta_flow.policies import authz, route_plan
 from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.project.scale import load_yaml_object
-from meta_flow.state import current
+from meta_flow.state import current, event_ledger
+from meta_flow.work.model import load_work
+from meta_flow.work.scope import check_scope
+from meta_flow.workspace.git_sync import run_git
 
 CR_LEDGER_REL = Path("process/state/CR-LEDGER.ndjson")
 CR_INDEX_REL = Path("process/changes/CR-INDEX.json")
 CR_SUMMARY_ROOT_REL = Path("process/changes/summaries")
 CR_ARCHIVE_ROOT_REL = Path("process/archive")
+LEGACY_SOURCE_REL = Path("process/legacy/LEGACY-SOURCE.yaml")
 IMPACT_SURFACE_RULES_REL = Path("process/project/IMPACT-SURFACE-RULES.yaml")
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
 CR_ID_RE = re.compile(r"CR-\d+")
@@ -40,6 +50,7 @@ ALLOWED_LIFECYCLE_STATUSES = {
 }
 FINISHED_STATUSES = {"closed", "superseded", "cancelled"}
 CLOSED_GATE_STATUS = "cp8_closed"
+INDEX_SCHEMA_VERSION = 1
 ALLOWED_CR_TYPES = {
     "product-scope",
     "architecture",
@@ -309,10 +320,20 @@ def _format_frontmatter_value(value: str) -> str:
 def update_frontmatter_fields(path: Path, updates: dict[str, str]) -> bool:
     """Update scalar frontmatter fields, preserving unrelated body content."""
 
+    text = path.read_text(encoding="utf-8")
+    updated = render_frontmatter_fields(text, updates)
+    if updated == text:
+        return False
+    path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def render_frontmatter_fields(text: str, updates: dict[str, str]) -> str:
+    """Render scalar frontmatter changes without touching the source file."""
+
     clean_updates = {key: value for key, value in updates.items() if value != ""}
     if not clean_updates:
-        return False
-    text = path.read_text(encoding="utf-8")
+        return text
     frontmatter = _frontmatter(text)
     lines = frontmatter.splitlines()
     seen: set[str] = set()
@@ -332,11 +353,7 @@ def update_frontmatter_fields(path: Path, updates: dict[str, str]) -> bool:
     for key, value in clean_updates.items():
         if key not in seen:
             next_lines.append(f"{key}: {_format_frontmatter_value(value)}")
-    updated = _replace_frontmatter(text, "\n".join(next_lines))
-    if updated == text:
-        return False
-    path.write_text(updated, encoding="utf-8")
-    return True
+    return _replace_frontmatter(text, "\n".join(next_lines))
 
 
 def parse_inline_list(value: Any) -> list[str]:
@@ -363,10 +380,23 @@ def normalize_cr_type(value: Any) -> str:
 
 
 def _rel(project_root: Path, path: Path) -> str:
+    project_root = project_root.resolve()
+    path = path.resolve(strict=False)
     try:
         return path.relative_to(project_root).as_posix()
     except ValueError:
-        return path.as_posix()
+        process_root = _process_root(project_root)
+        try:
+            relative = path.relative_to(process_root)
+        except ValueError:
+            raise ValueError(f"path is outside release and process repositories: {path}") from None
+        return (Path("process") / relative).as_posix()
+
+
+def _process_root(project_root: Path) -> Path:
+    """Resolve the process root for binding projects and legacy test fixtures."""
+
+    return _resolve_runtime_ref(project_root.resolve(), "process/PROJECT.yaml").parent.resolve(strict=False)
 
 
 def _cr_id_from_path(path: Path) -> str:
@@ -913,6 +943,10 @@ def discover_formal_crs(project_root: Path) -> dict[str, Path]:
             continue
         cr_id = _cr_id_from_path(path)
         if cr_id:
+            if cr_id in crs:
+                raise ValueError(
+                    f"duplicate formal CR id {cr_id}: {_rel(project_root, crs[cr_id])}, {_rel(project_root, path)}"
+                )
             crs[cr_id] = path
     return crs
 
@@ -1103,89 +1137,313 @@ def load_ledger_events(project_root: Path) -> list[dict[str, Any]]:
     return events
 
 
-def build_index(project_root: Path) -> dict[str, Any]:
-    project_root = project_root.resolve()
-    items: list[dict[str, Any]] = []
-    formal_ids = set(discover_formal_crs(project_root))
-    for cr_id, path in discover_formal_crs(project_root).items():
-        record = record_from_cr_file(project_root, path)
-        summary_path = project_root / record.summary_ref
-        items.append(
-            {
-                "id": cr_id,
-                "cr_type": record.cr_type,
-                "title": record.title,
-                "status": record.status,
-                "lifecycle_status": record.status,
-                "readiness": record.readiness,
-                "readiness_status": record.readiness,
-                "gate_status": record.gate_status,
-                "gate_profile": record.gate_profile,
-                "full_ref": record.full_ref,
-                "formal_cr_path": record.full_ref,
-                "summary_ref": record.summary_ref if summary_path.is_file() else "",
-                "goal_ref": record.goal_ref,
-                "goal_statement": record.goal_statement,
-                "approval_focus": record.approval_focus,
-                "decision_burden": record.decision_burden,
-                "conflict_keys": record.conflict_keys,
-                "impact_surface": record.impact_surface,
-                **_impact_split_payload(record),
-                "impact_capability_resolution": record.impact_capability_resolution,
-                "impact_capability_normalized": _normalized_capability_refs(
-                    record.impact_capability_resolution
-                ),
-                "authz_policy_refs": record.authz_policy_refs,
-                "risk_refs": record.risk_refs,
-                "product_baseline_refresh_required": record.product_baseline_refresh_required,
-                "required_phase": record.required_phase,
-                "required_agent": record.required_agent,
-                "required_gate": record.required_gate,
-                "block_story_decomposition_until": record.block_story_decomposition_until,
-                "affected_product_docs": record.affected_product_docs,
-                "affected_use_cases": record.affected_use_cases,
-                "routing_design_ref": record.routing_design_ref,
-                "required_evidence": _record_required_evidence(
-                    record, path.read_text(encoding="utf-8")
-                ),
-                "required_capabilities": record.required_capabilities,
-            }
-        )
+def _cr_numeric_sort_key(cr_id: str) -> tuple[int, str]:
+    match = re.fullmatch(r"CR-(\d+)", cr_id)
+    return (int(match.group(1)), cr_id) if match else (sys.maxsize, cr_id)
 
-    # Candidate rows may intentionally precede a formal CR file.  Rebuilding the
-    # canonical JSON index must not silently discard those follow-up decisions.
-    # Only non-formal candidate rows are preserved; every formal CR is always
-    # regenerated from its source-owned Markdown record above.
-    existing_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
-    if existing_path.is_file():
-        try:
-            existing_index = json.loads(existing_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{existing_path} invalid JSON: {exc}") from exc
-        for existing in existing_index.get("items", []):
-            if not isinstance(existing, dict):
-                continue
-            item_id = str(existing.get("id", ""))
-            lifecycle = str(existing.get("lifecycle_status") or existing.get("status") or "")
-            formal_ref = str(existing.get("formal_cr_path") or existing.get("full_ref") or "")
-            if item_id in formal_ids or lifecycle != "candidate" or formal_ref:
-                continue
-            items.append(existing)
+
+def _canonical_digest(payload: object) -> str:
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _index_item(record: CRRecord, text: str) -> dict[str, Any]:
     return {
-        "schema_version": 1,
-        "generated_at": now_utc(),
-        "items": sorted(items, key=lambda item: item["id"]),
+        "id": record.cr_id,
+        "cr_type": record.cr_type,
+        "title": record.title,
+        "status": record.status,
+        "lifecycle_status": record.status,
+        "readiness": record.readiness,
+        "readiness_status": record.readiness,
+        "gate_status": record.gate_status,
+        "gate_profile": record.gate_profile,
+        "full_ref": record.full_ref,
+        "formal_cr_path": record.full_ref,
+        # summary 是派生对象；引用只由 CR ID 决定，index 构建不读取 summary 内容或存在性。
+        "summary_ref": record.summary_ref,
+        "goal_ref": record.goal_ref,
+        "goal_statement": record.goal_statement,
+        "approval_focus": record.approval_focus,
+        "decision_burden": record.decision_burden,
+        "conflict_keys": record.conflict_keys,
+        "impact_surface": record.impact_surface,
+        **_impact_split_payload(record),
+        "impact_capability_resolution": record.impact_capability_resolution,
+        "impact_capability_normalized": _normalized_capability_refs(
+            record.impact_capability_resolution
+        ),
+        "authz_policy_refs": record.authz_policy_refs,
+        "risk_refs": record.risk_refs,
+        "product_baseline_refresh_required": record.product_baseline_refresh_required,
+        "required_phase": record.required_phase,
+        "required_agent": record.required_agent,
+        "required_gate": record.required_gate,
+        "block_story_decomposition_until": record.block_story_decomposition_until,
+        "affected_product_docs": record.affected_product_docs,
+        "affected_use_cases": record.affected_use_cases,
+        "routing_design_ref": record.routing_design_ref,
+        "required_evidence": _record_required_evidence(record, text),
+        "required_capabilities": record.required_capabilities,
     }
 
 
-def write_index(project_root: Path) -> Path:
+def _record_override(record: CRRecord, updates: dict[str, str]) -> CRRecord:
+    fields: dict[str, str] = {}
+    if updates.get("lifecycle_status"):
+        fields["status"] = updates["lifecycle_status"]
+    if updates.get("readiness_status"):
+        fields["readiness"] = updates["readiness_status"]
+    if updates.get("gate_status"):
+        fields["gate_status"] = updates["gate_status"]
+    return replace(record, **fields) if fields else record
+
+
+def _native_cr_minimum(project_root: Path) -> int:
+    """Return the project-specific first native CR number.
+
+    Fresh projects default to CR-001.  A migrated project may declare its
+    explicit legacy/native boundary in LEGACY-SOURCE.yaml; no project-specific
+    number is hard-coded into the reusable builder.
+    """
+
+    path = _resolve_runtime_ref(project_root, LEGACY_SOURCE_REL.as_posix())
+    if not path.is_file():
+        return 1
+    payload = load_yaml_object(path)
+    value = str(payload.get("native_cr_minimum") or "CR-001")
+    match = re.fullmatch(r"CR-(\d+)", value)
+    if match is None:
+        raise ValueError(
+            f"{LEGACY_SOURCE_REL.as_posix()} native_cr_minimum must use CR-nnn naming"
+        )
+    return int(match.group(1))
+
+
+def _validate_native_formal_cr(
+    project_root: Path,
+    cr_id: str,
+    path: Path,
+    *,
+    minimum: int,
+) -> None:
+    fields = parse_frontmatter(path.read_text(encoding="utf-8"))
+    problems: list[str] = []
+    if str(fields.get("schema_version") or "") != "1":
+        problems.append("schema_version=1 is required")
+    if str(fields.get("kind") or "") != "cr":
+        problems.append("kind=cr is required")
+    if str(fields.get("cr_id") or "") != cr_id:
+        problems.append("frontmatter cr_id must exactly match the filename CR id")
+    numeric = _cr_numeric_sort_key(cr_id)[0]
+    if numeric < minimum:
+        problems.append(f"CR number is earlier than native_cr_minimum=CR-{minimum:03d}")
+    if problems:
+        raise ValueError(
+            f"non-native formal CR contamination at {_rel(project_root, path)}: "
+            + "; ".join(problems)
+        )
+
+
+def build_index(
+    project_root: Path,
+    *,
+    record_overrides: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Build a pure projection from formal CR files only.
+
+    Existing CR-INDEX bytes, summaries, ledgers and legacy repositories are
+    deliberately not inputs.  ``record_overrides`` is used only by a
+    status-sync plan to project its not-yet-applied formal truth.
+    """
+
+    project_root = project_root.resolve()
+    items: list[dict[str, Any]] = []
+    formal_crs = discover_formal_crs(project_root)
+    minimum = _native_cr_minimum(project_root)
+    overrides = record_overrides or {}
+    for cr_id, path in formal_crs.items():
+        _validate_native_formal_cr(project_root, cr_id, path, minimum=minimum)
+        record = record_from_cr_file(project_root, path)
+        record = _record_override(record, overrides.get(cr_id, {}))
+        items.append(_index_item(record, path.read_text(encoding="utf-8")))
+    items.sort(key=lambda item: _cr_numeric_sort_key(str(item["id"])))
+    semantic = {"schema_version": INDEX_SCHEMA_VERSION, "items": items}
+    return {
+        "schema_version": INDEX_SCHEMA_VERSION,
+        "generated_at": now_utc(),
+        "semantic_digest": _canonical_digest(semantic),
+        "items": items,
+    }
+
+
+def validate_index_payload(payload: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        return ["CR-INDEX must be a JSON object"]
+    if payload.get("schema_version") != INDEX_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {INDEX_SCHEMA_VERSION}")
+    if not isinstance(payload.get("generated_at"), str) or not payload.get("generated_at"):
+        errors.append("generated_at must be a non-empty string")
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return [*errors, "items must be a list"]
+    required = {
+        "id",
+        "cr_type",
+        "title",
+        "lifecycle_status",
+        "readiness_status",
+        "gate_status",
+        "formal_cr_path",
+        "summary_ref",
+    }
+    ids: list[str] = []
+    for offset, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            errors.append(f"items[{offset}] must be an object")
+            continue
+        missing = sorted(required - set(item))
+        if missing:
+            errors.append(f"items[{offset}] missing fields: {','.join(missing)}")
+        item_id = str(item.get("id") or "")
+        if not re.fullmatch(r"CR-\d+", item_id):
+            errors.append(f"items[{offset}].id is invalid: {item_id}")
+        ids.append(item_id)
+        for key in ("formal_cr_path", "summary_ref"):
+            value = str(item.get(key) or "")
+            if not value.startswith("process/") or Path(value).is_absolute() or ".." in Path(value).parts:
+                errors.append(f"items[{offset}].{key} must be one safe process/ logical ref")
+    if len(ids) != len(set(ids)):
+        errors.append("items contain duplicate CR IDs")
+    if ids != sorted(ids, key=_cr_numeric_sort_key):
+        errors.append("items must be ordered by numeric CR ID")
+    expected_digest = _canonical_digest(
+        {"schema_version": payload.get("schema_version"), "items": items}
+    )
+    if payload.get("semantic_digest") != expected_digest:
+        errors.append("semantic_digest does not match schema_version + items")
+    return errors
+
+
+def plan_index(project_root: Path, *, rebuild_corrupt: bool = False) -> dict[str, Any]:
     project_root = project_root.resolve()
     path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
+    try:
+        expected = build_index(project_root)
+    except ValueError as exc:
+        return {
+            "decision": "BLOCKED",
+            "action": "none",
+            "mutation_count": 0,
+            "reason": str(exc),
+            "index_ref": CR_INDEX_REL.as_posix(),
+        }
+    expected_digest = str(expected["semantic_digest"])
+    if not path.is_file():
+        return {
+            "decision": "READY",
+            "action": "create",
+            "mutation_count": 1,
+            "semantic_digest": expected_digest,
+            "index_ref": CR_INDEX_REL.as_posix(),
+            "expected": expected,
+        }
+    before_text = path.read_text(encoding="utf-8")
+    before_digest = hashlib.sha256(before_text.encode("utf-8")).hexdigest()
+    try:
+        existing = json.loads(before_text)
+    except json.JSONDecodeError as exc:
+        if not rebuild_corrupt:
+            return {
+                "decision": "BLOCKED",
+                "action": "none",
+                "mutation_count": 0,
+                "reason": f"CR-INDEX invalid JSON; use explicit --rebuild: {exc}",
+                "before_bytes_digest": before_digest,
+                "index_ref": CR_INDEX_REL.as_posix(),
+            }
+        existing = None
+    existing_errors = validate_index_payload(existing) if existing is not None else []
+    if existing_errors and not rebuild_corrupt:
+        return {
+            "decision": "BLOCKED",
+            "action": "none",
+            "mutation_count": 0,
+            "reason": "; ".join(existing_errors),
+            "before_bytes_digest": before_digest,
+            "index_ref": CR_INDEX_REL.as_posix(),
+        }
+    if isinstance(existing, dict) and existing.get("semantic_digest") == expected_digest:
+        return {
+            "decision": "READY",
+            "action": "noop",
+            "mutation_count": 0,
+            "semantic_digest": expected_digest,
+            "before_bytes_digest": before_digest,
+            "index_ref": CR_INDEX_REL.as_posix(),
+            "expected": expected,
+        }
+    if not rebuild_corrupt:
+        return {
+            "decision": "BLOCKED",
+            "action": "none",
+            "mutation_count": 0,
+            "reason": "CR-INDEX stale projection differs from formal truth; use explicit --rebuild",
+            "semantic_digest": expected_digest,
+            "existing_semantic_digest": (
+                str(existing.get("semantic_digest") or "") if isinstance(existing, dict) else ""
+            ),
+            "before_bytes_digest": before_digest,
+            "index_ref": CR_INDEX_REL.as_posix(),
+        }
+    return {
+        "decision": "READY",
+        "action": "rebuild",
+        "mutation_count": 1,
+        "semantic_digest": expected_digest,
+        "before_bytes_digest": before_digest,
+        "index_ref": CR_INDEX_REL.as_posix(),
+        "expected": expected,
+    }
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(build_index(project_root), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    target_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(target_mode)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def write_index(
+    project_root: Path,
+    *,
+    rebuild_corrupt: bool = False,
+    expected_process_oid: str = "",
+) -> Path:
+    project_root = project_root.resolve()
+    path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
+    plan = plan_index(project_root, rebuild_corrupt=rebuild_corrupt)
+    if plan["decision"] != "READY":
+        raise ValueError(str(plan.get("reason") or "CR-INDEX plan is blocked"))
+    if expected_process_oid:
+        process_root = _process_root(project_root)
+        actual = run_git(["rev-parse", "--verify", "HEAD"], cwd=process_root)
+        if not actual.ok or actual.stdout.strip() != expected_process_oid:
+            raise ValueError("process HEAD differs from expected_process_oid")
+    if plan["mutation_count"]:
+        text = json.dumps(plan["expected"], ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        _atomic_write_text(path, text)
     return path
 
 
@@ -1215,6 +1473,8 @@ def _write_bootstrap_cr_file(
         raise FileExistsError(f"CR already exists: {path}")
     created_at = now_utc()
     text = f"""---
+schema_version: 1
+kind: cr
 cr_id: "{cr_id}"
 cr_type: "process"
 title: "{title}"
@@ -1435,6 +1695,816 @@ def close_cr(project_root: Path, cr_id: str, *, readiness: str) -> dict[str, Pat
     }
 
 
+@dataclass(frozen=True)
+class StatusSyncTarget:
+    order: int
+    ref: str
+    path: Path
+    truth_or_derived: str
+    before: str | None
+    after: str
+
+    @property
+    def before_digest(self) -> str:
+        return _canonical_digest(self.before) if self.before is not None else _canonical_digest("")
+
+    @property
+    def after_digest(self) -> str:
+        return _canonical_digest(self.after)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "order": self.order,
+            "ref": self.ref,
+            "truth_or_derived": self.truth_or_derived,
+            "before_exists": self.before is not None,
+            "before_digest": self.before_digest,
+            "after_digest": self.after_digest,
+        }
+
+
+@dataclass(frozen=True)
+class StatusSyncPlan:
+    decision: str
+    cr_id: str
+    work_id: str
+    desired_transition: dict[str, str]
+    expected_facts: dict[str, str]
+    scope_digest: str
+    targets: tuple[StatusSyncTarget, ...]
+    reason: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "decision": self.decision,
+            "cr_id": self.cr_id,
+            "work_id": self.work_id,
+            "desired_transition": self.desired_transition,
+            "expected_facts": self.expected_facts,
+            "scope_digest": self.scope_digest,
+            "targets": [target.as_dict() for target in self.targets],
+            "mutation_count": len(self.targets) if self.decision == "READY" else 0,
+            "reason": self.reason,
+        }
+
+
+def _git_fact(root: Path, *args: str) -> str:
+    result = run_git(list(args), cwd=root)
+    return result.stdout.strip() if result.ok else ""
+
+
+def _dirty_path_digest(root: Path) -> str:
+    result = run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=root)
+    if not result.ok:
+        return _canonical_digest([])
+    return _canonical_digest(sorted(line for line in result.stdout.splitlines() if line))
+
+
+def _status_sync_facts(project_root: Path, *, work_id: str) -> tuple[dict[str, str], str]:
+    release_root = project_root.resolve()
+    process_root = _process_root(release_root)
+    common = _git_fact(process_root, "rev-parse", "--git-common-dir")
+    common_identity = _canonical_digest(common or "non-git-fixture")
+    scope_digest = ""
+    if work_id:
+        scope_digest = load_work(process_root, work_id).scope.digest
+    return (
+        {
+            "release_head_oid": _git_fact(release_root, "rev-parse", "--verify", "HEAD"),
+            "process_head_oid": _git_fact(process_root, "rev-parse", "--verify", "HEAD"),
+            "process_git_common_dir_identity": common_identity,
+            "current_branch": _git_fact(process_root, "branch", "--show-current"),
+            "dirty_path_digest": _dirty_path_digest(process_root),
+        },
+        scope_digest,
+    )
+
+
+def _target(
+    project_root: Path,
+    order: int,
+    path: Path,
+    after: str,
+    truth_or_derived: str,
+) -> StatusSyncTarget:
+    return StatusSyncTarget(
+        order=order,
+        ref=_rel(project_root, path),
+        path=path,
+        truth_or_derived=truth_or_derived,
+        before=path.read_text(encoding="utf-8") if path.is_file() else None,
+        after=after,
+    )
+
+
+def plan_status_sync(
+    project_root: Path,
+    cr_id: str,
+    *,
+    status: str = "",
+    readiness: str = "",
+    gate_status: str = "",
+    work_id: str = "",
+    historical_migration: bool = False,
+    historical_gate_status: str = "",
+    historical_lifecycle_status: str = "",
+    expected_process_oid: str = "",
+    rebuild_corrupt_index: bool = False,
+) -> StatusSyncPlan:
+    """Build a zero-mutation status-sync transaction plan."""
+
+    project_root = project_root.resolve()
+    facts, scope_digest = _status_sync_facts(project_root, work_id=work_id)
+    if expected_process_oid and facts["process_head_oid"] != expected_process_oid:
+        return StatusSyncPlan(
+            "BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), "process HEAD differs from expected OID"
+        )
+    crs = discover_formal_crs(project_root)
+    if cr_id not in crs:
+        raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
+    cr_path = crs[cr_id]
+    before_text = cr_path.read_text(encoding="utf-8")
+    fields = parse_frontmatter(before_text)
+    before_status = str(fields.get("lifecycle_status") or fields.get("status") or "active")
+    before_readiness = str(fields.get("readiness_status") or "not_ready")
+    before_gate = str(fields.get("gate_status") or "not_started")
+    target_status = status or before_status
+    target_readiness = readiness or before_readiness
+    target_gate = gate_status or before_gate
+    if target_status == "closed":
+        if gate_status and gate_status != CLOSED_GATE_STATUS:
+            raise ValueError(f"status=closed requires gate_status={CLOSED_GATE_STATUS}")
+        target_gate = CLOSED_GATE_STATUS
+    elif target_gate and target_gate not in cr_tracking.ALLOWED_GATE_STATUSES:
+        raise ValueError(f"invalid gate_status: {target_gate}")
+    native = str(fields.get("schema_version") or "") == "1" and str(fields.get("kind") or "") == "cr"
+    if native:
+        transition_errors = cr_tracking.validate_native_transition(
+            (before_status, before_readiness, before_gate),
+            (target_status, target_readiness, target_gate),
+            historical_migration=historical_migration,
+        )
+        if transition_errors:
+            return StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "; ".join(transition_errors),
+            )
+    index_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
+    if index_path.is_file():
+        try:
+            formal_truth_index = build_index(project_root)
+        except ValueError as exc:
+            return StatusSyncPlan(
+                "BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), str(exc)
+            )
+        try:
+            existing_index = json.loads(index_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            if not rebuild_corrupt_index:
+                return StatusSyncPlan(
+                    "BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), f"CR-INDEX invalid JSON: {exc}"
+                )
+        else:
+            index_errors = validate_index_payload(existing_index)
+            if index_errors and not rebuild_corrupt_index:
+                return StatusSyncPlan(
+                    "BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), "; ".join(index_errors)
+                )
+            if (
+                not index_errors
+                and existing_index.get("semantic_digest")
+                != formal_truth_index.get("semantic_digest")
+                and not rebuild_corrupt_index
+            ):
+                return StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    "CR-INDEX stale projection differs from formal truth rebuild digest",
+                )
+    updates = {
+        "lifecycle_status": target_status,
+        "readiness_status": target_readiness,
+        "gate_status": target_gate,
+        "historical_gate_status": historical_gate_status,
+        "historical_lifecycle_status": historical_lifecycle_status,
+    }
+    if "status" in fields:
+        updates["status"] = target_status
+    cr_after = render_frontmatter_fields(before_text, updates)
+    timestamp = now_utc()
+    summary = summary_from_cr_file(project_root, cr_path, readiness=target_readiness)
+    summary["status"] = target_status
+    summary["readiness"] = target_readiness
+    summary["gate_status"] = target_gate
+    summary["updated_at"] = timestamp
+    summary_path = _resolve_runtime_ref(
+        project_root, (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
+    )
+    summary_after = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    evidence_path = _resolve_runtime_ref(
+        project_root, (CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix()
+    )
+    evidence = {
+        "cr_id": cr_id,
+        "summary_ref": (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix(),
+        "full_ref": summary.get("full_ref"),
+        "evidence_refs": [],
+        "created_at": timestamp,
+    }
+    evidence_after = json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ledger_path = _resolve_runtime_ref(project_root, CR_LEDGER_REL.as_posix())
+    ledger_event = {
+        "event_id": _canonical_digest(
+            {"event": "status_sync", "id": cr_id, "transition": updates, "facts": facts}
+        ),
+        "event": "status_sync",
+        "event_type": "status_sync",
+        "id": cr_id,
+        "cr_type": summary.get("cr_type"),
+        "status": target_status,
+        "readiness": target_readiness,
+        "gate_status": target_gate,
+        "summary_ref": _rel(project_root, summary_path),
+        "full_ref": summary.get("full_ref"),
+        "evidence_index_ref": _rel(project_root, evidence_path),
+        "frontmatter_changed": cr_after != before_text,
+        "historical_migration": historical_migration,
+        "synced_at": timestamp,
+    }
+    ledger_after = event_ledger.render_appended_event(ledger_path, ledger_event)
+    expected_index = build_index(
+        project_root,
+        record_overrides={cr_id: updates},
+    )
+    index_after = json.dumps(expected_index, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    targets: list[StatusSyncTarget] = [
+        _target(project_root, 10, cr_path, cr_after, "truth"),
+    ]
+    state_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
+    if state_path.is_file() and not historical_migration:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state_patch: dict[str, Any] = {"updated_at": timestamp}
+        if target_status in FINISHED_STATUSES and state.get("active_change") == cr_id:
+            state_patch.update(
+                {
+                    "active_change": None,
+                    "active_context_ref": None,
+                    "current_phase": "delivered" if target_status == "closed" else str(state.get("current_phase") or "delivered"),
+                    "pending_gate": None,
+                    "pending_checklist_path": None,
+                    "next_action": {
+                        "type": "done",
+                        "text": f"{cr_id} status synced as {target_status}; choose next CR.",
+                        "stop_reason": "delivered" if target_status == "closed" else "no_remaining_route",
+                    },
+                }
+            )
+        elif target_status in {"active", "blocked"} and not state.get("active_change"):
+            state_patch.update(
+                {
+                    "active_change": cr_id,
+                    "next_action": {
+                        "type": "status_synced",
+                        "text": f"{cr_id} status synced as {target_status}; continue from the Work route.",
+                    },
+                }
+            )
+        if len(state_patch) > 1:
+            state_after = current.render_current_state_candidate(
+                current.build_current_state_candidate(
+                    project_root,
+                    state_patch,
+                    actor="meta_flow.workflow.cr_lifecycle",
+                    reason=f"status-sync {cr_id}",
+                )
+            )
+            targets.append(_target(project_root, 20, state_path, state_after, "truth"))
+    targets.extend(
+        [
+            _target(project_root, 30, summary_path, summary_after, "derived"),
+            _target(project_root, 40, evidence_path, evidence_after, "derived"),
+            _target(project_root, 50, ledger_path, ledger_after, "derived"),
+            _target(project_root, 90, index_path, index_after, "derived"),
+        ]
+    )
+    if work_id:
+        work = load_work(_process_root(project_root), work_id)
+        denied = [
+            target.ref
+            for target in targets
+            if not check_scope(
+                work.scope,
+                "write",
+                target.ref.removeprefix("process/"),
+            ).allowed
+        ]
+        if denied:
+            return StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "targets outside Work write scope: " + ", ".join(denied),
+            )
+    return StatusSyncPlan(
+        "READY",
+        cr_id,
+        work_id,
+        {
+            "lifecycle_status": target_status,
+            "readiness_status": target_readiness,
+            "gate_status": target_gate,
+        },
+        facts,
+        scope_digest,
+        tuple(sorted(targets, key=lambda item: item.order)),
+    )
+
+
+def _transaction_root(project_root: Path) -> Path:
+    process_root = _process_root(project_root)
+    common = _git_fact(process_root, "rev-parse", "--git-common-dir")
+    if common:
+        path = Path(common)
+        common_root = path if path.is_absolute() else (process_root / path)
+    else:
+        common_root = process_root / ".meta-flow-fixture-git"
+    return common_root.resolve(strict=False) / "meta-flow" / "transactions"
+
+
+def _current_target_digest(target: StatusSyncTarget) -> str:
+    if not target.path.is_file():
+        return _canonical_digest("")
+    return _canonical_digest(target.path.read_text(encoding="utf-8"))
+
+
+def _status_sync_writer_lock_path(project_root: Path) -> Path:
+    return _transaction_root(project_root.resolve()).parent / "status-sync.lock"
+
+
+def _acquire_status_sync_writer_lock(
+    project_root: Path,
+    *,
+    transaction_id: str,
+    purpose: str,
+) -> dict[str, Any] | None:
+    """Acquire the cooperative global writer lock and persist owner identity."""
+
+    lock_path = _status_sync_writer_lock_path(project_root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    acquired_at = now_utc()
+    owner = {
+        "schema_version": 1,
+        "owner_token": uuid.uuid4().hex,
+        "owner_process_identity": f"pid:{os.getpid()}:instance:{uuid.uuid4().hex}",
+        "owner_started_at": acquired_at,
+        "acquired_at": acquired_at,
+        "transaction_id": transaction_id,
+        "purpose": purpose,
+        "lease_state": "held",
+    }
+    try:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return None
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(owner, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        lock_path.unlink(missing_ok=True)
+        raise
+    return owner
+
+
+def _release_status_sync_writer_lock(project_root: Path, owner: dict[str, Any]) -> bool:
+    """Release only the lock whose persisted owner token matches the caller."""
+
+    lock_path = _status_sync_writer_lock_path(project_root)
+    try:
+        first_stat = lock_path.stat()
+        persisted = json.loads(lock_path.read_text(encoding="utf-8"))
+        second_stat = lock_path.stat()
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return False
+    if (
+        persisted.get("owner_token") != owner.get("owner_token")
+        or persisted.get("owner_process_identity") != owner.get("owner_process_identity")
+        or (first_stat.st_dev, first_stat.st_ino) != (second_stat.st_dev, second_stat.st_ino)
+    ):
+        return False
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def apply_status_sync(
+    project_root: Path,
+    plan: StatusSyncPlan,
+    *,
+    _fail_after_replace: int | None = None,
+    _fail_recovery: bool = False,
+    _fault: str = "",
+) -> dict[str, Any]:
+    """Apply one prepared status-sync plan with verified backups and recovery."""
+
+    project_root = project_root.resolve()
+    if plan.decision != "READY":
+        return {"status": "BLOCKED", "reason": plan.reason, "mutation_count": 0}
+    observed_facts, observed_scope = _status_sync_facts(project_root, work_id=plan.work_id)
+    if observed_facts != plan.expected_facts or observed_scope != plan.scope_digest:
+        return {"status": "BLOCKED", "reason": "expected facts or scope digest drifted", "mutation_count": 0}
+    drifted = [target.ref for target in plan.targets if _current_target_digest(target) != target.before_digest]
+    if drifted:
+        return {"status": "BLOCKED", "reason": "target digest drift: " + ", ".join(drifted), "mutation_count": 0}
+    transaction_root = _transaction_root(project_root)
+    transaction_root.mkdir(parents=True, exist_ok=True)
+    unresolved = [
+        path
+        for path in transaction_root.glob("*/manifest.json")
+        if path.is_file()
+    ]
+    if unresolved:
+        return {"status": "BLOCKED", "reason": "unresolved status-sync transaction exists", "mutation_count": 0}
+    transaction_id = uuid.uuid4().hex
+    lock_owner = _acquire_status_sync_writer_lock(
+        project_root,
+        transaction_id=transaction_id,
+        purpose="apply",
+    )
+    if lock_owner is None:
+        return {"status": "BLOCKED", "reason": "status-sync writer lock exists", "mutation_count": 0}
+    transaction_dir = transaction_root / transaction_id
+    backup_root = transaction_dir / "backups"
+    after_root = transaction_dir / "after"
+    backup_root.mkdir(parents=True)
+    after_root.mkdir(parents=True)
+    idempotency_key = _canonical_digest(
+        {
+            "command": "status-sync",
+            "cr_id": plan.cr_id,
+            "desired_transition": plan.desired_transition,
+            "expected_facts": plan.expected_facts,
+            "scope_digest": plan.scope_digest,
+        }
+    )
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "transaction_id": transaction_id,
+        "idempotency_key": idempotency_key,
+        "work_id": plan.work_id,
+        "cr_id": plan.cr_id,
+        "command": "status-sync",
+        "desired_transition": plan.desired_transition,
+        "expected_facts": plan.expected_facts,
+        "scope_digest": plan.scope_digest,
+        "lock": dict(lock_owner),
+        "targets": [],
+        "receipts": [],
+        "recovery_state": "prepared",
+        "created_at": now_utc(),
+        "updated_at": now_utc(),
+    }
+    applied: list[StatusSyncTarget] = []
+    try:
+        for target in plan.targets:
+            backup = backup_root / f"{target.order:03d}.before"
+            prepared_after = after_root / f"{target.order:03d}.after"
+            backup.write_text(target.before or "", encoding="utf-8")
+            prepared_after.write_text(target.after, encoding="utf-8")
+            backup_digest = _canonical_digest(backup.read_text(encoding="utf-8"))
+            if backup_digest != target.before_digest:
+                raise RuntimeError(f"backup digest mismatch: {target.ref}")
+            if _canonical_digest(prepared_after.read_text(encoding="utf-8")) != target.after_digest:
+                raise RuntimeError(f"prepared after digest mismatch: {target.ref}")
+            manifest["targets"].append(
+                {
+                    **target.as_dict(),
+                    "before_content_ref": f"backups/{backup.name}",
+                    "before_content_digest": backup_digest,
+                    "after_content_ref": f"after/{prepared_after.name}",
+                    "backup_created_at": now_utc(),
+                    "backup_verified_at": now_utc(),
+                    "apply_status": "prepared",
+                    "recovery_status": "not-required",
+                }
+            )
+        manifest_path = transaction_dir / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        manifest["recovery_state"] = "applying"
+        if _fault == "before-first-replace":
+            raise RuntimeError("injected failure before first replace")
+        for offset, target in enumerate(plan.targets, 1):
+            if _fault == "before-index-last" and target.ref == CR_INDEX_REL.as_posix():
+                raise RuntimeError("injected failure before index-last replace")
+            _atomic_write_text(target.path, target.after)
+            applied.append(target)
+            if _fault == "after-replace-before-receipt":
+                raise RuntimeError("injected abrupt exit after replace before receipt")
+            manifest["targets"][offset - 1]["apply_status"] = "applied"
+            manifest["receipts"].append(
+                {
+                    "target_ref": target.ref,
+                    "operation": "replace" if target.before is not None else "create",
+                    "observed_before_digest": target.before_digest,
+                    "observed_after_digest": _current_target_digest(target),
+                    "completed_at": now_utc(),
+                }
+            )
+            manifest["updated_at"] = now_utc()
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            if _fail_after_replace == offset:
+                raise RuntimeError(f"injected failure after replace {offset}")
+            if _fault == "after-receipt-before-next":
+                raise RuntimeError("injected abrupt exit after receipt before next target")
+            if (
+                _fault == "after-truth-before-derived"
+                and target.truth_or_derived == "truth"
+                and offset < len(plan.targets)
+                and plan.targets[offset].truth_or_derived == "derived"
+            ):
+                raise RuntimeError("injected failure after truth before derived")
+        if _fault == "during-read-back":
+            raise RuntimeError("injected failure during read-back")
+        readback_failures = [
+            target.ref for target in plan.targets if _current_target_digest(target) != target.after_digest
+        ]
+        if readback_failures:
+            raise RuntimeError("read-back mismatch: " + ", ".join(readback_failures))
+        manifest["recovery_state"] = "committed"
+        manifest["lock"]["lease_state"] = "released"
+        manifest["updated_at"] = now_utc()
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        paths = {target.ref: target.path for target in plan.targets}
+        shutil.rmtree(transaction_dir)
+        return {
+            "status": "PASS",
+            "transaction_id": transaction_id,
+            "idempotency_key": idempotency_key,
+            "mutation_count": len(plan.targets),
+            "paths": paths,
+        }
+    except Exception as exc:
+        manifest["recovery_state"] = "recovery-required"
+        recovery_errors: list[str] = []
+        for target in reversed(applied):
+            try:
+                if _fail_recovery:
+                    raise RuntimeError("injected recovery failure")
+                if target.before is None:
+                    if target.path.exists():
+                        target.path.unlink()
+                else:
+                    _atomic_write_text(target.path, target.before)
+                if _current_target_digest(target) != target.before_digest:
+                    raise RuntimeError("recovery digest mismatch")
+                for entry in manifest["targets"]:
+                    if entry["ref"] == target.ref:
+                        entry["recovery_status"] = "restored"
+            except Exception as recovery_error:
+                recovery_errors.append(f"{target.ref}: {recovery_error}")
+        status = "PARTIAL" if recovery_errors else "RECOVERED" if applied else "BLOCKED"
+        manifest["recovery_state"] = status.lower()
+        manifest["lock"]["lease_state"] = "released"
+        manifest["updated_at"] = now_utc()
+        (transaction_dir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if status in {"BLOCKED", "RECOVERED"}:
+            shutil.rmtree(transaction_dir)
+        return {
+            "status": status,
+            "transaction_id": transaction_id,
+            "idempotency_key": idempotency_key,
+            "mutation_count": len(applied),
+            "reason": str(exc),
+            "recovery_errors": recovery_errors,
+        }
+    finally:
+        _release_status_sync_writer_lock(project_root, lock_owner)
+
+
+def inspect_status_sync_transactions(project_root: Path) -> dict[str, Any]:
+    """Inspect unresolved private manifests without changing repository state."""
+
+    root = _transaction_root(project_root.resolve())
+    transactions: list[dict[str, Any]] = []
+    if root.is_dir():
+        for path in sorted(root.glob("*/manifest.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                transactions.append(
+                    {
+                        "transaction_id": path.parent.name,
+                        "recovery_state": "partial",
+                        "error": str(exc),
+                    }
+                )
+                continue
+            transactions.append(
+                {
+                    "transaction_id": payload.get("transaction_id") or path.parent.name,
+                    "cr_id": payload.get("cr_id") or "",
+                    "work_id": payload.get("work_id") or "",
+                    "recovery_state": payload.get("recovery_state") or "",
+                    "target_refs": [
+                        str(item.get("ref") or "")
+                        for item in payload.get("targets") or []
+                        if isinstance(item, dict)
+                    ],
+                }
+            )
+    return {
+        "decision": "PASS",
+        "transaction_count": len(transactions),
+        "transactions": transactions,
+    }
+
+
+def recover_status_sync_transaction(
+    project_root: Path,
+    transaction_id: str,
+    *,
+    action: str,
+    typed_authorized: bool = False,
+) -> dict[str, Any]:
+    """Explicitly resume, rollback, or abandon one unresolved transaction."""
+
+    if action not in {"resume", "rollback", "abandon"}:
+        raise ValueError("recovery action must be resume, rollback, or abandon")
+    if not re.fullmatch(r"[0-9a-f]{32}", transaction_id):
+        raise ValueError("transaction_id must be one 32-character lowercase hex identity")
+    project_root = project_root.resolve()
+    transaction_dir = _transaction_root(project_root) / transaction_id
+    manifest_path = transaction_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"status-sync transaction not found: {transaction_id}")
+    if action == "abandon" and not typed_authorized:
+        return {
+            "status": "BLOCKED",
+            "reason": "abandon requires typed authorization",
+            "mutation_count": 0,
+        }
+    lock_owner = _acquire_status_sync_writer_lock(
+        project_root,
+        transaction_id=transaction_id,
+        purpose=f"recovery:{action}",
+    )
+    if lock_owner is None:
+        return {
+            "status": "BLOCKED",
+            "reason": "status-sync writer lock exists",
+            "mutation_count": 0,
+        }
+    manifest: dict[str, Any] = {}
+    remove_transaction = False
+    result: dict[str, Any]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        prior_lock = manifest.get("lock")
+        if isinstance(prior_lock, dict):
+            manifest.setdefault("lock_history", []).append(prior_lock)
+        manifest["lock"] = dict(lock_owner)
+        manifest["recovery_state"] = "recovering"
+        manifest["updated_at"] = now_utc()
+        _atomic_write_text(
+            manifest_path,
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
+        if action == "abandon":
+            manifest["recovery_state"] = "abandoned"
+            manifest["updated_at"] = now_utc()
+            result = {"status": "PASS", "action": "abandon", "mutation_count": 1}
+        else:
+            facts, scope_digest = _status_sync_facts(
+                project_root, work_id=str(manifest.get("work_id") or "")
+            )
+            expected = manifest.get("expected_facts") or {}
+            stable_keys = {
+                "release_head_oid",
+                "process_head_oid",
+                "process_git_common_dir_identity",
+                "current_branch",
+            }
+            if (
+                any(facts.get(key) != expected.get(key) for key in stable_keys)
+                or scope_digest != manifest.get("scope_digest")
+            ):
+                manifest["recovery_state"] = "recovery-required"
+                result = {
+                    "status": "BLOCKED",
+                    "reason": "recovery expected facts or scope digest drifted",
+                    "mutation_count": 0,
+                }
+            else:
+                targets = sorted(
+                    [item for item in manifest.get("targets") or [] if isinstance(item, dict)],
+                    key=lambda item: int(item.get("order") or 0),
+                    reverse=action == "rollback",
+                )
+                changed = 0
+                errors: list[str] = []
+                for item in targets:
+                    ref = str(item.get("ref") or "")
+                    try:
+                        path = _resolve_runtime_ref(project_root, ref)
+                        before_exists = bool(item.get("before_exists"))
+                        before_content = (
+                            transaction_dir / str(item["before_content_ref"])
+                        ).read_text(encoding="utf-8")
+                        after_content = (
+                            transaction_dir / str(item["after_content_ref"])
+                        ).read_text(encoding="utf-8")
+                        current_digest = (
+                            _canonical_digest(path.read_text(encoding="utf-8"))
+                            if path.is_file()
+                            else _canonical_digest("")
+                        )
+                        before_digest = str(item.get("before_digest") or "")
+                        after_digest = str(item.get("after_digest") or "")
+                        desired_digest = after_digest if action == "resume" else before_digest
+                        if current_digest == desired_digest:
+                            continue
+                        if current_digest not in {before_digest, after_digest}:
+                            raise RuntimeError(
+                                "current digest matches neither prepared before nor after content"
+                            )
+                        if action == "resume":
+                            _atomic_write_text(path, after_content)
+                        elif before_exists:
+                            _atomic_write_text(path, before_content)
+                        elif path.exists():
+                            path.unlink()
+                        observed = (
+                            _canonical_digest(path.read_text(encoding="utf-8"))
+                            if path.is_file()
+                            else _canonical_digest("")
+                        )
+                        if observed != desired_digest:
+                            raise RuntimeError("recovery read-back digest mismatch")
+                        changed += 1
+                    except Exception as exc:
+                        errors.append(f"{ref}: {exc}")
+                if errors:
+                    manifest["recovery_state"] = "partial"
+                    result = {
+                        "status": "PARTIAL",
+                        "action": action,
+                        "mutation_count": changed,
+                        "errors": errors,
+                    }
+                else:
+                    manifest["recovery_state"] = (
+                        "committed" if action == "resume" else "recovered"
+                    )
+                    remove_transaction = True
+                    result = {
+                        "status": "PASS" if action == "resume" else "RECOVERED",
+                        "action": action,
+                        "mutation_count": changed,
+                    }
+        manifest["updated_at"] = now_utc()
+        if not remove_transaction:
+            manifest["lock"]["lease_state"] = "released"
+            _atomic_write_text(
+                manifest_path,
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
+        else:
+            shutil.rmtree(transaction_dir)
+        return result
+    finally:
+        _release_status_sync_writer_lock(project_root, lock_owner)
+
+
 def sync_cr_status(
     project_root: Path,
     cr_id: str,
@@ -1442,98 +2512,36 @@ def sync_cr_status(
     status: str = "",
     readiness: str = "",
     gate_status: str = "",
+    work_id: str = "",
+    historical_migration: bool = False,
+    historical_gate_status: str = "",
+    historical_lifecycle_status: str = "",
+    expected_process_oid: str = "",
 ) -> dict[str, Path]:
-    project_root = project_root.resolve()
-    crs = discover_formal_crs(project_root)
-    if cr_id not in crs:
-        raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
-    if status == "closed":
-        if gate_status and gate_status != CLOSED_GATE_STATUS:
-            raise ValueError(f"status=closed requires gate_status={CLOSED_GATE_STATUS}")
-        gate_status = CLOSED_GATE_STATUS
-    elif gate_status and gate_status not in cr_tracking.ALLOWED_GATE_STATUSES:
-        raise ValueError(f"invalid gate_status: {gate_status}")
-    cr_path = crs[cr_id]
-    frontmatter_updates: dict[str, str] = {}
-    if status:
-        frontmatter_updates["lifecycle_status"] = status
-        existing = parse_frontmatter(cr_path.read_text(encoding="utf-8"))
-        if "status" in existing:
-            frontmatter_updates["status"] = status
-    if readiness:
-        frontmatter_updates["readiness_status"] = readiness
-    if gate_status:
-        frontmatter_updates["gate_status"] = gate_status
-    frontmatter_changed = update_frontmatter_fields(cr_path, frontmatter_updates)
+    """Compatibility apply API backed by the recoverable plan/apply transaction."""
 
-    summary = summary_from_cr_file(project_root, cr_path, readiness=readiness or None)
-    if status:
-        summary["status"] = status
-    if gate_status:
-        summary["gate_status"] = gate_status
-    summary_path = write_summary(project_root, cr_id, summary)
-    evidence_path = write_evidence_index(project_root, cr_id, summary)
-    index_path = write_index(project_root)
-    state_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
-    if state_path.is_file():
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        patch: dict[str, Any] = {"updated_at": now_utc()}
-        if status in FINISHED_STATUSES and state.get("active_change") == cr_id:
-            patch.update(
-                {
-                    "active_change": None,
-                    "active_context_ref": None,
-                    "current_phase": "delivered"
-                    if status == "closed"
-                    else str(state.get("current_phase") or "delivered"),
-                    "pending_gate": None,
-                    "pending_checklist_path": None,
-                    "next_action": {
-                        "type": "done",
-                        "text": f"{cr_id} status synced as {status}; choose next CR.",
-                        "stop_reason": "delivered" if status == "closed" else "no_remaining_route",
-                    },
-                }
-            )
-        elif status in {"active", "proposed", "blocked"} and not state.get("active_change"):
-            patch.update(
-                {
-                    "active_change": cr_id,
-                    "next_action": {
-                        "type": "status_synced",
-                        "text": f"{cr_id} status synced as {status}; continue from route plan.",
-                    },
-                }
-            )
-        if len(patch) > 1:
-            current.update_current_state(
-                project_root,
-                patch,
-                actor="meta_flow.workflow.cr_lifecycle",
-                reason=f"status-sync {cr_id}",
-            )
-    ledger_path = append_ledger_event(
+    plan = plan_status_sync(
         project_root,
-        {
-            "event": "status_sync",
-            "id": cr_id,
-            "cr_type": summary.get("cr_type"),
-            "status": summary.get("status"),
-            "readiness": summary.get("readiness"),
-            "gate_status": summary.get("gate_status"),
-            "summary_ref": _rel(project_root, summary_path),
-            "full_ref": summary.get("full_ref"),
-            "evidence_index_ref": _rel(project_root, evidence_path),
-            "frontmatter_changed": frontmatter_changed,
-            "synced_at": now_utc(),
-        },
+        cr_id,
+        status=status,
+        readiness=readiness,
+        gate_status=gate_status,
+        work_id=work_id,
+        historical_migration=historical_migration,
+        historical_gate_status=historical_gate_status,
+        historical_lifecycle_status=historical_lifecycle_status,
+        expected_process_oid=expected_process_oid,
     )
+    result = apply_status_sync(project_root, plan)
+    if result["status"] != "PASS":
+        raise RuntimeError(f"status-sync {result['status']}: {result.get('reason', '')}")
+    by_ref = result["paths"]
     return {
-        "cr": cr_path,
-        "summary": summary_path,
-        "evidence_index": evidence_path,
-        "index": index_path,
-        "ledger": ledger_path,
+        "cr": by_ref[_rel(project_root, discover_formal_crs(project_root)[cr_id])],
+        "summary": by_ref[(CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()],
+        "evidence_index": by_ref[(CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix()],
+        "index": by_ref[CR_INDEX_REL.as_posix()],
+        "ledger": by_ref[CR_LEDGER_REL.as_posix()],
     }
 
 
@@ -1544,7 +2552,25 @@ def collect_check_errors(project_root: Path) -> list[str]:
         events = load_ledger_events(project_root)
     except ValueError as exc:
         return [str(exc)]
-    index = load_index(project_root)
+    try:
+        index = load_index(project_root)
+    except ValueError as exc:
+        index = {}
+        errors.append(str(exc))
+    try:
+        expected_index = build_index(project_root)
+    except ValueError as exc:
+        expected_index = {}
+        errors.append(str(exc))
+    if index:
+        errors.extend(validate_index_payload(index))
+        if (
+            expected_index
+            and index.get("semantic_digest") != expected_index.get("semantic_digest")
+        ):
+            errors.append(
+                "CR-INDEX stale projection differs from formal truth rebuild digest"
+            )
     items = {item.get("id"): item for item in index.get("items", []) if isinstance(item, dict)}
     current_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
     current_state: dict[str, Any] = {}
@@ -1565,7 +2591,7 @@ def collect_check_errors(project_root: Path) -> list[str]:
         if status == "closed":
             if not summary_ref:
                 errors.append(f"closed CR {cr_id} missing summary_ref")
-            elif not (project_root / summary_ref).is_file():
+            elif not _resolve_runtime_ref(project_root, str(summary_ref)).is_file():
                 errors.append(f"closed CR {cr_id} summary_ref missing on disk: {summary_ref}")
             if current_state.get("active_change") == cr_id:
                 errors.append(f"STATE.current.json active_change points to closed CR: {cr_id}")
@@ -2005,12 +3031,16 @@ def _print_cr_help() -> None:
         "usage: meta-flow cr <command> [options]\n\n"
         "Commands:\n"
         "  bootstrap  Create an active bootstrap CR plus summary, index, ledger, CP0 result, and context.\n"
-        "  index      Rebuild process/changes/CR-INDEX.json from formal CR files.\n"
+        "  index      Preview a pure CR-INDEX projection; --apply writes it and --rebuild acknowledges corrupt bytes.\n"
         "  summary    Generate process/changes/summaries/<CR>.summary.json.\n"
         "  brief      Print a goal-oriented CR brief from summary/frontmatter.\n"
         "  goal-brief Print all CRs attached to one goal_ref.\n"
         "  impact-report Print a side-effect-free impact surface migration report as JSON.\n"
         "  status-sync Sync one CR frontmatter, summary, CR-INDEX, ledger, and active STATE pointer.\n"
+        "  status-sync-inspect Inspect unresolved private status-sync manifests.\n"
+        "  status-sync-resume Resume one explicitly selected unresolved transaction.\n"
+        "  status-sync-rollback Roll back one explicitly selected unresolved transaction.\n"
+        "  status-sync-abandon Mark one inspected transaction abandoned with typed authorization.\n"
         "  aggregate  Validate explicit published leg handles and persist/project a guarded aggregate.\n"
         "  branch-open Open paired project/artifact CR branches from fresh remote defaults.\n"
         "  branch-publish Publish existing committed CR refs; never stage or commit.\n"
@@ -2022,12 +3052,14 @@ def _print_cr_help() -> None:
         "Examples:\n"
         '  meta-flow cr bootstrap --id CR-001 --title "target adoption bootstrap" --scope "Initialize Meta Flow adoption readiness." --project-root .\n'
         "  meta-flow cr index --project-root .\n"
+        "  meta-flow cr index --project-root . --apply --expected-process-oid <oid>\n"
         "  meta-flow cr summary --id CR-101 --project-root .\n"
         "  meta-flow cr brief --id CR-101 --project-root .\n"
         "  meta-flow cr brief --id CR-101 --mode enforce --project-root .\n"
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow cr impact-report --project-root .\n"
         "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --project-root .\n"
+        "  meta-flow cr status-sync --id CR-101 --status closed --work-id CR-101 --project-root . --apply --expected-process-oid <oid>\n"
         "  meta-flow cr aggregate --id CR-051 --operation-id operation-001 --attempt 1 --source-handle source.json --artifact-handle artifact.json --dry-run --project-root .\n"
         "  meta-flow cr branch-open --id CR-101 --slug safe-change --dry-run --project-root .\n"
         "  meta-flow cr branch-publish --id CR-101 --branch cr/cr-101-safe-change --dry-run --project-root .\n"
@@ -2064,6 +3096,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--readiness", default="READY")
     parser.add_argument("--status", default="")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--rebuild", action="store_true")
+    parser.add_argument("--expected-process-oid", default="")
+    parser.add_argument("--work-id", default="")
+    parser.add_argument("--historical-migration", action="store_true")
+    parser.add_argument("--historical-gate-status", default="")
+    parser.add_argument("--historical-lifecycle-status", default="")
+    parser.add_argument("--transaction-id", default="")
+    parser.add_argument("--typed-authorized", action="store_true")
     parser.add_argument("--goal-ref", default="")
     parser.add_argument("--mode", choices=["audit", "enforce"], default=None)
     parser.add_argument("--output", type=Path, default=None)
@@ -2085,8 +3126,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{key}: {path}")
         return 0
     if command == "index":
-        path = write_index(project_root)
-        print(f"wrote: {path}")
+        plan = plan_index(project_root, rebuild_corrupt=parsed.rebuild)
+        printable = {key: value for key, value in plan.items() if key != "expected"}
+        if not parsed.apply:
+            print(json.dumps(printable, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if plan["decision"] == "READY" else 1
+        if plan["decision"] != "READY":
+            print(json.dumps(printable, ensure_ascii=False, indent=2, sort_keys=True))
+            return 1
+        path = write_index(
+            project_root,
+            rebuild_corrupt=parsed.rebuild,
+            expected_process_oid=parsed.expected_process_oid,
+        )
+        print(json.dumps({**printable, "wrote": _rel(project_root, path)}, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if command == "summary":
         if not parsed.cr_id:
@@ -2127,16 +3180,43 @@ def main(argv: list[str] | None = None) -> int:
     if command == "status-sync":
         if not parsed.cr_id:
             raise SystemExit("--id is required")
-        paths = sync_cr_status(
+        plan = plan_status_sync(
             project_root,
             parsed.cr_id,
             status=parsed.status,
             readiness=parsed.readiness if "--readiness" in args else "",
             gate_status=parsed.gate_status if "--gate-status" in args else "",
+            work_id=parsed.work_id,
+            historical_migration=parsed.historical_migration,
+            historical_gate_status=parsed.historical_gate_status,
+            historical_lifecycle_status=parsed.historical_lifecycle_status,
+            expected_process_oid=parsed.expected_process_oid,
+            rebuild_corrupt_index=parsed.rebuild,
         )
-        for key, path in paths.items():
-            print(f"{key}: {path}")
+        if not parsed.apply:
+            print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if plan.decision == "READY" else 1
+        result = apply_status_sync(project_root, plan)
+        printable = {key: value for key, value in result.items() if key != "paths"}
+        if "paths" in result:
+            printable["path_refs"] = sorted(result["paths"])
+        print(json.dumps(printable, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if result["status"] == "PASS" else 1
+    if command == "status-sync-inspect":
+        print(json.dumps(inspect_status_sync_transactions(project_root), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
+    if command in {"status-sync-resume", "status-sync-rollback", "status-sync-abandon"}:
+        if not parsed.transaction_id:
+            raise SystemExit("--transaction-id is required")
+        action = command.removeprefix("status-sync-")
+        result = recover_status_sync_transaction(
+            project_root,
+            parsed.transaction_id,
+            action=action,
+            typed_authorized=parsed.typed_authorized,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if result["status"] in {"PASS", "RECOVERED"} else 1
     if command == "check":
         errors = collect_check_errors(project_root)
         warnings = collect_check_warnings(project_root)
@@ -2158,7 +3238,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if conflicts else 0
     raise SystemExit(
         f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, "
-        "status-sync, aggregate, branch-open, branch-publish, branch-merge, branch-finish, close, check, conflicts"
+        "status-sync, status-sync-inspect, status-sync-resume, status-sync-rollback, status-sync-abandon, "
+        "aggregate, branch-open, branch-publish, branch-merge, branch-finish, close, check, conflicts"
     )
 
 

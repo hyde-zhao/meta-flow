@@ -11,6 +11,7 @@ from pathlib import Path
 from meta_flow import cli
 from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
 from meta_flow.state import current
+from meta_flow.workflow import cr_lifecycle
 
 LEGACY_STATE = """---
 project_id: "demo-project"
@@ -160,7 +161,10 @@ class StateV2Tests(unittest.TestCase):
             index_json.parent.mkdir(parents=True, exist_ok=True)
             release.write_text("schema_version: 1\n", encoding="utf-8")
             handoff.write_text("# Next Session\n", encoding="utf-8")
-            index_json.write_text('{"schema_version": 1, "items": []}\n', encoding="utf-8")
+            index_json.write_text(
+                json.dumps(cr_lifecycle.build_index(root), ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
             state = current.default_current_state(root)
             state["current_phase"] = "delivered"
             state["active_change"] = None

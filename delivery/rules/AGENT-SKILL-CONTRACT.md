@@ -24,6 +24,9 @@
 5. 每次读/写/检查前分别校验 risk、scope、budget。任一条件不满足时停止并返回重分类、缩小范围或拆 Work 建议；不得用剩余 token 绕过 scope，也不得用 scope 绕过风险门。
 6. 项目查询最多读取 5 个直接引用对象；跨项目汇总、全历史审计和敏感证据必须升级并批准。
 7. 复盘报告、建议决策、进化包、实现启动和 publication 是不同对象；任何 Agent/Skill 都不得把上一步的 approve 扩张为下一步授权。
+8. native CR 的真相顺序是 PROJECT/WORK/formal CR → summary/ledger/CR-INDEX。任何 Agent/Skill 都不得从 CR-INDEX 反向修改 lifecycle，也不得让旧 index、summary 正文、ledger 或 legacy 仓参与 native index rebuild；损坏/缺失 index 必须走显式 dry-run/rebuild。
+9. 一个 Decision Bundle revision 可以合并一次用户确认，但每个 subgate 仍必须独立校验、独立 evidence、独立结果和停止传播。facts/scope/authz 漂移时必须新建 revision，不能复用旧确认。
+10. 冻结写 scope 前必须按 Git index facts 做八分类；tracked symlink、missing 与 ignored generated output 只能进入 validation，submodule/outside_repo/duplicate 必须 BLOCKED。commit 子门按仓库分别检查 staged symmetric difference，不得 `git add -f`。
 
 下方契约继续服务 legacy 项目和 G2 profile，不得作为 G0/G1 默认开销。
 
@@ -107,6 +110,8 @@
 - `state-router` 优先读取 `STATE.current.json`、`process/current/CURRENT.json`、ledgers、context pack 和 CP result；`STATE.md` 仅作 human summary / legacy fallback。
 - `checkpoint-manager` 优先消费 CP result JSON、evidence index、ledger 和 context refs；Markdown 只作为摘要或人工门禁入口。
 - `change-impact-analysis` 优先写 CR ledger / summary / index；CR 文档只维护 Checkpoint Index、状态摘要和 ref，关闭 CR 后不得继续把全文放入 active state。
+- `change-impact-analysis` 与 `state-router` 对 native CR 状态变化必须先调用 `meta-flow cr status-sync` dry-run，并且只在 exact OID/Work scope 授权下 apply；不得分别手写 formal CR、summary、ledger、STATE 或 index。
+- Host Orchestrator 合并人工确认时必须创建 revision-aware Decision Bundle；功能 Agent 只能回写自身 subgate result/evidence，不能把 bundle approval 解释为 commit/push/runtime 授权。
 - `review-artifact-protocol`、`release-readiness` 和质量类 Skill 只输出 findings / release / evidence 摘要和引用。
 
 ## Acceptance

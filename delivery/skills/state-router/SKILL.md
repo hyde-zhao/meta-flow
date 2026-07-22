@@ -269,7 +269,7 @@ CP2 升级为 required 的触发条件包括：`cr_type` 为 `product-scope` / `
 
 当用户询问“当前状态”“还有哪些 CR 需要推进”“建议如何推进”“待跟踪 CR”等问题时，state-router 不得只返回 `STATE.current.json.active_change` 或唯一 `status=active` 的正式 CR；必须生成 CR 盘点视图：
 
-1. 读取 `process/state/STATE.current.json.active_change`、`process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson`、全部 `process/changes/CR-*.md` 正式 CR 和全部 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md` 台账；`process/changes/CR-INDEX.yaml` 若存在，只能作为 legacy read-only fallback 并应列为迁移警告。
+1. 读取 `process/state/STATE.current.json.active_change`、`process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson`、全部 `process/changes/CR-*.md` 正式 CR 和全部 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md` 台账；native index 必须先通过 schema、数值 CR 顺序和 semantic digest 校验。`process/changes/CR-INDEX.yaml` 若存在，只能作为 legacy read-only fallback 并应列为迁移警告。
 2. 若存在 `meta-flow check cr-tracking`，运行或要求运行该脚本检查 `--project-root .`；若无法运行，必须在回答中说明跳过原因。
 3. 输出必须固定分为五类：`active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate`、`stale_status_conflicts`。
 4. `candidate` / `spike_candidate` 是 backlog，不占执行锁，但必须在“还有哪些 CR 需要推进”回答中列出标题、优先级、阻塞前置、下一步和不授权边界。
@@ -290,7 +290,7 @@ CP2 升级为 required 的触发条件包括：`cr_type` 为 `product-scope` / `
 1. 读取台账路径、候选编号、`STATE.current.json.active_change`、`process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson` 和所有未关闭 `process/changes/CR-*.md`；`CR-INDEX.yaml` 若存在，只能作为 legacy read-only fallback。
 2. `candidate` / `spike_candidate` 不占执行锁；`active` / `blocked` 的正式 CR 视为未完成。
 3. 比较受影响正式文档、Story / LLD 批次、文件 owner、外部接口、权限 / 安全边界、运行授权、风险接受项和来源决策 ID。
-4. 若无重叠，允许创建正式 CR，并把台账状态、`CR-INDEX.json` 和 `CR-LEDGER.ndjson` 改为 `active`。
+4. 若无重叠，允许创建正式 CR；台账状态单独改为 `active`，native index 只能通过 `meta-flow cr index`/`status-sync` 从 formal CR 重建，禁止直接编辑 index item。
 5. 若存在重叠，返回 `blocked` 下一步，不得静默并行推进；host-orchestrator 必须发起人工决策，选项包括合并到现有 CR、保持候选等待、标记 `blocked`、拆分无冲突子集或 `superseded`。
 
 ### 4. 回写状态
@@ -299,6 +299,8 @@ CP2 升级为 required 的触发条件包括：`cr_type` 为 `product-scope` / `
 2. 推进或回退时追加 `history` 记录。
 3. 同步 `checkpoints.<cp_id>.status`、`last_result`、`auto_result`、`manual_review` 或滚动 `results[]`。
 4. 查询状态时不改变业务内容，但允许刷新 `next_action`。
+
+native CR 的 lifecycle/readiness/gate tuple 变化不得逐文件手写。state-router 必须先调用 `meta-flow cr status-sync` 生成零 mutation 计划；只有 plan=READY、expected process OID、Work scope digest 和所有 target before digest 未漂移且存在本轮 apply 授权，才可执行 apply。异常后先 inspect，再显式 resume/rollback；`RECOVERED`、`PARTIAL` 和 `BLOCKED` 都停止后续阶段。
 
 ### 4.1 检查点结果同步
 

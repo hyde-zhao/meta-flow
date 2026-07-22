@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 from meta_flow.checks import cr_tracking
 from meta_flow.state import current
+from meta_flow.workflow import cr_lifecycle
 
 
 def _write(path: Path, text: str) -> None:
@@ -16,11 +18,13 @@ def _formal_cr(root: Path, cr_id: str, *, lifecycle: str = "active", status: str
     _write(
         root / "process" / "changes" / f"{cr_id}.md",
         f'''---
+schema_version: 1
+kind: cr
 cr_id: "{cr_id}"
 title: "truth fixture"
 cr_kind: "requirement-change"
 lifecycle_status: "{lifecycle}"
-readiness_status: "ready"
+readiness_status: "NOT_READY"
 gate_status: "implementation_in_progress"
 gate_profile: "standard"
 status: "{status}"
@@ -98,7 +102,7 @@ def test_active_change_must_exist_in_canonical_json_index(tmp_path: Path) -> Non
 def test_current_projection_detects_state_drift(tmp_path: Path) -> None:
     _write(
         tmp_path / "process" / "changes" / "CR-INDEX.json",
-        '{"schema_version": 1, "items": []}\n',
+        json.dumps(cr_lifecycle.build_index(tmp_path)) + "\n",
     )
     state = current.default_current_state(tmp_path, project_id="demo")
     state["active_change"] = "CR-047"
@@ -120,9 +124,54 @@ def test_current_projection_detects_state_drift(tmp_path: Path) -> None:
 def test_current_projection_passes_after_refresh(tmp_path: Path) -> None:
     _write(
         tmp_path / "process" / "changes" / "CR-INDEX.json",
-        '{"schema_version": 1, "items": []}\n',
+        json.dumps(cr_lifecycle.build_index(tmp_path)) + "\n",
     )
     current.write_current_state(tmp_path, current.default_current_state(tmp_path, project_id="demo"))
     current.refresh_current_entry(tmp_path)
 
     assert current.validate_current_projection(tmp_path) == []
+
+
+def test_cr_index_semantic_digest_drift_is_not_accepted_as_projection_truth(tmp_path: Path) -> None:
+    payload = cr_lifecycle.build_index(tmp_path)
+    payload["semantic_digest"] = "0" * 64
+    path = tmp_path / "process/changes/CR-INDEX.json"
+    _write(path, json.dumps(payload) + "\n")
+
+    assert "CR-INDEX.json semantic_digest mismatch" in cr_tracking.validate_cr_index_projection(path)
+
+
+def test_self_consistent_stale_index_is_blocked_against_formal_truth(tmp_path: Path) -> None:
+    _formal_cr(tmp_path, "CR-053")
+    expected = cr_lifecycle.build_index(tmp_path)
+    stale = json.loads(json.dumps(expected))
+    stale["items"][0]["title"] = "stale but internally self-consistent"
+    semantic = json.dumps(
+        {"schema_version": stale["schema_version"], "items": stale["items"]},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    stale["semantic_digest"] = hashlib.sha256(semantic.encode("utf-8")).hexdigest()
+    path = tmp_path / "process/changes/CR-INDEX.json"
+    _write(path, json.dumps(stale) + "\n")
+
+    projection_errors = cr_tracking.validate_cr_index_projection(
+        path,
+        expected_semantic_digest=expected["semantic_digest"],
+    )
+    ordinary = cr_lifecycle.plan_index(tmp_path)
+    explicit = cr_lifecycle.plan_index(tmp_path, rebuild_corrupt=True)
+    status_sync = cr_lifecycle.plan_status_sync(
+        tmp_path,
+        "CR-053",
+        status="blocked",
+    )
+
+    assert "CR-INDEX.json stale projection differs from formal truth rebuild digest" in projection_errors
+    assert ordinary["decision"] == "BLOCKED"
+    assert ordinary["mutation_count"] == 0
+    assert explicit["decision"] == "READY"
+    assert explicit["action"] == "rebuild"
+    assert status_sync.decision == "BLOCKED"
+    assert "formal truth rebuild digest" in status_sync.reason

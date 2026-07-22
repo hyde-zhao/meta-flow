@@ -77,6 +77,33 @@ meta-flow work resume --project-root . --work-id W-001
 
 读取、写入和检查都必须同时满足 risk、`WORK.yaml.scope` 与 budget。token 只能标为 `measured`、`proxy` 或 `unavailable`；unavailable 不等于 0。默认项目查询最多读取 5 个直接引用对象，不扫描 sibling 项目或全历史。
 
+### 0.1 Native CR 状态与可重建索引
+
+vNext 正式 CR 的真相是 `PROJECT.yaml`、当前 `WORK.yaml` 和 `process/changes/CR-*.md`。`process/changes/CR-INDEX.json` 是可删除重建的派生索引，只扫描 native formal CR、按数值 CR ID 排序，并用 `semantic_digest` 覆盖 `schema_version + items`；它不会读取旧 index items、summary 正文、ledger 或 legacy 仓来补字段。旧仓和 `CR-INDEX.yaml` 只读，不复制、不修改、不重新生成。
+
+```bash
+# index 默认 dry-run；apply 必须绑定当前 process HEAD
+meta-flow cr index --project-root .
+meta-flow cr index --project-root . --apply --expected-process-oid <oid>
+# 只有损坏 index 的显式恢复才增加 --rebuild
+meta-flow cr index --project-root . --rebuild --apply --expected-process-oid <oid>
+
+# 状态更新先生成计划，再使用完全相同的目标与 expected OID apply
+meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK \
+  --gate-status cp8_closed --work-id CR-101 --project-root .
+meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK \
+  --gate-status cp8_closed --work-id CR-101 --project-root . \
+  --apply --expected-process-oid <oid>
+```
+
+`status-sync` 会在 process Git common dir 的私有 Meta Flow 区准备 transaction manifest、全部目标的 before/after digest、不可变恢复载荷和逐步 receipt；确认目标未漂移后逐文件原子替换，并最后写 CR-INDEX。发现未解决事务时新 sync 必须 BLOCKED：先运行 `meta-flow cr status-sync-inspect --project-root .`，再对明确 transaction ID 执行 `status-sync-resume` 或 `status-sync-rollback`。`RECOVERED` 表示发生过替换但已恢复，`PARTIAL` 表示恢复不完整；二者都不是 PASS。
+
+### 0.2 合并确认与 exact Git scope
+
+连续的本地实现、验证、交付子门可以冻结为一个 Decision Bundle revision，从而只向用户请求一次确认。确认只覆盖该 revision 中列出的 exact subgate、OID/branch/dirty facts、scope digest、授权与不授权项；每个 subgate 仍须分别检查、分别写 evidence/result，任一 `failed|blocked` 后不得启动后续门。facts、scope 或授权变化时必须建立新 revision 并重新确认。
+
+冻结 changed paths 前运行 `meta-flow work git-inventory`，将候选路径唯一归入八类：`tracked_regular`、`tracked_symlink`、`prospective_untracked`、`ignored_generated`、`missing`、`submodule`、`outside_repo`、`duplicate`。只有 regular/prospective 是 mutation；symlink/missing/ignored 只验证，submodule/outside/duplicate 阻断。提交前 release/process 两仓分别检查 staged symmetric difference=0，不能用聚合结果代替，也不能用 `git add -f` 强行暂存 ignored 或 symlink alias。
+
 两仓提交/推送彼此独立：
 
 ```bash

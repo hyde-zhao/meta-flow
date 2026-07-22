@@ -104,6 +104,8 @@ Meta Flow 的交互路径分两类：
 
 人工门禁发起消息必须同时合规：包含 checklist 路径、自动预检结论、Context Capsule 摘要、审批者摘要、决策分层、决策收集覆盖摘要、待决策项数量、待决策表格或压缩后的 blocking / high-risk 决策摘要和三个 exact 回复。checkpoint 文件中的 Decision Brief 必须完整；对话可按 `decision_brief_profile=full|compact|summary` 压缩，但不能省略整体目标、`approve` 后果、不授权边界和阻塞影响。低风险、可回退、实现细节类事项默认归入 agent 默认处理或仅审计记录，不进入用户主确认表。真实运行、凭据、安全、外部接口、数据写入、publish、live / 交易类事项必须作为不授权项单独列出；`approve` 不代表授权这些操作。CP8 必须输出 follow-up tracking 分流：关闭范围、不授权范围、风险接受项、后续 CR 候选项、取消 / deferred 项。后续 CR 候选只进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md` 台账，用户决定推进某项时才创建正式 CR。
 
+需要减少连续人工轮次时，可以把已经冻结的多个子门合并为一个 Decision Bundle revision 请求一次确认。合并的是确认轮次，不是检查、证据或失败边界：revision 必须绑定 exact subgate IDs、OID/branch/dirty facts、scope digest、授权快照和不授权项；每个子门仍分别记录 precondition/result/evidence，任一 `failed|blocked` 必须停止后续子门。OID、scope 或授权含义变化时创建新 revision 并重新确认，不能复用旧确认。
+
 阶段任务、检查点、Story 实现 / 验证或 CR 收敛完成后，Host Orchestrator 必须给出可直接复制的“下一步准确提示词”，例如 `approve`、`修改: <具体修改点>`、`reject`、`执行下一步: <具体动作>` 或 `处理阻塞: <具体处理方式>`；不得只提示用户回复“同意”“继续”“可以”。`meta-flow next` 遵守同一输出规则。
 
 Codex 平台没有 Claude Code frontmatter `tools: AskUserQuestion` 的同构 agent 字段。Host Orchestrator 在当前 Codex 工具面明确提供 `request_user_input` 时，可用 `meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --format codex-json` 生成结构化提问负载；不可用时发送命令输出中的 exact-text fallback。生成或维护发起消息后，仍必须用 `meta-flow check human-gate --checkpoint <path> --launch-message-file <message>` 校验。
@@ -112,11 +114,16 @@ Codex 平台没有 Claude Code frontmatter `tools: AskUserQuestion` 的同构 ag
 
 状态查询必须列出 `active formal CR`、`blocked formal CR`、`follow-up candidate`、`spike_candidate` 和 `stale_status_conflicts`，不能只返回唯一 active CR。若目标项目存在 `meta-flow check cr-tracking`，host-orchestrator 在状态盘点、候选 CR 启动、CR 关闭和 CP8 follow-up 分流后运行或记录跳过原因；该脚本会检查 `STATE.current.json.active_change`、正式 CR、follow-up 台账和 `CR-INDEX.json` 的一致性，并默认阻断 legacy YAML。
 
-CR lifecycle 的机器入口是 `process/changes/CR-INDEX.json`、`process/changes/summaries/CR-*.summary.json`、`process/state/CR-LEDGER.ndjson` 和 `process/state/CHECKPOINT-LEDGER.ndjson`。完整 `process/changes/CR-*.md` 只在人工审计、冲突排查、深度评审或用户明确要求时展开。常用命令：
+CR lifecycle 的机器入口是 native formal `process/changes/CR-*.md` 及其派生的 `process/changes/CR-INDEX.json`、`process/changes/summaries/CR-*.summary.json`、`process/state/CR-LEDGER.ndjson` 和 `process/state/CHECKPOINT-LEDGER.ndjson`。CR-INDEX 是只从 native formal CR 重建的纯投影，不读取旧 index items、summary 正文、ledger 或 legacy 仓；legacy index 只读且不进入 native 投影。完整 CR 正文只在人工审计、冲突排查、深度评审或用户明确要求时展开。常用命令：
 
 ```bash
 meta-flow cr summary --id CR-101 --project-root .
 meta-flow cr index --project-root .
+meta-flow cr index --project-root . --apply --expected-process-oid <oid>
+meta-flow cr index --project-root . --rebuild --apply --expected-process-oid <oid>
+meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --work-id CR-101 --project-root .
+meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --work-id CR-101 --project-root . --apply --expected-process-oid <oid>
+meta-flow cr status-sync-inspect --project-root .
 meta-flow cr brief --id CR-101 --project-root .
 meta-flow cr brief --id CR-101 --mode enforce --project-root .
 meta-flow cr impact-report --project-root .
@@ -124,6 +131,10 @@ meta-flow cr impact-report --mode enforce --project-root .
 meta-flow cr check --project-root .
 meta-flow cr conflicts --id CR-101 --project-root .
 ```
+
+`status-sync` 默认只规划；apply 前复核 exact process OID、Work scope digest、两仓/分支/dirty facts 和每个目标 before digest。事务先验证全部恢复载荷，再逐对象原子 replace、逐步写 receipt，CR-INDEX 最后写；异常后先 inspect，再显式 resume/rollback。`BLOCKED` 表示零 mutation，`RECOVERED` 表示发生过替换但已恢复，`PARTIAL` 表示恢复不完整；所有非 PASS 结果都不得推进后续交付子门。
+
+范围冻结前运行 `meta-flow work git-inventory`，把候选路径唯一归入 `tracked_regular|tracked_symlink|prospective_untracked|ignored_generated|missing|submodule|outside_repo|duplicate`。只有 regular/prospective 进入 mutation；symlink/missing/ignored 只验证，submodule/outside/duplicate 阻断。每个仓、每个 commit 子门分别校验 staged symmetric difference=0，不能用聚合结果替代，也不能使用 `git add -f`。
 
 新 CR 应优先写结构化影响面字段：`impact_capability_refs`、`impact_feature_refs`、`impact_module_paths`、`impact_policy_refs`、`impact_process_refs`、`impact_runtime_refs`、`impact_data_refs`。旧 `impact_surface` 兼容读取，但迁移报告必须暴露无法分类的 `uncategorized_legacy`，并把需要人工分类的条目变成 follow-up candidate 或显式风险。项目可用 `process/project/IMPACT-SURFACE-RULES.yaml` 配置 legacy impact 分类规则；配置修改后必须重新运行 impact report、CR lifecycle check 和相关测试。
 

@@ -11,6 +11,21 @@ from meta_flow.policies import authz, gate_profiles
 
 
 class GateProfileTests(unittest.TestCase):
+    def test_native_status_registry_accepts_canonical_closed_tuple(self) -> None:
+        self.assertEqual(
+            [],
+            cr_tracking.validate_native_status_tuple("closed", "READY_WITH_RISK", "cp8_closed"),
+        )
+
+    def test_native_status_registry_rejects_terminal_reactivation(self) -> None:
+        errors = cr_tracking.validate_native_transition(
+            ("closed", "READY_WITH_RISK", "cp8_closed"),
+            ("active", "NOT_READY", "cp2_pending"),
+            historical_migration=True,
+        )
+
+        self.assertEqual(["historical migration must not reactivate a terminal CR"], errors)
+
     def test_docs_only_classifies_as_docs_lite(self) -> None:
         result = gate_profiles.classify_gate_profile(["README.md", "docs/usage.md"], [])
 

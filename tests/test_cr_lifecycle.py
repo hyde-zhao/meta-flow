@@ -56,12 +56,14 @@ def write_cr(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"""---
+schema_version: 1
+kind: cr
 cr_id: "{cr_id}"
 cr_type: "architecture"
 title: "{cr_id} title"
 lifecycle_status: "{status}"
-readiness_status: "not_ready"
-gate_status: "cp6_pending"
+readiness_status: "NOT_READY"
+gate_status: "cp8_pending"
 gate_profile: "standard"
 conflict_keys: [{conflict_keys}]
 impact_surface: [{impact_surface}]
@@ -160,6 +162,20 @@ def write_impact_rules(root: Path, rules: list[dict]) -> Path:
 
 
 class CRLifecycleTests(unittest.TestCase):
+    def test_atomic_write_preserves_existing_mode_and_defaults_new_files_to_0644(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "existing.json"
+            created = root / "created.json"
+            existing.write_text("before\n", encoding="utf-8")
+            existing.chmod(0o640)
+
+            cr_lifecycle._atomic_write_text(existing, "after\n")
+            cr_lifecycle._atomic_write_text(created, "created\n")
+
+            self.assertEqual(0o640, existing.stat().st_mode & 0o777)
+            self.assertEqual(0o644, created.stat().st_mode & 0o777)
+
     def test_binding_only_index_and_summary_write_to_process_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             release, process = init_binding_project(Path(directory))
@@ -176,7 +192,37 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual(process / "changes" / "CR-INDEX.json", index_path)
             self.assertFalse((release / "process").exists())
 
-    def test_index_rebuild_preserves_non_formal_candidate_rows(self) -> None:
+    def test_binding_only_status_sync_check_resolves_summary_and_preserves_worktree_modes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_binding_project(Path(directory))
+            cr_path = write_cr(release, "CR-055")
+            cr_path.chmod(0o644)
+            plan = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-055",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="cp8_closed",
+            )
+
+            result = cr_lifecycle.apply_status_sync(release, plan)
+
+            self.assertEqual("PASS", result["status"])
+            self.assertEqual([], cr_lifecycle.collect_check_errors(release))
+            self.assertFalse((release / "process").exists())
+            expected_refs = (
+                process / "changes" / "CR-055.md",
+                process / "changes" / "CR-INDEX.json",
+                process / "changes" / "summaries" / "CR-055.summary.json",
+                process / "archive" / "CR-055" / "evidence-index.json",
+                process / "state" / "CR-LEDGER.ndjson",
+            )
+            self.assertTrue(all(path.is_file() for path in expected_refs))
+            self.assertTrue(all(path.stat().st_mode & 0o777 == 0o644 for path in expected_refs))
+
+    def test_index_rebuild_does_not_preserve_non_formal_candidate_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_cr(root, "CR-047")
@@ -204,13 +250,12 @@ class CRLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            cr_lifecycle.write_index(root)
+            cr_lifecycle.write_index(root, rebuild_corrupt=True)
 
             rebuilt = json.loads(index_path.read_text(encoding="utf-8"))
             by_id = {item["id"]: item for item in rebuilt["items"]}
-            self.assertEqual({"CR-033", "CR-047"}, set(by_id))
-            self.assertEqual("candidate", by_id["CR-033"]["lifecycle_status"])
-            self.assertEqual("", by_id["CR-033"]["formal_cr_path"])
+            self.assertEqual({"CR-047"}, set(by_id))
+            self.assertNotIn("CR-033", by_id)
 
     def test_bootstrap_cr_writes_active_cr_cp0_context_and_state_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -288,7 +333,7 @@ class CRLifecycleTests(unittest.TestCase):
                 extra_frontmatter='goal_ref: "GOAL-001"\ngoal_statement: "建立目标导向 CR 汇总"\napproval_focus: "确认目标包而不是细任务"\ndecision_burden: "medium"\nsplit_rationale: "需要独立审计"\napprove_effect: "进入实现"\nnot_authorized_by_approve: ["runtime", "publish"]\nproduct_baseline_refresh_required: true\nrequired_phase: "requirement-clarification"\nrequired_agent: "meta-pm"\nrequired_gate: "CP2"\nblock_story_decomposition_until: "CP2-approved"\naffected_product_docs: ["docs/product/USE-CASES.md", "docs/product/REQUIREMENTS.md"]\naffected_use_cases: ["UC-08"]\nrouting_design_ref: "process/USE-CASES.md#UC-08"',
             )
 
-            self.assertEqual(0, cr_lifecycle.main(["index", "--project-root", str(root)]))
+            self.assertEqual(0, cr_lifecycle.main(["index", "--project-root", str(root), "--apply"]))
             self.assertEqual(0, cr_lifecycle.main(["summary", "--id", "CR-101", "--project-root", str(root)]))
 
             index = json.loads((root / "process" / "changes" / "CR-INDEX.json").read_text(encoding="utf-8"))
@@ -307,7 +352,7 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual(["UC-08"], index["items"][0]["affected_use_cases"])
             self.assertEqual("process/USE-CASES.md#UC-08", index["items"][0]["routing_design_ref"])
             self.assertEqual("active", index["items"][0]["lifecycle_status"])
-            self.assertEqual("not_ready", index["items"][0]["readiness_status"])
+            self.assertEqual("NOT_READY", index["items"][0]["readiness_status"])
             self.assertEqual("process/changes/CR-101.md", index["items"][0]["formal_cr_path"])
             summary = json.loads(
                 (root / "process" / "changes" / "summaries" / "CR-101.summary.json").read_text(encoding="utf-8")
@@ -316,7 +361,7 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual("architecture", summary["cr_type"])
             self.assertEqual("process/changes/CR-101.md", summary["full_ref"])
             self.assertEqual("建立目标导向 CR 汇总", summary["goal_statement"])
-            self.assertEqual("cp6_pending", summary["gate_status"])
+            self.assertEqual("cp8_pending", summary["gate_status"])
             self.assertEqual("确认目标包而不是细任务", summary["approval_focus"])
             self.assertEqual("需要独立审计", summary["split_rationale"])
             self.assertEqual(["runtime", "publish"], summary["not_authorized_by_approve"])
@@ -591,7 +636,7 @@ class CRLifecycleTests(unittest.TestCase):
                 ),
             )
 
-            self.assertEqual(0, cr_lifecycle.main(["index", "--project-root", str(root)]))
+            self.assertEqual(0, cr_lifecycle.main(["index", "--project-root", str(root), "--apply"]))
             self.assertEqual(0, cr_lifecycle.main(["summary", "--id", "CR-201", "--project-root", str(root)]))
 
             index = json.loads((root / "process" / "changes" / "CR-INDEX.json").read_text(encoding="utf-8"))
@@ -708,7 +753,12 @@ class CRLifecycleTests(unittest.TestCase):
             root = Path(directory)
             write_cr(root, "CR-101", status="active")
 
-            paths = cr_lifecycle.sync_cr_status(root, "CR-101", status="closed")
+            paths = cr_lifecycle.sync_cr_status(
+                root,
+                "CR-101",
+                status="closed",
+                readiness="READY",
+            )
 
             text = (root / "process/changes/CR-101.md").read_text(encoding="utf-8")
             self.assertIn('gate_status: "cp8_closed"', text)
@@ -723,6 +773,244 @@ class CRLifecycleTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "status=closed requires gate_status=cp8_closed"):
                 cr_lifecycle.sync_cr_status(root, "CR-101", status="closed", gate_status="cp8_approved")
+
+    def test_status_sync_cli_defaults_to_zero_mutation_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cr_path = write_cr(root, "CR-101", status="active")
+            before = cr_path.read_text(encoding="utf-8")
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cr_lifecycle.main(
+                    [
+                        "status-sync",
+                        "--id",
+                        "CR-101",
+                        "--status",
+                        "closed",
+                        "--readiness",
+                        "READY",
+                        "--project-root",
+                        str(root),
+                    ]
+                )
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual(before, cr_path.read_text(encoding="utf-8"))
+            self.assertFalse((root / "process/changes/CR-INDEX.json").exists())
+            self.assertEqual("READY", json.loads(output.getvalue())["decision"])
+
+    def test_status_sync_fault_points_recover_before_index_is_written(self) -> None:
+        fault_expectations = {
+            "before-first-replace": "BLOCKED",
+            "after-replace-before-receipt": "RECOVERED",
+            "after-receipt-before-next": "RECOVERED",
+            "after-truth-before-derived": "RECOVERED",
+            "before-index-last": "RECOVERED",
+            "during-read-back": "RECOVERED",
+        }
+        for fault, expected in fault_expectations.items():
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                cr_path = write_cr(root, "CR-101", status="active")
+                before = cr_path.read_text(encoding="utf-8")
+                plan = cr_lifecycle.plan_status_sync(
+                    root,
+                    "CR-101",
+                    status="closed",
+                    readiness="READY_WITH_RISK",
+                )
+
+                result = cr_lifecycle.apply_status_sync(root, plan, _fault=fault)
+
+                self.assertEqual(expected, result["status"])
+                self.assertEqual(before, cr_path.read_text(encoding="utf-8"))
+                self.assertFalse((root / "process/changes/CR-INDEX.json").exists())
+
+    def test_status_sync_partial_is_queryable_and_explicit_rollback_recovers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cr_path = write_cr(root, "CR-101", status="active")
+            before = cr_path.read_text(encoding="utf-8")
+            plan = cr_lifecycle.plan_status_sync(
+                root,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+            )
+
+            partial = cr_lifecycle.apply_status_sync(
+                root,
+                plan,
+                _fault="after-receipt-before-next",
+                _fail_recovery=True,
+            )
+            inspected = cr_lifecycle.inspect_status_sync_transactions(root)
+            recovered = cr_lifecycle.recover_status_sync_transaction(
+                root,
+                partial["transaction_id"],
+                action="rollback",
+            )
+
+            self.assertEqual("PARTIAL", partial["status"])
+            self.assertEqual(1, inspected["transaction_count"])
+            self.assertEqual("RECOVERED", recovered["status"])
+            self.assertEqual(before, cr_path.read_text(encoding="utf-8"))
+            self.assertEqual(0, cr_lifecycle.inspect_status_sync_transactions(root)["transaction_count"])
+
+    def test_status_sync_recovery_blocks_competing_writer_and_releases_only_its_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-101", status="active")
+            plan = cr_lifecycle.plan_status_sync(
+                root,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+            )
+            partial = cr_lifecycle.apply_status_sync(
+                root,
+                plan,
+                _fault="after-receipt-before-next",
+                _fail_recovery=True,
+            )
+            owner = cr_lifecycle._acquire_status_sync_writer_lock(
+                root,
+                transaction_id=partial["transaction_id"],
+                purpose="recovery:test-contender",
+            )
+            self.assertIsNotNone(owner)
+            assert owner is not None
+            lock_path = cr_lifecycle._status_sync_writer_lock_path(root)
+            persisted = json.loads(lock_path.read_text(encoding="utf-8"))
+
+            blocked = cr_lifecycle.recover_status_sync_transaction(
+                root,
+                partial["transaction_id"],
+                action="rollback",
+            )
+            wrong_owner = dict(owner)
+            wrong_owner["owner_token"] = "0" * 32
+
+            self.assertEqual("BLOCKED", blocked["status"])
+            self.assertIn("writer lock", blocked["reason"])
+            self.assertFalse(cr_lifecycle._release_status_sync_writer_lock(root, wrong_owner))
+            self.assertTrue(lock_path.is_file())
+            self.assertEqual(
+                persisted["owner_token"],
+                json.loads(lock_path.read_text(encoding="utf-8"))["owner_token"],
+            )
+            self.assertTrue(cr_lifecycle._release_status_sync_writer_lock(root, owner))
+
+            recovered = cr_lifecycle.recover_status_sync_transaction(
+                root,
+                partial["transaction_id"],
+                action="rollback",
+            )
+            self.assertEqual("RECOVERED", recovered["status"])
+            self.assertFalse(lock_path.exists())
+
+    def test_status_sync_recovery_does_not_auto_remove_stale_owner_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-101", status="active")
+            plan = cr_lifecycle.plan_status_sync(
+                root,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+            )
+            partial = cr_lifecycle.apply_status_sync(
+                root,
+                plan,
+                _fault="after-receipt-before-next",
+                _fail_recovery=True,
+            )
+            owner = cr_lifecycle._acquire_status_sync_writer_lock(
+                root,
+                transaction_id=partial["transaction_id"],
+                purpose="recovery:stale-fixture",
+            )
+            assert owner is not None
+            lock_path = cr_lifecycle._status_sync_writer_lock_path(root)
+            stale = json.loads(lock_path.read_text(encoding="utf-8"))
+            stale["acquired_at"] = "1970-01-01T00:00:00+00:00"
+            lock_path.write_text(json.dumps(stale) + "\n", encoding="utf-8")
+
+            blocked = cr_lifecycle.recover_status_sync_transaction(
+                root,
+                partial["transaction_id"],
+                action="resume",
+            )
+
+            self.assertEqual("BLOCKED", blocked["status"])
+            self.assertTrue(lock_path.is_file())
+            self.assertTrue(cr_lifecycle._release_status_sync_writer_lock(root, owner))
+
+    def test_index_default_is_dry_run_and_semantic_digest_excludes_generated_at(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-101")
+            first = cr_lifecycle.build_index(root)
+            second = cr_lifecycle.build_index(root)
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = cr_lifecycle.main(["index", "--project-root", str(root)])
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual(first["semantic_digest"], second["semantic_digest"])
+            self.assertFalse((root / "process/changes/CR-INDEX.json").exists())
+            self.assertEqual(1, json.loads(output.getvalue())["mutation_count"])
+
+    def test_corrupt_index_requires_explicit_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-101")
+            index_path = root / "process/changes/CR-INDEX.json"
+            index_path.write_text("{not-json\n", encoding="utf-8")
+
+            blocked = cr_lifecycle.plan_index(root)
+            rebuilt = cr_lifecycle.write_index(root, rebuild_corrupt=True)
+
+            self.assertEqual("BLOCKED", blocked["decision"])
+            self.assertEqual([], cr_lifecycle.validate_index_payload(json.loads(rebuilt.read_text(encoding="utf-8"))))
+
+    def test_index_builder_rejects_non_native_and_legacy_boundary_contamination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy_source = root / "process/legacy/LEGACY-SOURCE.yaml"
+            legacy_source.parent.mkdir(parents=True, exist_ok=True)
+            legacy_source.write_text(
+                "schema_version: 1\nnative_cr_minimum: CR-053\n",
+                encoding="utf-8",
+            )
+            write_cr(root, "CR-052")
+
+            blocked = cr_lifecycle.plan_index(root)
+
+            self.assertEqual("BLOCKED", blocked["decision"])
+            self.assertEqual(0, blocked["mutation_count"])
+            self.assertIn("native_cr_minimum=CR-053", blocked["reason"])
+            self.assertFalse((root / "process/changes/CR-INDEX.json").exists())
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-053")
+            contaminated = root / "process/changes/CR-054.md"
+            contaminated.write_text(
+                "---\ncr_id: CR-054\ntitle: non-native\n---\n",
+                encoding="utf-8",
+            )
+
+            blocked = cr_lifecycle.plan_index(root)
+
+            self.assertEqual("BLOCKED", blocked["decision"])
+            self.assertIn("schema_version=1", blocked["reason"])
+            self.assertIn("kind=cr", blocked["reason"])
+            with self.assertRaisesRegex(ValueError, "non-native formal CR contamination"):
+                cr_lifecycle.build_index(root)
 
     def test_cr_help_uses_canonical_closed_gate_status(self) -> None:
         output = StringIO()

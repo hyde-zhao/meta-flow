@@ -91,6 +91,21 @@ class ScopeDecision:
         return self.decision == "ALLOW"
 
 
+def exact_scope_difference(declared: tuple[str, ...], observed: tuple[str, ...]) -> dict[str, object]:
+    """Compare two exact scope sets without allowing glob or prefix expansion."""
+
+    declared_set = set(declared)
+    observed_set = set(observed)
+    missing = sorted(declared_set - observed_set)
+    unexpected = sorted(observed_set - declared_set)
+    return {
+        "missing": missing,
+        "unexpected": unexpected,
+        "symmetric_difference_count": len(missing) + len(unexpected),
+        "decision": "PASS" if not missing and not unexpected else "BLOCKED",
+    }
+
+
 def check_scope(scope: WorkScope, operation: str, requested: str) -> ScopeDecision:
     if operation == "read":
         normalized = _normalize_requested_path(requested)

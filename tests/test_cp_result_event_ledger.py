@@ -79,6 +79,17 @@ def write_cp8_result(root: Path, payload: dict[str, object] | None = None) -> Pa
 
 
 class CPResultEventLedgerTests(unittest.TestCase):
+    def test_render_appended_event_is_pure_until_caller_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "process/state/GATE-LEDGER.ndjson"
+            rendered = event_ledger.render_appended_event(
+                path,
+                {"event_id": "E-1", "event_type": "subgate_passed", "gate": "B2", "status": "passed"},
+            )
+
+            self.assertFalse(path.exists())
+            self.assertEqual("subgate_passed", json.loads(rendered)["event_type"])
+
     def test_cp_result_check_passes_for_valid_cp6_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
