@@ -8,6 +8,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,20 @@ from meta_flow.project.model import (
     build_minimal_project,
     load_project,
     write_project_create_only,
+)
+from meta_flow.project.onboarding_contract import (
+    OnboardingAuthorization,
+    OnboardingContractError,
+    assert_expected_observations,
+    authorization_claim_path,
+    build_plan_envelope,
+    claim_authorization,
+    load_authorization,
+    observe_repository,
+    path_digest,
+    repository_descriptor,
+    validate_authorization,
+    write_transaction_manifest,
 )
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.workspace.git_sync import run_git
@@ -30,10 +45,7 @@ PROCESS_LINK_MODE_NONE = "none"
 PROCESS_LINK_MODE_RELATIVE_SYMLINK = "relative-symlink"
 ROUTE_MODE_SIBLING_BINDING = "sibling-binding"
 ROUTE_MODE_RELATIVE_SYMLINK = "relative-symlink"
-_PROCESS_LINK_MODES = {
-    PROCESS_LINK_MODE_NONE,
-    PROCESS_LINK_MODE_RELATIVE_SYMLINK,
-}
+_PROCESS_LINK_MODES = {PROCESS_LINK_MODE_NONE}
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -43,7 +55,9 @@ class ProjectInitRequest:
     project_id: str
     project_name: str
     process_repo_root: Path | None = None
+    source_process_root: Path | None = None
     process_link_mode: str = PROCESS_LINK_MODE_NONE
+    decision_ref: str = "decisions/project-init"
 
 
 @dataclass(frozen=True)
@@ -89,37 +103,28 @@ class ProjectInitPlan:
     process_repo_root: Path
     release_repo: RepositoryObservation
     process_repo: RepositoryObservation
+    source_repo: RepositoryObservation | None
     project: Project
+    source_project_bytes: bytes | None
+    source_project_digest: str
     binding_payload: dict[str, Any]
     process_metadata_payload: dict[str, Any]
     actions: tuple[InitAction, ...]
     conflicts: tuple[InitConflict, ...]
     plan_digest: str
+    envelope: dict[str, Any]
 
     @property
     def blocked(self) -> bool:
         return bool(self.conflicts)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
-            "decision": "BLOCKED" if self.blocked else "READY",
-            "project_id": self.request.project_id,
-            "project_name": self.request.project_name,
-            "project_root": str(self.project_root),
-            "process_repo_root": str(self.process_repo_root),
-            "process_link_mode": self.request.process_link_mode,
-            "release_repo": self.release_repo.as_dict(),
-            "process_repo": self.process_repo.as_dict(),
-            "actions": [action.__dict__ for action in self.actions],
-            "conflicts": [conflict.__dict__ for conflict in self.conflicts],
-            "plan_digest": self.plan_digest,
-            "mutation_count": 0,
-        }
+        return dict(self.envelope)
 
 
 @dataclass(frozen=True)
 class ProjectInitReceipt:
+    envelope: dict[str, Any]
     plan_digest: str
     decision: str
     created_paths: tuple[str, ...]
@@ -130,17 +135,7 @@ class ProjectInitReceipt:
     health_status: str
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
-            "plan_digest": self.plan_digest,
-            "decision": self.decision,
-            "created_paths": list(self.created_paths),
-            "release_oid_before": self.release_oid_before,
-            "process_oid_after": self.process_oid_after,
-            "mutation_count": self.mutation_count,
-            "recovery_route": self.recovery_route,
-            "health_status": self.health_status,
-        }
+        return dict(self.envelope)
 
 
 @dataclass(frozen=True)
@@ -312,6 +307,224 @@ def _digest_payload(payload: dict[str, Any]) -> str:
     return sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _portable_init_ref(
+    raw_path: str,
+    *,
+    project_root: Path,
+    process_root: Path,
+    fallback: str,
+) -> tuple[str, str]:
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        resolved = candidate.resolve(strict=False)
+        release = project_root.resolve(strict=False)
+        process = process_root.resolve(strict=False)
+        if resolved == release:
+            return "release", "release/repository"
+        if resolved == process:
+            return "process", "process/repository"
+        if resolved.is_relative_to(release):
+            return "release", f"release/{resolved.relative_to(release).as_posix()}"
+        if resolved.is_relative_to(process):
+            return "process", f"process/{resolved.relative_to(process).as_posix()}"
+    return "release", f"release/input/{fallback}"
+
+
+def _contract_init_actions(
+    actions: tuple[InitAction, ...],
+    *,
+    project_root: Path,
+    process_root: Path,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for offset, action in enumerate(actions, 1):
+        side, target_ref = _portable_init_ref(
+            action.path,
+            project_root=project_root,
+            process_root=process_root,
+            fallback=f"action-{offset:03d}",
+        )
+        if action.action == "git-init":
+            target_ref = f"{side}/.git"
+        result.append(
+            {
+                "action_id": f"INIT-{offset:03d}",
+                "side": side,
+                "kind": action.action,
+                "target_ref": target_ref,
+                "ownership": "project.init",
+                "precondition": "create-only-or-exact-match",
+                "expected_effect": action.reason,
+            }
+        )
+    return result
+
+
+def _contract_init_conflicts(
+    conflicts: tuple[InitConflict, ...],
+    *,
+    project_root: Path,
+    process_root: Path,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for offset, conflict in enumerate(conflicts, 1):
+        side, target_ref = _portable_init_ref(
+            conflict.path,
+            project_root=project_root,
+            process_root=process_root,
+            fallback=conflict.code or f"conflict-{offset:03d}",
+        )
+        result.append(
+            {
+                "code": conflict.code,
+                "side": side,
+                "target_ref": target_ref,
+                "message": conflict.message,
+                "recovery_action": "resolve-conflict-and-rebuild-plan",
+            }
+        )
+    return result
+
+
+def _rollback_plan(actions: list[dict[str, Any]]) -> dict[str, Any]:
+    mutating = [item["target_ref"] for item in actions if item["kind"] != "noop"]
+    return {
+        "strategy": "explicit-non-atomic-recovery",
+        "transaction_ref": "meta-flow/project-onboarding/transactions/authorization-id/manifest.json",
+        "release_actions": [item for item in mutating if item.startswith("release/")],
+        "process_actions": [item for item in mutating if item.startswith("process/")],
+        "resume_actions": mutating,
+        "cleanup_actions": [
+            item for item in mutating if not item.endswith("/.git") and not item.endswith("/repository")
+        ],
+        "manual_only_actions": [
+            item for item in mutating if item.endswith("/.git") or item.endswith("/repository")
+        ],
+    }
+
+
+def _build_init_envelope(
+    *,
+    request: ProjectInitRequest,
+    project_root: Path,
+    process_root: Path,
+    actions: tuple[InitAction, ...],
+    conflicts: tuple[InitConflict, ...],
+    source_repo: RepositoryObservation | None = None,
+    source_project_digest: str = "",
+    decision: str | None = None,
+) -> dict[str, Any]:
+    contract_actions = _contract_init_actions(
+        actions,
+        project_root=project_root,
+        process_root=process_root,
+    )
+    if source_repo is not None and source_project_digest:
+        for action in contract_actions:
+            if action["target_ref"] == "process/PROJECT.yaml":
+                action["source_ref"] = "source/PROJECT.yaml"
+                action["source_digest"] = source_project_digest
+    selected_decision = decision or (
+        "BLOCKED"
+        if conflicts
+        else "NOOP"
+        if all(action.action == "noop" for action in actions)
+        else "READY"
+    )
+    release_repo = repository_descriptor(
+        project_root,
+        role="release",
+        workspace_parent=project_root.parent,
+    )
+    try:
+        process_repo = repository_descriptor(
+            process_root,
+            role="process",
+            workspace_parent=project_root.parent,
+        )
+    except OnboardingContractError:
+        safe_name = process_root.name if _SAFE_ID_RE.fullmatch(process_root.name) else "invalid-process"
+        process_repo = {
+            "role": "process",
+            "anchor": "workspace_parent",
+            "relative_path": safe_name,
+            "observation": observe_repository(process_root),
+            "dirty": False,
+            "branch": "",
+            "common_dir_identity": "",
+        }
+    base_oids: dict[str, Any] = {
+        "release": release_repo["observation"],
+        "process": process_repo["observation"],
+    }
+    if source_repo is not None:
+        base_oids["source_snapshot"] = {
+            "state": "commit",
+            "oid": source_repo.head_oid.lower(),
+        }
+    return build_plan_envelope(
+        operation="project.init",
+        decision=selected_decision,
+        decision_ref=request.decision_ref,
+        project_id=request.project_id,
+        release_repo=release_repo,
+        process_repo=process_repo,
+        base_oids=base_oids,
+        actions=contract_actions,
+        conflicts=_contract_init_conflicts(
+            conflicts,
+            project_root=project_root,
+            process_root=process_root,
+        ),
+        rollback_plan=_rollback_plan(contract_actions),
+    )
+
+
+def _receipt_envelope(
+    plan: ProjectInitPlan,
+    *,
+    decision: str,
+    outcomes: dict[str, str],
+    error: str = "",
+) -> dict[str, Any]:
+    actions = []
+    for action in plan.envelope["actions"]:
+        item = dict(action)
+        item["outcome"] = outcomes.get(item["target_ref"], "unchanged")
+        actions.append(item)
+    conflicts = list(plan.envelope["conflicts"])
+    if error:
+        conflicts.append(
+            {
+                "code": "apply_failed",
+                "side": "release",
+                "target_ref": "release/transaction",
+                "message": error,
+                "recovery_action": "run-project-recover-inspect",
+            }
+        )
+    return build_plan_envelope(
+        operation="project.init",
+        decision=decision,
+        decision_ref=plan.request.decision_ref,
+        project_id=plan.request.project_id,
+        release_repo=repository_descriptor(
+            plan.project_root,
+            role="release",
+            workspace_parent=plan.project_root.parent,
+        ),
+        process_repo=repository_descriptor(
+            plan.process_repo_root,
+            role="process",
+            workspace_parent=plan.project_root.parent,
+        ),
+        base_oids=plan.envelope["base_oids"],
+        actions=actions,
+        conflicts=conflicts,
+        rollback_plan=plan.envelope["rollback_plan"],
+    )
+
+
 def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
     project_root = request.project_root.resolve()
     process_root = (
@@ -321,13 +534,18 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
     )
     actions: list[InitAction] = []
     conflicts: list[InitConflict] = []
+    source_root = request.source_process_root.resolve() if request.source_process_root is not None else None
+    source_repo: RepositoryObservation | None = None
+    source_project: Project | None = None
+    source_project_bytes: bytes | None = None
+    source_project_digest = ""
 
     if request.process_link_mode not in _PROCESS_LINK_MODES:
         conflicts.append(
             InitConflict(
                 "invalid_process_link_mode",
                 "process_link_mode",
-                "process_link_mode must be none or relative-symlink",
+                "project init accepts only none; relative-symlink is legacy-only",
             )
         )
     if not _SAFE_ID_RE.fullmatch(request.project_id):
@@ -344,6 +562,65 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
 
     release_repo = _observe_repo(project_root)
     process_repo = _observe_repo(process_root)
+    if source_root is not None:
+        source_repo = _observe_repo(source_root)
+        if not source_repo.is_git_repo or not source_repo.head_oid:
+            conflicts.append(
+                InitConflict(
+                    "source_not_committed_git_root",
+                    str(source_root),
+                    "source process must be an independent committed Git repository root",
+                )
+            )
+        else:
+            if source_repo.dirty:
+                conflicts.append(
+                    InitConflict(
+                        "source_dirty",
+                        str(source_root),
+                        "source process repository must be clean",
+                    )
+                )
+            if source_repo.git_common_dir in {
+                release_repo.git_common_dir,
+                process_repo.git_common_dir,
+            } - {None}:
+                conflicts.append(
+                    InitConflict(
+                        "source_shared_git_control",
+                        str(source_root),
+                        "source process must not share Git control with release or target process",
+                    )
+                )
+        source_project_path = source_root / PROJECT_FILE
+        if source_project_path.is_symlink() or not source_project_path.is_file():
+            conflicts.append(
+                InitConflict(
+                    "source_project_invalid",
+                    str(source_project_path),
+                    "source PROJECT.yaml must be one regular root-level file",
+                )
+            )
+        else:
+            try:
+                source_project_bytes = source_project_path.read_bytes()
+                source_project = load_project(source_root)
+            except (OSError, ValueError) as exc:
+                conflicts.append(InitConflict("source_project_invalid", str(source_project_path), str(exc)))
+                source_project_bytes = None
+            else:
+                source_project_digest = sha256(source_project_bytes).hexdigest()
+                if (
+                    source_project.project_id != request.project_id
+                    or source_project.name != request.project_name
+                ):
+                    conflicts.append(
+                        InitConflict(
+                            "source_project_identity_conflict",
+                            str(source_project_path),
+                            "source PROJECT.yaml identity differs from the init request",
+                        )
+                    )
     if not release_repo.exists:
         if not project_root.parent.is_dir():
             conflicts.append(
@@ -383,20 +660,29 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
     elif process_repo.branch and process_repo.branch != "main":
         conflicts.append(InitConflict("process_branch_conflict", str(process_root), "existing process repo must be on main"))
 
-    project = build_minimal_project(project_id=request.project_id, name=request.project_name)
+    project = source_project or build_minimal_project(project_id=request.project_id, name=request.project_name)
     project_path = process_root / PROJECT_FILE
     if project_path.exists() or project_path.is_symlink():
-        try:
-            existing = load_project(process_root)
-        except (OSError, ValueError) as exc:
-            conflicts.append(InitConflict("project_invalid", str(project_path), str(exc)))
-        else:
-            if existing.project_id != project.project_id or existing.name != project.name:
-                conflicts.append(InitConflict("project_identity_conflict", str(project_path), "existing PROJECT.yaml identity differs from request"))
+        if source_project_bytes is not None:
+            if project_path.is_symlink() or not project_path.is_file():
+                conflicts.append(InitConflict("project_seed_conflict", str(project_path), "target PROJECT.yaml is not a regular file"))
+            elif sha256(project_path.read_bytes()).hexdigest() != source_project_digest:
+                conflicts.append(InitConflict("project_seed_digest_conflict", str(project_path), "target PROJECT.yaml differs from the approved source snapshot seed"))
             else:
-                actions.append(InitAction("noop", str(project_path), "matching project identity already exists; preserve evolved governance fields"))
+                actions.append(InitAction("noop", str(project_path), "matching source PROJECT.yaml snapshot already exists"))
+        else:
+            try:
+                existing = load_project(process_root)
+            except (OSError, ValueError) as exc:
+                conflicts.append(InitConflict("project_invalid", str(project_path), str(exc)))
+            else:
+                if existing.project_id != project.project_id or existing.name != project.name:
+                    conflicts.append(InitConflict("project_identity_conflict", str(project_path), "existing PROJECT.yaml identity differs from request"))
+                else:
+                    actions.append(InitAction("noop", str(project_path), "matching project identity already exists; preserve evolved governance fields"))
     else:
-        actions.append(InitAction("create", str(project_path), "write minimal PROJECT.yaml"))
+        reason = "copy approved source PROJECT.yaml snapshot bytes" if source_project_bytes is not None else "write minimal PROJECT.yaml"
+        actions.append(InitAction("create", str(project_path), reason))
 
     try:
         route_mode = _route_mode_for_link_mode(request.process_link_mode)
@@ -428,7 +714,10 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
 
     link_path = project_root / PROCESS_LINK_REL
     link_text, actual_target = _link_target(link_path)
-    if request.process_link_mode == PROCESS_LINK_MODE_RELATIVE_SYMLINK:
+    if (
+        request.process_link_mode == PROCESS_LINK_MODE_RELATIVE_SYMLINK
+        and request.process_link_mode in _PROCESS_LINK_MODES
+    ):
         gitignore_path = project_root / ".gitignore"
         if _gitignore_has_process_entry(gitignore_path):
             actions.append(InitAction("noop", str(gitignore_path), "process link is already ignored"))
@@ -459,33 +748,33 @@ def plan_project_init(request: ProjectInitRequest) -> ProjectInitPlan:
             )
         )
 
-    digest_source = {
-        "schema_version": 1,
-        "project_id": request.project_id,
-        "project_name": request.project_name,
-        "project_root": str(project_root),
-        "process_repo_root": str(process_root),
-        "process_link_mode": request.process_link_mode,
-        "release_head_oid": release_repo.head_oid,
-        "process_head_oid": process_repo.head_oid,
-        "actions": [action.__dict__ for action in actions],
-        "conflicts": [conflict.__dict__ for conflict in conflicts],
-        "binding": binding,
-        "process_metadata": metadata,
-        "project": project.as_dict(),
-    }
+    frozen_actions = tuple(actions)
+    frozen_conflicts = tuple(conflicts)
+    envelope = _build_init_envelope(
+        request=request,
+        project_root=project_root,
+        process_root=process_root,
+        actions=frozen_actions,
+        conflicts=frozen_conflicts,
+        source_repo=source_repo if source_repo is not None and source_repo.head_oid else None,
+        source_project_digest=source_project_digest,
+    )
     return ProjectInitPlan(
         request=request,
         project_root=project_root,
         process_repo_root=process_root,
         release_repo=release_repo,
         process_repo=process_repo,
+        source_repo=source_repo,
         project=project,
+        source_project_bytes=source_project_bytes,
+        source_project_digest=source_project_digest,
         binding_payload=binding,
         process_metadata_payload=metadata,
-        actions=tuple(actions),
-        conflicts=tuple(conflicts),
-        plan_digest=_digest_payload(digest_source),
+        actions=frozen_actions,
+        conflicts=frozen_conflicts,
+        plan_digest=envelope["plan_digest"],
+        envelope=envelope,
     )
 
 
@@ -497,6 +786,14 @@ def _write_yaml_create_only(path: Path, payload: dict[str, Any]) -> None:
         stream.write(dump_yaml(payload) + "\n")
 
 
+def _write_bytes_create_only(path: Path, payload: bytes) -> None:
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(f"path already exists: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("xb") as stream:
+        stream.write(payload)
+
+
 def _append_process_ignore(path: Path) -> None:
     original = path.read_text(encoding="utf-8")
     separator = "" if not original or original.endswith("\n") else "\n"
@@ -504,98 +801,254 @@ def _append_process_ignore(path: Path) -> None:
         stream.write(f"{separator}/process\n")
 
 
-def apply_project_init(plan: ProjectInitPlan) -> ProjectInitReceipt:
+def apply_project_init(
+    plan: ProjectInitPlan,
+    authorization: OnboardingAuthorization | None = None,
+    *,
+    _authorization_claimed: bool = False,
+) -> ProjectInitReceipt:
     if plan.blocked:
         raise ValueError("project init plan is blocked: " + "; ".join(item.message for item in plan.conflicts))
     fresh = plan_project_init(plan.request)
     if fresh.plan_digest != plan.plan_digest:
         raise ValueError("project init plan is stale; rebuild dry-run plan before apply")
+    if plan.envelope["decision"] == "NOOP":
+        envelope = _receipt_envelope(plan, decision="NOOP", outcomes={})
+        return ProjectInitReceipt(
+            envelope=envelope,
+            plan_digest=plan.plan_digest,
+            decision="NOOP",
+            created_paths=(),
+            release_oid_before=plan.envelope["base_oids"]["release"]["oid"],
+            process_oid_after=observe_repository(plan.process_repo_root)["oid"],
+            mutation_count=0,
+            recovery_route="none",
+            health_status="healthy",
+        )
+    if authorization is None:
+        raise OnboardingContractError("project init apply requires typed authorization")
+    if (
+        not _authorization_claimed
+        and observe_repository(plan.project_root)["state"] != "absent"
+        and authorization_claim_path(plan.project_root, authorization.authorization_id).exists()
+    ):
+        raise OnboardingContractError("authorization was already consumed")
+    if not _authorization_claimed:
+        validate_authorization(plan.envelope, authorization)
+    assert_expected_observations(
+        plan=plan.envelope,
+        release_root=plan.project_root,
+        process_root=plan.process_repo_root,
+        source_root=plan.request.source_process_root,
+        stage="authorization-consume",
+    )
+    assert_expected_observations(
+        plan=plan.envelope,
+        release_root=plan.project_root,
+        process_root=plan.process_repo_root,
+        source_root=plan.request.source_process_root,
+        stage="apply-final",
+    )
+    if plan.source_project_bytes is not None:
+        assert plan.request.source_process_root is not None
+        source_project_path = plan.request.source_process_root.resolve() / PROJECT_FILE
+        if source_project_path.is_symlink() or not source_project_path.is_file():
+            raise OnboardingContractError("source PROJECT.yaml is no longer a regular file")
+        if sha256(source_project_path.read_bytes()).hexdigest() != plan.source_project_digest:
+            raise OnboardingContractError("source PROJECT.yaml digest drift at apply-final")
 
     created: list[str] = []
+    outcomes: dict[str, str] = {}
     mutations = 0
+    manifest: dict[str, Any] | None = None
+    manifest_created = False
+
+    def record(target_ref: str, path: Path, before_digest: str) -> None:
+        nonlocal manifest
+        after_digest = path_digest(path)
+        created.append(target_ref)
+        outcomes[target_ref] = "created"
+        if manifest is None:
+            return
+        for item in manifest["actions"]:
+            if item["target_ref"] == target_ref:
+                item.update(
+                    {
+                        "before_digest": before_digest,
+                        "after_digest": after_digest,
+                        "outcome": "created",
+                    }
+                )
+                break
+        manifest["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+        write_transaction_manifest(
+            plan.project_root,
+            authorization.authorization_id,
+            manifest,
+            create_only=False,
+        )
+
     try:
         if not plan.project_root.exists():
+            before = path_digest(plan.project_root)
             plan.project_root.mkdir(parents=False)
-            created.append(str(plan.project_root))
             mutations += 1
+            record("release/repository", plan.project_root, before)
         if not _observe_repo(plan.project_root).is_git_repo:
+            git_path = plan.project_root / ".git"
+            before = path_digest(git_path)
             result = run_git(["init", "-b", "main"], cwd=plan.project_root)
             if not result.ok:
                 raise RuntimeError(result.stderr.strip() or "release git init failed")
-            created.append(str(plan.project_root / ".git"))
             mutations += 1
+            outcomes["release/.git"] = "created"
+            created.append("release/.git")
+
+        if not _authorization_claimed:
+            claim_authorization(plan.project_root, plan.envelope, authorization)
+        manifest = {
+            "schema_version": 1,
+            "authorization_id": authorization.authorization_id,
+            "operation": "project.init",
+            "project_id": plan.request.project_id,
+            "decision_ref": plan.request.decision_ref,
+            "plan_digest": plan.plan_digest,
+            "state": "claimed",
+            "intent": {
+                "project_name": plan.request.project_name,
+                "process_repo_relative_path": plan.process_repo_root.name,
+                "process_link_mode": PROCESS_LINK_MODE_NONE,
+                **(
+                    {
+                        "source_ref": "source/PROJECT.yaml",
+                        "source_oid": plan.envelope["base_oids"]["source_snapshot"]["oid"],
+                        "source_project_digest": plan.source_project_digest,
+                    }
+                    if plan.source_project_bytes is not None
+                    else {}
+                ),
+            },
+            "actions": [
+                {
+                    "action_id": item["action_id"],
+                    "side": item["side"],
+                    "kind": item["kind"],
+                    "target_ref": item["target_ref"],
+                    "before_digest": "",
+                    "after_digest": "",
+                    "outcome": outcomes.get(item["target_ref"], "pending"),
+                }
+                for item in plan.envelope["actions"]
+                if item["kind"] != "noop"
+            ],
+            "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        write_transaction_manifest(
+            plan.project_root,
+            authorization.authorization_id,
+            manifest,
+            create_only=True,
+        )
+        manifest_created = True
+
         if not plan.process_repo_root.exists():
+            before = path_digest(plan.process_repo_root)
             plan.process_repo_root.mkdir(parents=False)
-            created.append(str(plan.process_repo_root))
             mutations += 1
+            record("process/repository", plan.process_repo_root, before)
         if not _observe_repo(plan.process_repo_root).is_git_repo:
+            git_path = plan.process_repo_root / ".git"
+            before = path_digest(git_path)
             result = run_git(["init", "-b", "main"], cwd=plan.process_repo_root)
             if not result.ok:
-                raise RuntimeError(result.stderr.strip() or "git init failed")
-            created.append(str(plan.process_repo_root / ".git"))
+                raise RuntimeError(result.stderr.strip() or "process git init failed")
             mutations += 1
+            record("process/.git", git_path, before)
 
         project_path = plan.process_repo_root / PROJECT_FILE
         if not project_path.exists() and not project_path.is_symlink():
-            write_project_create_only(plan.process_repo_root, plan.project)
-            created.append(str(project_path))
+            before = path_digest(project_path)
+            if plan.source_project_bytes is not None:
+                _write_bytes_create_only(project_path, plan.source_project_bytes)
+            else:
+                write_project_create_only(plan.process_repo_root, plan.project)
             mutations += 1
+            record("process/PROJECT.yaml", project_path, before)
         metadata_path = plan.process_repo_root / PROCESS_METADATA_REL
         if not metadata_path.exists() and not metadata_path.is_symlink():
+            before = path_digest(metadata_path)
             _write_yaml_create_only(metadata_path, plan.process_metadata_payload)
-            created.append(str(metadata_path))
             mutations += 1
+            record("process/.meta-flow-process.yaml", metadata_path, before)
+
         binding_path = plan.project_root / WORKSPACE_BINDING_REL
         if not binding_path.exists() and not binding_path.is_symlink():
+            before = path_digest(binding_path)
             _write_yaml_create_only(binding_path, plan.binding_payload)
-            created.append(str(binding_path))
             mutations += 1
-
-        if plan.request.process_link_mode == PROCESS_LINK_MODE_RELATIVE_SYMLINK:
-            gitignore_path = plan.project_root / ".gitignore"
-            if not _gitignore_has_process_entry(gitignore_path):
-                if gitignore_path.exists():
-                    _append_process_ignore(gitignore_path)
-                else:
-                    gitignore_path.write_text("/process\n", encoding="utf-8")
-                    created.append(str(gitignore_path))
-                mutations += 1
-
-            link_path = plan.project_root / PROCESS_LINK_REL
-            if not link_path.is_symlink():
-                link_text = os.path.relpath(plan.process_repo_root, start=plan.project_root)
-                temporary = plan.project_root / f".process.meta-flow-init-{plan.plan_digest[:12]}"
-                if temporary.exists() or temporary.is_symlink():
-                    raise FileExistsError(f"temporary link path already exists: {temporary}")
-                temporary.symlink_to(link_text, target_is_directory=True)
-                os.replace(temporary, link_path)
-                created.append(str(link_path))
-                mutations += 1
+            record("release/.meta-flow/workspace.yaml", binding_path, before)
 
         health = check_independent_process_route(plan.project_root)
         if not health.ok:
-            raise RuntimeError("post-apply health failed: " + "; ".join(health.errors))
-        process_after = _observe_repo(plan.process_repo_root)
+            raise RuntimeError("post-apply route health failed")
+        assert manifest is not None
+        manifest["state"] = "passed"
+        manifest["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+        write_transaction_manifest(
+            plan.project_root,
+            authorization.authorization_id,
+            manifest,
+            create_only=False,
+        )
+        envelope = _receipt_envelope(plan, decision="PASS", outcomes=outcomes)
         return ProjectInitReceipt(
+            envelope=envelope,
             plan_digest=plan.plan_digest,
             decision="PASS",
             created_paths=tuple(created),
-            release_oid_before=plan.release_repo.head_oid,
-            process_oid_after=process_after.head_oid,
+            release_oid_before=plan.envelope["base_oids"]["release"]["oid"],
+            process_oid_after=observe_repository(plan.process_repo_root)["oid"],
             mutation_count=mutations,
             recovery_route="none",
             health_status=health.status,
         )
     except Exception as exc:
-        process_after = _observe_repo(plan.process_repo_root)
+        if manifest is not None and manifest_created:
+            if "release/.meta-flow/workspace.yaml" in created:
+                manifest["state"] = "bound_partial"
+            elif any(item.startswith("process/") for item in created):
+                manifest["state"] = "process_partial"
+            elif any(item.startswith("release/") for item in created):
+                manifest["state"] = "release_partial"
+            else:
+                manifest["state"] = "claimed"
+            manifest["error"] = f"{type(exc).__name__}: apply failed"
+            manifest["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+            write_transaction_manifest(
+                plan.project_root,
+                authorization.authorization_id,
+                manifest,
+                create_only=False,
+            )
+        decision = "PARTIAL" if mutations else "BLOCKED"
         receipt = ProjectInitReceipt(
+            envelope=_receipt_envelope(
+                plan,
+                decision=decision,
+                outcomes=outcomes,
+                error=f"{type(exc).__name__}: project init apply failed",
+            ),
             plan_digest=plan.plan_digest,
-            decision="PARTIAL" if mutations else "BLOCKED",
+            decision=decision,
             created_paths=tuple(created),
-            release_oid_before=plan.release_repo.head_oid,
-            process_oid_after=process_after.head_oid,
+            release_oid_before=plan.envelope["base_oids"]["release"]["oid"],
+            process_oid_after=observe_repository(plan.process_repo_root)["oid"],
             mutation_count=mutations,
-            recovery_route="inspect-created-paths-and-rerun-plan",
+            recovery_route=(
+                "meta-flow project recover --project-root . --authorization-id "
+                f"{authorization.authorization_id} --action inspect"
+            ),
             health_status="apply_failed",
         )
         raise ProjectInitApplyError(str(exc), receipt) from exc
@@ -776,32 +1229,55 @@ def init_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-name", default=None)
     parser.add_argument("--process-repo-root", type=Path, default=None)
     parser.add_argument(
+        "--source-process-root",
+        type=Path,
+        default=None,
+        help="read-only committed process Git root whose PROJECT.yaml seeds an existing-project init",
+    )
+    parser.add_argument("--decision-ref", default="decisions/project-init")
+    parser.add_argument(
         "--process-link-mode",
         choices=sorted(_PROCESS_LINK_MODES),
         default=PROCESS_LINK_MODE_NONE,
-        help="none uses portable binding only; relative-symlink enables legacy Agent/Skill path compatibility",
+        help="project init only accepts portable binding mode none",
     )
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--authorization", type=Path, default=None)
     parsed = parser.parse_args(argv or [])
     request = ProjectInitRequest(
         project_root=parsed.project_root,
         project_id=parsed.project_id,
         project_name=parsed.project_name or parsed.project_id,
         process_repo_root=parsed.process_repo_root,
+        source_process_root=parsed.source_process_root,
         process_link_mode=parsed.process_link_mode,
+        decision_ref=parsed.decision_ref,
     )
     plan = plan_project_init(request)
     if not parsed.apply:
         print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
-        return 1 if plan.blocked else 0
+        return 2 if plan.blocked else 0
+    if plan.envelope["decision"] != "NOOP" and parsed.authorization is None:
+        print(
+            json.dumps(
+                {"plan": plan.as_dict(), "error": "--apply requires --authorization"},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
     try:
-        receipt = apply_project_init(plan)
-    except (ValueError, ProjectInitApplyError) as exc:
+        authorization = load_authorization(parsed.authorization) if parsed.authorization else None
+        receipt = apply_project_init(plan, authorization)
+    except (OnboardingContractError, ValueError, ProjectInitApplyError) as exc:
         output: dict[str, Any] = {"plan": plan.as_dict(), "error": str(exc)}
         if isinstance(exc, ProjectInitApplyError):
             output["receipt"] = exc.receipt.as_dict()
         print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
-        return 1
+        if isinstance(exc, ProjectInitApplyError):
+            return 1
+        return 2
     print(json.dumps({"plan": plan.as_dict(), "receipt": receipt.as_dict()}, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

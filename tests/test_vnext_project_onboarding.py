@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
 from meta_flow import cli
+from meta_flow.project import onboarding
 from meta_flow.project.model import load_project
 from meta_flow.project.onboarding import (
     LAYOUT_VERSION,
@@ -17,6 +18,7 @@ from meta_flow.project.onboarding import (
     ROUTE_MODE_RELATIVE_SYMLINK,
     ROUTE_MODE_SIBLING_BINDING,
     WORKSPACE_BINDING_REL,
+    ProjectInitApplyError,
     ProjectInitRequest,
     apply_project_init,
     check_independent_process_route,
@@ -24,6 +26,13 @@ from meta_flow.project.onboarding import (
     plan_project_init,
     resolve_process_repo_root,
     status_main,
+)
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    PLAN_FIELDS,
+    OnboardingAuthorization,
+    load_transaction_manifest,
 )
 from meta_flow.project.process_route import resolve_ref_main
 from meta_flow.project.scale import dump_yaml, load_yaml_object
@@ -59,6 +68,34 @@ def init_release(root: Path, *, name: str = "release") -> Path:
     return release
 
 
+def init_source_snapshot(root: Path) -> Path:
+    source = root / "snapshot-process"
+    source.mkdir(parents=True)
+    git(source, "init", "-b", "main")
+    (source / "PROJECT.yaml").write_text(
+        "schema_version: 1\n"
+        "project_id: demo\n"
+        "name: Demo Project\n"
+        "objective: 已有项目当前有效治理快照\n"
+        "status: active\n"
+        "active_work_refs:\n"
+        "  - works/W-001/WORK.yaml\n",
+        encoding="utf-8",
+    )
+    git(source, "add", "PROJECT.yaml")
+    git(
+        source,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "current snapshot",
+    )
+    return source
+
+
 def common_dir(root: Path) -> Path:
     value = git(root, "rev-parse", "--git-common-dir")
     path = Path(value)
@@ -79,6 +116,26 @@ def request_for(
     )
 
 
+def authorize(plan, authorization_id: str | None = None) -> OnboardingAuthorization:
+    payload = plan.as_dict()
+    return OnboardingAuthorization(
+        schema_version=1,
+        authorization_id=authorization_id or f"auth-{plan.plan_digest[:12]}",
+        authorization_source=AUTHORIZATION_SOURCE,
+        authorization_kind=AUTHORIZATION_KIND,
+        operation=payload["operation"],
+        decision_ref=payload["decision_ref"],
+        project_id=payload["project_id"],
+        plan_digest=payload["plan_digest"],
+        expected_oids=payload["base_oids"],
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+
+
+def apply_init(plan, authorization_id: str | None = None):
+    return apply_project_init(plan, authorize(plan, authorization_id))
+
+
 def test_dry_run_is_deterministic_and_has_zero_mutation(tmp_path: Path) -> None:
     release = init_release(tmp_path)
     request = request_for(release)
@@ -88,7 +145,7 @@ def test_dry_run_is_deterministic_and_has_zero_mutation(tmp_path: Path) -> None:
 
     assert not first.blocked
     assert first.plan_digest == second.plan_digest
-    assert first.as_dict()["mutation_count"] == 0
+    assert tuple(first.as_dict()) == PLAN_FIELDS
     assert not (tmp_path / "demo-process").exists()
     assert not (release / "process").exists()
     assert not (release / WORKSPACE_BINDING_REL).exists()
@@ -99,7 +156,7 @@ def test_apply_creates_binding_only_independent_repo_and_minimal_project(tmp_pat
     before_oid = git(release, "rev-parse", "HEAD")
     plan = plan_project_init(request_for(release))
 
-    receipt = apply_project_init(plan)
+    receipt = apply_init(plan)
 
     process_repo = tmp_path / "demo-process"
     assert receipt.decision == "PASS"
@@ -131,25 +188,108 @@ def test_apply_creates_binding_only_independent_repo_and_minimal_project(tmp_pat
     assert health.process_repo_root == process_repo.resolve()
 
 
-def test_relative_symlink_compatibility_mode_is_explicit(tmp_path: Path) -> None:
+def test_existing_project_init_seed_binds_source_oid_digest_and_original_bytes(
+    tmp_path: Path,
+) -> None:
+    release = init_release(tmp_path)
+    source = init_source_snapshot(tmp_path)
+    request = ProjectInitRequest(
+        release,
+        "demo",
+        "Demo Project",
+        source_process_root=source,
+    )
+    plan = plan_project_init(request)
+
+    assert not plan.blocked
+    assert plan.envelope["base_oids"]["source_snapshot"] == {
+        "state": "commit",
+        "oid": git(source, "rev-parse", "HEAD"),
+    }
+    project_action = next(
+        item for item in plan.envelope["actions"] if item["target_ref"] == "process/PROJECT.yaml"
+    )
+    assert project_action["source_ref"] == "source/PROJECT.yaml"
+    assert project_action["source_digest"] == plan.source_project_digest
+
+    receipt = apply_init(plan, "seed-init")
+    process = tmp_path / "demo-process"
+    assert receipt.decision == "PASS"
+    assert (process / "PROJECT.yaml").read_bytes() == (source / "PROJECT.yaml").read_bytes()
+    manifest = load_transaction_manifest(release, "seed-init")
+    assert manifest["intent"] == {
+        "project_name": "Demo Project",
+        "process_repo_relative_path": "demo-process",
+        "process_link_mode": "none",
+        "source_ref": "source/PROJECT.yaml",
+        "source_oid": git(source, "rev-parse", "HEAD"),
+        "source_project_digest": plan.source_project_digest,
+    }
+    assert str(source) not in json.dumps(manifest, ensure_ascii=False)
+
+    second = plan_project_init(request)
+    assert second.envelope["decision"] == "NOOP"
+    assert apply_project_init(second).decision == "NOOP"
+
+
+@pytest.mark.parametrize("drift_stage", ["authorization-consume", "apply-final"])
+def test_init_seed_source_oid_drift_at_authorization_stages_blocks_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drift_stage: str,
+) -> None:
+    release = init_release(tmp_path)
+    source = init_source_snapshot(tmp_path)
+    request = ProjectInitRequest(
+        release,
+        "demo",
+        "Demo Project",
+        source_process_root=source,
+    )
+    plan = plan_project_init(request)
+    original_assert = onboarding.assert_expected_observations
+    drifted = False
+
+    def inject_source_drift(*, stage: str, **kwargs) -> None:
+        nonlocal drifted
+        if stage == drift_stage and not drifted:
+            drifted = True
+            (source / "OID-DRIFT.txt").write_text(f"{stage}\n", encoding="utf-8")
+            git(source, "add", "OID-DRIFT.txt")
+            git(
+                source,
+                "-c",
+                "user.name=Meta Flow Test",
+                "-c",
+                "user.email=meta-flow@example.invalid",
+                "commit",
+                "-m",
+                f"drift at {stage}",
+            )
+        original_assert(stage=stage, **kwargs)
+
+    monkeypatch.setattr(onboarding, "assert_expected_observations", inject_source_drift)
+
+    with pytest.raises(ValueError, match=f"OID observation drift at {drift_stage}"):
+        apply_init(plan, f"seed-{drift_stage}")
+
+    assert not (tmp_path / "demo-process").exists()
+    assert not (release / WORKSPACE_BINDING_REL).exists()
+
+
+def test_relative_symlink_mode_is_legacy_only_and_blocked_by_project_init(tmp_path: Path) -> None:
     release = init_release(tmp_path)
     request = request_for(
         release,
         process_link_mode=PROCESS_LINK_MODE_RELATIVE_SYMLINK,
     )
 
-    apply_project_init(plan_project_init(request))
+    plan = plan_project_init(request)
 
-    process_repo = tmp_path / "demo-process"
-    assert (release / "process").is_symlink()
-    link_text = os.readlink(release / "process")
-    assert link_text == "../demo-process"
-    assert not Path(link_text).is_absolute()
-    assert (release / "process").resolve() == process_repo.resolve()
-    assert "/process" in (release / ".gitignore").read_text(encoding="utf-8")
-    health = check_independent_process_route(release)
-    assert health.ok
-    assert health.route_mode == ROUTE_MODE_RELATIVE_SYMLINK
+    assert plan.blocked
+    assert "invalid_process_link_mode" in {item.code for item in plan.conflicts}
+    assert not (release / "process").exists()
+    assert not (release / ".gitignore").exists()
 
 
 @pytest.mark.parametrize("release_exists", [False, True])
@@ -170,13 +310,40 @@ def test_init_can_create_release_repo_from_missing_or_empty_directory(
 
     assert not plan.blocked
     assert not (release / ".git").exists()
-    receipt = apply_project_init(plan)
+    receipt = apply_init(plan)
     process_repo = tmp_path / "new-project-process"
     assert receipt.decision == "PASS"
     assert git(release, "branch", "--show-current") == "main"
     assert git(process_repo, "branch", "--show-current") == "main"
     assert common_dir(release) != common_dir(process_repo)
     assert check_independent_process_route(release).ok
+
+
+def test_init_failure_after_release_bootstrap_records_release_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = tmp_path / "new-project"
+    request = ProjectInitRequest(release, "new-project", "New Project")
+    plan = plan_project_init(request)
+    process = tmp_path / "new-project-process"
+    original_mkdir = Path.mkdir
+
+    def fail_process_mkdir(path: Path, *args, **kwargs):
+        if path == process:
+            raise OSError("fixture process directory failure")
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_process_mkdir)
+
+    with pytest.raises(ProjectInitApplyError) as raised:
+        apply_init(plan, "release-partial")
+
+    assert raised.value.receipt.decision == "PARTIAL"
+    assert (release / ".git").is_dir()
+    assert not process.exists()
+    manifest = load_transaction_manifest(release, "release-partial")
+    assert manifest["state"] == "release_partial"
 
 
 def test_init_rejects_nonempty_non_git_release_directory(tmp_path: Path) -> None:
@@ -193,7 +360,7 @@ def test_init_rejects_nonempty_non_git_release_directory(tmp_path: Path) -> None
 
 def test_binding_and_process_metadata_are_portable_and_mutually_identified(tmp_path: Path) -> None:
     release = init_release(tmp_path)
-    apply_project_init(plan_project_init(request_for(release)))
+    apply_init(plan_project_init(request_for(release)))
     process_repo = tmp_path / "demo-process"
 
     binding = load_yaml_object(release / WORKSPACE_BINDING_REL)
@@ -224,14 +391,14 @@ def test_binding_and_process_metadata_are_portable_and_mutually_identified(tmp_p
 
 def test_valid_existing_initialization_is_idempotent_noop(tmp_path: Path) -> None:
     release = init_release(tmp_path)
-    apply_project_init(plan_project_init(request_for(release)))
+    apply_init(plan_project_init(request_for(release)))
 
     second = plan_project_init(request_for(release))
     receipt = apply_project_init(second)
 
     assert not second.blocked
     assert {action.action for action in second.actions} == {"noop"}
-    assert receipt.decision == "PASS"
+    assert receipt.decision == "NOOP"
     assert receipt.mutation_count == 0
     assert receipt.created_paths == ()
 
@@ -239,7 +406,7 @@ def test_valid_existing_initialization_is_idempotent_noop(tmp_path: Path) -> Non
 def test_moving_workspace_parent_preserves_binding_and_health(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     release = init_release(bundle)
-    apply_project_init(plan_project_init(request_for(release)))
+    apply_init(plan_project_init(request_for(release)))
     original_binding = (release / WORKSPACE_BINDING_REL).read_text(encoding="utf-8")
 
     moved = tmp_path / "moved-bundle"
@@ -291,7 +458,7 @@ def test_existing_process_repo_owned_by_other_project_is_rejected(tmp_path: Path
     first_release = init_release(tmp_path, name="first")
     process_root = tmp_path / "shared-process"
     first_request = ProjectInitRequest(first_release, "first", "First", process_root)
-    apply_project_init(plan_project_init(first_request))
+    apply_init(plan_project_init(first_request))
     second_release = init_release(tmp_path, name="second")
 
     second = plan_project_init(
@@ -320,7 +487,7 @@ def test_release_oid_drift_blocks_before_any_init_mutation(tmp_path: Path) -> No
     )
 
     with pytest.raises(ValueError, match="stale"):
-        apply_project_init(plan)
+        apply_init(plan)
 
     assert not (tmp_path / "demo-process").exists()
     assert not (release / WORKSPACE_BINDING_REL).exists()
@@ -330,8 +497,8 @@ def test_release_oid_drift_blocks_before_any_init_mutation(tmp_path: Path) -> No
 def test_two_projects_are_physically_isolated_when_one_switches_branch(tmp_path: Path) -> None:
     release_a = init_release(tmp_path, name="A")
     release_b = init_release(tmp_path, name="B")
-    apply_project_init(plan_project_init(request_for(release_a, project_id="A")))
-    apply_project_init(plan_project_init(request_for(release_b, project_id="B")))
+    apply_init(plan_project_init(request_for(release_a, project_id="A")))
+    apply_init(plan_project_init(request_for(release_b, project_id="B")))
     process_b = tmp_path / "B-process"
     before = {
         "release_head": git(release_b, "rev-parse", "HEAD"),
@@ -370,12 +537,26 @@ def test_cli_init_and_auto_detecting_project_check(tmp_path: Path, capsys: pytes
     dry_payload = json.loads(capsys.readouterr().out)
     assert dry_code == 0
     assert dry_payload["decision"] == "READY"
-    assert dry_payload["mutation_count"] == 0
-    assert dry_payload["process_link_mode"] == "none"
-    assert "create-link" not in {item["action"] for item in dry_payload["actions"]}
+    assert set(dry_payload) == set(PLAN_FIELDS)
+    assert "create-link" not in {item["kind"] for item in dry_payload["actions"]}
+
+    plan = plan_project_init(request_for(release))
+    authorization_path = tmp_path / "init-authorization.json"
+    authorization_path.write_text(
+        json.dumps(asdict(authorize(plan)), ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     apply_code = init_main(
-        ["--project-root", str(release), "--project-id", "demo", "--apply"]
+        [
+            "--project-root",
+            str(release),
+            "--project-id",
+            "demo",
+            "--apply",
+            "--authorization",
+            str(authorization_path),
+        ]
     )
     apply_payload = json.loads(capsys.readouterr().out)
     assert apply_code == 0
@@ -400,7 +581,7 @@ def test_resolve_ref_cli_maps_logical_ref_without_process_entry(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     release = init_release(tmp_path)
-    apply_project_init(plan_project_init(request_for(release)))
+    apply_init(plan_project_init(request_for(release)))
     process = tmp_path / "demo-process"
     work = process / "works" / "W-001" / "WORK.yaml"
     work.parent.mkdir(parents=True)
@@ -428,7 +609,7 @@ def test_resolve_ref_cli_maps_logical_ref_without_process_entry(
 def test_project_init_preserves_evolved_project_fields_on_rerun(tmp_path: Path) -> None:
     release = init_release(tmp_path)
     request = request_for(release)
-    apply_project_init(plan_project_init(request))
+    apply_init(plan_project_init(request))
     process = tmp_path / "demo-process"
     (process / "PROJECT.yaml").write_text(
         "schema_version: 1\n"
@@ -488,7 +669,7 @@ def test_reciprocal_binding_mismatch_fails_closed(
     expected_error: str,
 ) -> None:
     release = init_release(tmp_path)
-    apply_project_init(plan_project_init(request_for(release)))
+    apply_init(plan_project_init(request_for(release)))
     process = tmp_path / "demo-process"
     if target == "metadata-route":
         metadata = load_yaml_object(process / PROCESS_METADATA_REL)
@@ -535,7 +716,7 @@ def test_unsupported_or_missing_layout_fails_closed(tmp_path: Path) -> None:
 
 def test_missing_project_reports_initialization_action(tmp_path: Path) -> None:
     release = init_release(tmp_path)
-    apply_project_init(plan_project_init(request_for(release)))
+    apply_init(plan_project_init(request_for(release)))
     (tmp_path / "demo-process" / "PROJECT.yaml").unlink()
 
     health = check_independent_process_route(release)

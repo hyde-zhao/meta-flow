@@ -5,6 +5,11 @@ from pathlib import Path
 
 from meta_flow.checks import cr_tracking
 from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    OnboardingAuthorization,
+)
 from meta_flow.project.process_route import _resolve_runtime_ref
 
 
@@ -28,8 +33,22 @@ def _init_binding_project(root: Path) -> tuple[Path, Path]:
         check=True,
         capture_output=True,
     )
+    plan = plan_project_init(ProjectInitRequest(release, "fixture", "Fixture Project"))
+    payload = plan.as_dict()
     apply_project_init(
-        plan_project_init(ProjectInitRequest(release, "fixture", "Fixture Project"))
+        plan,
+        OnboardingAuthorization(
+            1,
+            "cr120-row-fixture",
+            AUTHORIZATION_SOURCE,
+            AUTHORIZATION_KIND,
+            payload["operation"],
+            payload["decision_ref"],
+            payload["project_id"],
+            payload["plan_digest"],
+            payload["base_oids"],
+            "2099-01-01T00:00:00+00:00",
+        ),
     )
     return release, root / "fixture-process"
 

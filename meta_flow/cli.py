@@ -963,6 +963,7 @@ def _run_project(args: list[str]) -> None:
             "Commands:\n"
             "  init      Preview or apply a vNext independent process repository.\n"
             "  adopt     Preview or explicitly authorize one snapshot-only project adoption.\n"
+            "  recover   Inspect or explicitly recover one partial onboarding transaction.\n"
             "  status    Check the vNext project binding and independent process route.\n"
             "  query     Read at most five directly referenced Project/Phase/Work objects.\n"
             "  resolve-ref  Resolve one process/... logical ref through the vNext binding.\n"
@@ -970,9 +971,10 @@ def _run_project(args: list[str]) -> None:
             "  check     Validate vNext binding when present; otherwise validate legacy project governance.\n\n"
             "Examples:\n"
             "  meta-flow project init --project-root . --project-id demo\n"
-            "  meta-flow project init --project-root . --project-id demo --process-link-mode relative-symlink\n"
-            "  meta-flow project init --project-root . --project-id demo --apply\n"
-            "  meta-flow project adopt --project-id demo --source-id legacy --source-process-root ../legacy --target-process-root ../demo-process --include-ref PROJECT.yaml\n"
+            "  meta-flow project init --project-root . --project-id demo --source-process-root ../snapshot-process\n"
+            "  meta-flow project init --project-root . --project-id demo --apply --authorization /tmp/init-auth.json\n"
+            "  meta-flow project adopt --project-root . --project-id demo --source-id snapshot --source-process-root ../snapshot --include-ref PROJECT.yaml\n"
+            "  meta-flow project recover --project-root . --authorization-id auth-001 --action inspect\n"
             "  meta-flow project status --project-root .\n"
             "  meta-flow project query --project-root .\n"
             "  meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yaml --format json\n"
@@ -991,6 +993,10 @@ def _run_project(args: list[str]) -> None:
         from meta_flow.project import adoption
 
         raise SystemExit(adoption.main(forwarded))
+    if command == "recover":
+        from meta_flow.project import recovery
+
+        raise SystemExit(recovery.main(forwarded))
     if command == "status":
         from meta_flow.project import onboarding
 
@@ -1019,7 +1025,7 @@ def _run_project(args: list[str]) -> None:
 
         raise SystemExit(state.main(forwarded))
     raise SystemExit(
-        f"未知 project 命令: {command}. 目前支持: init, adopt, status, query, resolve-ref, scaffold, check"
+        f"未知 project 命令: {command}. 目前支持: init, adopt, recover, status, query, resolve-ref, scaffold, check"
     )
 
 
