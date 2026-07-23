@@ -7,11 +7,14 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from fnmatch import fnmatchcase
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from meta_flow.project.model import is_safe_ref
+from meta_flow.project.process_route import ProcessRouteError, resolve_process_ref
+from meta_flow.project.scale import load_yaml_object
 from meta_flow.workspace.git_sync import query_exact_remote_ref, run_git
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -42,6 +45,312 @@ class RepositoryAuthorization:
 
 
 @dataclass(frozen=True)
+class PublicationEligibility:
+    """由 WORK 快照和 route plan 交叉验证得到的 publication 前置结论。"""
+
+    decision: str
+    reason: str
+    branch: str
+    work_profile_digest: str
+    route_plan_digest: str
+    mutation_count: int = 0
+
+
+@dataclass(frozen=True)
+class PublicationEvidence:
+    """供 plan 与 apply 同步重算的 canonical eligibility 证据引用。"""
+
+    project_root: Path
+    evidence_ref: str
+
+
+def _resolve_publication_ref(project_root: Path, logical_ref: str) -> Path:
+    """所有 publication 证据均通过健康 binding 的 process resolver。"""
+
+    if not logical_ref.startswith("process/"):
+        raise ValueError("publication evidence contains an unsafe or empty ref")
+    return resolve_process_ref(project_root, logical_ref)
+
+
+def _load_publication_object(project_root: Path, logical_ref: str) -> dict[str, Any]:
+    path = _resolve_publication_ref(project_root, logical_ref)
+    if path.suffix.lower() == ".json":
+        value = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        value = load_yaml_object(path)
+    if not isinstance(value, dict):
+        raise ValueError(f"{logical_ref} must contain one mapping")
+    return value
+
+
+def _profile_snapshot(work: dict[str, Any], work_ref: str) -> dict[str, Any]:
+    scope = work.get("scope") or {}
+    return {
+        "work_id": str(work.get("work_id") or ""),
+        "work_ref": work_ref,
+        "kind": str(work.get("kind") or ""),
+        "risk_profile": str(work.get("risk_profile") or ""),
+        "risk_reason_codes": sorted(str(item) for item in work.get("risk_reason_codes") or []),
+        "required_gates": sorted(str(item) for item in work.get("required_gates") or []),
+        "scope_version": int(work.get("scope_version") or scope.get("version") or 0),
+        "scope_digest": str(work.get("scope_digest") or scope.get("digest") or ""),
+    }
+
+
+def evaluate_publication_eligibility(
+    *,
+    project_root: Path,
+    work_id: str,
+    route_plan_ref: str,
+    work_ref: str = "",
+) -> PublicationEligibility:
+    """只评估 WORK+route；G2 必须由 canonical evidence loader 补齐批准事实。"""
+    logical_work_ref = work_ref or f"process/works/{work_id}/WORK.yaml"
+    try:
+        work = _load_publication_object(project_root, logical_work_ref)
+        route = _load_publication_object(project_root, route_plan_ref)
+    except (ProcessRouteError, OSError, ValueError, json.JSONDecodeError):
+        return PublicationEligibility("BLOCKED", "ROUTE_PROFILE_UNTRUSTED", "", "", "")
+    snapshot = _profile_snapshot(work, logical_work_ref)
+    profile_digest, route_digest = _digest(snapshot), _digest(route)
+    if snapshot["work_id"] != work_id or not snapshot["scope_version"] or not snapshot["scope_digest"]:
+        return PublicationEligibility("BLOCKED", "ROUTE_PROFILE_UNTRUSTED", "", profile_digest, route_digest)
+    route_snapshot = route.get("work_profile_snapshot")
+    route_profile_digest = str(route.get("work_profile_digest") or "")
+    if route_snapshot != snapshot or route_profile_digest != profile_digest:
+        return PublicationEligibility("BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest)
+    cp8 = (route.get("checkpoint_applicability") or {}).get("CP8") or {}
+    profile = snapshot["risk_profile"]
+    if profile == "G2":
+        if not (cp8.get("applies") is True and cp8.get("human_gate") == "required"):
+            return PublicationEligibility("BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest)
+        return PublicationEligibility("BLOCKED", "CP8_REQUIRED", "G2_CP8_APPLIES", profile_digest, route_digest)
+    canonical_na = cp8.get("applies") is False and cp8.get("decision") in {"N/A", "NOT_APPLICABLE_BY_PROFILE"} and cp8.get("reason") == "profile-not-required"
+    if profile not in {"G0", "G1"} or snapshot["kind"] != "work" or not canonical_na:
+        return PublicationEligibility("BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest)
+    if snapshot["risk_reason_codes"]:
+        return PublicationEligibility("BLOCKED", "RECLASSIFICATION_REQUIRED_G2", "", profile_digest, route_digest)
+    return PublicationEligibility("READY", "eligible_by_profile", "G0_G1_NOT_APPLICABLE_BY_PROFILE", profile_digest, route_digest)
+
+
+def _sha256_file(path: Path) -> str:
+    return sha256(path.read_bytes()).hexdigest()
+
+
+def _frontmatter(path: Path) -> dict[str, str]:
+    text = path.read_text(encoding="utf-8")
+    match = re.match(r"^---\r?\n(.*?)\r?\n---", text, re.DOTALL)
+    if match is None:
+        raise ValueError(f"{path.name} has no frontmatter")
+    values: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip().strip("\"'")
+    return values
+
+
+def _scope_allows_reads(work: dict[str, Any], refs: Iterable[str]) -> bool:
+    scope = work.get("scope") or {}
+    allowed = scope.get("allowed_reads") or work.get("allowed_reads") or []
+    patterns = [str(item) for item in allowed]
+    if not patterns:
+        return False
+
+    def candidates(logical_ref: str) -> tuple[str, ...]:
+        # Publication evidence 使用 process/... 逻辑引用；WORK scope 的规范值则以
+        # 过程仓根为基准，不携带 process/ 前缀。兼容历史上已经写入完整逻辑引用的
+        # fixture，但不放宽到绝对路径、父目录或其他命名空间。
+        if logical_ref.startswith("process/"):
+            return logical_ref, logical_ref.removeprefix("process/")
+        return (logical_ref,)
+
+    return all(
+        any(fnmatchcase(candidate, pattern) for candidate in candidates(ref) for pattern in patterns)
+        for ref in refs
+    )
+
+
+def _target_is_authorized(
+    policy: dict[str, Any],
+    *,
+    work_id: str,
+    scope_version: int,
+    scope_digest: str,
+    operation: str,
+    repo_role: str,
+    remote: str,
+    ref: str,
+) -> bool:
+    if (
+        policy.get("decision") != "APPROVED"
+        or str(policy.get("work_id") or "") != work_id
+        or int(policy.get("scope_version") or 0) != scope_version
+        or str(policy.get("scope_digest") or "") != scope_digest
+    ):
+        return False
+    return any(
+        isinstance(target, dict)
+        and target.get("operation") == operation
+        and target.get("repo_role") == repo_role
+        and str(target.get("remote") or "") == remote
+        and str(target.get("ref") or "") == ref
+        and target.get("preauthorized") is True
+        for target in policy.get("targets") or []
+    )
+
+
+def _g2_is_canonically_approved(
+    *,
+    project_root: Path,
+    refs: dict[str, str],
+    work_id: str,
+    scope_version: int,
+    scope_digest: str,
+) -> bool:
+    result = _load_publication_object(project_root, refs["cp8_result"])
+    if (
+        str(result.get("checkpoint") or "").upper() != "CP8"
+        or str(result.get("decision") or "").upper() not in {"PASS", "PASS_WITH_RISK"}
+        or str(result.get("work_id") or "") != work_id
+        or int(result.get("scope_version") or 0) != scope_version
+        or str(result.get("scope_digest") or "") != scope_digest
+    ):
+        return False
+    checkpoint = _frontmatter(_resolve_publication_ref(project_root, refs["cp8_checkpoint"]))
+    if (
+        str(checkpoint.get("work_id") or "") != work_id
+        or checkpoint.get("status", "").lower() not in {"approved", "approve"}
+        or str(checkpoint.get("scope_digest") or "") != scope_digest
+    ):
+        return False
+    formal = _frontmatter(_resolve_publication_ref(project_root, refs["formal_cr"]))
+    cr_id = str(formal.get("cr_id") or "")
+    if (
+        formal.get("lifecycle_status", "").lower() != "closed"
+        or formal.get("readiness_status", "").lower() not in {"ready", "ready_with_risk"}
+        or formal.get("gate_status", "").lower() not in {"cp8_closed", "cp8_recovery_closed"}
+    ):
+        return False
+    ledger_path = _resolve_publication_ref(project_root, refs["gate_ledger"])
+    for line in ledger_path.read_text(encoding="utf-8").splitlines():
+        event = json.loads(line)
+        if (
+            isinstance(event, dict)
+            and event.get("event_type") == "human_gate_approval"
+            and event.get("status") == "approved"
+            and str(event.get("work_id") or "") == work_id
+            and str(event.get("cr_id") or "") == cr_id
+            and "CP8" in str(event.get("gate") or event.get("checkpoint") or "")
+            and str(event.get("scope_digest") or "") == scope_digest
+        ):
+            return True
+    return False
+
+
+def _evaluate_evidence(
+    work_id: str,
+    evidence: PublicationEvidence | None,
+    *,
+    operation: str,
+    repo_role: str,
+    observed_oid: str,
+    remote: str = "",
+    ref: str = "",
+) -> PublicationEligibility:
+    if evidence is None:
+        return PublicationEligibility("BLOCKED", "PUBLICATION_EVIDENCE_REQUIRED", "", "", "")
+    try:
+        payload = _load_publication_object(evidence.project_root, evidence.evidence_ref)
+        if payload.get("schema_version") != 1 or payload.get("evidence_kind") != "publication-eligibility":
+            raise ValueError("unsupported publication evidence schema")
+        if str(payload.get("work_id") or "") != work_id:
+            raise ValueError("publication evidence work_id mismatch")
+        refs = payload.get("canonical_refs") or {}
+        digests = payload.get("canonical_digests") or {}
+        if not isinstance(refs, dict) or not isinstance(digests, dict):
+            raise ValueError("publication evidence refs/digests must be mappings")
+        work_ref = str(refs.get("work") or "")
+        route_plan_ref = str(refs.get("route_plan") or "")
+        work = _load_publication_object(evidence.project_root, work_ref)
+        route = _load_publication_object(evidence.project_root, route_plan_ref)
+        snapshot = _profile_snapshot(work, work_ref)
+        profile_digest = _digest(snapshot)
+        route_digest = _digest(route)
+        if (
+            int(payload.get("scope_version") or 0) != snapshot["scope_version"]
+            or str(payload.get("scope_digest") or "") != snapshot["scope_digest"]
+            or str(payload.get("work_profile_digest") or "") != profile_digest
+            or str(payload.get("route_plan_digest") or "") != route_digest
+        ):
+            raise ValueError("publication evidence scope/profile/route digest mismatch")
+        required_ref_keys = {"work", "route_plan", "target_policy"}
+        if snapshot["risk_profile"] == "G2":
+            required_ref_keys |= {"formal_cr", "cp8_result", "cp8_checkpoint", "gate_ledger"}
+        if set(refs) != required_ref_keys or set(digests) != required_ref_keys:
+            raise ValueError("publication evidence canonical ref set mismatch")
+        all_refs = [evidence.evidence_ref, *(str(refs[key]) for key in sorted(refs))]
+        if not _scope_allows_reads(work, all_refs):
+            raise ValueError("publication evidence ref is outside WORK allowed_reads")
+        for key, logical_ref in refs.items():
+            if str(digests.get(key) or "") != _sha256_file(
+                _resolve_publication_ref(evidence.project_root, str(logical_ref))
+            ):
+                raise ValueError(f"publication evidence canonical digest mismatch: {key}")
+        repo_oids = payload.get("repo_oids") or {}
+        if not _OID_RE.fullmatch(observed_oid) or str(repo_oids.get(repo_role) or "") != observed_oid:
+            raise ValueError("publication evidence repository OID mismatch")
+        requested_target = payload.get("requested_target") or {}
+        if requested_target != {
+            "operation": operation,
+            "repo_role": repo_role,
+            "remote": remote,
+            "ref": ref,
+        }:
+            raise ValueError("publication evidence requested target mismatch")
+        target_policy = _load_publication_object(evidence.project_root, str(refs["target_policy"]))
+        target_matches = _target_is_authorized(
+            target_policy,
+            work_id=work_id,
+            scope_version=snapshot["scope_version"],
+            scope_digest=snapshot["scope_digest"],
+            operation=operation,
+            repo_role=repo_role,
+            remote=remote,
+            ref=ref,
+        )
+        if not target_matches:
+            raise ValueError("publication evidence target is not preauthorized")
+        base = evaluate_publication_eligibility(
+            project_root=evidence.project_root,
+            work_id=work_id,
+            route_plan_ref=route_plan_ref,
+            work_ref=work_ref,
+        )
+        if snapshot["risk_profile"] != "G2":
+            return base
+        if base.reason != "CP8_REQUIRED":
+            return base
+        approved = _g2_is_canonically_approved(
+            project_root=evidence.project_root,
+            refs={key: str(value) for key, value in refs.items()},
+            work_id=work_id,
+            scope_version=snapshot["scope_version"],
+            scope_digest=snapshot["scope_digest"],
+        )
+        return PublicationEligibility(
+            "READY" if approved else "BLOCKED",
+            "eligible_g2" if approved else "CP8_REQUIRED",
+            "G2_CP8_APPLIES",
+            profile_digest,
+            route_digest,
+        )
+    except (ProcessRouteError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return PublicationEligibility("BLOCKED", "PUBLICATION_EVIDENCE_UNTRUSTED", "", "", "")
+
+
+@dataclass(frozen=True)
 class CommitPlan:
     project_id: str
     work_id: str
@@ -55,6 +364,8 @@ class CommitPlan:
     decision: str
     reason: str
     plan_digest: str
+    publication_evidence: PublicationEvidence | None = None
+    publication_eligibility: PublicationEligibility | None = None
 
     @property
     def blocked(self) -> bool:
@@ -68,6 +379,15 @@ class CommitPlan:
             "allowed_paths": list(self.allowed_paths),
             "unexpected_paths": list(self.unexpected_paths),
             "mutation_count": 0,
+            "publication_evidence": (
+                None
+                if self.publication_evidence is None
+                else {
+                    "project_root": str(self.publication_evidence.project_root),
+                    "evidence_ref": self.publication_evidence.evidence_ref,
+                }
+            ),
+            "publication_eligibility": None if self.publication_eligibility is None else self.publication_eligibility.__dict__,
         }
 
 
@@ -99,6 +419,8 @@ class PushPlan:
     reason: str
     argv: tuple[str, ...]
     plan_digest: str
+    publication_evidence: PublicationEvidence | None = None
+    publication_eligibility: PublicationEligibility | None = None
 
     @property
     def blocked(self) -> bool:
@@ -110,6 +432,15 @@ class PushPlan:
             "repo_root": str(self.repo_root),
             "argv": list(self.argv),
             "mutation_count": 0,
+            "publication_evidence": (
+                None
+                if self.publication_evidence is None
+                else {
+                    "project_root": str(self.publication_evidence.project_root),
+                    "evidence_ref": self.publication_evidence.evidence_ref,
+                }
+            ),
+            "publication_eligibility": None if self.publication_eligibility is None else self.publication_eligibility.__dict__,
         }
 
 
@@ -226,6 +557,7 @@ def plan_commit(
     allowed_paths: Iterable[str],
     message: str,
     expected_head_oid: str,
+    publication_evidence: PublicationEvidence | None = None,
 ) -> CommitPlan:
     _validate_identity(project_id, work_id, repo_role)
     if not _OID_RE.fullmatch(expected_head_oid):
@@ -246,6 +578,15 @@ def plan_commit(
         reasons.append("unexpected_paths")
     if any(path not in allowed for path in observation.staged_paths):
         reasons.append("unexpected_staged_paths")
+    eligibility = _evaluate_evidence(
+        work_id,
+        publication_evidence,
+        operation="commit",
+        repo_role=repo_role,
+        observed_oid=observation.head_oid,
+    )
+    if eligibility.decision != "READY":
+        reasons.append(eligibility.reason)
     decision = "BLOCKED" if reasons else "READY"
     digest_source = {
         "schema_version": 1,
@@ -262,6 +603,7 @@ def plan_commit(
         "unexpected_paths": unexpected,
         "decision": decision,
         "reasons": reasons,
+        "publication_eligibility": eligibility.__dict__,
     }
     return CommitPlan(
         project_id=project_id,
@@ -276,6 +618,8 @@ def plan_commit(
         decision=decision,
         reason=",".join(reasons) if reasons else "ready",
         plan_digest=_digest(digest_source),
+        publication_evidence=publication_evidence,
+        publication_eligibility=eligibility,
     )
 
 
@@ -320,6 +664,18 @@ def _validate_authorization(
 def apply_commit(plan: CommitPlan, authorization: RepositoryAuthorization) -> CommitReceipt:
     if plan.blocked:
         raise ValueError(f"commit plan is blocked: {plan.reason}")
+    fresh = plan_commit(
+        project_id=plan.project_id,
+        work_id=plan.work_id,
+        repo_role=plan.repo_role,
+        repo_root=plan.repo_root,
+        allowed_paths=plan.allowed_paths,
+        message=plan.message,
+        expected_head_oid=plan.expected_head_oid,
+        publication_evidence=plan.publication_evidence,
+    )
+    if fresh.plan_digest != plan.plan_digest:
+        raise ValueError("commit plan is stale")
     _validate_authorization(
         authorization,
         operation="commit",
@@ -329,17 +685,6 @@ def apply_commit(plan: CommitPlan, authorization: RepositoryAuthorization) -> Co
         plan_digest=plan.plan_digest,
         expected_oid=plan.expected_head_oid,
     )
-    fresh = plan_commit(
-        project_id=plan.project_id,
-        work_id=plan.work_id,
-        repo_role=plan.repo_role,
-        repo_root=plan.repo_root,
-        allowed_paths=plan.allowed_paths,
-        message=plan.message,
-        expected_head_oid=plan.expected_head_oid,
-    )
-    if fresh.plan_digest != plan.plan_digest:
-        raise ValueError("commit plan is stale")
     add_result = run_git(["add", "--", *plan.changed_paths], cwd=plan.repo_root)
     if not add_result.ok:
         message = add_result.stderr.strip() or "git add failed"
@@ -434,6 +779,7 @@ def plan_push(
     remote: str,
     ref: str,
     expected_remote_oid: str,
+    publication_evidence: PublicationEvidence | None = None,
 ) -> PushPlan:
     _validate_identity(project_id, work_id, repo_role)
     _validate_remote_ref(remote, ref)
@@ -457,6 +803,17 @@ def plan_push(
         )
         if not ancestor.ok:
             reasons.append("not_fast_forward")
+    eligibility = _evaluate_evidence(
+        work_id,
+        publication_evidence,
+        operation="push",
+        repo_role=repo_role,
+        observed_oid=observation.head_oid,
+        remote=remote,
+        ref=ref,
+    )
+    if eligibility.decision != "READY":
+        reasons.append(eligibility.reason)
     decision = "BLOCKED" if reasons else "READY"
     argv = ("push", remote, f"{observation.head_oid}:{ref}")
     digest_source = {
@@ -473,6 +830,7 @@ def plan_push(
         "decision": decision,
         "reasons": reasons,
         "argv": argv,
+        "publication_eligibility": eligibility.__dict__,
     }
     return PushPlan(
         project_id=project_id,
@@ -488,12 +846,26 @@ def plan_push(
         reason=",".join(reasons) if reasons else "ready",
         argv=argv,
         plan_digest=_digest(digest_source),
+        publication_evidence=publication_evidence,
+        publication_eligibility=eligibility,
     )
 
 
 def apply_push(plan: PushPlan, authorization: RepositoryAuthorization) -> PushReceipt:
     if plan.blocked:
         raise ValueError(f"push plan is blocked: {plan.reason}")
+    fresh = plan_push(
+        project_id=plan.project_id,
+        work_id=plan.work_id,
+        repo_role=plan.repo_role,
+        repo_root=plan.repo_root,
+        remote=plan.remote,
+        ref=plan.ref,
+        expected_remote_oid=plan.expected_remote_oid,
+        publication_evidence=plan.publication_evidence,
+    )
+    if fresh.plan_digest != plan.plan_digest:
+        raise ValueError("push plan is stale")
     _validate_authorization(
         authorization,
         operation="push",
@@ -503,17 +875,6 @@ def apply_push(plan: PushPlan, authorization: RepositoryAuthorization) -> PushRe
         plan_digest=plan.plan_digest,
         expected_oid=plan.expected_remote_oid,
     )
-    fresh = plan_push(
-        project_id=plan.project_id,
-        work_id=plan.work_id,
-        repo_role=plan.repo_role,
-        repo_root=plan.repo_root,
-        remote=plan.remote,
-        ref=plan.ref,
-        expected_remote_oid=plan.expected_remote_oid,
-    )
-    if fresh.plan_digest != plan.plan_digest:
-        raise ValueError("push plan is stale")
     result = run_git(list(plan.argv), cwd=plan.repo_root)
     after = query_exact_remote_ref(plan.repo_root, plan.remote, plan.ref)
     if not result.ok or after.decision != "PRESENT" or after.oid != plan.local_oid:

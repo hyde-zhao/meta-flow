@@ -59,6 +59,119 @@ class ValidationRunResult:
     stderr_excerpt: str
 
 
+@dataclass(frozen=True)
+class RecoveryAttemptPlan:
+    work_id: str
+    check_id: str
+    attempt_key: str
+    attempt_number: int
+    failure_class: str
+    input_digest: str
+    scope_digest: str
+    work_profile_digest: str
+    action: str
+    targeted_revalidation_only: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "work_id": self.work_id,
+            "check_id": self.check_id,
+            "attempt_key": self.attempt_key,
+            "attempt_number": self.attempt_number,
+            "failure_class": self.failure_class,
+            "input_digest": self.input_digest,
+            "scope_digest": self.scope_digest,
+            "work_profile_digest": self.work_profile_digest,
+            "action": self.action,
+            "targeted_revalidation_only": self.targeted_revalidation_only,
+        }
+
+
+def recovery_attempt_key(
+    *,
+    work_id: str,
+    check_id: str,
+    input_digest: str,
+    scope_digest: str,
+    work_profile_digest: str,
+) -> str:
+    payload = {
+        "work_id": work_id,
+        "check_id": check_id,
+        "input_digest": input_digest,
+        "scope_digest": scope_digest,
+        "work_profile_digest": work_profile_digest,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def build_recovery_attempt_plan(
+    *,
+    work_id: str,
+    check_id: str,
+    failure_class: str,
+    input_digest: str,
+    scope_digest: str,
+    work_profile_digest: str,
+    recovery_decision: dict[str, Any],
+) -> RecoveryAttemptPlan:
+    """把已获准的恢复决策转成一次受限 rerun；阻断决策不会产生 plan。"""
+
+    if recovery_decision.get("decision") != "RECOVERY_ALLOWED":
+        raise ValueError("recovery decision does not allow a rerun")
+    attempts_completed = int(recovery_decision.get("attempts_completed", 0))
+    effective_max = int(recovery_decision.get("effective_max_auto_recovery_attempts", 0))
+    attempt_number = attempts_completed + 1
+    if attempt_number > effective_max:
+        raise ValueError("recovery attempt exceeds effective maximum")
+    action = str(recovery_decision.get("next_action") or "")
+    if action != "rerun_original_check_group":
+        raise ValueError("recovery action must rerun the original check group")
+    return RecoveryAttemptPlan(
+        work_id=work_id,
+        check_id=check_id,
+        attempt_key=recovery_attempt_key(
+            work_id=work_id,
+            check_id=check_id,
+            input_digest=input_digest,
+            scope_digest=scope_digest,
+            work_profile_digest=work_profile_digest,
+        ),
+        attempt_number=attempt_number,
+        failure_class=failure_class,
+        input_digest=input_digest,
+        scope_digest=scope_digest,
+        work_profile_digest=work_profile_digest,
+        action=action,
+        targeted_revalidation_only=bool(
+            recovery_decision.get("targeted_revalidation_only")
+        ),
+    )
+
+
+def build_recovery_receipt(
+    plan: RecoveryAttemptPlan,
+    *,
+    result: str,
+    evidence_refs: list[str],
+    output_digest: str,
+) -> dict[str, Any]:
+    if result not in {"PASS", "FAIL", "BLOCKED"}:
+        raise ValueError("recovery result must be PASS, FAIL, or BLOCKED")
+    if not evidence_refs:
+        raise ValueError("recovery receipt requires evidence refs")
+    return {
+        "schema_version": 1,
+        "kind": "recovery-attempt-receipt",
+        **plan.as_dict(),
+        "result": result,
+        "evidence_refs": list(evidence_refs),
+        "output_digest": output_digest,
+    }
+
+
 def now_utc() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 

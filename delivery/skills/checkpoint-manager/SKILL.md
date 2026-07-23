@@ -992,6 +992,13 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 | inline fallback 授权 | N/A/WAIVED/FAIL | `approved_by`、`approved_at` | 仅 fallback 时允许 WAIVED |
 ```
 
+## CR-058 检查点执行闭环
+
+- CP3 + CP5 可以共用一次用户交互和一个 revision-aware Decision Bundle，但两个 subgate 必须有独立 evidence、result、receipt 与 route-on-fail。facts / scope / authz 漂移后必须新建 revision，并只发布 delta + capsule。
+- CP6 / CP8 前必须消费 Work usage 与 changed leaf inventory，验证 stage coverage=100%、token proxy 未超限、deduplicated gate interactions 未超限且 unknown leaf paths=0。
+- cost closure 只允许 `PASS_WITH_BASELINE_LIMITATION|FAIL`；`FAIL` 阻断 CP6 / CP8。CR-057 的 `1,752,000` 只能写为 `authorized_proxy_ceiling`，不得声称 actual-to-actual 改善。
+- CP8 result、人工 approve、native close 与测试 PASS 都不是 repository publication authorization；commit / push / publish 必须另取 typed authorization。
+
 ## 验收标准
 
 - [ ] CP0-CP8 均有 Entry Criteria、Checklist、Exit Criteria、Deliverables

@@ -1,6 +1,6 @@
 ---
 project_id: "meta-flow"
-release_scope: "meta-flow-context-budgeted-governance"
+release_scope: "meta-flow-governance-execution-closure"
 release_decision: "READY_WITH_RISK"
 created_at: "2026-06-17T13:49:25+08:00"
 ---
@@ -27,6 +27,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.13 | 2026-07-15 | host-orchestrator-inline/meta-qa | CR-047 收敛 workflow truth、portable routing、Doctor/guardrail/Ruff/installer preflight 与 CR-046 protected-object firewall；CP8 候选为 `READY_WITH_RISK`。 |
 | 1.14-candidate | 2026-07-19 | host-orchestrator | CR-052 vNext 本地实现候选：每项目独立发布库/过程库、弹性 Project/Phase/Work、G0/G1/G2、scope/budget、snapshot-only adoption、单仓 publication、六维复盘和有界自进化；用户已单独授权把当前两仓整改成果普通 commit/push 到各自远端分支，真实迁移、tag、production/runtime 发布仍未授权。 |
 | 1.15-candidate | 2026-07-23 | host-orchestrator | CR-057 Linux 项目接入能力成熟候选：统一 12 字段计划、双仓 6 个 exact OID 检查点、snapshot seed、typed authorization、partial/recovery 和隔离 F1/F2；CP8 自动预检为 `READY_WITH_RISK`，等待人工终验。 |
+| 1.16-candidate | 2026-07-23 | host-orchestrator | CR-058 治理执行闭环候选：固化 G2 CP8-before-publication、G0/G1 profile N/A、canonical truth、失败恢复上限、leaf path 计数、native projection 与 usage 降本闭环；独立 CP7 PASS，CP8 推荐 `READY_WITH_RISK`。 |
 
 ## 发布范围
 
@@ -169,3 +170,42 @@ created_at: "2026-06-17T13:49:25+08:00"
 | `RISK-057-GOV-SEQ-001` | release main 已先于 CP8 人工终验合并；历史事实保留，不倒填或自动回滚，CP8 只能以 `READY_WITH_RISK` 供人工接受或拒绝 |
 | `FU-CR057-001` | “CP8 必须先于 commit/push”已 accepted / approved_not_started；只登记候选，CR-057 关闭前不创建或启动新的正式 CR |
 | `RISK-055-WIN-001` | 继续 deferred / out-of-scope，不阻塞 Linux 候选，也不声称 Windows 原生验证通过 |
+
+## CR-058 候选发布切片
+
+### 用户可见变化
+
+| 能力 | 候选行为 |
+|---|---|
+| publication eligibility | `repository commit/push` 的 plan 与 apply 都必须从 binding 解析的 canonical refs 重算资格；caller 自证字段不再影响结果 |
+| G2 publication | CP8 机器 PASS、人工 approved、native CR closed、exact OID、scope、typed authorization 和目标策略全部一致后才可 READY |
+| G0/G1 publication | 消费同一 route/profile 分类输出；只有五项 `NOT_APPLICABLE_BY_PROFILE` 事实和目标预授权成立才可 READY |
+| fail closed | evidence missing/stale、digest/OID/target drift 和 formal truth 冲突均在 claim、授权消费、receipt、Git/network mutation 之前 BLOCKED |
+| recovery | G0/G1/G2 的 deterministic recovery 上限为 1/2/2；G0 只在剩余 check-group 预算充足时允许一次 |
+| changed-path 计量 | 机器统一消费 `git status --porcelain=v1 -z -uall` 的 leaf path；折叠 UI 条目数只用于显示 |
+| usage | 80%、100%、超限和 unavailable 使用稳定机器状态；100% 为 `EXCEEDED` |
+| native truth | CR、ADR、checkpoint、result、gate 与 ledger 的陈旧联合投影可被检测，不再以局部一致冒充整体一致 |
+
+### 验证结果
+
+- 独立 CP7 最终结论：`PASS`，F-058-CP7-001 至 F-058-CP7-005 全部 `VERIFIED_RESOLVED`。
+- 自动证据：publisher 27；定向 161 passed + 48 subtests；R3 定向 56 passed + 6 subtests；最终全仓 1012 passed + 117 subtests。
+- 静态与交付：Ruff PASS、隔离 pycompile 24/24、delivery guardrail PASS、mirror 3/3。
+- 安全边界：forged/missing/stale/digest/OID/target drift 场景下 authorization consumption、receipt、staged、HEAD/remote mutation 均为 0。
+
+### 降本闭环
+
+- CP8 准备及增量独立复验完成后的最终 usage：319 reads、271 writes、119 check groups、959000 proxy tokens，均严格低于 320/272/120/960000 上限。
+- stage coverage 预计 24/24，CP8 人工批准后 user decision interactions 预计 5/6，unknown changed leaf paths=0。
+- `CR-057` 没有 actual token telemetry；1,752,000 只是历史授权 proxy ceiling。因此本候选只声明当前硬上限合规和人工交互下降，不声明 actual-to-actual token 降幅，风险记为 `RISK-058-COST-BASELINE-001`。
+
+### 授权边界
+
+CR-058 已完成 CP8 人工批准、native close 和 Work close，最终状态为
+`closed/READY_WITH_RISK/cp8_closed`。真实 publication dogfood 额外修复了 canonical
+`process/...` 逻辑引用与 WORK 过程根相对 `allowed_reads` 的匹配问题；非 allowlisted 引用继续
+fail closed。publication evidence、target policy 和 typed authorization 采用不进入 Git 的单次
+运行态对象，以便 commit 后刷新 exact OID 而不制造 process 递归 dirty。
+
+当前用户已单独授权解决该 publication blocker 后执行双仓 commit/push；该授权仍不等于 merge、
+tag、正式 release、GOV-006/GOV-007、legacy、真实外部项目或 Windows 原生工作。

@@ -939,6 +939,146 @@ def is_formal_finished(formal: FormalCR) -> bool:
     return formal.status in FINISHED_FORMAL_STATUSES or formal.lifecycle_status in {"closed", "cancelled", "superseded"}
 
 
+def _checkpoint_index_projection(text: str) -> dict[str, str]:
+    projection: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        cells = split_table_row(line)
+        if len(cells) >= 2 and re.fullmatch(r"CP[0-8]", cells[0], re.IGNORECASE):
+            projection[cells[0].upper()] = strip_scalar(cells[1]).upper()
+    return projection
+
+
+def _gate_progress_rank(gate_status: str) -> int:
+    ranks = {
+        "not_started": 0,
+        "cp2_pending": 2,
+        "cp3_pending": 3,
+        "cp5_pending": 5,
+        "implementation_in_progress": 6,
+        "verification_in_progress": 7,
+        "cp7_pending": 7,
+        "cp8_pending": 8,
+        "cp8_closed": 9,
+        "cp8_recovery_closed": 9,
+        "closed": 9,
+    }
+    return ranks.get(normalize_gate_status(gate_status), -1)
+
+
+def validate_native_evidence_projection(project_root: Path, formal: FormalCR) -> list[str]:
+    """交叉校验正式 CR、ADR、gate ledger 与 checkpoint result 的当前投影。"""
+
+    errors: list[str] = []
+    text = read_text(formal.path)
+    checkpoint_projection = _checkpoint_index_projection(text)
+    observed_progress: list[tuple[str, int, int]] = []
+    work_ids: set[str] = set()
+
+    try:
+        gate_ledger = _resolve_runtime_ref(project_root, "process/state/GATE-LEDGER.ndjson")
+        if gate_ledger.is_file():
+            for line in read_text(gate_ledger).splitlines():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict) or not _ledger_event_belongs_to_cr(event, formal.cr_id):
+                    continue
+                if event.get("event_type") != "human_gate_approval" or event.get("status") != "approved":
+                    continue
+                checkpoint_match = re.search(r"CP[0-8]", str(event.get("gate") or event.get("checkpoint") or ""))
+                if checkpoint_match is None:
+                    continue
+                checkpoint = checkpoint_match.group(0)
+                if checkpoint_projection.get(checkpoint) not in {"APPROVED", "PASS", "PASS_WITH_RISK"}:
+                    errors.append(
+                        f"{formal.cr_id} Checkpoint Index {checkpoint} is stale relative to approved gate ledger evidence"
+                    )
+                number = int(checkpoint[2:])
+                # CP8 人工批准只证明发布终验通过；native close 是独立、受授权的
+                # 相邻转换。若把 CP8 approval 视为 rank=9，会形成“先 close 才能
+                # 记录 approval、但 close 又依赖 approval”的循环。
+                required_rank = number if checkpoint == "CP8" else number + 1
+                observed_progress.append(
+                    (f"approved gate {checkpoint}", number, required_rank)
+                )
+                if event.get("work_id"):
+                    work_ids.add(str(event["work_id"]))
+
+        checks_root = _resolve_runtime_ref(project_root, "process/checks")
+        if checks_root.is_dir():
+            for result_path in sorted(checks_root.glob(f"CP[0-8]-{formal.cr_id}-*.result.json")):
+                try:
+                    result = json.loads(read_text(result_path))
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(result, dict):
+                    continue
+                checkpoint = str(result.get("checkpoint") or "").upper()
+                decision = str(result.get("decision") or "").upper()
+                if not re.fullmatch(r"CP[0-8]", checkpoint) or not decision:
+                    continue
+                projected = checkpoint_projection.get(checkpoint, "")
+                if projected != decision and not (
+                    decision in {"PASS", "PASS_WITH_RISK"} and projected in {"PASS", "APPROVED", "PASS_WITH_RISK"}
+                ):
+                    errors.append(
+                        f"{formal.cr_id} Checkpoint Index {checkpoint}={projected or '<missing>'} "
+                        f"is stale relative to result decision={decision}"
+                    )
+                number = int(checkpoint[2:])
+                if decision in {"FAIL", "BLOCKED", "NEEDS_REWORK"}:
+                    required_rank = number
+                elif checkpoint in {"CP2", "CP3", "CP5", "CP8"}:
+                    # 人工检查点的机器 PASS 只满足进入人工门的条件，不代表已
+                    # 越过该门。CP2/CP3/CP5 由 approval ledger 推进；CP8
+                    # approval 后仍保持 cp8_pending，直到独立 native close。
+                    required_rank = number
+                else:
+                    required_rank = number + 1
+                observed_progress.append((f"{checkpoint} result {decision}", number, required_rank))
+                if result.get("work_id"):
+                    work_ids.add(str(result["work_id"]))
+    except (OSError, ProcessRouteError):
+        # 缺少辅助投影本身由其他 canonical 检查负责；这里不把 legacy fixture
+        # 强行升级为 native process 布局。
+        return errors
+
+    formal_rank = _gate_progress_rank(formal.gate_status)
+    for source, _checkpoint_number, required_rank in observed_progress:
+        if formal_rank < required_rank:
+            errors.append(
+                f"{formal.cr_id} frontmatter gate_status={formal.gate_status or '<missing>'} "
+                f"is stale relative to {source}"
+            )
+
+    for work_id in sorted(work_ids):
+        try:
+            adr_path = _resolve_runtime_ref(
+                project_root,
+                f"process/works/{work_id}/ARCHITECTURE-DECISION.md",
+            )
+        except ProcessRouteError:
+            continue
+        if not adr_path.is_file():
+            continue
+        adr_text = read_text(adr_path)
+        if strip_scalar(parse_frontmatter(adr_text).get("status", "")).lower() != "accepted":
+            continue
+        for line_no, line in enumerate(adr_text.splitlines(), 1):
+            if not line.strip().startswith("|") or not re.search(r"(?:CP[35]-)?DQ-[A-Za-z0-9-]+", line):
+                continue
+            cells = [strip_scalar(cell).upper() for cell in split_table_row(line)]
+            if "OPEN" in cells:
+                errors.append(
+                    f"{formal.cr_id} accepted ADR has stale OPEN decision queue row "
+                    f"{format_rel(project_root, adr_path)}:{line_no}"
+                )
+    return errors
+
+
 def collect_errors_and_warnings(
     project_root: Path,
     formal_crs: dict[str, FormalCR],
@@ -996,6 +1136,8 @@ def collect_errors_and_warnings(
             errors.append(f"{location} invalid gate_profile for {cr.cr_id}: {cr.gate_profile}")
         if cr.historical_baseline_status == "reframed" and not cr.reframed_by:
             warnings.append(f"{location} has historical_baseline_status=reframed but no reframed_by")
+        if cr.native and cr.lifecycle_status in {"active", "blocked"}:
+            errors.extend(validate_native_evidence_projection(project_root, cr))
 
     top_refs = [ref for ref in state_refs if ref.key == "active_change" and ref.value]
     nested_refs = [
@@ -1108,7 +1250,8 @@ def collect_errors_and_warnings(
         if cr.source != "cp8-follow-up":
             continue
         location = format_rel(project_root, cr.path)
-        if cr.cr_id not in rows_by_id:
+        expected_row_id = cr.source_follow_up_id or cr.cr_id
+        if expected_row_id not in rows_by_id:
             warnings.append(f"{location} source=cp8-follow-up but no matching follow-up tracking row")
         if not cr.source_follow_up_id:
             continue
@@ -1141,7 +1284,11 @@ def collect_errors_and_warnings(
 
     for cr in active_formal:
         if not any(item.item_id == cr.cr_id or item.formal_path == format_rel(project_root, cr.path) for item in index_items):
-            warnings.append(f"CR-INDEX.json does not mention active formal CR {cr.cr_id}")
+            message = f"CR-INDEX.json does not mention active formal CR {cr.cr_id}"
+            if cr.native:
+                errors.append(message)
+            else:
+                warnings.append(message)
 
     for item in index_items:
         location = f"process/changes/CR-INDEX.json:{item.line_no}"
@@ -1207,7 +1354,9 @@ def collect_errors_and_warnings(
 
     for item_id, row_group in rows_by_id.items():
         if item_id not in index_by_id:
-            warnings.append(f"{format_rel(project_root, row_group[0].source_path)}:{row_group[0].line_no} {item_id} missing from CR-INDEX.json items")
+            # CR-INDEX 是 formal-only 投影。合法 candidate/spike_candidate，
+            # 以及通过 formal_cr_path 关联正式 CR 的 follow-up row，均不要求
+            # 自身 ID 出现在 index。
             continue
         index_item = index_by_id[item_id]
         for row in row_group:
@@ -1220,7 +1369,12 @@ def collect_errors_and_warnings(
     for candidate_id, line_no in next_action_refs:
         if not candidate_id or candidate_id in PATH_EMPTY_VALUES or "000" in candidate_id:
             continue
-        if candidate_id not in index_by_id:
+        tracked_candidate = any(
+            row.item_id == candidate_id
+            and row.lifecycle_status == "candidate"
+            for row in rows
+        )
+        if candidate_id not in index_by_id and not tracked_candidate:
             warnings.append(f"CR-INDEX.json:{line_no} next_action_queue candidate_id={candidate_id} is not in CR-INDEX.json items")
 
     return errors, warnings

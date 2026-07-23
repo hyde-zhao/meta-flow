@@ -53,6 +53,41 @@ def write_state(root: Path, payload: dict) -> Path:
 
 
 class StateTransitionTests(unittest.TestCase):
+    def test_cp5_transition_accepts_missing_state_projection_without_creating_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route = write_route_plan(root)
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = state_transition.main(
+                    ["--project-root", str(root), "--route-plan", str(route), "--approved-gate", "CP5", "--output", "json"]
+                )
+            self.assertEqual(0, exit_code)
+            self.assertEqual("OK", json.loads(output.getvalue())["status"])
+            self.assertFalse((root / "process" / "state" / "STATE.current.json").exists())
+
+    def test_cp5_transition_rejects_missing_route_instead_of_treating_it_as_missing_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing_route = root / "process" / "checks" / "missing-route.json"
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = state_transition.main(
+                    [
+                        "--project-root",
+                        str(root),
+                        "--route-plan",
+                        str(missing_route),
+                        "--approved-gate",
+                        "CP5",
+                        "--output",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(1, exit_code)
+            self.assertEqual("FAIL", json.loads(output.getvalue())["status"])
+
     def test_chronology_accepts_complete_timezone_aware_order(self) -> None:
         nodes = [
             state_transition.ChronologyNode("producer-complete", "2026-07-12T00:00:00Z", "producer"),

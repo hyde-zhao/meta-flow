@@ -620,6 +620,18 @@ def main(argv: list[str] | None = None) -> int:
             decision=parsed.decision,
             approved_gate=parsed.approved_gate,
         )
+    except FileNotFoundError as exc:
+        # STATE.current.json 是派生投影；CP5 批准后的 CP6 工作可在其尚未
+        # 建立时继续，不能为了通过检查而创建该状态文件。
+        missing_path = Path(exc.filename).resolve() if exc.filename else None
+        if (
+            parsed.approved_gate == "CP5"
+            and state_path.name == "STATE.current.json"
+            and missing_path == state_path.resolve()
+        ):
+            errors, warnings = [], [f"state projection absent: {exc.filename}; CP5 transition accepted without mutation"]
+        else:
+            errors, warnings = [str(exc)], []
     except ValueError as exc:
         errors, warnings = [str(exc)], []
     if parsed.output == "json":

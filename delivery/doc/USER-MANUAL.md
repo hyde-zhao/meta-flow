@@ -914,6 +914,33 @@ notes:
   - "本轮验证只检查安装目录、文件引用和提示词加载"
 ```
 
+### 9.1 治理恢复、预算与发布边界
+
+当检查失败时，Meta Flow 先分类再决定是否恢复：仅 `CHECK_HARNESS_ERROR` 和
+`DETERMINISTIC_SCHEMA_REPAIR` 可能自动恢复；`REAL_CONTENT_FAILURE`、
+`PARTIAL_MUTATION`、未知失败或 facts / scope / OID / authz / profile 漂移会立即停止。
+G0 / G1 / G2 的单检查恢复上限分别为 1 / 2 / 2。G2 同一 finding 最多独立 re-QA
+2 次；G0 / G1 不启动独立 QA，只重跑受影响检查。
+
+Work usage 在每个阶段写入 `process/works/<work-id>/USAGE.json`。达到任一预算的 80%
+会警告；达到或超过 100%，或 token 无法测量时，当前事实仍会落账，但下一次 mutation
+会被拒绝。路径统计必须看 `changed_leaf_path_count` 和 `changed_leaf_paths`；终端中折叠
+显示的一条未跟踪目录只用于 UI，不能代表一个实际文件。
+
+CP6 / CP8 前的 cost closure 必须同时满足：阶段 coverage=100%、当前 token proxy 未超过
+批准上限、去重后的 gate interaction 未超过批准上限、unknown leaf paths=0。历史
+CR-057 的 1,752,000 是授权 proxy ceiling，不是可直接比较的 actual token；因此迁移期
+正常结论是 `PASS_WITH_BASELINE_LIMITATION`，任一硬条件失败则为 `FAIL` 并停止推进。
+
+人工门修改后会创建新的 Decision Bundle revision，只展示 facts / scope / authz delta 和
+capsule 引用。一次交互可以合并确认 CP3 + CP5，但两道门仍各有 result、evidence 与 receipt。
+native CR 关闭时，status-sync 会在同一事务更新 formal CR、正文状态表、Checkpoint Index、
+summary、ledger 和 formal-only index；follow-up candidate 不会伪装成正式 CR。
+
+最后要区分“就绪”和“发布授权”：CP8 approve、native close、测试通过或 cost closure
+通过都不允许自动执行 `git commit`、`git push`、publish、live、production write 或读取
+凭据。每一种真实外部动作都需要单独、目标明确并绑定当前 OID/facts 的授权。
+
 ## 10. 排障
 
 1. **提示找不到 `scripts/install.py`**：你在仓库根目录执行了 delivery-root 命令；改用 `delivery/scripts/install.py`

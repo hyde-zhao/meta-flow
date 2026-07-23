@@ -767,6 +767,59 @@ class CRLifecycleTests(unittest.TestCase):
             events = cr_lifecycle.load_ledger_events(root)
             self.assertEqual("status_sync", events[-1]["event"])
 
+    def test_status_sync_projects_body_status_and_checkpoint_in_same_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cr_path = write_cr(root, "CR-101", status="active")
+            cr_path.write_text(
+                cr_path.read_text(encoding="utf-8")
+                + """
+## CR 类型与门禁策略
+
+| 字段 | 内容 |
+|---|---|
+| 生命周期状态 | active |
+| 就绪状态 | NOT_READY |
+| 门禁状态 | cp3_pending |
+| 门禁模板 | architecture-major |
+
+## Checkpoint Index
+
+| CP | 状态 | 机器结果 ref |
+|---|---|---|
+| CP3 | approved | process/checks/CP3.result.json |
+| CP8 | pending | process/checks/CP8.result.json |
+""",
+                encoding="utf-8",
+            )
+
+            plan = cr_lifecycle.plan_status_sync(
+                root,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="cp8_closed",
+            )
+
+            self.assertEqual("READY", plan.decision)
+            formal_target = next(
+                target for target in plan.targets if target.ref == "process/changes/CR-101.md"
+            )
+            self.assertIn("| 生命周期状态 | closed |", formal_target.after)
+            self.assertIn("| 就绪状态 | READY_WITH_RISK |", formal_target.after)
+            self.assertIn("| 门禁状态 | cp8_closed |", formal_target.after)
+            self.assertIn(
+                "| CP8 | approved | process/checks/CP8.result.json |",
+                formal_target.after,
+            )
+            self.assertEqual(
+                1,
+                sum(
+                    target.ref == "process/changes/CR-101.md"
+                    for target in plan.targets
+                ),
+            )
+
     def test_status_sync_closed_defaults_gate_status_to_cp8_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

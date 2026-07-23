@@ -60,6 +60,105 @@ def write_cp1_result(root: Path) -> Path:
 
 
 class QualityGovernanceTests(unittest.TestCase):
+    def test_g2_readiness_and_same_finding_reqa_are_bounded(self) -> None:
+        ready = {
+            "cp6_result_ready": True,
+            "approved_design_refs_match": True,
+            "required_fixtures_ready": True,
+            "changed_paths_allowed": True,
+            "consumer_authorization_ready": True,
+            "usage_allows_mutation": True,
+        }
+        policy = {
+            "risk_profile": "G2",
+            "independent_qa": True,
+            "same_finding_reqa_max": 2,
+        }
+        initial = quality_governance.evaluate_quality_route(
+            route_policy=policy,
+            readiness_facts=ready,
+        )
+        self.assertEqual("READY_FOR_QA", initial.decision)
+        finding = {
+            "check_id": "CP7-01",
+            "normalized_contract_ref": "ADR-058-05",
+            "affected_path_set": ["meta_flow/checks/quality_governance.py"],
+            "root_cause_class": "REAL_CONTENT_FAILURE",
+            "title": "first title",
+        }
+        first = quality_governance.evaluate_quality_route(
+            route_policy=policy,
+            readiness_facts=ready,
+            finding=finding,
+            same_finding_rounds_completed=0,
+        )
+        renamed = {**finding, "title": "renamed finding"}
+        second = quality_governance.evaluate_quality_route(
+            route_policy=policy,
+            readiness_facts=ready,
+            finding=renamed,
+            same_finding_rounds_completed=1,
+        )
+        third = quality_governance.evaluate_quality_route(
+            route_policy=policy,
+            readiness_facts=ready,
+            finding=renamed,
+            same_finding_rounds_completed=2,
+        )
+        self.assertEqual("REQA_ALLOWED", first.decision)
+        self.assertEqual("REQA_ALLOWED", second.decision)
+        self.assertEqual(first.finding_fingerprint, second.finding_fingerprint)
+        self.assertEqual("NEEDS_DESIGN_CLARIFICATION", third.decision)
+        self.assertEqual("require_user_decision", third.next_action)
+
+    def test_g0_g1_only_allow_targeted_revalidation(self) -> None:
+        for profile in ("G0", "G1"):
+            with self.subTest(profile=profile):
+                decision = quality_governance.evaluate_quality_route(
+                    route_policy={
+                        "risk_profile": profile,
+                        "independent_qa": False,
+                        "same_finding_reqa_max": 0,
+                    },
+                    readiness_facts={
+                        "affected_required_check_groups": ["work-policy"],
+                    },
+                )
+                self.assertEqual("TARGETED_REVALIDATION", decision.decision)
+                self.assertFalse(decision.independent_qa)
+                self.assertTrue(decision.targeted_revalidation_only)
+                self.assertEqual(0, decision.same_finding_reqa_max)
+
+    def test_quality_policy_conflict_and_partial_mutation_fail_closed(self) -> None:
+        conflict = quality_governance.evaluate_quality_route(
+            route_policy={
+                "risk_profile": "G1",
+                "independent_qa": True,
+                "same_finding_reqa_max": 2,
+            },
+            readiness_facts={"affected_required_check_groups": ["x"]},
+        )
+        self.assertEqual("PROFILE_ROUTE_CONFLICT", conflict.decision)
+
+        blocked = quality_governance.evaluate_quality_route(
+            route_policy={
+                "risk_profile": "G2",
+                "independent_qa": True,
+                "same_finding_reqa_max": 2,
+            },
+            readiness_facts={
+                "cp6_result_ready": True,
+                "approved_design_refs_match": True,
+                "required_fixtures_ready": True,
+                "changed_paths_allowed": True,
+                "consumer_authorization_ready": True,
+                "usage_allows_mutation": True,
+                "partial_mutation": True,
+            },
+        )
+        self.assertEqual("NOT_READY_FOR_QA", blocked.decision)
+        self.assertIn("PARTIAL_MUTATION", blocked.blockers)
+
     def test_quality_init_writes_default_policies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

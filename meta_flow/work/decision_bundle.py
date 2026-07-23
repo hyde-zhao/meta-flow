@@ -35,12 +35,139 @@ SUBGATE_STATES = {
     "not-started-by-stop-propagation",
 }
 STOP_RESULTS = {"failed", "blocked"}
+READ_EXPANSION_REASONS = {
+    "capsule_missing",
+    "field_conflict",
+    "human_audit",
+    "deep_review",
+    "schema_validation_failed",
+}
 
 
 @dataclass(frozen=True)
 class BundleFinding:
     code: str
     message: str
+
+
+def build_decision_bundle_delta(
+    baseline: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    baseline_ref: str,
+    capsule_ref: str,
+    read_expansions: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """生成 capsule-first 的 revision delta，不复制完整设计正文。"""
+
+    baseline_findings = validate_bundle(baseline)
+    current_findings = validate_bundle(current)
+    findings = [*baseline_findings, *current_findings]
+    if findings:
+        raise ValueError(
+            "invalid Decision Bundle: "
+            + "; ".join(item.message for item in findings)
+        )
+    if baseline.get("work_id") != current.get("work_id"):
+        raise ValueError("Decision Bundle delta requires the same work_id")
+    if int(current["revision"]) <= int(baseline["revision"]):
+        raise ValueError("Decision Bundle delta requires a newer revision")
+    for ref_name, ref in (
+        ("baseline_ref", baseline_ref),
+        ("capsule_ref", capsule_ref),
+    ):
+        if (
+            not ref.startswith("process/")
+            or ref.startswith("/")
+            or ".." in ref.split("/")
+        ):
+            raise ValueError(f"{ref_name} must be one safe process/ logical ref")
+    expansion_refs: list[str] = []
+    for expansion in read_expansions:
+        reason = str(expansion.get("full_doc_read_reason") or "")
+        ref = str(expansion.get("ref") or "")
+        if reason not in READ_EXPANSION_REASONS:
+            raise ValueError(f"invalid full_doc_read_reason: {reason or '-'}")
+        if not ref.startswith("process/") or ".." in ref.split("/"):
+            raise ValueError("read expansion ref must be one safe process/ logical ref")
+        expansion_refs.append(ref)
+
+    baseline_facts = dict(baseline.get("expected_facts") or {})
+    current_facts = dict(current.get("expected_facts") or {})
+    facts_delta = {
+        key: {
+            "before": baseline_facts.get(key),
+            "after": current_facts.get(key),
+        }
+        for key in sorted(set(baseline_facts) | set(current_facts))
+        if baseline_facts.get(key) != current_facts.get(key)
+    }
+    baseline_authz = dict(baseline.get("authorization_snapshot") or {})
+    current_authz = dict(current.get("authorization_snapshot") or {})
+    authz_delta = {
+        key: {
+            "before": baseline_authz.get(key),
+            "after": current_authz.get(key),
+        }
+        for key in sorted(set(baseline_authz) | set(current_authz))
+        if baseline_authz.get(key) != current_authz.get(key)
+    }
+    baseline_subgates = {
+        str(item.get("id")): item for item in baseline.get("subgates") or []
+    }
+    current_subgates = {
+        str(item.get("id")): item for item in current.get("subgates") or []
+    }
+    added = sorted(set(current_subgates) - set(baseline_subgates))
+    closed = sorted(set(baseline_subgates) - set(current_subgates))
+    changed = sorted(
+        subgate_id
+        for subgate_id in set(baseline_subgates) & set(current_subgates)
+        if _canonical_digest(baseline_subgates[subgate_id])
+        != _canonical_digest(current_subgates[subgate_id])
+    )
+    scope_before = str(baseline.get("scope_digest") or "")
+    scope_after = str(current.get("scope_digest") or "")
+    return {
+        "schema_version": 1,
+        "kind": "decision-bundle-delta",
+        "work_id": current["work_id"],
+        "baseline": {
+            "bundle_id": baseline["bundle_id"],
+            "revision": baseline["revision"],
+            "ref": baseline_ref,
+        },
+        "current": {
+            "bundle_id": current["bundle_id"],
+            "revision": current["revision"],
+        },
+        "capsule_ref": capsule_ref,
+        "facts_delta": facts_delta,
+        "scope_delta": {
+            "changed": scope_before != scope_after,
+            "before": scope_before,
+            "after": scope_after,
+        },
+        "authorization_delta": authz_delta,
+        "subgate_delta": {
+            "added": added,
+            "changed": changed,
+            "closed": closed,
+        },
+        "read_expansion_refs": expansion_refs,
+        "excluded_actions": list(
+            current_authz.get("excluded_actions") or []
+        ),
+        "requires_new_revision": bool(
+            facts_delta
+            or authz_delta
+            or added
+            or changed
+            or closed
+            or scope_before != scope_after
+        ),
+        "full_document_bodies_embedded": False,
+    }
 
 
 def _canonical_digest(payload: object) -> str:

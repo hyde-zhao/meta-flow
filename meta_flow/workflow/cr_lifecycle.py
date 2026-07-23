@@ -356,6 +356,94 @@ def render_frontmatter_fields(text: str, updates: dict[str, str]) -> str:
     return _replace_frontmatter(text, "\n".join(next_lines))
 
 
+def _gate_checkpoint_projection(gate_status: str) -> tuple[str, str] | None:
+    """Map the lifecycle gate to the exact Checkpoint Index row projection."""
+
+    mapping = {
+        "cp2_pending": ("CP2", "pending"),
+        "cp3_pending": ("CP3", "pending"),
+        "cp5_pending": ("CP5", "pending"),
+        "implementation_in_progress": ("CP6", "in-progress"),
+        "cp7_pending": ("CP7", "pending"),
+        "verification_in_progress": ("CP7", "in-progress"),
+        "cp8_pending": ("CP8", "pending"),
+        "cp8_closed": ("CP8", "approved"),
+        "cp8_recovery_closed": ("CP8", "approved"),
+        "closed": ("CP8", "approved"),
+    }
+    return mapping.get(gate_status)
+
+
+def _render_exact_section_rows(
+    text: str,
+    heading: str,
+    replacements: dict[str, str],
+) -> str:
+    """Replace exact first-column table rows inside one optional section."""
+
+    heading_line = f"## {heading}"
+    lines = text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.rstrip("\r\n") == heading_line]
+    if not starts:
+        return text
+    if len(starts) != 1:
+        raise ValueError(f"duplicate CR body section: {heading}")
+    start = starts[0] + 1
+    end = next(
+        (
+            index
+            for index in range(start, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    seen: set[str] = set()
+    for index in range(start, end):
+        raw = lines[index]
+        line_ending = "\n" if raw.endswith("\n") else ""
+        cells = [cell.strip() for cell in raw.rstrip("\r\n").split("|")]
+        if len(cells) < 4 or cells[0] != "":
+            continue
+        key = cells[1]
+        if key not in replacements:
+            continue
+        if key in seen:
+            raise ValueError(f"duplicate CR body table row: {heading}/{key}")
+        cells[2] = replacements[key]
+        lines[index] = "| " + " | ".join(cells[1:-1]) + " |" + line_ending
+        seen.add(key)
+    return "".join(lines)
+
+
+def render_status_body_projection(
+    text: str,
+    *,
+    lifecycle_status: str,
+    readiness_status: str,
+    gate_status: str,
+) -> str:
+    """Project lifecycle truth into the optional CR body status tables."""
+
+    rendered = _render_exact_section_rows(
+        text,
+        "CR 类型与门禁策略",
+        {
+            "生命周期状态": lifecycle_status,
+            "就绪状态": readiness_status,
+            "门禁状态": gate_status,
+        },
+    )
+    checkpoint = _gate_checkpoint_projection(gate_status)
+    if checkpoint is None:
+        return rendered
+    checkpoint_id, checkpoint_status = checkpoint
+    return _render_exact_section_rows(
+        rendered,
+        "Checkpoint Index",
+        {checkpoint_id: checkpoint_status},
+    )
+
+
 def parse_inline_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [_strip_scalar(item) for item in value if _strip_scalar(item)]
@@ -1902,6 +1990,12 @@ def plan_status_sync(
     if "status" in fields:
         updates["status"] = target_status
     cr_after = render_frontmatter_fields(before_text, updates)
+    cr_after = render_status_body_projection(
+        cr_after,
+        lifecycle_status=target_status,
+        readiness_status=target_readiness,
+        gate_status=target_gate,
+    )
     timestamp = now_utc()
     summary = summary_from_cr_file(project_root, cr_path, readiness=target_readiness)
     summary["status"] = target_status

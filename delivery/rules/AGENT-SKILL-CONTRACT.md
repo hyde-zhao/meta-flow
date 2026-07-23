@@ -114,6 +114,16 @@
 - Host Orchestrator 合并人工确认时必须创建 revision-aware Decision Bundle；功能 Agent 只能回写自身 subgate result/evidence，不能把 bundle approval 解释为 commit/push/runtime 授权。
 - `review-artifact-protocol`、`release-readiness` 和质量类 Skill 只输出 findings / release / evidence 摘要和引用。
 
+## Governance Execution Closure
+
+1. failure route 只接受 `CHECK_HARNESS_ERROR`、`DETERMINISTIC_SCHEMA_REPAIR`、`REAL_CONTENT_FAILURE`、`PARTIAL_MUTATION` 四类。G0 / G1 / G2 每个检查的自动恢复次数上限是 `1 / 2 / 2`；facts / scope / OID / authz / profile 漂移、真实内容失败、部分写入和未知失败不得自动重试。
+2. 只有 G2 能进入 independent QA；同一 finding fingerprint 最多 2 次 re-QA，第 3 次返回 `NEEDS_DESIGN_CLARIFICATION`。G0 / G1 只能执行 affected-check targeted revalidation。
+3. usage event 无论是否越界都必须先幂等追加。80% 为 `WARNING`；100% 及以上或 token `unavailable` 阻断后续 mutation。changed-path 机器真相只读取 `git status --porcelain=v1 -z -uall` 的 leaf paths；collapsed count 仅供 UI。
+4. CP6 / CP8 的 cost closure 必须证明 stage coverage=100%、token proxy 在批准上限内、去重 gate interaction 不超过批准上限且 unknown leaf paths=0。合法结论仅为 `PASS_WITH_BASELINE_LIMITATION|FAIL`，`FAIL` 必须停止推进。CR-057 的 `1,752,000` 只能标记为 `authorized_proxy_ceiling`。
+5. facts / scope / authz 变化时，Decision Bundle 必须创建新 revision，并只携带 delta、capsule ref 和 `read_expansion_log`；不得复制完整上轮 brief。合并一次 CP3 + CP5 用户交互不合并两个 subgate 的 evidence、result 或 receipt。
+6. status-sync 必须以一个可恢复事务投影 formal frontmatter、CR 正文状态摘要、Checkpoint Index、summary、evidence index、ledger 和 formal-only index。follow-up candidate 不进入 formal-only index；dangling formal ref 仍阻断。
+7. CP8、native close、测试或 cost closure 均不构成 repository publication authorization。`git commit`、`git push`、publish、live、production write 和 credential access 必须另有 exact target、facts/OID 与时效绑定的 typed authorization。
+
 ## Acceptance
 
 - 五个功能 Agent 均显式遵守 Input Contract、Output Contract 和 Handoff Contract。

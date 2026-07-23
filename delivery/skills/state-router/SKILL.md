@@ -489,6 +489,14 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 - 并行队列必须由 Story DAG、依赖类型和文件所有权计算，不得只按 Wave 名称粗略并行
 - 仅使用当前 `process/STATE.md` 与 `skills/state-router/templates/STATE-TEMPLATE.md` 契约
 
+## CR-058 merged gate 与恢复路由
+
+1. CP3 与 CP5 可由同一个 `interaction_id` 发起，但必须分别检查 subgate evidence、result 和 receipt；任一 subgate 非 pass-like 都停止传播。
+2. facts、scope、authz 或 revision 变化时，必须创建新的 Decision Bundle revision，只装配 delta、capsule ref 与 `read_expansion_log`，不得复用旧 approval。
+3. approval 回填后连续执行所有 `human_gate=none` 节点，直到 required gate、授权边界、失败或稳定 stop reason。native CR 状态必须通过一次 batch status-sync 投影 formal、正文状态表、Checkpoint Index、summary、ledger 与 formal-only index。
+4. 失败先分类为 `CHECK_HARNESS_ERROR`、`DETERMINISTIC_SCHEMA_REPAIR`、`REAL_CONTENT_FAILURE` 或 `PARTIAL_MUTATION`。G0 / G1 / G2 单检查恢复上限为 `1 / 2 / 2`；drift、真实内容失败、部分 mutation 和未知失败不得自动恢复。
+5. G0 / G1 只路由 affected-check targeted revalidation；G2 同一 finding 最多 2 次独立 re-QA，第 3 次路由 `NEEDS_DESIGN_CLARIFICATION`。
+
 ## 验收标准
 
 - [ ] `STATE.md` 的阶段与下一步动作与实际产物状态一致

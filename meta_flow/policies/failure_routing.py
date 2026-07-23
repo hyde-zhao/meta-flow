@@ -6,6 +6,8 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,200 @@ FAILURE_ROUTES = {
 TERMINAL_BLOCKING_DECISIONS = {"FAIL", "BLOCKED"}
 RISK_ACCEPTANCE_DECISIONS = {"PASS_WITH_RISK", "WAIVED"}
 RELEASE_READY_WITH_RISK = "READY_WITH_RISK"
+FAILURE_CLASSES = {
+    "CHECK_HARNESS_ERROR",
+    "DETERMINISTIC_SCHEMA_REPAIR",
+    "REAL_CONTENT_FAILURE",
+    "PARTIAL_MUTATION",
+}
+PROFILE_RECOVERY_MAX = {"G0": 1, "G1": 2, "G2": 2}
+NON_RECOVERABLE_FAILURES = {"REAL_CONTENT_FAILURE", "PARTIAL_MUTATION", "UNKNOWN"}
+DRIFT_FACTS = ("facts_digest", "scope_digest", "oid_digest", "authz_digest", "profile_digest")
+
+
+@dataclass(frozen=True)
+class FailureClassification:
+    failure_class: str
+    reason_codes: tuple[str, ...]
+    automatic_recovery_candidate: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "failure_class": self.failure_class,
+            "reason_codes": list(self.reason_codes),
+            "automatic_recovery_candidate": self.automatic_recovery_candidate,
+        }
+
+
+@dataclass(frozen=True)
+class RecoveryDecision:
+    decision: str
+    risk_profile: str
+    route_max_auto_recovery_attempts: int
+    effective_max_auto_recovery_attempts: int
+    attempts_completed: int
+    remaining_attempts: int
+    next_action: str
+    reason_codes: tuple[str, ...]
+    targeted_revalidation_only: bool
+
+    @property
+    def allowed(self) -> bool:
+        return self.decision == "RECOVERY_ALLOWED"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "decision": self.decision,
+            "risk_profile": self.risk_profile,
+            "route_max_auto_recovery_attempts": self.route_max_auto_recovery_attempts,
+            "effective_max_auto_recovery_attempts": self.effective_max_auto_recovery_attempts,
+            "attempts_completed": self.attempts_completed,
+            "remaining_attempts": self.remaining_attempts,
+            "next_action": self.next_action,
+            "reason_codes": list(self.reason_codes),
+            "targeted_revalidation_only": self.targeted_revalidation_only,
+        }
+
+
+def classify_failure(facts: Mapping[str, Any]) -> FailureClassification:
+    """把失败事实稳定归入四类；证据不充分时失败关闭为 UNKNOWN。"""
+
+    if facts.get("partial_mutation") or facts.get("mutation_receipts"):
+        return FailureClassification(
+            "PARTIAL_MUTATION",
+            ("PARTIAL_MUTATION_OBSERVED",),
+            False,
+        )
+    if facts.get("real_content_failure") or facts.get("contract_failure") or facts.get("semantic_failure"):
+        return FailureClassification(
+            "REAL_CONTENT_FAILURE",
+            ("CONTENT_OR_CONTRACT_FAILURE",),
+            False,
+        )
+    if (
+        facts.get("deterministic_schema_repair")
+        and facts.get("repair_path_in_scope")
+        and facts.get("before_digest_matches")
+    ):
+        return FailureClassification(
+            "DETERMINISTIC_SCHEMA_REPAIR",
+            ("DETERMINISTIC_REPAIR_PROVEN",),
+            True,
+        )
+    if facts.get("check_harness_error") and facts.get("semantic_digest_unchanged"):
+        return FailureClassification(
+            "CHECK_HARNESS_ERROR",
+            ("HARNESS_ERROR_WITH_UNCHANGED_SEMANTICS",),
+            True,
+        )
+    return FailureClassification(
+        "UNKNOWN",
+        ("FAILURE_CLASSIFICATION_INSUFFICIENT",),
+        False,
+    )
+
+
+def _policy_value(route_policy: Mapping[str, Any], key: str, default: Any = None) -> Any:
+    recovery = route_policy.get("recovery")
+    if isinstance(recovery, Mapping) and key in recovery:
+        return recovery[key]
+    return route_policy.get(key, default)
+
+
+def _budget_allows_recovery(
+    *,
+    risk_profile: str,
+    remaining_budget: Mapping[str, int | None],
+    recovery_cost: Mapping[str, int],
+    pending_required_check_groups: int,
+) -> tuple[bool, tuple[str, ...]]:
+    reasons: list[str] = []
+    for dimension in ("reads", "writes", "tokens"):
+        remaining = remaining_budget.get(dimension)
+        cost = int(recovery_cost.get(dimension, 0))
+        if remaining is None or int(remaining) < cost:
+            reasons.append(f"{dimension.upper()}_BUDGET_INSUFFICIENT")
+    remaining_checks = remaining_budget.get("check_groups")
+    recovery_checks = int(recovery_cost.get("check_groups", 0))
+    required_checks = recovery_checks
+    if risk_profile == "G0":
+        required_checks += pending_required_check_groups
+    if remaining_checks is None or int(remaining_checks) < required_checks:
+        reasons.append("CHECK_GROUP_BUDGET_INSUFFICIENT")
+    return not reasons, tuple(reasons)
+
+
+def evaluate_recovery(
+    *,
+    failure_class: str,
+    route_policy: Mapping[str, Any],
+    attempts_completed: int,
+    baseline_facts: Mapping[str, Any],
+    current_facts: Mapping[str, Any],
+    remaining_budget: Mapping[str, int | None],
+    recovery_cost: Mapping[str, int],
+    pending_required_check_groups: int = 0,
+) -> RecoveryDecision:
+    """消费 route policy 计算有效恢复上限，不自行重新判定 Work profile。"""
+
+    if attempts_completed < 0 or pending_required_check_groups < 0:
+        raise ValueError("attempt and pending check counts must be non-negative")
+    risk_profile = str(_policy_value(route_policy, "risk_profile", "")).upper()
+    expected_max = PROFILE_RECOVERY_MAX.get(risk_profile)
+    try:
+        route_max = int(_policy_value(route_policy, "max_auto_recovery_attempts", -1))
+    except (TypeError, ValueError):
+        route_max = -1
+    reasons: list[str] = []
+    effective_max = 0
+    next_action = "require_user_decision"
+
+    if expected_max is None or route_max != expected_max:
+        reasons.append("PROFILE_ROUTE_CONFLICT")
+    elif failure_class not in FAILURE_CLASSES:
+        reasons.append("FAILURE_CLASSIFICATION_UNKNOWN")
+    elif failure_class in NON_RECOVERABLE_FAILURES:
+        reasons.append(f"{failure_class}_AUTOMATIC_RECOVERY_FORBIDDEN")
+        next_action = "preserve_partial_and_stop" if failure_class == "PARTIAL_MUTATION" else "rework_content"
+    else:
+        drifted = [
+            key
+            for key in DRIFT_FACTS
+            if baseline_facts.get(key) != current_facts.get(key)
+        ]
+        if drifted:
+            reasons.extend(f"{key.upper()}_DRIFT" for key in drifted)
+            next_action = "replan_or_reclassify"
+        else:
+            budget_ok, budget_reasons = _budget_allows_recovery(
+                risk_profile=risk_profile,
+                remaining_budget=remaining_budget,
+                recovery_cost=recovery_cost,
+                pending_required_check_groups=pending_required_check_groups,
+            )
+            if not budget_ok:
+                reasons.extend(budget_reasons)
+                next_action = "stop_budget_blocked"
+            else:
+                effective_max = route_max
+                next_action = "rerun_original_check_group"
+
+    remaining_attempts = max(effective_max - attempts_completed, 0)
+    allowed = effective_max > 0 and remaining_attempts > 0
+    if not allowed and not reasons and attempts_completed >= effective_max:
+        reasons.append("AUTO_RECOVERY_LIMIT_REACHED")
+        next_action = "stop_recovery_loop"
+    return RecoveryDecision(
+        decision="RECOVERY_ALLOWED" if allowed else "RECOVERY_BLOCKED",
+        risk_profile=risk_profile,
+        route_max_auto_recovery_attempts=route_max,
+        effective_max_auto_recovery_attempts=effective_max,
+        attempts_completed=attempts_completed,
+        remaining_attempts=remaining_attempts,
+        next_action=next_action,
+        reason_codes=tuple(reasons),
+        targeted_revalidation_only=risk_profile in {"G0", "G1"},
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
