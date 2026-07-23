@@ -10,6 +10,7 @@ from pathlib import Path
 from meta_flow.checks import cp_result
 from meta_flow.context_pack import builder, story_contract
 from meta_flow.state import event_ledger
+from meta_flow.work.decision_bundle import build_decision_bundle_delta
 from meta_flow.workflow import story_evidence
 
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "evals" / "fixtures" / "context-budgeted-meta-flow"
@@ -37,6 +38,71 @@ def assert_no_denied_allowed_reads(testcase: unittest.TestCase, payload: dict[st
 
 
 class ContextBudgetedFlowE2ETests(unittest.TestCase):
+    def test_decision_bundle_delta_reports_facts_scope_and_authz_without_full_docs(
+        self,
+    ) -> None:
+        baseline = {
+            "bundle_id": "DB-1",
+            "revision": 1,
+            "work_id": "W-1",
+            "authorization_snapshot": {
+                "authorization_id": "AUTH-1",
+                "authorized_by": "user",
+                "authorized_at": "2026-01-01T00:00:00Z",
+                "exact_subgate_ids": ["CP3"],
+                "excluded_actions": ["commit"],
+                "expiry_or_revalidation_rule": "facts drift",
+            },
+            "expected_facts": {
+                "release_oid": "a" * 40,
+                "process_oid": "b" * 40,
+                "branch": "main",
+                "dirty_path_digest": "c" * 64,
+            },
+            "scope_digest": "d" * 64,
+            "subgates": [
+                {
+                    "id": "CP3",
+                    "order": 1,
+                    "action": "review",
+                    "preconditions": [],
+                    "authorization_required": True,
+                    "evidence_refs": ["process/checks/CP3.result.json"],
+                    "result": "passed",
+                }
+            ],
+            "stop_policy": {"stop_results": ["failed", "blocked"]},
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+        current = json.loads(json.dumps(baseline))
+        current["bundle_id"] = "DB-2"
+        current["revision"] = 2
+        current["authorization_snapshot"]["authorization_id"] = "AUTH-2"
+        current["expected_facts"]["dirty_path_digest"] = "e" * 64
+
+        delta = build_decision_bundle_delta(
+            baseline,
+            current,
+            baseline_ref="process/works/W-1/DB-1.json",
+            capsule_ref="process/context/CP5-W-1.yaml",
+            read_expansions=[
+                {
+                    "full_doc_read_reason": "field_conflict",
+                    "ref": "process/works/W-1/DESIGN.md",
+                }
+            ],
+        )
+
+        self.assertTrue(delta["requires_new_revision"])
+        self.assertIn("dirty_path_digest", delta["facts_delta"])
+        self.assertIn("authorization_id", delta["authorization_delta"])
+        self.assertFalse(delta["scope_delta"]["changed"])
+        self.assertFalse(delta["full_document_bodies_embedded"])
+        self.assertEqual(
+            ["process/works/W-1/DESIGN.md"],
+            delta["read_expansion_refs"],
+        )
+
     def test_fixture_runs_context_budgeted_chain_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = copy_fixture(Path(directory))

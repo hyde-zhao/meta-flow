@@ -9,6 +9,7 @@ from pathlib import Path
 
 from meta_flow.checks import cp_result
 from meta_flow.policies import failure_routing
+from meta_flow.validation import task_runner
 
 
 def cp_result_payload() -> dict[str, object]:
@@ -51,6 +52,160 @@ def write_result(root: Path, payload: dict[str, object]) -> Path:
 
 
 class FailureRoutingWaiverTests(unittest.TestCase):
+    def test_failure_classifier_covers_all_four_classes_and_unknown(self) -> None:
+        fixtures = [
+            (
+                {"check_harness_error": True, "semantic_digest_unchanged": True},
+                "CHECK_HARNESS_ERROR",
+                True,
+            ),
+            (
+                {
+                    "deterministic_schema_repair": True,
+                    "repair_path_in_scope": True,
+                    "before_digest_matches": True,
+                },
+                "DETERMINISTIC_SCHEMA_REPAIR",
+                True,
+            ),
+            ({"real_content_failure": True}, "REAL_CONTENT_FAILURE", False),
+            ({"partial_mutation": True}, "PARTIAL_MUTATION", False),
+            ({}, "UNKNOWN", False),
+        ]
+        for facts, expected, recoverable in fixtures:
+            with self.subTest(expected=expected):
+                result = failure_routing.classify_failure(facts)
+                self.assertEqual(expected, result.failure_class)
+                self.assertEqual(recoverable, result.automatic_recovery_candidate)
+
+    def test_recovery_profile_limits_and_task_receipt(self) -> None:
+        stable = {
+            "facts_digest": "facts",
+            "scope_digest": "scope",
+            "oid_digest": "oids",
+            "authz_digest": "authz",
+            "profile_digest": "profile",
+        }
+        for profile, maximum in (("G0", 1), ("G1", 2), ("G2", 2)):
+            with self.subTest(profile=profile):
+                decision = failure_routing.evaluate_recovery(
+                    failure_class="CHECK_HARNESS_ERROR",
+                    route_policy={
+                        "risk_profile": profile,
+                        "max_auto_recovery_attempts": maximum,
+                    },
+                    attempts_completed=0,
+                    baseline_facts=stable,
+                    current_facts=stable,
+                    remaining_budget={
+                        "reads": 10,
+                        "writes": 10,
+                        "check_groups": 10,
+                        "tokens": 10_000,
+                    },
+                    recovery_cost={
+                        "reads": 1,
+                        "writes": 0,
+                        "check_groups": 1,
+                        "tokens": 100,
+                    },
+                    pending_required_check_groups=2,
+                )
+                self.assertTrue(decision.allowed)
+                self.assertEqual(maximum, decision.effective_max_auto_recovery_attempts)
+                plan = task_runner.build_recovery_attempt_plan(
+                    work_id="WORK-1",
+                    check_id="check-1",
+                    failure_class="CHECK_HARNESS_ERROR",
+                    input_digest="input",
+                    scope_digest="scope",
+                    work_profile_digest="profile",
+                    recovery_decision=decision.as_dict(),
+                )
+                receipt = task_runner.build_recovery_receipt(
+                    plan,
+                    result="PASS",
+                    evidence_refs=["process/evidence/check-1.json"],
+                    output_digest="output",
+                )
+                self.assertEqual(1, receipt["attempt_number"])
+                self.assertEqual("rerun_original_check_group", receipt["action"])
+
+    def test_g0_budget_formula_and_drift_force_effective_zero(self) -> None:
+        stable = {
+            "facts_digest": "facts",
+            "scope_digest": "scope",
+            "oid_digest": "oids",
+            "authz_digest": "authz",
+            "profile_digest": "profile",
+        }
+        blocked = failure_routing.evaluate_recovery(
+            failure_class="DETERMINISTIC_SCHEMA_REPAIR",
+            route_policy={"risk_profile": "G0", "max_auto_recovery_attempts": 1},
+            attempts_completed=0,
+            baseline_facts=stable,
+            current_facts=stable,
+            remaining_budget={
+                "reads": 2,
+                "writes": 1,
+                "check_groups": 2,
+                "tokens": 500,
+            },
+            recovery_cost={
+                "reads": 1,
+                "writes": 1,
+                "check_groups": 1,
+                "tokens": 100,
+            },
+            pending_required_check_groups=2,
+        )
+        self.assertFalse(blocked.allowed)
+        self.assertEqual(0, blocked.effective_max_auto_recovery_attempts)
+        self.assertIn("CHECK_GROUP_BUDGET_INSUFFICIENT", blocked.reason_codes)
+
+        drifted = {**stable, "oid_digest": "changed"}
+        drift = failure_routing.evaluate_recovery(
+            failure_class="CHECK_HARNESS_ERROR",
+            route_policy={"risk_profile": "G2", "max_auto_recovery_attempts": 2},
+            attempts_completed=0,
+            baseline_facts=stable,
+            current_facts=drifted,
+            remaining_budget={
+                "reads": 100,
+                "writes": 100,
+                "check_groups": 100,
+                "tokens": 100_000,
+            },
+            recovery_cost={},
+        )
+        self.assertFalse(drift.allowed)
+        self.assertEqual(0, drift.effective_max_auto_recovery_attempts)
+        self.assertIn("OID_DIGEST_DRIFT", drift.reason_codes)
+
+    def test_content_and_partial_failures_never_auto_recover(self) -> None:
+        stable = {key: "same" for key in failure_routing.DRIFT_FACTS}
+        for failure_class in ("REAL_CONTENT_FAILURE", "PARTIAL_MUTATION"):
+            with self.subTest(failure_class=failure_class):
+                decision = failure_routing.evaluate_recovery(
+                    failure_class=failure_class,
+                    route_policy={
+                        "risk_profile": "G2",
+                        "max_auto_recovery_attempts": 2,
+                    },
+                    attempts_completed=0,
+                    baseline_facts=stable,
+                    current_facts=stable,
+                    remaining_budget={
+                        "reads": 100,
+                        "writes": 100,
+                        "check_groups": 100,
+                        "tokens": 100_000,
+                    },
+                    recovery_cost={},
+                )
+                self.assertFalse(decision.allowed)
+                self.assertEqual(0, decision.effective_max_auto_recovery_attempts)
+
     def test_policy_check_writes_and_validates_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

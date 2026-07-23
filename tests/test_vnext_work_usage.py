@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,10 @@ from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
 from meta_flow.work.usage import (
     UsageEvent,
+    UsageLedger,
     append_usage_event,
+    build_cost_closure,
+    collect_changed_path_inventory,
     load_usage,
     stage_usage,
     summarize_usage,
@@ -78,7 +82,9 @@ def test_conflicting_duplicate_event_id_is_rejected(tmp_path: Path) -> None:
     ("field", "value"),
     [("reads", 9), ("writes", 9), ("check_groups", 4), ("tokens", 32_001)],
 )
-def test_budget_is_checked_before_usage_mutation(tmp_path: Path, field: str, value: int) -> None:
+def test_over_budget_fact_is_recorded_and_blocks_followup_mutation(
+    tmp_path: Path, field: str, value: int
+) -> None:
     init_work(tmp_path)
     kwargs = {"reads": 0, "writes": 0, "check_groups": 0, "tokens": 0}
     kwargs[field] = value
@@ -89,10 +95,13 @@ def test_budget_is_checked_before_usage_mutation(tmp_path: Path, field: str, val
         UsageEvent(event_id="evt-over", stage="implementation", **kwargs),
     )
 
-    assert result.decision == "BLOCKED"
-    assert not result.appended
+    assert result.decision == "RECORDED_AND_BLOCKED"
+    assert result.appended
     usage_path = tmp_path / "works" / "W-001" / "USAGE.json"
-    assert not usage_path.exists()
+    assert usage_path.exists()
+    ledger = load_usage(tmp_path, load_work(tmp_path, "W-001"))
+    assert ledger.events[0].event_id == "evt-over"
+    assert result.budget.decision == "EXCEEDED"
 
 
 def test_exact_budget_limit_is_recorded(tmp_path: Path) -> None:
@@ -111,8 +120,8 @@ def test_exact_budget_limit_is_recorded(tmp_path: Path) -> None:
         ),
     )
 
-    assert result.decision == "RECORDED"
-    assert result.budget.decision == "AT_LIMIT"
+    assert result.decision == "RECORDED_AND_BLOCKED"
+    assert result.budget.decision == "EXCEEDED"
 
 
 def test_unavailable_usage_is_recorded_but_blocks_further_execution(tmp_path: Path) -> None:
@@ -178,3 +187,136 @@ def test_invalid_proxy_and_unavailable_events_are_rejected() -> None:
             token_measurement_status="unavailable",
             unavailable_reason="missing",
         )
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_changed_path_inventory_separates_collapsed_ui_and_leaf_paths(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-b", "main")
+    for index in range(8):
+        (tmp_path / f"tracked-{index}.txt").write_text("before\n", encoding="utf-8")
+    _git(tmp_path, "add", ".")
+    _git(
+        tmp_path,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "initial",
+    )
+    for index in range(8):
+        (tmp_path / f"tracked-{index}.txt").write_text("after\n", encoding="utf-8")
+    untracked: list[str] = []
+    for index in range(23):
+        directory = tmp_path / f"new-{index:02d}"
+        directory.mkdir()
+        names = ["one.txt", "two.txt"] if index < 8 else ["one.txt"]
+        for name in names:
+            path = directory / name
+            path.write_text("new\n", encoding="utf-8")
+            untracked.append(path.relative_to(tmp_path).as_posix())
+    allowed = {
+        *(f"tracked-{index}.txt" for index in range(8)),
+        *untracked,
+    }
+
+    inventory = collect_changed_path_inventory(
+        tmp_path,
+        allowed_leaf_paths=allowed,
+    )
+
+    assert inventory.collapsed_status_entry_count == 31
+    assert len(inventory.changed_leaf_paths) == 39
+    assert len(inventory.tracked_modified_leaf_paths) == 8
+    assert len(inventory.untracked_leaf_paths) == 31
+    assert len(inventory.staged_leaf_paths) == 0
+    assert len(inventory.unknown_leaf_paths) == 0
+    payload = inventory.as_dict()
+    assert payload["collapsed_status_entries_ui_only"] is True
+    assert payload["machine_decision_path_field"] == "changed_leaf_paths"
+
+
+def test_cost_closure_enforces_limits_and_preserves_cr057_baseline_limitation(
+    tmp_path: Path,
+) -> None:
+    ledger = UsageLedger(
+        work_id="GOV-004-FU-001",
+        events=(
+            UsageEvent(
+                event_id="init",
+                stage="init",
+                tokens=100_000,
+                token_measurement_status="proxy",
+                proxy_method="context-estimate",
+            ),
+            UsageEvent(
+                event_id="implementation",
+                stage="implementation",
+                tokens=200_000,
+                token_measurement_status="proxy",
+                proxy_method="context-estimate",
+            ),
+        ),
+    )
+    inventory = collect_changed_path_inventory(
+        tmp_path,
+        allowed_leaf_paths=(),
+    ) if (tmp_path / ".git").exists() else None
+    if inventory is None:
+        _git(tmp_path, "init", "-b", "main")
+        inventory = collect_changed_path_inventory(
+            tmp_path,
+            allowed_leaf_paths=(),
+        )
+    gate_events = [
+        {
+            "event_id": "cp3",
+            "event_type": "human_gate_approval",
+            "decision": "approve",
+            "interaction_id": "merged-design",
+        },
+        {
+            "event_id": "cp5",
+            "event_type": "human_gate_approval",
+            "decision": "approve",
+            "interaction_id": "merged-design",
+        },
+        {
+            "event_id": "scope",
+            "event_type": "human_gate_approval",
+            "decision": "approve",
+        },
+        {
+            "event_id": "launch",
+            "event_type": "human_gate_launched",
+        },
+    ]
+
+    closure = build_cost_closure(
+        ledger=ledger,
+        required_stages=["init", "implementation"],
+        gate_events=gate_events,
+        changed_path_inventory=inventory,
+    )
+
+    assert closure["decision"] == "PASS_WITH_BASELINE_LIMITATION"
+    assert closure["human_interactions"]["deduplicated_user_decisions"] == 2
+    assert closure["human_interactions"]["reduction_ratio"] >= 0.8235
+    assert closure["baseline"]["token_actual"] is None
+    assert closure["baseline"]["token_actual_status"] == "unavailable"
+    assert closure["baseline"]["authorized_proxy_ceiling"] == 1_752_000
+    assert (
+        closure["baseline"]["actual_to_actual_token_reduction_claim"]
+        == "not_available"
+    )

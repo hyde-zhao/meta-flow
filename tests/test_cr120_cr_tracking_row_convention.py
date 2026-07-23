@@ -124,11 +124,76 @@ def _errors(root: Path) -> list[str]:
     return errors
 
 
+def _findings(
+    root: Path,
+    *,
+    next_action_refs: list[tuple[str, int]] | None = None,
+) -> tuple[list[str], list[str]]:
+    formal = cr_tracking.discover_formal_crs(
+        _resolve_runtime_ref(root, "process/changes")
+    )
+    rows = cr_tracking.discover_follow_up_rows(root, [])
+    return cr_tracking.collect_errors_and_warnings(
+        project_root=root,
+        formal_crs=formal,
+        rows=rows,
+        index_items=[],
+        next_action_refs=next_action_refs or [],
+        state_refs=[],
+        allow_multiple_active=False,
+    )
+
+
 def test_active_source_follow_up_row_with_related_active_cr_passes(tmp_path: Path) -> None:
     _formal_cr(tmp_path, "CR-120")
     _tracking(tmp_path, "related_active_cr=CR-120; blocked_by=cp5_pending")
 
     assert _errors(tmp_path) == []
+
+
+def test_formal_only_index_does_not_warn_for_legal_candidate_or_next_action(
+    tmp_path: Path,
+) -> None:
+    path = _resolve_runtime_ref(
+        tmp_path, "process/changes/CR-116-FOLLOW-UP-TRACKING-2026-06-22.md"
+    )
+    _write(
+        path,
+        """# Tracking
+
+| 候选编号 | 标题 | 状态 | 类型 | 正式 CR 路径 | 下一步 |
+|---|---|---|---|---|---|
+| FU-CR116-001 | later | candidate | spike | - | 保留候选 |
+""",
+    )
+
+    errors, warnings = _findings(
+        tmp_path,
+        next_action_refs=[("FU-CR116-001", 1)],
+    )
+
+    assert errors == []
+    assert not any("missing from CR-INDEX" in warning for warning in warnings)
+    assert not any("next_action_queue" in warning for warning in warnings)
+
+
+def test_dangling_formal_link_remains_an_error(tmp_path: Path) -> None:
+    path = _resolve_runtime_ref(
+        tmp_path, "process/changes/CR-116-FOLLOW-UP-TRACKING-2026-06-22.md"
+    )
+    _write(
+        path,
+        """# Tracking
+
+| 候选编号 | 标题 | 状态 | 类型 | 正式 CR 路径 | 下一步 |
+|---|---|---|---|---|---|
+| FU-CR116-002 | active | active | requirement-change | process/changes/CR-999-MISSING.md | inspect |
+""",
+    )
+
+    errors, _warnings = _findings(tmp_path)
+
+    assert any("formal CR path does not exist" in error for error in errors)
 
 
 def test_binding_only_follow_up_rows_resolve_in_process_repository(tmp_path: Path) -> None:
@@ -195,3 +260,153 @@ gate_status: implementation_in_progress
     )
 
     assert any("illegal native status tuple" in error for error in errors)
+
+
+def test_native_formal_cr_rejects_jointly_stale_gate_checkpoint_result_and_adr(
+    tmp_path: Path,
+) -> None:
+    formal_path = _resolve_runtime_ref(tmp_path, "process/changes/CR-120-NATIVE.md")
+    _write(
+        formal_path,
+        """---
+schema_version: 1
+cr_id: CR-120
+kind: cr
+title: stale projection fixture
+lifecycle_status: active
+readiness_status: NOT_READY
+gate_status: cp3_pending
+---
+
+## Checkpoint Index
+
+| CP | 状态 |
+|---|---|
+| CP3 | pending |
+| CP6 | pending |
+""",
+    )
+    gate_ledger = _resolve_runtime_ref(tmp_path, "process/state/GATE-LEDGER.ndjson")
+    _write(
+        gate_ledger,
+        '{"event_id":"CR120-CP3-APPROVED","event_type":"human_gate_approval",'
+        '"cr_id":"CR-120","work_id":"W-120","gate":"CP3-CR-120-DESIGN",'
+        '"status":"approved"}\n',
+    )
+    cp6_result = _resolve_runtime_ref(
+        tmp_path,
+        "process/checks/CP6-CR-120-IMPLEMENTATION.result.json",
+    )
+    _write(
+        cp6_result,
+        '{"checkpoint":"CP6","cr_id":"CR-120","work_id":"W-120","decision":"PASS"}\n',
+    )
+    adr_path = _resolve_runtime_ref(
+        tmp_path,
+        "process/works/W-120/ARCHITECTURE-DECISION.md",
+    )
+    _write(
+        adr_path,
+        """---
+status: accepted
+---
+
+| 决策 ID | 状态 |
+|---|---|
+| CP3-DQ-120-01 | OPEN |
+""",
+    )
+
+    errors = _errors(tmp_path)
+
+    assert any("Checkpoint Index CP3 is stale" in error for error in errors)
+    assert any("Checkpoint Index CP6=PENDING is stale" in error for error in errors)
+    assert any("frontmatter gate_status=cp3_pending is stale" in error for error in errors)
+    assert any("accepted ADR has stale OPEN decision queue" in error for error in errors)
+
+
+def test_native_formal_cr_accepts_cp8_machine_pass_before_human_approval(
+    tmp_path: Path,
+) -> None:
+    formal_path = _resolve_runtime_ref(tmp_path, "process/changes/CR-120-NATIVE.md")
+    _write(
+        formal_path,
+        """---
+schema_version: 1
+cr_id: CR-120
+kind: cr
+status: active
+lifecycle_status: active
+readiness_status: NOT_READY
+gate_status: cp8_pending
+---
+
+## Checkpoint Index
+
+| CP | 状态 |
+|---|---|
+| CP8 | PASS |
+""",
+    )
+    result_path = _resolve_runtime_ref(
+        tmp_path,
+        "process/checks/CP8-CR-120-DELIVERY-READINESS.result.json",
+    )
+    _write(
+        result_path,
+        '{"checkpoint":"CP8","cr_id":"CR-120","work_id":"W-120",'
+        '"decision":"PASS","release_decision":"READY_WITH_RISK"}\n',
+    )
+
+    errors = _errors(tmp_path)
+
+    assert not any("Checkpoint Index CP8" in error for error in errors)
+    assert not any("frontmatter gate_status=cp8_pending is stale" in error for error in errors)
+
+
+def test_native_formal_cr_accepts_cp8_approval_before_independent_native_close(
+    tmp_path: Path,
+) -> None:
+    formal_path = _resolve_runtime_ref(tmp_path, "process/changes/CR-120-NATIVE.md")
+    _write(
+        formal_path,
+        """---
+schema_version: 1
+cr_id: CR-120
+kind: cr
+status: active
+lifecycle_status: active
+readiness_status: NOT_READY
+gate_status: cp8_pending
+---
+
+## Checkpoint Index
+
+| CP | 状态 |
+|---|---|
+| CP8 | approved |
+""",
+    )
+    gate_ledger = _resolve_runtime_ref(
+        tmp_path, "process/state/GATE-LEDGER.ndjson"
+    )
+    _write(
+        gate_ledger,
+        '{"event_id":"CR120-CP8-APPROVED","event_type":"human_gate_approval",'
+        '"cr_id":"CR-120","work_id":"W-120","gate":"CP8-DELIVERY-READINESS",'
+        '"decision":"approve","status":"approved"}\n',
+    )
+    result_path = _resolve_runtime_ref(
+        tmp_path,
+        "process/checks/CP8-CR-120-DELIVERY-READINESS.result.json",
+    )
+    _write(
+        result_path,
+        '{"checkpoint":"CP8","cr_id":"CR-120","work_id":"W-120",'
+        '"decision":"PASS","release_decision":"READY_WITH_RISK"}\n',
+    )
+
+    errors = _errors(tmp_path)
+
+    assert not any("Checkpoint Index CP8" in error for error in errors)
+    assert not any("frontmatter gate_status=cp8_pending is stale" in error for error in errors)

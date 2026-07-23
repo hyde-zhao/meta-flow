@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import json
 import sys
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +42,174 @@ FORBIDDEN_MANUAL_SOURCE_NEEDLES = (
     "portfolio reporting",
 )
 LEDGER_TYPES = ("checkpoint", "handoff", "dispatch", "run", "gate")
+QA_READINESS_FACTS = (
+    "cp6_result_ready",
+    "approved_design_refs_match",
+    "required_fixtures_ready",
+    "changed_paths_allowed",
+    "consumer_authorization_ready",
+    "usage_allows_mutation",
+)
+
+
+@dataclass(frozen=True)
+class QualityRouteDecision:
+    decision: str
+    independent_qa: bool
+    targeted_revalidation_only: bool
+    same_finding_reqa_max: int
+    finding_round: int
+    finding_fingerprint: str
+    next_action: str
+    blockers: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "decision": self.decision,
+            "independent_qa": self.independent_qa,
+            "targeted_revalidation_only": self.targeted_revalidation_only,
+            "same_finding_reqa_max": self.same_finding_reqa_max,
+            "finding_round": self.finding_round,
+            "finding_fingerprint": self.finding_fingerprint,
+            "next_action": self.next_action,
+            "blockers": list(self.blockers),
+        }
+
+
+def finding_fingerprint(finding: Mapping[str, Any]) -> str:
+    payload = {
+        "check_id": str(finding.get("check_id") or ""),
+        "normalized_contract_ref": str(
+            finding.get("normalized_contract_ref") or ""
+        ),
+        "affected_path_set": sorted(
+            str(item) for item in finding.get("affected_path_set") or []
+        ),
+        "root_cause_class": str(finding.get("root_cause_class") or ""),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def evaluate_quality_route(
+    *,
+    route_policy: Mapping[str, Any],
+    readiness_facts: Mapping[str, Any],
+    finding: Mapping[str, Any] | None = None,
+    same_finding_rounds_completed: int = 0,
+) -> QualityRouteDecision:
+    """按 route policy 判定 G2 independent QA 或 G0/G1 定向复验。"""
+
+    if same_finding_rounds_completed < 0:
+        raise ValueError("same finding rounds must be non-negative")
+    quality = route_policy.get("quality")
+    policy = quality if isinstance(quality, Mapping) else route_policy
+    risk_profile = str(policy.get("risk_profile") or "").upper()
+    independent_qa = bool(policy.get("independent_qa"))
+    try:
+        reqa_max = int(policy.get("same_finding_reqa_max", -1))
+    except (TypeError, ValueError):
+        reqa_max = -1
+    expected = {
+        "G0": (False, 0),
+        "G1": (False, 0),
+        "G2": (True, 2),
+    }.get(risk_profile)
+    fingerprint = finding_fingerprint(finding or {}) if finding else ""
+    if expected is None or (independent_qa, reqa_max) != expected:
+        return QualityRouteDecision(
+            "PROFILE_ROUTE_CONFLICT",
+            False,
+            False,
+            0,
+            same_finding_rounds_completed,
+            fingerprint,
+            "reclassify_and_rebuild_route",
+            ("PROFILE_ROUTE_CONFLICT",),
+        )
+    if risk_profile in {"G0", "G1"}:
+        if readiness_facts.get("g2_reason_present") or readiness_facts.get(
+            "independent_risk_acceptance_required"
+        ):
+            return QualityRouteDecision(
+                "RECLASSIFICATION_REQUIRED_G2",
+                False,
+                True,
+                0,
+                0,
+                fingerprint,
+                "reclassify_and_rebuild_route",
+                ("G2_REASON_OR_RISK_ACCEPTANCE_REQUIRED",),
+            )
+        affected = readiness_facts.get("affected_required_check_groups") or []
+        return QualityRouteDecision(
+            "TARGETED_REVALIDATION",
+            False,
+            True,
+            0,
+            0,
+            fingerprint,
+            "rerun_affected_required_check_groups",
+            () if affected else ("NO_AFFECTED_REQUIRED_CHECK_GROUPS",),
+        )
+
+    blockers = [
+        fact.upper()
+        for fact in QA_READINESS_FACTS
+        if not readiness_facts.get(fact)
+    ]
+    for fact in (
+        "partial_mutation",
+        "blocking_design_item",
+        "telemetry_budget_block",
+        "route_stop_reason",
+    ):
+        if readiness_facts.get(fact):
+            blockers.append(fact.upper())
+    if blockers:
+        return QualityRouteDecision(
+            "NOT_READY_FOR_QA",
+            True,
+            False,
+            reqa_max,
+            same_finding_rounds_completed,
+            fingerprint,
+            "return_to_implementation_readiness",
+            tuple(blockers),
+        )
+    if finding and same_finding_rounds_completed >= reqa_max:
+        return QualityRouteDecision(
+            "NEEDS_DESIGN_CLARIFICATION",
+            True,
+            False,
+            reqa_max,
+            same_finding_rounds_completed + 1,
+            fingerprint,
+            "require_user_decision",
+            ("SAME_FINDING_REQA_LIMIT_REACHED",),
+        )
+    if finding:
+        return QualityRouteDecision(
+            "REQA_ALLOWED",
+            True,
+            False,
+            reqa_max,
+            same_finding_rounds_completed + 1,
+            fingerprint,
+            "rework_then_independent_reqa",
+            (),
+        )
+    return QualityRouteDecision(
+        "READY_FOR_QA",
+        True,
+        False,
+        reqa_max,
+        0,
+        "",
+        "dispatch_independent_qa",
+        (),
+    )
 
 
 QUALITY_MODEL_TEMPLATE = """schema_version: 1

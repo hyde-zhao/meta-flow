@@ -153,6 +153,13 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 - `FEEDBACK.md` 只记录反馈回流入口；CP8 后续 CR 候选必须进入 `process/changes/CR-*-FOLLOW-UP-TRACKING-YYYY-MM-DD.md`，并由 host-orchestrator 同步 `process/changes/CR-INDEX.json` 与 `process/state/CR-LEDGER.ndjson`。
 - 使用外置 artifact repo 时，不得把 `git push` 当前源码仓库当作完整项目推送；必须同时处理源码仓库和 artifact 仓库。`meta-flow workspace push` 默认拒绝 dirty working tree，发现未提交过程文件时应先提交 artifact 仓库。
 
+## CR-058 profile-aware 关闭与发布边界
+
+- G2 必须完成独立 QA、CP8 自动结果和人工门后，才允许 native close；G0 / G1 对不适用的独立 QA 或完整 CP8 控件必须写 profile-aware `N/A` 证据，不能伪造 PASS。
+- CP8 前必须读取 cost closure。只有 stage coverage=100%、token proxy 在上限内、去重 gate interaction 在上限内且 unknown leaf paths=0 时，才接受 `PASS_WITH_BASELINE_LIMITATION`；`FAIL` 直接输出 `NOT_READY`。
+- CR-057 的 `1,752,000` 是 `authorized_proxy_ceiling`，不是 actual token 基线；发布说明不得声称 actual-to-actual 降本。
+- `READY`、`READY_WITH_RISK`、CP8 approve、native close 和 repository cleanliness 都不授权 commit、push、publish、live、production write 或 credential access；真实动作必须有独立 typed authorization。
+
 ## 验收标准
 
 - [ ] `process/release/RELEASE-CONTEXT.yaml` 已生成，且不复制长正文。

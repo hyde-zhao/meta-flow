@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,13 +61,20 @@ class UsageEvent:
 class UsageLedger:
     work_id: str
     events: tuple[UsageEvent, ...]
+    changed_path_inventory: dict[str, Any] | None = None
+    cost_closure: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema_version": USAGE_SCHEMA_VERSION,
             "work_id": self.work_id,
             "events": [event.as_dict() for event in self.events],
         }
+        if self.changed_path_inventory is not None:
+            payload["changed_path_inventory"] = self.changed_path_inventory
+        if self.cost_closure is not None:
+            payload["cost_closure"] = self.cost_closure
+        return payload
 
 
 @dataclass(frozen=True)
@@ -75,6 +84,38 @@ class UsageAppendResult:
     appended: bool
     budget: BudgetDecision
     ledger_ref: str
+
+
+@dataclass(frozen=True)
+class ChangedPathInventory:
+    collapsed_status_entry_count: int
+    changed_leaf_paths: tuple[str, ...]
+    tracked_modified_leaf_paths: tuple[str, ...]
+    untracked_leaf_paths: tuple[str, ...]
+    staged_leaf_paths: tuple[str, ...]
+    unknown_leaf_paths: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source": "git-status-porcelain-v1-z-uall",
+            "collapsed_status_entry_count": self.collapsed_status_entry_count,
+            "changed_leaf_path_count": len(self.changed_leaf_paths),
+            "changed_leaf_paths": list(self.changed_leaf_paths),
+            "tracked_modified_leaf_path_count": len(
+                self.tracked_modified_leaf_paths
+            ),
+            "tracked_modified_leaf_paths": list(
+                self.tracked_modified_leaf_paths
+            ),
+            "untracked_leaf_path_count": len(self.untracked_leaf_paths),
+            "untracked_leaf_paths": list(self.untracked_leaf_paths),
+            "staged_leaf_path_count": len(self.staged_leaf_paths),
+            "staged_leaf_paths": list(self.staged_leaf_paths),
+            "unknown_leaf_path_count": len(self.unknown_leaf_paths),
+            "unknown_leaf_paths": list(self.unknown_leaf_paths),
+            "machine_decision_path_field": "changed_leaf_paths",
+            "collapsed_status_entries_ui_only": True,
+        }
 
 
 def _combine(events: tuple[UsageEvent, ...]) -> WorkUsage:
@@ -152,7 +193,20 @@ def load_usage(process_root: Path, work: Work) -> UsageLedger:
             raise ValueError(f"duplicate usage event_id: {event.event_id}")
         seen.add(event.event_id)
         events.append(event)
-    return UsageLedger(work_id=work.work_id, events=tuple(events))
+    changed_path_inventory = payload.get("changed_path_inventory")
+    if changed_path_inventory is not None and not isinstance(
+        changed_path_inventory, dict
+    ):
+        raise ValueError("changed_path_inventory must be an object")
+    cost_closure = payload.get("cost_closure")
+    if cost_closure is not None and not isinstance(cost_closure, dict):
+        raise ValueError("cost_closure must be an object")
+    return UsageLedger(
+        work_id=work.work_id,
+        events=tuple(events),
+        changed_path_inventory=changed_path_inventory,
+        cost_closure=cost_closure,
+    )
 
 
 def _write_ledger_atomic(path: Path, ledger: UsageLedger) -> None:
@@ -183,15 +237,33 @@ def append_usage_event(
         if existing != event:
             raise ValueError(f"usage event_id conflict: {event.event_id}")
         decision = evaluate_budget(work.budget, summarize_usage(ledger))
-        return UsageAppendResult("NO_CHANGE", event.event_id, False, decision, work.usage_ref)
+        duplicate_decision = (
+            "NO_CHANGE"
+            if decision.allowed
+            else "NO_CHANGE_AND_BLOCKED"
+        )
+        return UsageAppendResult(
+            duplicate_decision,
+            event.event_id,
+            False,
+            decision,
+            work.usage_ref,
+        )
 
     current = summarize_usage(ledger)
     decision = evaluate_budget(work.budget, current, delta=event.as_usage())
-    if decision.decision == "EXCEEDED":
-        return UsageAppendResult("BLOCKED", event.event_id, False, decision, work.usage_ref)
-    updated = UsageLedger(work_id=work.work_id, events=(*ledger.events, event))
+    updated = UsageLedger(
+        work_id=work.work_id,
+        events=(*ledger.events, event),
+        changed_path_inventory=ledger.changed_path_inventory,
+        cost_closure=ledger.cost_closure,
+    )
     _write_ledger_atomic(usage_path(process_root, work), updated)
-    terminal = "RECORDED_AND_BLOCKED" if decision.decision == "TELEMETRY_UNAVAILABLE" else "RECORDED"
+    terminal = (
+        "RECORDED"
+        if decision.allowed
+        else "RECORDED_AND_BLOCKED"
+    )
     return UsageAppendResult(terminal, event.event_id, True, decision, work.usage_ref)
 
 
@@ -203,3 +275,220 @@ def stage_usage(ledger: UsageLedger) -> dict[str, dict[str, Any]]:
         stage: _combine(tuple(events)).as_dict()
         for stage, events in sorted(stages.items())
     }
+
+
+def _run_git_z(repo_root: Path, *args: str) -> bytes:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        error = result.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"git {' '.join(args)} failed: {error}")
+    return result.stdout
+
+
+def _z_paths(payload: bytes) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                item.decode("utf-8", errors="surrogateescape")
+                for item in payload.split(b"\0")
+                if item
+            }
+        )
+    )
+
+
+def _porcelain_paths(payload: bytes) -> tuple[tuple[str, str], ...]:
+    parts = [item for item in payload.split(b"\0") if item]
+    entries: list[tuple[str, str]] = []
+    offset = 0
+    while offset < len(parts):
+        raw = parts[offset]
+        if len(raw) < 4:
+            raise ValueError("git status porcelain entry is malformed")
+        status = raw[:2].decode("ascii", errors="strict")
+        path = raw[3:].decode("utf-8", errors="surrogateescape")
+        entries.append((status, path))
+        offset += 1
+        if "R" in status or "C" in status:
+            if offset >= len(parts):
+                raise ValueError("git rename/copy status is missing its source path")
+            source = parts[offset].decode("utf-8", errors="surrogateescape")
+            entries.append((status, source))
+            offset += 1
+    return tuple(entries)
+
+
+def collect_changed_path_inventory(
+    repo_root: Path,
+    *,
+    allowed_leaf_paths: Iterable[str] | None = None,
+) -> ChangedPathInventory:
+    """采集两种 Git 状态计数；机器判定只使用 ``-uall`` 叶子集合。"""
+
+    root = repo_root.resolve()
+    collapsed = _porcelain_paths(
+        _run_git_z(root, "status", "--porcelain=v1", "-z")
+    )
+    leaf_entries = _porcelain_paths(
+        _run_git_z(root, "status", "--porcelain=v1", "-z", "-uall")
+    )
+    leaf_paths = tuple(sorted({path for _status, path in leaf_entries}))
+    leaf_set = set(leaf_paths)
+    tracked_modified = tuple(
+        path
+        for path in _z_paths(_run_git_z(root, "diff", "--name-only", "-z"))
+        if path in leaf_set
+    )
+    untracked = tuple(
+        path
+        for path in _z_paths(
+            _run_git_z(root, "ls-files", "--others", "--exclude-standard", "-z")
+        )
+        if path in leaf_set
+    )
+    staged = tuple(
+        path
+        for path in _z_paths(
+            _run_git_z(root, "diff", "--cached", "--name-only", "-z")
+        )
+        if path in leaf_set
+    )
+    allowed = None if allowed_leaf_paths is None else set(allowed_leaf_paths)
+    unknown = (
+        ()
+        if allowed is None
+        else tuple(sorted(path for path in leaf_paths if path not in allowed))
+    )
+    return ChangedPathInventory(
+        collapsed_status_entry_count=len(collapsed),
+        changed_leaf_paths=leaf_paths,
+        tracked_modified_leaf_paths=tracked_modified,
+        untracked_leaf_paths=untracked,
+        staged_leaf_paths=staged,
+        unknown_leaf_paths=unknown,
+    )
+
+
+def _deduplicated_human_interactions(
+    gate_events: Sequence[dict[str, Any]],
+) -> int:
+    identities: set[str] = set()
+    for offset, event in enumerate(gate_events):
+        if event.get("event_type") != "human_gate_approval":
+            continue
+        if str(event.get("decision") or "").lower() not in {"approve", "approved"}:
+            continue
+        interaction_id = str(event.get("interaction_id") or "")
+        identities.add(
+            f"interaction:{interaction_id}"
+            if interaction_id
+            else f"approval:{event.get('event_id') or offset}"
+        )
+    return len(identities)
+
+
+def build_cost_closure(
+    *,
+    ledger: UsageLedger,
+    required_stages: Sequence[str],
+    gate_events: Sequence[dict[str, Any]],
+    changed_path_inventory: ChangedPathInventory,
+    current_token_proxy_limit: int = 960_000,
+    current_interaction_limit: int = 6,
+    baseline_interactions: int = 34,
+    baseline_authorized_proxy_ceiling: int = 1_752_000,
+) -> dict[str, Any]:
+    usage = summarize_usage(ledger)
+    expected_stages = tuple(dict.fromkeys(required_stages))
+    observed_stages = {event.stage for event in ledger.events}
+    missing_stages = [
+        stage for stage in expected_stages if stage not in observed_stages
+    ]
+    stage_coverage = (
+        1.0
+        if not expected_stages
+        else (len(expected_stages) - len(missing_stages)) / len(expected_stages)
+    )
+    interactions = _deduplicated_human_interactions(gate_events)
+    interaction_reduction = (
+        0.0
+        if baseline_interactions <= 0
+        else (baseline_interactions - interactions) / baseline_interactions
+    )
+    token_ok = (
+        usage.tokens is not None
+        and usage.token_measurement_status in {"measured", "proxy"}
+        and usage.tokens <= current_token_proxy_limit
+    )
+    hard_checks = {
+        "stage_usage_coverage_100_percent": stage_coverage == 1.0,
+        "current_token_proxy_within_limit": token_ok,
+        "deduplicated_user_interactions_within_limit": (
+            interactions <= current_interaction_limit
+        ),
+        "unknown_leaf_paths_zero": not changed_path_inventory.unknown_leaf_paths,
+    }
+    decision = (
+        "PASS_WITH_BASELINE_LIMITATION"
+        if all(hard_checks.values())
+        else "FAIL"
+    )
+    return {
+        "schema_version": 1,
+        "decision": decision,
+        "blocks_cp6_cp8": decision == "FAIL",
+        "hard_checks": hard_checks,
+        "current_usage": usage.as_dict(),
+        "stage_coverage": {
+            "required_stages": list(expected_stages),
+            "observed_stages": sorted(observed_stages),
+            "missing_stages": missing_stages,
+            "coverage_ratio": stage_coverage,
+        },
+        "human_interactions": {
+            "counting_rule": "GATE-LEDGER human_gate_approval deduplicated by interaction_id; missing IDs count individually",
+            "deduplicated_user_decisions": interactions,
+            "limit": current_interaction_limit,
+            "baseline_observed_user_confirmations": baseline_interactions,
+            "reduction_ratio": interaction_reduction,
+        },
+        "changed_path_inventory": changed_path_inventory.as_dict(),
+        "baseline": {
+            "cr_id": "CR-057",
+            "observed_user_confirmations": baseline_interactions,
+            "token_actual": None,
+            "token_actual_status": "unavailable",
+            "token_actual_unavailable_reason": "historical USAGE.json is missing",
+            "authorized_proxy_ceiling": baseline_authorized_proxy_ceiling,
+            "actual_to_actual_token_reduction_claim": "not_available",
+        },
+        "limitation": (
+            "CR-057 token actual is unavailable; the authorized proxy ceiling "
+            "is not an actual usage baseline"
+        ),
+    }
+
+
+def write_usage_evidence(
+    process_root: Path,
+    work_id: str,
+    *,
+    changed_path_inventory: ChangedPathInventory,
+    cost_closure: dict[str, Any],
+) -> Path:
+    work = load_work(process_root, work_id)
+    ledger = load_usage(process_root, work)
+    updated = UsageLedger(
+        work_id=ledger.work_id,
+        events=ledger.events,
+        changed_path_inventory=changed_path_inventory.as_dict(),
+        cost_closure=cost_closure,
+    )
+    path = usage_path(process_root, work)
+    _write_ledger_atomic(path, updated)
+    return path

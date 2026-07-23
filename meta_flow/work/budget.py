@@ -83,7 +83,7 @@ class BudgetDecision:
 
     @property
     def allowed(self) -> bool:
-        return self.decision in {"OK", "AT_LIMIT"}
+        return self.decision in {"OK", "WARNING"}
 
 
 def _project_usage(current: WorkUsage, delta: WorkUsage) -> WorkUsage:
@@ -139,7 +139,9 @@ def evaluate_budget(
         "tokens": int(projected.tokens or 0),
     }
     maximum = limit.as_dict()
-    exceeded = tuple(key for key, value in actual.items() if value > maximum[key])
+    # 硬预算是可用量的排他上界：达到 100% 时已经没有后续操作余量，
+    # 必须与超过上界一样 fail closed。
+    exceeded = tuple(key for key, value in actual.items() if value >= maximum[key])
     remaining: dict[str, int | None] = {
         key: maximum[key] - value for key, value in actual.items()
     }
@@ -151,11 +153,22 @@ def evaluate_budget(
             remaining=remaining,
             reason="projected usage exceeds one or more hard limits before the operation",
         )
-    at_limit = tuple(key for key, value in actual.items() if value == maximum[key])
+    warning = tuple(
+        key for key, value in actual.items()
+        if maximum[key] and value / maximum[key] >= 0.80
+    )
+    if warning:
+        return BudgetDecision(
+            decision="WARNING",
+            projected=projected,
+            exceeded_dimensions=(),
+            remaining=remaining,
+            reason="projected usage reaches the 80 percent warning threshold",
+        )
     return BudgetDecision(
-        decision="AT_LIMIT" if at_limit else "OK",
+        decision="OK",
         projected=projected,
         exceeded_dimensions=(),
         remaining=remaining,
-        reason="operation reaches a hard limit" if at_limit else "projected usage is within budget",
+        reason="projected usage is within budget",
     )

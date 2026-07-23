@@ -32,6 +32,7 @@ from meta_flow.work.cli import (
     review_plan_main,
     status_main,
     transition_main,
+    usage_add_main,
     validation_plan_main,
 )
 from meta_flow.work.lifecycle import update_work_status
@@ -300,6 +301,42 @@ def test_work_cli_end_to_end_and_top_level_dispatch(tmp_path: Path, capsys: pyte
     dispatched = json.loads(capsys.readouterr().out)
     assert raised.value.code == 0
     assert dispatched["work"]["risk_profile"] == "G0"
+
+
+def test_usage_add_cli_records_over_limit_fact_then_blocks_mutation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, process = init_project(tmp_path)
+    apply_work_init(plan_work_init(process, make_work(process)))
+
+    exit_code = usage_add_main(
+        [
+            "--project-root",
+            str(release),
+            "--work-id",
+            "W-001",
+            "--event-id",
+            "usage-over-limit",
+            "--stage",
+            "implementation",
+            "--reads",
+            "9",
+            "--tokens",
+            "100",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload["decision"] == "RECORDED_AND_BLOCKED"
+    assert payload["appended"] is True
+    assert payload["budget_decision"] == "EXCEEDED"
+    ledger = json.loads(
+        (process / "works" / "W-001" / "USAGE.json").read_text(encoding="utf-8")
+    )
+    assert ledger["events"][0]["event_id"] == "usage-over-limit"
+    assert sum(event["reads"] for event in ledger["events"]) == 9
 
 
 def test_work_start_pause_resume_and_close_minimally_updates_project(

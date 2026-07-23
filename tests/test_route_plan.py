@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -8,6 +9,12 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow.policies import gate_profiles, route_plan
+from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    OnboardingAuthorization,
+)
 
 
 def checkpoints(plan: dict[str, object]) -> list[str]:
@@ -15,6 +22,75 @@ def checkpoints(plan: dict[str, object]) -> list[str]:
 
 
 class RoutePlanTests(unittest.TestCase):
+    def test_route_plan_check_resolves_logical_ref_through_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            release = parent / "release"
+            release.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=release, check=True, capture_output=True)
+            (release / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=release, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Meta Flow Test",
+                    "-c",
+                    "user.email=meta-flow@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                cwd=release,
+                check=True,
+                capture_output=True,
+            )
+            plan = plan_project_init(ProjectInitRequest(release, "route-plan", "Route Plan"))
+            payload = plan.as_dict()
+            authorization = OnboardingAuthorization(
+                schema_version=1,
+                authorization_id=f"auth-{plan.plan_digest[:12]}",
+                authorization_source=AUTHORIZATION_SOURCE,
+                authorization_kind=AUTHORIZATION_KIND,
+                operation=payload["operation"],
+                decision_ref=payload["decision_ref"],
+                project_id=payload["project_id"],
+                plan_digest=plan.plan_digest,
+                expected_oids=payload["base_oids"],
+                expires_at="2099-01-01T00:00:00+00:00",
+            )
+            apply_project_init(plan, authorization)
+
+            process = parent / "route-plan-process"
+            cr_path = process / "changes" / "CR-156.md"
+            artifact = process / "checks" / "CP0-CR156.route-plan.json"
+            cr_path.parent.mkdir(parents=True)
+            cr_path.write_text(
+                """---
+cr_id: "CR-156"
+cr_type: "process"
+gate_profile: "process-lite"
+route_plan_ref: "process/checks/CP0-CR156.route-plan.json"
+cr_trait_uses_existing_evidence_only: true
+cr_trait_existing_evidence_refs: "process/evidence/CR156.index.json"
+product_baseline_refresh_required: false
+---
+
+# CR-156
+""",
+                encoding="utf-8",
+            )
+            route_plan.write_route_plan(
+                artifact,
+                route_plan.derive_route_plan_from_mapping(route_plan.parse_cr_frontmatter(cr_path)),
+            )
+
+            errors, warnings = route_plan.validate_route_plan_for_cr(release, cr_path)
+
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+            self.assertFalse((release / "process").exists())
+
     def test_process_lite_existing_evidence_routes_cp0_cp2_cp8(self) -> None:
         plan = route_plan.derive_route_plan(
             cr_type="process",

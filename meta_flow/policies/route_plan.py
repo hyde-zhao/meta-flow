@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.policies import gate_profiles
+from meta_flow.project.process_route import ProcessRouteError, _resolve_runtime_ref
 
 CHECKPOINTS = tuple(f"CP{index}" for index in range(9))
 HUMAN_GATE_CHECKPOINTS = {"CP2", "CP3", "CP5", "CP8"}
@@ -529,7 +530,12 @@ def validate_route_plan_for_cr(
     ref = _route_plan_ref(mapping)
     if not ref:
         return [f"{cr_id} missing route_plan_ref"], warnings
-    route_path = project_root / ref
+    try:
+        # ``process/...`` 是逻辑引用；绑定项目必须经统一 resolver 到过程仓，
+        # 不能把它误当作发布仓内的物理相对路径。
+        route_path = _resolve_runtime_ref(project_root, ref)
+    except ProcessRouteError as exc:
+        return [f"{cr_id} route_plan_ref resolution blocked ({exc.error_code}): {ref}"], warnings
     if not route_path.is_file():
         return [f"{cr_id} route_plan_ref missing on disk: {ref}"], warnings
     try:

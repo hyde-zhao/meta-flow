@@ -9,6 +9,7 @@ from typing import Any
 
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.repository.publisher import (
+    PublicationEvidence,
     RepositoryApplyError,
     RepositoryAuthorization,
     apply_commit,
@@ -16,6 +17,18 @@ from meta_flow.repository.publisher import (
     plan_commit,
     plan_push,
 )
+
+
+def _publication_evidence(parsed: argparse.Namespace) -> PublicationEvidence:
+    return PublicationEvidence(
+        project_root=parsed.project_root,
+        evidence_ref=parsed.publication_evidence_ref,
+    )
+
+
+def _add_publication_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--project-root", type=Path, required=True)
+    parser.add_argument("--publication-evidence-ref", required=True)
 
 
 def _authorization(path: Path) -> RepositoryAuthorization:
@@ -47,6 +60,7 @@ def commit_main(argv: list[str]) -> int:
     parser.add_argument("--expected-head-oid", required=True)
     parser.add_argument("--authorization", type=Path, default=None)
     parser.add_argument("--apply", action="store_true")
+    _add_publication_arguments(parser)
     parsed = parser.parse_args(argv)
     try:
         plan = plan_commit(
@@ -57,6 +71,7 @@ def commit_main(argv: list[str]) -> int:
             allowed_paths=parsed.allowed_path,
             message=parsed.message,
             expected_head_oid=parsed.expected_head_oid,
+            publication_evidence=_publication_evidence(parsed),
         )
         if parsed.apply:
             if parsed.authorization is None:
@@ -93,6 +108,7 @@ def push_main(argv: list[str]) -> int:
     parser.add_argument("--expected-remote-oid", required=True)
     parser.add_argument("--authorization", type=Path, default=None)
     parser.add_argument("--apply", action="store_true")
+    _add_publication_arguments(parser)
     parsed = parser.parse_args(argv)
     try:
         plan = plan_push(
@@ -103,6 +119,7 @@ def push_main(argv: list[str]) -> int:
             remote=parsed.remote,
             ref=parsed.ref,
             expected_remote_oid=parsed.expected_remote_oid,
+            publication_evidence=_publication_evidence(parsed),
         )
         if parsed.apply:
             if parsed.authorization is None:

@@ -299,6 +299,17 @@ init（host-orchestrator）                                                   [C
 - **安装路径前置校验**：安装器写入前必须逐级检查目标父路径；任一级被普通文件占用时必须 fail fast，输出 `安装路径被非目录占用: <path>`，不得暴露 Python traceback
 - **安装命令与组件默认值**：安装 CLI 使用 `meta-flow install <platform>`，卸载使用 `meta-flow uninstall <platform>`；`--platform` 与 `install --uninstall` 仅作 legacy 兼容。组件使用 `--component rules|agent|full`；`rules` 只安装 AGENTS.md（claude 平台生成 CLAUDE.md）等规则，`agent` 安装 agents+skills，`full` 同时安装两类内容；user scope 默认 `rules`，project scope 默认 `full`；legacy `--content all|agents|skills|rules` 仅作兼容入口
 
+## 治理执行闭环补充（CR-058）
+
+- 失败分类固定为 `CHECK_HARNESS_ERROR`、`DETERMINISTIC_SCHEMA_REPAIR`、`REAL_CONTENT_FAILURE`、`PARTIAL_MUTATION`。G0 / G1 / G2 的单检查自动恢复上限分别是 `1 / 2 / 2`；facts、scope、OID、authz 或 profile 漂移，以及真实内容失败、部分写入和未知失败，自动恢复上限一律为 0。
+- G2 才允许独立 QA；同一 finding fingerprint 最多 re-QA 2 次，第 3 次必须返回 `NEEDS_DESIGN_CLARIFICATION`。G0 / G1 的 independent QA 次数为 0，只运行受影响检查的 targeted revalidation。
+- Work usage 事实必须幂等落账。任一维度达到 80% 输出 `WARNING`；达到或超过 100%，或 token 状态为 `unavailable`，仍记录当前事实，但阻断后续 mutation。`unavailable` 不得记为 0。
+- changed-path 机器判定只能使用 `git status --porcelain=v1 -z -uall` 得到的 leaf paths；默认折叠目录的 status entry 数只供 UI 显示，不能用于预算、scope 或完成判定。
+- CP6 / CP8 前必须生成 cost closure：阶段 coverage 为 100%、当前 token proxy 不超过 Work 上限、去重 gate interaction 不超过批准上限且 unknown leaf paths 为 0。结论只允许 `PASS_WITH_BASELINE_LIMITATION` 或 `FAIL`；`FAIL` 阻断 CP6 / CP8。历史 CR-057 的 `1,752,000` 仅是 authorized proxy ceiling，不能声称为 actual-to-actual 基线。
+- Decision Bundle 只允许在 facts / scope / authz 与 revision 未漂移时复用；变化后必须生成新 revision 的 delta + capsule，不复制完整 Decision Brief。一次用户交互可确认 CP3 + CP5，但两个 subgate 必须保留独立 result、evidence 和 receipt。
+- native CR 的 formal frontmatter、正文状态摘要、Checkpoint Index、summary、evidence index、ledger、formal-only index 由一次 status-sync 事务投影。follow-up candidate 不进入 formal-only index；dangling formal link 仍为错误。
+- CP8 `approve`、native close、测试通过或 cost closure 通过都不授权 `git commit`、`git push`、publish、live、production write 或凭据访问；这些动作必须获得独立、目标明确且绑定当前 facts/OID 的授权。
+
 ## 防火墙测试工作流（现有，独立运行）
 
 > 本项目同时保留原有防火墙测试元工作流说明，两套系统并行存在，互不干扰。

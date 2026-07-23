@@ -390,6 +390,95 @@ FAILURE_WAIVER_TOKEN_TARGETS = {
         "test_cp_result_check_includes_failure_and_waiver_governance",
     ),
 }
+CR058_EXECUTION_CLOSURE_TOKEN_TARGETS = {
+    "meta_flow/policies/failure_routing.py": (
+        "CHECK_HARNESS_ERROR",
+        "DETERMINISTIC_SCHEMA_REPAIR",
+        "REAL_CONTENT_FAILURE",
+        "PARTIAL_MUTATION",
+        "targeted_revalidation_only",
+    ),
+    "meta_flow/checks/quality_governance.py": (
+        '"G2": (True, 2)',
+        "NEEDS_DESIGN_CLARIFICATION",
+        "targeted_revalidation_only",
+    ),
+    "meta_flow/work/usage.py": (
+        "changed_leaf_paths",
+        "collapsed_status_entries_ui_only",
+        "PASS_WITH_BASELINE_LIMITATION",
+        "authorized_proxy_ceiling",
+    ),
+    "meta_flow/work/decision_bundle.py": (
+        "build_decision_bundle_delta",
+        "read_expansion_refs",
+        "requires_new_revision",
+    ),
+    "meta_flow/workflow/cr_lifecycle.py": (
+        "render_status_body_projection",
+        "CR 类型与门禁策略",
+        "Checkpoint Index",
+    ),
+    "meta_flow/checks/cr_tracking.py": (
+        "source_follow_up_id",
+        "CR-INDEX.json",
+    ),
+    "delivery/rules/AGENTS.md": (
+        "治理执行闭环补充（CR-058）",
+        "CHECK_HARNESS_ERROR",
+        "1 / 2 / 2",
+        "targeted revalidation",
+        "PASS_WITH_BASELINE_LIMITATION",
+        "formal-only index",
+        "不授权 `git commit`",
+    ),
+    "delivery/rules/AGENT-SKILL-CONTRACT.md": (
+        "Governance Execution Closure",
+        "Decision Bundle",
+        "changed-path",
+        "cost closure",
+        "repository publication authorization",
+    ),
+    "delivery/skills/state-router/SKILL.md": (
+        "CR-058 merged gate 与恢复路由",
+        "interaction_id",
+        "batch status-sync",
+        "NEEDS_DESIGN_CLARIFICATION",
+    ),
+    "delivery/skills/checkpoint-manager/SKILL.md": (
+        "CR-058 检查点执行闭环",
+        "deduplicated gate interactions",
+        "authorized_proxy_ceiling",
+        "repository publication authorization",
+    ),
+    "delivery/skills/release-readiness/SKILL.md": (
+        "CR-058 profile-aware 关闭与发布边界",
+        "profile-aware `N/A`",
+        "PASS_WITH_BASELINE_LIMITATION",
+        "typed authorization",
+    ),
+    "delivery/doc/USER-MANUAL.md": (
+        "治理恢复、预算与发布边界",
+        "changed_leaf_path_count",
+        "actual token",
+        "formal-only index",
+        "不允许自动执行 `git commit`",
+    ),
+}
+CR058_CANONICAL_MIRROR_PAIRS = (
+    (
+        "delivery/skills/state-router/SKILL.md",
+        ".agents/skills/state-router/SKILL.md",
+    ),
+    (
+        "delivery/skills/checkpoint-manager/SKILL.md",
+        ".agents/skills/checkpoint-manager/SKILL.md",
+    ),
+    (
+        "delivery/skills/release-readiness/SKILL.md",
+        ".agents/skills/release-readiness/SKILL.md",
+    ),
+)
 CONTEXT_BUDGETED_E2E_TOKEN_TARGETS = {
     "evals/fixtures/context-budgeted-meta-flow/README.md": (
         "STATE.current.json -> CR summary -> context pack -> Story packet -> Story return -> evidence index -> CP result -> checkpoint ledger",
@@ -2281,6 +2370,36 @@ def collect_failure_waiver_errors() -> list[str]:
     return errors
 
 
+def collect_cr058_execution_closure_errors() -> list[str]:
+    errors: list[str] = []
+    for rel_path, required_tokens in CR058_EXECUTION_CLOSURE_TOKEN_TARGETS.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            errors.append(f"missing CR-058 execution closure target: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in required_tokens if token not in text]
+        if missing:
+            errors.append(
+                f"{rel_path} missing CR-058 execution closure tokens: "
+                + ", ".join(missing)
+            )
+
+    for canonical_ref, mirror_ref in CR058_CANONICAL_MIRROR_PAIRS:
+        canonical = ROOT / canonical_ref
+        mirror = ROOT / mirror_ref
+        if not canonical.is_file() or not mirror.is_file():
+            errors.append(
+                f"missing CR-058 canonical/mirror pair: {canonical_ref} / {mirror_ref}"
+            )
+            continue
+        if canonical.read_bytes() != mirror.read_bytes():
+            errors.append(
+                f"CR-058 canonical/mirror drift: {canonical_ref} / {mirror_ref}"
+            )
+    return errors
+
+
 def collect_delivery_asset_lifecycle_errors() -> list[str]:
     errors: list[str] = []
 
@@ -2414,6 +2533,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_governance_lifecycle_errors())
     errors.extend(collect_context_sufficiency_errors())
     errors.extend(collect_failure_waiver_errors())
+    errors.extend(collect_cr058_execution_closure_errors())
     errors.extend(collect_delivery_asset_lifecycle_errors())
     errors.extend(collect_process_route_contract_errors())
 

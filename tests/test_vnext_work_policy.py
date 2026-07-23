@@ -135,7 +135,7 @@ def test_preauthorized_ordinary_git_push_inherits_g0_or_g1() -> None:
 
 
 @pytest.mark.parametrize("dimension", ["reads", "writes", "check_groups", "tokens"])
-def test_budget_allows_exact_limit_and_blocks_limit_plus_one(dimension: str) -> None:
+def test_budget_blocks_exact_limit_and_limit_plus_one(dimension: str) -> None:
     exact_values = G0_BUDGET.as_dict()
     exact = WorkUsage(
         reads=exact_values["reads"],
@@ -149,11 +149,38 @@ def test_budget_allows_exact_limit_and_blocks_limit_plus_one(dimension: str) -> 
     exact_decision = evaluate_budget(G0_BUDGET, exact)
     exceeded = evaluate_budget(G0_BUDGET, exact, delta=WorkUsage(**delta_values))
 
-    assert exact_decision.decision == "AT_LIMIT"
-    assert exact_decision.allowed
+    assert exact_decision.decision == "EXCEEDED"
+    assert not exact_decision.allowed
+    assert dimension in exact_decision.exceeded_dimensions
     assert exceeded.decision == "EXCEEDED"
     assert not exceeded.allowed
     assert dimension in exceeded.exceeded_dimensions
+
+
+@pytest.mark.parametrize("profile", ["G0", "G1", "G2"])
+@pytest.mark.parametrize(
+    ("tokens", "expected"),
+    [
+        (7_999, "OK"),
+        (8_000, "WARNING"),
+        (9_999, "WARNING"),
+        (10_000, "EXCEEDED"),
+        (10_001, "EXCEEDED"),
+    ],
+)
+def test_budget_thresholds_are_consistent_across_profiles(
+    profile: str,
+    tokens: int,
+    expected: str,
+) -> None:
+    # 使用可精确表达 79.99% / 80% / 99.99% / 100% / 100.01% 的共同刻度，
+    # profile 参数确保三种治理档位消费同一边界语义。
+    del profile
+    limit = BudgetLimit(reads=10_000, writes=10_000, check_groups=10_000, tokens=10_000)
+    decision = evaluate_budget(limit, WorkUsage(tokens=tokens))
+
+    assert decision.decision == expected
+    assert decision.allowed is (expected in {"OK", "WARNING"})
 
 
 def test_unavailable_tokens_are_not_treated_as_zero() -> None:
