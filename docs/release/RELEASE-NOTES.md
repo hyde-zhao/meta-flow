@@ -26,6 +26,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.12 | 2026-07-11 | host-orchestrator | CR-045 更新至最终 R6 证据（9/9、17/113/329），精确标注 `next_action.stop_reason`，披露 dispatch receipt 限制，并记录后续 commit/push 授权 |
 | 1.13 | 2026-07-15 | host-orchestrator-inline/meta-qa | CR-047 收敛 workflow truth、portable routing、Doctor/guardrail/Ruff/installer preflight 与 CR-046 protected-object firewall；CP8 候选为 `READY_WITH_RISK`。 |
 | 1.14-candidate | 2026-07-19 | host-orchestrator | CR-052 vNext 本地实现候选：每项目独立发布库/过程库、弹性 Project/Phase/Work、G0/G1/G2、scope/budget、snapshot-only adoption、单仓 publication、六维复盘和有界自进化；用户已单独授权把当前两仓整改成果普通 commit/push 到各自远端分支，真实迁移、tag、production/runtime 发布仍未授权。 |
+| 1.15-candidate | 2026-07-23 | host-orchestrator | CR-057 Linux 项目接入能力成熟候选：统一 12 字段计划、双仓 6 个 exact OID 检查点、snapshot seed、typed authorization、partial/recovery 和隔离 F1/F2；CP8 自动预检为 `READY_WITH_RISK`，等待人工终验。 |
 
 ## 发布范围
 
@@ -129,3 +130,42 @@ created_at: "2026-06-17T13:49:25+08:00"
 | CR-045 dispatch platform receipt | MEDIUM | 当前证据为 session-observed，仓库不可独立验证平台调用真实性；移交 CR-A S01 producer contract，不倒填历史 receipt |
 | CR-047 inline CP7 / paired Git publication | MEDIUM | 7/7 功能验证通过，但无独立 meta-qa/platform receipt；用户在 CP8 批准消息中另行授权 `meta-flow` 与 `meta-flow-artifacts` 配对 commit/push，结论仍保持 `READY_WITH_RISK`。 |
 | CR-047 historical/reference-only warnings | LOW | Doctor exit 0 且 blocker/unclassified=0；21 个 closed/reference-only 超预算和 legacy provenance warning 保持可见，不伪造为无风险。 |
+
+## CR-057 候选发布切片
+
+### 候选身份与边界
+
+| 项 | 值 |
+|---|---|
+| 当前包版本 | `0.4.0`，本次未修改 `pyproject.toml` 或 `uv.lock` |
+| 推荐目标版本 | `0.5.0` candidate；属于新增公共能力的 MINOR 候选，不代表已 tag 或正式发布 |
+| 支持平台 | Linux / Python 3.11 |
+| Windows | `RISK-055-WIN-001`，deferred / out-of-scope；无 Windows 原生 PASS 声明 |
+| CP8 自动预检 | `PASS / READY_WITH_RISK`，仍须人工终验 |
+| 非授权动作 | 版本修改、commit、push、merge、tag、正式发布、真实外部项目迁移 |
+
+### 用户可见能力
+
+- `meta-flow project init` 对新项目和已有项目 snapshot seed 生成严格 12 字段 dry-run envelope；非 `NOOP` mutation 必须提供与 source exact OID、PROJECT 原始字节 digest、plan digest 和 decision ref 绑定的一次性 typed authorization。
+- release/process 在 dry-run、authorization consumption、apply-final 分别核验 exact OID，共 6 个双仓检查点；snapshot source 在相同阶段另有 3 个只读 OID 检查。
+- `project adopt` 只接收 clean、已提交的新格式过程快照；legacy shared-artifact 子目录不进入 adopt，也不复制全量 CR/CP/Story/ledger。
+- `project recover` 对 healthy binding 和 unresolved 场景都输出严格 12 字段 envelope；manifest missing、corrupt JSON、missing fields 或 digest drift 均 fail closed，不猜 ownership、不消费授权、不产生 mutation。
+- F1 新项目与 F2 snapshot-only 接入均在隔离 fixture 中通过；第二次相同 init/adopt 返回 `NOOP`。
+
+### 质量证据
+
+| 检查 | 结果 |
+|---|---|
+| 独立 QA | PASS；F-001 至 F-007 全部关闭 |
+| 定向回归 | F-007 direct 4 passed；recovery 10 passed；核心 100 passed；六消费者 103 passed + 15 subtests |
+| 全仓回归 | 962 passed + 105 subtests |
+| 静态与交付门 | Ruff 0 error；pycompile exit 0；delivery guardrail exit 0 / OK |
+| 禁止边界 | 绝对 process 路径、未知 changed path、新依赖、source write、legacy/external mutation、Windows PASS 声明均为 0 |
+
+### 已知风险与后续
+
+| 风险 / 后续 | 处置 |
+|---|---|
+| `RISK-057-GOV-SEQ-001` | release main 已先于 CP8 人工终验合并；历史事实保留，不倒填或自动回滚，CP8 只能以 `READY_WITH_RISK` 供人工接受或拒绝 |
+| `FU-CR057-001` | “CP8 必须先于 commit/push”已 accepted / approved_not_started；只登记候选，CR-057 关闭前不创建或启动新的正式 CR |
+| `RISK-055-WIN-001` | 继续 deferred / out-of-scope，不阻塞 Linux 候选，也不声称 Windows 原生验证通过 |
