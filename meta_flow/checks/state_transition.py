@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from meta_flow.checks.frozen_cp6_evidence import (
+    FrozenCp6EvidenceError,
+    FrozenCp6EvidenceV1,
+    project_story_admission,
+)
+from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_ref
 
 PASS_LIKE_DECISIONS = {"PASS", "WAIVED", "PASS_WITH_RISK"}
@@ -33,6 +41,33 @@ FAILURE_STOP_REASONS = {
 }
 PASS_COMPATIBLE_INTERRUPT_REASONS = {"authorization_required", "workflow_health_threshold"}
 STALE_FAILURE_STOP_REASONS = {"blocked", "needs_rework", "needs_design_clarification"}
+C0_SCHEMA_VERSION = 1
+C0_CONSUMER_PROJECTOR_REF = "meta_flow.checks.state_transition.project_c0_consumer"
+C0_RESULT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "cr_id",
+        "checkpoint",
+        "dry_run",
+        "release_oid",
+        "process_oid",
+        "scope_digest",
+        "input_evidence_refs",
+        "frozen_evidence",
+        "replay_results",
+        "consumer_inventory",
+        "bootstrap_consumer_count",
+        "legacy_projector_consumer_count",
+        "planned_transitions",
+        "mutation_allowlist",
+        "blockers",
+        "decision",
+        "mutation_count",
+        "plan_digest",
+        "checker_provenance",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +88,525 @@ class ChronologyFinding:
     field: str
     message: str
     source_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class C0ResultV1:
+    """C0 bootstrap cutover 的严格、可摘要、零副作用结果。"""
+
+    cr_id: str
+    release_oid: str
+    process_oid: str
+    scope_digest: str
+    input_evidence_refs: tuple[str, ...]
+    frozen_evidence: tuple[Mapping[str, Any], ...]
+    replay_results: tuple[Mapping[str, Any], ...]
+    consumer_inventory: tuple[Mapping[str, Any], ...]
+    bootstrap_consumer_count: int
+    legacy_projector_consumer_count: int
+    planned_transitions: tuple[Mapping[str, Any], ...]
+    mutation_allowlist: tuple[str, ...]
+    blockers: tuple[str, ...]
+    decision: str
+    checker_provenance: Mapping[str, Any]
+    schema_version: int = C0_SCHEMA_VERSION
+    kind: str = "C0ResultV1"
+    checkpoint: str = "C0"
+    dry_run: bool = True
+    mutation_count: int = 0
+    plan_digest: str = ""
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "kind": self.kind,
+            "cr_id": self.cr_id,
+            "checkpoint": self.checkpoint,
+            "dry_run": self.dry_run,
+            "release_oid": self.release_oid,
+            "process_oid": self.process_oid,
+            "scope_digest": self.scope_digest,
+            "input_evidence_refs": list(self.input_evidence_refs),
+            "frozen_evidence": [dict(item) for item in self.frozen_evidence],
+            "replay_results": [dict(item) for item in self.replay_results],
+            "consumer_inventory": [dict(item) for item in self.consumer_inventory],
+            "bootstrap_consumer_count": self.bootstrap_consumer_count,
+            "legacy_projector_consumer_count": self.legacy_projector_consumer_count,
+            "planned_transitions": [dict(item) for item in self.planned_transitions],
+            "mutation_allowlist": list(self.mutation_allowlist),
+            "blockers": list(self.blockers),
+            "decision": self.decision,
+            "mutation_count": self.mutation_count,
+            "plan_digest": self.plan_digest,
+            "checker_provenance": dict(self.checker_provenance),
+        }
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = self._payload()
+        digest_payload = {key: value for key, value in payload.items() if key != "plan_digest"}
+        expected_digest = canonical_digest(digest_payload)
+        if self.plan_digest and self.plan_digest != expected_digest:
+            raise ValueError("C0ResultV1 plan_digest does not match canonical payload")
+        payload["plan_digest"] = expected_digest
+        if set(payload) != C0_RESULT_FIELDS:
+            raise ValueError("C0ResultV1 field set is not the frozen 21-key contract")
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> C0ResultV1:
+        if set(payload) != C0_RESULT_FIELDS:
+            raise ValueError("C0ResultV1 fields mismatch")
+        if payload.get("schema_version") != C0_SCHEMA_VERSION:
+            raise ValueError("C0ResultV1 schema_version mismatch")
+        if payload.get("kind") != "C0ResultV1" or payload.get("checkpoint") != "C0":
+            raise ValueError("C0ResultV1 identity mismatch")
+        if payload.get("dry_run") is not True or payload.get("mutation_count") != 0:
+            raise ValueError("C0ResultV1 must remain a zero-mutation dry-run")
+        instance = cls(
+            cr_id=str(payload["cr_id"]),
+            release_oid=str(payload["release_oid"]),
+            process_oid=str(payload["process_oid"]),
+            scope_digest=str(payload["scope_digest"]),
+            input_evidence_refs=tuple(str(item) for item in payload["input_evidence_refs"]),
+            frozen_evidence=tuple(dict(item) for item in payload["frozen_evidence"]),
+            replay_results=tuple(dict(item) for item in payload["replay_results"]),
+            consumer_inventory=tuple(dict(item) for item in payload["consumer_inventory"]),
+            bootstrap_consumer_count=int(payload["bootstrap_consumer_count"]),
+            legacy_projector_consumer_count=int(payload["legacy_projector_consumer_count"]),
+            planned_transitions=tuple(dict(item) for item in payload["planned_transitions"]),
+            mutation_allowlist=tuple(str(item) for item in payload["mutation_allowlist"]),
+            blockers=tuple(str(item) for item in payload["blockers"]),
+            decision=str(payload["decision"]),
+            checker_provenance=dict(payload["checker_provenance"]),
+            plan_digest=str(payload["plan_digest"]),
+        )
+        instance.as_dict()
+        return instance
+
+
+def project_c0_consumer(
+    *,
+    consumer_id: str,
+    operation: str,
+    attempts: Sequence[Mapping[str, Any]],
+    absolute_process_path: str,
+) -> dict[str, Any]:
+    """用一个 projector 归一化所有公共 consumer 的重放结论。"""
+
+    finding_codes: set[str] = set()
+    if not attempts:
+        finding_codes.add("C0_CONSUMER_NOT_EXECUTED")
+    absolute_path_count = 0
+    for attempt in attempts:
+        if int(attempt.get("returncode", 1)) != 0:
+            finding_codes.add("C0_CONSUMER_COMMAND_FAILED")
+        output = f"{attempt.get('stdout', '')}\n{attempt.get('stderr', '')}"
+        if absolute_process_path:
+            absolute_path_count += output.count(absolute_process_path)
+    if absolute_path_count:
+        finding_codes.add("ABSOLUTE_PROCESS_PATH_EXPOSED")
+    return {
+        "consumer_id": consumer_id,
+        "operation": operation,
+        "projector_ref": C0_CONSUMER_PROJECTOR_REF,
+        "command_count": len(attempts),
+        "status": "PASS" if not finding_codes else "BLOCKED",
+        "finding_codes": sorted(finding_codes),
+        "absolute_process_path_count": absolute_path_count,
+    }
+
+
+def build_c0_result(
+    *,
+    cr_id: str,
+    release_oid: str,
+    process_oid: str,
+    scope_digest: str,
+    input_evidence_refs: Sequence[str],
+    frozen_evidence: Sequence[Mapping[str, Any]],
+    consumer_inventory: Sequence[Mapping[str, Any]],
+    planned_transitions: Sequence[Mapping[str, Any]],
+    mutation_allowlist: Sequence[str],
+    initial_blockers: Sequence[str] = (),
+) -> C0ResultV1:
+    """从冻结证据和公共 consumer 重放结果生成唯一 C0 结论。"""
+
+    blockers = list(initial_blockers)
+    if len(input_evidence_refs) != 9 or len(set(input_evidence_refs)) != 9:
+        blockers.append("C0_INPUT_EVIDENCE_REFS_MUST_BE_EXACTLY_9")
+    if len(frozen_evidence) != 3:
+        blockers.append("C0_FROZEN_EVIDENCE_MUST_BE_EXACTLY_3")
+    if len(consumer_inventory) != 11:
+        blockers.append("C0_CONSUMER_INVENTORY_MUST_BE_EXACTLY_11")
+
+    replay_results: list[dict[str, Any]] = []
+    for raw in frozen_evidence:
+        try:
+            frozen = FrozenCp6EvidenceV1.from_dict(raw)
+        except FrozenCp6EvidenceError as exc:
+            blockers.append(f"C0_FROZEN_EVIDENCE_INVALID:{exc}")
+            continue
+        admission = project_story_admission(
+            frozen,
+            expected_dependency_digests=frozen.dependency_digests,
+        )
+        replay_decision = "PASS" if admission.get("decision") == "READY" else "BLOCKED"
+        replay_results.append(
+            {
+                "story_id": frozen.story_id,
+                "decision": replay_decision,
+                "admission_decision": admission.get("decision"),
+                "evidence_digest": frozen.evidence_digest,
+                "finding_codes": [] if replay_decision == "PASS" else list(admission.get("reason_codes") or []),
+            }
+        )
+        if replay_decision != "PASS":
+            blockers.append(f"C0_REPLAY_BLOCKED:{frozen.story_id}")
+    if len(replay_results) != 3 or any(item["decision"] != "PASS" for item in replay_results):
+        blockers.append("C0_REPLAY_MUST_PASS_3_OF_3")
+
+    normalized_consumers = [dict(item) for item in consumer_inventory]
+    projector_refs = {str(item.get("projector_ref") or "") for item in normalized_consumers}
+    if projector_refs != {C0_CONSUMER_PROJECTOR_REF}:
+        blockers.append("C0_CONSUMERS_MUST_SHARE_ONE_PROJECTOR")
+    if any(str(item.get("status") or "") != "PASS" for item in normalized_consumers):
+        blockers.append("C0_CONSUMER_REPLAY_BLOCKED")
+    if sum(int(item.get("absolute_process_path_count") or 0) for item in normalized_consumers):
+        blockers.append("C0_ABSOLUTE_PROCESS_PATH_COUNT_NONZERO")
+
+    bootstrap_consumer_count = sum(
+        1 for item in normalized_consumers if str(item.get("projection_mode") or "") == "bootstrap"
+    )
+    legacy_projector_consumer_count = sum(
+        1
+        for item in normalized_consumers
+        if str(item.get("projector_ref") or "") not in {"", C0_CONSUMER_PROJECTOR_REF}
+    )
+    if bootstrap_consumer_count:
+        blockers.append("C0_BOOTSTRAP_CONSUMER_COUNT_NONZERO")
+    if legacy_projector_consumer_count:
+        blockers.append("C0_LEGACY_PROJECTOR_CONSUMER_COUNT_NONZERO")
+
+    deduplicated_blockers = tuple(sorted(set(blockers)))
+    return C0ResultV1(
+        cr_id=cr_id,
+        release_oid=release_oid,
+        process_oid=process_oid,
+        scope_digest=scope_digest,
+        input_evidence_refs=tuple(input_evidence_refs),
+        frozen_evidence=tuple(dict(item) for item in frozen_evidence),
+        replay_results=tuple(replay_results),
+        consumer_inventory=tuple(normalized_consumers),
+        bootstrap_consumer_count=bootstrap_consumer_count,
+        legacy_projector_consumer_count=legacy_projector_consumer_count,
+        planned_transitions=tuple(dict(item) for item in planned_transitions),
+        mutation_allowlist=tuple(mutation_allowlist),
+        blockers=deduplicated_blockers,
+        decision="READY" if not deduplicated_blockers else "BLOCKED",
+        checker_provenance={
+            "checker_name": "meta-flow route c0-dry-run",
+            "checker_version": "C0ResultV1",
+            "consumer_projector_ref": C0_CONSUMER_PROJECTOR_REF,
+            "consumer_count": len(normalized_consumers),
+        },
+    )
+
+
+C0_STORY_PROGRESS_ORDER = (
+    "draft",
+    "lld-ready",
+    "lld-in-progress",
+    "lld-ready-for-review",
+    "lld-batch-ready-for-review",
+    "lld-approved",
+    "dev-ready",
+    "in-development",
+    "ready-for-verification",
+    "verified",
+    "verified-with-risk",
+    "done",
+)
+C0_STORY_PROGRESS_RANK = {
+    status: index for index, status in enumerate(C0_STORY_PROGRESS_ORDER)
+}
+
+
+def _c0_story_rank(story_id: str, status: str) -> int:
+    try:
+        return C0_STORY_PROGRESS_RANK[status]
+    except KeyError as exc:
+        raise ValueError(
+            f"{story_id} C0 projection cannot consume non-progress status={status or '-'}"
+        ) from exc
+
+
+def _c0_recovery_floors(
+    prior_transitions: Iterable[Mapping[str, Any]],
+    *,
+    expected: set[str],
+) -> dict[str, str]:
+    floors: dict[str, str] = {}
+    for transition in prior_transitions:
+        if not isinstance(transition, Mapping):
+            raise ValueError("C0 prior story transition must be an object")
+        story_id = str(transition.get("subject") or "")
+        if story_id not in expected:
+            continue
+        before_status = str(transition.get("from") or "")
+        after_status = str(transition.get("to") or "")
+        before_rank = _c0_story_rank(story_id, before_status)
+        after_rank = _c0_story_rank(story_id, after_status)
+        if before_rank <= after_rank:
+            continue
+        current_floor = floors.get(story_id)
+        if current_floor is None or before_rank > _c0_story_rank(
+            story_id,
+            current_floor,
+        ):
+            floors[story_id] = before_status
+    return floors
+
+
+def has_c0_regressive_story_transition(
+    transitions: Iterable[Mapping[str, Any]],
+    *,
+    cr_id: str,
+) -> bool:
+    prefix = f"STORY-{cr_id.replace('-', '')}-S"
+    expected = {f"{prefix}{index:02d}" for index in range(1, 6)}
+    return bool(_c0_recovery_floors(transitions, expected=expected))
+
+
+def project_c0_development_plan(
+    payload: Mapping[str, Any],
+    *,
+    cr_id: str,
+    prior_transitions: Iterable[Mapping[str, Any]] = (),
+) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+    """把 C0 PASS 单调投影为可重复的 CR Story 状态。"""
+
+    projected = copy.deepcopy(dict(payload))
+    waves = projected.get("waves")
+    if not isinstance(waves, list):
+        raise ValueError("DEVELOPMENT-PLAN must contain waves[]")
+    prefix = f"STORY-{cr_id.replace('-', '')}-S"
+    expected = {f"{prefix}{index:02d}" for index in range(1, 6)}
+    stories: dict[str, dict[str, Any]] = {}
+    for wave in waves:
+        if not isinstance(wave, dict):
+            continue
+        wave_stories = wave.get("stories")
+        if not isinstance(wave_stories, list):
+            continue
+        for story in wave_stories:
+            if not isinstance(story, dict):
+                continue
+            story_id = str(story.get("story_id") or "")
+            if story_id not in expected:
+                continue
+            if story_id in stories:
+                raise ValueError(f"duplicate C0 story in DEVELOPMENT-PLAN: {story_id}")
+            stories[story_id] = story
+    missing = sorted(expected - set(stories))
+    if missing:
+        raise ValueError("C0 stories missing from DEVELOPMENT-PLAN: " + ", ".join(missing))
+    recovery_floors = _c0_recovery_floors(
+        prior_transitions,
+        expected=expected,
+    )
+
+    target_states = {
+        f"{prefix}01": ("ready-for-verification", True, True),
+        f"{prefix}02": ("ready-for-verification", True, True),
+        f"{prefix}03": ("ready-for-verification", True, True),
+        f"{prefix}04": ("dev-ready", True, True),
+        f"{prefix}05": ("lld-approved", False, False),
+    }
+    transitions: list[dict[str, Any]] = []
+    for story_id in sorted(expected):
+        story = stories[story_id]
+        before_status = str(story.get("status") or "")
+        minimum_status, minimum_dependencies, minimum_authorized = target_states[story_id]
+        before_rank = _c0_story_rank(story_id, before_status)
+        minimum_rank = _c0_story_rank(story_id, minimum_status)
+        recovery_status = recovery_floors.get(story_id)
+        recovery_rank = (
+            _c0_story_rank(story_id, recovery_status)
+            if recovery_status is not None
+            else minimum_rank
+        )
+        target_rank = max(before_rank, minimum_rank, recovery_rank)
+        target_status = C0_STORY_PROGRESS_ORDER[target_rank]
+        lld_gate = story.get("lld_gate")
+        if not isinstance(lld_gate, dict):
+            raise ValueError(f"{story_id} lld_gate must be an object")
+        dev_gate = story.get("dev_gate")
+        if not isinstance(dev_gate, dict):
+            raise ValueError(f"{story_id} dev_gate must be an object")
+        dependencies_satisfied = (
+            bool(dev_gate.get("dependencies_satisfied"))
+            or minimum_dependencies
+            or target_rank >= C0_STORY_PROGRESS_RANK["dev-ready"]
+        )
+        implementation_authorized = (
+            bool(dev_gate.get("implementation_authorized"))
+            or minimum_authorized
+            or target_rank >= C0_STORY_PROGRESS_RANK["dev-ready"]
+        )
+        before_projection = (
+            before_status,
+            str(lld_gate.get("status") or ""),
+            bool(dev_gate.get("lld_confirmed")),
+            bool(dev_gate.get("cp5_confirmed")),
+            bool(dev_gate.get("dependencies_satisfied")),
+            bool(dev_gate.get("file_conflict_free")),
+            bool(dev_gate.get("implementation_authorized")),
+        )
+        story["status"] = target_status
+        lld_gate["status"] = "approved"
+        dev_gate.update(
+            {
+                "lld_confirmed": True,
+                "cp5_confirmed": True,
+                "dependencies_satisfied": dependencies_satisfied,
+                "file_conflict_free": True,
+                "implementation_authorized": implementation_authorized,
+            }
+        )
+        after_projection = (
+            target_status,
+            "approved",
+            True,
+            True,
+            dependencies_satisfied,
+            True,
+            implementation_authorized,
+        )
+        if before_projection == after_projection:
+            continue
+        transitions.append(
+            {
+                "subject": story_id,
+                "from": before_status,
+                "to": target_status,
+                "dependencies_satisfied": dependencies_satisfied,
+                "implementation_authorized": implementation_authorized,
+                "reason": (
+                    "C0_REPAIR_REGRESSIVE_PRIOR_PROJECTION"
+                    if recovery_status is not None
+                    else "C0_PASS"
+                ),
+            }
+        )
+    return projected, tuple(transitions)
+
+
+def project_cp6_development_plan(
+    payload: Mapping[str, Any],
+    *,
+    result: Mapping[str, Any],
+) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+    """将已记录的 CP6 PASS 原生投影到 Story 管理真相源及其直接下游。"""
+
+    if str(result.get("checkpoint") or "") != "CP6":
+        raise ValueError("Story projection requires one CP6 result")
+    if str(result.get("decision") or "") != "PASS":
+        raise ValueError("Story projection requires CP6 decision=PASS")
+    story_id = str(result.get("story_id") or "")
+    if not story_id:
+        raise ValueError("CP6 result story_id is required")
+    projected = copy.deepcopy(dict(payload))
+    waves = projected.get("waves")
+    if not isinstance(waves, list):
+        raise ValueError("DEVELOPMENT-PLAN must contain waves[]")
+    stories: dict[str, dict[str, Any]] = {}
+    for wave in waves:
+        if not isinstance(wave, dict):
+            continue
+        for story in wave.get("stories", []):
+            if not isinstance(story, dict):
+                continue
+            candidate_id = str(story.get("story_id") or "")
+            if not candidate_id:
+                continue
+            if candidate_id in stories:
+                raise ValueError(
+                    f"duplicate Story in DEVELOPMENT-PLAN: {candidate_id}"
+                )
+            stories[candidate_id] = story
+    current = stories.get(story_id)
+    if current is None:
+        raise ValueError(f"CP6 Story missing from DEVELOPMENT-PLAN: {story_id}")
+    current_status = str(current.get("status") or "")
+    if current_status not in {
+        "dev-ready",
+        "in-development",
+        "ready-for-verification",
+    }:
+        raise ValueError(
+            f"{story_id} cannot consume CP6 PASS from status={current_status or '-'}"
+        )
+    dev_gate = current.get("dev_gate")
+    if not isinstance(dev_gate, dict) or not all(
+        dev_gate.get(field) is True
+        for field in (
+            "cp5_confirmed",
+            "dependencies_satisfied",
+            "file_conflict_free",
+            "implementation_authorized",
+            "lld_confirmed",
+        )
+    ):
+        raise ValueError(f"{story_id} CP6 projection requires a fully open dev_gate")
+    transitions: list[dict[str, Any]] = []
+    if current_status != "ready-for-verification":
+        current["status"] = "ready-for-verification"
+        transitions.append(
+            {
+                "subject": story_id,
+                "from": current_status,
+                "to": "ready-for-verification",
+                "reason": "CP6_PASS",
+            }
+        )
+    completed = {
+        candidate_id
+        for candidate_id, story in stories.items()
+        if str(story.get("status") or "")
+        in {"ready-for-verification", "verified", "verified-with-risk", "done"}
+    }
+    for candidate_id, downstream in sorted(stories.items()):
+        dependencies = [
+            str(item) for item in downstream.get("depends_on", []) if str(item)
+        ]
+        if story_id not in dependencies or not dependencies:
+            continue
+        downstream_gate = downstream.get("dev_gate")
+        if not isinstance(downstream_gate, dict):
+            raise ValueError(f"{candidate_id} dev_gate must be an object")
+        satisfied = all(dependency in completed for dependency in dependencies)
+        downstream_gate["dependencies_satisfied"] = satisfied
+        can_authorize = satisfied and all(
+            downstream_gate.get(field) is True
+            for field in (
+                "cp5_confirmed",
+                "file_conflict_free",
+                "lld_confirmed",
+            )
+        )
+        downstream_gate["implementation_authorized"] = can_authorize
+        downstream_status = str(downstream.get("status") or "")
+        if can_authorize and downstream_status == "lld-approved":
+            downstream["status"] = "dev-ready"
+            transitions.append(
+                {
+                    "subject": candidate_id,
+                    "from": downstream_status,
+                    "to": "dev-ready",
+                    "reason": f"{story_id}_CP6_PASS",
+                }
+            )
+    return projected, tuple(transitions)
 
 
 CHRONOLOGY_KINDS = {

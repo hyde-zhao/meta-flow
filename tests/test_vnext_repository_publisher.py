@@ -3,17 +3,20 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from meta_flow import cli as top_level_cli
 from meta_flow.project.process_route import ProcessRouteError
-from meta_flow.project.scale import dump_yaml
+from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.repository import publisher
 from meta_flow.repository.cli import commit_main, push_main
 from meta_flow.repository.publisher import (
+    PublicationContext,
     PublicationEvidence,
     RepositoryApplyError,
     RepositoryAuthorization,
@@ -28,6 +31,7 @@ from meta_flow.repository.publisher import (
 from meta_flow.repository.publisher import (
     plan_push as _plan_push,
 )
+from meta_flow.workflow import cr_lifecycle
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +40,19 @@ def _isolated_process_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
         assert logical_ref.startswith("process/")
         return project_root / "_process" / Path(*logical_ref.split("/")[1:])
 
+    def logical_ref(project_root: Path, path: Path) -> str:
+        root = project_root.resolve()
+        resolved = path.resolve(strict=False)
+        process_root = (root / "_process").resolve(strict=False)
+        if resolved.is_relative_to(process_root):
+            return (
+                Path("process") / resolved.relative_to(process_root)
+            ).as_posix()
+        return resolved.relative_to(root).as_posix()
+
     monkeypatch.setattr(publisher, "resolve_process_ref", resolve)
+    monkeypatch.setattr(cr_lifecycle, "_resolve_runtime_ref", resolve)
+    monkeypatch.setattr(cr_lifecycle, "_rel", logical_ref)
 
 
 def _path_for_ref(project_root: Path, logical_ref: str) -> Path:
@@ -124,7 +140,10 @@ def _canonical_publication_evidence(
     if profile == "G2":
         canonical_refs.update(
             {
-                "formal_cr": f"{base_ref}/CR-001.md",
+                "formal_cr": "process/changes/CR-001.md",
+                "cr_summary": "process/changes/summaries/CR-001.summary.json",
+                "cr_index": "process/changes/CR-INDEX.json",
+                "cr_ledger": "process/state/CR-LEDGER.ndjson",
                 "cp8_result": f"{base_ref}/CP8.result.json",
                 "cp8_checkpoint": f"{base_ref}/CP8.md",
                 "gate_ledger": f"{base_ref}/GATE-LEDGER.ndjson",
@@ -191,8 +210,70 @@ def _canonical_publication_evidence(
         _write_ref(
             project_root,
             canonical_refs["formal_cr"],
-            f"---\ncr_id: CR-001\nlifecycle_status: {lifecycle}\n"
-            f"readiness_status: {readiness}\ngate_status: {gate_status}\n---\n",
+            "---\n"
+            "schema_version: 1\n"
+            "kind: cr\n"
+            "cr_id: CR-001\n"
+            "cr_type: architecture\n"
+            "title: fixture\n"
+            f"lifecycle_status: {lifecycle}\n"
+            f"readiness_status: {readiness}\n"
+            f"gate_status: {gate_status}\n"
+            "conflict_keys: []\n"
+            "impact_surface: []\n"
+            "authz_policy_refs: []\n"
+            "risk_refs: []\n"
+            "---\n",
+        )
+        _write_ref(
+            project_root,
+            canonical_refs["cr_summary"],
+            json.dumps(
+                {
+                    "id": "CR-001",
+                    "status": lifecycle,
+                    "readiness": readiness,
+                    "gate_status": gate_status,
+                    "full_ref": canonical_refs["formal_cr"],
+                }
+            ),
+        )
+        _write_ref(
+            project_root,
+            canonical_refs["cr_index"],
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "CR-001",
+                            "status": lifecycle,
+                            "lifecycle_status": lifecycle,
+                            "readiness": readiness,
+                            "readiness_status": readiness,
+                            "gate_status": gate_status,
+                            "full_ref": canonical_refs["formal_cr"],
+                            "summary_ref": canonical_refs["cr_summary"],
+                        }
+                    ]
+                }
+            ),
+        )
+        _write_ref(
+            project_root,
+            canonical_refs["cr_ledger"],
+            json.dumps(
+                {
+                    "event_id": f"CR-001-{lifecycle}",
+                    "event_type": "status_sync",
+                    "id": "CR-001",
+                    "status": lifecycle,
+                    "readiness": readiness,
+                    "gate_status": gate_status,
+                    "full_ref": canonical_refs["formal_cr"],
+                    "summary_ref": canonical_refs["cr_summary"],
+                }
+            )
+            + "\n",
         )
         _write_ref(
             project_root,
@@ -201,6 +282,7 @@ def _canonical_publication_evidence(
                 {
                     "checkpoint": "CP8",
                     "decision": "PASS" if g2_approved else "BLOCKED",
+                    "cr_id": "CR-001",
                     "work_id": "W-001",
                     "scope_version": 7,
                     "scope_digest": scope_digest,
@@ -256,6 +338,80 @@ def _canonical_publication_evidence(
         encoding="utf-8",
     )
     return PublicationEvidence(project_root=project_root, evidence_ref=evidence_ref), work_path, route_path
+
+
+def _canonical_publication_context(
+    project_root: Path,
+    repo_root: Path,
+    *,
+    operation: str,
+    repo_role: str,
+    remote: str = "",
+    ref: str = "",
+) -> tuple[PublicationContext, dict[str, str]]:
+    evidence, work_path, route_path = _canonical_publication_evidence(
+        project_root,
+        repo_root,
+        operation=operation,
+        repo_role=repo_role,
+        remote=remote,
+        ref=ref,
+        profile="G2",
+        g2_approved=True,
+    )
+    evidence_payload = json.loads(
+        _path_for_ref(project_root, evidence.evidence_ref).read_text(
+            encoding="utf-8"
+        )
+    )
+    context_ref = evidence.evidence_ref.replace(
+        "publication-evidence.json",
+        "publication-context.json",
+    )
+    refs = {
+        key: value
+        for key, value in evidence_payload["canonical_refs"].items()
+        if key != "target_policy"
+    }
+    work = load_yaml_object(work_path)
+    work["kind"] = "cr"
+    work["scope"]["allowed_reads"].append(context_ref)
+    work_path.write_text(dump_yaml(work), encoding="utf-8")
+    snapshot = publisher._profile_snapshot(work, refs["work"])
+    route = json.loads(route_path.read_text(encoding="utf-8"))
+    route["work_profile_snapshot"] = snapshot
+    route["work_profile_digest"] = _canonical_digest(snapshot)
+    route_path.write_text(json.dumps(route), encoding="utf-8")
+    policy = json.loads(
+        _path_for_ref(
+            project_root,
+            evidence_payload["canonical_refs"]["target_policy"],
+        ).read_text(encoding="utf-8")
+    )
+    _write_ref(
+        project_root,
+        context_ref,
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "PublicationContextV1",
+                "work_id": "W-001",
+                "cr_id": "CR-001",
+                "canonical_refs": refs,
+                "targets": policy["targets"],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+    )
+    return (
+        PublicationContext(
+            project_root=project_root,
+            context_ref=context_ref,
+        ),
+        refs,
+    )
 
 
 def plan_commit(**kwargs):
@@ -360,6 +516,150 @@ def test_canonical_profile_fixtures_reach_expected_plan_branch(
     expected_branch = "G2_CP8_APPLIES" if profile == "G2" else "G0_G1_NOT_APPLICABLE_BY_PROFILE"
     assert plan.publication_eligibility is not None
     assert plan.publication_eligibility.branch == expected_branch
+
+
+@pytest.mark.parametrize("operation", ["commit", "push"])
+def test_publication_context_builds_native_g2_plan_for_each_repository_operation(
+    operation: str,
+    tmp_path: Path,
+) -> None:
+    local, _bare = init_remote_pair(tmp_path, "release")
+    before = git(local, "rev-parse", "HEAD")
+    remote_before = git(local, "rev-parse", "origin/main")
+    if operation == "commit":
+        (local / "README.md").write_text("pending\n", encoding="utf-8")
+        remote = ""
+        ref = ""
+    else:
+        make_local_commit(local, "README.md", "pending push\n")
+        remote = "origin"
+        ref = "refs/heads/main"
+    context, _refs = _canonical_publication_context(
+        tmp_path,
+        local,
+        operation=operation,
+        repo_role="release",
+        remote=remote,
+        ref=ref,
+    )
+
+    if operation == "commit":
+        plan = _plan_commit(
+            project_id="demo",
+            work_id="W-001",
+            repo_role="release",
+            repo_root=local,
+            allowed_paths=("README.md",),
+            message="feat: native publication context",
+            expected_head_oid=before,
+            publication_context=context,
+        )
+    else:
+        plan = _plan_push(
+            project_id="demo",
+            work_id="W-001",
+            repo_role="release",
+            repo_root=local,
+            remote=remote,
+            ref=ref,
+            expected_remote_oid=remote_before,
+            publication_context=context,
+        )
+
+    assert not plan.blocked
+    assert plan.publication_eligibility_plan is not None
+    assert plan.publication_eligibility_plan.decision == "READY"
+    assert plan.publication_eligibility_plan.mutation_count == 0
+    assert (
+        plan.publication_eligibility_plan.as_dict()["kind"]
+        == "PublicationEligibilityPlanV1"
+    )
+
+
+@pytest.mark.parametrize(
+    ("drift", "expected_reason"),
+    [
+        ("summary", "CP8_REQUIRED"),
+        ("ledger", "CP8_REQUIRED"),
+        ("cp8", "CP8_REQUIRED"),
+        ("unknown_context_field", "PUBLICATION_CONTEXT_UNTRUSTED"),
+    ],
+)
+def test_publication_context_rechecks_native_truth_fail_closed(
+    drift: str,
+    expected_reason: str,
+    tmp_path: Path,
+) -> None:
+    local, _bare = init_remote_pair(tmp_path, "release")
+    before = git(local, "rev-parse", "HEAD")
+    (local / "README.md").write_text("pending\n", encoding="utf-8")
+    context, refs = _canonical_publication_context(
+        tmp_path,
+        local,
+        operation="commit",
+        repo_role="release",
+    )
+    if drift == "unknown_context_field":
+        context_path = _path_for_ref(tmp_path, context.context_ref)
+        payload = json.loads(context_path.read_text(encoding="utf-8"))
+        payload["unknown"] = True
+        context_path.write_text(json.dumps(payload), encoding="utf-8")
+    else:
+        target_key = {
+            "summary": "cr_summary",
+            "ledger": "cr_ledger",
+            "cp8": "cp8_result",
+        }[drift]
+        target_path = _path_for_ref(tmp_path, refs[target_key])
+        if drift == "ledger":
+            target_path.write_text(
+                json.dumps(
+                    {
+                        "event_id": "CR-001-drift",
+                        "event_type": "status_sync",
+                        "id": "CR-001",
+                        "status": "active",
+                        "readiness": "NOT_READY",
+                        "gate_status": "cp8_pending",
+                        "full_ref": refs["formal_cr"],
+                        "summary_ref": refs["cr_summary"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            payload = json.loads(target_path.read_text(encoding="utf-8"))
+            if drift == "summary":
+                payload["status"] = "active"
+            else:
+                payload["scope_digest"] = "0" * 64
+            target_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    plan = _plan_commit(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        allowed_paths=("README.md",),
+        message="feat: fail closed",
+        expected_head_oid=before,
+        publication_context=context,
+    )
+
+    assert plan.blocked
+    assert expected_reason in plan.reason
+    assert git(local, "diff", "--cached", "--name-only") == ""
+    assert git(local, "rev-parse", "HEAD") == before
+
+
+def test_publisher_has_one_native_cr_status_owner() -> None:
+    source = (
+        Path(publisher.__file__).resolve().read_text(encoding="utf-8")
+    )
+
+    assert "project_native_cr_status" in source
+    assert '_frontmatter(_resolve_publication_ref(project_root, refs["formal_cr"]))' not in source
 
 
 @pytest.mark.parametrize("operation", ["commit", "push"])
@@ -627,7 +927,7 @@ def push_auth(plan, authorization_id: str) -> RepositoryAuthorization:
         work_id=plan.work_id,
         repo_role=plan.repo_role,
         plan_digest=plan.plan_digest,
-        expected_oid=plan.expected_remote_oid,
+        expected_oid=plan.authorization_expected_oid,
         expires_at="2099-01-01T00:00:00+00:00",
     )
 
@@ -774,7 +1074,9 @@ def test_remote_oid_drift_blocks_old_push_plan_without_mutation(tmp_path: Path) 
     assert git(bare, "rev-parse", "refs/heads/main") == advanced
 
 
-def test_push_plan_blocks_dirty_non_ff_and_missing_ref(tmp_path: Path) -> None:
+def test_push_plan_blocks_dirty_and_absent_ref_with_nonempty_expectation(
+    tmp_path: Path,
+) -> None:
     local, _bare = init_remote_pair(tmp_path, "release")
     expected = git(local, "rev-parse", "origin/main")
     (local / "dirty.txt").write_text("dirty\n", encoding="utf-8")
@@ -794,13 +1096,227 @@ def test_push_plan_blocks_dirty_non_ff_and_missing_ref(tmp_path: Path) -> None:
         repo_root=local,
         remote="origin",
         ref="refs/heads/new",
-        expected_remote_oid="",
+        expected_remote_oid=expected,
     )
 
     assert dirty.blocked
     assert "dirty_repository" in dirty.reason
     assert missing.blocked
-    assert "remote_ref_not_present" in missing.reason
+    assert "remote_ref_absent" in missing.reason
+
+
+def test_first_push_creates_absent_ref_with_empty_expected_oid_and_create_only_lease(
+    tmp_path: Path,
+) -> None:
+    local, bare = init_remote_pair(tmp_path, "release")
+    local_oid = make_local_commit(local, "README.md", "first branch push\n")
+    ref = "refs/heads/new"
+    plan = plan_push(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        remote="origin",
+        ref=ref,
+        expected_remote_oid="",
+    )
+
+    assert not plan.blocked
+    assert plan.observed_remote_oid == ""
+    assert plan.authorization_expected_oid == "ABSENT"
+    assert plan.as_dict()["authorization_expected_oid"] == "ABSENT"
+    assert plan.argv == (
+        "push",
+        f"--force-with-lease={ref}:",
+        "origin",
+        f"{local_oid}:{ref}",
+    )
+    receipt = apply_push(plan, push_auth(plan, "first-push-release"))
+
+    assert receipt.decision == "PASS"
+    assert receipt.before_oid == ""
+    assert receipt.after_oid == local_oid
+    assert git(bare, "rev-parse", ref) == local_oid
+
+
+def test_first_push_plan_stales_if_remote_ref_appears_before_apply(
+    tmp_path: Path,
+) -> None:
+    local, bare = init_remote_pair(tmp_path, "release")
+    base_oid = git(local, "rev-parse", "origin/main")
+    local_oid = make_local_commit(local, "README.md", "planned branch push\n")
+    ref = "refs/heads/new"
+    plan = plan_push(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        remote="origin",
+        ref=ref,
+        expected_remote_oid="",
+    )
+    git(local, "push", "origin", f"{base_oid}:{ref}")
+
+    with pytest.raises(ValueError, match="stale"):
+        apply_push(plan, push_auth(plan, "stale-first-push"))
+
+    assert git(bare, "rev-parse", ref) == base_oid
+    assert git(bare, "rev-parse", ref) != local_oid
+
+
+def test_first_push_create_only_lease_rejects_transport_race_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local, bare = init_remote_pair(tmp_path, "release")
+    base_oid = git(local, "rev-parse", "origin/main")
+    local_oid = make_local_commit(local, "README.md", "lease race\n")
+    ref = "refs/heads/new"
+    plan = plan_push(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        remote="origin",
+        ref=ref,
+        expected_remote_oid="",
+    )
+    original_run_git = publisher.run_git
+    injected = False
+
+    def race_before_transport(args: list[str], *, cwd: Path):
+        nonlocal injected
+        if args and args[0] == "push" and not injected:
+            injected = True
+            git(local, "push", "origin", f"{base_oid}:{ref}")
+        return original_run_git(args, cwd=cwd)
+
+    monkeypatch.setattr(publisher, "run_git", race_before_transport)
+
+    with pytest.raises(RepositoryApplyError) as failure:
+        apply_push(plan, push_auth(plan, "raced-first-push"))
+
+    assert failure.value.receipt.decision == "FAILED"
+    assert failure.value.receipt.mutation_count == 0
+    assert git(bare, "rev-parse", ref) == base_oid
+    assert git(bare, "rev-parse", ref) != local_oid
+
+
+def test_first_push_lost_transport_ack_reports_observed_partial_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local, bare = init_remote_pair(tmp_path, "release")
+    local_oid = make_local_commit(local, "README.md", "accepted without ack\n")
+    ref = "refs/heads/new"
+    plan = plan_push(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        remote="origin",
+        ref=ref,
+        expected_remote_oid="",
+    )
+    original_run_git = publisher.run_git
+
+    def lose_ack_after_accept(args: list[str], *, cwd: Path):
+        accepted = original_run_git(args, cwd=cwd)
+        if args and args[0] == "push":
+            assert accepted.ok
+            return replace(
+                accepted,
+                returncode=1,
+                stderr="simulated lost transport acknowledgement",
+            )
+        return accepted
+
+    monkeypatch.setattr(publisher, "run_git", lose_ack_after_accept)
+
+    with pytest.raises(RepositoryApplyError) as failure:
+        apply_push(plan, push_auth(plan, "lost-ack-first-push"))
+
+    assert failure.value.receipt.decision == "PARTIAL"
+    assert failure.value.receipt.mutation_count == 1
+    assert failure.value.receipt.observed_oid == local_oid
+    assert git(bare, "rev-parse", ref) == local_oid
+
+
+def test_first_push_lost_ack_and_unknown_verification_never_claims_zero_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local, bare = init_remote_pair(tmp_path, "release")
+    local_oid = make_local_commit(local, "README.md", "accepted but unverifiable\n")
+    ref = "refs/heads/new"
+    plan = plan_push(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        remote="origin",
+        ref=ref,
+        expected_remote_oid="",
+    )
+    original_run_git = publisher.run_git
+    original_query = publisher.query_exact_remote_ref
+    transport_finished = False
+
+    def lose_ack_after_accept(args: list[str], *, cwd: Path):
+        nonlocal transport_finished
+        accepted = original_run_git(args, cwd=cwd)
+        if args and args[0] == "push":
+            assert accepted.ok
+            transport_finished = True
+            return replace(
+                accepted,
+                returncode=1,
+                stderr="simulated lost transport acknowledgement",
+            )
+        return accepted
+
+    def lose_post_apply_observation(root: Path, remote: str, target_ref: str):
+        observation = original_query(root, remote, target_ref)
+        if transport_finished:
+            return replace(
+                observation,
+                decision="UNKNOWN",
+                oid="",
+                reason="simulated_post_apply_query_failure",
+            )
+        return observation
+
+    monkeypatch.setattr(publisher, "run_git", lose_ack_after_accept)
+    monkeypatch.setattr(
+        publisher,
+        "query_exact_remote_ref",
+        lose_post_apply_observation,
+    )
+
+    with pytest.raises(RepositoryApplyError) as failure:
+        apply_push(plan, push_auth(plan, "unknown-after-first-push"))
+
+    assert failure.value.receipt.decision == "PARTIAL"
+    assert failure.value.receipt.mutation_count == 1
+    assert failure.value.receipt.observed_oid == ""
+    assert git(bare, "rev-parse", ref) == local_oid
+
+
+def test_first_push_blocks_unknown_remote_observation(tmp_path: Path) -> None:
+    local, _bare = init_remote_pair(tmp_path, "release")
+    make_local_commit(local, "README.md", "unknown remote\n")
+    plan = plan_push(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        remote="missing",
+        ref="refs/heads/new",
+        expected_remote_oid="",
+    )
+
+    assert plan.blocked
+    assert "remote_ref_observation_unknown" in plan.reason
 
 
 def test_two_repo_sequence_reports_partial_and_never_rolls_back_success(tmp_path: Path) -> None:
@@ -904,6 +1420,37 @@ def test_authorization_cannot_cross_operation_or_plan(tmp_path: Path) -> None:
         apply_push(plan, wrong)
     with pytest.raises(ValueError, match="single-use"):
         apply_push(plan, replace(push_auth(plan, "auth"), single_use=1))
+
+
+def test_first_push_authorization_requires_exact_absent_sentinel(
+    tmp_path: Path,
+) -> None:
+    local, _bare = init_remote_pair(tmp_path, "release")
+    base_oid = git(local, "rev-parse", "origin/main")
+    make_local_commit(local, "README.md", "first push authorization\n")
+    ref = "refs/heads/new"
+    plan = plan_push(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        remote="origin",
+        ref=ref,
+        expected_remote_oid="",
+    )
+    valid = push_auth(plan, "first-push-auth")
+    invalid = (
+        replace(valid, authorization_id="wrong-operation", operation="commit"),
+        replace(valid, authorization_id="empty-expected", expected_oid=""),
+        replace(valid, authorization_id="unknown-expected", expected_oid="UNKNOWN"),
+        replace(valid, authorization_id="oid-expected", expected_oid=base_oid),
+    )
+
+    for authorization in invalid:
+        with pytest.raises(ValueError):
+            apply_push(plan, authorization)
+
+    assert git(local, "ls-remote", "--refs", "origin", ref) == ""
 
 
 def test_push_sequence_requires_nonempty_unique_repository_roles(tmp_path: Path) -> None:
@@ -1040,6 +1587,89 @@ def test_repository_cli_is_dry_run_then_requires_exact_authorization(
     pushed = json.loads(capsys.readouterr().out)
     assert pushed["receipt"]["decision"] == "PASS"
     assert git(local, "rev-parse", "origin/main") == git(local, "rev-parse", "HEAD")
+
+
+def test_top_level_repository_cli_first_push_is_create_only(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local, bare = init_remote_pair(tmp_path, "release")
+    local_oid = make_local_commit(local, "README.md", "first public branch push\n")
+    ref = "refs/heads/new"
+    evidence, _work_path, _route_path = _canonical_publication_evidence(
+        tmp_path,
+        local,
+        operation="push",
+        repo_role="release",
+        remote="origin",
+        ref=ref,
+    )
+    plan = _plan_push(
+        project_id="demo",
+        work_id="W-001",
+        repo_role="release",
+        repo_root=local,
+        remote="origin",
+        ref=ref,
+        expected_remote_oid="",
+        publication_evidence=evidence,
+    )
+    authorization_path = tmp_path / "first-push-auth.yaml"
+    authorization_path.write_text(
+        dump_yaml(push_auth(plan, "first-push-cli").__dict__) + "\n",
+        encoding="utf-8",
+    )
+    args = [
+        "repository",
+        "push",
+        "--project-id",
+        "demo",
+        "--work-id",
+        "W-001",
+        "--repo-role",
+        "release",
+        "--repo-root",
+        str(local),
+        "--remote",
+        "origin",
+        "--ref",
+        ref,
+        "--expected-remote-oid",
+        "",
+        "--project-root",
+        str(tmp_path),
+        "--publication-evidence-ref",
+        evidence.evidence_ref,
+    ]
+
+    monkeypatch.setattr(sys, "argv", ["meta-flow", *args])
+    with pytest.raises(SystemExit) as dry_run:
+        top_level_cli.main()
+    assert dry_run.value.code == 0
+    dry_payload = json.loads(capsys.readouterr().out)
+    assert dry_payload["decision"] == "READY"
+    assert dry_payload["authorization_expected_oid"] == "ABSENT"
+    assert git(local, "ls-remote", "--refs", "origin", ref) == ""
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "meta-flow",
+            *args,
+            "--apply",
+            "--authorization",
+            str(authorization_path),
+        ],
+    )
+    with pytest.raises(SystemExit) as applied:
+        top_level_cli.main()
+    assert applied.value.code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["receipt"]["decision"] == "PASS"
+    assert payload["receipt"]["before_oid"] == ""
+    assert git(bare, "rev-parse", ref) == local_oid
 
 
 def test_commit_hook_failure_returns_partial_receipt_and_preserves_staged_truth(

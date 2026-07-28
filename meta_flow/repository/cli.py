@@ -1,4 +1,9 @@
-"""vNext 单仓提交/推送 CLI；默认 dry-run，apply 需要匹配计划的 typed authorization。"""
+"""vNext 单仓提交/推送 CLI。
+
+默认 dry-run，apply 需要匹配计划的 typed authorization；远端 ref 不存在时，
+push 计划以 ``expected_remote_oid=""`` 表达 create-only，并输出授权哨兵
+``authorization_expected_oid=ABSENT``。
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,7 @@ from typing import Any
 
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.repository.publisher import (
+    PublicationContext,
     PublicationEvidence,
     RepositoryApplyError,
     RepositoryAuthorization,
@@ -19,16 +25,27 @@ from meta_flow.repository.publisher import (
 )
 
 
-def _publication_evidence(parsed: argparse.Namespace) -> PublicationEvidence:
-    return PublicationEvidence(
-        project_root=parsed.project_root,
-        evidence_ref=parsed.publication_evidence_ref,
-    )
+def _publication_inputs(parsed: argparse.Namespace) -> dict[str, object]:
+    if parsed.publication_context_ref:
+        return {
+            "publication_context": PublicationContext(
+                project_root=parsed.project_root,
+                context_ref=parsed.publication_context_ref,
+            )
+        }
+    return {
+        "publication_evidence": PublicationEvidence(
+            project_root=parsed.project_root,
+            evidence_ref=parsed.publication_evidence_ref,
+        )
+    }
 
 
 def _add_publication_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", type=Path, required=True)
-    parser.add_argument("--publication-evidence-ref", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--publication-evidence-ref")
+    source.add_argument("--publication-context-ref")
 
 
 def _authorization(path: Path) -> RepositoryAuthorization:
@@ -71,7 +88,7 @@ def commit_main(argv: list[str]) -> int:
             allowed_paths=parsed.allowed_path,
             message=parsed.message,
             expected_head_oid=parsed.expected_head_oid,
-            publication_evidence=_publication_evidence(parsed),
+            **_publication_inputs(parsed),
         )
         if parsed.apply:
             if parsed.authorization is None:
@@ -119,7 +136,7 @@ def push_main(argv: list[str]) -> int:
             remote=parsed.remote,
             ref=parsed.ref,
             expected_remote_oid=parsed.expected_remote_oid,
-            publication_evidence=_publication_evidence(parsed),
+            **_publication_inputs(parsed),
         )
         if parsed.apply:
             if parsed.authorization is None:
@@ -148,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "usage: meta-flow repository <commit|push> [options]\n\n"
             "Each repository is planned and published independently. Commands are dry-run by default; "
-            "--apply requires one exact-plan typed authorization.\n"
+            "--apply requires one exact-plan typed authorization. An absent remote ref is published "
+            "create-only with expected_remote_oid='' and authorization expected_oid=ABSENT.\n"
         )
         return 0
     command, forwarded = args[0], args[1:]

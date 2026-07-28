@@ -8,6 +8,7 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow.checks import state_transition
+from meta_flow.checks.frozen_cp6_evidence import FrozenCp6EvidenceV1
 
 
 def write_route_plan(root: Path) -> Path:
@@ -53,6 +54,339 @@ def write_state(root: Path, payload: dict) -> Path:
 
 
 class StateTransitionTests(unittest.TestCase):
+    def _c0_result(
+        self,
+        *,
+        failed_consumer: bool = False,
+    ) -> state_transition.C0ResultV1:
+        frozen = [
+            FrozenCp6EvidenceV1(
+                story_id=f"STORY-CR061-S0{index}",
+                release_oid="a" * 40,
+                process_oid="b" * 40,
+                scope_digest="c" * 64,
+                implementation_digest=chr(99 + index) * 64,
+                dependency_digests={"upstream": str(index) * 64},
+                cp6_result_ref=f"process/checks/CP6-STORY-CR061-S0{index}.result.json",
+            ).as_dict()
+            for index in range(1, 4)
+        ]
+        consumers = [
+            state_transition.project_c0_consumer(
+                consumer_id=f"C0-CONSUMER-{index:02d}",
+                operation=f"operation-{index:02d}",
+                attempts=[
+                    {
+                        "returncode": 1 if failed_consumer and index == 1 else 0,
+                        "stdout": "PASS",
+                        "stderr": "",
+                    }
+                ],
+                absolute_process_path="/bound/process",
+            )
+            for index in range(1, 12)
+        ]
+        return state_transition.build_c0_result(
+            cr_id="CR-061",
+            release_oid="a" * 40,
+            process_oid="b" * 40,
+            scope_digest="c" * 64,
+            input_evidence_refs=[
+                f"process/{kind}/STORY-CR061-S0{index}.json"
+                for index in range(1, 4)
+                for kind in ("checks", "returns", "evidence")
+            ],
+            frozen_evidence=frozen,
+            consumer_inventory=consumers,
+            planned_transitions=[
+                {
+                    "subject": "STORY-CR061-S01",
+                    "from": "bootstrap-cp6-pass",
+                    "to": "ready-for-verification",
+                }
+            ],
+            mutation_allowlist=["process/DEVELOPMENT-PLAN.yaml"],
+        )
+
+    def test_c0_result_v1_has_exact_21_keys_and_native_digest(self) -> None:
+        result = self._c0_result()
+        payload = result.as_dict()
+
+        self.assertEqual(21, len(payload))
+        self.assertEqual(state_transition.C0_RESULT_FIELDS, set(payload))
+        self.assertEqual("READY", payload["decision"])
+        self.assertEqual(3, len(payload["replay_results"]))
+        self.assertEqual(11, len(payload["consumer_inventory"]))
+        self.assertEqual(0, payload["bootstrap_consumer_count"])
+        self.assertEqual(0, payload["legacy_projector_consumer_count"])
+        self.assertEqual(payload, state_transition.C0ResultV1.from_dict(payload).as_dict())
+
+    def test_c0_result_v1_rejects_unknown_field(self) -> None:
+        payload = self._c0_result().as_dict()
+        payload["unknown"] = True
+
+        with self.assertRaisesRegex(ValueError, "fields mismatch"):
+            state_transition.C0ResultV1.from_dict(payload)
+
+    def test_c0_result_blocks_failed_public_consumer(self) -> None:
+        payload = self._c0_result(failed_consumer=True).as_dict()
+
+        self.assertEqual("BLOCKED", payload["decision"])
+        self.assertIn("C0_CONSUMER_REPLAY_BLOCKED", payload["blockers"])
+
+    def test_c0_development_plan_projector_has_one_deterministic_state_mapping(self) -> None:
+        payload = {
+            "waves": [
+                {
+                    "stories": [
+                        {
+                            "story_id": f"STORY-CR061-S0{index}",
+                            "status": "lld-ready",
+                            "lld_gate": {"status": "ready-for-review"},
+                            "dev_gate": {
+                                "lld_confirmed": False,
+                                "cp5_confirmed": False,
+                                "dependencies_satisfied": False,
+                                "file_conflict_free": False,
+                                "implementation_authorized": False,
+                            },
+                        }
+                        for index in range(1, 6)
+                    ]
+                }
+            ]
+        }
+
+        projected, transitions = state_transition.project_c0_development_plan(
+            payload,
+            cr_id="CR-061",
+        )
+        stories = {
+            story["story_id"]: story
+            for story in projected["waves"][0]["stories"]
+        }
+
+        self.assertEqual("ready-for-verification", stories["STORY-CR061-S01"]["status"])
+        self.assertEqual("ready-for-verification", stories["STORY-CR061-S03"]["status"])
+        self.assertEqual("dev-ready", stories["STORY-CR061-S04"]["status"])
+        self.assertTrue(stories["STORY-CR061-S04"]["dev_gate"]["dependencies_satisfied"])
+        self.assertTrue(stories["STORY-CR061-S04"]["dev_gate"]["implementation_authorized"])
+        self.assertEqual("lld-approved", stories["STORY-CR061-S05"]["status"])
+        self.assertFalse(stories["STORY-CR061-S05"]["dev_gate"]["dependencies_satisfied"])
+        self.assertFalse(stories["STORY-CR061-S05"]["dev_gate"]["implementation_authorized"])
+        self.assertEqual(5, len(transitions))
+        self.assertEqual(payload, {
+            "waves": [
+                {
+                    "stories": [
+                        {
+                            "story_id": f"STORY-CR061-S0{index}",
+                            "status": "lld-ready",
+                            "lld_gate": {"status": "ready-for-review"},
+                            "dev_gate": {
+                                "lld_confirmed": False,
+                                "cp5_confirmed": False,
+                                "dependencies_satisfied": False,
+                                "file_conflict_free": False,
+                                "implementation_authorized": False,
+                            },
+                        }
+                        for index in range(1, 6)
+                    ]
+                }
+            ]
+        })
+
+        replayed, _replayed_transitions = state_transition.project_c0_development_plan(
+            projected,
+            cr_id="CR-061",
+        )
+        self.assertEqual(projected, replayed)
+
+    def test_c0_development_plan_projector_rejects_missing_story(self) -> None:
+        payload = {
+            "waves": [
+                {
+                    "stories": [
+                        {
+                            "story_id": f"STORY-CR061-S0{index}",
+                            "status": "lld-ready",
+                            "lld_gate": {},
+                            "dev_gate": {},
+                        }
+                        for index in range(1, 5)
+                    ]
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(ValueError, "C0 stories missing"):
+            state_transition.project_c0_development_plan(payload, cr_id="CR-061")
+
+    def test_c0_development_plan_projector_repairs_prior_regression_monotonically(
+        self,
+    ) -> None:
+        payload = {
+            "waves": [
+                {
+                    "stories": [
+                        {
+                            "story_id": f"STORY-CR061-S0{index}",
+                            "status": (
+                                "dev-ready"
+                                if index == 4
+                                else "lld-approved"
+                                if index == 5
+                                else "ready-for-verification"
+                            ),
+                            "lld_gate": {"status": "approved"},
+                            "dev_gate": {
+                                "lld_confirmed": True,
+                                "cp5_confirmed": True,
+                                "dependencies_satisfied": index != 5,
+                                "file_conflict_free": True,
+                                "implementation_authorized": index != 5,
+                            },
+                        }
+                        for index in range(1, 6)
+                    ]
+                }
+            ]
+        }
+        prior_transitions = [
+            {
+                "subject": "STORY-CR061-S04",
+                "from": "ready-for-verification",
+                "to": "dev-ready",
+            },
+            {
+                "subject": "STORY-CR061-S05",
+                "from": "ready-for-verification",
+                "to": "lld-approved",
+            },
+        ]
+
+        projected, transitions = state_transition.project_c0_development_plan(
+            payload,
+            cr_id="CR-061",
+            prior_transitions=prior_transitions,
+        )
+        stories = {
+            story["story_id"]: story
+            for story in projected["waves"][0]["stories"]
+        }
+
+        self.assertEqual("ready-for-verification", stories["STORY-CR061-S04"]["status"])
+        self.assertEqual("ready-for-verification", stories["STORY-CR061-S05"]["status"])
+        self.assertTrue(stories["STORY-CR061-S04"]["dev_gate"]["dependencies_satisfied"])
+        self.assertTrue(stories["STORY-CR061-S05"]["dev_gate"]["dependencies_satisfied"])
+        self.assertTrue(stories["STORY-CR061-S04"]["dev_gate"]["implementation_authorized"])
+        self.assertTrue(stories["STORY-CR061-S05"]["dev_gate"]["implementation_authorized"])
+        self.assertEqual(
+            {
+                "STORY-CR061-S04",
+                "STORY-CR061-S05",
+            },
+            {transition["subject"] for transition in transitions},
+        )
+        self.assertTrue(
+            all(
+                transition["reason"] == "C0_REPAIR_REGRESSIVE_PRIOR_PROJECTION"
+                for transition in transitions
+            )
+        )
+
+    def test_cp6_pass_projects_story_and_only_satisfied_downstream_to_dev_ready(
+        self,
+    ) -> None:
+        payload = {
+            "waves": [
+                {
+                    "stories": [
+                        {
+                            "story_id": "STORY-CR061-S04",
+                            "status": "dev-ready",
+                            "depends_on": [],
+                            "dev_gate": {
+                                "cp5_confirmed": True,
+                                "dependencies_satisfied": True,
+                                "file_conflict_free": True,
+                                "implementation_authorized": True,
+                                "lld_confirmed": True,
+                            },
+                        },
+                        {
+                            "story_id": "STORY-CR061-S05",
+                            "status": "lld-approved",
+                            "depends_on": ["STORY-CR061-S04"],
+                            "dev_gate": {
+                                "cp5_confirmed": True,
+                                "dependencies_satisfied": False,
+                                "file_conflict_free": True,
+                                "implementation_authorized": False,
+                                "lld_confirmed": True,
+                            },
+                        },
+                    ]
+                }
+            ]
+        }
+
+        projected, transitions = state_transition.project_cp6_development_plan(
+            payload,
+            result={
+                "checkpoint": "CP6",
+                "decision": "PASS",
+                "story_id": "STORY-CR061-S04",
+            },
+        )
+
+        stories = {
+            story["story_id"]: story for story in projected["waves"][0]["stories"]
+        }
+        self.assertEqual(
+            "ready-for-verification",
+            stories["STORY-CR061-S04"]["status"],
+        )
+        self.assertEqual("dev-ready", stories["STORY-CR061-S05"]["status"])
+        self.assertTrue(
+            stories["STORY-CR061-S05"]["dev_gate"]["dependencies_satisfied"]
+        )
+        self.assertTrue(
+            stories["STORY-CR061-S05"]["dev_gate"]["implementation_authorized"]
+        )
+        self.assertEqual(2, len(transitions))
+
+    def test_cp6_projection_rejects_closed_gate(self) -> None:
+        payload = {
+            "waves": [
+                {
+                    "stories": [
+                        {
+                            "story_id": "STORY-CR061-S04",
+                            "status": "dev-ready",
+                            "dev_gate": {
+                                "cp5_confirmed": True,
+                                "dependencies_satisfied": False,
+                                "file_conflict_free": True,
+                                "implementation_authorized": True,
+                                "lld_confirmed": True,
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "fully open dev_gate"):
+            state_transition.project_cp6_development_plan(
+                payload,
+                result={
+                    "checkpoint": "CP6",
+                    "decision": "PASS",
+                    "story_id": "STORY-CR061-S04",
+                },
+            )
+
     def test_cp5_transition_accepts_missing_state_projection_without_creating_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

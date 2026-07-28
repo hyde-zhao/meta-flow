@@ -2,8 +2,8 @@
 
 防止调度证据断链：handoff 文件的 dispatch 块声明 mode=subagent 时，
 必须回填真实子 agent 调度证据（canonical_role / dispatch_trigger /
-agent_id 或 thread_id / tool_name / spawned_at 或 resumed_at /
-completed_at）。只有 handoff 没有调度证据时，不得判定目标 agent 已完成。
+agent_id 或 thread_id / tool_name / spawned_at 或 resumed_at）。只有
+handoff 进入终态时才要求 completed_at；进行中的真实调度不得伪造完成时间。
 """
 
 from __future__ import annotations
@@ -14,12 +14,36 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.state.event_ledger import parse_handoff_dispatch_record
 
 # 已知 dispatch.mode 取值
 SUBAGENT_MODE = "subagent"
 INLINE_FALLBACK_MODE = "inline-fallback"
 HANDOFF_ONLY_MODE = "handoff-only"
 KNOWN_MODES = (SUBAGENT_MODE, INLINE_FALLBACK_MODE, HANDOFF_ONLY_MODE)
+
+# handoff 顶层 status 的当前生命周期枚举。进行中状态不代表执行完成；
+# 终态统一使用现有 completed_at 字段记录终止时间。
+ACTIVE_SUBAGENT_STATUSES = frozenset({"dispatched", "running", "in-progress"})
+TERMINAL_SUBAGENT_STATUSES = frozenset(
+    {
+        "completed",
+        "success",
+        "succeeded",
+        "passed",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "canceled",
+        "superseded",
+        "closed",
+        # 当前过程仓中仍在使用的 v1 终态别名；它们同样必须有 completed_at。
+        "agent-completed",
+        "agent-completed-pass",
+        "rework-round-2-completed",
+    }
+)
+KNOWN_HANDOFF_STATUSES = ACTIVE_SUBAGENT_STATUSES | TERMINAL_SUBAGENT_STATUSES
 
 # 视为空的占位值（与 human_gate.EMPTY_VALUES 思路一致）
 EMPTY_VALUES = {"", "-", "—", "n/a", "N/A", "无", "不适用"}
@@ -29,41 +53,20 @@ def _is_empty(value: Any) -> bool:
     return value is None or str(value).strip().strip('"').strip("'") in EMPTY_VALUES
 
 
-def _parse_frontmatter(text: str) -> str | None:
-    """提取 Markdown frontmatter 文本（--- 之间）。无 frontmatter 返回 None。"""
+def _parse_handoff_status(text: str) -> str:
+    """读取 Markdown frontmatter 的顶层 ``status``，不接受正文或嵌套字段。"""
     if not text.startswith("---\n"):
-        return None
+        raise ValueError("missing or invalid YAML frontmatter")
     end = text.find("\n---", 4)
     if end == -1:
-        return None
-    return text[4:end]
-
-
-def _parse_dispatch_block(frontmatter: str) -> dict[str, str] | None:
-    """解析 frontmatter 中 dispatch: 嵌套块的标量字段。
-
-    不依赖 yaml；按行解析 `  key: value` 形式的嵌套字段，与 cli.py 的
-    _scalar_value(nested=True) 同一约定。dispatch 块结束于第一个非缩进行。
-    """
-    dispatch: dict[str, str] = {}
-    in_dispatch = False
-    for line in frontmatter.splitlines():
-        if line.startswith("dispatch:"):
-            in_dispatch = True
+        raise ValueError("missing or invalid YAML frontmatter")
+    for line in text[4:end].splitlines():
+        if not line or line.startswith((" ", "\t")) or ":" not in line:
             continue
-        if not in_dispatch:
-            continue
-        # 遇到非缩进行（顶层 key 或空行外的内容）则 dispatch 块结束
-        if line and not line.startswith(" "):
-            break
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if ":" not in stripped:
-            continue
-        key, _, value = stripped.partition(":")
-        dispatch[key.strip()] = value.strip().strip('"').strip("'")
-    return dispatch if dispatch else None
+        key, _, value = line.partition(":")
+        if key.strip() == "status":
+            return value.strip().strip('"').strip("'")
+    raise ValueError("missing top-level status in frontmatter")
 
 
 def validate_handoff_dispatch(path: Path) -> list[str]:
@@ -72,15 +75,21 @@ def validate_handoff_dispatch(path: Path) -> list[str]:
     if not path.is_file():
         return [f"handoff file not found: {path}"]
     text = path.read_text(encoding="utf-8")
-    frontmatter = _parse_frontmatter(text)
-    if frontmatter is None:
-        return [f"{path.name}: missing or invalid YAML frontmatter"]
+    try:
+        record = parse_handoff_dispatch_record(text)
+        status = _parse_handoff_status(text)
+    except ValueError as exc:
+        return [f"{path.name}: {exc}"]
 
-    dispatch = _parse_dispatch_block(frontmatter)
-    if dispatch is None:
-        return [f"{path.name}: missing dispatch block in frontmatter"]
+    if _is_empty(status):
+        return [f"{path.name}: top-level status is empty"]
+    if status not in KNOWN_HANDOFF_STATUSES:
+        return [
+            f"{path.name}: top-level status={status!r} is not a known status "
+            f"(expected one of {sorted(KNOWN_HANDOFF_STATUSES)})"
+        ]
 
-    mode = dispatch.get("mode", "").strip()
+    mode = record.get("mode").strip()
     if not mode:
         errors.append(f"{path.name}: dispatch.mode is empty")
         return errors
@@ -92,25 +101,32 @@ def validate_handoff_dispatch(path: Path) -> list[str]:
         return errors
 
     # canonical_role 对所有执行模式都是必填（状态机角色）
-    if _is_empty(dispatch.get("canonical_role")):
+    if _is_empty(record.get("canonical_role")):
         errors.append(f"{path.name}: dispatch.mode={mode} requires canonical_role")
 
     if mode == SUBAGENT_MODE:
-        for field in ("dispatch_trigger", "tool_name", "completed_at"):
-            if _is_empty(dispatch.get(field)):
+        for field in ("dispatch_trigger", "tool_name"):
+            if _is_empty(record.get(field)):
                 errors.append(f"{path.name}: dispatch.mode=subagent requires {field}")
-        if _is_empty(dispatch.get("agent_id")) and _is_empty(dispatch.get("thread_id")):
+        if _is_empty(record.get("agent_id")) and _is_empty(record.get("thread_id")):
             errors.append(f"{path.name}: dispatch.mode=subagent requires agent_id or thread_id")
-        if _is_empty(dispatch.get("spawned_at")) and _is_empty(dispatch.get("resumed_at")):
+        if _is_empty(record.get("spawned_at")) and _is_empty(record.get("resumed_at")):
             errors.append(f"{path.name}: dispatch.mode=subagent requires spawned_at or resumed_at")
+        if status in ACTIVE_SUBAGENT_STATUSES:
+            if not _is_empty(record.get("completed_at")):
+                errors.append(
+                    f"{path.name}: active subagent status={status} must not carry completed_at"
+                )
+        elif _is_empty(record.get("completed_at")):
+            errors.append(f"{path.name}: terminal subagent status={status} requires completed_at")
     elif mode == INLINE_FALLBACK_MODE:
         for field in ("fallback_reason", "approved_by", "approved_at"):
-            if _is_empty(dispatch.get(field)):
+            if _is_empty(record.get(field)):
                 errors.append(f"{path.name}: dispatch.mode=inline-fallback requires {field}")
     elif mode == HANDOFF_ONLY_MODE:
         # handoff-only 只创建交接文件，不代表目标 agent 已执行；
         # 不得携带 completed_at 等调度完成证据，否则等于假装已完成。
-        if not _is_empty(dispatch.get("completed_at")):
+        if not _is_empty(record.get("completed_at")):
             errors.append(
                 f"{path.name}: dispatch.mode=handoff-only must not carry completed_at; "
                 "handoff-only does not represent target agent execution"
@@ -119,7 +135,9 @@ def validate_handoff_dispatch(path: Path) -> list[str]:
     return errors
 
 
-def validate_handoff_dispatch_dir(project_root: Path, *, strict_all: bool = False) -> tuple[list[str], list[str]]:
+def validate_handoff_dispatch_dir(
+    project_root: Path, *, strict_all: bool = False
+) -> tuple[list[str], list[str]]:
     """校验 handoff 目录。
 
     默认只检查已经声明 frontmatter ``dispatch`` 契约的 current-format
@@ -133,8 +151,9 @@ def validate_handoff_dispatch_dir(project_root: Path, *, strict_all: bool = Fals
         return errors, checked  # 无 handoff 目录不算错误
     for path in sorted(handoff_dir.glob("*.md")):
         if not strict_all:
-            frontmatter = _parse_frontmatter(path.read_text(encoding="utf-8"))
-            if frontmatter is None or _parse_dispatch_block(frontmatter) is None:
+            try:
+                parse_handoff_dispatch_record(path.read_text(encoding="utf-8"))
+            except ValueError:
                 continue
         checked.append(path.name)
         errors.extend(validate_handoff_dispatch(path))
@@ -146,8 +165,15 @@ def main(argv: list[str] | None = None) -> int:
         prog="meta-flow check handoff-dispatch",
         description="Validate dispatch evidence in process/handoffs/*.md frontmatter.",
     )
-    parser.add_argument("--handoff", type=Path, default=None, help="Single handoff file to validate")
-    parser.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root (scans process/handoffs/)")
+    parser.add_argument(
+        "--handoff", type=Path, default=None, help="Single handoff file to validate"
+    )
+    parser.add_argument(
+        "--project-root",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root (scans process/handoffs/)",
+    )
     parser.add_argument(
         "--strict-all",
         action="store_true",
@@ -159,7 +185,9 @@ def main(argv: list[str] | None = None) -> int:
         errors = validate_handoff_dispatch(args.handoff)
         checked = [args.handoff.name] if args.handoff.is_file() else []
     else:
-        errors, checked = validate_handoff_dispatch_dir(args.project_root.resolve(), strict_all=args.strict_all)
+        errors, checked = validate_handoff_dispatch_dir(
+            args.project_root.resolve(), strict_all=args.strict_all
+        )
 
     print("Handoff Dispatch Check: " + ("FAIL" if errors else "OK"))
     if checked:

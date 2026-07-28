@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -8,13 +10,62 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow.checks import cp_result
-from meta_flow.state import current, event_ledger
+from meta_flow.state import current, event_ledger, ledger_migration
 
 
 def write_minimal_state(root: Path) -> None:
     state = current.default_current_state(root)
     state["project_id"] = "fixture-project"
     current.write_current_state(root, state)
+
+
+def init_paired_binding(root: Path) -> tuple[Path, Path]:
+    release = root / "meta-flow"
+    process = root / "meta-flow-process"
+    release.mkdir()
+    process.mkdir()
+    for repository in (release, process):
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    binding = release / ".meta-flow" / "workspace.yaml"
+    binding.parent.mkdir()
+    binding.write_text(
+        "schema_version: 1\n"
+        "layout_version: independent-process-repo-v1\n"
+        "workflow_model: vnext\n"
+        "project_id: fixture-project\n"
+        "repo_role: release\n"
+        "route_mode: sibling-binding\n"
+        "process_repo:\n"
+        "  anchor: workspace_parent\n"
+        "  relative_path: meta-flow-process\n",
+        encoding="utf-8",
+    )
+    (process / ".meta-flow-process.yaml").write_text(
+        "schema_version: 1\n"
+        "layout_version: independent-process-repo-v1\n"
+        "workflow_model: vnext\n"
+        "project_id: fixture-project\n"
+        "repo_role: process\n"
+        "route_mode: sibling-binding\n"
+        "release_repo:\n"
+        "  anchor: workspace_parent\n"
+        "  relative_path: meta-flow\n",
+        encoding="utf-8",
+    )
+    (process / "PROJECT.yaml").write_text(
+        "schema_version: 1\n"
+        "project_id: fixture-project\n"
+        "name: Fixture Project\n"
+        "status: active\n",
+        encoding="utf-8",
+    )
+    return release, process
 
 
 def cp6_result_payload() -> dict[str, object]:
@@ -136,6 +187,36 @@ class CPResultEventLedgerTests(unittest.TestCase):
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root, correlation_profile="strict")
             self.assertIn("INPUT_HASH_MISMATCH: artifact.txt", errors)
 
+    def test_native_input_hashes_accept_sibling_bound_process_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            artifact = process / "returns" / "STORY-CR123-S04.CP6.return.json"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text('{"status":"implemented"}\n', encoding="utf-8")
+
+            hashes = cp_result.build_input_artifact_hashes(
+                release,
+                ["process/returns/STORY-CR123-S04.CP6.return.json"],
+            )
+
+            self.assertRegex(
+                hashes["process/returns/STORY-CR123-S04.CP6.return.json"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            stream = StringIO()
+            with redirect_stdout(stream):
+                exit_code = cp_result.main(
+                    [
+                        "input-hashes",
+                        "--project-root",
+                        str(release),
+                        "--ref",
+                        "process/returns/STORY-CR123-S04.CP6.return.json",
+                    ]
+                )
+            self.assertEqual(0, exit_code)
+            self.assertNotIn(str(process), stream.getvalue())
+
     def test_strict_correlation_rejects_missing_typed_final_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -147,6 +228,41 @@ class CPResultEventLedgerTests(unittest.TestCase):
             result = write_cp6_result(root, payload)
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root, correlation_profile="strict")
             self.assertIn("FINAL_ATTEMPT_UNAVAILABLE: ADE-0001", errors)
+
+    def test_strict_correlation_consumes_canonical_dispatch_projector(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "artifact.txt"
+            artifact.write_text("current", encoding="utf-8")
+            payload = cp6_result_payload()
+            payload["check_attempt"] = 1
+            payload["input_artifact_hashes"] = {
+                "artifact.txt": "sha256:" + __import__("hashlib").sha256(b"current").hexdigest()
+            }
+            result = write_cp6_result(root, payload)
+            event_ledger.append_dispatch_event(
+                root,
+                event_ledger.build_inline_fallback_event(
+                    event_id="ADE-0001-completed",
+                    dispatch_id="ADE-0001",
+                    attempt_id="ATTEMPT-0001",
+                    story_id="STORY-CR123-S01",
+                    canonical_role="meta-dev",
+                    fallback_reason="fixture inline implementation",
+                    approved_by="test",
+                    checkpoint="CP6",
+                    result_ref="process/checks/CP6-STORY-CR123-S01.result.json",
+                ),
+            )
+
+            errors, _warnings = cp_result.validate_cp_result(
+                result,
+                project_root=root,
+                correlation_profile="strict",
+            )
+
+            self.assertNotIn("FINAL_ATTEMPT_UNAVAILABLE: ADE-0001", errors)
+            self.assertNotIn("FINAL_ATTEMPT_NOT_UNIQUE_SUCCESS: ADE-0001", errors)
 
     def test_cp_result_rejects_pass_with_blocking_item(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -171,6 +287,22 @@ class CPResultEventLedgerTests(unittest.TestCase):
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
 
             self.assertIn("decision cannot be PASS/PASS_WITH_RISK when blocking items exist", errors)
+
+    def test_ledger_append_validates_full_cp_result_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = cp6_result_payload()
+            payload["items"][0]["route_on_fail"] = "unknown-route"  # type: ignore[index]
+            result = write_cp6_result(root, payload)
+            ledger = root / "process" / "state" / "CHECKPOINT-LEDGER.ndjson"
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "checkpoint result is invalid; ledger mutation=0",
+            ):
+                cp_result.append_checkpoint_ledger(root, result_path=result)
+
+            self.assertFalse(ledger.exists())
 
     def test_cp7_result_allows_needs_rework(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -554,7 +686,10 @@ class CPResultEventLedgerTests(unittest.TestCase):
             root = Path(directory)
             result = write_cp6_result(root)
             event = event_ledger.build_inline_fallback_event(
+                event_id="ADE-0001-completed",
                 dispatch_id="ADE-0001",
+                attempt_id="ATTEMPT-0001",
+                story_id="STORY-CR123-S01",
                 canonical_role="meta-dev",
                 fallback_reason="fixture inline implementation",
                 approved_by="test",
@@ -575,7 +710,8 @@ class CPResultEventLedgerTests(unittest.TestCase):
             root = Path(directory)
             result = write_cp6_result(root)
             event = event_ledger.build_inline_fallback_event(
-                dispatch_id="ADE-0001", canonical_role="meta-qa", fallback_reason="fixture",
+                event_id="ADE-0001-completed", dispatch_id="ADE-0001", attempt_id="ATTEMPT-0001",
+                story_id="STORY-CR123-S01", canonical_role="meta-qa", fallback_reason="fixture",
                 approved_by="test", checkpoint="CP6",
             )
             event_ledger.append_dispatch_event(root, event)
@@ -589,7 +725,8 @@ class CPResultEventLedgerTests(unittest.TestCase):
             root = Path(directory)
             result = write_cp6_result(root)
             event = event_ledger.build_inline_fallback_event(
-                dispatch_id="ADE-0001", canonical_role="meta-dev", fallback_reason="fixture",
+                event_id="ADE-0001-completed", dispatch_id="ADE-0001", attempt_id="ATTEMPT-0001",
+                story_id="STORY-CR123-S01", canonical_role="meta-dev", fallback_reason="fixture",
                 approved_by="test", checkpoint="CP7",
             )
             event_ledger.append_dispatch_event(root, event)
@@ -604,7 +741,8 @@ class CPResultEventLedgerTests(unittest.TestCase):
                 root = Path(directory)
                 result = write_cp6_result(root)
                 event = event_ledger.build_inline_fallback_event(
-                    dispatch_id="ADE-0001", canonical_role="meta-dev", fallback_reason="fixture",
+                    event_id="ADE-0001-completed", dispatch_id="ADE-0001", attempt_id="ATTEMPT-0001",
+                    story_id="STORY-CR123-S01", canonical_role="meta-dev", fallback_reason="fixture",
                     approved_by="test", checkpoint="CP6", status=status,
                 )
                 event_ledger.append_dispatch_event(root, event)
@@ -655,10 +793,11 @@ class CPResultEventLedgerTests(unittest.TestCase):
             })
             result = write_cp6_result(root, payload)
             event_ledger.append_dispatch_event(root, {
+                "event_id": "ADE-0001-completed", "attempt_id": "ATTEMPT-0001", "story_id": "STORY-CR123-S01",
                 "dispatch_id": "ADE-0001", "event_type": "dispatch", "canonical_role": "meta-qa",
-                "checkpoint": "CP7", "tool_name": "spawn_agent", "agent_id": "/root/qa",
+                "checkpoint": "CP7", "dispatch_mode": "subagent", "tool_name": "spawn_agent", "agent_id": "/root/qa",
                 "status": "completed", "dispatch_trigger": "critical-checkpoint",
-                "spawned_at": "2026-07-05T00:00:00+00:00", "completed_at": "2026-07-05T00:05:00+00:00",
+                "terminal_result": "PASS", "spawned_at": "2026-07-05T00:00:00+00:00", "completed_at": "2026-07-05T00:05:00+00:00",
             })
 
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
@@ -676,10 +815,11 @@ class CPResultEventLedgerTests(unittest.TestCase):
             })
             result = write_cp6_result(root, payload)
             event_ledger.append_dispatch_event(root, {
+                "event_id": "ADE-0001-completed", "attempt_id": "ATTEMPT-0001", "story_id": "STORY-CR123-S01",
                 "dispatch_id": "ADE-0001", "event_type": "dispatch", "dispatch_mode": "inline-fallback",
                 "canonical_role": "meta-qa", "checkpoint": "CP7", "tool_name": "spawn_agent",
                 "agent_id": "/root/qa", "status": "completed", "dispatch_trigger": "critical-checkpoint",
-                "spawned_at": "2026-07-05T00:00:00+00:00", "completed_at": "2026-07-05T00:05:00+00:00",
+                "approved_by": "test", "terminal_result": "PASS", "spawned_at": "2026-07-05T00:00:00+00:00", "completed_at": "2026-07-05T00:05:00+00:00",
             })
 
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
@@ -729,6 +869,64 @@ class CPResultEventLedgerTests(unittest.TestCase):
             self.assertTrue(output.is_file())
             self.assertEqual([], errors)
             self.assertEqual([], warnings)
+
+    def test_applicability_public_commands_resolve_paired_process_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            route_plan = process / "checks" / "CP0-CR156.route-plan.json"
+            aggregate = process / "checks" / "CP8-CR156.applicability.json"
+            route_plan.parent.mkdir(parents=True, exist_ok=True)
+            route_plan.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "decision": "PASS",
+                        "stages": [{"checkpoint": "CP8", "mode": "standard", "human_gate": "required"}],
+                        "checkpoint_applicability": {
+                            "CP8": {"applies": True, "mode": "standard", "human_gate": "required"}
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                build_exit = cp_result.main(
+                    [
+                        "applicability-build",
+                        "--route-plan",
+                        "process/checks/CP0-CR156.route-plan.json",
+                        "--output",
+                        "process/checks/CP8-CR156.applicability.json",
+                        "--cr-id",
+                        "CR-156",
+                        "--project-root",
+                        str(release),
+                    ]
+                )
+                check_exit = cp_result.main(
+                    [
+                        "applicability-check",
+                        "--aggregate",
+                        "process/checks/CP8-CR156.applicability.json",
+                        "--project-root",
+                        str(release),
+                    ]
+                )
+
+            self.assertEqual(0, build_exit)
+            self.assertEqual(0, check_exit)
+            self.assertTrue(aggregate.is_file())
+            self.assertFalse((release / "process").exists())
+            self.assertNotIn(str(process.resolve()), stream.getvalue())
+            self.assertIn("wrote: process/checks/CP8-CR156.applicability.json", stream.getvalue())
+            payload = json.loads(aggregate.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "process/checks/CP0-CR156.route-plan.json",
+                payload["source_route_plan_ref"],
+            )
 
     def test_applicability_aggregate_rejects_stale_route_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -927,15 +1125,16 @@ class DispatchEvidenceTests(unittest.TestCase):
             result = write_cp6_result(root)
             ledger = root / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
             self._write_dispatch_event(ledger, {
+                "event_id": "ADE-0001-completed", "attempt_id": "ATTEMPT-0001", "story_id": "STORY-CR123-S01",
                 "dispatch_id": "ADE-0001",
                 "event_type": "dispatch",
                 "canonical_role": "meta-dev",
-                "checkpoint": "CP6",
+                "checkpoint": "CP6", "dispatch_mode": "subagent",
                 "tool_name": "spawn_agent",
                 "status": "completed",
                 "dispatch_trigger": "phase-default",
                 "spawned_at": "2026-07-05T00:00:00+00:00",
-                "completed_at": "2026-07-05T00:05:00+00:00",
+                "terminal_result": "PASS", "completed_at": "2026-07-05T00:05:00+00:00",
             })  # 缺 agent_id/thread_id
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
             self.assertTrue(any("ADE-0001" in e and "agent_id or thread_id" in e for e in errors))
@@ -946,15 +1145,20 @@ class DispatchEvidenceTests(unittest.TestCase):
             result = write_cp6_result(root)
             ledger = root / "process/state/AGENT-DISPATCH-LEDGER.ndjson"
             self._write_dispatch_event(ledger, {
+                "event_id": "ADE-0001-completed",
+                "attempt_id": "ATTEMPT-0001",
+                "story_id": "STORY-CR123-S01",
                 "dispatch_id": "ADE-0001",
                 "event_type": "dispatch",
                 "canonical_role": "meta-dev",
                 "checkpoint": "CP6",
+                "dispatch_mode": "subagent",
                 "tool_name": "spawn_agent",
                 "status": "completed",
                 "dispatch_trigger": "phase-default",
                 "agent_id": "a-123",
                 "spawned_at": "2026-07-05T00:00:00+00:00",
+                "terminal_result": "PASS",
                 "completed_at": "2026-07-05T00:05:00+00:00",
             })
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
@@ -970,9 +1174,10 @@ class DispatchEvidenceTests(unittest.TestCase):
                     "event_id": "ADE-0001-running",
                     "dispatch_id": "ADE-0001",
                     "attempt_id": "attempt-1",
+                    "story_id": "STORY-CR123-S01",
                     "event_type": "dispatch",
                     "canonical_role": "meta-dev",
-                    "checkpoint": "CP6",
+                    "checkpoint": "CP6", "dispatch_mode": "subagent",
                     "tool_name": "spawn_agent",
                     "dispatch_trigger": "phase-default",
                     "agent_id": "a-123",
@@ -983,9 +1188,10 @@ class DispatchEvidenceTests(unittest.TestCase):
                     "event_id": "ADE-0001-completed",
                     "dispatch_id": "ADE-0001",
                     "attempt_id": "attempt-1",
+                    "story_id": "STORY-CR123-S01",
                     "event_type": "dispatch",
                     "canonical_role": "meta-dev",
-                    "checkpoint": "CP6",
+                    "checkpoint": "CP6", "dispatch_mode": "subagent",
                     "tool_name": "spawn_agent",
                     "status": "completed",
                     "terminal_result": "PASS",
@@ -1004,7 +1210,10 @@ class DispatchEvidenceTests(unittest.TestCase):
             root = Path(d)
             result = write_cp6_result(root)
             event = event_ledger.build_inline_fallback_event(
+                event_id="ADE-0001-completed",
                 dispatch_id="ADE-0001",
+                attempt_id="ATTEMPT-0001",
+                story_id="STORY-CR123-S01",
                 canonical_role="meta-dev",
                 fallback_reason="fixture inline implementation",
                 approved_by="test",
@@ -1016,6 +1225,426 @@ class DispatchEvidenceTests(unittest.TestCase):
             event_ledger.append_dispatch_event(root, event)
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root, check_consistency=True)
             self.assertFalse(any("subagent event missing" in e for e in errors))
+
+
+class S01ProjectionContractTests(unittest.TestCase):
+    """C01-C09：只通过公共事件入口与唯一 projector 断言 S01 契约。"""
+
+    def test_terminal_projector_normalizes_without_event_id_identity_fallback(self) -> None:
+        events = (
+            {"event_id": "event-running", "dispatch_id": "DISPATCH-1", "status": " running "},
+            {"event_id": "event-terminal", "dispatch_id": "DISPATCH-1", "status": " PASSED "},
+        )
+        projected = event_ledger.project_terminal_successes(
+            event_ledger.ProjectionInputV1(events, "dispatch")
+        )
+
+        self.assertTrue(projected.terminal_success)
+        self.assertEqual(("event-terminal",), projected.terminal_event_ids)
+        self.assertEqual((), projected.typed_attempt_ids)
+
+    def test_typed_inline_attempt_requires_approval_and_identity(self) -> None:
+        projected = event_ledger.project_dispatch_attempt(
+            event_ledger.ProjectionInputV1(
+                (
+                    {
+                        "event_id": "event-inline",
+                        "dispatch_id": "DISPATCH-1",
+                        "attempt_id": "ATTEMPT-1",
+                        "story_id": "STORY-CR123-S01",
+                        "canonical_role": "meta-dev",
+                        "checkpoint": "CP6",
+                        "dispatch_mode": "inline-fallback",
+                        "event_type": "inline_fallback",
+                        "status": "completed",
+                        "terminal_result": "PASS",
+                    },
+                ),
+                "dispatch",
+                "DISPATCH-1",
+            )
+        )
+
+        self.assertFalse(projected.terminal_success)
+        self.assertIn("MISSING_INLINE_FALLBACK_APPROVAL", projected.finding_codes)
+
+    def test_public_append_rejects_invalid_event_before_ledger_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_ref = "process/state/GATE-LEDGER.ndjson"
+            payload = {"event_id": "G-1", "event_type": "gate", "status": "passed"}
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = event_ledger.main(
+                    [
+                        "append",
+                        "--project-root",
+                        str(root),
+                        "--ledger",
+                        ledger_ref,
+                        "--event-json",
+                        json.dumps(payload),
+                    ]
+                )
+
+            self.assertEqual(2, exit_code)
+            result = json.loads(output.getvalue())
+            self.assertEqual("BLOCKED", result["status"])
+            self.assertEqual(0, result["mutation_count"])
+            self.assertFalse((root / ledger_ref).exists())
+
+    def test_dispatch_terminal_source_owner_invariant(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        owner = root / "meta_flow" / "state" / "event_ledger.py"
+        consumers = (
+            root / "meta_flow" / "checks" / "cp_result.py",
+            root / "meta_flow" / "checks" / "audit_report.py",
+            root / "meta_flow" / "checks" / "handoff_dispatch.py",
+            root / "meta_flow" / "evidence" / "dispatch.py",
+        )
+        protected_names = {
+            "TERMINAL_SUCCESS_STATUSES",
+            "TERMINAL_SUCCESS_RESULTS",
+            "TERMINAL_ATTEMPT_STATUSES",
+            "NONTERMINAL_ATTEMPT_STATUSES",
+            "ALL_ATTEMPT_STATUSES",
+        }
+
+        owner_tree = ast.parse(owner.read_text(encoding="utf-8"))
+        owner_assignments = {
+            target.id
+            for node in ast.walk(owner_tree)
+            if isinstance(node, (ast.Assign, ast.AnnAssign))
+            for target in (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+            )
+            if isinstance(target, ast.Name) and target.id in protected_names
+        }
+        projector_owners = [
+            node
+            for node in ast.walk(owner_tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "project_dispatch_attempt"
+        ]
+
+        private_owners: list[str] = []
+        for consumer in consumers:
+            tree = ast.parse(consumer.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                targets = (
+                    node.targets
+                    if isinstance(node, ast.Assign)
+                    else [node.target]
+                )
+                if any(
+                    isinstance(target, ast.Name)
+                    and target.id in protected_names
+                    for target in targets
+                ):
+                    private_owners.append(consumer.relative_to(root).as_posix())
+
+        self.assertEqual(protected_names, owner_assignments)
+        self.assertEqual(1, len(projector_owners))
+        self.assertEqual([], private_owners)
+
+    def test_public_cp_result_commands_resolve_sibling_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            result_path = process / "checks" / "CP6-STORY-CR123-S01.result.json"
+            result_path.parent.mkdir(parents=True)
+            payload = cp6_result_payload()
+            payload["summary_ref"] = (
+                "process/checks/CP6-STORY-CR123-S01-CODING-DONE.md"
+            )
+            result_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            outputs: list[str] = []
+            for argv in (
+                [
+                    "result-check",
+                    "--result",
+                    "process/checks/CP6-STORY-CR123-S01.result.json",
+                    "--project-root",
+                    str(release),
+                ],
+                [
+                    "render-summary",
+                    "--result",
+                    "process/checks/CP6-STORY-CR123-S01.result.json",
+                    "--output",
+                    "process/checks/CP6-STORY-CR123-S01-CODING-DONE.md",
+                    "--project-root",
+                    str(release),
+                ],
+                [
+                    "ledger-append",
+                    "--result",
+                    "process/checks/CP6-STORY-CR123-S01.result.json",
+                    "--project-root",
+                    str(release),
+                ],
+            ):
+                stream = StringIO()
+                with redirect_stdout(stream):
+                    exit_code = cp_result.main(argv)
+                self.assertEqual(0, exit_code, stream.getvalue())
+                outputs.append(stream.getvalue())
+
+            event = json.loads(
+                (process / "state" / "CHECKPOINT-LEDGER.ndjson")
+                .read_text(encoding="utf-8")
+                .splitlines()[-1]
+            )
+            self.assertEqual(
+                "process/checks/CP6-STORY-CR123-S01.result.json",
+                event["result_ref"],
+            )
+            self.assertEqual(
+                "process/checks/CP6-STORY-CR123-S01-CODING-DONE.md",
+                event["summary_ref"],
+            )
+            self.assertTrue(
+                (process / "checks" / "CP6-STORY-CR123-S01-CODING-DONE.md").is_file()
+            )
+            self.assertFalse((release / "process").exists())
+            rendered = "\n".join(outputs)
+            self.assertNotIn(str(release.resolve()), rendered)
+            self.assertNotIn(str(process.resolve()), rendered)
+
+
+class LedgerMigrationTests(unittest.TestCase):
+    def _fixture(self, root: Path) -> tuple[Path, Path, dict[str, dict[str, object]]]:
+        release, process = init_paired_binding(root)
+        events: dict[str, dict[str, object]] = {
+            "dispatch": {
+                "schema_version": 1,
+                "event_id": "ADE-CR123-S04-completed",
+                "dispatch_id": "ADE-CR123-S04",
+                "attempt_id": "attempt-1",
+                "story_id": "STORY-CR123-S04",
+                "event_type": "dispatch",
+                "canonical_role": "meta-dev",
+                "checkpoint": "CP6",
+                "dispatch_mode": "subagent",
+                "tool_name": "spawn_agent",
+                "status": "completed",
+                "terminal_result": "PASS",
+                "agent_id": "agent-1",
+                "spawned_at": "2026-07-26T00:00:00+00:00",
+                "completed_at": "2026-07-26T00:01:00+00:00",
+            },
+            "handoff": {
+                "schema_version": 1,
+                "event_id": "HE-CR123-S04",
+                "event_type": "handoff",
+                "stage": "CP6",
+                "from_role": "host-orchestrator",
+                "to_role": "meta-dev",
+                "context_ref": "process/context/stories/STORY-CR123-S04.CP6.work-packet.json",
+                "status": "created",
+            },
+            "checkpoint": {
+                "schema_version": 1,
+                "event_id": "CP6-CR123-S04",
+                "event_type": "checkpoint_result",
+                "checkpoint": "CP6",
+                "decision": "PASS",
+                "result_ref": "process/checks/CP6-STORY-CR123-S04.result.json",
+            },
+            "read-expansion": {
+                "schema_version": 1,
+                "event_id": "RE-CR123-S04",
+                "event_type": "read_expansion",
+                "requested_path": "process/stories/STORY-CR123-S04-LLD.md",
+                "reason": "deep_review",
+                "stage": "CP6",
+                "agent": "meta-dev",
+                "context_ref": "process/context/stories/STORY-CR123-S04.CP6.work-packet.json",
+                "allowed_by_policy": True,
+                "estimated_tokens": 100,
+            },
+        }
+        for ledger_type, event in events.items():
+            ref = ledger_migration.LEDGER_REFS[ledger_type]
+            path = process / ref.removeprefix("process/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        for command in (
+            ["git", "config", "user.name", "Meta Flow Test"],
+            ["git", "config", "user.email", "meta-flow-test@example.invalid"],
+            ["git", "add", "."],
+            ["git", "commit", "-m", "fixture"],
+        ):
+            subprocess.run(
+                command,
+                cwd=process,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        return release, process, events
+
+    def _authorization(
+        self,
+        plan: ledger_migration.LedgerMigrationPlanV1,
+        *,
+        authorization_id: str,
+    ) -> ledger_migration.MigrationAuthorizationV1:
+        return ledger_migration.MigrationAuthorizationV1.from_dict(
+            {
+                "schema_version": 1,
+                "authorization_id": authorization_id,
+                "authorization_source": "typed-user-confirmation",
+                "authorization_kind": "ledger-migration",
+                "operation": "ledger-migration-apply",
+                "decision_ref": "process/checkpoints/CP6-STORY-CR123-S04.md",
+                "ledger_type": plan.ledger_type,
+                "source_event_ids": list(plan.source_event_ids),
+                "expected_process_oid": plan.process_oid,
+                "expected_plan_digest": plan.plan_digest,
+                "single_use": True,
+            }
+        )
+
+    def test_c20_c23_four_ledgers_append_successors_without_rewriting_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, events = self._fixture(Path(directory))
+
+            for index, (ledger_type, event) in enumerate(events.items(), 20):
+                with self.subTest(ledger_type=ledger_type):
+                    ledger = (
+                        process
+                        / ledger_migration.LEDGER_REFS[ledger_type].removeprefix("process/")
+                    )
+                    before = ledger.read_bytes()
+                    plan = ledger_migration.plan_ledger_migration(
+                        release,
+                        ledger_type=ledger_type,
+                        source_event_ids=[str(event["event_id"])],
+                    )
+
+                    self.assertEqual("READY", plan.decision)
+                    self.assertEqual(1, plan.as_dict()["mutation_count"])
+                    self.assertNotIn(
+                        str(process.resolve()),
+                        json.dumps(plan.as_dict(), ensure_ascii=False),
+                    )
+                    receipt = ledger_migration.apply_ledger_migration(
+                        release,
+                        plan=plan,
+                        authorization=self._authorization(
+                            plan,
+                            authorization_id=f"AUTH-CR123-S04-C{index}",
+                        ),
+                    )
+
+                    self.assertEqual("PASS", receipt["decision"])
+                    self.assertEqual(1, receipt["mutation_count"])
+                    after = ledger.read_bytes()
+                    self.assertTrue(after.startswith(before))
+                    rows = [
+                        json.loads(line)
+                        for line in after.decode("utf-8").splitlines()
+                        if line.strip()
+                    ]
+                    successor = rows[-1]
+                    self.assertEqual(event["event_id"], successor["supersedes_event_id"])
+                    self.assertEqual(2, successor["schema_version"])
+                    self.assertEqual(
+                        "append-only-successor",
+                        successor["migration_kind"],
+                    )
+                    repeated = ledger_migration.apply_ledger_migration(
+                        release,
+                        plan=plan,
+                        authorization=None,
+                    )
+                    self.assertEqual("NO_CHANGE", repeated["decision"])
+                    self.assertEqual(0, repeated["mutation_count"])
+
+    def test_migration_fails_closed_on_preimage_drift_and_ambiguous_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, events = self._fixture(Path(directory))
+            dispatch = events["dispatch"]
+            plan = ledger_migration.plan_ledger_migration(
+                release,
+                ledger_type="dispatch",
+                source_event_ids=[str(dispatch["event_id"])],
+            )
+            ledger = process / "state" / "AGENT-DISPATCH-LEDGER.ndjson"
+            with ledger.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            **dispatch,
+                            "event_id": "ADE-CR123-S04-running",
+                            "status": "running",
+                            "terminal_result": "PENDING",
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+
+            blocked = ledger_migration.apply_ledger_migration(
+                release,
+                plan=plan,
+                authorization=self._authorization(
+                    plan,
+                    authorization_id="AUTH-CR123-S04-DRIFT",
+                ),
+            )
+
+            self.assertEqual("BLOCKED", blocked["decision"])
+            self.assertEqual(0, blocked["mutation_count"])
+            ambiguous = dict(dispatch)
+            ambiguous.pop("attempt_id")
+            ledger.write_text(
+                json.dumps(ambiguous, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            invalid_plan = ledger_migration.plan_ledger_migration(
+                release,
+                ledger_type="dispatch",
+                source_event_ids=[str(dispatch["event_id"])],
+            )
+            self.assertEqual("BLOCKED", invalid_plan.decision)
+            self.assertIn(
+                f"{dispatch['event_id']}:MISSING_SOURCE_FIELD:attempt_id",
+                invalid_plan.blockers,
+            )
+
+    def test_migration_authorization_rejects_unknown_fields(self) -> None:
+        payload = {
+            "schema_version": 1,
+            "authorization_id": "AUTH-CR123-S04-C20",
+            "authorization_source": "typed-user-confirmation",
+            "authorization_kind": "ledger-migration",
+            "operation": "ledger-migration-apply",
+            "decision_ref": "process/checkpoints/CP6-STORY-CR123-S04.md",
+            "ledger_type": "dispatch",
+            "source_event_ids": ["ADE-CR123-S04-completed"],
+            "expected_process_oid": "a" * 40,
+            "expected_plan_digest": "b" * 64,
+            "single_use": True,
+            "unknown": True,
+        }
+        with self.assertRaisesRegex(
+            ledger_migration.LedgerMigrationError,
+            "authorization fields mismatch",
+        ):
+            ledger_migration.MigrationAuthorizationV1.from_dict(payload)
 
 
 if __name__ == "__main__":

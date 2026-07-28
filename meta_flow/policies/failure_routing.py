@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 
 FAILURE_ROUTING_REL = Path("process/policies/FAILURE-ROUTING.json")
 WAIVER_POLICY_REL = Path("process/policies/WAIVER-POLICY.json")
@@ -572,13 +572,22 @@ def validate_result_governance(project_root: Path, result: dict[str, Any]) -> tu
     return [*route_errors, *waiver_errors], [*route_warnings, *waiver_warnings]
 
 
-def _load_result(path: Path) -> dict[str, Any]:
+def _load_result(project_root: Path, path: Path) -> dict[str, Any]:
+    result_ref = path.as_posix()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        resolved = _resolve_runtime_path(project_root, path)
+    except ValueError as exc:
+        raise SystemExit(f"{result_ref} cannot be resolved: {exc}") from exc
+    if not resolved.is_file():
+        raise SystemExit(f"{result_ref} is not a readable result file")
+    try:
+        data = json.loads(resolved.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"{path} invalid JSON: {exc}") from exc
+        raise SystemExit(f"{result_ref} invalid JSON: {exc}") from exc
+    except OSError as exc:
+        raise SystemExit(f"{result_ref} cannot be read: {exc.strerror or 'I/O error'}") from exc
     if not isinstance(data, dict):
-        raise SystemExit(f"{path} must contain a JSON object")
+        raise SystemExit(f"{result_ref} must contain a JSON object")
     return data
 
 
@@ -618,7 +627,10 @@ def failure_main(argv: list[str] | None = None) -> int:
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
         parser.add_argument("--result", dest="result_path", type=Path, required=True)
         parsed = parser.parse_args(args[1:])
-        errors, warnings = validate_failure_routes_for_result(parsed.project_root, _load_result(parsed.result_path))
+        errors, warnings = validate_failure_routes_for_result(
+            parsed.project_root,
+            _load_result(parsed.project_root, parsed.result_path),
+        )
         print("Failure Route Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
@@ -664,7 +676,10 @@ def waiver_main(argv: list[str] | None = None) -> int:
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
         parser.add_argument("--result", dest="result_path", type=Path, required=True)
         parsed = parser.parse_args(args[1:])
-        errors, warnings = validate_waivers_for_result(parsed.project_root, _load_result(parsed.result_path))
+        errors, warnings = validate_waivers_for_result(
+            parsed.project_root,
+            _load_result(parsed.project_root, parsed.result_path),
+        )
         print("Waiver Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")

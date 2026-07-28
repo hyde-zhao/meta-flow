@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -10,6 +12,8 @@ from pathlib import Path
 from meta_flow.checks import cp_result
 from meta_flow.policies import failure_routing
 from meta_flow.validation import task_runner
+
+CONSOLE = Path(sys.executable).with_name("meta-flow")
 
 
 def cp_result_payload() -> dict[str, object]:
@@ -49,6 +53,55 @@ def write_result(root: Path, payload: dict[str, object]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def init_paired_binding(root: Path) -> tuple[Path, Path]:
+    release = root / "meta-flow"
+    process = root / "meta-flow-process"
+    release.mkdir()
+    process.mkdir()
+    for repository in (release, process):
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    binding = release / ".meta-flow" / "workspace.yaml"
+    binding.parent.mkdir()
+    binding.write_text(
+        "schema_version: 1\n"
+        "layout_version: independent-process-repo-v1\n"
+        "workflow_model: vnext\n"
+        "project_id: fixture-project\n"
+        "repo_role: release\n"
+        "route_mode: sibling-binding\n"
+        "process_repo:\n"
+        "  anchor: workspace_parent\n"
+        "  relative_path: meta-flow-process\n",
+        encoding="utf-8",
+    )
+    (process / ".meta-flow-process.yaml").write_text(
+        "schema_version: 1\n"
+        "layout_version: independent-process-repo-v1\n"
+        "workflow_model: vnext\n"
+        "project_id: fixture-project\n"
+        "repo_role: process\n"
+        "route_mode: sibling-binding\n"
+        "release_repo:\n"
+        "  anchor: workspace_parent\n"
+        "  relative_path: meta-flow\n",
+        encoding="utf-8",
+    )
+    (process / "PROJECT.yaml").write_text(
+        "schema_version: 1\n"
+        "project_id: fixture-project\n"
+        "name: Fixture Project\n"
+        "status: active\n",
+        encoding="utf-8",
+    )
+    return release, process
 
 
 class FailureRoutingWaiverTests(unittest.TestCase):
@@ -353,6 +406,65 @@ class FailureRoutingWaiverTests(unittest.TestCase):
             self.assertEqual(0, waiver_code)
             self.assertIn("Failure Route Check: OK", route_stream.getvalue())
             self.assertIn("Waiver Check: OK", waiver_stream.getvalue())
+
+    def test_paired_console_checks_resolve_process_logical_result_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            result = process / "checks" / "CP7-STORY-CR123-S01.result.json"
+            result.parent.mkdir(parents=True)
+            result.write_text(
+                json.dumps(cp_result_payload(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            logical_ref = "process/checks/CP7-STORY-CR123-S01.result.json"
+
+            for command, expected in (
+                (("failure", "route-check"), "Failure Route Check: OK"),
+                (("waiver", "check"), "Waiver Check: OK"),
+            ):
+                with self.subTest(command=command):
+                    completed = subprocess.run(
+                        [
+                            str(CONSOLE),
+                            *command,
+                            "--result",
+                            logical_ref,
+                            "--project-root",
+                            str(release),
+                        ],
+                        cwd=release,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(0, completed.returncode, completed.stderr)
+                    self.assertIn(expected, completed.stdout)
+                    self.assertNotIn(str(process), completed.stdout + completed.stderr)
+
+    def test_paired_console_missing_result_fails_without_absolute_process_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            logical_ref = "process/checks/missing.result.json"
+
+            completed = subprocess.run(
+                [
+                    str(CONSOLE),
+                    "failure",
+                    "route-check",
+                    "--result",
+                    logical_ref,
+                    "--project-root",
+                    str(release),
+                ],
+                cwd=release,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn(logical_ref, completed.stderr)
+            self.assertNotIn(str(process), completed.stdout + completed.stderr)
 
 
 if __name__ == "__main__":

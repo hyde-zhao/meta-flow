@@ -20,9 +20,12 @@ from typing import Any
 from meta_flow.checks import cr_tracking
 from meta_flow.design import feature_registry
 from meta_flow.policies import authz, route_plan
-from meta_flow.project.process_route import _resolve_runtime_ref
-from meta_flow.project.scale import load_yaml_object
+from meta_flow.project.governance import load_phase
+from meta_flow.project.model import load_project
+from meta_flow.project.process_route import _resolve_runtime_ref, require_process_route
+from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.state import current, event_ledger
+from meta_flow.work.lifecycle import transition_work
 from meta_flow.work.model import load_work
 from meta_flow.work.scope import check_scope
 from meta_flow.workspace.git_sync import run_git
@@ -51,6 +54,62 @@ ALLOWED_LIFECYCLE_STATUSES = {
 FINISHED_STATUSES = {"closed", "superseded", "cancelled"}
 CLOSED_GATE_STATUS = "cp8_closed"
 INDEX_SCHEMA_VERSION = 1
+TERMINATION_TUPLES = {
+    "cancelled": {
+        "lifecycle_status": "cancelled",
+        "readiness_status": "n/a",
+        "gate_status": "closed",
+    },
+    "superseded": {
+        "lifecycle_status": "superseded",
+        "readiness_status": "n/a",
+        "gate_status": "closed",
+    },
+}
+TERMINATION_AUTHORIZATION_FIELDS = {
+    "schema_version",
+    "authorization_id",
+    "authorization_source",
+    "authorization_kind",
+    "operation",
+    "cr_id",
+    "work_id",
+    "termination_reason",
+    "terminal_tuple",
+    "expected_release_oid",
+    "expected_process_oid",
+    "scope_digest",
+    "plan_digest",
+    "expires_at",
+    "single_use",
+}
+TERMINATION_AUTHORIZATION_SOURCE = "typed-user-confirmation"
+TERMINATION_AUTHORIZATION_KIND = "cr-termination"
+TERMINATION_OPERATION = "cr.terminate"
+STATUS_SYNC_AUTHORIZATION_FIELDS = {
+    "schema_version",
+    "authorization_id",
+    "authorization_source",
+    "authorization_kind",
+    "operation",
+    "cr_id",
+    "work_id",
+    "desired_transition",
+    "effective_at",
+    "expected_release_oid",
+    "expected_process_oid",
+    "scope_digest",
+    "targets",
+    "plan_digest",
+    "expires_at",
+    "single_use",
+}
+STATUS_SYNC_AUTHORIZATION_SOURCE = "typed-user-confirmation"
+STATUS_SYNC_AUTHORIZATION_KIND = "cr-status-sync"
+STATUS_SYNC_OPERATION = "cr.status-sync"
+SAFE_AUTHORIZATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+OID_RE = re.compile(r"^[0-9a-f]{40}$")
+DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_CR_TYPES = {
     "product-scope",
     "architecture",
@@ -183,6 +242,29 @@ class CRRecord:
     routing_design_ref: str
     required_evidence: list[str]
     required_capabilities: list[str]
+
+
+@dataclass(frozen=True)
+class NativeCRStatusProjectionV1:
+    """由四个原生 CR 真相源收敛得到的单一状态投影。"""
+
+    cr_id: str
+    lifecycle_status: str
+    readiness_status: str
+    gate_status: str
+    formal_cr_ref: str
+    summary_ref: str
+    ledger_event_id: str
+    decision: str
+    findings: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            **self.__dict__,
+            "kind": "NativeCRStatusProjectionV1",
+            "schema_version": 1,
+            "findings": list(self.findings),
+        }
 
 
 def now_utc() -> str:
@@ -374,6 +456,41 @@ def _gate_checkpoint_projection(gate_status: str) -> tuple[str, str] | None:
     return mapping.get(gate_status)
 
 
+def _checkpoint_result_projection(
+    project_root: Path,
+    cr_id: str,
+) -> dict[str, str]:
+    """Project canonical CR-level checkpoint results without guessing completion."""
+
+    checks_root = _resolve_runtime_ref(project_root, "process/checks")
+    if not checks_root.is_dir():
+        return {}
+    projected: dict[str, str] = {}
+    for result_path in sorted(checks_root.glob(f"CP[0-8]-{cr_id}-*.result.json")):
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"invalid checkpoint result JSON: {_rel(project_root, result_path)}: {exc}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"checkpoint result must be an object: {_rel(project_root, result_path)}"
+            )
+        checkpoint = str(payload.get("checkpoint") or "").upper()
+        decision = str(payload.get("decision") or "").upper()
+        if not re.fullmatch(r"CP[0-8]", checkpoint) or not decision:
+            continue
+        previous = projected.get(checkpoint)
+        if previous is not None and previous != decision:
+            raise ValueError(
+                f"conflicting canonical checkpoint results for {cr_id} {checkpoint}: "
+                f"{previous} != {decision}"
+            )
+        projected[checkpoint] = decision
+    return projected
+
+
 def _render_exact_section_rows(
     text: str,
     heading: str,
@@ -381,9 +498,15 @@ def _render_exact_section_rows(
 ) -> str:
     """Replace exact first-column table rows inside one optional section."""
 
-    heading_line = f"## {heading}"
+    heading_pattern = re.compile(
+        rf"^## (?:(?:\d+(?:\.\d+)*)\.?\s+)?{re.escape(heading)}$"
+    )
     lines = text.splitlines(keepends=True)
-    starts = [index for index, line in enumerate(lines) if line.rstrip("\r\n") == heading_line]
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if heading_pattern.fullmatch(line.rstrip("\r\n"))
+    ]
     if not starts:
         return text
     if len(starts) != 1:
@@ -421,6 +544,7 @@ def render_status_body_projection(
     lifecycle_status: str,
     readiness_status: str,
     gate_status: str,
+    checkpoint_results: dict[str, str] | None = None,
 ) -> str:
     """Project lifecycle truth into the optional CR body status tables."""
 
@@ -433,14 +557,18 @@ def render_status_body_projection(
             "门禁状态": gate_status,
         },
     )
+    checkpoint_projection = dict(checkpoint_results or {})
     checkpoint = _gate_checkpoint_projection(gate_status)
-    if checkpoint is None:
+    if checkpoint is not None:
+        checkpoint_id, checkpoint_status = checkpoint
+        if checkpoint_status == "approved" or checkpoint_id not in checkpoint_projection:
+            checkpoint_projection[checkpoint_id] = checkpoint_status
+    if not checkpoint_projection:
         return rendered
-    checkpoint_id, checkpoint_status = checkpoint
     return _render_exact_section_rows(
         rendered,
         "Checkpoint Index",
-        {checkpoint_id: checkpoint_status},
+        checkpoint_projection,
     )
 
 
@@ -1225,6 +1353,163 @@ def load_ledger_events(project_root: Path) -> list[dict[str, Any]]:
     return events
 
 
+def project_native_cr_status(
+    project_root: Path,
+    *,
+    cr_id: str,
+) -> NativeCRStatusProjectionV1:
+    """交叉验证 formal CR、summary、index 和 append-only ledger 的状态。
+
+    publisher 等下游只能消费这个投影，不再各自解释 frontmatter。
+    """
+
+    findings: list[str] = []
+    formal_crs = discover_formal_crs(project_root)
+    formal_path = formal_crs.get(cr_id)
+    if formal_path is None:
+        return NativeCRStatusProjectionV1(
+            cr_id=cr_id,
+            lifecycle_status="",
+            readiness_status="",
+            gate_status="",
+            formal_cr_ref="",
+            summary_ref="",
+            ledger_event_id="",
+            decision="BLOCKED",
+            findings=("FORMAL_CR_MISSING",),
+        )
+    record = record_from_cr_file(project_root, formal_path)
+    formal_ref = record.full_ref
+    summary_ref = record.summary_ref
+    formal_tuple = (
+        cr_tracking.normalize_lifecycle_status(record.status),
+        cr_tracking.normalize_readiness_status(record.readiness),
+        cr_tracking.normalize_gate_status(record.gate_status),
+    )
+    if cr_tracking.validate_native_status_tuple(*formal_tuple):
+        findings.append("FORMAL_CR_STATUS_TUPLE_INVALID")
+
+    index = load_index(project_root)
+    index_items = index.get("items") if isinstance(index, dict) else None
+    index_item = next(
+        (
+            item
+            for item in index_items or []
+            if isinstance(item, dict) and str(item.get("id") or "") == cr_id
+        ),
+        None,
+    )
+    if index_item is None:
+        findings.append("CR_INDEX_ITEM_MISSING")
+    else:
+        index_tuple = (
+            cr_tracking.normalize_lifecycle_status(
+                str(index_item.get("lifecycle_status") or ""),
+                fallback_status=str(index_item.get("status") or ""),
+            ),
+            cr_tracking.normalize_readiness_status(
+                str(
+                    index_item.get("readiness_status")
+                    or index_item.get("readiness")
+                    or ""
+                )
+            ),
+            cr_tracking.normalize_gate_status(
+                str(index_item.get("gate_status") or "")
+            ),
+        )
+        if index_tuple != formal_tuple:
+            findings.append("CR_INDEX_STATUS_DIVERGED")
+        if str(
+            index_item.get("full_ref")
+            or index_item.get("formal_cr_path")
+            or ""
+        ) != formal_ref:
+            findings.append("CR_INDEX_FORMAL_REF_DIVERGED")
+        if str(index_item.get("summary_ref") or "") != summary_ref:
+            findings.append("CR_INDEX_SUMMARY_REF_DIVERGED")
+
+    summary_path = _resolve_runtime_ref(project_root, summary_ref)
+    summary: dict[str, Any] = {}
+    if not summary_path.is_file():
+        findings.append("CR_SUMMARY_MISSING")
+    else:
+        try:
+            loaded_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            findings.append("CR_SUMMARY_INVALID_JSON")
+        else:
+            if not isinstance(loaded_summary, dict):
+                findings.append("CR_SUMMARY_INVALID_SHAPE")
+            else:
+                summary = loaded_summary
+    if summary:
+        summary_tuple = (
+            cr_tracking.normalize_lifecycle_status(
+                str(summary.get("status") or "")
+            ),
+            cr_tracking.normalize_readiness_status(
+                str(summary.get("readiness") or "")
+            ),
+            cr_tracking.normalize_gate_status(
+                str(summary.get("gate_status") or "")
+            ),
+        )
+        if str(summary.get("id") or "") != cr_id:
+            findings.append("CR_SUMMARY_ID_DIVERGED")
+        if str(summary.get("full_ref") or "") != formal_ref:
+            findings.append("CR_SUMMARY_FORMAL_REF_DIVERGED")
+        if summary_tuple != formal_tuple:
+            findings.append("CR_SUMMARY_STATUS_DIVERGED")
+
+    ledger_events = [
+        event
+        for event in load_ledger_events(project_root)
+        if str(event.get("id") or event.get("cr_id") or "") == cr_id
+        and all(
+            key in event
+            for key in ("status", "readiness", "gate_status")
+        )
+    ]
+    ledger_event = ledger_events[-1] if ledger_events else None
+    ledger_event_id = ""
+    if ledger_event is None:
+        findings.append("CR_LEDGER_STATUS_EVENT_MISSING")
+    else:
+        ledger_event_id = str(ledger_event.get("event_id") or "")
+        ledger_tuple = (
+            cr_tracking.normalize_lifecycle_status(
+                str(ledger_event.get("status") or "")
+            ),
+            cr_tracking.normalize_readiness_status(
+                str(ledger_event.get("readiness") or "")
+            ),
+            cr_tracking.normalize_gate_status(
+                str(ledger_event.get("gate_status") or "")
+            ),
+        )
+        if not ledger_event_id:
+            findings.append("CR_LEDGER_EVENT_ID_MISSING")
+        if str(ledger_event.get("full_ref") or "") != formal_ref:
+            findings.append("CR_LEDGER_FORMAL_REF_DIVERGED")
+        if str(ledger_event.get("summary_ref") or "") != summary_ref:
+            findings.append("CR_LEDGER_SUMMARY_REF_DIVERGED")
+        if ledger_tuple != formal_tuple:
+            findings.append("CR_LEDGER_STATUS_DIVERGED")
+
+    return NativeCRStatusProjectionV1(
+        cr_id=cr_id,
+        lifecycle_status=formal_tuple[0],
+        readiness_status=formal_tuple[1],
+        gate_status=formal_tuple[2],
+        formal_cr_ref=formal_ref,
+        summary_ref=summary_ref,
+        ledger_event_id=ledger_event_id,
+        decision="PASS" if not findings else "BLOCKED",
+        findings=tuple(findings),
+    )
+
+
 def _cr_numeric_sort_key(cr_id: str) -> tuple[int, str]:
     match = re.fullmatch(r"CR-(\d+)", cr_id)
     return (int(match.group(1)), cr_id) if match else (sys.maxsize, cr_id)
@@ -1738,48 +2023,63 @@ def bootstrap_cr(
     }
 
 
-def close_cr(project_root: Path, cr_id: str, *, readiness: str) -> dict[str, Path]:
-    project_root = project_root.resolve()
-    crs = discover_formal_crs(project_root)
-    if cr_id not in crs:
-        raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
-    cr_path = crs[cr_id]
-    update_frontmatter_fields(
-        cr_path,
-        {
-            "lifecycle_status": "closed",
-            "readiness_status": readiness,
-            "gate_status": CLOSED_GATE_STATUS,
-        },
-    )
-    summary = summary_from_cr_file(project_root, cr_path, readiness=readiness)
-    summary["status"] = "closed"
-    summary["gate_status"] = CLOSED_GATE_STATUS
-    summary_path = write_summary(project_root, cr_id, summary)
-    evidence_path = write_evidence_index(project_root, cr_id, summary)
-    index_path = write_index(project_root)
-    ledger_path = append_ledger_event(
+def close_cr(
+    project_root: Path,
+    cr_id: str,
+    *,
+    readiness: str,
+    work_id: str,
+    effective_at: str,
+    expected_process_oid: str,
+    expected_plan_digest: str,
+    authorization: StatusSyncAuthorization | None,
+) -> dict[str, Path]:
+    """Compatibility API routed through the typed status-sync transaction."""
+
+    plan = plan_status_sync(
         project_root,
-        {
-            "event": "closed",
-            "id": cr_id,
-            "cr_type": summary.get("cr_type"),
-            "status": "closed",
-            "readiness": readiness,
-            "gate_status": CLOSED_GATE_STATUS,
-            "summary_ref": _rel(project_root, summary_path),
-            "full_ref": summary.get("full_ref"),
-            "evidence_index_ref": _rel(project_root, evidence_path),
-            "risk_refs": summary.get("remaining_risks", []),
-            "authz_policy_refs": summary.get("authz_policy_refs", []),
-            "closed_at": now_utc(),
-        },
+        cr_id,
+        status="closed",
+        readiness=readiness,
+        gate_status=CLOSED_GATE_STATUS,
+        work_id=work_id,
+        expected_process_oid=expected_process_oid,
+        effective_at=effective_at,
     )
+    result = apply_status_sync(
+        project_root,
+        plan,
+        authorization=authorization,
+        expected_plan_digest=expected_plan_digest,
+    )
+    if result["status"] not in {"PASS", "NO_CHANGE"}:
+        raise RuntimeError(f"close {result['status']}: {result.get('reason', '')}")
+    if result["status"] == "NO_CHANGE":
+        cr_path = discover_formal_crs(project_root)[cr_id]
+        return {
+            "cr": cr_path,
+            "summary": _resolve_runtime_ref(
+                project_root,
+                (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix(),
+            ),
+            "evidence_index": _resolve_runtime_ref(
+                project_root,
+                (CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix(),
+            ),
+            "index": _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix()),
+            "ledger": _resolve_runtime_ref(project_root, CR_LEDGER_REL.as_posix()),
+        }
+    by_ref = result["paths"]
     return {
-        "summary": summary_path,
-        "evidence_index": evidence_path,
-        "index": index_path,
-        "ledger": ledger_path,
+        "cr": by_ref[_rel(project_root, discover_formal_crs(project_root)[cr_id])],
+        "summary": by_ref[
+            (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
+        ],
+        "evidence_index": by_ref[
+            (CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix()
+        ],
+        "index": by_ref[CR_INDEX_REL.as_posix()],
+        "ledger": by_ref[CR_LEDGER_REL.as_posix()],
     }
 
 
@@ -1812,6 +2112,37 @@ class StatusSyncTarget:
 
 
 @dataclass(frozen=True)
+class StatusSyncAuthorization:
+    schema_version: int
+    authorization_id: str
+    authorization_source: str
+    authorization_kind: str
+    operation: str
+    cr_id: str
+    work_id: str
+    desired_transition: dict[str, str]
+    effective_at: str
+    expected_release_oid: str
+    expected_process_oid: str
+    scope_digest: str
+    targets: list[dict[str, Any]]
+    plan_digest: str
+    expires_at: str
+    single_use: bool = True
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> StatusSyncAuthorization:
+        if set(payload) != STATUS_SYNC_AUTHORIZATION_FIELDS:
+            missing = sorted(STATUS_SYNC_AUTHORIZATION_FIELDS - set(payload))
+            extra = sorted(set(payload) - STATUS_SYNC_AUTHORIZATION_FIELDS)
+            raise ValueError(
+                "status-sync authorization fields mismatch: "
+                f"missing={missing}, extra={extra}"
+            )
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
 class StatusSyncPlan:
     decision: str
     cr_id: str
@@ -1821,17 +2152,45 @@ class StatusSyncPlan:
     scope_digest: str
     targets: tuple[StatusSyncTarget, ...]
     reason: str = ""
+    effective_at: str = ""
 
-    def as_dict(self) -> dict[str, Any]:
+    def _digest_payload(self) -> dict[str, Any]:
         return {
+            "schema_version": 1,
+            "operation": STATUS_SYNC_OPERATION,
             "decision": self.decision,
             "cr_id": self.cr_id,
             "work_id": self.work_id,
             "desired_transition": self.desired_transition,
+            "effective_at": self.effective_at,
             "expected_facts": self.expected_facts,
             "scope_digest": self.scope_digest,
             "targets": [target.as_dict() for target in self.targets],
-            "mutation_count": len(self.targets) if self.decision == "READY" else 0,
+            "reason": self.reason,
+        }
+
+    @property
+    def plan_digest(self) -> str:
+        return _canonical_digest(self._digest_payload())
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "operation": STATUS_SYNC_OPERATION,
+            "decision": self.decision,
+            "cr_id": self.cr_id,
+            "work_id": self.work_id,
+            "desired_transition": self.desired_transition,
+            "effective_at": self.effective_at,
+            "expected_facts": self.expected_facts,
+            "scope_digest": self.scope_digest,
+            "targets": [target.as_dict() for target in self.targets],
+            "mutation_allowlist": [target.ref for target in self.targets],
+            "planned_mutation_count": (
+                len(self.targets) if self.decision == "READY" else 0
+            ),
+            "mutation_count": 0,
+            "plan_digest": self.plan_digest,
             "reason": self.reason,
         }
 
@@ -1885,6 +2244,80 @@ def _target(
     )
 
 
+def _json_semantically_matches(
+    path: Path,
+    expected: dict[str, Any],
+    *,
+    volatile_fields: tuple[str, ...] = (),
+) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        observed = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(observed, dict):
+        return False
+    observed = dict(observed)
+    expected = dict(expected)
+    for field in volatile_fields:
+        observed.pop(field, None)
+        expected.pop(field, None)
+    return observed == expected
+
+
+def _ledger_contains_status_sync_transition(
+    path: Path,
+    *,
+    cr_id: str,
+    lifecycle_status: str,
+    readiness_status: str,
+    gate_status: str,
+) -> bool:
+    """Match semantic status truth; dirty-path facts remain transaction preconditions only."""
+
+    if not path.is_file():
+        return False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if (
+            isinstance(event, dict)
+            and event.get("event_type") == "status_sync"
+            and str(event.get("id") or "") == cr_id
+            and cr_tracking.normalize_lifecycle_status(
+                str(event.get("status") or "")
+            )
+            == cr_tracking.normalize_lifecycle_status(lifecycle_status)
+            and cr_tracking.normalize_readiness_status(
+                str(event.get("readiness") or "")
+            )
+            == cr_tracking.normalize_readiness_status(readiness_status)
+            and cr_tracking.normalize_gate_status(
+                str(event.get("gate_status") or "")
+            )
+            == cr_tracking.normalize_gate_status(gate_status)
+        ):
+            return True
+    return False
+
+
+def _normalize_status_sync_effective_at(value: str) -> str:
+    if not value:
+        return now_utc()
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("status-sync effective_at is invalid") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("status-sync effective_at must include timezone")
+    return parsed.astimezone(UTC).isoformat(timespec="seconds")
+
+
 def plan_status_sync(
     project_root: Path,
     cr_id: str,
@@ -1898,14 +2331,24 @@ def plan_status_sync(
     historical_lifecycle_status: str = "",
     expected_process_oid: str = "",
     rebuild_corrupt_index: bool = False,
+    effective_at: str = "",
 ) -> StatusSyncPlan:
     """Build a zero-mutation status-sync transaction plan."""
 
     project_root = project_root.resolve()
+    timestamp = _normalize_status_sync_effective_at(effective_at)
     facts, scope_digest = _status_sync_facts(project_root, work_id=work_id)
     if expected_process_oid and facts["process_head_oid"] != expected_process_oid:
         return StatusSyncPlan(
-            "BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), "process HEAD differs from expected OID"
+            "BLOCKED",
+            cr_id,
+            work_id,
+            {},
+            facts,
+            scope_digest,
+            (),
+            "process HEAD differs from expected OID",
+            timestamp,
         )
     crs = discover_formal_crs(project_root)
     if cr_id not in crs:
@@ -1995,8 +2438,8 @@ def plan_status_sync(
         lifecycle_status=target_status,
         readiness_status=target_readiness,
         gate_status=target_gate,
+        checkpoint_results=_checkpoint_result_projection(project_root, cr_id),
     )
-    timestamp = now_utc()
     summary = summary_from_cr_file(project_root, cr_path, readiness=target_readiness)
     summary["status"] = target_status
     summary["readiness"] = target_readiness
@@ -2041,6 +2484,7 @@ def plan_status_sync(
         project_root,
         record_overrides={cr_id: updates},
     )
+    expected_index["generated_at"] = timestamp
     index_after = json.dumps(expected_index, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     targets: list[StatusSyncTarget] = [
         _target(project_root, 10, cr_path, cr_after, "truth"),
@@ -2114,18 +2558,61 @@ def plan_status_sync(
                 (),
                 "targets outside Work write scope: " + ", ".join(denied),
             )
+    desired_transition = {
+        "lifecycle_status": target_status,
+        "readiness_status": target_readiness,
+        "gate_status": target_gate,
+    }
+    truth_current = all(
+        target.before is not None and target.before_digest == target.after_digest
+        for target in targets
+        if target.truth_or_derived == "truth"
+    )
+    derived_current = (
+        _json_semantically_matches(
+            summary_path,
+            summary,
+            volatile_fields=("updated_at",),
+        )
+        and _json_semantically_matches(
+            evidence_path,
+            evidence,
+            volatile_fields=("created_at",),
+        )
+        and _ledger_contains_status_sync_transition(
+            ledger_path,
+            cr_id=cr_id,
+            lifecycle_status=target_status,
+            readiness_status=target_readiness,
+            gate_status=target_gate,
+        )
+        and index_path.is_file()
+        and json.loads(index_path.read_text(encoding="utf-8")).get(
+            "semantic_digest"
+        )
+        == expected_index.get("semantic_digest")
+    )
+    if truth_current and derived_current:
+        return StatusSyncPlan(
+            "NO_CHANGE",
+            cr_id,
+            work_id,
+            desired_transition,
+            facts,
+            scope_digest,
+            (),
+            "status tuple and native projections are already synchronized",
+            timestamp,
+        )
     return StatusSyncPlan(
         "READY",
         cr_id,
         work_id,
-        {
-            "lifecycle_status": target_status,
-            "readiness_status": target_readiness,
-            "gate_status": target_gate,
-        },
+        desired_transition,
         facts,
         scope_digest,
         tuple(sorted(targets, key=lambda item: item.order)),
+        effective_at=timestamp,
     )
 
 
@@ -2144,6 +2631,136 @@ def _current_target_digest(target: StatusSyncTarget) -> str:
     if not target.path.is_file():
         return _canonical_digest("")
     return _canonical_digest(target.path.read_text(encoding="utf-8"))
+
+
+def load_status_sync_authorization(path: Path) -> StatusSyncAuthorization:
+    payload = _load_json_object(path, subject="status-sync authorization")
+    return StatusSyncAuthorization.from_dict(payload)
+
+
+def validate_status_sync_authorization(
+    plan: StatusSyncPlan,
+    authorization: StatusSyncAuthorization,
+) -> None:
+    if plan.decision != "READY":
+        raise ValueError("status-sync authorization requires one READY plan")
+    if not plan.work_id or not plan.scope_digest:
+        raise ValueError("status-sync typed apply requires work_id and scope digest")
+    if authorization.schema_version != 1:
+        raise ValueError("status-sync authorization schema_version must be 1")
+    if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization.authorization_id):
+        raise ValueError("status-sync authorization_id is invalid")
+    if authorization.authorization_source != STATUS_SYNC_AUTHORIZATION_SOURCE:
+        raise ValueError(
+            "status-sync authorization_source must be typed-user-confirmation"
+        )
+    if authorization.authorization_kind != STATUS_SYNC_AUTHORIZATION_KIND:
+        raise ValueError(
+            "status-sync authorization_kind must be cr-status-sync"
+        )
+    if authorization.operation != STATUS_SYNC_OPERATION:
+        raise ValueError("status-sync authorization operation mismatch")
+    if authorization.single_use is not True:
+        raise ValueError("status-sync authorization must be single-use")
+    expected = (
+        plan.cr_id,
+        plan.work_id,
+        plan.desired_transition,
+        plan.effective_at,
+        plan.expected_facts.get("release_head_oid", ""),
+        plan.expected_facts.get("process_head_oid", ""),
+        plan.scope_digest,
+        [target.as_dict() for target in plan.targets],
+        plan.plan_digest,
+    )
+    actual = (
+        authorization.cr_id,
+        authorization.work_id,
+        authorization.desired_transition,
+        authorization.effective_at,
+        authorization.expected_release_oid,
+        authorization.expected_process_oid,
+        authorization.scope_digest,
+        authorization.targets,
+        authorization.plan_digest,
+    )
+    if actual != expected:
+        raise ValueError(
+            "status-sync authorization does not match "
+            "CR/Work/transition/effective_at/OIDs/scope/targets/plan"
+        )
+    if not OID_RE.fullmatch(authorization.expected_release_oid):
+        raise ValueError("status-sync expected_release_oid is invalid")
+    if not OID_RE.fullmatch(authorization.expected_process_oid):
+        raise ValueError("status-sync expected_process_oid is invalid")
+    if not DIGEST_RE.fullmatch(authorization.scope_digest):
+        raise ValueError("status-sync scope_digest is invalid")
+    if not DIGEST_RE.fullmatch(authorization.plan_digest):
+        raise ValueError("status-sync plan_digest is invalid")
+    try:
+        expires_at = datetime.fromisoformat(
+            authorization.expires_at.replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise ValueError("status-sync authorization expires_at is invalid") from exc
+    if expires_at.tzinfo is None:
+        raise ValueError(
+            "status-sync authorization expires_at must include timezone"
+        )
+    if expires_at.astimezone(UTC) <= datetime.now(UTC):
+        raise ValueError("status-sync authorization is expired")
+
+
+def _status_sync_claim_path(
+    project_root: Path,
+    authorization_id: str,
+) -> Path:
+    if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization_id):
+        raise ValueError("status-sync authorization_id is invalid")
+    return (
+        _transaction_root(project_root).parent
+        / "status-sync"
+        / "authorizations"
+        / f"{authorization_id}.json"
+    )
+
+
+def _claim_status_sync_authorization(
+    project_root: Path,
+    plan: StatusSyncPlan,
+    authorization: StatusSyncAuthorization,
+) -> Path:
+    validate_status_sync_authorization(plan, authorization)
+    path = _status_sync_claim_path(project_root, authorization.authorization_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "authorization_id": authorization.authorization_id,
+        "operation": authorization.operation,
+        "cr_id": authorization.cr_id,
+        "work_id": authorization.work_id,
+        "plan_digest": authorization.plan_digest,
+        "expected_release_oid": authorization.expected_release_oid,
+        "expected_process_oid": authorization.expected_process_oid,
+        "scope_digest": authorization.scope_digest,
+        "claimed_at": now_utc(),
+    }
+    try:
+        with path.open("x", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+    except FileExistsError as exc:
+        raise ValueError(
+            "status-sync authorization was already consumed"
+        ) from exc
+    return path
 
 
 def _status_sync_writer_lock_path(project_root: Path) -> Path:
@@ -2213,6 +2830,8 @@ def apply_status_sync(
     project_root: Path,
     plan: StatusSyncPlan,
     *,
+    authorization: StatusSyncAuthorization | None = None,
+    expected_plan_digest: str = "",
     _fail_after_replace: int | None = None,
     _fail_recovery: bool = False,
     _fault: str = "",
@@ -2220,8 +2839,34 @@ def apply_status_sync(
     """Apply one prepared status-sync plan with verified backups and recovery."""
 
     project_root = project_root.resolve()
+    if plan.decision == "NO_CHANGE":
+        return {
+            "status": "NO_CHANGE",
+            "reason": plan.reason,
+            "mutation_count": 0,
+        }
     if plan.decision != "READY":
         return {"status": "BLOCKED", "reason": plan.reason, "mutation_count": 0}
+    if not expected_plan_digest or expected_plan_digest != plan.plan_digest:
+        return {
+            "status": "BLOCKED",
+            "reason": "expected plan digest does not match the current plan",
+            "mutation_count": 0,
+        }
+    if authorization is None:
+        return {
+            "status": "BLOCKED",
+            "reason": "status-sync apply requires typed authorization",
+            "mutation_count": 0,
+        }
+    try:
+        validate_status_sync_authorization(plan, authorization)
+    except ValueError as exc:
+        return {
+            "status": "BLOCKED",
+            "reason": str(exc),
+            "mutation_count": 0,
+        }
     observed_facts, observed_scope = _status_sync_facts(project_root, work_id=plan.work_id)
     if observed_facts != plan.expected_facts or observed_scope != plan.scope_digest:
         return {"status": "BLOCKED", "reason": "expected facts or scope digest drifted", "mutation_count": 0}
@@ -2245,6 +2890,15 @@ def apply_status_sync(
     )
     if lock_owner is None:
         return {"status": "BLOCKED", "reason": "status-sync writer lock exists", "mutation_count": 0}
+    try:
+        _claim_status_sync_authorization(project_root, plan, authorization)
+    except ValueError as exc:
+        _release_status_sync_writer_lock(project_root, lock_owner)
+        return {
+            "status": "BLOCKED",
+            "reason": str(exc),
+            "mutation_count": 0,
+        }
     transaction_dir = transaction_root / transaction_id
     backup_root = transaction_dir / "backups"
     after_root = transaction_dir / "after"
@@ -2253,10 +2907,8 @@ def apply_status_sync(
     idempotency_key = _canonical_digest(
         {
             "command": "status-sync",
-            "cr_id": plan.cr_id,
-            "desired_transition": plan.desired_transition,
-            "expected_facts": plan.expected_facts,
-            "scope_digest": plan.scope_digest,
+            "plan_digest": plan.plan_digest,
+            "authorization_id": authorization.authorization_id,
         }
     )
     manifest: dict[str, Any] = {
@@ -2266,7 +2918,10 @@ def apply_status_sync(
         "work_id": plan.work_id,
         "cr_id": plan.cr_id,
         "command": "status-sync",
+        "plan_digest": plan.plan_digest,
+        "authorization_id": authorization.authorization_id,
         "desired_transition": plan.desired_transition,
+        "effective_at": plan.effective_at,
         "expected_facts": plan.expected_facts,
         "scope_digest": plan.scope_digest,
         "lock": dict(lock_owner),
@@ -2361,6 +3016,8 @@ def apply_status_sync(
             "status": "PASS",
             "transaction_id": transaction_id,
             "idempotency_key": idempotency_key,
+            "plan_digest": plan.plan_digest,
+            "authorization_id": authorization.authorization_id,
             "mutation_count": len(plan.targets),
             "paths": paths,
         }
@@ -2393,14 +3050,22 @@ def apply_status_sync(
         )
         if status in {"BLOCKED", "RECOVERED"}:
             shutil.rmtree(transaction_dir)
-        return {
+        result = {
             "status": status,
             "transaction_id": transaction_id,
             "idempotency_key": idempotency_key,
+            "plan_digest": plan.plan_digest,
+            "authorization_id": authorization.authorization_id,
             "mutation_count": len(applied),
             "reason": str(exc),
             "recovery_errors": recovery_errors,
         }
+        if status == "PARTIAL":
+            result["rollback_evidence_ref"] = (
+                "private://status-sync/transactions/"
+                f"{transaction_id}/manifest.json"
+            )
+        return result
     finally:
         _release_status_sync_writer_lock(project_root, lock_owner)
 
@@ -2599,6 +3264,1132 @@ def recover_status_sync_transaction(
         _release_status_sync_writer_lock(project_root, lock_owner)
 
 
+@dataclass(frozen=True)
+class TerminationAuthorization:
+    schema_version: int
+    authorization_id: str
+    authorization_source: str
+    authorization_kind: str
+    operation: str
+    cr_id: str
+    work_id: str
+    termination_reason: str
+    terminal_tuple: dict[str, str]
+    expected_release_oid: str
+    expected_process_oid: str
+    scope_digest: str
+    plan_digest: str
+    expires_at: str
+    single_use: bool = True
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> TerminationAuthorization:
+        if set(payload) != TERMINATION_AUTHORIZATION_FIELDS:
+            missing = sorted(TERMINATION_AUTHORIZATION_FIELDS - set(payload))
+            extra = sorted(set(payload) - TERMINATION_AUTHORIZATION_FIELDS)
+            raise ValueError(
+                f"termination authorization fields mismatch: missing={missing}, extra={extra}"
+            )
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class TerminationTarget:
+    order: int
+    ref: str
+    path: Path
+    truth_or_derived: str
+    before: str | None
+    after: str
+
+    @property
+    def before_digest(self) -> str:
+        return _canonical_digest(self.before if self.before is not None else "")
+
+    @property
+    def after_digest(self) -> str:
+        return _canonical_digest(self.after)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "order": self.order,
+            "ref": self.ref,
+            "truth_or_derived": self.truth_or_derived,
+            "before_exists": self.before is not None,
+            "before_digest": self.before_digest,
+            "after_digest": self.after_digest,
+        }
+
+
+@dataclass(frozen=True)
+class TerminationPlan:
+    decision: str
+    cr_id: str
+    work_id: str
+    termination_reason: str
+    terminal_tuple: dict[str, str]
+    expected_facts: dict[str, str]
+    binding: dict[str, str]
+    scope_digest: str
+    targets: tuple[TerminationTarget, ...]
+    reason: str = ""
+
+    def _digest_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "operation": TERMINATION_OPERATION,
+            "decision": self.decision,
+            "cr_id": self.cr_id,
+            "work_id": self.work_id,
+            "termination_reason": self.termination_reason,
+            "terminal_tuple": self.terminal_tuple,
+            "expected_facts": self.expected_facts,
+            "binding": self.binding,
+            "scope_digest": self.scope_digest,
+            "targets": [target.as_dict() for target in self.targets],
+            "reason": self.reason,
+        }
+
+    @property
+    def plan_digest(self) -> str:
+        return _canonical_digest(self._digest_payload())
+
+    def as_dict(self) -> dict[str, Any]:
+        target_refs = [target.ref for target in self.targets]
+        return {
+            **self._digest_payload(),
+            "expected_oids": {
+                "producer_release": self.expected_facts.get("producer_release_oid", ""),
+                "target_release": self.expected_facts.get("target_release_oid", ""),
+                "process": self.expected_facts.get("process_head_oid", ""),
+            },
+            "mutation_count": 0,
+            "planned_mutation_count": len(self.targets),
+            "mutation_allowlist": target_refs,
+            "exact_changed_leaf_paths": target_refs,
+            "transaction_order": [
+                {
+                    "order": target.order,
+                    "ref": target.ref,
+                    "truth_or_derived": target.truth_or_derived,
+                }
+                for target in self.targets
+            ],
+            "rollback": {
+                "strategy": "reverse-order-exact-preimage-restore",
+                "order": list(reversed(target_refs)),
+                "partial_evidence": "private://cr-termination/transactions/<transaction-id>/manifest.json",
+            },
+            "apply_private_effects": [
+                "single-use authorization claim",
+                "recoverable transaction evidence",
+            ],
+            "plan_digest": self.plan_digest,
+        }
+
+
+def _portable_termination_error(
+    exc: Exception,
+    *,
+    project_root: Path,
+    process_root: Path | None = None,
+) -> str:
+    text = str(exc)
+    replacements = [(str(project_root.resolve()), "<release-root>")]
+    if process_root is not None:
+        replacements.append((str(process_root.resolve()), "<process-root>"))
+    for source, replacement in replacements:
+        text = text.replace(source, replacement)
+    return text
+
+
+def _termination_facts(
+    project_root: Path,
+    *,
+    work_id: str,
+) -> tuple[dict[str, str], dict[str, str], str, Path]:
+    release_root = project_root.resolve()
+    route = require_process_route(release_root)
+    process_root = route.process_root
+    producer_root = Path(__file__).resolve().parents[2]
+    facts = {
+        "producer_release_oid": _git_fact(
+            producer_root, "rev-parse", "--verify", "HEAD"
+        ).lower(),
+        "target_release_oid": _git_fact(
+            release_root, "rev-parse", "--verify", "HEAD"
+        ).lower(),
+        "process_head_oid": _git_fact(
+            process_root, "rev-parse", "--verify", "HEAD"
+        ).lower(),
+        "process_git_common_dir_identity": _canonical_digest(
+            _git_fact(process_root, "rev-parse", "--git-common-dir")
+            or "non-git-fixture"
+        ),
+        "process_dirty_path_digest": _dirty_path_digest(process_root),
+    }
+    for key in ("producer_release_oid", "target_release_oid", "process_head_oid"):
+        if not OID_RE.fullmatch(facts[key]):
+            raise ValueError(f"{key} is not one exact Git OID")
+    work = load_work(process_root, work_id)
+    binding = {
+        "status": "healthy",
+        "project_id": route.project_id,
+        "layout_version": route.layout_version,
+        "route_mode": route.route_mode,
+    }
+    return facts, binding, work.scope.digest, process_root
+
+
+def _termination_target(
+    project_root: Path,
+    order: int,
+    path: Path,
+    after: str,
+    truth_or_derived: str,
+) -> TerminationTarget | None:
+    before = path.read_text(encoding="utf-8") if path.is_file() else None
+    if before == after:
+        return None
+    return TerminationTarget(
+        order=order,
+        ref=_rel(project_root, path),
+        path=path,
+        truth_or_derived=truth_or_derived,
+        before=before,
+        after=after,
+    )
+
+
+def _render_termination_body_projection(
+    text: str,
+    *,
+    terminal_tuple: dict[str, str],
+) -> str:
+    rendered = _render_exact_section_rows(
+        text,
+        "CR 类型与门禁策略",
+        {
+            "生命周期状态": terminal_tuple["lifecycle_status"],
+            "就绪状态": terminal_tuple["readiness_status"],
+            "门禁状态": terminal_tuple["gate_status"],
+        },
+    )
+    return _render_exact_section_rows(
+        rendered,
+        "Checkpoint Index",
+        {"CP8": "not-applicable"},
+    )
+
+
+def _load_json_object(path: Path, *, subject: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{subject} is not readable JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{subject} must be one JSON object")
+    return payload
+
+
+def _termination_projection_is_complete(
+    project_root: Path,
+    *,
+    cr_id: str,
+    work_id: str,
+    terminal_tuple: dict[str, str],
+    process_root: Path,
+) -> tuple[bool, str]:
+    work = load_work(process_root, work_id)
+    if work.status not in {"cancelled", "archived"}:
+        return False, f"Work remains non-terminal: {work.status}"
+    project = load_project(process_root)
+    if work.work_ref in project.active_work_refs:
+        return False, "Project still references the terminated Work"
+    if work.phase_ref:
+        phase = load_phase(process_root, work.phase_ref)
+        if work.work_ref in phase.work_refs:
+            return False, "Phase still references the terminated Work"
+    summary_path = _resolve_runtime_ref(
+        project_root, (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
+    )
+    if not summary_path.is_file():
+        return False, "termination summary is missing"
+    summary = _load_json_object(summary_path, subject="termination summary")
+    if (
+        str(summary.get("status") or "") != terminal_tuple["lifecycle_status"]
+        or str(summary.get("readiness") or "").lower()
+        != terminal_tuple["readiness_status"]
+        or str(summary.get("gate_status") or "").lower()
+        != terminal_tuple["gate_status"]
+    ):
+        return False, "termination summary tuple is inconsistent"
+    index_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
+    if not index_path.is_file():
+        return False, "CR-INDEX is missing"
+    index = _load_json_object(index_path, subject="CR-INDEX")
+    index_errors = validate_index_payload(index)
+    if index_errors:
+        return False, "; ".join(index_errors)
+    expected_index = build_index(project_root)
+    if index.get("semantic_digest") != expected_index.get("semantic_digest"):
+        return False, "CR-INDEX differs from formal truth"
+    ledger_path = _resolve_runtime_ref(project_root, CR_LEDGER_REL.as_posix())
+    if not ledger_path.is_file():
+        return False, "CR ledger is missing"
+    matching_event = any(
+        str(event.get("event_type") or "") == "cr_termination"
+        and str(event.get("id") or "") == cr_id
+        and str(event.get("status") or "") == terminal_tuple["lifecycle_status"]
+        for event in load_ledger_events(project_root)
+    )
+    if not matching_event:
+        return False, "CR termination ledger event is missing"
+    state_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
+    if state_path.is_file():
+        state = _load_json_object(state_path, subject="STATE.current.json")
+        if state.get("active_change") == cr_id:
+            return False, "STATE.current.json still references the terminated CR"
+    return True, ""
+
+
+def _blocked_termination_plan(
+    *,
+    cr_id: str,
+    work_id: str,
+    termination_reason: str,
+    terminal_tuple: dict[str, str],
+    expected_facts: dict[str, str],
+    binding: dict[str, str],
+    scope_digest: str,
+    reason: str,
+) -> TerminationPlan:
+    return TerminationPlan(
+        decision="BLOCKED",
+        cr_id=cr_id,
+        work_id=work_id,
+        termination_reason=termination_reason,
+        terminal_tuple=terminal_tuple,
+        expected_facts=expected_facts,
+        binding=binding,
+        scope_digest=scope_digest,
+        targets=(),
+        reason=reason,
+    )
+
+
+def plan_cr_termination(
+    project_root: Path,
+    cr_id: str,
+    *,
+    work_id: str,
+    termination_status: str,
+    termination_reason: str,
+    expected_process_oid: str = "",
+) -> TerminationPlan:
+    """Build a deterministic, zero-mutation CR termination transaction."""
+
+    release_root = project_root.resolve()
+    terminal_tuple = dict(TERMINATION_TUPLES.get(termination_status) or {})
+    facts: dict[str, str] = {}
+    binding: dict[str, str] = {}
+    scope_digest = ""
+    process_root: Path | None = None
+    if not CR_ID_RE.fullmatch(cr_id):
+        return _blocked_termination_plan(
+            cr_id=cr_id,
+            work_id=work_id,
+            termination_reason=termination_reason,
+            terminal_tuple=terminal_tuple,
+            expected_facts=facts,
+            binding=binding,
+            scope_digest=scope_digest,
+            reason="CR id must use CR-xxx naming",
+        )
+    if not terminal_tuple:
+        return _blocked_termination_plan(
+            cr_id=cr_id,
+            work_id=work_id,
+            termination_reason=termination_reason,
+            terminal_tuple={},
+            expected_facts=facts,
+            binding=binding,
+            scope_digest=scope_digest,
+            reason="termination status must be cancelled or superseded",
+        )
+    normalized_reason = termination_reason.strip()
+    if not normalized_reason or len(normalized_reason) > 1000:
+        return _blocked_termination_plan(
+            cr_id=cr_id,
+            work_id=work_id,
+            termination_reason=normalized_reason,
+            terminal_tuple=terminal_tuple,
+            expected_facts=facts,
+            binding=binding,
+            scope_digest=scope_digest,
+            reason="termination reason must contain 1-1000 characters",
+        )
+    if not work_id:
+        return _blocked_termination_plan(
+            cr_id=cr_id,
+            work_id=work_id,
+            termination_reason=normalized_reason,
+            terminal_tuple=terminal_tuple,
+            expected_facts=facts,
+            binding=binding,
+            scope_digest=scope_digest,
+            reason="work_id is required",
+        )
+    try:
+        facts, binding, scope_digest, process_root = _termination_facts(
+            release_root, work_id=work_id
+        )
+        if expected_process_oid and expected_process_oid != facts["process_head_oid"]:
+            raise ValueError("process HEAD differs from expected OID")
+        crs = discover_formal_crs(release_root)
+        if cr_id not in crs:
+            raise ValueError(f"formal CR is missing: {cr_id}")
+        cr_path = crs[cr_id]
+        cr_before = cr_path.read_text(encoding="utf-8")
+        fields = parse_frontmatter(cr_before)
+        source_follow_up_id = str(fields.get("source_follow_up_id") or "")
+        if source_follow_up_id and source_follow_up_id != work_id:
+            raise ValueError("CR source_follow_up_id does not match work_id")
+        current_tuple = {
+            "lifecycle_status": cr_tracking.normalize_lifecycle_status(
+                fields.get("lifecycle_status") or fields.get("status") or ""
+            ),
+            "readiness_status": cr_tracking.normalize_readiness_status(
+                fields.get("readiness_status") or ""
+            ),
+            "gate_status": cr_tracking.normalize_gate_status(
+                fields.get("gate_status") or ""
+            ),
+        }
+        current_values = tuple(current_tuple.values())
+        target_values = tuple(terminal_tuple.values())
+        if current_values == target_values:
+            complete, incomplete_reason = _termination_projection_is_complete(
+                release_root,
+                cr_id=cr_id,
+                work_id=work_id,
+                terminal_tuple=terminal_tuple,
+                process_root=process_root,
+            )
+            if not complete:
+                raise ValueError(
+                    "terminal CR has incomplete projection: " + incomplete_reason
+                )
+            return TerminationPlan(
+                decision="NO_CHANGE",
+                cr_id=cr_id,
+                work_id=work_id,
+                termination_reason=normalized_reason,
+                terminal_tuple=terminal_tuple,
+                expected_facts=facts,
+                binding=binding,
+                scope_digest=scope_digest,
+                targets=(),
+            )
+        if current_tuple["lifecycle_status"] in FINISHED_STATUSES:
+            raise ValueError(
+                "a terminal CR cannot be changed to a different terminal state"
+            )
+        source_errors = cr_tracking.validate_native_status_tuple(*current_values)
+        target_errors = cr_tracking.validate_native_status_tuple(*target_values)
+        if source_errors or target_errors:
+            raise ValueError("; ".join([*source_errors, *target_errors]))
+
+        work = load_work(process_root, work_id)
+        terminated_work = transition_work(work, "cancelled")
+        project = load_project(process_root)
+        if work.work_ref not in project.active_work_refs:
+            raise ValueError("Project active_work_refs does not contain the target Work")
+        terminated_project = replace(
+            project,
+            active_work_refs=tuple(
+                ref for ref in project.active_work_refs if ref != work.work_ref
+            ),
+        )
+        phase = load_phase(process_root, work.phase_ref) if work.phase_ref else None
+        if phase is not None and work.work_ref not in phase.work_refs:
+            raise ValueError("Phase work_refs does not contain the target Work")
+        terminated_phase = (
+            replace(
+                phase,
+                work_refs=tuple(ref for ref in phase.work_refs if ref != work.work_ref),
+            )
+            if phase is not None
+            else None
+        )
+
+        index_path = _resolve_runtime_ref(release_root, CR_INDEX_REL.as_posix())
+        existing_index: dict[str, Any] | None = None
+        if index_path.is_file():
+            existing_index = _load_json_object(index_path, subject="CR-INDEX")
+            index_errors = validate_index_payload(existing_index)
+            if index_errors:
+                raise ValueError("; ".join(index_errors))
+            formal_truth_index = build_index(release_root)
+            if (
+                existing_index.get("semantic_digest")
+                != formal_truth_index.get("semantic_digest")
+            ):
+                raise ValueError("CR-INDEX differs from current formal truth")
+
+        cr_after = render_frontmatter_fields(
+            cr_before,
+            {
+                "lifecycle_status": terminal_tuple["lifecycle_status"],
+                "readiness_status": terminal_tuple["readiness_status"],
+                "gate_status": terminal_tuple["gate_status"],
+                "status": terminal_tuple["lifecycle_status"],
+            },
+        )
+        cr_after = _render_termination_body_projection(
+            cr_after, terminal_tuple=terminal_tuple
+        )
+        summary_path = _resolve_runtime_ref(
+            release_root,
+            (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix(),
+        )
+        if summary_path.is_file():
+            summary = _load_json_object(summary_path, subject="CR summary")
+            if str(summary.get("id") or "") != cr_id:
+                raise ValueError("CR summary identity mismatch")
+            if str(summary.get("full_ref") or "") != _rel(release_root, cr_path):
+                raise ValueError("CR summary full_ref mismatch")
+        else:
+            summary = summary_from_cr_file(release_root, cr_path)
+            summary.pop("updated_at", None)
+        summary.update(
+            {
+                "status": terminal_tuple["lifecycle_status"],
+                "readiness": terminal_tuple["readiness_status"],
+                "gate_status": terminal_tuple["gate_status"],
+                "decision": terminal_tuple["lifecycle_status"],
+                "termination_reason": normalized_reason,
+                "terminal_tuple": terminal_tuple,
+            }
+        )
+        summary_after = (
+            json.dumps(
+                summary,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        ledger_path = _resolve_runtime_ref(release_root, CR_LEDGER_REL.as_posix())
+        ledger_event = {
+            "event_id": _canonical_digest(
+                {
+                    "operation": TERMINATION_OPERATION,
+                    "id": cr_id,
+                    "work_id": work_id,
+                    "termination_reason": normalized_reason,
+                    "terminal_tuple": terminal_tuple,
+                    "expected_facts": facts,
+                    "scope_digest": scope_digest,
+                }
+            ),
+            "event": "terminated",
+            "event_type": "cr_termination",
+            "id": cr_id,
+            "work_id": work_id,
+            "cr_type": normalize_cr_type(
+                fields.get("cr_type") or fields.get("cr_kind") or "feature"
+            ),
+            "status": terminal_tuple["lifecycle_status"],
+            "readiness": terminal_tuple["readiness_status"],
+            "gate_status": terminal_tuple["gate_status"],
+            "summary_ref": _rel(release_root, summary_path),
+            "full_ref": _rel(release_root, cr_path),
+            "termination_reason": normalized_reason,
+            "terminal_tuple": terminal_tuple,
+        }
+        ledger_after = event_ledger.render_appended_event(ledger_path, ledger_event)
+        projected_index = build_index(
+            release_root,
+            record_overrides={
+                cr_id: {
+                    "lifecycle_status": terminal_tuple[
+                        "lifecycle_status"
+                    ],
+                    "readiness_status": terminal_tuple[
+                        "readiness_status"
+                    ],
+                    "gate_status": terminal_tuple["gate_status"],
+                    "status": terminal_tuple["lifecycle_status"],
+                }
+            },
+        )
+        projected_index["generated_at"] = (
+            str(existing_index.get("generated_at") or "")
+            if existing_index is not None
+            else "1970-01-01T00:00:00+00:00"
+        )
+        index_after = (
+            json.dumps(
+                projected_index,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+
+        candidate_targets: list[TerminationTarget | None] = [
+            _termination_target(release_root, 10, cr_path, cr_after, "truth"),
+            _termination_target(
+                release_root,
+                20,
+                process_root / work.work_ref,
+                dump_yaml(terminated_work.as_dict()) + "\n",
+                "truth",
+            ),
+            _termination_target(
+                release_root,
+                30,
+                process_root / "PROJECT.yaml",
+                dump_yaml(terminated_project.as_dict()) + "\n",
+                "truth",
+            ),
+        ]
+        if terminated_phase is not None:
+            candidate_targets.append(
+                _termination_target(
+                    release_root,
+                    40,
+                    process_root / terminated_phase.phase_ref,
+                    dump_yaml(terminated_phase.as_dict()) + "\n",
+                    "truth",
+                )
+            )
+        state_path = _resolve_runtime_ref(
+            release_root, STATE_CURRENT_REL.as_posix()
+        )
+        if state_path.is_file():
+            state = _load_json_object(state_path, subject="STATE.current.json")
+            if state.get("active_change") == cr_id:
+                state_after = current.render_current_state_candidate(
+                    current.build_current_state_candidate(
+                        release_root,
+                        {
+                            "active_change": None,
+                            "active_context_ref": None,
+                            "pending_gate": None,
+                            "pending_checklist_path": None,
+                            "next_action": {
+                                "type": "done",
+                                "text": (
+                                    f"{cr_id} terminated as "
+                                    f"{terminal_tuple['lifecycle_status']}."
+                                ),
+                                "stop_reason": "no_remaining_route",
+                            },
+                        },
+                        actor="meta_flow.workflow.cr_lifecycle",
+                        reason=f"terminate {cr_id}",
+                    )
+                )
+                candidate_targets.append(
+                    _termination_target(
+                        release_root, 45, state_path, state_after, "truth"
+                    )
+                )
+        candidate_targets.extend(
+            [
+                _termination_target(
+                    release_root, 50, summary_path, summary_after, "derived"
+                ),
+                _termination_target(
+                    release_root, 60, ledger_path, ledger_after, "derived"
+                ),
+                _termination_target(
+                    release_root, 90, index_path, index_after, "derived"
+                ),
+            ]
+        )
+        targets = tuple(
+            sorted(
+                (target for target in candidate_targets if target is not None),
+                key=lambda target: target.order,
+            )
+        )
+        denied = [
+            target.ref
+            for target in targets
+            if not check_scope(
+                work.scope,
+                "write",
+                target.ref.removeprefix("process/"),
+            ).allowed
+        ]
+        if denied:
+            raise ValueError(
+                "termination targets outside Work write scope: "
+                + ", ".join(denied)
+            )
+        return TerminationPlan(
+            decision="READY",
+            cr_id=cr_id,
+            work_id=work_id,
+            termination_reason=normalized_reason,
+            terminal_tuple=terminal_tuple,
+            expected_facts=facts,
+            binding=binding,
+            scope_digest=scope_digest,
+            targets=targets,
+        )
+    except Exception as exc:
+        return _blocked_termination_plan(
+            cr_id=cr_id,
+            work_id=work_id,
+            termination_reason=normalized_reason,
+            terminal_tuple=terminal_tuple,
+            expected_facts=facts,
+            binding=binding,
+            scope_digest=scope_digest,
+            reason=_portable_termination_error(
+                exc,
+                project_root=release_root,
+                process_root=process_root,
+            ),
+        )
+
+
+def load_termination_authorization(path: Path) -> TerminationAuthorization:
+    payload = _load_json_object(path, subject="termination authorization")
+    return TerminationAuthorization.from_dict(payload)
+
+
+def validate_termination_authorization(
+    plan: TerminationPlan,
+    authorization: TerminationAuthorization,
+) -> None:
+    if plan.decision != "READY":
+        raise ValueError("termination authorization requires one READY plan")
+    if authorization.schema_version != 1:
+        raise ValueError("termination authorization schema_version must be 1")
+    if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization.authorization_id):
+        raise ValueError("termination authorization_id is invalid")
+    if (
+        authorization.authorization_source
+        != TERMINATION_AUTHORIZATION_SOURCE
+    ):
+        raise ValueError(
+            "termination authorization_source must be typed-user-confirmation"
+        )
+    if authorization.authorization_kind != TERMINATION_AUTHORIZATION_KIND:
+        raise ValueError(
+            "termination authorization_kind must be cr-termination"
+        )
+    if authorization.operation != TERMINATION_OPERATION:
+        raise ValueError("termination authorization operation mismatch")
+    if authorization.single_use is not True:
+        raise ValueError("termination authorization must be single-use")
+    expected = (
+        plan.cr_id,
+        plan.work_id,
+        plan.termination_reason,
+        plan.terminal_tuple,
+        plan.expected_facts.get("target_release_oid", ""),
+        plan.expected_facts.get("process_head_oid", ""),
+        plan.scope_digest,
+        plan.plan_digest,
+    )
+    actual = (
+        authorization.cr_id,
+        authorization.work_id,
+        authorization.termination_reason,
+        authorization.terminal_tuple,
+        authorization.expected_release_oid,
+        authorization.expected_process_oid,
+        authorization.scope_digest,
+        authorization.plan_digest,
+    )
+    if actual != expected:
+        raise ValueError(
+            "termination authorization does not match CR/Work/reason/tuple/OIDs/scope/plan"
+        )
+    if not OID_RE.fullmatch(authorization.expected_release_oid):
+        raise ValueError("termination expected_release_oid is invalid")
+    if not OID_RE.fullmatch(authorization.expected_process_oid):
+        raise ValueError("termination expected_process_oid is invalid")
+    if not DIGEST_RE.fullmatch(authorization.scope_digest):
+        raise ValueError("termination scope_digest is invalid")
+    if not DIGEST_RE.fullmatch(authorization.plan_digest):
+        raise ValueError("termination plan_digest is invalid")
+    try:
+        expires_at = datetime.fromisoformat(
+            authorization.expires_at.replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise ValueError("termination authorization expires_at is invalid") from exc
+    if expires_at.tzinfo is None:
+        raise ValueError(
+            "termination authorization expires_at must include timezone"
+        )
+    if expires_at.astimezone(UTC) <= datetime.now(UTC):
+        raise ValueError("termination authorization is expired")
+
+
+def _termination_private_root(project_root: Path) -> Path:
+    return (
+        _transaction_root(project_root).parent
+        / "cr-termination"
+    )
+
+
+def _termination_claim_path(
+    project_root: Path,
+    authorization_id: str,
+) -> Path:
+    if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization_id):
+        raise ValueError("termination authorization_id is invalid")
+    return (
+        _termination_private_root(project_root)
+        / "authorizations"
+        / f"{authorization_id}.json"
+    )
+
+
+def _claim_termination_authorization(
+    project_root: Path,
+    plan: TerminationPlan,
+    authorization: TerminationAuthorization,
+) -> Path:
+    validate_termination_authorization(plan, authorization)
+    path = _termination_claim_path(project_root, authorization.authorization_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "authorization_id": authorization.authorization_id,
+        "operation": authorization.operation,
+        "cr_id": authorization.cr_id,
+        "work_id": authorization.work_id,
+        "plan_digest": authorization.plan_digest,
+        "expected_release_oid": authorization.expected_release_oid,
+        "expected_process_oid": authorization.expected_process_oid,
+        "scope_digest": authorization.scope_digest,
+        "claimed_at": now_utc(),
+    }
+    try:
+        with path.open("x", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+    except FileExistsError as exc:
+        raise ValueError(
+            "termination authorization was already consumed"
+        ) from exc
+    return path
+
+
+def _termination_current_digest(target: TerminationTarget) -> str:
+    if not target.path.is_file():
+        return _canonical_digest("")
+    return _canonical_digest(target.path.read_text(encoding="utf-8"))
+
+
+def apply_cr_termination(
+    project_root: Path,
+    plan: TerminationPlan,
+    *,
+    authorization: TerminationAuthorization | None,
+    expected_plan_digest: str,
+    _fail_after_replace: int | None = None,
+    _fail_recovery: bool = False,
+    _fault: str = "",
+) -> dict[str, Any]:
+    """Apply one typed, exact-preimage termination transaction."""
+
+    release_root = project_root.resolve()
+    if plan.decision == "NO_CHANGE":
+        return {
+            "status": "NO_CHANGE",
+            "plan_digest": plan.plan_digest,
+            "mutation_count": 0,
+            "path_refs": [],
+        }
+    if plan.decision != "READY":
+        return {
+            "status": "BLOCKED",
+            "reason": plan.reason,
+            "mutation_count": 0,
+        }
+    if not expected_plan_digest or expected_plan_digest != plan.plan_digest:
+        return {
+            "status": "BLOCKED",
+            "reason": "expected plan digest does not match the current plan",
+            "mutation_count": 0,
+        }
+    if authorization is None:
+        return {
+            "status": "BLOCKED",
+            "reason": "termination apply requires typed authorization",
+            "mutation_count": 0,
+        }
+    fresh = plan_cr_termination(
+        release_root,
+        plan.cr_id,
+        work_id=plan.work_id,
+        termination_status=plan.terminal_tuple["lifecycle_status"],
+        termination_reason=plan.termination_reason,
+        expected_process_oid=plan.expected_facts["process_head_oid"],
+    )
+    if fresh.decision != "READY" or fresh.plan_digest != plan.plan_digest:
+        return {
+            "status": "BLOCKED",
+            "reason": "termination plan drifted before apply",
+            "mutation_count": 0,
+        }
+    drifted = [
+        target.ref
+        for target in plan.targets
+        if _termination_current_digest(target) != target.before_digest
+    ]
+    if drifted:
+        return {
+            "status": "BLOCKED",
+            "reason": "termination target preimage drift: " + ", ".join(drifted),
+            "mutation_count": 0,
+        }
+    try:
+        validate_termination_authorization(plan, authorization)
+    except ValueError as exc:
+        return {
+            "status": "BLOCKED",
+            "reason": str(exc),
+            "mutation_count": 0,
+        }
+    transaction_root = (
+        _termination_private_root(release_root) / "transactions"
+    )
+    transaction_root.mkdir(parents=True, exist_ok=True)
+    unresolved = list(transaction_root.glob("*/manifest.json"))
+    if unresolved:
+        return {
+            "status": "BLOCKED",
+            "reason": "unresolved CR termination transaction exists",
+            "mutation_count": 0,
+        }
+    transaction_id = uuid.uuid4().hex
+    lock_owner = _acquire_status_sync_writer_lock(
+        release_root,
+        transaction_id=transaction_id,
+        purpose="cr-terminate",
+    )
+    if lock_owner is None:
+        return {
+            "status": "BLOCKED",
+            "reason": "process writer lock exists",
+            "mutation_count": 0,
+        }
+    transaction_dir = transaction_root / transaction_id
+    backup_root = transaction_dir / "backups"
+    after_root = transaction_dir / "after"
+    backup_root.mkdir(parents=True)
+    after_root.mkdir(parents=True)
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "transaction_id": transaction_id,
+        "command": "cr terminate",
+        "cr_id": plan.cr_id,
+        "work_id": plan.work_id,
+        "termination_reason": plan.termination_reason,
+        "terminal_tuple": plan.terminal_tuple,
+        "expected_facts": plan.expected_facts,
+        "scope_digest": plan.scope_digest,
+        "plan_digest": plan.plan_digest,
+        "authorization_id": authorization.authorization_id,
+        "lock": dict(lock_owner),
+        "targets": [],
+        "receipts": [],
+        "recovery_state": "prepared",
+        "created_at": now_utc(),
+        "updated_at": now_utc(),
+    }
+    applied: list[TerminationTarget] = []
+    manifest_path = transaction_dir / "manifest.json"
+    try:
+        _claim_termination_authorization(release_root, plan, authorization)
+        if _fault == "after-claim-before-first-replace":
+            raise RuntimeError(
+                "injected failure after authorization claim"
+            )
+        for target in plan.targets:
+            backup = backup_root / f"{target.order:03d}.before"
+            prepared_after = after_root / f"{target.order:03d}.after"
+            backup.write_text(target.before or "", encoding="utf-8")
+            prepared_after.write_text(target.after, encoding="utf-8")
+            if (
+                _canonical_digest(backup.read_text(encoding="utf-8"))
+                != target.before_digest
+            ):
+                raise RuntimeError(f"backup digest mismatch: {target.ref}")
+            if (
+                _canonical_digest(
+                    prepared_after.read_text(encoding="utf-8")
+                )
+                != target.after_digest
+            ):
+                raise RuntimeError(
+                    f"prepared after digest mismatch: {target.ref}"
+                )
+            manifest["targets"].append(
+                {
+                    **target.as_dict(),
+                    "before_content_ref": f"backups/{backup.name}",
+                    "after_content_ref": f"after/{prepared_after.name}",
+                    "apply_status": "prepared",
+                    "rollback_status": "not-required",
+                }
+            )
+        manifest_path.write_text(
+            json.dumps(
+                manifest,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        manifest["recovery_state"] = "applying"
+        for offset, target in enumerate(plan.targets, 1):
+            _atomic_write_text(target.path, target.after)
+            applied.append(target)
+            manifest["targets"][offset - 1]["apply_status"] = "applied"
+            manifest["receipts"].append(
+                {
+                    "target_ref": target.ref,
+                    "observed_before_digest": target.before_digest,
+                    "observed_after_digest": _termination_current_digest(
+                        target
+                    ),
+                    "completed_at": now_utc(),
+                }
+            )
+            manifest["updated_at"] = now_utc()
+            manifest_path.write_text(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            if _fail_after_replace == offset:
+                raise RuntimeError(
+                    f"injected failure after replace {offset}"
+                )
+        readback_failures = [
+            target.ref
+            for target in plan.targets
+            if _termination_current_digest(target) != target.after_digest
+        ]
+        if readback_failures:
+            raise RuntimeError(
+                "termination read-back mismatch: "
+                + ", ".join(readback_failures)
+            )
+        manifest["recovery_state"] = "committed"
+        manifest["lock"]["lease_state"] = "released"
+        manifest["updated_at"] = now_utc()
+        manifest_path.write_text(
+            json.dumps(
+                manifest,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        shutil.rmtree(transaction_dir)
+        return {
+            "status": "PASS",
+            "transaction_id": transaction_id,
+            "plan_digest": plan.plan_digest,
+            "authorization_id": authorization.authorization_id,
+            "mutation_count": len(plan.targets),
+            "path_refs": [target.ref for target in plan.targets],
+        }
+    except Exception as exc:
+        recovery_errors: list[str] = []
+        for target in reversed(applied):
+            try:
+                if _fail_recovery:
+                    raise RuntimeError("injected rollback failure")
+                if target.before is None:
+                    target.path.unlink(missing_ok=True)
+                else:
+                    _atomic_write_text(target.path, target.before)
+                if (
+                    _termination_current_digest(target)
+                    != target.before_digest
+                ):
+                    raise RuntimeError("rollback digest mismatch")
+                for entry in manifest["targets"]:
+                    if entry["ref"] == target.ref:
+                        entry["rollback_status"] = "restored"
+            except Exception as recovery_error:
+                recovery_errors.append(
+                    f"{target.ref}: {recovery_error}"
+                )
+        status = (
+            "PARTIAL"
+            if recovery_errors
+            else "RECOVERED"
+            if applied
+            else "BLOCKED"
+        )
+        manifest["recovery_state"] = status.lower()
+        manifest["lock"]["lease_state"] = "released"
+        manifest["updated_at"] = now_utc()
+        if manifest_path.parent.is_dir():
+            manifest_path.write_text(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        if status in {"BLOCKED", "RECOVERED"}:
+            shutil.rmtree(transaction_dir)
+        result = {
+            "status": status,
+            "transaction_id": transaction_id,
+            "plan_digest": plan.plan_digest,
+            "authorization_id": authorization.authorization_id,
+            "mutation_count": len(applied),
+            "reason": str(exc),
+            "rollback_errors": recovery_errors,
+        }
+        if status == "PARTIAL":
+            result["rollback_evidence_ref"] = (
+                "private://cr-termination/transactions/"
+                f"{transaction_id}/manifest.json"
+            )
+        return result
+    finally:
+        _release_status_sync_writer_lock(release_root, lock_owner)
+
+
 def sync_cr_status(
     project_root: Path,
     cr_id: str,
@@ -2611,8 +4402,11 @@ def sync_cr_status(
     historical_gate_status: str = "",
     historical_lifecycle_status: str = "",
     expected_process_oid: str = "",
+    effective_at: str = "",
+    expected_plan_digest: str = "",
+    authorization: StatusSyncAuthorization | None = None,
 ) -> dict[str, Path]:
-    """Compatibility apply API backed by the recoverable plan/apply transaction."""
+    """Compatibility API backed by the typed recoverable plan/apply transaction."""
 
     plan = plan_status_sync(
         project_root,
@@ -2625,10 +4419,31 @@ def sync_cr_status(
         historical_gate_status=historical_gate_status,
         historical_lifecycle_status=historical_lifecycle_status,
         expected_process_oid=expected_process_oid,
+        effective_at=effective_at,
     )
-    result = apply_status_sync(project_root, plan)
-    if result["status"] != "PASS":
+    result = apply_status_sync(
+        project_root,
+        plan,
+        authorization=authorization,
+        expected_plan_digest=expected_plan_digest,
+    )
+    if result["status"] not in {"PASS", "NO_CHANGE"}:
         raise RuntimeError(f"status-sync {result['status']}: {result.get('reason', '')}")
+    if result["status"] == "NO_CHANGE":
+        cr_path = discover_formal_crs(project_root)[cr_id]
+        return {
+            "cr": cr_path,
+            "summary": _resolve_runtime_ref(
+                project_root,
+                (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix(),
+            ),
+            "evidence_index": _resolve_runtime_ref(
+                project_root,
+                (CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix(),
+            ),
+            "index": _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix()),
+            "ledger": _resolve_runtime_ref(project_root, CR_LEDGER_REL.as_posix()),
+        }
     by_ref = result["paths"]
     return {
         "cr": by_ref[_rel(project_root, discover_formal_crs(project_root)[cr_id])],
@@ -2803,6 +4618,110 @@ def conflict_report(project_root: Path, cr_id: str) -> tuple[list[str], list[str
             f"{cr_id} has no conflict_keys or impact fields; conflict detection is weak"
         )
     return conflicts, warnings
+
+
+def proposed_conflict_report(
+    project_root: Path,
+    *,
+    cr_id: str,
+    conflict_keys: list[str],
+    impact_surface: list[str],
+    impact_fields: dict[str, list[str]],
+    title: str = "",
+    scope: str = "",
+) -> dict[str, Any]:
+    """Preview one transient CR candidate without writing lifecycle artifacts."""
+
+    project_root = project_root.resolve()
+    if not CR_ID_RE.fullmatch(cr_id):
+        return {
+            "decision": "INVALID",
+            "code": "CR_CONFLICT_PROPOSED_INPUT_INVALID",
+            "cr_id": cr_id,
+            "mutation_count": 0,
+            "planned_mutation_count": 0,
+            "conflicts": [],
+            "warnings": [],
+        }
+    index = load_index(project_root)
+    items = [item for item in index.get("items", []) if isinstance(item, dict)]
+    if any(str(item.get("id") or "") == cr_id for item in items):
+        return {
+            "decision": "INVALID",
+            "code": "CR_CONFLICT_PROPOSED_ID_EXISTS",
+            "cr_id": cr_id,
+            "mutation_count": 0,
+            "planned_mutation_count": 0,
+            "conflicts": [],
+            "warnings": [],
+        }
+
+    normalized_keys = sorted(set(value.strip() for value in conflict_keys if value.strip()))
+    normalized_surface = sorted(
+        set(value.strip() for value in impact_surface if value.strip())
+    )
+    normalized_fields = {
+        field: sorted(
+            set(value.strip() for value in impact_fields.get(field, []) if value.strip())
+        )
+        for field in IMPACT_SPLIT_FIELDS
+    }
+    if not normalized_keys and not normalized_surface and not any(normalized_fields.values()):
+        return {
+            "decision": "INVALID",
+            "code": "CR_CONFLICT_PROPOSED_INPUT_REQUIRED",
+            "cr_id": cr_id,
+            "mutation_count": 0,
+            "planned_mutation_count": 0,
+            "conflicts": [],
+            "warnings": [],
+        }
+
+    capability_resolution = _resolve_capability_refs(
+        project_root,
+        normalized_fields["impact_capability_refs"],
+        mode="audit",
+    )
+    candidate = {
+        "id": cr_id,
+        "title": title,
+        "scope": scope,
+        "status": "proposed",
+        "conflict_keys": normalized_keys,
+        "impact_surface": normalized_surface,
+        **normalized_fields,
+        "impact_capability_normalized": _normalized_capability_refs(
+            capability_resolution
+        ),
+    }
+    candidate_keys = set(candidate["conflict_keys"])
+    candidate_surface = _conflict_surface(candidate)
+    conflicts: list[dict[str, Any]] = []
+    for item in sorted(
+        items, key=lambda value: _cr_numeric_sort_key(str(value.get("id") or ""))
+    ):
+        if item.get("status") not in OPEN_DEPENDENCY_STATUSES:
+            continue
+        key_overlap = sorted(candidate_keys.intersection(item.get("conflict_keys") or []))
+        surface_overlap = sorted(candidate_surface.intersection(_conflict_surface(item)))
+        if key_overlap or surface_overlap:
+            conflicts.append(
+                {
+                    "existing_cr_id": str(item.get("id") or ""),
+                    "matched_conflict_keys": key_overlap,
+                    "matched_impact_surface": surface_overlap,
+                }
+            )
+    return {
+        "decision": "CONFLICT" if conflicts else "NO_CONFLICT",
+        "code": "CR_CONFLICT" if conflicts else "CR_CONFLICT_NONE",
+        "cr_id": cr_id,
+        "mutation_count": 0,
+        "planned_mutation_count": 0,
+        "candidate": candidate,
+        "conflicts": conflicts,
+        "warnings": [],
+    }
 
 
 def build_impact_report(project_root: Path, *, mode: str = "enforce") -> dict[str, Any]:
@@ -3130,7 +5049,8 @@ def _print_cr_help() -> None:
         "  brief      Print a goal-oriented CR brief from summary/frontmatter.\n"
         "  goal-brief Print all CRs attached to one goal_ref.\n"
         "  impact-report Print a side-effect-free impact surface migration report as JSON.\n"
-        "  status-sync Sync one CR frontmatter, summary, CR-INDEX, ledger, and active STATE pointer.\n"
+        "  terminate  Plan or apply an exact-OID, typed, recoverable native CR termination.\n"
+        "  status-sync Plan or apply a typed CR status projection transaction.\n"
         "  status-sync-inspect Inspect unresolved private status-sync manifests.\n"
         "  status-sync-resume Resume one explicitly selected unresolved transaction.\n"
         "  status-sync-rollback Roll back one explicitly selected unresolved transaction.\n"
@@ -3140,8 +5060,9 @@ def _print_cr_help() -> None:
         "  branch-publish Publish existing committed CR refs; never stage or commit.\n"
         "  branch-merge Explicitly fast-forward paired remote defaults from published tips.\n"
         "  branch-finish Re-prove merge facts, retain recovery refs, then clean CR branches.\n"
-        "  close      Close a CR logically: summary + evidence index + ledger event.\n"
+        "  close      Compatibility alias for a typed closed status-sync transaction.\n"
         "  check      Validate CR ledger, index, summaries, and active state refs.\n"
+        "  public-operations-check Validate the public operation registry and console discovery.\n"
         "  conflicts  Compare active/proposed/blocked CR conflict keys from CR-INDEX.json.\n\n"
         "Examples:\n"
         '  meta-flow cr bootstrap --id CR-001 --title "target adoption bootstrap" --scope "Initialize Meta Flow adoption readiness." --project-root .\n'
@@ -3152,14 +5073,17 @@ def _print_cr_help() -> None:
         "  meta-flow cr brief --id CR-101 --mode enforce --project-root .\n"
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow cr impact-report --project-root .\n"
-        "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --project-root .\n"
-        "  meta-flow cr status-sync --id CR-101 --status closed --work-id CR-101 --project-root . --apply --expected-process-oid <oid>\n"
+        '  meta-flow cr terminate --id CR-101 --work-id WORK-101 --status cancelled --reason "superseded by a clean replacement" --expected-process-oid <oid> --project-root .\n'
+        '  meta-flow cr terminate --id CR-101 --work-id WORK-101 --status cancelled --reason "superseded by a clean replacement" --expected-process-oid <oid> --expected-plan-digest <digest> --authorization-file authorization.json --apply --project-root .\n'
+        "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --work-id WORK-101 --effective-at <timestamp> --project-root .\n"
+        "  meta-flow cr status-sync --id CR-101 --status closed --work-id WORK-101 --effective-at <timestamp> --project-root . --apply --expected-process-oid <oid> --expected-plan-digest <digest> --authorization-file authorization.json\n"
         "  meta-flow cr aggregate --id CR-051 --operation-id operation-001 --attempt 1 --source-handle source.json --artifact-handle artifact.json --dry-run --project-root .\n"
         "  meta-flow cr branch-open --id CR-101 --slug safe-change --dry-run --project-root .\n"
         "  meta-flow cr branch-publish --id CR-101 --branch cr/cr-101-safe-change --dry-run --project-root .\n"
         "  meta-flow cr branch-merge --id CR-101 --branch cr/cr-101-safe-change --publish-result publish.json --dry-run --project-root .\n"
         "  meta-flow cr branch-finish --id CR-101 --branch cr/cr-101-safe-change --merge-result merge.json --dry-run --project-root .\n"
-        "  meta-flow cr close --id CR-101 --readiness READY_WITH_RISK --project-root .\n"
+        "  meta-flow cr close --id CR-101 --readiness READY_WITH_RISK --work-id WORK-101 --effective-at <timestamp> --project-root .\n"
+        "  meta-flow cr public-operations-check --project-root .\n"
         "  meta-flow cr conflicts --id CR-102 --project-root .\n"
     )
 
@@ -3172,6 +5096,10 @@ def main(argv: list[str] | None = None) -> int:
     command = args[0]
     if command == "aggregate":
         return aggregate_main(args[1:])
+    if command == "public-operations-check":
+        from meta_flow.policies import public_operations
+
+        return public_operations.main(args[1:])
     if command in {"branch-open", "branch-publish", "branch-merge", "branch-finish"}:
         from meta_flow.workflow.git_branch_lifecycle import branch_main
 
@@ -3193,7 +5121,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--rebuild", action="store_true")
     parser.add_argument("--expected-process-oid", default="")
+    parser.add_argument("--expected-plan-digest", default="")
+    parser.add_argument("--effective-at", default="")
     parser.add_argument("--work-id", default="")
+    parser.add_argument("--reason", default="")
+    parser.add_argument("--authorization-file", type=Path, default=None)
     parser.add_argument("--historical-migration", action="store_true")
     parser.add_argument("--historical-gate-status", default="")
     parser.add_argument("--historical-lifecycle-status", default="")
@@ -3202,6 +5134,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--goal-ref", default="")
     parser.add_argument("--mode", choices=["audit", "enforce"], default=None)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--proposed", action="store_true")
+    parser.add_argument("--conflict-key", action="append", default=[])
+    parser.add_argument("--impact-surface", action="append", default=[])
+    parser.add_argument("--impact-capability-ref", action="append", default=[])
+    parser.add_argument("--impact-feature-ref", action="append", default=[])
+    parser.add_argument("--impact-module-path", action="append", default=[])
+    parser.add_argument("--impact-policy-ref", action="append", default=[])
+    parser.add_argument("--impact-process-ref", action="append", default=[])
+    parser.add_argument("--impact-runtime-ref", action="append", default=[])
+    parser.add_argument("--impact-data-ref", action="append", default=[])
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
@@ -3267,10 +5209,118 @@ def main(argv: list[str] | None = None) -> int:
     if command == "close":
         if not parsed.cr_id:
             raise SystemExit("--id is required")
-        paths = close_cr(project_root, parsed.cr_id, readiness=parsed.readiness)
-        for key, path in paths.items():
-            print(f"{key}: {path}")
-        return 0
+        plan = plan_status_sync(
+            project_root,
+            parsed.cr_id,
+            status="closed",
+            readiness=parsed.readiness,
+            gate_status=CLOSED_GATE_STATUS,
+            work_id=parsed.work_id,
+            expected_process_oid=parsed.expected_process_oid,
+            effective_at=parsed.effective_at,
+        )
+        if not parsed.apply:
+            print(
+                json.dumps(
+                    plan.as_dict(),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0 if plan.decision in {"READY", "NO_CHANGE"} else 1
+        authorization: StatusSyncAuthorization | None = None
+        authorization_error = ""
+        if parsed.authorization_file is None:
+            authorization_error = "close apply requires --authorization-file"
+        else:
+            try:
+                authorization = load_status_sync_authorization(
+                    parsed.authorization_file
+                )
+            except (OSError, ValueError) as exc:
+                authorization_error = str(exc)
+        if authorization_error:
+            result = {
+                "status": "BLOCKED",
+                "reason": authorization_error,
+                "mutation_count": 0,
+            }
+        else:
+            result = apply_status_sync(
+                project_root,
+                plan,
+                authorization=authorization,
+                expected_plan_digest=parsed.expected_plan_digest,
+            )
+        printable = {key: value for key, value in result.items() if key != "paths"}
+        if "paths" in result:
+            printable["path_refs"] = sorted(result["paths"])
+        print(
+            json.dumps(
+                printable,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0 if result["status"] in {"PASS", "NO_CHANGE"} else 1
+    if command == "terminate":
+        if not parsed.cr_id:
+            raise SystemExit("--id is required")
+        plan = plan_cr_termination(
+            project_root,
+            parsed.cr_id,
+            work_id=parsed.work_id,
+            termination_status=parsed.status,
+            termination_reason=parsed.reason,
+            expected_process_oid=parsed.expected_process_oid,
+        )
+        if not parsed.apply:
+            print(
+                json.dumps(
+                    plan.as_dict(),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0 if plan.decision in {"READY", "NO_CHANGE"} else 1
+        authorization: TerminationAuthorization | None = None
+        authorization_error = ""
+        if parsed.authorization_file is None:
+            authorization_error = (
+                "termination apply requires --authorization-file"
+            )
+        else:
+            try:
+                authorization = load_termination_authorization(
+                    parsed.authorization_file
+                )
+            except (OSError, ValueError) as exc:
+                authorization_error = str(exc)
+        if authorization_error:
+            result = {
+                "status": "BLOCKED",
+                "reason": authorization_error,
+                "mutation_count": 0,
+            }
+        else:
+            result = apply_cr_termination(
+                project_root,
+                plan,
+                authorization=authorization,
+                expected_plan_digest=parsed.expected_plan_digest,
+            )
+        print(
+            json.dumps(
+                result,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0 if result["status"] in {"PASS", "NO_CHANGE"} else 1
     if command == "status-sync":
         if not parsed.cr_id:
             raise SystemExit("--id is required")
@@ -3286,16 +5336,42 @@ def main(argv: list[str] | None = None) -> int:
             historical_lifecycle_status=parsed.historical_lifecycle_status,
             expected_process_oid=parsed.expected_process_oid,
             rebuild_corrupt_index=parsed.rebuild,
+            effective_at=parsed.effective_at,
         )
         if not parsed.apply:
             print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
-            return 0 if plan.decision == "READY" else 1
-        result = apply_status_sync(project_root, plan)
+            return 0 if plan.decision in {"READY", "NO_CHANGE"} else 1
+        authorization = None
+        authorization_error = ""
+        if parsed.authorization_file is None:
+            authorization_error = (
+                "status-sync apply requires --authorization-file"
+            )
+        else:
+            try:
+                authorization = load_status_sync_authorization(
+                    parsed.authorization_file
+                )
+            except (OSError, ValueError) as exc:
+                authorization_error = str(exc)
+        if authorization_error:
+            result = {
+                "status": "BLOCKED",
+                "reason": authorization_error,
+                "mutation_count": 0,
+            }
+        else:
+            result = apply_status_sync(
+                project_root,
+                plan,
+                authorization=authorization,
+                expected_plan_digest=parsed.expected_plan_digest,
+            )
         printable = {key: value for key, value in result.items() if key != "paths"}
         if "paths" in result:
             printable["path_refs"] = sorted(result["paths"])
         print(json.dumps(printable, ensure_ascii=False, indent=2, sort_keys=True))
-        return 0 if result["status"] == "PASS" else 1
+        return 0 if result["status"] in {"PASS", "NO_CHANGE"} else 1
     if command == "status-sync-inspect":
         print(json.dumps(inspect_status_sync_transactions(project_root), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
@@ -3323,6 +5399,63 @@ def main(argv: list[str] | None = None) -> int:
     if command == "conflicts":
         if not parsed.cr_id:
             raise SystemExit("--id is required")
+        proposed_fields = {
+            "impact_capability_refs": parsed.impact_capability_ref,
+            "impact_feature_refs": parsed.impact_feature_ref,
+            "impact_module_paths": parsed.impact_module_path,
+            "impact_policy_refs": parsed.impact_policy_ref,
+            "impact_process_refs": parsed.impact_process_ref,
+            "impact_runtime_refs": parsed.impact_runtime_ref,
+            "impact_data_refs": parsed.impact_data_ref,
+        }
+        has_candidate_fields = bool(
+            parsed.conflict_key
+            or parsed.impact_surface
+            or any(proposed_fields.values())
+        )
+        if parsed.proposed:
+            if parsed.output is not None:
+                result = {
+                    "decision": "INVALID",
+                    "code": "CR_CONFLICT_PROPOSED_INPUT_INVALID",
+                    "cr_id": parsed.cr_id,
+                    "mutation_count": 0,
+                    "planned_mutation_count": 0,
+                    "conflicts": [],
+                    "warnings": ["--output is forbidden for zero-write proposed preview"],
+                }
+            else:
+                result = proposed_conflict_report(
+                    project_root,
+                    cr_id=parsed.cr_id,
+                    conflict_keys=parsed.conflict_key,
+                    impact_surface=parsed.impact_surface,
+                    impact_fields=proposed_fields,
+                    title=parsed.title if "--title" in args else "",
+                    scope=parsed.scope if "--scope" in args else "",
+                )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            if result["decision"] == "INVALID":
+                return 2
+            return 1 if result["decision"] == "CONFLICT" else 0
+        if has_candidate_fields:
+            print(
+                json.dumps(
+                    {
+                        "decision": "INVALID",
+                        "code": "CR_CONFLICT_PROPOSED_INPUT_INVALID",
+                        "cr_id": parsed.cr_id,
+                        "mutation_count": 0,
+                        "planned_mutation_count": 0,
+                        "conflicts": [],
+                        "warnings": ["candidate fields require --proposed"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 2
         conflicts, warnings = conflict_report(project_root, parsed.cr_id)
         print("CR Conflicts: " + ("FAIL" if conflicts else "OK"))
         for warning in warnings:
@@ -3332,8 +5465,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if conflicts else 0
     raise SystemExit(
         f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, "
-        "status-sync, status-sync-inspect, status-sync-resume, status-sync-rollback, status-sync-abandon, "
-        "aggregate, branch-open, branch-publish, branch-merge, branch-finish, close, check, conflicts"
+        "terminate, status-sync, status-sync-inspect, status-sync-resume, status-sync-rollback, status-sync-abandon, "
+        "aggregate, branch-open, branch-publish, branch-merge, branch-finish, close, check, "
+        "public-operations-check, conflicts"
     )
 
 

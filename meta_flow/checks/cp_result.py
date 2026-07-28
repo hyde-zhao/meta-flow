@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from meta_flow.checks import state_transition
@@ -57,6 +57,23 @@ def _rel(project_root: Path, path: Path) -> str:
         return path.resolve().relative_to(project_root.resolve()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
+    """把 release/process 物理路径还原为 canonical logical ref。"""
+
+    root = project_root.resolve()
+    resolved = path.resolve(strict=False)
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        process_marker = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml")
+        process_root = process_marker.parent.resolve(strict=False)
+        try:
+            process_relative = resolved.relative_to(process_root)
+        except ValueError as exc:
+            raise ValueError("runtime path is outside the release and bound process repositories") from exc
+        return f"process/{process_relative.as_posix()}"
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -269,6 +286,41 @@ def _load_dispatch_events(root: Path) -> list[dict[str, Any]]:
     return events
 
 
+def _input_artifact_path(root: Path, ref: str) -> Path:
+    logical = Path(ref)
+    if logical.is_absolute() or PureWindowsPath(ref).is_absolute() or ".." in logical.parts:
+        raise ValueError(f"INPUT_HASH_PATH_INVALID: {ref}")
+    candidate = _resolve_runtime_path(root, logical)
+    allowed_root = (
+        _resolve_runtime_ref(root, "process/PROJECT.yaml").parent
+        if logical.parts and logical.parts[0] == "process"
+        else root.resolve()
+    )
+    try:
+        candidate.relative_to(allowed_root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"INPUT_HASH_PATH_ESCAPE: {ref}") from exc
+    return candidate
+
+
+def build_input_artifact_hashes(
+    project_root: Path,
+    refs: list[str],
+) -> dict[str, str]:
+    """由原生模块生成 CP strict correlation 的 file-byte digests。"""
+
+    root = project_root.resolve()
+    if not refs or len(set(refs)) != len(refs):
+        raise ValueError("input artifact refs must be non-empty and unique")
+    hashes: dict[str, str] = {}
+    for ref in sorted(refs):
+        candidate = _input_artifact_path(root, ref)
+        if not candidate.is_file():
+            raise ValueError(f"INPUT_HASH_MISSING: {ref}")
+        hashes[ref] = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
+    return hashes
+
+
 def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
     refs = [str(ref) for ref in _as_list(result.get("dispatch_refs")) if str(ref)]
     if not refs:
@@ -281,81 +333,60 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
     events = _load_dispatch_events(root)
     if not events:
         return ["dispatch_refs require AGENT-DISPATCH-LEDGER entries: " + ", ".join(refs)]
-    events_by_id: dict[str, list[dict[str, Any]]] = {}
     events_by_dispatch: dict[str, list[dict[str, Any]]] = {}
     for event in events:
-        for value in (event.get("dispatch_id"), event.get("event_id")):
-            if value:
-                events_by_id.setdefault(str(value), []).append(event)
-        if event.get("dispatch_id"):
-            events_by_dispatch.setdefault(str(event["dispatch_id"]), []).append(event)
-
-    successful_statuses = {"completed", "success", "succeeded", "passed"}
+        dispatch_id = str(event.get("dispatch_id") or "")
+        if dispatch_id:
+            events_by_dispatch.setdefault(dispatch_id, []).append(event)
     errors: list[str] = []
     for ref in refs:
-        matching = events_by_id.get(ref, [])
+        matching = events_by_dispatch.get(ref, [])
         if not matching:
             errors.append(f"dispatch_refs missing from AGENT-DISPATCH-LEDGER: {ref}")
             continue
-        semantic_errors: list[str] = []
+        projector = event_ledger.project_dispatch_attempt(
+            event_ledger.ProjectionInputV1(tuple(matching), "dispatch", ref)
+        )
+        semantic_errors: list[str] = list(projector.finding_codes)
         for event in matching:
-            event_errors: list[str] = []
             event_type = str(event.get("event_type") or "")
             if event_type == "dispatch_not_required":
-                event_errors.append("dispatch_not_required is invalid for applicable CP6/CP7")
-            if str(event.get("canonical_role") or "") != expected_role:
-                event_errors.append(f"canonical_role must be {expected_role}")
-            if str(event.get("checkpoint") or "") != checkpoint:
-                event_errors.append(f"checkpoint must be {checkpoint}")
-            if str(event.get("status") or "").lower() not in successful_statuses:
-                event_errors.append("status must be terminal and successful")
-
-            if event_type == "inline_fallback":
-                if str(event.get("dispatch_mode") or "") != "inline-fallback":
-                    event_errors.append("inline fallback requires dispatch_mode=inline-fallback")
-                for field in ("fallback_reason", "approved_by", "tool_name"):
-                    if not str(event.get(field) or "").strip():
-                        event_errors.append(f"inline fallback requires {field}")
+                semantic_errors.append("dispatch_not_required is invalid for applicable CP6/CP7")
+            elif event_type == "inline_fallback" and not str(event.get("approved_by") or "").strip():
+                semantic_errors.append("inline fallback requires approved_by")
             elif event_type == "dispatch":
-                if str(event.get("dispatch_mode") or "") in {"not-required", "inline-fallback"}:
-                    event_errors.append("real dispatch has incompatible dispatch_mode")
-                if not str(event.get("tool_name") or "").strip():
-                    event_errors.append("real dispatch requires tool_name")
-
-                # A real dispatch may be represented by several event rows.  The
-                # terminal row proves completion while the running/spawn row may
-                # carry the platform identity and start timestamp.  Validate the
-                # whole attempt instead of accepting or rejecting the first row.
-                dispatch_id = str(event.get("dispatch_id") or "")
-                attempt_id = str(event.get("attempt_id") or "")
-                related = events_by_dispatch.get(dispatch_id, matching) if dispatch_id else matching
-                if attempt_id:
-                    related = [candidate for candidate in related if str(candidate.get("attempt_id") or "") == attempt_id]
-                related_dispatch = [candidate for candidate in related if str(candidate.get("event_type") or "") == "dispatch"]
+                if str(event.get("dispatch_mode") or "") == "inline-fallback":
+                    semantic_errors.append("real dispatch has incompatible dispatch_mode")
+                related_dispatch = [
+                    candidate
+                    for candidate in matching
+                    if str(candidate.get("event_type") or "") == "dispatch"
+                ]
                 if not any(
                     str(candidate.get(field) or "").strip()
                     for candidate in related_dispatch
                     for field in ("agent_id", "thread_id")
                 ):
-                    event_errors.append("real dispatch requires agent_id or thread_id")
+                    semantic_errors.append("real dispatch requires agent_id or thread_id")
                 if not any(
                     str(candidate.get(field) or "").strip()
                     for candidate in related_dispatch
                     for field in ("spawned_at", "resumed_at")
                 ):
-                    event_errors.append("real dispatch requires spawned_at or resumed_at")
+                    semantic_errors.append("real dispatch requires spawned_at or resumed_at")
                 if not any(str(candidate.get("dispatch_trigger") or "").strip() for candidate in related_dispatch):
-                    event_errors.append("real dispatch requires dispatch_trigger")
-                if not str(event.get("completed_at") or "").strip():
-                    event_errors.append("successful real dispatch requires completed_at on terminal event")
-            elif event_type != "dispatch_not_required":
-                event_errors.append("event_type must be dispatch or inline_fallback")
-
-            if not event_errors:
-                break
-            semantic_errors.extend(event_errors)
-        else:
-            errors.append(f"dispatch_ref {ref} is not valid for {checkpoint}: " + "; ".join(dict.fromkeys(semantic_errors)))
+                    semantic_errors.append("real dispatch requires dispatch_trigger")
+            if str(event.get("canonical_role") or "") != expected_role:
+                semantic_errors.append(f"canonical_role must be {expected_role}")
+            if str(event.get("checkpoint") or "") != checkpoint:
+                semantic_errors.append(f"checkpoint must be {checkpoint}")
+        if not projector.terminal_success:
+            semantic_errors.append("status must be terminal and successful")
+        if semantic_errors:
+            errors.append(
+                f"dispatch_ref {ref} is not valid for {checkpoint}: "
+                + "; ".join(dict.fromkeys(semantic_errors))
+            )
     return errors
 
 
@@ -388,15 +419,10 @@ def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any])
         findings.append("LEGACY_INPUT_HASH_UNAVAILABLE: input_artifact_hashes must be non-empty")
     else:
         for ref, declared in sorted(hashes.items()):
-            path = Path(str(ref))
-            if path.is_absolute() or ".." in path.parts:
-                findings.append(f"INPUT_HASH_PATH_INVALID: {ref}")
-                continue
-            candidate = _resolve_runtime_path(root, path)
             try:
-                candidate.relative_to(root.resolve())
-            except ValueError:
-                findings.append(f"INPUT_HASH_PATH_ESCAPE: {ref}")
+                candidate = _input_artifact_path(root, str(ref))
+            except ValueError as exc:
+                findings.append(str(exc))
                 continue
             if not candidate.is_file():
                 findings.append(f"INPUT_HASH_MISSING: {ref}")
@@ -415,19 +441,20 @@ def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any])
             if event.get("dispatch_id"):
                 by_dispatch.setdefault(str(event["dispatch_id"]), []).append(event)
         for dispatch_id in refs:
-            typed = [event for event in by_dispatch.get(dispatch_id, []) if event.get("attempt_id")]
-            if not typed:
+            projected = event_ledger.project_dispatch_attempt(
+                event_ledger.ProjectionInputV1(
+                    tuple(by_dispatch.get(dispatch_id, [])),
+                    "dispatch",
+                    dispatch_id,
+                )
+            )
+            if "DISPATCH_NOT_FOUND" in projected.finding_codes or "TYPED_ATTEMPT_UNAVAILABLE" in projected.finding_codes:
                 findings.append(f"FINAL_ATTEMPT_UNAVAILABLE: {dispatch_id}")
                 continue
-            terminal = [
-                event for event in typed
-                if str(event.get("status") or "").lower() in {"completed", "success", "succeeded", "passed"}
-                and str(event.get("terminal_result") or "").upper() in {"PASS", "SUCCESS", "SUCCEEDED", "COMPLETED"}
-            ]
-            if len(terminal) != 1:
+            if not projected.terminal_success:
                 findings.append(f"FINAL_ATTEMPT_NOT_UNIQUE_SUCCESS: {dispatch_id}")
     for event in _load_checkpoint_events(root):
-        if str(event.get("result_ref") or "") != _rel(root, result_path):
+        if str(event.get("result_ref") or "") != _canonical_runtime_ref(root, result_path):
             continue
         if str(event.get("decision") or "") != str(result.get("decision") or ""):
             findings.append("CHECKPOINT_RESULT_DECISION_MISMATCH")
@@ -436,8 +463,13 @@ def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any])
 
 def _validate_derived_consistency(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    rel_result = _rel(root, result_path)
-    summary_path = result_path.with_suffix(".summary.md")
+    rel_result = _canonical_runtime_ref(root, result_path)
+    summary_ref = str(result.get("summary_ref") or "")
+    summary_path = (
+        _resolve_runtime_path(root, summary_ref)
+        if summary_ref
+        else result_path.with_suffix(".summary.md")
+    )
     decision = str(result.get("decision") or "")
     checkpoint = str(result.get("checkpoint") or result.get("checkpoint_id") or "")
     cr_id = str(result.get("cr_id") or "")
@@ -547,16 +579,16 @@ def validate_cp_result(
     check_consistency: bool = False,
     correlation_profile: str = "compat",
 ) -> tuple[list[str], list[str]]:
-    result_path = result_path.resolve()
+    root = project_root.resolve() if project_root is not None else Path.cwd().resolve()
+    result_path = _resolve_runtime_path(root, result_path)
     if not result_path.is_file():
-        return [f"CP result missing: {result_path}"], []
+        return [f"CP result missing: {_canonical_runtime_ref(root, result_path)}"], []
     errors: list[str] = []
     warnings: list[str] = []
     try:
         result = load_cp_result(result_path)
     except ValueError as exc:
         return [str(exc)], []
-    root = project_root.resolve() if project_root else result_path.parent.parent.parent
     if correlation_profile not in {"compat", "audit", "strict"}:
         return ["correlation_profile must be compat, audit or strict"], []
 
@@ -760,9 +792,20 @@ def render_summary(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_summary_file(result_path: Path, *, output: Path | None = None) -> Path:
+def render_summary_file(
+    result_path: Path,
+    *,
+    output: Path | None = None,
+    project_root: Path | None = None,
+) -> Path:
+    root = project_root.resolve() if project_root else Path.cwd().resolve()
+    result_path = _resolve_runtime_path(root, result_path)
     result = load_cp_result(result_path)
-    output_path = output.resolve() if output else result_path.with_suffix(".summary.md")
+    output_path = (
+        _resolve_runtime_path(root, output)
+        if output
+        else result_path.with_suffix(".summary.md")
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_summary(result), encoding="utf-8")
     return output_path
@@ -770,17 +813,23 @@ def render_summary_file(result_path: Path, *, output: Path | None = None) -> Pat
 
 def build_checkpoint_event(project_root: Path, result_path: Path) -> dict[str, Any]:
     root = project_root.resolve()
-    result_path = result_path.resolve()
+    result_path = _resolve_runtime_path(root, result_path)
     result = load_cp_result(result_path)
     checkpoint = str(result.get("checkpoint") or result.get("checkpoint_id") or "")
     event_id = str(result.get("event_id") or f"{checkpoint}-{result.get('story_id') or result.get('cr_id') or 'global'}")
+    summary_ref = str(result.get("summary_ref") or "")
+    summary_path = (
+        _resolve_runtime_path(root, summary_ref)
+        if summary_ref
+        else result_path.with_suffix(".summary.md")
+    )
     return {
         "event_id": event_id,
         "event_type": "checkpoint_result",
         "checkpoint": checkpoint,
         "decision": result.get("decision"),
-        "result_ref": _rel(root, result_path),
-        "summary_ref": _rel(root, result_path.with_suffix(".summary.md")),
+        "result_ref": _canonical_runtime_ref(root, result_path),
+        "summary_ref": _canonical_runtime_ref(root, summary_path),
         "story_id": result.get("story_id"),
         "cr_id": result.get("cr_id"),
         "context_ref": result.get("context_ref"),
@@ -793,9 +842,20 @@ def build_checkpoint_event(project_root: Path, result_path: Path) -> dict[str, A
 
 def append_checkpoint_ledger(project_root: Path, *, result_path: Path, ledger: Path | None = None) -> Path:
     root = project_root.resolve()
+    result_path = _resolve_runtime_path(root, result_path)
+    errors, _warnings = validate_cp_result(
+        result_path,
+        project_root=root,
+        check_consistency=False,
+        correlation_profile="compat",
+    )
+    if errors:
+        raise ValueError(
+            "checkpoint result is invalid; ledger mutation=0: " + "; ".join(errors)
+        )
     event = build_checkpoint_event(root, result_path)
     ledger_path = (
-        ledger.resolve()
+        _resolve_runtime_path(root, ledger)
         if ledger
         else _resolve_runtime_ref(root, CHECKPOINT_LEDGER_REL.as_posix())
     )
@@ -809,12 +869,9 @@ def build_applicability_aggregate(
     cr_id: str = "",
 ) -> dict[str, Any]:
     root = project_root.resolve()
-    route_plan_path = route_plan_path.resolve()
+    route_plan_path = _resolve_runtime_path(root, route_plan_path)
     route_plan = _read_json(route_plan_path)
-    try:
-        route_ref = route_plan_path.relative_to(root).as_posix()
-    except ValueError:
-        route_ref = route_plan_path.as_posix()
+    route_ref = _canonical_runtime_ref(root, route_plan_path)
     return {
         "schema_version": 1,
         "kind": "checkpoint_applicability_aggregate",
@@ -834,9 +891,11 @@ def write_applicability_aggregate(
     *,
     cr_id: str = "",
 ) -> Path:
-    aggregate = build_applicability_aggregate(project_root, route_plan_path, cr_id=cr_id)
-    _write_json(output, aggregate)
-    return output
+    root = project_root.resolve()
+    aggregate = build_applicability_aggregate(root, route_plan_path, cr_id=cr_id)
+    output_path = _resolve_runtime_path(root, output)
+    _write_json(output_path, aggregate)
+    return output_path
 
 
 def validate_applicability_aggregate(
@@ -846,6 +905,7 @@ def validate_applicability_aggregate(
     root = project_root.resolve()
     errors: list[str] = []
     warnings: list[str] = []
+    aggregate_path = _resolve_runtime_path(root, aggregate_path)
     if not aggregate_path.is_file():
         return [f"applicability aggregate missing: {aggregate_path}"], warnings
     try:
@@ -882,15 +942,17 @@ def validate_applicability_aggregate(
 
 def _print_cp_help() -> None:
     print(
-        "usage: meta-flow cp <result-check|render-summary|ledger-append|applicability-build|applicability-check> [options]\n\n"
+        "usage: meta-flow cp <result-check|input-hashes|render-summary|ledger-append|applicability-build|applicability-check> [options]\n\n"
         "Commands:\n"
         "  result-check    Validate a machine-readable CP result JSON.\n"
+        "  input-hashes    Build native file-byte digests for CP strict correlation.\n"
         "  render-summary  Render a compact Markdown summary from CP result JSON.\n"
         "  ledger-append   Append a checkpoint_result event to CHECKPOINT-LEDGER.ndjson.\n\n"
         "  applicability-build  Build a CP8 checkpoint applicability aggregate from a route plan.\n"
         "  applicability-check  Validate a CP8 checkpoint applicability aggregate against its route plan.\n\n"
         "Examples:\n"
         "  meta-flow cp result-check --result process/checks/CP6-STORY.result.json --project-root .\n"
+        "  meta-flow cp input-hashes --project-root . --ref process/returns/STORY.CP6.return.json --ref process/evidence/STORY.CP6.index.json\n"
         "  meta-flow cp result-check --result process/checks/CP6-STORY.result.json --project-root . --mode silent\n"
         "  meta-flow cp result-check --result process/checks/CP8-CR.result.json --project-root . --check-consistency\n"
         "  meta-flow cp render-summary --result process/checks/CP6-STORY.result.json\n"
@@ -932,13 +994,31 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"- ERROR: {error}")
         return 1 if errors else 0
+    if command == "input-hashes":
+        parser = argparse.ArgumentParser(prog="meta-flow cp input-hashes")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--ref", dest="refs", action="append", default=[])
+        parsed = parser.parse_args(args[1:])
+        try:
+            payload = build_input_artifact_hashes(parsed.project_root, parsed.refs)
+        except ValueError as exc:
+            print("CP Input Hashes: BLOCKED")
+            print(f"- {exc}")
+            return 2
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
     if command == "render-summary":
         parser = argparse.ArgumentParser(prog="meta-flow cp render-summary")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
         parser.add_argument("--result", dest="result_path", type=Path, required=True)
         parser.add_argument("--output", type=Path, default=None)
         parsed = parser.parse_args(args[1:])
-        path = render_summary_file(parsed.result_path, output=parsed.output)
-        print(f"wrote: {path}")
+        path = render_summary_file(
+            parsed.result_path,
+            output=parsed.output,
+            project_root=parsed.project_root,
+        )
+        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "ledger-append":
         parser = argparse.ArgumentParser(prog="meta-flow cp ledger-append")
@@ -947,7 +1027,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--ledger", type=Path, default=None)
         parsed = parser.parse_args(args[1:])
         path = append_checkpoint_ledger(parsed.project_root, result_path=parsed.result_path, ledger=parsed.ledger)
-        print(f"appended: {path}")
+        print(f"appended: {_canonical_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "applicability-build":
         parser = argparse.ArgumentParser(prog="meta-flow cp applicability-build")
@@ -962,7 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
             parsed.output,
             cr_id=parsed.cr_id,
         )
-        print(f"wrote: {path}")
+        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "applicability-check":
         parser = argparse.ArgumentParser(prog="meta-flow cp applicability-check")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -18,7 +19,9 @@ from meta_flow.project.onboarding_contract import (
     OnboardingAuthorization,
 )
 from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.state import current
+from meta_flow.work.scope import WorkScope
 from meta_flow.workflow import cr_lifecycle
 
 
@@ -100,8 +103,208 @@ risk_refs: [RISK-001]
     return path
 
 
+def write_termination_fixture(
+    root: Path,
+    *,
+    cr_id: str = "CR-101",
+    work_id: str = "WORK-101",
+) -> tuple[Path, Path, Path, WorkScope]:
+    release, process = init_binding_project(root)
+    subprocess.run(
+        ["git", "add", "--all"],
+        cwd=process,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Meta Flow Test",
+            "-c",
+            "user.email=meta-flow@example.invalid",
+            "commit",
+            "-m",
+            "initial process truth",
+        ],
+        cwd=process,
+        check=True,
+        capture_output=True,
+    )
+    cr_path = write_cr(release, cr_id)
+    phase_ref = "phases/P1-termination/PHASE.yaml"
+    work_ref = f"works/{work_id}/WORK.yaml"
+    scope = WorkScope(
+        version=1,
+        allowed_reads=(
+            "PROJECT.yaml",
+            phase_ref,
+            work_ref,
+            "archive/**",
+            "changes/**",
+            "state/**",
+        ),
+        allowed_writes=(
+            "PROJECT.yaml",
+            phase_ref,
+            work_ref,
+            "archive/**",
+            "changes/**",
+            "state/**",
+        ),
+        required_checks=("cr-termination",),
+    )
+    release_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=release,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    process_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=process,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    project = load_yaml_object(process / "PROJECT.yaml")
+    project["active_phase_ref"] = phase_ref
+    project["active_work_refs"] = [work_ref]
+    (process / "PROJECT.yaml").write_text(
+        dump_yaml(project) + "\n",
+        encoding="utf-8",
+    )
+    phase_path = process / phase_ref
+    phase_path.parent.mkdir(parents=True, exist_ok=True)
+    phase_path.write_text(
+        dump_yaml(
+            {
+                "schema_version": 1,
+                "project_id": "fixture",
+                "phase_id": "P1-termination",
+                "objective": "验证原生 CR 终止事务",
+                "status": "active",
+                "work_refs": [work_ref],
+                "result_refs": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    work_path = process / work_ref
+    work_path.parent.mkdir(parents=True, exist_ok=True)
+    work_path.write_text(
+        dump_yaml(
+            {
+                "schema_version": 1,
+                "work_id": work_id,
+                "project_id": "fixture",
+                "kind": "cr",
+                "objective": "验证原生 CR 终止事务",
+                "status": "active",
+                "request_ref": f"works/{work_id}/REQUEST.md",
+                "request_confirmed": True,
+                "phase_ref": phase_ref,
+                "risk_profile": "G2",
+                "risk_reason_codes": ["PUBLIC_CONTRACT"],
+                "required_gates": ["GATE-DESIGN"],
+                "scope": scope.as_dict(),
+                "scope_digest": scope.digest,
+                "budget": {
+                    "reads": 20,
+                    "writes": 20,
+                    "check_groups": 4,
+                    "tokens": 100000,
+                },
+                "usage_ref": f"works/{work_id}/USAGE.json",
+                "base_oids": {
+                    "release": release_oid,
+                    "process": process_oid,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    request_path = process / "works" / work_id / "REQUEST.md"
+    request_path.write_text("# fixture\n", encoding="utf-8")
+    return release, process, cr_path, scope
+
+
+def termination_authorization(
+    plan: cr_lifecycle.TerminationPlan,
+    *,
+    authorization_id: str = "AUTH-TERMINATE-001",
+) -> cr_lifecycle.TerminationAuthorization:
+    return cr_lifecycle.TerminationAuthorization(
+        schema_version=1,
+        authorization_id=authorization_id,
+        authorization_source=cr_lifecycle.TERMINATION_AUTHORIZATION_SOURCE,
+        authorization_kind=cr_lifecycle.TERMINATION_AUTHORIZATION_KIND,
+        operation=cr_lifecycle.TERMINATION_OPERATION,
+        cr_id=plan.cr_id,
+        work_id=plan.work_id,
+        termination_reason=plan.termination_reason,
+        terminal_tuple=plan.terminal_tuple,
+        expected_release_oid=plan.expected_facts["target_release_oid"],
+        expected_process_oid=plan.expected_facts["process_head_oid"],
+        scope_digest=plan.scope_digest,
+        plan_digest=plan.plan_digest,
+        expires_at="2099-01-01T00:00:00+00:00",
+        single_use=True,
+    )
+
+
+def status_sync_authorization(
+    plan: cr_lifecycle.StatusSyncPlan,
+    *,
+    authorization_id: str = "AUTH-STATUS-SYNC-001",
+) -> cr_lifecycle.StatusSyncAuthorization:
+    return cr_lifecycle.StatusSyncAuthorization(
+        schema_version=1,
+        authorization_id=authorization_id,
+        authorization_source=cr_lifecycle.STATUS_SYNC_AUTHORIZATION_SOURCE,
+        authorization_kind=cr_lifecycle.STATUS_SYNC_AUTHORIZATION_KIND,
+        operation=cr_lifecycle.STATUS_SYNC_OPERATION,
+        cr_id=plan.cr_id,
+        work_id=plan.work_id,
+        desired_transition=plan.desired_transition,
+        effective_at=plan.effective_at,
+        expected_release_oid=plan.expected_facts["release_head_oid"],
+        expected_process_oid=plan.expected_facts["process_head_oid"],
+        scope_digest=plan.scope_digest,
+        targets=[target.as_dict() for target in plan.targets],
+        plan_digest=plan.plan_digest,
+        expires_at="2099-01-01T00:00:00+00:00",
+        single_use=True,
+    )
+
+
+def apply_ready_status_sync(
+    root: Path,
+    plan: cr_lifecycle.StatusSyncPlan,
+    *,
+    authorization_id: str = "AUTH-STATUS-SYNC-001",
+    **kwargs: object,
+) -> dict[str, object]:
+    return cr_lifecycle.apply_status_sync(
+        root,
+        plan,
+        authorization=status_sync_authorization(
+            plan,
+            authorization_id=authorization_id,
+        ),
+        expected_plan_digest=plan.plan_digest,
+        **kwargs,
+    )
+
+
 def write_feature_registry(root: Path) -> Path:
-    path = root / "docs" / "design" / "FEATURE-REGISTRY.yaml"
+    path = _resolve_runtime_ref(
+        root,
+        "process/docs/design/FEATURE-REGISTRY.yaml",
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -133,7 +336,10 @@ def write_feature_registry(root: Path) -> Path:
 
 
 def write_capability_registry(root: Path, *, status: str = "active") -> Path:
-    path = root / "docs" / "design" / "CAPABILITY-REGISTRY.yaml"
+    path = _resolve_runtime_ref(
+        root,
+        "process/docs/design/CAPABILITY-REGISTRY.yaml",
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -215,8 +421,11 @@ class CRLifecycleTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            release, process = init_binding_project(Path(directory))
-            cr_path = write_cr(release, "CR-055")
+            release, process, cr_path, _scope = write_termination_fixture(
+                Path(directory),
+                cr_id="CR-055",
+                work_id="WORK-055",
+            )
             cr_path.chmod(0o644)
             plan = cr_lifecycle.plan_status_sync(
                 release,
@@ -224,9 +433,11 @@ class CRLifecycleTests(unittest.TestCase):
                 status="closed",
                 readiness="READY_WITH_RISK",
                 gate_status="cp8_closed",
+                work_id="WORK-055",
+                effective_at="2026-07-27T00:00:00+00:00",
             )
 
-            result = cr_lifecycle.apply_status_sync(release, plan)
+            result = apply_ready_status_sync(release, plan)
 
             self.assertEqual("PASS", result["status"])
             self.assertEqual([], cr_lifecycle.collect_check_errors(release))
@@ -700,57 +911,159 @@ class CRLifecycleTests(unittest.TestCase):
 
     def test_close_writes_summary_evidence_index_and_ledger_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            write_cr(root, "CR-101")
-
-            exit_code = cr_lifecycle.main(
-                ["close", "--id", "CR-101", "--readiness", "READY_WITH_RISK", "--project-root", str(root)]
+            release, process, cr_path, _scope = write_termination_fixture(
+                Path(directory)
             )
+            process_oid = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=process,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            effective_at = "2026-07-27T01:02:03+00:00"
+            before_text = cr_path.read_text(encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                dry_run_exit = cr_lifecycle.main(
+                    [
+                        "close",
+                        "--id",
+                        "CR-101",
+                        "--readiness",
+                        "READY_WITH_RISK",
+                        "--work-id",
+                        "WORK-101",
+                        "--effective-at",
+                        effective_at,
+                        "--expected-process-oid",
+                        process_oid,
+                        "--project-root",
+                        str(release),
+                    ]
+                )
+            payload = json.loads(output.getvalue())
+            self.assertEqual(before_text, cr_path.read_text(encoding="utf-8"))
+            plan = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="cp8_closed",
+                work_id="WORK-101",
+                effective_at=effective_at,
+                expected_process_oid=process_oid,
+            )
+            authorization = status_sync_authorization(plan)
+            authorization_path = Path(directory) / "authorization.json"
+            authorization_path.write_text(
+                json.dumps(authorization.__dict__, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            apply_output = StringIO()
+            with redirect_stdout(apply_output):
+                apply_exit = cr_lifecycle.main(
+                    [
+                        "close",
+                        "--id",
+                        "CR-101",
+                        "--readiness",
+                        "READY_WITH_RISK",
+                        "--work-id",
+                        "WORK-101",
+                        "--effective-at",
+                        effective_at,
+                        "--expected-process-oid",
+                        process_oid,
+                        "--expected-plan-digest",
+                        plan.plan_digest,
+                        "--authorization-file",
+                        str(authorization_path),
+                        "--apply",
+                        "--project-root",
+                        str(release),
+                    ]
+                )
 
-            self.assertEqual(0, exit_code)
+            self.assertEqual(0, dry_run_exit)
+            self.assertEqual(0, payload["mutation_count"])
+            self.assertEqual(5, payload["planned_mutation_count"])
+            self.assertEqual(0, apply_exit, apply_output.getvalue())
             summary = json.loads(
-                (root / "process" / "changes" / "summaries" / "CR-101.summary.json").read_text(encoding="utf-8")
+                (
+                    process
+                    / "changes"
+                    / "summaries"
+                    / "CR-101.summary.json"
+                ).read_text(encoding="utf-8")
             )
             self.assertEqual("closed", summary["status"])
             self.assertEqual("READY_WITH_RISK", summary["readiness"])
             self.assertEqual("cp8_closed", summary["gate_status"])
-            formal_text = (root / "process/changes/CR-101.md").read_text(encoding="utf-8")
+            formal_text = cr_path.read_text(encoding="utf-8")
             self.assertIn('lifecycle_status: "closed"', formal_text)
             self.assertIn('gate_status: "cp8_closed"', formal_text)
-            index = json.loads((root / "process/changes/CR-INDEX.json").read_text(encoding="utf-8"))
+            index = json.loads(
+                (process / "changes" / "CR-INDEX.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             self.assertEqual("cp8_closed", index["items"][0]["gate_status"])
-            self.assertTrue((root / "process" / "archive" / "CR-101" / "evidence-index.json").is_file())
+            self.assertTrue(
+                (process / "archive" / "CR-101" / "evidence-index.json").is_file()
+            )
             events = [
                 json.loads(line)
-                for line in (root / "process" / "state" / "CR-LEDGER.ndjson").read_text(encoding="utf-8").splitlines()
+                for line in (
+                    process / "state" / "CR-LEDGER.ndjson"
+                ).read_text(encoding="utf-8").splitlines()
             ]
-            self.assertEqual("closed", events[0]["event"])
+            self.assertEqual("status_sync", events[0]["event"])
             self.assertEqual("process/changes/summaries/CR-101.summary.json", events[0]["summary_ref"])
 
     def test_status_sync_updates_frontmatter_summary_index_ledger_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            current.write_current_state(root, current.default_current_state(root))
+            release, process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            current.write_current_state(
+                release,
+                current.default_current_state(release),
+            )
             current.update_current_state(
-                root,
+                release,
                 {
                     "active_change": "CR-101",
                     "current_phase": "documentation",
                     "next_action": {"type": "await_user", "text": "review CP8"},
                 },
             )
-            write_cr(root, "CR-101", status="active")
-
-            paths = cr_lifecycle.sync_cr_status(
-                root,
+            effective_at = "2026-07-27T02:00:00+00:00"
+            plan = cr_lifecycle.plan_status_sync(
+                release,
                 "CR-101",
                 status="closed",
                 readiness="READY_WITH_RISK",
                 gate_status="cp8_closed",
+                work_id="WORK-101",
+                effective_at=effective_at,
+            )
+            paths = cr_lifecycle.sync_cr_status(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="cp8_closed",
+                work_id="WORK-101",
+                effective_at=effective_at,
+                expected_plan_digest=plan.plan_digest,
+                authorization=status_sync_authorization(plan),
             )
 
             self.assertTrue(paths["summary"].is_file())
-            text = (root / "process" / "changes" / "CR-101.md").read_text(encoding="utf-8")
+            text = (process / "changes" / "CR-101.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn('lifecycle_status: "closed"', text)
             self.assertIn('readiness_status: "READY_WITH_RISK"', text)
             self.assertIn('gate_status: "cp8_closed"', text)
@@ -760,11 +1073,11 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual("cp8_closed", summary["gate_status"])
             index = json.loads(paths["index"].read_text(encoding="utf-8"))
             self.assertEqual("closed", index["items"][0]["status"])
-            state = current.load_current_state(root)
+            state = current.load_current_state(release)
             self.assertIsNone(state["active_change"])
             self.assertEqual("delivered", state["current_phase"])
             self.assertEqual("delivered", state["next_action"]["stop_reason"])
-            events = cr_lifecycle.load_ledger_events(root)
+            events = cr_lifecycle.load_ledger_events(release)
             self.assertEqual("status_sync", events[-1]["event"])
 
     def test_status_sync_projects_body_status_and_checkpoint_in_same_transaction(self) -> None:
@@ -783,7 +1096,7 @@ class CRLifecycleTests(unittest.TestCase):
 | 门禁状态 | cp3_pending |
 | 门禁模板 | architecture-major |
 
-## Checkpoint Index
+## 8. Checkpoint Index
 
 | CP | 状态 | 机器结果 ref |
 |---|---|---|
@@ -820,19 +1133,177 @@ class CRLifecycleTests(unittest.TestCase):
                 ),
             )
 
-    def test_status_sync_closed_defaults_gate_status_to_cp8_closed(self) -> None:
+    def test_status_sync_projects_canonical_checkpoint_result_without_regressing_pending_gate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            write_cr(root, "CR-101", status="active")
+            cr_path = write_cr(root, "CR-101", status="active")
+            cr_path.write_text(
+                cr_path.read_text(encoding="utf-8")
+                + """
+## Checkpoint Index
 
-            paths = cr_lifecycle.sync_cr_status(
+| CP | 状态 | 机器结果 ref |
+|---|---|---|
+| CP7 | pending | process/checks/CP7-CR-101-AGGREGATE.result.json |
+| CP8 | pending | process/checks/CP8-CR-101-DELIVERY.result.json |
+""",
+                encoding="utf-8",
+            )
+            result_path = root / "process/checks/CP7-CR-101-AGGREGATE.result.json"
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "checkpoint": "CP7",
+                        "decision": "PASS",
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            plan = cr_lifecycle.plan_status_sync(
                 root,
+                "CR-101",
+                status="active",
+                readiness="NOT_READY",
+                gate_status="cp8_pending",
+            )
+
+            self.assertEqual("READY", plan.decision)
+            formal_target = next(
+                target for target in plan.targets if target.ref == "process/changes/CR-101.md"
+            )
+            self.assertIn(
+                "| CP7 | PASS | process/checks/CP7-CR-101-AGGREGATE.result.json |",
+                formal_target.after,
+            )
+            self.assertIn(
+                "| CP8 | pending | process/checks/CP8-CR-101-DELIVERY.result.json |",
+                formal_target.after,
+            )
+
+    def test_status_sync_same_tuple_and_projection_is_no_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            effective_at = "2026-07-27T03:00:00+00:00"
+            initial = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                status="active",
+                readiness="NOT_READY",
+                gate_status="cp8_pending",
+                work_id="WORK-101",
+                effective_at=effective_at,
+            )
+            paths = cr_lifecycle.sync_cr_status(
+                release,
+                "CR-101",
+                status="active",
+                readiness="NOT_READY",
+                gate_status="cp8_pending",
+                work_id="WORK-101",
+                effective_at=effective_at,
+                expected_plan_digest=initial.plan_digest,
+                authorization=status_sync_authorization(initial),
+            )
+            ledger_before = paths["ledger"].read_bytes()
+
+            plan = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                status="active",
+                readiness="NOT_READY",
+                gate_status="cp8_pending",
+                work_id="WORK-101",
+                effective_at=effective_at,
+            )
+            result = cr_lifecycle.apply_status_sync(release, plan)
+
+            self.assertEqual("NO_CHANGE", plan.decision)
+            self.assertEqual("NO_CHANGE", result["status"])
+            self.assertEqual(0, result["mutation_count"])
+            self.assertEqual(ledger_before, paths["ledger"].read_bytes())
+
+    def test_status_sync_no_change_ignores_unrelated_paired_dirty_path_growth(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            effective_at = "2026-07-27T04:00:00+00:00"
+            initial = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                status="active",
+                readiness="NOT_READY",
+                gate_status="cp8_pending",
+                work_id="WORK-101",
+                effective_at=effective_at,
+            )
+            paths = cr_lifecycle.sync_cr_status(
+                release,
+                "CR-101",
+                status="active",
+                readiness="NOT_READY",
+                gate_status="cp8_pending",
+                work_id="WORK-101",
+                effective_at=effective_at,
+                expected_plan_digest=initial.plan_digest,
+                authorization=status_sync_authorization(initial),
+            )
+            ledger_before = paths["ledger"].read_bytes()
+            unrelated = process / "checks/UNRELATED.result.json"
+            unrelated.parent.mkdir(parents=True, exist_ok=True)
+            unrelated.write_text('{"decision":"PASS"}\n', encoding="utf-8")
+
+            plan = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                status="active",
+                readiness="NOT_READY",
+                gate_status="cp8_pending",
+                work_id="WORK-101",
+                effective_at=effective_at,
+            )
+            result = cr_lifecycle.apply_status_sync(release, plan)
+
+            self.assertEqual("NO_CHANGE", plan.decision)
+            self.assertEqual("NO_CHANGE", result["status"])
+            self.assertEqual(0, result["mutation_count"])
+            self.assertEqual(ledger_before, paths["ledger"].read_bytes())
+
+    def test_status_sync_closed_defaults_gate_status_to_cp8_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            effective_at = "2026-07-27T05:00:00+00:00"
+            plan = cr_lifecycle.plan_status_sync(
+                release,
                 "CR-101",
                 status="closed",
                 readiness="READY",
+                work_id="WORK-101",
+                effective_at=effective_at,
+            )
+            paths = cr_lifecycle.sync_cr_status(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY",
+                work_id="WORK-101",
+                effective_at=effective_at,
+                expected_plan_digest=plan.plan_digest,
+                authorization=status_sync_authorization(plan),
             )
 
-            text = (root / "process/changes/CR-101.md").read_text(encoding="utf-8")
+            text = (process / "changes" / "CR-101.md").read_text(
+                encoding="utf-8"
+            )
             self.assertIn('gate_status: "cp8_closed"', text)
             summary = json.loads(paths["summary"].read_text(encoding="utf-8"))
             self.assertEqual("cp8_closed", summary["gate_status"])
@@ -873,6 +1344,159 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertFalse((root / "process/changes/CR-INDEX.json").exists())
             self.assertEqual("READY", json.loads(output.getvalue())["decision"])
 
+    def test_status_sync_frozen_effective_at_produces_byte_identical_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            inputs = {
+                "status": "closed",
+                "readiness": "READY_WITH_RISK",
+                "gate_status": "cp8_closed",
+                "work_id": "WORK-101",
+                "effective_at": "2026-07-27T11:00:00+00:00",
+            }
+
+            first = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                **inputs,
+            )
+            second = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                **inputs,
+            )
+            changed_time = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                **{
+                    **inputs,
+                    "effective_at": "2026-07-27T11:00:01+00:00",
+                },
+            )
+
+            first_bytes = json.dumps(
+                first.as_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            second_bytes = json.dumps(
+                second.as_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            self.assertEqual(first_bytes, second_bytes)
+            self.assertEqual(first.plan_digest, second.plan_digest)
+            self.assertNotEqual(first.plan_digest, changed_time.plan_digest)
+            self.assertEqual(0, first.as_dict()["mutation_count"])
+            self.assertEqual(5, first.as_dict()["planned_mutation_count"])
+
+    def test_status_sync_typed_authorization_fail_closed_and_single_use(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            before = cr_path.read_bytes()
+            plan = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="cp8_closed",
+                work_id="WORK-101",
+                effective_at="2026-07-27T12:00:00+00:00",
+            )
+            authorization = status_sync_authorization(plan)
+            wrong_payload = dict(authorization.__dict__)
+            wrong_payload["expected_release_oid"] = "0" * 40
+            wrong = cr_lifecycle.StatusSyncAuthorization.from_dict(
+                wrong_payload
+            )
+
+            missing = cr_lifecycle.apply_status_sync(
+                release,
+                plan,
+                expected_plan_digest=plan.plan_digest,
+            )
+            wrong_digest = cr_lifecycle.apply_status_sync(
+                release,
+                plan,
+                authorization=authorization,
+                expected_plan_digest="0" * 64,
+            )
+            wrong_authorization = cr_lifecycle.apply_status_sync(
+                release,
+                plan,
+                authorization=wrong,
+                expected_plan_digest=plan.plan_digest,
+            )
+            first_attempt = cr_lifecycle.apply_status_sync(
+                release,
+                plan,
+                authorization=authorization,
+                expected_plan_digest=plan.plan_digest,
+                _fault="before-first-replace",
+            )
+            replay = cr_lifecycle.apply_status_sync(
+                release,
+                plan,
+                authorization=authorization,
+                expected_plan_digest=plan.plan_digest,
+            )
+
+            self.assertEqual("BLOCKED", missing["status"])
+            self.assertEqual("BLOCKED", wrong_digest["status"])
+            self.assertEqual("BLOCKED", wrong_authorization["status"])
+            self.assertEqual("BLOCKED", first_attempt["status"])
+            self.assertEqual("BLOCKED", replay["status"])
+            self.assertIn("already consumed", replay["reason"])
+            self.assertEqual(before, cr_path.read_bytes())
+            self.assertTrue(
+                all(
+                    result["mutation_count"] == 0
+                    for result in (
+                        missing,
+                        wrong_digest,
+                        wrong_authorization,
+                        first_attempt,
+                        replay,
+                    )
+                )
+            )
+
+    def test_status_sync_authorization_unknown_field_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            plan = cr_lifecycle.plan_status_sync(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="cp8_closed",
+                work_id="WORK-101",
+                effective_at="2026-07-27T13:00:00+00:00",
+            )
+            payload = dict(status_sync_authorization(plan).__dict__)
+            payload["unknown"] = True
+            authorization_path = Path(directory) / "authorization.json"
+            authorization_path.write_text(
+                json.dumps(payload, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "fields mismatch",
+            ):
+                cr_lifecycle.load_status_sync_authorization(
+                    authorization_path
+                )
+
     def test_status_sync_fault_points_recover_before_index_is_written(self) -> None:
         fault_expectations = {
             "before-first-replace": "BLOCKED",
@@ -884,35 +1508,46 @@ class CRLifecycleTests(unittest.TestCase):
         }
         for fault, expected in fault_expectations.items():
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                cr_path = write_cr(root, "CR-101", status="active")
+                root, _process, cr_path, _scope = write_termination_fixture(
+                    Path(directory)
+                )
                 before = cr_path.read_text(encoding="utf-8")
                 plan = cr_lifecycle.plan_status_sync(
                     root,
                     "CR-101",
                     status="closed",
                     readiness="READY_WITH_RISK",
+                    work_id="WORK-101",
+                    effective_at="2026-07-27T06:00:00+00:00",
                 )
 
-                result = cr_lifecycle.apply_status_sync(root, plan, _fault=fault)
+                result = apply_ready_status_sync(root, plan, _fault=fault)
 
                 self.assertEqual(expected, result["status"])
                 self.assertEqual(before, cr_path.read_text(encoding="utf-8"))
-                self.assertFalse((root / "process/changes/CR-INDEX.json").exists())
+                self.assertFalse(
+                    _resolve_runtime_ref(
+                        root,
+                        "process/changes/CR-INDEX.json",
+                    ).exists()
+                )
 
     def test_status_sync_partial_is_queryable_and_explicit_rollback_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cr_path = write_cr(root, "CR-101", status="active")
+            root, _process, cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
             before = cr_path.read_text(encoding="utf-8")
             plan = cr_lifecycle.plan_status_sync(
                 root,
                 "CR-101",
                 status="closed",
                 readiness="READY_WITH_RISK",
+                work_id="WORK-101",
+                effective_at="2026-07-27T07:00:00+00:00",
             )
 
-            partial = cr_lifecycle.apply_status_sync(
+            partial = apply_ready_status_sync(
                 root,
                 plan,
                 _fault="after-receipt-before-next",
@@ -933,15 +1568,18 @@ class CRLifecycleTests(unittest.TestCase):
 
     def test_status_sync_recovery_blocks_competing_writer_and_releases_only_its_owner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            write_cr(root, "CR-101", status="active")
+            root, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
             plan = cr_lifecycle.plan_status_sync(
                 root,
                 "CR-101",
                 status="closed",
                 readiness="READY_WITH_RISK",
+                work_id="WORK-101",
+                effective_at="2026-07-27T08:00:00+00:00",
             )
-            partial = cr_lifecycle.apply_status_sync(
+            partial = apply_ready_status_sync(
                 root,
                 plan,
                 _fault="after-receipt-before-next",
@@ -985,15 +1623,18 @@ class CRLifecycleTests(unittest.TestCase):
 
     def test_status_sync_recovery_does_not_auto_remove_stale_owner_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            write_cr(root, "CR-101", status="active")
+            root, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
             plan = cr_lifecycle.plan_status_sync(
                 root,
                 "CR-101",
                 status="closed",
                 readiness="READY_WITH_RISK",
+                work_id="WORK-101",
+                effective_at="2026-07-27T09:00:00+00:00",
             )
-            partial = cr_lifecycle.apply_status_sync(
+            partial = apply_ready_status_sync(
                 root,
                 plan,
                 _fault="after-receipt-before-next",
@@ -1019,6 +1660,388 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual("BLOCKED", blocked["status"])
             self.assertTrue(lock_path.is_file())
             self.assertTrue(cr_lifecycle._release_status_sync_writer_lock(root, owner))
+
+    def test_terminate_dry_run_supports_both_native_tuples_and_mutates_nothing(
+        self,
+    ) -> None:
+        for termination_status in ("cancelled", "superseded"):
+            with self.subTest(status=termination_status), tempfile.TemporaryDirectory() as directory:
+                release, process, cr_path, scope = write_termination_fixture(
+                    Path(directory)
+                )
+                before = cr_path.read_text(encoding="utf-8")
+                process_oid = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=process,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                output = StringIO()
+
+                with redirect_stdout(output):
+                    exit_code = cr_lifecycle.main(
+                        [
+                            "terminate",
+                            "--id",
+                            "CR-101",
+                            "--work-id",
+                            "WORK-101",
+                            "--status",
+                            termination_status,
+                            "--reason",
+                            "由替代路线接管",
+                            "--expected-process-oid",
+                            process_oid,
+                            "--project-root",
+                            str(release),
+                        ]
+                    )
+
+                payload = json.loads(output.getvalue())
+                self.assertEqual(0, exit_code)
+                self.assertEqual("READY", payload["decision"])
+                self.assertEqual(
+                    {
+                        "lifecycle_status": termination_status,
+                        "readiness_status": "n/a",
+                        "gate_status": "closed",
+                    },
+                    payload["terminal_tuple"],
+                )
+                self.assertEqual(0, payload["mutation_count"])
+                self.assertEqual(7, payload["planned_mutation_count"])
+                self.assertEqual(scope.digest, payload["scope_digest"])
+                self.assertNotIn(
+                    "process/state/STATE.current.json",
+                    payload["mutation_allowlist"],
+                )
+                self.assertEqual(before, cr_path.read_text(encoding="utf-8"))
+                self.assertFalse((process / "changes" / "CR-INDEX.json").exists())
+                self.assertNotIn(str(process), output.getvalue())
+
+    def test_terminate_apply_projects_cr_work_project_phase_summary_ledger_and_index(
+        self,
+    ) -> None:
+        for termination_status in ("cancelled", "superseded"):
+            with self.subTest(status=termination_status), tempfile.TemporaryDirectory() as directory:
+                release, process, _cr_path, _scope = write_termination_fixture(
+                    Path(directory)
+                )
+                plan = cr_lifecycle.plan_cr_termination(
+                    release,
+                    "CR-101",
+                    work_id="WORK-101",
+                    termination_status=termination_status,
+                    termination_reason="由替代路线接管",
+                )
+                authorization = termination_authorization(
+                    plan,
+                    authorization_id=f"AUTH-{termination_status.upper()}",
+                )
+
+                result = cr_lifecycle.apply_cr_termination(
+                    release,
+                    plan,
+                    authorization=authorization,
+                    expected_plan_digest=plan.plan_digest,
+                )
+
+                self.assertEqual("PASS", result["status"])
+                self.assertEqual(7, result["mutation_count"])
+                fields = cr_lifecycle.parse_frontmatter(
+                    (
+                        process / "changes" / "CR-101.md"
+                    ).read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    (
+                        termination_status,
+                        "n/a",
+                        "closed",
+                    ),
+                    (
+                        fields["lifecycle_status"],
+                        fields["readiness_status"],
+                        fields["gate_status"],
+                    ),
+                )
+                work = load_yaml_object(
+                    process / "works" / "WORK-101" / "WORK.yaml"
+                )
+                project = load_yaml_object(process / "PROJECT.yaml")
+                phase = load_yaml_object(
+                    process
+                    / "phases"
+                    / "P1-termination"
+                    / "PHASE.yaml"
+                )
+                summary = json.loads(
+                    (
+                        process
+                        / "changes"
+                        / "summaries"
+                        / "CR-101.summary.json"
+                    ).read_text(encoding="utf-8")
+                )
+                index = json.loads(
+                    (
+                        process / "changes" / "CR-INDEX.json"
+                    ).read_text(encoding="utf-8")
+                )
+                ledger = [
+                    json.loads(line)
+                    for line in (
+                        process / "state" / "CR-LEDGER.ndjson"
+                    )
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                    if line.strip()
+                ]
+                self.assertEqual("cancelled", work["status"])
+                self.assertEqual([], project.get("active_work_refs", []))
+                self.assertEqual([], phase["work_refs"])
+                self.assertEqual(termination_status, summary["status"])
+                self.assertEqual("n/a", summary["readiness"])
+                self.assertEqual("closed", summary["gate_status"])
+                self.assertEqual(
+                    termination_status,
+                    index["items"][0]["lifecycle_status"],
+                )
+                self.assertEqual("n/a", index["items"][0]["readiness_status"])
+                self.assertEqual("closed", index["items"][0]["gate_status"])
+                self.assertEqual("cr_termination", ledger[-1]["event_type"])
+                self.assertEqual(termination_status, ledger[-1]["status"])
+                repeated = cr_lifecycle.plan_cr_termination(
+                    release,
+                    "CR-101",
+                    work_id="WORK-101",
+                    termination_status=termination_status,
+                    termination_reason="由替代路线接管",
+                )
+                self.assertEqual("NO_CHANGE", repeated.decision)
+                no_change = cr_lifecycle.apply_cr_termination(
+                    release,
+                    repeated,
+                    authorization=authorization,
+                    expected_plan_digest=repeated.plan_digest,
+                )
+                self.assertEqual("NO_CHANGE", no_change["status"])
+                self.assertEqual(0, no_change["mutation_count"])
+
+    def test_terminate_rejects_illegal_tuple_process_oid_and_plan_digest_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            illegal = cr_lifecycle.plan_cr_termination(
+                release,
+                "CR-101",
+                work_id="WORK-101",
+                termination_status="closed",
+                termination_reason="非法枚举",
+            )
+            oid_drift = cr_lifecycle.plan_cr_termination(
+                release,
+                "CR-101",
+                work_id="WORK-101",
+                termination_status="cancelled",
+                termination_reason="由替代路线接管",
+                expected_process_oid="0" * 40,
+            )
+            plan = cr_lifecycle.plan_cr_termination(
+                release,
+                "CR-101",
+                work_id="WORK-101",
+                termination_status="cancelled",
+                termination_reason="由替代路线接管",
+            )
+            authorization = termination_authorization(plan)
+
+            digest_drift = cr_lifecycle.apply_cr_termination(
+                release,
+                plan,
+                authorization=authorization,
+                expected_plan_digest="0" * 64,
+            )
+
+            self.assertEqual("BLOCKED", illegal.decision)
+            self.assertEqual("BLOCKED", oid_drift.decision)
+            self.assertEqual("BLOCKED", digest_drift["status"])
+            self.assertIn("plan digest", digest_drift["reason"])
+
+    def test_terminate_apply_rejects_missing_wrong_unknown_and_replayed_authorization(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            plan = cr_lifecycle.plan_cr_termination(
+                release,
+                "CR-101",
+                work_id="WORK-101",
+                termination_status="cancelled",
+                termination_reason="由替代路线接管",
+            )
+            authorization = termination_authorization(plan)
+            missing = cr_lifecycle.apply_cr_termination(
+                release,
+                plan,
+                authorization=None,
+                expected_plan_digest=plan.plan_digest,
+            )
+            wrong = cr_lifecycle.TerminationAuthorization(
+                **{
+                    **authorization.__dict__,
+                    "expected_process_oid": "0" * 40,
+                }
+            )
+            wrong_result = cr_lifecycle.apply_cr_termination(
+                release,
+                plan,
+                authorization=wrong,
+                expected_plan_digest=plan.plan_digest,
+            )
+            authorization_path = Path(directory) / "authorization.json"
+            authorization_path.write_text(
+                json.dumps(
+                    {
+                        **authorization.__dict__,
+                        "unknown": True,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                unknown_exit = cr_lifecycle.main(
+                    [
+                        "terminate",
+                        "--id",
+                        "CR-101",
+                        "--work-id",
+                        "WORK-101",
+                        "--status",
+                        "cancelled",
+                        "--reason",
+                        "由替代路线接管",
+                        "--expected-plan-digest",
+                        plan.plan_digest,
+                        "--authorization-file",
+                        str(authorization_path),
+                        "--apply",
+                        "--project-root",
+                        str(release),
+                    ]
+                )
+            first_consumption = cr_lifecycle.apply_cr_termination(
+                release,
+                plan,
+                authorization=authorization,
+                expected_plan_digest=plan.plan_digest,
+                _fault="after-claim-before-first-replace",
+            )
+            replay = cr_lifecycle.apply_cr_termination(
+                release,
+                plan,
+                authorization=authorization,
+                expected_plan_digest=plan.plan_digest,
+            )
+
+            self.assertEqual("BLOCKED", missing["status"])
+            self.assertEqual("BLOCKED", wrong_result["status"])
+            self.assertEqual(1, unknown_exit)
+            self.assertIn("extra=['unknown']", output.getvalue())
+            self.assertEqual("BLOCKED", first_consumption["status"])
+            self.assertEqual("BLOCKED", replay["status"])
+            self.assertIn("already consumed", replay["reason"])
+
+    def test_terminate_partial_mutation_reports_private_rollback_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            plan = cr_lifecycle.plan_cr_termination(
+                release,
+                "CR-101",
+                work_id="WORK-101",
+                termination_status="cancelled",
+                termination_reason="由替代路线接管",
+            )
+            authorization = termination_authorization(plan)
+
+            result = cr_lifecycle.apply_cr_termination(
+                release,
+                plan,
+                authorization=authorization,
+                expected_plan_digest=plan.plan_digest,
+                _fail_after_replace=1,
+                _fail_recovery=True,
+            )
+
+            self.assertEqual("PARTIAL", result["status"])
+            self.assertEqual(1, result["mutation_count"])
+            self.assertTrue(result["rollback_errors"])
+            self.assertEqual(
+                (
+                    "private://cr-termination/transactions/"
+                    f"{result['transaction_id']}/manifest.json"
+                ),
+                result["rollback_evidence_ref"],
+            )
+
+    def test_terminate_is_discoverable_from_real_top_level_console(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            before = cr_path.read_text(encoding="utf-8")
+            process_oid = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=process,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            console = Path(sys.executable).with_name("meta-flow")
+
+            result = subprocess.run(
+                [
+                    str(console),
+                    "cr",
+                    "terminate",
+                    "--id",
+                    "CR-101",
+                    "--work-id",
+                    "WORK-101",
+                    "--status",
+                    "cancelled",
+                    "--reason",
+                    "由替代路线接管",
+                    "--expected-process-oid",
+                    process_oid,
+                    "--project-root",
+                    str(release),
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            payload = json.loads(result.stdout)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("READY", payload["decision"])
+            self.assertEqual(0, payload["mutation_count"])
+            self.assertEqual(7, payload["planned_mutation_count"])
+            self.assertEqual(before, cr_path.read_text(encoding="utf-8"))
+            self.assertNotIn(str(process), result.stdout)
 
     def test_index_default_is_dry_run_and_semantic_digest_excludes_generated_at(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1094,9 +2117,20 @@ class CRLifecycleTests(unittest.TestCase):
 
     def test_check_fails_when_closed_cr_is_still_active_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            write_cr(root, "CR-101")
-            cr_lifecycle.close_cr(root, "CR-101", readiness="READY")
+            root, _process, _cr_path, _scope = write_termination_fixture(
+                Path(directory)
+            )
+            plan = cr_lifecycle.plan_status_sync(
+                root,
+                "CR-101",
+                status="closed",
+                readiness="READY",
+                gate_status="cp8_closed",
+                work_id="WORK-101",
+                effective_at="2026-07-27T10:00:00+00:00",
+            )
+            result = apply_ready_status_sync(root, plan)
+            self.assertEqual("PASS", result["status"])
             state = current.default_current_state(root)
             state["active_change"] = "CR-101"
             current.write_current_state(root, state)
@@ -1138,6 +2172,95 @@ class CRLifecycleTests(unittest.TestCase):
             self.assertEqual(1, exit_code)
             self.assertIn("CR-202 overlaps CR-201", output.getvalue())
             self.assertIn("CAP-PG-REGISTRY-REFS", output.getvalue())
+
+    def test_conflicts_proposed_is_zero_write_and_preserves_indexed_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(
+                root,
+                "CR-101",
+                conflict_keys="data_contract",
+                impact_surface="quant_lab/data",
+            )
+            write_cr(
+                root,
+                "CR-102",
+                conflict_keys="data_contract",
+                impact_surface="quant_lab/research",
+            )
+            cr_lifecycle.write_index(root)
+            index = root / cr_lifecycle.CR_INDEX_REL
+            frozen_index = index.read_bytes()
+            frozen_paths = sorted(path.relative_to(root) for path in root.rglob("*"))
+
+            proposed_stdout = StringIO()
+            with redirect_stdout(proposed_stdout):
+                proposed_code = cr_lifecycle.main(
+                    [
+                        "conflicts",
+                        "--proposed",
+                        "--id",
+                        "CR-999",
+                        "--conflict-key",
+                        "data_contract",
+                        "--project-root",
+                        str(root),
+                    ]
+                )
+            proposed = json.loads(proposed_stdout.getvalue())
+
+            self.assertEqual(1, proposed_code)
+            self.assertEqual("CONFLICT", proposed["decision"])
+            self.assertEqual("CR-101", proposed["conflicts"][0]["existing_cr_id"])
+            self.assertEqual(frozen_index, index.read_bytes())
+            self.assertEqual(
+                frozen_paths,
+                sorted(path.relative_to(root) for path in root.rglob("*")),
+            )
+            self.assertFalse((root / "process" / "changes" / "CR-999.md").exists())
+
+            indexed_stdout = StringIO()
+            with redirect_stdout(indexed_stdout):
+                indexed_code = cr_lifecycle.main(
+                    ["conflicts", "--id", "CR-102", "--project-root", str(root)]
+                )
+            self.assertEqual(1, indexed_code)
+            self.assertIn("CR-102 overlaps CR-101", indexed_stdout.getvalue())
+
+    def test_conflicts_proposed_rejects_missing_payload_existing_id_and_output(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_cr(root, "CR-101", conflict_keys="data_contract")
+            cr_lifecycle.write_index(root)
+
+            for extra in (
+                [],
+                ["--conflict-key", "data_contract"],
+                ["--impact-surface", "quant_lab/data", "--output", "preview.json"],
+            ):
+                cr_id = (
+                    "CR-101"
+                    if extra == ["--conflict-key", "data_contract"]
+                    else "CR-999"
+                )
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = cr_lifecycle.main(
+                        [
+                            "conflicts",
+                            "--proposed",
+                            "--id",
+                            cr_id,
+                            *extra,
+                            "--project-root",
+                            str(root),
+                        ]
+                    )
+                result = json.loads(stdout.getvalue())
+                self.assertEqual(2, code)
+                self.assertEqual("INVALID", result["decision"])
 
     def test_impact_report_marks_unresolved_capability_refs_as_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1312,6 +2435,89 @@ class CRLifecycleTests(unittest.TestCase):
             errors = cr_lifecycle.collect_check_errors(root)
 
             self.assertIn("CR index item CR-101: invalid cr_type requirement-change", errors)
+
+    def test_native_cr_status_projection_requires_four_source_convergence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cr_path = write_cr(root, "CR-101")
+            text = cr_path.read_text(encoding="utf-8")
+            cr_path.write_text(
+                text.replace(
+                    'lifecycle_status: "active"\nreadiness_status: "NOT_READY"\n'
+                    'gate_status: "cp8_pending"',
+                    'lifecycle_status: "closed"\n'
+                    'readiness_status: "READY_WITH_RISK"\n'
+                    'gate_status: "cp8_closed"',
+                ),
+                encoding="utf-8",
+            )
+            cr_lifecycle.write_index(root)
+            cr_lifecycle.write_summary(
+                root,
+                "CR-101",
+                cr_lifecycle.summary_from_cr_file(root, cr_path),
+            )
+            cr_lifecycle.append_ledger_event(
+                root,
+                {
+                    "event": "status_sync",
+                    "event_id": "CR-101-CLOSED",
+                    "event_type": "status_sync",
+                    "id": "CR-101",
+                    "status": "closed",
+                    "readiness": "READY_WITH_RISK",
+                    "gate_status": "cp8_closed",
+                    "full_ref": "process/changes/CR-101.md",
+                    "summary_ref": "process/changes/summaries/CR-101.summary.json",
+                },
+            )
+
+            projection = cr_lifecycle.project_native_cr_status(
+                root,
+                cr_id="CR-101",
+            )
+
+            self.assertEqual("PASS", projection.decision)
+            self.assertEqual(
+                ("closed", "ready_with_risk", "cp8_closed"),
+                (
+                    projection.lifecycle_status,
+                    projection.readiness_status,
+                    projection.gate_status,
+                ),
+            )
+            self.assertEqual((), projection.findings)
+
+    def test_native_cr_status_projection_blocks_derived_status_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cr_path = write_cr(root, "CR-101")
+            cr_lifecycle.write_index(root)
+            summary = cr_lifecycle.summary_from_cr_file(root, cr_path)
+            summary["status"] = "closed"
+            cr_lifecycle.write_summary(root, "CR-101", summary)
+            cr_lifecycle.append_ledger_event(
+                root,
+                {
+                    "event": "status_sync",
+                    "event_id": "CR-101-ACTIVE",
+                    "event_type": "status_sync",
+                    "id": "CR-101",
+                    "status": "active",
+                    "readiness": "NOT_READY",
+                    "gate_status": "cp8_pending",
+                    "full_ref": "process/changes/CR-101.md",
+                    "summary_ref": "process/changes/summaries/CR-101.summary.json",
+                },
+            )
+
+            projection = cr_lifecycle.project_native_cr_status(
+                root,
+                cr_id="CR-101",
+            )
+
+            self.assertEqual("BLOCKED", projection.decision)
+            self.assertIn("CR_SUMMARY_STATUS_DIVERGED", projection.findings)
 
 
 if __name__ == "__main__":

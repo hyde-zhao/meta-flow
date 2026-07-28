@@ -1,4 +1,8 @@
-"""一次只处理一个仓的 allowlist commit 与 exact-OID fast-forward push。"""
+"""一次只处理一个仓的 allowlist commit 与 exact-OID push。
+
+已存在的远端分支只允许 fast-forward；不存在的远端分支只允许带空值 lease
+的 create-only 首次 push，避免观测与写入之间的竞态覆盖。
+"""
 
 from __future__ import annotations
 
@@ -20,6 +24,32 @@ from meta_flow.workspace.git_sync import query_exact_remote_ref, run_git
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_REF_RE = re.compile(r"^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$")
 _OID_RE = re.compile(r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")
+_PUBLICATION_CONTEXT_FIELDS = {
+    "schema_version",
+    "kind",
+    "work_id",
+    "cr_id",
+    "canonical_refs",
+    "targets",
+}
+_G2_CONTEXT_REF_KEYS = {
+    "work",
+    "route_plan",
+    "formal_cr",
+    "cr_summary",
+    "cr_index",
+    "cr_ledger",
+    "cp8_result",
+    "cp8_checkpoint",
+    "gate_ledger",
+}
+_PUBLICATION_TARGET_FIELDS = {
+    "operation",
+    "repo_role",
+    "remote",
+    "ref",
+    "preauthorized",
+}
 
 
 @dataclass(frozen=True)
@@ -62,6 +92,46 @@ class PublicationEvidence:
 
     project_root: Path
     evidence_ref: str
+
+
+@dataclass(frozen=True)
+class PublicationContext:
+    """稳定、可跟踪的发布上下文；动态事实由原生 producer 在每次 plan 时生成。"""
+
+    project_root: Path
+    context_ref: str
+
+
+@dataclass(frozen=True)
+class PublicationEligibilityPlanV1:
+    """由当前原生真相动态生成的发布资格计划。"""
+
+    work_id: str
+    cr_id: str
+    operation: str
+    repo_role: str
+    remote: str
+    ref: str
+    observed_oid: str
+    scope_version: int
+    scope_digest: str
+    work_profile_digest: str
+    route_plan_digest: str
+    canonical_refs: dict[str, str]
+    canonical_digests: dict[str, str]
+    requested_target: dict[str, str]
+    decision: str
+    reason: str
+    branch: str
+    plan_digest: str
+    mutation_count: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "PublicationEligibilityPlanV1",
+            **self.__dict__,
+        }
 
 
 def _resolve_publication_ref(project_root: Path, logical_ref: str) -> Path:
@@ -210,9 +280,11 @@ def _g2_is_canonically_approved(
     scope_digest: str,
 ) -> bool:
     result = _load_publication_object(project_root, refs["cp8_result"])
+    cr_id = str(result.get("cr_id") or "")
     if (
         str(result.get("checkpoint") or "").upper() != "CP8"
         or str(result.get("decision") or "").upper() not in {"PASS", "PASS_WITH_RISK"}
+        or not cr_id
         or str(result.get("work_id") or "") != work_id
         or int(result.get("scope_version") or 0) != scope_version
         or str(result.get("scope_digest") or "") != scope_digest
@@ -225,12 +297,19 @@ def _g2_is_canonically_approved(
         or str(checkpoint.get("scope_digest") or "") != scope_digest
     ):
         return False
-    formal = _frontmatter(_resolve_publication_ref(project_root, refs["formal_cr"]))
-    cr_id = str(formal.get("cr_id") or "")
+
+    from meta_flow.workflow.cr_lifecycle import project_native_cr_status
+
+    projection = project_native_cr_status(project_root, cr_id=cr_id)
     if (
-        formal.get("lifecycle_status", "").lower() != "closed"
-        or formal.get("readiness_status", "").lower() not in {"ready", "ready_with_risk"}
-        or formal.get("gate_status", "").lower() not in {"cp8_closed", "cp8_recovery_closed"}
+        projection.decision != "PASS"
+        or projection.formal_cr_ref != refs["formal_cr"]
+        or projection.summary_ref != refs["cr_summary"]
+        or refs["cr_index"] != "process/changes/CR-INDEX.json"
+        or refs["cr_ledger"] != "process/state/CR-LEDGER.ndjson"
+        or projection.lifecycle_status != "closed"
+        or projection.readiness_status not in {"ready", "ready_with_risk"}
+        or projection.gate_status not in {"cp8_closed", "cp8_recovery_closed"}
     ):
         return False
     ledger_path = _resolve_publication_ref(project_root, refs["gate_ledger"])
@@ -247,6 +326,235 @@ def _g2_is_canonically_approved(
         ):
             return True
     return False
+
+
+def build_publication_eligibility_plan(
+    *,
+    work_id: str,
+    context: PublicationContext,
+    operation: str,
+    repo_role: str,
+    observed_oid: str,
+    remote: str = "",
+    ref: str = "",
+) -> PublicationEligibilityPlanV1:
+    """从稳定 context 和当前原生真相生成一次零写发布资格计划。"""
+
+    payload = _load_publication_object(context.project_root, context.context_ref)
+    if set(payload) != _PUBLICATION_CONTEXT_FIELDS:
+        raise ValueError("publication context fields mismatch")
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("kind") != "PublicationContextV1"
+        or str(payload.get("work_id") or "") != work_id
+    ):
+        raise ValueError("publication context identity mismatch")
+    cr_id = str(payload.get("cr_id") or "")
+    if not re.fullmatch(r"CR-\d{3,}", cr_id):
+        raise ValueError("publication context cr_id is invalid")
+    refs = payload.get("canonical_refs")
+    if not isinstance(refs, dict) or set(refs) != _G2_CONTEXT_REF_KEYS:
+        raise ValueError("publication context canonical ref set mismatch")
+    normalized_refs = {key: str(value) for key, value in refs.items()}
+    if any(
+        not value.startswith("process/") or not is_safe_ref(value)
+        for value in normalized_refs.values()
+    ):
+        raise ValueError("publication context contains unsafe canonical ref")
+
+    work = _load_publication_object(context.project_root, normalized_refs["work"])
+    route = _load_publication_object(
+        context.project_root,
+        normalized_refs["route_plan"],
+    )
+    snapshot = _profile_snapshot(work, normalized_refs["work"])
+    profile_digest = _digest(snapshot)
+    route_digest = _digest(route)
+    if (
+        snapshot["work_id"] != work_id
+        or snapshot["risk_profile"] != "G2"
+        or snapshot["kind"] != "cr"
+        or not snapshot["scope_version"]
+        or not snapshot["scope_digest"]
+    ):
+        raise ValueError("publication context WORK profile is not canonical G2")
+    route_snapshot = route.get("work_profile_snapshot")
+    route_profile_digest = str(route.get("work_profile_digest") or "")
+    if (route_snapshot is None) != (not route_profile_digest):
+        raise ValueError("route profile snapshot is partially populated")
+    if route_snapshot is not None and (
+        route_snapshot != snapshot or route_profile_digest != profile_digest
+    ):
+        raise ValueError("route profile snapshot diverges from current WORK")
+    cp8_route = (route.get("checkpoint_applicability") or {}).get("CP8") or {}
+    if (
+        route.get("decision") not in {None, "PASS"}
+        or route.get("blockers") not in (None, [])
+        or cp8_route.get("applies") is not True
+        or cp8_route.get("human_gate") != "required"
+    ):
+        raise ValueError("route plan is not trusted for G2 publication")
+
+    all_refs = [context.context_ref, *normalized_refs.values()]
+    if not _scope_allows_reads(work, all_refs):
+        raise ValueError("publication context ref is outside WORK allowed_reads")
+    canonical_digests = {
+        key: _sha256_file(
+            _resolve_publication_ref(context.project_root, logical_ref)
+        )
+        for key, logical_ref in normalized_refs.items()
+    }
+
+    targets = payload.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("publication context targets must be non-empty")
+    for target in targets:
+        if not isinstance(target, dict) or set(target) != _PUBLICATION_TARGET_FIELDS:
+            raise ValueError("publication context target fields mismatch")
+    target_matches = any(
+        target.get("operation") == operation
+        and target.get("repo_role") == repo_role
+        and str(target.get("remote") or "") == remote
+        and str(target.get("ref") or "") == ref
+        and target.get("preauthorized") is True
+        for target in targets
+    )
+    if not target_matches:
+        raise ValueError("publication context target is not preauthorized")
+    if not _OID_RE.fullmatch(observed_oid):
+        raise ValueError("publication context repository OID mismatch")
+
+    approved = _g2_is_canonically_approved(
+        project_root=context.project_root,
+        refs=normalized_refs,
+        work_id=work_id,
+        scope_version=snapshot["scope_version"],
+        scope_digest=snapshot["scope_digest"],
+    )
+    requested_target = {
+        "operation": operation,
+        "repo_role": repo_role,
+        "remote": remote,
+        "ref": ref,
+    }
+    decision = "READY" if approved else "BLOCKED"
+    reason = "eligible_g2" if approved else "CP8_REQUIRED"
+    digest_source = {
+        "schema_version": 1,
+        "kind": "PublicationEligibilityPlanV1",
+        "work_id": work_id,
+        "cr_id": cr_id,
+        "operation": operation,
+        "repo_role": repo_role,
+        "remote": remote,
+        "ref": ref,
+        "observed_oid": observed_oid,
+        "scope_version": snapshot["scope_version"],
+        "scope_digest": snapshot["scope_digest"],
+        "work_profile_digest": profile_digest,
+        "route_plan_digest": route_digest,
+        "canonical_refs": normalized_refs,
+        "canonical_digests": canonical_digests,
+        "requested_target": requested_target,
+        "decision": decision,
+        "reason": reason,
+        "branch": "G2_CP8_APPLIES",
+        "mutation_count": 0,
+    }
+    return PublicationEligibilityPlanV1(
+        work_id=work_id,
+        cr_id=cr_id,
+        operation=operation,
+        repo_role=repo_role,
+        remote=remote,
+        ref=ref,
+        observed_oid=observed_oid,
+        scope_version=snapshot["scope_version"],
+        scope_digest=snapshot["scope_digest"],
+        work_profile_digest=profile_digest,
+        route_plan_digest=route_digest,
+        canonical_refs=normalized_refs,
+        canonical_digests=canonical_digests,
+        requested_target=requested_target,
+        decision=decision,
+        reason=reason,
+        branch="G2_CP8_APPLIES",
+        plan_digest=_digest(digest_source),
+    )
+
+
+def _evaluate_publication_inputs(
+    work_id: str,
+    *,
+    evidence: PublicationEvidence | None,
+    context: PublicationContext | None,
+    operation: str,
+    repo_role: str,
+    observed_oid: str,
+    remote: str = "",
+    ref: str = "",
+) -> tuple[PublicationEligibility, PublicationEligibilityPlanV1 | None]:
+    if evidence is not None and context is not None:
+        return (
+            PublicationEligibility(
+                "BLOCKED",
+                "PUBLICATION_INPUT_CONFLICT",
+                "",
+                "",
+                "",
+            ),
+            None,
+        )
+    if context is None:
+        return (
+            _evaluate_evidence(
+                work_id,
+                evidence,
+                operation=operation,
+                repo_role=repo_role,
+                observed_oid=observed_oid,
+                remote=remote,
+                ref=ref,
+            ),
+            None,
+        )
+    try:
+        plan = build_publication_eligibility_plan(
+            work_id=work_id,
+            context=context,
+            operation=operation,
+            repo_role=repo_role,
+            observed_oid=observed_oid,
+            remote=remote,
+            ref=ref,
+        )
+    except (
+        ProcessRouteError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return (
+            PublicationEligibility(
+                "BLOCKED",
+                "PUBLICATION_CONTEXT_UNTRUSTED",
+                "",
+                "",
+                "",
+            ),
+            None,
+        )
+    return (
+        PublicationEligibility(
+            plan.decision,
+            plan.reason,
+            plan.branch,
+            plan.work_profile_digest,
+            plan.route_plan_digest,
+        ),
+        plan,
+    )
 
 
 def _evaluate_evidence(
@@ -287,7 +595,15 @@ def _evaluate_evidence(
             raise ValueError("publication evidence scope/profile/route digest mismatch")
         required_ref_keys = {"work", "route_plan", "target_policy"}
         if snapshot["risk_profile"] == "G2":
-            required_ref_keys |= {"formal_cr", "cp8_result", "cp8_checkpoint", "gate_ledger"}
+            required_ref_keys |= {
+                "formal_cr",
+                "cr_summary",
+                "cr_index",
+                "cr_ledger",
+                "cp8_result",
+                "cp8_checkpoint",
+                "gate_ledger",
+            }
         if set(refs) != required_ref_keys or set(digests) != required_ref_keys:
             raise ValueError("publication evidence canonical ref set mismatch")
         all_refs = [evidence.evidence_ref, *(str(refs[key]) for key in sorted(refs))]
@@ -365,7 +681,9 @@ class CommitPlan:
     reason: str
     plan_digest: str
     publication_evidence: PublicationEvidence | None = None
+    publication_context: PublicationContext | None = None
     publication_eligibility: PublicationEligibility | None = None
+    publication_eligibility_plan: PublicationEligibilityPlanV1 | None = None
 
     @property
     def blocked(self) -> bool:
@@ -387,7 +705,20 @@ class CommitPlan:
                     "evidence_ref": self.publication_evidence.evidence_ref,
                 }
             ),
+            "publication_context": (
+                None
+                if self.publication_context is None
+                else {
+                    "project_root": str(self.publication_context.project_root),
+                    "context_ref": self.publication_context.context_ref,
+                }
+            ),
             "publication_eligibility": None if self.publication_eligibility is None else self.publication_eligibility.__dict__,
+            "publication_eligibility_plan": (
+                None
+                if self.publication_eligibility_plan is None
+                else self.publication_eligibility_plan.as_dict()
+            ),
         }
 
 
@@ -420,17 +751,24 @@ class PushPlan:
     argv: tuple[str, ...]
     plan_digest: str
     publication_evidence: PublicationEvidence | None = None
+    publication_context: PublicationContext | None = None
     publication_eligibility: PublicationEligibility | None = None
+    publication_eligibility_plan: PublicationEligibilityPlanV1 | None = None
 
     @property
     def blocked(self) -> bool:
         return self.decision == "BLOCKED"
+
+    @property
+    def authorization_expected_oid(self) -> str:
+        return self.expected_remote_oid or "ABSENT"
 
     def as_dict(self) -> dict[str, Any]:
         return {
             **self.__dict__,
             "repo_root": str(self.repo_root),
             "argv": list(self.argv),
+            "authorization_expected_oid": self.authorization_expected_oid,
             "mutation_count": 0,
             "publication_evidence": (
                 None
@@ -440,7 +778,20 @@ class PushPlan:
                     "evidence_ref": self.publication_evidence.evidence_ref,
                 }
             ),
+            "publication_context": (
+                None
+                if self.publication_context is None
+                else {
+                    "project_root": str(self.publication_context.project_root),
+                    "context_ref": self.publication_context.context_ref,
+                }
+            ),
             "publication_eligibility": None if self.publication_eligibility is None else self.publication_eligibility.__dict__,
+            "publication_eligibility_plan": (
+                None
+                if self.publication_eligibility_plan is None
+                else self.publication_eligibility_plan.as_dict()
+            ),
         }
 
 
@@ -558,6 +909,7 @@ def plan_commit(
     message: str,
     expected_head_oid: str,
     publication_evidence: PublicationEvidence | None = None,
+    publication_context: PublicationContext | None = None,
 ) -> CommitPlan:
     _validate_identity(project_id, work_id, repo_role)
     if not _OID_RE.fullmatch(expected_head_oid):
@@ -578,9 +930,10 @@ def plan_commit(
         reasons.append("unexpected_paths")
     if any(path not in allowed for path in observation.staged_paths):
         reasons.append("unexpected_staged_paths")
-    eligibility = _evaluate_evidence(
+    eligibility, eligibility_plan = _evaluate_publication_inputs(
         work_id,
-        publication_evidence,
+        evidence=publication_evidence,
+        context=publication_context,
         operation="commit",
         repo_role=repo_role,
         observed_oid=observation.head_oid,
@@ -604,6 +957,9 @@ def plan_commit(
         "decision": decision,
         "reasons": reasons,
         "publication_eligibility": eligibility.__dict__,
+        "publication_eligibility_plan": (
+            None if eligibility_plan is None else eligibility_plan.as_dict()
+        ),
     }
     return CommitPlan(
         project_id=project_id,
@@ -619,7 +975,9 @@ def plan_commit(
         reason=",".join(reasons) if reasons else "ready",
         plan_digest=_digest(digest_source),
         publication_evidence=publication_evidence,
+        publication_context=publication_context,
         publication_eligibility=eligibility,
+        publication_eligibility_plan=eligibility_plan,
     )
 
 
@@ -638,8 +996,18 @@ def _validate_authorization(
         raise ValueError("authorization_id is invalid")
     if authorization.single_use is not True:
         raise ValueError("repository authorization must be single-use")
-    if not _OID_RE.fullmatch(authorization.expected_oid):
-        raise ValueError("repository authorization expected_oid must be one exact full OID")
+    authorization_binds_absence = (
+        operation == "push"
+        and expected_oid == "ABSENT"
+        and authorization.expected_oid == "ABSENT"
+    )
+    if not authorization_binds_absence and not _OID_RE.fullmatch(
+        authorization.expected_oid
+    ):
+        raise ValueError(
+            "repository authorization expected_oid must be one exact full OID "
+            "or ABSENT for a create-only push"
+        )
     expected = (operation, project_id, work_id, repo_role, plan_digest, expected_oid)
     actual = (
         authorization.operation,
@@ -673,6 +1041,7 @@ def apply_commit(plan: CommitPlan, authorization: RepositoryAuthorization) -> Co
         message=plan.message,
         expected_head_oid=plan.expected_head_oid,
         publication_evidence=plan.publication_evidence,
+        publication_context=plan.publication_context,
     )
     if fresh.plan_digest != plan.plan_digest:
         raise ValueError("commit plan is stale")
@@ -780,6 +1149,7 @@ def plan_push(
     ref: str,
     expected_remote_oid: str,
     publication_evidence: PublicationEvidence | None = None,
+    publication_context: PublicationContext | None = None,
 ) -> PushPlan:
     _validate_identity(project_id, work_id, repo_role)
     _validate_remote_ref(remote, ref)
@@ -792,10 +1162,14 @@ def plan_push(
         reasons.append("dirty_repository")
     if not observation.head_oid:
         reasons.append("local_head_missing")
-    if remote_observation.decision != "PRESENT":
-        reasons.append("remote_ref_not_present")
-    elif remote_observation.oid != expected_remote_oid:
-        reasons.append("expected_remote_oid_mismatch")
+    if remote_observation.decision == "PRESENT":
+        if remote_observation.oid != expected_remote_oid:
+            reasons.append("expected_remote_oid_mismatch")
+    elif remote_observation.decision == "ABSENT":
+        if expected_remote_oid:
+            reasons.append("remote_ref_absent")
+    else:
+        reasons.append("remote_ref_observation_unknown")
     if observation.head_oid and remote_observation.decision == "PRESENT":
         ancestor = run_git(
             ["merge-base", "--is-ancestor", remote_observation.oid, observation.head_oid],
@@ -803,9 +1177,10 @@ def plan_push(
         )
         if not ancestor.ok:
             reasons.append("not_fast_forward")
-    eligibility = _evaluate_evidence(
+    eligibility, eligibility_plan = _evaluate_publication_inputs(
         work_id,
-        publication_evidence,
+        evidence=publication_evidence,
+        context=publication_context,
         operation="push",
         repo_role=repo_role,
         observed_oid=observation.head_oid,
@@ -815,7 +1190,15 @@ def plan_push(
     if eligibility.decision != "READY":
         reasons.append(eligibility.reason)
     decision = "BLOCKED" if reasons else "READY"
-    argv = ("push", remote, f"{observation.head_oid}:{ref}")
+    if remote_observation.decision == "ABSENT" and not expected_remote_oid:
+        argv = (
+            "push",
+            f"--force-with-lease={ref}:",
+            remote,
+            f"{observation.head_oid}:{ref}",
+        )
+    else:
+        argv = ("push", remote, f"{observation.head_oid}:{ref}")
     digest_source = {
         "schema_version": 1,
         "project_id": project_id,
@@ -826,11 +1209,15 @@ def plan_push(
         "ref": ref,
         "local_oid": observation.head_oid,
         "expected_remote_oid": expected_remote_oid,
+        "observed_remote_state": remote_observation.decision,
         "observed_remote_oid": remote_observation.oid,
         "decision": decision,
         "reasons": reasons,
         "argv": argv,
         "publication_eligibility": eligibility.__dict__,
+        "publication_eligibility_plan": (
+            None if eligibility_plan is None else eligibility_plan.as_dict()
+        ),
     }
     return PushPlan(
         project_id=project_id,
@@ -847,7 +1234,9 @@ def plan_push(
         argv=argv,
         plan_digest=_digest(digest_source),
         publication_evidence=publication_evidence,
+        publication_context=publication_context,
         publication_eligibility=eligibility,
+        publication_eligibility_plan=eligibility_plan,
     )
 
 
@@ -863,6 +1252,7 @@ def apply_push(plan: PushPlan, authorization: RepositoryAuthorization) -> PushRe
         ref=plan.ref,
         expected_remote_oid=plan.expected_remote_oid,
         publication_evidence=plan.publication_evidence,
+        publication_context=plan.publication_context,
     )
     if fresh.plan_digest != plan.plan_digest:
         raise ValueError("push plan is stale")
@@ -873,13 +1263,28 @@ def apply_push(plan: PushPlan, authorization: RepositoryAuthorization) -> PushRe
         work_id=plan.work_id,
         repo_role=plan.repo_role,
         plan_digest=plan.plan_digest,
-        expected_oid=plan.expected_remote_oid,
+        expected_oid=plan.authorization_expected_oid,
     )
     result = run_git(list(plan.argv), cwd=plan.repo_root)
     after = query_exact_remote_ref(plan.repo_root, plan.remote, plan.ref)
     if not result.ok or after.decision != "PRESENT" or after.oid != plan.local_oid:
         message = result.stderr.strip() or "push did not publish the planned local OID"
-        changed = after.decision == "PRESENT" and after.oid != plan.expected_remote_oid
+        create_only_proven_no_mutation = (
+            plan.authorization_expected_oid == "ABSENT"
+            and not result.ok
+            and after.decision in {"ABSENT", "PRESENT"}
+            and after.oid != plan.local_oid
+        )
+        changed = (
+            result.ok
+            or (after.decision == "PRESENT" and after.oid == plan.local_oid)
+            or after.decision == "UNKNOWN"
+            or (
+                not create_only_proven_no_mutation
+                and after.decision == "PRESENT"
+                and after.oid != plan.expected_remote_oid
+            )
+        )
         raise RepositoryApplyError(
             message,
             RepositoryFailureReceipt(

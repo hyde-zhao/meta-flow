@@ -2370,6 +2370,63 @@ def collect_failure_waiver_errors() -> list[str]:
     return errors
 
 
+def collect_canonical_mirror_errors(
+    root: Path,
+    pairs: tuple[tuple[str, str], ...],
+) -> list[str]:
+    """校验 canonical 必须存在，并在本地 mirror 已安装时检查字节一致性。"""
+
+    errors: list[str] = []
+    for canonical_ref, mirror_ref in pairs:
+        canonical = root / canonical_ref
+        mirror = root / mirror_ref
+        if not canonical.is_file():
+            errors.append(f"missing CR-058 canonical target: {canonical_ref}")
+            continue
+        if not mirror.exists() and not mirror.is_symlink():
+            continue
+        if not mirror.is_file() or canonical.read_bytes() != mirror.read_bytes():
+            errors.append(
+                f"CR-058 canonical/mirror drift: {canonical_ref} / {mirror_ref}"
+            )
+    return errors
+
+
+def collect_canonical_mirror_self_check_errors() -> list[str]:
+    """用隔离临时目录证明 mirror 可选边界与 drift 检测未失效。"""
+
+    pairs = (("canonical/SKILL.md", "mirror/SKILL.md"),)
+    with tempfile.TemporaryDirectory(prefix="meta-flow-mirror-check-") as tmp:
+        root = Path(tmp)
+        canonical = root / pairs[0][0]
+        mirror = root / pairs[0][1]
+
+        missing_canonical = collect_canonical_mirror_errors(root, pairs)
+        canonical.parent.mkdir(parents=True)
+        canonical.write_bytes(b"canonical\n")
+        missing_mirror = collect_canonical_mirror_errors(root, pairs)
+        mirror.parent.mkdir(parents=True)
+        mirror.write_bytes(canonical.read_bytes())
+        identical_mirror = collect_canonical_mirror_errors(root, pairs)
+        mirror.write_bytes(b"drift\n")
+        drifted_mirror = collect_canonical_mirror_errors(root, pairs)
+
+    expected_missing = ["missing CR-058 canonical target: canonical/SKILL.md"]
+    expected_drift = [
+        "CR-058 canonical/mirror drift: canonical/SKILL.md / mirror/SKILL.md"
+    ]
+    errors: list[str] = []
+    if missing_canonical != expected_missing:
+        errors.append("CR-058 canonical/mirror self-check failed to reject missing canonical")
+    if missing_mirror:
+        errors.append("CR-058 canonical/mirror self-check rejected an uninstalled mirror")
+    if identical_mirror:
+        errors.append("CR-058 canonical/mirror self-check rejected an identical mirror")
+    if drifted_mirror != expected_drift:
+        errors.append("CR-058 canonical/mirror self-check failed to detect mirror drift")
+    return errors
+
+
 def collect_cr058_execution_closure_errors() -> list[str]:
     errors: list[str] = []
     for rel_path, required_tokens in CR058_EXECUTION_CLOSURE_TOKEN_TARGETS.items():
@@ -2385,18 +2442,8 @@ def collect_cr058_execution_closure_errors() -> list[str]:
                 + ", ".join(missing)
             )
 
-    for canonical_ref, mirror_ref in CR058_CANONICAL_MIRROR_PAIRS:
-        canonical = ROOT / canonical_ref
-        mirror = ROOT / mirror_ref
-        if not canonical.is_file() or not mirror.is_file():
-            errors.append(
-                f"missing CR-058 canonical/mirror pair: {canonical_ref} / {mirror_ref}"
-            )
-            continue
-        if canonical.read_bytes() != mirror.read_bytes():
-            errors.append(
-                f"CR-058 canonical/mirror drift: {canonical_ref} / {mirror_ref}"
-            )
+    errors.extend(collect_canonical_mirror_errors(ROOT, CR058_CANONICAL_MIRROR_PAIRS))
+    errors.extend(collect_canonical_mirror_self_check_errors())
     return errors
 
 
