@@ -11,9 +11,9 @@ from typing import Any
 
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 
-FEATURE_REGISTRY_REL = Path("docs/design/FEATURE-REGISTRY.yaml")
-CAPABILITY_REGISTRY_REL = Path("docs/design/CAPABILITY-REGISTRY.yaml")
-FEATURE_DESIGN_MATRIX_REL = Path("docs/design/FEATURE-DESIGN-MATRIX.yaml")
+FEATURE_REGISTRY_REL = Path("process/docs/design/FEATURE-REGISTRY.yaml")
+CAPABILITY_REGISTRY_REL = Path("process/docs/design/CAPABILITY-REGISTRY.yaml")
+FEATURE_DESIGN_MATRIX_REL = Path("process/docs/design/FEATURE-DESIGN-MATRIX.yaml")
 STORY_ROOT_REL = Path("process/stories")
 ALLOWED_FEATURE_STATUSES = {
     "active",
@@ -163,11 +163,10 @@ def _feature_id_from_dir(path: Path) -> str:
 
 def default_registry(project_root: Path) -> dict[str, Any]:
     features: list[dict[str, Any]] = []
-    feature_root = project_root / "docs" / "features"
+    feature_root = _resolve_runtime_ref(project_root, "process/docs/features")
     if feature_root.is_dir():
         for feature_dir in sorted(item for item in feature_root.iterdir() if item.is_dir()):
             design_doc = feature_dir / "DESIGN.md"
-            test_plan = feature_dir / "TEST-PLAN.md"
             features.append(
                 {
                     "feature_id": _feature_id_from_dir(feature_dir),
@@ -178,9 +177,9 @@ def default_registry(project_root: Path) -> dict[str, Any]:
                     "status": "planned",
                     "risk_profile": "standard-code",
                     "design_doc_policy": "full-design",
-                    "design_doc": _rel(project_root, design_doc),
-                    "test_plan": _rel(project_root, test_plan),
-                    "tasks_doc": _rel(project_root, feature_dir / "TASKS.md"),
+                    "design_doc": f"process/docs/features/{feature_dir.name}/DESIGN.md",
+                    "test_plan": f"process/docs/features/{feature_dir.name}/TEST-PLAN.md",
+                    "tasks_doc": f"process/docs/features/{feature_dir.name}/TASKS.md",
                     "module_paths": [],
                     "public_api": [],
                     "forbidden_dependencies": [],

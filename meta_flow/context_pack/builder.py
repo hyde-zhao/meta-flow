@@ -31,6 +31,7 @@ from meta_flow.state.current import (
     STATE_CURRENT_REL,
     load_current_state,
     refresh_current_entry,
+    validate_current_state_for_write,
 )
 from meta_flow.workflow.cr_lifecycle import (
     CR_INDEX_REL,
@@ -93,6 +94,18 @@ class ReadEntry:
 
 def _as_posix(path: Path | str) -> str:
     return Path(path).as_posix()
+
+
+def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
+    """将过程仓物理输出还原为公开 CLI 可显示的 logical ref。"""
+
+    root = project_root.resolve()
+    resolved = path.resolve(strict=False)
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        process_root = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml").parent
+        return f"process/{resolved.relative_to(process_root.resolve()).as_posix()}"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -330,9 +343,34 @@ def build_context_pack(
     if write_policy:
         write_default_read_policy(project_root)
     read_policy = load_read_policy(project_root)
-    state = load_current_state(project_root)
-    if state:
+    state_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
+    current_entry_path = _resolve_runtime_ref(
+        project_root, STATE_CURRENT_ENTRY_REL.as_posix()
+    )
+    state_exists = state_path.is_file()
+    if state_exists:
+        state = load_current_state(project_root)
+        if not state:
+            raise ValueError("runtime state payload is empty or invalid")
+        try:
+            validate_current_state_for_write(state)
+        except ValueError as exc:
+            raise ValueError("runtime state payload is invalid") from exc
         refresh_current_entry(project_root)
+        current_entry_exists = current_entry_path.is_file()
+        if not current_entry_exists:
+            raise ValueError(
+                "runtime state contract is incomplete: CURRENT.json projection failed"
+            )
+    else:
+        state = {}
+        current_entry_exists = current_entry_path.is_file()
+    if not state_exists and current_entry_exists:
+        raise ValueError(
+            "runtime state contract is incomplete: STATE.current.json and "
+            "CURRENT.json must both exist or both be absent"
+        )
+    state_required = state_exists and current_entry_exists
     project_id = str(state.get("project_id") or project_root.name)
     cr_index_semantic_digest: str | None = None
     cr_index_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
@@ -346,17 +384,49 @@ def build_context_pack(
 
     _append_unique(
         allowed_reads,
-        _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="lightweight_runtime_state"),
+        _read_entry(
+            project_root,
+            STATE_CURRENT_REL.as_posix(),
+            required=state_required,
+            reason=(
+                "lightweight_runtime_state"
+                if state_required
+                else "runtime_state_legal_missing"
+            ),
+        ),
     )
     _append_unique(
         allowed_reads,
-        _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_discovery_entry"),
+        _read_entry(
+            project_root,
+            STATE_CURRENT_ENTRY_REL.as_posix(),
+            required=state_required,
+            reason=(
+                "current_discovery_entry"
+                if state_required
+                else "current_discovery_entry_legal_missing"
+            ),
+        ),
     )
-    _append_unique(must_read, _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="machine_state"))
-    _append_unique(
-        must_read,
-        _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_entrypoint"),
-    )
+    if state_required:
+        _append_unique(
+            must_read,
+            _read_entry(
+                project_root,
+                STATE_CURRENT_REL.as_posix(),
+                required=True,
+                reason="machine_state",
+            ),
+        )
+        _append_unique(
+            must_read,
+            _read_entry(
+                project_root,
+                STATE_CURRENT_ENTRY_REL.as_posix(),
+                required=True,
+                reason="current_entrypoint",
+            ),
+        )
     _append_unique(allowed_reads, _read_entry(project_root, CR_INDEX_REL.as_posix(), required=False, reason="cr_index"))
     if cr_id:
         summary_rel = (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
@@ -452,9 +522,15 @@ def build_context_pack(
         "full_doc_read_allowed_when": list(read_policy.get("full_doc_read_allowed_when") or DEFAULT_FULL_DOC_READ_REASONS),
         "required_full_doc_read_log": str(read_policy.get("required_full_doc_read_log") or READ_EXPANSION_LEDGER_REL.as_posix()),
     }
-    output_path = output.resolve() if output else default_output_path(project_root, stage=stage, cr_id=cr_id, story_id=story_id)
+    output_path = (
+        _resolve_runtime_path(project_root, output)
+        if output is not None
+        else default_output_path(project_root, stage=stage, cr_id=cr_id, story_id=story_id)
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(context, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if state_required:
+        refresh_current_entry(project_root)
     return context, output_path
 
 
@@ -479,10 +555,10 @@ def _infer_project_root(context_path: Path) -> Path:
 
 
 def validate_context_pack(context_path: Path, *, project_root: Path | None = None) -> tuple[list[str], list[str]]:
-    context_path = context_path.resolve()
-    if not context_path.is_file():
-        return [f"context pack missing: {context_path}"], []
     root = project_root.resolve() if project_root else _infer_project_root(context_path)
+    context_path = _resolve_runtime_path(root, context_path)
+    if not context_path.is_file():
+        return ["context pack missing"], []
     errors: list[str] = []
     warnings: list[str] = []
     try:
@@ -562,7 +638,7 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
             errors.append(f"allowed_reads contains deny-default path: {rel_path}")
         if entry in read_if_needed and _matches_any(rel_path, denied_patterns):
             errors.append(f"read_if_needed contains deny-default path without read expansion log policy: {rel_path}")
-        if entry.get("required") is True and not (root / rel_path).is_file():
+        if entry.get("required") is True and not _resolve_runtime_path(root, rel_path).is_file():
             errors.append(f"required allowed_read missing on disk: {rel_path}")
     if "process/archive/**" not in denied_patterns and "process/archive/**" not in do_not_patterns:
         errors.append("do_not_read_by_default must include process/archive/**")
@@ -596,10 +672,10 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
         errors.append("required_full_doc_read_log missing")
 
     read_policy_ref = context.get("read_policy_ref")
-    if read_policy_ref and not (root / str(read_policy_ref)).is_file():
+    if read_policy_ref and not _resolve_runtime_path(root, str(read_policy_ref)).is_file():
         errors.append(f"read_policy_ref missing on disk: {read_policy_ref}")
     if context.get("cr_id") and context.get("cr_summary_ref"):
-        summary_path = root / str(context["cr_summary_ref"])
+        summary_path = _resolve_runtime_path(root, str(context["cr_summary_ref"]))
         if not summary_path.is_file():
             errors.append(f"cr_summary_ref missing on disk: {context['cr_summary_ref']}")
     if str(context.get("stage") or "").upper() == "CP7" and context.get("cr_id"):
@@ -611,17 +687,43 @@ def validate_context_pack(context_path: Path, *, project_root: Path | None = Non
         warnings.append("denied_default_reads does not include process/STATE.md")
     if "process/DEVELOPMENT-PLAN.yaml" not in denied_patterns:
         warnings.append("denied_default_reads does not include process/DEVELOPMENT-PLAN.yaml")
-    if "process/current/CURRENT.json" not in [str(entry.get("path") or "") for entry in must_read if isinstance(entry, dict)]:
+    state_path = _resolve_runtime_ref(root, STATE_CURRENT_REL.as_posix())
+    current_entry_path = _resolve_runtime_ref(root, STATE_CURRENT_ENTRY_REL.as_posix())
+    if state_path.is_file() != current_entry_path.is_file():
+        errors.append(
+            "runtime state contract is incomplete: STATE.current.json and "
+            "CURRENT.json must both exist or both be absent"
+        )
+    if (
+        state_path.is_file()
+        and current_entry_path.is_file()
+        and "process/current/CURRENT.json"
+        not in [
+            str(entry.get("path") or "")
+            for entry in must_read
+            if isinstance(entry, dict)
+        ]
+    ):
         warnings.append("must_read does not include process/current/CURRENT.json")
     warnings.extend(_capsule_redundancy_warnings(root, context))
     return errors, warnings
 
 
-def explain_context_pack(context_path: Path) -> int:
-    context = _load_context(context_path.resolve())
+def explain_context_pack(
+    context_path: Path,
+    *,
+    project_root: Path | None = None,
+) -> int:
+    root = (
+        project_root.resolve()
+        if project_root is not None
+        else _infer_project_root(context_path)
+    )
+    resolved_path = _resolve_runtime_path(root, context_path)
+    context = _load_context(resolved_path)
     budget = context.get("budget") or {}
     print("Context Pack:")
-    print(f"- path: {context_path.resolve()}")
+    print(f"- path: {_canonical_runtime_ref(root, resolved_path)}")
     print(f"- project_id: {context.get('project_id')}")
     print(f"- stage: {context.get('stage')}")
     print(f"- profile: {context.get('profile')}")
@@ -696,7 +798,7 @@ def main(argv: list[str] | None = None) -> int:
             output=parsed.output,
             write_policy=not parsed.no_write_policy,
         )
-        print(f"wrote: {path}")
+        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "check":
         parser = argparse.ArgumentParser(prog="meta-flow context check")
@@ -712,9 +814,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if errors else 0
     if command == "explain":
         parser = argparse.ArgumentParser(prog="meta-flow context explain")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
         parser.add_argument("--context", dest="context_path", type=Path, required=True)
         parsed = parser.parse_args(args[1:])
-        return explain_context_pack(parsed.context_path)
+        return explain_context_pack(
+            parsed.context_path,
+            project_root=parsed.project_root,
+        )
     raise SystemExit(f"未知 context 命令: {command}. 目前支持: build, check, explain")
 
 

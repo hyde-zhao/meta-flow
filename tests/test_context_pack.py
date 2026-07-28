@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from meta_flow.context_pack import builder
+from meta_flow.context_pack import builder, story_contract
 from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
 from meta_flow.project.onboarding_contract import (
     AUTHORIZATION_KIND,
@@ -165,6 +165,81 @@ def write_cp2_result_with_required_evidence(root: Path, cr_id: str) -> Path:
 
 
 class ContextPackTests(unittest.TestCase):
+    def test_story_public_entries_use_binding_logical_refs_without_absolute_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_binding_project(Path(directory))
+            write_cr_summary(release, "CR-101")
+            story = _resolve_runtime_ref(release, "process/stories/STORY-CR101-S01.md")
+            story.parent.mkdir(parents=True, exist_ok=True)
+            story.write_text(
+                """---
+story_id: STORY-CR101-S01
+cr_id: CR-101
+title: Binding packet
+feature_refs: [governance.kernel]
+feature_design_refs: [docs/features/kernel/DESIGN.md]
+feature_contract_summary: binding-aware public entry
+cr_delta_summary: resolve logical process refs
+dependency_inputs: [ROOT]
+lld_policy: technical-note
+risk_profile: standard-code
+allowed_write_paths: [meta_flow/context_pack/story_contract.py]
+forbidden_write_paths: [delivery/**]
+acceptance: [logical refs resolve]
+verification_plan: [pytest]
+authz_policy_refs: [NO_CREDENTIAL_READ]
+---
+""",
+                encoding="utf-8",
+            )
+            logical_story = "process/stories/STORY-CR101-S01.md"
+            logical_packet = "process/context/stories/STORY-CR101-S01.CP6.work-packet.json"
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    0,
+                    story_contract.main(
+                        [
+                            "build-story-packet", "--project-root", str(release), "--story", logical_story,
+                            "--stage", "CP6", "--output", logical_packet,
+                        ]
+                    ),
+                )
+            self.assertIn(logical_packet, output.getvalue())
+            self.assertNotIn(str(process), output.getvalue())
+            self.assertFalse((release / "process").exists())
+            packet = json.loads(_resolve_runtime_ref(release, logical_packet).read_text(encoding="utf-8"))
+            self.assertEqual("BLOCKED", packet["admission"]["decision"])
+            self.assertEqual(["FROZEN_CP6_EVIDENCE_MISSING"], packet["admission"]["reason_codes"])
+            self.assertEqual(
+                0,
+                story_contract.main(
+                    ["check-story-packet", "--project-root", str(release), "--packet", logical_packet]
+                ),
+            )
+            self.assertEqual(
+                0,
+                story_contract.main(
+                    ["sufficiency-check", "--project-root", str(release), "--packet", logical_packet]
+                ),
+            )
+            explain_output = StringIO()
+            with redirect_stdout(explain_output):
+                self.assertEqual(
+                    0,
+                    story_contract.main(
+                        [
+                            "explain-story-packet",
+                            "--project-root",
+                            str(release),
+                            "--packet",
+                            logical_packet,
+                        ]
+                    ),
+                )
+            self.assertIn(f"- path: {logical_packet}", explain_output.getvalue())
+            self.assertNotIn(str(process), explain_output.getvalue())
+
     def test_build_routes_binding_only_context_to_process_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             release, process = init_binding_project(Path(directory))
@@ -185,6 +260,139 @@ class ContextPackTests(unittest.TestCase):
                 "process/state/STATE.current.json",
                 context["state_ref"],
             )
+
+    def test_build_projects_missing_current_and_refreshes_after_context_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = current.default_current_state(root)
+            state["active_story"] = "STORY-CR101-S01"
+            state["active_context_ref"] = "process/context/CP6-CR101.context.json"
+            current.write_current_state(root, state)
+            write_cr_summary(root, "CR-101")
+
+            _context, output = builder.build_context_pack(
+                root,
+                stage="CP6",
+                profile="standard-code",
+                cr_id="CR-101",
+                budget=16000,
+            )
+
+            current_entry = json.loads(
+                (root / "process" / "current" / "CURRENT.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(output.is_file())
+            self.assertEqual(
+                "process/context/CP6-CR101.context.json",
+                current_entry["context_ref"],
+            )
+            self.assertEqual([], current_entry["stale_refs"])
+
+    def test_build_rejects_current_entry_without_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current_path = root / "process" / "current" / "CURRENT.json"
+            current_path.parent.mkdir(parents=True, exist_ok=True)
+            current_path.write_text("{}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "STATE.current.json and CURRENT.json must both exist or both be absent",
+            ):
+                builder.build_context_pack(
+                    root,
+                    stage="CP6",
+                    profile="standard-code",
+                    budget=16000,
+                )
+
+    def test_build_rejects_invalid_state_without_projecting_current(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_path = root / "process" / "state" / "STATE.current.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text("{invalid\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "runtime state payload is empty or invalid",
+            ):
+                builder.build_context_pack(
+                    root,
+                    stage="CP6",
+                    profile="standard-code",
+                    budget=16000,
+                )
+
+            self.assertFalse(
+                (root / "process" / "current" / "CURRENT.json").exists()
+            )
+
+    def test_cp7_context_accepts_legal_missing_state_in_sibling_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_binding_project(Path(directory))
+            write_cr_summary(release, "CR-101")
+
+            context, output = builder.build_context_pack(
+                release,
+                stage="CP7",
+                profile="high-risk",
+                cr_id="CR-101",
+                budget=16000,
+            )
+            errors, warnings = builder.validate_context_pack(
+                output,
+                project_root=release,
+            )
+
+            self.assertEqual([], errors)
+            self.assertFalse(
+                {
+                    "process/state/STATE.current.json",
+                    "process/current/CURRENT.json",
+                }
+                & {
+                    str(entry["path"])
+                    for entry in context["must_read"]
+                }
+            )
+            state_reads = {
+                str(entry["path"]): entry
+                for entry in context["allowed_reads"]
+                if str(entry["path"])
+                in {
+                    "process/state/STATE.current.json",
+                    "process/current/CURRENT.json",
+                }
+            }
+            self.assertEqual(2, len(state_reads))
+            self.assertTrue(
+                all(entry["required"] is False for entry in state_reads.values())
+            )
+            self.assertNotIn(
+                "must_read does not include process/current/CURRENT.json",
+                warnings,
+            )
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                self.assertEqual(
+                    0,
+                    builder.main(
+                        [
+                            "explain",
+                            "--project-root",
+                            str(release),
+                            "--context",
+                            "process/context/CP7-CR101.context.json",
+                        ]
+                    ),
+                )
+            self.assertIn(
+                "- path: process/context/CP7-CR101.context.json",
+                stream.getvalue(),
+            )
+            self.assertNotIn(str(process.resolve()), stream.getvalue())
 
     def test_build_writes_context_pack_and_read_policy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

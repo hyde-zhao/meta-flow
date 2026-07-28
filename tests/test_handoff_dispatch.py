@@ -7,160 +7,341 @@ import unittest
 from pathlib import Path
 
 from meta_flow.checks import handoff_dispatch
+from meta_flow.state import event_ledger
 
 
-def _handoff(dispatch_lines: list[str], body: str = "body") -> str:
-    return "---\n" + "\n".join(dispatch_lines) + "\n---\n\n" + body + "\n"
+def _handoff(
+    dispatch_lines: list[str],
+    body: str = "body",
+    *,
+    status: str = "completed",
+) -> str:
+    return "---\n" + f'status: "{status}"\n' + "\n".join(dispatch_lines) + "\n---\n\n" + body + "\n"
 
 
 class HandoffDispatchCheckTests(unittest.TestCase):
-    def _write(self, directory: str | Path, name: str, dispatch_lines: list[str]) -> Path:
+    def _write(
+        self,
+        directory: str | Path,
+        name: str,
+        dispatch_lines: list[str],
+        *,
+        status: str = "completed",
+        body: str = "body",
+    ) -> Path:
         path = Path(directory) / name
-        path.write_text(_handoff(dispatch_lines), encoding="utf-8")
+        path.write_text(_handoff(dispatch_lines, body, status=status), encoding="utf-8")
         return path
+
+    def test_active_subagent_statuses_pass_without_completed_at(self) -> None:
+        for status in ("dispatched", "running", "in-progress"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as d:
+                path = self._write(
+                    d,
+                    "active.md",
+                    [
+                        "dispatch:",
+                        '  mode: "subagent"',
+                        '  canonical_role: "meta-qa"',
+                        '  dispatch_trigger: "critical-checkpoint-cp7"',
+                        '  tool_name: "spawn_agent"',
+                        '  thread_id: "/root/cr061_cp7_critical"',
+                        '  spawned_at: "2026-07-26T19:27:53+08:00"',
+                    ],
+                    status=status,
+                )
+                self.assertEqual([], handoff_dispatch.validate_handoff_dispatch(path))
+
+    def test_active_subagent_with_completed_at_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = self._write(
+                d,
+                "active.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-qa"',
+                    '  dispatch_trigger: "critical-checkpoint-cp7"',
+                    '  tool_name: "spawn_agent"',
+                    '  thread_id: "/root/cr061_cp7_critical"',
+                    '  spawned_at: "2026-07-26T19:27:53+08:00"',
+                    '  completed_at: "2026-07-26T20:00:00+08:00"',
+                ],
+                status="running",
+            )
+            errors = handoff_dispatch.validate_handoff_dispatch(path)
+            self.assertTrue(any("active subagent" in error for error in errors))
 
     def test_complete_subagent_passes(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-                '  canonical_role: "meta-dev"',
-                '  dispatch_trigger: "phase-default"',
-                '  tool_name: "spawn_agent"',
-                '  agent_id: "a-123"',
-                '  spawned_at: "2026-07-05T00:00:00+00:00"',
-                '  completed_at: "2026-07-05T00:05:00+00:00"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                    '  dispatch_trigger: "phase-default"',
+                    '  tool_name: "spawn_agent"',
+                    '  agent_id: "a-123"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                    '  completed_at: "2026-07-05T00:05:00+00:00"',
+                ],
+            )
             self.assertEqual([], handoff_dispatch.validate_handoff_dispatch(path))
 
     def test_subagent_with_thread_id_passes(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-                '  canonical_role: "meta-qa"',
-                '  dispatch_trigger: "critical-checkpoint"',
-                '  tool_name: "send_input"',
-                '  thread_id: "t-1"',
-                '  resumed_at: "2026-07-05T00:00:00+00:00"',
-                '  completed_at: "2026-07-05T00:05:00+00:00"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-qa"',
+                    '  dispatch_trigger: "critical-checkpoint"',
+                    '  tool_name: "send_input"',
+                    '  thread_id: "t-1"',
+                    '  resumed_at: "2026-07-05T00:00:00+00:00"',
+                    '  completed_at: "2026-07-05T00:05:00+00:00"',
+                ],
+            )
             self.assertEqual([], handoff_dispatch.validate_handoff_dispatch(path))
 
     def test_subagent_missing_agent_id_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-                '  canonical_role: "meta-dev"',
-                '  dispatch_trigger: "phase-default"',
-                '  tool_name: "spawn_agent"',
-                '  spawned_at: "2026-07-05T00:00:00+00:00"',
-                '  completed_at: "2026-07-05T00:05:00+00:00"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                    '  dispatch_trigger: "phase-default"',
+                    '  tool_name: "spawn_agent"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                    '  completed_at: "2026-07-05T00:05:00+00:00"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("agent_id or thread_id" in e for e in errors))
 
     def test_subagent_missing_completed_at_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-                '  canonical_role: "meta-dev"',
-                '  dispatch_trigger: "phase-default"',
-                '  tool_name: "spawn_agent"',
-                '  agent_id: "a-1"',
-                '  spawned_at: "2026-07-05T00:00:00+00:00"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                    '  dispatch_trigger: "phase-default"',
+                    '  tool_name: "spawn_agent"',
+                    '  agent_id: "a-1"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("completed_at" in e for e in errors))
 
+    def test_terminal_failure_statuses_missing_completed_at_fail(self) -> None:
+        for status in ("failed", "cancelled", "interrupted"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as d:
+                path = self._write(
+                    d,
+                    "terminal.md",
+                    [
+                        "dispatch:",
+                        '  mode: "subagent"',
+                        '  canonical_role: "meta-dev"',
+                        '  dispatch_trigger: "phase-default"',
+                        '  tool_name: "spawn_agent"',
+                        '  agent_id: "a-1"',
+                        '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                    ],
+                    status=status,
+                )
+                errors = handoff_dispatch.validate_handoff_dispatch(path)
+                self.assertTrue(
+                    any("terminal subagent" in e and "completed_at" in e for e in errors)
+                )
+
+    def test_terminal_failed_status_with_completed_at_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = self._write(
+                d,
+                "terminal.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                    '  dispatch_trigger: "phase-default"',
+                    '  tool_name: "spawn_agent"',
+                    '  agent_id: "a-1"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                    '  completed_at: "2026-07-05T00:05:00+00:00"',
+                ],
+                status="failed",
+            )
+            self.assertEqual([], handoff_dispatch.validate_handoff_dispatch(path))
+
     def test_subagent_missing_dispatch_trigger_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-                '  canonical_role: "meta-dev"',
-                '  tool_name: "spawn_agent"',
-                '  agent_id: "a-1"',
-                '  spawned_at: "2026-07-05T00:00:00+00:00"',
-                '  completed_at: "2026-07-05T00:05:00+00:00"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                    '  tool_name: "spawn_agent"',
+                    '  agent_id: "a-1"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                    '  completed_at: "2026-07-05T00:05:00+00:00"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("dispatch_trigger" in e for e in errors))
 
     def test_subagent_missing_canonical_role_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-                '  dispatch_trigger: "phase-default"',
-                '  tool_name: "spawn_agent"',
-                '  agent_id: "a-1"',
-                '  spawned_at: "2026-07-05T00:00:00+00:00"',
-                '  completed_at: "2026-07-05T00:05:00+00:00"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  dispatch_trigger: "phase-default"',
+                    '  tool_name: "spawn_agent"',
+                    '  agent_id: "a-1"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                    '  completed_at: "2026-07-05T00:05:00+00:00"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("canonical_role" in e for e in errors))
 
     def test_complete_inline_fallback_passes(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "inline-fallback"',
-                '  canonical_role: "meta-dev"',
-                '  fallback_reason: "no subagent tool"',
-                '  approved_by: "user"',
-                '  approved_at: "2026-07-05T00:00:00+00:00"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "inline-fallback"',
+                    '  canonical_role: "meta-dev"',
+                    '  fallback_reason: "no subagent tool"',
+                    '  approved_by: "user"',
+                    '  approved_at: "2026-07-05T00:00:00+00:00"',
+                ],
+            )
             self.assertEqual([], handoff_dispatch.validate_handoff_dispatch(path))
 
     def test_inline_fallback_missing_approved_by_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "inline-fallback"',
-                '  canonical_role: "meta-dev"',
-                '  fallback_reason: "no subagent tool"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "inline-fallback"',
+                    '  canonical_role: "meta-dev"',
+                    '  fallback_reason: "no subagent tool"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("approved_by" in e for e in errors))
 
     def test_handoff_only_clean_passes(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "handoff-only"',
-                '  canonical_role: "meta-dev"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "handoff-only"',
+                    '  canonical_role: "meta-dev"',
+                ],
+            )
             self.assertEqual([], handoff_dispatch.validate_handoff_dispatch(path))
 
     def test_handoff_only_with_completed_at_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "handoff-only"',
-                '  canonical_role: "meta-dev"',
-                '  completed_at: "2026-07-05T00:05:00+00:00"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "handoff-only"',
+                    '  canonical_role: "meta-dev"',
+                    '  completed_at: "2026-07-05T00:05:00+00:00"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("handoff-only" in e and "completed_at" in e for e in errors))
 
     def test_unknown_mode_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  mode: "dynamic"',
-                '  canonical_role: "meta-dev"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "dynamic"',
+                    '  canonical_role: "meta-dev"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("not a known mode" in e for e in errors))
 
+    def test_unknown_status_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                    '  dispatch_trigger: "phase-default"',
+                    '  tool_name: "spawn_agent"',
+                    '  agent_id: "a-1"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                ],
+                status="almost-done",
+            )
+            errors = handoff_dispatch.validate_handoff_dispatch(path)
+            self.assertTrue(any("not a known status" in e for e in errors))
+
+    def test_body_status_cannot_replace_empty_frontmatter_status(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                    '  dispatch_trigger: "phase-default"',
+                    '  tool_name: "spawn_agent"',
+                    '  agent_id: "a-1"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                ],
+                status="",
+                body="status: dispatched",
+            )
+            errors = handoff_dispatch.validate_handoff_dispatch(path)
+            self.assertTrue(any("top-level status is empty" in e for e in errors))
+
     def test_missing_dispatch_block_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                'semantic: "stage-dispatch"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    'semantic: "stage-dispatch"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("missing dispatch block" in e for e in errors))
 
@@ -173,10 +354,14 @@ class HandoffDispatchCheckTests(unittest.TestCase):
 
     def test_empty_mode_fails(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "h1.md", [
-                "dispatch:",
-                '  canonical_role: "meta-dev"',
-            ])
+            path = self._write(
+                d,
+                "h1.md",
+                [
+                    "dispatch:",
+                    '  canonical_role: "meta-dev"',
+                ],
+            )
             errors = handoff_dispatch.validate_handoff_dispatch(path)
             self.assertTrue(any("dispatch.mode is empty" in e for e in errors))
 
@@ -185,21 +370,29 @@ class HandoffDispatchCheckTests(unittest.TestCase):
             root = Path(d)
             handoff_dir = root / "process" / "handoffs"
             handoff_dir.mkdir(parents=True)
-            self._write(handoff_dir, "good.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-                '  canonical_role: "meta-dev"',
-                '  dispatch_trigger: "phase-default"',
-                '  tool_name: "spawn_agent"',
-                '  agent_id: "a-1"',
-                '  spawned_at: "2026-07-05T00:00:00+00:00"',
-                '  completed_at: "2026-07-05T00:05:00+00:00"',
-            ])
-            self._write(handoff_dir, "bad.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-                '  canonical_role: "meta-dev"',
-            ])
+            self._write(
+                handoff_dir,
+                "good.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                    '  dispatch_trigger: "phase-default"',
+                    '  tool_name: "spawn_agent"',
+                    '  agent_id: "a-1"',
+                    '  spawned_at: "2026-07-05T00:00:00+00:00"',
+                    '  completed_at: "2026-07-05T00:05:00+00:00"',
+                ],
+            )
+            self._write(
+                handoff_dir,
+                "bad.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                    '  canonical_role: "meta-dev"',
+                ],
+            )
             errors, checked = handoff_dispatch.validate_handoff_dispatch_dir(root)
             self.assertEqual(2, len(checked))
             self.assertTrue(any("bad.md" in e for e in errors))
@@ -210,11 +403,15 @@ class HandoffDispatchCheckTests(unittest.TestCase):
             root = Path(d)
             handoff_dir = root / "process" / "handoffs"
             handoff_dir.mkdir(parents=True)
-            self._write(handoff_dir, "current.md", [
-                "dispatch:",
-                '  mode: "handoff-only"',
-                '  canonical_role: "meta-dev"',
-            ])
+            self._write(
+                handoff_dir,
+                "current.md",
+                [
+                    "dispatch:",
+                    '  mode: "handoff-only"',
+                    '  canonical_role: "meta-dev"',
+                ],
+            )
             self._write(handoff_dir, "legacy.md", ['semantic: "stage-dispatch"'])
 
             errors, checked = handoff_dispatch.validate_handoff_dispatch_dir(root)
@@ -242,22 +439,44 @@ class HandoffDispatchCheckTests(unittest.TestCase):
 
     def test_main_returns_nonzero_on_error(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "bad.md", [
-                "dispatch:",
-                '  mode: "subagent"',
-            ])
+            path = self._write(
+                d,
+                "bad.md",
+                [
+                    "dispatch:",
+                    '  mode: "subagent"',
+                ],
+            )
             exit_code = handoff_dispatch.main(["--handoff", str(path)])
             self.assertEqual(1, exit_code)
 
     def test_main_returns_zero_on_pass(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            path = self._write(d, "good.md", [
+            path = self._write(
+                d,
+                "good.md",
+                [
+                    "dispatch:",
+                    '  mode: "handoff-only"',
+                    '  canonical_role: "meta-dev"',
+                ],
+            )
+            exit_code = handoff_dispatch.main(["--handoff", str(path)])
+            self.assertEqual(0, exit_code)
+
+    def test_canonical_parser_is_byte_equivalent_for_multiple_consumers(self) -> None:
+        text = _handoff(
+            [
                 "dispatch:",
                 '  mode: "handoff-only"',
                 '  canonical_role: "meta-dev"',
-            ])
-            exit_code = handoff_dispatch.main(["--handoff", str(path)])
-            self.assertEqual(0, exit_code)
+            ]
+        )
+
+        first = event_ledger.parse_handoff_dispatch_record(text)
+        second = event_ledger.parse_handoff_dispatch_record(text)
+
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":

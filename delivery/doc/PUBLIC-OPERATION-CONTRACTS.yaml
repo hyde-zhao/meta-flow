@@ -1,0 +1,222 @@
+{
+  "schema_version": 2,
+  "kind": "PublicOperationContractRegistryV2",
+  "operations": [
+    {
+      "operation": "event.append",
+      "entry": ["meta-flow", "event", "append"],
+      "input_version": "EventLedgerAppendV1",
+      "output_version": "EventLedgerAppendResultV1",
+      "mutation_mode": "append-only-prevalidated",
+      "authorization_mode": "none",
+      "projector": "meta_flow.state.event_ledger.append_event",
+      "l3_journey": "L3-EVENT",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--ledger"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "story.project-cp6",
+      "entry": ["meta-flow", "story", "project-cp6"],
+      "input_version": "CheckpointResultV1",
+      "output_version": "Cp6StoryProjectionPlanV1",
+      "mutation_mode": "dry-run-digest-apply",
+      "authorization_mode": "expected-plan-digest",
+      "projector": "meta_flow.checks.state_transition.project_cp6_development_plan",
+      "l3_journey": "L3-STORY",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--result"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "context.read-log",
+      "entry": ["meta-flow", "context", "read-log"],
+      "input_version": "ReadExpansionEventV1",
+      "output_version": "ReadExpansionAppendResultV1",
+      "mutation_mode": "append-only-prevalidated",
+      "authorization_mode": "policy-enum",
+      "projector": "meta_flow.context_pack.read_expansion.append_event",
+      "l3_journey": "L3-CONTEXT",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--path", "--context-ref"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "cr.terminate",
+      "entry": ["meta-flow", "cr", "terminate"],
+      "input_version": "TerminationPlanV1",
+      "output_version": "TerminationResultV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.workflow.cr_lifecycle.plan_cr_termination",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "cr.status-sync",
+      "entry": ["meta-flow", "cr", "status-sync"],
+      "input_version": "StatusSyncPlanV1",
+      "output_version": "StatusSyncResultV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.workflow.cr_lifecycle.plan_status_sync",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "cr.close",
+      "entry": ["meta-flow", "cr", "close"],
+      "input_version": "StatusSyncPlanV1",
+      "output_version": "StatusSyncResultV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.workflow.cr_lifecycle.plan_status_sync",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "cr.conflicts.proposed",
+      "entry": ["meta-flow", "cr", "conflicts", "--proposed"],
+      "input_version": "ProposedConflictPreviewV1",
+      "output_version": "ProposedConflictPreviewResultV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.workflow.cr_lifecycle.proposed_conflict_report",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "public-operations.check",
+      "entry": ["meta-flow", "cr", "public-operations-check"],
+      "input_version": "PublicOperationContractRegistryV2",
+      "output_version": "PublicOperationRegistryCheckV2",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.policies.public_operations.validate_public_operations",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "not-applicable",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "not-applicable",
+        "persisted_process_ref_mode": "not-applicable",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "repository.commit",
+      "entry": ["meta-flow", "repository", "commit"],
+      "input_version": "PublicationContextV1",
+      "output_version": "CommitPlanV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.repository.publisher.plan_commit",
+      "l3_journey": "L3-REPOSITORY",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--publication-evidence-ref", "--publication-context-ref"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "repository.push",
+      "entry": ["meta-flow", "repository", "push"],
+      "input_version": "PublicationContextV1",
+      "output_version": "PushPlanV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.repository.publisher.plan_push",
+      "l3_journey": "L3-REPOSITORY",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--publication-evidence-ref", "--publication-context-ref"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "human-gate.ask-user",
+      "entry": ["meta-flow", "ask-user", "human-gate"],
+      "input_version": "HumanGateRefV1",
+      "output_version": "HumanGateLaunchMessageV1",
+      "mutation_mode": "explicit-output-file",
+      "authorization_mode": "none",
+      "projector": "meta_flow.ask_user.render_human_gate_message",
+      "l3_journey": "L3-HUMAN-GATE",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--checkpoint", "--launch-message-file", "--output"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "human-gate.check",
+      "entry": ["meta-flow", "check", "human-gate"],
+      "input_version": "HumanGateRefV1",
+      "output_version": "HumanGateValidationResultV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.checks.human_gate.collect_checkpoint_errors",
+      "l3_journey": "L3-HUMAN-GATE",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--checkpoint", "--launch-message-file", "--decision-bundle"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    }
+  ]
+}

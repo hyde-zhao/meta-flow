@@ -28,6 +28,28 @@ from meta_flow.state import event_ledger
 NOW = datetime(2026, 7, 12, 4, 40, tzinfo=UTC)
 
 
+def dispatch_attempt(
+    dispatch_id: str,
+    attempt_id: str,
+    status: str,
+    source_ref: str,
+    **overrides: object,
+) -> DispatchAttempt:
+    data: dict[str, object] = {
+        "dispatch_id": dispatch_id,
+        "attempt_id": attempt_id,
+        "status": status,
+        "source_ref": source_ref,
+        "event_id": f"event-{dispatch_id}-{attempt_id}-{status}",
+        "story_id": "STORY-CR046-S01",
+        "canonical_role": "meta-dev",
+        "checkpoint": "CP6",
+        "dispatch_mode": "subagent",
+    }
+    data.update(overrides)
+    return DispatchAttempt(**data)  # type: ignore[arg-type]
+
+
 def config() -> ProfileConfig:
     return ProfileConfig("meta-qa-critical", "cfg-1", "gpt-5.6-sol", "xhigh", ".codex/agents/meta-qa-critical.toml")
 
@@ -140,7 +162,13 @@ class DispatchAttestationTests(unittest.TestCase):
         self.assertEqual("REQUIRED_PROFILE_UNAVAILABLE", findings[0].code)
 
     def test_pc11_attempt_terminal_cannot_reopen(self) -> None:
-        attempt = DispatchAttempt("dispatch-1", "attempt-1", "completed", "event:completed", terminal_result="PASS")
+        attempt = dispatch_attempt(
+            "dispatch-1",
+            "attempt-1",
+            "completed",
+            "event:completed",
+            terminal_result="PASS",
+        )
         transition = advance_attempt(attempt, {"status": "running"})
         self.assertIn("ATTEMPT_ALREADY_TERMINAL", [item.code for item in transition.findings])
 
@@ -159,21 +187,67 @@ class DispatchAttestationTests(unittest.TestCase):
 
     def test_pc14_attempt_identity_collision_is_rejected(self) -> None:
         attempts = [
-            DispatchAttempt("dispatch-1", "attempt-1", "completed", "first", terminal_result="PASS"),
-            DispatchAttempt("dispatch-2", "attempt-1", "completed", "second", terminal_result="PASS"),
+            dispatch_attempt("dispatch-1", "attempt-1", "completed", "first", terminal_result="PASS"),
+            dispatch_attempt("dispatch-2", "attempt-1", "completed", "second", terminal_result="PASS"),
         ]
         self.assertIn("CROSS_DISPATCH_ATTEMPT_ID", [item.code for item in validate_attempt_graph(attempts)])
 
     def test_pc15_attempt_supersedes_cycle_is_rejected(self) -> None:
         attempts = [
-            DispatchAttempt("dispatch-1", "a", "superseded", "a", terminal_result="SUPERSEDED", supersedes_attempt_id="b"),
-            DispatchAttempt("dispatch-1", "b", "superseded", "b", terminal_result="SUPERSEDED", supersedes_attempt_id="a"),
+            dispatch_attempt(
+                "dispatch-1",
+                "a",
+                "superseded",
+                "a",
+                terminal_result="SUPERSEDED",
+                supersedes_attempt_id="b",
+            ),
+            dispatch_attempt(
+                "dispatch-1",
+                "b",
+                "superseded",
+                "b",
+                terminal_result="SUPERSEDED",
+                supersedes_attempt_id="a",
+            ),
         ]
         self.assertIn("SUPERSEDES_CYCLE", [item.code for item in validate_attempt_graph(attempts)])
 
     def test_pc16_missing_terminal_closure_is_rejected(self) -> None:
-        findings = validate_attempt_graph([DispatchAttempt("dispatch-1", "attempt-1", "running", "event:running")])
+        findings = validate_attempt_graph(
+            [dispatch_attempt("dispatch-1", "attempt-1", "running", "event:running")]
+        )
         self.assertIn("MISSING_TERMINAL_CLOSURE", [item.code for item in findings])
+
+    def test_public_dispatch_attempt_is_typed_contract_adapter(self) -> None:
+        attempt = dispatch_attempt(
+            "dispatch-1",
+            "attempt-1",
+            "completed",
+            "event:completed",
+            terminal_result="PASS",
+        )
+
+        typed, errors = attempt.as_typed_attempt()
+
+        self.assertEqual((), errors)
+        self.assertIsInstance(typed, event_ledger.TypedDispatchAttemptV1)
+        self.assertEqual("meta-dev", typed.canonical_role if typed else "")
+
+    def test_inline_fallback_adapter_requires_approval(self) -> None:
+        attempt = dispatch_attempt(
+            "dispatch-1",
+            "attempt-1",
+            "completed",
+            "event:inline",
+            terminal_result="PASS",
+            dispatch_mode="inline-fallback",
+            approval_ref="",
+        )
+
+        _typed, errors = attempt.as_typed_attempt()
+
+        self.assertIn("MISSING_INLINE_FALLBACK_APPROVAL", errors)
 
     def test_pc17_config_loader_produces_d2_hash_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -220,8 +294,8 @@ class DispatchAttestationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ledger = Path(directory) / "AGENT-DISPATCH-LEDGER.ndjson"
             for event in (
-                {"event_id": "event-running", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "dispatch_trigger": "phase-default", "agent_id": "agent-1", "status": "running", "spawned_at": "2026-07-12T00:00:00Z"},
-                {"event_id": "event-completed", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "status": "completed", "terminal_result": "PASS", "completed_at": "2026-07-12T00:01:00Z"},
+                {"event_id": "event-running", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "story_id": "STORY-CR046-S01", "checkpoint": "CP6", "dispatch_mode": "subagent", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "dispatch_trigger": "phase-default", "agent_id": "agent-1", "status": "running", "spawned_at": "2026-07-12T00:00:00Z"},
+                {"event_id": "event-completed", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "story_id": "STORY-CR046-S01", "checkpoint": "CP6", "dispatch_mode": "subagent", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "status": "completed", "terminal_result": "PASS", "completed_at": "2026-07-12T00:01:00Z"},
             ):
                 event_ledger.append_event(ledger, event)
             errors, warnings = event_ledger.validate_event_ledger(ledger, ledger_type="dispatch")
@@ -233,7 +307,7 @@ class DispatchAttestationTests(unittest.TestCase):
             ledger = Path(directory) / "AGENT-DISPATCH-LEDGER.ndjson"
             event_ledger.append_event(
                 ledger,
-                {"event_id": "event-running", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "status": "running", "created_at": "2026-07-12T00:00:00Z"},
+                {"event_id": "event-running", "event_type": "dispatch", "dispatch_id": "dispatch-1", "attempt_id": "attempt-1", "story_id": "STORY-CR046-S01", "checkpoint": "CP6", "dispatch_mode": "subagent", "canonical_role": "meta-dev", "tool_name": "spawn_agent", "status": "running", "created_at": "2026-07-12T00:00:00Z"},
             )
             errors, _warnings = event_ledger.validate_event_ledger(ledger, ledger_type="dispatch")
         self.assertIn("dispatch dispatch-1 attempt attempt-1: missing terminal closure", errors)

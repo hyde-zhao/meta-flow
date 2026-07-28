@@ -19,7 +19,9 @@ def build_audit_report(project_root: Path, *, cr_id: str) -> dict[str, Any]:
     scoped = [event for event in events if str(event.get("cr_id") or "") == cr_id]
     attempts = {(str(event.get("dispatch_id") or ""), str(event.get("attempt_id") or "")) for event in scoped if event.get("attempt_id")}
     threads = {str(event.get("thread_id") or "") for event in scoped if event.get("thread_id")}
-    terminal = [event for event in scoped if str(event.get("status") or "") in {"completed", "failed", "interrupted", "cancelled", "superseded"}]
+    terminal_projection = event_ledger.project_terminal_successes(
+        event_ledger.ProjectionInputV1(tuple(scoped), "dispatch")
+    )
     usages = [usage for event in scoped if (usage := usage_from_event(event)) is not None]
     usage_summary = aggregate_usage(usages)
     digest = hashlib.sha256(dispatch_path.read_bytes()).hexdigest() if dispatch_path.is_file() else ""
@@ -27,7 +29,12 @@ def build_audit_report(project_root: Path, *, cr_id: str) -> dict[str, Any]:
         "schema_version": 1,
         "cr_id": cr_id,
         "checker_provenance": {"checker_name": "meta-flow audit-report", "checker_commit": "working-tree", "input_sha256": f"sha256:{digest}" if digest else None},
-        "counts": {"event_rows": len(scoped), "attempts": len(attempts), "threads": len(threads), "terminal_events": len(terminal)},
+        "counts": {
+            "event_rows": len(scoped),
+            "attempts": len(attempts),
+            "threads": len(threads),
+            "terminal_events": len(terminal_projection.terminal_event_ids),
+        },
         "errors": errors,
         "token_measurement": usage_summary if usages else {"measurement_status_counts": {"estimated": 0, "measured": 0, "unavailable": 0}, "measured_total_tokens": None, "measurement_status": "unavailable", "reason": "not-yet-ingested"},
     }

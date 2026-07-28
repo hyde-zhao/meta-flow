@@ -11,9 +11,22 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Any
 
-TERMINAL_ATTEMPT_STATUSES = frozenset({"completed", "failed", "interrupted", "cancelled", "superseded"})
-NONTERMINAL_ATTEMPT_STATUSES = frozenset({"submitted", "running", "retrying"})
-ALL_ATTEMPT_STATUSES = TERMINAL_ATTEMPT_STATUSES | NONTERMINAL_ATTEMPT_STATUSES
+from meta_flow.state.event_ledger import (
+    ALL_ATTEMPT_STATUSES,
+    TERMINAL_ATTEMPT_STATUSES,
+    ProjectionInputV1,
+    ProjectionResultV1,
+    TypedDispatchAttemptV1,
+    normalize_terminal_status,
+    project_dispatch_attempt,
+    typed_dispatch_attempt_from_event,
+)
+
+
+def project_typed_dispatch_evidence(events: Iterable[dict[str, Any]], dispatch_id: str) -> ProjectionResultV1:
+    """Expose the event-ledger projector without reinterpreting dispatch identity."""
+
+    return project_dispatch_attempt(ProjectionInputV1(tuple(events), "dispatch", dispatch_id))
 
 
 @dataclass(frozen=True)
@@ -27,6 +40,8 @@ class EvidenceFinding:
 
 @dataclass(frozen=True)
 class DispatchAttempt:
+    """Public compatibility view backed by ``TypedDispatchAttemptV1``."""
+
     dispatch_id: str
     attempt_id: str
     status: str
@@ -35,10 +50,39 @@ class DispatchAttempt:
     supersedes_attempt_id: str | None = None
     thread_id: str | None = None
     agent_id: str | None = None
+    event_id: str = ""
+    story_id: str = ""
+    canonical_role: str = ""
+    checkpoint: str = ""
+    dispatch_mode: str = "subagent"
+    approval_ref: str | None = None
 
     @property
     def is_terminal(self) -> bool:
-        return self.status in TERMINAL_ATTEMPT_STATUSES
+        return normalize_terminal_status(self.status) in TERMINAL_ATTEMPT_STATUSES
+
+    def as_event(self) -> dict[str, Any]:
+        """Render the adapter input without inventing any canonical identity."""
+
+        event_type = "inline_fallback" if self.dispatch_mode == "inline-fallback" else "dispatch"
+        return {
+            "event_id": self.event_id,
+            "event_type": event_type,
+            "dispatch_id": self.dispatch_id,
+            "attempt_id": self.attempt_id,
+            "story_id": self.story_id,
+            "canonical_role": self.canonical_role,
+            "checkpoint": self.checkpoint,
+            "dispatch_mode": self.dispatch_mode,
+            "status": self.status,
+            "terminal_result": self.terminal_result or "",
+            "approval_ref": self.approval_ref or "",
+        }
+
+    def as_typed_attempt(self) -> tuple[TypedDispatchAttemptV1 | None, tuple[str, ...]]:
+        """Delegate compatibility validation to the canonical event-ledger adapter."""
+
+        return typed_dispatch_attempt_from_event(self.as_event())
 
 
 @dataclass(frozen=True)
@@ -75,11 +119,12 @@ def _finding(code: str, attempt: DispatchAttempt, field: str, message: str, *ref
 
 def validate_attempt(attempt: DispatchAttempt) -> list[EvidenceFinding]:
     findings: list[EvidenceFinding] = []
-    if not attempt.dispatch_id:
-        findings.append(_finding("MISSING_DISPATCH_ID", attempt, "dispatch_id", "dispatch_id is required"))
-    if not attempt.attempt_id:
-        findings.append(_finding("MISSING_ATTEMPT_ID", attempt, "attempt_id", "attempt_id is required"))
-    if attempt.status not in ALL_ATTEMPT_STATUSES:
+    _typed, typed_errors = attempt.as_typed_attempt()
+    for code in typed_errors:
+        field = code.removeprefix("MISSING_TYPED_").lower()
+        findings.append(_finding(code, attempt, field, f"{field} is required by TypedDispatchAttemptV1"))
+    normalized_status = normalize_terminal_status(attempt.status)
+    if normalized_status not in ALL_ATTEMPT_STATUSES:
         findings.append(_finding("INVALID_ATTEMPT_STATUS", attempt, "status", f"unsupported attempt status: {attempt.status or '-'}"))
     if attempt.is_terminal and not attempt.terminal_result:
         findings.append(_finding("MISSING_TERMINAL_RESULT", attempt, "terminal_result", "terminal attempt requires terminal_result"))
@@ -94,7 +139,7 @@ def advance_attempt(attempt: DispatchAttempt, event: dict[str, Any]) -> AttemptT
     findings = validate_attempt(attempt)
     event_dispatch = str(event.get("dispatch_id") or attempt.dispatch_id)
     event_attempt = str(event.get("attempt_id") or attempt.attempt_id)
-    event_status = str(event.get("status") or "")
+    event_status = normalize_terminal_status(event.get("status"))
     if event_dispatch != attempt.dispatch_id:
         findings.append(_finding("DISPATCH_ID_MISMATCH", attempt, "dispatch_id", "event dispatch_id differs from attempt"))
     if event_attempt != attempt.attempt_id:

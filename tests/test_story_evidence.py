@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -16,6 +17,7 @@ def write_minimal_state(root: Path) -> None:
     state = current.default_current_state(root)
     state["project_id"] = "fixture-project"
     current.write_current_state(root, state)
+    current.refresh_current_entry(root)
 
 
 def write_cr_summary(root: Path, cr_id: str = "CR-123") -> None:
@@ -64,10 +66,8 @@ def write_feature_doc(root: Path) -> None:
     path.write_text("# Data Manifest Design\n", encoding="utf-8")
 
 
-def write_return_packet(root: Path, *, touched_path: str = "quant_lab/data/manifest/reader.py") -> Path:
-    path = root / "process" / "returns" / "STORY-CR123-S01.CP6.return.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    packet = {
+def return_packet_payload(*, touched_path: str = "quant_lab/data/manifest/reader.py") -> dict[str, object]:
+    return {
         "schema_version": 1,
         "packet_type": "story_return_packet",
         "stage": "CP6",
@@ -96,8 +96,233 @@ def write_return_packet(root: Path, *, touched_path: str = "quant_lab/data/manif
         "waivers": [],
         "next_stage_recommendation": "ready_for_cp7",
     }
+
+
+def write_return_packet(root: Path, *, touched_path: str = "quant_lab/data/manifest/reader.py") -> Path:
+    path = root / "process" / "returns" / "STORY-CR123-S01.CP6.return.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    packet = return_packet_payload(touched_path=touched_path)
     path.write_text(json.dumps(packet, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def init_paired_binding(root: Path) -> tuple[Path, Path]:
+    release = root / "meta-flow"
+    process = root / "meta-flow-process"
+    release.mkdir()
+    process.mkdir()
+    for repository in (release, process):
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    binding = release / ".meta-flow" / "workspace.yaml"
+    binding.parent.mkdir()
+    binding.write_text(
+        "schema_version: 1\n"
+        "layout_version: independent-process-repo-v1\n"
+        "workflow_model: vnext\n"
+        "project_id: fixture-project\n"
+        "repo_role: release\n"
+        "route_mode: sibling-binding\n"
+        "process_repo:\n"
+        "  anchor: workspace_parent\n"
+        "  relative_path: meta-flow-process\n",
+        encoding="utf-8",
+    )
+    (process / ".meta-flow-process.yaml").write_text(
+        "schema_version: 1\n"
+        "layout_version: independent-process-repo-v1\n"
+        "workflow_model: vnext\n"
+        "project_id: fixture-project\n"
+        "repo_role: process\n"
+        "route_mode: sibling-binding\n"
+        "release_repo:\n"
+        "  anchor: workspace_parent\n"
+        "  relative_path: meta-flow\n",
+        encoding="utf-8",
+    )
+    (process / "PROJECT.yaml").write_text(
+        "schema_version: 1\n"
+        "project_id: fixture-project\n"
+        "name: Fixture Project\n"
+        "status: active\n",
+        encoding="utf-8",
+    )
+    return release, process
+
+
+def write_bound_return_contract(process: Path) -> None:
+    packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+    packet_path.parent.mkdir(parents=True)
+    packet_path.write_text(
+        json.dumps(
+            {
+                "story_id": "STORY-CR123-S01",
+                "stage": "CP6",
+                "expected_return_packet": "process/returns/STORY-CR123-S01.CP6.return.json",
+                "allowed_write_paths": ["quant_lab/data/manifest/**"],
+                "forbidden_write_paths": ["quant_lab/trading/**"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return_path = process / "returns" / "STORY-CR123-S01.CP6.return.json"
+    return_path.parent.mkdir(parents=True)
+    return_path.write_text(
+        json.dumps(return_packet_payload(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_bound_verify_story(process: Path) -> None:
+    summary = process / "changes" / "summaries" / "CR-123.summary.json"
+    summary.parent.mkdir(parents=True)
+    summary.write_text(
+        json.dumps({"id": "CR-123", "status": "active"}) + "\n",
+        encoding="utf-8",
+    )
+    story = process / "stories" / "STORY-CR123-S01.md"
+    story.parent.mkdir(parents=True)
+    story.write_text(
+        """---
+story_id: STORY-CR123-S01
+cr_id: CR-123
+title: Migrate manifest owner
+feature_refs:
+  - data.manifest
+feature_design_refs:
+  - docs/features/data-manifest/DESIGN.md
+feature_contract_summary: Manifest ownership is explicit.
+cr_delta_summary: Verify the CP6 implementation.
+dependency_inputs:
+  - CP6 Return Packet
+lld_policy: technical-note
+risk_profile: standard-code
+allowed_write_paths:
+  - process/checks/**
+forbidden_write_paths:
+  - meta_flow/**
+acceptance:
+  - legacy manifest can load
+verification_plan:
+  - pytest tests/data/manifest
+authz_policy_refs:
+  - NO_CREDENTIAL_READ
+---
+
+# Story
+""",
+        encoding="utf-8",
+    )
+
+
+def write_cp6_projection_fixture(process: Path) -> Path:
+    plan_path = process / "DEVELOPMENT-PLAN.yaml"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "story_management_truth_source": "process/DEVELOPMENT-PLAN.yaml",
+                "waves": [
+                    {
+                        "wave_id": "W1",
+                        "stories": [
+                            {
+                                "story_id": "STORY-CR123-S01",
+                                "title": "Upstream",
+                                "wave": "W1",
+                                "status": "dev-ready",
+                                "depends_on": [],
+                                "dev_gate": {
+                                    "cp5_confirmed": True,
+                                    "dependencies_satisfied": True,
+                                    "file_conflict_free": True,
+                                    "implementation_authorized": True,
+                                    "lld_confirmed": True,
+                                },
+                            },
+                            {
+                                "story_id": "STORY-CR123-S02",
+                                "title": "Downstream",
+                                "wave": "W1",
+                                "status": "lld-approved",
+                                "depends_on": ["STORY-CR123-S01"],
+                                "dev_gate": {
+                                    "cp5_confirmed": True,
+                                    "dependencies_satisfied": False,
+                                    "file_conflict_free": True,
+                                    "implementation_authorized": False,
+                                    "lld_confirmed": True,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = {
+        "schema_version": 1,
+        "checkpoint": "CP6",
+        "checkpoint_id": "CP6-STORY-CR123-S01",
+        "profile": "standard-code",
+        "story_id": "STORY-CR123-S01",
+        "cr_id": "CR-123",
+        "context_ref": "process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+        "dispatch_refs": ["DISPATCH-CR123-S01"],
+        "evidence_ref": "process/evidence/STORY-CR123-S01.CP6.index.json",
+        "items": [
+            {
+                "id": "CP6-01",
+                "name": "implementation",
+                "status": "PASS",
+                "severity": "BLOCKER",
+                "evidence_refs": ["process/evidence/STORY-CR123-S01.CP6.index.json"],
+            }
+        ],
+        "blockers": [],
+        "waivers": [],
+        "decision": "PASS",
+        "next_route": "STORY-CR123-S02-CP6",
+        "checked_at": "2026-07-26T00:00:00+00:00",
+        "event_id": "CP6-STORY-CR123-S01-RESULT-V1",
+    }
+    result_path = process / "checks" / "CP6-STORY-CR123-S01.result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    checkpoint = process / "state" / "CHECKPOINT-LEDGER.ndjson"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text(
+        json.dumps(
+            {
+                "event_id": result["event_id"],
+                "event_type": "checkpoint_result",
+                "checkpoint": "CP6",
+                "decision": "PASS",
+                "result_ref": "process/checks/CP6-STORY-CR123-S01.result.json",
+                "story_id": "STORY-CR123-S01",
+                "cr_id": "CR-123",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return result_path
 
 
 class StoryEvidenceTests(unittest.TestCase):
@@ -201,6 +426,209 @@ class StoryEvidenceTests(unittest.TestCase):
             self.assertTrue(output.is_file())
             self.assertEqual([], errors)
             self.assertEqual([], warnings)
+
+    def test_public_story_evidence_commands_resolve_sibling_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            write_bound_return_contract(process)
+            write_bound_verify_story(process)
+
+            outputs: list[str] = []
+            for argv in (
+                [
+                    "return-check",
+                    "--packet",
+                    "process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+                    "--return",
+                    "process/returns/STORY-CR123-S01.CP6.return.json",
+                    "--project-root",
+                    str(release),
+                ],
+                [
+                    "evidence-index",
+                    "--return",
+                    "process/returns/STORY-CR123-S01.CP6.return.json",
+                    "--project-root",
+                    str(release),
+                ],
+                [
+                    "evidence-check",
+                    "--index",
+                    "process/evidence/STORY-CR123-S01.CP6.index.json",
+                    "--project-root",
+                    str(release),
+                ],
+                [
+                    "verify-packet",
+                    "--from-return",
+                    "process/returns/STORY-CR123-S01.CP6.return.json",
+                    "--story",
+                    "process/stories/STORY-CR123-S01.md",
+                    "--project-root",
+                    str(release),
+                ],
+            ):
+                stream = StringIO()
+                with redirect_stdout(stream):
+                    exit_code = story_evidence.main(argv)
+                self.assertEqual(0, exit_code, stream.getvalue())
+                self.assertNotIn("WARN", stream.getvalue())
+                outputs.append(stream.getvalue())
+
+            evidence = json.loads(
+                (process / "evidence" / "STORY-CR123-S01.CP6.index.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                "process/returns/STORY-CR123-S01.CP6.return.json",
+                evidence["return_ref"],
+            )
+            verify_packet = json.loads(
+                (
+                    process
+                    / "context"
+                    / "stories"
+                    / "STORY-CR123-S01.CP7.verify-packet.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                "process/returns/STORY-CR123-S01.CP6.return.json",
+                verify_packet["implementation_return_ref"],
+            )
+            self.assertFalse((release / "process").exists())
+            rendered = "\n".join(outputs)
+            self.assertNotIn(str(release.resolve()), rendered)
+            self.assertNotIn(str(process.resolve()), rendered)
+
+    def test_public_return_check_fails_closed_on_broken_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            write_bound_return_contract(process)
+            binding = release / ".meta-flow" / "workspace.yaml"
+            binding.write_text(
+                binding.read_text(encoding="utf-8").replace(
+                    "relative_path: meta-flow-process",
+                    "relative_path: missing-process",
+                ),
+                encoding="utf-8",
+            )
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                exit_code = story_evidence.main(
+                    [
+                        "return-check",
+                        "--packet",
+                        "process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+                        "--return",
+                        "process/returns/STORY-CR123-S01.CP6.return.json",
+                        "--project-root",
+                        str(release),
+                    ]
+                )
+
+            self.assertEqual(1, exit_code)
+            self.assertIn("Story Return Packet Check: FAIL", stream.getvalue())
+            self.assertFalse((release / "process").exists())
+            self.assertNotIn(str(release.resolve()), stream.getvalue())
+            self.assertNotIn(str(process.resolve()), stream.getvalue())
+
+    def test_public_cp6_projection_dry_run_apply_and_idempotent_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            write_cp6_projection_fixture(process)
+            before = (process / "DEVELOPMENT-PLAN.yaml").read_bytes()
+
+            dry_run = StringIO()
+            with redirect_stdout(dry_run):
+                exit_code = story_evidence.main(
+                    [
+                        "project-cp6",
+                        "--project-root",
+                        str(release),
+                        "--result",
+                        "process/checks/CP6-STORY-CR123-S01.result.json",
+                    ]
+                )
+            self.assertEqual(0, exit_code, dry_run.getvalue())
+            plan = json.loads(dry_run.getvalue())
+            self.assertEqual("READY", plan["decision"])
+            self.assertEqual(1, plan["mutation_count"])
+            self.assertEqual(before, (process / "DEVELOPMENT-PLAN.yaml").read_bytes())
+
+            applied = StringIO()
+            with redirect_stdout(applied):
+                exit_code = story_evidence.main(
+                    [
+                        "project-cp6",
+                        "--project-root",
+                        str(release),
+                        "--result",
+                        "process/checks/CP6-STORY-CR123-S01.result.json",
+                        "--expected-plan-digest",
+                        plan["plan_digest"],
+                        "--apply",
+                    ]
+                )
+            self.assertEqual(0, exit_code, applied.getvalue())
+            result = json.loads(applied.getvalue())
+            self.assertEqual("PASS", result["status"])
+            projected = json.loads(
+                (process / "DEVELOPMENT-PLAN.yaml").read_text(encoding="utf-8")
+            )
+            stories = {
+                story["story_id"]: story
+                for story in projected["waves"][0]["stories"]
+            }
+            self.assertEqual(
+                "ready-for-verification",
+                stories["STORY-CR123-S01"]["status"],
+            )
+            self.assertEqual("dev-ready", stories["STORY-CR123-S02"]["status"])
+
+            replay = StringIO()
+            with redirect_stdout(replay):
+                exit_code = story_evidence.main(
+                    [
+                        "project-cp6",
+                        "--project-root",
+                        str(release),
+                        "--result",
+                        "process/checks/CP6-STORY-CR123-S01.result.json",
+                        "--apply",
+                    ]
+                )
+            self.assertEqual(0, exit_code, replay.getvalue())
+            self.assertEqual("NO_CHANGE", json.loads(replay.getvalue())["status"])
+            self.assertNotIn(str(process.resolve()), dry_run.getvalue())
+
+    def test_public_cp6_projection_fails_closed_without_checkpoint_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = init_paired_binding(Path(directory))
+            write_cp6_projection_fixture(process)
+            checkpoint = process / "state" / "CHECKPOINT-LEDGER.ndjson"
+            checkpoint.write_text("", encoding="utf-8")
+            before = (process / "DEVELOPMENT-PLAN.yaml").read_bytes()
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                exit_code = story_evidence.main(
+                    [
+                        "project-cp6",
+                        "--project-root",
+                        str(release),
+                        "--result",
+                        "process/checks/CP6-STORY-CR123-S01.result.json",
+                        "--expected-plan-digest",
+                        "0" * 64,
+                        "--apply",
+                    ]
+                )
+
+            self.assertEqual(2, exit_code)
+            self.assertEqual("BLOCKED", json.loads(stream.getvalue())["status"])
+            self.assertEqual(before, (process / "DEVELOPMENT-PLAN.yaml").read_bytes())
 
     def test_design_delta_check_warns_pending_and_can_require_merged(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

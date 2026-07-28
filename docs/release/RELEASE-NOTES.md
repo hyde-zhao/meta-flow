@@ -1,6 +1,6 @@
 ---
 project_id: "meta-flow"
-release_scope: "meta-flow-governance-execution-closure"
+release_scope: "meta-flow-governance-kernel-projection-convergence"
 release_decision: "READY_WITH_RISK"
 created_at: "2026-06-17T13:49:25+08:00"
 ---
@@ -28,6 +28,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.14-candidate | 2026-07-19 | host-orchestrator | CR-052 vNext 本地实现候选：每项目独立发布库/过程库、弹性 Project/Phase/Work、G0/G1/G2、scope/budget、snapshot-only adoption、单仓 publication、六维复盘和有界自进化；用户已单独授权把当前两仓整改成果普通 commit/push 到各自远端分支，真实迁移、tag、production/runtime 发布仍未授权。 |
 | 1.15-candidate | 2026-07-23 | host-orchestrator | CR-057 Linux 项目接入能力成熟候选：统一 12 字段计划、双仓 6 个 exact OID 检查点、snapshot seed、typed authorization、partial/recovery 和隔离 F1/F2；CP8 自动预检为 `READY_WITH_RISK`，等待人工终验。 |
 | 1.16-candidate | 2026-07-23 | host-orchestrator | CR-058 治理执行闭环候选：固化 G2 CP8-before-publication、G0/G1 profile N/A、canonical truth、失败恢复上限、leaf path 计数、native projection 与 usage 降本闭环；独立 CP7 PASS，CP8 推荐 `READY_WITH_RISK`。 |
+| 1.17-candidate | 2026-07-27 | host-orchestrator / meta-qa-critical | CR-061 治理内核投影收敛候选：统一 terminal-success、dispatch identity、Story admission、read-expansion、状态投影、ledger migration 和 Public Operation Contract Registry；C0 及独立 CP7 PASS，等待 CP8 人工终验。 |
 
 ## 发布范围
 
@@ -209,3 +210,40 @@ fail closed。publication evidence、target policy 和 typed authorization 采�
 
 当前用户已单独授权解决该 publication blocker 后执行双仓 commit/push；该授权仍不等于 merge、
 tag、正式 release、GOV-006/GOV-007、legacy、真实外部项目或 Windows 原生工作。
+
+## CR-061 候选发布切片
+
+### 用户可见变化
+
+| 能力 | 候选行为 |
+|---|---|
+| terminal-success | CP result、audit、handoff 和 dispatch 统一消费同一原生 projector；不再维护私有成功集合或把 `dispatch_id` 回退为 `event_id` |
+| typed dispatch | real subagent 与受限 `inline_fallback` 使用同一 typed attempt 身份；缺 story、canonical role、checkpoint 或批准事实时 fail closed |
+| Story admission | CP5→CP6 由原生 projector 投影，contract dependency 在上游 CP6 PASS 后自动满足；virtual bootstrap 不再强制伪造 READY |
+| read expansion | 必读但需要扩读登记时由 Host 预登记；公共入口、logical `process/...` 与 append-only migration 使用同一 binding 契约 |
+| ledger migration | 旧 dispatch/read-expansion 事件只追加 successor/correction，不删除或改写历史；未知、歧义和无法唯一关联的记录保持 fail closed |
+| public operations | 轻量 registry 固定 6 个公共能力，4 条真实 L3 journey；event append、Story projection、read-log、terminate、proposed conflict preview 与 registry check 均可由顶层 CLI 发现 |
+| CP8 applicability | `cp applicability-build/check` 在 sibling-binding 下解析逻辑 route plan 和 aggregate 路径，输出绝对 process 路径为 0 |
+| status sync | 同一 lifecycle/readiness/gate tuple 在合法过程证据路径增长后仍为 `NO_CHANGE / mutation_count=0`，不追加重复状态事件 |
+
+### 质量证据
+
+- C0 最终 cutover：3/3 bootstrap Story replay、11/11 consumer PASS、bootstrap/legacy consumer=0。
+- 独立 CP7：attempt-7 最终 `PASS`，blocker=0、waiver=0；S01 applicability 定向 `4 passed`，paired 公共 build/check PASS。
+- 冻结全量基线：`1083 passed + 135 subtests`，workflow eval `2/2`，failure/waiver 公共入口 `12/12`，safety finding=0。
+- 增量闭环：S01 `106 passed + 18 subtests`；S05 `73 passed + 22 subtests`；生命周期独立复验 `56 passed + 10 subtests`。
+- Public Operation Contract Registry：documented `6/6`、undocumented=0、unknown=0、L3 `4/4`。
+- Ruff、隔离 pycompile、delivery guardrail、双仓 diff-check、CR tracking/audit、checkpoint/gate/dispatch ledger 均通过。
+
+### 兼容性与迁移
+
+- 不新增依赖，不修改 `pyproject.toml` 或 `uv.lock`，不改变安装路径。
+- `STATE.current.json` 合法缺失时不创建文件；CR-061 通过现有 CR/index/ledger 原生真相继续运行。
+- ledger 历史不批量重写；需要规范化的旧事件使用 append-only successor/correction。
+- `inline_fallback` 保留为平台真实调度不可用时的受限回退，不作为正常优先路径。
+
+### 风险与授权边界
+
+- `RISK-061-USAGE-CLOSURE-001`：后半程 usage 未形成可与原 420/300/160/3.2M hard cap逐项核对的完整实测总账；用户已要求不中断问题修复，因此本候选不声明预算合规，CP8 推荐 `READY_WITH_RISK`。
+- 历史 dispatch ledger 仍有缺 timestamp/receipt 的 legacy warning；当前 CR-061 typed attempt 和 terminal 证据完整，旧行不倒填。
+- 本候选未执行真实安装、迁移 apply、native close、commit、push、PR、merge、tag 或 release。CP8 人工批准与 native close 必须先于任何单仓 publication typed authorization。

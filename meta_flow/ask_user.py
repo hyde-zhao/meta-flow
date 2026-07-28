@@ -9,17 +9,20 @@ from pathlib import Path
 
 from meta_flow.checks.human_gate import (
     DecisionRow,
+    HumanGateRefV1,
     collect_checkpoint_errors,
     collect_launch_message_errors,
+    resolve_human_gate_ref,
 )
+from meta_flow.project.process_route import ProcessRouteError
 
 
 def _clean_cell(value: str) -> str:
     return " ".join(value.replace("|", "/").split())
 
 
-def _gate_id(checkpoint: Path) -> str:
-    return checkpoint.stem
+def _gate_id(checkpoint_ref: str | Path) -> str:
+    return Path(checkpoint_ref).stem
 
 
 def _render_decision_table(rows: list[DecisionRow]) -> str:
@@ -51,17 +54,21 @@ def _render_decision_table(rows: list[DecisionRow]) -> str:
     return "\n".join(lines)
 
 
-def render_human_gate_message(checkpoint: Path, rows: list[DecisionRow]) -> str:
+def render_human_gate_message(
+    checkpoint_ref: str | Path,
+    rows: list[DecisionRow],
+) -> str:
     """生成可通过 human-gate 校验的人工门禁发起消息。"""
 
-    gate = _gate_id(checkpoint)
+    canonical_ref = Path(checkpoint_ref).as_posix()
+    gate = _gate_id(canonical_ref)
     decision_count = len(rows)
     table_or_reason = _render_decision_table(rows)
     decision_ids = ", ".join(row.decision_id for row in rows) if rows else "-"
     return f"""请审查人工门禁 `{gate}`。
 
-checklist 路径: `{checkpoint.as_posix()}`
-自动预检结论: 已生成 Decision Brief；发起前请以 `meta-flow check human-gate --checkpoint {checkpoint.as_posix()}` 的结果为准。
+checklist 路径: `{canonical_ref}`
+自动预检结论: 已生成 Decision Brief；发起前请以 `meta-flow check human-gate --checkpoint {canonical_ref}` 的结果为准。
 
 审批者摘要:
 - 本次确认服务的整体目标: 请见 checkpoint `### 审批者摘要`；本消息只承载发起确认所需摘要。
@@ -92,11 +99,14 @@ blocking / high-risk 决策摘要: {decision_ids if rows else "无；完整表�
 """
 
 
-def build_codex_request_payload(checkpoint: Path, rows: list[DecisionRow]) -> dict[str, object]:
+def build_codex_request_payload(
+    checkpoint_ref: str | Path,
+    rows: list[DecisionRow],
+) -> dict[str, object]:
     """生成可映射到 Codex `request_user_input` 的结构化负载。"""
 
-    gate = _gate_id(checkpoint)
-    message = render_human_gate_message(checkpoint, rows)
+    gate = _gate_id(checkpoint_ref)
+    message = render_human_gate_message(checkpoint_ref, rows)
     return {
         "tool": "request_user_input",
         "usage": "当当前 Codex 工具面提供 request_user_input 时，Host Orchestrator 使用该负载发起结构化人工确认；否则发送 fallback_message exact-text。",
@@ -126,11 +136,17 @@ def build_codex_request_payload(checkpoint: Path, rows: list[DecisionRow]) -> di
     }
 
 
-def _load_checkpoint(path: Path) -> tuple[str, list[DecisionRow], list[str]]:
-    if not path.is_file():
-        return "", [], [f"checkpoint file not found: {path}"]
-    text = path.read_text(encoding="utf-8")
-    errors, rows = collect_checkpoint_errors(path, text)
+def _load_checkpoint(
+    checkpoint: HumanGateRefV1,
+    *,
+    legacy: bool,
+) -> tuple[str, list[DecisionRow], list[str]]:
+    text = checkpoint.resolved_path.read_text(encoding="utf-8")
+    errors, rows = collect_checkpoint_errors(
+        checkpoint.resolved_path,
+        text,
+        legacy=legacy,
+    )
     return text, rows, errors
 
 
@@ -145,35 +161,76 @@ def main(argv: list[str] | None = None) -> int:
         "human-gate",
         help="Generate a Codex/text AskUserQuestion equivalent from a CP2/CP3/CP5/CP8 checkpoint.",
     )
-    human_gate.add_argument("--checkpoint", required=True, type=Path, help="Path to process/checkpoints/CP*.md")
-    human_gate.add_argument("--launch-message-file", type=Path, help="Validate and emit an existing launch message")
+    human_gate.add_argument("--project-root", type=Path, default=Path.cwd())
+    human_gate.add_argument("--checkpoint", required=True, help="Canonical process/checkpoints/CP*.md logical ref")
+    human_gate.add_argument("--launch-message-file", help="Validate and emit a canonical process/... launch message")
     human_gate.add_argument(
         "--replay",
         action="store_true",
         help="Regenerate the launch message from checkpoint content instead of requiring a persisted launch-message file.",
     )
     human_gate.add_argument("--format", choices=("markdown", "codex-json"), default="markdown")
-    human_gate.add_argument("--output", type=Path, help="Write generated output to this file instead of stdout")
+    human_gate.add_argument("--output", help="Write generated output to a canonical process/... logical ref")
     human_gate.add_argument(
         "--check-output",
         action="store_true",
         help="After writing --output, run launch-message validation against the generated content.",
+    )
+    human_gate.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Use explicit physical paths for the pre-vNext legacy protocol.",
     )
 
     args = parser.parse_args(argv)
     if args.command != "human-gate":
         parser.error(f"unknown command: {args.command}")
 
-    _, rows, errors = _load_checkpoint(args.checkpoint)
+    try:
+        checkpoint = resolve_human_gate_ref(
+            args.project_root,
+            args.checkpoint,
+            legacy=args.legacy,
+            require_file=True,
+        )
+        output_ref = (
+            resolve_human_gate_ref(
+                args.project_root,
+                args.output,
+                legacy=args.legacy,
+                require_file=False,
+            )
+            if args.output
+            else None
+        )
+    except ProcessRouteError as exc:
+        print(json.dumps(exc.as_dict(), ensure_ascii=False, sort_keys=True), file=sys.stderr)
+        return 2
+
+    _, rows, errors = _load_checkpoint(checkpoint, legacy=args.legacy)
     message = ""
     if args.launch_message_file and args.replay:
         errors.append("--replay cannot be combined with --launch-message-file")
     elif args.launch_message_file:
-        if not args.launch_message_file.is_file():
-            errors.append(f"launch message file not found: {args.launch_message_file}")
-        else:
-            message = args.launch_message_file.read_text(encoding="utf-8")
-            errors.extend(collect_launch_message_errors(args.checkpoint, message, rows))
+        try:
+            launch_message = resolve_human_gate_ref(
+                args.project_root,
+                args.launch_message_file,
+                legacy=args.legacy,
+                require_file=True,
+            )
+        except ProcessRouteError as exc:
+            print(json.dumps(exc.as_dict(), ensure_ascii=False, sort_keys=True), file=sys.stderr)
+            return 2
+        message = launch_message.resolved_path.read_text(encoding="utf-8")
+        errors.extend(
+            collect_launch_message_errors(
+                checkpoint.logical_ref,
+                message,
+                rows,
+                legacy=args.legacy,
+            )
+        )
 
     if errors:
         for error in errors:
@@ -181,22 +238,39 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.format == "codex-json":
-        output = json.dumps(build_codex_request_payload(args.checkpoint, rows), ensure_ascii=False, indent=2) + "\n"
+        output = (
+            json.dumps(
+                build_codex_request_payload(checkpoint.logical_ref, rows),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        )
     else:
         if not message:
-            message = render_human_gate_message(args.checkpoint, rows)
-            launch_errors = collect_launch_message_errors(args.checkpoint, message, rows)
+            message = render_human_gate_message(checkpoint.logical_ref, rows)
+            launch_errors = collect_launch_message_errors(
+                checkpoint.logical_ref,
+                message,
+                rows,
+                legacy=args.legacy,
+            )
             if launch_errors:
                 for error in launch_errors:
                     print(f"ERROR: generated launch message invalid: {error}", file=sys.stderr)
                 return 1
         output = message.rstrip() + "\n"
 
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(output, encoding="utf-8")
+    if output_ref is not None:
+        output_ref.resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        output_ref.resolved_path.write_text(output, encoding="utf-8")
         if args.check_output:
-            launch_errors = collect_launch_message_errors(args.checkpoint, output, rows)
+            launch_errors = collect_launch_message_errors(
+                checkpoint.logical_ref,
+                output,
+                rows,
+                legacy=args.legacy,
+            )
             if launch_errors:
                 for error in launch_errors:
                     print(f"ERROR: generated output invalid: {error}", file=sys.stderr)

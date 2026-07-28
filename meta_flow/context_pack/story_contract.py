@@ -6,9 +6,10 @@ import argparse
 import json
 import sys
 from fnmatch import fnmatch
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
+from meta_flow.checks.frozen_cp6_evidence import project_story_admission
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS, estimate_tokens, load_budgets
 from meta_flow.context_pack import read_expansion
 from meta_flow.context_pack.builder import (
@@ -28,16 +29,20 @@ from meta_flow.design.product_governance import (
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.scale import load_yaml_object
 from meta_flow.state.current import (
     STATE_CURRENT_ENTRY_REL,
     STATE_CURRENT_REL,
     load_current_state,
     refresh_current_entry,
+    validate_current_projection,
+    validate_current_state_for_write,
 )
 from meta_flow.workflow.cr_lifecycle import CR_SUMMARY_ROOT_REL
 
 STORY_CONTEXT_ROOT_REL = Path("process/context/stories")
 STORY_RETURN_ROOT_REL = Path("process/returns")
+DEVELOPMENT_PLAN_REL = Path("process/DEVELOPMENT-PLAN.yaml")
 DEFAULT_STORY_BUDGET = 8000
 STRICT_SUFFICIENCY_PROFILES = {"architecture-major", "product-redesign", "runtime-high-risk"}
 SUFFICIENCY_REQUIRED_SLOTS = (
@@ -136,6 +141,24 @@ def _rel(project_root: Path, path: Path) -> str:
         return path.as_posix()
 
 
+def _runtime_output_path(project_root: Path, output: Path | None, default: Path) -> Path:
+    """输出若是 process 逻辑引用，必须经 binding resolver，而非落入 release。"""
+
+    return _resolve_runtime_path(project_root, output) if output is not None else default
+
+
+def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
+    """将绑定过程仓的物理路径还原为可安全显示的 logical ref。"""
+
+    root = project_root.resolve()
+    resolved = path.resolve(strict=False)
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        process_root = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml").parent
+        return f"process/{resolved.relative_to(process_root.resolve()).as_posix()}"
+
+
 def _path_tokens(project_root: Path, rel_path: str) -> int:
     path = _resolve_runtime_path(project_root, rel_path)
     if not path.is_file():
@@ -186,6 +209,137 @@ def story_data_from_file(path: Path) -> dict[str, Any]:
     return data
 
 
+def _markdown_section(text: str, heading: str) -> list[str]:
+    """读取一个二级 Markdown 章节，避免调用方手工复制 Story 正文。"""
+
+    lines = text.splitlines()
+    start = next((index + 1 for index, line in enumerate(lines) if line.strip() == heading), None)
+    if start is None:
+        return []
+    result: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        result.append(line)
+    return result
+
+
+def _section_summary(text: str, heading: str) -> str:
+    for line in _markdown_section(text, heading):
+        stripped = line.strip()
+        if stripped and not stripped.startswith(("#", "|", "-", "```")):
+            return stripped
+    return ""
+
+
+def _section_bullets(text: str, heading: str) -> list[str]:
+    return [
+        line.strip()[2:].strip()
+        for line in _markdown_section(text, heading)
+        if line.strip().startswith("- ") and line.strip()[2:].strip()
+    ]
+
+
+def _development_plan_story(project_root: Path, story_id: str) -> dict[str, Any]:
+    path = _resolve_runtime_ref(project_root, DEVELOPMENT_PLAN_REL.as_posix())
+    if not path.is_file():
+        return {}
+    payload = load_yaml_object(path)
+    matches = [
+        story
+        for wave in payload.get("waves", [])
+        if isinstance(wave, dict)
+        for story in wave.get("stories", [])
+        if isinstance(story, dict) and str(story.get("story_id") or "") == story_id
+    ]
+    if len(matches) > 1:
+        raise ValueError(f"duplicate Story in DEVELOPMENT-PLAN: {story_id}")
+    return dict(matches[0]) if matches else {}
+
+
+def _projected_story_contract(
+    project_root: Path,
+    *,
+    story: dict[str, Any],
+    story_text: str,
+    story_id: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """从原生 DEVELOPMENT-PLAN 投影 packet 输入，不手工改 Story 派生状态。"""
+
+    plan_story = _development_plan_story(project_root, story_id)
+    if not plan_story:
+        return story, None
+    projected = dict(story)
+    ownership = plan_story.get("file_ownership")
+    ownership = ownership if isinstance(ownership, dict) else {}
+    dependencies = plan_story.get("dependency_type")
+    dependencies = dependencies if isinstance(dependencies, list) else []
+    if not projected.get("feature_contract_summary"):
+        projected["feature_contract_summary"] = _section_summary(story_text, "## 目标")
+    if not projected.get("cr_delta_summary"):
+        projected["cr_delta_summary"] = _section_summary(story_text, "## 目标")
+    if not projected.get("dependency_inputs"):
+        projected["dependency_inputs"] = [
+            ":".join(
+                part
+                for part in (
+                    str(item.get("upstream") or ""),
+                    str(item.get("type") or ""),
+                    str(item.get("gate") or ""),
+                )
+                if part
+            )
+            for item in dependencies
+            if isinstance(item, dict)
+        ] or ["ROOT: DEVELOPMENT-PLAN native gate"]
+    if not projected.get("allowed_write_paths"):
+        projected["allowed_write_paths"] = _as_list(ownership.get("primary")) + _as_list(
+            ownership.get("shared")
+        )
+    if not projected.get("forbidden_write_paths"):
+        projected["forbidden_write_paths"] = _as_list(ownership.get("forbidden"))
+    if not projected.get("acceptance"):
+        projected["acceptance"] = _section_bullets(story_text, "## 量化验收")
+    if not projected.get("verification_plan"):
+        output_files = _as_list(plan_story.get("output_files"))
+        tests = [path for path in output_files if path.startswith("tests/")]
+        python_files = [path for path in output_files if path.endswith(".py")]
+        projected["verification_plan"] = [
+            *(
+                [
+                    "uv run --frozen --no-sync --python 3.11 pytest -q "
+                    + " ".join(tests)
+                ]
+                if tests
+                else []
+            ),
+            *(
+                [
+                    "uv run --frozen --no-sync --python 3.11 ruff check --fix "
+                    + " ".join(python_files),
+                    "uv run --frozen --no-sync --python 3.11 python -m py_compile "
+                    + " ".join(python_files),
+                ]
+                if python_files
+                else []
+            ),
+            "git diff --check",
+        ]
+    if not projected.get("authz_policy_refs"):
+        projected["authz_policy_refs"] = [AUTHZ_POLICY_REL.as_posix()]
+    dev_gate = plan_story.get("dev_gate")
+    projected_gate = (
+        {
+            "story_id": story_id,
+            "status": str(plan_story.get("status") or ""),
+            "dev_gate": dict(dev_gate),
+        }
+        if isinstance(dev_gate, dict)
+        else None
+    )
+    return projected, projected_gate
+
+
 def _story_output_path(project_root: Path, story_id: str, stage: str) -> Path:
     if stage == "BASE":
         return _resolve_runtime_ref(project_root, STORY_CONTEXT_ROOT_REL.as_posix()) / f"{story_id}.base.context.json"
@@ -226,6 +380,30 @@ def _design_refs() -> dict[str, str]:
     }
 
 
+def _load_runtime_state_contract(project_root: Path) -> tuple[dict[str, Any], bool]:
+    """读取 Story packet 的状态契约，并区分合法缺失与非法漂移。"""
+
+    state_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
+    entry_path = _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
+    state_exists = state_path.is_file()
+    entry_exists = entry_path.is_file()
+    if not state_exists and not entry_exists:
+        return {}, False
+    if not state_exists:
+        raise ValueError("runtime state contract is partial")
+
+    state = load_current_state(project_root)
+    if not state:
+        raise ValueError("runtime state payload is empty or invalid")
+    try:
+        validate_current_state_for_write(state)
+    except ValueError as exc:
+        raise ValueError("runtime state payload is invalid") from exc
+
+    refresh_current_entry(project_root)
+    return state, True
+
+
 def build_story_packet(
     project_root: Path,
     *,
@@ -236,35 +414,67 @@ def build_story_packet(
     output: Path | None = None,
     parent_context_ref: str = "",
     cp6_return_ref: str = "",
+    frozen_cp6_evidence: dict[str, Any] | None = None,
+    expected_dependency_digests: dict[str, str] | None = None,
     write_policy: bool = True,
 ) -> tuple[dict[str, Any], Path]:
     project_root = project_root.resolve()
     stage = stage.upper()
     if stage not in ALLOWED_STAGES:
         raise ValueError(f"unsupported Story context stage: {stage}")
+    story_input_ref = story_path.as_posix()
     story_path = _resolve_runtime_path(project_root, story_path)
     if not story_path.is_file():
         raise FileNotFoundError(f"Story file missing: {story_path}")
     if write_policy:
         write_default_read_policy(project_root)
     read_policy = load_read_policy(project_root)
-    state = load_current_state(project_root)
-    if state:
-        refresh_current_entry(project_root)
+    state, state_required = _load_runtime_state_contract(project_root)
     story = story_data_from_file(story_path)
     story_id = str(story["story_id"])
     effective_cr_id = cr_id or str(story.get("cr_id") or "")
-    story_rel = _rel(project_root, story_path)
+    story_rel = (
+        story_input_ref
+        if not Path(story_input_ref).is_absolute() and story_input_ref.startswith("process/")
+        else _rel(project_root, story_path)
+    )
+    lld_ref = story_rel.replace(".md", "-LLD.md")
+    story, projected_gate = _projected_story_contract(
+        project_root,
+        story=story,
+        story_text=story_path.read_text(encoding="utf-8"),
+        story_id=story_id,
+    )
     allowed_reads: list[dict[str, Any]] = []
     must_read: list[dict[str, Any]] = []
     read_if_needed: list[dict[str, Any]] = []
 
-    _append_unique(allowed_reads, _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="runtime_state"))
-    _append_unique(allowed_reads, _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_discovery_entry"))
+    state_reason = "runtime_state" if state_required else "runtime_state_legal_missing"
+    current_reason = "current_discovery_entry" if state_required else "current_discovery_entry_legal_missing"
+    _append_unique(
+        allowed_reads,
+        _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=state_required, reason=state_reason),
+    )
+    _append_unique(
+        allowed_reads,
+        _read_entry(
+            project_root,
+            STATE_CURRENT_ENTRY_REL.as_posix(),
+            required=state_required,
+            reason=current_reason,
+        ),
+    )
     _append_unique(allowed_reads, _read_entry(project_root, story_rel, required=True, reason="story_card"))
     _append_unique(allowed_reads, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
-    _append_unique(must_read, _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="machine_state"))
-    _append_unique(must_read, _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_entrypoint"))
+    if state_required:
+        _append_unique(
+            must_read,
+            _read_entry(project_root, STATE_CURRENT_REL.as_posix(), required=True, reason="machine_state"),
+        )
+        _append_unique(
+            must_read,
+            _read_entry(project_root, STATE_CURRENT_ENTRY_REL.as_posix(), required=True, reason="current_entrypoint"),
+        )
     _append_unique(must_read, _read_entry(project_root, story_rel, required=True, reason="story_card"))
     _append_unique(must_read, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
     if effective_cr_id:
@@ -284,7 +494,6 @@ def build_story_packet(
 
     lld_policy = str(story.get("lld_policy") or story.get("required_level") or "")
     if lld_policy == "full-lld":
-        lld_ref = story_rel.replace(".md", "-LLD.md")
         read_if_needed.append(
             {
                 "path": lld_ref,
@@ -294,6 +503,31 @@ def build_story_packet(
                 "reason": "story_lld",
             }
         )
+    denied_patterns = list(
+        read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS
+    )
+    preregistration_refs = sorted(
+        {
+            str(entry.get("path") or "")
+            for entry in read_if_needed
+            if str(entry.get("trigger") or "")
+            and _matches_any(str(entry.get("path") or ""), denied_patterns)
+        }
+    )
+    pre_dispatch_actions = (
+        [
+            {
+                "operation": "context.read-log",
+                "input_contract": "ReadExpansionPlanV1",
+                "actor": "host-orchestrator",
+                "required_before": "story-dispatch",
+                "requested_refs": preregistration_refs,
+                "reason": "deep_review",
+            }
+        ]
+        if preregistration_refs
+        else []
+    )
 
     estimated_tokens = sum(int(entry.get("estimated_tokens") or 0) for entry in allowed_reads)
     max_tokens = _stage_budget(project_root, stage if stage != "BASE" else "CP5", budget)
@@ -307,7 +541,7 @@ def build_story_packet(
     if stage in {"CP6", "CP7"} and not parent_ref:
         parent_ref = (STORY_CONTEXT_ROOT_REL / f"{story_id}.base.context.json").as_posix()
     packet: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "packet_type": packet_type,
         "stage": stage,
         "project_id": str(state.get("project_id") or project_root.name),
@@ -338,10 +572,11 @@ def build_story_packet(
         "must_read": must_read,
         "allowed_reads": allowed_reads,
         "read_if_needed": read_if_needed,
+        "pre_dispatch_actions": pre_dispatch_actions,
         "do_not_read_by_default": _deny_default_entries(
             list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS)
         ),
-        "denied_default_reads": list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS),
+        "denied_default_reads": denied_patterns,
         "allowed_write_paths": _as_list(story.get("allowed_write_paths") or story.get("allowed_paths")),
         "forbidden_write_paths": _as_list(story.get("forbidden_write_paths") or story.get("forbidden_paths")),
         "acceptance": _as_list(story.get("acceptance") or story.get("acceptance_criteria")),
@@ -363,12 +598,23 @@ def build_story_packet(
     }
     if stage == "CP6":
         packet["expected_return_packet"] = _return_ref(story_id, "CP6")
+        packet["admission"] = project_story_admission(
+            frozen_cp6_evidence,
+            expected_dependency_digests=expected_dependency_digests or {},
+            projected_gate=projected_gate,
+        )
     if stage == "CP7":
         packet["implementation_return_ref"] = cp6_return_ref or _return_ref(story_id, "CP6")
         packet["expected_return_packet"] = _return_ref(story_id, "CP7")
-    output_path = output.resolve() if output else _story_output_path(project_root, story_id, stage)
+    output_path = _runtime_output_path(project_root, output, _story_output_path(project_root, story_id, stage))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if state_required:
+        refresh_current_entry(project_root)
+        projection_findings = validate_current_projection(project_root)
+        if projection_findings:
+            codes = ",".join(sorted({finding.code for finding in projection_findings}))
+            raise ValueError(f"runtime state projection is invalid: {codes}")
     return packet, output_path
 
 
@@ -380,16 +626,36 @@ def _load_packet(packet_path: Path) -> dict[str, Any]:
     return json.loads(packet_path.read_text(encoding="utf-8"))
 
 
+def _absolute_path_locations(value: Any, *, location: str = "$") -> list[str]:
+    if isinstance(value, dict):
+        found: list[str] = []
+        for key, item in value.items():
+            found.extend(_absolute_path_locations(item, location=f"{location}.{key}"))
+        return found
+    if isinstance(value, list):
+        found = []
+        for index, item in enumerate(value):
+            found.extend(_absolute_path_locations(item, location=f"{location}[{index}]"))
+        return found
+    if isinstance(value, str) and (Path(value).is_absolute() or PureWindowsPath(value).is_absolute()):
+        return [location]
+    return []
+
+
 def validate_story_packet(packet_path: Path, *, project_root: Path | None = None) -> tuple[list[str], list[str]]:
-    packet_path = packet_path.resolve()
-    if not packet_path.is_file():
-        return [f"Story packet missing: {packet_path}"], []
-    packet = _load_packet(packet_path)
     root = project_root.resolve() if project_root else _infer_project_root(packet_path)
+    packet_path = _resolve_runtime_path(root, packet_path)
+    if not packet_path.is_file():
+        return ["Story packet missing"], []
+    packet = _load_packet(packet_path)
     errors: list[str] = []
     warnings: list[str] = []
-    if packet.get("schema_version") != 1:
-        errors.append("schema_version must be 1")
+    absolute_locations = _absolute_path_locations(packet)
+    if absolute_locations:
+        errors.append("Story packet contains absolute path values at: " + ", ".join(absolute_locations))
+    packet_schema_version = packet.get("schema_version")
+    if packet_schema_version not in {1, 2}:
+        errors.append("schema_version must be 1 or 2")
     if packet.get("packet_type") not in ALLOWED_PACKET_TYPES:
         errors.append(f"invalid packet_type: {packet.get('packet_type')}")
     if packet.get("stage") not in ALLOWED_STAGES:
@@ -442,6 +708,7 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
             errors.append(f"allowed_reads contains deny-default path: {rel_path}")
         if entry.get("required") is True and not _resolve_runtime_path(root, rel_path).is_file():
             errors.append(f"required allowed_read missing on disk: {rel_path}")
+    preregistration_refs: list[str] = []
     for entry in packet.get("read_if_needed") or []:
         if not isinstance(entry, dict):
             errors.append("read_if_needed entries must be objects")
@@ -455,6 +722,43 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
         # still write a read-expansion event when it is actually expanded.
         if _matches_any(rel_path, denied) and not str(entry.get("trigger") or ""):
             errors.append(f"read_if_needed deny-default path lacks explicit trigger: {rel_path}")
+        elif _matches_any(rel_path, denied):
+            preregistration_refs.append(rel_path)
+    actions = packet.get("pre_dispatch_actions") or []
+    if preregistration_refs and packet_schema_version == 1:
+        warnings.append(
+            "schema_version=1 packet has no machine-enforced Host pre_dispatch_action; "
+            "regenerate before the next Story dispatch"
+        )
+    elif preregistration_refs:
+        if not isinstance(actions, list) or len(actions) != 1:
+            errors.append(
+                "deny-default read_if_needed requires exactly one Host pre_dispatch_action"
+            )
+        elif not isinstance(actions[0], dict):
+            errors.append("pre_dispatch_actions entries must be objects")
+        else:
+            action = actions[0]
+            expected_fields = read_expansion.PREREGISTRATION_ACTION_FIELDS
+            if set(action) != expected_fields:
+                errors.append("Host pre_dispatch_action fields must match ReadExpansionPlanV1")
+            if action.get("operation") != "context.read-log":
+                errors.append("Host pre_dispatch_action operation must be context.read-log")
+            if action.get("input_contract") != "ReadExpansionPlanV1":
+                errors.append("Host pre_dispatch_action input_contract must be ReadExpansionPlanV1")
+            if action.get("actor") != "host-orchestrator":
+                errors.append("Host pre_dispatch_action actor must be host-orchestrator")
+            if action.get("required_before") != "story-dispatch":
+                errors.append("Host pre_dispatch_action must run before story-dispatch")
+            action_refs = sorted(str(item) for item in action.get("requested_refs") or [])
+            if action_refs != sorted(set(preregistration_refs)):
+                errors.append("Host pre_dispatch_action requested_refs mismatch read_if_needed")
+            if action.get("reason") not in (
+                packet.get("full_doc_read_allowed_when") or []
+            ):
+                errors.append("Host pre_dispatch_action reason is not allowed by read policy")
+    elif actions:
+        errors.append("pre_dispatch_actions must be empty without deny-default read_if_needed")
     if "process/archive/**" not in denied and "process/archive/**" not in do_not_patterns:
         errors.append("do_not_read_by_default must include process/archive/**")
     if packet.get("stage") in {"CP6", "CP7"} and not packet.get("parent_context_ref"):
@@ -552,11 +856,17 @@ def _infer_project_root(packet_path: Path) -> Path:
     return Path.cwd()
 
 
-def explain_story_packet(packet_path: Path) -> int:
-    packet = _load_packet(packet_path.resolve())
+def explain_story_packet(packet_path: Path, *, project_root: Path | None = None) -> int:
+    root = project_root.resolve() if project_root else _infer_project_root(packet_path)
+    resolved_packet = _resolve_runtime_path(root, packet_path)
+    if not resolved_packet.is_file():
+        print("Story Context Packet: BLOCKED")
+        print("- reason: packet missing")
+        return 2
+    packet = _load_packet(resolved_packet)
     budget = packet.get("budget") or {}
     print("Story Context Packet:")
-    print(f"- path: {packet_path.resolve()}")
+    print(f"- path: {_canonical_runtime_ref(root, resolved_packet)}")
     print(f"- packet_type: {packet.get('packet_type')}")
     print(f"- stage: {packet.get('stage')}")
     print(f"- story_id: {packet.get('story_id')}")
@@ -569,8 +879,9 @@ def explain_story_packet(packet_path: Path) -> int:
     return 0
 
 
-def check_sufficiency(packet_path: Path) -> int:
-    packet = _load_packet(packet_path.resolve())
+def check_sufficiency(packet_path: Path, *, project_root: Path | None = None) -> int:
+    root = project_root.resolve() if project_root else _infer_project_root(packet_path)
+    packet = _load_packet(_resolve_runtime_path(root, packet_path))
     errors, warnings = validate_context_sufficiency(packet)
     print("Context Sufficiency Check: " + ("FAIL" if errors else "OK"))
     for warning in warnings:
@@ -614,7 +925,7 @@ def main(argv: list[str] | None = None) -> int:
             cp6_return_ref=parsed.cp6_return_ref,
             write_policy=not parsed.no_write_policy,
         )
-        print(f"wrote: {path}")
+        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "check-story-packet":
         parser = argparse.ArgumentParser(prog="meta-flow context check-story-packet")
@@ -630,14 +941,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if errors else 0
     if command == "sufficiency-check":
         parser = argparse.ArgumentParser(prog="meta-flow context sufficiency-check")
+        parser.add_argument("--project-root", type=Path, default=None)
         parser.add_argument("--packet", dest="packet_path", type=Path, required=True)
         parsed = parser.parse_args(args[1:])
-        return check_sufficiency(parsed.packet_path)
+        return check_sufficiency(parsed.packet_path, project_root=parsed.project_root)
     if command == "explain-story-packet":
         parser = argparse.ArgumentParser(prog="meta-flow context explain-story-packet")
+        parser.add_argument("--project-root", type=Path, default=None)
         parser.add_argument("--packet", dest="packet_path", type=Path, required=True)
         parsed = parser.parse_args(args[1:])
-        return explain_story_packet(parsed.packet_path)
+        return explain_story_packet(parsed.packet_path, project_root=parsed.project_root)
     if command in {"read-log", "read-log-check"}:
         return read_expansion.main(args)
     raise SystemExit(f"未知 story context 命令: {command}")

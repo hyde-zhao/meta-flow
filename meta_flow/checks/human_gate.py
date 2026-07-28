@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from meta_flow.project.process_route import ProcessRouteError, resolve_process_ref
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.work.decision_bundle import validate_bundle
 
@@ -42,6 +44,51 @@ class DecisionRow:
     @property
     def decision_id(self) -> str:
         return self.cells.get("决策 ID", "")
+
+
+@dataclass(frozen=True)
+class HumanGateRefV1:
+    """人工门输入的逻辑身份与仅供本次 I/O 使用的物理路径。"""
+
+    logical_ref: str
+    resolved_path: Path
+
+
+def resolve_human_gate_ref(
+    project_root: Path,
+    value: str | Path,
+    *,
+    legacy: bool,
+    require_file: bool,
+) -> HumanGateRefV1:
+    """解析人工门路径；vNext 输出身份始终保留 canonical process ref。"""
+
+    root = project_root.resolve()
+    raw_ref = str(value)
+    if legacy:
+        requested = Path(value)
+        resolved = (
+            requested.resolve(strict=False)
+            if requested.is_absolute()
+            else (root / requested).resolve(strict=False)
+        )
+        logical_ref = requested.as_posix()
+    else:
+        if not raw_ref.startswith("process/"):
+            raise ProcessRouteError(
+                "logical_ref_invalid",
+                "human-gate refs must use canonical process/<relative> text",
+                "",
+            )
+        logical_ref = raw_ref
+        resolved = resolve_process_ref(root, logical_ref)
+    if require_file and not resolved.is_file():
+        raise ProcessRouteError(
+            "logical_ref_missing",
+            f"logical ref does not name an existing file: {logical_ref}",
+            logical_ref,
+        )
+    return HumanGateRefV1(logical_ref=logical_ref, resolved_path=resolved)
 
 
 def split_table_row(line: str) -> list[str]:
@@ -209,10 +256,17 @@ def collect_checkpoint_errors(path: Path, text: str, *, legacy: bool = False) ->
     return errors, rows
 
 
-def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow], *, legacy: bool = False) -> list[str]:
+def collect_launch_message_errors(
+    path: str | Path,
+    text: str,
+    rows: list[DecisionRow],
+    *,
+    legacy: bool = False,
+) -> list[str]:
     errors: list[str] = []
-    checkpoint_ref = path.as_posix()
-    if checkpoint_ref not in text and path.name not in text:
+    checkpoint_ref = Path(path).as_posix()
+    checkpoint_name = Path(path).name
+    if checkpoint_ref not in text and checkpoint_name not in text:
         errors.append("launch message missing checkpoint path")
     for token in ("自动预检结论", "Context Capsule", "决策收集覆盖", "本轮待人工决策项", "approve", "修改: <具体修改点>", "reject"):
         if token not in text:
@@ -237,7 +291,7 @@ def collect_launch_message_errors(path: Path, text: str, rows: list[DecisionRow]
     if rows:
         has_full_table = "| 决策 ID" in text and "决策类型" in text and "推荐方案" in text and "备选方案" in text
         has_compact_summary = ("blocking" in text or "high-risk" in text or "高风险" in text or "阻断" in text) and (
-            "完整表" in text or "完整待决策表" in text or checkpoint_ref in text or path.name in text
+            "完整表" in text or "完整待决策表" in text or checkpoint_ref in text or checkpoint_name in text
         )
         if not has_full_table and not has_compact_summary:
             errors.append("launch message with decisions must include a full decision table or compact blocking/high-risk summary with checkpoint path")
@@ -269,9 +323,10 @@ def collect_decision_bundle_errors(path: Path) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate human gate Decision Brief and launch message.")
-    parser.add_argument("--checkpoint", required=True, type=Path, help="Path to process/checkpoints/CP*.md")
-    parser.add_argument("--launch-message-file", type=Path, help="Optional file containing the message to send to the user")
-    parser.add_argument("--decision-bundle", type=Path, help="Optional revision-aware merged confirmation envelope")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--checkpoint", required=True, help="Canonical process/checkpoints/CP*.md logical ref")
+    parser.add_argument("--launch-message-file", help="Optional canonical process/... launch-message logical ref")
+    parser.add_argument("--decision-bundle", help="Optional canonical process/... Decision Bundle logical ref")
     parser.add_argument(
         "--require-launch-message",
         action="store_true",
@@ -280,25 +335,58 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--legacy", action="store_true", help="Validate the pre-CR036 legacy human-gate protocol.")
     args = parser.parse_args(argv)
 
-    if not args.checkpoint.is_file():
-        print(f"ERROR: checkpoint file not found: {args.checkpoint}", file=sys.stderr)
-        return 1
-    checkpoint_text = args.checkpoint.read_text(encoding="utf-8")
-    errors, rows = collect_checkpoint_errors(args.checkpoint, checkpoint_text, legacy=args.legacy)
+    try:
+        checkpoint = resolve_human_gate_ref(
+            args.project_root,
+            args.checkpoint,
+            legacy=args.legacy,
+            require_file=True,
+        )
+        launch_message = (
+            resolve_human_gate_ref(
+                args.project_root,
+                args.launch_message_file,
+                legacy=args.legacy,
+                require_file=True,
+            )
+            if args.launch_message_file
+            else None
+        )
+        decision_bundle = (
+            resolve_human_gate_ref(
+                args.project_root,
+                args.decision_bundle,
+                legacy=args.legacy,
+                require_file=True,
+            )
+            if args.decision_bundle
+            else None
+        )
+    except ProcessRouteError as exc:
+        print(json.dumps(exc.as_dict(), ensure_ascii=False, sort_keys=True), file=sys.stderr)
+        return 2
 
-    if args.require_launch_message and not args.launch_message_file:
+    checkpoint_text = checkpoint.resolved_path.read_text(encoding="utf-8")
+    errors, rows = collect_checkpoint_errors(
+        checkpoint.resolved_path,
+        checkpoint_text,
+        legacy=args.legacy,
+    )
+
+    if args.require_launch_message and launch_message is None:
         errors.append("--require-launch-message requires --launch-message-file")
-    if args.launch_message_file:
-        if not args.launch_message_file.is_file():
-            errors.append(f"launch message file not found: {args.launch_message_file}")
-        else:
-            message_text = args.launch_message_file.read_text(encoding="utf-8")
-            errors.extend(collect_launch_message_errors(args.checkpoint, message_text, rows, legacy=args.legacy))
-    if args.decision_bundle:
-        if not args.decision_bundle.is_file():
-            errors.append(f"decision bundle file not found: {args.decision_bundle}")
-        else:
-            errors.extend(collect_decision_bundle_errors(args.decision_bundle))
+    if launch_message is not None:
+        message_text = launch_message.resolved_path.read_text(encoding="utf-8")
+        errors.extend(
+            collect_launch_message_errors(
+                checkpoint.logical_ref,
+                message_text,
+                rows,
+                legacy=args.legacy,
+            )
+        )
+    if decision_bundle is not None:
+        errors.extend(collect_decision_bundle_errors(decision_bundle.resolved_path))
 
     if errors:
         for error in errors:

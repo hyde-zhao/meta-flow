@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -10,12 +13,20 @@ from pathlib import Path
 from meta_flow.checks import context_doctor, cp_result
 from meta_flow.context_pack import read_expansion, story_contract
 from meta_flow.state import current
+from meta_flow.work.budget import BudgetLimit
+from meta_flow.work.model import build_work, write_work_create_only
+from meta_flow.work.risk import RiskFacts, classify_work
+from meta_flow.work.scope import WorkScope
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONSOLE = Path(sys.executable).with_name("meta-flow")
 
 
 def write_minimal_state(root: Path) -> None:
     state = current.default_current_state(root)
     state["project_id"] = "fixture-project"
     current.write_current_state(root, state)
+    current.refresh_current_entry(root)
 
 
 def write_cr_summary(root: Path, cr_id: str = "CR-123") -> None:
@@ -90,6 +101,124 @@ def cp6_result_payload() -> dict[str, object]:
     }
 
 
+def write_preregistration_fixture(
+    parent: Path,
+) -> tuple[Path, Path, str, str]:
+    release = parent / "meta-flow"
+    process = parent / "meta-flow-process"
+    release.mkdir()
+    process.mkdir()
+    for repository in (release, process):
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    binding = release / ".meta-flow" / "workspace.yaml"
+    binding.parent.mkdir()
+    binding.write_text(
+        "schema_version: 1\n"
+        "layout_version: independent-process-repo-v1\n"
+        "workflow_model: vnext\n"
+        "project_id: fixture-project\n"
+        "repo_role: release\n"
+        "route_mode: sibling-binding\n"
+        "process_repo:\n"
+        "  anchor: workspace_parent\n"
+        "  relative_path: meta-flow-process\n",
+        encoding="utf-8",
+    )
+    (process / ".meta-flow-process.yaml").write_text(
+        "schema_version: 1\n"
+        "layout_version: independent-process-repo-v1\n"
+        "workflow_model: vnext\n"
+        "project_id: fixture-project\n"
+        "repo_role: process\n"
+        "route_mode: sibling-binding\n"
+        "release_repo:\n"
+        "  anchor: workspace_parent\n"
+        "  relative_path: meta-flow\n",
+        encoding="utf-8",
+    )
+    (process / "PROJECT.yaml").write_text(
+        "schema_version: 1\n"
+        "project_id: fixture-project\n"
+        "name: Fixture Project\n"
+        "status: active\n",
+        encoding="utf-8",
+    )
+    story_ref = "process/stories/STORY-CR123-S01.md"
+    story = process / "stories" / "STORY-CR123-S01.md"
+    story.parent.mkdir(parents=True)
+    story.write_text(
+        """---
+story_id: STORY-CR123-S01
+cr_id: CR-123
+title: Host preregistration
+feature_refs: [governance.kernel]
+feature_design_refs: [process/docs/features/kernel/DESIGN.md]
+feature_contract_summary: Host pre-dispatch reads use one native ledger operation.
+cr_delta_summary: Wire the existing read-log operation before dispatch.
+dependency_inputs: [ROOT]
+lld_policy: full-lld
+risk_profile: runtime-high-risk
+allowed_write_paths: [meta_flow/context_pack/**]
+forbidden_write_paths: [process/state/**]
+acceptance: [Host preregistration is idempotent]
+verification_plan: [pytest tests/test_context_sufficiency_read_expansion.py]
+authz_policy_refs: [process/policies/AUTHZ-POLICY.json]
+---
+
+# Story
+""",
+        encoding="utf-8",
+    )
+    (process / "stories" / "STORY-CR123-S01-LLD.md").write_text(
+        "# LLD\n\nHost pre-dispatch read-expansion fixture.\n",
+        encoding="utf-8",
+    )
+    summary = process / "changes" / "summaries" / "CR-123.summary.json"
+    summary.parent.mkdir(parents=True)
+    summary.write_text('{"id":"CR-123","status":"active"}\n', encoding="utf-8")
+    scope = WorkScope(
+        version=1,
+        allowed_reads=("stories/**",),
+        allowed_writes=("state/**",),
+        required_checks=("read-log-check",),
+    )
+    classification = classify_work(
+        RiskFacts(
+            change_kind="code",
+            touched_path_count=2,
+            public_contract=True,
+        ),
+        requested_cr=True,
+        g2_budget=BudgetLimit(30, 30, 12, 160_000),
+    )
+    work = build_work(
+        work_id="WORK-CR123",
+        project_id="fixture-project",
+        objective="Validate Host preregistration",
+        request_ref="works/WORK-CR123/REQUEST.md",
+        scope=scope,
+        classification=classification,
+        release_base_oid="a" * 40,
+        process_base_oid="b" * 40,
+    )
+    write_work_create_only(process, work)
+    _packet, packet_path = story_contract.build_story_packet(
+        release,
+        story_path=Path(story_ref),
+        stage="CP6",
+        budget=8000,
+    )
+    packet_ref = "process/context/stories/STORY-CR123-S01.CP6.work-packet.json"
+    assert packet_path == process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+    return release, process, packet_ref, work.scope.digest
+
+
 class ContextSufficiencyReadExpansionTests(unittest.TestCase):
     def test_standard_profile_missing_sufficiency_slots_warns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -139,22 +268,59 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
             self.assertEqual([], errors)
             self.assertEqual([], warnings)
 
-    def test_read_log_check_rejects_unknown_reason(self) -> None:
+    def test_read_log_rejects_unknown_reason_before_ledger_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            _event, ledger = read_expansion.append_event(
+            ledger = read_expansion.default_ledger_path(root)
+
+            with self.assertRaisesRegex(ValueError, "mutation=0"):
+                read_expansion.append_event(
+                    root,
+                    requested_path="process/STATE.md",
+                    reason="curiosity",
+                    stage="CP6",
+                    agent="meta-dev",
+                    context_ref="process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+                )
+
+            self.assertFalse(ledger.exists())
+
+    def test_read_log_append_only_correction_supersedes_invalid_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger = read_expansion.default_ledger_path(root)
+            ledger.parent.mkdir(parents=True)
+            invalid = read_expansion.build_event(
                 root,
                 requested_path="process/STATE.md",
                 reason="curiosity",
                 stage="CP6",
                 agent="meta-dev",
                 context_ref="process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+                story_id="STORY-CR123-S01",
             )
+            ledger.write_text(
+                json.dumps(invalid, ensure_ascii=False, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            before = ledger.read_bytes()
 
-            errors, _warnings = read_expansion.validate_ledger(root, ledger=ledger)
+            successor, _path = read_expansion.append_event(
+                root,
+                requested_path="process/STATE.md",
+                reason="human_audit",
+                stage="CP6",
+                agent="meta-dev",
+                context_ref="process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
+                story_id="STORY-CR123-S01",
+                supersedes_event_id=str(invalid["event_id"]),
+            )
+            errors, warnings = read_expansion.validate_ledger(root, ledger=ledger)
 
-            self.assertTrue(any("reason not allowed by read policy" in error for error in errors))
-            self.assertTrue(any("allowed_by_policy must be true" in error for error in errors))
+            self.assertEqual([], errors)
+            self.assertTrue(warnings)
+            self.assertEqual(invalid["event_id"], successor["supersedes_event_id"])
+            self.assertTrue(ledger.read_bytes().startswith(before))
 
     def test_context_doctor_reports_summary_feedback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +382,156 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
             errors, _warnings = cp_result.validate_cp_result(result, project_root=root)
 
             self.assertEqual([], errors)
+
+    def test_host_preregister_real_console_dry_run_apply_and_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(
+                Path(directory)
+            )
+            command = [
+                str(CONSOLE),
+                "context",
+                "read-log",
+                "--project-root",
+                str(release),
+                "--story-packet",
+                packet_ref,
+                "--work-id",
+                "WORK-CR123",
+                "--scope-digest",
+                scope_digest,
+            ]
+            env = {**os.environ, "PYTHONPATH": str(PROJECT_ROOT)}
+
+            dry_run = subprocess.run(
+                [*command, "--dry-run"],
+                cwd=PROJECT_ROOT,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            dry_plan = json.loads(dry_run.stdout)
+            self.assertEqual(0, dry_run.returncode, dry_run.stderr)
+            self.assertEqual("READY", dry_plan["decision"])
+            self.assertEqual(1, dry_plan["planned_mutation_count"])
+            self.assertEqual(0, dry_plan["mutation_count"])
+
+            applied = subprocess.run(
+                command,
+                cwd=PROJECT_ROOT,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            applied_result = json.loads(applied.stdout)
+            self.assertEqual(0, applied.returncode, applied.stderr)
+            self.assertEqual("APPLIED", applied_result["decision"])
+            self.assertEqual(1, applied_result["mutation_count"])
+
+            replay = subprocess.run(
+                command,
+                cwd=PROJECT_ROOT,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            replay_result = json.loads(replay.stdout)
+            self.assertEqual(0, replay.returncode, replay.stderr)
+            self.assertEqual("NO_CHANGE", replay_result["decision"])
+            self.assertEqual(0, replay_result["mutation_count"])
+            self.assertNotIn(str(process), dry_run.stdout + applied.stdout + replay.stdout)
+
+            errors, warnings = read_expansion.validate_ledger(release)
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+
+    def test_host_preregister_invalid_reason_and_scope_are_mutation_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(
+                Path(directory)
+            )
+            ledger = process / "state" / "READ-EXPANSION-LEDGER.ndjson"
+
+            output = StringIO()
+            with redirect_stdout(output):
+                bad_reason = read_expansion.main(
+                    [
+                        "read-log",
+                        "--project-root",
+                        str(release),
+                        "--story-packet",
+                        packet_ref,
+                        "--work-id",
+                        "WORK-CR123",
+                        "--scope-digest",
+                        scope_digest,
+                        "--reason",
+                        "curiosity",
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(2, bad_reason)
+            self.assertEqual(0, json.loads(output.getvalue())["mutation_count"])
+            self.assertFalse(ledger.exists())
+
+            output = StringIO()
+            with redirect_stdout(output):
+                bad_scope = read_expansion.main(
+                    [
+                        "read-log",
+                        "--project-root",
+                        str(release),
+                        "--story-packet",
+                        packet_ref,
+                        "--work-id",
+                        "WORK-CR123",
+                        "--scope-digest",
+                        "0" * 64,
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(2, bad_scope)
+            self.assertEqual(0, json.loads(output.getvalue())["mutation_count"])
+            self.assertFalse(ledger.exists())
+
+    def test_host_preregister_invalid_binding_is_mutation_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(
+                Path(directory)
+            )
+            binding = release / ".meta-flow" / "workspace.yaml"
+            binding.write_text(
+                binding.read_text(encoding="utf-8").replace(
+                    "relative_path: meta-flow-process",
+                    "relative_path: missing-process",
+                ),
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = read_expansion.main(
+                    [
+                        "read-log",
+                        "--project-root",
+                        str(release),
+                        "--story-packet",
+                        packet_ref,
+                        "--work-id",
+                        "WORK-CR123",
+                        "--scope-digest",
+                        scope_digest,
+                        "--dry-run",
+                    ]
+                )
+
+            self.assertEqual(2, exit_code)
+            self.assertEqual(0, json.loads(output.getvalue())["mutation_count"])
+            self.assertFalse(
+                (process / "state" / "READ-EXPANSION-LEDGER.ndjson").exists()
+            )
 
 
 if __name__ == "__main__":

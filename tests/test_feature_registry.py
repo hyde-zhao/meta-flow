@@ -11,7 +11,7 @@ from meta_flow.design import feature_registry
 
 
 def write_feature_design(root: Path, feature_slug: str = "data-manifest") -> Path:
-    feature_dir = root / "docs" / "features" / feature_slug
+    feature_dir = root / "process" / "docs" / "features" / feature_slug
     feature_dir.mkdir(parents=True, exist_ok=True)
     design = feature_dir / "DESIGN.md"
     design.write_text("# Data Manifest\n\nFeature design.\n", encoding="utf-8")
@@ -22,7 +22,7 @@ def write_feature_design(root: Path, feature_slug: str = "data-manifest") -> Pat
 
 def write_registry(root: Path, *, risk_profile: str = "standard-code", module_paths: list[str] | None = None) -> Path:
     paths = ["quant_lab/data/manifest"] if module_paths is None else module_paths
-    path = root / "docs" / "design" / "FEATURE-REGISTRY.yaml"
+    path = root / "process" / "docs" / "design" / "FEATURE-REGISTRY.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -38,9 +38,9 @@ def write_registry(root: Path, *, risk_profile: str = "standard-code", module_pa
                         "status": "implemented",
                         "risk_profile": risk_profile,
                         "design_doc_policy": "full-design",
-                        "design_doc": "docs/features/data-manifest/DESIGN.md",
-                        "test_plan": "docs/features/data-manifest/TEST-PLAN.md",
-                        "tasks_doc": "docs/features/data-manifest/TASKS.md",
+                        "design_doc": "process/docs/features/data-manifest/DESIGN.md",
+                        "test_plan": "process/docs/features/data-manifest/TEST-PLAN.md",
+                        "tasks_doc": "process/docs/features/data-manifest/TASKS.md",
                         "module_paths": paths,
                         "public_api": ["quant_lab.data.Manifest"],
                         "forbidden_dependencies": ["quant_lab.trading"],
@@ -59,7 +59,7 @@ def write_registry(root: Path, *, risk_profile: str = "standard-code", module_pa
 
 def write_v2_registry(root: Path) -> Path:
     write_feature_design(root)
-    path = root / "docs" / "design" / "FEATURE-REGISTRY.yaml"
+    path = root / "process" / "docs" / "design" / "FEATURE-REGISTRY.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -76,9 +76,9 @@ def write_v2_registry(root: Path) -> Path:
                         "status": "active",
                         "risk_profile": "standard-code",
                         "design_doc_policy": "full-design",
-                        "design_doc": "docs/features/data-manifest/DESIGN.md",
-                        "test_plan": "docs/features/data-manifest/TEST-PLAN.md",
-                        "tasks_doc": "docs/features/data-manifest/TASKS.md",
+                        "design_doc": "process/docs/features/data-manifest/DESIGN.md",
+                        "test_plan": "process/docs/features/data-manifest/TEST-PLAN.md",
+                        "tasks_doc": "process/docs/features/data-manifest/TASKS.md",
                         "module_paths": ["meta_flow/design/feature_registry.py"],
                         "public_api": ["meta_flow.design.feature_registry.resolve_ref"],
                         "forbidden_dependencies": [],
@@ -99,7 +99,7 @@ def write_v2_registry(root: Path) -> Path:
 
 
 def write_capability_registry(root: Path, *, alias: str = "registry refs", status: str = "active") -> Path:
-    path = root / "docs" / "design" / "CAPABILITY-REGISTRY.yaml"
+    path = root / "process" / "docs" / "design" / "CAPABILITY-REGISTRY.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -137,7 +137,7 @@ story_id: STORY-CR123-S01
 feature_refs:
   - {feature_ref}
 feature_design_refs:
-  - docs/features/data-manifest/DESIGN.md
+  - process/docs/features/data-manifest/DESIGN.md
 lld_policy: {lld_policy}
 risk_profile: standard-code
 ---
@@ -158,7 +158,7 @@ class FeatureRegistryTests(unittest.TestCase):
             exit_code = feature_registry.main(["build", "--project-root", str(root)])
 
             self.assertEqual(0, exit_code)
-            registry = json.loads((root / "docs" / "design" / "FEATURE-REGISTRY.yaml").read_text(encoding="utf-8"))
+            registry = json.loads((root / "process" / "docs" / "design" / "FEATURE-REGISTRY.yaml").read_text(encoding="utf-8"))
             self.assertEqual("data.manifest", registry["features"][0]["feature_id"])
             self.assertEqual("Data Manifest", registry["features"][0]["title"])
 
@@ -180,7 +180,7 @@ class FeatureRegistryTests(unittest.TestCase):
             root = Path(directory)
             write_feature_design(root)
             write_registry(root, module_paths=[])
-            registry_path = root / "docs" / "design" / "FEATURE-REGISTRY.yaml"
+            registry_path = root / "process" / "docs" / "design" / "FEATURE-REGISTRY.yaml"
             registry = json.loads(registry_path.read_text(encoding="utf-8"))
             registry["features"][0]["owner_context"] = ""
             registry_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -232,7 +232,7 @@ class FeatureRegistryTests(unittest.TestCase):
             root = Path(directory)
             write_feature_design(root)
             write_registry(root, risk_profile="architecture-major")
-            registry_path = root / "docs" / "design" / "FEATURE-REGISTRY.yaml"
+            registry_path = root / "process" / "docs" / "design" / "FEATURE-REGISTRY.yaml"
             registry = json.loads(registry_path.read_text(encoding="utf-8"))
             registry["features"][0]["product_domain"] = ""
             registry["features"][0]["capability"] = ""
@@ -248,7 +248,7 @@ class FeatureRegistryTests(unittest.TestCase):
             root = Path(directory)
             write_feature_design(root)
             write_registry(root)
-            registry_path = root / "docs" / "design" / "FEATURE-REGISTRY.yaml"
+            registry_path = root / "process" / "docs" / "design" / "FEATURE-REGISTRY.yaml"
             registry = json.loads(registry_path.read_text(encoding="utf-8"))
             registry["features"][0]["design_doc_policy"] = "registry-only"
             registry["features"][0]["design_doc"] = ""
@@ -295,7 +295,7 @@ class FeatureRegistryTests(unittest.TestCase):
             errors, _warnings = feature_registry.validate_registry(root, include_capabilities=True)
             self.assertEqual([], errors)
 
-            capability_path = root / "docs" / "design" / "CAPABILITY-REGISTRY.yaml"
+            capability_path = root / "process" / "docs" / "design" / "CAPABILITY-REGISTRY.yaml"
             registry = json.loads(capability_path.read_text(encoding="utf-8"))
             registry["capabilities"][0]["source_refs"].append("private_token_should_not_be_here")
             capability_path.write_text(json.dumps(registry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -323,7 +323,7 @@ class FeatureRegistryTests(unittest.TestCase):
             self.assertEqual("ERROR", deprecated_enforce.severity)
             self.assertEqual("CAP-PG-REGISTRY-REFS-V2", deprecated_enforce.deprecated_by)
 
-            capability_path = root / "docs" / "design" / "CAPABILITY-REGISTRY.yaml"
+            capability_path = root / "process" / "docs" / "design" / "CAPABILITY-REGISTRY.yaml"
             registry = json.loads(capability_path.read_text(encoding="utf-8"))
             registry["capabilities"].append(
                 {
@@ -358,7 +358,7 @@ class FeatureRegistryTests(unittest.TestCase):
                 kind="capability",
                 source_ref="synthetic-consumer",
             )
-            registry = json.loads((root / "docs" / "design" / "CAPABILITY-REGISTRY.yaml").read_text(encoding="utf-8"))
+            registry = json.loads((root / "process" / "docs" / "design" / "CAPABILITY-REGISTRY.yaml").read_text(encoding="utf-8"))
 
             self.assertFalse(report["canonical_registry_written"])
             self.assertEqual([{"input_ref": "CAP-PG-UNKNOWN", "kind": "capability", "source_ref": "synthetic-consumer", "reason": "E_REF_UNRESOLVED", "status": "candidate-only"}], report["candidates"])

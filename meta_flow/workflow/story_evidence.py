@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import tempfile
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
+from meta_flow.checks import cp_result, state_transition
 from meta_flow.context_pack import story_contract
+from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.project.scale import load_yaml_object
+from meta_flow.state import event_ledger
 
 EVIDENCE_ROOT_REL = Path("process/evidence")
 DESIGN_DELTA_ROOT_REL = Path("process/design-deltas")
@@ -135,12 +140,32 @@ def _read_json(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"{path} invalid JSON: {exc}") from exc
+        raise ValueError(f"invalid JSON: {exc}") from exc
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _infer_project_root(path: Path) -> Path:
@@ -155,6 +180,31 @@ def _rel(project_root: Path, path: Path) -> str:
         return path.resolve().relative_to(project_root.resolve()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
+    """把 release/process 物理路径还原为可持久化的 canonical logical ref。"""
+
+    root = project_root.resolve()
+    resolved = path.resolve(strict=False)
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        process_marker = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml")
+        process_root = process_marker.parent.resolve(strict=False)
+        try:
+            process_relative = resolved.relative_to(process_root)
+        except ValueError as exc:
+            raise ValueError("runtime path is outside the release and bound process repositories") from exc
+        return f"process/{process_relative.as_posix()}"
+
+
+def _runtime_root(project_root: Path | None, path: Path) -> Path:
+    if project_root is not None:
+        return project_root.resolve()
+    if path.is_absolute():
+        return _infer_project_root(path)
+    return Path.cwd().resolve()
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -232,8 +282,8 @@ def validate_lld_structure(
     evidence_type: str = "",
     project_root: Path | None = None,
 ) -> tuple[list[str], list[str]]:
-    path = lld_path.resolve()
-    root = project_root.resolve() if project_root else _infer_project_root(path)
+    root = project_root.resolve() if project_root else _infer_project_root(lld_path)
+    path = _resolve_runtime_path(root, lld_path)
     if not path.is_file():
         return [f"LLD evidence missing: {_rel(root, path)}"], []
     text = path.read_text(encoding="utf-8", errors="ignore")
@@ -544,10 +594,10 @@ def validate_return_packet(
     packet_path: Path | None = None,
     project_root: Path | None = None,
 ) -> tuple[list[str], list[str]]:
-    return_path = return_path.resolve()
+    root = _runtime_root(project_root, return_path)
+    return_path = _resolve_runtime_path(root, return_path)
     if not return_path.is_file():
-        return [f"Story return packet missing: {return_path}"], []
-    root = project_root.resolve() if project_root else _infer_project_root(return_path)
+        return [f"Story return packet missing: {_canonical_runtime_ref(root, return_path)}"], []
     errors: list[str] = []
     warnings: list[str] = []
     try:
@@ -557,8 +607,9 @@ def validate_return_packet(
 
     context: dict[str, Any] = {}
     if packet_path:
+        packet_path = _resolve_runtime_path(root, packet_path)
         if not packet_path.is_file():
-            errors.append(f"Story context packet missing: {packet_path}")
+            errors.append(f"Story context packet missing: {_canonical_runtime_ref(root, packet_path)}")
         else:
             try:
                 context = _read_json(packet_path.resolve())
@@ -585,7 +636,7 @@ def validate_return_packet(
         if packet.get("stage") != context.get("stage"):
             errors.append(f"stage mismatch: return={packet.get('stage')} context={context.get('stage')}")
         expected = str(context.get("expected_return_packet") or "")
-        if expected and _rel(root, return_path) != expected:
+        if expected and _canonical_runtime_ref(root, return_path) != expected:
             warnings.append(f"return path differs from expected_return_packet: expected {expected}")
 
     touched_files = [_changed_file_path(entry) for entry in _as_list(packet.get("touched_files")) if _changed_file_path(entry)]
@@ -647,7 +698,7 @@ def build_evidence_index(
     output: Path | None = None,
 ) -> tuple[dict[str, Any], Path]:
     root = project_root.resolve()
-    return_path = return_path.resolve()
+    return_path = _resolve_runtime_path(root, return_path)
     packet = load_return_packet(return_path)
     story_id = str(packet.get("story_id") or "")
     stage = str(packet.get("stage") or "")
@@ -659,7 +710,7 @@ def build_evidence_index(
         "story_id": story_id,
         "cr_id": packet.get("cr_id"),
         "stage": stage,
-        "return_ref": _rel(root, return_path),
+        "return_ref": _canonical_runtime_ref(root, return_path),
         "changed_files": _as_list(packet.get("touched_files")),
         "commands": _as_list(verification.get("commands_run")),
         "tests": _as_list(verification.get("tests")),
@@ -668,16 +719,16 @@ def build_evidence_index(
         "waivers": _as_list(packet.get("waivers")),
         "design_delta_ref": (packet.get("contract_changes") or {}).get("design_delta_ref"),
     }
-    output_path = output.resolve() if output else default_evidence_path(root, story_id, stage)
+    output_path = _resolve_runtime_path(root, output) if output else default_evidence_path(root, story_id, stage)
     _write_json(output_path, evidence)
     return evidence, output_path
 
 
 def validate_evidence_index(index_path: Path, *, project_root: Path | None = None) -> tuple[list[str], list[str]]:
-    index_path = index_path.resolve()
+    root = _runtime_root(project_root, index_path)
+    index_path = _resolve_runtime_path(root, index_path)
     if not index_path.is_file():
-        return [f"Evidence index missing: {index_path}"], []
-    root = project_root.resolve() if project_root else _infer_project_root(index_path)
+        return [f"Evidence index missing: {_canonical_runtime_ref(root, index_path)}"], []
     errors: list[str] = []
     warnings: list[str] = []
     try:
@@ -690,8 +741,13 @@ def validate_evidence_index(index_path: Path, *, project_root: Path | None = Non
         if key not in evidence:
             errors.append(f"missing required field: {key}")
     return_ref = str(evidence.get("return_ref") or "")
-    if return_ref and not (root / return_ref).is_file():
-        errors.append(f"return_ref missing on disk: {return_ref}")
+    if return_ref:
+        if not return_ref.startswith("process/"):
+            errors.append("return_ref must be one canonical process/... logical ref")
+        else:
+            resolved_return = _resolve_runtime_path(root, return_ref)
+            if not resolved_return.is_file():
+                errors.append(f"return_ref missing on disk: {return_ref}")
     stage = str(evidence.get("stage") or "")
     if stage not in ALLOWED_RETURN_STAGES:
         errors.append(f"invalid stage: {stage or '-'}")
@@ -771,7 +827,12 @@ def build_verify_packet_from_return(
     budget: int | None = None,
 ) -> tuple[dict[str, Any], Path]:
     root = project_root.resolve()
-    return_path = return_path.resolve()
+    return_path = _resolve_runtime_path(root, return_path)
+    if not return_path.is_file():
+        raise ValueError(
+            "CP6 Return Packet missing: "
+            + _canonical_runtime_ref(root, return_path)
+        )
     packet = load_return_packet(return_path)
     story_id = str(packet.get("story_id") or "")
     stage = str(packet.get("stage") or "")
@@ -786,8 +847,125 @@ def build_verify_packet_from_return(
         cr_id=str(packet.get("cr_id") or ""),
         budget=budget,
         output=output,
-        cp6_return_ref=_rel(root, return_path),
+        cp6_return_ref=_canonical_runtime_ref(root, return_path),
     )
+
+
+def build_cp6_story_projection_plan(
+    project_root: Path,
+    *,
+    result_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    """验证 CP6 ledger 事实并生成唯一的 Story 状态投影计划。"""
+
+    root = project_root.resolve()
+    result_path = _resolve_runtime_path(root, result_path)
+    result_ref = _canonical_runtime_ref(root, result_path)
+    errors, _warnings = cp_result.validate_cp_result(
+        result_path,
+        project_root=root,
+        check_consistency=False,
+        correlation_profile="compat",
+    )
+    if errors:
+        raise ValueError("CP6 result is invalid: " + "; ".join(errors))
+    result = cp_result.load_cp_result(result_path)
+    if result.get("checkpoint") != "CP6" or result.get("decision") != "PASS":
+        raise ValueError("Story projection requires a recorded CP6 PASS result")
+
+    checkpoint_path = event_ledger.ledger_path(root, "checkpoint")
+    if not checkpoint_path.is_file():
+        raise ValueError("checkpoint ledger is missing; mutation=0")
+    checkpoint_events, ledger_errors = event_ledger.load_events(checkpoint_path)
+    if ledger_errors:
+        raise ValueError(
+            "checkpoint ledger is invalid; mutation=0: " + "; ".join(ledger_errors)
+        )
+    matches = [
+        event
+        for event in checkpoint_events
+        if event.get("event_type") == "checkpoint_result"
+        and event.get("result_ref") == result_ref
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"CP6 result requires exactly one checkpoint ledger event; found={len(matches)}; mutation=0"
+        )
+    event = matches[0]
+    for key in ("event_id", "story_id", "cr_id", "decision"):
+        if event.get(key) != result.get(key):
+            raise ValueError(
+                f"checkpoint ledger {key} does not match CP6 result; mutation=0"
+            )
+
+    plan_path = _resolve_runtime_ref(root, DEVELOPMENT_PLAN_REL.as_posix())
+    if not plan_path.is_file():
+        raise ValueError("DEVELOPMENT-PLAN is missing; mutation=0")
+    before = load_yaml_object(plan_path)
+    projected, transitions = state_transition.project_cp6_development_plan(
+        before,
+        result=result,
+    )
+    changed = projected != before
+    digest_payload = {
+        "schema_version": 1,
+        "kind": "cp6_story_projection_plan",
+        "operation": "story.project-cp6",
+        "result_ref": result_ref,
+        "checkpoint_event_id": str(event["event_id"]),
+        "plan_ref": DEVELOPMENT_PLAN_REL.as_posix(),
+        "story_id": str(result["story_id"]),
+        "before_digest": canonical_digest(before),
+        "result_digest": canonical_digest(result),
+        "after_digest": canonical_digest(projected),
+        "transitions": [dict(item) for item in transitions],
+        "decision": "READY" if changed else "NO_CHANGE",
+        "mutation_count": 1 if changed else 0,
+        "mutation_allowlist": (
+            [DEVELOPMENT_PLAN_REL.as_posix()] if changed else []
+        ),
+    }
+    plan = dict(digest_payload)
+    plan["plan_digest"] = canonical_digest(digest_payload)
+    return plan, projected, plan_path
+
+
+def apply_cp6_story_projection(
+    project_root: Path,
+    *,
+    result_path: Path,
+    expected_plan_digest: str,
+) -> dict[str, Any]:
+    """在重算计划完全一致后原子写入派生 DEVELOPMENT-PLAN。"""
+
+    plan, projected, plan_path = build_cp6_story_projection_plan(
+        project_root,
+        result_path=result_path,
+    )
+    if plan["decision"] == "NO_CHANGE":
+        return {
+            "status": "NO_CHANGE",
+            "decision": "NO_CHANGE",
+            "mutation_count": 0,
+            "plan_digest": plan["plan_digest"],
+            "transitions": [],
+        }
+    if not expected_plan_digest:
+        raise ValueError("apply requires --expected-plan-digest; mutation=0")
+    if expected_plan_digest != plan["plan_digest"]:
+        raise ValueError("CP6 projection plan digest drift; mutation=0")
+    _atomic_write_json(plan_path, projected)
+    after = load_yaml_object(plan_path)
+    if canonical_digest(after) != plan["after_digest"]:
+        raise ValueError("CP6 projection post-write digest mismatch")
+    return {
+        "status": "PASS",
+        "decision": "PASS",
+        "mutation_count": 1,
+        "plan_digest": plan["plan_digest"],
+        "mutation_allowlist": plan["mutation_allowlist"],
+        "transitions": plan["transitions"],
+    }
 
 
 def _print_story_help() -> None:
@@ -799,6 +977,7 @@ def _print_story_help() -> None:
         "  evidence-check  Validate an Evidence Index.\n"
         "  verify-packet   Build a CP7 Story Verify Packet from a CP6 Return Packet.\n\n"
         "  plan-check      Validate DEVELOPMENT-PLAN as the Story management truth source.\n\n"
+        "  project-cp6     Project a recorded CP6 PASS into DEVELOPMENT-PLAN.\n"
         "  lld-check       Validate full-lld, batch-lld, technical-note, or waived evidence structure.\n"
         "  cp5-context-check Validate CP5 capsule-first context policy.\n\n"
         "Examples:\n"
@@ -806,6 +985,7 @@ def _print_story_help() -> None:
         "  meta-flow story evidence-index --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"
         "  meta-flow story verify-packet --from-return process/returns/STORY-CR123-S01.CP6.return.json --story process/stories/STORY-CR123-S01.md --project-root .\n"
         "  meta-flow story plan-check --project-root .\n"
+        "  meta-flow story project-cp6 --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .\n"
         "  meta-flow story lld-check --lld process/stories/STORY-CR123-S01-LLD.md --project-root .\n"
         "  meta-flow story cp5-context-check --context process/context/CP5-LLD-CONTEXT.yaml --project-root .\n"
     )
@@ -823,11 +1003,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--packet", dest="packet_path", type=Path, required=True)
         parser.add_argument("--return", dest="return_path", type=Path, required=True)
         parsed = parser.parse_args(args[1:])
-        errors, warnings = validate_return_packet(
-            parsed.return_path,
-            packet_path=parsed.packet_path,
-            project_root=parsed.project_root,
-        )
+        try:
+            errors, warnings = validate_return_packet(
+                parsed.return_path,
+                packet_path=parsed.packet_path,
+                project_root=parsed.project_root,
+            )
+        except (OSError, ValueError) as exc:
+            errors, warnings = [str(exc)], []
         print("Story Return Packet Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
@@ -840,15 +1023,30 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--return", dest="return_path", type=Path, required=True)
         parser.add_argument("--output", type=Path, default=None)
         parsed = parser.parse_args(args[1:])
-        _evidence, path = build_evidence_index(parsed.project_root, return_path=parsed.return_path, output=parsed.output)
-        print(f"wrote: {path}")
-        return 0
+        try:
+            _evidence, path = build_evidence_index(
+                parsed.project_root,
+                return_path=parsed.return_path,
+                output=parsed.output,
+            )
+            print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
+            return 0
+        except (OSError, ValueError) as exc:
+            print("Evidence Index Build: FAIL")
+            print(f"- ERROR: {exc}")
+            return 1
     if command == "evidence-check":
         parser = argparse.ArgumentParser(prog="meta-flow story evidence-check")
         parser.add_argument("--project-root", type=Path, default=None)
         parser.add_argument("--index", dest="index_path", type=Path, required=True)
         parsed = parser.parse_args(args[1:])
-        errors, warnings = validate_evidence_index(parsed.index_path, project_root=parsed.project_root)
+        try:
+            errors, warnings = validate_evidence_index(
+                parsed.index_path,
+                project_root=parsed.project_root,
+            )
+        except (OSError, ValueError) as exc:
+            errors, warnings = [str(exc)], []
         print("Evidence Index Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
@@ -863,14 +1061,19 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--output", type=Path, default=None)
         parser.add_argument("--budget", type=int, default=None)
         parsed = parser.parse_args(args[1:])
-        _packet, path = build_verify_packet_from_return(
-            parsed.project_root,
-            return_path=parsed.return_path,
-            story_path=parsed.story_path,
-            output=parsed.output,
-            budget=parsed.budget,
-        )
-        print(f"wrote: {path}")
+        try:
+            _packet, path = build_verify_packet_from_return(
+                parsed.project_root,
+                return_path=parsed.return_path,
+                story_path=parsed.story_path,
+                output=parsed.output,
+                budget=parsed.budget,
+            )
+        except (OSError, ValueError) as exc:
+            print("Story Verify Packet: BLOCKED")
+            print(f"- {exc}")
+            return 2
+        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "plan-check":
         parser = argparse.ArgumentParser(prog="meta-flow story plan-check")
@@ -889,6 +1092,41 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"- ERROR: {error}")
         return 1 if errors else 0
+    if command == "project-cp6":
+        parser = argparse.ArgumentParser(prog="meta-flow story project-cp6")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--result", dest="result_path", type=Path, required=True)
+        parser.add_argument("--expected-plan-digest", default="")
+        parser.add_argument("--apply", action="store_true")
+        parsed = parser.parse_args(args[1:])
+        try:
+            if parsed.apply:
+                output = apply_cp6_story_projection(
+                    parsed.project_root,
+                    result_path=parsed.result_path,
+                    expected_plan_digest=parsed.expected_plan_digest,
+                )
+            else:
+                output, _projected, _path = build_cp6_story_projection_plan(
+                    parsed.project_root,
+                    result_path=parsed.result_path,
+                )
+            print(json.dumps(output, ensure_ascii=False, sort_keys=True))
+            return 0
+        except (OSError, ValueError) as exc:
+            print(
+                json.dumps(
+                    {
+                        "status": "BLOCKED",
+                        "decision": "BLOCKED",
+                        "mutation_count": 0,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 2
     if command == "lld-check":
         parser = argparse.ArgumentParser(prog="meta-flow story lld-check")
         parser.add_argument("--project-root", type=Path, default=None)
