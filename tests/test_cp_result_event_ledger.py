@@ -175,6 +175,77 @@ class CPResultEventLedgerTests(unittest.TestCase):
             self.assertIn("LEGACY_ATTEMPT_UNAVAILABLE: check_attempt must be a positive integer", errors)
             self.assertIn("LEGACY_INPUT_HASH_UNAVAILABLE: input_artifact_hashes must be non-empty", errors)
 
+    def test_cp5_result_check_consumes_canonical_current_head(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checks = root / "process" / "checks"
+            checks.mkdir(parents=True)
+            old_ref = "process/checks/CP5-CR123-old.result.json"
+            current_ref = "process/checks/CP5-CR123-current.result.json"
+            base = cp6_result_payload()
+            base.update(
+                {
+                    "checkpoint": "CP5",
+                    "checkpoint_id": "CP5-CR123",
+                    "story_id": "",
+                    "dispatch_refs": [],
+                    "context_ref": "process/context/CP5-CR123.context.json",
+                    "evidence_ref": "process/evidence/CR123.CP5.index.json",
+                }
+            )
+            (root / old_ref).write_text(
+                json.dumps(base, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (root / current_ref).write_text(
+                json.dumps(base, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            ledger = root / "process" / "state" / "CHECKPOINT-LEDGER.ndjson"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "event_id": event_id,
+                            "event_type": "checkpoint_result",
+                            "checkpoint": "CP5",
+                            "cr_id": "CR-123",
+                            "decision": "PASS",
+                            "result_ref": result_ref,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    for event_id, result_ref in (
+                        ("CP5-CR123-OLD", old_ref),
+                        ("CP5-CR123-CURRENT", current_ref),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            old_errors, _warnings = cp_result.validate_cp_result(
+                root / old_ref,
+                project_root=root,
+                correlation_profile="strict",
+            )
+            current_errors, _warnings = cp_result.validate_cp_result(
+                root / current_ref,
+                project_root=root,
+                correlation_profile="strict",
+            )
+
+            self.assertIn(
+                f"CHECKPOINT_RESULT_NOT_CURRENT_HEAD: expected={current_ref}, actual={old_ref}",
+                old_errors,
+            )
+            self.assertNotIn(
+                "CHECKPOINT_RESULT_NOT_CURRENT_HEAD",
+                "\n".join(current_errors),
+            )
+
     def test_strict_correlation_rejects_stale_input_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

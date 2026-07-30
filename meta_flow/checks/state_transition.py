@@ -19,6 +19,7 @@ from meta_flow.checks.frozen_cp6_evidence import (
 )
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.state.checkpoint_projection import CheckpointProjectionV1
 
 PASS_LIKE_DECISIONS = {"PASS", "WAIVED", "PASS_WITH_RISK"}
 FAILURE_DECISIONS = {"FAIL", "BLOCKED", "NEEDS_REWORK", "NEEDS_DESIGN_CLARIFICATION"}
@@ -257,7 +258,9 @@ def build_c0_result(
                 "decision": replay_decision,
                 "admission_decision": admission.get("decision"),
                 "evidence_digest": frozen.evidence_digest,
-                "finding_codes": [] if replay_decision == "PASS" else list(admission.get("reason_codes") or []),
+                "finding_codes": []
+                if replay_decision == "PASS"
+                else list(admission.get("reason_codes") or []),
             }
         )
         if replay_decision != "PASS":
@@ -326,9 +329,7 @@ C0_STORY_PROGRESS_ORDER = (
     "verified-with-risk",
     "done",
 )
-C0_STORY_PROGRESS_RANK = {
-    status: index for index, status in enumerate(C0_STORY_PROGRESS_ORDER)
-}
+C0_STORY_PROGRESS_RANK = {status: index for index, status in enumerate(C0_STORY_PROGRESS_ORDER)}
 
 
 def _c0_story_rank(story_id: str, status: str) -> int:
@@ -501,6 +502,146 @@ def project_c0_development_plan(
     return projected, tuple(transitions)
 
 
+def project_cp5_development_plan(
+    payload: Mapping[str, Any],
+    *,
+    cr_id: str,
+    projection: CheckpointProjectionV1,
+    gate_events: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+    """把 canonical CP5 head 与一次人工批准投影为 Story 开发准入。"""
+
+    if projection.target_cr_id != cr_id or projection.findings:
+        raise ValueError("CP5 Story admission requires one valid CR projection; mutation=0")
+    head = projection.head("CP5")
+    if head is None:
+        raise ValueError("CP5 canonical current head is unavailable; mutation=0")
+    if head.decision != "PASS":
+        raise ValueError("CP5 Story admission requires canonical decision=PASS; mutation=0")
+    approvals = []
+    for event in gate_events:
+        if (
+            str(event.get("event_type") or "") != "human_gate_approval"
+            or str(event.get("status") or "").lower() != "approved"
+            or str(event.get("cr_id") or "") != cr_id
+            or str(event.get("result_ref") or "") != head.result_ref
+        ):
+            continue
+        gate_text = str(event.get("checkpoint") or event.get("gate") or "").upper()
+        if "CP5" in gate_text:
+            approvals.append(event)
+    if len(approvals) != 1:
+        raise ValueError(
+            "CP5 Story admission requires exactly one approval bound to canonical "
+            f"head; found={len(approvals)}; mutation=0"
+        )
+
+    projected = copy.deepcopy(dict(payload))
+    waves = projected.get("waves")
+    if not isinstance(waves, list):
+        raise ValueError("DEVELOPMENT-PLAN must contain waves[]; mutation=0")
+    stories: dict[str, dict[str, Any]] = {}
+    for wave in waves:
+        if not isinstance(wave, dict):
+            continue
+        wave_stories = wave.get("stories")
+        if not isinstance(wave_stories, list):
+            continue
+        for story in wave_stories:
+            if not isinstance(story, dict) or str(story.get("cr_id") or "") != cr_id:
+                continue
+            story_id = str(story.get("story_id") or "")
+            if not story_id:
+                raise ValueError("CP5 Story admission found Story without story_id; mutation=0")
+            if story_id in stories:
+                raise ValueError(f"duplicate Story in DEVELOPMENT-PLAN: {story_id}; mutation=0")
+            stories[story_id] = story
+    if not stories:
+        raise ValueError(f"no {cr_id} Stories in DEVELOPMENT-PLAN; mutation=0")
+
+    terminal_or_started = {
+        "dev-ready",
+        "in-development",
+        "ready-for-verification",
+        "verified",
+        "verified-with-risk",
+        "done",
+    }
+    completed = {
+        story_id
+        for story_id, story in stories.items()
+        if str(story.get("status") or "")
+        in {"ready-for-verification", "verified", "verified-with-risk", "done"}
+    }
+    transitions: list[dict[str, Any]] = []
+    for story_id, story in sorted(stories.items()):
+        lld_gate = story.get("lld_gate")
+        dev_gate = story.get("dev_gate")
+        if not isinstance(lld_gate, dict):
+            raise ValueError(f"{story_id} lld_gate must be an object; mutation=0")
+        if not isinstance(dev_gate, dict):
+            raise ValueError(f"{story_id} dev_gate must be an object; mutation=0")
+        dependencies = [str(item) for item in story.get("depends_on", []) if str(item)]
+        unknown = sorted(set(dependencies) - set(stories))
+        if unknown:
+            raise ValueError(
+                f"{story_id} has unknown dependencies: {', '.join(unknown)}; mutation=0"
+            )
+        dependencies_satisfied = not dependencies or all(
+            dependency in completed for dependency in dependencies
+        )
+        current_status = str(story.get("status") or "")
+        allowed = {
+            "lld-ready",
+            "lld-approved",
+            *terminal_or_started,
+        }
+        if current_status not in allowed:
+            raise ValueError(
+                f"{story_id} cannot consume CP5 PASS from "
+                f"status={current_status or '-'}; mutation=0"
+            )
+        already_started = current_status in terminal_or_started
+        implementation_authorized = dependencies_satisfied or already_started
+        target_status = current_status
+        if current_status in {"lld-ready", "lld-approved"}:
+            target_status = "dev-ready" if implementation_authorized else "lld-approved"
+        before = (
+            current_status,
+            str(lld_gate.get("status") or ""),
+            bool(dev_gate.get("implementation_authorized")),
+        )
+        story["status"] = target_status
+        lld_gate["status"] = "approved"
+        dev_gate.update(
+            {
+                "cp5_confirmed": True,
+                "lld_confirmed": True,
+                "dependencies_satisfied": dependencies_satisfied,
+                "file_conflict_free": True,
+                "implementation_authorized": implementation_authorized,
+                "checkpoint_projection_digest": projection.as_dict()["projection_digest"],
+                "checkpoint_result_ref": head.result_ref,
+            }
+        )
+        after = (
+            target_status,
+            "approved",
+            implementation_authorized,
+        )
+        if before != after:
+            transitions.append(
+                {
+                    "subject": story_id,
+                    "from": current_status,
+                    "to": target_status,
+                    "reason": "CANONICAL_CP5_PASS",
+                    "result_ref": head.result_ref,
+                }
+            )
+    return projected, tuple(transitions)
+
+
 def project_cp6_development_plan(
     payload: Mapping[str, Any],
     *,
@@ -530,9 +671,7 @@ def project_cp6_development_plan(
             if not candidate_id:
                 continue
             if candidate_id in stories:
-                raise ValueError(
-                    f"duplicate Story in DEVELOPMENT-PLAN: {candidate_id}"
-                )
+                raise ValueError(f"duplicate Story in DEVELOPMENT-PLAN: {candidate_id}")
             stories[candidate_id] = story
     current = stories.get(story_id)
     if current is None:
@@ -543,9 +682,7 @@ def project_cp6_development_plan(
         "in-development",
         "ready-for-verification",
     }:
-        raise ValueError(
-            f"{story_id} cannot consume CP6 PASS from status={current_status or '-'}"
-        )
+        raise ValueError(f"{story_id} cannot consume CP6 PASS from status={current_status or '-'}")
     dev_gate = current.get("dev_gate")
     if not isinstance(dev_gate, dict) or not all(
         dev_gate.get(field) is True
@@ -576,9 +713,7 @@ def project_cp6_development_plan(
         in {"ready-for-verification", "verified", "verified-with-risk", "done"}
     }
     for candidate_id, downstream in sorted(stories.items()):
-        dependencies = [
-            str(item) for item in downstream.get("depends_on", []) if str(item)
-        ]
+        dependencies = [str(item) for item in downstream.get("depends_on", []) if str(item)]
         if story_id not in dependencies or not dependencies:
             continue
         downstream_gate = downstream.get("dev_gate")
@@ -678,7 +813,11 @@ def validate_chronology(nodes: list[ChronologyNode]) -> list[ChronologyFinding]:
     conditional_present = False
     for node in nodes:
         if node.kind not in CHRONOLOGY_KINDS:
-            findings.append(_chronology_finding("UNKNOWN_CHRONOLOGY_KIND", node, "kind", "unknown chronology kind"))
+            findings.append(
+                _chronology_finding(
+                    "UNKNOWN_CHRONOLOGY_KIND", node, "kind", "unknown chronology kind"
+                )
+            )
             continue
         if not node.source_ref.strip():
             findings.append(
@@ -772,7 +911,9 @@ def derive_gate_decision(events: list[ChronologyNode]) -> tuple[str, list[Chrono
     return "pending", findings
 
 
-def validate_phase_gate_state(state: dict[str, Any], gate_events: list[ChronologyNode]) -> list[ChronologyFinding]:
+def validate_phase_gate_state(
+    state: dict[str, Any], gate_events: list[ChronologyNode]
+) -> list[ChronologyFinding]:
     """Keep phase work in progress separate from an opened human gate."""
 
     findings: list[ChronologyFinding] = []
@@ -781,7 +922,11 @@ def validate_phase_gate_state(state: dict[str, Any], gate_events: list[Chronolog
     pending_gate = str(state.get("pending_gate") or "")
     kinds = {event.kind for event in gate_events}
     approved_nodes = [event for event in gate_events if event.kind == "approved"]
-    reference = approved_nodes[0] if approved_nodes else ChronologyNode("gate-opened", None, "STATE.current.json")
+    reference = (
+        approved_nodes[0]
+        if approved_nodes
+        else ChronologyNode("gate-opened", None, "STATE.current.json")
+    )
 
     if "gate-opened" not in kinds and {"reviewed", "approved"} & kinds:
         observed = next(event for event in gate_events if event.kind in {"reviewed", "approved"})
@@ -859,14 +1004,18 @@ def _next_required_gate(stages: list[dict[str, Any]], checkpoint: str) -> str:
     return ""
 
 
-def _has_automatic_stage_before_gate(stages: list[dict[str, Any]], checkpoint: str, gate: str) -> bool:
+def _has_automatic_stage_before_gate(
+    stages: list[dict[str, Any]], checkpoint: str, gate: str
+) -> bool:
     """Return whether a route has real automatic work before its next human gate."""
 
     start = _stage_index(stages, checkpoint)
     end = _stage_index(stages, gate)
     if start < 0 or end <= start:
         return False
-    return any(str(stage.get("human_gate") or "none") == "none" for stage in stages[start + 1 : end])
+    return any(
+        str(stage.get("human_gate") or "none") == "none" for stage in stages[start + 1 : end]
+    )
 
 
 def expected_post_transition(route: dict[str, Any], checkpoint: str) -> dict[str, str]:
@@ -921,18 +1070,24 @@ def _decision_compatible_stop_reasons(decision: str, expected: dict[str, str]) -
     return set(ALLOWED_STOP_REASONS)
 
 
-def _has_valid_stop_reason(state: dict[str, Any], expected: dict[str, str], *, decision: str = "") -> bool:
+def _has_valid_stop_reason(
+    state: dict[str, Any], expected: dict[str, str], *, decision: str = ""
+) -> bool:
     reason = _stop_reason(state)
     if reason not in _decision_compatible_stop_reasons(decision, expected):
         return False
     if reason == "required_human_gate":
-        return bool(state.get("pending_gate")) and str(state.get("pending_gate")) == expected.get("checkpoint")
+        return bool(state.get("pending_gate")) and str(state.get("pending_gate")) == expected.get(
+            "checkpoint"
+        )
     if reason == "delivered":
         return str(state.get("current_phase") or "") == "delivered"
     return True
 
 
-def _state_matches_expected_stop(state: dict[str, Any], expected: dict[str, str], *, decision: str = "") -> list[str]:
+def _state_matches_expected_stop(
+    state: dict[str, Any], expected: dict[str, str], *, decision: str = ""
+) -> list[str]:
     errors: list[str] = []
     kind = expected.get("kind") or ""
     expected_gate = expected.get("checkpoint") or ""
@@ -945,7 +1100,9 @@ def _state_matches_expected_stop(state: dict[str, Any], expected: dict[str, str]
             if not state.get("pending_checklist_path"):
                 errors.append(f"{expected_gate} is pending but pending_checklist_path is missing")
             if action_type and action_type not in AWAIT_USER_ACTION_TYPES:
-                errors.append(f"{expected_gate} pending gate should use await_user next_action.type, got {action_type}")
+                errors.append(
+                    f"{expected_gate} pending gate should use await_user next_action.type, got {action_type}"
+                )
             return errors
         if _has_valid_stop_reason(state, expected, decision=decision):
             return errors
@@ -969,7 +1126,9 @@ def _state_matches_expected_stop(state: dict[str, Any], expected: dict[str, str]
     if _has_valid_stop_reason(state, expected, decision=decision):
         return errors
     if action_type in {"await_user", "continue", "wait_user"} and not pending_gate:
-        errors.append("route has no remaining required gate; state must continue automatically, deliver, or record a valid stop_reason")
+        errors.append(
+            "route has no remaining required gate; state must continue automatically, deliver, or record a valid stop_reason"
+        )
     return errors
 
 
@@ -990,7 +1149,9 @@ def _is_automatic_phase_in_progress(
     if expected.get("kind") != "required_human_gate" or checkpoint not in {"CP5", "CP6", "CP7"}:
         return False
     stages = [stage for stage in route.get("stages") or [] if isinstance(stage, dict)]
-    if checkpoint != "CP7" and not _has_automatic_stage_before_gate(stages, checkpoint, expected.get("checkpoint") or ""):
+    if checkpoint != "CP7" and not _has_automatic_stage_before_gate(
+        stages, checkpoint, expected.get("checkpoint") or ""
+    ):
         return False
     if state.get("pending_gate") or str(state.get("current_phase") or "") != "story-execution":
         return False
@@ -1023,16 +1184,18 @@ def validate_auto_cp_transition(
         if not _has_valid_stop_reason(state, expected_failure, decision=decision):
             errors.append(
                 f"{checkpoint} decision={decision} must leave matching "
-                "stop_reason in {"
-                + ", ".join(sorted(FAILURE_STOP_REASONS[decision]))
-                + "}"
+                "stop_reason in {" + ", ".join(sorted(FAILURE_STOP_REASONS[decision])) + "}"
             )
         return errors, warnings
     if decision not in PASS_LIKE_DECISIONS:
-        warnings.append(f"{checkpoint} decision={decision} is not pass-like; transition guard did not enforce auto-advance")
+        warnings.append(
+            f"{checkpoint} decision={decision} is not pass-like; transition guard did not enforce auto-advance"
+        )
         return errors, warnings
     if human_gate != "none":
-        warnings.append(f"{checkpoint} human_gate={human_gate}; use --approved-gate after human approval is recorded")
+        warnings.append(
+            f"{checkpoint} human_gate={human_gate}; use --approved-gate after human approval is recorded"
+        )
         return errors, warnings
     if _is_true_delivered_terminal(state):
         return errors, warnings
@@ -1042,7 +1205,9 @@ def validate_auto_cp_transition(
         errors.append(
             f"{checkpoint} decision={decision} cannot retain failure stop_reason={stale_failure_reason}"
         )
-    if not _is_automatic_phase_in_progress(route=route, state=state, checkpoint=checkpoint, expected=expected):
+    if not _is_automatic_phase_in_progress(
+        route=route, state=state, checkpoint=checkpoint, expected=expected
+    ):
         errors.extend(_state_matches_expected_stop(state, expected, decision=decision))
     return errors, warnings
 
@@ -1061,13 +1226,19 @@ def validate_approved_gate_transition(
         return [f"{checkpoint} is not present in route_plan.stages"], warnings
     human_gate = str(stages[index].get("human_gate") or "none")
     if human_gate != "required":
-        warnings.append(f"{checkpoint} human_gate={human_gate}; approved-gate transition is normally checked for required gates")
+        warnings.append(
+            f"{checkpoint} human_gate={human_gate}; approved-gate transition is normally checked for required gates"
+        )
     pending_gate = str(state.get("pending_gate") or "")
     if pending_gate == checkpoint:
-        errors.append(f"{checkpoint} approval was recorded but STATE.current.json still waits on the same pending_gate")
+        errors.append(
+            f"{checkpoint} approval was recorded but STATE.current.json still waits on the same pending_gate"
+        )
         return errors, warnings
     expected = expected_post_transition(route, checkpoint)
-    if not _is_automatic_phase_in_progress(route=route, state=state, checkpoint=checkpoint, expected=expected):
+    if not _is_automatic_phase_in_progress(
+        route=route, state=state, checkpoint=checkpoint, expected=expected
+    ):
         errors.extend(_state_matches_expected_stop(state, expected))
     return errors, warnings
 
@@ -1091,7 +1262,9 @@ def validate_transition(
         decision = str(result.get("decision") or decision)
     if not checkpoint or not decision:
         return ["provide --result or both --checkpoint and --decision"], []
-    return validate_auto_cp_transition(route=route, state=state, checkpoint=checkpoint, decision=decision)
+    return validate_auto_cp_transition(
+        route=route, state=state, checkpoint=checkpoint, decision=decision
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1102,10 +1275,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--route-plan", type=Path, default=None)
     parser.add_argument("--state", type=Path, default=None)
-    parser.add_argument("--result", type=Path, default=None, help="CP result JSON for automatic CP PASS/WAIVED transitions")
-    parser.add_argument("--checkpoint", default="", help="Checkpoint id when --result is not supplied")
+    parser.add_argument(
+        "--result",
+        type=Path,
+        default=None,
+        help="CP result JSON for automatic CP PASS/WAIVED transitions",
+    )
+    parser.add_argument(
+        "--checkpoint", default="", help="Checkpoint id when --result is not supplied"
+    )
     parser.add_argument("--decision", default="", help="Decision when --result is not supplied")
-    parser.add_argument("--approved-gate", default="", help="Required human gate that was just approved, for example CP3")
+    parser.add_argument(
+        "--approved-gate",
+        default="",
+        help="Required human gate that was just approved, for example CP3",
+    )
     parser.add_argument(
         "--chronology-events",
         type=Path,
@@ -1157,7 +1341,9 @@ def main(argv: list[str] | None = None) -> int:
             print("State Transition Check: " + ("FAIL" if errors else "OK"))
             print(f"- gate_decision: {decision}")
             for finding in findings:
-                print(f"- ERROR: {finding.code} {finding.object_ref}.{finding.field}: {finding.message}")
+                print(
+                    f"- ERROR: {finding.code} {finding.object_ref}.{finding.field}: {finding.message}"
+                )
             for error in errors if not findings else []:
                 print(f"- ERROR: {error}")
         return 1 if errors else 0
@@ -1183,13 +1369,24 @@ def main(argv: list[str] | None = None) -> int:
             and state_path.name == "STATE.current.json"
             and missing_path == state_path.resolve()
         ):
-            errors, warnings = [], [f"state projection absent: {exc.filename}; CP5 transition accepted without mutation"]
+            errors, warnings = (
+                [],
+                [
+                    f"state projection absent: {exc.filename}; CP5 transition accepted without mutation"
+                ],
+            )
         else:
             errors, warnings = [str(exc)], []
     except ValueError as exc:
         errors, warnings = [str(exc)], []
     if parsed.output == "json":
-        print(json.dumps({"errors": errors, "status": "FAIL" if errors else "OK", "warnings": warnings}, ensure_ascii=False, sort_keys=True))
+        print(
+            json.dumps(
+                {"errors": errors, "status": "FAIL" if errors else "OK", "warnings": warnings},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
     else:
         print("State Transition Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:

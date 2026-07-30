@@ -20,6 +20,7 @@ from meta_flow.project.process_route import (
     _resolve_runtime_ref,
     require_process_route,
 )
+from meta_flow.state import checkpoint_projection as canonical_checkpoint_projection
 from meta_flow.state import current
 
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
@@ -62,7 +63,9 @@ ALLOWED_CR_KINDS = {
     "spike",
 }
 LEGACY_GATE_PROFILES = {"full", "standard", "compact", "runtime", "spike"}
-ALLOWED_GATE_PROFILES = set(gate_profiles.default_gate_profiles().get("profiles", {})) | LEGACY_GATE_PROFILES
+ALLOWED_GATE_PROFILES = (
+    set(gate_profiles.default_gate_profiles().get("profiles", {})) | LEGACY_GATE_PROFILES
+)
 PATH_EMPTY_VALUES = {"", "-", "—", "n/a", "N/A", "无", "不适用"}
 LEGACY_CR_INDEX_RELS = (
     Path("process/changes/CR-INDEX.yaml"),
@@ -151,7 +154,11 @@ def _sha256_bytes(payload: bytes) -> str:
 def _safe_project_file(project_root: Path, rel_path: str) -> Path:
     root = project_root.resolve()
     relative = Path(rel_path)
-    if relative.is_absolute() or ".." in relative.parts or relative.parts[:2] == ("process", "quant-lab"):
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or relative.parts[:2] == ("process", "quant-lab")
+    ):
         raise ValueError(f"protected object escapes project boundary: {rel_path}")
     path = _resolve_runtime_path(root, rel_path).resolve(strict=True)
     process_root = _resolve_runtime_ref(root, "process/PROJECT.yaml").parent
@@ -216,7 +223,9 @@ def _ledger_event_id_payload(path: Path, expected_ids: list[str]) -> tuple[bytes
     return payload, event_ids
 
 
-def build_protected_object_manifest(project_root: Path, *, cr_id: str, story_id: str) -> dict[str, Any]:
+def build_protected_object_manifest(
+    project_root: Path, *, cr_id: str, story_id: str
+) -> dict[str, Any]:
     """Build an object-identity manifest for a closed CR's original evidence."""
 
     root = project_root.resolve()
@@ -240,7 +249,9 @@ def build_protected_object_manifest(project_root: Path, *, cr_id: str, story_id:
         )
     evidence_root = _resolve_runtime_ref(root, "process/evidence")
     if evidence_root.is_dir():
-        candidate_paths.update(path.relative_to(root) for path in evidence_root.glob("ST-EI-*.index.json"))
+        candidate_paths.update(
+            path.relative_to(root) for path in evidence_root.glob("ST-EI-*.index.json")
+        )
 
     objects: list[dict[str, Any]] = []
     for rel_path in sorted(candidate_paths, key=lambda item: item.as_posix()):
@@ -295,8 +306,13 @@ def verify_protected_object_manifest(project_root: Path, manifest: dict[str, Any
     root = project_root.resolve()
     cr_id = str(manifest.get("cr_id") or "")
     findings: list[str] = []
-    if manifest.get("identity_mode") != "object-identity" or manifest.get("path_prefix_only_identification") is not False:
-        findings.append("manifest must use object identity and prohibit path-prefix-only identification")
+    if (
+        manifest.get("identity_mode") != "object-identity"
+        or manifest.get("path_prefix_only_identification") is not False
+    ):
+        findings.append(
+            "manifest must use object identity and prohibit path-prefix-only identification"
+        )
     for item in manifest.get("objects") or []:
         if not isinstance(item, dict):
             findings.append("manifest object is not a mapping")
@@ -508,7 +524,10 @@ def validate_native_transition(
             (("candidate", "not_ready", "not_started"), ("active", "not_ready", "cp3_pending")),
             (("active", "not_ready", "cp8_pending"), ("closed", "ready", "cp8_closed")),
             (("active", "not_ready", "cp8_pending"), ("closed", "ready_with_risk", "cp8_closed")),
-            (("blocked", "not_ready", "cp8_pending"), ("closed", "ready_with_risk", "cp8_recovery_closed")),
+            (
+                ("blocked", "not_ready", "cp8_pending"),
+                ("closed", "ready_with_risk", "cp8_recovery_closed"),
+            ),
         }
     )
     for gate in active_gates:
@@ -523,7 +542,10 @@ def normalize_kind(value: str, *, fallback_status: str = "") -> str:
     kind = strip_scalar(value).lower()
     if kind in {"cr", "change", "follow-up", "follow_up"}:
         return "requirement-change"
-    if kind in {"spike", "spike_candidate"} or normalize_status(fallback_status) == "spike_candidate":
+    if (
+        kind in {"spike", "spike_candidate"}
+        or normalize_status(fallback_status) == "spike_candidate"
+    ):
         return "spike"
     return kind
 
@@ -605,7 +627,9 @@ def discover_formal_crs(change_root: Path) -> dict[str, FormalCR]:
             continue
         text = read_text(path)
         fields = parse_frontmatter(text)
-        cr_id = fields.get("cr_id") or (CR_ID_RE.search(path.name).group(0) if CR_ID_RE.search(path.name) else "")
+        cr_id = fields.get("cr_id") or (
+            CR_ID_RE.search(path.name).group(0) if CR_ID_RE.search(path.name) else ""
+        )
         if not cr_id:
             continue
         if cr_id in crs:
@@ -627,7 +651,10 @@ def discover_formal_crs(change_root: Path) -> dict[str, FormalCR]:
             source_follow_up_id=strip_scalar(fields.get("source_follow_up_id", "")),
             historical_baseline_status=strip_scalar(fields.get("historical_baseline_status", "")),
             reframed_by=strip_scalar(fields.get("reframed_by", "")),
-            native=(strip_scalar(fields.get("schema_version", "")) == "1" and strip_scalar(fields.get("kind", "")) == "cr"),
+            native=(
+                strip_scalar(fields.get("schema_version", "")) == "1"
+                and strip_scalar(fields.get("kind", "")) == "cr"
+            ),
         )
     return crs
 
@@ -660,16 +687,23 @@ def parse_follow_up_rows(path: Path) -> list[FollowUpRow]:
             item_id = cells[header_map["候选编号"]].strip()
             if CANDIDATE_ID_RE.fullmatch(item_id):
                 status = normalize_status(cells[header_map["状态"]])
-                kind = normalize_kind(cells[header_map.get("类型", -1)].strip() if "类型" in header_map else "", fallback_status=status)
+                kind = normalize_kind(
+                    cells[header_map.get("类型", -1)].strip() if "类型" in header_map else "",
+                    fallback_status=status,
+                )
                 rows.append(
                     FollowUpRow(
                         item_id=item_id,
-                        title=cells[header_map.get("标题", -1)].strip() if "标题" in header_map else "",
+                        title=cells[header_map.get("标题", -1)].strip()
+                        if "标题" in header_map
+                        else "",
                         status=status,
                         lifecycle_status=normalize_lifecycle_status("", fallback_status=status),
                         readiness_status="n/a",
                         gate_status=normalize_gate_status(
-                            cells[header_map.get("当前门控", -1)].strip() if "当前门控" in header_map else "",
+                            cells[header_map.get("当前门控", -1)].strip()
+                            if "当前门控" in header_map
+                            else "",
                             fallback_gate="not_started",
                         ),
                         gate_profile="spike" if kind == "spike" else "",
@@ -702,7 +736,9 @@ def parse_structured_follow_up_rows(path: Path) -> list[FollowUpRow]:
             item_match = re.match(r"^\s*-\s+id:\s*(?P<value>.+?)\s*$", line)
             if item_match:
                 if current:
-                    rows.append(follow_up_row_from_mapping(current, path, current_line, source="yaml"))
+                    rows.append(
+                        follow_up_row_from_mapping(current, path, current_line, source="yaml")
+                    )
                 current = {"id": strip_scalar(item_match.group("value"))}
                 current_line = block_start_line + offset
                 continue
@@ -716,19 +752,29 @@ def parse_structured_follow_up_rows(path: Path) -> list[FollowUpRow]:
     return rows
 
 
-def follow_up_row_from_mapping(mapping: dict[str, str], path: Path, line_no: int, *, source: str) -> FollowUpRow:
+def follow_up_row_from_mapping(
+    mapping: dict[str, str], path: Path, line_no: int, *, source: str
+) -> FollowUpRow:
     status = normalize_status(mapping.get("status", ""))
-    lifecycle_status = normalize_lifecycle_status(mapping.get("lifecycle_status", ""), fallback_status=status)
+    lifecycle_status = normalize_lifecycle_status(
+        mapping.get("lifecycle_status", ""), fallback_status=status
+    )
     kind = normalize_kind(mapping.get("kind", mapping.get("type", "")), fallback_status=status)
     if not status:
-        status = "spike_candidate" if kind == "spike" and lifecycle_status == "candidate" else lifecycle_status
+        status = (
+            "spike_candidate"
+            if kind == "spike" and lifecycle_status == "candidate"
+            else lifecycle_status
+        )
     return FollowUpRow(
         item_id=strip_scalar(mapping.get("id", "")),
         title=strip_scalar(mapping.get("title", "")),
         status=status,
         lifecycle_status=lifecycle_status,
         readiness_status=normalize_readiness_status(mapping.get("readiness_status", "")) or "n/a",
-        gate_status=normalize_gate_status(mapping.get("gate_status", ""), fallback_gate="not_started"),
+        gate_status=normalize_gate_status(
+            mapping.get("gate_status", ""), fallback_gate="not_started"
+        ),
         gate_profile=strip_scalar(mapping.get("gate_profile", "")).lower(),
         kind=kind,
         formal_path=normalize_path(strip_scalar(mapping.get("formal_cr_path", ""))),
@@ -763,10 +809,19 @@ def parse_cr_index_items(index_path: Path) -> list[IndexItem]:
         data = json.loads(read_text(index_path))
         items = []
         for offset, item in enumerate(data.get("items", []), 1):
-            mapping = {key: json.dumps(value) if isinstance(value, (list, dict)) else str(value) for key, value in item.items()}
-            mapping.setdefault("lifecycle_status", str(item.get("lifecycle_status") or item.get("status") or ""))
-            mapping.setdefault("readiness_status", str(item.get("readiness_status") or item.get("readiness") or ""))
-            mapping.setdefault("formal_cr_path", str(item.get("formal_cr_path") or item.get("full_ref") or ""))
+            mapping = {
+                key: json.dumps(value) if isinstance(value, (list, dict)) else str(value)
+                for key, value in item.items()
+            }
+            mapping.setdefault(
+                "lifecycle_status", str(item.get("lifecycle_status") or item.get("status") or "")
+            )
+            mapping.setdefault(
+                "readiness_status", str(item.get("readiness_status") or item.get("readiness") or "")
+            )
+            mapping.setdefault(
+                "formal_cr_path", str(item.get("formal_cr_path") or item.get("full_ref") or "")
+            )
             items.append(index_item_from_mapping(mapping, offset))
         return items
     items: list[IndexItem] = []
@@ -825,6 +880,7 @@ def validate_cr_index_projection(
         errors.append("CR-INDEX.json items must contain objects only")
     if len(ids) != len(set(ids)):
         errors.append("CR-INDEX.json contains duplicate CR IDs")
+
     def numeric(value: str) -> tuple[int, str]:
         return (
             (int(value.split("-", 1)[1]), value)
@@ -843,13 +899,8 @@ def validate_cr_index_projection(
     expected = hashlib.sha256(semantic.encode("utf-8")).hexdigest()
     if payload.get("semantic_digest") != expected:
         errors.append("CR-INDEX.json semantic_digest mismatch")
-    if (
-        expected_semantic_digest
-        and payload.get("semantic_digest") != expected_semantic_digest
-    ):
-        errors.append(
-            "CR-INDEX.json stale projection differs from formal truth rebuild digest"
-        )
+    if expected_semantic_digest and payload.get("semantic_digest") != expected_semantic_digest:
+        errors.append("CR-INDEX.json stale projection differs from formal truth rebuild digest")
     return errors
 
 
@@ -888,7 +939,9 @@ def parse_next_action_candidates(index_path: Path) -> list[tuple[str, int]]:
 
 def index_item_from_mapping(mapping: dict[str, str], line_no: int) -> IndexItem:
     status = normalize_status(mapping.get("status", ""))
-    lifecycle_status = normalize_lifecycle_status(mapping.get("lifecycle_status", ""), fallback_status=status)
+    lifecycle_status = normalize_lifecycle_status(
+        mapping.get("lifecycle_status", ""), fallback_status=status
+    )
     kind = normalize_kind(mapping.get("kind", mapping.get("type", "")), fallback_status=status)
     return IndexItem(
         item_id=strip_scalar(mapping.get("id", "")),
@@ -896,7 +949,9 @@ def index_item_from_mapping(mapping: dict[str, str], line_no: int) -> IndexItem:
         status=status,
         lifecycle_status=lifecycle_status,
         readiness_status=normalize_readiness_status(mapping.get("readiness_status", "")) or "n/a",
-        gate_status=normalize_gate_status(mapping.get("gate_status", ""), fallback_gate=mapping.get("next_gate", "")),
+        gate_status=normalize_gate_status(
+            mapping.get("gate_status", ""), fallback_gate=mapping.get("next_gate", "")
+        ),
         gate_profile=strip_scalar(mapping.get("gate_profile", "")).lower(),
         kind=kind,
         formal_path=normalize_path(strip_scalar(mapping.get("formal_cr_path", ""))),
@@ -915,7 +970,9 @@ def format_rel(project_root: Path, path: Path) -> str:
         return path.as_posix()
 
 
-def formal_cr_for_follow_up_row(project_root: Path, formal_crs: dict[str, FormalCR], row: FollowUpRow) -> FormalCR | None:
+def formal_cr_for_follow_up_row(
+    project_root: Path, formal_crs: dict[str, FormalCR], row: FollowUpRow
+) -> FormalCR | None:
     if row.formal_path in PATH_EMPTY_VALUES:
         return None
     resolved = resolve_project_path(project_root, row.formal_path).resolve()
@@ -936,7 +993,11 @@ def is_formal_active(formal: FormalCR) -> bool:
 
 
 def is_formal_finished(formal: FormalCR) -> bool:
-    return formal.status in FINISHED_FORMAL_STATUSES or formal.lifecycle_status in {"closed", "cancelled", "superseded"}
+    return formal.status in FINISHED_FORMAL_STATUSES or formal.lifecycle_status in {
+        "closed",
+        "cancelled",
+        "superseded",
+    }
 
 
 def _checkpoint_index_projection(text: str) -> dict[str, str]:
@@ -984,15 +1045,26 @@ def validate_native_evidence_projection(project_root: Path, formal: FormalCR) ->
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(event, dict) or not _ledger_event_belongs_to_cr(event, formal.cr_id):
+                if not isinstance(event, dict) or not _ledger_event_belongs_to_cr(
+                    event, formal.cr_id
+                ):
                     continue
-                if event.get("event_type") != "human_gate_approval" or event.get("status") != "approved":
+                if (
+                    event.get("event_type") != "human_gate_approval"
+                    or event.get("status") != "approved"
+                ):
                     continue
-                checkpoint_match = re.search(r"CP[0-8]", str(event.get("gate") or event.get("checkpoint") or ""))
+                checkpoint_match = re.search(
+                    r"CP[0-8]", str(event.get("gate") or event.get("checkpoint") or "")
+                )
                 if checkpoint_match is None:
                     continue
                 checkpoint = checkpoint_match.group(0)
-                if checkpoint_projection.get(checkpoint) not in {"APPROVED", "PASS", "PASS_WITH_RISK"}:
+                if checkpoint_projection.get(checkpoint) not in {
+                    "APPROVED",
+                    "PASS",
+                    "PASS_WITH_RISK",
+                }:
                     errors.append(
                         f"{formal.cr_id} Checkpoint Index {checkpoint} is stale relative to approved gate ledger evidence"
                     )
@@ -1001,46 +1073,49 @@ def validate_native_evidence_projection(project_root: Path, formal: FormalCR) ->
                 # 相邻转换。若把 CP8 approval 视为 rank=9，会形成“先 close 才能
                 # 记录 approval、但 close 又依赖 approval”的循环。
                 required_rank = number if checkpoint == "CP8" else number + 1
-                observed_progress.append(
-                    (f"approved gate {checkpoint}", number, required_rank)
-                )
+                observed_progress.append((f"approved gate {checkpoint}", number, required_rank))
                 if event.get("work_id"):
                     work_ids.add(str(event["work_id"]))
 
-        checks_root = _resolve_runtime_ref(project_root, "process/checks")
-        if checks_root.is_dir():
-            for result_path in sorted(checks_root.glob(f"CP[0-8]-{formal.cr_id}-*.result.json")):
-                try:
-                    result = json.loads(read_text(result_path))
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(result, dict):
-                    continue
-                checkpoint = str(result.get("checkpoint") or "").upper()
-                decision = str(result.get("decision") or "").upper()
-                if not re.fullmatch(r"CP[0-8]", checkpoint) or not decision:
-                    continue
-                projected = checkpoint_projection.get(checkpoint, "")
-                if projected != decision and not (
-                    decision in {"PASS", "PASS_WITH_RISK"} and projected in {"PASS", "APPROVED", "PASS_WITH_RISK"}
-                ):
-                    errors.append(
-                        f"{formal.cr_id} Checkpoint Index {checkpoint}={projected or '<missing>'} "
-                        f"is stale relative to result decision={decision}"
-                    )
-                number = int(checkpoint[2:])
-                if decision in {"FAIL", "BLOCKED", "NEEDS_REWORK"}:
-                    required_rank = number
-                elif checkpoint in {"CP2", "CP3", "CP5", "CP8"}:
-                    # 人工检查点的机器 PASS 只满足进入人工门的条件，不代表已
-                    # 越过该门。CP2/CP3/CP5 由 approval ledger 推进；CP8
-                    # approval 后仍保持 cp8_pending，直到独立 native close。
-                    required_rank = number
-                else:
-                    required_rank = number + 1
-                observed_progress.append((f"{checkpoint} result {decision}", number, required_rank))
-                if result.get("work_id"):
-                    work_ids.add(str(result["work_id"]))
+        projection = canonical_checkpoint_projection.load_checkpoint_projection(
+            project_root,
+            cr_id=formal.cr_id,
+        )
+        errors.extend(
+            f"{formal.cr_id} checkpoint projection {finding.code}: {finding.message}"
+            for finding in projection.findings
+        )
+        for head in projection.heads:
+            if head.subject_id != formal.cr_id or not re.fullmatch(
+                r"CP[0-8]",
+                head.checkpoint,
+            ):
+                continue
+            checkpoint = head.checkpoint
+            decision = head.decision
+            projected = checkpoint_projection.get(checkpoint, "")
+            if projected != decision and not (
+                decision in {"PASS", "PASS_WITH_RISK"}
+                and projected in {"PASS", "APPROVED", "PASS_WITH_RISK"}
+            ):
+                errors.append(
+                    f"{formal.cr_id} Checkpoint Index "
+                    f"{checkpoint}={projected or '<missing>'} is stale relative "
+                    f"to canonical result decision={decision}"
+                )
+            number = int(checkpoint[2:])
+            if decision in {"FAIL", "BLOCKED", "NEEDS_REWORK"}:
+                required_rank = number
+            elif checkpoint in {"CP2", "CP3", "CP5", "CP8"}:
+                # 人工检查点的机器 PASS 只满足进入人工门的条件，不代表已越门。
+                required_rank = number
+            else:
+                required_rank = number + 1
+            observed_progress.append(
+                (f"{checkpoint} canonical result {decision}", number, required_rank)
+            )
+            if head.result.get("work_id"):
+                work_ids.add(str(head.result["work_id"]))
     except (OSError, ProcessRouteError):
         # 缺少辅助投影本身由其他 canonical 检查负责；这里不把 legacy fixture
         # 强行升级为 native process 布局。
@@ -1068,7 +1143,9 @@ def validate_native_evidence_projection(project_root: Path, formal: FormalCR) ->
         if strip_scalar(parse_frontmatter(adr_text).get("status", "")).lower() != "accepted":
             continue
         for line_no, line in enumerate(adr_text.splitlines(), 1):
-            if not line.strip().startswith("|") or not re.search(r"(?:CP[35]-)?DQ-[A-Za-z0-9-]+", line):
+            if not line.strip().startswith("|") or not re.search(
+                r"(?:CP[35]-)?DQ-[A-Za-z0-9-]+", line
+            ):
                 continue
             cells = [strip_scalar(cell).upper() for cell in split_table_row(line)]
             if "OPEN" in cells:
@@ -1096,7 +1173,9 @@ def collect_errors_and_warnings(
             continue
         cr = formal_crs.get(ref.value)
         if cr is None:
-            errors.append(f"STATE line {ref.line_no} {ref.key} points to missing formal CR: {ref.value}")
+            errors.append(
+                f"STATE line {ref.line_no} {ref.key} points to missing formal CR: {ref.value}"
+            )
             continue
         if ref.key != "active_change" and cr.status in FINISHED_FORMAL_STATUSES:
             continue
@@ -1116,9 +1195,13 @@ def collect_errors_and_warnings(
     for cr in formal_crs.values():
         location = format_rel(project_root, cr.path)
         if cr.lifecycle_status and cr.lifecycle_status not in ALLOWED_LIFECYCLE_STATUSES:
-            errors.append(f"{location} invalid lifecycle_status for {cr.cr_id}: {cr.lifecycle_status}")
+            errors.append(
+                f"{location} invalid lifecycle_status for {cr.cr_id}: {cr.lifecycle_status}"
+            )
         if cr.readiness_status and cr.readiness_status not in ALLOWED_READINESS_STATUSES:
-            errors.append(f"{location} invalid readiness_status for {cr.cr_id}: {cr.readiness_status}")
+            errors.append(
+                f"{location} invalid readiness_status for {cr.cr_id}: {cr.readiness_status}"
+            )
         if cr.gate_status and cr.gate_status not in ALLOWED_GATE_STATUSES:
             errors.append(f"{location} invalid gate_status for {cr.cr_id}: {cr.gate_status}")
         if cr.native:
@@ -1135,7 +1218,9 @@ def collect_errors_and_warnings(
         if cr.gate_profile and cr.gate_profile not in ALLOWED_GATE_PROFILES:
             errors.append(f"{location} invalid gate_profile for {cr.cr_id}: {cr.gate_profile}")
         if cr.historical_baseline_status == "reframed" and not cr.reframed_by:
-            warnings.append(f"{location} has historical_baseline_status=reframed but no reframed_by")
+            warnings.append(
+                f"{location} has historical_baseline_status=reframed but no reframed_by"
+            )
         if cr.native and cr.lifecycle_status in {"active", "blocked"}:
             errors.extend(validate_native_evidence_projection(project_root, cr))
 
@@ -1157,9 +1242,7 @@ def collect_errors_and_warnings(
                 )
 
     active_formal = [
-        cr
-        for cr in formal_crs.values()
-        if cr.status == "active" or cr.lifecycle_status == "active"
+        cr for cr in formal_crs.values() if cr.status == "active" or cr.lifecycle_status == "active"
     ]
     if len(active_formal) > 1 and not allow_multiple_active:
         ids = ", ".join(sorted(cr.cr_id for cr in active_formal))
@@ -1179,7 +1262,9 @@ def collect_errors_and_warnings(
             continue
         indexed = index_by_id.get(ref.value)
         if indexed is None:
-            errors.append(f"STATE active_change={ref.value} is missing from canonical CR-INDEX.json")
+            errors.append(
+                f"STATE active_change={ref.value} is missing from canonical CR-INDEX.json"
+            )
             continue
         if indexed.lifecycle_status in {"closed", "cancelled", "superseded"}:
             errors.append(
@@ -1195,9 +1280,13 @@ def collect_errors_and_warnings(
         if row.status not in ALLOWED_FOLLOW_UP_STATUSES:
             errors.append(f"{location} invalid follow-up status for {row.item_id}: {row.status}")
         if row.lifecycle_status not in ALLOWED_LIFECYCLE_STATUSES:
-            errors.append(f"{location} invalid lifecycle_status for {row.item_id}: {row.lifecycle_status}")
+            errors.append(
+                f"{location} invalid lifecycle_status for {row.item_id}: {row.lifecycle_status}"
+            )
         if row.readiness_status not in ALLOWED_READINESS_STATUSES:
-            errors.append(f"{location} invalid readiness_status for {row.item_id}: {row.readiness_status}")
+            errors.append(
+                f"{location} invalid readiness_status for {row.item_id}: {row.readiness_status}"
+            )
         if row.gate_status and row.gate_status not in ALLOWED_GATE_STATUSES:
             errors.append(f"{location} invalid gate_status for {row.item_id}: {row.gate_status}")
         if row.kind and row.kind not in ALLOWED_CR_KINDS:
@@ -1208,11 +1297,15 @@ def collect_errors_and_warnings(
         if row.lifecycle_status in {"active", "blocked", "closed"} and formal_path_missing:
             errors.append(f"{location} {row.item_id} status={row.status} requires 正式 CR 路径")
         if row.lifecycle_status == "candidate" and not formal_path_missing:
-            warnings.append(f"{location} {row.item_id} is {row.status} but already has 正式 CR 路径={row.formal_path}")
+            warnings.append(
+                f"{location} {row.item_id} is {row.status} but already has 正式 CR 路径={row.formal_path}"
+            )
         if not formal_path_missing:
             resolved = resolve_project_path(project_root, row.formal_path)
             if not resolved.is_file():
-                errors.append(f"{location} {row.item_id} formal CR path does not exist: {row.formal_path}")
+                errors.append(
+                    f"{location} {row.item_id} formal CR path does not exist: {row.formal_path}"
+                )
 
         formal = formal_crs.get(row.item_id)
         if formal is not None:
@@ -1222,20 +1315,29 @@ def collect_errors_and_warnings(
                     f"{format_rel(project_root, formal.path)}"
                 )
             if row.lifecycle_status == "active" and formal.status in FINISHED_FORMAL_STATUSES:
-                errors.append(f"{location} {row.item_id} is active in tracking but formal status={formal.status}")
+                errors.append(
+                    f"{location} {row.item_id} is active in tracking but formal status={formal.status}"
+                )
             if row.lifecycle_status == "closed" and formal.status not in FINISHED_FORMAL_STATUSES:
-                errors.append(f"{location} {row.item_id} is closed in tracking but formal status={formal.status}")
+                errors.append(
+                    f"{location} {row.item_id} is closed in tracking but formal status={formal.status}"
+                )
 
         linked_formal = formal_cr_for_follow_up_row(project_root, formal_crs, row)
         if row.item_id.startswith("FU-") and not formal_path_missing and linked_formal is None:
-            errors.append(f"{location} {row.item_id} formal CR path is not a discovered formal CR: {row.formal_path}")
+            errors.append(
+                f"{location} {row.item_id} formal CR path is not a discovered formal CR: {row.formal_path}"
+            )
         if row.item_id.startswith("FU-") and linked_formal is not None:
             if row.lifecycle_status == "active" and not is_formal_active(linked_formal):
                 errors.append(
                     f"{location} {row.item_id} is active but linked formal CR {linked_formal.cr_id} "
                     f"is status={linked_formal.status or '<empty>'} lifecycle_status={linked_formal.lifecycle_status or '<empty>'}"
                 )
-            if row.lifecycle_status == "active" and f"related_active_cr={linked_formal.cr_id}" not in row.relationship_text:
+            if (
+                row.lifecycle_status == "active"
+                and f"related_active_cr={linked_formal.cr_id}" not in row.relationship_text
+            ):
                 errors.append(
                     f"{location} {row.item_id} active follow-up row must include "
                     f"related_active_cr={linked_formal.cr_id}"
@@ -1252,14 +1354,20 @@ def collect_errors_and_warnings(
         location = format_rel(project_root, cr.path)
         expected_row_id = cr.source_follow_up_id or cr.cr_id
         if expected_row_id not in rows_by_id:
-            warnings.append(f"{location} source=cp8-follow-up but no matching follow-up tracking row")
+            warnings.append(
+                f"{location} source=cp8-follow-up but no matching follow-up tracking row"
+            )
         if not cr.source_follow_up_id:
             continue
         source_rows = rows_by_id.get(cr.source_follow_up_id, [])
         if not source_rows:
-            errors.append(f"{location} source_follow_up_id={cr.source_follow_up_id} has no matching follow-up row")
+            errors.append(
+                f"{location} source_follow_up_id={cr.source_follow_up_id} has no matching follow-up row"
+            )
             continue
-        linked_source_rows = [row for row in source_rows if formal_row_points_to_cr(project_root, row, cr)]
+        linked_source_rows = [
+            row for row in source_rows if formal_row_points_to_cr(project_root, row, cr)
+        ]
         if not linked_source_rows:
             errors.append(
                 f"{location} source_follow_up_id={cr.source_follow_up_id} has no follow-up row pointing to this CR"
@@ -1283,7 +1391,10 @@ def collect_errors_and_warnings(
                 )
 
     for cr in active_formal:
-        if not any(item.item_id == cr.cr_id or item.formal_path == format_rel(project_root, cr.path) for item in index_items):
+        if not any(
+            item.item_id == cr.cr_id or item.formal_path == format_rel(project_root, cr.path)
+            for item in index_items
+        ):
             message = f"CR-INDEX.json does not mention active formal CR {cr.cr_id}"
             if cr.native:
                 errors.append(message)
@@ -1302,9 +1413,13 @@ def collect_errors_and_warnings(
                     f"{item.lifecycle_status}"
                 )
             else:
-                errors.append(f"{location} invalid lifecycle_status for {item.item_id}: {item.lifecycle_status}")
+                errors.append(
+                    f"{location} invalid lifecycle_status for {item.item_id}: {item.lifecycle_status}"
+                )
         if item.readiness_status not in ALLOWED_READINESS_STATUSES:
-            errors.append(f"{location} invalid readiness_status for {item.item_id}: {item.readiness_status}")
+            errors.append(
+                f"{location} invalid readiness_status for {item.item_id}: {item.readiness_status}"
+            )
         if item.gate_status and item.gate_status not in ALLOWED_GATE_STATUSES:
             errors.append(f"{location} invalid gate_status for {item.item_id}: {item.gate_status}")
         formal = formal_crs.get(item.item_id)
@@ -1335,22 +1450,42 @@ def collect_errors_and_warnings(
         if item.kind and item.kind not in ALLOWED_CR_KINDS:
             errors.append(f"{location} invalid kind for {item.item_id}: {item.kind}")
         if item.gate_profile and item.gate_profile not in ALLOWED_GATE_PROFILES:
-            errors.append(f"{location} invalid gate_profile for {item.item_id}: {item.gate_profile}")
-        if item.status and item.lifecycle_status and normalize_lifecycle_status("", fallback_status=item.status) != item.lifecycle_status:
+            errors.append(
+                f"{location} invalid gate_profile for {item.item_id}: {item.gate_profile}"
+            )
+        if (
+            item.status
+            and item.lifecycle_status
+            and normalize_lifecycle_status("", fallback_status=item.status) != item.lifecycle_status
+        ):
             warnings.append(
                 f"{location} legacy status={item.status} disagrees with lifecycle_status={item.lifecycle_status}"
             )
         formal_path_missing = item.formal_path in PATH_EMPTY_VALUES
         if item.lifecycle_status in {"active", "blocked", "closed"} and formal_path_missing:
-            errors.append(f"{location} {item.item_id} lifecycle_status={item.lifecycle_status} requires formal_cr_path")
+            errors.append(
+                f"{location} {item.item_id} lifecycle_status={item.lifecycle_status} requires formal_cr_path"
+            )
         if item.lifecycle_status == "candidate" and not formal_path_missing:
-            warnings.append(f"{location} {item.item_id} is candidate but already has formal_cr_path={item.formal_path}")
-        if not formal_path_missing and not resolve_project_path(project_root, item.formal_path).is_file():
-            errors.append(f"{location} {item.item_id} formal_cr_path does not exist: {item.formal_path}")
+            warnings.append(
+                f"{location} {item.item_id} is candidate but already has formal_cr_path={item.formal_path}"
+            )
+        if (
+            not formal_path_missing
+            and not resolve_project_path(project_root, item.formal_path).is_file()
+        ):
+            errors.append(
+                f"{location} {item.item_id} formal_cr_path does not exist: {item.formal_path}"
+            )
         for blocker in item.blocked_by:
             blocker_cr = formal_crs.get(blocker)
-            if blocker_cr and (blocker_cr.status in FINISHED_FORMAL_STATUSES or blocker_cr.lifecycle_status == "closed"):
-                warnings.append(f"{location} {item.item_id} blocked_by={blocker} points to closed CR")
+            if blocker_cr and (
+                blocker_cr.status in FINISHED_FORMAL_STATUSES
+                or blocker_cr.lifecycle_status == "closed"
+            ):
+                warnings.append(
+                    f"{location} {item.item_id} blocked_by={blocker} points to closed CR"
+                )
 
     for item_id, row_group in rows_by_id.items():
         if item_id not in index_by_id:
@@ -1370,32 +1505,46 @@ def collect_errors_and_warnings(
         if not candidate_id or candidate_id in PATH_EMPTY_VALUES or "000" in candidate_id:
             continue
         tracked_candidate = any(
-            row.item_id == candidate_id
-            and row.lifecycle_status == "candidate"
-            for row in rows
+            row.item_id == candidate_id and row.lifecycle_status == "candidate" for row in rows
         )
         if candidate_id not in index_by_id and not tracked_candidate:
-            warnings.append(f"CR-INDEX.json:{line_no} next_action_queue candidate_id={candidate_id} is not in CR-INDEX.json items")
+            warnings.append(
+                f"CR-INDEX.json:{line_no} next_action_queue candidate_id={candidate_id} is not in CR-INDEX.json items"
+            )
 
     return errors, warnings
 
 
-def print_summary(formal_crs: dict[str, FormalCR], rows: list[FollowUpRow], index_items: list[IndexItem]) -> None:
+def print_summary(
+    formal_crs: dict[str, FormalCR], rows: list[FollowUpRow], index_items: list[IndexItem]
+) -> None:
     active = sorted(
-        cr.cr_id for cr in formal_crs.values() if cr.status == "active" or cr.lifecycle_status == "active"
+        cr.cr_id
+        for cr in formal_crs.values()
+        if cr.status == "active" or cr.lifecycle_status == "active"
     )
     blocked = sorted(
-        cr.cr_id for cr in formal_crs.values() if cr.status == "blocked" or cr.lifecycle_status == "blocked"
+        cr.cr_id
+        for cr in formal_crs.values()
+        if cr.status == "blocked" or cr.lifecycle_status == "blocked"
     )
-    candidates = sorted({row.item_id for row in rows if row.lifecycle_status == "candidate" and row.kind != "spike"})
-    spike_candidates = sorted({row.item_id for row in rows if row.lifecycle_status == "candidate" and row.kind == "spike"})
-    indexed_candidates = sorted({item.item_id for item in index_items if item.lifecycle_status == "candidate"})
+    candidates = sorted(
+        {row.item_id for row in rows if row.lifecycle_status == "candidate" and row.kind != "spike"}
+    )
+    spike_candidates = sorted(
+        {row.item_id for row in rows if row.lifecycle_status == "candidate" and row.kind == "spike"}
+    )
+    indexed_candidates = sorted(
+        {item.item_id for item in index_items if item.lifecycle_status == "candidate"}
+    )
     print("CR tracking summary")
     print(f"- active formal CRs: {', '.join(active) if active else 'none'}")
     print(f"- blocked formal CRs: {', '.join(blocked) if blocked else 'none'}")
     print(f"- follow-up candidates: {', '.join(candidates) if candidates else 'none'}")
     print(f"- spike candidates: {', '.join(spike_candidates) if spike_candidates else 'none'}")
-    print(f"- indexed candidates: {', '.join(indexed_candidates) if indexed_candidates else 'none'}")
+    print(
+        f"- indexed candidates: {', '.join(indexed_candidates) if indexed_candidates else 'none'}"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1405,7 +1554,12 @@ def main(argv: list[str] | None = None) -> int:
             "follow-up tracking tables, and CR-INDEX.json."
         )
     )
-    parser.add_argument("--project-root", type=Path, default=Path("."), help="Project root containing process/STATE.md")
+    parser.add_argument(
+        "--project-root",
+        type=Path,
+        default=Path("."),
+        help="Project root containing process/STATE.md",
+    )
     parser.add_argument(
         "--tracking",
         type=Path,
@@ -1413,7 +1567,11 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Optional follow-up tracking file. Defaults to process/changes/CR-*-FOLLOW-UP-TRACKING-*.md",
     )
-    parser.add_argument("--allow-multiple-active", action="store_true", help="Allow more than one formal CR with status=active")
+    parser.add_argument(
+        "--allow-multiple-active",
+        action="store_true",
+        help="Allow more than one formal CR with status=active",
+    )
     parser.add_argument(
         "--allow-legacy-yaml",
         action="store_true",
@@ -1458,7 +1616,11 @@ def main(argv: list[str] | None = None) -> int:
     except json.JSONDecodeError:
         index_items = []
         next_action_refs = []
-    state_refs = find_state_v2_refs(state_v2_path) if state_v2_path.is_file() else find_state_refs(state_path)
+    state_refs = (
+        find_state_v2_refs(state_v2_path)
+        if state_v2_path.is_file()
+        else find_state_refs(state_path)
+    )
     errors, warnings = collect_errors_and_warnings(
         project_root=project_root,
         formal_crs=formal_crs,

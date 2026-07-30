@@ -104,7 +104,7 @@ class PublicOperationContractTests(unittest.TestCase):
         )
 
         self.assertEqual("PASS", result["decision"], result["errors"])
-        self.assertEqual(12, result["documented_operation_count"])
+        self.assertEqual(15, result["documented_operation_count"])
         self.assertEqual([], result["undocumented_public_operations"])
         self.assertEqual([], result["unknown_registry_operations"])
         self.assertEqual(6, result["l3_journey_count"])
@@ -114,9 +114,7 @@ class PublicOperationContractTests(unittest.TestCase):
         self,
     ) -> None:
         source = json.loads(
-            (PROJECT_ROOT / public_operations.DEFAULT_REGISTRY_REL).read_text(
-                encoding="utf-8"
-            )
+            (PROJECT_ROOT / public_operations.DEFAULT_REGISTRY_REL).read_text(encoding="utf-8")
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -133,6 +131,7 @@ class PublicOperationContractTests(unittest.TestCase):
                 check_console=False,
             )
             missing = json.loads(json.dumps(source))
+            removed_operation = missing["operations"][0]["operation"]
             missing["operations"] = missing["operations"][1:]
             registry.write_text(
                 json.dumps(missing, ensure_ascii=False, indent=2) + "\n",
@@ -143,9 +142,7 @@ class PublicOperationContractTests(unittest.TestCase):
                 check_console=False,
             )
             path_drift = json.loads(json.dumps(source))
-            path_drift["operations"][-1]["path_contract"][
-                "absolute_process_path_limit"
-            ] = 1
+            path_drift["operations"][-1]["path_contract"]["absolute_process_path_limit"] = 1
             registry.write_text(
                 json.dumps(path_drift, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
@@ -167,18 +164,16 @@ class PublicOperationContractTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            invalid_argument_contract = (
-                public_operations.validate_public_operations(
-                    root,
-                    check_console=True,
-                )
+            invalid_argument_contract = public_operations.validate_public_operations(
+                root,
+                check_console=True,
             )
 
         self.assertEqual("FAIL", invalid_shape["decision"])
         self.assertIn("extra=['unknown']", invalid_shape["errors"][0])
         self.assertEqual("FAIL", missing_operation["decision"])
         self.assertEqual(
-            ["event.append"],
+            [removed_operation],
             missing_operation["undocumented_public_operations"],
         )
         self.assertEqual("FAIL", invalid_path_contract["decision"])
@@ -230,9 +225,7 @@ class PublicOperationContractTests(unittest.TestCase):
             self.assertNotEqual(0, event_result.returncode)
             self.assertFalse(gate_ledger.exists())
 
-            read_ledger = (
-                root / "process" / "state" / "READ-EXPANSION-LEDGER.ndjson"
-            )
+            read_ledger = root / "process" / "state" / "READ-EXPANSION-LEDGER.ndjson"
             context_result = subprocess.run(
                 [
                     str(CONSOLE),
@@ -261,9 +254,7 @@ class PublicOperationContractTests(unittest.TestCase):
             self.assertFalse(read_ledger.exists())
 
             write_cp6_projection_fixture(root)
-            plan_before = (
-                root / "process" / "DEVELOPMENT-PLAN.yaml"
-            ).read_bytes()
+            plan_before = (root / "process" / "DEVELOPMENT-PLAN.yaml").read_bytes()
             story_result = subprocess.run(
                 [
                     str(CONSOLE),
@@ -310,9 +301,7 @@ class PublicOperationContractTests(unittest.TestCase):
             self.assertEqual(0, cr_result.returncode, cr_result.stderr)
             self.assertEqual("NO_CONFLICT", cr_preview["decision"])
             self.assertEqual(0, cr_preview["mutation_count"])
-            self.assertFalse(
-                (root / "process" / "changes" / "CR-998.md").exists()
-            )
+            self.assertFalse((root / "process" / "changes" / "CR-998.md").exists())
 
             cr_path = root / "process" / "changes" / "CR-997.md"
             cr_path.parent.mkdir(parents=True, exist_ok=True)

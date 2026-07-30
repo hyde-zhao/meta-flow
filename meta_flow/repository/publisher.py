@@ -19,6 +19,7 @@ from typing import Any
 from meta_flow.project.model import is_safe_ref
 from meta_flow.project.process_route import ProcessRouteError, resolve_process_ref
 from meta_flow.project.scale import load_yaml_object
+from meta_flow.state import checkpoint_projection
 from meta_flow.workspace.git_sync import query_exact_remote_ref, run_git
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -183,24 +184,50 @@ def evaluate_publication_eligibility(
         return PublicationEligibility("BLOCKED", "ROUTE_PROFILE_UNTRUSTED", "", "", "")
     snapshot = _profile_snapshot(work, logical_work_ref)
     profile_digest, route_digest = _digest(snapshot), _digest(route)
-    if snapshot["work_id"] != work_id or not snapshot["scope_version"] or not snapshot["scope_digest"]:
-        return PublicationEligibility("BLOCKED", "ROUTE_PROFILE_UNTRUSTED", "", profile_digest, route_digest)
+    if (
+        snapshot["work_id"] != work_id
+        or not snapshot["scope_version"]
+        or not snapshot["scope_digest"]
+    ):
+        return PublicationEligibility(
+            "BLOCKED", "ROUTE_PROFILE_UNTRUSTED", "", profile_digest, route_digest
+        )
     route_snapshot = route.get("work_profile_snapshot")
     route_profile_digest = str(route.get("work_profile_digest") or "")
     if route_snapshot != snapshot or route_profile_digest != profile_digest:
-        return PublicationEligibility("BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest)
+        return PublicationEligibility(
+            "BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest
+        )
     cp8 = (route.get("checkpoint_applicability") or {}).get("CP8") or {}
     profile = snapshot["risk_profile"]
     if profile == "G2":
         if not (cp8.get("applies") is True and cp8.get("human_gate") == "required"):
-            return PublicationEligibility("BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest)
-        return PublicationEligibility("BLOCKED", "CP8_REQUIRED", "G2_CP8_APPLIES", profile_digest, route_digest)
-    canonical_na = cp8.get("applies") is False and cp8.get("decision") in {"N/A", "NOT_APPLICABLE_BY_PROFILE"} and cp8.get("reason") == "profile-not-required"
+            return PublicationEligibility(
+                "BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest
+            )
+        return PublicationEligibility(
+            "BLOCKED", "CP8_REQUIRED", "G2_CP8_APPLIES", profile_digest, route_digest
+        )
+    canonical_na = (
+        cp8.get("applies") is False
+        and cp8.get("decision") in {"N/A", "NOT_APPLICABLE_BY_PROFILE"}
+        and cp8.get("reason") == "profile-not-required"
+    )
     if profile not in {"G0", "G1"} or snapshot["kind"] != "work" or not canonical_na:
-        return PublicationEligibility("BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest)
+        return PublicationEligibility(
+            "BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest
+        )
     if snapshot["risk_reason_codes"]:
-        return PublicationEligibility("BLOCKED", "RECLASSIFICATION_REQUIRED_G2", "", profile_digest, route_digest)
-    return PublicationEligibility("READY", "eligible_by_profile", "G0_G1_NOT_APPLICABLE_BY_PROFILE", profile_digest, route_digest)
+        return PublicationEligibility(
+            "BLOCKED", "RECLASSIFICATION_REQUIRED_G2", "", profile_digest, route_digest
+        )
+    return PublicationEligibility(
+        "READY",
+        "eligible_by_profile",
+        "G0_G1_NOT_APPLICABLE_BY_PROFILE",
+        profile_digest,
+        route_digest,
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -237,7 +264,9 @@ def _scope_allows_reads(work: dict[str, Any], refs: Iterable[str]) -> bool:
         return (logical_ref,)
 
     return all(
-        any(fnmatchcase(candidate, pattern) for candidate in candidates(ref) for pattern in patterns)
+        any(
+            fnmatchcase(candidate, pattern) for candidate in candidates(ref) for pattern in patterns
+        )
         for ref in refs
     )
 
@@ -275,12 +304,22 @@ def _g2_is_canonically_approved(
     *,
     project_root: Path,
     refs: dict[str, str],
+    cr_id: str,
     work_id: str,
     scope_version: int,
     scope_digest: str,
 ) -> bool:
-    result = _load_publication_object(project_root, refs["cp8_result"])
-    cr_id = str(result.get("cr_id") or "")
+    projection = checkpoint_projection.load_checkpoint_projection(
+        project_root,
+        cr_id=cr_id,
+        checkpoint="CP8",
+        candidate_refs=(refs["cp8_result"],),
+        resolver=_resolve_publication_ref,
+    )
+    head = projection.head("CP8")
+    if projection.findings or head is None or head.result_ref != refs["cp8_result"]:
+        return False
+    result = head.result
     if (
         str(result.get("checkpoint") or "").upper() != "CP8"
         or str(result.get("decision") or "").upper() not in {"PASS", "PASS_WITH_RISK"}
@@ -399,9 +438,7 @@ def build_publication_eligibility_plan(
     if not _scope_allows_reads(work, all_refs):
         raise ValueError("publication context ref is outside WORK allowed_reads")
     canonical_digests = {
-        key: _sha256_file(
-            _resolve_publication_ref(context.project_root, logical_ref)
-        )
+        key: _sha256_file(_resolve_publication_ref(context.project_root, logical_ref))
         for key, logical_ref in normalized_refs.items()
     }
 
@@ -427,6 +464,7 @@ def build_publication_eligibility_plan(
     approved = _g2_is_canonically_approved(
         project_root=context.project_root,
         refs=normalized_refs,
+        cr_id=cr_id,
         work_id=work_id,
         scope_version=snapshot["scope_version"],
         scope_digest=snapshot["scope_digest"],
@@ -571,7 +609,10 @@ def _evaluate_evidence(
         return PublicationEligibility("BLOCKED", "PUBLICATION_EVIDENCE_REQUIRED", "", "", "")
     try:
         payload = _load_publication_object(evidence.project_root, evidence.evidence_ref)
-        if payload.get("schema_version") != 1 or payload.get("evidence_kind") != "publication-eligibility":
+        if (
+            payload.get("schema_version") != 1
+            or payload.get("evidence_kind") != "publication-eligibility"
+        ):
             raise ValueError("unsupported publication evidence schema")
         if str(payload.get("work_id") or "") != work_id:
             raise ValueError("publication evidence work_id mismatch")
@@ -615,7 +656,10 @@ def _evaluate_evidence(
             ):
                 raise ValueError(f"publication evidence canonical digest mismatch: {key}")
         repo_oids = payload.get("repo_oids") or {}
-        if not _OID_RE.fullmatch(observed_oid) or str(repo_oids.get(repo_role) or "") != observed_oid:
+        if (
+            not _OID_RE.fullmatch(observed_oid)
+            or str(repo_oids.get(repo_role) or "") != observed_oid
+        ):
             raise ValueError("publication evidence repository OID mismatch")
         requested_target = payload.get("requested_target") or {}
         if requested_target != {
@@ -648,9 +692,17 @@ def _evaluate_evidence(
             return base
         if base.reason != "CP8_REQUIRED":
             return base
+        cr_id, checkpoint, _subject_id = checkpoint_projection.load_checkpoint_identity(
+            evidence.project_root,
+            str(refs["cp8_result"]),
+            resolver=_resolve_publication_ref,
+        )
+        if checkpoint != "CP8":
+            raise ValueError("publication checkpoint result is not CP8")
         approved = _g2_is_canonically_approved(
             project_root=evidence.project_root,
             refs={key: str(value) for key, value in refs.items()},
+            cr_id=cr_id,
             work_id=work_id,
             scope_version=snapshot["scope_version"],
             scope_digest=snapshot["scope_digest"],
@@ -713,7 +765,9 @@ class CommitPlan:
                     "context_ref": self.publication_context.context_ref,
                 }
             ),
-            "publication_eligibility": None if self.publication_eligibility is None else self.publication_eligibility.__dict__,
+            "publication_eligibility": None
+            if self.publication_eligibility is None
+            else self.publication_eligibility.__dict__,
             "publication_eligibility_plan": (
                 None
                 if self.publication_eligibility_plan is None
@@ -786,7 +840,9 @@ class PushPlan:
                     "context_ref": self.publication_context.context_ref,
                 }
             ),
-            "publication_eligibility": None if self.publication_eligibility is None else self.publication_eligibility.__dict__,
+            "publication_eligibility": None
+            if self.publication_eligibility is None
+            else self.publication_eligibility.__dict__,
             "publication_eligibility_plan": (
                 None
                 if self.publication_eligibility_plan is None
@@ -879,7 +935,11 @@ def observe_repo(root: Path) -> RepoObservation:
 
 
 def _validate_identity(project_id: str, work_id: str, repo_role: str) -> None:
-    for label, value in (("project_id", project_id), ("work_id", work_id), ("repo_role", repo_role)):
+    for label, value in (
+        ("project_id", project_id),
+        ("work_id", work_id),
+        ("repo_role", repo_role),
+    ):
         if not _ID_RE.fullmatch(value):
             raise ValueError(f"{label} is invalid")
 
@@ -997,13 +1057,9 @@ def _validate_authorization(
     if authorization.single_use is not True:
         raise ValueError("repository authorization must be single-use")
     authorization_binds_absence = (
-        operation == "push"
-        and expected_oid == "ABSENT"
-        and authorization.expected_oid == "ABSENT"
+        operation == "push" and expected_oid == "ABSENT" and authorization.expected_oid == "ABSENT"
     )
-    if not authorization_binds_absence and not _OID_RE.fullmatch(
-        authorization.expected_oid
-    ):
+    if not authorization_binds_absence and not _OID_RE.fullmatch(authorization.expected_oid):
         raise ValueError(
             "repository authorization expected_oid must be one exact full OID "
             "or ABSENT for a create-only push"

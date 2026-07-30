@@ -17,14 +17,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from meta_flow.checks import cr_tracking
+from meta_flow.checks import cr_tracking, state_transition
 from meta_flow.design import feature_registry
 from meta_flow.policies import authz, route_plan
 from meta_flow.project.governance import load_phase
 from meta_flow.project.model import load_project
 from meta_flow.project.process_route import _resolve_runtime_ref, require_process_route
 from meta_flow.project.scale import dump_yaml, load_yaml_object
-from meta_flow.state import current, event_ledger
+from meta_flow.state import checkpoint_projection, current, event_ledger
 from meta_flow.work.lifecycle import transition_work
 from meta_flow.work.model import load_work
 from meta_flow.work.scope import check_scope
@@ -460,35 +460,22 @@ def _checkpoint_result_projection(
     project_root: Path,
     cr_id: str,
 ) -> dict[str, str]:
-    """Project canonical CR-level checkpoint results without guessing completion."""
+    """只消费 canonical owner 选出的 CR-level current heads。"""
 
-    checks_root = _resolve_runtime_ref(project_root, "process/checks")
-    if not checks_root.is_dir():
-        return {}
-    projected: dict[str, str] = {}
-    for result_path in sorted(checks_root.glob(f"CP[0-8]-{cr_id}-*.result.json")):
-        try:
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"invalid checkpoint result JSON: {_rel(project_root, result_path)}: {exc}"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise ValueError(
-                f"checkpoint result must be an object: {_rel(project_root, result_path)}"
-            )
-        checkpoint = str(payload.get("checkpoint") or "").upper()
-        decision = str(payload.get("decision") or "").upper()
-        if not re.fullmatch(r"CP[0-8]", checkpoint) or not decision:
-            continue
-        previous = projected.get(checkpoint)
-        if previous is not None and previous != decision:
-            raise ValueError(
-                f"conflicting canonical checkpoint results for {cr_id} {checkpoint}: "
-                f"{previous} != {decision}"
-            )
-        projected[checkpoint] = decision
-    return projected
+    projection = checkpoint_projection.load_checkpoint_projection(
+        project_root,
+        cr_id=cr_id,
+    )
+    if projection.findings:
+        raise ValueError(
+            "checkpoint projection failed: "
+            + "; ".join(f"{finding.code}:{finding.message}" for finding in projection.findings)
+        )
+    return {
+        head.checkpoint: head.decision
+        for head in projection.heads
+        if head.subject_id == cr_id and re.fullmatch(r"CP[0-8]", head.checkpoint)
+    }
 
 
 def _render_exact_section_rows(
@@ -498,14 +485,10 @@ def _render_exact_section_rows(
 ) -> str:
     """Replace exact first-column table rows inside one optional section."""
 
-    heading_pattern = re.compile(
-        rf"^## (?:(?:\d+(?:\.\d+)*)\.?\s+)?{re.escape(heading)}$"
-    )
+    heading_pattern = re.compile(rf"^## (?:(?:\d+(?:\.\d+)*)\.?\s+)?{re.escape(heading)}$")
     lines = text.splitlines(keepends=True)
     starts = [
-        index
-        for index, line in enumerate(lines)
-        if heading_pattern.fullmatch(line.rstrip("\r\n"))
+        index for index, line in enumerate(lines) if heading_pattern.fullmatch(line.rstrip("\r\n"))
     ]
     if not starts:
         return text
@@ -513,11 +496,7 @@ def _render_exact_section_rows(
         raise ValueError(f"duplicate CR body section: {heading}")
     start = starts[0] + 1
     end = next(
-        (
-            index
-            for index in range(start, len(lines))
-            if lines[index].startswith("## ")
-        ),
+        (index for index in range(start, len(lines)) if lines[index].startswith("## ")),
         len(lines),
     )
     seen: set[str] = set()
@@ -612,7 +591,9 @@ def _rel(project_root: Path, path: Path) -> str:
 def _process_root(project_root: Path) -> Path:
     """Resolve the process root for binding projects and legacy test fixtures."""
 
-    return _resolve_runtime_ref(project_root.resolve(), "process/PROJECT.yaml").parent.resolve(strict=False)
+    return _resolve_runtime_ref(project_root.resolve(), "process/PROJECT.yaml").parent.resolve(
+        strict=False
+    )
 
 
 def _cr_id_from_path(path: Path) -> str:
@@ -1303,7 +1284,9 @@ def summary_from_cr_file(
 
 
 def write_summary(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Path:
-    path = _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix()) / f"{cr_id}.summary.json"
+    path = (
+        _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix()) / f"{cr_id}.summary.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     # CR summaries are hot/warm routing objects with a 4 KiB budget.  Compact
     # JSON preserves the schema while avoiding formatting-only budget drift.
@@ -1315,7 +1298,11 @@ def write_summary(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Pa
 
 
 def write_evidence_index(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Path:
-    path = _resolve_runtime_ref(project_root, CR_ARCHIVE_ROOT_REL.as_posix()) / cr_id / "evidence-index.json"
+    path = (
+        _resolve_runtime_ref(project_root, CR_ARCHIVE_ROOT_REL.as_posix())
+        / cr_id
+        / "evidence-index.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "cr_id": cr_id,
@@ -1408,23 +1395,13 @@ def project_native_cr_status(
                 fallback_status=str(index_item.get("status") or ""),
             ),
             cr_tracking.normalize_readiness_status(
-                str(
-                    index_item.get("readiness_status")
-                    or index_item.get("readiness")
-                    or ""
-                )
+                str(index_item.get("readiness_status") or index_item.get("readiness") or "")
             ),
-            cr_tracking.normalize_gate_status(
-                str(index_item.get("gate_status") or "")
-            ),
+            cr_tracking.normalize_gate_status(str(index_item.get("gate_status") or "")),
         )
         if index_tuple != formal_tuple:
             findings.append("CR_INDEX_STATUS_DIVERGED")
-        if str(
-            index_item.get("full_ref")
-            or index_item.get("formal_cr_path")
-            or ""
-        ) != formal_ref:
+        if str(index_item.get("full_ref") or index_item.get("formal_cr_path") or "") != formal_ref:
             findings.append("CR_INDEX_FORMAL_REF_DIVERGED")
         if str(index_item.get("summary_ref") or "") != summary_ref:
             findings.append("CR_INDEX_SUMMARY_REF_DIVERGED")
@@ -1445,15 +1422,9 @@ def project_native_cr_status(
                 summary = loaded_summary
     if summary:
         summary_tuple = (
-            cr_tracking.normalize_lifecycle_status(
-                str(summary.get("status") or "")
-            ),
-            cr_tracking.normalize_readiness_status(
-                str(summary.get("readiness") or "")
-            ),
-            cr_tracking.normalize_gate_status(
-                str(summary.get("gate_status") or "")
-            ),
+            cr_tracking.normalize_lifecycle_status(str(summary.get("status") or "")),
+            cr_tracking.normalize_readiness_status(str(summary.get("readiness") or "")),
+            cr_tracking.normalize_gate_status(str(summary.get("gate_status") or "")),
         )
         if str(summary.get("id") or "") != cr_id:
             findings.append("CR_SUMMARY_ID_DIVERGED")
@@ -1466,10 +1437,7 @@ def project_native_cr_status(
         event
         for event in load_ledger_events(project_root)
         if str(event.get("id") or event.get("cr_id") or "") == cr_id
-        and all(
-            key in event
-            for key in ("status", "readiness", "gate_status")
-        )
+        and all(key in event for key in ("status", "readiness", "gate_status"))
     ]
     ledger_event = ledger_events[-1] if ledger_events else None
     ledger_event_id = ""
@@ -1478,15 +1446,9 @@ def project_native_cr_status(
     else:
         ledger_event_id = str(ledger_event.get("event_id") or "")
         ledger_tuple = (
-            cr_tracking.normalize_lifecycle_status(
-                str(ledger_event.get("status") or "")
-            ),
-            cr_tracking.normalize_readiness_status(
-                str(ledger_event.get("readiness") or "")
-            ),
-            cr_tracking.normalize_gate_status(
-                str(ledger_event.get("gate_status") or "")
-            ),
+            cr_tracking.normalize_lifecycle_status(str(ledger_event.get("status") or "")),
+            cr_tracking.normalize_readiness_status(str(ledger_event.get("readiness") or "")),
+            cr_tracking.normalize_gate_status(str(ledger_event.get("gate_status") or "")),
         )
         if not ledger_event_id:
             findings.append("CR_LEDGER_EVENT_ID_MISSING")
@@ -1587,9 +1549,7 @@ def _native_cr_minimum(project_root: Path) -> int:
     value = str(payload.get("native_cr_minimum") or "CR-001")
     match = re.fullmatch(r"CR-(\d+)", value)
     if match is None:
-        raise ValueError(
-            f"{LEGACY_SOURCE_REL.as_posix()} native_cr_minimum must use CR-nnn naming"
-        )
+        raise ValueError(f"{LEGACY_SOURCE_REL.as_posix()} native_cr_minimum must use CR-nnn naming")
     return int(match.group(1))
 
 
@@ -1685,7 +1645,11 @@ def validate_index_payload(payload: Any) -> list[str]:
         ids.append(item_id)
         for key in ("formal_cr_path", "summary_ref"):
             value = str(item.get(key) or "")
-            if not value.startswith("process/") or Path(value).is_absolute() or ".." in Path(value).parts:
+            if (
+                not value.startswith("process/")
+                or Path(value).is_absolute()
+                or ".." in Path(value).parts
+            ):
                 errors.append(f"items[{offset}].{key} must be one safe process/ logical ref")
     if len(ids) != len(set(ids)):
         errors.append("items contain duplicate CR IDs")
@@ -2072,12 +2036,8 @@ def close_cr(
     by_ref = result["paths"]
     return {
         "cr": by_ref[_rel(project_root, discover_formal_crs(project_root)[cr_id])],
-        "summary": by_ref[
-            (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
-        ],
-        "evidence_index": by_ref[
-            (CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix()
-        ],
+        "summary": by_ref[(CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()],
+        "evidence_index": by_ref[(CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix()],
         "index": by_ref[CR_INDEX_REL.as_posix()],
         "ledger": by_ref[CR_LEDGER_REL.as_posix()],
     }
@@ -2136,8 +2096,7 @@ class StatusSyncAuthorization:
             missing = sorted(STATUS_SYNC_AUTHORIZATION_FIELDS - set(payload))
             extra = sorted(set(payload) - STATUS_SYNC_AUTHORIZATION_FIELDS)
             raise ValueError(
-                "status-sync authorization fields mismatch: "
-                f"missing={missing}, extra={extra}"
+                f"status-sync authorization fields mismatch: missing={missing}, extra={extra}"
             )
         return cls(**payload)
 
@@ -2186,9 +2145,7 @@ class StatusSyncPlan:
             "scope_digest": self.scope_digest,
             "targets": [target.as_dict() for target in self.targets],
             "mutation_allowlist": [target.ref for target in self.targets],
-            "planned_mutation_count": (
-                len(self.targets) if self.decision == "READY" else 0
-            ),
+            "planned_mutation_count": (len(self.targets) if self.decision == "READY" else 0),
             "mutation_count": 0,
             "plan_digest": self.plan_digest,
             "reason": self.reason,
@@ -2289,17 +2246,11 @@ def _ledger_contains_status_sync_transition(
             isinstance(event, dict)
             and event.get("event_type") == "status_sync"
             and str(event.get("id") or "") == cr_id
-            and cr_tracking.normalize_lifecycle_status(
-                str(event.get("status") or "")
-            )
+            and cr_tracking.normalize_lifecycle_status(str(event.get("status") or ""))
             == cr_tracking.normalize_lifecycle_status(lifecycle_status)
-            and cr_tracking.normalize_readiness_status(
-                str(event.get("readiness") or "")
-            )
+            and cr_tracking.normalize_readiness_status(str(event.get("readiness") or ""))
             == cr_tracking.normalize_readiness_status(readiness_status)
-            and cr_tracking.normalize_gate_status(
-                str(event.get("gate_status") or "")
-            )
+            and cr_tracking.normalize_gate_status(str(event.get("gate_status") or ""))
             == cr_tracking.normalize_gate_status(gate_status)
         ):
             return True
@@ -2368,7 +2319,9 @@ def plan_status_sync(
         target_gate = CLOSED_GATE_STATUS
     elif target_gate and target_gate not in cr_tracking.ALLOWED_GATE_STATUSES:
         raise ValueError(f"invalid gate_status: {target_gate}")
-    native = str(fields.get("schema_version") or "") == "1" and str(fields.get("kind") or "") == "cr"
+    native = (
+        str(fields.get("schema_version") or "") == "1" and str(fields.get("kind") or "") == "cr"
+    )
     if native:
         transition_errors = cr_tracking.validate_native_transition(
             (before_status, before_readiness, before_gate),
@@ -2391,15 +2344,20 @@ def plan_status_sync(
         try:
             formal_truth_index = build_index(project_root)
         except ValueError as exc:
-            return StatusSyncPlan(
-                "BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), str(exc)
-            )
+            return StatusSyncPlan("BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), str(exc))
         try:
             existing_index = json.loads(index_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             if not rebuild_corrupt_index:
                 return StatusSyncPlan(
-                    "BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), f"CR-INDEX invalid JSON: {exc}"
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    f"CR-INDEX invalid JSON: {exc}",
                 )
         else:
             index_errors = validate_index_payload(existing_index)
@@ -2448,7 +2406,9 @@ def plan_status_sync(
     summary_path = _resolve_runtime_ref(
         project_root, (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
     )
-    summary_after = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    summary_after = (
+        json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    )
     evidence_path = _resolve_runtime_ref(
         project_root, (CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix()
     )
@@ -2498,13 +2458,17 @@ def plan_status_sync(
                 {
                     "active_change": None,
                     "active_context_ref": None,
-                    "current_phase": "delivered" if target_status == "closed" else str(state.get("current_phase") or "delivered"),
+                    "current_phase": "delivered"
+                    if target_status == "closed"
+                    else str(state.get("current_phase") or "delivered"),
                     "pending_gate": None,
                     "pending_checklist_path": None,
                     "next_action": {
                         "type": "done",
                         "text": f"{cr_id} status synced as {target_status}; choose next CR.",
-                        "stop_reason": "delivered" if target_status == "closed" else "no_remaining_route",
+                        "stop_reason": "delivered"
+                        if target_status == "closed"
+                        else "no_remaining_route",
                     },
                 }
             )
@@ -2528,6 +2492,101 @@ def plan_status_sync(
                 )
             )
             targets.append(_target(project_root, 20, state_path, state_after, "truth"))
+    if target_gate == "implementation_in_progress":
+        cp5_projection = checkpoint_projection.load_checkpoint_projection(
+            project_root,
+            cr_id=cr_id,
+            checkpoint="CP5",
+        )
+        if cp5_projection.findings or cp5_projection.head("CP5") is None:
+            reason = (
+                "; ".join(
+                    f"{finding.code}:{finding.message}" for finding in cp5_projection.findings
+                )
+                or "CP5 canonical current head is unavailable"
+            )
+            return StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                reason + "; mutation=0",
+                timestamp,
+            )
+        gate_ledger_path = _resolve_runtime_ref(
+            project_root,
+            "process/state/GATE-LEDGER.ndjson",
+        )
+        gate_events, gate_errors = event_ledger.load_events(gate_ledger_path)
+        if gate_errors:
+            return StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "invalid Gate Ledger: " + "; ".join(gate_errors),
+                timestamp,
+            )
+        development_plan_path = _resolve_runtime_ref(
+            project_root,
+            "process/DEVELOPMENT-PLAN.yaml",
+        )
+        if not development_plan_path.is_file():
+            return StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "DEVELOPMENT-PLAN is unavailable; mutation=0",
+                timestamp,
+            )
+        try:
+            development_plan = load_yaml_object(development_plan_path)
+            projected_plan, _story_transitions = state_transition.project_cp5_development_plan(
+                development_plan,
+                cr_id=cr_id,
+                projection=cp5_projection,
+                gate_events=gate_events,
+            )
+        except ValueError as exc:
+            return StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                str(exc),
+                timestamp,
+            )
+        development_plan_after = (
+            json.dumps(
+                projected_plan,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        targets.append(
+            _target(
+                project_root,
+                25,
+                development_plan_path,
+                development_plan_after,
+                "truth",
+            )
+        )
     targets.extend(
         [
             _target(project_root, 30, summary_path, summary_after, "derived"),
@@ -2587,9 +2646,7 @@ def plan_status_sync(
             gate_status=target_gate,
         )
         and index_path.is_file()
-        and json.loads(index_path.read_text(encoding="utf-8")).get(
-            "semantic_digest"
-        )
+        and json.loads(index_path.read_text(encoding="utf-8")).get("semantic_digest")
         == expected_index.get("semantic_digest")
     )
     if truth_current and derived_current:
@@ -2651,13 +2708,9 @@ def validate_status_sync_authorization(
     if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization.authorization_id):
         raise ValueError("status-sync authorization_id is invalid")
     if authorization.authorization_source != STATUS_SYNC_AUTHORIZATION_SOURCE:
-        raise ValueError(
-            "status-sync authorization_source must be typed-user-confirmation"
-        )
+        raise ValueError("status-sync authorization_source must be typed-user-confirmation")
     if authorization.authorization_kind != STATUS_SYNC_AUTHORIZATION_KIND:
-        raise ValueError(
-            "status-sync authorization_kind must be cr-status-sync"
-        )
+        raise ValueError("status-sync authorization_kind must be cr-status-sync")
     if authorization.operation != STATUS_SYNC_OPERATION:
         raise ValueError("status-sync authorization operation mismatch")
     if authorization.single_use is not True:
@@ -2698,15 +2751,11 @@ def validate_status_sync_authorization(
     if not DIGEST_RE.fullmatch(authorization.plan_digest):
         raise ValueError("status-sync plan_digest is invalid")
     try:
-        expires_at = datetime.fromisoformat(
-            authorization.expires_at.replace("Z", "+00:00")
-        )
+        expires_at = datetime.fromisoformat(authorization.expires_at.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("status-sync authorization expires_at is invalid") from exc
     if expires_at.tzinfo is None:
-        raise ValueError(
-            "status-sync authorization expires_at must include timezone"
-        )
+        raise ValueError("status-sync authorization expires_at must include timezone")
     if expires_at.astimezone(UTC) <= datetime.now(UTC):
         raise ValueError("status-sync authorization is expired")
 
@@ -2757,9 +2806,7 @@ def _claim_status_sync_authorization(
                 + "\n"
             )
     except FileExistsError as exc:
-        raise ValueError(
-            "status-sync authorization was already consumed"
-        ) from exc
+        raise ValueError("status-sync authorization was already consumed") from exc
     return path
 
 
@@ -2869,19 +2916,31 @@ def apply_status_sync(
         }
     observed_facts, observed_scope = _status_sync_facts(project_root, work_id=plan.work_id)
     if observed_facts != plan.expected_facts or observed_scope != plan.scope_digest:
-        return {"status": "BLOCKED", "reason": "expected facts or scope digest drifted", "mutation_count": 0}
-    drifted = [target.ref for target in plan.targets if _current_target_digest(target) != target.before_digest]
+        return {
+            "status": "BLOCKED",
+            "reason": "expected facts or scope digest drifted",
+            "mutation_count": 0,
+        }
+    drifted = [
+        target.ref
+        for target in plan.targets
+        if _current_target_digest(target) != target.before_digest
+    ]
     if drifted:
-        return {"status": "BLOCKED", "reason": "target digest drift: " + ", ".join(drifted), "mutation_count": 0}
+        return {
+            "status": "BLOCKED",
+            "reason": "target digest drift: " + ", ".join(drifted),
+            "mutation_count": 0,
+        }
     transaction_root = _transaction_root(project_root)
     transaction_root.mkdir(parents=True, exist_ok=True)
-    unresolved = [
-        path
-        for path in transaction_root.glob("*/manifest.json")
-        if path.is_file()
-    ]
+    unresolved = [path for path in transaction_root.glob("*/manifest.json") if path.is_file()]
     if unresolved:
-        return {"status": "BLOCKED", "reason": "unresolved status-sync transaction exists", "mutation_count": 0}
+        return {
+            "status": "BLOCKED",
+            "reason": "unresolved status-sync transaction exists",
+            "mutation_count": 0,
+        }
     transaction_id = uuid.uuid4().hex
     lock_owner = _acquire_status_sync_writer_lock(
         project_root,
@@ -2889,7 +2948,11 @@ def apply_status_sync(
         purpose="apply",
     )
     if lock_owner is None:
-        return {"status": "BLOCKED", "reason": "status-sync writer lock exists", "mutation_count": 0}
+        return {
+            "status": "BLOCKED",
+            "reason": "status-sync writer lock exists",
+            "mutation_count": 0,
+        }
     try:
         _claim_status_sync_authorization(project_root, plan, authorization)
     except ValueError as exc:
@@ -2999,7 +3062,9 @@ def apply_status_sync(
         if _fault == "during-read-back":
             raise RuntimeError("injected failure during read-back")
         readback_failures = [
-            target.ref for target in plan.targets if _current_target_digest(target) != target.after_digest
+            target.ref
+            for target in plan.targets
+            if _current_target_digest(target) != target.after_digest
         ]
         if readback_failures:
             raise RuntimeError("read-back mismatch: " + ", ".join(readback_failures))
@@ -3062,8 +3127,7 @@ def apply_status_sync(
         }
         if status == "PARTIAL":
             result["rollback_evidence_ref"] = (
-                "private://status-sync/transactions/"
-                f"{transaction_id}/manifest.json"
+                f"private://status-sync/transactions/{transaction_id}/manifest.json"
             )
         return result
     finally:
@@ -3173,10 +3237,9 @@ def recover_status_sync_transaction(
                 "process_git_common_dir_identity",
                 "current_branch",
             }
-            if (
-                any(facts.get(key) != expected.get(key) for key in stable_keys)
-                or scope_digest != manifest.get("scope_digest")
-            ):
+            if any(
+                facts.get(key) != expected.get(key) for key in stable_keys
+            ) or scope_digest != manifest.get("scope_digest"):
                 manifest["recovery_state"] = "recovery-required"
                 result = {
                     "status": "BLOCKED",
@@ -3241,9 +3304,7 @@ def recover_status_sync_transaction(
                         "errors": errors,
                     }
                 else:
-                    manifest["recovery_state"] = (
-                        "committed" if action == "resume" else "recovered"
-                    )
+                    manifest["recovery_state"] = "committed" if action == "resume" else "recovered"
                     remove_transaction = True
                     result = {
                         "status": "PASS" if action == "resume" else "RECOVERED",
@@ -3413,18 +3474,11 @@ def _termination_facts(
     process_root = route.process_root
     producer_root = Path(__file__).resolve().parents[2]
     facts = {
-        "producer_release_oid": _git_fact(
-            producer_root, "rev-parse", "--verify", "HEAD"
-        ).lower(),
-        "target_release_oid": _git_fact(
-            release_root, "rev-parse", "--verify", "HEAD"
-        ).lower(),
-        "process_head_oid": _git_fact(
-            process_root, "rev-parse", "--verify", "HEAD"
-        ).lower(),
+        "producer_release_oid": _git_fact(producer_root, "rev-parse", "--verify", "HEAD").lower(),
+        "target_release_oid": _git_fact(release_root, "rev-parse", "--verify", "HEAD").lower(),
+        "process_head_oid": _git_fact(process_root, "rev-parse", "--verify", "HEAD").lower(),
         "process_git_common_dir_identity": _canonical_digest(
-            _git_fact(process_root, "rev-parse", "--git-common-dir")
-            or "non-git-fixture"
+            _git_fact(process_root, "rev-parse", "--git-common-dir") or "non-git-fixture"
         ),
         "process_dirty_path_digest": _dirty_path_digest(process_root),
     }
@@ -3518,10 +3572,8 @@ def _termination_projection_is_complete(
     summary = _load_json_object(summary_path, subject="termination summary")
     if (
         str(summary.get("status") or "") != terminal_tuple["lifecycle_status"]
-        or str(summary.get("readiness") or "").lower()
-        != terminal_tuple["readiness_status"]
-        or str(summary.get("gate_status") or "").lower()
-        != terminal_tuple["gate_status"]
+        or str(summary.get("readiness") or "").lower() != terminal_tuple["readiness_status"]
+        or str(summary.get("gate_status") or "").lower() != terminal_tuple["gate_status"]
     ):
         return False, "termination summary tuple is inconsistent"
     index_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
@@ -3662,9 +3714,7 @@ def plan_cr_termination(
             "readiness_status": cr_tracking.normalize_readiness_status(
                 fields.get("readiness_status") or ""
             ),
-            "gate_status": cr_tracking.normalize_gate_status(
-                fields.get("gate_status") or ""
-            ),
+            "gate_status": cr_tracking.normalize_gate_status(fields.get("gate_status") or ""),
         }
         current_values = tuple(current_tuple.values())
         target_values = tuple(terminal_tuple.values())
@@ -3677,9 +3727,7 @@ def plan_cr_termination(
                 process_root=process_root,
             )
             if not complete:
-                raise ValueError(
-                    "terminal CR has incomplete projection: " + incomplete_reason
-                )
+                raise ValueError("terminal CR has incomplete projection: " + incomplete_reason)
             return TerminationPlan(
                 decision="NO_CHANGE",
                 cr_id=cr_id,
@@ -3692,9 +3740,7 @@ def plan_cr_termination(
                 targets=(),
             )
         if current_tuple["lifecycle_status"] in FINISHED_STATUSES:
-            raise ValueError(
-                "a terminal CR cannot be changed to a different terminal state"
-            )
+            raise ValueError("a terminal CR cannot be changed to a different terminal state")
         source_errors = cr_tracking.validate_native_status_tuple(*current_values)
         target_errors = cr_tracking.validate_native_status_tuple(*target_values)
         if source_errors or target_errors:
@@ -3707,9 +3753,7 @@ def plan_cr_termination(
             raise ValueError("Project active_work_refs does not contain the target Work")
         terminated_project = replace(
             project,
-            active_work_refs=tuple(
-                ref for ref in project.active_work_refs if ref != work.work_ref
-            ),
+            active_work_refs=tuple(ref for ref in project.active_work_refs if ref != work.work_ref),
         )
         phase = load_phase(process_root, work.phase_ref) if work.phase_ref else None
         if phase is not None and work.work_ref not in phase.work_refs:
@@ -3731,10 +3775,7 @@ def plan_cr_termination(
             if index_errors:
                 raise ValueError("; ".join(index_errors))
             formal_truth_index = build_index(release_root)
-            if (
-                existing_index.get("semantic_digest")
-                != formal_truth_index.get("semantic_digest")
-            ):
+            if existing_index.get("semantic_digest") != formal_truth_index.get("semantic_digest"):
                 raise ValueError("CR-INDEX differs from current formal truth")
 
         cr_after = render_frontmatter_fields(
@@ -3746,9 +3787,7 @@ def plan_cr_termination(
                 "status": terminal_tuple["lifecycle_status"],
             },
         )
-        cr_after = _render_termination_body_projection(
-            cr_after, terminal_tuple=terminal_tuple
-        )
+        cr_after = _render_termination_body_projection(cr_after, terminal_tuple=terminal_tuple)
         summary_path = _resolve_runtime_ref(
             release_root,
             (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix(),
@@ -3814,12 +3853,8 @@ def plan_cr_termination(
             release_root,
             record_overrides={
                 cr_id: {
-                    "lifecycle_status": terminal_tuple[
-                        "lifecycle_status"
-                    ],
-                    "readiness_status": terminal_tuple[
-                        "readiness_status"
-                    ],
+                    "lifecycle_status": terminal_tuple["lifecycle_status"],
+                    "readiness_status": terminal_tuple["readiness_status"],
                     "gate_status": terminal_tuple["gate_status"],
                     "status": terminal_tuple["lifecycle_status"],
                 }
@@ -3867,9 +3902,7 @@ def plan_cr_termination(
                     "truth",
                 )
             )
-        state_path = _resolve_runtime_ref(
-            release_root, STATE_CURRENT_REL.as_posix()
-        )
+        state_path = _resolve_runtime_ref(release_root, STATE_CURRENT_REL.as_posix())
         if state_path.is_file():
             state = _load_json_object(state_path, subject="STATE.current.json")
             if state.get("active_change") == cr_id:
@@ -3884,8 +3917,7 @@ def plan_cr_termination(
                             "next_action": {
                                 "type": "done",
                                 "text": (
-                                    f"{cr_id} terminated as "
-                                    f"{terminal_tuple['lifecycle_status']}."
+                                    f"{cr_id} terminated as {terminal_tuple['lifecycle_status']}."
                                 ),
                                 "stop_reason": "no_remaining_route",
                             },
@@ -3895,21 +3927,13 @@ def plan_cr_termination(
                     )
                 )
                 candidate_targets.append(
-                    _termination_target(
-                        release_root, 45, state_path, state_after, "truth"
-                    )
+                    _termination_target(release_root, 45, state_path, state_after, "truth")
                 )
         candidate_targets.extend(
             [
-                _termination_target(
-                    release_root, 50, summary_path, summary_after, "derived"
-                ),
-                _termination_target(
-                    release_root, 60, ledger_path, ledger_after, "derived"
-                ),
-                _termination_target(
-                    release_root, 90, index_path, index_after, "derived"
-                ),
+                _termination_target(release_root, 50, summary_path, summary_after, "derived"),
+                _termination_target(release_root, 60, ledger_path, ledger_after, "derived"),
+                _termination_target(release_root, 90, index_path, index_after, "derived"),
             ]
         )
         targets = tuple(
@@ -3928,10 +3952,7 @@ def plan_cr_termination(
             ).allowed
         ]
         if denied:
-            raise ValueError(
-                "termination targets outside Work write scope: "
-                + ", ".join(denied)
-            )
+            raise ValueError("termination targets outside Work write scope: " + ", ".join(denied))
         return TerminationPlan(
             decision="READY",
             cr_id=cr_id,
@@ -3975,17 +3996,10 @@ def validate_termination_authorization(
         raise ValueError("termination authorization schema_version must be 1")
     if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization.authorization_id):
         raise ValueError("termination authorization_id is invalid")
-    if (
-        authorization.authorization_source
-        != TERMINATION_AUTHORIZATION_SOURCE
-    ):
-        raise ValueError(
-            "termination authorization_source must be typed-user-confirmation"
-        )
+    if authorization.authorization_source != TERMINATION_AUTHORIZATION_SOURCE:
+        raise ValueError("termination authorization_source must be typed-user-confirmation")
     if authorization.authorization_kind != TERMINATION_AUTHORIZATION_KIND:
-        raise ValueError(
-            "termination authorization_kind must be cr-termination"
-        )
+        raise ValueError("termination authorization_kind must be cr-termination")
     if authorization.operation != TERMINATION_OPERATION:
         raise ValueError("termination authorization operation mismatch")
     if authorization.single_use is not True:
@@ -4023,24 +4037,17 @@ def validate_termination_authorization(
     if not DIGEST_RE.fullmatch(authorization.plan_digest):
         raise ValueError("termination plan_digest is invalid")
     try:
-        expires_at = datetime.fromisoformat(
-            authorization.expires_at.replace("Z", "+00:00")
-        )
+        expires_at = datetime.fromisoformat(authorization.expires_at.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("termination authorization expires_at is invalid") from exc
     if expires_at.tzinfo is None:
-        raise ValueError(
-            "termination authorization expires_at must include timezone"
-        )
+        raise ValueError("termination authorization expires_at must include timezone")
     if expires_at.astimezone(UTC) <= datetime.now(UTC):
         raise ValueError("termination authorization is expired")
 
 
 def _termination_private_root(project_root: Path) -> Path:
-    return (
-        _transaction_root(project_root).parent
-        / "cr-termination"
-    )
+    return _transaction_root(project_root).parent / "cr-termination"
 
 
 def _termination_claim_path(
@@ -4049,11 +4056,7 @@ def _termination_claim_path(
 ) -> Path:
     if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization_id):
         raise ValueError("termination authorization_id is invalid")
-    return (
-        _termination_private_root(project_root)
-        / "authorizations"
-        / f"{authorization_id}.json"
-    )
+    return _termination_private_root(project_root) / "authorizations" / f"{authorization_id}.json"
 
 
 def _claim_termination_authorization(
@@ -4088,9 +4091,7 @@ def _claim_termination_authorization(
                 + "\n"
             )
     except FileExistsError as exc:
-        raise ValueError(
-            "termination authorization was already consumed"
-        ) from exc
+        raise ValueError("termination authorization was already consumed") from exc
     return path
 
 
@@ -4171,9 +4172,7 @@ def apply_cr_termination(
             "reason": str(exc),
             "mutation_count": 0,
         }
-    transaction_root = (
-        _termination_private_root(release_root) / "transactions"
-    )
+    transaction_root = _termination_private_root(release_root) / "transactions"
     transaction_root.mkdir(parents=True, exist_ok=True)
     unresolved = list(transaction_root.glob("*/manifest.json"))
     if unresolved:
@@ -4223,28 +4222,16 @@ def apply_cr_termination(
     try:
         _claim_termination_authorization(release_root, plan, authorization)
         if _fault == "after-claim-before-first-replace":
-            raise RuntimeError(
-                "injected failure after authorization claim"
-            )
+            raise RuntimeError("injected failure after authorization claim")
         for target in plan.targets:
             backup = backup_root / f"{target.order:03d}.before"
             prepared_after = after_root / f"{target.order:03d}.after"
             backup.write_text(target.before or "", encoding="utf-8")
             prepared_after.write_text(target.after, encoding="utf-8")
-            if (
-                _canonical_digest(backup.read_text(encoding="utf-8"))
-                != target.before_digest
-            ):
+            if _canonical_digest(backup.read_text(encoding="utf-8")) != target.before_digest:
                 raise RuntimeError(f"backup digest mismatch: {target.ref}")
-            if (
-                _canonical_digest(
-                    prepared_after.read_text(encoding="utf-8")
-                )
-                != target.after_digest
-            ):
-                raise RuntimeError(
-                    f"prepared after digest mismatch: {target.ref}"
-                )
+            if _canonical_digest(prepared_after.read_text(encoding="utf-8")) != target.after_digest:
+                raise RuntimeError(f"prepared after digest mismatch: {target.ref}")
             manifest["targets"].append(
                 {
                     **target.as_dict(),
@@ -4273,9 +4260,7 @@ def apply_cr_termination(
                 {
                     "target_ref": target.ref,
                     "observed_before_digest": target.before_digest,
-                    "observed_after_digest": _termination_current_digest(
-                        target
-                    ),
+                    "observed_after_digest": _termination_current_digest(target),
                     "completed_at": now_utc(),
                 }
             )
@@ -4291,19 +4276,14 @@ def apply_cr_termination(
                 encoding="utf-8",
             )
             if _fail_after_replace == offset:
-                raise RuntimeError(
-                    f"injected failure after replace {offset}"
-                )
+                raise RuntimeError(f"injected failure after replace {offset}")
         readback_failures = [
             target.ref
             for target in plan.targets
             if _termination_current_digest(target) != target.after_digest
         ]
         if readback_failures:
-            raise RuntimeError(
-                "termination read-back mismatch: "
-                + ", ".join(readback_failures)
-            )
+            raise RuntimeError("termination read-back mismatch: " + ", ".join(readback_failures))
         manifest["recovery_state"] = "committed"
         manifest["lock"]["lease_state"] = "released"
         manifest["updated_at"] = now_utc()
@@ -4336,25 +4316,14 @@ def apply_cr_termination(
                     target.path.unlink(missing_ok=True)
                 else:
                     _atomic_write_text(target.path, target.before)
-                if (
-                    _termination_current_digest(target)
-                    != target.before_digest
-                ):
+                if _termination_current_digest(target) != target.before_digest:
                     raise RuntimeError("rollback digest mismatch")
                 for entry in manifest["targets"]:
                     if entry["ref"] == target.ref:
                         entry["rollback_status"] = "restored"
             except Exception as recovery_error:
-                recovery_errors.append(
-                    f"{target.ref}: {recovery_error}"
-                )
-        status = (
-            "PARTIAL"
-            if recovery_errors
-            else "RECOVERED"
-            if applied
-            else "BLOCKED"
-        )
+                recovery_errors.append(f"{target.ref}: {recovery_error}")
+        status = "PARTIAL" if recovery_errors else "RECOVERED" if applied else "BLOCKED"
         manifest["recovery_state"] = status.lower()
         manifest["lock"]["lease_state"] = "released"
         manifest["updated_at"] = now_utc()
@@ -4382,8 +4351,7 @@ def apply_cr_termination(
         }
         if status == "PARTIAL":
             result["rollback_evidence_ref"] = (
-                "private://cr-termination/transactions/"
-                f"{transaction_id}/manifest.json"
+                f"private://cr-termination/transactions/{transaction_id}/manifest.json"
             )
         return result
     finally:
@@ -4473,13 +4441,8 @@ def collect_check_errors(project_root: Path) -> list[str]:
         errors.append(str(exc))
     if index:
         errors.extend(validate_index_payload(index))
-        if (
-            expected_index
-            and index.get("semantic_digest") != expected_index.get("semantic_digest")
-        ):
-            errors.append(
-                "CR-INDEX stale projection differs from formal truth rebuild digest"
-            )
+        if expected_index and index.get("semantic_digest") != expected_index.get("semantic_digest"):
+            errors.append("CR-INDEX stale projection differs from formal truth rebuild digest")
     items = {item.get("id"): item for item in index.get("items", []) if isinstance(item, dict)}
     current_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
     current_state: dict[str, Any] = {}
@@ -4657,13 +4620,9 @@ def proposed_conflict_report(
         }
 
     normalized_keys = sorted(set(value.strip() for value in conflict_keys if value.strip()))
-    normalized_surface = sorted(
-        set(value.strip() for value in impact_surface if value.strip())
-    )
+    normalized_surface = sorted(set(value.strip() for value in impact_surface if value.strip()))
     normalized_fields = {
-        field: sorted(
-            set(value.strip() for value in impact_fields.get(field, []) if value.strip())
-        )
+        field: sorted(set(value.strip() for value in impact_fields.get(field, []) if value.strip()))
         for field in IMPACT_SPLIT_FIELDS
     }
     if not normalized_keys and not normalized_surface and not any(normalized_fields.values()):
@@ -4690,16 +4649,12 @@ def proposed_conflict_report(
         "conflict_keys": normalized_keys,
         "impact_surface": normalized_surface,
         **normalized_fields,
-        "impact_capability_normalized": _normalized_capability_refs(
-            capability_resolution
-        ),
+        "impact_capability_normalized": _normalized_capability_refs(capability_resolution),
     }
     candidate_keys = set(candidate["conflict_keys"])
     candidate_surface = _conflict_surface(candidate)
     conflicts: list[dict[str, Any]] = []
-    for item in sorted(
-        items, key=lambda value: _cr_numeric_sort_key(str(value.get("id") or ""))
-    ):
+    for item in sorted(items, key=lambda value: _cr_numeric_sort_key(str(value.get("id") or ""))):
         if item.get("status") not in OPEN_DEPENDENCY_STATUSES:
             continue
         key_overlap = sorted(candidate_keys.intersection(item.get("conflict_keys") or []))
@@ -4795,7 +4750,9 @@ def write_impact_report(path: Path, report: dict[str, Any]) -> Path:
 
 
 def _load_summary(project_root: Path, cr_id: str) -> dict[str, Any]:
-    path = _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix()) / f"{cr_id}.summary.json"
+    path = (
+        _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix()) / f"{cr_id}.summary.json"
+    )
     if not path.is_file():
         crs = discover_formal_crs(project_root)
         if cr_id not in crs:
@@ -5175,7 +5132,14 @@ def main(argv: list[str] | None = None) -> int:
             rebuild_corrupt=parsed.rebuild,
             expected_process_oid=parsed.expected_process_oid,
         )
-        print(json.dumps({**printable, "wrote": _rel(project_root, path)}, ensure_ascii=False, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {**printable, "wrote": _rel(project_root, path)},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     if command == "summary":
         if not parsed.cr_id:
@@ -5235,9 +5199,7 @@ def main(argv: list[str] | None = None) -> int:
             authorization_error = "close apply requires --authorization-file"
         else:
             try:
-                authorization = load_status_sync_authorization(
-                    parsed.authorization_file
-                )
+                authorization = load_status_sync_authorization(parsed.authorization_file)
             except (OSError, ValueError) as exc:
                 authorization_error = str(exc)
         if authorization_error:
@@ -5289,14 +5251,10 @@ def main(argv: list[str] | None = None) -> int:
         authorization: TerminationAuthorization | None = None
         authorization_error = ""
         if parsed.authorization_file is None:
-            authorization_error = (
-                "termination apply requires --authorization-file"
-            )
+            authorization_error = "termination apply requires --authorization-file"
         else:
             try:
-                authorization = load_termination_authorization(
-                    parsed.authorization_file
-                )
+                authorization = load_termination_authorization(parsed.authorization_file)
             except (OSError, ValueError) as exc:
                 authorization_error = str(exc)
         if authorization_error:
@@ -5344,14 +5302,10 @@ def main(argv: list[str] | None = None) -> int:
         authorization = None
         authorization_error = ""
         if parsed.authorization_file is None:
-            authorization_error = (
-                "status-sync apply requires --authorization-file"
-            )
+            authorization_error = "status-sync apply requires --authorization-file"
         else:
             try:
-                authorization = load_status_sync_authorization(
-                    parsed.authorization_file
-                )
+                authorization = load_status_sync_authorization(parsed.authorization_file)
             except (OSError, ValueError) as exc:
                 authorization_error = str(exc)
         if authorization_error:
@@ -5373,7 +5327,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(printable, ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if result["status"] in {"PASS", "NO_CHANGE"} else 1
     if command == "status-sync-inspect":
-        print(json.dumps(inspect_status_sync_transactions(project_root), ensure_ascii=False, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                inspect_status_sync_transactions(project_root),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     if command in {"status-sync-resume", "status-sync-rollback", "status-sync-abandon"}:
         if not parsed.transaction_id:
@@ -5409,9 +5370,7 @@ def main(argv: list[str] | None = None) -> int:
             "impact_data_refs": parsed.impact_data_ref,
         }
         has_candidate_fields = bool(
-            parsed.conflict_key
-            or parsed.impact_surface
-            or any(proposed_fields.values())
+            parsed.conflict_key or parsed.impact_surface or any(proposed_fields.values())
         )
         if parsed.proposed:
             if parsed.output is not None:
