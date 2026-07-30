@@ -19,6 +19,7 @@ from meta_flow.checks.frozen_cp6_evidence import (
 )
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.state import event_ledger
 from meta_flow.state.checkpoint_projection import CheckpointProjectionV1
 
 PASS_LIKE_DECISIONS = {"PASS", "WAIVED", "PASS_WITH_RISK"}
@@ -518,18 +519,14 @@ def project_cp5_development_plan(
         raise ValueError("CP5 canonical current head is unavailable; mutation=0")
     if head.decision != "PASS":
         raise ValueError("CP5 Story admission requires canonical decision=PASS; mutation=0")
-    approvals = []
-    for event in gate_events:
-        if (
-            str(event.get("event_type") or "") != "human_gate_approval"
-            or str(event.get("status") or "").lower() != "approved"
-            or str(event.get("cr_id") or "") != cr_id
-            or str(event.get("result_ref") or "") != head.result_ref
-        ):
-            continue
-        gate_text = str(event.get("checkpoint") or event.get("gate") or "").upper()
-        if "CP5" in gate_text:
-            approvals.append(event)
+    approvals = [
+        approval
+        for approval in event_ledger.project_gate_approvals(list(gate_events))
+        if approval.passage
+        and approval.cr_id == cr_id
+        and approval.checkpoint == "CP5"
+        and approval.result_ref == head.result_ref
+    ]
     if len(approvals) != 1:
         raise ValueError(
             "CP5 Story admission requires exactly one approval bound to canonical "

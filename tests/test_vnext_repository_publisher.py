@@ -299,12 +299,19 @@ def _canonical_publication_evidence(
             canonical_refs["gate_ledger"],
             json.dumps(
                 {
+                    "event_id": "GATE-CR001-CP8-V1",
                     "event_type": "human_gate_approval",
                     "status": status,
+                    "decision": "approve",
                     "work_id": "W-001",
                     "cr_id": "CR-001",
                     "gate": "CP8",
+                    "checkpoint": "CP8",
+                    "result_ref": canonical_refs["cp8_result"],
+                    "scope_version": 7,
                     "scope_digest": scope_digest,
+                    "approval_kind_version": 1,
+                    "approval_kind": "checkpoint_passage",
                 }
             )
             + "\n",
@@ -743,6 +750,55 @@ def test_forged_eligibility_fields_cannot_override_canonical_g2_truth(
     assert git(bare, "rev-parse", "refs/heads/main") == remote_before
     if operation == "commit":
         assert git(local, "rev-parse", "HEAD") == before
+
+
+def test_g2_publication_rejects_typed_non_passage_gate_approval(
+    tmp_path: Path,
+) -> None:
+    local, _bare = init_remote_pair(tmp_path, "release")
+    evidence, _work, _route = _canonical_publication_evidence(
+        tmp_path,
+        local,
+        operation="commit",
+        repo_role="release",
+        profile="G2",
+        g2_approved=True,
+    )
+    evidence_payload = json.loads(
+        _path_for_ref(tmp_path, evidence.evidence_ref).read_text(encoding="utf-8")
+    )
+    refs = evidence_payload["canonical_refs"]
+    _write_ref(
+        tmp_path,
+        refs["gate_ledger"],
+        json.dumps(
+            {
+                "event_id": "GATE-CR001-SCOPE-V1",
+                "event_type": "human_gate_approval",
+                "status": "approved",
+                "decision": "approve",
+                "work_id": "W-001",
+                "cr_id": "CR-001",
+                "gate": "SCOPE-AMENDMENT",
+                "scope_version": 7,
+                "scope_digest": "a" * 64,
+                "authorized_actions": ["amend-scope"],
+                "decision_ref": "process/checkpoints/CP3-CR-001.md",
+                "approval_kind_version": 1,
+                "approval_kind": "scope_amendment",
+            }
+        )
+        + "\n",
+    )
+
+    assert not publisher._g2_is_canonically_approved(
+        project_root=tmp_path,
+        refs=refs,
+        cr_id="CR-001",
+        work_id="W-001",
+        scope_version=7,
+        scope_digest="a" * 64,
+    )
 
 
 @pytest.mark.parametrize(

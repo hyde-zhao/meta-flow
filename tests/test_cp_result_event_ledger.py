@@ -11,6 +11,118 @@ from pathlib import Path
 
 from meta_flow.checks import cp_result
 from meta_flow.state import current, event_ledger, ledger_migration
+from meta_flow.work import usage
+
+GATE_SEMANTIC_REGISTRY = {
+    "meta_flow/state/event_ledger.py": "producer-validator-projector-owner",
+    "meta_flow/checks/cr_tracking.py": "passage-consumer",
+    "meta_flow/checks/state_transition.py": "passage-consumer",
+    "meta_flow/repository/publisher.py": "passage-consumer",
+    "meta_flow/work/usage.py": "count-only-exception",
+    "meta_flow/workflow/cr_lifecycle.py": "transport-adapter",
+    "meta_flow/policies/route_plan.py": "mutation-reference-only",
+    "meta_flow/policies/c0_cutover.py": "mutation-reference-only",
+    "meta_flow/policies/failure_routing.py": "metadata-reference-only",
+    "meta_flow/state/current.py": "inventory-reference-only",
+    "meta_flow/cli.py": "optional-public-adapter",
+    "meta_flow/state/checkpoint_projection.py": "adjacent-owner-boundary",
+}
+GATE_OPTIONAL_REGISTERED_ONLY = {
+    "meta_flow/cli.py",
+    "meta_flow/state/checkpoint_projection.py",
+}
+
+
+def _discover_gate_semantic_paths(root: Path) -> dict[str, frozenset[str]]:
+    """在整个产品包发现 gate 语义、读取、传输和清单引用。"""
+
+    discovered: dict[str, frozenset[str]] = {}
+    product_root = root / "meta_flow"
+    for path in sorted(product_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tokens: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                value = node.value
+                if value == "human_gate_approval":
+                    tokens.add("raw-human-gate-approval")
+                if "GATE-LEDGER" in value:
+                    tokens.add("gate-ledger-ref")
+                if value in {
+                    "gate_approval_kind_correction",
+                    "gate_approval_kind_cutover",
+                }:
+                    tokens.add(value)
+                if value in {
+                    "checkpoint_passage",
+                    "scope_amendment",
+                    "recovery_authorization",
+                    "evidence_acknowledgement",
+                }:
+                    tokens.add("approval-kind-value")
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "project_gate_approvals"
+            ):
+                tokens.add("canonical-projector-call")
+            if (
+                isinstance(node, ast.FunctionDef)
+                and node.name == "project_gate_approvals"
+            ):
+                tokens.add("canonical-projector-owner")
+        if tokens:
+            discovered[path.relative_to(root).as_posix()] = frozenset(tokens)
+    return discovered
+
+
+def _gate_guardrail_differences(
+    root: Path,
+    *,
+    registry: dict[str, str] | None = None,
+) -> dict[str, object]:
+    effective_registry = GATE_SEMANTIC_REGISTRY if registry is None else registry
+    discovered = _discover_gate_semantic_paths(root)
+    registered = set(effective_registry)
+    actual = set(discovered)
+    role_mismatches: list[str] = []
+    for path, role in sorted(effective_registry.items()):
+        tokens = discovered.get(path, frozenset())
+        if role == "producer-validator-projector-owner" and (
+            "canonical-projector-owner" not in tokens
+            or "approval-kind-value" not in tokens
+        ):
+            role_mismatches.append(f"{path}:owner-contract")
+        elif role == "passage-consumer" and "canonical-projector-call" not in tokens:
+            role_mismatches.append(f"{path}:missing-canonical-projector-call")
+        elif role == "count-only-exception" and (
+            "raw-human-gate-approval" not in tokens
+            or "canonical-projector-call" in tokens
+        ):
+            role_mismatches.append(f"{path}:count-only-contract")
+        elif role in {
+            "transport-adapter",
+            "mutation-reference-only",
+            "metadata-reference-only",
+            "inventory-reference-only",
+        } and "gate-ledger-ref" not in tokens:
+            role_mismatches.append(f"{path}:reference-contract")
+    forbidden_raw_semantic = sorted(
+        path
+        for path, tokens in discovered.items()
+        if "raw-human-gate-approval" in tokens
+        and path
+        not in {
+            "meta_flow/state/event_ledger.py",
+            "meta_flow/work/usage.py",
+        }
+    )
+    return {
+        "registered_only": sorted(registered - actual),
+        "discovered_only": sorted(actual - registered),
+        "role_mismatch": role_mismatches,
+        "forbidden_raw_semantic": forbidden_raw_semantic,
+        "discovered": discovered,
+    }
 
 
 def write_minimal_state(root: Path) -> None:
@@ -1338,6 +1450,265 @@ class S01ProjectionContractTests(unittest.TestCase):
 
         self.assertFalse(projected.terminal_success)
         self.assertIn("MISSING_INLINE_FALLBACK_APPROVAL", projected.finding_codes)
+
+    def test_gate_approval_kind_v1_projects_only_checkpoint_passage(self) -> None:
+        base = {
+            "event_id": "GATE-TYPED-V1",
+            "event_type": "human_gate_approval",
+            "gate": "EXPLICIT_TYPED_GATE",
+            "status": "approved",
+            "decision": "approve",
+            "cr_id": "CR-200",
+            "work_id": "W-200",
+            "approval_kind_version": 1,
+        }
+        events = [
+            {
+                **base,
+                "event_id": "GATE-PASSAGE-V1",
+                "approval_kind": "checkpoint_passage",
+                "checkpoint": "CP5",
+                "result_ref": "process/checks/CP5-CR-200.result.json",
+            },
+            {
+                **base,
+                "event_id": "GATE-SCOPE-V1",
+                "approval_kind": "scope_amendment",
+                "scope_version": 2,
+                "scope_digest": "a" * 64,
+                "authorized_actions": ["add-one-leaf"],
+                "decision_ref": "process/checkpoints/CP3-CR-200.md",
+            },
+            {
+                **base,
+                "event_id": "GATE-RECOVERY-V1",
+                "approval_kind": "recovery_authorization",
+                "recovery_ordinal": 3,
+                "authorized_actions": ["retry-once"],
+                "decision_ref": "process/checkpoints/CP3-CR-200.md",
+            },
+            {
+                **base,
+                "event_id": "GATE-EVIDENCE-V1",
+                "approval_kind": "evidence_acknowledgement",
+                "evidence_refs": ["process/evidence/example.index.json"],
+                "evidence_digests": ["b" * 64],
+                "acknowledgement_decision": "acknowledged",
+            },
+        ]
+
+        projections = event_ledger.project_gate_approvals(events)
+
+        self.assertEqual(
+            [True, False, False, False],
+            [projection.passage for projection in projections],
+        )
+        self.assertEqual("CP5", projections[0].checkpoint)
+        self.assertEqual(
+            "process/checks/CP5-CR-200.result.json",
+            projections[0].result_ref,
+        )
+        self.assertTrue(
+            all(not projection.finding_codes for projection in projections)
+        )
+
+    def test_gate_approval_append_rejects_missing_or_unknown_kind(self) -> None:
+        ledger = Path("process/state/GATE-LEDGER.ndjson")
+        base = {
+            "event_id": "GATE-INVALID-V1",
+            "event_type": "human_gate_approval",
+            "gate": "CP5_SHOULD_NOT_BE_INFERRED",
+            "status": "approved",
+            "decision": "approve",
+            "cr_id": "CR-200",
+            "work_id": "W-200",
+        }
+        for payload in (
+            base,
+            {
+                **base,
+                "approval_kind_version": 1,
+                "approval_kind": "not-a-kind",
+            },
+        ):
+            with self.subTest(payload=payload), self.assertRaisesRegex(
+                ValueError,
+                "invalid gate human approval",
+            ):
+                event_ledger.validate_event_before_append(
+                    ledger,
+                    payload,
+                    ledger_type="gate",
+                )
+            projection = event_ledger.project_gate_approvals([payload])[0]
+            self.assertFalse(projection.passage)
+
+    def test_public_gate_append_rejects_untyped_approval_before_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_ref = "process/state/GATE-LEDGER.ndjson"
+            payload = {
+                "event_id": "GATE-UNTYPED-V1",
+                "event_type": "human_gate_approval",
+                "gate": "CP5_SHOULD_NOT_BE_INFERRED",
+                "status": "approved",
+                "decision": "approve",
+                "cr_id": "CR-200",
+                "work_id": "W-200",
+            }
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = event_ledger.main(
+                    [
+                        "append",
+                        "--project-root",
+                        str(root),
+                        "--ledger",
+                        ledger_ref,
+                        "--event-json",
+                        json.dumps(payload),
+                    ]
+                )
+
+            self.assertEqual(2, exit_code)
+            result = json.loads(output.getvalue())
+            self.assertEqual("BLOCKED", result["status"])
+            self.assertEqual(0, result["mutation_count"])
+            self.assertFalse((root / ledger_ref).exists())
+
+    def test_legacy_gate_manifest_and_migration_dry_run_are_exact(self) -> None:
+        legacy_events = []
+        for event_id, (
+            _approval_kind,
+            _checkpoint,
+            _result_ref,
+        ) in event_ledger._LEGACY_GATE_APPROVAL_MANIFEST_V1.items():
+            legacy_events.append(
+                {
+                    "event_id": event_id,
+                    "event_type": "human_gate_approval",
+                    "gate": "LEGACY_VALUE_MUST_NOT_BE_PARSED",
+                    "status": "approved",
+                    "decision": "approve",
+                    "cr_id": "CR-LEGACY",
+                    "work_id": "W-LEGACY",
+                    "interaction_id": event_id,
+                }
+            )
+        projections = event_ledger.project_gate_approvals(legacy_events)
+        counts = {
+            kind.value: sum(
+                projection.approval_kind == kind.value
+                for projection in projections
+            )
+            for kind in event_ledger.GateApprovalKindV1
+        }
+        self.assertEqual(
+            {
+                "checkpoint_passage": 13,
+                "scope_amendment": 2,
+                "recovery_authorization": 1,
+                "evidence_acknowledgement": 0,
+            },
+            counts,
+        )
+        self.assertEqual(13, sum(projection.passage for projection in projections))
+
+        decision_ref = (
+            "process/checkpoints/"
+            "CP3-CR-062-GATE-APPROVAL-KIND-REFACTOR.md"
+        )
+        plan = event_ledger.build_gate_approval_kind_migration_plan(
+            legacy_events,
+            decision_ref=decision_ref,
+        )
+
+        self.assertEqual("READY", plan["decision"])
+        self.assertTrue(plan["dry_run"])
+        self.assertEqual(0, plan["mutation_count"])
+        self.assertEqual(17, plan["planned_append_count"])
+        self.assertEqual(counts, plan["classification_counts"])
+        self.assertEqual(64, len(plan["gate_ledger_preimage_digest"]))
+        self.assertEqual(64, len(plan["legacy_manifest_digest"]))
+        self.assertEqual(64, len(plan["plan_digest"]))
+        migrated = event_ledger.project_gate_approvals(
+            [*legacy_events, *plan["append_events"]]
+        )
+        self.assertEqual(13, sum(projection.passage for projection in migrated))
+        partial = event_ledger.project_gate_approvals(
+            [*legacy_events, plan["append_events"][0]]
+        )
+        self.assertEqual(0, sum(projection.passage for projection in partial))
+
+        before_count = usage._deduplicated_human_interactions(legacy_events)
+        after_count = usage._deduplicated_human_interactions(
+            [*legacy_events, *plan["append_events"]]
+        )
+        self.assertEqual(16, before_count)
+        self.assertEqual(before_count, after_count)
+
+    def test_unknown_legacy_gate_is_fail_closed_and_plan_is_zero_mutation(self) -> None:
+        event = {
+            "event_id": "UNKNOWN-LEGACY-CP8-NAME",
+            "event_type": "human_gate_approval",
+            "gate": "CP8",
+            "status": "approved",
+            "decision": "approve",
+            "cr_id": "CR-999",
+            "work_id": "W-999",
+        }
+        projection = event_ledger.project_gate_approvals([event])[0]
+        plan = event_ledger.build_gate_approval_kind_migration_plan(
+            [event],
+            decision_ref="process/checkpoints/CP3-CR-062.md",
+        )
+
+        self.assertFalse(projection.passage)
+        self.assertIn("GATE_APPROVAL_LEGACY_UNKNOWN", projection.finding_codes)
+        self.assertEqual("BLOCKED", plan["decision"])
+        self.assertEqual(0, plan["mutation_count"])
+        self.assertEqual([], plan["append_events"])
+
+    def test_gate_semantic_guardrail_covers_repo_wide_registry(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        report = _gate_guardrail_differences(root)
+
+        self.assertEqual([], report["discovered_only"])
+        self.assertEqual([], report["role_mismatch"])
+        self.assertEqual([], report["forbidden_raw_semantic"])
+        self.assertEqual(
+            sorted(GATE_OPTIONAL_REGISTERED_ONLY),
+            report["registered_only"],
+        )
+        roles = tuple(GATE_SEMANTIC_REGISTRY.values())
+        self.assertEqual(1, roles.count("producer-validator-projector-owner"))
+        self.assertEqual(3, roles.count("passage-consumer"))
+        self.assertEqual(1, roles.count("count-only-exception"))
+
+    def test_gate_semantic_guardrail_positive_fixture_finds_rogue_consumer(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "meta_flow"
+            package.mkdir()
+            (package / "rogue.py").write_text(
+                "def admits(event):\n"
+                "    return event.get('event_type') == 'human_gate_approval'\n",
+                encoding="utf-8",
+            )
+
+            report = _gate_guardrail_differences(root, registry={})
+
+        self.assertEqual(["meta_flow/rogue.py"], report["discovered_only"])
+        self.assertEqual(
+            ["meta_flow/rogue.py"],
+            report["forbidden_raw_semantic"],
+        )
 
     def test_public_append_rejects_invalid_event_before_ledger_creation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

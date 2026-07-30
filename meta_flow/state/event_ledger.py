@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 
 KNOWN_LEDGER_RELS = {
@@ -65,6 +68,118 @@ TERMINAL_ATTEMPT_STATUSES = frozenset(
 )
 NONTERMINAL_ATTEMPT_STATUSES = frozenset({"submitted", "running", "retrying"})
 ALL_ATTEMPT_STATUSES = TERMINAL_ATTEMPT_STATUSES | NONTERMINAL_ATTEMPT_STATUSES
+GATE_APPROVAL_KIND_VERSION = 1
+
+
+class GateApprovalKindV1(StrEnum):
+    """人工批准的四种互斥语义，只有 checkpoint passage 能推进门禁。"""
+
+    CHECKPOINT_PASSAGE = "checkpoint_passage"
+    SCOPE_AMENDMENT = "scope_amendment"
+    RECOVERY_AUTHORIZATION = "recovery_authorization"
+    EVIDENCE_ACKNOWLEDGEMENT = "evidence_acknowledgement"
+
+
+@dataclass(frozen=True)
+class CanonicalGateApprovalProjectionV1:
+    """唯一的 gate approval 投影；下游只能消费 ``passage``。"""
+
+    event_id: str
+    approval_kind: str
+    passage: bool
+    checkpoint: str
+    result_ref: str
+    cr_id: str
+    work_id: str
+    scope_version: int
+    scope_digest: str
+    finding_codes: tuple[str, ...]
+
+
+_LEGACY_GATE_APPROVAL_MANIFEST_V1 = {
+    "CR057-CP8-R1-HUMAN-GATE-APPROVED": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP8",
+        "process/checks/CP8-CR-057-DELIVERY-READINESS.result.json",
+    ),
+    "CR058-CP2-SCOPE-BASELINE-APPROVED": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP2",
+        "process/checks/CP2-CR-058-SCOPE-BASELINE.result.json",
+    ),
+    "CR058-CP3-DESIGN-R2-HUMAN-GATE-APPROVED": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP3",
+        "process/checks/CP3-CR-058-DESIGN.result.json",
+    ),
+    "CR058-CP5-DESIGN-EVIDENCE-R2-HUMAN-GATE-APPROVED": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP5",
+        "process/checks/CP5-CR-058-DESIGN-EVIDENCE.result.json",
+    ),
+    "CR058-CP5-IMPLEMENTATION-SCOPE-R3-HUMAN-GATE-APPROVED": (
+        GateApprovalKindV1.SCOPE_AMENDMENT,
+        "",
+        "",
+    ),
+    "CR058-CP8-R2-HUMAN-GATE-APPROVED": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP8",
+        "process/checks/CP8-CR-058-DELIVERY-READINESS.result.json",
+    ),
+    "CR058-CP8-R3-HUMAN-GATE-APPROVED": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP8",
+        "process/checks/CP8-CR-058-DELIVERY-READINESS.result.json",
+    ),
+    "GATE-CR061-CP5-CONTRACT-COMPLETION-DELTA-APPROVED-20260727-V1": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP5",
+        "process/checks/CP5-CR-061-CONTRACT-COMPLETION-DELTA.result.json",
+    ),
+    "GATE-CR061-CP8-CONTRACT-COMPLETION-APPROVED-20260727-V1": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP8",
+        "process/checks/CP8-CR-061-CONTRACT-COMPLETION.result.json",
+    ),
+    "GATE-CR061-CP8-PUBLICATION-CONTRACT-APPROVED-20260727-V1": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP8",
+        "process/checks/CP8-CR-061-PUBLICATION-CONTRACT.result.json",
+    ),
+    "GATE-CR061-CP8-HUMAN-GATE-BINDING-APPROVED-20260728-V1": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP8",
+        "process/checks/CP8-CR-061-HUMAN-GATE-BINDING.result.json",
+    ),
+    "GATE-CR062-CP3-CONTROL-PLANE-DESIGN-APPROVED-20260729-V1": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP3",
+        "process/checks/CP3-CR-062-DESIGN-SUCCESSOR-V7.result.json",
+    ),
+    "GATE-CR062-CP5-ALL-STORIES-LLD-APPROVED-20260729-V1": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP5",
+        "process/checks/CP5-CR-062-ALL-STORIES.auto-precheck-V4.json",
+    ),
+    "GATE-CR062-CP5-ALL-STORIES-LLD-APPROVED-20260729-V2": (
+        GateApprovalKindV1.CHECKPOINT_PASSAGE,
+        "CP5",
+        "process/checks/CP5-CR-062-ALL-STORIES.auto-precheck-V5.json",
+    ),
+    "GATE-CR062-CP6-ADMISSION-ENABLING-APPROVED-20260729-V1": (
+        GateApprovalKindV1.SCOPE_AMENDMENT,
+        "",
+        "",
+    ),
+    "GATE-CR062-CP6-ADMISSION-LINEAGE-CORRECTION-APPROVED-20260729-V1": (
+        GateApprovalKindV1.RECOVERY_AUTHORIZATION,
+        "",
+        "",
+    ),
+}
+_GATE_APPROVAL_CORRECTION_EVENT = "gate_approval_kind_correction"
+_GATE_APPROVAL_CUTOVER_EVENT = "gate_approval_kind_cutover"
 
 
 @dataclass(frozen=True)
@@ -291,6 +406,425 @@ def load_events(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     return events, errors
 
 
+def _clean_event(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {str(key): value for key, value in event.items() if key != "_line_no"}
+
+
+def _typed_gate_approval_findings(event: Mapping[str, Any]) -> tuple[str, ...]:
+    findings: list[str] = []
+    if event.get("approval_kind_version") != GATE_APPROVAL_KIND_VERSION:
+        findings.append("GATE_APPROVAL_KIND_VERSION_INVALID")
+    try:
+        approval_kind = GateApprovalKindV1(str(event.get("approval_kind") or ""))
+    except ValueError:
+        findings.append("GATE_APPROVAL_KIND_UNKNOWN")
+        return tuple(findings)
+    for field in ("event_id", "gate", "cr_id", "work_id"):
+        if not str(event.get(field) or "").strip():
+            findings.append(f"GATE_APPROVAL_{field.upper()}_REQUIRED")
+    if str(event.get("decision") or "").lower() != "approve":
+        findings.append("GATE_APPROVAL_DECISION_INVALID")
+    if str(event.get("status") or "").lower() != "approved":
+        findings.append("GATE_APPROVAL_STATUS_INVALID")
+    if approval_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE:
+        if re.fullmatch(r"CP[0-8]", str(event.get("checkpoint") or "").upper()) is None:
+            findings.append("GATE_APPROVAL_CHECKPOINT_REQUIRED")
+        if not str(event.get("result_ref") or "").strip():
+            findings.append("GATE_APPROVAL_RESULT_REF_REQUIRED")
+    elif approval_kind is GateApprovalKindV1.SCOPE_AMENDMENT:
+        scope_version = event.get("scope_version")
+        if (
+            not isinstance(scope_version, int)
+            or isinstance(scope_version, bool)
+            or scope_version < 1
+        ):
+            findings.append("GATE_APPROVAL_SCOPE_VERSION_REQUIRED")
+        if not str(event.get("scope_digest") or "").strip():
+            findings.append("GATE_APPROVAL_SCOPE_DIGEST_REQUIRED")
+        if not event.get("authorized_actions"):
+            findings.append("GATE_APPROVAL_AUTHORIZED_ACTIONS_REQUIRED")
+        if not (event.get("decision_ref") or event.get("checkpoint_ref")):
+            findings.append("GATE_APPROVAL_DECISION_REF_REQUIRED")
+    elif approval_kind is GateApprovalKindV1.RECOVERY_AUTHORIZATION:
+        recovery_ordinal = event.get("recovery_ordinal")
+        if (
+            not isinstance(recovery_ordinal, int)
+            or isinstance(recovery_ordinal, bool)
+            or recovery_ordinal < 1
+        ):
+            findings.append("GATE_APPROVAL_RECOVERY_ORDINAL_REQUIRED")
+        if not event.get("authorized_actions"):
+            findings.append("GATE_APPROVAL_AUTHORIZED_ACTIONS_REQUIRED")
+        if not (event.get("decision_ref") or event.get("checkpoint_ref")):
+            findings.append("GATE_APPROVAL_DECISION_REF_REQUIRED")
+    else:
+        if not event.get("evidence_refs"):
+            findings.append("GATE_APPROVAL_EVIDENCE_REFS_REQUIRED")
+        if not event.get("evidence_digests"):
+            findings.append("GATE_APPROVAL_EVIDENCE_DIGESTS_REQUIRED")
+        if not str(event.get("acknowledgement_decision") or "").strip():
+            findings.append("GATE_APPROVAL_ACKNOWLEDGEMENT_DECISION_REQUIRED")
+    return tuple(sorted(set(findings)))
+
+
+def _gate_projection(
+    event: Mapping[str, Any],
+    *,
+    approval_kind: GateApprovalKindV1 | None,
+    checkpoint: str = "",
+    result_ref: str = "",
+    findings: tuple[str, ...] = (),
+) -> CanonicalGateApprovalProjectionV1:
+    scope_version = event.get("scope_version")
+    return CanonicalGateApprovalProjectionV1(
+        event_id=str(event.get("event_id") or ""),
+        approval_kind=str(approval_kind or ""),
+        passage=(
+            not findings
+            and approval_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE
+            and bool(checkpoint)
+            and bool(result_ref)
+        ),
+        checkpoint=checkpoint,
+        result_ref=result_ref,
+        cr_id=str(event.get("cr_id") or ""),
+        work_id=str(event.get("work_id") or ""),
+        scope_version=(
+            scope_version
+            if isinstance(scope_version, int) and not isinstance(scope_version, bool)
+            else 0
+        ),
+        scope_digest=str(event.get("scope_digest") or ""),
+        finding_codes=tuple(sorted(set(findings))),
+    )
+
+
+def _legacy_gate_corrections(
+    events: tuple[Mapping[str, Any], ...],
+    legacy_events: dict[str, Mapping[str, Any]],
+) -> tuple[dict[str, Mapping[str, Any]], tuple[str, ...]]:
+    corrections = [
+        event
+        for event in events
+        if str(event.get("event_type") or "") == _GATE_APPROVAL_CORRECTION_EVENT
+    ]
+    cutovers = [
+        event
+        for event in events
+        if str(event.get("event_type") or "") == _GATE_APPROVAL_CUTOVER_EVENT
+    ]
+    if not corrections and not cutovers:
+        return {}, ()
+    findings: list[str] = []
+    event_ids = [str(event.get("event_id") or "") for event in events]
+    if len(event_ids) != len(set(event_ids)):
+        findings.append("GATE_APPROVAL_EVENT_ID_DUPLICATE")
+    by_original: dict[str, Mapping[str, Any]] = {}
+    for correction in corrections:
+        original_id = str(correction.get("corrects_event_id") or "")
+        original = legacy_events.get(original_id)
+        try:
+            approval_kind = GateApprovalKindV1(
+                str(correction.get("approval_kind") or "")
+            )
+        except ValueError:
+            approval_kind = None
+        if correction.get("approval_kind_version") != GATE_APPROVAL_KIND_VERSION:
+            findings.append("GATE_APPROVAL_CORRECTION_VERSION_INVALID")
+        if not original_id or original is None:
+            findings.append("GATE_APPROVAL_CORRECTION_TARGET_UNKNOWN")
+            continue
+        if original_id in by_original:
+            findings.append("GATE_APPROVAL_CORRECTION_TARGET_DUPLICATE")
+            continue
+        if approval_kind is None:
+            findings.append("GATE_APPROVAL_CORRECTION_KIND_UNKNOWN")
+            continue
+        expected_kind, expected_checkpoint, expected_result_ref = (
+            _LEGACY_GATE_APPROVAL_MANIFEST_V1[original_id]
+        )
+        if approval_kind is not expected_kind:
+            findings.append("GATE_APPROVAL_CORRECTION_KIND_MISMATCH")
+        if str(correction.get("original_event_digest") or "") != canonical_digest(
+            _clean_event(original)
+        ):
+            findings.append("GATE_APPROVAL_CORRECTION_DIGEST_MISMATCH")
+        if (
+            str(correction.get("cr_id") or "") != str(original.get("cr_id") or "")
+            or str(correction.get("work_id") or "")
+            != str(original.get("work_id") or "")
+        ):
+            findings.append("GATE_APPROVAL_CORRECTION_CROSSES_TARGET")
+        if approval_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE and (
+            str(correction.get("checkpoint") or "").upper() != expected_checkpoint
+            or str(correction.get("result_ref") or "") != expected_result_ref
+        ):
+            findings.append("GATE_APPROVAL_CORRECTION_PASSAGE_BINDING_MISMATCH")
+        by_original[original_id] = correction
+    if len(cutovers) != 1:
+        findings.append("GATE_APPROVAL_CUTOVER_NOT_UNIQUE")
+        return {}, tuple(sorted(set(findings)))
+    cutover = cutovers[0]
+    correction_ids = sorted(
+        str(correction.get("event_id") or "") for correction in corrections
+    )
+    source_events = [
+        _clean_event(event)
+        for event in events
+        if str(event.get("event_type") or "")
+        not in {_GATE_APPROVAL_CORRECTION_EVENT, _GATE_APPROVAL_CUTOVER_EVENT}
+    ]
+    manifest = [
+        {
+            "event_id": event_id,
+            "approval_kind": str(kind),
+            "checkpoint": checkpoint,
+            "result_ref": result_ref,
+        }
+        for event_id, (kind, checkpoint, result_ref) in sorted(
+            _LEGACY_GATE_APPROVAL_MANIFEST_V1.items()
+        )
+    ]
+    if (
+        cutover.get("approval_kind_version") != GATE_APPROVAL_KIND_VERSION
+        or str(cutover.get("status") or "") != "complete"
+        or int(cutover.get("legacy_event_count") or 0) != len(legacy_events)
+        or int(cutover.get("correction_event_count") or 0) != len(corrections)
+        or sorted(cutover.get("correction_event_ids") or []) != correction_ids
+        or str(cutover.get("gate_ledger_preimage_digest") or "")
+        != canonical_digest(source_events)
+        or str(cutover.get("legacy_manifest_digest") or "")
+        != canonical_digest(manifest)
+        or not str(cutover.get("plan_digest") or "")
+    ):
+        findings.append("GATE_APPROVAL_CUTOVER_BINDING_INVALID")
+    if set(by_original) != set(_LEGACY_GATE_APPROVAL_MANIFEST_V1):
+        findings.append("GATE_APPROVAL_CUTOVER_PARTIAL")
+    if findings:
+        return {}, tuple(sorted(set(findings)))
+    return by_original, ()
+
+
+def project_gate_approvals(
+    events: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
+) -> tuple[CanonicalGateApprovalProjectionV1, ...]:
+    """投影 typed 与精确 legacy approval，禁止从 gate 文本推断 checkpoint。"""
+
+    source = tuple(events)
+    approvals = [
+        event
+        for event in source
+        if str(event.get("event_type") or "") == "human_gate_approval"
+    ]
+    legacy_events = {
+        str(event.get("event_id") or ""): event
+        for event in approvals
+        if event.get("approval_kind_version") is None
+        and str(event.get("event_id") or "") in _LEGACY_GATE_APPROVAL_MANIFEST_V1
+    }
+    legacy_corrections, correction_findings = _legacy_gate_corrections(
+        source, legacy_events
+    )
+    migration_present = any(
+        str(event.get("event_type") or "")
+        in {_GATE_APPROVAL_CORRECTION_EVENT, _GATE_APPROVAL_CUTOVER_EVENT}
+        for event in source
+    )
+    projections: list[CanonicalGateApprovalProjectionV1] = []
+    for event in approvals:
+        event_id = str(event.get("event_id") or "")
+        if event.get("approval_kind_version") is not None:
+            findings = _typed_gate_approval_findings(event)
+            try:
+                approval_kind = GateApprovalKindV1(
+                    str(event.get("approval_kind") or "")
+                )
+            except ValueError:
+                approval_kind = None
+            checkpoint = (
+                str(event.get("checkpoint") or "").upper()
+                if approval_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE
+                else ""
+            )
+            result_ref = (
+                str(event.get("result_ref") or "")
+                if approval_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE
+                else ""
+            )
+            projections.append(
+                _gate_projection(
+                    event,
+                    approval_kind=approval_kind,
+                    checkpoint=checkpoint,
+                    result_ref=result_ref,
+                    findings=findings,
+                )
+            )
+            continue
+        manifest_entry = _LEGACY_GATE_APPROVAL_MANIFEST_V1.get(event_id)
+        if manifest_entry is None:
+            findings = ["GATE_APPROVAL_LEGACY_UNKNOWN"]
+            if (
+                str(event.get("decision") or "").lower() != "approve"
+                or str(event.get("status") or "").lower() != "approved"
+                or not str(event.get("cr_id") or "")
+                or not str(event.get("work_id") or "")
+            ):
+                findings.append("GATE_APPROVAL_LEGACY_BINDING_INVALID")
+            projections.append(
+                _gate_projection(
+                    event,
+                    approval_kind=None,
+                    findings=tuple(findings),
+                )
+            )
+            continue
+        approval_kind, checkpoint, result_ref = manifest_entry
+        findings = list(correction_findings)
+        if (
+            str(event.get("decision") or "").lower() != "approve"
+            or str(event.get("status") or "").lower() != "approved"
+            or not str(event.get("cr_id") or "")
+            or not str(event.get("work_id") or "")
+        ):
+            findings.append("GATE_APPROVAL_LEGACY_BINDING_INVALID")
+        if migration_present and event_id not in legacy_corrections:
+            findings.append("GATE_APPROVAL_CUTOVER_PARTIAL")
+        projections.append(
+            _gate_projection(
+                event,
+                approval_kind=approval_kind,
+                checkpoint=checkpoint,
+                result_ref=result_ref,
+                findings=tuple(findings),
+            )
+        )
+    return tuple(projections)
+
+
+def build_gate_approval_kind_migration_plan(
+    events: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
+    *,
+    decision_ref: str,
+) -> dict[str, Any]:
+    """生成 16 correction + 1 cutover 的纯内存计划，永远不写 ledger。"""
+
+    source = tuple(events)
+    legacy = {
+        str(event.get("event_id") or ""): event
+        for event in source
+        if str(event.get("event_type") or "") == "human_gate_approval"
+        and event.get("approval_kind_version") is None
+    }
+    blockers: list[str] = []
+    legacy_rows = [
+        event
+        for event in source
+        if str(event.get("event_type") or "") == "human_gate_approval"
+        and event.get("approval_kind_version") is None
+    ]
+    if len(legacy) != len(legacy_rows):
+        blockers.append("LEGACY_GATE_APPROVAL_ID_DUPLICATE")
+    if set(legacy) != set(_LEGACY_GATE_APPROVAL_MANIFEST_V1):
+        blockers.append("LEGACY_GATE_APPROVAL_MANIFEST_MISMATCH")
+    if any(
+        str(event.get("event_type") or "")
+        in {_GATE_APPROVAL_CORRECTION_EVENT, _GATE_APPROVAL_CUTOVER_EVENT}
+        for event in source
+    ):
+        blockers.append("GATE_APPROVAL_MIGRATION_ALREADY_PRESENT")
+    manifest = [
+        {
+            "event_id": event_id,
+            "approval_kind": str(kind),
+            "checkpoint": checkpoint,
+            "result_ref": result_ref,
+        }
+        for event_id, (kind, checkpoint, result_ref) in sorted(
+            _LEGACY_GATE_APPROVAL_MANIFEST_V1.items()
+        )
+    ]
+    if blockers:
+        return {
+            "schema_version": 1,
+            "kind": "GateApprovalKindMigrationPlanV1",
+            "decision": "BLOCKED",
+            "dry_run": True,
+            "mutation_count": 0,
+            "classification_counts": {},
+            "planned_append_count": 0,
+            "append_events": [],
+            "blockers": sorted(set(blockers)),
+            "gate_ledger_preimage_digest": canonical_digest(
+                [_clean_event(event) for event in source]
+            ),
+            "legacy_manifest_digest": canonical_digest(manifest),
+            "plan_digest": "",
+        }
+    corrections: list[dict[str, Any]] = []
+    counts = {kind.value: 0 for kind in GateApprovalKindV1}
+    for index, (event_id, (approval_kind, checkpoint, result_ref)) in enumerate(
+        sorted(_LEGACY_GATE_APPROVAL_MANIFEST_V1.items()), 1
+    ):
+        original = legacy[event_id]
+        counts[approval_kind.value] += 1
+        correction: dict[str, Any] = {
+            "event_id": f"GATE-APPROVAL-KIND-CORRECTION-{index:02d}-V1",
+            "event_type": _GATE_APPROVAL_CORRECTION_EVENT,
+            "gate": "GATE_APPROVAL_KIND_V1_MIGRATION",
+            "status": "corrected",
+            "approval_kind_version": GATE_APPROVAL_KIND_VERSION,
+            "approval_kind": approval_kind.value,
+            "corrects_event_id": event_id,
+            "original_event_digest": canonical_digest(_clean_event(original)),
+            "cr_id": str(original.get("cr_id") or ""),
+            "work_id": str(original.get("work_id") or ""),
+            "decision_ref": decision_ref,
+        }
+        if approval_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE:
+            correction["checkpoint"] = checkpoint
+            correction["result_ref"] = result_ref
+        corrections.append(correction)
+    preimage_digest = canonical_digest([_clean_event(event) for event in source])
+    manifest_digest = canonical_digest(manifest)
+    plan_seed = {
+        "schema_version": 1,
+        "kind": "GateApprovalKindMigrationPlanV1",
+        "decision": "READY",
+        "dry_run": True,
+        "mutation_count": 0,
+        "classification_counts": counts,
+        "gate_ledger_preimage_digest": preimage_digest,
+        "legacy_manifest_digest": manifest_digest,
+        "correction_events": corrections,
+        "decision_ref": decision_ref,
+    }
+    plan_digest = canonical_digest(plan_seed)
+    cutover = {
+        "event_id": "GATE-APPROVAL-KIND-CUTOVER-V1",
+        "event_type": _GATE_APPROVAL_CUTOVER_EVENT,
+        "gate": "GATE_APPROVAL_KIND_V1_MIGRATION",
+        "status": "complete",
+        "approval_kind_version": GATE_APPROVAL_KIND_VERSION,
+        "legacy_event_count": len(legacy),
+        "correction_event_count": len(corrections),
+        "correction_event_ids": [
+            str(correction["event_id"]) for correction in corrections
+        ],
+        "gate_ledger_preimage_digest": preimage_digest,
+        "legacy_manifest_digest": manifest_digest,
+        "plan_digest": plan_digest,
+        "decision_ref": decision_ref,
+    }
+    return {
+        **plan_seed,
+        "planned_append_count": len(corrections) + 1,
+        "append_events": [*corrections, cutover],
+        "blockers": [],
+        "plan_digest": plan_digest,
+    }
+
+
 def validate_event_before_append(path: Path, event: Mapping[str, Any], *, ledger_type: str = "") -> dict[str, Any]:
     """Fail before directory creation or file mutation when required fields are absent."""
 
@@ -311,6 +845,10 @@ def validate_event_before_append(path: Path, event: Mapping[str, Any], *, ledger
     if missing:
         unique = ", ".join(dict.fromkeys(missing))
         raise ValueError(f"invalid {resolved_type} event missing required fields: {unique}")
+    if resolved_type == "gate" and event_type == "human_gate_approval":
+        findings = _typed_gate_approval_findings(event)
+        if findings:
+            raise ValueError("invalid gate human approval: " + ", ".join(findings))
     return {key: value for key, value in event.items() if key != "_line_no"}
 
 
