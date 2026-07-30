@@ -19,7 +19,7 @@ from typing import Any
 from meta_flow.project.model import is_safe_ref
 from meta_flow.project.process_route import ProcessRouteError, resolve_process_ref
 from meta_flow.project.scale import load_yaml_object
-from meta_flow.state import checkpoint_projection
+from meta_flow.state import checkpoint_projection, event_ledger
 from meta_flow.workspace.git_sync import query_exact_remote_ref, run_git
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -352,16 +352,20 @@ def _g2_is_canonically_approved(
     ):
         return False
     ledger_path = _resolve_publication_ref(project_root, refs["gate_ledger"])
+    gate_events: list[dict[str, Any]] = []
     for line in ledger_path.read_text(encoding="utf-8").splitlines():
         event = json.loads(line)
+        if isinstance(event, dict):
+            gate_events.append(event)
+    for approval in event_ledger.project_gate_approvals(gate_events):
         if (
-            isinstance(event, dict)
-            and event.get("event_type") == "human_gate_approval"
-            and event.get("status") == "approved"
-            and str(event.get("work_id") or "") == work_id
-            and str(event.get("cr_id") or "") == cr_id
-            and "CP8" in str(event.get("gate") or event.get("checkpoint") or "")
-            and str(event.get("scope_digest") or "") == scope_digest
+            approval.passage
+            and approval.checkpoint == "CP8"
+            and approval.result_ref == refs["cp8_result"]
+            and approval.work_id == work_id
+            and approval.cr_id == cr_id
+            and approval.scope_version == scope_version
+            and approval.scope_digest == scope_digest
         ):
             return True
     return False

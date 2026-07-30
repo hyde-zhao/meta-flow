@@ -21,7 +21,7 @@ from meta_flow.project.process_route import (
     require_process_route,
 )
 from meta_flow.state import checkpoint_projection as canonical_checkpoint_projection
-from meta_flow.state import current
+from meta_flow.state import current, event_ledger
 
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 CR_ID_RE = re.compile(r"CR-\d+")
@@ -1040,26 +1040,43 @@ def validate_native_evidence_projection(project_root: Path, formal: FormalCR) ->
     try:
         gate_ledger = _resolve_runtime_ref(project_root, "process/state/GATE-LEDGER.ndjson")
         if gate_ledger.is_file():
+            gate_events: list[dict[str, Any]] = []
             for line in read_text(gate_ledger).splitlines():
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(event, dict) or not _ledger_event_belongs_to_cr(
-                    event, formal.cr_id
-                ):
+                if isinstance(event, dict):
+                    gate_events.append(event)
+            for approval in event_ledger.project_gate_approvals(gate_events):
+                if approval.cr_id != formal.cr_id:
                     continue
                 if (
-                    event.get("event_type") != "human_gate_approval"
-                    or event.get("status") != "approved"
+                    "GATE_APPROVAL_LEGACY_BINDING_INVALID"
+                    in approval.finding_codes
                 ):
+                    source = next(
+                        (
+                            event
+                            for event in gate_events
+                            if str(event.get("event_id") or "") == approval.event_id
+                        ),
+                        {},
+                    )
+                    checkpoint_match = re.search(
+                        r"CP[0-8]",
+                        str(source.get("checkpoint") or source.get("gate") or "").upper(),
+                    )
+                    if checkpoint_match is not None:
+                        errors.append(
+                            f"{formal.cr_id} Checkpoint Index "
+                            f"{checkpoint_match.group(0)} is stale relative to "
+                            "invalid legacy gate approval binding"
+                        )
                     continue
-                checkpoint_match = re.search(
-                    r"CP[0-8]", str(event.get("gate") or event.get("checkpoint") or "")
-                )
-                if checkpoint_match is None:
+                if not approval.passage:
                     continue
-                checkpoint = checkpoint_match.group(0)
+                checkpoint = approval.checkpoint
                 if checkpoint_projection.get(checkpoint) not in {
                     "APPROVED",
                     "PASS",
@@ -1074,8 +1091,8 @@ def validate_native_evidence_projection(project_root: Path, formal: FormalCR) ->
                 # 记录 approval、但 close 又依赖 approval”的循环。
                 required_rank = number if checkpoint == "CP8" else number + 1
                 observed_progress.append((f"approved gate {checkpoint}", number, required_rank))
-                if event.get("work_id"):
-                    work_ids.add(str(event["work_id"]))
+                if approval.work_id:
+                    work_ids.add(approval.work_id)
 
         projection = canonical_checkpoint_projection.load_checkpoint_projection(
             project_root,

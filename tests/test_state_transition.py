@@ -9,6 +9,46 @@ from pathlib import Path
 
 from meta_flow.checks import state_transition
 from meta_flow.checks.frozen_cp6_evidence import FrozenCp6EvidenceV1
+from meta_flow.state.checkpoint_projection import (
+    CheckpointHeadV1,
+    CheckpointProjectionV1,
+)
+
+
+def cp5_projection(
+    *,
+    cr_id: str = "CR-062",
+    result_ref: str = "process/checks/CP5-CR-062-V5.result.json",
+    decision: str = "PASS",
+) -> CheckpointProjectionV1:
+    result = {
+        "event_id": "CP5-CR-062-V5",
+        "cr_id": cr_id,
+        "checkpoint": "CP5",
+        "decision": decision,
+    }
+    return CheckpointProjectionV1(
+        target_cr_id=cr_id,
+        target_checkpoint="CP5",
+        heads=(
+            CheckpointHeadV1(
+                cr_id=cr_id,
+                checkpoint="CP5",
+                subject_id=cr_id,
+                event_id="CP5-CR-062-V5",
+                result_ref=result_ref,
+                decision=decision,
+                result=result,
+                revision=1,
+                selection_mode="legacy-single",
+                provenance_event_ids=("CP5-CR-062-V5",),
+            ),
+        ),
+        findings=(),
+        selected_event_count=1,
+        loaded_result_refs=(result_ref,),
+        source_event_digest="a" * 64,
+    )
 
 
 def write_route_plan(root: Path) -> Path:
@@ -295,6 +335,142 @@ class StateTransitionTests(unittest.TestCase):
                 for transition in transitions
             )
         )
+
+    def test_cp5_passage_projects_only_dependency_roots_to_dev_ready(self) -> None:
+        payload = {
+            "waves": [
+                {
+                    "stories": [
+                        {
+                            "story_id": "STORY-CR062-S01",
+                            "cr_id": "CR-062",
+                            "status": "lld-ready",
+                            "depends_on": [],
+                            "lld_gate": {"status": "ready"},
+                            "dev_gate": {
+                                "cp5_confirmed": False,
+                                "dependencies_satisfied": True,
+                                "file_conflict_free": True,
+                                "implementation_authorized": False,
+                                "lld_confirmed": False,
+                            },
+                        },
+                        {
+                            "story_id": "STORY-CR062-S02",
+                            "cr_id": "CR-062",
+                            "status": "lld-ready",
+                            "depends_on": ["STORY-CR062-S01"],
+                            "lld_gate": {"status": "ready"},
+                            "dev_gate": {
+                                "cp5_confirmed": False,
+                                "dependencies_satisfied": False,
+                                "file_conflict_free": True,
+                                "implementation_authorized": False,
+                                "lld_confirmed": False,
+                            },
+                        },
+                    ]
+                }
+            ]
+        }
+        result_ref = "process/checks/CP5-CR-062-V5.result.json"
+        projection = cp5_projection(result_ref=result_ref)
+        approval = {
+            "event_id": "GATE-CR062-CP5-V5",
+            "event_type": "human_gate_approval",
+            "cr_id": "CR-062",
+            "work_id": "GOV-006-CONTROL-001",
+            "result_ref": result_ref,
+            "decision": "approve",
+            "status": "approved",
+            "gate": "CP5_ALL_STORIES_LLD",
+            "approval_kind_version": 1,
+            "approval_kind": "checkpoint_passage",
+            "checkpoint": "CP5",
+        }
+
+        projected, transitions = state_transition.project_cp5_development_plan(
+            payload,
+            cr_id="CR-062",
+            projection=projection,
+            gate_events=[approval],
+        )
+
+        stories = {
+            story["story_id"]: story for story in projected["waves"][0]["stories"]
+        }
+        self.assertEqual("dev-ready", stories["STORY-CR062-S01"]["status"])
+        self.assertEqual("lld-approved", stories["STORY-CR062-S02"]["status"])
+        self.assertTrue(
+            stories["STORY-CR062-S01"]["dev_gate"]["implementation_authorized"]
+        )
+        self.assertFalse(
+            stories["STORY-CR062-S02"]["dev_gate"]["implementation_authorized"]
+        )
+        self.assertEqual(2, len(transitions))
+        self.assertEqual("lld-ready", payload["waves"][0]["stories"][0]["status"])
+
+        replayed, replay_transitions = state_transition.project_cp5_development_plan(
+            projected,
+            cr_id="CR-062",
+            projection=projection,
+            gate_events=[approval],
+        )
+        self.assertEqual(projected, replayed)
+        self.assertEqual((), replay_transitions)
+
+    def test_cp5_projection_rejects_non_passage_or_duplicate_approval(self) -> None:
+        payload = {
+            "waves": [
+                {
+                    "stories": [
+                        {
+                            "story_id": "STORY-CR062-S01",
+                            "cr_id": "CR-062",
+                            "status": "lld-ready",
+                            "depends_on": [],
+                            "lld_gate": {"status": "ready"},
+                            "dev_gate": {},
+                        }
+                    ]
+                }
+            ]
+        }
+        result_ref = "process/checks/CP5-CR-062-V5.result.json"
+        projection = cp5_projection(result_ref=result_ref)
+        passage = {
+            "event_id": "GATE-CR062-CP5-V5",
+            "event_type": "human_gate_approval",
+            "cr_id": "CR-062",
+            "work_id": "GOV-006-CONTROL-001",
+            "result_ref": result_ref,
+            "decision": "approve",
+            "status": "approved",
+            "gate": "CP5_ALL_STORIES_LLD",
+            "approval_kind_version": 1,
+            "approval_kind": "checkpoint_passage",
+            "checkpoint": "CP5",
+        }
+        scope_amendment = {
+            **passage,
+            "event_id": "GATE-CR062-SCOPE-V1",
+            "approval_kind": "scope_amendment",
+            "scope_version": 5,
+            "scope_digest": "b" * 64,
+            "authorized_actions": ["add-one-leaf"],
+            "decision_ref": "process/checkpoints/CP3-CR-062.md",
+        }
+        for gate_events in ([scope_amendment], [passage, dict(passage)]):
+            with self.subTest(event_count=len(gate_events)), self.assertRaisesRegex(
+                ValueError,
+                "exactly one approval bound to canonical head",
+            ):
+                state_transition.project_cp5_development_plan(
+                    payload,
+                    cr_id="CR-062",
+                    projection=projection,
+                    gate_events=gate_events,
+                )
 
     def test_cp6_pass_projects_story_and_only_satisfied_downstream_to_dev_ready(
         self,
