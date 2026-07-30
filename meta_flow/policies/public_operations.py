@@ -48,6 +48,7 @@ AUTHORIZATION_MODES = {
     "typed-user-confirmation",
 }
 PUBLIC_OPERATION_ENTRIES = {
+    "cp.projection": ("meta-flow", "cp", "projection"),
     "event.append": ("meta-flow", "event", "append"),
     "story.project-cp6": ("meta-flow", "story", "project-cp6"),
     "context.read-log": ("meta-flow", "context", "read-log"),
@@ -58,6 +59,8 @@ PUBLIC_OPERATION_ENTRIES = {
     "public-operations.check": ("meta-flow", "cr", "public-operations-check"),
     "repository.commit": ("meta-flow", "repository", "commit"),
     "repository.push": ("meta-flow", "repository", "push"),
+    "route.c0-cutover-plan": ("meta-flow", "route", "c0-cutover-plan"),
+    "route.c0-cutover-apply": ("meta-flow", "route", "c0-cutover-apply"),
     "human-gate.ask-user": ("meta-flow", "ask-user", "human-gate"),
     "human-gate.check": ("meta-flow", "check", "human-gate"),
 }
@@ -92,8 +95,7 @@ class PublicOperationPathContractV1:
             missing = sorted(PATH_CONTRACT_FIELDS - set(payload))
             extra = sorted(set(payload) - PATH_CONTRACT_FIELDS)
             raise ValueError(
-                f"{operation} path contract fields mismatch: "
-                f"missing={missing}, extra={extra}"
+                f"{operation} path contract fields mismatch: missing={missing}, extra={extra}"
             )
         raw_arguments = payload.get("logical_process_arguments")
         if (
@@ -104,9 +106,7 @@ class PublicOperationPathContractV1:
             )
             or len(set(raw_arguments)) != len(raw_arguments)
         ):
-            raise ValueError(
-                f"{operation} logical_process_arguments must be unique CLI flags"
-            )
+            raise ValueError(f"{operation} logical_process_arguments must be unique CLI flags")
         contract = cls(
             binding_mode=str(payload["binding_mode"]),
             project_root_argument=str(payload["project_root_argument"]),
@@ -118,34 +118,22 @@ class PublicOperationPathContractV1:
         if contract.binding_mode not in {"required", "not-applicable"}:
             raise ValueError(f"{operation} has invalid binding_mode")
         if contract.project_root_argument != "--project-root":
-            raise ValueError(
-                f"{operation} project_root_argument must be --project-root"
-            )
+            raise ValueError(f"{operation} project_root_argument must be --project-root")
         if type(contract.absolute_process_path_limit) is not int:
-            raise ValueError(
-                f"{operation} absolute_process_path_limit must be one integer"
-            )
+            raise ValueError(f"{operation} absolute_process_path_limit must be one integer")
         if contract.absolute_process_path_limit != 0:
-            raise ValueError(
-                f"{operation} absolute_process_path_limit must be 0"
-            )
+            raise ValueError(f"{operation} absolute_process_path_limit must be 0")
         if contract.binding_mode == "required":
             if contract.resolved_path_visibility != "internal-only":
-                raise ValueError(
-                    f"{operation} resolved_path_visibility must be internal-only"
-                )
+                raise ValueError(f"{operation} resolved_path_visibility must be internal-only")
             if contract.persisted_process_ref_mode != "logical-only":
-                raise ValueError(
-                    f"{operation} persisted_process_ref_mode must be logical-only"
-                )
+                raise ValueError(f"{operation} persisted_process_ref_mode must be logical-only")
         elif (
             contract.logical_process_arguments
             or contract.resolved_path_visibility != "not-applicable"
             or contract.persisted_process_ref_mode != "not-applicable"
         ):
-            raise ValueError(
-                f"{operation} not-applicable binding cannot declare process refs"
-            )
+            raise ValueError(f"{operation} not-applicable binding cannot declare process refs")
         return contract
 
     def as_dict(self) -> dict[str, Any]:
@@ -178,9 +166,7 @@ class PublicOperationContractV2:
         if set(payload) != CONTRACT_FIELDS:
             missing = sorted(CONTRACT_FIELDS - set(payload))
             extra = sorted(set(payload) - CONTRACT_FIELDS)
-            raise ValueError(
-                f"public operation fields mismatch: missing={missing}, extra={extra}"
-            )
+            raise ValueError(f"public operation fields mismatch: missing={missing}, extra={extra}")
         entry = payload.get("entry")
         if (
             not isinstance(entry, list)
@@ -210,8 +196,7 @@ class PublicOperationContractV2:
             raise ValueError(f"{contract.operation} entry must start with meta-flow")
         if contract.mutation_mode not in MUTATION_MODES:
             raise ValueError(
-                f"{contract.operation} has invalid mutation_mode: "
-                f"{contract.mutation_mode}"
+                f"{contract.operation} has invalid mutation_mode: {contract.mutation_mode}"
             )
         if contract.authorization_mode not in AUTHORIZATION_MODES:
             raise ValueError(
@@ -219,15 +204,11 @@ class PublicOperationContractV2:
                 f"{contract.authorization_mode}"
             )
         if not contract.input_version or not contract.output_version:
-            raise ValueError(
-                f"{contract.operation} input/output versions must be non-empty"
-            )
+            raise ValueError(f"{contract.operation} input/output versions must be non-empty")
         if "." not in contract.projector:
             raise ValueError(f"{contract.operation} projector must be module-qualified")
         if contract.l3_journey not in L3_JOURNEYS:
-            raise ValueError(
-                f"{contract.operation} has invalid l3_journey: {contract.l3_journey}"
-            )
+            raise ValueError(f"{contract.operation} has invalid l3_journey: {contract.l3_journey}")
         return contract
 
     def as_dict(self) -> dict[str, Any]:
@@ -319,9 +300,7 @@ def validate_public_operations(
     undocumented = sorted(set(PUBLIC_OPERATION_ENTRIES) - set(by_id))
     unknown = sorted(set(by_id) - set(PUBLIC_OPERATION_ENTRIES))
     if undocumented:
-        errors.append(
-            "undocumented public operations: " + ", ".join(undocumented)
-        )
+        errors.append("undocumented public operations: " + ", ".join(undocumented))
     if unknown:
         errors.append("unknown registry operations: " + ", ".join(unknown))
     for operation, expected_entry in PUBLIC_OPERATION_ENTRIES.items():
@@ -353,9 +332,7 @@ def validate_public_operations(
                     }
                 )
                 if completed.returncode != 0:
-                    errors.append(
-                        f"{contract.operation} public entry is not executable"
-                    )
+                    errors.append(f"{contract.operation} public entry is not executable")
                 elif (
                     contract.path_contract.binding_mode == "required"
                     and contract.path_contract.project_root_argument
@@ -387,9 +364,7 @@ def validate_public_operations(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="meta-flow cr public-operations-check"
-    )
+    parser = argparse.ArgumentParser(prog="meta-flow cr public-operations-check")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY_REL)
     parser.add_argument("--skip-console", action="store_true")

@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -14,8 +15,12 @@ from meta_flow.checks import state_transition
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS
 from meta_flow.context_pack import read_expansion
 from meta_flow.policies import failure_routing
-from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
-from meta_flow.state import event_ledger
+from meta_flow.project.process_route import (
+    ProcessRouteError,
+    _resolve_runtime_path,
+    _resolve_runtime_ref,
+)
+from meta_flow.state import checkpoint_projection, event_ledger
 from meta_flow.state.current import now_utc
 
 CHECKPOINT_LEDGER_REL = Path("process/state/CHECKPOINT-LEDGER.ndjson")
@@ -49,7 +54,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _rel(project_root: Path, path: Path) -> str:
@@ -72,7 +79,9 @@ def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
         try:
             process_relative = resolved.relative_to(process_root)
         except ValueError as exc:
-            raise ValueError("runtime path is outside the release and bound process repositories") from exc
+            raise ValueError(
+                "runtime path is outside the release and bound process repositories"
+            ) from exc
         return f"process/{process_relative.as_posix()}"
 
 
@@ -142,7 +151,9 @@ def _validate_cp2_commitments(result: dict[str, Any]) -> list[str]:
             errors.append(f"commitments.required_evidence[{index}] required_stage must be CP7")
         minimum = entry.get("minimum_evidence")
         if minimum is not None and not isinstance(minimum, dict):
-            errors.append(f"commitments.required_evidence[{index}] minimum_evidence must be an object")
+            errors.append(
+                f"commitments.required_evidence[{index}] minimum_evidence must be an object"
+            )
     return errors
 
 
@@ -165,7 +176,13 @@ def _validate_cp7_alignment(result: dict[str, Any]) -> list[str]:
         if status and status not in EVIDENCE_STATUSES:
             errors.append(f"promise_evidence_alignment[{index}] invalid evidence_status: {status}")
         result_value = str(item.get("result") or "")
-        if result_value and result_value not in {"PASS", "FAIL", "BLOCKED", "NEEDS_REVIEW", "PASS_WITH_RISK"}:
+        if result_value and result_value not in {
+            "PASS",
+            "FAIL",
+            "BLOCKED",
+            "NEEDS_REVIEW",
+            "PASS_WITH_RISK",
+        }:
             errors.append(f"promise_evidence_alignment[{index}] invalid result: {result_value}")
         evidence_refs = item.get("evidence_refs") or []
         if evidence_refs and not isinstance(evidence_refs, list):
@@ -173,9 +190,13 @@ def _validate_cp7_alignment(result: dict[str, Any]) -> list[str]:
         if status == "MISSING_REQUIRED_EVIDENCE":
             missing_required_seen = True
             if result_value != "BLOCKED":
-                errors.append(f"promise_evidence_alignment[{index}] missing required evidence must result BLOCKED")
+                errors.append(
+                    f"promise_evidence_alignment[{index}] missing required evidence must result BLOCKED"
+                )
         if status == "EXECUTED_NEGATIVE_RESULT" and not evidence_refs:
-            errors.append(f"promise_evidence_alignment[{index}] executed negative result requires evidence_refs")
+            errors.append(
+                f"promise_evidence_alignment[{index}] executed negative result requires evidence_refs"
+            )
     if missing_required_seen and str(result.get("decision") or "") != "BLOCKED":
         errors.append("CP7 decision must be BLOCKED when required evidence is missing")
     return errors
@@ -214,7 +235,9 @@ def _validate_cp8_fact_diff(result: dict[str, Any]) -> list[str]:
         if status == "MISSING_REQUIRED_EVIDENCE":
             missing_required_seen = True
             if decision_impact != "NOT_READY":
-                errors.append(f"fact_diff[{index}] missing required evidence must have decision_impact NOT_READY")
+                errors.append(
+                    f"fact_diff[{index}] missing required evidence must have decision_impact NOT_READY"
+                )
         if status in {"EXECUTED_NEGATIVE_RESULT", "DEFERRED_FOLLOW_UP", "NEEDS_REVIEW"}:
             risk_seen = True
             if status == "EXECUTED_NEGATIVE_RESULT" and not evidence_refs:
@@ -226,14 +249,22 @@ def _validate_cp8_fact_diff(result: dict[str, Any]) -> list[str]:
     decision = str(result.get("decision") or "")
     if missing_required_seen:
         if decision in {"PASS", "WAIVED"}:
-            errors.append("CP8 decision cannot be PASS/WAIVED when fact_diff has missing required evidence")
+            errors.append(
+                "CP8 decision cannot be PASS/WAIVED when fact_diff has missing required evidence"
+            )
         if release_decision and release_decision != "NOT_READY":
-            errors.append("CP8 release_decision must be NOT_READY when fact_diff has missing required evidence")
+            errors.append(
+                "CP8 release_decision must be NOT_READY when fact_diff has missing required evidence"
+            )
     if release_decision == "READY":
         if risk_seen or ready_with_risk_impact_seen or not_ready_impact_seen:
-            errors.append("CP8 release_decision cannot be READY when fact_diff has risk or not-ready impacts")
+            errors.append(
+                "CP8 release_decision cannot be READY when fact_diff has risk or not-ready impacts"
+            )
     if release_decision == "READY_WITH_RISK" and not_ready_impact_seen:
-        errors.append("CP8 release_decision cannot be READY_WITH_RISK when fact_diff has NOT_READY impacts")
+        errors.append(
+            "CP8 release_decision cannot be READY_WITH_RISK when fact_diff has NOT_READY impacts"
+        )
     return errors
 
 
@@ -256,26 +287,11 @@ def _validate_checker_provenance(result: dict[str, Any]) -> list[str]:
             if not provenance.get(key):
                 errors.append(f"checker_provenance fallback_used=true requires {key}")
     fallback_keys = ("fallback_reason", "fallback_review_ref")
-    if provenance.get("fallback_used") is False and any(provenance.get(key) for key in fallback_keys):
+    if provenance.get("fallback_used") is False and any(
+        provenance.get(key) for key in fallback_keys
+    ):
         errors.append("checker_provenance fallback fields require fallback_used=true")
     return errors
-
-
-def _load_checkpoint_events(root: Path) -> list[dict[str, Any]]:
-    ledger_path = _resolve_runtime_ref(root, CHECKPOINT_LEDGER_REL.as_posix())
-    if not ledger_path.is_file():
-        return []
-    events: list[dict[str, Any]] = []
-    for line in ledger_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            events.append(payload)
-    return events
 
 
 def _load_dispatch_events(root: Path) -> list[dict[str, Any]]:
@@ -352,7 +368,9 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
             event_type = str(event.get("event_type") or "")
             if event_type == "dispatch_not_required":
                 semantic_errors.append("dispatch_not_required is invalid for applicable CP6/CP7")
-            elif event_type == "inline_fallback" and not str(event.get("approved_by") or "").strip():
+            elif (
+                event_type == "inline_fallback" and not str(event.get("approved_by") or "").strip()
+            ):
                 semantic_errors.append("inline fallback requires approved_by")
             elif event_type == "dispatch":
                 if str(event.get("dispatch_mode") or "") == "inline-fallback":
@@ -374,7 +392,10 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
                     for field in ("spawned_at", "resumed_at")
                 ):
                     semantic_errors.append("real dispatch requires spawned_at or resumed_at")
-                if not any(str(candidate.get("dispatch_trigger") or "").strip() for candidate in related_dispatch):
+                if not any(
+                    str(candidate.get("dispatch_trigger") or "").strip()
+                    for candidate in related_dispatch
+                ):
                     semantic_errors.append("real dispatch requires dispatch_trigger")
             if str(event.get("canonical_role") or "") != expected_role:
                 semantic_errors.append(f"canonical_role must be {expected_role}")
@@ -393,9 +414,12 @@ def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:
 def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:
     """Validate new attempt/hash evidence without fabricating legacy facts."""
 
-    if str(result.get("checkpoint") or "") not in {"CP6", "CP7"} or str(result.get("decision") or "") == "N/A":
-        return []
-    findings: list[str] = []
+    findings = _canonical_checkpoint_findings(root, result_path, result)
+    if (
+        str(result.get("checkpoint") or "") not in {"CP6", "CP7"}
+        or str(result.get("decision") or "") == "N/A"
+    ):
+        return findings
     attempt = result.get("check_attempt")
     if not isinstance(attempt, int) or attempt < 1:
         findings.append("LEGACY_ATTEMPT_UNAVAILABLE: check_attempt must be a positive integer")
@@ -403,17 +427,32 @@ def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any])
         ref = str(result.get("supersedes_result_ref") or "")
         previous = _resolve_runtime_path(root, ref) if ref else None
         if not ref or previous is None or not previous.is_file():
-            findings.append("RESULT_SUPERSEDES_MISSING: check_attempt>1 requires existing supersedes_result_ref")
+            findings.append(
+                "RESULT_SUPERSEDES_MISSING: check_attempt>1 requires existing supersedes_result_ref"
+            )
         else:
             try:
                 prior = _read_json(previous)
             except ValueError:
-                findings.append("RESULT_SUPERSEDES_INVALID: supersedes_result_ref is not a result object")
+                findings.append(
+                    "RESULT_SUPERSEDES_INVALID: supersedes_result_ref is not a result object"
+                )
             else:
-                if prior.get("cr_id") != result.get("cr_id") or prior.get("checkpoint") != result.get("checkpoint") or prior.get("story_id") != result.get("story_id"):
-                    findings.append("RESULT_SUPERSEDES_IDENTITY_MISMATCH: prior result must share CR/checkpoint/story")
-                if not isinstance(prior.get("check_attempt"), int) or int(prior["check_attempt"]) >= attempt:
-                    findings.append("RESULT_SUPERSEDES_ORDER_INVALID: prior check_attempt must be smaller")
+                if (
+                    prior.get("cr_id") != result.get("cr_id")
+                    or prior.get("checkpoint") != result.get("checkpoint")
+                    or prior.get("story_id") != result.get("story_id")
+                ):
+                    findings.append(
+                        "RESULT_SUPERSEDES_IDENTITY_MISMATCH: prior result must share CR/checkpoint/story"
+                    )
+                if (
+                    not isinstance(prior.get("check_attempt"), int)
+                    or int(prior["check_attempt"]) >= attempt
+                ):
+                    findings.append(
+                        "RESULT_SUPERSEDES_ORDER_INVALID: prior check_attempt must be smaller"
+                    )
     hashes = result.get("input_artifact_hashes")
     if not isinstance(hashes, dict) or not hashes:
         findings.append("LEGACY_INPUT_HASH_UNAVAILABLE: input_artifact_hashes must be non-empty")
@@ -448,22 +487,60 @@ def _correlation_findings(root: Path, result_path: Path, result: dict[str, Any])
                     dispatch_id,
                 )
             )
-            if "DISPATCH_NOT_FOUND" in projected.finding_codes or "TYPED_ATTEMPT_UNAVAILABLE" in projected.finding_codes:
+            if (
+                "DISPATCH_NOT_FOUND" in projected.finding_codes
+                or "TYPED_ATTEMPT_UNAVAILABLE" in projected.finding_codes
+            ):
                 findings.append(f"FINAL_ATTEMPT_UNAVAILABLE: {dispatch_id}")
                 continue
             if not projected.terminal_success:
                 findings.append(f"FINAL_ATTEMPT_NOT_UNIQUE_SUCCESS: {dispatch_id}")
-    for event in _load_checkpoint_events(root):
-        if str(event.get("result_ref") or "") != _canonical_runtime_ref(root, result_path):
-            continue
-        if str(event.get("decision") or "") != str(result.get("decision") or ""):
-            findings.append("CHECKPOINT_RESULT_DECISION_MISMATCH")
     return findings
 
 
-def _validate_derived_consistency(root: Path, result_path: Path, result: dict[str, Any]) -> list[str]:
+def _canonical_checkpoint_findings(
+    root: Path,
+    result_path: Path,
+    result: Mapping[str, Any],
+) -> list[str]:
+    """只通过 canonical projection 校验 result 的 current-head 身份。"""
+
+    cr_id = str(result.get("cr_id") or "")
+    checkpoint = str(result.get("checkpoint") or result.get("checkpoint_id") or "").upper()
+    if not cr_id or not CHECKPOINT_RE.fullmatch(checkpoint):
+        return []
+    projection = checkpoint_projection.load_checkpoint_projection(
+        root,
+        cr_id=cr_id,
+        checkpoint=checkpoint,
+    )
+    findings = [
+        f"CHECKPOINT_PROJECTION_{finding.code}: {finding.message}"
+        for finding in projection.findings
+    ]
+    result_ref = _canonical_runtime_ref(root, result_path)
+    # Producer 可先校验尚未 append 的新 result；只有 ledger 已引用该 ref 时，
+    # result-check 才对它施加 current-head 身份约束。append 前的图一致性由
+    # preflight_checkpoint_ledger_append 在零写阶段负责。
+    if result_ref not in projection.loaded_result_refs:
+        return findings
+    subject_id = str(result.get("story_id") or "") or cr_id
+    head = projection.head(checkpoint, subject_id=subject_id)
+    if head is None:
+        findings.append(f"CHECKPOINT_CURRENT_HEAD_UNAVAILABLE: {cr_id}/{checkpoint}/{subject_id}")
+    elif head.result_ref != result_ref:
+        findings.append(
+            f"CHECKPOINT_RESULT_NOT_CURRENT_HEAD: expected={head.result_ref}, actual={result_ref}"
+        )
+    elif head.decision != str(result.get("decision") or "").upper():
+        findings.append("CHECKPOINT_RESULT_DECISION_MISMATCH")
+    return findings
+
+
+def _validate_derived_consistency(
+    root: Path, result_path: Path, result: dict[str, Any]
+) -> list[str]:
     errors: list[str] = []
-    rel_result = _canonical_runtime_ref(root, result_path)
     summary_ref = str(result.get("summary_ref") or "")
     summary_path = (
         _resolve_runtime_path(root, summary_ref)
@@ -481,14 +558,6 @@ def _validate_derived_consistency(root: Path, result_path: Path, result: dict[st
             errors.append(f"summary checkpoint does not match result JSON: {summary_path}")
         if cr_id and f"CR: {cr_id}" not in summary_text:
             errors.append(f"summary CR does not match result JSON: {summary_path}")
-    for event in _load_checkpoint_events(root):
-        if str(event.get("result_ref") or "") != rel_result:
-            continue
-        for key in ("checkpoint", "decision", "cr_id", "context_ref", "evidence_ref"):
-            expected = result.get(key)
-            actual = event.get(key)
-            if expected and actual and str(expected) != str(actual):
-                errors.append(f"checkpoint ledger {key} does not match result JSON for {rel_result}")
     errors.extend(_validate_dispatch_refs(root, result))
     cr_index_path = _resolve_runtime_ref(root, "process/changes/CR-INDEX.json")
     if cr_id and cr_index_path.is_file():
@@ -515,7 +584,9 @@ def _validate_derived_consistency(root: Path, result_path: Path, result: dict[st
         else:
             active_change = state.get("active_change")
             if active_change and str(active_change) != cr_id and checkpoint not in {"CP8"}:
-                errors.append(f"STATE.current.json active_change={active_change} differs from CP result cr_id={cr_id}")
+                errors.append(
+                    f"STATE.current.json active_change={active_change} differs from CP result cr_id={cr_id}"
+                )
     return errors
 
 
@@ -529,9 +600,7 @@ def _candidate_route_plan_paths(root: Path, result: dict[str, Any]) -> list[Path
         refs.extend(
             path.relative_to(root).as_posix()
             for path in sorted(
-                _resolve_runtime_ref(root, "process/checks").glob(
-                    f"CP0-*{cr_id}*.route-plan.json"
-                )
+                _resolve_runtime_ref(root, "process/checks").glob(f"CP0-*{cr_id}*.route-plan.json")
             )
             if path.is_file()
         )
@@ -550,7 +619,9 @@ def _validate_post_cp_transition(root: Path, result: dict[str, Any]) -> tuple[li
         return [], ["state-transition skipped: STATE.current.json missing"]
     route_paths = _candidate_route_plan_paths(root, result)
     if not route_paths:
-        return [], ["state-transition skipped: route_plan_ref missing and no CP0 route-plan artifact found"]
+        return [], [
+            "state-transition skipped: route_plan_ref missing and no CP0 route-plan artifact found"
+        ]
     for route_path in route_paths:
         if route_path.is_file():
             return state_transition.validate_transition(
@@ -638,8 +709,13 @@ def validate_cp_result(
         errors.append("waivers must be a list")
     if (blocking_item_seen or blockers) and decision in {"PASS", "PASS_WITH_RISK"}:
         errors.append("decision cannot be PASS/PASS_WITH_RISK when blocking items exist")
-    if decision == "N/A" and not any(result.get(key) for key in ("not_applicable_reason", "route_plan_ref", "checkpoint_applicability")):
-        errors.append("decision=N/A requires not_applicable_reason, route_plan_ref, or checkpoint_applicability")
+    if decision == "N/A" and not any(
+        result.get(key)
+        for key in ("not_applicable_reason", "route_plan_ref", "checkpoint_applicability")
+    ):
+        errors.append(
+            "decision=N/A requires not_applicable_reason, route_plan_ref, or checkpoint_applicability"
+        )
     if decision == "WAIVED" and not waivers:
         errors.append("decision=WAIVED requires waivers")
     if checkpoint == "CP2":
@@ -665,24 +741,40 @@ def validate_cp_result(
             errors.append(f"{checkpoint} result requires dispatch_refs")
     deny_refs = _deny_default_refs(result)
     if deny_refs:
-        read_expansion_refs = [str(item) for item in _as_list(result.get("read_expansion_refs")) if str(item)]
+        read_expansion_refs = [
+            str(item) for item in _as_list(result.get("read_expansion_refs")) if str(item)
+        ]
         if not read_expansion_refs:
             errors.append(
                 "deny-default references require read_expansion_refs: " + ", ".join(deny_refs)
             )
         elif project_root:
-            ledger_events, ledger_errors = read_expansion.load_events(read_expansion.default_ledger_path(root))
+            ledger_events, ledger_errors = read_expansion.load_events(
+                read_expansion.default_ledger_path(root)
+            )
             if ledger_errors:
                 errors.extend(f"read expansion ledger: {error}" for error in ledger_errors)
             event_ids = {str(event.get("event_id") or "") for event in ledger_events}
-            requested_paths = {str(event.get("requested_path") or "") for event in ledger_events if event.get("event_id") in read_expansion_refs}
+            requested_paths = {
+                str(event.get("requested_path") or "")
+                for event in ledger_events
+                if event.get("event_id") in read_expansion_refs
+            }
             missing_events = sorted(set(read_expansion_refs) - event_ids)
             if missing_events:
-                errors.append("read_expansion_refs missing from READ-EXPANSION-LEDGER: " + ", ".join(missing_events))
+                errors.append(
+                    "read_expansion_refs missing from READ-EXPANSION-LEDGER: "
+                    + ", ".join(missing_events)
+                )
             missing_paths = sorted(path for path in deny_refs if path not in requested_paths)
             if missing_paths:
-                errors.append("read_expansion_refs do not cover deny-default refs: " + ", ".join(missing_paths))
-    governance_errors, governance_warnings = failure_routing.validate_result_governance(root, result)
+                errors.append(
+                    "read_expansion_refs do not cover deny-default refs: "
+                    + ", ".join(missing_paths)
+                )
+    governance_errors, governance_warnings = failure_routing.validate_result_governance(
+        root, result
+    )
     errors.extend(governance_errors)
     warnings.extend(governance_warnings)
     for ref_key in ("context_ref", "evidence_ref"):
@@ -752,7 +844,9 @@ def render_summary(result: dict[str, Any]) -> str:
                     f"| fallback_review_ref | {_summary_cell(provenance.get('fallback_review_ref'))} |",
                 ]
             )
-    lines.extend(["", "## Check Items", "", "| ID | Status | Severity | Name |", "|---|---|---|---|"])
+    lines.extend(
+        ["", "## Check Items", "", "| ID | Status | Severity | Name |", "|---|---|---|---|"]
+    )
     for item in _as_list(result.get("items")):
         if not isinstance(item, dict):
             continue
@@ -773,7 +867,9 @@ def render_summary(result: dict[str, Any]) -> str:
         for item in fact_diff:
             if not isinstance(item, dict):
                 continue
-            evidence_refs = ", ".join(str(ref) for ref in _as_list(item.get("evidence_refs"))) or "-"
+            evidence_refs = (
+                ", ".join(str(ref) for ref in _as_list(item.get("evidence_refs"))) or "-"
+            )
             lines.append(
                 "| "
                 + " | ".join(
@@ -802,9 +898,7 @@ def render_summary_file(
     result_path = _resolve_runtime_path(root, result_path)
     result = load_cp_result(result_path)
     output_path = (
-        _resolve_runtime_path(root, output)
-        if output
-        else result_path.with_suffix(".summary.md")
+        _resolve_runtime_path(root, output) if output else result_path.with_suffix(".summary.md")
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_summary(result), encoding="utf-8")
@@ -816,14 +910,17 @@ def build_checkpoint_event(project_root: Path, result_path: Path) -> dict[str, A
     result_path = _resolve_runtime_path(root, result_path)
     result = load_cp_result(result_path)
     checkpoint = str(result.get("checkpoint") or result.get("checkpoint_id") or "")
-    event_id = str(result.get("event_id") or f"{checkpoint}-{result.get('story_id') or result.get('cr_id') or 'global'}")
+    event_id = str(
+        result.get("event_id")
+        or f"{checkpoint}-{result.get('story_id') or result.get('cr_id') or 'global'}"
+    )
     summary_ref = str(result.get("summary_ref") or "")
     summary_path = (
         _resolve_runtime_path(root, summary_ref)
         if summary_ref
         else result_path.with_suffix(".summary.md")
     )
-    return {
+    event = {
         "event_id": event_id,
         "event_type": "checkpoint_result",
         "checkpoint": checkpoint,
@@ -838,9 +935,135 @@ def build_checkpoint_event(project_root: Path, result_path: Path) -> dict[str, A
         "checker_provenance": result.get("checker_provenance"),
         "checked_at": result.get("checked_at") or now_utc(),
     }
+    for field in (
+        "revision",
+        "supersedes_ref",
+        "supersedes_event_id",
+        "supersedes_plan_digest",
+        "cutover_revision",
+    ):
+        value = result.get(field)
+        if value not in (None, ""):
+            event[field] = value
+    return event
 
 
-def append_checkpoint_ledger(project_root: Path, *, result_path: Path, ledger: Path | None = None) -> Path:
+def preflight_checkpoint_ledger_append(
+    project_root: Path,
+    *,
+    result_path: Path,
+    ledger: Path | None = None,
+) -> dict[str, Any]:
+    """在 ledger mutation 前用 canonical projector 验证 replay 与 current head。"""
+
+    root = project_root.resolve()
+    resolved_result_path = _resolve_runtime_path(root, result_path)
+    result = load_cp_result(resolved_result_path)
+    event = build_checkpoint_event(root, resolved_result_path)
+    ledger_path = (
+        _resolve_runtime_path(root, ledger)
+        if ledger
+        else _resolve_runtime_ref(root, CHECKPOINT_LEDGER_REL.as_posix())
+    )
+    events, ledger_errors = event_ledger.load_events(ledger_path)
+    if not ledger_path.is_file():
+        events = []
+        ledger_errors = []
+    if ledger_errors:
+        return {
+            "decision": "BLOCKED",
+            "mutation_count": 0,
+            "blockers": [f"CHECKPOINT_LEDGER_INVALID:{error}" for error in ledger_errors],
+            "event": event,
+            "ledger_path": ledger_path,
+        }
+    matching_ids = [
+        candidate
+        for candidate in events
+        if str(candidate.get("event_id") or "") == str(event["event_id"])
+    ]
+    replay = [
+        candidate
+        for candidate in matching_ids
+        if str(candidate.get("result_ref") or "") == str(event["result_ref"])
+        and str(candidate.get("decision") or "") == str(event.get("decision") or "")
+    ]
+    if matching_ids and len(replay) != 1:
+        return {
+            "decision": "BLOCKED",
+            "mutation_count": 0,
+            "blockers": ["CHECKPOINT_EVENT_ID_DUPLICATE"],
+            "event": event,
+            "ledger_path": ledger_path,
+        }
+    simulated = events if replay else [*events, event]
+    refs, ref_findings = checkpoint_projection.required_result_refs(
+        simulated,
+        cr_id=str(event.get("cr_id") or ""),
+        checkpoint=str(event.get("checkpoint") or ""),
+    )
+    results: dict[str, dict[str, Any]] = {
+        str(event["result_ref"]): dict(result),
+    }
+    load_findings = list(ref_findings)
+    for result_ref in refs:
+        if result_ref in results:
+            continue
+        candidate_path = _resolve_runtime_ref(root, result_ref)
+        if not candidate_path.is_file():
+            load_findings.append(
+                checkpoint_projection.CheckpointFindingV1(
+                    code="RESULT_FILE_MISSING",
+                    message=f"current candidate result 不存在: {result_ref}",
+                    cr_id=str(event.get("cr_id") or ""),
+                    checkpoint=str(event.get("checkpoint") or ""),
+                    result_ref=result_ref,
+                )
+            )
+            continue
+        try:
+            payload = _read_json(candidate_path)
+        except ValueError as exc:
+            load_findings.append(
+                checkpoint_projection.CheckpointFindingV1(
+                    code="RESULT_FILE_INVALID",
+                    message=str(exc),
+                    cr_id=str(event.get("cr_id") or ""),
+                    checkpoint=str(event.get("checkpoint") or ""),
+                    result_ref=result_ref,
+                )
+            )
+            continue
+        results[result_ref] = payload
+    projection = checkpoint_projection.project_checkpoint_events(
+        simulated,
+        results,
+        cr_id=str(event.get("cr_id") or ""),
+        checkpoint=str(event.get("checkpoint") or ""),
+        load_findings=load_findings,
+    )
+    if projection.findings:
+        return {
+            "decision": "BLOCKED",
+            "mutation_count": 0,
+            "blockers": [f"{finding.code}:{finding.message}" for finding in projection.findings],
+            "event": event,
+            "ledger_path": ledger_path,
+            "projection_digest": projection.as_dict()["projection_digest"],
+        }
+    return {
+        "decision": "NO_CHANGE" if replay else "READY",
+        "mutation_count": 0 if replay else 1,
+        "blockers": [],
+        "event": event,
+        "ledger_path": ledger_path,
+        "projection_digest": projection.as_dict()["projection_digest"],
+    }
+
+
+def append_checkpoint_ledger(
+    project_root: Path, *, result_path: Path, ledger: Path | None = None
+) -> Path:
     root = project_root.resolve()
     result_path = _resolve_runtime_path(root, result_path)
     errors, _warnings = validate_cp_result(
@@ -850,16 +1073,19 @@ def append_checkpoint_ledger(project_root: Path, *, result_path: Path, ledger: P
         correlation_profile="compat",
     )
     if errors:
-        raise ValueError(
-            "checkpoint result is invalid; ledger mutation=0: " + "; ".join(errors)
-        )
-    event = build_checkpoint_event(root, result_path)
-    ledger_path = (
-        _resolve_runtime_path(root, ledger)
-        if ledger
-        else _resolve_runtime_ref(root, CHECKPOINT_LEDGER_REL.as_posix())
+        raise ValueError("checkpoint result is invalid; ledger mutation=0: " + "; ".join(errors))
+    preflight = preflight_checkpoint_ledger_append(
+        root,
+        result_path=result_path,
+        ledger=ledger,
     )
-    return event_ledger.append_event(ledger_path, event)
+    if preflight["decision"] == "BLOCKED":
+        raise ValueError(
+            "checkpoint ledger append blocked; mutation=0: " + "; ".join(preflight["blockers"])
+        )
+    if preflight["decision"] == "NO_CHANGE":
+        return preflight["ledger_path"]
+    return event_ledger.append_event(preflight["ledger_path"], preflight["event"])
 
 
 def build_applicability_aggregate(
@@ -945,6 +1171,7 @@ def _print_cp_help() -> None:
         "usage: meta-flow cp <result-check|input-hashes|render-summary|ledger-append|applicability-build|applicability-check> [options]\n\n"
         "Commands:\n"
         "  result-check    Validate a machine-readable CP result JSON.\n"
+        "  projection      Project canonical checkpoint current heads for one CR.\n"
         "  input-hashes    Build native file-byte digests for CP strict correlation.\n"
         "  render-summary  Render a compact Markdown summary from CP result JSON.\n"
         "  ledger-append   Append a checkpoint_result event to CHECKPOINT-LEDGER.ndjson.\n\n"
@@ -952,6 +1179,7 @@ def _print_cp_help() -> None:
         "  applicability-check  Validate a CP8 checkpoint applicability aggregate against its route plan.\n\n"
         "Examples:\n"
         "  meta-flow cp result-check --result process/checks/CP6-STORY.result.json --project-root .\n"
+        "  meta-flow cp projection --project-root . --cr-id CR-063 --checkpoint CP5 --format json\n"
         "  meta-flow cp input-hashes --project-root . --ref process/returns/STORY.CP6.return.json --ref process/evidence/STORY.CP6.index.json\n"
         "  meta-flow cp result-check --result process/checks/CP6-STORY.result.json --project-root . --mode silent\n"
         "  meta-flow cp result-check --result process/checks/CP8-CR.result.json --project-root . --check-consistency\n"
@@ -1007,6 +1235,53 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
+    if command == "projection":
+        parser = argparse.ArgumentParser(prog="meta-flow cp projection")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--cr-id", required=True)
+        parser.add_argument("--checkpoint", default="")
+        parser.add_argument("--format", choices=("json",), default="json")
+        parsed = parser.parse_args(args[1:])
+        try:
+            projection = checkpoint_projection.load_checkpoint_projection(
+                parsed.project_root,
+                cr_id=parsed.cr_id,
+                checkpoint=parsed.checkpoint,
+            )
+        except (OSError, ProcessRouteError, ValueError) as exc:
+            print(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "kind": "CheckpointProjectionV1",
+                        "decision": "BLOCKED",
+                        "target_cr_id": parsed.cr_id,
+                        "target_checkpoint": parsed.checkpoint.upper(),
+                        "findings": [
+                            {
+                                "code": "PROJECTION_INPUT_BLOCKED",
+                                "message": str(exc).replace(
+                                    str(parsed.project_root.resolve()),
+                                    "<release-root>",
+                                ),
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 2
+        print(
+            json.dumps(
+                projection.as_dict(),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0 if projection.decision == "PASS" else 2
     if command == "render-summary":
         parser = argparse.ArgumentParser(prog="meta-flow cp render-summary")
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -1026,7 +1301,32 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--result", dest="result_path", type=Path, required=True)
         parser.add_argument("--ledger", type=Path, default=None)
         parsed = parser.parse_args(args[1:])
-        path = append_checkpoint_ledger(parsed.project_root, result_path=parsed.result_path, ledger=parsed.ledger)
+        try:
+            preflight = preflight_checkpoint_ledger_append(
+                parsed.project_root,
+                result_path=parsed.result_path,
+                ledger=parsed.ledger,
+            )
+            if preflight["decision"] == "BLOCKED":
+                print("Checkpoint Ledger Append: BLOCKED")
+                for blocker in preflight["blockers"]:
+                    print(f"- {blocker}")
+                return 2
+            path = append_checkpoint_ledger(
+                parsed.project_root,
+                result_path=parsed.result_path,
+                ledger=parsed.ledger,
+            )
+        except (OSError, ProcessRouteError, ValueError) as exc:
+            print("Checkpoint Ledger Append: BLOCKED")
+            print(f"- {exc}")
+            return 2
+        if preflight["decision"] == "NO_CHANGE":
+            print(
+                "Checkpoint Ledger Append: NO_CHANGE "
+                f"({_canonical_runtime_ref(parsed.project_root, path)})"
+            )
+            return 0
         print(f"appended: {_canonical_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "applicability-build":
