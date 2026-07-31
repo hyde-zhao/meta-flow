@@ -2,7 +2,7 @@
 name: state-router
 description: >-
   当需要推进工作流状态、回退到上一阶段、查询当前进度、或判断下一步应调用哪个 Agent 时使用。
-  触发词包括：推进、下一步、当前状态、回退、状态查询、继续。
+  触发词包括：推进、下一步、当前状态、回退、状态查询、继续、阶段目标、长期路线、Roadmap。
   适用场景：元工作流全流程的状态管理。
 argument-hint: "可选：指定目标阶段、查询字段或回退原因"
 user-invokable: true
@@ -36,6 +36,7 @@ status: active
 - `workflow_health` 循环 / 卡顿 / 反复回修信号维护
 - CP0-CP8 检查点状态、自动检查结果路径和人工审查结果路径维护
 - CR 跟踪状态查询：汇总 active / blocked 正式 CR、follow-up candidate、spike_candidate 和状态冲突
+- 长期治理与阶段查询：沿 Project/Roadmap/declared Phase 真相链回答阶段目标、下一阶段、长期路线和重叠关系
 - `standard` / `fast-lane` 工作流模式、关键决策门控和同工作流自动子 agent 调度状态维护
 
 ## 前置条件
@@ -52,6 +53,7 @@ status: active
 - `skills/state-router/templates/STATE-TEMPLATE.md`
 - `skills/checkpoint-manager/SKILL.md`
 - `meta-flow check cr-tracking`（若存在）：CR 台账、正式 CR 和 `STATE.current.json.active_change` 一致性预检
+- 长期治理查询按需读取：`process/PROJECT.yaml`、其 `roadmap_ref`、Roadmap 中全部 `phase_refs`，以及 active Phase `result_refs` 中声明的实施计划
 - `process/context/*-CONTEXT.yaml` / `process/context/*.context.json` / `process/context/stories/*.json`：当前阶段上下文胶囊；默认优先读取
 - `process/checks/CP0-*.result.json` 中的 `route_plan`，或正式 CR frontmatter / summary 中的 `cr_type`、`cr_trait_*`、`gate_profile`：用于判定当前 CR 的实际 CP 路径
 - `meta-flow route plan`：当 CP0 result 尚未固化 route_plan，但已有 CR type / trait / gate profile 时，用可执行策略预览或重建 route_plan
@@ -95,6 +97,7 @@ status: active
 - `AGENTS.md` / `rules/AGENTS.md`：阶段定义、人工检查点与角色职责
 - 各阶段产物 frontmatter 与文件存在性：退出条件的事实来源
 - `process/changes/CR-INDEX.json` 与 `process/changes/CR-*-FOLLOW-UP-TRACKING-*.md`：CR 跟踪索引和后续候选台账；`CR-INDEX.yaml` 仅作 legacy read-only fallback
+- `process/PROJECT.yaml`、其 `roadmap_ref` 与 Roadmap 的 `phase_refs`：长期治理和 Phase 状态的机器真相链；project memory 只作线索
 - `context-manifest-builder`：阶段上下文胶囊和最终上下文清单契约；capsule 是默认读取入口，不替代正式产物
 - `scenario-expansion` / `story-planning` / `blueprint-design` / `implementation-design` / `implementation-execution` / `verification-execution` / `quality-review` / `release-readiness`：软件开发工作流新增产物契约；模板存在不代表运行态产物已完成
 
@@ -276,6 +279,25 @@ CP2 升级为 required 的触发条件包括：`cr_type` 为 `product-scope` / `
 5. 若 `STATE.current.json.active_change` 指向已关闭 CR，或与正式 `status=active` 的 CR 不一致，必须先列为 `stale_status_conflicts`；不得因为状态冲突而隐藏 follow-up 台账候选项。
 6. 若存在独立 active CR（例如未占用 follow-up 候选编号的临时 CR），必须要求其在台账或 `CR-INDEX.json` 中建立 `related_active_cr`、`blocked_by`、`superseded_by` 或等价关系，否则列为同步缺口。
 7. 推进建议必须先收敛 active / blocked 正式 CR，再说明哪些 candidate 可启动、哪些必须等待前置 CR、哪些只适合 Spike。
+
+### 2.3 长期治理 / 阶段目标查询
+
+当用户询问“阶段目标”“长期治理”“长期路线”“Roadmap”“下一阶段”“后续如何规划”或“与现有阶段是否重叠”时，state-router 必须使用以下独立查询路径；不得用 CR 盘点、当前 Work、最近对话或 memory 代替：
+
+1. 通过 resolver 读取 `process/PROJECT.yaml`，校验项目身份并取得唯一 `roadmap_ref`。
+2. 只读取该 `roadmap_ref`，按声明顺序取得 `phase_refs`。
+3. 通过 resolver 读取全部 declared `phase_refs`；禁止 sibling discovery、目录扫描、文件名推导或未声明 Phase 扩读。
+4. 核对每个 Phase 的 `status`、`objective`、`work_refs`、`result_refs`，并检查引用缺失、重复 active、项目身份和 schema 冲突。任何冲突返回 `BLOCKED`，不得猜测修复。
+5. 普通阶段查询到第 4 步停止。只有用户需要 active Phase 的详细路线时，才从该 Phase 的 `result_refs` 中读取已声明实施计划，并记录扩读原因；只有边界、重定基或历史决策问题才继续读取治理基线/ADR。
+6. 默认 5 对象查询预算不变；长期路线允许 `PROJECT + ROADMAP + 全部 declared phase_refs` 的有界例外。该例外不授权全部 Work/CR、legacy 或历史对象扩读。
+7. 回答固定分为：
+   - `机器事实`：路径、Phase 顺序、状态、目标和声明引用；
+   - `解释/推断`：当前问题由哪个 Phase/工作流承载；
+   - `建议`：下一 Work、工作流或 Phase 调整，以及不授权边界。
+8. 提议新 Phase 前输出重叠矩阵，至少比较目标结果、进入条件、退出条件、非目标和时间跨度。若候选目标可作为 active/planned Phase 的 Work 或工作流完成，默认复用现有 Phase。
+9. project memory 只用于发现可能的历史线索；memory 不可用不阻塞，memory 与仓库冲突时采用仓库机器事实并报告漂移。
+
+此查询是只读操作，不更新 `STATE.current.json`，不创建 Work/CR/Phase，也不构成实现、Git 或发布授权。
 
 ### 3. 处理回退
 
@@ -518,6 +540,10 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 - [ ] 阻塞状态下返回明确阻塞原因
 - [ ] 状态查询必须列出 active formal CR、blocked formal CR、follow-up candidate、spike_candidate 和 stale_status_conflicts
 - [ ] `meta-flow check cr-tracking` 能识别 `STATE.current.json.active_change` 指向已关闭 CR、多个 active CR、台账候选与正式 CR 文件不同步等问题
+- [ ] 长期路线查询已读取 PROJECT、其 roadmap_ref 和全部 declared phase_refs，并明确显示读取闭包
+- [ ] active Phase 详细计划只从其 result_refs 读取；未执行 sibling discovery 或全历史扩读
+- [ ] 新 Phase 建议包含重叠矩阵；可归入现有 Phase 的目标已路由为 Work/工作流
+- [ ] 长期路线回答已区分机器事实、解释/推断和建议，且未以 memory 覆盖仓库真相
 
 ## 不适用边界
 
@@ -535,6 +561,10 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 - 当存在活跃 `CR-*` 时，应优先收敛变更影响，再判断是否允许推进
 - 当 active CR 命中产品基线重整条件时，必须优先路由到 `requirement-clarification` / `meta-pm` / CP2；CP2 approved 前不得进入 Story 拆解、LLD 设计批次或实现
 - “唯一 active CR”不等于“没有后续 CR 候选”；follow-up tracking 中的 candidate / spike_candidate 必须作为 backlog 显式展示
+- “没有 active Work”不等于“没有 active Phase 或长期路线”；阶段问题必须沿 PROJECT→ROADMAP→全部 declared phase_refs 查询
+- 不要因为 5 对象默认预算而漏掉 Roadmap 声明的第 4 个 Phase；使用声明闭包的有界例外，同时禁止 sibling discovery
+- 不要把实施步骤、Wave 或短期 CR 直接升格为长期 Phase；先做重叠矩阵，优先归入现有 Phase 的 Work/工作流
+- 不要让 project memory、旧 HLD 或最近一次会话摘要替代当前 Project/Roadmap/Phase 机器事实
 - 当 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计时，必须先形成 CR 影响范围的 `lld_design_batch`，批次确认前不得进入开发
 - 首次初始化时只允许从 `skills/state-router/templates/STATE-TEMPLATE.md` 复制，不允许凭空脑补字段
 - 首次初始化时不要直接 `mkdir process` 后写 `STATE.md`；外置模式必须先建立 artifact 目录和软链接。`workspace link` 创建后出现 `state_missing` 是新项目的正常下一步，不代表可以跳过 STATE 初始化。
