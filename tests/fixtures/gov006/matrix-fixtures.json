@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "registry_ref": "tests/fixtures/gov006/CASE-REGISTRY.json",
+  "contract": {
+    "operations": [
+      "cli.install",
+      "cli.upgrade",
+      "cli.uninstall",
+      "assets.install",
+      "assets.upgrade",
+      "assets.uninstall",
+      "lifecycle.recover"
+    ],
+    "decisions": ["READY", "NOOP", "BLOCKED"],
+    "checkpoints": [
+      "C1_REQUEST_SCOPE",
+      "C2_SOURCE_IDENTITY",
+      "C3_TARGET_IDENTITY",
+      "C4_PLAN_DIGEST"
+    ],
+    "ownership_types": ["managed_block", "exact_file", "exact_leaf_set"],
+    "journal_states": [
+      "planned",
+      "authorized",
+      "applying",
+      "applied",
+      "rollback_pending",
+      "rolled_back",
+      "partial",
+      "blocked",
+      "receipt_missing",
+      "abandoned"
+    ],
+    "recovery_actions": ["inspect", "resume", "rollback", "abandon"],
+    "result_protocol": [
+      "case_id",
+      "semantic_id",
+      "decision",
+      "terminal",
+      "mutation_count",
+      "authorization_count",
+      "transaction_count",
+      "portable_refs_only"
+    ]
+  },
+  "semantic_profiles": [
+    {"semantic_id":"LIF-01","driver":"cli_executor","expected_terminal":"applied-or-blocked"},
+    {"semantic_id":"LIF-02","driver":"cli_executor","expected_terminal":"noop-or-applied"},
+    {"semantic_id":"LIF-03","driver":"cli_executor","expected_terminal":"noop-or-applied"},
+    {"semantic_id":"LIF-04","driver":"recovery","expected_terminal":"partial-or-recovered"},
+    {"semantic_id":"LIF-05","driver":"asset_executor","expected_terminal":"applied-or-blocked"},
+    {"semantic_id":"LIF-06","driver":"migration","expected_terminal":"noop-or-applied"},
+    {"semantic_id":"LIF-07","driver":"migration","expected_terminal":"noop-or-applied"},
+    {"semantic_id":"LIF-08","driver":"recovery","expected_terminal":"partial-or-recovered"},
+    {"semantic_id":"LIF-09","driver":"migration","expected_terminal":"normalized"},
+    {"semantic_id":"MAN-01","driver":"canonical_contract","expected_terminal":"validated-or-blocked"},
+    {"semantic_id":"MAN-02","driver":"canonical_contract","expected_terminal":"stable"},
+    {"semantic_id":"MAN-03","driver":"source_identity","expected_terminal":"validated-or-blocked"},
+    {"semantic_id":"MAN-04","driver":"authorization","expected_terminal":"claimed-or-blocked"},
+    {"semantic_id":"MAN-05","driver":"manifest_recovery","expected_terminal":"validated-or-blocked"},
+    {"semantic_id":"MAN-06","driver":"migration","expected_terminal":"migrated-or-blocked"},
+    {"semantic_id":"MAN-07","driver":"migration","expected_terminal":"blocked"},
+    {"semantic_id":"MAN-08","driver":"recovery","expected_terminal":"receipt-missing"},
+    {"semantic_id":"OWN-01","driver":"asset_executor","expected_terminal":"blocked"},
+    {"semantic_id":"OWN-02","driver":"asset_executor","expected_terminal":"blocked"},
+    {"semantic_id":"OWN-03","driver":"asset_executor","expected_terminal":"preserved"},
+    {"semantic_id":"OWN-04","driver":"asset_executor","expected_terminal":"exact-removal"},
+    {"semantic_id":"OWN-05","driver":"asset_executor","expected_terminal":"blocked"},
+    {"semantic_id":"OWN-06","driver":"ownership","expected_terminal":"blocked"},
+    {"semantic_id":"OWN-07","driver":"asset_executor","expected_terminal":"blocked"},
+    {"semantic_id":"OWN-08","driver":"ownership","expected_terminal":"blocked-or-partial"},
+    {"semantic_id":"RUL-01","driver":"rules_inventory","expected_terminal":"complete"},
+    {"semantic_id":"RUL-02","driver":"rules_equivalence","expected_terminal":"equivalent"},
+    {"semantic_id":"RUL-03","driver":"asset_executor","expected_terminal":"blocked"},
+    {"semantic_id":"RUL-04","driver":"asset_executor","expected_terminal":"blocked"},
+    {"semantic_id":"RUL-05","driver":"recovery","expected_terminal":"partial-or-recovered"},
+    {"semantic_id":"RUL-06","driver":"asset_executor","expected_terminal":"exact-cleanup"},
+    {"semantic_id":"RUL-07","driver":"asset_executor","expected_terminal":"outside-preserved"},
+    {"semantic_id":"FIX-F3","driver":"isolated_fixture","expected_terminal":"isolated"},
+    {"semantic_id":"FIX-F4","driver":"isolated_fixture","expected_terminal":"isolated"}
+  ]
+}

@@ -1,7 +1,48 @@
 {
   "version": 1,
   "format": "json-compatible-yaml",
-  "last_verified": "2026-04-28",
+  "last_verified": "2026-07-31",
+  "installation_lifecycle": {
+    "contract_version": "InstallationLifecycleV2",
+    "qualified_host_platforms": ["linux"],
+    "qualified_asset_platforms": ["codex", "claude"],
+    "public_intents": [
+      "install",
+      "upgrade",
+      "uninstall",
+      "reinstall",
+      "recover",
+      "version"
+    ],
+    "canonical_operations": [
+      "cli.install",
+      "cli.upgrade",
+      "cli.uninstall",
+      "assets.install",
+      "assets.upgrade",
+      "assets.uninstall",
+      "lifecycle.recover"
+    ],
+    "reinstall_normalization": {
+      "operation": "*.upgrade",
+      "force_refresh": true,
+      "transaction_count": 1,
+      "authorization_count": 1
+    },
+    "ownership_types": ["managed_block", "exact_file", "exact_leaf_set"],
+    "recovery_actions": ["inspect", "resume", "rollback", "abandon"],
+    "unsupported_qualification_claims": {
+      "windows": "not-qualified",
+      "openclaw": "legacy-adapter-only",
+      "qoder": "legacy-adapter-only"
+    },
+    "source_refs": {
+      "canonical_contract": "meta_flow/installation/contracts.py",
+      "platform_adapter": "delivery/scripts/install.py",
+      "cli_bootstrap": "delivery/scripts/install-cli.py",
+      "case_registry": "tests/fixtures/gov006/CASE-REGISTRY.json"
+    }
+  },
   "contracts": {
     "claude": {
       "source": "project convention",
