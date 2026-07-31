@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "delivery/rules/AGENTS.md",
+  "required_dimensions": ["process-routing", "safety-preflight", "authorization", "workflow-gates", "story-execution", "platform-path", "detail-contract", "duplicate-prose"],
+  "coverage": {"old_line_count": 347, "mapped_line_count": 347, "unmapped_line_count": 0, "ambiguous_line_count": 0, "not_equivalent_count": 0},
+  "mappings": [
+    {"id": "EQ-01", "old_lines": [1, 18], "dimension": "process-routing", "mode": "keep", "canonical_ref": "# 0. 权威边界", "failure_action": "BLOCKED"},
+    {"id": "EQ-02", "old_lines": [19, 46], "dimension": "safety-preflight", "mode": "keep", "canonical_ref": "# 1. 先验检查（任何危险动作前）", "failure_action": "BLOCKED"},
+    {"id": "EQ-03", "old_lines": [47, 84], "dimension": "authorization", "mode": "keep", "canonical_ref": "# 2. 授权、风险与 Git", "failure_action": "BLOCKED"},
+    {"id": "EQ-04", "old_lines": [85, 137], "dimension": "workflow-gates", "mode": "keep", "canonical_ref": "# 3. Work、上下文与门禁", "failure_action": "BLOCKED"},
+    {"id": "EQ-05", "old_lines": [138, 202], "dimension": "story-execution", "mode": "keep", "canonical_ref": "# 4. Story 设计与实现", "failure_action": "BLOCKED"},
+    {"id": "EQ-06", "old_lines": [203, 246], "dimension": "platform-path", "mode": "keep", "canonical_ref": "# 5. 平台、安装与交付", "failure_action": "BLOCKED"},
+    {"id": "EQ-07", "old_lines": [247, 302], "dimension": "detail-contract", "mode": "delegate", "canonical_ref": "delivery/rules/AGENT-SKILL-CONTRACT.md", "failure_action": "BLOCKED"},
+    {"id": "EQ-08", "old_lines": [303, 347], "dimension": "duplicate-prose", "mode": "deduplicate", "canonical_ref": "# 0. 权威边界", "failure_action": "BLOCKED"}
+  ],
+  "fallback_bundle": {"S01-SW-01": "PASS", "S01-SW-02": "PASS", "S01-SW-03": "PASS", "S01-SW-04": "PASS", "decision": "ELIGIBLE_FOR_FALLBACK"},
+  "render": {"line_threshold": {"recommended": 180, "fallback": 200}, "byte_threshold": {"recommended": 24576, "fallback": 32768}, "actual": {"line_count": 58, "sha256": "023c82c2be5b0ed756e0e1da7c2e0bf97b7573a192289e076b20f97b18785fcc"}, "dynamic_fields_in_managed_bytes": false, "digest_algorithm": "meta_flow.project.onboarding_contract.path_digest"},
+  "replace_policy": {"requires": ["inventory_complete", "equivalence_pass", "threshold_pass", "two_render_digest_match"], "on_failure": "mutation=0; preserve preimage bytes"}
+}

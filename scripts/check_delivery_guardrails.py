@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -21,7 +23,65 @@ PROCESS_ROOT = ROOT / "process"
 CHANGE_ROOT = PROCESS_ROOT / "changes"
 PLATFORM_CONTRACTS = DELIVERY_ROOT / "doc" / "PLATFORM-CONTRACTS.yaml"
 ALLOWED_DELIVERY_DIRS = {"agents", "doc", "rules", "scripts", "skills"}
-ALLOWED_DELIVERY_SCRIPT_FILES = {"install.py", "install.sh", "install.ps1"}
+ALLOWED_DELIVERY_SCRIPT_FILES = {
+    "install-cli.py",
+    "install.py",
+    "install.sh",
+    "install.ps1",
+}
+INSTALLATION_ROLE_REGISTRY = {
+    "delivery/rules/AGENTS.md": "rules_source",
+    "delivery/doc/RULES-SEMANTIC-INVENTORY.json": "rules_source",
+    "delivery/doc/RULES-EQUIVALENCE.json": "rules_source",
+    "tests/test_rules_slimming_contract.py": "contract_test",
+    "meta_flow/installation/contracts.py": "canonical_contract",
+    "meta_flow/installation/canonical.py": "canonical_contract",
+    "meta_flow/installation/identity.py": "source_identity",
+    "tests/test_install_plan_contract.py": "contract_test",
+    "meta_flow/installation/manifest.py": "manifest_ownership",
+    "meta_flow/installation/ownership.py": "manifest_ownership",
+    "tests/test_install_manifest_v2.py": "contract_test",
+    "meta_flow/installation/planner.py": "checkpoint_planner",
+    "meta_flow/installation/authorization.py": "authorization_dispatch",
+    "meta_flow/installation/engine.py": "authorization_dispatch",
+    "tests/test_install_authorization.py": "contract_test",
+    "meta_flow/installation/asset_executor.py": "asset_executor",
+    "delivery/scripts/install.py": "public_adapter",
+    "tests/test_install_asset_ownership.py": "contract_test",
+    "meta_flow/installation/cli_executor.py": "cli_executor",
+    "delivery/scripts/install-cli.py": "public_adapter",
+    "meta_flow/cli.py": "public_adapter",
+    "tests/test_cli_lifecycle.py": "contract_test",
+    "meta_flow/installation/recovery.py": "durable_recovery",
+    "tests/test_install_recovery.py": "contract_test",
+    "meta_flow/installation/migration.py": "migration_adapter",
+    "tests/test_install_migration.py": "contract_test",
+    "tests/fixtures/gov006/CASE-REGISTRY.json": "case_registry",
+    "tests/test_gov006_case_registry.py": "contract_test",
+    "tests/fixtures/gov006/matrix-fixtures.json": "case_registry",
+    "tests/test_gov006_lifecycle_matrix.py": "contract_test",
+    "tests/fixtures/gov006/fixture_runner.py": "isolated_fixture",
+    "tests/test_gov006_isolated_e2e.py": "contract_test",
+    "delivery/doc/PLATFORM-CONTRACTS.yaml": "platform_contract",
+    "README.md": "lifecycle_docs",
+    "delivery/README.md": "lifecycle_docs",
+    "delivery/doc/USER-MANUAL.md": "lifecycle_docs",
+    "scripts/check_delivery_guardrails.py": "guardrail_owner",
+    "meta_flow/installation/__init__.py": "compatibility_facade",
+    "tests/test_delivery_guardrails.py": "guardrail_test",
+}
+INSTALLATION_DISCOVERY_ROOTS = (
+    "meta_flow",
+    "delivery/scripts",
+    "scripts",
+    "tests",
+)
+INSTALLATION_FIXTURE_EXCLUSIONS = {
+    "tests/fixtures/gov006/fixture_runner.py": (
+        "task-specific temp runtime cleanup may use shutil.rmtree; "
+        "real HOME/external roots are rejected first"
+    ),
+}
 REVISION_RECORD_TARGETS = {
     "docs/product/USE-CASES.md": ROOT / "docs" / "product" / "USE-CASES.md",
     "docs/product/REQUIREMENTS.md": ROOT / "docs" / "product" / "REQUIREMENTS.md",
@@ -2557,6 +2617,246 @@ def collect_process_route_contract_errors() -> list[str]:
     return errors
 
 
+def _infer_installation_role(relative: str, content: str) -> str:
+    """按 source symbols/path 推断角色，不读取 registry 中的期望 role。"""
+
+    if relative.startswith("tests/fixtures/gov006/"):
+        return (
+            "isolated_fixture"
+            if relative.endswith("fixture_runner.py")
+            else "case_registry"
+        )
+    if relative.startswith("tests/"):
+        return (
+            "guardrail_test"
+            if relative.endswith("test_delivery_guardrails.py")
+            else "contract_test"
+        )
+    if relative in {
+        "delivery/scripts/install.py",
+        "delivery/scripts/install-cli.py",
+        "meta_flow/cli.py",
+    }:
+        return "public_adapter"
+    if relative == "meta_flow/installation/__init__.py":
+        return "compatibility_facade"
+    if relative in {
+        "delivery/rules/AGENTS.md",
+        "delivery/doc/RULES-SEMANTIC-INVENTORY.json",
+        "delivery/doc/RULES-EQUIVALENCE.json",
+    }:
+        return "rules_source"
+    if relative == "delivery/doc/PLATFORM-CONTRACTS.yaml":
+        return "platform_contract"
+    if relative in {
+        "README.md",
+        "delivery/README.md",
+        "delivery/doc/USER-MANUAL.md",
+    }:
+        return "lifecycle_docs"
+    if relative == "scripts/check_delivery_guardrails.py":
+        return "guardrail_owner"
+    defined_symbols: set[str] = set()
+    if relative.endswith(".py"):
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            pass
+        else:
+            defined_symbols = {
+                node.name
+                for node in tree.body
+                if isinstance(
+                    node,
+                    (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+                )
+            }
+    symbol_roles = (
+        ("execute_asset_action", "asset_executor"),
+        ("execute_cli_action", "cli_executor"),
+        ("dispatch_authorized_actions", "authorization_dispatch"),
+        ("inspect_v1_for_migration", "migration_adapter"),
+        ("DurableJournalStore", "durable_recovery"),
+        ("validate_manifest_v2", "manifest_ownership"),
+        ("validate_ownership_entry", "manifest_ownership"),
+        ("observe_checkout_source_identity", "source_identity"),
+        ("compare_checkpoints", "checkpoint_planner"),
+        ("build_plan", "canonical_contract"),
+    )
+    for symbol, role in symbol_roles:
+        if symbol in defined_symbols:
+            return role
+    if relative.endswith("/contracts.py") or relative.endswith(
+        "/canonical.py"
+    ):
+        return "canonical_contract"
+    if relative.endswith("/authorization.py") or relative.endswith(
+        "/engine.py"
+    ):
+        return "authorization_dispatch"
+    return "unknown_installation_consumer"
+
+
+def _installation_candidate(relative: str, content: str) -> bool:
+    if relative in INSTALLATION_ROLE_REGISTRY:
+        return True
+    if relative.startswith("meta_flow/installation/"):
+        return True
+    return any(
+        marker in content
+        for marker in (
+            "meta_flow.installation",
+            "InstallationLifecycleV2",
+            "INSTALLATION_ROLE_REGISTRY",
+            "tests/fixtures/gov006/CASE-REGISTRY.json",
+        )
+    )
+
+
+def _installation_forbidden_hits(
+    relative: str,
+    content: str,
+) -> list[dict[str, str]]:
+    hits: list[dict[str, str]] = []
+    is_python = relative.endswith(".py")
+    if is_python and re.search(r"\bshell\s*=\s*True\b", content):
+        hits.append({"path": relative, "rule": "shell-true"})
+    if is_python and re.search(r"\bpip\s+install\b", content):
+        hits.append({"path": relative, "rule": "bare-pip-install"})
+    if is_python:
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            hits.append({"path": relative, "rule": "python-syntax-error"})
+        else:
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                called = node.func
+                name = (
+                    called.id
+                    if isinstance(called, ast.Name)
+                    else called.attr
+                    if isinstance(called, ast.Attribute)
+                    else ""
+                )
+                if (
+                    name == "rmtree"
+                    and relative not in INSTALLATION_FIXTURE_EXCLUSIONS
+                ):
+                    hits.append(
+                        {
+                            "path": relative,
+                            "rule": (
+                                "recursive-delete-outside-isolated-fixture"
+                            ),
+                        }
+                    )
+                if name == "_run_reinstaller":
+                    hits.append(
+                        {
+                            "path": relative,
+                            "rule": "legacy-two-transaction-reinstall-call",
+                        }
+                    )
+                    break
+    return hits
+
+
+def build_installation_guardrail_report(
+    root: Path = ROOT,
+    *,
+    extra_sources: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """返回 exact registry 与独立 source discovery 的闭包报告。"""
+
+    supplied = dict(extra_sources or {})
+    sources: dict[str, str] = {}
+    for relative in INSTALLATION_ROLE_REGISTRY:
+        path = root / relative
+        if relative in supplied:
+            sources[relative] = supplied.pop(relative)
+        elif path.is_file():
+            sources[relative] = path.read_text(encoding="utf-8")
+
+    for relative_root in INSTALLATION_DISCOVERY_ROOTS:
+        scan_root = root / relative_root
+        if not scan_root.is_dir():
+            continue
+        for path in sorted(scan_root.rglob("*")):
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or path.suffix not in {".py", ".json"}
+            ):
+                continue
+            relative = path.relative_to(root).as_posix()
+            if relative in sources:
+                continue
+            content = path.read_text(encoding="utf-8")
+            if _installation_candidate(relative, content):
+                sources[relative] = content
+    sources.update(supplied)
+
+    discovered = {
+        relative: _infer_installation_role(relative, content)
+        for relative, content in sorted(sources.items())
+        if _installation_candidate(relative, content)
+    }
+    registered_paths = set(INSTALLATION_ROLE_REGISTRY)
+    discovered_paths = set(discovered)
+    role_mismatch = [
+        {
+            "path": relative,
+            "registered_role": INSTALLATION_ROLE_REGISTRY[relative],
+            "discovered_role": discovered[relative],
+        }
+        for relative in sorted(registered_paths & discovered_paths)
+        if INSTALLATION_ROLE_REGISTRY[relative] != discovered[relative]
+    ]
+    forbidden_hits = [
+        hit
+        for relative, content in sorted(sources.items())
+        if relative in discovered
+        for hit in _installation_forbidden_hits(relative, content)
+    ]
+    return {
+        "registry_version": "InstallationGuardrailRegistryV1",
+        "scan_roots": list(INSTALLATION_DISCOVERY_ROOTS),
+        "fixture_exclusions": dict(INSTALLATION_FIXTURE_EXCLUSIONS),
+        "registered": [
+            {"path": path, "role": role}
+            for path, role in INSTALLATION_ROLE_REGISTRY.items()
+        ],
+        "discovered": [
+            {"path": path, "role": role}
+            for path, role in discovered.items()
+        ],
+        "registered_only": sorted(registered_paths - discovered_paths),
+        "discovered_only": sorted(discovered_paths - registered_paths),
+        "role_mismatch": role_mismatch,
+        "forbidden_hits": forbidden_hits,
+    }
+
+
+def collect_installation_architecture_errors() -> list[str]:
+    report = build_installation_guardrail_report()
+    errors: list[str] = []
+    for field in (
+        "registered_only",
+        "discovered_only",
+        "role_mismatch",
+        "forbidden_hits",
+    ):
+        values = report[field]
+        if values:
+            errors.append(
+                f"installation guardrail {field} must be empty: "
+                f"{json.dumps(values, ensure_ascii=False, sort_keys=True)}"
+            )
+    return errors
+
+
 def collect_errors() -> list[str]:
     RUNTIME_WARNINGS.clear()
     errors: list[str] = []
@@ -2583,6 +2883,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_cr058_execution_closure_errors())
     errors.extend(collect_delivery_asset_lifecycle_errors())
     errors.extend(collect_process_route_contract_errors())
+    errors.extend(collect_installation_architecture_errors())
 
     binding_profile_documents = {
         relative: (ROOT / relative).read_text(encoding="utf-8")
@@ -2725,7 +3026,28 @@ def binding_profile_contract_errors(documents: dict[str, str]) -> list[str]:
     return errors
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    arguments = list(argv or ())
+    if arguments == ["--installation-report"]:
+        report = build_installation_guardrail_report()
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return int(
+            any(
+                report[field]
+                for field in (
+                    "registered_only",
+                    "discovered_only",
+                    "role_mismatch",
+                    "forbidden_hits",
+                )
+            )
+        )
+    if arguments:
+        print(
+            "ERROR: only --installation-report is supported",
+            file=sys.stderr,
+        )
+        return 2
     errors = collect_errors()
     for warning in RUNTIME_WARNINGS:
         print(f"WARN: {warning}", file=sys.stderr)
@@ -2738,4 +3060,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

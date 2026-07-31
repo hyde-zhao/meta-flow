@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import runpy
@@ -309,8 +310,11 @@ def _print_help() -> None:
         "usage: meta-flow <command> [options]\n\n"
         "Commands:\n"
         "  install    Install Meta Flow assets into Claude Code, Codex, or OpenClaw.\n"
+        "  upgrade    Upgrade exact Meta Flow-owned assets through one lifecycle transaction.\n"
         "  uninstall  Uninstall Meta Flow assets recorded in INSTALL-MANIFEST.\n"
-        "  reinstall  Uninstall then install Meta Flow assets for the target platform.\n"
+        "  reinstall  Force-refresh through one upgrade transaction (never uninstall+install).\n"
+        "  recover    Inspect a durable installation journal; mutating recovery needs new authorization.\n"
+        "  version    Show package and exact source diagnostics.\n"
         "  check      Run packaged Meta Flow validators.\n"
         "  capability Validate capability status and docs claims.\n"
         "  concept    Validate concept ownership and overlap.\n"
@@ -347,8 +351,11 @@ def _print_help() -> None:
         "Examples:\n"
         "  meta-flow install codex --scope user --component rules\n"
         "  meta-flow install claude --scope project --project-dir /path/to/repo\n"
+        "  meta-flow upgrade codex --scope user --component rules\n"
         "  meta-flow uninstall codex --scope user\n"
         "  meta-flow reinstall codex --scope user --component rules\n"
+        "  meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action inspect\n"
+        "  meta-flow version --format json\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
         "  meta-flow ask-user human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md --replay --format codex-json\n"
         "  meta-flow context build --stage CP6 --profile standard-code --cr CR-101 --project-root .\n"
@@ -401,8 +408,8 @@ def _print_help() -> None:
 def _run_installer(command: str, args: list[str]) -> None:
     installer = _find_installer()
     forwarded = [*args]
-    if command == "uninstall":
-        forwarded = ["uninstall", *forwarded]
+    if command != "install":
+        forwarded = [command, *forwarded]
     original_argv = sys.argv[:]
     try:
         sys.argv = [f"meta-flow {command}", *forwarded]
@@ -415,9 +422,9 @@ def _run_installer(command: str, args: list[str]) -> None:
 def _print_reinstall_help() -> None:
     print(
         "usage: meta-flow reinstall <platform> [options]\n\n"
-        "Uninstall then install Meta Flow assets for the target platform.\n"
-        "The uninstall phase receives only platform, --scope, --project-dir, --component, and --dry-run;\n"
-        "the install phase receives the full argument list.\n\n"
+        "Normalize reinstall to one upgrade transaction with force_refresh=true.\n"
+        "No uninstall phase is run, so one plan, authorization, journal, and terminal receipt\n"
+        "cover the complete operation.\n\n"
         "Examples:\n"
         "  meta-flow reinstall codex --scope user --component rules\n"
         "  meta-flow reinstall claude --scope project --project-dir /path/to/repo\n"
@@ -451,6 +458,11 @@ def _reinstall_uninstall_args(args: list[str]) -> list[str]:
 
 
 def _run_reinstaller(args: list[str]) -> None:
+    """Legacy private helper retained only for source compatibility tests.
+
+    Production ``main`` no longer calls this two-transaction implementation.
+    """
+
     if not args or args[0] in {"-h", "--help"}:
         _print_reinstall_help()
         return
@@ -459,6 +471,115 @@ def _run_reinstaller(args: list[str]) -> None:
     _run_installer("uninstall", uninstall_args)
     print("Reinstall step 2/2: install")
     _run_installer("install", args)
+
+
+def _run_lifecycle_reinstaller(args: list[str]) -> None:
+    """公开 reinstall：唯一分发为 upgrade + force-refresh。"""
+
+    if not args or args[0] in {"-h", "--help"}:
+        _print_reinstall_help()
+        return
+    from meta_flow.installation.migration import dispatch_lifecycle_adapter
+
+    calls: list[tuple[str, list[str]]] = []
+
+    def asset_adapter(
+        operation: str,
+        selector: object,
+    ) -> None:
+        if operation != "assets.upgrade" or not isinstance(selector, dict):
+            raise SystemExit("reinstall normalization produced an invalid asset request")
+        forwarded = [*args]
+        if "--force-refresh" not in forwarded:
+            forwarded.append("--force-refresh")
+        calls.append(("upgrade", forwarded))
+
+    dispatch_lifecycle_adapter(
+        surface="assets",
+        intent="reinstall",
+        selector={},
+        asset_adapter=asset_adapter,
+        cli_adapter=lambda _operation, _selector: None,
+    )
+    if calls != [("upgrade", [*args, "--force-refresh"])]:
+        raise SystemExit("reinstall must produce exactly one upgrade transaction")
+    _run_installer(*calls[0])
+
+
+def _run_version(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="meta-flow version")
+    parser.add_argument("--format", choices=("text", "json"), default="text")
+    parsed = parser.parse_args(args)
+
+    from meta_flow import __version__
+    from meta_flow.installation.identity import observe_checkout_source_identity
+
+    try:
+        installer = _find_installer()
+        repo_root = installer.parents[2]
+        identity = observe_checkout_source_identity(repo_root)
+        payload: dict[str, object] = {
+            "ready": True,
+            "status": "READY",
+            **identity,
+        }
+    except (OSError, ValueError) as exc:
+        payload = {
+            "ready": False,
+            "status": "IDENTITY_INCOMPLETE",
+            "source": "installed/meta-flow",
+            "version": __version__,
+            "oid": "",
+            "delivery_tree_digest": "",
+            "rules_source_digest": "",
+            "inventory_digest": "",
+            "findings": [type(exc).__name__],
+        }
+    if parsed.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return
+    print(f"meta-flow {payload['version']}")
+    print(f"status: {payload['status']}")
+    print(f"source: {payload['source']}")
+    print(f"git_oid: {payload['oid'] or '-'}")
+    print(f"delivery_tree_digest: {payload['delivery_tree_digest'] or '-'}")
+
+
+def _run_lifecycle_recovery(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="meta-flow recover")
+    parser.add_argument("--journal", type=Path, required=True)
+    parser.add_argument(
+        "--action",
+        choices=("inspect", "resume", "rollback", "abandon"),
+        default="inspect",
+    )
+    parser.add_argument("--authorization", type=Path)
+    parsed = parser.parse_args(args)
+    if parsed.action != "inspect":
+        if parsed.authorization is None:
+            raise SystemExit(
+                f"{parsed.action} requires one new --authorization; "
+                "the original operation authorization cannot be reused."
+            )
+        raise SystemExit(
+            "mutating recovery must be executed from a freshly rebuilt "
+            "lifecycle.recover plan; direct journal mutation is disabled."
+        )
+
+    from meta_flow.installation.recovery import inspect_journal, validate_journal
+
+    try:
+        payload = json.loads(parsed.journal.read_text(encoding="utf-8"))
+        observation = inspect_journal(validate_journal(payload))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemExit(f"cannot inspect installation journal: {exc}") from exc
+    print(
+        json.dumps(
+            dataclasses.asdict(observation),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
 
 
 def _print_check_help() -> None:
@@ -1081,11 +1202,17 @@ def main() -> None:
     if command == "doctor":
         _run_doctor(args[1:])
         return
-    if command in {"install", "uninstall"}:
+    if command in {"install", "upgrade", "uninstall"}:
         _run_installer(command, args[1:])
         return
     if command == "reinstall":
-        _run_reinstaller(args[1:])
+        _run_lifecycle_reinstaller(args[1:])
+        return
+    if command == "recover":
+        _run_lifecycle_recovery(args[1:])
+        return
+    if command == "version":
+        _run_version(args[1:])
         return
     if command == "check":
         _run_check(args[1:])
@@ -1179,7 +1306,7 @@ def main() -> None:
         return
     raise SystemExit(
         "未知命令: "
-        "install, uninstall, reinstall, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, route, identity, ledger, "
+        "install, upgrade, uninstall, reinstall, recover, version, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, route, identity, ledger, "
         "governance, module, policy, project, work, retrospective, evolution, repository, quality, story, validation, waiver, ask-user, state, status, next, doctor"
     )
 if __name__ == "__main__":

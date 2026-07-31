@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "source": "delivery/rules/AGENTS.md",
+  "baseline": {"line_count": 347, "byte_count": 71576, "sha256": "bc48e925cae84686c3e9ce7a760aafe2f2570f6ea92a43fd1018d78620e24cf2"},
+  "slim_source": {"line_count": 58, "sha256": "023c82c2be5b0ed756e0e1da7c2e0bf97b7573a192289e076b20f97b18785fcc", "digest_algorithm": "meta_flow.project.onboarding_contract.path_digest"},
+  "record_schema": ["line_no", "class", "dimension", "normative_level", "precondition", "action", "failure_action", "canonical_ref", "canonical_exists", "equivalence_id"],
+  "coverage": {"first_line": 1, "last_line": 347, "classified_count": 347, "unclassified_count": 0, "duplicate_line_count": 0},
+  "categories": [
+    {"lines": [1, 18], "class": "KEEP_ALWAYS_LOADED", "dimension": "process-routing", "canonical_ref": "# 0. 权威边界"},
+    {"lines": [19, 46], "class": "KEEP_ALWAYS_LOADED", "dimension": "safety-preflight", "canonical_ref": "# 1. 先验检查（任何危险动作前）"},
+    {"lines": [47, 84], "class": "KEEP_ALWAYS_LOADED", "dimension": "authorization", "canonical_ref": "# 2. 授权、风险与 Git"},
+    {"lines": [85, 137], "class": "KEEP_ALWAYS_LOADED", "dimension": "workflow-gates", "canonical_ref": "# 3. Work、上下文与门禁"},
+    {"lines": [138, 202], "class": "KEEP_ALWAYS_LOADED", "dimension": "story-execution", "canonical_ref": "# 4. Story 设计与实现"},
+    {"lines": [203, 246], "class": "KEEP_PLATFORM_ADAPTER", "dimension": "platform-path", "canonical_ref": "# 5. 平台、安装与交付"},
+    {"lines": [247, 302], "class": "DELEGATE", "dimension": "detail-contract", "canonical_ref": "delivery/rules/AGENT-SKILL-CONTRACT.md"},
+    {"lines": [303, 347], "class": "DELETE_DUPLICATE", "dimension": "duplicate-prose", "canonical_ref": "# 0. 权威边界"}
+  ],
+  "mandatory_summary": {"KEEP_ALWAYS_LOADED": 202, "KEEP_PLATFORM_ADAPTER": 44, "DELEGATE": 56, "DELETE_DUPLICATE": 45},
+  "inventory_digest_algorithm": "meta_flow.project.onboarding_contract.canonical_digest",
+  "baseline_digest_algorithm": "meta_flow.project.onboarding_contract.path_digest"
+}

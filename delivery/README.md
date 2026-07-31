@@ -303,10 +303,46 @@ CP2 / CP3 的讨论增强不会强行升级所有小修改；fast-lane 下若 di
 uv tool install --editable .
 meta-flow install codex --scope user
 meta-flow install codex --scope project --project-dir /path/to/project
+meta-flow upgrade codex --scope project --project-dir /path/to/project
 meta-flow uninstall codex --scope project --project-dir /path/to/project
+meta-flow reinstall codex --scope project --project-dir /path/to/project
+meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action inspect
+meta-flow version --format json
 meta-flow install codex --help
 meta-flow uninstall codex --help
 ```
+
+### Installation Lifecycle V2
+
+安装生命周期的 canonical truth 来自
+`doc/PLATFORM-CONTRACTS.yaml.installation_lifecycle`。当前资格范围为 Linux
+CLI 和 Codex/Claude project/user 资产；OpenClaw、Qoder 只保留 legacy
+adapter，Windows 未资格化。
+
+- `install|upgrade|uninstall` 分别进入 qualified `cli.*` 或 `assets.*`
+  operation。
+- `reinstall` 只规范化为 `upgrade + force_refresh=true`，事务数和授权数均
+  为 1；旧 uninstall→install 两事务 helper 不再由生产 CLI 分发。
+- `recover --action inspect` 只读；`resume|rollback|abandon` 不能复用原授权，
+  必须先重建 `lifecycle.recover` plan 并取得新的 single-use typed
+  authorization。
+- `version --format json` 输出 version、exact OID、delivery tree、Rules
+  source 和 inventory digest；不完整事实明确返回
+  `IDENTITY_INCOMPLETE`。
+- v1→v2 只接受可验证 source/target/platform/scope/ownership；backup 必须
+  在 v2 target mutation 前可读，missing/corrupt/unknown 只产生 BLOCKED
+  candidate，mutation=0。
+
+从 source checkout 进行 Linux CLI bootstrap dry-run：
+
+```bash
+uv run --frozen python scripts/install-cli.py install --source .. --dry-run
+uv run --frozen python scripts/install-cli.py reinstall --source .. --dry-run
+```
+
+运行时代码通过 `meta_flow.installation` facade 消费 canonical
+plan/authorization/executor/recovery；禁止 bare pip、shell 拼接、递归删除
+Skill 目录或通过扫描获得 ownership。
 
 项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
 

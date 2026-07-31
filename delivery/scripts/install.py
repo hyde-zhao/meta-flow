@@ -17,7 +17,9 @@ Examples:
   uv run --python 3.11 python delivery/scripts/install.py claude
   uv run --python 3.11 python delivery/scripts/install.py codex --scope user
   meta-flow install codex --scope user --component rules
+  meta-flow upgrade codex --scope user --component rules
   meta-flow uninstall codex --scope user
+  meta-flow reinstall codex --scope user --component rules
   uv run --python 3.11 python delivery/scripts/install.py codex --project-dir D:\\work\\demo
   uv run --python 3.11 python delivery/scripts/install.py claude --dry-run
   uv run --python 3.11 python delivery/scripts/install.py uninstall codex --scope user
@@ -824,12 +826,10 @@ def remove_path(path: Path, transaction: Transaction, dry_run: bool) -> None:
         return
 
     if path.is_dir():
-        removed_files: list[tuple[Path, bytes]] = []
-        for file_path in sorted(p for p in path.rglob("*") if p.is_file()):
-            removed_files.append((file_path.relative_to(path), file_path.read_bytes()))
-        transaction.removed_dirs[path] = removed_files
-        shutil.rmtree(path)
-        return
+        fail(
+            "legacy directory uninstall is disabled: exact_leaf_set ownership "
+            "must remove digest-matching leaves individually; recursive delete=0."
+        )
 
     if path.exists():
         record_original_text(transaction, path)
@@ -1459,20 +1459,30 @@ def uninstall_platform(
 def parse_args() -> argparse.Namespace:
     raw_args = sys.argv[1:]
     mode = "install"
-    if raw_args and raw_args[0] in {"install", "uninstall"}:
+    if raw_args and raw_args[0] in {
+        "install",
+        "upgrade",
+        "uninstall",
+        "reinstall",
+    }:
         mode = raw_args[0]
         raw_args = raw_args[1:]
 
     prog = sys.argv[0]
     display_prog = prog
-    if mode == "uninstall" and not prog.endswith(" uninstall"):
-        display_prog = f"{prog} uninstall"
-    action_text = "Install" if mode == "install" else "Uninstall"
+    if mode != "install" and not prog.endswith(f" {mode}"):
+        display_prog = f"{prog} {mode}"
+    action_text = {
+        "install": "Install",
+        "upgrade": "Upgrade",
+        "uninstall": "Uninstall",
+        "reinstall": "Force-refresh",
+    }[mode]
     usage = (
         f"{display_prog} <platform> [options]\n"
         f"       {display_prog} --platform <platform> [options]  (legacy)"
     )
-    if mode == "install":
+    if mode in {"install", "upgrade", "reinstall"}:
         epilog = (
             "Examples:\n"
             f"  {display_prog} codex --scope user\n"
@@ -1505,11 +1515,11 @@ def parse_args() -> argparse.Namespace:
         choices=VALID_COMPONENTS,
         help=(
             "安装组件：rules=规则文件，agent=agents+skills，full=rules+agents+skills；未提供时 user 默认 rules，project 默认 full"
-            if mode == "install"
+            if mode in {"install", "upgrade", "reinstall"}
             else "卸载组件：rules=规则文件，agent=agents+skills，full=rules+agents+skills；未提供时默认 full"
         ),
     )
-    if mode == "install":
+    if mode in {"install", "upgrade", "reinstall"}:
         parser.add_argument(
             "--content",
             default=None,
@@ -1522,6 +1532,11 @@ def parse_args() -> argparse.Namespace:
     else:
         parser.set_defaults(content=None, agent="", skill="", permissive=False)
     parser.add_argument("--dry-run", action="store_true", help="仅打印将执行的操作")
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="在单一 upgrade transaction 中强制刷新受管内容",
+    )
     parser.add_argument("--uninstall", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(raw_args)
 
@@ -1529,6 +1544,11 @@ def parse_args() -> argparse.Namespace:
         if mode == "uninstall":
             fail("已使用 uninstall 命令，无需再传 --uninstall。")
         mode = "uninstall"
+
+    args.requested_intent = mode
+    if mode == "reinstall":
+        mode = "upgrade"
+        args.force_refresh = True
 
     if args.platform_arg and args.platform_option:
         positional = normalize_platform(args.platform_arg)
@@ -1602,6 +1622,9 @@ def main() -> None:
     print(f"Manifest path: {target_manifest_path}")
     print(f"Platform: {args.platform}")
     print(f"Scope: {args.scope}")
+    print(f"Lifecycle intent: {args.requested_intent}")
+    print(f"Lifecycle operation: assets.{args.mode}")
+    print(f"Force refresh: {str(args.force_refresh).lower()}")
 
     transaction = Transaction()
     manifest_payload = load_manifest(target_manifest_path)

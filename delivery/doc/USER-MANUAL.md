@@ -210,6 +210,10 @@ meta-flow repository push ...
 uv tool install --editable .
 meta-flow install codex --scope user
 meta-flow install codex --scope project --project-dir /path/to/project
+meta-flow upgrade codex --scope project --project-dir /path/to/project
+meta-flow reinstall codex --scope project --project-dir /path/to/project
+meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action inspect
+meta-flow version --format json
 meta-flow install qoder --scope project --project-dir /path/to/project
 ```
 
@@ -247,6 +251,45 @@ meta-flow install qoder --help
 meta-flow uninstall --help
 meta-flow uninstall codex --help
 ```
+
+## 2.1 Installation Lifecycle V2
+
+安装生命周期资格和平台路径以
+`delivery/doc/PLATFORM-CONTRACTS.yaml`（独立 delivery 根下为
+`doc/PLATFORM-CONTRACTS.yaml`）为单一真相源。当前资格范围为 Linux CLI
+以及 Codex、Claude Code 的 project/user 资产；OpenClaw、Qoder 只保留
+legacy adapter，Windows 未资格化。
+
+| 命令 | 语义 | 授权/恢复边界 |
+|---|---|---|
+| `meta-flow install …` | fresh exact install | READY apply 需要 single-use typed authorization |
+| `meta-flow upgrade …` | exact source/ownership diff | source/OID/digest 或 before facts 漂移时 mutation=0 |
+| `meta-flow uninstall …` | 只移除 manifest-owned block/file/leaf | foreign 或 owned drift 均 BLOCKED |
+| `meta-flow reinstall …` | 单一 upgrade，`force_refresh=true` | transaction=1、authorization=1，不先卸载 |
+| `meta-flow recover …` | inspect/resume/rollback/abandon | inspect auth=0；其余必须新 plan、新授权 |
+| `meta-flow version --format json` | 只读来源 diagnostics | 不完整或漂移事实不能冒充 READY |
+
+`reinstall` 明确禁止旧 `uninstall→install` 两事务路径。
+
+以下 Linux CLI source bootstrap 命令均为 mutation=0 的 dry-run：
+
+```bash
+uv run --frozen python delivery/scripts/install-cli.py install --source . --dry-run
+uv run --frozen python delivery/scripts/install-cli.py reinstall --source . --dry-run
+```
+
+事务依次经过 canonical plan、C1-C4、一次授权 claim、action-before-write
+journal、qualified executor、Manifest v2 和 terminal receipt。异常后先运行：
+
+```bash
+meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action inspect
+```
+
+`resume|rollback|abandon` 不会直接修改 journal，也不能复用原授权；调用方必须
+依据 target digest/preimage 重建 `lifecycle.recover` plan。v1 manifest
+只有 source/target/platform/scope/ownership 全部匹配才是 migration
+candidate，且必须先保存可读 backup；missing、corrupt、unknown owner 或
+source drift 都保持 BLOCKED、mutation=0。
 
 从仓库根目录执行：
 

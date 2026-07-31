@@ -425,7 +425,11 @@ uv python install 3.11
 uv tool install --editable .
 meta-flow install codex --scope user --component rules
 meta-flow install codex --scope project --component full --project-dir /path/to/project
+meta-flow upgrade codex --scope project --component full --project-dir /path/to/project
 meta-flow uninstall codex --scope project --project-dir /path/to/project
+meta-flow reinstall codex --scope project --component full --project-dir /path/to/project
+meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action inspect
+meta-flow version --format json
 meta-flow install codex --help
 meta-flow uninstall codex --help
 # 从项目根运行
@@ -433,6 +437,36 @@ uv run --python 3.11 python delivery/scripts/install.py claude --dry-run
 # 或从 delivery/ 目录运行（delivery 作为独立仓库时）
 cd delivery && uv run --python 3.11 python scripts/install.py claude --dry-run
 ```
+
+### Installation Lifecycle V2
+
+`delivery/doc/PLATFORM-CONTRACTS.yaml` 是安装路径和资格声明的唯一真相源。
+Lifecycle V2 当前只资格化 Linux CLI 以及 Codex/Claude 的 project/user
+资产；OpenClaw、Qoder 和 Windows 仍是 legacy/not-qualified，不得从目录相似
+推导 PASS。
+
+| intent | canonical operation | 事务语义 |
+|---|---|---|
+| `install` | `cli.install` 或 `assets.install` | 一个 plan、一次 single-use authorization、一个 journal |
+| `upgrade` | `cli.upgrade` 或 `assets.upgrade` | exact source/ownership diff |
+| `uninstall` | `cli.uninstall` 或 `assets.uninstall` | 只移除 manifest-owned 对象 |
+| `reinstall` | 对应 `*.upgrade` + `force_refresh=true` | 始终一个事务，不执行 uninstall→install |
+| `recover` | `lifecycle.recover` | `inspect` 不用授权；其余 action 需要新 plan 和新授权 |
+| `version` | 只读 diagnostics | version、OID、delivery/rules/inventory digest |
+
+源码 checkout 的 Linux CLI bootstrap 只读示例：
+
+```bash
+uv run --frozen python delivery/scripts/install-cli.py install --source . --dry-run
+uv run --frozen python delivery/scripts/install-cli.py reinstall --source . --dry-run
+meta-flow version --format json
+```
+
+Canonical plan、Manifest v2、C1-C4、typed authorization、qualified executor 和
+durable recovery 的 Python facade 是 `meta_flow.installation`。缺失/损坏 v1
+manifest、unknown owner、source drift、未持久化 preimage 或 authorization
+不匹配都必须 fail-closed、mutation=0；扫描结果本身不授予写权限。仓库验证不触碰真实
+HOME、外部项目、网络或真实 `uv tool`。
 
 ## 开发节奏
 
