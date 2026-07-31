@@ -8,6 +8,13 @@
 
 vNext 默认 `route_mode=sibling-binding`；`relative-symlink` 仅是显式 legacy Agent/Skill 兼容模式。不得声称 binding-only 已兼容全部 legacy Skill。`.meta-flow/workspace.yaml` 是 tracked 真相；`.meta-flow/INSTALL-MANIFEST.yaml` 必须忽略。
 
+## 0.1 长期治理查询与阶段规划
+
+- 用户询问“阶段目标、长期路线、Roadmap、下一阶段、后续规划或阶段重叠”时，必须按 `process/PROJECT.yaml → roadmap_ref → process/ROADMAP.yaml → 全部 declared phase_refs` 查询；不得只看当前 Work、最近对话或 memory。
+- 默认 5 对象限制保留；长期路线允许 `PROJECT + ROADMAP + 全部 declared phase_refs` 的有界例外。active Phase 详细路线只按其 `result_refs` 读取声明的实施计划；禁止 sibling discovery、目录猜测和全历史扩读。
+- 回答固定区分“机器事实 / 解释或推断 / 建议”。memory 仅作线索，仓库真相优先。
+- 提议新 Phase 前必须输出目标、进入/退出条件、非目标和生命周期结果的重叠矩阵；可归入现有 active/planned Phase 时使用 Work/工作流，不新建 Phase。
+
 ## 1. 先验检查（任何危险动作前）
 
 1. 调 API 前，使用签名、类型注解、正式 schema 或 canonical contract 确认返回类型；Python `_resolve_runtime_ref` / `_resolve_runtime_path` 返回 `pathlib.Path`，只有 CLI `meta-flow project resolve-ref --format json` 返回含 `resolved_path` 的 JSON。
