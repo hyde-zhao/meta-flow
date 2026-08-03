@@ -19,7 +19,7 @@ GATE_SEMANTIC_REGISTRY = {
     "meta_flow/checks/state_transition.py": "passage-consumer",
     "meta_flow/repository/publisher.py": "passage-consumer",
     "meta_flow/work/usage.py": "count-only-exception",
-    "meta_flow/workflow/cr_lifecycle.py": "transport-adapter",
+    "meta_flow/workflow/cr_status_sync.py": "transport-adapter",
     "meta_flow/policies/route_plan.py": "mutation-reference-only",
     "meta_flow/policies/c0_cutover.py": "mutation-reference-only",
     "meta_flow/policies/failure_routing.py": "metadata-reference-only",

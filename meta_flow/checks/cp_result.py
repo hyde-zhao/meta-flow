@@ -598,17 +598,13 @@ def _candidate_route_plan_paths(root: Path, result: dict[str, Any]) -> list[Path
     cr_id = str(result.get("cr_id") or "")
     if cr_id:
         refs.extend(
-            path.relative_to(root).as_posix()
+            _canonical_runtime_ref(root, path)
             for path in sorted(
                 _resolve_runtime_ref(root, "process/checks").glob(f"CP0-*{cr_id}*.route-plan.json")
             )
             if path.is_file()
         )
-    paths: list[Path] = []
-    for ref in refs:
-        path = Path(ref)
-        paths.append(_resolve_runtime_path(root, path))
-    return paths
+    return [_resolve_runtime_path(root, Path(ref)) for ref in refs]
 
 
 def _validate_post_cp_transition(root: Path, result: dict[str, Any]) -> tuple[list[str], list[str]]:

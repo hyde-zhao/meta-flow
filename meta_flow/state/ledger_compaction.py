@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.evals.runner import parse_yaml_subset
-from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.process_route import (
+    ProcessRouteError,
+    _resolve_runtime_path,
+    _resolve_runtime_ref,
+)
 from meta_flow.state import event_ledger
 from meta_flow.state.current import BASE_LEDGER_RELS, now_utc
 
@@ -74,10 +78,16 @@ def _clean_event(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rel(project_root: Path, path: Path) -> str:
+    root = project_root.resolve()
+    resolved = path.resolve()
     try:
-        return path.resolve().relative_to(project_root.resolve()).as_posix()
+        return resolved.relative_to(root).as_posix()
     except ValueError:
-        return path.as_posix()
+        process_root = _resolve_runtime_ref(root, "process/PROJECT.yaml").parent.resolve()
+        try:
+            return f"process/{resolved.relative_to(process_root).as_posix()}"
+        except ValueError:
+            return path.as_posix()
 
 
 def _resolve_under_project(project_root: Path, value: Path) -> Path:
@@ -85,20 +95,26 @@ def _resolve_under_project(project_root: Path, value: Path) -> Path:
     return candidate.resolve()
 
 
-def guard_ledger_path(project_root: Path, ledger_path: Path) -> Path:
+def _guard_process_path(project_root: Path, path: Path, *, label: str) -> Path:
     root = project_root.resolve()
-    resolved = _resolve_under_project(root, ledger_path)
+    resolved = _resolve_under_project(root, path)
+    process_root = _resolve_runtime_ref(root, "process/PROJECT.yaml").parent.resolve()
     try:
-        rel = resolved.relative_to(root)
+        rel = resolved.relative_to(process_root)
     except ValueError as exc:
-        raise LedgerCompactionError(f"ledger path is outside project root: {ledger_path}") from exc
-    rel_text = rel.as_posix()
-    if rel_text == "process/quant-lab" or rel_text.startswith("process/quant-lab/"):
-        raise LedgerCompactionError(f"ledger path is forbidden: {rel_text}")
-    if not rel_text.startswith("process/"):
-        raise LedgerCompactionError(f"ledger path must stay under process/: {rel_text}")
+        raise LedgerCompactionError(f"{label} path is outside project root or bound process root: {path}") from exc
     if ".." in rel.parts:
-        raise LedgerCompactionError(f"ledger path contains unsafe traversal: {ledger_path}")
+        raise LedgerCompactionError(f"{label} path contains unsafe traversal: {path}")
+    return resolved
+
+
+def guard_ledger_path(project_root: Path, ledger_path: Path) -> Path:
+    resolved = _guard_process_path(project_root, ledger_path, label="ledger")
+    process_root = _resolve_runtime_ref(project_root.resolve(), "process/PROJECT.yaml").parent.resolve()
+    rel = resolved.relative_to(process_root)
+    rel_text = rel.as_posix()
+    if rel_text == "quant-lab" or rel_text.startswith("quant-lab/"):
+        raise LedgerCompactionError(f"ledger path is forbidden: {rel_text}")
     return resolved
 
 
@@ -118,6 +134,8 @@ def load_retention_policy(path: Path | None = None, *, project_root: Path | None
         if project_root is None:
             return _default_policy()
         path = _resolve_runtime_ref(project_root, DEFAULT_POLICY_REL.as_posix())
+    elif project_root is not None:
+        path = _guard_process_path(project_root, path, label="retention policy")
     if not path.is_file():
         return _default_policy()
     data = parse_yaml_subset(path.read_text(encoding="utf-8"))
@@ -496,6 +514,9 @@ def main(argv: list[str] | None = None) -> int:
                 result = apply_compaction(plan)
                 print("Apply Result: " + json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
+    except ProcessRouteError as exc:
+        print(f"Ledger Compact BLOCKED: {exc.error_code}: {exc}")
+        return 2
     except LedgerCompactionError as exc:
         print(f"Ledger Compact FAIL: {exc}")
         return 1

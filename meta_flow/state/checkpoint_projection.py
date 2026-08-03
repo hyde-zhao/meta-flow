@@ -1,7 +1,6 @@
 """Checkpoint ledger 的唯一 current-head 投影所有者。
 
-该模块只解释 checkpoint result、successor、alias correction 与 C0 event
-supersession。业务 consumer 只能消费 :class:`CheckpointProjectionV1`，不得在
+该模块只解释 checkpoint result、successor 与 alias correction。业务 consumer 只能消费 :class:`CheckpointProjectionV1`，不得在
 模块外重新实现 current-head 归并。
 """
 
@@ -39,7 +38,6 @@ REGISTERED_CONSUMERS = (
 )
 REGISTERED_WRITE_PRODUCERS = (
     "cp_result",
-    "c0_cutover",
 )
 REGISTERED_THIN_ADAPTERS = ("route_plan",)
 

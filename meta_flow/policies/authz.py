@@ -8,7 +8,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.process_route import (
+    ProcessRouteError,
+    _resolve_runtime_path,
+    _resolve_runtime_ref,
+)
 
 AUTHZ_POLICY_REL = Path("process/policies/AUTHZ-POLICY.json")
 AUTHZ_CAPABILITY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
@@ -295,9 +299,14 @@ def validate_authz_policy(project_root: Path) -> list[str]:
     return errors
 
 
-def _is_human_or_release_artifact(path: Path) -> bool:
-    rel = path.as_posix()
-    return "/process/checkpoints/" in rel or "/process/release/" in rel or "/docs/release/" in rel
+def _is_human_or_release_artifact(path: Path | str) -> bool:
+    rel = Path(path).as_posix()
+    return (
+        rel.startswith(("process/checkpoints/", "process/release/", "docs/release/"))
+        or "/process/checkpoints/" in rel
+        or "/process/release/" in rel
+        or "/docs/release/" in rel
+    )
 
 
 def required_policy_refs_for_text(text: str) -> list[str]:
@@ -315,7 +324,8 @@ def required_policy_refs_for_text(text: str) -> list[str]:
 
 def check_artifact(project_root: Path, artifact: Path) -> tuple[list[str], list[str]]:
     project_root = project_root.resolve()
-    artifact = artifact.resolve()
+    artifact_ref = artifact.as_posix()
+    artifact = _resolve_runtime_path(project_root, artifact)
     errors: list[str] = []
     warnings: list[str] = []
     if not artifact.is_file():
@@ -327,7 +337,7 @@ def check_artifact(project_root: Path, artifact: Path) -> tuple[list[str], list[
     for policy_id in required_refs:
         if policy_id not in text:
             errors.append(f"artifact mentions high-risk surface but lacks authz policy ref: {policy_id}")
-    if not _is_human_or_release_artifact(artifact):
+    if not _is_human_or_release_artifact(artifact_ref):
         for policy_id, item in policies.items():
             expanded = str(item.get("expanded_text") or "")
             if expanded and expanded in text:
@@ -395,12 +405,17 @@ def main(argv: list[str] | None = None) -> int:
         if parsed.write_default:
             path = write_default_authz_policy(parsed.project_root)
             print(f"wrote: {path}")
-        errors = validate_authz_policy(parsed.project_root)
-        warnings: list[str] = []
-        if parsed.artifact:
-            artifact_errors, artifact_warnings = check_artifact(parsed.project_root, parsed.artifact)
-            errors.extend(artifact_errors)
-            warnings.extend(artifact_warnings)
+        try:
+            errors = validate_authz_policy(parsed.project_root)
+            warnings: list[str] = []
+            if parsed.artifact:
+                artifact_errors, artifact_warnings = check_artifact(parsed.project_root, parsed.artifact)
+                errors.extend(artifact_errors)
+                warnings.extend(artifact_warnings)
+        except ProcessRouteError as exc:
+            print("Authz Policy Check: BLOCKED")
+            print(f"- ERROR: {exc.error_code}: {exc}")
+            return 2
         print("Authz Policy Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
