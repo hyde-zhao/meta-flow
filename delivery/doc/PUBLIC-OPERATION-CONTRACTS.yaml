@@ -43,8 +43,8 @@
       "entry": ["meta-flow", "route", "c0-cutover-apply"],
       "input_version": "C0CutoverPlanV2",
       "output_version": "C0CutoverReceiptV2",
-      "mutation_mode": "dry-run-typed-apply",
-      "authorization_mode": "typed-user-confirmation",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
       "projector": "meta_flow.policies.c0_cutover.apply_c0_cutover",
       "l3_journey": "L3-CR",
       "path_contract": {

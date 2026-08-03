@@ -4,20 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from meta_flow.checks import state_transition
-from meta_flow.checks.frozen_cp6_evidence import FrozenCp6EvidenceV1
 from meta_flow.policies import c0_cutover, gate_profiles
-from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import ProcessRouteError, _resolve_runtime_ref
-from meta_flow.work.model import load_work
 
 CHECKPOINTS = tuple(f"CP{index}" for index in range(9))
 HUMAN_GATE_CHECKPOINTS = {"CP2", "CP3", "CP5", "CP8"}
@@ -52,76 +45,8 @@ PROFILE_UPGRADE_TARGETS = {
     "implementation": "standard-code",
     "design": "standard-code",
 }
-C0_CONSUMERS = (
-    ("C0-CONSUMER-01", "cp result-check"),
-    ("C0-CONSUMER-02", "event dispatch-check"),
-    ("C0-CONSUMER-03", "check handoff-dispatch"),
-    ("C0-CONSUMER-04", "story return-check"),
-    ("C0-CONSUMER-05", "story evidence-check"),
-    ("C0-CONSUMER-06", "context check-story-packet"),
-    ("C0-CONSUMER-07", "context sufficiency-check"),
-    ("C0-CONSUMER-08", "context read-log-check"),
-    ("C0-CONSUMER-09", "story lld-check"),
-    ("C0-CONSUMER-10", "feature check"),
-    ("C0-CONSUMER-11", "feature trace"),
-)
-C0_AUTHORIZATION_FIELDS = frozenset(
-    {
-        "schema_version",
-        "authorization_id",
-        "authorization_source",
-        "authorization_kind",
-        "operation",
-        "decision_ref",
-        "cr_id",
-        "work_id",
-        "expected_release_oid",
-        "expected_process_oid",
-        "scope_digest",
-        "plan_digest",
-        "mutation_allowlist",
-        "expires_at",
-        "single_use",
-    }
-)
-C0_AUTHORIZATION_SOURCE = "typed-user-confirmation"
-C0_AUTHORIZATION_KIND = "c0-projector-cutover"
-C0_APPLY_OPERATION = "route-c0-apply"
-C0_V1_DISABLED_REASON = "C0_V1_MUTATION_DISABLED"
-
-
-@dataclass(frozen=True)
-class C0AuthorizationV1:
-    """仅保留旧授权载荷的解析兼容；V1 apply 已永久禁用。"""
-
-    schema_version: int
-    authorization_id: str
-    authorization_source: str
-    authorization_kind: str
-    operation: str
-    decision_ref: str
-    cr_id: str
-    work_id: str
-    expected_release_oid: str
-    expected_process_oid: str
-    scope_digest: str
-    plan_digest: str
-    mutation_allowlist: tuple[str, ...]
-    expires_at: str
-    single_use: bool
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> C0AuthorizationV1:
-        if set(payload) != C0_AUTHORIZATION_FIELDS:
-            missing = sorted(C0_AUTHORIZATION_FIELDS - set(payload))
-            extra = sorted(set(payload) - C0_AUTHORIZATION_FIELDS)
-            raise ValueError(f"C0 authorization fields mismatch: missing={missing}, extra={extra}")
-        values = dict(payload)
-        allowlist = values.get("mutation_allowlist")
-        if not isinstance(allowlist, list):
-            raise ValueError("C0 authorization mutation_allowlist must be a list")
-        values["mutation_allowlist"] = tuple(str(item) for item in allowlist)
-        return cls(**values)
+# 保留 gate-semantic registry 分类；四个 retired C0 CLI 从不读取该逻辑引用。
+C0_RETIRED_GATE_LEDGER_REF = "process/state/GATE-LEDGER.ndjson"
 
 
 def _as_bool(value: Any, *, default: bool = False) -> bool:
@@ -731,303 +656,27 @@ def _load_trait(raw: str) -> dict[str, Any]:
     return data
 
 
-def _read_runtime_json(project_root: Path, logical_ref: str) -> dict[str, Any]:
-    if not logical_ref.startswith("process/"):
-        raise ValueError(f"C0 input must be a process logical ref: {logical_ref}")
-    path = _resolve_runtime_ref(project_root, logical_ref)
-    if not path.is_file():
-        raise ValueError(f"C0 input is missing: {logical_ref}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"C0 input is invalid JSON: {logical_ref}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"C0 input must contain a JSON object: {logical_ref}")
-    return payload
-
-
-def _git_head_oid(repo_root: Path) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo_root,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    oid = result.stdout.strip()
-    if result.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", oid):
-        raise ValueError(f"unable to read exact git HEAD for {repo_root.name}")
-    return oid
-
-
-def _run_c0_command(project_root: Path, args: list[str]) -> dict[str, Any]:
-    environment = dict(os.environ)
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    environment["PYTHONPATH"] = str(project_root)
-    result = subprocess.run(
-        [sys.executable, "-m", "meta_flow.cli", *args],
-        cwd=project_root,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return {
-        "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }
-
-
-def _c0_consumer_commands(
+def _retired_c0_result(
+    command: str,
     *,
-    story_inputs: list[dict[str, str]],
-    s03_lld_ref: str,
-) -> dict[str, list[list[str]]]:
-    project = ["--project-root", "."]
-    return {
-        "cp result-check": [
-            [
-                "cp",
-                "result-check",
-                "--result",
-                item["result_ref"],
-                *project,
-                "--check-consistency",
-                "--correlation-profile",
-                "audit",
-            ]
-            for item in story_inputs
-        ],
-        "event dispatch-check": [["event", "dispatch-check", *project]],
-        "check handoff-dispatch": [["check", "handoff-dispatch", *project]],
-        "story return-check": [
-            [
-                "story",
-                "return-check",
-                "--packet",
-                item["context_ref"],
-                "--return",
-                item["return_ref"],
-                *project,
-            ]
-            for item in story_inputs
-        ],
-        "story evidence-check": [
-            ["story", "evidence-check", "--index", item["evidence_ref"], *project]
-            for item in story_inputs
-        ],
-        "context check-story-packet": [
-            ["context", "check-story-packet", "--packet", item["context_ref"], *project]
-            for item in story_inputs
-        ],
-        "context sufficiency-check": [
-            ["context", "sufficiency-check", "--packet", item["context_ref"], *project]
-            for item in story_inputs
-        ],
-        "context read-log-check": [["context", "read-log-check", *project]],
-        "story lld-check": [["story", "lld-check", "--lld", s03_lld_ref, *project]],
-        "feature check": [["feature", "check", *project]],
-        "feature trace": [["feature", "trace", *project]],
-    }
-
-
-def _release_root_has_process_entry(project_root: Path) -> bool:
-    """检查发布根是否存在名为 process 的任意目录项。"""
-
-    with os.scandir(project_root) as entries:
-        return any(entry.name == "process" for entry in entries)
-
-
-def _c0_return_ref(result: dict[str, Any], *, story_id: str) -> str:
-    return_ref = str(result.get("return_ref") or f"process/returns/{story_id}.CP6.return.json")
-    if not return_ref.startswith("process/returns/") or not return_ref.endswith(".json"):
-        raise ValueError("C0 return_ref must be one canonical process/returns/*.json ref")
-    return return_ref
-
-
-def build_c0_dry_run(
-    *,
-    project_root: Path,
     cr_id: str,
     work_id: str,
-    story_result_refs: list[str],
-) -> state_transition.C0ResultV1:
-    """重放 bootstrap wave，并用一个 C0 projector 归一化 11 个公共 consumer。"""
-
-    project_root = project_root.resolve()
-    if len(story_result_refs) != 3 or len(set(story_result_refs)) != 3:
-        raise ValueError("c0-dry-run requires exactly three distinct --story-result refs")
-    process_project = _resolve_runtime_ref(project_root, "process/PROJECT.yaml")
-    if not process_project.is_file():
-        raise ValueError("bound process/PROJECT.yaml is missing")
-    process_root = process_project.parent
-    release_oid = _git_head_oid(project_root)
-    process_oid = _git_head_oid(process_root)
-    work = load_work(process_root, work_id)
-
-    story_inputs: list[dict[str, str]] = []
-    frozen_evidence: list[dict[str, Any]] = []
-    input_evidence_refs: list[str] = []
-    initial_blockers: list[str] = []
-    for result_ref in story_result_refs:
-        result = _read_runtime_json(project_root, result_ref)
-        story_id = str(result.get("story_id") or "")
-        if str(result.get("cr_id") or "") != cr_id:
-            initial_blockers.append(f"C0_CR_ID_MISMATCH:{result_ref}")
-        if (
-            str(result.get("checkpoint") or "") != "CP6"
-            or str(result.get("decision") or "") != "PASS"
-        ):
-            initial_blockers.append(f"C0_CP6_RESULT_NOT_PASS:{result_ref}")
-        if not story_id:
-            raise ValueError(f"C0 result is missing story_id: {result_ref}")
-        context_ref = str(result.get("context_ref") or "")
-        evidence_ref = str(result.get("evidence_ref") or "")
-        return_ref = _c0_return_ref(result, story_id=story_id)
-        return_payload = _read_runtime_json(project_root, return_ref)
-        evidence_payload = _read_runtime_json(project_root, evidence_ref)
-        dependency_digests = {
-            "cp6_result": canonical_digest(result),
-            "return_packet": canonical_digest(return_payload),
-            "evidence_index": canonical_digest(evidence_payload),
-        }
-        frozen = FrozenCp6EvidenceV1(
-            story_id=story_id,
-            release_oid=release_oid,
-            process_oid=process_oid,
-            scope_digest=work.scope.digest,
-            implementation_digest=canonical_digest(return_payload),
-            dependency_digests=dependency_digests,
-            cp6_result_ref=result_ref,
-        )
-        frozen_evidence.append(frozen.as_dict())
-        input_evidence_refs.extend((result_ref, return_ref, evidence_ref))
-        story_inputs.append(
-            {
-                "story_id": story_id,
-                "result_ref": result_ref,
-                "return_ref": return_ref,
-                "evidence_ref": evidence_ref,
-                "context_ref": context_ref,
-                "summary_ref": str(result.get("summary_ref") or ""),
-            }
-        )
-    story_inputs.sort(key=lambda item: item["story_id"])
-    frozen_evidence.sort(key=lambda item: str(item["story_id"]))
-    if [item["story_id"] for item in story_inputs] != [
-        f"STORY-{cr_id.replace('-', '')}-S01",
-        f"STORY-{cr_id.replace('-', '')}-S02",
-        f"STORY-{cr_id.replace('-', '')}-S03",
-    ]:
-        initial_blockers.append("C0_BOOTSTRAP_STORY_SET_MISMATCH")
-    if work.release_base_oid != release_oid:
-        initial_blockers.append("C0_RELEASE_OID_DRIFT")
-    if work.process_base_oid != process_oid:
-        initial_blockers.append("C0_PROCESS_OID_DRIFT")
-    if _release_root_has_process_entry(project_root):
-        initial_blockers.append("C0_RELEASE_PROCESS_ENTRY_MUST_BE_ABSENT")
-
-    s03 = next((item for item in story_inputs if item["story_id"].endswith("-S03")), None)
-    if s03 is None:
-        raise ValueError("c0-dry-run requires the S03 CP6 result")
-    summary_name = Path(s03["summary_ref"]).name
-    if not summary_name.startswith("CP6-") or not summary_name.endswith("-CODING-DONE.md"):
-        raise ValueError("S03 summary_ref cannot derive the approved LLD ref")
-    s03_lld_ref = f"process/stories/{summary_name[4 : -len('-CODING-DONE.md')]}-LLD.md"
-
-    commands = _c0_consumer_commands(story_inputs=story_inputs, s03_lld_ref=s03_lld_ref)
-    consumer_inventory = [
-        state_transition.project_c0_consumer(
-            consumer_id=consumer_id,
-            operation=operation,
-            attempts=[_run_c0_command(project_root, command) for command in commands[operation]],
-            absolute_process_path=str(process_root),
-        )
-        for consumer_id, operation in C0_CONSUMERS
-    ]
-    planned_transitions = [
-        {
-            "subject": item["story_id"],
-            "from": "bootstrap-cp6-pass",
-            "to": "ready-for-verification",
-            "apply_required": True,
-        }
-        for item in story_inputs
-    ]
-    planned_transitions.append(
-        {
-            "subject": cr_id,
-            "from": "CUTOVER-GATE-C0-blocked",
-            "to": "post-C0-native-wave",
-            "unblocks": [
-                f"STORY-{cr_id.replace('-', '')}-S04",
-                f"STORY-{cr_id.replace('-', '')}-S05",
-            ],
-            "apply_required": True,
-        }
-    )
-    mutation_allowlist = (
-        "process/DEVELOPMENT-PLAN.yaml",
-        f"process/checks/C0-{cr_id}-PROJECTOR-CUTOVER.result.json",
-        f"process/checks/C0-{cr_id}-PROJECTOR-CUTOVER.summary.md",
-        "process/state/CHECKPOINT-LEDGER.ndjson",
-        "process/state/GATE-LEDGER.ndjson",
-    )
-    return state_transition.build_c0_result(
-        cr_id=cr_id,
-        release_oid=release_oid,
-        process_oid=process_oid,
-        scope_digest=work.scope.digest,
-        input_evidence_refs=input_evidence_refs,
-        frozen_evidence=frozen_evidence,
-        consumer_inventory=consumer_inventory,
-        planned_transitions=planned_transitions,
-        mutation_allowlist=mutation_allowlist,
-        initial_blockers=initial_blockers,
-    )
-
-
-def _portable_c0_error(
-    exc: Exception,
-    *,
-    project_root: Path,
-    process_root: Path | None = None,
-) -> str:
-    text = str(exc)
-    replacements = [(str(project_root.resolve()), "<release-root>")]
-    if process_root is not None:
-        replacements.append((str(process_root.resolve()), "<process-root>"))
-    for source, replacement in replacements:
-        text = text.replace(source, replacement)
-    return text
-
-
-def apply_c0_cutover(
-    *,
-    project_root: Path,
-    cr_id: str,
-    work_id: str,
-    story_result_refs: list[str],
     expected_plan_digest: str,
-    authorization: C0AuthorizationV1 | None,
-    _fail_after_replace: int | None = None,
 ) -> dict[str, Any]:
-    """永久禁用旧 C0 V1 mutation；调用方必须迁移到 C0 V2 owner。"""
+    """四个保留 C0 CLI 的共同零 I/O retired forwarding。"""
 
-    return _c0_v1_disabled_result()
-
-
-def _c0_v1_disabled_result() -> dict[str, Any]:
-    """返回所有 V1 公共和 Python API 共用的稳定 fail-closed 结果。"""
-
-    return {
-        "status": "BLOCKED",
-        "decision": "BLOCKED",
-        "reason": C0_V1_DISABLED_REASON,
-        "replacement_operation": "route-c0-cutover-apply",
-        "mutation_count": 0,
-    }
+    if command in {"c0-apply", "c0-cutover-apply"}:
+        return c0_cutover.apply_c0_cutover(
+            project_root=Path("."),
+            work_id=work_id,
+            expected_plan_digest=expected_plan_digest,
+        )
+    return c0_cutover.build_c0_cutover_plan(
+        project_root=Path("."),
+        work_id=work_id,
+        cr_id=cr_id,
+        diagnostic_ref=C0_RETIRED_GATE_LEDGER_REF,
+    ).as_dict()
 
 
 def _print_route_help() -> None:
@@ -1036,18 +685,18 @@ def _print_route_help() -> None:
         "Commands:\n"
         "  plan  Derive a CR route plan from cr_type, cr_trait, and gate_profile.\n\n"
         "  check Validate a CR route_plan_ref against CR frontmatter.\n\n"
-        "  c0-dry-run Replay bootstrap CP6 evidence through the canonical C0 projector.\n\n"
-        "  c0-apply Legacy V1 mutation is permanently disabled; use c0-cutover-apply.\n\n"
-        "  c0-cutover-plan Freeze the V2 first-activation five-target transaction.\n\n"
-        "  c0-cutover-apply Apply one typed, single-use V2 cutover transaction.\n\n"
+        "  c0-dry-run Retired compatibility endpoint; returns fail-closed zero-write plan.\n\n"
+        "  c0-apply Retired compatibility endpoint; returns fail-closed zero-write receipt.\n\n"
+        "  c0-cutover-plan Retired V2 compatibility endpoint; no plan is frozen or applied.\n\n"
+        "  c0-cutover-apply Retired V2 compatibility endpoint; no transaction is applied.\n\n"
         "Examples:\n"
         "  meta-flow route plan --cr-type process --gate-profile process-lite --cr-trait '{\"uses_existing_evidence_only\": true}'\n"
         "  meta-flow route plan --from-cr process/changes/CR-045.md --output process/checks/CP0-CR045.route-plan.json --project-root .\n"
         "  meta-flow route check --from-cr process/changes/CR-045.md --project-root .\n"
-        "  meta-flow route c0-dry-run --project-root . --cr-id CR-061 --story-result process/checks/CP6-STORY-CR061-S01.result.json --story-result process/checks/CP6-STORY-CR061-S02.result.json --story-result process/checks/CP6-STORY-CR061-S03.result.json --format json\n"
-        "  meta-flow route c0-apply --project-root . --cr-id CR-061 --story-result process/checks/CP6-STORY-CR061-S01.result.json --story-result process/checks/CP6-STORY-CR061-S02.result.json --story-result process/checks/CP6-STORY-CR061-S03.result.json --expected-plan-digest <digest> --authorization-json '{...}' --apply\n"
-        "  meta-flow route c0-cutover-plan --project-root . --cr-id CR-063 --work-id WORK-063 --story-result process/checks/CP6-STORY-CR063-S01.result.json --story-result process/checks/CP6-STORY-CR063-S02.result.json --story-result process/checks/CP6-STORY-CR063-S03.result.json --format json\n"
-        "  meta-flow route c0-cutover-apply --project-root . --cr-id CR-063 --work-id WORK-063 --story-result process/checks/CP6-STORY-CR063-S01.result.json --story-result process/checks/CP6-STORY-CR063-S02.result.json --story-result process/checks/CP6-STORY-CR063-S03.result.json --expected-plan-digest <digest> --authorization-json '{...}' --apply\n"
+        "  meta-flow route c0-dry-run --project-root . --cr-id CR-064 --format json  # retired, fail-closed\n"
+        "  meta-flow route c0-apply --project-root . --cr-id CR-064 --format json  # retired, zero-write\n"
+        "  meta-flow route c0-cutover-plan --project-root . --cr-id CR-064 --work-id WORK-064 --format json  # retired, fail-closed\n"
+        "  meta-flow route c0-cutover-apply --project-root . --cr-id CR-064 --work-id WORK-064 --format json  # retired, zero-write\n"
     )
 
 
@@ -1074,85 +723,16 @@ def main(argv: list[str] | None = None) -> int:
             parser.add_argument("--authorization-json", default="")
             parser.add_argument("--apply", action="store_true")
         parsed = parser.parse_args(args[1:])
-        if command == "c0-apply" and parsed.apply:
-            result = _c0_v1_disabled_result()
-            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-            return 2
-        if command == "c0-cutover-apply" and parsed.apply:
-            try:
-                authorization_payload = (
-                    json.loads(parsed.authorization_json) if parsed.authorization_json else None
-                )
-                if authorization_payload is not None and not isinstance(
-                    authorization_payload,
-                    dict,
-                ):
-                    raise ValueError("C0 V2 authorization JSON must contain an object")
-                authorization = (
-                    c0_cutover.C0CutoverAuthorizationV2.from_dict(authorization_payload)
-                    if authorization_payload is not None
-                    else None
-                )
-
-                def semantic_plan_factory() -> state_transition.C0ResultV1:
-                    return build_c0_dry_run(
-                        project_root=parsed.project_root,
-                        cr_id=parsed.cr_id,
-                        work_id=parsed.work_id,
-                        story_result_refs=parsed.story_result,
-                    )
-
-                result = c0_cutover.apply_c0_cutover(
-                    project_root=parsed.project_root,
-                    work_id=parsed.work_id,
-                    expected_plan_digest=parsed.expected_plan_digest,
-                    authorization=authorization,
-                    semantic_plan_factory=semantic_plan_factory,
-                )
-            except (json.JSONDecodeError, ValueError) as exc:
-                result = {
-                    "status": "BLOCKED",
-                    "reason": _portable_c0_error(
-                        exc,
-                        project_root=parsed.project_root,
-                    ),
-                    "mutation_count": 0,
-                }
-            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-            return 0 if result.get("status") in {"PASS", "NO_CHANGE"} else 2
-        try:
-            semantic_result = build_c0_dry_run(
-                project_root=parsed.project_root,
-                cr_id=parsed.cr_id,
-                work_id=parsed.work_id,
-                story_result_refs=parsed.story_result,
-            )
-            if command in {"c0-cutover-plan", "c0-cutover-apply"}:
-                cutover_plan = c0_cutover.build_c0_cutover_plan(
-                    project_root=parsed.project_root,
-                    work_id=parsed.work_id,
-                    semantic_plan=semantic_result,
-                )
-                payload = cutover_plan.as_dict()
-                print(
-                    json.dumps(
-                        payload,
-                        ensure_ascii=False,
-                        indent=2,
-                        sort_keys=True,
-                    )
-                )
-                return 0 if cutover_plan.decision == "READY" else 1
-            result = semantic_result
-        except (OSError, ProcessRouteError, ValueError) as exc:
-            print(
-                json.dumps(
-                    {"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, sort_keys=True
-                )
-            )
-            return 2
-        print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
-        return 0 if result.decision == "READY" else 1
+        # C0 已完全退役：四个历史命令在任何参数组合下都不能读取项目、解析授权
+        # 或构建 semantic plan；只转发到 c0_cutover 的 fail-closed compatibility stub。
+        result = _retired_c0_result(
+            command,
+            cr_id=parsed.cr_id,
+            work_id=parsed.work_id,
+            expected_plan_digest=getattr(parsed, "expected_plan_digest", ""),
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 2 if command in {"c0-apply", "c0-cutover-apply"} else 1
     if command not in {"plan", "check"}:
         raise SystemExit(
             f"unknown route command: {command}. Currently supported: plan, check, "

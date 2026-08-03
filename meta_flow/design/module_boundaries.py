@@ -236,6 +236,19 @@ def _imports_from_file(path: Path) -> list[tuple[str, int]]:
     return imports
 
 
+def _top_level_imports_from_file(path: Path) -> list[tuple[str, int]]:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (SyntaxError, UnicodeDecodeError):
+        return []
+    def scan(nodes: list[ast.stmt]) -> list[tuple[str, int]]:
+        imports = [(alias.name, node.lineno) for node in nodes if isinstance(node, ast.Import) for alias in node.names] + [(node.module, node.lineno) for node in nodes if isinstance(node, ast.ImportFrom) and node.module]
+        for node in nodes:
+            if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
+                imports.extend(scan(node.body))
+        return imports
+    return scan(tree.body)
+
 def collect_import_records(project_root: Path) -> list[ImportRecord]:
     project_root = project_root.resolve()
     data = load_boundaries(project_root)
@@ -257,6 +270,80 @@ def collect_import_records(project_root: Path) -> list[ImportRecord]:
                 )
             )
     return records
+
+
+def check_import_graph(
+    project_root: Path, *, targets: set[str], touched: set[str],
+    allowed_edges: set[tuple[str, str]],
+    known_sccs: dict[frozenset[str], frozenset[tuple[str, str]]] | None = None,
+) -> dict[str, list[Any]]:
+    """检查目标闭包的 AST import 图，不把已知 SCC 视为通用豁免。"""
+    root = project_root.resolve()
+    modules = {path.relative_to(root).with_suffix("").as_posix().replace("/", "."): path for path in _iter_python_files(root)}
+    graph: dict[str, set[str]] = {module: set() for module in modules}
+    for source, path in modules.items():
+        for imported, _line_no in _top_level_imports_from_file(path):
+            candidates = [module for module in modules if _matches_prefix(imported, module)]
+            if candidates:
+                graph[source].add(max(candidates, key=len))
+    closure = set(targets) | set(touched)
+    edges = {(source, target) for source in closure for target in graph.get(source, set()) if target in closure}
+    undeclared = sorted(edges - allowed_edges)
+    index = 0
+    indexes: dict[str, int] = {}
+    lowlinks: dict[str, int] = {}
+    stack: list[str] = []
+    active: set[str] = set()
+    components: list[frozenset[str]] = []
+
+    def visit(node: str) -> None:
+        nonlocal index
+        indexes[node] = lowlinks[node] = index
+        index += 1
+        stack.append(node)
+        active.add(node)
+        for target in sorted(graph.get(node, set())):
+            if target not in indexes:
+                visit(target)
+                lowlinks[node] = min(lowlinks[node], lowlinks[target])
+            elif target in active:
+                lowlinks[node] = min(lowlinks[node], indexes[target])
+        if lowlinks[node] == indexes[node]:
+            component: set[str] = set()
+            while (member := stack.pop()) != node:
+                active.remove(member)
+                component.add(member)
+            active.remove(node)
+            component.add(node)
+            components.append(frozenset(component))
+
+    for node in sorted(graph):
+        if node not in indexes:
+            visit(node)
+    sccs = sorted((component for component in components if len(component) > 1), key=lambda item: tuple(sorted(item)))
+    self_loops = sorted(node for node in closure if node in graph.get(node, set()))
+    actual_known = {component: frozenset(edge for edge in {(a, b) for a in graph for b in graph[a]} if edge[0] in component and edge[1] in component) for component in sccs}
+    frozen = known_sccs or {}
+    drift = sorted(
+        f"known SCC membership/edge drift: {','.join(sorted(component))}"
+        for component, expected_edges in frozen.items()
+        if actual_known.get(component) != expected_edges
+    )
+    findings = [
+        *(f"undeclared import edge: {source} -> {target}" for source, target in undeclared),
+        *(f"SCC(size>1): {','.join(sorted(component))}" for component in sccs if component <= closure and component not in frozen),
+        *(f"self-loop: {node}" for node in self_loops),
+        *drift,
+    ]
+    return {
+        "closure": sorted(closure),
+        "edges": sorted(edges),
+        "undeclared_edges": undeclared,
+        "sccs": [sorted(component) for component in sccs],
+        "self_loops": self_loops,
+        "known_scc_drift": drift,
+        "findings": sorted(findings),
+    }
 
 
 def check_imports(project_root: Path) -> tuple[list[str], list[str]]:

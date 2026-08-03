@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 
 VALIDATION_ROOT_REL = Path("process/validation")
 EVIDENCE_ROOT_REL = Path("process/evidence")
@@ -177,10 +177,16 @@ def now_utc() -> str:
 
 
 def _rel(project_root: Path, path: Path) -> str:
+    root = project_root.resolve()
+    resolved = path.resolve()
     try:
-        return path.relative_to(project_root).as_posix()
+        return resolved.relative_to(root).as_posix()
     except ValueError:
-        return path.as_posix()
+        process_root = _resolve_runtime_ref(root, "process/PROJECT.yaml").parent.resolve()
+        try:
+            return f"process/{resolved.relative_to(process_root).as_posix()}"
+        except ValueError:
+            return path.as_posix()
 
 
 def _safe_id(value: str) -> str:
@@ -318,7 +324,7 @@ def _counter_value(data: dict[str, Any], key: str) -> int:
     return 0
 
 
-def _build_forbidden_ops_summary(profile: dict[str, Any], ops_counter: Path | None) -> dict[str, Any]:
+def _build_forbidden_ops_summary(project_root: Path, profile: dict[str, Any], ops_counter: Path | None, data: dict[str, Any] | None = None) -> dict[str, Any]:
     forbidden = [str(item) for item in profile.get("forbidden_operations") or [] if str(item)]
     if ops_counter is None:
         return {
@@ -329,12 +335,12 @@ def _build_forbidden_ops_summary(profile: dict[str, Any], ops_counter: Path | No
             "violations": [],
             "reason": "no operation counter file supplied",
         }
-    data = _load_json(ops_counter)
+    data = _load_json(ops_counter) if data is None else data
     counts = {name: _counter_value(data, f"{name}_count") for name in forbidden}
     violations = [name for name, count in counts.items() if count > 0]
     return {
         "status": "FAIL" if violations else "PASS",
-        "source_ref": ops_counter.as_posix(),
+        "source_ref": _rel(project_root, ops_counter),
         "real_lake_read_count": _counter_value(data, "real_lake_read_count"),
         "forbidden_operation_counts": counts,
         "violations": violations,
@@ -342,7 +348,7 @@ def _build_forbidden_ops_summary(profile: dict[str, Any], ops_counter: Path | No
     }
 
 
-def _build_admission_summary(admission_package: Path | None) -> dict[str, Any]:
+def _build_admission_summary(project_root: Path, admission_package: Path | None, data: dict[str, Any] | None = None) -> dict[str, Any]:
     if admission_package is None:
         return {
             "status": "UNKNOWN",
@@ -350,10 +356,10 @@ def _build_admission_summary(admission_package: Path | None) -> dict[str, Any]:
             "paper_candidate": None,
             "reason": "no admission package supplied",
         }
-    data = _load_json(admission_package)
+    data = _load_json(admission_package) if data is None else data
     return {
         "status": str(data.get("package_status") or data.get("admission_package_status") or data.get("status") or "UNKNOWN"),
-        "source_ref": admission_package.as_posix(),
+        "source_ref": _rel(project_root, admission_package),
         "paper_candidate": data.get("paper_candidate"),
         "reason": str(data.get("reason") or data.get("summary") or ""),
     }
@@ -384,9 +390,14 @@ def run_validation_task(
     created_at = now_utc()
     run_id = f"{_safe_id(cr_id)}-{_safe_id(profile_name)}-{created_at.replace(':', '').replace('+', 'Z')}"
     task_dir = (
-        output_dir
-        or (_resolve_runtime_ref(project_root, VALIDATION_ROOT_REL.as_posix()) / cr_id / run_id)
+        _resolve_runtime_path(project_root, output_dir)
+        if output_dir is not None
+        else _resolve_runtime_ref(project_root, VALIDATION_ROOT_REL.as_posix()) / cr_id / run_id
     ).resolve()
+    resolved_ops_counter = _resolve_runtime_path(project_root, ops_counter) if ops_counter else None
+    resolved_admission_package = _resolve_runtime_path(project_root, admission_package) if admission_package else None
+    ops_payload = _load_json(resolved_ops_counter) if resolved_ops_counter else None
+    admission_payload = _load_json(resolved_admission_package) if resolved_admission_package else None
     task_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = task_dir / RUN_LEDGER_NAME
     _append_ledger(
@@ -426,8 +437,8 @@ def run_validation_task(
         )
 
     rerun_comparison = _build_rerun_comparison(profile, results, executed=execute)
-    forbidden_ops_summary = _build_forbidden_ops_summary(profile, ops_counter.resolve() if ops_counter else None)
-    admission_summary = _build_admission_summary(admission_package.resolve() if admission_package else None)
+    forbidden_ops_summary = _build_forbidden_ops_summary(project_root, profile, resolved_ops_counter, ops_payload)
+    admission_summary = _build_admission_summary(project_root, resolved_admission_package, admission_payload)
     task_status = "PASS"
     if not execute:
         task_status = "PLANNED"

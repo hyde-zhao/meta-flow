@@ -7,10 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
 
-from meta_flow.checks import state_transition
-from meta_flow.checks.frozen_cp6_evidence import FrozenCp6EvidenceV1
 from meta_flow.policies import gate_profiles, route_plan
 from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
 from meta_flow.project.onboarding_contract import (
@@ -25,94 +22,9 @@ def checkpoints(plan: dict[str, object]) -> list[str]:
 
 
 class RoutePlanTests(unittest.TestCase):
-    def _ready_c0_result(
-        self,
-        *,
-        scope_digest: str = "c" * 64,
-    ) -> state_transition.C0ResultV1:
-        frozen = [
-            FrozenCp6EvidenceV1(
-                story_id=f"STORY-CR061-S0{index}",
-                release_oid="a" * 40,
-                process_oid="b" * 40,
-                scope_digest=scope_digest,
-                implementation_digest=chr(99 + index) * 64,
-                dependency_digests={"upstream": str(index) * 64},
-                cp6_result_ref=f"process/checks/CP6-STORY-CR061-S0{index}.result.json",
-            ).as_dict()
-            for index in range(1, 4)
-        ]
-        consumers = [
-            state_transition.project_c0_consumer(
-                consumer_id=consumer_id,
-                operation=operation,
-                attempts=[{"returncode": 0, "stdout": "PASS", "stderr": ""}],
-                absolute_process_path="/bound/process",
-            )
-            for consumer_id, operation in route_plan.C0_CONSUMERS
-        ]
-        return state_transition.build_c0_result(
-            cr_id="CR-061",
-            release_oid="a" * 40,
-            process_oid="b" * 40,
-            scope_digest=scope_digest,
-            input_evidence_refs=[
-                f"process/{kind}/STORY-CR061-S0{index}.json"
-                for index in range(1, 4)
-                for kind in ("checks", "returns", "evidence")
-            ],
-            frozen_evidence=frozen,
-            consumer_inventory=consumers,
-            planned_transitions=[
-                {
-                    "subject": f"STORY-CR061-S0{index}",
-                    "from": "bootstrap-cp6-pass",
-                    "to": "ready-for-verification",
-                }
-                for index in range(1, 4)
-            ],
-            mutation_allowlist=[
-                "process/DEVELOPMENT-PLAN.yaml",
-                "process/checks/C0-CR-061-PROJECTOR-CUTOVER.result.json",
-                "process/checks/C0-CR-061-PROJECTOR-CUTOVER.summary.md",
-                "process/state/CHECKPOINT-LEDGER.ndjson",
-                "process/state/GATE-LEDGER.ndjson",
-            ],
-        )
-
-    def _c0_authorization(
-        self,
-        plan: state_transition.C0ResultV1,
-        *,
-        authorization_id: str = "AUTH-CR061-C0-TEST-001",
-    ) -> route_plan.C0AuthorizationV1:
-        return route_plan.C0AuthorizationV1.from_dict(
-            {
-                "schema_version": 1,
-                "authorization_id": authorization_id,
-                "authorization_source": route_plan.C0_AUTHORIZATION_SOURCE,
-                "authorization_kind": route_plan.C0_AUTHORIZATION_KIND,
-                "operation": route_plan.C0_APPLY_OPERATION,
-                "decision_ref": "process/checkpoints/C0-CR-061-PROJECTOR-CUTOVER-AUTHORIZATION.md",
-                "cr_id": "CR-061",
-                "work_id": "GOV-006-KERNEL-001",
-                "expected_release_oid": plan.release_oid,
-                "expected_process_oid": plan.process_oid,
-                "scope_digest": plan.scope_digest,
-                "plan_digest": plan.as_dict()["plan_digest"],
-                "mutation_allowlist": list(plan.mutation_allowlist),
-                "expires_at": "2099-01-01T00:00:00+00:00",
-                "single_use": True,
-            }
-        )
-
-    def test_c0_dry_run_cli_uses_public_route_entry_and_prints_21_key_result(self) -> None:
-        expected = self._ready_c0_result()
+    def test_c0_dry_run_cli_forwards_to_retired_stub_without_semantic_plan(self) -> None:
         output = StringIO()
-        with (
-            patch.object(route_plan, "build_c0_dry_run", return_value=expected) as builder,
-            redirect_stdout(output),
-        ):
+        with redirect_stdout(output):
             exit_code = route_plan.main(
                 [
                     "c0-dry-run",
@@ -132,133 +44,10 @@ class RoutePlanTests(unittest.TestCase):
             )
 
         payload = json.loads(output.getvalue())
-        self.assertEqual(0, exit_code)
-        self.assertEqual(21, len(payload))
-        self.assertEqual("READY", payload["decision"])
-        builder.assert_called_once()
-
-    def test_release_root_process_entry_detection_is_fail_closed_for_all_entry_types(self) -> None:
-        def create_directory(path: Path) -> None:
-            path.mkdir()
-
-        def create_file(path: Path) -> None:
-            path.write_text("not a process root\n", encoding="utf-8")
-
-        def create_symlink(path: Path) -> None:
-            target = path.parent / "installed-process"
-            target.mkdir()
-            path.symlink_to(target, target_is_directory=True)
-
-        def create_broken_symlink(path: Path) -> None:
-            path.symlink_to(path.parent / "missing-process", target_is_directory=True)
-
-        creators = {
-            "directory": create_directory,
-            "file": create_file,
-            "symlink": create_symlink,
-            "broken-symlink": create_broken_symlink,
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            self.assertFalse(route_plan._release_root_has_process_entry(Path(directory)))
-
-        for label, creator in creators.items():
-            with self.subTest(entry_type=label), tempfile.TemporaryDirectory() as directory:
-                release_root = Path(directory)
-                creator(release_root / "process")
-                self.assertTrue(route_plan._release_root_has_process_entry(release_root))
-
-    def test_c0_return_ref_prefers_versioned_result_contract_and_rejects_noncanonical_ref(
-        self,
-    ) -> None:
-        self.assertEqual(
-            "process/returns/STORY-CR061-S01.CP6.revalidation-01.return.json",
-            route_plan._c0_return_ref(
-                {
-                    "return_ref": (
-                        "process/returns/"
-                        "STORY-CR061-S01.CP6.revalidation-01.return.json"
-                    )
-                },
-                story_id="STORY-CR061-S01",
-            ),
-        )
-        self.assertEqual(
-            "process/returns/STORY-CR061-S01.CP6.return.json",
-            route_plan._c0_return_ref({}, story_id="STORY-CR061-S01"),
-        )
-        with self.assertRaisesRegex(ValueError, "canonical process/returns"):
-            route_plan._c0_return_ref(
-                {"return_ref": "process/checks/not-a-return.json"},
-                story_id="STORY-CR061-S01",
-            )
-
-    def test_c0_authorization_rejects_unknown_field(self) -> None:
-        plan = self._ready_c0_result()
-        payload = {
-            **self._c0_authorization(plan).__dict__,
-            "mutation_allowlist": list(plan.mutation_allowlist),
-            "unknown": True,
-        }
-
-        with self.assertRaisesRegex(ValueError, "fields mismatch"):
-            route_plan.C0AuthorizationV1.from_dict(payload)
-
-    def test_c0_v1_python_apply_is_disabled_before_any_dry_run_or_io(self) -> None:
-        with patch.object(
-            route_plan,
-            "build_c0_dry_run",
-            side_effect=AssertionError("V1 apply must not build a semantic plan"),
-        ) as builder:
-            result = route_plan.apply_c0_cutover(
-                project_root=Path("/must-not-be-read"),
-                cr_id="CR-061",
-                work_id="GOV-006-KERNEL-001",
-                story_result_refs=["S01", "S02", "S03"],
-                expected_plan_digest="ignored",
-                authorization=None,
-            )
-
-        builder.assert_not_called()
-        self.assertEqual("BLOCKED", result["status"])
-        self.assertEqual("C0_V1_MUTATION_DISABLED", result["reason"])
-        self.assertEqual("route-c0-cutover-apply", result["replacement_operation"])
-        self.assertEqual(0, result["mutation_count"])
-
-    def test_c0_v1_cli_apply_is_disabled_before_authorization_parsing_or_io(self) -> None:
-        output = StringIO()
-        with (
-            patch.object(
-                route_plan,
-                "build_c0_dry_run",
-                side_effect=AssertionError("V1 CLI apply must not build a semantic plan"),
-            ) as builder,
-            redirect_stdout(output),
-        ):
-            exit_code = route_plan.main(
-                [
-                    "c0-apply",
-                    "--project-root",
-                    "/must-not-be-read",
-                    "--cr-id",
-                    "CR-061",
-                    "--authorization-json",
-                    "{not-json",
-                    "--apply",
-                ]
-            )
-
-        builder.assert_not_called()
-        self.assertEqual(2, exit_code)
-        self.assertEqual(
-            {
-                "status": "BLOCKED",
-                "decision": "BLOCKED",
-                "reason": "C0_V1_MUTATION_DISABLED",
-                "replacement_operation": "route-c0-cutover-apply",
-                "mutation_count": 0,
-            },
-            json.loads(output.getvalue()),
-        )
+        self.assertEqual(1, exit_code)
+        self.assertEqual("BLOCKED", payload["decision"])
+        self.assertEqual(["C0_V2_RETIRED"], payload["blockers"])
+        self.assertEqual(0, payload["planned_mutation_count"])
 
     def test_route_plan_check_resolves_logical_ref_through_binding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
