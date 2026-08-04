@@ -19,6 +19,7 @@ from meta_flow.project.process_route import (
     _resolve_runtime_path,
     _resolve_runtime_ref,
 )
+from meta_flow.project.read_contract import ReadContextProtocol
 
 STATE_SCHEMA_VERSION = 2
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
@@ -98,9 +99,24 @@ SECRET_LIKE_KEY_PARTS = (
 )
 CURRENT_FIELD_BUDGETS = {
     "next_action": {"kind": "object", "max_text_bytes": 160, "max_json_bytes": 384},
-    "source_refs": {"kind": "list", "max_items": 24, "max_item_json_bytes": 256, "max_json_bytes": 4096},
-    "open_risks": {"kind": "list", "max_items": 16, "max_item_json_bytes": 256, "max_json_bytes": 2048},
-    "authz_policy_refs": {"kind": "list[str]", "max_items": 16, "max_item_json_bytes": 128, "max_json_bytes": 1024},
+    "source_refs": {
+        "kind": "list",
+        "max_items": 24,
+        "max_item_json_bytes": 256,
+        "max_json_bytes": 4096,
+    },
+    "open_risks": {
+        "kind": "list",
+        "max_items": 16,
+        "max_item_json_bytes": 256,
+        "max_json_bytes": 2048,
+    },
+    "authz_policy_refs": {
+        "kind": "list[str]",
+        "max_items": 16,
+        "max_item_json_bytes": 128,
+        "max_json_bytes": 1024,
+    },
     "routing_ref": {"kind": "scalar", "max_bytes": 256},
     "active_context_ref": {"kind": "scalar", "max_bytes": 256},
     "active_delegation_ref": {"kind": "scalar", "max_bytes": 256},
@@ -271,7 +287,11 @@ def _compact_list_item(value: Any) -> Any:
     compact: dict[str, Any] = {}
     for key in preferred_keys:
         if key in value and value[key] not in (None, "", [], {}):
-            compact[key] = _compact_scalar(value[key]) if not isinstance(value[key], (list, dict)) else value[key]
+            compact[key] = (
+                _compact_scalar(value[key])
+                if not isinstance(value[key], (list, dict))
+                else value[key]
+            )
     if not compact:
         compact = {"summary": _compact_scalar(value.get("summary") or value.get("title") or value)}
     while _json_size(compact) > 256 and compact:
@@ -284,7 +304,9 @@ def _bounded_list(value: Any, *, max_items: int, active_only: bool = False) -> l
     if active_only:
         filtered = []
         for item in raw_items:
-            if isinstance(item, dict) and str(item.get("status") or item.get("lifecycle_status") or "").lower() in {
+            if isinstance(item, dict) and str(
+                item.get("status") or item.get("lifecycle_status") or ""
+            ).lower() in {
                 "closed",
                 "cancelled",
                 "superseded",
@@ -354,7 +376,9 @@ def _budget_severity(mode: str) -> str:
     return "ERROR" if mode == "enforce" else "WARN"
 
 
-def _validate_budget_field(state: dict[str, Any], key: str, findings: list[CurrentStateFinding], *, mode: str) -> None:
+def _validate_budget_field(
+    state: dict[str, Any], key: str, findings: list[CurrentStateFinding], *, mode: str
+) -> None:
     if key not in state:
         return
     value = state[key]
@@ -362,7 +386,13 @@ def _validate_budget_field(state: dict[str, Any], key: str, findings: list[Curre
     kind = budget["kind"]
     if kind == "scalar":
         if not _is_scalar_or_absent(value):
-            _finding(findings, "ERROR", "field_type", f"{key} must be a scalar string or null/empty", key=key)
+            _finding(
+                findings,
+                "ERROR",
+                "field_type",
+                f"{key} must be a scalar string or null/empty",
+                key=key,
+            )
             return
     elif kind == "list[str]":
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
@@ -374,7 +404,13 @@ def _validate_budget_field(state: dict[str, Any], key: str, findings: list[Curre
             return
     elif kind == "object":
         if not isinstance(value, (dict, str)) and not _is_absent_optional(value):
-            _finding(findings, "ERROR", "field_type", f"{key} must be an object, string, or null/empty", key=key)
+            _finding(
+                findings,
+                "ERROR",
+                "field_type",
+                f"{key} must be an object, string, or null/empty",
+                key=key,
+            )
             return
 
     severity = _budget_severity(mode)
@@ -392,7 +428,13 @@ def _validate_budget_field(state: dict[str, Any], key: str, findings: list[Curre
 
     max_text_bytes = budget.get("max_text_bytes")
     if max_text_bytes is not None:
-        text_value = value.get("text") if isinstance(value, dict) else value if isinstance(value, str) else None
+        text_value = (
+            value.get("text")
+            if isinstance(value, dict)
+            else value
+            if isinstance(value, str)
+            else None
+        )
         if isinstance(text_value, str):
             actual_text_bytes = _text_size(text_value)
             if actual_text_bytes > int(max_text_bytes):
@@ -416,7 +458,13 @@ def _validate_budget_field(state: dict[str, Any], key: str, findings: list[Curre
         )
     max_items = budget.get("max_items")
     if max_items is not None and isinstance(value, list) and len(value) > int(max_items):
-        _finding(findings, severity, "field_budget", f"{key} exceeds item budget: {len(value)} > {max_items}", key=key)
+        _finding(
+            findings,
+            severity,
+            "field_budget",
+            f"{key} exceeds item budget: {len(value)} > {max_items}",
+            key=key,
+        )
     max_item_json_bytes = budget.get("max_item_json_bytes")
     if max_item_json_bytes is not None and isinstance(value, list):
         for index, item in enumerate(value):
@@ -431,24 +479,51 @@ def _validate_budget_field(state: dict[str, Any], key: str, findings: list[Curre
                 )
 
 
-def validate_current_state_payload(state: dict[str, Any], *, mode: str = "audit") -> list[CurrentStateFinding]:
+def validate_current_state_payload(
+    state: dict[str, Any], *, mode: str = "audit"
+) -> list[CurrentStateFinding]:
     if mode not in {"audit", "enforce"}:
         raise ValueError(f"unknown current-state validation mode: {mode}")
     findings: list[CurrentStateFinding] = []
     if state.get("schema_version") != STATE_SCHEMA_VERSION:
-        _finding(findings, "ERROR", "schema_version", f"schema_version must be {STATE_SCHEMA_VERSION}", key="schema_version")
+        _finding(
+            findings,
+            "ERROR",
+            "schema_version",
+            f"schema_version must be {STATE_SCHEMA_VERSION}",
+            key="schema_version",
+        )
     for key in sorted(CURRENT_REQUIRED_KEYS):
         if key not in state:
-            _finding(findings, "ERROR", "missing_required", f"missing required field: {key}", key=key)
+            _finding(
+                findings, "ERROR", "missing_required", f"missing required field: {key}", key=key
+            )
     unknown_keys = sorted(set(state) - CURRENT_ALLOWED_KEYS)
     for key in unknown_keys:
         severity = "ERROR" if mode == "enforce" else "WARN"
-        _finding(findings, severity, "unknown_key", f"STATE.current.json contains unknown field: {key}", key=key)
+        _finding(
+            findings,
+            severity,
+            "unknown_key",
+            f"STATE.current.json contains unknown field: {key}",
+            key=key,
+        )
     for key in sorted(DISALLOWED_CURRENT_KEYS):
         if key in state:
-            _finding(findings, "ERROR", "disallowed_key", f"STATE.current.json must not store long-running field: {key}", key=key)
+            _finding(
+                findings,
+                "ERROR",
+                "disallowed_key",
+                f"STATE.current.json must not store long-running field: {key}",
+                key=key,
+            )
     if _contains_secret_like_key(state):
-        _finding(findings, "ERROR", "secret_like_key", "STATE.current.json must not store credential/secret/token/cookie/private-key fields")
+        _finding(
+            findings,
+            "ERROR",
+            "secret_like_key",
+            "STATE.current.json must not store credential/secret/token/cookie/private-key fields",
+        )
     project_state_ref = state.get("project_state_ref")
     if isinstance(project_state_ref, str) and project_state_ref:
         if not _is_relative_state_ref(project_state_ref):
@@ -465,7 +540,13 @@ def validate_current_state_payload(state: dict[str, Any], *, mode: str = "audit"
     # pointers below.  Do not infer it from a historical transition event's
     # stop_reason: the current-state payload is its own truth source.
     if state.get("current_phase") == "delivered":
-        for key in ("active_change", "pending_gate", "active_story", "active_context_ref", "active_delegation_ref"):
+        for key in (
+            "active_change",
+            "pending_gate",
+            "active_story",
+            "active_context_ref",
+            "active_delegation_ref",
+        ):
             if not _is_absent_optional(state.get(key)):
                 _finding(
                     findings,
@@ -485,21 +566,37 @@ def validate_current_state_for_write(state: dict[str, Any]) -> None:
         raise ValueError(f"STATE.current.json enforce validation failed: {messages}")
 
 
-def validate_current_patch(patch: dict[str, Any], *, mode: str = "enforce") -> list[CurrentStateFinding]:
+def validate_current_patch(
+    patch: dict[str, Any], *, mode: str = "enforce"
+) -> list[CurrentStateFinding]:
     if mode not in {"audit", "enforce"}:
         raise ValueError(f"unknown current-state validation mode: {mode}")
     findings: list[CurrentStateFinding] = []
     unknown_keys = sorted(set(patch) - CURRENT_ALLOWED_KEYS)
     for key in unknown_keys:
         severity = "ERROR" if mode == "enforce" else "WARN"
-        _finding(findings, severity, "unknown_patch_key", f"current-state patch contains unknown field: {key}", key=key)
+        _finding(
+            findings,
+            severity,
+            "unknown_patch_key",
+            f"current-state patch contains unknown field: {key}",
+            key=key,
+        )
     for key in sorted(DISALLOWED_CURRENT_KEYS):
         if key in patch:
-            _finding(findings, "ERROR", "disallowed_patch_key", f"current-state patch must not store long-running field: {key}", key=key)
+            _finding(
+                findings,
+                "ERROR",
+                "disallowed_patch_key",
+                f"current-state patch must not store long-running field: {key}",
+                key=key,
+            )
     return findings
 
 
-def _raise_on_error(findings: list[CurrentStateFinding], *, subject: str, actor: str = "", reason: str = "") -> None:
+def _raise_on_error(
+    findings: list[CurrentStateFinding], *, subject: str, actor: str = "", reason: str = ""
+) -> None:
     errors = [finding for finding in findings if finding.severity == "ERROR"]
     if not errors:
         return
@@ -567,7 +664,9 @@ def ensure_base_ledgers(project_root: Path) -> None:
         ledger_path.touch(exist_ok=True)
 
 
-def init_current_state(project_root: Path, *, project_id: str | None = None, force: bool = False) -> Path:
+def init_current_state(
+    project_root: Path, *, project_id: str | None = None, force: bool = False
+) -> Path:
     path = current_state_path(project_root.resolve())
     if path.exists() and not force:
         ensure_base_ledgers(project_root)
@@ -660,8 +759,12 @@ def migrate_legacy_state(project_root: Path) -> dict[str, Any]:
     if not frontmatter:
         raise ValueError(f"legacy STATE.md 缺少 frontmatter: {path}")
 
-    pending_gate = _scalar_value(frontmatter, "pending_gate", section="orchestrator_session") or None
-    pending_checklist_path = _scalar_value(frontmatter, "pending_checklist_path", section="orchestrator_session") or None
+    pending_gate = (
+        _scalar_value(frontmatter, "pending_gate", section="orchestrator_session") or None
+    )
+    pending_checklist_path = (
+        _scalar_value(frontmatter, "pending_checklist_path", section="orchestrator_session") or None
+    )
     next_action_text = _scalar_value(frontmatter, "next_action") or _scalar_value(
         frontmatter, "next_exact_prompt", section="orchestrator_session"
     )
@@ -715,8 +818,20 @@ def _write_current_state_file(path: Path, state: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def load_current_state(project_root: Path) -> dict[str, Any]:
-    return _read_json(current_state_path(project_root.resolve()))
+def load_current_state(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> dict[str, Any]:
+    path = (
+        current_state_path(project_root.resolve())
+        if read_context is None
+        else read_context.resolve_path(STATE_CURRENT_REL.as_posix())
+    )
+    if read_context is None or not path.is_file():
+        return _read_json(path)
+    payload = read_context.read_json(STATE_CURRENT_REL.as_posix())
+    return payload if isinstance(payload, dict) else {}
 
 
 def _existing_rel(project_root: Path, rel_path: Path) -> str | None:
@@ -746,9 +861,7 @@ def _latest_matching_ref(project_root: Path, pattern: str) -> str | None:
     if pattern.startswith("process/"):
         process_root = _resolve_runtime_ref(project_root, "process/PROJECT.yaml").parent
         candidates = [
-            path
-            for path in process_root.glob(pattern.removeprefix("process/"))
-            if path.is_file()
+            path for path in process_root.glob(pattern.removeprefix("process/")) if path.is_file()
         ]
         prefix = "process/"
         relative_root = process_root
@@ -781,12 +894,16 @@ def _is_existing_ref(project_root: Path, rel_path: str) -> bool:
     return _resolve_runtime_path(project_root, path).is_file()
 
 
-def _record_stale_ref(stale_refs: list[dict[str, str]], field: str, rel_path: str, *, reason: str = "missing") -> None:
+def _record_stale_ref(
+    stale_refs: list[dict[str, str]], field: str, rel_path: str, *, reason: str = "missing"
+) -> None:
     if rel_path:
         stale_refs.append({"field": field, "path": rel_path, "reason": reason})
 
 
-def _choose_release_ref(project_root: Path, state: dict[str, Any], status: str, stale_refs: list[dict[str, str]]) -> str | None:
+def _choose_release_ref(
+    project_root: Path, state: dict[str, Any], status: str, stale_refs: list[dict[str, str]]
+) -> str | None:
     release_ref = str(state.get("release_context_ref") or "")
     active_context_ref = str(state.get("active_context_ref") or "")
     if not release_ref and status == "idle" and "RELEASE-CONTEXT" in active_context_ref:
@@ -802,13 +919,17 @@ def _choose_release_ref(project_root: Path, state: dict[str, Any], status: str, 
     )
 
 
-def _choose_handoff_ref(project_root: Path, state: dict[str, Any], stale_refs: list[dict[str, str]]) -> str | None:
+def _choose_handoff_ref(
+    project_root: Path, state: dict[str, Any], stale_refs: list[dict[str, str]]
+) -> str | None:
     handoff_ref = str(state.get("next_session_handoff_ref") or "")
     if handoff_ref:
         if not _is_existing_ref(project_root, handoff_ref):
             _record_stale_ref(stale_refs, "next_session_handoff_ref", handoff_ref)
         return handoff_ref
-    return _latest_matching_ref(project_root, "process/handoffs/NEXT-SESSION-*.md") or _latest_matching_ref(
+    return _latest_matching_ref(
+        project_root, "process/handoffs/NEXT-SESSION-*.md"
+    ) or _latest_matching_ref(
         project_root,
         "process/handoffs/*.md",
     )
@@ -824,19 +945,25 @@ def _choose_story_packet_ref(project_root: Path, state: dict[str, Any]) -> str |
     escaped = active_story.replace("/", "")
     return (
         _latest_matching_ref(project_root, f"process/context/stories/*{escaped}*.work-packet.json")
-        or _latest_matching_ref(project_root, f"process/context/stories/*{escaped}*.verify-packet.json")
+        or _latest_matching_ref(
+            project_root, f"process/context/stories/*{escaped}*.verify-packet.json"
+        )
         or _latest_matching_ref(project_root, f"process/context/stories/*{escaped}*.context.json")
     )
 
 
-def _choose_checkpoint_ref(project_root: Path, state: dict[str, Any], stale_refs: list[dict[str, str]]) -> str | None:
+def _choose_checkpoint_ref(
+    project_root: Path, state: dict[str, Any], stale_refs: list[dict[str, str]]
+) -> str | None:
     checkpoint_ref = str(state.get("pending_checklist_path") or "")
     if checkpoint_ref and not _is_existing_ref(project_root, checkpoint_ref):
         _record_stale_ref(stale_refs, "pending_checklist_path", checkpoint_ref)
     return checkpoint_ref or None
 
 
-def _choose_context_ref(project_root: Path, state: dict[str, Any], status: str, stale_refs: list[dict[str, str]]) -> str | None:
+def _choose_context_ref(
+    project_root: Path, state: dict[str, Any], status: str, stale_refs: list[dict[str, str]]
+) -> str | None:
     if status == "idle":
         return None
     context_ref = str(state.get("active_context_ref") or "")
@@ -845,7 +972,9 @@ def _choose_context_ref(project_root: Path, state: dict[str, Any], status: str, 
     return context_ref or None
 
 
-def _change_ref(project_root: Path, active_change: str, stale_refs: list[dict[str, str]]) -> str | None:
+def _change_ref(
+    project_root: Path, active_change: str, stale_refs: list[dict[str, str]]
+) -> str | None:
     if not active_change:
         return None
     rel_path = f"process/changes/{active_change}.md"
@@ -854,9 +983,18 @@ def _change_ref(project_root: Path, active_change: str, stale_refs: list[dict[st
     return rel_path
 
 
-def build_current_entry(project_root: Path) -> dict[str, Any]:
+def build_current_entry(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+    state_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     project_root = project_root.resolve()
-    state = load_current_state(project_root)
+    state = (
+        dict(state_snapshot)
+        if state_snapshot is not None
+        else load_current_state(project_root, read_context=read_context)
+    )
     if not state:
         raise FileNotFoundError(f"STATE.current.json missing: {current_state_path(project_root)}")
     status = _state_status(state)
@@ -978,9 +1116,12 @@ def validate_current_projection(project_root: Path) -> list[CurrentStateFinding]
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    if path.is_file() and path.read_text(encoding="utf-8") == rendered:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.{_archive_timestamp()}.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.write_text(rendered, encoding="utf-8")
     tmp_path.replace(path)
 
 
@@ -998,26 +1139,49 @@ def _write_pointer(current_dir: Path, project_root: Path, name: str, rel_ref: st
         _clear_pointer(current_dir, name)
         return
     ref_path = current_dir / f"{name}.ref"
-    ref_path.write_text(rel_ref + "\n", encoding="utf-8")
+    rendered_ref = rel_ref + "\n"
+    if not ref_path.is_file() or ref_path.read_text(encoding="utf-8") != rendered_ref:
+        ref_path.write_text(rendered_ref, encoding="utf-8")
     link_path = current_dir / name
     try:
-        if link_path.is_symlink() or link_path.is_file():
-            link_path.unlink()
         target = _resolve_runtime_path(project_root, rel_ref)
         if target.exists():
             relative_target = os.path.relpath(target, start=current_dir)
+            if link_path.is_symlink() and os.readlink(link_path) == relative_target:
+                return
+            if link_path.is_symlink() or link_path.is_file():
+                link_path.unlink()
             link_path.symlink_to(relative_target)
+        elif link_path.is_symlink() or link_path.is_file():
+            link_path.unlink()
     except OSError:
         pass
 
 
-def refresh_current_entry(project_root: Path) -> Path:
+def refresh_current_entry(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+    state_snapshot: dict[str, Any] | None = None,
+) -> Path:
     project_root = project_root.resolve()
-    entry = build_current_entry(project_root)
+    entry = build_current_entry(
+        project_root,
+        read_context=read_context,
+        state_snapshot=state_snapshot,
+    )
     current_dir = _resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
     current_dir.mkdir(parents=True, exist_ok=True)
     path = _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
-    _write_json(path, entry)
+    existing = _read_json(path) if path.is_file() else {}
+    existing_semantic = dict(existing)
+    candidate_semantic = dict(entry)
+    existing_semantic.pop("updated_at", None)
+    candidate_semantic.pop("updated_at", None)
+    if existing and existing_semantic == candidate_semantic:
+        entry["updated_at"] = existing.get("updated_at")
+    else:
+        _write_json(path, entry)
     _write_pointer(current_dir, project_root, "state", entry["state_ref"])
     _write_pointer(current_dir, project_root, "cr-index", entry.get("cr_index_ref"))
     _write_pointer(current_dir, project_root, "change", entry.get("change_ref"))
@@ -1029,18 +1193,29 @@ def refresh_current_entry(project_root: Path) -> Path:
     return path
 
 
-def load_workflow_health(project_root: Path) -> dict[str, Any]:
-    path = _resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
+def load_workflow_health(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> dict[str, Any]:
+    path = (
+        _resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
+        if read_context is None
+        else read_context.resolve_path(WORKFLOW_HEALTH_REL.as_posix())
+    )
     if not path.is_file():
         return {
             "schema_version": 1,
             "updated_at": now_utc(),
             "phase_counters": {},
         }
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        payload = {}
+    if read_context is None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+    else:
+        payload = read_context.read_json(WORKFLOW_HEALTH_REL.as_posix())
     if not isinstance(payload, dict):
         payload = {}
     payload.setdefault("schema_version", 1)
@@ -1061,6 +1236,8 @@ def update_workflow_health(
         raise ValueError("unknown workflow health counters: " + ", ".join(unknown))
     project_root = project_root.resolve()
     payload = load_workflow_health(project_root)
+    before_semantic = copy.deepcopy(payload)
+    before_semantic.pop("updated_at", None)
     phase_counters = payload.setdefault("phase_counters", {})
     if not isinstance(phase_counters, dict):
         phase_counters = {}
@@ -1071,8 +1248,12 @@ def update_workflow_health(
         phase_counters[phase] = counters
     for key, delta in increments.items():
         counters[key] = int(counters.get(key) or 0) + int(delta)
-    payload["updated_at"] = now_utc()
     path = _resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
+    after_semantic = copy.deepcopy(payload)
+    after_semantic.pop("updated_at", None)
+    if path.is_file() and before_semantic == after_semantic:
+        return payload, path
+    payload["updated_at"] = now_utc()
     _write_json(path, payload)
     if current_state_path(project_root).is_file():
         update_current_state(
@@ -1098,7 +1279,9 @@ def update_current_state(
     render: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(patch, dict):
-        raise StateValidationError("current-state patch validation failed: invalid_patch: patch must be a dict")
+        raise StateValidationError(
+            "current-state patch validation failed: invalid_patch: patch must be a dict"
+        )
     project_root = project_root.resolve()
     path = current_state_path(project_root)
     candidate = build_current_state_candidate(
@@ -1123,21 +1306,34 @@ def build_current_state_candidate(
     actor: str = "",
     reason: str = "",
     mode: str = "enforce",
+    base_state: dict[str, Any] | None = None,
+    read_context: ReadContextProtocol | None = None,
 ) -> dict[str, Any]:
     """Build and validate a current-state candidate without writing it."""
 
     if not isinstance(patch, dict):
-        raise StateValidationError("current-state patch validation failed: invalid_patch: patch must be a dict")
+        raise StateValidationError(
+            "current-state patch validation failed: invalid_patch: patch must be a dict"
+        )
     project_root = project_root.resolve()
-    path = current_state_path(project_root)
+    path = (
+        current_state_path(project_root)
+        if read_context is None
+        else read_context.resolve_path(STATE_CURRENT_REL.as_posix())
+    )
     if not path.is_file():
         raise FileNotFoundError(f"STATE.current.json missing: {path}")
     patch_findings = validate_current_patch(patch, mode=mode)
     _raise_on_error(patch_findings, subject="current-state patch", actor=actor, reason=reason)
-    base = json.loads(path.read_text(encoding="utf-8"))
+    base = dict(base_state) if base_state is not None else load_current_state(
+        project_root,
+        read_context=read_context,
+    )
     candidate = _deep_merge_current_state(base, patch)
     candidate_findings = validate_current_state_payload(candidate, mode=mode)
-    _raise_on_error(candidate_findings, subject="STATE.current.json candidate", actor=actor, reason=reason)
+    _raise_on_error(
+        candidate_findings, subject="STATE.current.json candidate", actor=actor, reason=reason
+    )
     return candidate
 
 
@@ -1186,9 +1382,7 @@ def project_aggregate_completion(
     }
     for field, expected in expected_fields.items():
         if aggregate_payload.get(field) != expected:
-            raise StateValidationError(
-                f"persisted aggregate projection guard mismatch for {field}"
-            )
+            raise StateValidationError(f"persisted aggregate projection guard mismatch for {field}")
     canonical_payload = dict(aggregate_payload)
     canonical_payload.pop("payload_digest", None)
     canonical_digest = hashlib.sha256(
@@ -1344,26 +1538,44 @@ def _slim_next_action(state: dict[str, Any]) -> dict[str, str]:
 def _slim_source_refs(state: dict[str, Any], *, timestamp: str) -> list[Any]:
     refs = _bounded_list(state.get("source_refs"), max_items=23)
     archived = [key for key in sorted(SLIM_ARCHIVE_KEYS) if key in state]
-    unknown = [key for key in sorted(set(state) - CURRENT_ALLOWED_KEYS - {"schema_version"}) if key not in SLIM_ARCHIVE_KEYS]
+    unknown = [
+        key
+        for key in sorted(set(state) - CURRENT_ALLOWED_KEYS - {"schema_version"})
+        if key not in SLIM_ARCHIVE_KEYS
+    ]
     if archived or unknown:
         refs.append(_archive_source_ref(timestamp))
     return refs[-24:]
 
 
-def _slim_state_payload(state: dict[str, Any], *, project_root: Path, timestamp: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    base = default_current_state(project_root, project_id=str(state.get("project_id") or project_root.resolve().name))
-    base["workflow_mode"] = _compact_scalar(state.get("workflow_mode") or base["workflow_mode"], max_bytes=64)
-    base["current_phase"] = _compact_scalar(state.get("current_phase") or base["current_phase"], max_bytes=128)
+def _slim_state_payload(
+    state: dict[str, Any], *, project_root: Path, timestamp: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    base = default_current_state(
+        project_root, project_id=str(state.get("project_id") or project_root.resolve().name)
+    )
+    base["workflow_mode"] = _compact_scalar(
+        state.get("workflow_mode") or base["workflow_mode"], max_bytes=64
+    )
+    base["current_phase"] = _compact_scalar(
+        state.get("current_phase") or base["current_phase"], max_bytes=128
+    )
     base["blocked"] = bool(state.get("blocked", False))
     base["active_change"] = _extract_active_change(state) or None
-    base["active_story"] = _compact_scalar(state.get("active_story"), max_bytes=128) if state.get("active_story") else None
+    base["active_story"] = (
+        _compact_scalar(state.get("active_story"), max_bytes=128)
+        if state.get("active_story")
+        else None
+    )
     base["pending_gate"] = _extract_pending_gate(state) or None
     base["pending_checklist_path"] = _extract_pending_checklist_path(state) or None
     base["next_action"] = _slim_next_action(state)
     base["routing_ref"] = _compact_scalar(state.get("routing_ref") or ROUTING_REL.as_posix())
     base["active_context_ref"] = _extract_active_context_ref(state) or None
     base["next_session_handoff_ref"] = (
-        _compact_scalar(state["next_session_handoff_ref"]) if state.get("next_session_handoff_ref") else None
+        _compact_scalar(state["next_session_handoff_ref"])
+        if state.get("next_session_handoff_ref")
+        else None
     )
     base["authz_policy_refs"] = _bounded_list(state.get("authz_policy_refs"), max_items=16)
     base["open_risks"] = _bounded_list(state.get("open_risks"), max_items=16, active_only=True)
@@ -1408,7 +1620,9 @@ def _slim_state_payload(state: dict[str, Any], *, project_root: Path, timestamp:
     return base, archive
 
 
-def _slim_report(state: dict[str, Any], candidate: dict[str, Any], archive: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
+def _slim_report(
+    state: dict[str, Any], candidate: dict[str, Any], archive: dict[str, Any], *, timestamp: str
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "generated_at": now_utc(),
@@ -1426,7 +1640,9 @@ def _slim_report(state: dict[str, Any], candidate: dict[str, Any], archive: dict
     }
 
 
-def plan_slim_current_state(project_root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
+def plan_slim_current_state(
+    project_root: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
     project_root = project_root.resolve()
     path = current_state_path(project_root)
     if not path.is_file():
@@ -1442,12 +1658,14 @@ def plan_slim_current_state(project_root: Path) -> tuple[dict[str, Any], dict[st
 def apply_slim_current_state(project_root: Path, *, render: bool = False) -> dict[str, Any]:
     project_root = project_root.resolve()
     candidate, archive, report, timestamp = plan_slim_current_state(project_root)
-    archive_dir = _resolve_runtime_ref(
-        project_root, STATE_ARCHIVE_ROOT_REL.as_posix()
-    ) / timestamp
+    archive_dir = _resolve_runtime_ref(project_root, STATE_ARCHIVE_ROOT_REL.as_posix()) / timestamp
     archive_dir.mkdir(parents=True, exist_ok=False)
-    (archive_dir / "archived-fields.json").write_text(json.dumps(archive, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (archive_dir / "slim-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (archive_dir / "archived-fields.json").write_text(
+        json.dumps(archive, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (archive_dir / "slim-report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     _write_current_state_file(current_state_path(project_root), candidate)
     ensure_base_ledgers(project_root)
     if render:
@@ -1516,7 +1734,9 @@ def render_state_file(project_root: Path, *, force: bool = False) -> Path:
     if path.exists() and not force:
         existing = path.read_text(encoding="utf-8", errors="ignore")
         if "generated-by: meta-flow state render" not in existing:
-            raise FileExistsError(f"{path} 已存在且不是 state render 生成物；如需覆盖请使用 --force")
+            raise FileExistsError(
+                f"{path} 已存在且不是 state render 生成物；如需覆盖请使用 --force"
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_state_markdown(state), encoding="utf-8")
     refresh_current_entry(project_root)
@@ -1539,9 +1759,7 @@ def _load_ndjson(path: Path) -> list[dict[str, Any]]:
 
 def render_history_markdown(project_root: Path) -> str:
     project_root = project_root.resolve()
-    cr_events = _load_ndjson(
-        _resolve_runtime_ref(project_root, "process/state/CR-LEDGER.ndjson")
-    )
+    cr_events = _load_ndjson(_resolve_runtime_ref(project_root, "process/state/CR-LEDGER.ndjson"))
     checkpoint_events = _load_ndjson(
         _resolve_runtime_ref(project_root, "process/state/CHECKPOINT-LEDGER.ndjson")
     )
@@ -1610,7 +1828,9 @@ def render_history_file(project_root: Path, *, force: bool = False) -> Path:
     if path.exists() and not force:
         existing = path.read_text(encoding="utf-8", errors="ignore")
         if "generated-by: meta-flow state history-render" not in existing:
-            raise FileExistsError(f"{path} 已存在且不是 history-render 生成物；如需覆盖请使用 --force")
+            raise FileExistsError(
+                f"{path} 已存在且不是 history-render 生成物；如需覆盖请使用 --force"
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_history_markdown(project_root), encoding="utf-8")
     return path
@@ -1653,16 +1873,22 @@ def check_current_state(
         errors.append(f"STATE.current.json invalid JSON: {exc}")
         return errors, warnings
 
-    current_max = int(budgets.get("state_current_max_bytes", DEFAULT_BUDGETS["state_current_max_bytes"]))
+    current_max = int(
+        budgets.get("state_current_max_bytes", DEFAULT_BUDGETS["state_current_max_bytes"])
+    )
     current_size = state_path.stat().st_size
     if current_size > current_max:
-        errors.append(f"STATE.current.json too large: {format_bytes(current_size)} > {format_bytes(current_max)}")
+        errors.append(
+            f"STATE.current.json too large: {format_bytes(current_size)} > {format_bytes(current_max)}"
+        )
     findings = validate_current_state_payload(state, mode=mode)
     warnings.extend(finding.as_cli_line() for finding in findings if finding.severity == "WARN")
     errors.extend(finding.as_cli_line() for finding in findings if finding.severity == "ERROR")
     legacy_long_keys = (set(state) & SLIM_ARCHIVE_KEYS) - CURRENT_ALLOWED_KEYS
     if legacy_long_keys or (set(state) - CURRENT_ALLOWED_KEYS - {"schema_version"}):
-        warnings.append("STATE.current.json contains legacy or long-running fields; run `meta-flow state slim --dry-run` and then `--apply` after review")
+        warnings.append(
+            "STATE.current.json contains legacy or long-running fields; run `meta-flow state slim --dry-run` and then `--apply` after review"
+        )
     if "expanded_text" in json.dumps(state, ensure_ascii=False):
         errors.append("STATE.current.json must reference policy IDs, not expanded policy text")
     project_state_ref = state.get("project_state_ref")
@@ -1677,14 +1903,18 @@ def check_current_state(
     if isinstance(workflow_health_ref, str) and workflow_health_ref:
         health_path = read_path(workflow_health_ref)
         if not _is_relative_state_ref(workflow_health_ref) or not health_path.is_file():
-            errors.append(f"workflow_health_ref points to missing or unsafe file: {workflow_health_ref}")
+            errors.append(
+                f"workflow_health_ref points to missing or unsafe file: {workflow_health_ref}"
+            )
         else:
             try:
                 health = json.loads(health_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 health = None
             if not isinstance(health, dict) or not isinstance(health.get("phase_counters"), dict):
-                errors.append(f"workflow_health_ref is not a valid workflow health report: {workflow_health_ref}")
+                errors.append(
+                    f"workflow_health_ref is not a valid workflow health report: {workflow_health_ref}"
+                )
     for ledger_rel in BASE_LEDGER_RELS:
         ledger_path = read_ref(ledger_rel.as_posix())
         if not ledger_path.is_file():
@@ -1787,10 +2017,19 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(f"--increment value must be an integer: {item}") from exc
         if not increments:
             raise SystemExit("health-update requires at least one --increment key=value")
-        payload, path = update_workflow_health(project_root, phase=parsed.phase, increments=increments)
+        payload, path = update_workflow_health(
+            project_root, phase=parsed.phase, increments=increments
+        )
         print(f"wrote: {path}")
         print(f"phase: {parsed.phase}")
-        print("counters: " + json.dumps(payload.get("phase_counters", {}).get(parsed.phase, {}), ensure_ascii=False, sort_keys=True))
+        print(
+            "counters: "
+            + json.dumps(
+                payload.get("phase_counters", {}).get(parsed.phase, {}),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
         return 0
     if command == "slim":
         if parsed.apply and parsed.dry_run:
@@ -1804,10 +2043,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"- source_size: {format_bytes(int(report['source_size_bytes']))}")
         print(f"- projected_size: {format_bytes(int(report['projected_size_bytes']))}")
         print(f"- archive_ref: {report['archive_ref']}")
-        print("- archived_keys: " + (", ".join(report["archived_keys"]) if report["archived_keys"] else "none"))
-        max_bytes = int(load_budgets(project_root).get("state_current_max_bytes", DEFAULT_BUDGETS["state_current_max_bytes"]))
+        print(
+            "- archived_keys: "
+            + (", ".join(report["archived_keys"]) if report["archived_keys"] else "none")
+        )
+        max_bytes = int(
+            load_budgets(project_root).get(
+                "state_current_max_bytes", DEFAULT_BUDGETS["state_current_max_bytes"]
+            )
+        )
         if int(report["projected_size_bytes"]) > max_bytes:
-            print(f"- ERROR: projected STATE.current.json exceeds budget: {format_bytes(int(report['projected_size_bytes']))} > {format_bytes(max_bytes)}")
+            print(
+                f"- ERROR: projected STATE.current.json exceeds budget: {format_bytes(int(report['projected_size_bytes']))} > {format_bytes(max_bytes)}"
+            )
             return 1
         return 0
     if command == "check":

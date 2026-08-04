@@ -1,4 +1,5 @@
 """Public CR status-sync planning and authorization owner."""
+
 from __future__ import annotations
 
 import json
@@ -9,9 +10,11 @@ from typing import Any
 
 from meta_flow.checks import cr_tracking, state_transition
 from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.read_contract import ReadContextProtocol, ReadContractError
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import checkpoint_projection, current, event_ledger
 from meta_flow.work.model import load_work
+from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.scope import check_scope
 from meta_flow.workflow.cr_index import (
     CR_INDEX_REL,
@@ -35,6 +38,7 @@ from meta_flow.workflow.cr_projection import (
     CR_LEDGER_REL,
     STATE_CURRENT_REL,
     _checkpoint_result_projection,
+    _transaction_root,
     render_status_body_projection,
     summary_from_cr_file,
 )
@@ -188,13 +192,27 @@ def _target(
     path: Path,
     after: str,
     truth_or_derived: str,
+    *,
+    read_context: ReadContextProtocol | None = None,
 ) -> StatusSyncTarget:
+    ref = (
+        _rel(project_root, path)
+        if read_context is None
+        else read_context.logical_ref_for(path, qualified=True)
+    )
+    before = None
+    if path.is_file():
+        before = (
+            path.read_text(encoding="utf-8")
+            if read_context is None
+            else read_context.read_text(ref)
+        )
     return StatusSyncTarget(
         order=order,
-        ref=_rel(project_root, path),
+        ref=ref,
         path=path,
         truth_or_derived=truth_or_derived,
-        before=path.read_text(encoding="utf-8") if path.is_file() else None,
+        before=before,
         after=after,
     )
 
@@ -204,11 +222,18 @@ def _json_semantically_matches(
     expected: dict[str, Any],
     *,
     volatile_fields: tuple[str, ...] = (),
+    read_context: ReadContextProtocol | None = None,
+    logical_ref: str = "",
 ) -> bool:
     if not path.is_file():
         return False
     try:
-        observed = json.loads(path.read_text(encoding="utf-8"))
+        text = (
+            path.read_text(encoding="utf-8")
+            if read_context is None
+            else read_context.read_text(logical_ref)
+        )
+        observed = json.loads(text)
     except json.JSONDecodeError:
         return False
     if not isinstance(observed, dict):
@@ -228,12 +253,19 @@ def _ledger_contains_status_sync_transition(
     lifecycle_status: str,
     readiness_status: str,
     gate_status: str,
+    read_context: ReadContextProtocol | None = None,
+    logical_ref: str = "",
 ) -> bool:
     """Match semantic status truth; dirty-path facts remain transaction preconditions only."""
 
     if not path.is_file():
         return False
-    for line in path.read_text(encoding="utf-8").splitlines():
+    text = (
+        path.read_text(encoding="utf-8")
+        if read_context is None
+        else read_context.read_text(logical_ref)
+    )
+    for line in text.splitlines():
         if not line.strip():
             continue
         try:
@@ -281,34 +313,61 @@ def plan_status_sync(
     expected_process_oid: str = "",
     rebuild_corrupt_index: bool = False,
     effective_at: str = "",
+    read_context: ReadContextProtocol | None = None,
 ) -> StatusSyncPlan:
     """Build a zero-mutation status-sync transaction plan."""
 
     project_root = project_root.resolve()
+    context = read_context or OperationReadContext(
+        _process_root(project_root),
+        operation_id=f"cr.status-sync.plan:{cr_id}",
+        operation_kind="plan",
+        allowed_reads=("process/**", "works/**"),
+        max_objects=128,
+    )
+    context.assert_operation("plan")
+
+    def resolve_from_context(_root: Path, logical_ref: str) -> Path:
+        return context.resolve_path(logical_ref)
+
+    def rel_from_context(_root: Path, path: Path) -> str:
+        return context.logical_ref_for(path, qualified=True)
+
+    def finish(plan: StatusSyncPlan) -> StatusSyncPlan:
+        context.close()
+        return plan
+
     timestamp = _normalize_status_sync_effective_at(effective_at)
     facts, scope_digest = _status_sync_facts(
         project_root,
         work_id=work_id,
         canonical_digest=_canonical_digest,
         dirty_path_digest=_dirty_path_digest,
+        read_context=context,
     )
     if expected_process_oid and facts["process_head_oid"] != expected_process_oid:
-        return StatusSyncPlan(
-            "BLOCKED",
-            cr_id,
-            work_id,
-            {},
-            facts,
-            scope_digest,
-            (),
-            "process HEAD differs from expected OID",
-            timestamp,
+        return finish(
+            StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "process HEAD differs from expected OID",
+                timestamp,
+            )
         )
-    crs = discover_formal_crs(project_root)
+    crs = discover_formal_crs(
+        project_root,
+        _resolve_runtime_ref_fn=resolve_from_context,
+        _rel_fn=rel_from_context,
+    )
     if cr_id not in crs:
         raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
     cr_path = crs[cr_id]
-    before_text = cr_path.read_text(encoding="utf-8")
+    before_text = context.read_text(rel_from_context(project_root, cr_path))
     fields = parse_frontmatter(before_text)
     before_status = str(fields.get("lifecycle_status") or fields.get("status") or "active")
     before_readiness = str(fields.get("readiness_status") or "not_ready")
@@ -332,27 +391,8 @@ def plan_status_sync(
             historical_migration=historical_migration,
         )
         if transition_errors:
-            return StatusSyncPlan(
-                "BLOCKED",
-                cr_id,
-                work_id,
-                {},
-                facts,
-                scope_digest,
-                (),
-                "; ".join(transition_errors),
-            )
-    index_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
-    if index_path.is_file():
-        try:
-            formal_truth_index = build_index(project_root)
-        except ValueError as exc:
-            return StatusSyncPlan("BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), str(exc))
-        try:
-            existing_index = json.loads(index_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            if not rebuild_corrupt_index:
-                return StatusSyncPlan(
+            return finish(
+                StatusSyncPlan(
                     "BLOCKED",
                     cr_id,
                     work_id,
@@ -360,13 +400,52 @@ def plan_status_sync(
                     facts,
                     scope_digest,
                     (),
-                    f"CR-INDEX invalid JSON: {exc}",
+                    "; ".join(transition_errors),
+                )
+            )
+    index_path = resolve_from_context(project_root, CR_INDEX_REL.as_posix())
+    if index_path.is_file():
+        try:
+            formal_truth_index = build_index(
+                project_root,
+                read_context=context,
+                resolve_runtime_ref_fn=resolve_from_context,
+                rel_fn=rel_from_context,
+            )
+        except ValueError as exc:
+            return finish(
+                StatusSyncPlan("BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), str(exc))
+            )
+        try:
+            existing_index = context.read_json(CR_INDEX_REL.as_posix())
+        except ReadContractError as exc:
+            if not rebuild_corrupt_index:
+                return finish(
+                    StatusSyncPlan(
+                        "BLOCKED",
+                        cr_id,
+                        work_id,
+                        {},
+                        facts,
+                        scope_digest,
+                        (),
+                        f"CR-INDEX invalid JSON: {exc}",
+                    )
                 )
         else:
             index_errors = validate_index_payload(existing_index)
             if index_errors and not rebuild_corrupt_index:
-                return StatusSyncPlan(
-                    "BLOCKED", cr_id, work_id, {}, facts, scope_digest, (), "; ".join(index_errors)
+                return finish(
+                    StatusSyncPlan(
+                        "BLOCKED",
+                        cr_id,
+                        work_id,
+                        {},
+                        facts,
+                        scope_digest,
+                        (),
+                        "; ".join(index_errors),
+                    )
                 )
             if (
                 not index_errors
@@ -374,15 +453,17 @@ def plan_status_sync(
                 != formal_truth_index.get("semantic_digest")
                 and not rebuild_corrupt_index
             ):
-                return StatusSyncPlan(
-                    "BLOCKED",
-                    cr_id,
-                    work_id,
-                    {},
-                    facts,
-                    scope_digest,
-                    (),
-                    "CR-INDEX stale projection differs from formal truth rebuild digest",
+                return finish(
+                    StatusSyncPlan(
+                        "BLOCKED",
+                        cr_id,
+                        work_id,
+                        {},
+                        facts,
+                        scope_digest,
+                        (),
+                        "CR-INDEX stale projection differs from formal truth rebuild digest",
+                    )
                 )
     updates = {
         "lifecycle_status": target_status,
@@ -399,20 +480,32 @@ def plan_status_sync(
         lifecycle_status=target_status,
         readiness_status=target_readiness,
         gate_status=target_gate,
-        checkpoint_results=_checkpoint_result_projection(project_root, cr_id),
+        checkpoint_results=_checkpoint_result_projection(
+            project_root,
+            cr_id,
+            resolver=resolve_from_context,
+            read_context=context,
+        ),
     )
-    summary = summary_from_cr_file(project_root, cr_path, readiness=target_readiness)
+    summary = summary_from_cr_file(
+        project_root,
+        cr_path,
+        readiness=target_readiness,
+        read_context=context,
+        text=before_text,
+        rel_fn=rel_from_context,
+    )
     summary["status"] = target_status
     summary["readiness"] = target_readiness
     summary["gate_status"] = target_gate
     summary["updated_at"] = timestamp
-    summary_path = _resolve_runtime_ref(
+    summary_path = resolve_from_context(
         project_root, (CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()
     )
     summary_after = (
         json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     )
-    evidence_path = _resolve_runtime_ref(
+    evidence_path = resolve_from_context(
         project_root, (CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix()
     )
     evidence = {
@@ -423,7 +516,7 @@ def plan_status_sync(
         "created_at": timestamp,
     }
     evidence_after = json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ledger_path = _resolve_runtime_ref(project_root, CR_LEDGER_REL.as_posix())
+    ledger_path = resolve_from_context(project_root, CR_LEDGER_REL.as_posix())
     ledger_event = {
         "event_id": _canonical_digest(
             {"event": "status_sync", "id": cr_id, "transition": updates, "facts": facts}
@@ -435,26 +528,41 @@ def plan_status_sync(
         "status": target_status,
         "readiness": target_readiness,
         "gate_status": target_gate,
-        "summary_ref": _rel(project_root, summary_path),
+        "summary_ref": rel_from_context(project_root, summary_path),
         "full_ref": summary.get("full_ref"),
-        "evidence_index_ref": _rel(project_root, evidence_path),
+        "evidence_index_ref": rel_from_context(project_root, evidence_path),
         "frontmatter_changed": cr_after != before_text,
         "historical_migration": historical_migration,
         "synced_at": timestamp,
     }
-    ledger_after = event_ledger.render_appended_event(ledger_path, ledger_event)
+    ledger_before = context.read_text(CR_LEDGER_REL.as_posix()) if ledger_path.is_file() else ""
+    ledger_after = event_ledger.render_appended_event(
+        ledger_path,
+        ledger_event,
+        before_text=ledger_before,
+    )
     expected_index = build_index(
         project_root,
         record_overrides={cr_id: updates},
+        read_context=context,
+        resolve_runtime_ref_fn=resolve_from_context,
+        rel_fn=rel_from_context,
     )
     expected_index["generated_at"] = timestamp
     index_after = json.dumps(expected_index, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     targets: list[StatusSyncTarget] = [
-        _target(project_root, 10, cr_path, cr_after, "truth"),
+        _target(
+            project_root,
+            10,
+            cr_path,
+            cr_after,
+            "truth",
+            read_context=context,
+        ),
     ]
-    state_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
+    state_path = resolve_from_context(project_root, STATE_CURRENT_REL.as_posix())
     if state_path.is_file() and not historical_migration:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state = context.read_json(STATE_CURRENT_REL.as_posix())
         state_patch: dict[str, Any] = {"updated_at": timestamp}
         if target_status in FINISHED_STATUSES and state.get("active_change") == cr_id:
             state_patch.update(
@@ -492,14 +600,27 @@ def plan_status_sync(
                     state_patch,
                     actor="meta_flow.workflow.cr_lifecycle",
                     reason=f"status-sync {cr_id}",
+                    base_state=state,
+                    read_context=context,
                 )
             )
-            targets.append(_target(project_root, 20, state_path, state_after, "truth"))
+            targets.append(
+                _target(
+                    project_root,
+                    20,
+                    state_path,
+                    state_after,
+                    "truth",
+                    read_context=context,
+                )
+            )
     if target_gate == "implementation_in_progress":
         cp5_projection = checkpoint_projection.load_checkpoint_projection(
             project_root,
             cr_id=cr_id,
             checkpoint="CP5",
+            resolver=resolve_from_context,
+            read_context=context,
         )
         if cp5_projection.findings or cp5_projection.head("CP5") is None:
             reason = (
@@ -508,52 +629,65 @@ def plan_status_sync(
                 )
                 or "CP5 canonical current head is unavailable"
             )
-            return StatusSyncPlan(
-                "BLOCKED",
-                cr_id,
-                work_id,
-                {},
-                facts,
-                scope_digest,
-                (),
-                reason + "; mutation=0",
-                timestamp,
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    reason + "; mutation=0",
+                    timestamp,
+                )
             )
-        gate_ledger_path = _resolve_runtime_ref(
+        gate_ledger_path = resolve_from_context(
             project_root,
             "process/state/GATE-LEDGER.ndjson",
         )
-        gate_events, gate_errors = event_ledger.load_events(gate_ledger_path)
+        gate_events, gate_errors = event_ledger.load_events(
+            gate_ledger_path,
+            read_context=context,
+            logical_ref="process/state/GATE-LEDGER.ndjson",
+        )
         if gate_errors:
-            return StatusSyncPlan(
-                "BLOCKED",
-                cr_id,
-                work_id,
-                {},
-                facts,
-                scope_digest,
-                (),
-                "invalid Gate Ledger: " + "; ".join(gate_errors),
-                timestamp,
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    "invalid Gate Ledger: " + "; ".join(gate_errors),
+                    timestamp,
+                )
             )
-        development_plan_path = _resolve_runtime_ref(
+        development_plan_path = resolve_from_context(
             project_root,
             "process/DEVELOPMENT-PLAN.yaml",
         )
         if not development_plan_path.is_file():
-            return StatusSyncPlan(
-                "BLOCKED",
-                cr_id,
-                work_id,
-                {},
-                facts,
-                scope_digest,
-                (),
-                "DEVELOPMENT-PLAN is unavailable; mutation=0",
-                timestamp,
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    "DEVELOPMENT-PLAN is unavailable; mutation=0",
+                    timestamp,
+                )
             )
         try:
-            development_plan = load_yaml_object(development_plan_path)
+            development_plan = context.read_yaml_object(
+                "process/DEVELOPMENT-PLAN.yaml",
+                loader=load_yaml_object,
+            )
             projected_plan, _story_transitions = state_transition.project_cp5_development_plan(
                 development_plan,
                 cr_id=cr_id,
@@ -561,16 +695,18 @@ def plan_status_sync(
                 gate_events=gate_events,
             )
         except ValueError as exc:
-            return StatusSyncPlan(
-                "BLOCKED",
-                cr_id,
-                work_id,
-                {},
-                facts,
-                scope_digest,
-                (),
-                str(exc),
-                timestamp,
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    str(exc),
+                    timestamp,
+                )
             )
         development_plan_after = (
             json.dumps(
@@ -588,18 +724,93 @@ def plan_status_sync(
                 development_plan_path,
                 development_plan_after,
                 "truth",
+                read_context=context,
             )
         )
-    targets.extend(
-        [
-            _target(project_root, 30, summary_path, summary_after, "derived"),
-            _target(project_root, 40, evidence_path, evidence_after, "derived"),
-            _target(project_root, 50, ledger_path, ledger_after, "derived"),
-            _target(project_root, 90, index_path, index_after, "derived"),
-        ]
+    targets = [
+        target
+        for target in targets
+        if target.before is None or target.before_digest != target.after_digest
+    ]
+    summary_current = _json_semantically_matches(
+        summary_path,
+        summary,
+        volatile_fields=("updated_at",),
+        read_context=context,
+        logical_ref=rel_from_context(project_root, summary_path),
     )
+    evidence_current = _json_semantically_matches(
+        evidence_path,
+        evidence,
+        volatile_fields=("created_at",),
+        read_context=context,
+        logical_ref=rel_from_context(project_root, evidence_path),
+    )
+    ledger_current = _ledger_contains_status_sync_transition(
+        ledger_path,
+        cr_id=cr_id,
+        lifecycle_status=target_status,
+        readiness_status=target_readiness,
+        gate_status=target_gate,
+        read_context=context,
+        logical_ref=CR_LEDGER_REL.as_posix(),
+    )
+    index_current = index_path.is_file() and context.read_json(CR_INDEX_REL.as_posix()).get(
+        "semantic_digest"
+    ) == expected_index.get("semantic_digest")
+    derived_targets = [
+        (
+            summary_current,
+            _target(
+                project_root,
+                30,
+                summary_path,
+                summary_after,
+                "derived",
+                read_context=context,
+            ),
+        ),
+        (
+            evidence_current,
+            _target(
+                project_root,
+                40,
+                evidence_path,
+                evidence_after,
+                "derived",
+                read_context=context,
+            ),
+        ),
+        (
+            ledger_current,
+            _target(
+                project_root,
+                50,
+                ledger_path,
+                ledger_after,
+                "derived",
+                read_context=context,
+            ),
+        ),
+        (
+            index_current,
+            _target(
+                project_root,
+                90,
+                index_path,
+                index_after,
+                "derived",
+                read_context=context,
+            ),
+        ),
+    ]
+    targets.extend(target for is_current, target in derived_targets if not is_current)
     if work_id:
-        work = load_work(_process_root(project_root), work_id)
+        work = load_work(
+            context.repository_root,
+            work_id,
+            read_context=context,
+        )
         denied = [
             target.ref
             for target in targets
@@ -610,69 +821,50 @@ def plan_status_sync(
             ).allowed
         ]
         if denied:
-            return StatusSyncPlan(
-                "BLOCKED",
-                cr_id,
-                work_id,
-                {},
-                facts,
-                scope_digest,
-                (),
-                "targets outside Work write scope: " + ", ".join(denied),
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    "targets outside Work write scope: " + ", ".join(denied),
+                )
             )
     desired_transition = {
         "lifecycle_status": target_status,
         "readiness_status": target_readiness,
         "gate_status": target_gate,
     }
-    truth_current = all(
-        target.before is not None and target.before_digest == target.after_digest
-        for target in targets
-        if target.truth_or_derived == "truth"
-    )
-    derived_current = (
-        _json_semantically_matches(
-            summary_path,
-            summary,
-            volatile_fields=("updated_at",),
-        )
-        and _json_semantically_matches(
-            evidence_path,
-            evidence,
-            volatile_fields=("created_at",),
-        )
-        and _ledger_contains_status_sync_transition(
-            ledger_path,
-            cr_id=cr_id,
-            lifecycle_status=target_status,
-            readiness_status=target_readiness,
-            gate_status=target_gate,
-        )
-        and index_path.is_file()
-        and json.loads(index_path.read_text(encoding="utf-8")).get("semantic_digest")
-        == expected_index.get("semantic_digest")
-    )
+    truth_current = not any(target.truth_or_derived == "truth" for target in targets)
+    derived_current = all((summary_current, evidence_current, ledger_current, index_current))
     if truth_current and derived_current:
-        return StatusSyncPlan(
-            "NO_CHANGE",
+        return finish(
+            StatusSyncPlan(
+                "NO_CHANGE",
+                cr_id,
+                work_id,
+                desired_transition,
+                facts,
+                scope_digest,
+                (),
+                "status tuple and native projections are already synchronized",
+                timestamp,
+            )
+        )
+    return finish(
+        StatusSyncPlan(
+            "READY",
             cr_id,
             work_id,
             desired_transition,
             facts,
             scope_digest,
-            (),
-            "status tuple and native projections are already synchronized",
-            timestamp,
+            tuple(sorted(targets, key=lambda item: item.order)),
+            effective_at=timestamp,
         )
-    return StatusSyncPlan(
-        "READY",
-        cr_id,
-        work_id,
-        desired_transition,
-        facts,
-        scope_digest,
-        tuple(sorted(targets, key=lambda item: item.order)),
-        effective_at=timestamp,
     )
 
 
@@ -746,8 +938,17 @@ def validate_status_sync_authorization(
         raise ValueError("status-sync authorization is expired")
 
 
-
-def apply_status_sync(project_root: Path, plan: StatusSyncPlan, *, authorization: StatusSyncAuthorization | None = None, expected_plan_digest: str = "", _fail_after_replace: int | None = None, _fail_recovery: bool = False, _fault: str = "") -> dict[str, Any]:
+def apply_status_sync(
+    project_root: Path,
+    plan: StatusSyncPlan,
+    *,
+    authorization: StatusSyncAuthorization | None = None,
+    expected_plan_digest: str = "",
+    read_context: ReadContextProtocol | None = None,
+    _fail_after_replace: int | None = None,
+    _fail_recovery: bool = False,
+    _fault: str = "",
+) -> dict[str, Any]:
     """Validate public status input, then delegate only structural values to transaction."""
     project_root = project_root.resolve()
     if plan.decision == "NO_CHANGE":
@@ -755,27 +956,108 @@ def apply_status_sync(project_root: Path, plan: StatusSyncPlan, *, authorization
     if plan.decision != "READY":
         return {"status": "BLOCKED", "reason": plan.reason, "mutation_count": 0}
     if not expected_plan_digest or expected_plan_digest != plan.plan_digest:
-        return {"status": "BLOCKED", "reason": "expected plan digest does not match the current plan", "mutation_count": 0}
+        return {
+            "status": "BLOCKED",
+            "reason": "expected plan digest does not match the current plan",
+            "mutation_count": 0,
+        }
     if authorization is None:
-        return {"status": "BLOCKED", "reason": "status-sync apply requires typed authorization", "mutation_count": 0}
+        return {
+            "status": "BLOCKED",
+            "reason": "status-sync apply requires typed authorization",
+            "mutation_count": 0,
+        }
     try:
         validate_status_sync_authorization(plan, authorization)
     except ValueError as exc:
         return {"status": "BLOCKED", "reason": str(exc), "mutation_count": 0}
-    observed_facts, observed_scope = _status_sync_facts(
-        project_root,
-        work_id=plan.work_id,
-        canonical_digest=_canonical_digest,
-        dirty_path_digest=_dirty_path_digest,
+    context = read_context or OperationReadContext(
+        _process_root(project_root),
+        operation_id=f"cr.status-sync.apply:{plan.cr_id}",
+        operation_kind="apply",
+        allowed_reads=tuple(
+            dict.fromkeys(
+                (
+                    f"works/{plan.work_id}/WORK.yaml",
+                    *(target.ref for target in plan.targets),
+                )
+            )
+        ),
+        max_objects=max(1, len(plan.targets) + 1),
+        scope_digest=plan.scope_digest,
+        authorization_digest=authorization.plan_digest,
     )
+    try:
+        context.assert_operation("apply")
+        context.assert_snapshot(
+            scope_digest=plan.scope_digest,
+            authorization_digest=authorization.plan_digest,
+        )
+        observed_facts, observed_scope = _status_sync_facts(
+            project_root,
+            work_id=plan.work_id,
+            canonical_digest=_canonical_digest,
+            dirty_path_digest=_dirty_path_digest,
+            read_context=context,
+        )
+    except ReadContractError as exc:
+        context.close()
+        return {
+            "status": "BLOCKED",
+            "reason": f"{exc.error_code}: {exc}",
+            "mutation_count": 0,
+        }
     if observed_facts != plan.expected_facts or observed_scope != plan.scope_digest:
-        return {"status": "BLOCKED", "reason": "expected facts or scope digest drifted", "mutation_count": 0}
+        context.close()
+        return {
+            "status": "BLOCKED",
+            "reason": "expected facts or scope digest drifted",
+            "mutation_count": 0,
+        }
+    transaction_root = _transaction_root(
+        project_root,
+        process_root=context.repository_root,
+    )
+    try:
+        for target in plan.targets:
+            observed_text = context.read_text(target.ref) if target.path.is_file() else ""
+            if _canonical_digest(observed_text) != target.before_digest:
+                context.close()
+                return {
+                    "status": "BLOCKED",
+                    "reason": f"target preimage drifted: {target.ref}",
+                    "mutation_count": 0,
+                }
+    except ReadContractError as exc:
+        context.close()
+        return {
+            "status": "BLOCKED",
+            "reason": f"{exc.error_code}: {exc}",
+            "mutation_count": 0,
+        }
+    context.close()
     validated = {
         "plan": {
-            "cr_id": plan.cr_id, "work_id": plan.work_id, "desired_transition": dict(plan.desired_transition),
-            "effective_at": plan.effective_at, "expected_facts": dict(plan.expected_facts),
-            "scope_digest": plan.scope_digest, "plan_digest": plan.plan_digest,
-            "targets": [{"order": target.order, "ref": target.ref, "path": target.path, "truth_or_derived": target.truth_or_derived, "before": target.before, "before_digest": target.before_digest, "after": target.after, "after_digest": target.after_digest} for target in plan.targets],
+            "cr_id": plan.cr_id,
+            "work_id": plan.work_id,
+            "desired_transition": dict(plan.desired_transition),
+            "effective_at": plan.effective_at,
+            "expected_facts": dict(plan.expected_facts),
+            "scope_digest": plan.scope_digest,
+            "plan_digest": plan.plan_digest,
+            "targets": [
+                {
+                    "order": target.order,
+                    "ref": target.ref,
+                    "path": target.path,
+                    "truth_or_derived": target.truth_or_derived,
+                    "before": target.before,
+                    "before_digest": target.before_digest,
+                    "after": target.after,
+                    "after_digest": target.after_digest,
+                }
+                for target in plan.targets
+            ],
         },
         "authorization": dict(authorization.__dict__),
     }
@@ -787,7 +1069,9 @@ def apply_status_sync(project_root: Path, plan: StatusSyncPlan, *, authorization
         fail_after_replace=_fail_after_replace,
         fail_recovery=_fail_recovery,
         fault=_fault,
+        transaction_root=transaction_root,
     )
+
 
 def sync_cr_status(
     project_root: Path,

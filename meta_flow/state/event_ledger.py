@@ -15,6 +15,7 @@ from typing import Any
 
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.read_contract import ReadContextProtocol
 
 KNOWN_LEDGER_RELS = {
     "checkpoint": Path("process/state/CHECKPOINT-LEDGER.ndjson"),
@@ -64,7 +65,16 @@ DISPATCH_EVENT_REQUIRED_FIELDS = {
 TERMINAL_SUCCESS_STATUSES = frozenset({"completed", "success", "succeeded", "passed"})
 TERMINAL_SUCCESS_RESULTS = frozenset({"pass", "success", "succeeded", "completed"})
 TERMINAL_ATTEMPT_STATUSES = frozenset(
-    {"completed", "success", "succeeded", "passed", "failed", "interrupted", "cancelled", "superseded"}
+    {
+        "completed",
+        "success",
+        "succeeded",
+        "passed",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "superseded",
+    }
 )
 NONTERMINAL_ATTEMPT_STATUSES = frozenset({"submitted", "running", "retrying"})
 ALL_ATTEMPT_STATUSES = TERMINAL_ATTEMPT_STATUSES | NONTERMINAL_ATTEMPT_STATUSES
@@ -238,7 +248,15 @@ def typed_dispatch_attempt_from_event(
 ) -> tuple[TypedDispatchAttemptV1 | None, tuple[str, ...]]:
     """把公开 dispatch evidence 适配为唯一的 typed attempt 契约。"""
 
-    required = ("event_id", "dispatch_id", "attempt_id", "story_id", "canonical_role", "checkpoint", "dispatch_mode")
+    required = (
+        "event_id",
+        "dispatch_id",
+        "attempt_id",
+        "story_id",
+        "canonical_role",
+        "checkpoint",
+        "dispatch_mode",
+    )
     missing = [field for field in required if not str(event.get(field) or "").strip()]
     if missing:
         return None, tuple(f"MISSING_TYPED_{field.upper()}" for field in missing)
@@ -266,7 +284,11 @@ def typed_dispatch_attempt_from_event(
 def project_dispatch_attempt(input_value: ProjectionInputV1) -> ProjectionResultV1:
     """Project one dispatch identity without using event_id as a dispatch fallback."""
 
-    matching = [event for event in input_value.events if str(event.get("dispatch_id") or "") == input_value.dispatch_id]
+    matching = [
+        event
+        for event in input_value.events
+        if str(event.get("dispatch_id") or "") == input_value.dispatch_id
+    ]
     corrected_attempts = {
         (str(event.get("dispatch_id") or ""), str(event.get("attempt_id") or ""))
         for event in matching
@@ -326,7 +348,9 @@ def parse_handoff_dispatch_record(source: str | Mapping[str, Any]) -> HandoffDis
         dispatch = source.get("dispatch")
         if not isinstance(dispatch, Mapping):
             raise ValueError("missing dispatch block in frontmatter")
-        return HandoffDispatchRecordV1(tuple(sorted((str(key), str(value)) for key, value in dispatch.items())))
+        return HandoffDispatchRecordV1(
+            tuple(sorted((str(key), str(value)) for key, value in dispatch.items()))
+        )
     if not source.startswith("---\n"):
         raise ValueError("missing or invalid YAML frontmatter")
     end = source.find("\n---", 4)
@@ -385,12 +409,23 @@ def now_utc() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def load_events(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+def load_events(
+    path: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+    logical_ref: str = "",
+) -> tuple[list[dict[str, Any]], list[str]]:
     if not path.is_file():
         return [], [f"event ledger missing: {path}"]
     events: list[dict[str, Any]] = []
     errors: list[str] = []
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    if read_context is None:
+        text = path.read_text(encoding="utf-8")
+    else:
+        if not logical_ref:
+            raise ValueError("logical_ref is required with read_context")
+        text = read_context.read_text(logical_ref)
+    for line_no, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -524,9 +559,7 @@ def _legacy_gate_corrections(
         original_id = str(correction.get("corrects_event_id") or "")
         original = legacy_events.get(original_id)
         try:
-            approval_kind = GateApprovalKindV1(
-                str(correction.get("approval_kind") or "")
-            )
+            approval_kind = GateApprovalKindV1(str(correction.get("approval_kind") or ""))
         except ValueError:
             approval_kind = None
         if correction.get("approval_kind_version") != GATE_APPROVAL_KIND_VERSION:
@@ -540,20 +573,18 @@ def _legacy_gate_corrections(
         if approval_kind is None:
             findings.append("GATE_APPROVAL_CORRECTION_KIND_UNKNOWN")
             continue
-        expected_kind, expected_checkpoint, expected_result_ref = (
-            _LEGACY_GATE_APPROVAL_MANIFEST_V1[original_id]
-        )
+        expected_kind, expected_checkpoint, expected_result_ref = _LEGACY_GATE_APPROVAL_MANIFEST_V1[
+            original_id
+        ]
         if approval_kind is not expected_kind:
             findings.append("GATE_APPROVAL_CORRECTION_KIND_MISMATCH")
         if str(correction.get("original_event_digest") or "") != canonical_digest(
             _clean_event(original)
         ):
             findings.append("GATE_APPROVAL_CORRECTION_DIGEST_MISMATCH")
-        if (
-            str(correction.get("cr_id") or "") != str(original.get("cr_id") or "")
-            or str(correction.get("work_id") or "")
-            != str(original.get("work_id") or "")
-        ):
+        if str(correction.get("cr_id") or "") != str(original.get("cr_id") or "") or str(
+            correction.get("work_id") or ""
+        ) != str(original.get("work_id") or ""):
             findings.append("GATE_APPROVAL_CORRECTION_CROSSES_TARGET")
         if approval_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE and (
             str(correction.get("checkpoint") or "").upper() != expected_checkpoint
@@ -565,9 +596,7 @@ def _legacy_gate_corrections(
         findings.append("GATE_APPROVAL_CUTOVER_NOT_UNIQUE")
         return {}, tuple(sorted(set(findings)))
     cutover = cutovers[0]
-    correction_ids = sorted(
-        str(correction.get("event_id") or "") for correction in corrections
-    )
+    correction_ids = sorted(str(correction.get("event_id") or "") for correction in corrections)
     source_events = [
         _clean_event(event)
         for event in events
@@ -591,10 +620,8 @@ def _legacy_gate_corrections(
         or int(cutover.get("legacy_event_count") or 0) != len(legacy_events)
         or int(cutover.get("correction_event_count") or 0) != len(corrections)
         or sorted(cutover.get("correction_event_ids") or []) != correction_ids
-        or str(cutover.get("gate_ledger_preimage_digest") or "")
-        != canonical_digest(source_events)
-        or str(cutover.get("legacy_manifest_digest") or "")
-        != canonical_digest(manifest)
+        or str(cutover.get("gate_ledger_preimage_digest") or "") != canonical_digest(source_events)
+        or str(cutover.get("legacy_manifest_digest") or "") != canonical_digest(manifest)
         or not str(cutover.get("plan_digest") or "")
     ):
         findings.append("GATE_APPROVAL_CUTOVER_BINDING_INVALID")
@@ -612,9 +639,7 @@ def project_gate_approvals(
 
     source = tuple(events)
     approvals = [
-        event
-        for event in source
-        if str(event.get("event_type") or "") == "human_gate_approval"
+        event for event in source if str(event.get("event_type") or "") == "human_gate_approval"
     ]
     legacy_events = {
         str(event.get("event_id") or ""): event
@@ -622,9 +647,7 @@ def project_gate_approvals(
         if event.get("approval_kind_version") is None
         and str(event.get("event_id") or "") in _LEGACY_GATE_APPROVAL_MANIFEST_V1
     }
-    legacy_corrections, correction_findings = _legacy_gate_corrections(
-        source, legacy_events
-    )
+    legacy_corrections, correction_findings = _legacy_gate_corrections(source, legacy_events)
     migration_present = any(
         str(event.get("event_type") or "")
         in {_GATE_APPROVAL_CORRECTION_EVENT, _GATE_APPROVAL_CUTOVER_EVENT}
@@ -636,9 +659,7 @@ def project_gate_approvals(
         if event.get("approval_kind_version") is not None:
             findings = _typed_gate_approval_findings(event)
             try:
-                approval_kind = GateApprovalKindV1(
-                    str(event.get("approval_kind") or "")
-                )
+                approval_kind = GateApprovalKindV1(str(event.get("approval_kind") or ""))
             except ValueError:
                 approval_kind = None
             checkpoint = (
@@ -808,9 +829,7 @@ def build_gate_approval_kind_migration_plan(
         "approval_kind_version": GATE_APPROVAL_KIND_VERSION,
         "legacy_event_count": len(legacy),
         "correction_event_count": len(corrections),
-        "correction_event_ids": [
-            str(correction["event_id"]) for correction in corrections
-        ],
+        "correction_event_ids": [str(correction["event_id"]) for correction in corrections],
         "gate_ledger_preimage_digest": preimage_digest,
         "legacy_manifest_digest": manifest_digest,
         "plan_digest": plan_digest,
@@ -825,7 +844,9 @@ def build_gate_approval_kind_migration_plan(
     }
 
 
-def validate_event_before_append(path: Path, event: Mapping[str, Any], *, ledger_type: str = "") -> dict[str, Any]:
+def validate_event_before_append(
+    path: Path, event: Mapping[str, Any], *, ledger_type: str = ""
+) -> dict[str, Any]:
     """Fail before directory creation or file mutation when required fields are absent."""
 
     if not isinstance(event, Mapping):
@@ -835,7 +856,9 @@ def validate_event_before_append(path: Path, event: Mapping[str, Any], *, ledger
     if event_type == "ledger_compacted":
         required = COMPACT_MARKER_REQUIRED_FIELDS
     elif resolved_type == "dispatch":
-        required = DISPATCH_EVENT_REQUIRED_FIELDS.get(event_type, LEDGER_REQUIRED_FIELDS["dispatch"])
+        required = DISPATCH_EVENT_REQUIRED_FIELDS.get(
+            event_type, LEDGER_REQUIRED_FIELDS["dispatch"]
+        )
     else:
         required = LEDGER_REQUIRED_FIELDS.get(resolved_type, ("event_type",))
     missing = [field for field in required if not event.get(field)]
@@ -860,11 +883,22 @@ def append_event(path: Path, event: dict[str, Any]) -> Path:
     return path
 
 
-def render_appended_event(path: Path, event: dict[str, Any]) -> str:
+def render_appended_event(
+    path: Path,
+    event: dict[str, Any],
+    *,
+    before_text: str | None = None,
+) -> str:
     """Render append-only ledger content without mutating the ledger."""
 
     payload = validate_event_before_append(path, event)
-    before = path.read_text(encoding="utf-8") if path.is_file() else ""
+    before = (
+        before_text
+        if before_text is not None
+        else path.read_text(encoding="utf-8")
+        if path.is_file()
+        else ""
+    )
     if before and not before.endswith("\n"):
         before += "\n"
     return before + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
@@ -932,7 +966,9 @@ def build_inline_fallback_event(
         "approved_by": approved_by,
         "tool_name": tool_name,
         "status": status,
-        "terminal_result": "PASS" if normalize_terminal_status(status) in TERMINAL_SUCCESS_STATUSES else "FAIL",
+        "terminal_result": "PASS"
+        if normalize_terminal_status(status) in TERMINAL_SUCCESS_STATUSES
+        else "FAIL",
         "created_at": created_at or now_utc(),
     }
     for key, value in {
@@ -947,14 +983,26 @@ def build_inline_fallback_event(
     return event
 
 
-def append_dispatch_event(project_root: Path, event: dict[str, Any], *, ledger: Path | None = None) -> Path:
+def append_dispatch_event(
+    project_root: Path, event: dict[str, Any], *, ledger: Path | None = None
+) -> Path:
     path = ledger.resolve() if ledger else ledger_path(project_root.resolve(), "dispatch")
     return append_event(path, event)
 
 
-def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[str], list[str]]:
+def validate_event_ledger(
+    path: Path,
+    *,
+    ledger_type: str = "",
+    read_context: ReadContextProtocol | None = None,
+    logical_ref: str = "",
+) -> tuple[list[str], list[str]]:
     ledger_type = ledger_type or _ledger_type_from_path(path)
-    events, errors = load_events(path)
+    events, errors = load_events(
+        path,
+        read_context=read_context,
+        logical_ref=logical_ref,
+    )
     warnings: list[str] = []
     if errors:
         return errors, warnings
@@ -974,7 +1022,9 @@ def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[st
         if event.get("event_type") == "ledger_compacted":
             fields = COMPACT_MARKER_REQUIRED_FIELDS
         elif ledger_type == "dispatch":
-            fields = DISPATCH_EVENT_REQUIRED_FIELDS.get(str(event.get("event_type") or ""), required)
+            fields = DISPATCH_EVENT_REQUIRED_FIELDS.get(
+                str(event.get("event_type") or ""), required
+            )
         else:
             fields = required
         for field in fields:
@@ -989,57 +1039,99 @@ def validate_event_ledger(path: Path, *, ledger_type: str = "") -> tuple[list[st
             # Legacy dispatch rows may lack event_id.  They remain readable,
             # but dispatch_id/run_id may never be used as semantic event-id
             # fallbacks because one attempt naturally has several events.
-            warnings.append(f"line {line_no}: legacy dispatch event lacks event_id; identity is self-declared-unverifiable")
+            warnings.append(
+                f"line {line_no}: legacy dispatch event lacks event_id; identity is self-declared-unverifiable"
+            )
         elif ledger_type != "dispatch":
             errors.append(f"line {line_no}: missing event_id")
 
-        if ledger_type == "dispatch" and event.get("event_type") == "dispatch" and not event.get("attempt_id"):
+        if (
+            ledger_type == "dispatch"
+            and event.get("event_type") == "dispatch"
+            and not event.get("attempt_id")
+        ):
             # Untyped rows predate the attempt contract.  Preserve them as
             # append-only history, but disclose evidence gaps instead of
             # fabricating identity or timing fields.
             if not (event.get("agent_id") or event.get("thread_id")):
-                warnings.append(f"line {line_no}: legacy dispatch event lacks agent_id or thread_id")
+                warnings.append(
+                    f"line {line_no}: legacy dispatch event lacks agent_id or thread_id"
+                )
             if not (event.get("spawned_at") or event.get("resumed_at")):
-                warnings.append(f"line {line_no}: legacy dispatch event lacks spawned_at or resumed_at")
+                warnings.append(
+                    f"line {line_no}: legacy dispatch event lacks spawned_at or resumed_at"
+                )
             if not event.get("dispatch_trigger"):
                 warnings.append(f"line {line_no}: legacy dispatch event lacks dispatch_trigger")
-            if normalize_terminal_status(event.get("status")) in TERMINAL_SUCCESS_STATUSES and not event.get("completed_at"):
-                warnings.append(f"line {line_no}: legacy successful dispatch event lacks completed_at")
+            if normalize_terminal_status(
+                event.get("status")
+            ) in TERMINAL_SUCCESS_STATUSES and not event.get("completed_at"):
+                warnings.append(
+                    f"line {line_no}: legacy successful dispatch event lacks completed_at"
+                )
 
-        if ledger_type == "dispatch" and event.get("event_type") == "dispatch" and event.get("attempt_id"):
+        if (
+            ledger_type == "dispatch"
+            and event.get("event_type") == "dispatch"
+            and event.get("attempt_id")
+        ):
             dispatch_id = str(event.get("dispatch_id") or "")
             attempt_id = str(event.get("attempt_id") or "")
             status = normalize_terminal_status(event.get("status"))
             if not event_id:
                 if (dispatch_id, attempt_id) in corrected_attempts:
-                    warnings.append(f"line {line_no}: typed dispatch event_id is covered by append-only correction")
+                    warnings.append(
+                        f"line {line_no}: typed dispatch event_id is covered by append-only correction"
+                    )
                 else:
                     errors.append(f"line {line_no}: typed dispatch attempt requires event_id")
             if not dispatch_id or not attempt_id:
-                errors.append(f"line {line_no}: typed dispatch attempt requires dispatch_id and attempt_id")
+                errors.append(
+                    f"line {line_no}: typed dispatch attempt requires dispatch_id and attempt_id"
+                )
             if status in TERMINAL_ATTEMPT_STATUSES and not event.get("terminal_result"):
-                errors.append(f"line {line_no}: terminal typed dispatch attempt requires terminal_result")
+                errors.append(
+                    f"line {line_no}: terminal typed dispatch attempt requires terminal_result"
+                )
             typed_attempt_events.setdefault((dispatch_id, attempt_id), []).append(event)
-        if not any(event.get(field) for field in ("created_at", "checked_at", "spawned_at", "completed_at", "timestamp")):
+        if not any(
+            event.get(field)
+            for field in ("created_at", "checked_at", "spawned_at", "completed_at", "timestamp")
+        ):
             warnings.append(f"line {line_no}: event has no timestamp field")
     if ledger_type == "dispatch":
         for (dispatch_id, attempt_id), events_for_attempt in sorted(typed_attempt_events.items()):
             statuses = {
-                normalize_terminal_status(event.get("status"))
-                for event in events_for_attempt
+                normalize_terminal_status(event.get("status")) for event in events_for_attempt
             }
             if not statuses & TERMINAL_ATTEMPT_STATUSES:
-                errors.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing terminal closure")
-            if not any(event.get("agent_id") or event.get("thread_id") for event in events_for_attempt):
-                warnings.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing agent_id or thread_id")
-            if not any(event.get("spawned_at") or event.get("resumed_at") for event in events_for_attempt):
-                warnings.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing spawned_at or resumed_at")
+                errors.append(
+                    f"dispatch {dispatch_id} attempt {attempt_id}: missing terminal closure"
+                )
+            if not any(
+                event.get("agent_id") or event.get("thread_id") for event in events_for_attempt
+            ):
+                warnings.append(
+                    f"dispatch {dispatch_id} attempt {attempt_id}: missing agent_id or thread_id"
+                )
+            if not any(
+                event.get("spawned_at") or event.get("resumed_at") for event in events_for_attempt
+            ):
+                warnings.append(
+                    f"dispatch {dispatch_id} attempt {attempt_id}: missing spawned_at or resumed_at"
+                )
             if not any(event.get("dispatch_trigger") for event in events_for_attempt):
-                warnings.append(f"dispatch {dispatch_id} attempt {attempt_id}: missing dispatch_trigger")
+                warnings.append(
+                    f"dispatch {dispatch_id} attempt {attempt_id}: missing dispatch_trigger"
+                )
             for event in events_for_attempt:
-                if normalize_terminal_status(event.get("status")) in TERMINAL_SUCCESS_STATUSES and not event.get("completed_at"):
+                if normalize_terminal_status(
+                    event.get("status")
+                ) in TERMINAL_SUCCESS_STATUSES and not event.get("completed_at"):
                     line_no = int(event.get("_line_no") or 0)
-                    errors.append(f"line {line_no}: successful typed dispatch terminal event requires completed_at")
+                    errors.append(
+                        f"line {line_no}: successful typed dispatch terminal event requires completed_at"
+                    )
     return errors, warnings
 
 
@@ -1055,7 +1147,7 @@ def _print_event_help() -> None:
         "  list    Print compact event lines from a ledger.\n\n"
         "Examples:\n"
         "  meta-flow event append --ledger process/state/CHECKPOINT-LEDGER.ndjson --event-file event.json\n"
-        "  meta-flow event inline-fallback --dispatch-id ADE-CR045-INLINE-CP6 --canonical-role meta-dev --fallback-reason \"implemented inline\" --approved-by host-orchestrator --project-root .\n"
+        '  meta-flow event inline-fallback --dispatch-id ADE-CR045-INLINE-CP6 --canonical-role meta-dev --fallback-reason "implemented inline" --approved-by host-orchestrator --project-root .\n'
         "  meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint\n"
         "  meta-flow event check --ledger process/state/CHECKPOINT-LEDGER.ndjson --type checkpoint --mode silent\n"
         "  meta-flow event list --ledger process/state/HANDOFF-LEDGER.ndjson\n"
@@ -1198,7 +1290,9 @@ def main(argv: list[str] | None = None) -> int:
     if command == "dispatch-check":
         parser = argparse.ArgumentParser(prog="meta-flow event dispatch-check")
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
-        parser.add_argument("--ledger", type=Path, default=Path("process/state/AGENT-DISPATCH-LEDGER.ndjson"))
+        parser.add_argument(
+            "--ledger", type=Path, default=Path("process/state/AGENT-DISPATCH-LEDGER.ndjson")
+        )
         parser.add_argument("--mode", choices=("normal", "silent"), default="normal")
         parsed = parser.parse_args(args[1:])
         errors, warnings = validate_event_ledger(
@@ -1224,7 +1318,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"- ERROR: {error}")
             return 1
         for event in events:
-            event_id = event.get("event_id") or event.get("dispatch_id") or event.get("run_id") or "-"
+            event_id = (
+                event.get("event_id") or event.get("dispatch_id") or event.get("run_id") or "-"
+            )
             event_type = event.get("event_type") or "-"
             status = event.get("status") or event.get("decision") or event.get("result") or "-"
             print(f"{event_id}\t{event_type}\t{status}")

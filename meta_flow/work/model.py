@@ -9,9 +9,16 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.model import is_safe_ref
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.work.budget import BudgetLimit
 from meta_flow.work.risk import RISK_PROFILES, ClassificationDecision
+from meta_flow.work.route_profile import (
+    SAFE_ROUTE_PROFILE,
+    RouteProfile,
+    evaluate_route_profile,
+    route_profile_from_payload,
+)
 from meta_flow.work.scope import WorkScope
 
 WORK_SCHEMA_VERSION = 1
@@ -41,6 +48,7 @@ WORK_ALLOWED_KEYS = {
     "risk_profile",
     "risk_reason_codes",
     "required_gates",
+    "route_profile",
     "scope",
     "scope_digest",
     "budget",
@@ -49,7 +57,12 @@ WORK_ALLOWED_KEYS = {
     "result_ref",
     "updated_at",
 }
-WORK_REQUIRED_KEYS = WORK_ALLOWED_KEYS - {"phase_ref", "result_ref", "updated_at"}
+WORK_REQUIRED_KEYS = WORK_ALLOWED_KEYS - {
+    "phase_ref",
+    "result_ref",
+    "route_profile",
+    "updated_at",
+}
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _REASON_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,127}$")
 _GATE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -77,6 +90,7 @@ class Work:
     risk_profile: str
     risk_reason_codes: tuple[str, ...]
     required_gates: tuple[str, ...]
+    route_profile: RouteProfile
     scope: WorkScope
     budget: BudgetLimit
     usage_ref: str
@@ -106,6 +120,7 @@ class Work:
             "risk_profile": self.risk_profile,
             "risk_reason_codes": list(self.risk_reason_codes),
             "required_gates": list(self.required_gates),
+            "route_profile": self.route_profile.as_dict(),
             "scope": self.scope.as_dict(),
             "scope_digest": self.scope.digest,
             "budget": self.budget.as_dict(),
@@ -152,13 +167,20 @@ def validate_work_payload(
 ) -> list[WorkFinding]:
     findings: list[WorkFinding] = []
     if byte_size is not None and byte_size > WORK_MAX_BYTES:
-        _finding(findings, "work_over_budget", f"WORK.yaml exceeds {WORK_MAX_BYTES} bytes: {byte_size}")
+        _finding(
+            findings, "work_over_budget", f"WORK.yaml exceeds {WORK_MAX_BYTES} bytes: {byte_size}"
+        )
     for key in sorted(set(payload) - WORK_ALLOWED_KEYS):
         _finding(findings, "unknown_key", f"WORK.yaml contains unknown field: {key}", key=key)
     for key in sorted(WORK_REQUIRED_KEYS - set(payload)):
         _finding(findings, "missing_required", f"WORK.yaml missing required field: {key}", key=key)
     if payload.get("schema_version") != WORK_SCHEMA_VERSION:
-        _finding(findings, "schema_version", f"schema_version must be {WORK_SCHEMA_VERSION}", key="schema_version")
+        _finding(
+            findings,
+            "schema_version",
+            f"schema_version must be {WORK_SCHEMA_VERSION}",
+            key="schema_version",
+        )
     for key in ("work_id", "project_id"):
         value = payload.get(key)
         if not isinstance(value, str) or not _ID_RE.fullmatch(value):
@@ -171,7 +193,12 @@ def validate_work_payload(
     if payload.get("status") not in WORK_STATUSES:
         _finding(findings, "status", "status is not a supported Work status", key="status")
     if payload.get("request_confirmed") is not True:
-        _finding(findings, "request_confirmation", "request_confirmed must be true before Work creation", key="request_confirmed")
+        _finding(
+            findings,
+            "request_confirmation",
+            "request_confirmed must be true before Work creation",
+            key="request_confirmed",
+        )
 
     prefix = _expected_work_prefix(payload)
     for key in ("request_ref", "usage_ref"):
@@ -185,7 +212,9 @@ def validate_work_payload(
         _finding(findings, "ref_path", "phase_ref must be under phases/", key="phase_ref")
     result_ref = payload.get("result_ref", "")
     if result_ref not in (None, "") and (
-        not isinstance(result_ref, str) or not is_safe_ref(result_ref) or not result_ref.startswith(prefix)
+        not isinstance(result_ref, str)
+        or not is_safe_ref(result_ref)
+        or not result_ref.startswith(prefix)
     ):
         _finding(findings, "ref_path", f"result_ref must be under {prefix}", key="result_ref")
 
@@ -193,19 +222,44 @@ def validate_work_payload(
     if risk_profile not in RISK_PROFILES:
         _finding(findings, "risk_profile", "risk_profile must be G0, G1, or G2", key="risk_profile")
     reasons = payload.get("risk_reason_codes")
-    if not isinstance(reasons, list) or not reasons or not all(
-        isinstance(item, str) and _REASON_RE.fullmatch(item) for item in reasons
+    if (
+        not isinstance(reasons, list)
+        or not reasons
+        or not all(isinstance(item, str) and _REASON_RE.fullmatch(item) for item in reasons)
     ):
-        _finding(findings, "risk_reason_codes", "risk_reason_codes must be non-empty safe codes", key="risk_reason_codes")
+        _finding(
+            findings,
+            "risk_reason_codes",
+            "risk_reason_codes must be non-empty safe codes",
+            key="risk_reason_codes",
+        )
     elif len(reasons) != len(set(reasons)):
-        _finding(findings, "duplicate", "risk_reason_codes contains duplicates", key="risk_reason_codes")
+        _finding(
+            findings, "duplicate", "risk_reason_codes contains duplicates", key="risk_reason_codes"
+        )
     gates = payload.get("required_gates")
     if not isinstance(gates, list) or not all(
         isinstance(item, str) and _GATE_RE.fullmatch(item) for item in gates
     ):
-        _finding(findings, "required_gates", "required_gates must be safe codes", key="required_gates")
+        _finding(
+            findings, "required_gates", "required_gates must be safe codes", key="required_gates"
+        )
     elif len(gates) != len(set(gates)):
         _finding(findings, "duplicate", "required_gates contains duplicates", key="required_gates")
+
+    try:
+        route_profile = route_profile_from_payload(payload.get("route_profile"))
+    except (TypeError, ValueError) as exc:
+        _finding(findings, "route_profile", str(exc), key="route_profile")
+    else:
+        route_decision = evaluate_route_profile(
+            route_profile,
+            risk_profile=str(risk_profile or ""),
+            work_kind=str(payload.get("kind") or ""),
+            require_human_approval=False,
+        )
+        for error in route_decision.errors:
+            _finding(findings, "route_profile", error, key="route_profile")
 
     scope_payload = payload.get("scope")
     if not isinstance(scope_payload, dict):
@@ -222,11 +276,23 @@ def validate_work_payload(
             _finding(findings, "scope", str(exc), key="scope")
         else:
             if payload.get("scope_digest") != scope.digest:
-                _finding(findings, "scope_digest", "scope_digest does not match scope", key="scope_digest")
+                _finding(
+                    findings,
+                    "scope_digest",
+                    "scope_digest does not match scope",
+                    key="scope_digest",
+                )
 
     budget_payload = payload.get("budget")
-    if not isinstance(budget_payload, dict) or set(budget_payload) != {"reads", "writes", "check_groups", "tokens"}:
-        _finding(findings, "budget", "budget must contain reads/writes/check_groups/tokens", key="budget")
+    if not isinstance(budget_payload, dict) or set(budget_payload) != {
+        "reads",
+        "writes",
+        "check_groups",
+        "tokens",
+    }:
+        _finding(
+            findings, "budget", "budget must contain reads/writes/check_groups/tokens", key="budget"
+        )
     else:
         try:
             BudgetLimit(**budget_payload)
@@ -235,13 +301,22 @@ def validate_work_payload(
 
     base_oids = payload.get("base_oids")
     if not isinstance(base_oids, dict) or set(base_oids) != {"release", "process"}:
-        _finding(findings, "base_oids", "base_oids must contain release and process", key="base_oids")
+        _finding(
+            findings, "base_oids", "base_oids must contain release and process", key="base_oids"
+        )
     else:
         for role in ("release", "process"):
             if not _safe_oid(base_oids.get(role)):
-                _finding(findings, "base_oid", f"base_oids.{role} must be empty or one full hex OID", key="base_oids")
+                _finding(
+                    findings,
+                    "base_oid",
+                    f"base_oids.{role} must be empty or one full hex OID",
+                    key="base_oids",
+                )
     if payload.get("status") == "completed" and not result_ref:
-        _finding(findings, "result_required", "completed Work requires result_ref", key="result_ref")
+        _finding(
+            findings, "result_required", "completed Work requires result_ref", key="result_ref"
+        )
     return findings
 
 
@@ -268,6 +343,7 @@ def work_from_payload(payload: Mapping[str, Any]) -> Work:
         risk_profile=str(payload["risk_profile"]),
         risk_reason_codes=tuple(str(item) for item in payload["risk_reason_codes"]),
         required_gates=tuple(str(item) for item in payload["required_gates"]),
+        route_profile=route_profile_from_payload(payload.get("route_profile")),
         scope=WorkScope(
             version=int(scope_payload["version"]),
             allowed_reads=tuple(str(item) for item in scope_payload["allowed_reads"]),
@@ -295,6 +371,7 @@ def build_work(
     process_base_oid: str,
     phase_ref: str = "",
     kind: str | None = None,
+    route_profile: RouteProfile = SAFE_ROUTE_PROFILE,
 ) -> Work:
     if classification.blocked or classification.budget is None:
         raise ValueError("blocked classification cannot create a Work")
@@ -312,6 +389,7 @@ def build_work(
         risk_profile=classification.risk_profile,
         risk_reason_codes=classification.reason_codes,
         required_gates=classification.required_gates,
+        route_profile=route_profile,
         scope=scope,
         budget=classification.budget,
         usage_ref=f"works/{work_id}/USAGE.json",
@@ -330,10 +408,24 @@ def work_path(process_root: Path, work_id: str) -> Path:
     return process_root.resolve() / "works" / work_id / "WORK.yaml"
 
 
-def load_work(process_root: Path, work_id: str) -> Work:
+def load_work(
+    process_root: Path,
+    work_id: str,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> Work:
     path = work_path(process_root, work_id)
-    payload = load_yaml_object(path)
-    findings = validate_work_payload(payload, byte_size=path.stat().st_size)
+    logical_ref = f"works/{work_id}/WORK.yaml"
+    if read_context is None:
+        payload = load_yaml_object(path)
+        byte_size = path.stat().st_size
+    else:
+        payload = read_context.read_yaml_object(
+            logical_ref,
+            loader=load_yaml_object,
+        )
+        byte_size = read_context.byte_size(logical_ref)
+    findings = validate_work_payload(payload, byte_size=byte_size)
     if findings:
         raise ValueError("; ".join(finding.message for finding in findings))
     return work_from_payload(payload)

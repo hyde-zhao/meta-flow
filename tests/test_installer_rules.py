@@ -10,12 +10,26 @@ from delivery.scripts import install
 
 
 class InstallerRulesTests(unittest.TestCase):
+    def test_canonical_rules_publish_routine_work_efficiency_contract(self) -> None:
+        content = Path("delivery/rules/AGENTS.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "mode=routine-four-stage",
+            "dispatch_mode=direct",
+            "legacy_cp_compatibility=false",
+            "targeted → compatibility → full",
+            "最多读取 5 个对象",
+            "plan 与 apply 不得共享 context",
+            "summary_insufficient",
+            "actual mutation 为 0",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+
     def test_process_consuming_canonical_skills_require_portable_resolver_contract(self) -> None:
         skill_files = sorted(Path("delivery/skills").glob("*/SKILL.md"))
         process_consumers = [
-            path
-            for path in skill_files
-            if "process/" in path.read_text(encoding="utf-8")
+            path for path in skill_files if "process/" in path.read_text(encoding="utf-8")
         ]
 
         self.assertEqual(29, len(process_consumers))
@@ -94,7 +108,9 @@ class InstallerRulesTests(unittest.TestCase):
 
         codex_toml = install.render_codex_agent(rendered_agents[0], "abc", "2026-07-10T00:00:00Z")
         self.assertIn('model = "gpt-5.6-terra"', codex_toml)
-        claude_markdown = install.render_claude_agent(source_agents[0], "abc", "2026-07-10T00:00:00Z")
+        claude_markdown = install.render_claude_agent(
+            source_agents[0], "abc", "2026-07-10T00:00:00Z"
+        )
         qoder_markdown = install.render_qoder_agent(source_agents[0], "abc", "2026-07-10T00:00:00Z")
         self.assertNotIn("gpt-5.6-", claude_markdown)
         self.assertNotIn("gpt-5.6-", qoder_markdown)
@@ -145,7 +161,10 @@ class InstallerRulesTests(unittest.TestCase):
             agents_md = target / "AGENTS.md"
             self.assertTrue(agents_md.is_file())
             self.assertIn("myflow:managed:begin", agents_md.read_text(encoding="utf-8"))
-            self.assertEqual([{"kind": "managed-block", "path": str(agents_md), "remove_path": str(agents_md)}], manifest_entries)
+            self.assertEqual(
+                [{"kind": "managed-block", "path": str(agents_md), "remove_path": str(agents_md)}],
+                manifest_entries,
+            )
 
     def test_codex_rules_install_fails_when_source_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -240,7 +259,10 @@ class InstallerRulesTests(unittest.TestCase):
             self.assertIn("myflow:managed:begin platform=claude", content)
             self.assertIn("myflow:managed:end platform=claude", content)
             self.assertIn("# Canonical Rules", content)
-            self.assertEqual([{"kind": "managed-block", "path": str(claude_md), "remove_path": str(claude_md)}], manifest_entries)
+            self.assertEqual(
+                [{"kind": "managed-block", "path": str(claude_md), "remove_path": str(claude_md)}],
+                manifest_entries,
+            )
 
     def test_claude_rules_install_fails_when_agents_source_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -300,12 +322,20 @@ class QoderInstallerTests(unittest.TestCase):
             "contracts": {
                 "codex": {
                     "scopes": {
-                        "project": {"rules": "AGENTS.md", "agents": ".codex/agents", "skills": ".agents/skills"},
+                        "project": {
+                            "rules": "AGENTS.md",
+                            "agents": ".codex/agents",
+                            "skills": ".agents/skills",
+                        },
                     }
                 },
                 "qoder": {
                     "scopes": {
-                        "project": {"rules": "AGENTS.md", "agents": ".qoder/agents", "skills": ".qoder/skills"},
+                        "project": {
+                            "rules": "AGENTS.md",
+                            "agents": ".qoder/agents",
+                            "skills": ".qoder/skills",
+                        },
                     }
                 },
             }
@@ -322,15 +352,26 @@ class QoderInstallerTests(unittest.TestCase):
             manifest_entries: list[dict[str, str]] = []
 
             install.install_rules(
-                "qoder", "project", target, self._make_contracts(), self._make_layout(root, source_rule),
-                install.Transaction(), False, "test-commit", "2026-06-29T00:00:00Z", manifest_entries,
+                "qoder",
+                "project",
+                target,
+                self._make_contracts(),
+                self._make_layout(root, source_rule),
+                install.Transaction(),
+                False,
+                "test-commit",
+                "2026-06-29T00:00:00Z",
+                manifest_entries,
             )
 
             agents_md = target / "AGENTS.md"
             content = agents_md.read_text(encoding="utf-8")
             self.assertIn("myflow:managed:begin platform=qoder", content)
             self.assertIn("myflow:managed:end platform=qoder", content)
-            self.assertEqual([{"kind": "managed-block", "path": str(agents_md), "remove_path": str(agents_md)}], manifest_entries)
+            self.assertEqual(
+                [{"kind": "managed-block", "path": str(agents_md), "remove_path": str(agents_md)}],
+                manifest_entries,
+            )
 
     def test_qoder_rules_install_fails_when_source_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -340,8 +381,16 @@ class QoderInstallerTests(unittest.TestCase):
 
             with self.assertRaises(SystemExit) as raised:
                 install.install_rules(
-                    "qoder", "project", target, self._make_contracts(), self._make_layout(root, None),
-                    install.Transaction(), True, "test-commit", "2026-06-29T00:00:00Z", [],
+                    "qoder",
+                    "project",
+                    target,
+                    self._make_contracts(),
+                    self._make_layout(root, None),
+                    install.Transaction(),
+                    True,
+                    "test-commit",
+                    "2026-06-29T00:00:00Z",
+                    [],
                 )
             self.assertEqual(1, raised.exception.code)
 
@@ -357,8 +406,30 @@ class QoderInstallerTests(unittest.TestCase):
             layout = self._make_layout(root, source_rule)
             txn = install.Transaction()
 
-            install.install_rules("codex", "project", target, contracts, layout, txn, False, "c1", "2026-01-01T00:00:00Z", [])
-            install.install_rules("qoder", "project", target, contracts, layout, txn, False, "c2", "2026-01-02T00:00:00Z", [])
+            install.install_rules(
+                "codex",
+                "project",
+                target,
+                contracts,
+                layout,
+                txn,
+                False,
+                "c1",
+                "2026-01-01T00:00:00Z",
+                [],
+            )
+            install.install_rules(
+                "qoder",
+                "project",
+                target,
+                contracts,
+                layout,
+                txn,
+                False,
+                "c2",
+                "2026-01-02T00:00:00Z",
+                [],
+            )
 
             content = (target / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("myflow:managed:begin platform=codex", content)
@@ -378,8 +449,30 @@ class QoderInstallerTests(unittest.TestCase):
             layout = self._make_layout(root, source_rule)
             txn = install.Transaction()
 
-            install.install_rules("codex", "project", target, contracts, layout, txn, False, "c1", "2026-01-01T00:00:00Z", [])
-            install.install_rules("qoder", "project", target, contracts, layout, txn, False, "c2", "2026-01-02T00:00:00Z", [])
+            install.install_rules(
+                "codex",
+                "project",
+                target,
+                contracts,
+                layout,
+                txn,
+                False,
+                "c1",
+                "2026-01-01T00:00:00Z",
+                [],
+            )
+            install.install_rules(
+                "qoder",
+                "project",
+                target,
+                contracts,
+                layout,
+                txn,
+                False,
+                "c2",
+                "2026-01-02T00:00:00Z",
+                [],
+            )
 
             agents_md = target / "AGENTS.md"
             install.clear_managed_block(agents_md, install.Transaction(), False, "qoder")
@@ -407,8 +500,16 @@ class QoderInstallerTests(unittest.TestCase):
             agents_md.write_text(legacy_content, encoding="utf-8")
 
             install.install_rules(
-                "codex", "project", target, self._make_contracts(), self._make_layout(root, source_rule),
-                install.Transaction(), False, "new-commit", "2026-06-29T00:00:00Z", [],
+                "codex",
+                "project",
+                target,
+                self._make_contracts(),
+                self._make_layout(root, source_rule),
+                install.Transaction(),
+                False,
+                "new-commit",
+                "2026-06-29T00:00:00Z",
+                [],
             )
 
             content = agents_md.read_text(encoding="utf-8")

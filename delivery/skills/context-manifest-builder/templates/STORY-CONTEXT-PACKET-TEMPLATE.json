@@ -50,9 +50,9 @@
   "full_doc_read_allowed_when": [
     "capsule_missing",
     "field_conflict",
+    "schema_validation_failed",
     "human_audit",
-    "deep_review",
-    "schema_validation_failed"
+    "summary_insufficient"
   ],
   "lld_policy": "technical-note",
   "objective": {
@@ -91,6 +91,13 @@
     }
   ],
   "read_if_needed": [],
+  "pre_dispatch_actions": [],
+  "read_expansion_contract": {
+    "input_contract": "ReadExpansionPlanV1",
+    "required_before": "story-dispatch",
+    "reason_evidence_required": true,
+    "invalid_request_result": "BLOCKED; target bytes=0; mutation=0"
+  },
   "required_full_doc_read_log": "process/state/READ-EXPANSION-LEDGER.ndjson",
   "context_sufficiency": {
     "required_slots": [
@@ -113,7 +120,7 @@
     ]
   },
   "risk_profile": "standard-code",
-  "schema_version": 1,
+  "schema_version": 2,
   "stage": "BASE|CP6|CP7",
   "story_id": "<STORY-ID>",
   "story_ref": "process/stories/<story>.md",

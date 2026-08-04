@@ -23,7 +23,15 @@ def test_new_read_expansion_has_explicit_authorization(tmp_path: Path) -> None:
     target = tmp_path / "process/stories/S-LLD.md"
     target.parent.mkdir(parents=True)
     target.write_text("x", encoding="utf-8")
-    event = read_expansion.build_event(tmp_path, requested_path="process/stories/S-LLD.md", reason="human_audit", stage="CP6", agent="host", context_ref="process/context/x")
+    event = read_expansion.build_event(
+        tmp_path,
+        requested_path="process/stories/S-LLD.md",
+        reason="human_audit",
+        reason_evidence={"authorization_ref": "process/checkpoints/AUDIT.md"},
+        stage="CP6",
+        agent="host",
+        context_ref="process/context/x",
+    )
     assert event["outside_default_read_set"] is True
     assert event["expansion_authorized"] is True
     assert not read_expansion.validate_event(event, allowed_reasons={"human_audit"}, line_number=1)

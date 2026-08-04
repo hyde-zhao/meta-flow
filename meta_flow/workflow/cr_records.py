@@ -669,9 +669,16 @@ def record_from_cr_file(
     path: Path,
     *,
     _rel_fn: Any | None = None,
+    read_context: Any | None = None,
+    text: str | None = None,
 ) -> CRRecord:
     rel = _rel if _rel_fn is None else _rel_fn
-    text = path.read_text(encoding="utf-8")
+    if text is None:
+        text = (
+            path.read_text(encoding="utf-8")
+            if read_context is None
+            else read_context.read_text(rel(project_root, path))
+        )
     fields = parse_frontmatter(text)
     cr_id = fields.get("cr_id") or _cr_id_from_path(path)
     if not cr_id:

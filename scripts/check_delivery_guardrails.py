@@ -628,9 +628,12 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "process/archive/**",
         "capsule_missing",
         "field_conflict",
-        "human_audit",
-        "deep_review",
         "schema_validation_failed",
+        "human_audit",
+        "summary_insufficient",
+        "reason_evidence",
+        "target bytes=0",
+        "mutation=0",
         "authz_policy_refs",
         "process/returns/*.return.json",
         "process/evidence/*.index.json",
@@ -807,6 +810,29 @@ AGENT_SKILL_CONTRACT_TOKEN_TARGETS = {
         "CR Checkpoint Index",
     ),
 }
+ACTIVE_READ_EXPANSION_REASONS = (
+    "capsule_missing",
+    "field_conflict",
+    "schema_validation_failed",
+    "human_audit",
+    "summary_insufficient",
+)
+ACTIVE_READ_EXPANSION_TEXT_TARGETS = (
+    "delivery/rules/AGENT-SKILL-CONTRACT.md",
+    "delivery/agents/meta-pm.md",
+    "delivery/skills/change-impact-analysis/SKILL.md",
+    ".agents/skills/change-impact-analysis/SKILL.md",
+    "delivery/README.md",
+)
+READ_EXPANSION_EVIDENCE_TOKENS = (
+    "reason_evidence",
+    "capsule_ref",
+    "conflict_field",
+    "schema_id",
+    "error_code",
+    "authorization_ref",
+    "missing_slots",
+)
 
 SOFTWARE_WORKFLOW_TOKEN_TARGETS = {
     "delivery/agents/meta-pm.md": ("scenario-expansion", "story-planning", "docs/product/SCENARIOS.yaml", "docs/product/TEST-MATRIX.md", "docs/product/MVP-SCOPE.md", "SGQ-*", "用户可见场景确认"),
@@ -2346,6 +2372,91 @@ def collect_agent_skill_contract_errors() -> list[str]:
     return errors
 
 
+def collect_read_expansion_delivery_contract_errors() -> list[str]:
+    """确保交付面只生成 v2 扩读理由并暴露逐理由机器证据。"""
+
+    errors: list[str] = []
+    legacy_reason = "deep" + "_review"
+    template_root = (
+        DELIVERY_ROOT / "skills" / "context-manifest-builder" / "templates"
+    )
+    policy_path = template_root / "READ-POLICY-TEMPLATE.json"
+    story_path = template_root / "STORY-CONTEXT-PACKET-TEMPLATE.json"
+    retention_path = template_root / "RETENTION-POLICY-TEMPLATE.json"
+    payloads: dict[str, dict[str, object]] = {}
+    for path in (policy_path, story_path, retention_path):
+        relative = path.relative_to(ROOT).as_posix()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"{relative} is not valid JSON: {exc}")
+            continue
+        if not isinstance(payload, dict):
+            errors.append(f"{relative} must contain one JSON object")
+            continue
+        payloads[relative] = payload
+
+    expected = list(ACTIVE_READ_EXPANSION_REASONS)
+    for path in (policy_path, story_path):
+        relative = path.relative_to(ROOT).as_posix()
+        payload = payloads.get(relative)
+        if payload is None:
+            continue
+        actual = payload.get("full_doc_read_allowed_when")
+        if actual != expected:
+            errors.append(
+                f"{relative} full_doc_read_allowed_when must equal v2 exact reasons"
+            )
+
+    policy = payloads.get(policy_path.relative_to(ROOT).as_posix())
+    if policy is not None:
+        evidence = policy.get("full_doc_read_reason_evidence")
+        if not isinstance(evidence, dict) or list(evidence) != expected:
+            errors.append(
+                "READ-POLICY-TEMPLATE.json must define evidence for every v2 reason"
+            )
+        elif any(not evidence.get(reason) for reason in expected):
+            errors.append(
+                "READ-POLICY-TEMPLATE.json reason evidence entries must be non-empty"
+            )
+
+    retention = payloads.get(retention_path.relative_to(ROOT).as_posix())
+    if retention is not None and legacy_reason in json.dumps(
+        retention, ensure_ascii=False
+    ):
+        errors.append(
+            "RETENTION-POLICY-TEMPLATE.json must not generate the legacy expansion reason"
+        )
+
+    for relative in ACTIVE_READ_EXPANSION_TEXT_TARGETS:
+        path = ROOT / relative
+        if not path.is_file():
+            errors.append(f"missing active read-expansion contract target: {relative}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        if legacy_reason in content:
+            errors.append(
+                f"{relative} contains the legacy expansion reason in an active contract"
+            )
+        missing_reasons = [
+            reason for reason in ACTIVE_READ_EXPANSION_REASONS if reason not in content
+        ]
+        if missing_reasons:
+            errors.append(
+                f"{relative} missing v2 read-expansion reasons: "
+                + ", ".join(missing_reasons)
+            )
+        missing_evidence = [
+            token for token in READ_EXPANSION_EVIDENCE_TOKENS if token not in content
+        ]
+        if missing_evidence:
+            errors.append(
+                f"{relative} missing read-expansion evidence tokens: "
+                + ", ".join(missing_evidence)
+            )
+    return errors
+
+
 def collect_context_budgeted_e2e_errors() -> list[str]:
     errors: list[str] = []
 
@@ -2876,6 +2987,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_software_workflow_artifact_errors())
     errors.extend(collect_context_capsule_protocol_errors())
     errors.extend(collect_agent_skill_contract_errors())
+    errors.extend(collect_read_expansion_delivery_contract_errors())
     errors.extend(collect_context_budgeted_e2e_errors())
     errors.extend(collect_governance_lifecycle_errors())
     errors.extend(collect_context_sufficiency_errors())

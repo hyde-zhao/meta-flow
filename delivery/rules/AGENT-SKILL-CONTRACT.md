@@ -47,10 +47,11 @@
 4. 需要读取全文档时，必须记录 `full_doc_read_reason`，且原因只能是：
    - `capsule_missing`
    - `field_conflict`
-   - `human_audit`
-   - `deep_review`
    - `schema_validation_failed`
-5. 全文读取日志写入 context / packet 的 `read_expansion_log`，或写入 `process/state/READ-EXPANSION-LEDGER.ndjson`。旧项目兼容时可同步到 `process/state/READ-EXPANSION-LEDGER.ndjson`。
+   - `human_audit`
+   - `summary_insufficient`
+5. 每个理由必须在读取目标正文前提供 `reason_evidence`：`capsule_missing` 提供 `capsule_ref`；`field_conflict` 提供 `conflict_field` 与两个含 `ref/digest` 的来源；`schema_validation_failed` 提供 `schema_id/error_code/target_ref`；`human_audit` 提供 `authorization_ref`；`summary_insufficient` 提供非空 `missing_slots`。理由或证据不符合契约时必须 `BLOCKED`，并保持 `target bytes=0`、`mutation=0`。
+6. 全文读取日志写入 context / packet 的 `read_expansion_log`，或写入 `process/state/READ-EXPANSION-LEDGER.ndjson`。旧 schema 事件只允许历史只读解析，不得作为新扩读授权或新事件模板。
 
 ## Output Contract
 

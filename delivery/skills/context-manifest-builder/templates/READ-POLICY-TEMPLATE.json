@@ -29,15 +29,22 @@
   "full_doc_read_allowed_when": [
     "capsule_missing",
     "field_conflict",
+    "schema_validation_failed",
     "human_audit",
-    "deep_review",
-    "schema_validation_failed"
+    "summary_insufficient"
   ],
+  "full_doc_read_reason_evidence": {
+    "capsule_missing": ["capsule_ref"],
+    "field_conflict": ["conflict_field", "sources[2].ref", "sources[2].digest"],
+    "schema_validation_failed": ["schema_id", "error_code", "target_ref"],
+    "human_audit": ["authorization_ref"],
+    "summary_insufficient": ["missing_slots[1+]" ]
+  },
   "required_full_doc_read_log": "process/state/READ-EXPANSION-LEDGER.ndjson",
   "rules": [
     "agent 必须先读取本阶段 context pack",
     "agent 默认只读取 allowed_reads",
-    "全文读取必须记录 full_doc_read_reason，且原因必须属于允许枚举",
+    "全文读取必须在读取目标正文前记录 full_doc_read_reason 与逐理由机器证据；理由或证据不合法时阻断且 target bytes=0",
     "普通 artifact 只能引用 authz policy ID，不复制 policy 全文",
     "process/current/CURRENT.json 是文件系统发现层；状态真相仍以 STATE.current.json 为准"
   ],

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.process_route import _resolve_runtime_path
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import load_yaml_object
 
 DEFAULT_REGISTRY_REL = Path("delivery/doc/PUBLIC-OPERATION-CONTRACTS.yaml")
@@ -229,6 +230,7 @@ def load_public_operation_registry(
     project_root: Path,
     *,
     registry_path: Path = DEFAULT_REGISTRY_REL,
+    read_context: ReadContextProtocol | None = None,
 ) -> tuple[PublicOperationContractV2, ...]:
     """Load a strict registry without importing or executing registered projectors."""
 
@@ -242,7 +244,13 @@ def load_public_operation_registry(
         raise ValueError("registry path must remain inside release root") from exc
     if not path.is_file():
         raise ValueError(f"public operation registry missing: {registry_path.as_posix()}")
-    payload = load_yaml_object(path)
+    if read_context is None:
+        payload = load_yaml_object(path)
+    else:
+        payload = read_context.read_yaml_object(
+            registry_path.as_posix(),
+            loader=load_yaml_object,
+        )
     if set(payload) != REGISTRY_FIELDS:
         missing = sorted(REGISTRY_FIELDS - set(payload))
         extra = sorted(set(payload) - REGISTRY_FIELDS)
@@ -274,6 +282,7 @@ def validate_public_operations(
     *,
     registry_path: Path = DEFAULT_REGISTRY_REL,
     check_console: bool = True,
+    read_context: ReadContextProtocol | None = None,
 ) -> dict[str, Any]:
     """Compare registry truth with the frozen public command inventory."""
 
@@ -283,6 +292,7 @@ def validate_public_operations(
         contracts = load_public_operation_registry(
             project_root,
             registry_path=registry_path,
+            read_context=read_context,
         )
     except (OSError, ValueError) as exc:
         return {

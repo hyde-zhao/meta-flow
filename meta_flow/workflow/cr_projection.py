@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.checks import cr_tracking
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.state import checkpoint_projection, current
 from meta_flow.workflow.cr_model import now_utc
 from meta_flow.workflow.cr_records import (
@@ -87,9 +88,21 @@ def _gate_checkpoint_projection(gate_status: str) -> tuple[str, str] | None:
     mapping = {'cp2_pending': ('CP2', 'pending'), 'cp3_pending': ('CP3', 'pending'), 'cp5_pending': ('CP5', 'pending'), 'implementation_in_progress': ('CP6', 'in-progress'), 'cp7_pending': ('CP7', 'pending'), 'verification_in_progress': ('CP7', 'in-progress'), 'cp8_pending': ('CP8', 'pending'), 'cp8_closed': ('CP8', 'approved'), 'cp8_recovery_closed': ('CP8', 'approved'), 'closed': ('CP8', 'approved')}
     return mapping.get(gate_status)
 
-def _checkpoint_result_projection(project_root: Path, cr_id: str) -> dict[str, str]:
+def _checkpoint_result_projection(
+    project_root: Path,
+    cr_id: str,
+    *,
+    resolver: Any | None = None,
+    read_context: ReadContextProtocol | None = None,
+) -> dict[str, str]:
     """只消费 canonical owner 选出的 CR-level current heads。"""
-    projection = checkpoint_projection.load_checkpoint_projection(project_root, cr_id=cr_id)
+    kwargs = {"resolver": resolver} if resolver is not None else {}
+    projection = checkpoint_projection.load_checkpoint_projection(
+        project_root,
+        cr_id=cr_id,
+        read_context=read_context,
+        **kwargs,
+    )
     if projection.findings:
         raise ValueError('checkpoint projection failed: ' + '; '.join((f'{finding.code}:{finding.message}' for finding in projection.findings)))
     return {head.checkpoint: head.decision for head in projection.heads if head.subject_id == cr_id and re.fullmatch('CP[0-8]', head.checkpoint)}
@@ -135,9 +148,29 @@ def render_status_body_projection(text: str, *, lifecycle_status: str, readiness
         return rendered
     return _render_exact_section_rows(rendered, 'Checkpoint Index', checkpoint_projection)
 
-def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | None=None) -> dict[str, Any]:
-    record = record_from_cr_file(project_root, path)
-    text = path.read_text(encoding='utf-8')
+def summary_from_cr_file(
+    project_root: Path,
+    path: Path,
+    *,
+    readiness: str | None = None,
+    read_context: ReadContextProtocol | None = None,
+    text: str | None = None,
+    rel_fn: Any | None = None,
+) -> dict[str, Any]:
+    relative = rel_fn or _rel
+    if text is None:
+        text = (
+            path.read_text(encoding='utf-8')
+            if read_context is None
+            else read_context.read_text(relative(project_root, path))
+        )
+    record = record_from_cr_file(
+        project_root,
+        path,
+        _rel_fn=relative,
+        read_context=read_context,
+        text=text,
+    )
     summary = {'id': record.cr_id, 'cr_type': record.cr_type, 'title': record.title, 'status': record.status, 'readiness': readiness or record.readiness, 'gate_status': record.gate_status, 'gate_profile': record.gate_profile, 'decision': 'pending', 'scope_summary': _section_summary(text, '## 变更描述') or [record.title], 'impact_surface': record.impact_surface, **_impact_split_payload(record), 'impact_capability_resolution': record.impact_capability_resolution, 'impact_capability_normalized': _normalized_capability_refs(record.impact_capability_resolution), 'conflict_keys': record.conflict_keys, 'remaining_risks': record.risk_refs, 'followup_candidates': [], 'authz_policy_refs': record.authz_policy_refs, 'goal_ref': record.goal_ref, 'goal_statement': record.goal_statement or _first_section_summary(text, '## 目标影响摘要'), 'user_goal_impact': record.user_goal_impact, 'split_rationale': record.split_rationale or _first_section_summary(text, '## 拆分理由'), 'why_not_merge_with_parent': record.why_not_merge_with_parent, 'why_not_story_or_task': record.why_not_story_or_task, 'approval_focus': record.approval_focus, 'decision_burden': record.decision_burden, 'approve_effect': record.approve_effect or _first_section_summary(text, '## approve 后果'), 'reject_effect': record.reject_effect, 'not_authorized_by_approve': record.not_authorized_by_approve or _section_summary(text, '## 不授权范围'), 'product_baseline_refresh_required': record.product_baseline_refresh_required, 'required_phase': record.required_phase, 'required_agent': record.required_agent, 'required_gate': record.required_gate, 'block_story_decomposition_until': record.block_story_decomposition_until, 'affected_product_docs': record.affected_product_docs, 'affected_use_cases': record.affected_use_cases, 'routing_design_ref': record.routing_design_ref, 'required_evidence': _record_required_evidence(record, text), 'required_capabilities': record.required_capabilities, 'full_ref': record.full_ref, 'evidence_index_ref': (CR_ARCHIVE_ROOT_REL / record.cr_id / 'evidence-index.json').as_posix(), 'updated_at': now_utc()}
     blockers, needs_review = collect_scope_authz_findings(record, text=text)
     summary['scope_authz_consistency'] = {'decision': 'BLOCKED' if blockers else 'NEEDS_REVIEW' if needs_review else 'PASS', 'blockers': blockers, 'needs_review': needs_review}
@@ -150,14 +183,38 @@ def summary_from_cr_file(project_root: Path, path: Path, *, readiness: str | Non
 
 def write_summary(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Path:
     path = _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix()) / f'{cr_id}.summary.json'
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text(encoding='utf-8'))
+        except json.JSONDecodeError:
+            existing = None
+        if isinstance(existing, dict):
+            existing_semantic = dict(existing)
+            candidate_semantic = dict(summary)
+            existing_semantic.pop('updated_at', None)
+            candidate_semantic.pop('updated_at', None)
+            if existing_semantic == candidate_semantic:
+                return path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
     return path
 
 def write_evidence_index(project_root: Path, cr_id: str, summary: dict[str, Any]) -> Path:
     path = _resolve_runtime_ref(project_root, CR_ARCHIVE_ROOT_REL.as_posix()) / cr_id / 'evidence-index.json'
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = {'cr_id': cr_id, 'summary_ref': (CR_SUMMARY_ROOT_REL / f'{cr_id}.summary.json').as_posix(), 'full_ref': summary.get('full_ref'), 'evidence_refs': [], 'created_at': now_utc()}
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text(encoding='utf-8'))
+        except json.JSONDecodeError:
+            existing = None
+        if isinstance(existing, dict):
+            existing_semantic = dict(existing)
+            candidate_semantic = dict(data)
+            existing_semantic.pop('created_at', None)
+            candidate_semantic.pop('created_at', None)
+            if existing_semantic == candidate_semantic:
+                return path
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return path
 
@@ -258,6 +315,8 @@ def project_native_cr_status(project_root: Path, *, cr_id: str, resolve_runtime_
     return NativeCRStatusProjectionV1(cr_id=cr_id, lifecycle_status=formal_tuple[0], readiness_status=formal_tuple[1], gate_status=formal_tuple[2], formal_cr_ref=formal_ref, summary_ref=summary_ref, ledger_event_id=ledger_event_id, decision='PASS' if not findings else 'BLOCKED', findings=tuple(findings))
 
 def _atomic_write_text(path: Path, text: str) -> None:
+    if path.is_file() and path.read_text(encoding='utf-8') == text:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     target_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 420
     descriptor, temporary_name = tempfile.mkstemp(prefix=f'.{path.name}.', dir=path.parent)
@@ -273,8 +332,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
         if temporary.exists():
             temporary.unlink()
 
-def _transaction_root(project_root: Path) -> Path:
-    process_root = _process_root(project_root)
+def _transaction_root(project_root: Path, *, process_root: Path | None = None) -> Path:
+    process_root = _process_root(project_root) if process_root is None else process_root.resolve()
     common = _git_fact(process_root, 'rev-parse', '--git-common-dir')
     if common:
         path = Path(common)
@@ -283,12 +342,26 @@ def _transaction_root(project_root: Path) -> Path:
         common_root = process_root / '.meta-flow-fixture-git'
     return common_root.resolve(strict=False) / 'meta-flow' / 'transactions'
 
-def _status_sync_writer_lock_path(project_root: Path) -> Path:
-    return _transaction_root(project_root.resolve()).parent / 'status-sync.lock'
+def _status_sync_writer_lock_path(
+    project_root: Path,
+    *,
+    transaction_root: Path | None = None,
+) -> Path:
+    root = _transaction_root(project_root.resolve()) if transaction_root is None else transaction_root
+    return root.parent / 'status-sync.lock'
 
-def _acquire_status_sync_writer_lock(project_root: Path, *, transaction_id: str, purpose: str) -> dict[str, Any] | None:
+def _acquire_status_sync_writer_lock(
+    project_root: Path,
+    *,
+    transaction_id: str,
+    purpose: str,
+    transaction_root: Path | None = None,
+) -> dict[str, Any] | None:
     """Acquire the cooperative global writer lock and persist owner identity."""
-    lock_path = _status_sync_writer_lock_path(project_root)
+    lock_path = _status_sync_writer_lock_path(
+        project_root,
+        transaction_root=transaction_root,
+    )
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     acquired_at = now_utc()
     owner = {'schema_version': 1, 'owner_token': uuid.uuid4().hex, 'owner_process_identity': f'pid:{os.getpid()}:instance:{uuid.uuid4().hex}', 'owner_started_at': acquired_at, 'acquired_at': acquired_at, 'transaction_id': transaction_id, 'purpose': purpose, 'lease_state': 'held'}
@@ -306,9 +379,17 @@ def _acquire_status_sync_writer_lock(project_root: Path, *, transaction_id: str,
         raise
     return owner
 
-def _release_status_sync_writer_lock(project_root: Path, owner: dict[str, Any]) -> bool:
+def _release_status_sync_writer_lock(
+    project_root: Path,
+    owner: dict[str, Any],
+    *,
+    transaction_root: Path | None = None,
+) -> bool:
     """Release only the lock whose persisted owner token matches the caller."""
-    lock_path = _status_sync_writer_lock_path(project_root)
+    lock_path = _status_sync_writer_lock_path(
+        project_root,
+        transaction_root=transaction_root,
+    )
     try:
         first_stat = lock_path.stat()
         persisted = json.loads(lock_path.read_text(encoding='utf-8'))

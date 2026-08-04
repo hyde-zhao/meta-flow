@@ -498,7 +498,8 @@ def build_story_packet(
             {
                 "path": lld_ref,
                 "mode": "full",
-                "estimated_tokens": _path_tokens(project_root, lld_ref),
+                # deny-default 目标在扩读授权前不得读取正文；授权后由 reader 计量。
+                "estimated_tokens": 0,
                 "trigger": "full_lld_required_by_policy",
                 "reason": "story_lld",
             }
@@ -522,7 +523,8 @@ def build_story_packet(
                 "actor": "host-orchestrator",
                 "required_before": "story-dispatch",
                 "requested_refs": preregistration_refs,
-                "reason": "deep_review",
+                "reason": "summary_insufficient",
+                "reason_evidence": {"missing_slots": ["full_lld_body"]},
             }
         ]
         if preregistration_refs
@@ -757,6 +759,13 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
                 packet.get("full_doc_read_allowed_when") or []
             ):
                 errors.append("Host pre_dispatch_action reason is not allowed by read policy")
+            reason_errors = read_expansion.validate_reason_evidence(
+                str(action.get("reason") or ""),
+                action.get("reason_evidence"),
+            )
+            errors.extend(
+                f"Host pre_dispatch_action {error}" for error in reason_errors
+            )
     elif actions:
         errors.append("pre_dispatch_actions must be empty without deny-default read_if_needed")
     if "process/archive/**" not in denied and "process/archive/**" not in do_not_patterns:

@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from meta_flow.context_pack import builder, story_contract
+from meta_flow.context_pack import builder, capsule_delta, story_contract
 from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
 from meta_flow.project.onboarding_contract import (
     AUTHORIZATION_KIND,
@@ -18,6 +18,8 @@ from meta_flow.project.onboarding_contract import (
 )
 from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.state import current
+from meta_flow.work.io_metrics import IOMetrics
+from meta_flow.work.read_context import OperationReadContext
 
 
 def init_binding_project(root: Path) -> tuple[Path, Path]:
@@ -58,6 +60,30 @@ def init_binding_project(root: Path) -> tuple[Path, Path]:
         ),
     )
     return release, root / "fixture-process"
+
+
+def test_read_policy_loader_reuses_one_operation_snapshot(tmp_path: Path) -> None:
+    policy_path = tmp_path / builder.READ_POLICY_REL
+    policy_path.parent.mkdir(parents=True)
+    policy_path.write_text(
+        json.dumps(builder.default_read_policy()),
+        encoding="utf-8",
+    )
+    metrics = IOMetrics("read-policy", enabled=True)
+    context = OperationReadContext(
+        tmp_path / "process",
+        operation_id="read-policy",
+        operation_kind="plan",
+        allowed_reads=(builder.READ_POLICY_REL.as_posix(),),
+        metrics=metrics,
+    )
+
+    first = builder.load_read_policy(tmp_path, read_context=context)
+    second = builder.load_read_policy(tmp_path, read_context=context)
+
+    assert first == second
+    assert metrics.summary()["totals"]["physical_reads"] == 1
+    assert metrics.summary()["totals"]["cache_hits"] == 1
 
 
 def write_minimal_state(root: Path) -> None:
@@ -165,6 +191,157 @@ def write_cp2_result_with_required_evidence(root: Path, cr_id: str) -> Path:
 
 
 class ContextPackTests(unittest.TestCase):
+    def test_incremental_capsule_composes_and_reduces_repeated_bytes_by_sixty_percent(self) -> None:
+        invariant = "stable-contract-" * 400
+        contexts = [
+            {
+                "project": "fixture",
+                "invariant": invariant,
+                "stage": stage,
+                "stage_value": index,
+            }
+            for index, stage in enumerate(
+                ("base", "clarification", "design", "implementation", "verification")
+            )
+        ]
+        refs = [
+            "process/context/W-001.base.json",
+            "process/context/W-001.clarification.delta.json",
+            "process/context/W-001.design.delta.json",
+            "process/context/W-001.implementation.delta.json",
+            "process/context/W-001.verification.delta.json",
+        ]
+        payloads: dict[str, dict[str, object]] = {}
+        payloads[refs[0]] = builder.build_incremental_capsule_base(
+            contexts[0],
+            owner_kind="work",
+            owner_id="W-001",
+            revision="r1",
+            evidence_refs=("works/W-001/REQUEST.md",),
+        )
+        for index, stage in enumerate(capsule_delta.CAPSULE_STAGES, 1):
+            parent = payloads[refs[index - 1]]
+            payloads[refs[index]] = builder.build_incremental_capsule_delta(
+                contexts[index - 1],
+                contexts[index],
+                owner_kind="work",
+                owner_id="W-001",
+                revision="r1",
+                parent_ref=refs[index - 1],
+                parent_digest=str(parent["semantic_digest"]),
+                stage=stage,
+                stage_evidence=(f"works/W-001/{stage}.md",),
+            )
+
+        composed = capsule_delta.compose_capsule(refs[-1], payloads.__getitem__)
+        full_bytes = sum(
+            len(json.dumps(context, ensure_ascii=False, sort_keys=True).encode())
+            for context in contexts
+        )
+        incremental_bytes = sum(
+            len(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode())
+            for payload in payloads.values()
+        )
+        materialized = capsule_delta.materialize_capsule_base(composed)
+
+        self.assertEqual(contexts[-1], composed.fields)
+        self.assertLessEqual(incremental_bytes, int(full_bytes * 0.4))
+        self.assertEqual(contexts[-1], materialized["fields"])
+        self.assertEqual(5, len(composed.chain_refs))
+
+    def test_capsule_chain_fails_closed_on_digest_stage_owner_depth_and_absolute_path(self) -> None:
+        base_ref = "process/context/W-001.base.json"
+        base = capsule_delta.create_capsule_base(
+            owner_kind="work",
+            owner_id="W-001",
+            revision="r1",
+            fields={"value": 1},
+            evidence_refs=("works/W-001/REQUEST.md",),
+        )
+        drift_ref = "process/context/W-001.design.delta.json"
+        drift = capsule_delta.create_capsule_delta(
+            owner_kind="work",
+            owner_id="W-001",
+            revision="r1",
+            parent_ref=base_ref,
+            parent_digest="0" * 64,
+            stage="design",
+            changed_fields={"value": 2},
+            stage_evidence=("works/W-001/DESIGN.md",),
+        )
+
+        with self.assertRaisesRegex(ValueError, "digest drift"):
+            capsule_delta.compose_capsule(
+                drift_ref,
+                {base_ref: base, drift_ref: drift}.__getitem__,
+            )
+        with self.assertRaisesRegex(ValueError, "absolute path"):
+            capsule_delta.create_capsule_base(
+                owner_kind="work",
+                owner_id="W-001",
+                revision="r1",
+                fields={"resolved": "/tmp/secret"},
+                evidence_refs=("works/W-001/REQUEST.md",),
+            )
+
+        missing = capsule_delta.create_capsule_delta(
+            owner_kind="work",
+            owner_id="W-001",
+            revision="r1",
+            parent_ref="process/context/missing.json",
+            parent_digest="0" * 64,
+            stage="clarification",
+            changed_fields={"value": 2},
+            stage_evidence=("works/W-001/REQUEST.md",),
+        )
+        with self.assertRaisesRegex(ValueError, "parent is missing"):
+            capsule_delta.compose_capsule(
+                "process/context/missing.delta.json",
+                {"process/context/missing.delta.json": missing}.__getitem__,
+            )
+
+        cycle_ref = "process/context/cycle.delta.json"
+        cycle = capsule_delta.create_capsule_delta(
+            owner_kind="work",
+            owner_id="W-001",
+            revision="r1",
+            parent_ref=cycle_ref,
+            parent_digest="0" * 64,
+            stage="clarification",
+            changed_fields={"value": 2},
+            stage_evidence=("works/W-001/REQUEST.md",),
+        )
+        with self.assertRaisesRegex(ValueError, "cycle"):
+            capsule_delta.compose_capsule(cycle_ref, {cycle_ref: cycle}.__getitem__)
+
+        first_ref = "process/context/W-001.clarification.delta.json"
+        first = capsule_delta.create_capsule_delta(
+            owner_kind="work",
+            owner_id="W-001",
+            revision="r1",
+            parent_ref=base_ref,
+            parent_digest=str(base["semantic_digest"]),
+            stage="clarification",
+            changed_fields={"value": 2},
+            stage_evidence=("works/W-001/REQUEST.md",),
+        )
+        repeated_ref = "process/context/W-001.clarification-2.delta.json"
+        repeated = capsule_delta.create_capsule_delta(
+            owner_kind="work",
+            owner_id="W-001",
+            revision="r1",
+            parent_ref=first_ref,
+            parent_digest=str(first["semantic_digest"]),
+            stage="clarification",
+            changed_fields={"value": 3},
+            stage_evidence=("works/W-001/REQUEST.md",),
+        )
+        with self.assertRaisesRegex(ValueError, "stage order"):
+            capsule_delta.compose_capsule(
+                repeated_ref,
+                {base_ref: base, first_ref: first, repeated_ref: repeated}.__getitem__,
+            )
+
     def test_story_public_entries_use_binding_logical_refs_without_absolute_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             release, process = init_binding_project(Path(directory))

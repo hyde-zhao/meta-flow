@@ -36,6 +36,15 @@ vNext 默认 `route_mode=sibling-binding`；`relative-symlink` 仅是显式 lega
 - 全阶段 Context Capsule、上下文预算、Workflow Health、Decision Brief 压缩均由原生上下文与检查模块维护。人工门由 Host Orchestrator 发起，使用 `process/checkpoints/`；用户回复 `approve` 只接受列明推荐方案，不授权禁止动作。
 - 产品输入在 `docs/product/SCENARIOS.yaml`、`docs/product/TEST-MATRIX.md`、`docs/product/MVP-SCOPE.md`；设计边界在 `docs/design/BLUEPRINT.md`、`docs/design/DOMAIN-MAP.md`、`docs/design/FEATURE-DESIGN-MATRIX.md`。不得以讨论稿、猜测或摘要替代它们。
 
+### 3.1 普通 Work 的四阶段与防重做契约
+
+- 新建或缺少路由声明的 Work 使用安全默认：`mode=routine-four-stage`、`dispatch_mode=direct`、`legacy_cp_compatibility=false`、`validation_profile=layered-v1`、`failure_scope=current-slice-only`。普通路线只有“澄清目标 → 计划切片 → 直接实施 → 分层验证”四阶段；G0/G1 不调度功能 Agent，也不创建 CP、status-sync 或 handoff 自治理产物。
+- legacy CP0-CP8 只能由当前 `WORK.yaml.route_profile.legacy_cp_compatibility=true` 显式进入，并同时满足 G2、人工批准、legacy gate evidence 和对应 scope；Skill、Agent、模板、环境变量或旧文件均不能隐式开启。
+- 验证顺序固定为 targeted → compatibility → full。PASS receipt 必须绑定 source/profile fingerprint、check layer、command identity、环境摘要和 result digest；fingerprint 不变才可复用。FAIL、命令漂移或 partial mutation 不得复用，失败只回当前切片和已失效层，不能重跑无关 Story。
+- 默认查询由单 operation、显式注入的读取上下文执行，最多读取 5 个对象；第 6 个对象、scope 外 ref、未声明 long-term Phase 或 stale context 必须在读取正文前阻断。plan 与 apply 不得共享 context；apply 必须重新验证授权、scope、OID、dirty-path 和 target preimage，mutation 后旧 context 不再可读。
+- 全文扩读只接受 `capsule_missing`、`field_conflict`、`schema_validation_failed`、`human_audit`、`summary_insufficient` 五类 reason 及其机器证据；`deep_review` 仅兼容读取历史事件，不能创建新请求。
+- CURRENT、summary、evidence 与 WORKFLOW-HEALTH 的 writer 必须按语义比较：只有 `updated_at` / `created_at` 或零增量变化时 actual mutation 为 0；append-only ledger、truth preimage 和 transaction recovery 边界不因 no-op 优化而放宽。
+
 ## 4. Story 设计与实现
 
 - CP4、全部目标 Story 的设计证据与 CP5 人工确认通过前不得实现。Story 必须消费 `lld_policy`、已确认 LLD/technical-note/waived、依赖门控与 file ownership；冲突或缺 AI 任务清单即 BLOCKED。

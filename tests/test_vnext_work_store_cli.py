@@ -26,6 +26,7 @@ from meta_flow.project.onboarding_contract import (
     OnboardingAuthorization,
 )
 from meta_flow.project.query import main as project_query_main
+from meta_flow.work.budget import BudgetLimit
 from meta_flow.work.cli import (
     classify_main,
     init_main,
@@ -35,9 +36,12 @@ from meta_flow.work.cli import (
     usage_add_main,
     validation_plan_main,
 )
+from meta_flow.work.io_metrics import IOMetrics
 from meta_flow.work.lifecycle import update_work_status
 from meta_flow.work.model import build_work, load_work, write_work_create_only
+from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import RiskFacts, classify_work
+from meta_flow.work.route_profile import RouteProfile
 from meta_flow.work.scope import WorkScope
 from meta_flow.work.store import apply_work_init, close_work, plan_work_init
 
@@ -142,6 +146,29 @@ def test_work_init_dry_run_then_apply_indexes_project(tmp_path: Path) -> None:
     assert findings == []
     assert snapshot is not None
     assert snapshot.objects_read == 2
+
+
+def test_work_init_plan_reuses_project_and_request_in_one_snapshot(
+    tmp_path: Path,
+) -> None:
+    _release, process = init_project(tmp_path)
+    work = make_work(process)
+    metrics = IOMetrics("work-init-plan", enabled=True)
+    context = OperationReadContext(
+        process,
+        operation_id="work-init-plan",
+        operation_kind="plan",
+        allowed_reads=("PROJECT.yaml", work.request_ref, work.work_ref),
+        metrics=metrics,
+    )
+
+    first = plan_work_init(process, work, read_context=context)
+    second = plan_work_init(process, work, read_context=context)
+
+    assert first.plan_digest == second.plan_digest
+    totals = metrics.summary()["totals"]
+    assert totals["physical_reads"] == 2
+    assert totals["cache_hits"] == 2
 
 
 def test_work_init_is_idempotent(tmp_path: Path) -> None:
@@ -282,6 +309,15 @@ def test_work_cli_end_to_end_and_top_level_dispatch(tmp_path: Path, capsys: pyte
     assert dry_code == 0
     assert dry_payload["decision"] == "READY"
     assert dry_payload["mutation_count"] == 0
+    assert dry_payload["route"] == {
+        "decision": "READY",
+        "mode": "routine-four-stage",
+        "dispatch_mode": "direct",
+        "stages": ["clarification", "design", "implementation", "verification"],
+        "functional_agent_dispatches": 0,
+        "legacy_cp_artifacts_allowed": False,
+        "errors": [],
+    }
 
     apply_code = init_main([*common, "--apply"])
     apply_payload = json.loads(capsys.readouterr().out)
@@ -301,6 +337,74 @@ def test_work_cli_end_to_end_and_top_level_dispatch(tmp_path: Path, capsys: pyte
     dispatched = json.loads(capsys.readouterr().out)
     assert raised.value.code == 0
     assert dispatched["work"]["risk_profile"] == "G0"
+    assert dispatched["work"]["route_profile"]["dispatch_mode"] == "direct"
+
+
+def test_g0_functional_agent_override_blocks_before_root_resolution(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = init_main(
+        [
+            "--project-root",
+            str(tmp_path / "missing-release"),
+            "--work-id",
+            "W-001",
+            "--objective",
+            "不应调度",
+            "--request-ref",
+            "works/W-001/REQUEST.md",
+            "--change-kind",
+            "documentation",
+            "--touched-path-count",
+            "1",
+            "--dispatch-mode",
+            "functional-agent",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 1
+    assert payload["decision"] == "BLOCKED"
+    assert "explicit G2 upgrade" in payload["error"]
+    assert not (tmp_path / "missing-release").exists()
+
+
+def test_legacy_cp_route_requires_g2_formal_cr_gate_evidence_and_scope(tmp_path: Path) -> None:
+    _release, process = init_project(tmp_path)
+    request_ref = make_request(process)
+    gate_ref = "gates/G2-DESIGN.md"
+    classification = classify_work(
+        RiskFacts(change_kind="code", touched_path_count=4, public_contract=True),
+        requested_cr=True,
+        g2_budget=BudgetLimit(30, 30, 12, 160_000),
+    )
+    work = build_work(
+        work_id="W-001",
+        project_id="demo",
+        objective="显式 legacy 兼容",
+        request_ref=request_ref,
+        scope=WorkScope(1, (request_ref, gate_ref), (), ("full",)),
+        classification=classification,
+        release_base_oid="a" * 40,
+        process_base_oid="",
+        route_profile=RouteProfile(
+            mode="legacy-cp0-cp8",
+            legacy_cp_compatibility=True,
+        ),
+    )
+
+    missing_ref = plan_work_init(process, work)
+    missing_file = plan_work_init(process, work, human_design_gate_ref=gate_ref)
+    gate_path = process / gate_ref
+    gate_path.parent.mkdir(parents=True)
+    gate_path.write_text("approved: true\n", encoding="utf-8")
+    ready = plan_work_init(process, work, human_design_gate_ref=gate_ref)
+
+    assert "route_profile_blocked" in {item.code for item in missing_ref.conflicts}
+    assert "human_design_gate_missing" in {item.code for item in missing_file.conflicts}
+    assert not ready.blocked
+    assert ready.route_decision.stages == tuple(f"CP{index}" for index in range(9))
 
 
 def test_usage_add_cli_records_over_limit_fact_then_blocks_mutation(

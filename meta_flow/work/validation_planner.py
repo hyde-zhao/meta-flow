@@ -1,0 +1,111 @@
+"""targeted → compatibility → full 的确定性验证与复用计划。"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from meta_flow.work.validation_fingerprint import VALIDATION_LAYERS
+from meta_flow.work.validation_receipt import ValidationReceipt
+
+_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class ValidationStep:
+    layer: str
+    action: str
+    reason: str
+    receipt_digest: str = ""
+
+    def as_dict(self) -> dict[str, str]:
+        return self.__dict__.copy()
+
+
+@dataclass(frozen=True)
+class ValidationExecutionPlan:
+    decision: str
+    steps: tuple[ValidationStep, ...]
+    next_layer: str
+    full_execution_count: int
+    errors: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "decision": self.decision,
+            "steps": [step.as_dict() for step in self.steps],
+            "next_layer": self.next_layer,
+            "full_execution_count": self.full_execution_count,
+            "errors": list(self.errors),
+        }
+
+
+def build_validation_execution_plan(
+    *,
+    fingerprints: Mapping[str, str],
+    command_identities: Mapping[str, str],
+    receipts: tuple[ValidationReceipt, ...] = (),
+    layers: tuple[str, ...] = VALIDATION_LAYERS,
+) -> ValidationExecutionPlan:
+    if not layers or any(layer not in VALIDATION_LAYERS for layer in layers):
+        raise ValueError("validation layers must be a non-empty supported subset")
+    expected_order = tuple(layer for layer in VALIDATION_LAYERS if layer in layers)
+    if layers != expected_order:
+        raise ValueError("validation layers must preserve targeted/compatibility/full order")
+    if set(fingerprints) != set(layers) or set(command_identities) != set(layers):
+        raise ValueError("fingerprints and command identities must exactly cover validation layers")
+    for value in (*fingerprints.values(), *command_identities.values()):
+        if not _HEX_RE.fullmatch(value):
+            raise ValueError("validation fingerprints and command identities must be sha256 digests")
+
+    steps: list[ValidationStep] = []
+    errors: list[str] = []
+    next_layer = ""
+    execution_scheduled = False
+    for layer in layers:
+        if execution_scheduled:
+            steps.append(ValidationStep(layer, "NOT_STARTED", "prior layer must pass first"))
+            continue
+        exact = [
+            receipt
+            for receipt in receipts
+            if receipt.layer == layer
+            and receipt.fingerprint_digest == fingerprints[layer]
+            and receipt.command_identity == command_identities[layer]
+        ]
+        passes = [receipt for receipt in exact if receipt.decision == "PASS"]
+        if len(passes) > 1:
+            errors.append(f"{layer} has duplicate exact PASS receipts")
+            steps.append(ValidationStep(layer, "BLOCKED", "duplicate exact PASS receipts"))
+            execution_scheduled = True
+            continue
+        if passes:
+            steps.append(
+                ValidationStep(
+                    layer,
+                    "REUSED_UNCHANGED",
+                    "exact fingerprint, command and prior PASS match",
+                    passes[0].receipt_digest,
+                )
+            )
+            continue
+        reason = "matching prior FAIL is never reusable" if exact else "no exact PASS receipt"
+        steps.append(ValidationStep(layer, "RUN", reason))
+        next_layer = layer
+        execution_scheduled = True
+
+    if errors:
+        decision = "BLOCKED"
+    elif next_layer:
+        decision = "READY_TO_RUN"
+    else:
+        decision = "REUSED_ALL"
+    return ValidationExecutionPlan(
+        decision,
+        tuple(steps),
+        next_layer,
+        1 if next_layer == "full" else 0,
+        tuple(errors),
+    )

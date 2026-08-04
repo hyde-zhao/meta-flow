@@ -45,7 +45,7 @@ status: active
 - `process/STATE.md`（仅 legacy fallback、人类摘要或 state v2 缺失时读取）
 - 当前变更描述
 - 相关 ISSUE / RUN-EXEC / 上游文档（若存在）
-- 受影响正式对象的 summary / context refs；全文 `REQUIREMENTS.md`、`HLD.md`、`DEVELOPMENT-PLAN.yaml` 等仅在 `field_conflict`、`human_audit` 或 `deep_review` 时读取
+- 受影响正式对象的 summary / context refs；全文 `REQUIREMENTS.md`、`HLD.md`、`DEVELOPMENT-PLAN.yaml` 等只允许以 `capsule_missing`、`field_conflict`、`schema_validation_failed`、`human_audit` 或 `summary_insufficient` 申请扩读，并必须在读取正文前提供对应 `reason_evidence`：`capsule_ref`；`conflict_field` 与两个含 `ref/digest` 的来源；`schema_id/error_code/target_ref`；`authorization_ref`；或非空 `missing_slots`。理由或证据不合法时返回 `BLOCKED`，保持 `target bytes=0`、`mutation=0`
 
 ## 知识来源
 

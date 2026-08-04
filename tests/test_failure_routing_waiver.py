@@ -12,8 +12,43 @@ from pathlib import Path
 from meta_flow.checks import cp_result
 from meta_flow.policies import failure_routing
 from meta_flow.validation import task_runner
+from meta_flow.work.io_metrics import IOMetrics
+from meta_flow.work.read_context import OperationReadContext
 
 CONSOLE = Path(sys.executable).with_name("meta-flow")
+
+
+def test_failure_and_waiver_policies_share_one_operation_snapshot(
+    tmp_path: Path,
+) -> None:
+    failure_routing.write_default_failure_routing_policy(tmp_path)
+    failure_routing.write_default_waiver_policy(tmp_path)
+    metrics = IOMetrics("failure-policy", enabled=True)
+    context = OperationReadContext(
+        tmp_path / "process",
+        operation_id="failure-policy",
+        operation_kind="check",
+        allowed_reads=(
+            failure_routing.FAILURE_ROUTING_REL.as_posix(),
+            failure_routing.WAIVER_POLICY_REL.as_posix(),
+        ),
+        metrics=metrics,
+    )
+
+    failure_routing.load_failure_routing_policy(
+        tmp_path,
+        read_context=context,
+    )
+    failure_routing.load_failure_routing_policy(
+        tmp_path,
+        read_context=context,
+    )
+    failure_routing.load_waiver_policy(tmp_path, read_context=context)
+    failure_routing.load_waiver_policy(tmp_path, read_context=context)
+
+    totals = metrics.summary()["totals"]
+    assert totals["physical_reads"] == 2
+    assert totals["cache_hits"] == 2
 
 
 def cp_result_payload() -> dict[str, object]:
@@ -105,6 +140,30 @@ def init_paired_binding(root: Path) -> tuple[Path, Path]:
 
 
 class FailureRoutingWaiverTests(unittest.TestCase):
+    def test_slice_failure_routes_only_invalidated_layer_or_current_slice(self) -> None:
+        harness = failure_routing.route_slice_failure(
+            failure_class="CHECK_HARNESS_ERROR",
+            failed_layer="compatibility",
+            current_slice_id="I1B",
+        )
+        content = failure_routing.route_slice_failure(
+            failure_class="REAL_CONTENT_FAILURE",
+            failed_layer="targeted",
+            current_slice_id="I1B",
+        )
+        partial = failure_routing.route_slice_failure(
+            failure_class="PARTIAL_MUTATION",
+            failed_layer="full",
+            current_slice_id="I1B",
+        )
+
+        self.assertEqual(("compatibility",), harness.invalidated_layers)
+        self.assertEqual((), harness.reopened_slices)
+        self.assertEqual(("I1B",), content.reopened_slices)
+        self.assertEqual(("targeted", "compatibility", "full"), content.invalidated_layers)
+        self.assertEqual("RECOVERY_REQUIRED", partial.decision)
+        self.assertEqual("inspect_then_explicit_resume_or_rollback", partial.next_action)
+
     def test_failure_classifier_covers_all_four_classes_and_unknown(self) -> None:
         fixtures = [
             (

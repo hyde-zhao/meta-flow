@@ -1,4 +1,5 @@
 """Private status-sync transaction and recovery owner."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.work.model import load_work
 from meta_flow.workflow.cr_model import SAFE_AUTHORIZATION_ID_RE, now_utc
 from meta_flow.workflow.cr_projection import (
@@ -27,14 +29,23 @@ def _status_sync_facts(
     work_id: str,
     canonical_digest: Any,
     dirty_path_digest: Any,
+    read_context: ReadContextProtocol | None = None,
 ) -> tuple[dict[str, str], str]:
     release_root = project_root.resolve()
-    process_root = _process_root(release_root)
+    process_root = (
+        _process_root(release_root)
+        if read_context is None
+        else read_context.repository_root
+    )
     common = _git_fact(process_root, "rev-parse", "--git-common-dir")
     common_identity = canonical_digest(common or "non-git-fixture")
     scope_digest = ""
     if work_id:
-        scope_digest = load_work(process_root, work_id).scope.digest
+        scope_digest = load_work(
+            process_root,
+            work_id,
+            read_context=read_context,
+        ).scope.digest
     return (
         {
             "release_head_oid": _git_fact(release_root, "rev-parse", "--verify", "HEAD"),
@@ -56,11 +67,17 @@ def _current_target_digest(target: Any, *, canonical_digest: Any) -> str:
 def _status_sync_claim_path(
     project_root: Path,
     authorization_id: str,
+    *,
+    transaction_root: Path | None = None,
 ) -> Path:
     if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization_id):
         raise ValueError("status-sync authorization_id is invalid")
     return (
-        _transaction_root(project_root).parent
+        (
+            _transaction_root(project_root)
+            if transaction_root is None
+            else transaction_root
+        ).parent
         / "status-sync"
         / "authorizations"
         / f"{authorization_id}.json"
@@ -71,8 +88,14 @@ def _claim_status_sync_authorization(
     project_root: Path,
     plan: Any,
     authorization: Any,
+    *,
+    transaction_root: Path | None = None,
 ) -> Path:
-    path = _status_sync_claim_path(project_root, authorization.authorization_id)
+    path = _status_sync_claim_path(
+        project_root,
+        authorization.authorization_id,
+        transaction_root=transaction_root,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": 1,
@@ -111,6 +134,7 @@ def _apply_status_sync_transaction(
     fail_after_replace: int | None = None,
     fail_recovery: bool = False,
     fault: str = "",
+    transaction_root: Path | None = None,
 ) -> dict[str, Any]:
     """Apply validated mapping/path/scalar inputs without importing public status types."""
     project_root = project_root.resolve()
@@ -119,11 +143,24 @@ def _apply_status_sync_transaction(
         authorization_data = validated["authorization"]
         if not isinstance(plan_data, Mapping) or not isinstance(authorization_data, Mapping):
             raise ValueError("validated status-sync input must contain structural mappings")
-        plan = SimpleNamespace(**{**plan_data, "targets": tuple(SimpleNamespace(**target) for target in plan_data["targets"])})
+        plan = SimpleNamespace(
+            **{
+                **plan_data,
+                "targets": tuple(SimpleNamespace(**target) for target in plan_data["targets"]),
+            }
+        )
         authorization = SimpleNamespace(**authorization_data)
     except (KeyError, TypeError, ValueError) as exc:
-        return {"status": "BLOCKED", "reason": f"invalid validated status-sync mapping: {exc}", "mutation_count": 0}
-    transaction_root = _transaction_root(project_root)
+        return {
+            "status": "BLOCKED",
+            "reason": f"invalid validated status-sync mapping: {exc}",
+            "mutation_count": 0,
+        }
+    transaction_root = (
+        _transaction_root(project_root)
+        if transaction_root is None
+        else transaction_root.resolve(strict=False)
+    )
     transaction_root.mkdir(parents=True, exist_ok=True)
     unresolved = [path for path in transaction_root.glob("*/manifest.json") if path.is_file()]
     if unresolved:
@@ -137,6 +174,7 @@ def _apply_status_sync_transaction(
         project_root,
         transaction_id=transaction_id,
         purpose="apply",
+        transaction_root=transaction_root,
     )
     if lock_owner is None:
         return {
@@ -144,10 +182,35 @@ def _apply_status_sync_transaction(
             "reason": "status-sync writer lock exists",
             "mutation_count": 0,
         }
+    drifted_targets = [
+        target.ref
+        for target in plan.targets
+        if _current_target_digest(target, canonical_digest=canonical_digest) != target.before_digest
+    ]
+    if drifted_targets:
+        _release_status_sync_writer_lock(
+            project_root,
+            lock_owner,
+            transaction_root=transaction_root,
+        )
+        return {
+            "status": "BLOCKED",
+            "reason": "target preimage drifted under writer lock: " + ", ".join(drifted_targets),
+            "mutation_count": 0,
+        }
     try:
-        _claim_status_sync_authorization(project_root, plan, authorization)
+        _claim_status_sync_authorization(
+            project_root,
+            plan,
+            authorization,
+            transaction_root=transaction_root,
+        )
     except ValueError as exc:
-        _release_status_sync_writer_lock(project_root, lock_owner)
+        _release_status_sync_writer_lock(
+            project_root,
+            lock_owner,
+            transaction_root=transaction_root,
+        )
         return {
             "status": "BLOCKED",
             "reason": str(exc),
@@ -199,7 +262,14 @@ def _apply_status_sync_transaction(
                 raise RuntimeError(f"prepared after digest mismatch: {target.ref}")
             manifest["targets"].append(
                 {
-                    **{"order": target.order, "ref": target.ref, "truth_or_derived": target.truth_or_derived, "before_exists": target.before is not None, "before_digest": target.before_digest, "after_digest": target.after_digest},
+                    **{
+                        "order": target.order,
+                        "ref": target.ref,
+                        "truth_or_derived": target.truth_or_derived,
+                        "before_exists": target.before is not None,
+                        "before_digest": target.before_digest,
+                        "after_digest": target.after_digest,
+                    },
                     "before_content_ref": f"backups/{backup.name}",
                     "before_content_digest": backup_digest,
                     "after_content_ref": f"after/{prepared_after.name}",
@@ -328,7 +398,11 @@ def _apply_status_sync_transaction(
             )
         return result
     finally:
-        _release_status_sync_writer_lock(project_root, lock_owner)
+        _release_status_sync_writer_lock(
+            project_root,
+            lock_owner,
+            transaction_root=transaction_root,
+        )
 
 
 def inspect_status_sync_transactions(project_root: Path) -> dict[str, Any]:

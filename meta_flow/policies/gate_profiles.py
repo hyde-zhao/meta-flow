@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.read_contract import ReadContextProtocol
+
 GATE_PROFILES_REL = Path("process/policies/GATE-PROFILES.json")
 RUNTIME_HIGH_RISK_TERMS = (
     "credential",
@@ -119,8 +121,17 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def load_gate_profiles(project_root: Path) -> dict[str, Any]:
-    configured = _read_json(profiles_path(project_root.resolve()))
+def load_gate_profiles(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> dict[str, Any]:
+    path = profiles_path(project_root.resolve())
+    if read_context is None or not path.is_file():
+        configured = _read_json(path)
+    else:
+        payload = read_context.read_json(GATE_PROFILES_REL.as_posix())
+        configured = payload if isinstance(payload, dict) else {}
     if configured:
         return configured
     return default_gate_profiles()

@@ -12,6 +12,8 @@ from pathlib import Path
 from meta_flow.checks import cp_result
 from meta_flow.state import current, event_ledger, ledger_migration
 from meta_flow.work import usage
+from meta_flow.work.io_metrics import IOMetrics
+from meta_flow.work.read_context import OperationReadContext
 
 GATE_SEMANTIC_REGISTRY = {
     "meta_flow/state/event_ledger.py": "producer-validator-projector-owner",
@@ -31,6 +33,39 @@ GATE_OPTIONAL_REGISTERED_ONLY = {
     "meta_flow/cli.py",
     "meta_flow/state/checkpoint_projection.py",
 }
+
+
+def test_event_ledger_loader_reuses_one_operation_snapshot(tmp_path: Path) -> None:
+    logical_ref = "process/state/CHECKPOINT-LEDGER.ndjson"
+    path = tmp_path / logical_ref
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"event_id": "E-1", "event_type": "checkpoint"}) + "\n",
+        encoding="utf-8",
+    )
+    metrics = IOMetrics("ledger-load", enabled=True)
+    context = OperationReadContext(
+        tmp_path / "process",
+        operation_id="ledger-load",
+        operation_kind="check",
+        allowed_reads=(logical_ref,),
+        metrics=metrics,
+    )
+
+    first = event_ledger.load_events(
+        path,
+        read_context=context,
+        logical_ref=logical_ref,
+    )
+    second = event_ledger.load_events(
+        path,
+        read_context=context,
+        logical_ref=logical_ref,
+    )
+
+    assert first == second
+    assert metrics.summary()["totals"]["physical_reads"] == 1
+    assert metrics.summary()["totals"]["cache_hits"] == 1
 
 
 def _discover_gate_semantic_paths(root: Path) -> dict[str, frozenset[str]]:
