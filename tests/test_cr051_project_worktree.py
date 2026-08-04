@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from meta_flow.workspace.git_sync import GitCommandResult, create_remote_ref_once, remote_ref_oid
+from meta_flow.work.route_profile import RouteProfile
+from meta_flow.workspace.git_sync import (
+    CreateOnlyRefResult,
+    GitCommandResult,
+    create_remote_ref_once,
+    remote_ref_oid,
+)
 from meta_flow.workspace.project_artifact_routing import (
     PathRef,
     ProjectArtifactConfig,
@@ -414,6 +420,94 @@ class RecordingRunner:
     def __call__(self, args: list[str], cwd: Path) -> GitCommandResult:
         self.calls.append(tuple(args))
         return GitCommandResult(("git", *args), cwd, self.returncode, "", "fixture")
+
+
+@pytest.mark.parametrize("risk_profile", ["G0", "G1"])
+def test_root_branch_only_blocks_worktree_before_git_with_zero_mutation(
+    tmp_path: Path,
+    risk_profile: str,
+) -> None:
+    identity = _identity(tmp_path, project_id=risk_profile.lower())
+    seed_oid = "a" * 40
+    intent = _durable_intent(tmp_path, identity.integration_ref, seed_oid)
+    bootstrap = CreateOnlyRefResult(
+        "NO_CHANGE",
+        "already_exists",
+        identity.integration_ref,
+        seed_oid,
+        seed_oid,
+        seed_oid,
+        0,
+        (),
+    )
+    runner = RecordingRunner()
+
+    result = create_project_worktree(
+        intent,
+        bootstrap,
+        identity=identity,
+        route_profile=RouteProfile(),
+        git=runner,
+        observe=lambda: pytest.fail("root-branch-only must block before observation"),
+    )
+
+    assert result.decision == "BLOCKED"
+    assert result.reason.startswith("root_branch_only:")
+    assert "git checkout -b <branch>" in result.reason
+    assert result.mutation_count == 0
+    assert runner.calls == []
+    assert not identity.target_path.exists()
+
+
+def test_paired_worktree_policy_allows_existing_creation_path_without_real_git(
+    tmp_path: Path,
+) -> None:
+    identity = _identity(tmp_path)
+    seed_oid = "a" * 40
+    intent = _durable_intent(tmp_path, identity.integration_ref, seed_oid)
+    bootstrap = CreateOnlyRefResult(
+        "NO_CHANGE",
+        "already_exists",
+        identity.integration_ref,
+        seed_oid,
+        seed_oid,
+        seed_oid,
+        0,
+        (),
+    )
+    runner = RecordingRunner()
+    after = _observation(
+        tmp_path,
+        identity=identity,
+        head_ref=identity.integration_ref,
+        head_oid=seed_oid,
+        worktree_state="LINKED",
+    )
+
+    result = create_project_worktree(
+        intent,
+        bootstrap,
+        identity=identity,
+        route_profile=RouteProfile(
+            dispatch_mode="functional-agent",
+            worktree_policy="paired-worktree",
+        ),
+        git=runner,
+        observe=lambda: after,
+    )
+
+    assert result.decision == "CHANGED"
+    assert result.mutation_count == 1
+    assert runner.calls == [
+        ("show-ref", "--verify", identity.integration_ref),
+        (
+            "worktree",
+            "add",
+            identity.target_path.as_posix(),
+            identity.integration_ref.removeprefix("refs/heads/"),
+        ),
+    ]
+    assert not identity.target_path.exists()
 
 
 @pytest.mark.parametrize(

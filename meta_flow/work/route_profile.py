@@ -13,6 +13,11 @@ from meta_flow.work.scope import WorkScope, check_scope
 ROUTE_PROFILE_SCHEMA_VERSION = 1
 ROUTINE_STAGES = ("clarification", "design", "implementation", "verification")
 LEGACY_STAGES = tuple(f"CP{index}" for index in range(9))
+ROOT_BRANCH_ONLY = "root-branch-only"
+PAIRED_WORKTREE = "paired-worktree"
+WORKTREE_POLICIES = frozenset({ROOT_BRANCH_ONLY, PAIRED_WORKTREE})
+BRANCH_NAME_TEMPLATE = "<type>/<work-id>-<description>"
+BRANCH_NAME_TYPES = ("feat", "fix", "refactor", "docs", "chore")
 ROUTE_PROFILE_KEYS = {
     "schema_version",
     "mode",
@@ -20,17 +25,22 @@ ROUTE_PROFILE_KEYS = {
     "legacy_cp_compatibility",
     "validation_profile",
     "failure_scope",
+    "worktree_policy",
 }
+_BACKWARD_COMPATIBLE_OPTIONAL_KEYS = {"worktree_policy"}
 
 
 @dataclass(frozen=True)
 class RouteProfile:
+    """有限路由配置；分支名遵循 ``<type>/<work-id>-<description>``。"""
+
     schema_version: int = ROUTE_PROFILE_SCHEMA_VERSION
     mode: str = "routine-four-stage"
     dispatch_mode: str = "direct"
     legacy_cp_compatibility: bool = False
     validation_profile: str = "layered-v1"
     failure_scope: str = "current-slice-only"
+    worktree_policy: str = ROOT_BRANCH_ONLY
 
     def __post_init__(self) -> None:
         if self.schema_version != ROUTE_PROFILE_SCHEMA_VERSION:
@@ -45,6 +55,16 @@ class RouteProfile:
             raise ValueError("route_profile.validation_profile must be layered-v1")
         if self.failure_scope != "current-slice-only":
             raise ValueError("route_profile.failure_scope must be current-slice-only")
+        if self.worktree_policy not in WORKTREE_POLICIES:
+            raise ValueError("route_profile.worktree_policy is unsupported")
+        if (
+            not self.legacy_cp_compatibility
+            and self.dispatch_mode == "direct"
+            and self.worktree_policy != ROOT_BRANCH_ONLY
+        ):
+            raise ValueError(
+                "route_profile direct dispatch requires root-branch-only worktree policy"
+            )
         if self.legacy_cp_compatibility != (self.mode == "legacy-cp0-cp8"):
             raise ValueError(
                 "legacy-cp0-cp8 mode and legacy_cp_compatibility must be enabled together"
@@ -58,6 +78,7 @@ class RouteProfile:
             "legacy_cp_compatibility": self.legacy_cp_compatibility,
             "validation_profile": self.validation_profile,
             "failure_scope": self.failure_scope,
+            "worktree_policy": self.worktree_policy,
         }
 
 
@@ -70,7 +91,7 @@ def route_profile_from_payload(payload: Mapping[str, Any] | None) -> RouteProfil
     if not isinstance(payload, Mapping):
         raise ValueError("route_profile must be an object")
     unknown = set(payload) - ROUTE_PROFILE_KEYS
-    missing = ROUTE_PROFILE_KEYS - set(payload)
+    missing = ROUTE_PROFILE_KEYS - _BACKWARD_COMPATIBLE_OPTIONAL_KEYS - set(payload)
     if unknown:
         raise ValueError(f"route_profile contains unknown fields: {','.join(sorted(unknown))}")
     if missing:
@@ -82,6 +103,7 @@ def route_profile_from_payload(payload: Mapping[str, Any] | None) -> RouteProfil
         legacy_cp_compatibility=payload["legacy_cp_compatibility"],
         validation_profile=payload["validation_profile"],
         failure_scope=payload["failure_scope"],
+        worktree_policy=payload.get("worktree_policy", ROOT_BRANCH_ONLY),
     )
 
 

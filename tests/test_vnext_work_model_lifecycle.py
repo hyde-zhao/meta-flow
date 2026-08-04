@@ -16,8 +16,11 @@ from meta_flow.work.model import (
 )
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.route_profile import (
+    BRANCH_NAME_TEMPLATE,
+    BRANCH_NAME_TYPES,
     RouteProfile,
     check_slice_mutation,
+    route_profile_from_payload,
 )
 from meta_flow.work.scope import WorkScope, exact_scope_difference
 
@@ -137,6 +140,37 @@ def test_legacy_work_without_route_profile_uses_safe_default() -> None:
 
     assert restored.route_profile == RouteProfile()
     assert restored.as_dict()["route_profile"] == RouteProfile().as_dict()
+
+
+def test_route_profile_defaults_to_root_branch_only_and_accepts_legacy_payload() -> None:
+    profile = RouteProfile()
+    legacy_payload = profile.as_dict()
+    legacy_payload.pop("worktree_policy")
+
+    restored = route_profile_from_payload(legacy_payload)
+
+    assert profile.worktree_policy == "root-branch-only"
+    assert restored == profile
+    assert BRANCH_NAME_TEMPLATE == "<type>/<work-id>-<description>"
+    assert BRANCH_NAME_TYPES == ("feat", "fix", "refactor", "docs", "chore")
+
+
+def test_direct_dispatch_rejects_paired_worktree_outside_legacy_route() -> None:
+    with pytest.raises(ValueError, match="direct dispatch requires root-branch-only"):
+        RouteProfile(worktree_policy="paired-worktree")
+
+    paired = RouteProfile(
+        dispatch_mode="functional-agent",
+        worktree_policy="paired-worktree",
+    )
+    legacy = RouteProfile(
+        mode="legacy-cp0-cp8",
+        legacy_cp_compatibility=True,
+        worktree_policy="paired-worktree",
+    )
+
+    assert paired.worktree_policy == "paired-worktree"
+    assert legacy.worktree_policy == "paired-worktree"
 
 
 def test_route_profile_is_strict_and_g0_cannot_dispatch_functional_agent() -> None:
