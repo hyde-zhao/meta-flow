@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "revision": "C66-G2-track-mf-v1",
+  "execution_boundary": "isolated-temporary-directories-only",
+  "token_measurement": "unavailable",
+  "fixtures": [
+    {
+      "id": "project-init",
+      "operation": "project.init",
+      "mode": "plan-dry-run-only",
+      "exact_command": "python tests/cr066_external_fixture_harness.py --fixture project-init --workspace <isolated-root>",
+      "expected_decision": "PASS",
+      "expected_actual_mutations": 0,
+      "required_evidence": [
+        "initial_state",
+        "expected_result",
+        "actual_result",
+        "file_mutations",
+        "before_digest",
+        "after_digest",
+        "failure_path",
+        "rollback",
+        "user_experience",
+        "io_measurement"
+      ]
+    },
+    {
+      "id": "snapshot-only",
+      "operation": "project.adopt-snapshot",
+      "mode": "authorized-isolated-apply-and-exact-rollback",
+      "exact_command": "python tests/cr066_external_fixture_harness.py --fixture snapshot-only --workspace <isolated-root>",
+      "expected_decision": "PASS",
+      "expected_historical_artifacts_copied": 0,
+      "required_evidence": [
+        "initial_state",
+        "expected_result",
+        "actual_result",
+        "file_mutations",
+        "before_digest",
+        "after_digest",
+        "failure_path",
+        "rollback",
+        "user_experience",
+        "io_measurement"
+      ]
+    },
+    {
+      "id": "installation-lifecycle",
+      "operation": "assets.install/assets.uninstall",
+      "mode": "dry-run-apply-repeat-uninstall",
+      "exact_command": "python tests/cr066_external_fixture_harness.py --fixture installation-lifecycle --workspace <isolated-root>",
+      "expected_decision": "PASS",
+      "expected_repeat_actual_mutations": 0,
+      "required_evidence": [
+        "initial_state",
+        "expected_result",
+        "actual_result",
+        "file_mutations",
+        "before_digest",
+        "after_digest",
+        "failure_path",
+        "rollback",
+        "user_experience",
+        "io_measurement"
+      ]
+    },
+    {
+      "id": "failure-recovery",
+      "operation": "assets.install-recovery",
+      "mode": "injected-partial-inspect-explicit-rollback",
+      "exact_command": "python tests/cr066_external_fixture_harness.py --fixture failure-recovery --workspace <isolated-root>",
+      "expected_decision": "PASS",
+      "expected_later_slice_executions": 0,
+      "required_evidence": [
+        "initial_state",
+        "expected_result",
+        "actual_result",
+        "file_mutations",
+        "before_digest",
+        "after_digest",
+        "failure_path",
+        "rollback",
+        "user_experience",
+        "io_measurement"
+      ]
+    }
+  ]
+}
