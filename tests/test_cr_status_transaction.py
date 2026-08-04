@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from functools import partial
 from pathlib import Path
+from unittest.mock import patch
 
 from cr_lifecycle_test_support import (
     LifecycleFixtureCollaborators,
@@ -23,6 +24,8 @@ from meta_flow.project.onboarding_contract import (
 )
 from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.project.scale import dump_yaml, load_yaml_object
+from meta_flow.work.io_metrics import IOMetrics
+from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.scope import WorkScope
 from meta_flow.workflow import cr_status_sync, cr_status_transaction
 from meta_flow.workflow.cr_index import _canonical_digest, _dirty_path_digest
@@ -57,17 +60,17 @@ class CRStatusTransactionOwnerTests(unittest.TestCase):
         functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
         self.assertEqual(
             {
-                "_status_sync_facts", "_current_target_digest", "_status_sync_claim_path",
-                "_claim_status_sync_authorization", "_apply_status_sync_transaction",
-                "inspect_status_sync_transactions", "recover_status_sync_transaction",
+                "_status_sync_facts",
+                "_current_target_digest",
+                "_status_sync_claim_path",
+                "_claim_status_sync_authorization",
+                "_apply_status_sync_transaction",
+                "inspect_status_sync_transactions",
+                "recover_status_sync_transaction",
             },
             functions,
         )
-        imports = {
-            node.module or ""
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-        }
+        imports = {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
         forbidden = {
             "meta_flow.workflow.cr_analysis",
             "meta_flow.workflow.cr_cli",
@@ -80,6 +83,65 @@ class CRStatusTransactionOwnerTests(unittest.TestCase):
         self.assertNotIn("importlib", imports)
         self.assertNotIn("import_module", source)
         self.assertNotIn("__import__", source)
+
+    def test_status_fact_loader_reuses_injected_work_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, process, _cr_path, _scope = write_termination_fixture(Path(directory))
+            metrics = IOMetrics("status-facts", enabled=True)
+            context = OperationReadContext(
+                process,
+                operation_id="status-facts",
+                operation_kind="apply",
+                allowed_reads=("works/WORK-101/WORK.yaml",),
+                max_objects=1,
+                metrics=metrics,
+            )
+
+            first = cr_status_transaction._status_sync_facts(
+                root,
+                work_id="WORK-101",
+                canonical_digest=_canonical_digest,
+                dirty_path_digest=_dirty_path_digest,
+                read_context=context,
+            )
+            second = cr_status_transaction._status_sync_facts(
+                root,
+                work_id="WORK-101",
+                canonical_digest=_canonical_digest,
+                dirty_path_digest=_dirty_path_digest,
+                read_context=context,
+            )
+            context.close()
+
+            self.assertEqual(first, second)
+            totals = metrics.summary()["totals"]
+            self.assertEqual(1, totals["physical_reads"])
+            self.assertGreaterEqual(totals["cache_hits"], 1)
+
+    def test_writer_lock_revalidates_preimage_before_consuming_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, _process, _cr_path, _scope = write_termination_fixture(Path(directory))
+            plan = cr_status_sync.plan_status_sync(
+                root,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                work_id="WORK-101",
+                effective_at="2026-07-27T05:30:00+00:00",
+            )
+
+            with patch.object(
+                cr_status_transaction,
+                "_current_target_digest",
+                return_value="0" * 64,
+            ):
+                blocked = _apply_ready(root, plan)
+            retried = _apply_ready(root, plan)
+
+            self.assertEqual("BLOCKED", blocked["status"])
+            self.assertEqual(0, blocked["mutation_count"])
+            self.assertIn("under writer lock", blocked["reason"])
+            self.assertEqual("PASS", retried["status"])
 
     def test_fault_ordering_recovers_before_index_is_written(self) -> None:
         expectations = {

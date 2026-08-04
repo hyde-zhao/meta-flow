@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import uuid
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from fnmatch import fnmatch
 from pathlib import Path
@@ -18,12 +20,14 @@ from meta_flow.context_pack.builder import (
     READ_EXPANSION_LEDGER_REL,
     load_read_policy,
 )
+from meta_flow.project.model import is_safe_ref
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import (
     _resolve_runtime_path,
     _resolve_runtime_ref,
     require_process_route,
 )
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.state.current import now_utc
 from meta_flow.work.model import load_work
 from meta_flow.work.scope import check_scope
@@ -41,6 +45,8 @@ REQUIRED_EVENT_FIELDS = {
     "created_at",
 }
 OPTIONAL_EVENT_FIELDS = {
+    "schema_version",
+    "reason_evidence",
     "story_id",
     "cr_id",
     "feature_id",
@@ -67,7 +73,67 @@ PREREGISTRATION_ACTION_FIELDS = {
     "required_before",
     "requested_refs",
     "reason",
+    "reason_evidence",
 }
+V2_READ_EXPANSION_REASONS = {
+    "capsule_missing",
+    "field_conflict",
+    "schema_validation_failed",
+    "human_audit",
+    "summary_insufficient",
+}
+LEGACY_READ_EXPANSION_REASONS = V2_READ_EXPANSION_REASONS | {"deep_review"}
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def validate_reason_evidence(reason: str, evidence: Mapping[str, Any] | None) -> list[str]:
+    """校验 v2 全文扩读 reason 的机器证据，不读取目标文件。"""
+
+    if reason not in V2_READ_EXPANSION_REASONS:
+        return [f"READ_EXPANSION_REASON_NOT_ALLOWED:{reason or '-'}"]
+    if not isinstance(evidence, Mapping):
+        return ["READ_EXPANSION_REASON_EVIDENCE_REQUIRED"]
+    errors: list[str] = []
+    if reason == "capsule_missing":
+        if set(evidence) != {"capsule_ref"} or not is_safe_ref(
+            str(evidence.get("capsule_ref") or "")
+        ):
+            errors.append("CAPSULE_MISSING_EVIDENCE_INVALID")
+    elif reason == "field_conflict":
+        sources = evidence.get("sources")
+        if set(evidence) != {"conflict_field", "sources"} or not str(
+            evidence.get("conflict_field") or ""
+        ):
+            errors.append("FIELD_CONFLICT_EVIDENCE_INVALID")
+        if not isinstance(sources, list) or len(sources) != 2:
+            errors.append("FIELD_CONFLICT_SOURCES_INVALID")
+        elif any(
+            not isinstance(source, Mapping)
+            or set(source) != {"ref", "digest"}
+            or not is_safe_ref(str(source.get("ref") or ""))
+            or not _DIGEST_RE.fullmatch(str(source.get("digest") or ""))
+            for source in sources
+        ):
+            errors.append("FIELD_CONFLICT_SOURCES_INVALID")
+    elif reason == "schema_validation_failed":
+        if set(evidence) != {"schema_id", "error_code", "target_ref"}:
+            errors.append("SCHEMA_VALIDATION_EVIDENCE_INVALID")
+        elif not all(str(evidence.get(key) or "") for key in ("schema_id", "error_code")) or not is_safe_ref(
+            str(evidence.get("target_ref") or "")
+        ):
+            errors.append("SCHEMA_VALIDATION_EVIDENCE_INVALID")
+    elif reason == "human_audit":
+        if set(evidence) != {"authorization_ref"} or not is_safe_ref(
+            str(evidence.get("authorization_ref") or "")
+        ):
+            errors.append("HUMAN_AUDIT_EVIDENCE_INVALID")
+    elif reason == "summary_insufficient":
+        slots = evidence.get("missing_slots")
+        if set(evidence) != {"missing_slots"} or not isinstance(slots, list) or not slots:
+            errors.append("SUMMARY_INSUFFICIENT_EVIDENCE_INVALID")
+        elif any(not isinstance(slot, str) or not slot.strip() for slot in slots):
+            errors.append("SUMMARY_INSUFFICIENT_EVIDENCE_INVALID")
+    return errors
 
 
 @dataclass(frozen=True)
@@ -82,6 +148,7 @@ class ReadExpansionPlanV1:
     scope_digest: str
     requested_refs: tuple[str, ...]
     reason: str
+    reason_evidence: dict[str, Any]
     agent: str
     ledger_ref: str
     planned_mutation_count: int
@@ -101,6 +168,7 @@ class ReadExpansionPlanV1:
             "scope_digest": self.scope_digest,
             "requested_refs": list(self.requested_refs),
             "reason": self.reason,
+            "reason_evidence": self.reason_evidence.copy(),
             "agent": self.agent,
             "ledger_ref": self.ledger_ref,
             "planned_mutation_count": self.planned_mutation_count,
@@ -200,12 +268,23 @@ def _ledger_path(project_root: Path, ledger: Path | None) -> Path:
     return _resolve_runtime_path(project_root, ledger) if ledger else default_ledger_path(project_root)
 
 
-def load_events(ledger_path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+def load_events(
+    ledger_path: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+    logical_ref: str = "",
+) -> tuple[list[dict[str, Any]], list[str]]:
     events: list[dict[str, Any]] = []
     errors: list[str] = []
     if not ledger_path.exists():
         return events, errors
-    for line_number, line in enumerate(ledger_path.read_text(encoding="utf-8").splitlines(), 1):
+    if read_context is None:
+        text = ledger_path.read_text(encoding="utf-8")
+    else:
+        if not logical_ref:
+            raise ValueError("logical_ref is required with read_context")
+        text = read_context.read_text(logical_ref)
+    for line_number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -225,6 +304,7 @@ def build_event(
     *,
     requested_path: str,
     reason: str,
+    reason_evidence: Mapping[str, Any] | None = None,
     stage: str,
     agent: str,
     context_ref: str,
@@ -240,14 +320,24 @@ def build_event(
     plan_digest: str = "",
 ) -> dict[str, Any]:
     root = project_root.resolve()
+    if Path(requested_path).is_absolute() or not is_safe_ref(requested_path):
+        raise ValueError("requested_path must be one safe logical ref; target bytes=0")
+    evidence_errors = validate_reason_evidence(reason, reason_evidence)
+    if evidence_errors:
+        raise ValueError("; ".join(evidence_errors) + "; target bytes=0; mutation=0")
     rel_path = _rel(root, requested_path)
     read_policy = load_read_policy(root)
-    allowed_reasons = set(str(item) for item in read_policy.get("full_doc_read_allowed_when") or DEFAULT_FULL_DOC_READ_REASONS)
+    allowed_reasons = set(
+        str(item)
+        for item in read_policy.get("full_doc_read_allowed_when")
+        or DEFAULT_FULL_DOC_READ_REASONS
+    ) & V2_READ_EXPANSION_REASONS
     deny_patterns = list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS)
     allowed_by_policy = reason in allowed_reasons
     outside_default_read_set = _matches_any(rel_path, deny_patterns)
     event_id = f"RE-{now_utc().replace(':', '').replace('-', '').replace('+', 'Z')}-{uuid.uuid4().hex[:8]}"
     event = {
+        "schema_version": 2,
         "event_id": event_id,
         "event_type": "read_expansion",
         "agent": agent,
@@ -257,6 +347,7 @@ def build_event(
         "feature_id": feature_id or _feature_from_path(rel_path),
         "requested_path": rel_path,
         "reason": reason,
+        "reason_evidence": dict(reason_evidence or {}),
         "allowed_by_policy": allowed_by_policy,
         "deny_default_match": _matches_any(rel_path, deny_patterns),
         # Keep policy membership distinct from the fact that a read is outside
@@ -265,8 +356,12 @@ def build_event(
         "outside_default_read_set": outside_default_read_set,
         "expansion_authorized": (not outside_default_read_set) or allowed_by_policy or bool(authorization_ref),
         "authorization_reason": reason if outside_default_read_set and (allowed_by_policy or authorization_ref) else None,
-        "authorization_ref": authorization_ref or None,
-        "estimated_tokens": _path_tokens(root, rel_path),
+        "authorization_ref": (
+            str((reason_evidence or {}).get("authorization_ref") or authorization_ref or "")
+            or None
+        ),
+        # 授权事件创建不读取目标正文；真实 reader 在 plan 成功后独立计量。
+        "estimated_tokens": 0,
         "context_ref": context_ref,
         "created_at": now_utc(),
         "notes": notes or None,
@@ -285,6 +380,7 @@ def append_event(
     *,
     requested_path: str,
     reason: str,
+    reason_evidence: Mapping[str, Any] | None = None,
     stage: str,
     agent: str,
     context_ref: str,
@@ -305,6 +401,7 @@ def append_event(
         root,
         requested_path=requested_path,
         reason=reason,
+        reason_evidence=reason_evidence,
         stage=stage,
         agent=agent,
         context_ref=context_ref,
@@ -325,7 +422,7 @@ def append_event(
         str(item)
         for item in read_policy.get("full_doc_read_allowed_when")
         or DEFAULT_FULL_DOC_READ_REASONS
-    )
+    ) & V2_READ_EXPANSION_REASONS
     event_errors = validate_event(
         event,
         allowed_reasons=allowed_reasons,
@@ -364,6 +461,7 @@ def append_event(
             source,
             allowed_reasons=allowed_reasons,
             line_number=0,
+            historical=True,
         )
         if not source_errors:
             raise ValueError(
@@ -401,6 +499,7 @@ def _blocked_plan(
     scope_digest: str,
     requested_refs: tuple[str, ...] = (),
     reason: str = "",
+    reason_evidence: Mapping[str, Any] | None = None,
     ledger_ref: str = READ_EXPANSION_LEDGER_REL.as_posix(),
     blockers: list[str],
 ) -> ReadExpansionPlanV1:
@@ -414,6 +513,7 @@ def _blocked_plan(
             scope_digest=scope_digest,
             requested_refs=requested_refs,
             reason=reason,
+            reason_evidence=dict(reason_evidence or {}),
             agent="host-orchestrator",
             ledger_ref=ledger_ref,
             planned_mutation_count=0,
@@ -432,6 +532,7 @@ def _matching_preregistration_events(
     work_id: str,
     scope_digest: str,
     reason: str,
+    reason_evidence: Mapping[str, Any],
     requested_ref: str,
 ) -> list[dict[str, Any]]:
     return [
@@ -444,6 +545,7 @@ def _matching_preregistration_events(
         and str(event.get("work_id") or "") == work_id
         and str(event.get("scope_digest") or "") == scope_digest
         and str(event.get("reason") or "") == reason
+        and event.get("reason_evidence") == dict(reason_evidence)
         and str(event.get("requested_path") or "") == requested_ref
         and str(event.get("preregistered_by") or "") == "host-orchestrator"
     ]
@@ -457,6 +559,7 @@ def build_host_preregistration_plan(
     scope_digest: str,
     reason_override: str = "",
     ledger: Path | None = None,
+    read_context: ReadContextProtocol | None = None,
 ) -> ReadExpansionPlanV1:
     """Project a Story packet's required Host action without mutating its ledger."""
 
@@ -473,8 +576,11 @@ def build_host_preregistration_plan(
             blockers=["STORY_PACKET_MISSING"],
         )
     try:
-        packet = json.loads(packet_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        if read_context is None:
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        else:
+            packet = read_context.read_json(context_ref)
+    except (json.JSONDecodeError, ValueError):
         return _blocked_plan(
             story_id="",
             stage="",
@@ -545,21 +651,28 @@ def build_host_preregistration_plan(
     if action_refs != required_refs or not required_refs:
         blockers.append("HOST_PREREGISTRATION_REFS_MISMATCH")
     action_reason = str(action.get("reason") or "")
+    action_evidence = action.get("reason_evidence")
+    reason_evidence = dict(action_evidence) if isinstance(action_evidence, Mapping) else {}
     reason = reason_override or action_reason
     if reason_override and reason_override != action_reason:
         blockers.append("HOST_PREREGISTRATION_REASON_MISMATCH")
 
-    read_policy = load_read_policy(root)
+    read_policy = load_read_policy(root, read_context=read_context)
     allowed_reasons = set(
         str(item)
         for item in read_policy.get("full_doc_read_allowed_when")
         or DEFAULT_FULL_DOC_READ_REASONS
-    )
+    ) & V2_READ_EXPANSION_REASONS
     if reason not in allowed_reasons:
         blockers.append("HOST_PREREGISTRATION_REASON_NOT_ALLOWED")
+    blockers.extend(validate_reason_evidence(reason, reason_evidence))
     try:
         route = require_process_route(root)
-        work = load_work(route.process_root, work_id)
+        work = load_work(
+            route.process_root,
+            work_id,
+            read_context=read_context,
+        )
     except (OSError, ValueError) as exc:
         blockers.append(f"WORK_SCOPE_UNAVAILABLE:{type(exc).__name__}")
         work = None
@@ -596,7 +709,11 @@ def build_host_preregistration_plan(
             blockers.append(f"REQUESTED_REF_MISSING:{logical_ref}")
 
     ledger_path = _ledger_path(root, ledger)
-    existing, ledger_errors = load_events(ledger_path)
+    existing, ledger_errors = load_events(
+        ledger_path,
+        read_context=read_context,
+        logical_ref=ledger_ref,
+    )
     blockers.extend(f"READ_EXPANSION_LEDGER_INVALID:{error}" for error in ledger_errors)
     if blockers:
         return _blocked_plan(
@@ -607,6 +724,7 @@ def build_host_preregistration_plan(
             scope_digest=scope_digest,
             requested_refs=required_refs,
             reason=reason,
+            reason_evidence=reason_evidence,
             ledger_ref=ledger_ref,
             blockers=blockers,
         )
@@ -622,6 +740,7 @@ def build_host_preregistration_plan(
             work_id=work_id,
             scope_digest=scope_digest,
             reason=reason,
+            reason_evidence=reason_evidence,
             requested_ref=requested_ref,
         )
     )
@@ -635,6 +754,7 @@ def build_host_preregistration_plan(
             scope_digest=scope_digest,
             requested_refs=required_refs,
             reason=reason,
+            reason_evidence=reason_evidence,
             agent="host-orchestrator",
             ledger_ref=ledger_ref,
             planned_mutation_count=len(missing_refs),
@@ -680,6 +800,7 @@ def apply_host_preregistration_plan(
             work_id=plan.work_id,
             scope_digest=plan.scope_digest,
             reason=plan.reason,
+            reason_evidence=plan.reason_evidence,
             requested_ref=requested_ref,
         )
         if matches:
@@ -705,6 +826,7 @@ def apply_host_preregistration_plan(
             root,
             requested_path=requested_ref,
             reason=plan.reason,
+            reason_evidence=plan.reason_evidence,
             stage=plan.stage,
             agent=plan.agent,
             context_ref=plan.context_ref,
@@ -721,7 +843,7 @@ def apply_host_preregistration_plan(
         str(item)
         for item in read_policy.get("full_doc_read_allowed_when")
         or DEFAULT_FULL_DOC_READ_REASONS
-    )
+    ) & V2_READ_EXPANSION_REASONS
     pending_errors = [
         error
         for event in pending
@@ -742,6 +864,7 @@ def apply_host_preregistration_plan(
             root,
             requested_path=str(event["requested_path"]),
             reason=str(event["reason"]),
+            reason_evidence=dict(event.get("reason_evidence") or {}),
             stage=str(event["stage"]),
             agent=str(event["agent"]),
             context_ref=str(event["context_ref"]),
@@ -767,7 +890,13 @@ def apply_host_preregistration_plan(
     )
 
 
-def validate_event(event: dict[str, Any], *, allowed_reasons: set[str], line_number: int) -> list[str]:
+def validate_event(
+    event: dict[str, Any],
+    *,
+    allowed_reasons: set[str],
+    line_number: int,
+    historical: bool = False,
+) -> list[str]:
     errors: list[str] = []
     missing = sorted(field for field in REQUIRED_EVENT_FIELDS if field not in event)
     for field in missing:
@@ -775,8 +904,14 @@ def validate_event(event: dict[str, Any], *, allowed_reasons: set[str], line_num
     if event.get("event_type") != "read_expansion":
         errors.append(f"line {line_number}: event_type must be read_expansion")
     reason = str(event.get("reason") or "")
-    if reason not in allowed_reasons:
+    effective_reasons = allowed_reasons | ({"deep_review"} if historical else set())
+    if reason not in effective_reasons:
         errors.append(f"line {line_number}: reason not allowed by read policy: {reason or '-'}")
+    if event.get("schema_version") == 2:
+        errors.extend(
+            f"line {line_number}: {error}"
+            for error in validate_reason_evidence(reason, event.get("reason_evidence"))
+        )
     if event.get("allowed_by_policy") is not True:
         errors.append(f"line {line_number}: allowed_by_policy must be true")
     estimated = event.get("estimated_tokens")
@@ -796,13 +931,23 @@ def validate_event(event: dict[str, Any], *, allowed_reasons: set[str], line_num
     return errors
 
 
-def validate_ledger(project_root: Path, *, ledger: Path | None = None) -> tuple[list[str], list[str]]:
+def validate_ledger(
+    project_root: Path,
+    *,
+    ledger: Path | None = None,
+    read_context: ReadContextProtocol | None = None,
+) -> tuple[list[str], list[str]]:
     root = project_root.resolve()
     ledger_path = _ledger_path(root, ledger)
-    events, parse_errors = load_events(ledger_path)
+    ledger_ref = _rel(root, ledger_path)
+    events, parse_errors = load_events(
+        ledger_path,
+        read_context=read_context,
+        logical_ref=ledger_ref,
+    )
     errors = list(parse_errors)
     warnings: list[str] = []
-    read_policy = load_read_policy(root)
+    read_policy = load_read_policy(root, read_context=read_context)
     allowed_reasons = set(str(item) for item in read_policy.get("full_doc_read_allowed_when") or DEFAULT_FULL_DOC_READ_REASONS)
     deny_patterns = list(read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS)
     events_by_id = {
@@ -820,6 +965,7 @@ def validate_ledger(project_root: Path, *, ledger: Path | None = None) -> tuple[
             event,
             allowed_reasons=allowed_reasons,
             line_number=line_number,
+            historical=True,
         )
         if source_entry is None:
             errors.append(
@@ -867,6 +1013,7 @@ def validate_ledger(project_root: Path, *, ledger: Path | None = None) -> tuple[
                     event,
                     allowed_reasons=allowed_reasons,
                     line_number=line_number,
+                    historical=True,
                 )
             )
         if event_id in seen_ids:
@@ -888,10 +1035,19 @@ def _feature_from_path(rel_path: str) -> str | None:
     return None
 
 
-def summarize_events(project_root: Path, *, ledger: Path | None = None) -> dict[str, Any]:
+def summarize_events(
+    project_root: Path,
+    *,
+    ledger: Path | None = None,
+    read_context: ReadContextProtocol | None = None,
+) -> dict[str, Any]:
     root = project_root.resolve()
     ledger_path = _ledger_path(root, ledger)
-    events, _errors = load_events(ledger_path)
+    events, _errors = load_events(
+        ledger_path,
+        read_context=read_context,
+        logical_ref=_rel(root, ledger_path),
+    )
     path_counter: Counter[str] = Counter()
     feature_counter: Counter[str] = Counter()
     reason_counter: Counter[str] = Counter()
@@ -981,7 +1137,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "usage: meta-flow context <read-log|read-log-check> [options]\n\n"
             "Examples:\n"
-            "  meta-flow context read-log --path process/STATE.md --reason human_audit --stage CP6 --agent meta-dev --context-ref process/context/CP6.context.json --project-root .\n"
+            "  meta-flow context read-log --path process/STATE.md --reason human_audit --reason-evidence-json '{\"authorization_ref\":\"process/checkpoints/AUDIT.md\"}' --stage CP6 --agent meta-dev --context-ref process/context/CP6.context.json --project-root .\n"
             "  meta-flow context read-log --story-packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --work-id WORK-123 --scope-digest <digest> --dry-run --project-root .\n"
             "  meta-flow context read-log-check --project-root .\n"
         )
@@ -993,6 +1149,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--ledger", type=Path, default=None)
         parser.add_argument("--path", dest="requested_path", default="")
         parser.add_argument("--reason", default="")
+        parser.add_argument("--reason-evidence-json", default="")
         parser.add_argument("--stage", default="")
         parser.add_argument("--agent", default="")
         parser.add_argument("--context-ref", default="")
@@ -1072,10 +1229,21 @@ def main(argv: list[str] | None = None) -> int:
                     + ", ".join(missing)
                     + "; mutation=0"
                 )
+            try:
+                reason_evidence = json.loads(parsed.reason_evidence_json)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "--reason-evidence-json must be valid JSON; mutation=0"
+                ) from exc
+            if not isinstance(reason_evidence, dict):
+                raise ValueError(
+                    "--reason-evidence-json must decode to one object; mutation=0"
+                )
             event, ledger_path = append_event(
                 parsed.project_root,
                 requested_path=parsed.requested_path,
                 reason=parsed.reason,
+                reason_evidence=reason_evidence,
                 stage=parsed.stage,
                 agent=parsed.agent,
                 context_ref=parsed.context_ref,

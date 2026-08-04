@@ -22,8 +22,10 @@ from meta_flow.work.handoff import (
 )
 from meta_flow.work.lifecycle import update_work_status
 from meta_flow.work.model import build_work, load_work
+from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import HIGH_RISK_FIELDS, RiskFacts, classify_work
-from meta_flow.work.scope import WorkScope
+from meta_flow.work.route_profile import RouteProfile, evaluate_route_profile
+from meta_flow.work.scope import WorkScope, check_scope
 from meta_flow.work.store import (
     WorkInitApplyError,
     apply_work_init,
@@ -31,6 +33,8 @@ from meta_flow.work.store import (
     plan_work_init,
 )
 from meta_flow.work.usage import UsageEvent, append_usage_event
+from meta_flow.work.validation_planner import build_validation_execution_plan
+from meta_flow.work.validation_receipt import load_validation_receipt
 from meta_flow.workspace.git_sync import run_git
 
 _CLI_HIGH_RISK = {key.replace("_", "-"): key for key in HIGH_RISK_FIELDS}
@@ -53,6 +57,29 @@ def _add_risk_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--g2-writes", type=int, default=None)
     parser.add_argument("--g2-check-groups", type=int, default=None)
     parser.add_argument("--g2-tokens", type=int, default=None)
+
+
+def _add_route_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--route-mode",
+        choices=["routine-four-stage", "legacy-cp0-cp8"],
+        default="routine-four-stage",
+    )
+    parser.add_argument(
+        "--dispatch-mode",
+        choices=["direct", "functional-agent"],
+        default="direct",
+    )
+    parser.add_argument("--legacy-cp-compatibility", action="store_true")
+    parser.add_argument("--human-design-gate-ref", default="")
+
+
+def _route_profile(parsed: argparse.Namespace) -> RouteProfile:
+    return RouteProfile(
+        mode=parsed.route_mode,
+        dispatch_mode=parsed.dispatch_mode,
+        legacy_cp_compatibility=parsed.legacy_cp_compatibility,
+    )
 
 
 def _risk_facts(parsed: argparse.Namespace) -> RiskFacts:
@@ -131,16 +158,26 @@ def init_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope-version", type=int, default=1)
     parser.add_argument("--apply", action="store_true")
     _add_risk_arguments(parser)
+    _add_route_arguments(parser)
     parsed = parser.parse_args(argv or [])
     try:
-        release_root, process_root = _resolve_roots(parsed.project_root)
-        project = load_project(process_root)
         classification = classify_work(
             _risk_facts(parsed),
             requested_cr=parsed.requested_cr,
             requested_profile=parsed.upgrade_to,
             g2_budget=_g2_budget(parsed),
         )
+        profile = _route_profile(parsed)
+        route_decision = evaluate_route_profile(
+            profile,
+            risk_profile=classification.risk_profile,
+            work_kind=classification.container_kind,
+            human_design_gate_ref=parsed.human_design_gate_ref,
+        )
+        if route_decision.blocked:
+            raise ValueError("; ".join(route_decision.errors))
+        release_root, process_root = _resolve_roots(parsed.project_root)
+        project = load_project(process_root)
         scope = WorkScope(
             version=parsed.scope_version,
             allowed_reads=tuple(parsed.allowed_read),
@@ -157,8 +194,13 @@ def init_main(argv: list[str] | None = None) -> int:
             classification=classification,
             release_base_oid=_head_oid(release_root),
             process_base_oid=_head_oid(process_root),
+            route_profile=profile,
         )
-        plan = plan_work_init(process_root, work)
+        plan = plan_work_init(
+            process_root,
+            work,
+            human_design_gate_ref=parsed.human_design_gate_ref,
+        )
     except (OSError, ValueError) as exc:
         print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
         return 1
@@ -190,15 +232,27 @@ def status_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-id", required=True)
     parsed = parser.parse_args(argv or [])
     try:
-        _release_root, process_root = _resolve_roots(parsed.project_root)
-        work = load_work(process_root, parsed.work_id)
+        route = require_process_route(parsed.project_root.resolve())
+        with OperationReadContext.from_route(
+            route,
+            operation_id="work.status.cli",
+            operation_kind="query",
+            allowed_reads=(f"works/{parsed.work_id}/WORK.yaml",),
+            max_objects=1,
+        ) as read_context:
+            work = load_work(
+                route.process_root,
+                parsed.work_id,
+                read_context=read_context,
+            )
+            objects_read = read_context.objects_read
     except (OSError, ValueError) as exc:
         print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
         return 1
     payload = {
         "decision": "PASS",
         "work": work.as_dict(),
-        "default_objects_read": 1,
+        "default_objects_read": objects_read,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
@@ -322,19 +376,47 @@ def validation_plan_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-id", required=True)
     parser.add_argument("--check-risk", action="append", default=[])
     parser.add_argument("--independent-qa-ref", default="")
+    parser.add_argument("--layer-fingerprint", action="append", default=[])
+    parser.add_argument("--layer-command", action="append", default=[])
+    parser.add_argument("--receipt-ref", action="append", default=[])
     parsed = parser.parse_args(argv or [])
     try:
         _release_root, process_root = _resolve_roots(parsed.project_root)
+        work = load_work(process_root, parsed.work_id)
         mapping: dict[str, str] = {}
         for item in parsed.check_risk:
             check_id, separator, risk = item.partition("=")
             if not separator or not check_id or not risk or check_id in mapping:
                 raise ValueError("--check-risk must use unique check-id=risk entries")
             mapping[check_id] = risk
+        layer_fingerprints: dict[str, str] = {}
+        layer_commands: dict[str, str] = {}
+        for raw, destination, option in (
+            (parsed.layer_fingerprint, layer_fingerprints, "--layer-fingerprint"),
+            (parsed.layer_command, layer_commands, "--layer-command"),
+        ):
+            for item in raw:
+                layer, separator, digest = item.partition("=")
+                if not separator or not layer or not digest or layer in destination:
+                    raise ValueError(f"{option} must use unique layer=sha256 entries")
+                destination[layer] = digest
+        execution_plan = None
+        if layer_fingerprints or layer_commands or parsed.receipt_ref:
+            receipts = []
+            for ref in parsed.receipt_ref:
+                if not check_scope(work.scope, "read", ref).allowed:
+                    raise ValueError(f"receipt ref is outside Work read scope: {ref}")
+                receipts.append(load_validation_receipt(process_root / ref))
+            execution_plan = build_validation_execution_plan(
+                fingerprints=layer_fingerprints,
+                command_identities=layer_commands,
+                receipts=tuple(receipts),
+            )
         plan = build_validation_plan(
-            load_work(process_root, parsed.work_id),
+            work,
             check_risk_mapping=mapping,
             independent_qa_ref=parsed.independent_qa_ref,
+            execution_plan=execution_plan,
         )
     except (OSError, ValueError) as exc:
         print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))

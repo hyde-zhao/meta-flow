@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.process_route import _resolve_runtime_ref as resolve_runtime_ref
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import current
 from meta_flow.workspace.git_sync import run_git
@@ -50,25 +51,44 @@ def _record_override(record: CRRecord, updates: dict[str, str]) -> CRRecord:
         fields['gate_status'] = updates['gate_status']
     return replace(record, **fields) if fields else record
 
-def _native_cr_minimum(project_root: Path) -> int:
+def _native_cr_minimum(
+    project_root: Path,
+    *,
+    resolver: Any = resolve_runtime_ref,
+    read_context: ReadContextProtocol | None = None,
+) -> int:
     """Return the project-specific first native CR number.
 
     Fresh projects default to CR-001.  A migrated project may declare its
     explicit legacy/native boundary in LEGACY-SOURCE.yaml; no project-specific
     number is hard-coded into the reusable builder.
     """
-    path = resolve_runtime_ref(project_root, LEGACY_SOURCE_REL.as_posix())
+    path = resolver(project_root, LEGACY_SOURCE_REL.as_posix())
     if not path.is_file():
         return 1
-    payload = load_yaml_object(path)
+    payload = (
+        load_yaml_object(path)
+        if read_context is None
+        else read_context.read_yaml_object(
+            LEGACY_SOURCE_REL.as_posix(), loader=load_yaml_object
+        )
+    )
     value = str(payload.get('native_cr_minimum') or 'CR-001')
     match = re.fullmatch('CR-(\\d+)', value)
     if match is None:
         raise ValueError(f'{LEGACY_SOURCE_REL.as_posix()} native_cr_minimum must use CR-nnn naming')
     return int(match.group(1))
 
-def _validate_native_formal_cr(project_root: Path, cr_id: str, path: Path, *, minimum: int) -> None:
-    fields = parse_frontmatter(path.read_text(encoding='utf-8'))
+def _validate_native_formal_cr(
+    project_root: Path,
+    cr_id: str,
+    path: Path,
+    *,
+    minimum: int,
+    text: str | None = None,
+    rel_fn: Any = rel,
+) -> None:
+    fields = parse_frontmatter(text if text is not None else path.read_text(encoding='utf-8'))
     problems: list[str] = []
     if str(fields.get('schema_version') or '') != '1':
         problems.append('schema_version=1 is required')
@@ -80,9 +100,16 @@ def _validate_native_formal_cr(project_root: Path, cr_id: str, path: Path, *, mi
     if numeric < minimum:
         problems.append(f'CR number is earlier than native_cr_minimum=CR-{minimum:03d}')
     if problems:
-        raise ValueError(f'non-native formal CR contamination at {rel(project_root, path)}: ' + '; '.join(problems))
+        raise ValueError(f'non-native formal CR contamination at {rel_fn(project_root, path)}: ' + '; '.join(problems))
 
-def build_index(project_root: Path, *, record_overrides: dict[str, dict[str, str]] | None=None) -> dict[str, Any]:
+def build_index(
+    project_root: Path,
+    *,
+    record_overrides: dict[str, dict[str, str]] | None = None,
+    read_context: ReadContextProtocol | None = None,
+    resolve_runtime_ref_fn: Any | None = None,
+    rel_fn: Any | None = None,
+) -> dict[str, Any]:
     """Build a pure projection from formal CR files only.
 
     Existing CR-INDEX bytes, summaries, ledgers and legacy repositories are
@@ -90,15 +117,43 @@ def build_index(project_root: Path, *, record_overrides: dict[str, dict[str, str
     status-sync plan to project its not-yet-applied formal truth.
     """
     project_root = project_root.resolve()
+    resolver = resolve_runtime_ref_fn or resolve_runtime_ref
+    relative = rel_fn or rel
     items: list[dict[str, Any]] = []
-    formal_crs = discover_formal_crs(project_root)
-    minimum = _native_cr_minimum(project_root)
+    formal_crs = discover_formal_crs(
+        project_root,
+        _resolve_runtime_ref_fn=resolver,
+        _rel_fn=relative,
+    )
+    minimum = _native_cr_minimum(
+        project_root,
+        resolver=resolver,
+        read_context=read_context,
+    )
     overrides = record_overrides or {}
     for cr_id, path in formal_crs.items():
-        _validate_native_formal_cr(project_root, cr_id, path, minimum=minimum)
-        record = record_from_cr_file(project_root, path)
+        text = (
+            path.read_text(encoding='utf-8')
+            if read_context is None
+            else read_context.read_text(relative(project_root, path))
+        )
+        _validate_native_formal_cr(
+            project_root,
+            cr_id,
+            path,
+            minimum=minimum,
+            text=text,
+            rel_fn=relative,
+        )
+        record = record_from_cr_file(
+            project_root,
+            path,
+            _rel_fn=relative,
+            read_context=read_context,
+            text=text,
+        )
         record = _record_override(record, overrides.get(cr_id, {}))
-        items.append(_index_item(record, path.read_text(encoding='utf-8')))
+        items.append(_index_item(record, text))
     items.sort(key=lambda item: _cr_numeric_sort_key(str(item['id'])))
     semantic = {'schema_version': INDEX_SCHEMA_VERSION, 'items': items}
     return {'schema_version': INDEX_SCHEMA_VERSION, 'generated_at': now_utc(), 'semantic_digest': _canonical_digest(semantic), 'items': items}

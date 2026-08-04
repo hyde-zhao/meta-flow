@@ -153,6 +153,45 @@ meta-flow work resume --project-root . --work-id W-001
 
 读取、写入和检查都必须同时满足 risk、`WORK.yaml.scope` 与 budget。token 只能标为 `measured`、`proxy` 或 `unavailable`；unavailable 不等于 0。默认项目查询最多读取 5 个直接引用对象，不扫描 sibling 项目或全历史。
 
+#### 普通 Work 的四阶段、上下文和验证复用
+
+G0/G1 的默认 route profile 如下；旧 Work 缺少该字段时也按同一安全默认解释，不会
+隐式回退到 CP0-CP8：
+
+```yaml
+route_profile:
+  schema_version: 1
+  mode: routine-four-stage
+  dispatch_mode: direct
+  legacy_cp_compatibility: false
+  validation_profile: layered-v1
+  failure_scope: current-slice-only
+```
+
+普通路线依次完成“澄清目标、计划切片、直接实施、分层验证”。`direct` 表示当前主进程
+直接修改代码并验证，G0/G1 的功能 Agent dispatch、legacy CP artifact 和 status-sync
+artifact 均为 0。只有 G2 Work 在 `route_profile.legacy_cp_compatibility=true`、人工批准、
+legacy gate evidence 与 scope 同时满足时，才可进入兼容 CP 路线；Skill、Agent、模板或
+环境变量不能替代该显式声明。
+
+验证按 targeted → compatibility → full 分层。PASS receipt 绑定 source/profile
+fingerprint、check layer、command identity、环境摘要与 result digest；只有 exact
+fingerprint 不变时才返回复用结果。前次 FAIL、命令变化或 partial mutation 都必须从
+当前失效层重新验证，不能重跑无关 Story 来掩盖失败。
+
+查询、计划、检查和应用分别建立单 operation 的显式读取上下文。默认查询最多成功读取
+5 个对象；第 6 个对象、scope 外引用、未声明的长期 Phase 和 stale context 都会在读取
+正文前被拒绝。plan context 不能传给 apply；apply 会建立新 snapshot，并在授权消费和
+mutation 前复核 scope、OID、dirty-path、plan digest 与每个 target preimage。相同逻辑
+引用在一次 operation 内只物理解析一次，不使用全局 singleton、TTL 或跨进程 cache。
+
+需要从 Capsule 扩读全文时，只能选择 `capsule_missing`、`field_conflict`、
+`schema_validation_failed`、`human_audit`、`summary_insufficient`，并提交该理由要求的
+机器证据。理由或证据不合法时 target bytes=0、mutation=0；历史 `deep_review` 事件仍可
+审计，但不能用于创建新请求。CURRENT、summary、evidence 和 WORKFLOW-HEALTH 在只有
+`updated_at` / `created_at` 或零增量变化时不重写；ledger append、truth CAS 和 recovery
+检查保持不变。
+
 ### 0.1 Native CR 状态与可重建索引
 
 vNext 正式 CR 的真相是 `PROJECT.yaml`、当前 `WORK.yaml` 和 `process/changes/CR-*.md`。`process/changes/CR-INDEX.json` 是可删除重建的派生索引，只扫描 native formal CR、按数值 CR ID 排序，并用 `semantic_digest` 覆盖 `schema_version + items`；它不会读取旧 index items、summary 正文、ledger 或 legacy 仓来补字段。旧仓和 `CR-INDEX.yaml` 只读，不复制、不修改、不重新生成。

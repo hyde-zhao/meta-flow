@@ -10,8 +10,12 @@ from typing import Any
 
 from meta_flow.project.governance import load_phase, replace_phase
 from meta_flow.project.model import Project, is_safe_ref, load_project, replace_project
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.work.model import Work, load_work, work_path, write_work_create_only
+from meta_flow.work.read_context import OperationReadContext
+from meta_flow.work.route_profile import RouteDecision, evaluate_route_profile
+from meta_flow.work.scope import check_scope
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,8 @@ class WorkInitPlan:
     project: Project | None
     actions: tuple[WorkInitAction, ...]
     conflicts: tuple[WorkInitConflict, ...]
+    route_decision: RouteDecision
+    human_design_gate_ref: str
     plan_digest: str
 
     @property
@@ -51,6 +57,8 @@ class WorkInitPlan:
             "risk_profile": self.work.risk_profile,
             "scope_digest": self.work.scope.digest,
             "budget": self.work.budget.as_dict(),
+            "route": self.route_decision.as_dict(),
+            "human_design_gate_ref": self.human_design_gate_ref,
             "actions": [action.__dict__ for action in self.actions],
             "conflicts": [conflict.__dict__ for conflict in self.conflicts],
             "plan_digest": self.plan_digest,
@@ -87,13 +95,60 @@ def _digest(payload: dict[str, Any]) -> str:
     return sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def plan_work_init(process_root: Path, work: Work) -> WorkInitPlan:
+def plan_work_init(
+    process_root: Path,
+    work: Work,
+    *,
+    human_design_gate_ref: str = "",
+    read_context: ReadContextProtocol | None = None,
+) -> WorkInitPlan:
     root = process_root.resolve()
+    owned_context = read_context is None
+    allowed_reads = ["PROJECT.yaml", work.request_ref, work.work_ref]
+    if work.phase_ref:
+        allowed_reads.append(work.phase_ref)
+    if work.route_profile.legacy_cp_compatibility and human_design_gate_ref:
+        allowed_reads.append(human_design_gate_ref)
+    context = read_context or OperationReadContext(
+        root,
+        operation_id=f"work.init.plan:{work.work_id}",
+        operation_kind="plan",
+        allowed_reads=tuple(dict.fromkeys(allowed_reads)),
+        max_objects=max(5, len(allowed_reads)),
+        scope_digest=work.scope.digest,
+    )
+    context.assert_operation("plan")
     actions: list[WorkInitAction] = []
     conflicts: list[WorkInitConflict] = []
+    route_decision = evaluate_route_profile(
+        work.route_profile,
+        risk_profile=work.risk_profile,
+        work_kind=work.kind,
+        human_design_gate_ref=human_design_gate_ref,
+    )
+    for error in route_decision.errors:
+        conflicts.append(WorkInitConflict("route_profile_blocked", work.work_ref, error))
+    if work.route_profile.legacy_cp_compatibility and not route_decision.errors:
+        gate_path = root / human_design_gate_ref
+        if not gate_path.is_file():
+            conflicts.append(
+                WorkInitConflict(
+                    "human_design_gate_missing",
+                    human_design_gate_ref,
+                    "legacy CP human design gate evidence is missing",
+                )
+            )
+        if not check_scope(work.scope, "read", human_design_gate_ref).allowed:
+            conflicts.append(
+                WorkInitConflict(
+                    "human_design_gate_out_of_scope",
+                    human_design_gate_ref,
+                    "legacy CP human design gate must be declared in Work reads",
+                )
+            )
     project: Project | None = None
     try:
-        project = load_project(root)
+        project = load_project(root, read_context=context)
     except (OSError, ValueError) as exc:
         conflicts.append(WorkInitConflict("project_invalid", "PROJECT.yaml", str(exc)))
     else:
@@ -121,7 +176,7 @@ def plan_work_init(process_root: Path, work: Work) -> WorkInitPlan:
     phase = None
     if work.phase_ref:
         try:
-            phase = load_phase(root, work.phase_ref)
+            phase = load_phase(root, work.phase_ref, read_context=context)
         except (OSError, ValueError) as exc:
             conflicts.append(WorkInitConflict("phase_invalid", work.phase_ref, str(exc)))
         else:
@@ -135,7 +190,7 @@ def plan_work_init(process_root: Path, work: Work) -> WorkInitPlan:
     path = work_path(root, work.work_id)
     if path.exists() or path.is_symlink():
         try:
-            existing = load_work(root, work.work_id)
+            existing = load_work(root, work.work_id, read_context=context)
         except (OSError, ValueError) as exc:
             conflicts.append(WorkInitConflict("work_invalid", work.work_ref, str(exc)))
         else:
@@ -161,24 +216,39 @@ def plan_work_init(process_root: Path, work: Work) -> WorkInitPlan:
         "project": project.as_dict() if project else None,
         "phase": phase.as_dict() if phase else None,
         "work": work.as_dict(),
-        "request_sha256": sha256(request_path.read_bytes()).hexdigest() if request_path.is_file() else "",
+        "route": route_decision.as_dict(),
+        "human_design_gate_ref": human_design_gate_ref,
+        "request_sha256": (
+            sha256(context.read_bytes(work.request_ref)).hexdigest()
+            if request_path.is_file()
+            else ""
+        ),
         "actions": [action.__dict__ for action in actions],
         "conflicts": [conflict.__dict__ for conflict in conflicts],
     }
-    return WorkInitPlan(
+    plan = WorkInitPlan(
         process_root=root,
         work=work,
         project=project,
         actions=tuple(actions),
         conflicts=tuple(conflicts),
+        route_decision=route_decision,
+        human_design_gate_ref=human_design_gate_ref,
         plan_digest=_digest(digest_source),
     )
+    if owned_context:
+        context.close()
+    return plan
 
 
 def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
     if plan.blocked:
         raise ValueError("Work init plan is blocked: " + "; ".join(item.message for item in plan.conflicts))
-    fresh = plan_work_init(plan.process_root, plan.work)
+    fresh = plan_work_init(
+        plan.process_root,
+        plan.work,
+        human_design_gate_ref=plan.human_design_gate_ref,
+    )
     if fresh.plan_digest != plan.plan_digest:
         raise ValueError("Work init plan is stale; rebuild plan before apply")
     mutations = 0

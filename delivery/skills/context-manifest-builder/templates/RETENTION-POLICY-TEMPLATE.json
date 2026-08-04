@@ -7,7 +7,7 @@
     "allowed_when": [
       "runtime-high-risk",
       "human_audit",
-      "deep_review"
+      "summary_insufficient"
     ],
     "default_context": "high-risk-only"
   },
@@ -15,8 +15,8 @@
     "default_context": "summary_only",
     "full_doc_read_allowed_when": [
       "human_audit",
-      "deep_review",
-      "field_conflict"
+      "field_conflict",
+      "summary_insufficient"
     ]
   },
   "cp_results": {

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from meta_flow.work.model import Work
+from meta_flow.work.validation_fingerprint import VALIDATION_LAYERS
+from meta_flow.work.validation_planner import ValidationExecutionPlan
 
 
 @dataclass(frozen=True)
@@ -17,6 +19,9 @@ class ReviewPlan:
     required_evidence: tuple[str, ...]
     decision: str
     missing_evidence: tuple[str, ...]
+    route_mode: str
+    dispatch_mode: str
+    stages: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,11 @@ class ValidationPlan:
     full_regression_allowed: bool
     decision: str
     errors: tuple[str, ...]
+    route_mode: str
+    dispatch_mode: str
+    stages: tuple[str, ...]
+    layer_decisions: dict[str, str]
+    next_layer: str
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -36,6 +46,8 @@ class ValidationPlan:
             "check_ids": list(self.check_ids),
             "risk_mapping": self.risk_mapping.copy(),
             "errors": list(self.errors),
+            "stages": list(self.stages),
+            "layer_decisions": self.layer_decisions.copy(),
         }
 
 
@@ -45,10 +57,36 @@ def build_review_plan(
     evidence_refs: Mapping[str, str] | None = None,
 ) -> ReviewPlan:
     evidence = dict(evidence_refs or {})
+    profile = work.route_profile
+    stages = (
+        tuple(f"CP{index}" for index in range(9))
+        if profile.legacy_cp_compatibility
+        else ("clarification", "design", "implementation", "verification")
+    )
     if work.risk_profile == "G0":
-        return ReviewPlan("G0", "self-check", 0, (), "READY", ())
+        return ReviewPlan(
+            "G0",
+            "self-check",
+            0,
+            (),
+            "READY",
+            (),
+            profile.mode,
+            profile.dispatch_mode,
+            stages,
+        )
     if work.risk_profile == "G1":
-        return ReviewPlan("G1", "work-scoped-lightweight", 1, (), "READY", ())
+        return ReviewPlan(
+            "G1",
+            "work-scoped-lightweight",
+            1,
+            (),
+            "READY",
+            (),
+            profile.mode,
+            profile.dispatch_mode,
+            stages,
+        )
     required = ("hld_ref", "adr_ref", "human_design_gate_ref", "independent_reviewer_ref")
     missing = tuple(key for key in required if not evidence.get(key))
     return ReviewPlan(
@@ -58,6 +96,9 @@ def build_review_plan(
         required,
         "BLOCKED" if missing else "READY",
         missing,
+        profile.mode,
+        profile.dispatch_mode,
+        stages,
     )
 
 
@@ -66,6 +107,7 @@ def build_validation_plan(
     *,
     check_risk_mapping: Mapping[str, str],
     independent_qa_ref: str = "",
+    execution_plan: ValidationExecutionPlan | None = None,
 ) -> ValidationPlan:
     errors: list[str] = []
     mapping = dict(check_risk_mapping)
@@ -84,6 +126,13 @@ def build_validation_plan(
     independent = work.risk_profile == "G2"
     if independent and not independent_qa_ref:
         errors.append("G2 requires independent QA evidence")
+    if execution_plan is not None and execution_plan.decision == "BLOCKED":
+        errors.extend(execution_plan.errors)
+    layer_decisions = (
+        {step.layer: step.action for step in execution_plan.steps}
+        if execution_plan is not None
+        else {layer: "PLANNED" for layer in VALIDATION_LAYERS}
+    )
     return ValidationPlan(
         risk_profile=work.risk_profile,
         check_ids=declared,
@@ -93,4 +142,13 @@ def build_validation_plan(
         full_regression_allowed=work.risk_profile == "G2",
         decision="BLOCKED" if errors else "READY",
         errors=tuple(errors),
+        route_mode=work.route_profile.mode,
+        dispatch_mode=work.route_profile.dispatch_mode,
+        stages=(
+            tuple(f"CP{index}" for index in range(9))
+            if work.route_profile.legacy_cp_compatibility
+            else ("clarification", "design", "implementation", "verification")
+        ),
+        layer_decisions=layer_decisions,
+        next_layer=execution_plan.next_layer if execution_plan is not None else "targeted",
     )

@@ -16,6 +16,7 @@ from typing import Any
 
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import ProcessRouteError, _resolve_runtime_ref
+from meta_flow.project.read_contract import ReadContextProtocol, ReadContractError
 from meta_flow.state.event_ledger import load_events
 
 CHECKPOINT_LEDGER_REF = "process/state/CHECKPOINT-LEDGER.ndjson"
@@ -866,6 +867,7 @@ def load_checkpoint_projection(
     checkpoint: str = "",
     candidate_refs: Sequence[str] = (),
     resolver: Callable[[Path, str], Path] = _resolve_runtime_ref,
+    read_context: ReadContextProtocol | None = None,
 ) -> CheckpointProjectionV1:
     """通过 binding 读取 ledger，并只加载目标归并所需的 result refs。"""
 
@@ -892,8 +894,12 @@ def load_checkpoint_projection(
         for result_ref, result_path in sorted(candidates.items()):
             if result_path.is_file():
                 try:
-                    payload = json.loads(result_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
+                    payload = (
+                        json.loads(result_path.read_text(encoding="utf-8"))
+                        if read_context is None
+                        else read_context.read_json(result_ref)
+                    )
+                except (OSError, json.JSONDecodeError, ReadContractError):
                     continue
                 if not isinstance(payload, dict):
                     continue
@@ -950,7 +956,11 @@ def load_checkpoint_projection(
             cr_id=cr_id,
             checkpoint=normalized_checkpoint,
         )
-    events, load_errors = load_events(ledger_path)
+    events, load_errors = load_events(
+        ledger_path,
+        read_context=read_context,
+        logical_ref=CHECKPOINT_LEDGER_REF,
+    )
     findings = [
         _finding(
             "CHECKPOINT_LEDGER_INVALID",
@@ -993,8 +1003,12 @@ def load_checkpoint_projection(
             )
             continue
         try:
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            payload = (
+                json.loads(result_path.read_text(encoding="utf-8"))
+                if read_context is None
+                else read_context.read_json(result_ref)
+            )
+        except (OSError, json.JSONDecodeError, ReadContractError) as exc:
             findings.append(
                 _finding(
                     "RESULT_FILE_INVALID",

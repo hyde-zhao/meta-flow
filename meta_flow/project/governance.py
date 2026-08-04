@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.model import Project, is_safe_ref, load_project
+from meta_flow.project.read_contract import ReadContextProtocol, ReadContractError
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.work.model import load_work
+from meta_flow.work.read_context import OperationReadContext
 
 ROADMAP_FILE = Path("ROADMAP.yaml")
 ROADMAP_SCHEMA_VERSION = 1
@@ -118,13 +120,17 @@ def validate_roadmap_payload(
     allowed = {"schema_version", "project_id", "outcome", "status", "phase_refs", "updated_at"}
     required = {"schema_version", "project_id", "outcome", "status", "phase_refs"}
     if byte_size is not None and byte_size > GOVERNANCE_MAX_BYTES:
-        _finding(findings, "roadmap_over_budget", f"ROADMAP.yaml exceeds {GOVERNANCE_MAX_BYTES} bytes")
+        _finding(
+            findings, "roadmap_over_budget", f"ROADMAP.yaml exceeds {GOVERNANCE_MAX_BYTES} bytes"
+        )
     for key in sorted(set(payload) - allowed):
         _finding(findings, "unknown_key", f"ROADMAP.yaml contains unknown field: {key}")
     for key in sorted(required - set(payload)):
         _finding(findings, "missing_required", f"ROADMAP.yaml missing required field: {key}")
     if payload.get("schema_version") != ROADMAP_SCHEMA_VERSION:
-        _finding(findings, "schema_version", f"ROADMAP schema_version must be {ROADMAP_SCHEMA_VERSION}")
+        _finding(
+            findings, "schema_version", f"ROADMAP schema_version must be {ROADMAP_SCHEMA_VERSION}"
+        )
     if not _valid_project_id(payload.get("project_id")):
         _finding(findings, "project_id", "ROADMAP project_id is invalid")
     if not isinstance(payload.get("outcome"), str) or not str(payload.get("outcome") or "").strip():
@@ -180,7 +186,10 @@ def validate_phase_payload(
         _finding(findings, "project_id", "PHASE project_id is invalid")
     if not _valid_project_id(payload.get("phase_id")):
         _finding(findings, "phase_id", "phase_id is invalid")
-    if not isinstance(payload.get("objective"), str) or not str(payload.get("objective") or "").strip():
+    if (
+        not isinstance(payload.get("objective"), str)
+        or not str(payload.get("objective") or "").strip()
+    ):
         _finding(findings, "objective", "PHASE objective must be non-empty")
     if payload.get("status") not in PHASE_STATUSES:
         _finding(findings, "status", "PHASE status is invalid")
@@ -191,7 +200,9 @@ def validate_phase_payload(
     if not isinstance(result_refs, list) or not all(
         isinstance(item, str) and is_safe_ref(item) for item in result_refs
     ):
-        _finding(findings, "result_refs", "result_refs must contain safe process-repo-relative refs")
+        _finding(
+            findings, "result_refs", "result_refs must contain safe process-repo-relative refs"
+        )
     elif len(result_refs) != len(set(result_refs)):
         _finding(findings, "result_refs", "result_refs must not contain duplicate refs")
     return findings
@@ -213,23 +224,43 @@ def phase_from_payload(payload: Mapping[str, Any]) -> Phase:
     )
 
 
-def load_roadmap(process_root: Path, ref: str = ROADMAP_FILE.as_posix()) -> Roadmap:
+def load_roadmap(
+    process_root: Path,
+    ref: str = ROADMAP_FILE.as_posix(),
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> Roadmap:
     if not is_safe_ref(ref):
         raise ValueError("roadmap ref is unsafe")
     path = process_root.resolve() / ref
-    payload = load_yaml_object(path)
-    findings = validate_roadmap_payload(payload, byte_size=path.stat().st_size)
+    if read_context is None:
+        payload = load_yaml_object(path)
+        byte_size = path.stat().st_size
+    else:
+        payload = read_context.read_yaml_object(ref, loader=load_yaml_object)
+        byte_size = read_context.byte_size(ref)
+    findings = validate_roadmap_payload(payload, byte_size=byte_size)
     if findings:
         raise ValueError("; ".join(item.message for item in findings))
     return roadmap_from_payload(payload)
 
 
-def load_phase(process_root: Path, ref: str) -> Phase:
+def load_phase(
+    process_root: Path,
+    ref: str,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> Phase:
     if not is_safe_ref(ref, prefix="phases"):
         raise ValueError("phase ref must be under phases/")
     path = process_root.resolve() / ref
-    payload = load_yaml_object(path)
-    findings = validate_phase_payload(payload, byte_size=path.stat().st_size)
+    if read_context is None:
+        payload = load_yaml_object(path)
+        byte_size = path.stat().st_size
+    else:
+        payload = read_context.read_yaml_object(ref, loader=load_yaml_object)
+        byte_size = read_context.byte_size(ref)
+    findings = validate_phase_payload(payload, byte_size=byte_size)
     if findings:
         raise ValueError("; ".join(item.message for item in findings))
     phase = phase_from_payload(payload)
@@ -288,40 +319,87 @@ def replace_phase(
     return path
 
 
-def load_governance_snapshot(process_root: Path) -> tuple[GovernanceSnapshot | None, list[GovernanceFinding]]:
+def load_governance_snapshot(
+    process_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> tuple[GovernanceSnapshot | None, list[GovernanceFinding]]:
     root = process_root.resolve()
+    owned_context = read_context is None
+    context = read_context or OperationReadContext(
+        root,
+        operation_id="project.governance-snapshot",
+        operation_kind="query",
+        allowed_reads=("PROJECT.yaml", "ROADMAP.yaml", "phases/**", "works/**"),
+    )
     findings: list[GovernanceFinding] = []
-    objects_read = 0
     try:
-        project = load_project(root)
-        objects_read += 1
+        project = load_project(root, read_context=context)
+    except ReadContractError as exc:
+        _finding(findings, exc.error_code.lower(), str(exc), exc.logical_ref)
+        if owned_context:
+            context.close()
+        return None, findings
     except (OSError, ValueError) as exc:
         _finding(findings, "project_invalid", str(exc), "PROJECT.yaml")
+        if owned_context:
+            context.close()
         return None, findings
 
     roadmap: Roadmap | None = None
     if project.roadmap_ref:
         try:
-            roadmap = load_roadmap(root, project.roadmap_ref)
-            objects_read += 1
+            roadmap = load_roadmap(
+                root,
+                project.roadmap_ref,
+                read_context=context,
+            )
+        except ReadContractError as exc:
+            _finding(findings, exc.error_code.lower(), str(exc), exc.logical_ref)
+            if owned_context:
+                context.close()
+            return None, findings
         except (OSError, ValueError) as exc:
             _finding(findings, "roadmap_invalid", str(exc), project.roadmap_ref)
         else:
             if roadmap.project_id != project.project_id:
-                _finding(findings, "project_id_mismatch", "Roadmap project_id differs from Project", project.roadmap_ref)
+                _finding(
+                    findings,
+                    "project_id_mismatch",
+                    "Roadmap project_id differs from Project",
+                    project.roadmap_ref,
+                )
 
     active_phase: Phase | None = None
     if project.active_phase_ref:
         try:
-            active_phase = load_phase(root, project.active_phase_ref)
-            objects_read += 1
+            active_phase = load_phase(
+                root,
+                project.active_phase_ref,
+                read_context=context,
+            )
+        except ReadContractError as exc:
+            _finding(findings, exc.error_code.lower(), str(exc), exc.logical_ref)
+            if owned_context:
+                context.close()
+            return None, findings
         except (OSError, ValueError) as exc:
             _finding(findings, "phase_invalid", str(exc), project.active_phase_ref)
         else:
             if active_phase.project_id != project.project_id:
-                _finding(findings, "project_id_mismatch", "Phase project_id differs from Project", project.active_phase_ref)
+                _finding(
+                    findings,
+                    "project_id_mismatch",
+                    "Phase project_id differs from Project",
+                    project.active_phase_ref,
+                )
             if roadmap is not None and project.active_phase_ref not in roadmap.phase_refs:
-                _finding(findings, "orphan_phase", "active Phase is not referenced by Roadmap", project.active_phase_ref)
+                _finding(
+                    findings,
+                    "orphan_phase",
+                    "active Phase is not referenced by Roadmap",
+                    project.active_phase_ref,
+                )
 
     works: list[Any] = []
     phase_work_refs = set(active_phase.work_refs if active_phase else ())
@@ -331,8 +409,12 @@ def load_governance_snapshot(process_root: Path) -> tuple[GovernanceSnapshot | N
             _finding(findings, "work_ref", "active Work ref must be works/<id>/WORK.yaml", ref)
             continue
         try:
-            work = load_work(root, parts[1])
-            objects_read += 1
+            work = load_work(root, parts[1], read_context=context)
+        except ReadContractError as exc:
+            _finding(findings, exc.error_code.lower(), str(exc), exc.logical_ref)
+            if owned_context:
+                context.close()
+            return None, findings
         except (OSError, ValueError) as exc:
             _finding(findings, "work_invalid", str(exc), ref)
             continue
@@ -345,16 +427,26 @@ def load_governance_snapshot(process_root: Path) -> tuple[GovernanceSnapshot | N
             if ref not in phase_work_refs:
                 _finding(findings, "work_parent", "Phase does not reference its Work", ref)
         elif active_phase is not None and ref in phase_work_refs:
-            _finding(findings, "work_parent", "direct Project Work must not appear in Phase work_refs", ref)
+            _finding(
+                findings,
+                "work_parent",
+                "direct Project Work must not appear in Phase work_refs",
+                ref,
+            )
     if findings:
+        if owned_context:
+            context.close()
         return None, findings
-    return (
+    result = (
         GovernanceSnapshot(
             project=project,
             roadmap=roadmap,
             active_phase=active_phase,
             active_works=tuple(works),
-            objects_read=objects_read,
+            objects_read=context.objects_read,
         ),
         findings,
     )
+    if owned_context:
+        context.close()
+    return result

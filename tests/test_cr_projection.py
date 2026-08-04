@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: I001, UP031
 
 import json
+import os
 
 from meta_flow.workflow import cr_projection
 from unittest.mock import Mock, patch
@@ -97,6 +98,45 @@ def test_projection_summary_ledger_and_atomic_writer_owner_behaviour(tmp_path: P
     cr_projection._atomic_write_text(output, "one\n")
     cr_projection._atomic_write_text(output, "two\n")
     assert output.read_text(encoding="utf-8") == "two\n"
+
+
+def test_projection_writers_skip_volatile_or_byte_identical_rewrites(tmp_path: Path) -> None:
+    summary = {
+        "id": "CR-101",
+        "full_ref": "process/changes/CR-101.md",
+        "status": "active",
+        "updated_at": "2026-08-03T00:00:00+00:00",
+    }
+    summary_path = cr_projection.write_summary(tmp_path, "CR-101", summary)
+    os.utime(summary_path, (1, 1))
+
+    cr_projection.write_summary(
+        tmp_path,
+        "CR-101",
+        {**summary, "updated_at": "2026-08-03T00:01:00+00:00"},
+    )
+
+    assert summary_path.stat().st_mtime_ns == 1_000_000_000
+    with patch.object(
+        cr_projection,
+        "now_utc",
+        side_effect=(
+            "2026-08-03T00:00:00+00:00",
+            "2026-08-03T00:01:00+00:00",
+        ),
+    ):
+        evidence_path = cr_projection.write_evidence_index(
+            tmp_path, "CR-101", summary
+        )
+        os.utime(evidence_path, (1, 1))
+        cr_projection.write_evidence_index(tmp_path, "CR-101", summary)
+    assert evidence_path.stat().st_mtime_ns == 1_000_000_000
+
+    output = tmp_path / "same.txt"
+    cr_projection._atomic_write_text(output, "same\n")
+    os.utime(output, (1, 1))
+    cr_projection._atomic_write_text(output, "same\n")
+    assert output.stat().st_mtime_ns == 1_000_000_000
 
 
 def test_projection_writer_lock_owner_behaviour(tmp_path: Path) -> None:

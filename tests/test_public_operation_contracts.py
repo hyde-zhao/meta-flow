@@ -9,9 +9,36 @@ from pathlib import Path
 
 from meta_flow.policies import public_operations
 from meta_flow.project.onboarding_contract import canonical_digest
+from meta_flow.work.io_metrics import IOMetrics
+from meta_flow.work.read_context import OperationReadContext
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONSOLE = Path(sys.executable).with_name("meta-flow")
+
+
+def test_public_operation_registry_reuses_release_snapshot() -> None:
+    metrics = IOMetrics("public-registry", enabled=True)
+    context = OperationReadContext(
+        PROJECT_ROOT,
+        operation_id="public-registry",
+        operation_kind="check",
+        allowed_reads=(public_operations.DEFAULT_REGISTRY_REL.as_posix(),),
+        logical_root="release-repository",
+        metrics=metrics,
+    )
+
+    first = public_operations.load_public_operation_registry(
+        PROJECT_ROOT,
+        read_context=context,
+    )
+    second = public_operations.load_public_operation_registry(
+        PROJECT_ROOT,
+        read_context=context,
+    )
+
+    assert first == second
+    assert metrics.summary()["totals"]["physical_reads"] == 1
+    assert metrics.summary()["totals"]["cache_hits"] == 1
 
 
 def write_cp6_projection_fixture(root: Path) -> None:

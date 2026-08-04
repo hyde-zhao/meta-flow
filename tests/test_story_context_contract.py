@@ -353,7 +353,10 @@ class StoryContextContractTests(unittest.TestCase):
                         "requested_refs": [
                             "process/stories/STORY-CR123-S01-LLD.md"
                         ],
-                        "reason": "deep_review",
+                        "reason": "summary_insufficient",
+                        "reason_evidence": {
+                            "missing_slots": ["full_lld_body"]
+                        },
                     }
                 ],
                 packet["pre_dispatch_actions"],

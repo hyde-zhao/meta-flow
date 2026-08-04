@@ -225,7 +225,11 @@ def default_retention_policy() -> dict[str, Any]:
         },
         "closed_cr": {
             "default_context": "summary_only",
-            "full_doc_read_allowed_when": ["human_audit", "deep_review", "field_conflict"],
+            "full_doc_read_allowed_when": [
+                "human_audit",
+                "field_conflict",
+                "summary_insufficient",
+            ],
         },
         "story_packets": {
             "keep_latest_in_default_context": True,
@@ -242,7 +246,7 @@ def default_retention_policy() -> dict[str, Any]:
         },
         "audit_appendix": {
             "default_context": "high-risk-only",
-            "allowed_when": ["runtime-high-risk", "human_audit", "deep_review"],
+            "allowed_when": ["runtime-high-risk", "human_audit"],
         },
     }
 

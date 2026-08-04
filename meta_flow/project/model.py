@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 
 PROJECT_FILE = Path("PROJECT.yaml")
@@ -138,9 +139,13 @@ def validate_project_payload(
     for key in unknown:
         _finding(findings, "unknown_key", f"PROJECT.yaml contains unknown field: {key}", key=key)
     for key in sorted(PROJECT_REQUIRED_KEYS - set(payload)):
-        _finding(findings, "missing_required", f"PROJECT.yaml missing required field: {key}", key=key)
+        _finding(
+            findings, "missing_required", f"PROJECT.yaml missing required field: {key}", key=key
+        )
     if _contains_forbidden_key(payload):
-        _finding(findings, "forbidden_key", "PROJECT.yaml contains credential/transcript-like field")
+        _finding(
+            findings, "forbidden_key", "PROJECT.yaml contains credential/transcript-like field"
+        )
 
     if payload.get("schema_version") != PROJECT_SCHEMA_VERSION:
         _finding(
@@ -151,7 +156,9 @@ def validate_project_payload(
         )
     project_id = payload.get("project_id")
     if not isinstance(project_id, str) or not _ID_RE.fullmatch(project_id):
-        _finding(findings, "project_id", "project_id must be 1-64 safe ID characters", key="project_id")
+        _finding(
+            findings, "project_id", "project_id must be 1-64 safe ID characters", key="project_id"
+        )
     name = payload.get("name")
     if not isinstance(name, str) or not name.strip():
         _finding(findings, "name", "name must be a non-empty string", key="name")
@@ -171,20 +178,40 @@ def validate_project_payload(
     roadmap_ref = payload.get("roadmap_ref", "")
     if roadmap_ref not in (None, ""):
         if not isinstance(roadmap_ref, str) or not is_safe_ref(roadmap_ref):
-            _finding(findings, "ref_path", "roadmap_ref must be a safe process-repo-relative path", key="roadmap_ref")
+            _finding(
+                findings,
+                "ref_path",
+                "roadmap_ref must be a safe process-repo-relative path",
+                key="roadmap_ref",
+            )
     phase_ref = payload.get("active_phase_ref", "")
     if phase_ref not in (None, ""):
         if not isinstance(phase_ref, str) or not is_safe_ref(phase_ref, prefix="phases"):
-            _finding(findings, "ref_path", "active_phase_ref must be under phases/", key="active_phase_ref")
+            _finding(
+                findings,
+                "ref_path",
+                "active_phase_ref must be under phases/",
+                key="active_phase_ref",
+            )
     work_refs = payload.get("active_work_refs", [])
     if work_refs in (None, ""):
         work_refs = []
     if not isinstance(work_refs, list) or not all(
         isinstance(item, str) and is_safe_ref(item, prefix="works") for item in work_refs
     ):
-        _finding(findings, "ref_path", "active_work_refs must be safe paths under works/", key="active_work_refs")
+        _finding(
+            findings,
+            "ref_path",
+            "active_work_refs must be safe paths under works/",
+            key="active_work_refs",
+        )
     elif len(work_refs) != len(set(work_refs)):
-        _finding(findings, "duplicate_ref", "active_work_refs must not contain duplicates", key="active_work_refs")
+        _finding(
+            findings,
+            "duplicate_ref",
+            "active_work_refs must not contain duplicates",
+            key="active_work_refs",
+        )
     return findings
 
 
@@ -205,10 +232,22 @@ def project_from_payload(payload: Mapping[str, Any]) -> Project:
     )
 
 
-def load_project(process_root: Path) -> Project:
+def load_project(
+    process_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> Project:
     path = process_root.resolve() / PROJECT_FILE
-    payload = load_yaml_object(path)
-    findings = validate_project_payload(payload, byte_size=path.stat().st_size)
+    if read_context is None:
+        payload = load_yaml_object(path)
+        byte_size = path.stat().st_size
+    else:
+        payload = read_context.read_yaml_object(
+            PROJECT_FILE.as_posix(),
+            loader=load_yaml_object,
+        )
+        byte_size = read_context.byte_size(PROJECT_FILE.as_posix())
+    findings = validate_project_payload(payload, byte_size=byte_size)
     if findings:
         raise ValueError("; ".join(finding.message for finding in findings))
     return project_from_payload(payload)

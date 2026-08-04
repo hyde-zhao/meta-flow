@@ -9,12 +9,15 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from meta_flow.checks import context_doctor, cp_result
 from meta_flow.context_pack import read_expansion, story_contract
 from meta_flow.state import current
 from meta_flow.work.budget import BudgetLimit
+from meta_flow.work.io_metrics import IOMetrics
 from meta_flow.work.model import build_work, write_work_create_only
+from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
 
@@ -220,6 +223,45 @@ authz_policy_refs: [process/policies/AUTHZ-POLICY.json]
 
 
 class ContextSufficiencyReadExpansionTests(unittest.TestCase):
+    def test_preregistration_plan_reuses_packet_policy_and_work_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(
+                Path(directory)
+            )
+            metrics = IOMetrics("read-expansion-plan", enabled=True)
+            context = OperationReadContext(
+                process,
+                operation_id="read-expansion-plan",
+                operation_kind="plan",
+                allowed_reads=(
+                    packet_ref,
+                    "process/policies/READ-POLICY.json",
+                    "works/WORK-CR123/WORK.yaml",
+                    "process/state/READ-EXPANSION-LEDGER.ndjson",
+                ),
+                metrics=metrics,
+            )
+
+            first = read_expansion.build_host_preregistration_plan(
+                release,
+                story_packet_ref=packet_ref,
+                work_id="WORK-CR123",
+                scope_digest=scope_digest,
+                read_context=context,
+            )
+            second = read_expansion.build_host_preregistration_plan(
+                release,
+                story_packet_ref=packet_ref,
+                work_id="WORK-CR123",
+                scope_digest=scope_digest,
+                read_context=context,
+            )
+
+            self.assertEqual(first.plan_digest, second.plan_digest)
+            totals = metrics.summary()["totals"]
+            self.assertEqual(3, totals["physical_reads"])
+            self.assertEqual(3, totals["cache_hits"])
+
     def test_standard_profile_missing_sufficiency_slots_warns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -256,6 +298,9 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
                 root,
                 requested_path="process/STATE.md",
                 reason="human_audit",
+                reason_evidence={
+                    "authorization_ref": "process/checkpoints/AUDIT.md"
+                },
                 stage="CP6",
                 agent="meta-dev",
                 context_ref="process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
@@ -267,6 +312,67 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
             self.assertTrue(event["allowed_by_policy"])
             self.assertEqual([], errors)
             self.assertEqual([], warnings)
+
+    def test_manual_read_log_cli_requires_and_forwards_reason_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = json.dumps(
+                {"authorization_ref": "process/checkpoints/AUDIT.md"}
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = read_expansion.main(
+                    [
+                        "read-log",
+                        "--project-root",
+                        str(root),
+                        "--path",
+                        "process/STATE.md",
+                        "--reason",
+                        "human_audit",
+                        "--reason-evidence-json",
+                        evidence,
+                        "--stage",
+                        "CP6",
+                        "--agent",
+                        "meta-dev",
+                        "--context-ref",
+                        "process/context/CP6.json",
+                    ]
+                )
+
+            self.assertEqual(0, exit_code, output.getvalue())
+            events, errors = read_expansion.load_events(
+                read_expansion.default_ledger_path(root)
+            )
+            self.assertEqual([], errors)
+            self.assertEqual(
+                {"authorization_ref": "process/checkpoints/AUDIT.md"},
+                events[0]["reason_evidence"],
+            )
+
+            missing_output = StringIO()
+            with redirect_stdout(missing_output):
+                missing_exit = read_expansion.main(
+                    [
+                        "read-log",
+                        "--project-root",
+                        str(root),
+                        "--path",
+                        "process/STATE.md",
+                        "--reason",
+                        "human_audit",
+                        "--stage",
+                        "CP6",
+                        "--agent",
+                        "meta-dev",
+                        "--context-ref",
+                        "process/context/CP6.json",
+                    ]
+                )
+            self.assertEqual(2, missing_exit)
+            self.assertIn("reason-evidence-json", missing_output.getvalue())
 
     def test_read_log_rejects_unknown_reason_before_ledger_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -285,6 +391,120 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
 
             self.assertFalse(ledger.exists())
 
+    def test_manual_read_log_without_reason_blocks_before_target_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "process" / "STATE.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("secret body must not be read", encoding="utf-8")
+            ledger = read_expansion.default_ledger_path(root)
+            target_reads = 0
+            original_read_text = Path.read_text
+
+            def tracked_read_text(path: Path, *args: object, **kwargs: object) -> str:
+                nonlocal target_reads
+                if path.resolve(strict=False) == target.resolve(strict=False):
+                    target_reads += 1
+                return original_read_text(path, *args, **kwargs)
+
+            output = StringIO()
+            with (
+                patch.object(Path, "read_text", tracked_read_text),
+                redirect_stdout(output),
+            ):
+                exit_code = read_expansion.main(
+                    [
+                        "read-log",
+                        "--project-root",
+                        str(root),
+                        "--path",
+                        "process/STATE.md",
+                        "--reason-evidence-json",
+                        "{}",
+                        "--stage",
+                        "CP6",
+                        "--agent",
+                        "meta-dev",
+                        "--context-ref",
+                        "process/context/CP6.json",
+                    ]
+                )
+
+            self.assertEqual(2, exit_code)
+            self.assertIn("--reason", output.getvalue())
+            self.assertIn("mutation_count: 0", output.getvalue())
+            self.assertEqual(0, target_reads)
+            self.assertFalse(ledger.exists())
+
+    def test_deep_review_is_rejected_for_new_events_but_legacy_event_remains_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "process" / "STATE.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("secret body must not be read", encoding="utf-8")
+            ledger = read_expansion.default_ledger_path(root)
+
+            with self.assertRaisesRegex(ValueError, "target bytes=0"):
+                read_expansion.append_event(
+                    root,
+                    requested_path="process/STATE.md",
+                    reason="deep_review",
+                    reason_evidence={},
+                    stage="CP6",
+                    agent="meta-dev",
+                    context_ref="process/context/legacy.json",
+                )
+            self.assertFalse(ledger.exists())
+
+            legacy = {
+                "event_id": "RE-LEGACY-001",
+                "event_type": "read_expansion",
+                "agent": "meta-dev",
+                "stage": "CP6",
+                "requested_path": "process/STATE.md",
+                "reason": "deep_review",
+                "allowed_by_policy": True,
+                "estimated_tokens": 10,
+                "context_ref": "process/context/legacy.json",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+
+            errors, warnings = read_expansion.validate_ledger(root, ledger=ledger)
+
+            self.assertEqual([], errors)
+            self.assertTrue(any("legacy read-expansion" in warning for warning in warnings))
+
+    def test_all_v2_read_expansion_reasons_require_exact_machine_evidence(self) -> None:
+        fixtures = {
+            "capsule_missing": {"capsule_ref": "process/context/missing.json"},
+            "field_conflict": {
+                "conflict_field": "scope_digest",
+                "sources": [
+                    {"ref": "works/W-001/WORK.yaml", "digest": "0" * 64},
+                    {"ref": "process/context/base.json", "digest": "1" * 64},
+                ],
+            },
+            "schema_validation_failed": {
+                "schema_id": "work-v1",
+                "error_code": "missing_required",
+                "target_ref": "works/W-001/WORK.yaml",
+            },
+            "human_audit": {"authorization_ref": "process/checkpoints/AUDIT.md"},
+            "summary_insufficient": {"missing_slots": ["acceptance"]},
+        }
+
+        for reason, evidence in fixtures.items():
+            with self.subTest(reason=reason):
+                self.assertEqual(
+                    [],
+                    read_expansion.validate_reason_evidence(reason, evidence),
+                )
+                self.assertTrue(
+                    read_expansion.validate_reason_evidence(reason, {})
+                )
+
     def test_read_log_append_only_correction_supersedes_invalid_history(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -293,12 +513,18 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
             invalid = read_expansion.build_event(
                 root,
                 requested_path="process/STATE.md",
-                reason="curiosity",
+                reason="human_audit",
+                reason_evidence={
+                    "authorization_ref": "process/checkpoints/AUDIT.md"
+                },
                 stage="CP6",
                 agent="meta-dev",
                 context_ref="process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
                 story_id="STORY-CR123-S01",
             )
+            invalid["reason"] = "curiosity"
+            invalid["reason_evidence"] = {}
+            invalid["allowed_by_policy"] = False
             ledger.write_text(
                 json.dumps(invalid, ensure_ascii=False, sort_keys=True) + "\n",
                 encoding="utf-8",
@@ -309,6 +535,9 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
                 root,
                 requested_path="process/STATE.md",
                 reason="human_audit",
+                reason_evidence={
+                    "authorization_ref": "process/checkpoints/AUDIT.md"
+                },
                 stage="CP6",
                 agent="meta-dev",
                 context_ref="process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
@@ -333,6 +562,19 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
                     root,
                     requested_path="docs/features/data-manifest/DESIGN.md",
                     reason="field_conflict",
+                    reason_evidence={
+                        "conflict_field": "contract.version",
+                        "sources": [
+                            {
+                                "ref": "docs/features/data-manifest/DESIGN.md",
+                                "digest": "0" * 64,
+                            },
+                            {
+                                "ref": "docs/design/FEATURE-REGISTRY.yaml",
+                                "digest": "1" * 64,
+                            },
+                        ],
+                    },
                     stage="CP6",
                     agent="meta-dev",
                     context_ref="process/context/stories/STORY-CR123-S01.CP6.work-packet.json",
@@ -368,6 +610,9 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
                 root,
                 requested_path="process/STATE.md",
                 reason="human_audit",
+                reason_evidence={
+                    "authorization_ref": "process/checkpoints/AUDIT.md"
+                },
                 stage="CP6",
                 agent="meta-dev",
                 context_ref="process/context/stories/STORY-CR123-S01.CP6.work-packet.json",

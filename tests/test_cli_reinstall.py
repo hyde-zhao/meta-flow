@@ -74,6 +74,20 @@ class CLIReinstallTests(unittest.TestCase):
         installer.assert_not_called()
         self.assertIn("usage: meta-flow reinstall", output.getvalue())
 
+    def test_top_level_help_human_audit_example_includes_required_evidence(self) -> None:
+        output = StringIO()
+
+        with redirect_stdout(output):
+            cli._print_help()
+
+        help_text = output.getvalue()
+        self.assertIn("context read-log --path process/STATE.md --reason human_audit", help_text)
+        self.assertIn(
+            "--reason-evidence-json "
+            "'{\"authorization_ref\":\"process/checkpoints/AUDIT.md\"}'",
+            help_text,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

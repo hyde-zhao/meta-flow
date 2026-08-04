@@ -15,6 +15,10 @@ from meta_flow.work.model import (
     write_work_create_only,
 )
 from meta_flow.work.risk import RiskFacts, classify_work
+from meta_flow.work.route_profile import (
+    RouteProfile,
+    check_slice_mutation,
+)
 from meta_flow.work.scope import WorkScope, exact_scope_difference
 
 RELEASE_OID = "a" * 40
@@ -123,6 +127,58 @@ def test_work_rejects_unknown_and_over_budget_payload() -> None:
     findings = validate_work_payload(payload, byte_size=WORK_MAX_BYTES + 1)
 
     assert {"unknown_key", "work_over_budget"} <= {finding.code for finding in findings}
+
+
+def test_legacy_work_without_route_profile_uses_safe_default() -> None:
+    payload = make_work().as_dict()
+    payload.pop("route_profile")
+
+    restored = work_from_payload(payload)
+
+    assert restored.route_profile == RouteProfile()
+    assert restored.as_dict()["route_profile"] == RouteProfile().as_dict()
+
+
+def test_route_profile_is_strict_and_g0_cannot_dispatch_functional_agent() -> None:
+    payload = make_work().as_dict()
+    payload["route_profile"]["unexpected"] = True
+    assert "route_profile" in {item.code for item in validate_work_payload(payload)}
+
+    with pytest.raises(ValueError, match="G0/G1 functional-agent"):
+        build_work(
+            work_id="W-002",
+            project_id="demo",
+            objective="错误调度",
+            request_ref="works/W-002/REQUEST.md",
+            scope=WorkScope(1, (), (), ()),
+            classification=classify_work(
+                RiskFacts(change_kind="documentation", touched_path_count=1)
+            ),
+            release_base_oid=RELEASE_OID,
+            process_base_oid="",
+            route_profile=RouteProfile(dispatch_mode="functional-agent"),
+        )
+
+
+def test_current_slice_allowlist_blocks_cross_slice_mutation() -> None:
+    profile = RouteProfile()
+
+    allowed = check_slice_mutation(
+        profile,
+        work_allowed_writes=("meta_flow/**", "tests/**"),
+        slice_allowed_writes=("meta_flow/work/model.py",),
+        requested_ref="meta_flow/work/model.py",
+    )
+    blocked = check_slice_mutation(
+        profile,
+        work_allowed_writes=("meta_flow/**", "tests/**"),
+        slice_allowed_writes=("meta_flow/work/model.py",),
+        requested_ref="tests/test_other_slice.py",
+    )
+
+    assert allowed.allowed
+    assert not blocked.allowed
+    assert blocked.reason == "path is outside current slice"
 
 
 def test_work_write_is_create_only(tmp_path: Path) -> None:

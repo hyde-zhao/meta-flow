@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "baseline_revision": "C65-I0-before-v1",
+  "measurement_kind": "deterministic-logical-proxy",
+  "governance_denominator_frozen": true,
+  "selection_evidence": {
+    "native_cr_053_064": {
+      "available": 11,
+      "architecture": 10,
+      "feature_or_untyped": 1,
+      "missing_ids": ["CR-063"],
+      "representativeness": "insufficient-for-routine-g0-g1"
+    },
+    "existing_work_count": 17,
+    "recent_non_merge_commit_count": 28,
+    "recent_commit_prefixes": {"docs": 7, "chore": 20, "other": 1},
+    "selection_rule": "固定每个风险档两个槽位，并强制 G0-F1 覆盖单函数修改"
+  },
+  "cases": [
+    {
+      "id": "G0-F1-single-function-targeted-test",
+      "risk_profile": "G0",
+      "check_groups": 3,
+      "token_proxy": 18000,
+      "events": [
+        {"action": "read", "logical_ref": "PROJECT.yaml", "bytes": 600},
+        {"action": "read", "logical_ref": "phases/P3/PHASE.yaml", "bytes": 900},
+        {"action": "read", "logical_ref": "works/G0-F1/WORK.yaml", "bytes": 1400},
+        {"action": "read", "logical_ref": "works/G0-F1/REQUEST.md", "bytes": 500},
+        {"action": "read", "logical_ref": "meta_flow/work/example.py", "bytes": 1500},
+        {"action": "read", "logical_ref": "tests/test_example.py", "bytes": 1400},
+        {"action": "write", "logical_ref": "meta_flow/work/example.py", "bytes": 1580, "actual_mutation": true},
+        {"action": "write", "logical_ref": "tests/test_example.py", "bytes": 1540, "actual_mutation": true}
+      ]
+    },
+    {
+      "id": "G0-F2-small-doc-config-fix",
+      "risk_profile": "G0",
+      "check_groups": 2,
+      "token_proxy": 12000,
+      "events": [
+        {"action": "read", "logical_ref": "PROJECT.yaml", "bytes": 600},
+        {"action": "read", "logical_ref": "works/G0-F2/WORK.yaml", "bytes": 1300},
+        {"action": "read", "logical_ref": "works/G0-F2/REQUEST.md", "bytes": 450},
+        {"action": "read", "logical_ref": "docs/README.md", "bytes": 5200},
+        {"action": "write", "logical_ref": "docs/README.md", "bytes": 5300, "actual_mutation": true}
+      ]
+    },
+    {
+      "id": "G1-F1-module-compatible-change",
+      "risk_profile": "G1",
+      "check_groups": 5,
+      "token_proxy": 52000,
+      "events": [
+        {"action": "read", "logical_ref": "PROJECT.yaml", "bytes": 600},
+        {"action": "read", "logical_ref": "phases/P3/PHASE.yaml", "bytes": 900},
+        {"action": "read", "logical_ref": "works/G1-F1/WORK.yaml", "bytes": 1800},
+        {"action": "read", "logical_ref": "works/G1-F1/REQUEST.md", "bytes": 700},
+        {"action": "read", "logical_ref": "works/G1-F1/HANDOFF.yaml", "bytes": 700},
+        {"action": "read", "logical_ref": "meta_flow/project/query.py", "bytes": 4200},
+        {"action": "read", "logical_ref": "tests/test_vnext_project_governance.py", "bytes": 7800},
+        {"action": "write", "logical_ref": "meta_flow/project/query.py", "bytes": 4400, "actual_mutation": true},
+        {"action": "write", "logical_ref": "tests/test_vnext_project_governance.py", "bytes": 8100, "actual_mutation": true}
+      ]
+    },
+    {
+      "id": "G1-F2-binding-path-slice",
+      "risk_profile": "G1",
+      "check_groups": 5,
+      "token_proxy": 68000,
+      "events": [
+        {"action": "read", "logical_ref": ".meta-flow/workspace.yaml", "bytes": 520, "repeat": 4},
+        {"action": "read", "logical_ref": "PROJECT.yaml", "bytes": 600, "repeat": 2},
+        {"action": "read", "logical_ref": "works/G1-F2/WORK.yaml", "bytes": 1900},
+        {"action": "read", "logical_ref": "works/G1-F2/REQUEST.md", "bytes": 650},
+        {"action": "read", "logical_ref": "meta_flow/project/process_route.py", "bytes": 6100},
+        {"action": "read", "logical_ref": "meta_flow/workspace/routing.py", "bytes": 5700},
+        {"action": "read", "logical_ref": "tests/test_binding_route.py", "bytes": 4900},
+        {"action": "write", "logical_ref": "meta_flow/project/process_route.py", "bytes": 6200, "actual_mutation": true},
+        {"action": "write", "logical_ref": "meta_flow/workspace/routing.py", "bytes": 5800, "actual_mutation": true},
+        {"action": "write", "logical_ref": "tests/test_binding_route.py", "bytes": 5200, "actual_mutation": true}
+      ]
+    },
+    {
+      "id": "G2-F1-route-work-public-contract",
+      "risk_profile": "G2",
+      "check_groups": 8,
+      "token_proxy": 144000,
+      "events": [
+        {"action": "read", "logical_ref": ".meta-flow/workspace.yaml", "bytes": 520, "repeat": 6},
+        {"action": "read", "logical_ref": "PROJECT.yaml", "bytes": 600, "repeat": 3},
+        {"action": "read", "logical_ref": "works/G2-F1/WORK.yaml", "bytes": 3200, "repeat": 2},
+        {"action": "read", "logical_ref": "changes/CR-065-example.md", "bytes": 7600, "repeat": 3},
+        {"action": "read", "logical_ref": "docs/design/HLD.md", "bytes": 12000, "repeat": 2},
+        {"action": "read", "logical_ref": "checks/route-plan.json", "bytes": 2600, "repeat": 2},
+        {"action": "read", "logical_ref": "state/STATE.current.json", "bytes": 5100, "repeat": 3},
+        {"action": "read", "logical_ref": "state/CR-LEDGER.ndjson", "bytes": 18000, "repeat": 3},
+        {"action": "read", "logical_ref": "context/CP5-CAPSULE.yaml", "bytes": 8800, "repeat": 3},
+        {"action": "write", "logical_ref": "context/CP5-CAPSULE.yaml", "bytes": 9000, "actual_mutation": true, "repeat": 3},
+        {"action": "write", "logical_ref": "changes/summaries/CR-065.summary.json", "bytes": 2100, "actual_mutation": true},
+        {"action": "write", "logical_ref": "current/CURRENT.json", "bytes": 1800, "actual_mutation": true},
+        {"action": "write", "logical_ref": "state/CHECKPOINT-LEDGER.ndjson", "bytes": 800, "actual_mutation": true}
+      ]
+    },
+    {
+      "id": "G2-F2-state-projection-transaction",
+      "risk_profile": "G2",
+      "check_groups": 8,
+      "token_proxy": 132000,
+      "events": [
+        {"action": "read", "logical_ref": "state/STATE.current.json", "bytes": 5100, "repeat": 3},
+        {"action": "read", "logical_ref": "state/CR-LEDGER.ndjson", "bytes": 18000, "repeat": 3},
+        {"action": "read", "logical_ref": "state/CHECKPOINT-LEDGER.ndjson", "bytes": 12000, "repeat": 2},
+        {"action": "read", "logical_ref": "changes/CR-065-example.md", "bytes": 7600, "repeat": 2},
+        {"action": "read", "logical_ref": "changes/CR-INDEX.json", "bytes": 14000, "repeat": 2},
+        {"action": "read", "logical_ref": ".meta-flow/workspace.yaml", "bytes": 520, "repeat": 4},
+        {"action": "read", "logical_ref": "PROJECT.yaml", "bytes": 600, "repeat": 2},
+        {"action": "read", "logical_ref": "checks/status-sync.plan.json", "bytes": 4800, "repeat": 2},
+        {"action": "write", "logical_ref": "state/STATE.current.json", "bytes": 5200, "actual_mutation": true},
+        {"action": "write", "logical_ref": "current/CURRENT.json", "bytes": 1800, "actual_mutation": true},
+        {"action": "write", "logical_ref": "changes/CR-INDEX.json", "bytes": 14200, "actual_mutation": true},
+        {"action": "write", "logical_ref": "state/CR-LEDGER.ndjson", "bytes": 900, "actual_mutation": true},
+        {"action": "write", "logical_ref": "state/CHECKPOINT-LEDGER.ndjson", "bytes": 800, "actual_mutation": true},
+        {"action": "write", "logical_ref": "changes/summaries/CR-065.summary.json", "bytes": 2100, "actual_mutation": true},
+        {"action": "write", "logical_ref": "current/WORKFLOW-HEALTH.json", "bytes": 1600, "actual_mutation": true}
+      ]
+    }
+  ]
+}

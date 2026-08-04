@@ -52,7 +52,7 @@ meta-flow project resolve-ref --project-root <release-root> --logical-ref <proce
 
 - 先读 `process/context/CP2-REQUIREMENT-CONTEXT.yaml` 或 context pack；默认机器状态只读 `process/state/STATE.current.json`。
 - 只能默认读取 context `allowed_reads` / `must_read`。`process/STATE.md`、`process/DEVELOPMENT-PLAN.yaml`、完整 `process/changes/CR-*.md`、全量 Story、完整 transcript 都属于 `do_not_read_by_default`。
-- 需要全文读取时，`full_doc_read_reason` 只能是 `capsule_missing`、`field_conflict`、`human_audit`、`deep_review` 或 `schema_validation_failed`，并写入 `read_expansion_log`。
+- 需要全文读取时，`full_doc_read_reason` 只能是 `capsule_missing`、`field_conflict`、`schema_validation_failed`、`human_audit` 或 `summary_insufficient`，并在读取目标正文前写入 `read_expansion_log`。同时必须提供对应 `reason_evidence`：`capsule_ref`；`conflict_field` 与两个含 `ref/digest` 的来源；`schema_id/error_code/target_ref`；`authorization_ref`；或非空 `missing_slots`。理由或证据不合法时立即 `BLOCKED`，保持 `target bytes=0`、`mutation=0`。
 
 ### Output Contract
 

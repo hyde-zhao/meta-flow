@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.read_contract import ReadContextProtocol
 
 FAILURE_ROUTING_REL = Path("process/policies/FAILURE-ROUTING.json")
 WAIVER_POLICY_REL = Path("process/policies/WAIVER-POLICY.json")
@@ -36,6 +37,7 @@ FAILURE_CLASSES = {
 PROFILE_RECOVERY_MAX = {"G0": 1, "G1": 2, "G2": 2}
 NON_RECOVERABLE_FAILURES = {"REAL_CONTENT_FAILURE", "PARTIAL_MUTATION", "UNKNOWN"}
 DRIFT_FACTS = ("facts_digest", "scope_digest", "oid_digest", "authz_digest", "profile_digest")
+VALIDATION_LAYER_ORDER = ("targeted", "compatibility", "full")
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,92 @@ class RecoveryDecision:
             "reason_codes": list(self.reason_codes),
             "targeted_revalidation_only": self.targeted_revalidation_only,
         }
+
+
+@dataclass(frozen=True)
+class SliceFailureRoute:
+    decision: str
+    failure_class: str
+    failed_layer: str
+    current_slice_id: str
+    next_action: str
+    invalidated_layers: tuple[str, ...]
+    reopened_slices: tuple[str, ...]
+    stop_downstream: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            **self.__dict__,
+            "invalidated_layers": list(self.invalidated_layers),
+            "reopened_slices": list(self.reopened_slices),
+        }
+
+
+def route_slice_failure(
+    *,
+    failure_class: str,
+    failed_layer: str,
+    current_slice_id: str,
+    fingerprint_invalidated_slices: tuple[str, ...] = (),
+) -> SliceFailureRoute:
+    """失败只回当前切片；显式 fingerprint closure 才能重开其他切片。"""
+
+    if failure_class not in (*FAILURE_CLASSES, "UNKNOWN"):
+        raise ValueError("unsupported failure class")
+    if failed_layer not in VALIDATION_LAYER_ORDER:
+        raise ValueError("unsupported validation layer")
+    if not current_slice_id:
+        raise ValueError("current_slice_id is required")
+    invalidated = VALIDATION_LAYER_ORDER[VALIDATION_LAYER_ORDER.index(failed_layer) :]
+    closure = tuple(dict.fromkeys(fingerprint_invalidated_slices))
+    if failure_class == "CHECK_HARNESS_ERROR":
+        return SliceFailureRoute(
+            "RETRY_LAYER",
+            failure_class,
+            failed_layer,
+            current_slice_id,
+            "repair_harness_then_rerun_failed_layer",
+            (failed_layer,),
+            (),
+            True,
+        )
+    if failure_class == "PARTIAL_MUTATION":
+        return SliceFailureRoute(
+            "RECOVERY_REQUIRED",
+            failure_class,
+            failed_layer,
+            current_slice_id,
+            "inspect_then_explicit_resume_or_rollback",
+            invalidated,
+            (),
+            True,
+        )
+    if failure_class == "UNKNOWN":
+        return SliceFailureRoute(
+            "BLOCKED",
+            failure_class,
+            failed_layer,
+            current_slice_id,
+            "classify_failure_before_retry",
+            invalidated,
+            (),
+            True,
+        )
+    reopened = tuple(dict.fromkeys((current_slice_id, *closure)))
+    return SliceFailureRoute(
+        "REWORK_CURRENT_SLICE",
+        failure_class,
+        failed_layer,
+        current_slice_id,
+        (
+            "repair_schema_in_current_slice"
+            if failure_class == "DETERMINISTIC_SCHEMA_REPAIR"
+            else "repair_content_in_current_slice"
+        ),
+        invalidated,
+        reopened,
+        True,
+    )
 
 
 def classify_failure(facts: Mapping[str, Any]) -> FailureClassification:
@@ -371,13 +459,31 @@ def default_waiver_policy() -> dict[str, Any]:
     }
 
 
-def load_failure_routing_policy(project_root: Path) -> dict[str, Any]:
-    data = _read_json(failure_routing_path(project_root.resolve()))
+def load_failure_routing_policy(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> dict[str, Any]:
+    path = failure_routing_path(project_root.resolve())
+    if read_context is None or not path.is_file():
+        data = _read_json(path)
+    else:
+        payload = read_context.read_json(FAILURE_ROUTING_REL.as_posix())
+        data = payload if isinstance(payload, dict) else {}
     return data or default_failure_routing_policy()
 
 
-def load_waiver_policy(project_root: Path) -> dict[str, Any]:
-    data = _read_json(waiver_policy_path(project_root.resolve()))
+def load_waiver_policy(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> dict[str, Any]:
+    path = waiver_policy_path(project_root.resolve())
+    if read_context is None or not path.is_file():
+        data = _read_json(path)
+    else:
+        payload = read_context.read_json(WAIVER_POLICY_REL.as_posix())
+        data = payload if isinstance(payload, dict) else {}
     return data or default_waiver_policy()
 
 
@@ -397,9 +503,13 @@ def write_default_waiver_policy(project_root: Path, *, force: bool = False) -> P
     return path
 
 
-def validate_failure_routing_policy(project_root: Path) -> list[str]:
+def validate_failure_routing_policy(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> list[str]:
     errors: list[str] = []
-    data = load_failure_routing_policy(project_root)
+    data = load_failure_routing_policy(project_root, read_context=read_context)
     if data.get("schema_version") != 1:
         errors.append("FAILURE-ROUTING schema_version must be 1")
     routes = data.get("routes")
@@ -425,9 +535,13 @@ def validate_failure_routing_policy(project_root: Path) -> list[str]:
     return errors
 
 
-def validate_waiver_policy(project_root: Path) -> list[str]:
+def validate_waiver_policy(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> list[str]:
     errors: list[str] = []
-    data = load_waiver_policy(project_root)
+    data = load_waiver_policy(project_root, read_context=read_context)
     if data.get("schema_version") != 1:
         errors.append("WAIVER-POLICY schema_version must be 1")
     for field in ("required_fields", "applies_to_required_fields", "non_waivable", "forces_release_status_values"):
@@ -448,21 +562,42 @@ def validate_waiver_policy(project_root: Path) -> list[str]:
     return errors
 
 
-def route_names(project_root: Path) -> set[str]:
-    routes = load_failure_routing_policy(project_root).get("routes") or {}
+def route_names(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> set[str]:
+    routes = load_failure_routing_policy(
+        project_root,
+        read_context=read_context,
+    ).get("routes") or {}
     if isinstance(routes, dict) and routes:
         return set(str(route) for route in routes)
     return set(FAILURE_ROUTES)
 
 
-def validate_failure_routes_for_result(project_root: Path, result: dict[str, Any]) -> tuple[list[str], list[str]]:
+def validate_failure_routes_for_result(
+    project_root: Path,
+    result: dict[str, Any],
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
-    policy_errors = validate_failure_routing_policy(project_root)
+    policy_errors = validate_failure_routing_policy(
+        project_root,
+        read_context=read_context,
+    )
     if policy_errors:
         errors.extend(f"failure routing policy: {error}" for error in policy_errors)
-    routes = route_names(project_root)
-    requirements = (load_failure_routing_policy(project_root).get("severity_route_requirements") or {})
+    routes = route_names(project_root, read_context=read_context)
+    requirements = (
+        load_failure_routing_policy(
+            project_root,
+            read_context=read_context,
+        ).get("severity_route_requirements")
+        or {}
+    )
     for index, item in enumerate(_as_list(result.get("items")), 1):
         if not isinstance(item, dict):
             continue
@@ -489,8 +624,13 @@ def _waiver_records(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return records
 
 
-def is_non_waivable_item(project_root: Path, item: dict[str, Any]) -> bool:
-    policy = load_waiver_policy(project_root)
+def is_non_waivable_item(
+    project_root: Path,
+    item: dict[str, Any],
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> bool:
+    policy = load_waiver_policy(project_root, read_context=read_context)
     non_waivable = policy.get("non_waivable") or {}
     categories = {_normalize_text(category) for category in _string_list(non_waivable.get("categories"))}
     patterns = [_normalize_text(pattern) for pattern in _string_list(non_waivable.get("name_patterns"))]
@@ -501,9 +641,15 @@ def is_non_waivable_item(project_root: Path, item: dict[str, Any]) -> bool:
     return any(pattern and pattern in text for pattern in patterns)
 
 
-def _validate_waiver_record(project_root: Path, waiver_id: str, waiver: dict[str, Any]) -> list[str]:
+def _validate_waiver_record(
+    project_root: Path,
+    waiver_id: str,
+    waiver: dict[str, Any],
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> list[str]:
     errors: list[str] = []
-    policy = load_waiver_policy(project_root)
+    policy = load_waiver_policy(project_root, read_context=read_context)
     for field in _string_list(policy.get("required_fields")):
         if not waiver.get(field):
             errors.append(f"waiver {waiver_id}: missing required field: {field}")
@@ -525,10 +671,18 @@ def _validate_waiver_record(project_root: Path, waiver_id: str, waiver: dict[str
     return errors
 
 
-def validate_waivers_for_result(project_root: Path, result: dict[str, Any]) -> tuple[list[str], list[str]]:
+def validate_waivers_for_result(
+    project_root: Path,
+    result: dict[str, Any],
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
-    policy_errors = validate_waiver_policy(project_root)
+    policy_errors = validate_waiver_policy(
+        project_root,
+        read_context=read_context,
+    )
     if policy_errors:
         errors.extend(f"waiver policy: {error}" for error in policy_errors)
     waivers = _waiver_records(result)
@@ -541,7 +695,11 @@ def validate_waivers_for_result(project_root: Path, result: dict[str, Any]) -> t
         status = str(item.get("status") or "")
         waiver_ref = str(item.get("waiver_ref") or "")
         if status == "WAIVED":
-            if is_non_waivable_item(project_root, item):
+            if is_non_waivable_item(
+                project_root,
+                item,
+                read_context=read_context,
+            ):
                 errors.append(f"item {index}: non-waivable check cannot be WAIVED: {item.get('id') or '-'}")
             if not waiver_ref:
                 errors.append(f"item {index}: WAIVED requires waiver_ref")
@@ -551,24 +709,59 @@ def validate_waivers_for_result(project_root: Path, result: dict[str, Any]) -> t
             if not waiver:
                 errors.append(f"item {index}: waiver_ref not found in result.waivers: {waiver_ref}")
                 continue
-            errors.extend(_validate_waiver_record(project_root, waiver_ref, waiver))
+            errors.extend(
+                _validate_waiver_record(
+                    project_root,
+                    waiver_ref,
+                    waiver,
+                    read_context=read_context,
+                )
+            )
             forced = str(waiver.get("forces_release_status") or "")
             if forced == RELEASE_READY_WITH_RISK and decision == "PASS" and release_decision != RELEASE_READY_WITH_RISK:
                 errors.append(f"item {index}: waiver {waiver_ref} forces READY_WITH_RISK; decision cannot be silent PASS")
         elif waiver_ref:
             warnings.append(f"item {index}: waiver_ref is set but status is not WAIVED")
-        if is_non_waivable_item(project_root, item) and status in {"FAIL", "BLOCKED"} and decision in RISK_ACCEPTANCE_DECISIONS:
+        if (
+            is_non_waivable_item(
+                project_root,
+                item,
+                read_context=read_context,
+            )
+            and status in {"FAIL", "BLOCKED"}
+            and decision in RISK_ACCEPTANCE_DECISIONS
+        ):
             errors.append(f"item {index}: non-waivable failure cannot use risk-acceptance decision {decision}")
     for waiver_id, waiver in waivers.items():
         if waiver_id not in waiver_ids_used:
             warnings.append(f"waiver record is not referenced by any WAIVED item: {waiver_id}")
-            errors.extend(_validate_waiver_record(project_root, waiver_id, waiver))
+            errors.extend(
+                _validate_waiver_record(
+                    project_root,
+                    waiver_id,
+                    waiver,
+                    read_context=read_context,
+                )
+            )
     return errors, warnings
 
 
-def validate_result_governance(project_root: Path, result: dict[str, Any]) -> tuple[list[str], list[str]]:
-    route_errors, route_warnings = validate_failure_routes_for_result(project_root, result)
-    waiver_errors, waiver_warnings = validate_waivers_for_result(project_root, result)
+def validate_result_governance(
+    project_root: Path,
+    result: dict[str, Any],
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> tuple[list[str], list[str]]:
+    route_errors, route_warnings = validate_failure_routes_for_result(
+        project_root,
+        result,
+        read_context=read_context,
+    )
+    waiver_errors, waiver_warnings = validate_waivers_for_result(
+        project_root,
+        result,
+        read_context=read_context,
+    )
     return [*route_errors, *waiver_errors], [*route_warnings, *waiver_warnings]
 
 

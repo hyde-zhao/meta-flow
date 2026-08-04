@@ -16,6 +16,11 @@ from meta_flow.checks.token_budget import (
     estimate_tokens,
     load_budgets,
 )
+from meta_flow.context_pack.capsule_delta import (
+    create_capsule_base,
+    create_capsule_delta,
+    diff_capsule_fields,
+)
 from meta_flow.design.feature_registry import FEATURE_DESIGN_MATRIX_REL, FEATURE_REGISTRY_REL
 from meta_flow.design.module_boundaries import MODULE_BOUNDARIES_REL
 from meta_flow.design.product_governance import (
@@ -26,6 +31,7 @@ from meta_flow.design.product_governance import (
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.state.current import (
     STATE_CURRENT_ENTRY_REL,
     STATE_CURRENT_REL,
@@ -47,8 +53,8 @@ DEFAULT_FULL_DOC_READ_REASONS = (
     "capsule_missing",
     "field_conflict",
     "human_audit",
-    "deep_review",
     "schema_validation_failed",
+    "summary_insufficient",
 )
 DEFAULT_STAGE_READS: dict[str, tuple[str, ...]] = {
     "CP2": (
@@ -72,6 +78,51 @@ DEFAULT_STAGE_READS: dict[str, tuple[str, ...]] = {
 }
 CHECKPOINT_REF_KEYS = ("checkpoint_ref", "checkpoint_refs", "source_checkpoint_refs")
 CAPSULE_INLINE_DUPLICATE_MIN_CHARS = 160
+
+
+def build_incremental_capsule_base(
+    context: dict[str, Any],
+    *,
+    owner_kind: str,
+    owner_id: str,
+    revision: str,
+    evidence_refs: tuple[str, ...],
+) -> dict[str, Any]:
+    """把一个完整上下文冻结为该 revision 的唯一 base capsule。"""
+
+    return create_capsule_base(
+        owner_kind=owner_kind,
+        owner_id=owner_id,
+        revision=revision,
+        fields=context,
+        evidence_refs=evidence_refs,
+    )
+
+
+def build_incremental_capsule_delta(
+    parent_context: dict[str, Any],
+    current_context: dict[str, Any],
+    *,
+    owner_kind: str,
+    owner_id: str,
+    revision: str,
+    parent_ref: str,
+    parent_digest: str,
+    stage: str,
+    stage_evidence: tuple[str, ...],
+) -> dict[str, Any]:
+    """只序列化相对父 capsule 变化的顶层字段。"""
+
+    return create_capsule_delta(
+        owner_kind=owner_kind,
+        owner_id=owner_id,
+        revision=revision,
+        parent_ref=parent_ref,
+        parent_digest=parent_digest,
+        stage=stage,
+        changed_fields=diff_capsule_fields(parent_context, current_context),
+        stage_evidence=stage_evidence,
+    )
 
 
 @dataclass(frozen=True)
@@ -196,8 +247,17 @@ def read_policy_path(project_root: Path) -> Path:
     return _resolve_runtime_ref(project_root, READ_POLICY_REL.as_posix())
 
 
-def load_read_policy(project_root: Path) -> dict[str, Any]:
-    configured = _read_json(read_policy_path(project_root))
+def load_read_policy(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> dict[str, Any]:
+    path = read_policy_path(project_root)
+    if read_context is None or not path.is_file():
+        configured = _read_json(path)
+    else:
+        payload = read_context.read_json(READ_POLICY_REL.as_posix())
+        configured = payload if isinstance(payload, dict) else {}
     if not configured:
         return default_read_policy()
     policy = default_read_policy()
@@ -206,6 +266,8 @@ def load_read_policy(project_root: Path) -> dict[str, Any]:
             policy[key] = value
         else:
             policy[key] = value
+    # 旧 policy 里的 deep_review 只服务历史 ledger 解析，不能继续进入新建授权路径。
+    policy["full_doc_read_allowed_when"] = list(DEFAULT_FULL_DOC_READ_REASONS)
     return policy
 
 
@@ -228,11 +290,18 @@ def _path_tokens(project_root: Path, rel_path: str) -> int:
         return 0
 
 
-def _read_entry(project_root: Path, rel_path: str, *, required: bool, reason: str) -> ReadEntry:
+def _read_entry(
+    project_root: Path,
+    rel_path: str,
+    *,
+    required: bool,
+    reason: str,
+    estimate: bool = True,
+) -> ReadEntry:
     return ReadEntry(
         path=rel_path,
         mode="full",
-        estimated_tokens=_path_tokens(project_root, rel_path),
+        estimated_tokens=_path_tokens(project_root, rel_path) if estimate else 0,
         required=required,
         reason=reason,
     )
@@ -337,26 +406,27 @@ def build_context_pack(
     budget: int | None = None,
     output: Path | None = None,
     write_policy: bool = True,
+    read_context: ReadContextProtocol | None = None,
 ) -> tuple[dict[str, Any], Path]:
     project_root = project_root.resolve()
     stage = stage.upper()
     if write_policy:
         write_default_read_policy(project_root)
-    read_policy = load_read_policy(project_root)
+    read_policy = load_read_policy(project_root, read_context=read_context)
     state_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
     current_entry_path = _resolve_runtime_ref(
         project_root, STATE_CURRENT_ENTRY_REL.as_posix()
     )
     state_exists = state_path.is_file()
     if state_exists:
-        state = load_current_state(project_root)
+        state = load_current_state(project_root, read_context=read_context)
         if not state:
             raise ValueError("runtime state payload is empty or invalid")
         try:
             validate_current_state_for_write(state)
         except ValueError as exc:
             raise ValueError("runtime state payload is invalid") from exc
-        refresh_current_entry(project_root)
+        refresh_current_entry(project_root, state_snapshot=state)
         current_entry_exists = current_entry_path.is_file()
         if not current_entry_exists:
             raise ValueError(
@@ -375,7 +445,11 @@ def build_context_pack(
     cr_index_semantic_digest: str | None = None
     cr_index_path = _resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
     if cr_index_path.is_file():
-        index_payload = _read_json(cr_index_path)
+        if read_context is None:
+            index_payload = _read_json(cr_index_path)
+        else:
+            payload = read_context.read_json(CR_INDEX_REL.as_posix())
+            index_payload = payload if isinstance(payload, dict) else {}
         if not validate_index_payload(index_payload):
             cr_index_semantic_digest = str(index_payload.get("semantic_digest") or "") or None
     allowed_reads: list[ReadEntry] = []
@@ -436,7 +510,16 @@ def build_context_pack(
         _append_unique(allowed_reads, _read_entry(project_root, story_summary_rel, required=False, reason="story_summary"))
     for rel_path in DEFAULT_STAGE_READS.get(stage, ()):
         if (project_root / rel_path).is_file():
-            _append_unique(read_if_needed, _read_entry(project_root, rel_path, required=False, reason=f"{stage.lower()}_stage_source"))
+            _append_unique(
+                read_if_needed,
+                _read_entry(
+                    project_root,
+                    rel_path,
+                    required=False,
+                    reason=f"{stage.lower()}_stage_source",
+                    estimate=False,
+                ),
+            )
     _append_unique(allowed_reads, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
     _append_unique(must_read, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
     if _resolve_runtime_path(project_root, ARTIFACT_BUDGETS_REL).is_file():
@@ -530,7 +613,7 @@ def build_context_pack(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(context, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if state_required:
-        refresh_current_entry(project_root)
+        refresh_current_entry(project_root, state_snapshot=state)
     return context, output_path
 
 

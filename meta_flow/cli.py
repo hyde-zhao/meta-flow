@@ -361,7 +361,7 @@ def _print_help() -> None:
         "  meta-flow context build --stage CP6 --profile standard-code --cr CR-101 --project-root .\n"
         "  meta-flow context check --context process/context/CP6-CR101.context.json --project-root .\n"
         "  meta-flow context sufficiency-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json\n"
-        "  meta-flow context read-log --path process/STATE.md --reason human_audit --stage CP6 --agent meta-dev --context-ref process/context/CP6.context.json --project-root .\n"
+        "  meta-flow context read-log --path process/STATE.md --reason human_audit --reason-evidence-json '{\"authorization_ref\":\"process/checkpoints/AUDIT.md\"}' --stage CP6 --agent meta-dev --context-ref process/context/CP6.context.json --project-root .\n"
         "  meta-flow context read-log-check --project-root .\n"
         "  meta-flow cr aggregate --id CR-051 --operation-id operation-001 --attempt 1 --source-handle source.json --artifact-handle artifact.json --dry-run --project-root .\n"
         "  meta-flow doctor context --project-root .\n"

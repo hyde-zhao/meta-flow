@@ -67,6 +67,9 @@ def test_review_plan_is_proportional_for_g0_g1(
     assert plan.review_mode == review_mode
     assert plan.max_independent_reviews == max_reviews
     assert plan.required_evidence == ()
+    assert plan.route_mode == "routine-four-stage"
+    assert plan.dispatch_mode == "direct"
+    assert plan.stages == ("clarification", "design", "implementation", "verification")
 
 
 def test_g2_review_requires_design_gate_and_independent_reviewer() -> None:
@@ -114,6 +117,8 @@ def test_validation_plan_requires_exact_risk_mapping_and_g2_qa() -> None:
     assert missing.decision == "BLOCKED"
     assert ready.decision == "READY"
     assert ready.full_regression_allowed is False
+    assert ready.route_mode == "routine-four-stage"
+    assert ready.stages == ("clarification", "design", "implementation", "verification")
     assert g2_blocked.decision == "BLOCKED"
     assert "G2 requires independent QA evidence" in g2_blocked.errors
 
@@ -267,3 +272,37 @@ def test_query_blocks_project_work_identity_mismatch(tmp_path: Path) -> None:
     # 查询器必须在返回前证明 Project/Work 属于同一项目。
     assert result.decision == "BLOCKED"
     assert result.work is None
+
+
+def test_query_object_budget_blocks_referenced_phase_before_its_read(
+    tmp_path: Path,
+) -> None:
+    phase_ref = "phases/PH-001/PHASE.yaml"
+    write_project_create_only(
+        tmp_path,
+        Project(
+            schema_version=1,
+            project_id="demo",
+            name="Demo",
+            status="active",
+            active_phase_ref=phase_ref,
+        ),
+    )
+    write_phase_create_only(
+        tmp_path,
+        Phase(
+            schema_version=PHASE_SCHEMA_VERSION,
+            project_id="demo",
+            phase_id="PH-001",
+            objective="首个阶段",
+            status="active",
+        ),
+    )
+
+    result = query_project_status(tmp_path, max_objects=1)
+
+    assert result.decision == "BLOCKED"
+    assert result.objects_read == 1
+    assert result.refs == ("PROJECT.yaml",)
+    assert result.blocked_ref == phase_ref
+    assert result.error_codes == ("QUERY_OBJECT_BUDGET_EXCEEDED",)

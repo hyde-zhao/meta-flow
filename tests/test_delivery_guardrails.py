@@ -21,6 +21,9 @@ GUARDRAIL = runpy.run_path(
     run_name="__installation_guardrail_test__",
 )
 build_report = GUARDRAIL["build_installation_guardrail_report"]
+collect_read_expansion_errors = GUARDRAIL[
+    "collect_read_expansion_delivery_contract_errors"
+]
 
 
 def test_installation_registry_and_discovery_are_exactly_closed() -> None:
@@ -145,3 +148,27 @@ def test_facade_is_lazy_and_exports_owner_apis() -> None:
     assert DurableJournalStore.__module__ == (
         "meta_flow.installation.recovery"
     )
+
+
+def test_active_delivery_read_expansion_contract_is_exact_and_evidence_bound() -> None:
+    assert collect_read_expansion_errors() == []
+
+    templates = ROOT / "delivery/skills/context-manifest-builder/templates"
+    read_policy = json.loads(
+        (templates / "READ-POLICY-TEMPLATE.json").read_text(encoding="utf-8")
+    )
+    expected = [
+        "capsule_missing",
+        "field_conflict",
+        "schema_validation_failed",
+        "human_audit",
+        "summary_insufficient",
+    ]
+    assert read_policy["full_doc_read_allowed_when"] == expected
+    assert list(read_policy["full_doc_read_reason_evidence"]) == expected
+
+
+def test_active_delivery_contract_does_not_publish_legacy_expansion_reason() -> None:
+    legacy_reason = "deep" + "_review"
+    for relative in GUARDRAIL["ACTIVE_READ_EXPANSION_TEXT_TARGETS"]:
+        assert legacy_reason not in (ROOT / relative).read_text(encoding="utf-8")
