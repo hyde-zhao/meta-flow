@@ -26,6 +26,12 @@
   },
   "ledgers": {
     "append_only": true,
+    "compaction": {
+      "archive_rule": "summary-index-backup",
+      "keep_latest_n_cr": 20,
+      "keep_latest_n_events": 500,
+      "window_days": 90
+    },
     "default_context": "latest-window-or-index"
   },
   "schema_version": 1,

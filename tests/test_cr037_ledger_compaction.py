@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -88,6 +89,88 @@ def test_retention_policy_defaults_and_invalid_policy(tmp_path: Path) -> None:
         load_retention_policy(invalid, project_root=tmp_path)
 
 
+def test_default_policy_reads_canonical_retention_compaction(tmp_path: Path) -> None:
+    canonical = tmp_path / "process/policies/RETENTION-POLICY.json"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ledgers": {
+                    "append_only": True,
+                    "default_context": "latest-window-or-index",
+                    "compaction": {
+                        "window_days": 30,
+                        "keep_latest_n_events": 200,
+                        "keep_latest_n_cr": 10,
+                        "archive_rule": "summary-index-backup",
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    policy = load_retention_policy(project_root=tmp_path)
+
+    assert policy.window_days == 30
+    assert policy.keep_latest_n_events == 200
+    assert policy.keep_latest_n_cr == 10
+
+
+def test_canonical_policy_rejects_invalid_compaction_schema(tmp_path: Path) -> None:
+    canonical = tmp_path / "process/policies/RETENTION-POLICY.json"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ledgers": {
+                    "compaction": {
+                        "window_days": 30,
+                        "keep_latest_n_events": 200,
+                        "keep_latest_n_cr": 10,
+                        "archive_rule": "summary-index-backup",
+                        "unexpected": True,
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LedgerCompactionError, match="unknown fields: unexpected"):
+        load_retention_policy(project_root=tmp_path)
+
+
+def test_explicit_flat_legacy_policy_remains_compatible(tmp_path: Path) -> None:
+    policy_path = tmp_path / "process/policies/legacy-flat.json"
+    policy_path.parent.mkdir(parents=True)
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "window_days": 7,
+                "keep_latest_n_events": 11,
+                "keep_latest_n_cr": 3,
+                "archive_rule": "summary-index-backup",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    policy = load_retention_policy(policy_path, project_root=tmp_path)
+
+    assert (policy.window_days, policy.keep_latest_n_events, policy.keep_latest_n_cr) == (
+        7,
+        11,
+        3,
+    )
+
+
 def test_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     ledger = tmp_path / "process/state/CHECKPOINT-LEDGER.ndjson"
     policy = tmp_path / "process/policies/LEDGER-RETENTION.yaml"
@@ -125,6 +208,7 @@ def test_apply_writes_archive_index_backup_marker_and_event_check_passes(
     policy = tmp_path / "process/policies/LEDGER-RETENTION.yaml"
     _write_checkpoint_ledger(ledger)
     _write_small_policy(policy)
+    before = ledger.read_bytes()
 
     _run_cli(
         monkeypatch,
@@ -168,6 +252,38 @@ def test_apply_writes_archive_index_backup_marker_and_event_check_passes(
     assert compacted_events[-1]["event_type"] == "ledger_compacted"
     check_errors, _warnings = event_ledger.validate_event_ledger(ledger, ledger_type="checkpoint")
     assert check_errors == []
+
+    ledger.write_bytes(backups[0].read_bytes())
+    assert ledger.read_bytes() == before
+
+
+def test_post_apply_failure_restores_source_bytes(tmp_path: Path) -> None:
+    ledger = tmp_path / "process/state/CHECKPOINT-LEDGER.ndjson"
+    _write_checkpoint_ledger(ledger)
+    before = ledger.read_bytes()
+    policy = load_retention_policy(project_root=tmp_path)
+    small_policy = policy.__class__(
+        window_days=1,
+        keep_latest_n_events=1,
+        keep_latest_n_cr=1,
+    )
+    plan = plan_ledger_compaction(
+        ledger,
+        project_root=tmp_path,
+        policy=small_policy,
+        ledger_type="checkpoint",
+    )
+
+    with (
+        patch(
+            "meta_flow.state.ledger_compaction.event_ledger.validate_event_ledger",
+            return_value=(["injected post-apply failure"], []),
+        ),
+        pytest.raises(LedgerCompactionError, match="post-apply event check failed"),
+    ):
+        apply_compaction(plan)
+
+    assert ledger.read_bytes() == before
 
 
 def test_hash_mismatch_aborts_without_changing_current_payload(tmp_path: Path) -> None:

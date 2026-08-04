@@ -262,6 +262,36 @@ gate_status: implementation_in_progress
     assert any("illegal native status tuple" in error for error in errors)
 
 
+def test_native_formal_cr_accepts_direct_terminal_tuple(tmp_path: Path) -> None:
+    path = _resolve_runtime_ref(tmp_path, "process/changes/CR-120-NATIVE.md")
+    _write(
+        path,
+        """---
+schema_version: 1
+cr_id: CR-120
+kind: cr
+title: direct terminal fixture
+lifecycle_status: closed
+readiness_status: READY_WITH_RISK
+gate_status: closed
+---
+""",
+    )
+    formal = cr_tracking.discover_formal_crs(path.parent)
+
+    errors, _warnings = cr_tracking.collect_errors_and_warnings(
+        project_root=tmp_path,
+        formal_crs=formal,
+        rows=[],
+        index_items=[],
+        next_action_refs=[],
+        state_refs=[],
+        allow_multiple_active=False,
+    )
+
+    assert not any("illegal native status tuple" in error for error in errors)
+
+
 def test_native_formal_cr_rejects_jointly_stale_gate_checkpoint_result_and_adr(
     tmp_path: Path,
 ) -> None:

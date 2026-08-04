@@ -24,6 +24,20 @@ class GovernancePolicyTests(unittest.TestCase):
             self.assertTrue((root / "process" / "policies" / "RETENTION-POLICY.json").is_file())
             self.assertEqual(([], []), governance.validate_truth_map(root))
             self.assertEqual(([], []), governance.validate_retention_policy(root))
+            policy = json.loads(
+                (root / "process" / "policies" / "RETENTION-POLICY.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                {
+                    "window_days": 90,
+                    "keep_latest_n_events": 500,
+                    "keep_latest_n_cr": 20,
+                    "archive_rule": "summary-index-backup",
+                },
+                policy["ledgers"]["compaction"],
+            )
 
             render_code = governance.main(["truth-map-render", "--project-root", str(root)])
 
@@ -58,6 +72,25 @@ class GovernancePolicyTests(unittest.TestCase):
             errors, _warnings = governance.validate_retention_policy(root)
 
             self.assertIn("closed_cr.default_context must be summary_only", errors)
+
+    def test_retention_policy_rejects_invalid_or_unknown_compaction_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            governance.write_default_retention_policy(root)
+            path = root / "process" / "policies" / "RETENTION-POLICY.json"
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["ledgers"]["compaction"]["window_days"] = 0
+            data["ledgers"]["compaction"]["unexpected"] = True
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            errors, _warnings = governance.validate_retention_policy(root)
+
+            self.assertTrue(any("unknown fields: unexpected" in error for error in errors))
+
+            del data["ledgers"]["compaction"]["unexpected"]
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            errors, _warnings = governance.validate_retention_policy(root)
+            self.assertTrue(any("window_days must be a positive integer" in error for error in errors))
 
 
 if __name__ == "__main__":

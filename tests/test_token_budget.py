@@ -75,6 +75,15 @@ class TokenBudgetTests(unittest.TestCase):
             self.assertEqual("cr_summary", rows["process/changes/summaries/CR-001.summary.json"].artifact_kind)
             self.assertEqual("DENY_DEFAULT", rows["process/changes/CR-001.md"].default_read_status)
 
+    def test_unowned_budget_remediation_uses_canonical_retention_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            self.assertEqual(
+                "process/policies/RETENTION-POLICY.json",
+                token_budget._remediation_ref(root, ""),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
