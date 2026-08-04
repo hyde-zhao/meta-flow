@@ -36,6 +36,35 @@ def _init_sibling_binding(root: Path, *, process_path: str = "meta-flow-process"
 
 
 class LedgerCompactionBindingTests(unittest.TestCase):
+    def test_default_policy_resolves_canonical_json_through_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process = _init_sibling_binding(Path(directory))
+            policy = process / "policies/RETENTION-POLICY.json"
+            policy.parent.mkdir(parents=True)
+            policy.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "ledgers": {
+                            "compaction": {
+                                "window_days": 14,
+                                "keep_latest_n_events": 25,
+                                "keep_latest_n_cr": 4,
+                                "archive_rule": "summary-index-backup",
+                            }
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            retention = ledger_compaction.load_retention_policy(project_root=release)
+
+            self.assertEqual(14, retention.window_days)
+            self.assertEqual(25, retention.keep_latest_n_events)
+            self.assertEqual(4, retention.keep_latest_n_cr)
+
     def test_sibling_ledger_policy_and_apply_receipt_use_logical_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             release, process = _init_sibling_binding(Path(directory))

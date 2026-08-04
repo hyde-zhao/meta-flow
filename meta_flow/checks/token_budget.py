@@ -262,7 +262,7 @@ def _remediation_ref(project_root: Path, related_cr: str) -> str:
         summary_ref = f"process/changes/summaries/{related_cr}.summary.json"
         if _resolve_runtime_ref(project_root, summary_ref).is_file():
             return summary_ref
-    return "process/policies/LEDGER-RETENTION.yaml"
+    return "process/policies/RETENTION-POLICY.json"
 
 
 def classify_over_budget(project_root: Path, row: FileBudgetInfo) -> BudgetDisposition:

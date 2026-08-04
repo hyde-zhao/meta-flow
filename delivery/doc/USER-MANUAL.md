@@ -166,6 +166,7 @@ route_profile:
   legacy_cp_compatibility: false
   validation_profile: layered-v1
   failure_scope: current-slice-only
+  worktree_policy: root-branch-only
 ```
 
 普通路线依次完成“澄清目标、计划切片、直接实施、分层验证”。`direct` 表示当前主进程
@@ -173,6 +174,11 @@ route_profile:
 artifact 均为 0。只有 G2 Work 在 `route_profile.legacy_cp_compatibility=true`、人工批准、
 legacy gate evidence 与 scope 同时满足时，才可进入兼容 CP 路线；Skill、Agent、模板或
 环境变量不能替代该显式声明。
+
+`root-branch-only` 是普通 Work 的 Git 默认策略：在根 worktree 用
+`git checkout -b <type>/<work-id>-<description>` 创建分支，不为每个 Work 新建
+worktree。只有 G2 Work 显式选择 `paired-worktree` 时才允许进入既有 worktree 创建路径；
+`dispatch_mode=direct` 与 `paired-worktree` 的组合会在执行前被拒绝。
 
 验证按 targeted → compatibility → full 分层。PASS receipt 绑定 source/profile
 fingerprint、check layer、command identity、环境摘要与 result digest；只有 exact
@@ -212,6 +218,44 @@ meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK
 ```
 
 `status-sync` 会在 process Git common dir 的私有 Meta Flow 区准备 transaction manifest、全部目标的 before/after digest、不可变恢复载荷和逐步 receipt；确认目标未漂移后逐文件原子替换，并最后写 CR-INDEX。发现未解决事务时新 sync 必须 BLOCKED：先运行 `meta-flow cr status-sync-inspect --project-root .`，再对明确 transaction ID 执行 `status-sync-resume` 或 `status-sync-rollback`。`RECOVERED` 表示发生过替换但已恢复，`PARTIAL` 表示恢复不完整；二者都不是 PASS。
+
+普通四阶段 Work 若要关闭正式 CR，必须显式请求 direct terminal：
+
+```bash
+meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK \
+  --gate-status closed --work-id W-101 --project-root .
+```
+
+该请求只在对应 Work 同时满足 `mode=routine-four-stage`、`dispatch_mode=direct`、
+`legacy_cp_compatibility=false` 时成立；缺少 Work 或路线不匹配会在读取 CR 目标正文前
+返回 `BLOCKED`，planned mutation 为 0。为保持旧调用兼容，关闭时省略 `--gate-status`
+仍默认使用 `cp8_closed`；legacy/CP8 caller 不会被隐式改成 direct terminal。
+
+#### Ledger retention 与 compaction 迁移
+
+ledger compaction 的默认策略唯一来自
+`process/policies/RETENTION-POLICY.json` 的 `ledgers.compaction`：
+
+```json
+{
+  "window_days": 90,
+  "keep_latest_n_events": 500,
+  "keep_latest_n_cr": 20,
+  "archive_rule": "summary-index-backup"
+}
+```
+
+canonical policy 文件不存在时使用上述安全默认且不创建文件；文件存在但 JSON、字段、
+正整数或 archive rule 非法时 fail-closed。显式 `meta-flow ledger compact --policy <path>`
+继续兼容旧 flat/default YAML 或 JSON policy，迁移时无需创建或双写
+`LEDGER-RETENTION.yaml`。命令默认 dry-run；`--apply` 会写备份、摘要、索引和 compact
+marker，仍需单独运行授权。应用后失败会恢复 source ledger 原始 bytes，恢复演练应从
+生成的 backup 复核 before digest 后再写回。
+
+`delivery/skills/**` 是 Skill canonical source，`.agents/skills/**` 是安装生成 mirror。
+mirror 允许比 canonical 多一个安装器生成的 `myflow-managed` 审计 marker；校验器严格检查
+marker 的数量、位置、字段和格式，再要求其余内容与 canonical 完全一致。不要手工复制
+或编辑 mirror 来消除 finding，应修改 canonical 后通过安装生命周期重新生成 mirror。
 
 ### 0.2 合并确认与 exact Git scope
 

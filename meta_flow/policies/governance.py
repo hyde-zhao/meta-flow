@@ -53,6 +53,12 @@ REQUIRED_TRUTH_OBJECTS = {
     "cp_result",
     "cp_summary",
 }
+LEDGER_COMPACTION_POLICY_KEYS = {
+    "window_days",
+    "keep_latest_n_events",
+    "keep_latest_n_cr",
+    "archive_rule",
+}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -243,12 +249,48 @@ def default_retention_policy() -> dict[str, Any]:
         "ledgers": {
             "append_only": True,
             "default_context": "latest-window-or-index",
+            "compaction": default_ledger_compaction_policy(),
         },
         "audit_appendix": {
             "default_context": "high-risk-only",
             "allowed_when": ["runtime-high-risk", "human_audit"],
         },
     }
+
+
+def default_ledger_compaction_policy() -> dict[str, Any]:
+    return {
+        "window_days": 90,
+        "keep_latest_n_events": 500,
+        "keep_latest_n_cr": 20,
+        "archive_rule": "summary-index-backup",
+    }
+
+
+def normalize_ledger_compaction_policy(value: Any) -> dict[str, Any]:
+    """校验并返回 canonical ledger compaction policy。"""
+
+    if not isinstance(value, dict):
+        raise ValueError("must be an object")
+    unknown = sorted(str(key) for key in set(value) - LEDGER_COMPACTION_POLICY_KEYS)
+    if unknown:
+        raise ValueError("has unknown fields: " + ", ".join(unknown))
+    missing = sorted(LEDGER_COMPACTION_POLICY_KEYS - set(value))
+    normalized: dict[str, Any] = {}
+    for key in ("window_days", "keep_latest_n_events", "keep_latest_n_cr"):
+        if key not in value:
+            continue
+        item = value.get(key)
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+            raise ValueError(f"{key} must be a positive integer")
+        normalized[key] = item
+    if missing:
+        raise ValueError("missing fields: " + ", ".join(missing))
+    archive_rule = value.get("archive_rule")
+    if archive_rule != "summary-index-backup":
+        raise ValueError("archive_rule must be summary-index-backup")
+    normalized["archive_rule"] = archive_rule
+    return normalized
 
 
 def write_default_truth_map(project_root: Path, *, force: bool = False) -> Path:
@@ -363,6 +405,10 @@ def validate_retention_policy(project_root: Path) -> tuple[list[str], list[str]]
         errors.append("ledgers.append_only must be true")
     if ledgers.get("default_context") not in {"latest-window-or-index", "latest-window", "index", "summary-only"}:
         errors.append("ledgers.default_context must be latest-window-or-index, latest-window, index, or summary-only")
+    try:
+        normalize_ledger_compaction_policy(ledgers.get("compaction"))
+    except ValueError as exc:
+        errors.append(f"ledgers.compaction {exc}")
     audit = data.get("audit_appendix") or {}
     if not isinstance(audit, dict):
         errors.append("audit_appendix must be an object")

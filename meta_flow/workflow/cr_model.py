@@ -28,6 +28,8 @@ FINISHED_STATUSES = {"closed", "superseded", "cancelled"}
 
 CLOSED_GATE_STATUS = "cp8_closed"
 
+DIRECT_CLOSED_GATE_STATUS = "closed"
+
 SAFE_AUTHORIZATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 OID_RE = re.compile(r"^[0-9a-f]{40}$")

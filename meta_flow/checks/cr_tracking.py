@@ -463,6 +463,7 @@ def validate_native_status_tuple(
         }
     elif lifecycle == "closed":
         legal = readiness in {"ready", "ready_with_risk"} and gate in {
+            "closed",
             "cp8_closed",
             "cp8_recovery_closed",
         }
@@ -533,6 +534,14 @@ def validate_native_transition(
     for gate in active_gates:
         allowed.add((("active", "not_ready", gate), ("blocked", "not_ready", gate)))
         allowed.add((("blocked", "not_ready", gate), ("active", "not_ready", gate)))
+        for lifecycle in ("active", "blocked"):
+            for readiness in ("ready", "ready_with_risk"):
+                allowed.add(
+                    (
+                        (lifecycle, "not_ready", gate),
+                        ("closed", readiness, "closed"),
+                    )
+                )
     if (source, target) not in allowed:
         return [f"illegal native status transition: {'/'.join(source)} -> {'/'.join(target)}"]
     return []

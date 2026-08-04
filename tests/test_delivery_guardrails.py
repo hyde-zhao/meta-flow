@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
 from pathlib import Path
 
@@ -24,6 +25,7 @@ build_report = GUARDRAIL["build_installation_guardrail_report"]
 collect_read_expansion_errors = GUARDRAIL[
     "collect_read_expansion_delivery_contract_errors"
 ]
+collect_canonical_mirror_errors = GUARDRAIL["collect_canonical_mirror_errors"]
 
 
 def test_installation_registry_and_discovery_are_exactly_closed() -> None:
@@ -172,3 +174,92 @@ def test_active_delivery_contract_does_not_publish_legacy_expansion_reason() -> 
     legacy_reason = "deep" + "_review"
     for relative in GUARDRAIL["ACTIVE_READ_EXPANSION_TEXT_TARGETS"]:
         assert legacy_reason not in (ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_cr_guardrail_tokens_follow_real_owners_without_facade_backfill() -> None:
+    assert GUARDRAIL["collect_native_cr_governance_errors"]() == []
+    assert GUARDRAIL["collect_requirement_intake_routing_errors"]() == []
+    assert GUARDRAIL["collect_cr058_execution_closure_errors"]() == []
+    assert GUARDRAIL["collect_retired_cr_facade_token_errors"]() == []
+
+
+def _write_mirror_fixture(root: Path, mirror_content: str) -> tuple[tuple[str, str], ...]:
+    canonical = root / "canonical/SKILL.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("---\nname: fixture\n---\n\n# Canonical\n", encoding="utf-8")
+    mirror = root / "mirror/SKILL.md"
+    mirror.parent.mkdir(parents=True)
+    mirror.write_text(mirror_content, encoding="utf-8")
+    return (("canonical/SKILL.md", "mirror/SKILL.md"),)
+
+
+def test_canonical_mirror_accepts_one_renderer_marker(tmp_path: Path) -> None:
+    marker = (
+        "<!-- myflow-managed: version=1.0.0 canonical-commit=abc1234 "
+        "generated=2026-08-04T14:00:00Z -->"
+    )
+    pairs = _write_mirror_fixture(
+        tmp_path,
+        f"---\nname: fixture\n---\n{marker}\n\n# Canonical\n",
+    )
+
+    assert collect_canonical_mirror_errors(tmp_path, pairs) == []
+
+
+@pytest.mark.parametrize(
+    "mirror_content",
+    [
+        "---\nname: fixture\n---\n\n# Canonical\n",
+        (
+            "<!-- myflow-managed: version=1.0.0 canonical-commit=abc1234 "
+            "generated=2026-08-04T14:00:00Z -->\n\n"
+            "---\nname: fixture\n---\n\n# Canonical\n"
+        ),
+        (
+            "---\nname: fixture\n---\n"
+            "<!-- myflow-managed: version=1.0.0 canonical-commit=abc1234 "
+            "generated=2026-08-04T14:00:00Z -->\n"
+            "<!-- myflow-managed: version=1.0.0 canonical-commit=abc1234 "
+            "generated=2026-08-04T14:00:00Z -->\n\n# Canonical\n"
+        ),
+        (
+            "---\nname: fixture\n---\n"
+            "<!-- myflow-managed: version=1.0.0 canonical-commit=abc1234 -->\n\n"
+            "# Canonical\n"
+        ),
+        (
+            "---\nname: changed\n---\n"
+            "<!-- myflow-managed: version=1.0.0 canonical-commit=abc1234 "
+            "generated=2026-08-04T14:00:00Z -->\n\n# Canonical\n"
+        ),
+        (
+            "---\nname: fixture\n---\n"
+            "<!-- myflow-managed: version=1.0.0 canonical-commit=abc1234 "
+            "generated=2026-08-04T14:00:00Z -->\n\n# Drift\n"
+        ),
+    ],
+)
+def test_canonical_mirror_rejects_missing_misplaced_or_drifted_marker(
+    tmp_path: Path,
+    mirror_content: str,
+) -> None:
+    pairs = _write_mirror_fixture(tmp_path, mirror_content)
+
+    assert collect_canonical_mirror_errors(tmp_path, pairs) == [
+        "CR-058 canonical/mirror drift: canonical/SKILL.md / mirror/SKILL.md"
+    ]
+
+
+def test_canonical_mirror_rejects_directory_and_symlink(tmp_path: Path) -> None:
+    canonical = tmp_path / "canonical/SKILL.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("canonical\n", encoding="utf-8")
+    mirror = tmp_path / "mirror/SKILL.md"
+    mirror.mkdir(parents=True)
+    pairs = (("canonical/SKILL.md", "mirror/SKILL.md"),)
+
+    assert collect_canonical_mirror_errors(tmp_path, pairs)
+
+    mirror.rmdir()
+    os.symlink(canonical, mirror)
+    assert collect_canonical_mirror_errors(tmp_path, pairs)

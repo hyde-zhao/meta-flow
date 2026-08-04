@@ -286,6 +286,103 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
                     root, "CR-101", status="closed", gate_status="cp8_approved"
                 )
 
+    def test_explicit_direct_close_requires_direct_routine_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, _cr_path, _scope = write_termination_fixture(Path(directory))
+
+            plan = cr_status_sync.plan_status_sync(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="closed",
+                work_id="WORK-101",
+                effective_at="2026-07-27T05:30:00+00:00",
+            )
+
+            self.assertEqual("READY", plan.decision)
+            self.assertEqual("closed", plan.desired_transition["gate_status"])
+
+    def test_explicit_direct_close_without_work_blocks_before_cr_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, _cr_path, _scope = write_termination_fixture(Path(directory))
+            metrics = IOMetrics("direct-close-no-work", enabled=True)
+            context = OperationReadContext(
+                process,
+                operation_id="direct-close-no-work",
+                operation_kind="plan",
+                allowed_reads=("process/**", "works/**"),
+                max_objects=128,
+                metrics=metrics,
+            )
+
+            plan = cr_status_sync.plan_status_sync(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="closed",
+                effective_at="2026-07-27T05:31:00+00:00",
+                read_context=context,
+            )
+
+            self.assertEqual("BLOCKED", plan.decision)
+            self.assertEqual((), plan.targets)
+            self.assertEqual(0, plan.as_dict()["mutation_count"])
+            self.assertIn("work_id", plan.reason)
+            self.assertFalse(
+                any(
+                    entry["logical_ref"].startswith("changes/CR-101")
+                    for entry in metrics.summary()["entries"]
+                )
+            )
+
+    def test_explicit_direct_close_rejects_non_direct_route_before_cr_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, _cr_path, _scope = write_termination_fixture(Path(directory))
+            work_path = process / "works/WORK-101/WORK.yaml"
+            work = load_yaml_object(work_path)
+            work["route_profile"] = {
+                "schema_version": 1,
+                "mode": "routine-four-stage",
+                "dispatch_mode": "functional-agent",
+                "legacy_cp_compatibility": False,
+                "validation_profile": "layered-v1",
+                "failure_scope": "current-slice-only",
+                "worktree_policy": "paired-worktree",
+            }
+            work_path.write_text(dump_yaml(work) + "\n", encoding="utf-8")
+            metrics = IOMetrics("direct-close-wrong-route", enabled=True)
+            context = OperationReadContext(
+                process,
+                operation_id="direct-close-wrong-route",
+                operation_kind="plan",
+                allowed_reads=("process/**", "works/**"),
+                max_objects=128,
+                metrics=metrics,
+            )
+
+            plan = cr_status_sync.plan_status_sync(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="closed",
+                work_id="WORK-101",
+                effective_at="2026-07-27T05:32:00+00:00",
+                read_context=context,
+            )
+
+            self.assertEqual("BLOCKED", plan.decision)
+            self.assertEqual((), plan.targets)
+            self.assertIn("routine-four-stage direct Work", plan.reason)
+            self.assertFalse(
+                any(
+                    entry["logical_ref"].startswith("changes/CR-101")
+                    for entry in metrics.summary()["entries"]
+                )
+            )
+
     def test_frozen_effective_at_makes_plan_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             release, _process, _cr_path, _scope = write_termination_fixture(Path(directory))

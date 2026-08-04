@@ -87,6 +87,12 @@ REVISION_RECORD_TARGETS = {
     "docs/product/REQUIREMENTS.md": ROOT / "docs" / "product" / "REQUIREMENTS.md",
 }
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
+MANAGED_MARKDOWN_LINE_RE = re.compile(
+    r"^<!-- myflow-managed: version=1\.0\.0 "
+    r"canonical-commit=(?:unknown|[0-9a-f]{4,40}) "
+    r"generated=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z -->$",
+    re.MULTILINE,
+)
 SKILL_ROOT_ASSET_REF_RE = re.compile(r"<skill-root>/(?P<kind>templates|scripts)/(?P<path>[A-Za-z0-9_./-]+)")
 TEMPLATE_REF_RE = re.compile(r"(?<![A-Za-z0-9_./-])templates/(?P<path>[A-Za-z0-9_./-]+)")
 DELIVERY_SCRIPT_REF_RE = re.compile(r"delivery/scripts/(?P<name>[A-Za-z0-9_.-]+)")
@@ -474,7 +480,7 @@ CR058_EXECUTION_CLOSURE_TOKEN_TARGETS = {
         "read_expansion_refs",
         "requires_new_revision",
     ),
-    "meta_flow/workflow/cr_lifecycle.py": (
+    "meta_flow/workflow/cr_projection.py": (
         "render_status_body_projection",
         "CR 类型与门禁策略",
         "Checkpoint Index",
@@ -1917,10 +1923,16 @@ def collect_native_cr_governance_errors() -> list[str]:
 
     errors: list[str] = []
     token_targets = {
-        "meta_flow/workflow/cr_lifecycle.py": (
+        "meta_flow/workflow/cr_index.py": (
             "semantic_digest",
+            "CR_INDEX_REL",
+        ),
+        "meta_flow/workflow/cr_status_sync.py": (
             "plan_status_sync",
             "apply_status_sync",
+            "semantic_digest",
+        ),
+        "meta_flow/workflow/cr_status_transaction.py": (
             "inspect_status_sync_transactions",
             "recover_status_sync_transaction",
             "before_content_ref",
@@ -1997,8 +2009,8 @@ def collect_native_cr_governance_errors() -> list[str]:
 def collect_requirement_intake_routing_errors() -> list[str]:
     errors: list[str] = []
     token_targets = {
-        "cr-lifecycle": (
-            ROOT / "meta_flow" / "workflow" / "cr_lifecycle.py",
+        "cr-model": (
+            ROOT / "meta_flow" / "workflow" / "cr_model.py",
             (
                 "product_baseline_refresh_required",
                 "required_phase",
@@ -2008,17 +2020,49 @@ def collect_requirement_intake_routing_errors() -> list[str]:
                 "affected_product_docs",
                 "affected_use_cases",
                 "routing_design_ref",
+            ),
+        ),
+        "cr-records": (
+            ROOT / "meta_flow" / "workflow" / "cr_records.py",
+            (
+                "product_baseline_refresh_required",
+                "required_phase",
+                "required_agent",
+                "required_gate",
+                "block_story_decomposition_until",
+                "affected_product_docs",
+                "affected_use_cases",
+                "routing_design_ref",
+            ),
+        ),
+        "cr-projection": (
+            ROOT / "meta_flow" / "workflow" / "cr_projection.py",
+            (
+                "product_baseline_refresh_required",
+                "required_phase",
+                "required_agent",
+                "required_gate",
+                "block_story_decomposition_until",
+                "affected_product_docs",
+                "affected_use_cases",
+                "routing_design_ref",
+            ),
+        ),
+        "cr-index": (
+            ROOT / "meta_flow" / "workflow" / "cr_index.py",
+            (
                 "CR_INDEX_REL",
             ),
         ),
-        "cr-lifecycle-tests": (
-            ROOT / "tests" / "test_cr_lifecycle.py",
+        "cr-model-tests": (
+            ROOT / "tests" / "test_cr_model.py",
             (
                 "product_baseline_refresh_required",
                 "requirement-clarification",
                 "meta-pm",
                 "CP2-approved",
                 "affected_product_docs",
+                "affected_use_cases",
                 "routing_design_ref",
             ),
         ),
@@ -2545,18 +2589,37 @@ def collect_canonical_mirror_errors(
     root: Path,
     pairs: tuple[tuple[str, str], ...],
 ) -> list[str]:
-    """校验 canonical 必须存在，并在本地 mirror 已安装时检查字节一致性。"""
+    """校验 canonical 与含一个合法 installer marker 的 mirror 语义等价。"""
 
     errors: list[str] = []
     for canonical_ref, mirror_ref in pairs:
         canonical = root / canonical_ref
         mirror = root / mirror_ref
-        if not canonical.is_file():
+        if canonical.is_symlink() or not canonical.is_file():
             errors.append(f"missing CR-058 canonical target: {canonical_ref}")
             continue
         if not mirror.exists() and not mirror.is_symlink():
             continue
-        if not mirror.is_file() or canonical.read_bytes() != mirror.read_bytes():
+        equivalent = False
+        if mirror.is_file() and not mirror.is_symlink():
+            try:
+                canonical_text = canonical.read_text(encoding="utf-8")
+                mirror_text = mirror.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                equivalent = False
+            else:
+                markers = list(MANAGED_MARKDOWN_LINE_RE.finditer(mirror_text))
+                if len(markers) == 1 and "myflow-managed:" not in canonical_text:
+                    marker = markers[0].group(0)
+                    frontmatter = FRONTMATTER_RE.match(canonical_text)
+                    if frontmatter is None:
+                        expected = f"{marker}\n\n{canonical_text.lstrip()}"
+                    else:
+                        prefix = canonical_text[: frontmatter.end()].rstrip()
+                        body = canonical_text[frontmatter.end() :].lstrip()
+                        expected = f"{prefix}\n{marker}\n\n{body}"
+                    equivalent = mirror_text == expected
+        if not equivalent:
             errors.append(
                 f"CR-058 canonical/mirror drift: {canonical_ref} / {mirror_ref}"
             )
@@ -2574,12 +2637,21 @@ def collect_canonical_mirror_self_check_errors() -> list[str]:
 
         missing_canonical = collect_canonical_mirror_errors(root, pairs)
         canonical.parent.mkdir(parents=True)
-        canonical.write_bytes(b"canonical\n")
+        canonical.write_text("---\nname: fixture\n---\n\ncanonical\n", encoding="utf-8")
         missing_mirror = collect_canonical_mirror_errors(root, pairs)
         mirror.parent.mkdir(parents=True)
-        mirror.write_bytes(canonical.read_bytes())
-        identical_mirror = collect_canonical_mirror_errors(root, pairs)
-        mirror.write_bytes(b"drift\n")
+        marker = (
+            "<!-- myflow-managed: version=1.0.0 canonical-commit=abc1234 "
+            "generated=2026-08-04T14:00:00Z -->"
+        )
+        mirror.write_text(
+            f"---\nname: fixture\n---\n{marker}\n\ncanonical\n",
+            encoding="utf-8",
+        )
+        valid_mirror = collect_canonical_mirror_errors(root, pairs)
+        mirror.write_text(canonical.read_text(encoding="utf-8"), encoding="utf-8")
+        markerless_mirror = collect_canonical_mirror_errors(root, pairs)
+        mirror.write_text(f"{marker}\n\ndrift\n", encoding="utf-8")
         drifted_mirror = collect_canonical_mirror_errors(root, pairs)
 
     expected_missing = ["missing CR-058 canonical target: canonical/SKILL.md"]
@@ -2591,11 +2663,44 @@ def collect_canonical_mirror_self_check_errors() -> list[str]:
         errors.append("CR-058 canonical/mirror self-check failed to reject missing canonical")
     if missing_mirror:
         errors.append("CR-058 canonical/mirror self-check rejected an uninstalled mirror")
-    if identical_mirror:
-        errors.append("CR-058 canonical/mirror self-check rejected an identical mirror")
+    if valid_mirror:
+        errors.append("CR-058 canonical/mirror self-check rejected a valid marked mirror")
+    if markerless_mirror != expected_drift:
+        errors.append("CR-058 canonical/mirror self-check accepted a markerless mirror")
     if drifted_mirror != expected_drift:
         errors.append("CR-058 canonical/mirror self-check failed to detect mirror drift")
     return errors
+
+
+def collect_retired_cr_facade_token_errors() -> list[str]:
+    """阻止仅为通过 guardrail 而把退役 owner token 回填到 facade。"""
+
+    facade = ROOT / "meta_flow" / "workflow" / "cr_lifecycle.py"
+    if not facade.is_file():
+        return ["missing CR lifecycle compatibility facade"]
+    retired_tokens = (
+        "semantic_digest",
+        "before_content_ref",
+        "index-last",
+        "product_baseline_refresh_required",
+        "required_phase",
+        "required_agent",
+        "required_gate",
+        "block_story_decomposition_until",
+        "affected_product_docs",
+        "affected_use_cases",
+        "routing_design_ref",
+        "CR 类型与门禁策略",
+        "Checkpoint Index",
+    )
+    text = facade.read_text(encoding="utf-8")
+    present = [token for token in retired_tokens if token in text]
+    if not present:
+        return []
+    return [
+        "meta_flow/workflow/cr_lifecycle.py must not regain retired owner tokens: "
+        + ", ".join(present)
+    ]
 
 
 def collect_cr058_execution_closure_errors() -> list[str]:
@@ -2983,6 +3088,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_cr_tracking_protocol_errors())
     errors.extend(collect_native_cr_governance_errors())
     errors.extend(collect_requirement_intake_routing_errors())
+    errors.extend(collect_retired_cr_facade_token_errors())
     errors.extend(collect_revision_record_errors())
     errors.extend(collect_software_workflow_artifact_errors())
     errors.extend(collect_context_capsule_protocol_errors())

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.evals.runner import parse_yaml_subset
+from meta_flow.policies import governance
 from meta_flow.project.process_route import (
     ProcessRouteError,
     _resolve_runtime_path,
@@ -20,11 +21,12 @@ from meta_flow.project.process_route import (
 from meta_flow.state import event_ledger
 from meta_flow.state.current import BASE_LEDGER_RELS, now_utc
 
-DEFAULT_POLICY_REL = Path("process/policies/LEDGER-RETENTION.yaml")
+DEFAULT_POLICY_REL = governance.RETENTION_POLICY_REL
 ARCHIVE_ROOT_REL = Path("process/archive/ledger")
-DEFAULT_WINDOW_DAYS = 90
-DEFAULT_KEEP_LATEST_N_EVENTS = 500
-DEFAULT_KEEP_LATEST_N_CR = 20
+_DEFAULT_COMPACTION = governance.default_ledger_compaction_policy()
+DEFAULT_WINDOW_DAYS = int(_DEFAULT_COMPACTION["window_days"])
+DEFAULT_KEEP_LATEST_N_EVENTS = int(_DEFAULT_COMPACTION["keep_latest_n_events"])
+DEFAULT_KEEP_LATEST_N_CR = int(_DEFAULT_COMPACTION["keep_latest_n_cr"])
 MARKER_EVENT_TYPE = "ledger_compacted"
 KNOWN_LEDGER_RELS = {
     **event_ledger.KNOWN_LEDGER_RELS,
@@ -122,14 +124,8 @@ def _default_policy() -> RetentionPolicy:
     return RetentionPolicy()
 
 
-def _positive_int(data: dict[str, Any], key: str, default: int) -> int:
-    value = data.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise LedgerCompactionError(f"retention policy {key} must be a positive integer")
-    return value
-
-
 def load_retention_policy(path: Path | None = None, *, project_root: Path | None = None) -> RetentionPolicy:
+    explicit_policy = path is not None
     if path is None:
         if project_root is None:
             return _default_policy()
@@ -138,21 +134,49 @@ def load_retention_policy(path: Path | None = None, *, project_root: Path | None
         path = _guard_process_path(project_root, path, label="retention policy")
     if not path.is_file():
         return _default_policy()
-    data = parse_yaml_subset(path.read_text(encoding="utf-8"))
+    try:
+        text = path.read_text(encoding="utf-8")
+        data = json.loads(text) if path.suffix.lower() == ".json" else parse_yaml_subset(text)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LedgerCompactionError(f"retention policy cannot be parsed: {exc}") from exc
     if not isinstance(data, dict):
         raise LedgerCompactionError("retention policy must be a mapping")
-    default = data.get("default") if isinstance(data.get("default"), dict) else data
-    allowed = {"schema_version", "default", "ledgers", "window_days", "keep_latest_n_events", "keep_latest_n_cr", "archive_rule"}
-    unknown = sorted(str(key) for key in data if key not in allowed)
-    if unknown:
-        raise LedgerCompactionError("retention policy has unknown fields: " + ", ".join(unknown))
     if data.get("schema_version", 1) != 1:
         raise LedgerCompactionError("retention policy schema_version must be 1")
+    if explicit_policy:
+        allowed = {"schema_version", "default", "ledgers", *governance.LEDGER_COMPACTION_POLICY_KEYS}
+        unknown = sorted(str(key) for key in data if key not in allowed)
+        if unknown:
+            raise LedgerCompactionError(
+                "retention policy has unknown fields: " + ", ".join(unknown)
+            )
+        if "default" in data:
+            default = data.get("default")
+        elif "ledgers" in data:
+            ledgers = data.get("ledgers")
+            default = ledgers.get("compaction") if isinstance(ledgers, dict) else None
+        else:
+            default = {
+                key: data[key]
+                for key in governance.LEDGER_COMPACTION_POLICY_KEYS
+                if key in data
+            }
+    else:
+        ledgers = data.get("ledgers")
+        if not isinstance(ledgers, dict):
+            raise LedgerCompactionError("retention policy ledgers must be an object")
+        default = ledgers.get("compaction")
+    if explicit_policy and isinstance(default, dict):
+        default = {**governance.default_ledger_compaction_policy(), **default}
+    try:
+        normalized = governance.normalize_ledger_compaction_policy(default)
+    except ValueError as exc:
+        raise LedgerCompactionError(f"retention policy compaction {exc}") from exc
     return RetentionPolicy(
-        window_days=_positive_int(default, "window_days", DEFAULT_WINDOW_DAYS),
-        keep_latest_n_events=_positive_int(default, "keep_latest_n_events", DEFAULT_KEEP_LATEST_N_EVENTS),
-        keep_latest_n_cr=_positive_int(default, "keep_latest_n_cr", DEFAULT_KEEP_LATEST_N_CR),
-        archive_rule=str(default.get("archive_rule") or "summary-index-backup"),
+        window_days=int(normalized["window_days"]),
+        keep_latest_n_events=int(normalized["keep_latest_n_events"]),
+        keep_latest_n_cr=int(normalized["keep_latest_n_cr"]),
+        archive_rule=str(normalized["archive_rule"]),
     )
 
 

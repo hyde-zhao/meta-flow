@@ -8,7 +8,7 @@ from meta_flow.workflow import cr_lifecycle, cr_model
 
 MODEL_MEMBERS = {
     "CR_ID_RE", "FRONTMATTER_RE", "ALLOWED_LIFECYCLE_STATUSES", "FINISHED_STATUSES",
-    "CLOSED_GATE_STATUS", "SAFE_AUTHORIZATION_ID_RE", "OID_RE", "DIGEST_RE",
+    "CLOSED_GATE_STATUS", "DIRECT_CLOSED_GATE_STATUS", "SAFE_AUTHORIZATION_ID_RE", "OID_RE", "DIGEST_RE",
     "ALLOWED_CR_TYPES", "CR_TYPE_ALIASES", "CRRecord", "now_utc", "_strip_scalar",
     "_frontmatter", "_replace_frontmatter", "parse_frontmatter", "_format_frontmatter_value",
     "render_frontmatter_fields", "parse_inline_list", "parse_bool", "normalize_cr_type",
@@ -27,9 +27,11 @@ def _public_top_level(path: Path) -> set[str]:
 
 def test_model_exact_owner_and_facade_reexport() -> None:
     assert MODEL_MEMBERS <= _public_top_level(Path(cr_model.__file__))
-    assert len(MODEL_MEMBERS) == 21
+    assert len(MODEL_MEMBERS) == 22
     assert cr_lifecycle.CRRecord is cr_model.CRRecord
     assert cr_lifecycle.parse_frontmatter is cr_model.parse_frontmatter
+    assert cr_model.CLOSED_GATE_STATUS == "cp8_closed"
+    assert cr_model.DIRECT_CLOSED_GATE_STATUS == "closed"
 
 
 def test_parse_frontmatter_returns_existing_fields() -> None:
@@ -88,3 +90,30 @@ product_baseline_refresh_required: true
     assert fields["impact_surface"] == '["meta_flow/workflow/cr_lifecycle.py"]'
     assert fields["product_baseline_refresh_required"] == "true"
     assert "本 CR 用于测试生命周期治理。" in rendered
+
+
+def test_requirement_intake_fields_remain_model_owned() -> None:
+    fields = cr_model.parse_frontmatter(
+        '''---
+product_baseline_refresh_required: true
+required_phase: requirement-clarification
+required_agent: meta-pm
+required_gate: CP2
+block_story_decomposition_until: CP2-approved
+affected_product_docs: [docs/product/REQUIREMENTS.md]
+affected_use_cases: [UC-001]
+routing_design_ref: process/works/W-001/ROUTE.md
+---
+'''
+    )
+
+    assert fields == {
+        "product_baseline_refresh_required": "true",
+        "required_phase": "requirement-clarification",
+        "required_agent": "meta-pm",
+        "required_gate": "CP2",
+        "block_story_decomposition_until": "CP2-approved",
+        "affected_product_docs": "[docs/product/REQUIREMENTS.md]",
+        "affected_use_cases": "[UC-001]",
+        "routing_design_ref": "process/works/W-001/ROUTE.md",
+    }

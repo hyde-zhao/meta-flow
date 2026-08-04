@@ -26,6 +26,7 @@ from meta_flow.workflow.cr_index import (
 from meta_flow.workflow.cr_model import (
     CLOSED_GATE_STATUS,
     DIGEST_RE,
+    DIRECT_CLOSED_GATE_STATUS,
     FINISHED_STATUSES,
     OID_RE,
     SAFE_AUTHORIZATION_ID_RE,
@@ -338,13 +339,34 @@ def plan_status_sync(
         return plan
 
     timestamp = _normalize_status_sync_effective_at(effective_at)
-    facts, scope_digest = _status_sync_facts(
-        project_root,
-        work_id=work_id,
-        canonical_digest=_canonical_digest,
-        dirty_path_digest=_dirty_path_digest,
-        read_context=context,
+    direct_close_requested = (
+        cr_tracking.normalize_lifecycle_status(status) == "closed"
+        and cr_tracking.normalize_gate_status(gate_status) == DIRECT_CLOSED_GATE_STATUS
     )
+    try:
+        facts, scope_digest = _status_sync_facts(
+            project_root,
+            work_id=work_id,
+            canonical_digest=_canonical_digest,
+            dirty_path_digest=_dirty_path_digest,
+            read_context=context,
+        )
+    except (OSError, ReadContractError, ValueError) as exc:
+        if not direct_close_requested:
+            raise
+        return finish(
+            StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                {},
+                "",
+                (),
+                f"direct close Work is unavailable or invalid: {exc}",
+                timestamp,
+            )
+        )
     if expected_process_oid and facts["process_head_oid"] != expected_process_oid:
         return finish(
             StatusSyncPlan(
@@ -359,6 +381,46 @@ def plan_status_sync(
                 timestamp,
             )
         )
+    if direct_close_requested:
+        if not work_id:
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    "explicit direct close requires work_id",
+                    timestamp,
+                )
+            )
+        work = load_work(
+            context.repository_root,
+            work_id,
+            read_context=context,
+        )
+        route = work.route_profile
+        if not (
+            route.mode == "routine-four-stage"
+            and route.dispatch_mode == "direct"
+            and route.legacy_cp_compatibility is False
+        ):
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    "explicit direct close requires a routine-four-stage direct Work "
+                    "with legacy_cp_compatibility=false",
+                    timestamp,
+                )
+            )
     crs = discover_formal_crs(
         project_root,
         _resolve_runtime_ref_fn=resolve_from_context,
@@ -376,9 +438,12 @@ def plan_status_sync(
     target_readiness = readiness or before_readiness
     target_gate = gate_status or before_gate
     if target_status == "closed":
-        if gate_status and gate_status != CLOSED_GATE_STATUS:
+        if direct_close_requested:
+            target_gate = DIRECT_CLOSED_GATE_STATUS
+        elif gate_status and gate_status != CLOSED_GATE_STATUS:
             raise ValueError(f"status=closed requires gate_status={CLOSED_GATE_STATUS}")
-        target_gate = CLOSED_GATE_STATUS
+        else:
+            target_gate = CLOSED_GATE_STATUS
     elif target_gate and target_gate not in cr_tracking.ALLOWED_GATE_STATUSES:
         raise ValueError(f"invalid gate_status: {target_gate}")
     native = (

@@ -17,6 +17,34 @@ class GateProfileTests(unittest.TestCase):
             cr_tracking.validate_native_status_tuple("closed", "READY_WITH_RISK", "cp8_closed"),
         )
 
+    def test_native_status_registry_accepts_direct_closed_tuple(self) -> None:
+        self.assertEqual(
+            [],
+            cr_tracking.validate_native_status_tuple("closed", "READY", "closed"),
+        )
+
+    def test_native_status_registry_accepts_direct_close_from_each_active_gate(self) -> None:
+        active_gates = (
+            "cp2_pending",
+            "cp3_pending",
+            "cp5_pending",
+            "implementation_in_progress",
+            "verification_in_progress",
+            "cp7_pending",
+            "cp8_pending",
+        )
+
+        for lifecycle_status in ("active", "blocked"):
+            for gate_status in active_gates:
+                with self.subTest(lifecycle_status=lifecycle_status, gate_status=gate_status):
+                    self.assertEqual(
+                        [],
+                        cr_tracking.validate_native_transition(
+                            (lifecycle_status, "NOT_READY", gate_status),
+                            ("closed", "READY_WITH_RISK", "closed"),
+                        ),
+                    )
+
     def test_native_status_registry_rejects_terminal_reactivation(self) -> None:
         errors = cr_tracking.validate_native_transition(
             ("closed", "READY_WITH_RISK", "cp8_closed"),
