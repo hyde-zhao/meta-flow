@@ -35,6 +35,8 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -811,6 +813,8 @@ def write_text(path: Path, content: str, transaction: Transaction, dry_run: bool
     if dry_run:
         print(f"[DryRun] write -> {path}")
         return
+    if path.is_file() and path.read_text(encoding="utf-8") == content:
+        return
     record_original_text(transaction, path)
     path.write_text(content, encoding="utf-8")
 
@@ -828,7 +832,8 @@ def remove_path(path: Path, transaction: Transaction, dry_run: bool) -> None:
     if path.is_dir():
         fail(
             "legacy directory uninstall is disabled: exact_leaf_set ownership "
-            "must remove digest-matching leaves individually; recursive delete=0."
+            "must remove digest-matching leaves individually; recursive delete=0. "
+            "请先运行一次新版 install 完成 exact leaf set 迁移，再执行 uninstall。"
         )
 
     if path.exists():
@@ -852,6 +857,18 @@ def rollback_transaction(transaction: Transaction) -> None:
             continue
         ensure_file_target(path, dry_run=False)
         path.write_text(original, encoding="utf-8")
+
+
+@contextmanager
+def rollback_on_failure(transaction: Transaction, dry_run: bool) -> Iterator[None]:
+    """确保所有失败类型在重抛前回滚已记录的安装 mutation。"""
+
+    try:
+        yield
+    except BaseException:
+        if not dry_run:
+            rollback_transaction(transaction)
+        raise
 
 
 def managed_block_begin_prefix(platform: str) -> str:
@@ -958,12 +975,21 @@ def has_managed_block(path: Path, platform: str | None = None) -> bool:
     return MANAGED_BLOCK_BEGIN in text and "<!-- myflow:managed:end" in text
 
 
-def copy_skill_tree(src_dir: Path, dest_dir: Path, transaction: Transaction, dry_run: bool, commit: str, generated: str) -> None:
+def copy_skill_tree(
+    src_dir: Path,
+    dest_dir: Path,
+    transaction: Transaction,
+    dry_run: bool,
+    commit: str,
+    generated: str,
+) -> list[Path]:
+    installed_leaves: list[Path] = []
     for src_path in sorted(src_dir.rglob("*")):
         if src_path.is_dir():
             continue
         relative_path = src_path.relative_to(src_dir)
         dest_path = dest_dir / relative_path
+        installed_leaves.append(dest_path)
         if relative_path == Path("SKILL.md"):
             copy_text_with_audit(src_path, dest_path, transaction, dry_run, commit, generated)
             continue
@@ -972,8 +998,11 @@ def copy_skill_tree(src_dir: Path, dest_dir: Path, transaction: Transaction, dry
             print(f"[DryRun] {src_path} -> {dest_path}")
             continue
         ensure_file_target(dest_path, dry_run=False)
+        if dest_path.is_file() and dest_path.read_bytes() == src_path.read_bytes():
+            continue
         record_original_text(transaction, dest_path)
         shutil.copy2(src_path, dest_path)
+    return installed_leaves
 
 
 def counterpart_paths(platform: str, workspace_root: Path, contracts: dict[str, object]) -> dict[str, Path]:
@@ -1243,15 +1272,23 @@ def install_skills(
 
     for skill_dir in skill_dirs:
         dest_dir = base_dir / skill_dir.name
-        copy_skill_tree(skill_dir, dest_dir, transaction, dry_run, commit, generated)
+        installed_leaves = copy_skill_tree(
+            skill_dir,
+            dest_dir,
+            transaction,
+            dry_run,
+            commit,
+            generated,
+        )
         installed_names.append(skill_dir.name)
-        manifest_entries.append(
+        manifest_entries.extend(
             {
                 "kind": "skill",
                 "name": skill_dir.name,
-                "path": str(dest_dir / "SKILL.md"),
-                "remove_path": str(dest_dir),
+                "path": str(dest_path),
+                "remove_path": str(dest_path),
             }
+            for dest_path in installed_leaves
         )
     return installed_names
 
@@ -1271,8 +1308,13 @@ def write_openclaw_manifest(
         remove_path = Path(entry["remove_path"])
         if entry["kind"] == "agent":
             agents.append({"name": entry["name"], "file": remove_path.relative_to(base_dir).as_posix()})
-        if entry["kind"] == "skill":
-            skills.append({"name": entry["name"], "file": (remove_path / "SKILL.md").relative_to(base_dir).as_posix()})
+        if entry["kind"] == "skill" and remove_path.name == "SKILL.md":
+            skills.append(
+                {
+                    "name": entry["name"],
+                    "file": remove_path.relative_to(base_dir).as_posix(),
+                }
+            )
     write_text(base_dir / "manifest.yaml", build_openclaw_manifest(agents, skills), transaction, dry_run)
 
 
@@ -1316,7 +1358,7 @@ def scan_managed_component_entries(
                             "kind": "skill",
                             "name": skill_dir.name,
                             "path": str(skill_file),
-                            "remove_path": str(skill_dir),
+                            "remove_path": str(skill_file),
                         }
                     )
 
@@ -1357,6 +1399,17 @@ def prune_stale_manifest_entries(
         remove_path_value = str(entry.get("remove_path", ""))
         if not remove_path_value or str(Path(remove_path_value)) in current_remove_paths:
             continue
+        legacy_skill_root = Path(remove_path_value)
+        if str(entry.get("kind")) == "skill" and legacy_skill_root.is_dir():
+            migrated_leaves = [
+                Path(value)
+                for value in current_remove_paths
+                if Path(value).is_relative_to(legacy_skill_root)
+            ]
+            if migrated_leaves:
+                # 旧 manifest 用目录表示 skill ownership。一次正常 install 会把
+                # 它迁移为当前 exact leaf set；迁移过程中不能递归删除该目录。
+                continue
         remove_manifest_entry(entry, transaction, dry_run, platform)
         pruned += 1
     return pruned
@@ -1399,6 +1452,13 @@ def uninstall_platform(
     matching = find_matching_install(manifest_payload, platform, scope, workspace_root)
 
     entry_kinds = component_entry_kinds(component)
+    preflight_uninstall_manifest_entries(
+        matching,
+        entry_kinds=entry_kinds,
+        platform=platform,
+        scope=scope,
+        component=component,
+    )
     remaining_entries: list[dict[str, str]] = []
     removed_count = 0
     removed_paths: set[str] = set()
@@ -1453,7 +1513,62 @@ def uninstall_platform(
     else:
         matching["status"] = "uninstalled"
         matching["uninstalled_at"] = iso_now()
+    _prune_empty_removed_parents(
+        (Path(path) for path in removed_paths),
+        workspace_root=workspace_root,
+        dry_run=dry_run,
+    )
     return matching
+
+
+def preflight_uninstall_manifest_entries(
+    matching: dict[str, object] | None,
+    *,
+    entry_kinds: set[str],
+    platform: str,
+    scope: str,
+    component: str,
+) -> None:
+    """在首次删除前阻断旧式目录 ownership，避免 partial uninstall。"""
+
+    if matching is None:
+        return
+    for entry in matching.get("entries", []):
+        if not isinstance(entry, dict) or str(entry.get("kind")) not in entry_kinds:
+            continue
+        remove_path_value = str(entry.get("remove_path", ""))
+        if not remove_path_value or not Path(remove_path_value).is_dir():
+            continue
+        fail(
+            "检测到 legacy directory ownership，已在任何 mutation 前阻断 uninstall: "
+            f"kind={entry.get('kind')} path={remove_path_value}。"
+            f"请先运行 `meta-flow install {platform} --scope {scope} --component {component}` "
+            "完成 exact leaf set 迁移，再执行 uninstall。"
+        )
+
+
+def _prune_empty_removed_parents(
+    removed_paths: Iterable[Path],
+    *,
+    workspace_root: Path,
+    dry_run: bool,
+) -> None:
+    """只清理由受管叶子产生的空父目录，绝不越过安装根。"""
+
+    root = workspace_root.resolve()
+    candidates: set[Path] = set()
+    for removed in removed_paths:
+        parent = removed.resolve(strict=False).parent
+        while parent != root and parent.is_relative_to(root):
+            candidates.add(parent)
+            parent = parent.parent
+    for candidate in sorted(candidates, key=lambda path: len(path.parts), reverse=True):
+        if not candidate.is_dir() or any(candidate.iterdir()):
+            continue
+        if dry_run:
+            print(f"[DryRun] remove empty directory -> {candidate}")
+        else:
+            candidate.rmdir()
 
 
 def parse_args() -> argparse.Namespace:
@@ -1629,11 +1744,29 @@ def main() -> None:
     transaction = Transaction()
     manifest_payload = load_manifest(target_manifest_path)
 
+    # 普通重复安装在 canonical commit 未变化时复用首次审计时间，使所有渲染
+    # bytes 与 manifest 保持稳定。源内容若实际变化，write_text 的 bytes 比较
+    # 仍会产生真实 mutation；这里只消除纯时间戳漂移。
+    existing_install = find_matching_install(
+        manifest_payload,
+        args.platform,
+        args.scope,
+        workspace_root,
+    )
+    if (
+        args.mode == "install"
+        and existing_install is not None
+        and existing_install.get("canonical_commit") == commit
+        and isinstance(existing_install.get("installed_at"), str)
+        and existing_install["installed_at"]
+    ):
+        generated = str(existing_install["installed_at"])
+
     if args.mode == "uninstall":
         resolved_component = args.component or "full"
         print(f"Component: {resolved_component}")
-        try:
-            entry = uninstall_platform(
+        with rollback_on_failure(transaction, dry_run=args.dry_run):
+            uninstall_platform(
                 args.platform,
                 args.scope,
                 workspace_root,
@@ -1643,11 +1776,27 @@ def main() -> None:
                 args.dry_run,
                 resolved_component,
             )
-            save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)
-        except Exception:
-            if not args.dry_run:
-                rollback_transaction(transaction)
-            raise
+            active_installs = [
+                installed
+                for installed in manifest_payload.get("installs", [])
+                if isinstance(installed, dict)
+                and installed.get("status") == "installed"
+                and installed.get("entries")
+            ]
+            if active_installs:
+                save_manifest(
+                    target_manifest_path,
+                    manifest_payload,
+                    transaction,
+                    args.dry_run,
+                )
+            else:
+                remove_path(target_manifest_path, transaction, args.dry_run)
+                _prune_empty_removed_parents(
+                    (target_manifest_path,),
+                    workspace_root=workspace_root,
+                    dry_run=args.dry_run,
+                )
         print(f"Uninstalled {args.platform}/{args.scope} component={resolved_component}.")
         return
 
@@ -1670,7 +1819,7 @@ def main() -> None:
     installed_agent_names: list[str] = []
     installed_skill_names: list[str] = []
 
-    try:
+    with rollback_on_failure(transaction, dry_run=args.dry_run):
         if install_rules_enabled:
             install_rules(args.platform, args.scope, workspace_root, platform_contracts, layout, transaction, args.dry_run, commit, generated, manifest_entries)
 
@@ -1752,10 +1901,6 @@ def main() -> None:
             print(f"Pruned {legacy_pruned_count} legacy orchestrator agent file(s).")
         upsert_manifest_entry(manifest_payload, entry)
         save_manifest(target_manifest_path, manifest_payload, transaction, args.dry_run)
-    except Exception:
-        if not args.dry_run:
-            rollback_transaction(transaction)
-        raise
 
     if warnings:
         print("Warnings:")

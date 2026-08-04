@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -161,6 +162,175 @@ def _partial_journal() -> dict[str, object]:
         timestamp=LATER,
     )
     return transition(journal, "partial", timestamp=LATER)
+
+
+def _cr066_action(action_id: str, ordinal: int, target_ref: str) -> dict[str, object]:
+    unsigned = {
+        "action_id": action_id,
+        "action_kind": "write_exact_file",
+        "component": "agents",
+        "ownership_kind": "exact_file",
+        "source_ref": f"delivery/{action_id}.txt",
+        "target_ref": target_ref,
+        "before_state": {"exists": False, "digest": ""},
+        "desired_state": {"digest": DIGEST_B},
+        "preconditions": [],
+        "rollback_action": None,
+        "ordinal": ordinal,
+    }
+    return {**unsigned, "action_digest": canonical_digest(unsigned)}
+
+
+def run_cr066_failure_recovery_fixture(workspace: Path) -> dict[str, object]:
+    """供 CR-066 外部 harness 编排的 registered durable-recovery fixture。"""
+
+    from cr066_external_fixture_harness import (
+        _base_report,
+        diff_snapshots,
+        filesystem_snapshot,
+    )
+
+    final = "2026-08-04T00:00:02+00:00"
+    case_root = workspace / "failure-recovery"
+    target = case_root / "target"
+    target.mkdir(parents=True)
+    before = filesystem_snapshot(target)
+    first_path = target / "first.txt"
+    second_path = target / "second.txt"
+    later_path = target / "later-slice.txt"
+    first = _cr066_action("action-1", 1, "target/first.txt")
+    second = _cr066_action("action-2", 2, "target/second.txt")
+
+    journal = create_journal(
+        _claim("auth-original", "txn-cr066-recovery"),
+        operation="assets.install",
+        source_identity_digest=DIGEST_A,
+        target_identity_digest=DIGEST_B,
+        timestamp=NOW,
+    )
+    journal = record_action_started(
+        journal,
+        first,
+        preimage_ref="preimages/action-1",
+        before_digest="",
+        timestamp=NOW,
+    )
+    first_path.write_text("partial mutation\n", encoding="utf-8")
+    first_digest = sha256(first_path.read_bytes()).hexdigest()
+    journal = record_action_outcome(
+        journal,
+        action_id="action-1",
+        after_digest=first_digest,
+        error_code="",
+        timestamp=LATER,
+    )
+    journal = record_action_started(
+        journal,
+        second,
+        preimage_ref="preimages/action-2",
+        before_digest="",
+        timestamp=LATER,
+    )
+    partial = finalize_journal(
+        journal,
+        terminal_state="partial",
+        terminal_receipt_ref="receipts/txn-cr066-recovery.partial.json",
+        timestamp=LATER,
+    )
+    partial_snapshot = filesystem_snapshot(target)
+    mutations = diff_snapshots(before, partial_snapshot)
+    inspected = inspect_journal(partial)
+    inspect_after = filesystem_snapshot(target)
+    unauthenticated_blocked = False
+    try:
+        recover(partial, "rollback")
+    except ValueError:
+        unauthenticated_blocked = True
+
+    resume_plan = recover(
+        partial,
+        "resume",
+        new_claim_context=_claim("auth-resume", "txn-cr066-resume"),
+    )
+    rollback_plan = recover(
+        partial,
+        "rollback",
+        new_claim_context=_claim("auth-rollback", "txn-cr066-rollback"),
+        current_digests={"target/first.txt": first_digest},
+        available_preimage_refs=frozenset({"preimages/action-1"}),
+    )
+
+    rollback_pending = transition(partial, "rollback_pending", timestamp=final)
+    first_path.unlink()
+    compensated = deepcopy(rollback_pending)
+    for receipt in compensated["action_receipts"]:
+        if receipt["action_id"] == "action-1":
+            receipt["state"] = "compensated"
+            receipt["completed_at"] = final
+    compensated = validate_journal(compensated)
+    rolled_back = transition(compensated, "rolled_back", timestamp=final)
+    final_snapshot = filesystem_snapshot(target)
+    rollback_ok = final_snapshot["digest"] == before["digest"]
+    later_slice_executions = int(second_path.exists()) + int(later_path.exists())
+    passed = (
+        inspected.state == "partial"
+        and inspected.mutation_count == 0
+        and inspect_after["digest"] == partial_snapshot["digest"]
+        and unauthenticated_blocked
+        and resume_plan.action_ids == ("action-2",)
+        and rollback_plan.action_ids == ("action-1",)
+        and rolled_back["state"] == "rolled_back"
+        and rollback_ok
+        and later_slice_executions == 0
+    )
+    return _base_report(
+        "failure-recovery",
+        initial_state={
+            "target_digest": before["digest"],
+            "journal_state": "authorized",
+            "planned_slices": ["action-1", "action-2", "later-slice"],
+        },
+        expected_result={
+            "failure_state": "partial",
+            "inspect_mutations": 0,
+            "resume_pending_actions": ["action-2"],
+            "rollback_actions": ["action-1"],
+            "later_slice_executions": 0,
+            "final_state": "rolled_back",
+        },
+        actual_result={
+            "decision": "PASS" if passed else "FAIL",
+            "failure_state": inspected.state,
+            "inspect_mutations": inspected.mutation_count,
+            "inspect_digest_unchanged": (
+                inspect_after["digest"] == partial_snapshot["digest"]
+            ),
+            "unauthenticated_recovery_blocked": unauthenticated_blocked,
+            "resume_pending_actions": list(resume_plan.action_ids),
+            "rollback_actions": list(rollback_plan.action_ids),
+            "later_slice_executions": later_slice_executions,
+            "final_state": rolled_back["state"],
+        },
+        mutations=mutations,
+        before_digest=before["digest"],
+        after_digest=partial_snapshot["digest"],
+        failure_path={
+            "injected_after": "action-1-applied/action-2-journaled-before-write",
+            "reported_state": inspected.state,
+            "reported_as_success": False,
+            "later_slice_executions": later_slice_executions,
+        },
+        rollback={
+            "strategy": "new-typed-claim-plus-digest-and-preimage-guard",
+            "decision": "PASS" if rollback_ok else "FAIL",
+            "restored_digest": final_snapshot["digest"],
+            "digest_restored": rollback_ok,
+        },
+        user_experience=(
+            "partial 明确可见；inspect 只读；resume/rollback 都要求新的 claim，"
+            "失败后不执行后续切片。"
+        ),
+    )
 
 
 def test_journal_and_action_receipt_have_exact_schema() -> None:

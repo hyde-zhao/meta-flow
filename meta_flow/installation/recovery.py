@@ -71,9 +71,9 @@ ALLOWED_TRANSITIONS = {
         {"applied", "rollback_pending", "partial", "receipt_missing"}
     ),
     "rollback_pending": frozenset({"rolled_back", "partial"}),
-    "partial": frozenset({"planned", "abandoned"}),
-    "blocked": frozenset({"planned"}),
-    "receipt_missing": frozenset({"planned", "abandoned"}),
+    "partial": frozenset({"planned", "rollback_pending", "abandoned"}),
+    "blocked": frozenset({"planned", "rollback_pending"}),
+    "receipt_missing": frozenset({"planned", "rollback_pending", "abandoned"}),
     "applied": frozenset(),
     "rolled_back": frozenset(),
     "abandoned": frozenset(),

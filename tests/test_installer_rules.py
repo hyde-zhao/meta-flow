@@ -1,12 +1,78 @@
 from __future__ import annotations
 
+import json
+import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from delivery.scripts import install
+
+
+def _tree_snapshot(root: Path) -> dict[str, tuple[str, bytes]]:
+    """记录隔离安装根的完整文件/目录状态，用于断言 mutation=0。"""
+
+    snapshot: dict[str, tuple[str, bytes]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        snapshot[relative] = (
+            ("directory", b"") if path.is_dir() else ("file", path.read_bytes())
+        )
+    return snapshot
+
+
+def _run_project_installer(target: Path, mode: str = "install") -> tuple[str, str]:
+    argv = ["install.py"]
+    if mode != "install":
+        argv.append(mode)
+    argv.extend(
+        [
+            "codex",
+            "--scope",
+            "project",
+            "--project-dir",
+            str(target),
+            "--component",
+            "full",
+        ]
+    )
+    stdout = StringIO()
+    stderr = StringIO()
+    with (
+        patch.object(sys, "argv", argv),
+        redirect_stdout(stdout),
+        redirect_stderr(stderr),
+    ):
+        install.main()
+    return stdout.getvalue(), stderr.getvalue()
+
+
+def _rewrite_skill_entries_as_legacy_directories(target: Path) -> Path:
+    manifest_path = install.manifest_path(target, "project")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    current = payload["installs"][0]
+    retained = [entry for entry in current["entries"] if entry["kind"] != "skill"]
+    skill_names = sorted(
+        {entry["name"] for entry in current["entries"] if entry["kind"] == "skill"}
+    )
+    retained.extend(
+        {
+            "kind": "skill",
+            "name": name,
+            "path": str(target / ".agents" / "skills" / name),
+            "remove_path": str(target / ".agents" / "skills" / name),
+        }
+        for name in skill_names
+    )
+    current["entries"] = retained
+    manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
 
 
 class InstallerRulesTests(unittest.TestCase):
@@ -207,6 +273,67 @@ class InstallerRulesTests(unittest.TestCase):
                 )
 
             self.assertEqual(1, raised.exception.code)
+
+    def test_transaction_guard_rolls_back_system_exit_after_prior_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            managed_leaf = root / "managed.md"
+            managed_leaf.write_text("before\n", encoding="utf-8")
+            transaction = install.Transaction()
+
+            with self.assertRaises(SystemExit) as raised:
+                with install.rollback_on_failure(transaction, dry_run=False):
+                    install.remove_path(managed_leaf, transaction, dry_run=False)
+                    install.fail("injected failure after first mutation")
+
+            self.assertEqual(1, raised.exception.code)
+            self.assertEqual(b"before\n", managed_leaf.read_bytes())
+
+    def test_legacy_directory_uninstall_blocks_before_any_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            target.mkdir()
+            (target / "README.md").write_text("user readme\n", encoding="utf-8")
+            user_skill_file = target / ".agents" / "skills" / "state-router" / "user-note.txt"
+            user_skill_file.parent.mkdir(parents=True)
+            user_skill_file.write_text("preserve\n", encoding="utf-8")
+            _run_project_installer(target)
+            manifest_path = _rewrite_skill_entries_as_legacy_directories(target)
+            before = _tree_snapshot(target)
+            manifest_before = manifest_path.read_bytes()
+
+            with self.assertRaises(SystemExit) as raised:
+                _run_project_installer(target, "uninstall")
+
+            self.assertEqual(1, raised.exception.code)
+            self.assertEqual(before, _tree_snapshot(target))
+            self.assertEqual(manifest_before, manifest_path.read_bytes())
+            self.assertEqual("preserve\n", user_skill_file.read_text(encoding="utf-8"))
+
+    def test_install_migrates_legacy_skill_directories_before_safe_uninstall(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            target.mkdir()
+            (target / "README.md").write_text("user readme\n", encoding="utf-8")
+            (target / "AGENTS.md").write_text("# User rules\n", encoding="utf-8")
+            user_skill_file = target / ".agents" / "skills" / "state-router" / "user-note.txt"
+            user_skill_file.parent.mkdir(parents=True)
+            user_skill_file.write_text("preserve\n", encoding="utf-8")
+            baseline = _tree_snapshot(target)
+
+            _run_project_installer(target)
+            manifest_path = _rewrite_skill_entries_as_legacy_directories(target)
+            _run_project_installer(target)
+
+            migrated = json.loads(manifest_path.read_text(encoding="utf-8"))["installs"][0]
+            skill_entries = [entry for entry in migrated["entries"] if entry["kind"] == "skill"]
+            self.assertTrue(skill_entries)
+            self.assertTrue(all(Path(entry["remove_path"]).is_file() for entry in skill_entries))
+
+            _run_project_installer(target, "uninstall")
+
+            self.assertEqual(baseline, _tree_snapshot(target))
+            self.assertEqual("preserve\n", user_skill_file.read_text(encoding="utf-8"))
 
     def test_claude_rules_install_generates_claude_md_from_agents_md(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
