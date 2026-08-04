@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol
 
 from meta_flow.workspace.git_sync import (
     CreateOnlyRefResult,
@@ -42,6 +43,11 @@ from meta_flow.workspace.worktree_journal import (
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SAFE_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_ROOT_BRANCH_ONLY = "root-branch-only"
+
+
+class WorktreePolicyProtocol(Protocol):
+    worktree_policy: str
 
 
 class OperationState(StrEnum):
@@ -730,10 +736,25 @@ def create_project_worktree(
     bootstrap: CreateOnlyRefResult,
     *,
     identity: WorktreeIdentity,
+    route_profile: WorktreePolicyProtocol | None = None,
     git: GitRunner = _default_git,
     observe: Callable[[], WorktreeObservation],
 ) -> WorktreeOperationResult:
     """在 sibling target 上创建 integration worktree，并由 fresh observe 决定终态。"""
+
+    if route_profile is not None and route_profile.worktree_policy == _ROOT_BRANCH_ONLY:
+        return WorktreeOperationResult(
+            durable_intent.operation_id,
+            durable_intent.attempt_id,
+            "BLOCKED",
+            "root_branch_only: use git checkout -b <branch> in the root worktree",
+            "ABSENT",
+            "",
+            None,
+            "",
+            durable_intent.seal_record.path.as_posix(),
+            0,
+        )
 
     payload = durable_intent.intent_record.payload
     seed_oid = bootstrap.after_oid or bootstrap.before_oid

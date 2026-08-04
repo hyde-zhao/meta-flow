@@ -49,6 +49,8 @@ STANDARD_LITE_BLOCKING_TERMS = (
     "cross_module",
     "cross-module",
 )
+DEFAULT_WORKTREE_POLICY = "root-branch-only"
+ALLOWED_WORKTREE_POLICIES = {DEFAULT_WORKTREE_POLICY, "paired-worktree"}
 
 
 def default_gate_profiles() -> dict[str, Any]:
@@ -60,24 +62,28 @@ def default_gate_profiles() -> dict[str, Any]:
                 "stages": ["CP0", "CP6-lite", "CP7-lite", "CP8-lite"],
                 "human_gates": [],
                 "max_context_tokens": 8000,
+                "worktree_policy": DEFAULT_WORKTREE_POLICY,
             },
             "docs-lite": {
                 "description": "README、用户文档、说明性文档",
                 "stages": ["CP0", "CP2-lite", "CP8-lite"],
                 "human_gates": ["CP8-lite"],
                 "max_context_tokens": 10000,
+                "worktree_policy": DEFAULT_WORKTREE_POLICY,
             },
             "process-lite": {
                 "description": "process ledger、checker、索引、归档、非业务逻辑流程修复",
                 "stages": ["CP0", "CP2-lite", "CP6-lite", "CP7-lite", "CP8-lite"],
                 "human_gates": ["CP8-lite"],
                 "max_context_tokens": 12000,
+                "worktree_policy": DEFAULT_WORKTREE_POLICY,
             },
             "standard-code": {
                 "description": "普通代码功能、测试、内部模块调整",
                 "stages": ["CP0", "CP2", "CP3-lite", "CP5", "CP6", "CP7", "CP8"],
                 "human_gates": ["CP2", "CP5", "CP8"],
                 "max_context_tokens": 20000,
+                "worktree_policy": DEFAULT_WORKTREE_POLICY,
             },
             "standard-lite": {
                 "description": "单模块 / 小范围 artifact CR，保留 CP2/CP7/CP8 硬门禁但压缩设计和发布文档形态",
@@ -86,12 +92,14 @@ def default_gate_profiles() -> dict[str, Any]:
                 "max_context_tokens": 16000,
                 "allows_batch_lld": True,
                 "requires_hard_gates": ["scope_authz_consistency", "promise_evidence_alignment"],
+                "worktree_policy": DEFAULT_WORKTREE_POLICY,
             },
             "architecture-major": {
                 "description": "项目重构、边界重划、核心设计变更",
                 "stages": ["CP0", "CP1", "CP2", "CP3", "CP4", "CP5", "CP6", "CP7", "CP8"],
                 "human_gates": ["CP2", "CP3", "CP5", "CP8"],
                 "max_context_tokens": 30000,
+                "worktree_policy": DEFAULT_WORKTREE_POLICY,
             },
             "runtime-high-risk": {
                 "description": "凭据、NAS、外部系统、真实运行、交易、发布等高风险变更",
@@ -99,6 +107,7 @@ def default_gate_profiles() -> dict[str, Any]:
                 "human_gates": ["CP2", "CP3", "CP5", "CP8"],
                 "max_context_tokens": 40000,
                 "requires_explicit_authorization": True,
+                "worktree_policy": DEFAULT_WORKTREE_POLICY,
             },
         },
         "risk_rules": {
@@ -167,6 +176,9 @@ def validate_gate_profiles(project_root: Path) -> list[str]:
             errors.append(f"{profile} missing human_gates")
         if int(item.get("max_context_tokens") or 0) <= 0:
             errors.append(f"{profile} max_context_tokens must be positive")
+        worktree_policy = item.get("worktree_policy", DEFAULT_WORKTREE_POLICY)
+        if worktree_policy not in ALLOWED_WORKTREE_POLICIES:
+            errors.append(f"{profile} worktree_policy is unsupported")
     return errors
 
 

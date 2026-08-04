@@ -70,6 +70,14 @@ class GateProfileTests(unittest.TestCase):
             self.assertEqual(0, exit_code)
             self.assertIn("Gate Profile Check: OK", output.getvalue())
 
+    def test_all_gate_profiles_default_to_root_branch_only(self) -> None:
+        profiles = gate_profiles.default_gate_profiles()["profiles"]
+
+        self.assertTrue(profiles)
+        self.assertTrue(
+            all(profile["worktree_policy"] == "root-branch-only" for profile in profiles.values())
+        )
+
     def test_plan_prints_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
