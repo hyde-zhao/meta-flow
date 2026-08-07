@@ -111,6 +111,23 @@ current_discovery:
     - process/current/CURRENT.json
     - process/current/*.ref
     - process/current/* symlink if supported by the filesystem
+  canonical_git_truth:
+    - process/current/CURRENT.json
+    - process/current/*.ref
+  local_aliases:
+    names:
+      - state
+      - cr-index
+      - change
+      - context
+      - checkpoint
+      - story
+      - release
+      - handoff
+    git_class: ignored_generated
+    gitignore_ref: process/.gitignore
+    regeneration_command: meta-flow state current-refresh
+    stage_policy: forbidden
 zone_read_rules:
   hot:
     default_read: true

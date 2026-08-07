@@ -25,6 +25,18 @@ STATE_SCHEMA_VERSION = 2
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
 STATE_CURRENT_DIR_REL = Path("process/current")
 STATE_CURRENT_ENTRY_REL = STATE_CURRENT_DIR_REL / "CURRENT.json"
+CURRENT_ALIAS_NAMES = (
+    "state",
+    "cr-index",
+    "change",
+    "context",
+    "checkpoint",
+    "story",
+    "release",
+    "handoff",
+)
+CURRENT_ALIAS_GITIGNORE_BEGIN = "# meta-flow:managed-current-aliases:begin"
+CURRENT_ALIAS_GITIGNORE_END = "# meta-flow:managed-current-aliases:end"
 STATE_MD_REL = Path("process/STATE.md")
 STATE_HISTORY_REL = Path("process/state/HISTORY.md")
 WORKFLOW_HEALTH_REL = Path("process/state/WORKFLOW-HEALTH.json")
@@ -739,6 +751,7 @@ def _bootstrap_legacy_state_at_process_root(
         "stale_refs": [],
     }
     current_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_current_alias_gitignore(current_dir)
     _write_json(entry_path, entry)
     state_ref = current_dir / "state.ref"
     state_ref.write_text(STATE_CURRENT_REL.as_posix() + "\n", encoding="utf-8")
@@ -1134,6 +1147,54 @@ def _clear_pointer(current_dir: Path, name: str) -> None:
             pass
 
 
+def _current_alias_gitignore_block() -> str:
+    lines = [
+        CURRENT_ALIAS_GITIGNORE_BEGIN,
+        "# CURRENT.json 与 *.ref 是 canonical truth；以下软链接仅供本地发现。",
+        *(f"/current/{name}" for name in CURRENT_ALIAS_NAMES),
+        CURRENT_ALIAS_GITIGNORE_END,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _ensure_current_alias_gitignore(current_dir: Path) -> Path:
+    """在过程仓根目录维护精确的 current alias 忽略规则。"""
+
+    gitignore_path = current_dir.parent / ".gitignore"
+    if gitignore_path.is_symlink() or (gitignore_path.exists() and not gitignore_path.is_file()):
+        raise FileExistsError(f"{gitignore_path} 不是可安全更新的常规文件")
+
+    existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else ""
+    has_begin = CURRENT_ALIAS_GITIGNORE_BEGIN in existing
+    has_end = CURRENT_ALIAS_GITIGNORE_END in existing
+    if has_begin != has_end:
+        raise ValueError(f"{gitignore_path} 的 current alias managed block 不完整")
+    if existing.count(CURRENT_ALIAS_GITIGNORE_BEGIN) > 1 or existing.count(CURRENT_ALIAS_GITIGNORE_END) > 1:
+        raise ValueError(f"{gitignore_path} 的 current alias managed block 重复")
+
+    block = _current_alias_gitignore_block()
+    if has_begin:
+        start = existing.index(CURRENT_ALIAS_GITIGNORE_BEGIN)
+        end_marker = existing.index(CURRENT_ALIAS_GITIGNORE_END, start)
+        end = existing.find("\n", end_marker)
+        end = len(existing) if end == -1 else end + 1
+        rendered = existing[:start] + block + existing[end:]
+    else:
+        prefix = existing
+        if prefix and not prefix.endswith("\n"):
+            prefix += "\n"
+        if prefix and not prefix.endswith("\n\n"):
+            prefix += "\n"
+        rendered = prefix + block
+
+    if rendered == existing:
+        return gitignore_path
+    tmp_path = gitignore_path.with_name(f".{gitignore_path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(rendered, encoding="utf-8")
+    tmp_path.replace(gitignore_path)
+    return gitignore_path
+
+
 def _write_pointer(current_dir: Path, project_root: Path, name: str, rel_ref: str | None) -> None:
     if not rel_ref:
         _clear_pointer(current_dir, name)
@@ -1172,6 +1233,7 @@ def refresh_current_entry(
     )
     current_dir = _resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
     current_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_current_alias_gitignore(current_dir)
     path = _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
     existing = _read_json(path) if path.is_file() else {}
     existing_semantic = dict(existing)
@@ -1182,14 +1244,18 @@ def refresh_current_entry(
         entry["updated_at"] = existing.get("updated_at")
     else:
         _write_json(path, entry)
-    _write_pointer(current_dir, project_root, "state", entry["state_ref"])
-    _write_pointer(current_dir, project_root, "cr-index", entry.get("cr_index_ref"))
-    _write_pointer(current_dir, project_root, "change", entry.get("change_ref"))
-    _write_pointer(current_dir, project_root, "context", entry.get("context_ref"))
-    _write_pointer(current_dir, project_root, "checkpoint", entry.get("checkpoint_ref"))
-    _write_pointer(current_dir, project_root, "story", entry.get("story_packet_ref"))
-    _write_pointer(current_dir, project_root, "release", entry.get("release_context_ref"))
-    _write_pointer(current_dir, project_root, "handoff", entry.get("handoff_ref"))
+    pointer_refs = {
+        "state": entry["state_ref"],
+        "cr-index": entry.get("cr_index_ref"),
+        "change": entry.get("change_ref"),
+        "context": entry.get("context_ref"),
+        "checkpoint": entry.get("checkpoint_ref"),
+        "story": entry.get("story_packet_ref"),
+        "release": entry.get("release_context_ref"),
+        "handoff": entry.get("handoff_ref"),
+    }
+    for name in CURRENT_ALIAS_NAMES:
+        _write_pointer(current_dir, project_root, name, pointer_refs[name])
     return path
 
 

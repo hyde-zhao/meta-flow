@@ -64,15 +64,10 @@ Production projects continue to follow their own documented delivery layout. Thi
 
 Generated outputs:
 
-- `process/current/CURRENT.json`
-- `process/current/state.ref`
-- `process/current/cr-index.ref`
-- `process/current/context.ref`
-- `process/current/checkpoint.ref`
-- `process/current/story.ref`
-- `process/current/release.ref`
-- `process/current/handoff.ref`
-- Best-effort symlinks with the same stem when the filesystem supports symlinks.
+- Canonical, trackable discovery truth: `process/current/CURRENT.json` and each present same-stem `*.ref` file (`state.ref`, `cr-index.ref`, `change.ref`, `context.ref`, `checkpoint.ref`, `story.ref`, `release.ref`, and `handoff.ref`).
+- Local, regenerable discovery aliases: same-stem symlinks (`state`, `cr-index`, `change`, `context`, `checkpoint`, `story`, `release`, and `handoff`) when the filesystem supports symlinks.
+
+The symlink aliases are never formal truth and must not be staged. `current-refresh` maintains an exact managed block in the process-root `.gitignore` so the aliases remain `ignored_generated`; it preserves unrelated ignore rules and fails before rewriting an unsafe or malformed `.gitignore`. A fresh clone may reconstruct the aliases from tracked state and discovery inputs without making the worktree dirty.
 
 `CURRENT.json` must include:
 
@@ -127,4 +122,4 @@ Reading deny-default files requires a valid `full_doc_read_reason` and a read ex
 
 ## Generation Rules
 
-`meta-flow state current-refresh` updates `process/current/`. `meta-flow state render` also refreshes it after rendering the human summary. Producers must not hand-edit `CURRENT.json`; stale refs should be fixed by updating `STATE.current.json`, CR indexes, context capsules, or handoff/release artifacts and then rerunning `current-refresh`.
+`meta-flow state current-refresh` updates `process/current/` and the process-root `.gitignore` managed alias block. `meta-flow state render` also refreshes it after rendering the human summary. Producers must not hand-edit `CURRENT.json`, `*.ref`, or the generated symlink aliases; stale refs should be fixed by updating `STATE.current.json`, CR indexes, context capsules, or handoff/release artifacts and then rerunning `current-refresh`.

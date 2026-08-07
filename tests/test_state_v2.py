@@ -208,6 +208,84 @@ class StateV2Tests(unittest.TestCase):
                 "process/handoffs/NEXT-SESSION-CR154-20260702.md\n",
                 (root / "process" / "current" / "handoff.ref").read_text(encoding="utf-8"),
             )
+            self.assertTrue((root / "process" / "current" / "handoff").is_symlink())
+
+    def test_current_refresh_preserves_gitignore_and_keeps_aliases_out_of_git(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = root / "process"
+            process.mkdir()
+            (process / ".gitignore").write_text("user-cache/\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "init", "-b", "main"],
+                cwd=process,
+                check=True,
+                capture_output=True,
+            )
+            current.write_current_state(root, current.default_current_state(root))
+
+            current.refresh_current_entry(root)
+
+            gitignore = (process / ".gitignore").read_text(encoding="utf-8")
+            self.assertTrue(gitignore.startswith("user-cache/\n"))
+            for name in current.CURRENT_ALIAS_NAMES:
+                self.assertIn(f"/current/{name}\n", gitignore)
+            self.assertTrue((process / "current" / "state").is_symlink())
+
+            subprocess.run(["git", "add", "."], cwd=process, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Meta Flow Test",
+                    "-c",
+                    "user.email=meta-flow@example.invalid",
+                    "commit",
+                    "-m",
+                    "initial current discovery",
+                ],
+                cwd=process,
+                check=True,
+                capture_output=True,
+            )
+            tracked = subprocess.run(
+                ["git", "ls-files"],
+                cwd=process,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            self.assertIn("current/CURRENT.json", tracked)
+            self.assertIn("current/state.ref", tracked)
+            self.assertNotIn("current/state", tracked)
+
+            first_gitignore = (process / ".gitignore").read_bytes()
+            current.refresh_current_entry(root)
+            self.assertEqual(first_gitignore, (process / ".gitignore").read_bytes())
+            status = subprocess.run(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                cwd=process,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual("", status)
+
+    def test_current_refresh_rejects_incomplete_gitignore_block_before_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = root / "process"
+            process.mkdir()
+            (process / ".gitignore").write_text(
+                current.CURRENT_ALIAS_GITIGNORE_BEGIN + "\n",
+                encoding="utf-8",
+            )
+            current.write_current_state(root, current.default_current_state(root))
+
+            with self.assertRaisesRegex(ValueError, "managed block 不完整"):
+                current.refresh_current_entry(root)
+
+            self.assertFalse((process / "current" / "CURRENT.json").exists())
 
     def test_current_refresh_does_not_use_yaml_cr_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

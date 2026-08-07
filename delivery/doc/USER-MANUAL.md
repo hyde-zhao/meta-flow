@@ -531,6 +531,8 @@ meta-flow state check --project-root . --mode enforce
 
 `process/current/CURRENT.json` 会表达 `idle`、`active`、`awaiting_gate` 或 `blocked`，并指向当前 `state_ref`、`cr_index_ref`、`context_ref`、`checkpoint_ref`、`story_packet_ref`、`release_context_ref` 和 `handoff_ref`。空闲期会显示 `status: "idle"`；这表示当前没有活跃 CR，Agent 应优先读取最新 release context、handoff 和 CR index，而不是误把已关闭 CR 的上下文当成活跃工作。
 
+`CURRENT.json` 与当前存在的同名 `*.ref` 是可提交的 canonical discovery truth；`state`、`cr-index`、`change`、`context`、`checkpoint`、`story`、`release`、`handoff` 等无扩展名软链接只是本地可再生 alias，不得 stage。`current-refresh` 会在过程仓根 `.gitignore` 中维护精确 managed block，保留其他规则；fresh clone 可再次运行该命令恢复 alias，且不应产生 Git dirty-path。
+
 上述流程不授权 credentials、runtime、SaaS、production write、trading、publish 或 CR-033 runtime follow-up。正式编号使用 `CR-xxx`；`MF-xxx` 仅作为历史别名。
 
 #### 源码仓库与共享 artifacts 仓库的 Git 周期
