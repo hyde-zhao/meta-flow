@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
+import subprocess
 import sys
 from fnmatch import fnmatch
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from meta_flow.checks.frozen_cp6_evidence import project_story_admission
+from meta_flow.checks.frozen_cp6_evidence import (
+    Cp6RevalidationAuthorizationV1,
+    FrozenCp6EvidenceError,
+    project_story_admission,
+)
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS, estimate_tokens, load_budgets
 from meta_flow.context_pack import read_expansion
 from meta_flow.context_pack.builder import (
@@ -28,8 +35,9 @@ from meta_flow.design.product_governance import (
 )
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
+from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
-from meta_flow.project.scale import load_yaml_object
+from meta_flow.project.scale import _parse_yaml_lines, _strip_comment, load_yaml_object
 from meta_flow.state.current import (
     STATE_CURRENT_ENTRY_REL,
     STATE_CURRENT_REL,
@@ -64,6 +72,13 @@ ALLOWED_PACKET_TYPES = {
     "story_verify_packet",
 }
 ALLOWED_STAGES = {"BASE", "CP5", "CP6", "CP7"}
+_CANONICAL_DEV_GATE_FIELDS = (
+    "cp5_confirmed",
+    "dependencies_satisfied",
+    "file_conflict_free",
+    "implementation_authorized",
+    "lld_confirmed",
+)
 
 
 def _frontmatter(text: str) -> str:
@@ -120,12 +135,50 @@ def _read_json_or_yaml(path: Path) -> dict[str, Any]:
         return _parse_flat_yaml(text)
 
 
+def _parse_story_frontmatter(text: str) -> dict[str, Any]:
+    """只解析 StoryCard frontmatter；通用 YAML loader 的契约不在此处扩展。"""
+
+    frontmatter = _frontmatter(text)
+    if not frontmatter:
+        return {}
+    prepared: list[tuple[int, str]] = []
+    for raw_line in frontmatter.splitlines():
+        line = _strip_comment(raw_line).rstrip()
+        if line.strip():
+            prepared.append((len(line) - len(line.lstrip(" ")), line.strip()))
+    if not prepared:
+        return {}
+    try:
+        data, index = _parse_yaml_lines(prepared, 0, prepared[0][0])
+    except (ValueError, IndexError) as exc:
+        raise ValueError("Story frontmatter is not a supported mapping") from exc
+    if index != len(prepared) or not isinstance(data, dict):
+        raise ValueError("Story frontmatter is not a supported mapping")
+    return data
+
+
 def _as_list(value: Any) -> list[str]:
     if value is None or value == "":
         return []
     if isinstance(value, list):
         return [str(item) for item in value if str(item)]
     return [str(value)]
+
+
+def _strict_string_list(value: Any, *, field: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise ValueError(f"canonical Story {field} must be a list of non-empty strings")
+    return value
+
+
+def _stable_unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value not in result:
+            result.append(value)
+    return result
 
 
 def _as_mapping_summary(value: Any) -> str:
@@ -204,7 +257,8 @@ def _story_id_from_path(path: Path, data: dict[str, Any]) -> str:
 
 
 def story_data_from_file(path: Path) -> dict[str, Any]:
-    data = _read_json_or_yaml(path)
+    text = path.read_text(encoding="utf-8")
+    data = _parse_story_frontmatter(text) if _frontmatter(text) else _read_json_or_yaml(path)
     data["story_id"] = _story_id_from_path(path, data)
     return data
 
@@ -240,6 +294,172 @@ def _section_bullets(text: str, heading: str) -> list[str]:
     ]
 
 
+def _section_list_items(text: str, heading: str) -> list[str]:
+    """读取 canonical acceptance 的编号项或项目符号，保留其书写顺序。"""
+
+    items: list[str] = []
+    for line in _markdown_section(text, heading):
+        stripped = line.strip()
+        match = re.match(r"(?:[-*]|\d+[.)])\s+(.+)$", stripped)
+        if match and match.group(1).strip():
+            items.append(match.group(1).strip())
+    return items
+
+
+def _canonical_story_present(story: dict[str, Any]) -> bool:
+    return "feature_id" in story or isinstance(story.get("lld_policy"), dict)
+
+
+def _optional_formal_identity(value: Any, *, field: str) -> str:
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Story {field} must be a non-empty string")
+    return value
+
+
+def _resolve_formal_cr_identity(story: dict[str, Any], *, explicit_cr_id: str) -> str:
+    """解析 packet 的 formal CR identity，并拒绝 caller/card 双写漂移。"""
+
+    explicit = _optional_formal_identity(explicit_cr_id, field="explicit --cr")
+    legacy = _optional_formal_identity(story.get("cr_id"), field="cr_id")
+    if not _canonical_story_present(story):
+        if explicit and legacy and explicit != legacy:
+            raise ValueError("explicit --cr and legacy cr_id conflict")
+        return explicit or legacy
+    raw_canonical = story.get("change_id")
+    if not isinstance(raw_canonical, str) or not raw_canonical.strip():
+        raise ValueError("canonical Story change_id must be a non-empty string")
+    canonical = raw_canonical
+    for name, value in (("explicit --cr", explicit), ("legacy cr_id", legacy)):
+        if value and value != canonical:
+            raise ValueError(f"canonical change_id and {name} conflict")
+    return canonical
+
+
+def _normalize_story_card_v1(story: dict[str, Any], story_text: str) -> dict[str, Any]:
+    """将已知 StoryCard V1 字段映射为 packet producer 的受限输入。"""
+
+    if not _canonical_story_present(story):
+        return dict(story)
+    normalized = dict(story)
+    lld_policy = story.get("lld_policy")
+    if not isinstance(lld_policy, dict):  # 防御性分支，保持此函数的 fail-closed 契约。
+        raise ValueError("canonical Story lld_policy must be a mapping")
+    required_level = lld_policy.get("required_level")
+    if not isinstance(required_level, str) or not required_level:
+        raise ValueError("canonical Story lld_policy.required_level must be a non-empty string")
+    feature_id = story.get("feature_id")
+    if not isinstance(feature_id, str) or not feature_id:
+        raise ValueError("canonical Story feature_id must be a non-empty string")
+    explicit_feature_refs = _strict_string_list(story.get("feature_refs"), field="feature_refs")
+    design_refs = _strict_string_list(story.get("feature_design_refs"), field="feature_design_refs")
+    canonical_acceptance = _section_list_items(text=story_text, heading="## 5. acceptance_criteria")
+    if not canonical_acceptance:
+        raise ValueError("canonical Story acceptance_criteria must contain at least one list item")
+    legacy_acceptance_sources = {
+        "acceptance": _strict_string_list(story.get("acceptance"), field="acceptance"),
+        "acceptance_criteria": _strict_string_list(
+            story.get("acceptance_criteria"), field="acceptance_criteria"
+        ),
+        "legacy_heading": _section_bullets(story_text, "## 量化验收"),
+    }
+    for source, values in legacy_acceptance_sources.items():
+        if values and values != canonical_acceptance:
+            raise ValueError(f"canonical and legacy Story acceptance conflict: {source}")
+    explicit_delta = story.get("cr_delta_summary")
+    if explicit_delta is not None and (not isinstance(explicit_delta, str) or not explicit_delta):
+        raise ValueError("canonical Story cr_delta_summary must be a non-empty string")
+    change_id = story.get("change_id")
+    title = story.get("title")
+    if not explicit_delta and (not isinstance(change_id, str) or not change_id or not isinstance(title, str) or not title):
+        raise ValueError("canonical Story requires change_id and title for deterministic CR delta")
+    normalized["lld_policy"] = required_level
+    normalized["feature_refs"] = _stable_unique([feature_id, *explicit_feature_refs])
+    normalized["feature_design_refs"] = design_refs
+    normalized["acceptance"] = canonical_acceptance
+    normalized["cr_delta_summary"] = explicit_delta or f"{change_id}: {title}"
+    normalized["cr_id"] = _resolve_formal_cr_identity(story, explicit_cr_id="")
+    return normalized
+
+
+def _project_admission_gate(dev_gate: Any) -> dict[str, bool]:
+    """白名单投影 native plan 的准入字段，保留原 plan provenance 不变。"""
+
+    if not isinstance(dev_gate, dict):
+        raise ValueError("native plan dev_gate must be a mapping")
+    projected: dict[str, bool] = {}
+    for field in _CANONICAL_DEV_GATE_FIELDS:
+        value = dev_gate.get(field)
+        if type(value) is not bool:
+            raise ValueError(f"native plan dev_gate.{field} must be bool")
+        projected[field] = value
+    return projected
+
+
+def _safe_lld_logical_ref(value: Any) -> str:
+    """验证 LLD 的 logical ref；错误不包含物理 process 路径。"""
+
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ValueError("LLD_REF_UNSAFE")
+    if (
+        not value.startswith("process/")
+        or value.startswith("/")
+        or "\\" in value
+        or "://" in value
+        or "//" in value
+        or not value.endswith(".md")
+    ):
+        raise ValueError("LLD_REF_UNSAFE")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("LLD_REF_UNSAFE")
+    return value
+
+
+def _selected_full_lld_ref(
+    project_root: Path,
+    *,
+    raw_story: dict[str, Any],
+    story_ref: str,
+) -> str | None:
+    """选择并预检 full LLD；canonical 分支绝不回退到 legacy 派生路径。"""
+
+    canonical = _canonical_story_present(raw_story)
+    raw_policy = raw_story.get("lld_policy")
+    if canonical:
+        if not isinstance(raw_policy, dict):
+            raise ValueError("LLD_GATE_MALFORMED")
+        required_level = raw_policy.get("required_level")
+        if not isinstance(required_level, str) or not required_level:
+            raise ValueError("LLD_GATE_MALFORMED")
+        if required_level != "full-lld":
+            return None
+        gate = raw_story.get("lld_gate")
+        if gate is None:
+            raise ValueError("LLD_GATE_MISSING")
+        if not isinstance(gate, dict) or gate.get("required") is not True:
+            raise ValueError("LLD_GATE_MALFORMED")
+        if "design_evidence_type" in gate and gate["design_evidence_type"] != "full-lld":
+            raise ValueError("LLD_GATE_POLICY_CONFLICT")
+        if "evidence_ref" not in gate:
+            raise ValueError("LLD_GATE_MISSING")
+        ref = _safe_lld_logical_ref(gate["evidence_ref"])
+    else:
+        if raw_policy != "full-lld":
+            return None
+        if not story_ref.startswith("process/") or not story_ref.endswith(".md"):
+            raise ValueError("LLD_REF_UNSAFE")
+        ref = _safe_lld_logical_ref(story_ref[:-3] + "-LLD.md")
+    try:
+        target = _resolve_runtime_ref(project_root, ref)
+    except (FileNotFoundError, ValueError):
+        raise ValueError("LLD_REF_TARGET_MISSING") from None
+    if not target.is_file():
+        raise ValueError("LLD_REF_TARGET_MISSING")
+    return ref
+
+
 def _development_plan_story(project_root: Path, story_id: str) -> dict[str, Any]:
     path = _resolve_runtime_ref(project_root, DEVELOPMENT_PLAN_REL.as_posix())
     if not path.is_file():
@@ -268,8 +488,8 @@ def _projected_story_contract(
 
     plan_story = _development_plan_story(project_root, story_id)
     if not plan_story:
-        return story, None
-    projected = dict(story)
+        return _normalize_story_card_v1(story, story_text), None
+    projected = _normalize_story_card_v1(story, story_text)
     ownership = plan_story.get("file_ownership")
     ownership = ownership if isinstance(ownership, dict) else {}
     dependencies = plan_story.get("dependency_type")
@@ -328,15 +548,11 @@ def _projected_story_contract(
     if not projected.get("authz_policy_refs"):
         projected["authz_policy_refs"] = [AUTHZ_POLICY_REL.as_posix()]
     dev_gate = plan_story.get("dev_gate")
-    projected_gate = (
-        {
-            "story_id": story_id,
-            "status": str(plan_story.get("status") or ""),
-            "dev_gate": dict(dev_gate),
-        }
-        if isinstance(dev_gate, dict)
-        else None
-    )
+    projected_gate = {
+        "story_id": story_id,
+        "status": str(plan_story.get("status") or ""),
+        "dev_gate": _project_admission_gate(dev_gate),
+    }
     return projected, projected_gate
 
 
@@ -352,6 +568,143 @@ def _story_output_path(project_root: Path, story_id: str, stage: str) -> Path:
 
 def _return_ref(story_id: str, stage: str) -> str:
     return (STORY_RETURN_ROOT_REL / f"{story_id}.{stage}.return.json").as_posix()
+
+
+def _load_revalidation_authorization(
+    project_root: Path, authorization_ref: str,
+) -> tuple[Cp6RevalidationAuthorizationV1, str]:
+    """只从持久化 logical ref 读取 A2 authorization，绝不信任 caller digest map。"""
+
+    if (
+        not authorization_ref.startswith("process/")
+        or authorization_ref.startswith("/")
+        or "\\" in authorization_ref
+        or any(part in {"", ".", ".."} for part in authorization_ref.split("/"))
+    ):
+        raise ValueError("revalidation authorization ref must be a safe process logical ref")
+    path = _resolve_runtime_path(project_root, authorization_ref)
+    if not path.is_file():
+        raise ValueError("revalidation authorization is missing")
+    try:
+        raw_bytes = path.read_bytes()
+        raw = json.loads(raw_bytes)
+        return Cp6RevalidationAuthorizationV1.from_dict(raw), hashlib.sha256(raw_bytes).hexdigest()
+    except (json.JSONDecodeError, FrozenCp6EvidenceError, TypeError) as exc:
+        raise ValueError("revalidation authorization is invalid") from exc
+
+
+def _revalidation_artifact_refs(authorization: Cp6RevalidationAuthorizationV1) -> tuple[str, str]:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", authorization.work_id) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", authorization.attempt_id):
+        raise ValueError("revalidation work or attempt identity is unsafe")
+    root = f"process/works/{authorization.work_id}/revalidation/{authorization.attempt_id}/artifacts"
+    return (
+        f"{root}/{authorization.story_id}.CP6.work-packet.json",
+        f"{root}/{authorization.story_id}.CP6.return.json",
+    )
+
+
+def _git_head(path: Path) -> str:
+    result = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+    value = result.stdout.strip()
+    if result.returncode or not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise ValueError("revalidation current git fact is unavailable")
+    return value
+
+
+def _current_revalidation_facts(project_root: Path, authorization: Cp6RevalidationAuthorizationV1) -> dict[str, str]:
+    """从 current release/process/Work 独立取事实，禁止由 authorization 回填。"""
+
+    process_root = _resolve_runtime_ref(project_root, "process/.meta-flow-process.yaml").parent
+    work_path = _resolve_runtime_path(project_root, f"process/works/{authorization.work_id}/WORK.yaml")
+    if not work_path.is_file():
+        raise ValueError("revalidation current Work is unavailable")
+    work = _read_json_or_yaml(work_path)
+    if work.get("work_id") != authorization.work_id or work.get("status") != "active":
+        raise ValueError("revalidation current Work identity or status is invalid")
+    scope_digest = str(work.get("scope_digest") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", scope_digest):
+        raise ValueError("revalidation current Work scope_digest is unavailable")
+    return {"release_oid": _git_head(project_root), "process_oid": _git_head(process_root), "scope_digest": scope_digest}
+
+
+def _revalidation_allowed_targets(authorization: Cp6RevalidationAuthorizationV1, packet_ref: str, return_ref: str) -> bool:
+    return all(any(fnmatch(target, pattern) for pattern in authorization.allowed_write_paths) for target in (packet_ref, return_ref))
+
+
+def _native_work_allowed_targets(project_root: Path, authorization: Cp6RevalidationAuthorizationV1, packet_ref: str, return_ref: str) -> bool:
+    work_path = _resolve_runtime_path(project_root, f"process/works/{authorization.work_id}/WORK.yaml")
+    work = _read_json_or_yaml(work_path)
+    scope = work.get("scope")
+    patterns = scope.get("allowed_writes") if isinstance(scope, dict) else None
+    if not isinstance(patterns, list) or not all(isinstance(pattern, str) for pattern in patterns):
+        return False
+    # Work scope is relative to process root; only a validated process logical ref
+    # may undergo this one-way normalization.
+    relative_targets = []
+    for target in (packet_ref, return_ref):
+        if not target.startswith("process/") or any(item in {"", ".", ".."} for item in target.split("/")):
+            return False
+        relative_targets.append(target.removeprefix("process/"))
+    return all(any(fnmatch(target, pattern) for pattern in patterns) for target in relative_targets)
+
+
+def _validate_authorization_refs(project_root: Path, authorization: Cp6RevalidationAuthorizationV1) -> None:
+    for ref, digest in ((authorization.previous_cp6_ref, authorization.previous_cp6_digest), (authorization.superseding_cp5_ref, authorization.superseding_cp5_digest)):
+        path = _resolve_runtime_path(project_root, ref)
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise ValueError("revalidation authorization reference or digest mismatch")
+
+
+def _validate_revalidation_packet_preimage(path: Path, packet_ref: str, authorization: Cp6RevalidationAuthorizationV1) -> None:
+    """首次 apply 只接受 authorization 冻结的 absent target preimage；replay 留给 bytes 比较。"""
+
+    expected = canonical_digest({"target_ref": packet_ref, "exists": False})
+    if authorization.plan_preimage_digest != expected:
+        raise ValueError("revalidation authorization packet preimage mismatch")
+
+
+def _write_revalidation_packet_create_once(path: Path, payload: bytes) -> dict[str, Any]:
+    """仅为同一 attempt 创建 packet；未知写后状态保守标记为 PARTIAL。"""
+
+    if path.exists():
+        try:
+            current = path.read_bytes()
+        except OSError:
+            return {"decision": "PARTIAL", "mutation_count": 0}
+        return {
+            "decision": "NO_CHANGE" if current == payload else "BLOCKED",
+            "mutation_count": 0,
+        }
+    parents = [item for item in (path.parent, *path.parent.parents) if item != item.parent]
+    before = {item: item.exists() for item in parents}
+
+    def observed_mutations() -> int:
+        parent_mutations = sum(
+            not existed and item.exists() for item, existed in before.items()
+        )
+        target_mutations = int(path.exists())
+        return parent_mutations + target_mutations
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return {"decision": "PARTIAL", "mutation_count": observed_mutations()}
+    try:
+        with path.open("xb") as target:
+            target.write(payload)
+    except FileExistsError:
+        try:
+            return {"decision": "NO_CHANGE" if path.read_bytes() == payload else "BLOCKED", "mutation_count": 0}
+        except OSError:
+            return {"decision": "PARTIAL", "mutation_count": 0}
+    except OSError:
+        return {"decision": "PARTIAL", "mutation_count": observed_mutations()}
+    try:
+        if path.read_bytes() != payload:
+            return {"decision": "PARTIAL", "mutation_count": observed_mutations()}
+    except OSError:
+        return {"decision": "PARTIAL", "mutation_count": observed_mutations()}
+    return {"decision": "APPLIED", "mutation_count": 1}
 
 
 def _stage_budget(project_root: Path, stage: str, explicit_budget: int | None) -> int:
@@ -416,6 +769,7 @@ def build_story_packet(
     cp6_return_ref: str = "",
     frozen_cp6_evidence: dict[str, Any] | None = None,
     expected_dependency_digests: dict[str, str] | None = None,
+    revalidation_authorization_ref: str = "",
     write_policy: bool = True,
 ) -> tuple[dict[str, Any], Path]:
     project_root = project_root.resolve()
@@ -426,25 +780,37 @@ def build_story_packet(
     story_path = _resolve_runtime_path(project_root, story_path)
     if not story_path.is_file():
         raise FileNotFoundError(f"Story file missing: {story_path}")
-    if write_policy:
-        write_default_read_policy(project_root)
-    read_policy = load_read_policy(project_root)
-    state, state_required = _load_runtime_state_contract(project_root)
     story = story_data_from_file(story_path)
+    raw_story = dict(story)
     story_id = str(story["story_id"])
-    effective_cr_id = cr_id or str(story.get("cr_id") or "")
+    effective_cr_id = _resolve_formal_cr_identity(story, explicit_cr_id=cr_id)
     story_rel = (
         story_input_ref
         if not Path(story_input_ref).is_absolute() and story_input_ref.startswith("process/")
         else _rel(project_root, story_path)
     )
-    lld_ref = story_rel.replace(".md", "-LLD.md")
     story, projected_gate = _projected_story_contract(
         project_root,
         story=story,
         story_text=story_path.read_text(encoding="utf-8"),
         story_id=story_id,
     )
+    if (
+        stage == "CP6"
+        and not revalidation_authorization_ref
+        and isinstance(projected_gate, dict)
+        and projected_gate.get("status") == "ready-for-verification"
+    ):
+        raise ValueError("ready-for-verification requires explicit revalidation authorization")
+    selected_lld_ref = _selected_full_lld_ref(
+        project_root,
+        raw_story=raw_story,
+        story_ref=story_rel,
+    )
+    if write_policy:
+        write_default_read_policy(project_root)
+    read_policy = load_read_policy(project_root)
+    state, state_required = _load_runtime_state_contract(project_root)
     allowed_reads: list[dict[str, Any]] = []
     must_read: list[dict[str, Any]] = []
     read_if_needed: list[dict[str, Any]] = []
@@ -493,33 +859,31 @@ def build_story_packet(
             _append_unique(allowed_reads, _read_entry(project_root, rel_path, required=False, reason=reason))
 
     lld_policy = str(story.get("lld_policy") or story.get("required_level") or "")
-    if lld_policy == "full-lld":
+    if selected_lld_ref:
         read_if_needed.append(
             {
-                "path": lld_ref,
+                "path": selected_lld_ref,
                 "mode": "full",
                 # deny-default 目标在扩读授权前不得读取正文；授权后由 reader 计量。
                 "estimated_tokens": 0,
                 "trigger": "full_lld_required_by_policy",
                 "reason": "story_lld",
+                "consumer_requirement": "required",
             }
         )
     denied_patterns = list(
         read_policy.get("deny_default_reads") or DEFAULT_READ_DENY_PATTERNS
     )
-    preregistration_refs = sorted(
-        {
-            str(entry.get("path") or "")
-            for entry in read_if_needed
-            if str(entry.get("trigger") or "")
-            and _matches_any(str(entry.get("path") or ""), denied_patterns)
-        }
+    preregistration_refs = list(
+        read_expansion.select_required_preregistration_refs(
+            {"lld_policy": lld_policy, "read_if_needed": read_if_needed}
+        )
     )
     pre_dispatch_actions = (
         [
             {
                 "operation": "context.read-log",
-                "input_contract": "ReadExpansionPlanV1",
+                "input_contract": "ReadExpansionPlanV2",
                 "actor": "host-orchestrator",
                 "required_before": "story-dispatch",
                 "requested_refs": preregistration_refs,
@@ -543,7 +907,7 @@ def build_story_packet(
     if stage in {"CP6", "CP7"} and not parent_ref:
         parent_ref = (STORY_CONTEXT_ROOT_REL / f"{story_id}.base.context.json").as_posix()
     packet: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "packet_type": packet_type,
         "stage": stage,
         "project_id": str(state.get("project_id") or project_root.name),
@@ -598,19 +962,85 @@ def build_story_packet(
             "estimator": "chars_div_4",
         },
     }
+    revalidation_authorization: Cp6RevalidationAuthorizationV1 | None = None
+    if revalidation_authorization_ref:
+        if stage != "CP6":
+            raise ValueError("revalidation authorization is only valid for CP6")
+        revalidation_authorization, authorization_bytes_digest = _load_revalidation_authorization(project_root, revalidation_authorization_ref)
+        if (revalidation_authorization.cr_id, revalidation_authorization.story_id) != (effective_cr_id, story_id):
+            raise ValueError("revalidation authorization Story identity mismatch")
+        if output is not None:
+            raise ValueError("revalidation packet output is derived from authorization")
     if stage == "CP6":
         packet["expected_return_packet"] = _return_ref(story_id, "CP6")
         packet["admission"] = project_story_admission(
             frozen_cp6_evidence,
             expected_dependency_digests=expected_dependency_digests or {},
             projected_gate=projected_gate,
+            revalidation_authorization=revalidation_authorization,
+            revalidation_identity=(
+                {
+                    "cr_id": effective_cr_id,
+                    "story_id": story_id,
+                    "work_id": revalidation_authorization.work_id,
+                    "attempt_id": revalidation_authorization.attempt_id,
+                    "release_oid": revalidation_authorization.release_oid,
+                    "process_oid": revalidation_authorization.process_oid,
+                    "scope_digest": revalidation_authorization.scope_digest,
+                }
+                if revalidation_authorization else None
+            ),
         )
+        if revalidation_authorization:
+            packet_ref, return_ref = _revalidation_artifact_refs(revalidation_authorization)
+            canonical_authorization_ref = f"process/works/{revalidation_authorization.work_id}/revalidation/{revalidation_authorization.attempt_id}/receipts/authorization.json"
+            if revalidation_authorization_ref != canonical_authorization_ref:
+                raise ValueError("revalidation authorization ref is not canonical")
+            current_facts = _current_revalidation_facts(project_root, revalidation_authorization)
+            if any(current_facts[field] != getattr(revalidation_authorization, field) for field in current_facts):
+                raise ValueError("revalidation authorization current facts mismatch")
+            if not _revalidation_allowed_targets(revalidation_authorization, packet_ref, return_ref):
+                raise ValueError("revalidation authorization target is outside allowlist")
+            if not _native_work_allowed_targets(project_root, revalidation_authorization, packet_ref, return_ref):
+                raise ValueError("revalidation target is outside native Work allowlist")
+            _validate_authorization_refs(project_root, revalidation_authorization)
+            packet["schema_version"] = 4
+            packet["expected_return_packet"] = return_ref
+            packet["revalidation_binding"] = {
+                "version": 1,
+                "authorization_ref": revalidation_authorization_ref,
+                "authorization_bytes_digest": authorization_bytes_digest,
+                "authorization_digest": revalidation_authorization.authorization_digest,
+                "cr_id": revalidation_authorization.cr_id,
+                "story_id": revalidation_authorization.story_id,
+                "work_id": revalidation_authorization.work_id,
+                "attempt_id": revalidation_authorization.attempt_id,
+                "release_oid": revalidation_authorization.release_oid,
+                "process_oid": revalidation_authorization.process_oid,
+                "scope_digest": revalidation_authorization.scope_digest,
+                "previous_cp6_ref": revalidation_authorization.previous_cp6_ref,
+                "previous_cp6_digest": revalidation_authorization.previous_cp6_digest,
+                "superseding_cp5_ref": revalidation_authorization.superseding_cp5_ref,
+                "superseding_cp5_digest": revalidation_authorization.superseding_cp5_digest,
+            }
+            if packet["admission"]["decision"] != "READY":
+                raise ValueError("revalidation authorization admission is blocked")
     if stage == "CP7":
         packet["implementation_return_ref"] = cp6_return_ref or _return_ref(story_id, "CP6")
         packet["expected_return_packet"] = _return_ref(story_id, "CP7")
     output_path = _runtime_output_path(project_root, output, _story_output_path(project_root, story_id, stage))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if revalidation_authorization:
+        output_path = _resolve_runtime_path(project_root, packet_ref)
+        _validate_revalidation_packet_preimage(output_path, packet_ref, revalidation_authorization)
+    serialized = (json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if revalidation_authorization:
+        packet["packet_write"] = _write_revalidation_packet_create_once(output_path, serialized)
+        if packet["packet_write"]["decision"] == "APPLIED":
+            # The persisted bytes intentionally exclude this runtime receipt.
+            pass
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(serialized)
     if state_required:
         refresh_current_entry(project_root)
         projection_findings = validate_current_projection(project_root)
@@ -656,8 +1086,8 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
     if absolute_locations:
         errors.append("Story packet contains absolute path values at: " + ", ".join(absolute_locations))
     packet_schema_version = packet.get("schema_version")
-    if packet_schema_version not in {1, 2}:
-        errors.append("schema_version must be 1 or 2")
+    if packet_schema_version not in {1, 2, 3, 4}:
+        errors.append("schema_version must be 1, 2, 3 or 4")
     if packet.get("packet_type") not in ALLOWED_PACKET_TYPES:
         errors.append(f"invalid packet_type: {packet.get('packet_type')}")
     if packet.get("stage") not in ALLOWED_STAGES:
@@ -710,7 +1140,6 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
             errors.append(f"allowed_reads contains deny-default path: {rel_path}")
         if entry.get("required") is True and not _resolve_runtime_path(root, rel_path).is_file():
             errors.append(f"required allowed_read missing on disk: {rel_path}")
-    preregistration_refs: list[str] = []
     for entry in packet.get("read_if_needed") or []:
         if not isinstance(entry, dict):
             errors.append("read_if_needed entries must be objects")
@@ -722,10 +1151,25 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
         # A full LLD remains deny-default; it may appear only as an explicit
         # on-demand read, never as a default allowed read.  The caller must
         # still write a read-expansion event when it is actually expanded.
+        is_full_lld = str(entry.get("trigger") or "") == "full_lld_required_by_policy"
         if _matches_any(rel_path, denied) and not str(entry.get("trigger") or ""):
             errors.append(f"read_if_needed deny-default path lacks explicit trigger: {rel_path}")
-        elif _matches_any(rel_path, denied):
-            preregistration_refs.append(rel_path)
+        elif _matches_any(rel_path, denied) or is_full_lld:
+            pass
+        if packet_schema_version in {3, 4}:
+            requirement = entry.get("consumer_requirement")
+            if not isinstance(requirement, str) or requirement not in {"required", "optional", "forbidden"}:
+                errors.append("read_if_needed consumer_requirement must be required, optional or forbidden")
+            elif requirement == "required" and entry.get("trigger") != "full_lld_required_by_policy":
+                errors.append("required read_if_needed entry must use full_lld_required_by_policy")
+    try:
+        selected_preregistration_refs = list(
+            read_expansion.select_required_preregistration_refs(packet)
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        selected_preregistration_refs = []
+    preregistration_refs = selected_preregistration_refs
     actions = packet.get("pre_dispatch_actions") or []
     if preregistration_refs and packet_schema_version == 1:
         warnings.append(
@@ -742,12 +1186,13 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
         else:
             action = actions[0]
             expected_fields = read_expansion.PREREGISTRATION_ACTION_FIELDS
+            expected_contract = "ReadExpansionPlanV2" if packet_schema_version in {3, 4} else "ReadExpansionPlanV1"
             if set(action) != expected_fields:
-                errors.append("Host pre_dispatch_action fields must match ReadExpansionPlanV1")
+                errors.append(f"Host pre_dispatch_action fields must match {expected_contract}")
             if action.get("operation") != "context.read-log":
                 errors.append("Host pre_dispatch_action operation must be context.read-log")
-            if action.get("input_contract") != "ReadExpansionPlanV1":
-                errors.append("Host pre_dispatch_action input_contract must be ReadExpansionPlanV1")
+            if action.get("input_contract") != expected_contract:
+                errors.append(f"Host pre_dispatch_action input_contract must be {expected_contract}")
             if action.get("actor") != "host-orchestrator":
                 errors.append("Host pre_dispatch_action actor must be host-orchestrator")
             if action.get("required_before") != "story-dispatch":
@@ -774,6 +1219,72 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
         errors.append("parent_context_ref is required for CP6/CP7 story packets")
     if packet.get("stage") == "CP6" and not packet.get("expected_return_packet"):
         errors.append("expected_return_packet is required for CP6 story packets")
+    if packet_schema_version == 4:
+        binding = packet.get("revalidation_binding")
+        required_binding = {
+            "version", "authorization_ref", "authorization_bytes_digest", "authorization_digest",
+            "cr_id", "story_id", "work_id", "attempt_id", "release_oid", "process_oid",
+            "scope_digest", "previous_cp6_ref", "previous_cp6_digest", "superseding_cp5_ref",
+            "superseding_cp5_digest",
+        }
+        if (
+            not isinstance(binding, dict)
+            or set(binding) != required_binding
+            or type(binding.get("version")) is not int
+            or binding.get("version") != 1
+        ):
+            errors.append("schema_version=4 revalidation_binding is invalid")
+        else:
+            try:
+                string_fields = required_binding - {"version"}
+                if any(not isinstance(binding[field], str) or not binding[field] for field in string_fields):
+                    raise ValueError
+                auth_ref = binding["authorization_ref"]
+                logical_ref_fields = (
+                    "authorization_ref",
+                    "previous_cp6_ref",
+                    "superseding_cp5_ref",
+                )
+                if any(
+                    not binding[field].startswith("process/")
+                    or "\\" in binding[field]
+                    or "://" in binding[field]
+                    or any(item in {"", ".", ".."} for item in binding[field].split("/"))
+                    for field in logical_ref_fields
+                ):
+                    raise ValueError
+                for field in ("authorization_bytes_digest", "authorization_digest", "scope_digest", "previous_cp6_digest", "superseding_cp5_digest"):
+                    if not re.fullmatch(r"[0-9a-f]{64}", binding[field]):
+                        raise ValueError
+                for field in ("cr_id", "story_id", "work_id", "attempt_id"):
+                    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", binding[field]):
+                        raise ValueError
+                for field in ("release_oid", "process_oid"):
+                    if not re.fullmatch(r"[0-9a-f]{40}", binding[field]):
+                        raise ValueError
+                return_ref = (
+                    f"process/works/{binding['work_id']}/revalidation/{binding['attempt_id']}"
+                    f"/artifacts/{binding['story_id']}.CP6.return.json"
+                )
+                canonical_auth_ref = f"process/works/{binding['work_id']}/revalidation/{binding['attempt_id']}/receipts/authorization.json"
+                if packet.get("cr_id") != binding["cr_id"] or packet.get("story_id") != binding["story_id"] or packet.get("expected_return_packet") != return_ref or auth_ref != canonical_auth_ref:
+                    raise ValueError
+                authorization, bytes_digest = _load_revalidation_authorization(root, auth_ref)
+                expected_binding = {
+                    "cr_id": authorization.cr_id, "story_id": authorization.story_id,
+                    "work_id": authorization.work_id, "attempt_id": authorization.attempt_id,
+                    "release_oid": authorization.release_oid, "process_oid": authorization.process_oid,
+                    "scope_digest": authorization.scope_digest, "previous_cp6_ref": authorization.previous_cp6_ref,
+                    "previous_cp6_digest": authorization.previous_cp6_digest,
+                    "superseding_cp5_ref": authorization.superseding_cp5_ref,
+                    "superseding_cp5_digest": authorization.superseding_cp5_digest,
+                    "authorization_digest": authorization.authorization_digest,
+                    "authorization_bytes_digest": bytes_digest,
+                }
+                if any(binding.get(key) != value for key, value in expected_binding.items()):
+                    raise ValueError
+            except (ValueError, FrozenCp6EvidenceError):
+                errors.append("schema_version=4 revalidation_binding is invalid")
     if packet.get("stage") == "CP7":
         if not packet.get("implementation_return_ref"):
             errors.append("implementation_return_ref is required for CP7 story packets")
@@ -921,6 +1432,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--output", type=Path, default=None)
         parser.add_argument("--parent-context-ref", default="")
         parser.add_argument("--cp6-return-ref", default="")
+        parser.add_argument("--revalidation-authorization", default="")
         parser.add_argument("--no-write-policy", action="store_true")
         parsed = parser.parse_args(args[1:])
         _packet, path = build_story_packet(
@@ -932,8 +1444,13 @@ def main(argv: list[str] | None = None) -> int:
             output=parsed.output,
             parent_context_ref=parsed.parent_context_ref,
             cp6_return_ref=parsed.cp6_return_ref,
+            revalidation_authorization_ref=parsed.revalidation_authorization,
             write_policy=not parsed.no_write_policy,
         )
+        decision = str(_packet.get("packet_write", {}).get("decision") or "APPLIED")
+        if decision in {"BLOCKED", "PARTIAL"}:
+            print(f"Story packet: {decision}")
+            return 1
         print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "check-story-packet":

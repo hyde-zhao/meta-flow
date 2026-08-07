@@ -10,11 +10,7 @@ import runpy
 import sys
 from pathlib import Path
 
-from meta_flow.project.process_route import (
-    ProcessRouteError,
-    _resolve_runtime_ref,
-    require_process_route,
-)
+from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.workspace.routing import (
     bootstrap_process_workspace,
     check_process_route,
@@ -164,17 +160,27 @@ def _run_workspace_doctor() -> int:
     health = None
     route_lines: list[str] = []
     if (root / ".meta-flow" / "workspace.yaml").is_file():
+        from meta_flow.project.process_route_adapter import (
+            RouteConsumerError,
+            resolve_configured_consumer_route,
+        )
+
         try:
-            route = require_process_route(root)
-        except ProcessRouteError as exc:
-            problems.append(f"{exc.error_code}: {exc}")
+            route = resolve_configured_consumer_route(
+                root,
+                consumer_id="workspace-doctor",
+            )
+        except RouteConsumerError as exc:
+            problems.append(f"{exc.code}: {exc}")
             state_path = root / LEGACY_STATE_REL
             process_dirs: tuple[Path, ...] = ()
         else:
-            state_path = route.resolve_ref(LEGACY_STATE_REL.as_posix())
+            if route is None:  # pragma: no cover - binding existence checked above
+                raise AssertionError("configured workspace did not resolve a route")
+            state_path = route.process_root / LEGACY_STATE_REL.relative_to("process")
             process_dirs = (
-                route.resolve_ref("process/checks"),
-                route.resolve_ref("process/checkpoints"),
+                route.process_root / "checks",
+                route.process_root / "checkpoints",
             )
             route_lines = [
                 "process_route_health: healthy",
@@ -789,6 +795,30 @@ def _run_workspace(args: list[str]) -> None:
         parser.add_argument("--project-root", type=Path, default=None)
         parsed = parser.parse_args(args[1:])
         root = parsed.project_root.resolve() if parsed.project_root else _find_workspace_root()
+        from meta_flow.project.process_route_adapter import (
+            RouteConsumerError,
+            resolve_configured_consumer_route,
+        )
+
+        try:
+            route = resolve_configured_consumer_route(
+                root,
+                consumer_id="workspace-check",
+            )
+        except RouteConsumerError as error:
+            print("process_route_health: blocked")
+            print("- consumer: workspace-check")
+            print(f"- error_code: {error.code}")
+            print(f"- error: {error}")
+            raise SystemExit(1) from error
+        if route is not None:
+            print("process_route_health: healthy")
+            print(f"- consumer: {route.consumer_id}")
+            print(f"- classification: {route.classification}")
+            print(f"- route_mode: {route.route_mode}")
+            print(f"- project_id: {route.project_id}")
+            print(f"- process_root: {route.process_root}")
+            raise SystemExit(0)
         health = check_process_route(root)
         for line in health.format_lines():
             print(line)
@@ -915,14 +945,15 @@ def _run_workspace(args: list[str]) -> None:
             help="Allow pushing committed refs while either working tree is dirty.",
         )
         parsed = parser.parse_args(args[1:])
-        plan = legacy_workspace_push_plan(
-            parsed.project_root,
-            remote=parsed.remote,
-            branch=parsed.branch,
-            allow_dirty=parsed.allow_dirty,
-        )
+        plan = None
         capability = None
         if not parsed.dry_run:
+            plan = legacy_workspace_push_plan(
+                parsed.project_root,
+                remote=parsed.remote,
+                branch=parsed.branch,
+                allow_dirty=parsed.allow_dirty,
+            )
             if parsed.authorization is None:
                 print(json.dumps({"plan": plan, "error": "push requires --authorization"}, ensure_ascii=False, sort_keys=True))
                 raise SystemExit(2)

@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from meta_flow.semantics.route import RouteConsumerClass, route_consumer_policy
+
 if TYPE_CHECKING:
     from meta_flow.workspace.legacy_route_adapter import _LegacyRouteAuthorization
     from meta_flow.workspace.project_artifact_routing import ProjectArtifactConfig, RouteDecision
@@ -327,6 +329,11 @@ def check_process_route(project_root: Path) -> ProcessRouteHealth:
 
 
 def require_process_health(project_root: Path) -> ProcessRouteHealth:
+    """legacy-only guard；vNext read consumer 必须使用 process_route_adapter。"""
+
+    policy = route_consumer_policy("require-process-health")
+    if policy.classification is not RouteConsumerClass.DEPRECATED:  # pragma: no cover
+        raise AssertionError("require_process_health semantic policy drifted")
     health = check_process_route(project_root)
     if health.blocking:
         lines = [
@@ -482,6 +489,8 @@ def _link_process_workspace_unchecked(
     project_root: Path,
     artifact_root: Path,
     project_name: str,
+    *,
+    postcheck_consumer_id: str,
 ) -> ProcessRouteHealth:
     project_root = project_root.resolve()
     artifact_root = _resolve_input_path(artifact_root, anchor=project_root)
@@ -515,6 +524,9 @@ def _link_process_workspace_unchecked(
         process_root=process_root,
         link_path=link_path,
     )
+    policy = route_consumer_policy(postcheck_consumer_id)
+    if policy.classification is not RouteConsumerClass.LEGACY_MUTATION_POSTCONDITION:
+        raise AssertionError("legacy mutation postcheck semantic policy drifted")
     return check_process_route(project_root)
 
 
@@ -544,7 +556,10 @@ def link_process_workspace(
     )
     try:
         health = _link_process_workspace_unchecked(
-            project_root, artifact_root, project_name
+            project_root,
+            artifact_root,
+            project_name,
+            postcheck_consumer_id="legacy-workspace-link-postcheck",
         )
     except BaseException:
         claim.finish("PARTIAL")
@@ -583,7 +598,10 @@ def bootstrap_process_workspace(
     )
     try:
         health = _link_process_workspace_unchecked(
-            project_root, artifact_root, project_name
+            project_root,
+            artifact_root,
+            project_name,
+            postcheck_consumer_id="legacy-workspace-bootstrap-postcheck",
         )
 
         from meta_flow.state import current
@@ -596,6 +614,9 @@ def bootstrap_process_workspace(
             project_id=project_name,
             force=force,
         )
+        policy = route_consumer_policy("legacy-workspace-bootstrap-postcheck")
+        if policy.classification is not RouteConsumerClass.LEGACY_MUTATION_POSTCONDITION:
+            raise AssertionError("legacy bootstrap postcheck semantic policy drifted")
         health = check_process_route(project_root)
     except BaseException:
         claim.finish("PARTIAL")

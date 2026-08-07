@@ -778,6 +778,308 @@ class ContextSufficiencyReadExpansionTests(unittest.TestCase):
                 (process / "state" / "READ-EXPANSION-LEDGER.ndjson").exists()
             )
 
+    def test_canonical_full_lld_selector_is_exact_one_and_fail_closed(self) -> None:
+        packet = {
+            "lld_policy": "full-lld",
+            "read_if_needed": [
+                {
+                    "path": "process/docs/design/LLD-STORY-CR123-S01.md",
+                    "trigger": "full_lld_required_by_policy",
+                },
+                {"path": "process/archive/old.md", "trigger": "human_audit"},
+            ]
+        }
+        self.assertEqual(
+            ("process/docs/design/LLD-STORY-CR123-S01.md",),
+            read_expansion.select_required_preregistration_refs(packet),
+        )
+        packet["read_if_needed"].append(
+            {
+                "path": "process/docs/design/LLD-STORY-CR123-S02.md",
+                "trigger": "full_lld_required_by_policy",
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "FULL_LLD_PREREGISTRATION_CARDINALITY_INVALID"):
+            read_expansion.select_required_preregistration_refs(packet)
+        with self.assertRaisesRegex(ValueError, "FULL_LLD_PREREGISTRATION_CARDINALITY_INVALID"):
+            read_expansion.select_required_preregistration_refs(
+                {"lld_policy": "full-lld", "read_if_needed": []}
+            )
+
+    def test_p01_attempt2_selector_rejects_malformed_refs_and_ignores_unknown_without_io(self) -> None:
+        for packet in (
+            {"lld_policy": "full-lld", "read_if_needed": "bad"},
+            {"lld_policy": "full-lld", "read_if_needed": ["bad"]},
+            {"lld_policy": "full-lld", "read_if_needed": [{"path": "/tmp/x", "trigger": "full_lld_required_by_policy"}]},
+            {"lld_policy": "full-lld", "read_if_needed": [{"path": "process/../x.md", "trigger": "full_lld_required_by_policy"}]},
+        ):
+            with self.assertRaises(ValueError):
+                read_expansion.select_required_preregistration_refs(packet)
+        unknown = {"lld_policy": "full-lld", "read_if_needed": [{"path": "process/archive/unknown.md", "trigger": "human_audit"}, {"path": "process/docs/design/LLD.md", "trigger": "full_lld_required_by_policy"}]}
+        with patch.object(read_expansion, "_resolve_runtime_ref") as resolver:
+            self.assertEqual(("process/docs/design/LLD.md",), read_expansion.select_required_preregistration_refs(unknown))
+        resolver.assert_not_called()
+
+    def test_p01_attempt2_plan_blocks_zero_full_lld_refs_and_action_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["lld_policy"] = "full-lld"
+            packet["read_if_needed"] = []
+            packet["pre_dispatch_actions"] = []
+            packet_path.write_text(json.dumps(packet) + "\n", encoding="utf-8")
+            plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertEqual("BLOCKED", plan.decision)
+            self.assertEqual(0, plan.mutation_count)
+            self.assertIn("FULL_LLD_PREREGISTRATION_CARDINALITY_INVALID", plan.blockers)
+
+    def test_v2_requirement_diagnostics_are_truthful_and_skip_nonrequired_io(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["read_if_needed"].extend([
+                {"path": "process/docs/optional.md", "mode": "full", "estimated_tokens": 0, "trigger": "human_audit", "reason": "story_lld", "consumer_requirement": "optional"},
+                {"path": "process/docs/forbidden.md", "mode": "full", "estimated_tokens": 0, "trigger": "human_audit", "reason": "story_lld", "consumer_requirement": "forbidden"},
+            ])
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+            resolver_calls: list[str] = []
+            is_file_calls: list[Path] = []
+            original_resolver = read_expansion._resolve_runtime_ref
+            original_is_file = Path.is_file
+            def count_resolver(root: Path, logical_ref: str) -> Path:
+                resolver_calls.append(logical_ref)
+                return original_resolver(root, logical_ref)
+            def count_is_file(path: Path) -> bool:
+                is_file_calls.append(path)
+                return original_is_file(path)
+            with patch.object(read_expansion, "_resolve_runtime_ref", side_effect=count_resolver), patch.object(Path, "is_file", count_is_file):
+                plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertIsInstance(plan, read_expansion.ReadExpansionPlanV2)
+            diagnostics = {item["logical_ref"]: item for item in plan.diagnostics}
+            self.assertEqual(("not-evaluated", "not-evaluated", "optional"), tuple(diagnostics["process/docs/optional.md"].values())[1:])
+            self.assertEqual(("not-evaluated", "not-evaluated", "forbidden"), tuple(diagnostics["process/docs/forbidden.md"].values())[1:])
+            self.assertEqual(("process/stories/STORY-CR123-S01-LLD.md",), plan.requested_refs)
+            self.assertNotIn("process/docs/optional.md", resolver_calls)
+            self.assertNotIn("process/docs/forbidden.md", resolver_calls)
+            self.assertNotIn(process / "docs" / "optional.md", is_file_calls)
+            self.assertNotIn(process / "docs" / "forbidden.md", is_file_calls)
+            self.assertEqual(0, plan.mutation_count)
+
+    def test_v3_same_packet_uses_one_selector_for_action_and_planner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            selector_refs = read_expansion.select_required_preregistration_refs(packet)
+            plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertEqual(selector_refs, tuple(packet["pre_dispatch_actions"][0]["requested_refs"]))
+            self.assertEqual(selector_refs, plan.requested_refs)
+
+    def test_v2_blocks_unknown_or_invalid_requirement_before_target_io(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["read_if_needed"][0]["trigger"] = "literal_unknown"
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+            with patch.object(read_expansion, "_resolve_runtime_ref", wraps=read_expansion._resolve_runtime_ref) as resolver:
+                plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertEqual("BLOCKED", plan.decision)
+            self.assertIn("REQUIRED_PREREGISTRATION_TRIGGER_INVALID", plan.blockers)
+            self.assertEqual(1, resolver.call_count)  # story packet only; no selected target resolution
+            self.assertEqual(0, plan.mutation_count)
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["read_if_needed"][0].pop("consumer_requirement")
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+            with patch.object(read_expansion, "_resolve_runtime_ref", wraps=read_expansion._resolve_runtime_ref) as resolver:
+                missing = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertEqual("BLOCKED", missing.decision)
+            self.assertIn("CONSUMER_REQUIREMENT_INVALID", missing.blockers)
+            self.assertEqual(1, resolver.call_count)
+            self.assertEqual(0, missing.mutation_count)
+
+    def test_v2_blocks_nonempty_action_mismatch_and_missing_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["pre_dispatch_actions"][0]["requested_refs"] = ["process/docs/other.md"]
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+            mismatch = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertIn("HOST_PREREGISTRATION_REFS_MISMATCH", mismatch.blockers)
+            (process / "stories" / "STORY-CR123-S01-LLD.md").unlink()
+            packet["pre_dispatch_actions"][0]["requested_refs"] = ["process/stories/STORY-CR123-S01-LLD.md"]
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+            missing = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertIn("REQUESTED_REF_MISSING:process/stories/STORY-CR123-S01-LLD.md", missing.blockers)
+            self.assertEqual("missing", missing.diagnostics[0]["physical_existence"])
+
+    def test_v2_digest_and_apply_are_version_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            v2 = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["schema_version"] = 2
+            packet["read_if_needed"][0].pop("consumer_requirement")
+            packet["pre_dispatch_actions"][0]["input_contract"] = "ReadExpansionPlanV1"
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "drifted"):
+                read_expansion.apply_host_preregistration_plan(release, v2)
+
+    def test_v3_selector_rejects_empty_nonstring_and_keeps_duplicate_required_stable(self) -> None:
+        base = {"schema_version": 3, "lld_policy": "full-lld"}
+        for path in ("", None, 42):
+            with self.assertRaises(ValueError):
+                read_expansion.select_required_preregistration_refs({**base, "read_if_needed": [{"path": path, "trigger": "full_lld_required_by_policy", "consumer_requirement": "required"}]})
+        duplicate = {**base, "read_if_needed": [
+            {"path": "process/docs/design/LLD.md", "trigger": "full_lld_required_by_policy", "consumer_requirement": "required"},
+            {"path": "process/docs/design/LLD.md", "trigger": "full_lld_required_by_policy", "consumer_requirement": "required"},
+        ]}
+        self.assertEqual(("process/docs/design/LLD.md",), read_expansion.select_required_preregistration_refs(duplicate))
+
+    def test_v2_forbidden_action_and_route_blocked_are_mutation_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            forbidden = {"path": "process/docs/forbidden.md", "mode": "full", "estimated_tokens": 0, "trigger": "human_audit", "reason": "story_lld", "consumer_requirement": "forbidden"}
+            packet["read_if_needed"].append(forbidden)
+            packet["pre_dispatch_actions"][0]["requested_refs"].append(forbidden["path"])
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+            forbidden_plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertIn("FORBIDDEN_PREREGISTRATION_REF_REQUESTED", forbidden_plan.blockers)
+            self.assertEqual(0, forbidden_plan.mutation_count)
+            packet["pre_dispatch_actions"][0]["requested_refs"].pop()
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+            original = read_expansion._resolve_runtime_ref
+            def block_target(root: Path, logical_ref: str) -> Path:
+                if logical_ref == "process/stories/STORY-CR123-S01-LLD.md":
+                    raise ValueError("blocked route")
+                return original(root, logical_ref)
+            with patch.object(read_expansion, "_resolve_runtime_ref", side_effect=block_target):
+                blocked = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            self.assertEqual("BLOCKED", blocked.decision)
+            self.assertEqual(0, blocked.mutation_count)
+            required = next(item for item in blocked.diagnostics if item["consumer_requirement"] == "required")
+            self.assertEqual(("blocked", "not-evaluated"), (required["logical_route"], required["physical_existence"]))
+
+    def test_f003_append_response_failure_returns_partial_and_replay_does_not_append(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            original_append = read_expansion.append_event
+            def append_then_fail(*args: object, **kwargs: object) -> tuple[dict[str, object], Path]:
+                original_append(*args, **kwargs)
+                raise OSError("response lost after write")
+            with patch.object(read_expansion, "append_event", side_effect=append_then_fail):
+                partial = read_expansion.apply_host_preregistration_plan(release, plan)
+            ledger = process / "state" / "READ-EXPANSION-LEDGER.ndjson"
+            before = ledger.read_bytes()
+            self.assertEqual("PARTIAL", partial.decision)
+            replay_plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            replay = read_expansion.apply_host_preregistration_plan(release, replay_plan)
+            self.assertEqual("NO_CHANGE", replay.decision)
+            self.assertEqual(0, replay.mutation_count)
+            self.assertEqual(before, ledger.read_bytes())
+
+    def test_f003_postcheck_failure_and_duplicate_identity_never_report_applied(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            original_load = read_expansion.load_events
+            calls = 0
+            def fail_postcheck(*args: object, **kwargs: object) -> tuple[list[dict[str, object]], list[str]]:
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    raise OSError("postcheck unavailable")
+                return original_load(*args, **kwargs)
+            with patch.object(read_expansion, "load_events", side_effect=fail_postcheck):
+                partial = read_expansion.apply_host_preregistration_plan(release, plan)
+            self.assertEqual("PARTIAL", partial.decision)
+            self.assertEqual(1, partial.mutation_count)
+            ledger = process / "state" / "READ-EXPANSION-LEDGER.ndjson"
+            self.assertEqual(1, len(ledger.read_text(encoding="utf-8").splitlines()))
+
+            # A duplicate semantic identity after write is also uncertain, never APPLIED.
+            duplicate_parent = Path(directory) / "duplicate"
+            duplicate_parent.mkdir()
+            release2, process2, packet_ref2, digest2 = write_preregistration_fixture(duplicate_parent)
+            plan2 = read_expansion.build_host_preregistration_plan(release2, story_packet_ref=packet_ref2, work_id="WORK-CR123", scope_digest=digest2)
+            original_append = read_expansion.append_event
+            def append_duplicate(*args: object, **kwargs: object) -> tuple[dict[str, object], Path]:
+                first, path = original_append(*args, **kwargs)
+                original_append(*args, **kwargs)
+                return first, path
+            with patch.object(read_expansion, "append_event", side_effect=append_duplicate):
+                duplicate = read_expansion.apply_host_preregistration_plan(release2, plan2)
+            self.assertEqual("PARTIAL", duplicate.decision)
+            self.assertEqual(2, len((process2 / "state" / "READ-EXPANSION-LEDGER.ndjson").read_text(encoding="utf-8").splitlines()))
+
+    def test_f003_append_failure_without_write_propagates_mutation_zero_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            ledger = process / "state" / "READ-EXPANSION-LEDGER.ndjson"
+            preimage = ledger.read_bytes() if ledger.exists() else b""
+            with patch.object(read_expansion, "append_event", side_effect=OSError("no write")):
+                with self.assertRaisesRegex(OSError, "no write"):
+                    read_expansion.apply_host_preregistration_plan(release, plan)
+            self.assertEqual(preimage, ledger.read_bytes() if ledger.exists() else b"")
+            self.assertEqual(0, len((ledger.read_text(encoding="utf-8") if ledger.exists() else "").splitlines()))
+
+    def test_f003_forged_append_response_id_is_partial_without_reappend(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, packet_ref, scope_digest = write_preregistration_fixture(Path(directory))
+            plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            original_append = read_expansion.append_event
+            def append_with_forged_response(*args: object, **kwargs: object) -> tuple[dict[str, object], Path]:
+                event, path = original_append(*args, **kwargs)
+                forged = dict(event)
+                forged["event_id"] = "RE-FORGED-RESPONSE"
+                return forged, path
+            with patch.object(read_expansion, "append_event", side_effect=append_with_forged_response):
+                partial = read_expansion.apply_host_preregistration_plan(release, plan)
+            ledger = process / "state" / "READ-EXPANSION-LEDGER.ndjson"
+            before = ledger.read_bytes()
+            self.assertEqual("PARTIAL", partial.decision)
+            self.assertNotIn("RE-FORGED-RESPONSE", partial.event_ids)
+            self.assertEqual(1, len(before.splitlines()))
+            replay_plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+            replay = read_expansion.apply_host_preregistration_plan(release, replay_plan)
+            self.assertEqual("NO_CHANGE", replay.decision)
+            self.assertEqual(0, replay.mutation_count)
+            self.assertEqual(before, ledger.read_bytes())
+
+    def test_f003_v1_and_v2_normal_apply_then_replay_are_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for name, legacy in (("v2", False), ("v1", True)):
+                parent = Path(directory) / name
+                parent.mkdir()
+                release, process, packet_ref, scope_digest = write_preregistration_fixture(parent)
+                packet_path = process / "context" / "stories" / "STORY-CR123-S01.CP6.work-packet.json"
+                if legacy:
+                    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+                    packet["schema_version"] = 2
+                    packet["read_if_needed"][0].pop("consumer_requirement")
+                    packet["pre_dispatch_actions"][0]["input_contract"] = "ReadExpansionPlanV1"
+                    packet_path.write_text(json.dumps(packet), encoding="utf-8")
+                plan = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+                applied = read_expansion.apply_host_preregistration_plan(release, plan)
+                ledger = process / "state" / "READ-EXPANSION-LEDGER.ndjson"
+                before = ledger.read_bytes()
+                self.assertEqual("APPLIED", applied.decision)
+                self.assertEqual(1, applied.mutation_count)
+                fresh = read_expansion.build_host_preregistration_plan(release, story_packet_ref=packet_ref, work_id="WORK-CR123", scope_digest=scope_digest)
+                replay = read_expansion.apply_host_preregistration_plan(release, fresh)
+                self.assertEqual("NO_CHANGE", replay.decision)
+                self.assertEqual(0, replay.mutation_count)
+                self.assertEqual(1, len(before.splitlines()))
+                self.assertEqual(before, ledger.read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()

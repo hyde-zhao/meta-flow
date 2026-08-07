@@ -14,7 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.semantics.attempt import (
+    ACTIVE_HANDOFF_STATUSES as ACTIVE_SUBAGENT_STATUSES,
+)
+from meta_flow.semantics.attempt import (
+    ALL_HANDOFF_STATUSES as KNOWN_HANDOFF_STATUSES,
+)
+from meta_flow.semantics.attempt import (
+    TERMINAL_HANDOFF_STATUSES,
+)
 from meta_flow.state.event_ledger import parse_handoff_dispatch_record
+
+TERMINAL_SUBAGENT_STATUSES = TERMINAL_HANDOFF_STATUSES
 
 # 已知 dispatch.mode 取值
 SUBAGENT_MODE = "subagent"
@@ -24,27 +35,6 @@ KNOWN_MODES = (SUBAGENT_MODE, INLINE_FALLBACK_MODE, HANDOFF_ONLY_MODE)
 
 # handoff 顶层 status 的当前生命周期枚举。进行中状态不代表执行完成；
 # 终态统一使用现有 completed_at 字段记录终止时间。
-ACTIVE_SUBAGENT_STATUSES = frozenset({"dispatched", "running", "in-progress"})
-TERMINAL_SUBAGENT_STATUSES = frozenset(
-    {
-        "completed",
-        "success",
-        "succeeded",
-        "passed",
-        "failed",
-        "interrupted",
-        "cancelled",
-        "canceled",
-        "superseded",
-        "closed",
-        # 当前过程仓中仍在使用的 v1 终态别名；它们同样必须有 completed_at。
-        "agent-completed",
-        "agent-completed-pass",
-        "rework-round-2-completed",
-    }
-)
-KNOWN_HANDOFF_STATUSES = ACTIVE_SUBAGENT_STATUSES | TERMINAL_SUBAGENT_STATUSES
-
 # 视为空的占位值（与 human_gate.EMPTY_VALUES 思路一致）
 EMPTY_VALUES = {"", "-", "—", "n/a", "N/A", "无", "不适用"}
 

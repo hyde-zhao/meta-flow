@@ -643,6 +643,7 @@ def discover_formal_crs(
     *,
     _resolve_runtime_ref_fn: Any | None = None,
     _rel_fn: Any | None = None,
+    excluded_legacy_paths: frozenset[Path] | None = None,
 ) -> dict[str, Path]:
     resolve_runtime_ref = (
         _resolve_runtime_ref if _resolve_runtime_ref_fn is None else _resolve_runtime_ref_fn
@@ -651,9 +652,12 @@ def discover_formal_crs(
     root = resolve_runtime_ref(project_root, "process/changes")
     if not root.is_dir():
         return {}
+    excluded_legacy_paths = excluded_legacy_paths or frozenset()
     crs: dict[str, Path] = {}
     for path in sorted(root.glob("CR-*.md")):
         if "FOLLOW-UP" in path.name:
+            continue
+        if path.resolve() in excluded_legacy_paths:
             continue
         cr_id = _cr_id_from_path(path)
         if cr_id:

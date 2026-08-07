@@ -179,6 +179,50 @@ class ReadExpansionPlanV1:
 
 
 @dataclass(frozen=True)
+class ReadExpansionPlanV2:
+    """Versioned plan carrying truthful per-entry prerequisite diagnostics."""
+
+    decision: str
+    story_id: str
+    stage: str
+    context_ref: str
+    work_id: str
+    scope_digest: str
+    requested_refs: tuple[str, ...]
+    reason: str
+    reason_evidence: dict[str, Any]
+    agent: str
+    ledger_ref: str
+    planned_mutation_count: int
+    mutation_count: int
+    blockers: tuple[str, ...]
+    diagnostics: tuple[dict[str, str], ...]
+    plan_digest: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 2,
+            "kind": "ReadExpansionPlanV2",
+            "decision": self.decision,
+            "story_id": self.story_id,
+            "stage": self.stage,
+            "context_ref": self.context_ref,
+            "work_id": self.work_id,
+            "scope_digest": self.scope_digest,
+            "requested_refs": list(self.requested_refs),
+            "reason": self.reason,
+            "reason_evidence": self.reason_evidence.copy(),
+            "agent": self.agent,
+            "ledger_ref": self.ledger_ref,
+            "planned_mutation_count": self.planned_mutation_count,
+            "mutation_count": self.mutation_count,
+            "blockers": list(self.blockers),
+            "diagnostics": [dict(item) for item in self.diagnostics],
+            "plan_digest": self.plan_digest,
+        }
+
+
+@dataclass(frozen=True)
 class ReadExpansionApplyResultV1:
     """Result of applying or replaying one prevalidated plan."""
 
@@ -215,6 +259,8 @@ def _as_posix(path: Path | str) -> str:
 
 
 def _logical_process_ref(value: Path | str, *, field: str) -> str:
+    if not isinstance(value, (Path, str)):
+        raise ValueError(f"{field} must be one canonical logical process/... ref")
     raw = Path(value)
     if (
         raw.is_absolute()
@@ -484,7 +530,7 @@ def append_event(
     return event, ledger_path
 
 
-def _with_plan_digest(plan: ReadExpansionPlanV1) -> ReadExpansionPlanV1:
+def _with_plan_digest(plan: ReadExpansionPlanV1 | ReadExpansionPlanV2) -> ReadExpansionPlanV1 | ReadExpansionPlanV2:
     payload = plan.as_dict()
     payload.pop("plan_digest", None)
     return replace(plan, plan_digest=canonical_digest(payload))
@@ -523,6 +569,60 @@ def _blocked_plan(
     )
 
 
+def select_required_preregistration_refs(packet: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the one canonical full-LLD preregistration ref without I/O.
+
+    The selector deliberately owns only the controlled full-LLD trigger.  Route,
+    existence, Work-scope and ledger checks remain planner responsibilities.
+    """
+
+    entries = packet.get("read_if_needed") or []
+    if not isinstance(entries, list):
+        raise ValueError("READ_IF_NEEDED_INVALID")
+    refs: list[str] = []
+    is_v3 = packet.get("schema_version") == 3
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise ValueError("READ_IF_NEEDED_ENTRY_INVALID")
+        requirement = entry.get("consumer_requirement")
+        if is_v3 and (not isinstance(requirement, str) or requirement not in {"required", "optional", "forbidden"}):
+            raise ValueError("CONSUMER_REQUIREMENT_INVALID")
+        trigger = entry.get("trigger")
+        if is_v3 and requirement == "required" and trigger != "full_lld_required_by_policy":
+            raise ValueError("REQUIRED_PREREGISTRATION_TRIGGER_INVALID")
+        if trigger != "full_lld_required_by_policy":
+            continue
+        if is_v3 and requirement != "required":
+            continue
+        refs.append(_logical_process_ref(entry.get("path") or "", field="requested_ref"))
+    selected = tuple(sorted(set(refs)))
+    policy = packet.get("lld_policy")
+    is_full_lld = policy == "full-lld" or (
+        isinstance(policy, Mapping) and policy.get("required_level") == "full-lld"
+    )
+    if is_full_lld and len(selected) != 1:
+        raise ValueError("FULL_LLD_PREREGISTRATION_CARDINALITY_INVALID")
+    return selected
+
+
+def _v2_entries(packet: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Validate v3 diagnostic inputs; selection remains owned by the selector."""
+
+    entries = packet.get("read_if_needed")
+    if not isinstance(entries, list):
+        raise ValueError("READ_IF_NEEDED_INVALID")
+    projected: list[tuple[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise ValueError("READ_IF_NEEDED_ENTRY_INVALID")
+        requirement = entry.get("consumer_requirement")
+        if not isinstance(requirement, str) or requirement not in {"required", "optional", "forbidden"}:
+            raise ValueError("CONSUMER_REQUIREMENT_INVALID")
+        logical_ref = _logical_process_ref(entry.get("path") or "", field="requested_ref")
+        projected.append((logical_ref, requirement))
+    return tuple(sorted(set(projected)))
+
+
 def _matching_preregistration_events(
     events: list[dict[str, Any]],
     *,
@@ -551,6 +651,153 @@ def _matching_preregistration_events(
     ]
 
 
+def _v2_plan(
+    *,
+    decision: str,
+    story_id: str,
+    stage: str,
+    context_ref: str,
+    work_id: str,
+    scope_digest: str,
+    requested_refs: tuple[str, ...],
+    reason: str,
+    reason_evidence: Mapping[str, Any],
+    ledger_ref: str,
+    blockers: list[str],
+    diagnostics: list[dict[str, str]],
+    planned_mutation_count: int = 0,
+) -> ReadExpansionPlanV2:
+    return _with_plan_digest(ReadExpansionPlanV2(
+        decision=decision,
+        story_id=story_id,
+        stage=stage,
+        context_ref=context_ref,
+        work_id=work_id,
+        scope_digest=scope_digest,
+        requested_refs=requested_refs,
+        reason=reason,
+        reason_evidence=dict(reason_evidence),
+        agent="host-orchestrator",
+        ledger_ref=ledger_ref,
+        planned_mutation_count=planned_mutation_count,
+        mutation_count=0,
+        blockers=tuple(sorted(set(blockers))),
+        diagnostics=tuple(sorted(diagnostics, key=lambda item: item["logical_ref"])),
+    ))  # type: ignore[return-value]
+
+
+def _build_host_preregistration_plan_v2(
+    root: Path,
+    *,
+    packet: Mapping[str, Any],
+    story_id: str,
+    stage: str,
+    context_ref: str,
+    work_id: str,
+    scope_digest: str,
+    ledger_ref: str,
+    reason_override: str,
+    ledger: Path | None,
+    read_context: ReadContextProtocol | None,
+) -> ReadExpansionPlanV2:
+    """Plan packet-v3 preregistration without evaluating non-required entries."""
+
+    blockers: list[str] = []
+    diagnostics: list[dict[str, str]] = []
+    try:
+        entries = _v2_entries(packet)
+        required_refs = select_required_preregistration_refs(packet)
+    except ValueError as exc:
+        return _v2_plan(decision="BLOCKED", story_id=story_id, stage=stage, context_ref=context_ref,
+            work_id=work_id, scope_digest=scope_digest, requested_refs=(), reason="", reason_evidence={},
+            ledger_ref=ledger_ref, blockers=[str(exc)], diagnostics=[])
+    policy = packet.get("lld_policy")
+    is_full_lld = policy == "full-lld" or (isinstance(policy, Mapping) and policy.get("required_level") == "full-lld")
+    if is_full_lld and len(required_refs) != 1:
+        blockers.append("FULL_LLD_PREREGISTRATION_CARDINALITY_INVALID")
+
+    actions = packet.get("pre_dispatch_actions")
+    action: Mapping[str, Any] = actions[0] if isinstance(actions, list) and len(actions) == 1 and isinstance(actions[0], Mapping) else {}
+    if not action:
+        blockers.append("HOST_PREREGISTRATION_ACTION_COUNT_INVALID")
+    elif set(action) != PREREGISTRATION_ACTION_FIELDS:
+        blockers.append("HOST_PREREGISTRATION_ACTION_FIELDS_INVALID")
+    if str(action.get("operation") or "") != "context.read-log":
+        blockers.append("HOST_PREREGISTRATION_OPERATION_INVALID")
+    if str(action.get("input_contract") or "") != "ReadExpansionPlanV2":
+        blockers.append("HOST_PREREGISTRATION_INPUT_CONTRACT_INVALID")
+    if str(action.get("actor") or "") != "host-orchestrator":
+        blockers.append("HOST_PREREGISTRATION_ACTOR_INVALID")
+    if str(action.get("required_before") or "") != "story-dispatch":
+        blockers.append("HOST_PREREGISTRATION_ORDER_INVALID")
+    action_refs = tuple(sorted(str(item) for item in action.get("requested_refs") or []))
+    if action_refs != required_refs:
+        blockers.append("HOST_PREREGISTRATION_REFS_MISMATCH")
+    entry_requirements = {ref: requirement for ref, requirement in entries}
+    if any(entry_requirements.get(ref) == "forbidden" for ref in action_refs):
+        blockers.append("FORBIDDEN_PREREGISTRATION_REF_REQUESTED")
+    action_reason = str(action.get("reason") or "")
+    action_evidence = action.get("reason_evidence")
+    reason_evidence = dict(action_evidence) if isinstance(action_evidence, Mapping) else {}
+    reason = reason_override or action_reason
+    if reason_override and reason_override != action_reason:
+        blockers.append("HOST_PREREGISTRATION_REASON_MISMATCH")
+    read_policy = load_read_policy(root, read_context=read_context)
+    allowed_reasons = set(str(item) for item in read_policy.get("full_doc_read_allowed_when") or DEFAULT_FULL_DOC_READ_REASONS) & V2_READ_EXPANSION_REASONS
+    if reason not in allowed_reasons:
+        blockers.append("HOST_PREREGISTRATION_REASON_NOT_ALLOWED")
+    blockers.extend(validate_reason_evidence(reason, reason_evidence))
+
+    # The requirement gate is deliberately before resolver and target probes.
+    for logical_ref, requirement in entries:
+        if requirement != "required":
+            diagnostics.append({"logical_ref": logical_ref, "logical_route": "not-evaluated", "physical_existence": "not-evaluated", "consumer_requirement": requirement})
+            continue
+        try:
+            target = _resolve_runtime_ref(root, logical_ref)
+        except (OSError, ValueError):
+            diagnostics.append({"logical_ref": logical_ref, "logical_route": "blocked", "physical_existence": "not-evaluated", "consumer_requirement": requirement})
+            blockers.append(f"REQUESTED_REF_ROUTE_BLOCKED:{logical_ref}")
+            continue
+        if target.is_file():
+            diagnostics.append({"logical_ref": logical_ref, "logical_route": "resolved", "physical_existence": "present", "consumer_requirement": requirement})
+        else:
+            diagnostics.append({"logical_ref": logical_ref, "logical_route": "resolved", "physical_existence": "missing", "consumer_requirement": requirement})
+            blockers.append(f"REQUESTED_REF_MISSING:{logical_ref}")
+
+    try:
+        route = require_process_route(root)
+        work = load_work(route.process_root, work_id, read_context=read_context)
+    except (OSError, ValueError) as exc:
+        blockers.append(f"WORK_SCOPE_UNAVAILABLE:{type(exc).__name__}")
+        work = None
+    if work is not None:
+        if work.scope.digest != scope_digest:
+            blockers.append("WORK_SCOPE_DIGEST_MISMATCH")
+        for requested_ref in required_refs:
+            try:
+                decision = check_scope(work.scope, "read", Path(requested_ref).relative_to("process").as_posix())
+            except ValueError:
+                blockers.append(f"WORK_SCOPE_REF_INVALID:{requested_ref}")
+                continue
+            if not decision.allowed:
+                blockers.append(f"WORK_SCOPE_READ_DENIED:{requested_ref}")
+    ledger_path = _ledger_path(root, ledger)
+    existing, ledger_errors = load_events(ledger_path, read_context=read_context, logical_ref=ledger_ref)
+    blockers.extend(f"READ_EXPANSION_LEDGER_INVALID:{error}" for error in ledger_errors)
+    if blockers:
+        return _v2_plan(decision="BLOCKED", story_id=story_id, stage=stage, context_ref=context_ref,
+            work_id=work_id, scope_digest=scope_digest, requested_refs=required_refs, reason=reason,
+            reason_evidence=reason_evidence, ledger_ref=ledger_ref, blockers=blockers, diagnostics=diagnostics)
+    missing_refs = tuple(ref for ref in required_refs if not _matching_preregistration_events(
+        existing, story_id=story_id, stage=stage, context_ref=context_ref, work_id=work_id,
+        scope_digest=scope_digest, reason=reason, reason_evidence=reason_evidence, requested_ref=ref))
+    return _v2_plan(decision="READY" if missing_refs else "NO_CHANGE", story_id=story_id, stage=stage,
+        context_ref=context_ref, work_id=work_id, scope_digest=scope_digest, requested_refs=required_refs,
+        reason=reason, reason_evidence=reason_evidence, ledger_ref=ledger_ref, blockers=[], diagnostics=diagnostics,
+        planned_mutation_count=len(missing_refs))
+
+
 def build_host_preregistration_plan(
     project_root: Path,
     *,
@@ -560,7 +807,7 @@ def build_host_preregistration_plan(
     reason_override: str = "",
     ledger: Path | None = None,
     read_context: ReadContextProtocol | None = None,
-) -> ReadExpansionPlanV1:
+) -> ReadExpansionPlanV1 | ReadExpansionPlanV2:
     """Project a Story packet's required Host action without mutating its ledger."""
 
     root = project_root.resolve()
@@ -606,7 +853,7 @@ def build_host_preregistration_plan(
         or READ_EXPANSION_LEDGER_REL.as_posix()
     )
     blockers: list[str] = []
-    if packet.get("schema_version") != 2:
+    if packet.get("schema_version") not in {2, 3}:
         blockers.append("STORY_PACKET_SCHEMA_NOT_PREREGISTRATION_CAPABLE")
     try:
         ledger_ref = _logical_process_ref(ledger_ref, field="required_full_doc_read_log")
@@ -614,20 +861,22 @@ def build_host_preregistration_plan(
         blockers.append("READ_EXPANSION_LEDGER_REF_INVALID")
         ledger_ref = READ_EXPANSION_LEDGER_REL.as_posix()
 
-    denied = list(
-        packet.get("denied_default_reads") or DEFAULT_READ_DENY_PATTERNS
-    )
-    required_refs = tuple(
-        sorted(
-            {
-                str(entry.get("path") or "")
-                for entry in packet.get("read_if_needed") or []
-                if isinstance(entry, dict)
-                and str(entry.get("trigger") or "")
-                and _matches_any(str(entry.get("path") or ""), denied)
-            }
+    if packet.get("schema_version") == 3:
+        if blockers:
+            return _v2_plan(decision="BLOCKED", story_id=story_id, stage=stage, context_ref=context_ref,
+                work_id=work_id, scope_digest=scope_digest, requested_refs=(), reason="", reason_evidence={},
+                ledger_ref=ledger_ref, blockers=blockers, diagnostics=[])
+        return _build_host_preregistration_plan_v2(
+            root, packet=packet, story_id=story_id, stage=stage, context_ref=context_ref,
+            work_id=work_id, scope_digest=scope_digest, ledger_ref=ledger_ref,
+            reason_override=reason_override, ledger=ledger, read_context=read_context,
         )
-    )
+
+    try:
+        required_refs = select_required_preregistration_refs(packet)
+    except ValueError as exc:
+        blockers.append(str(exc))
+        required_refs = ()
     actions = packet.get("pre_dispatch_actions")
     if not isinstance(actions, list) or len(actions) != 1:
         blockers.append("HOST_PREREGISTRATION_ACTION_COUNT_INVALID")
@@ -766,7 +1015,7 @@ def build_host_preregistration_plan(
 
 def apply_host_preregistration_plan(
     project_root: Path,
-    plan: ReadExpansionPlanV1,
+    plan: ReadExpansionPlanV1 | ReadExpansionPlanV2,
     *,
     ledger: Path | None = None,
 ) -> ReadExpansionApplyResultV1:
@@ -782,7 +1031,7 @@ def apply_host_preregistration_plan(
         reason_override=plan.reason,
         ledger=ledger,
     )
-    if fresh.plan_digest != plan.plan_digest:
+    if type(fresh) is not type(plan) or fresh.plan_digest != plan.plan_digest:
         raise ValueError("read expansion plan drifted before apply; mutation=0")
     root = project_root.resolve()
     ledger_path = _ledger_path(root, ledger)
@@ -858,36 +1107,78 @@ def apply_host_preregistration_plan(
             "read expansion preregistration is invalid; mutation=0: "
             + "; ".join(pending_errors)
         )
-    appended_ids: list[str] = []
-    for event in pending:
-        appended, _path = append_event(
-            root,
-            requested_path=str(event["requested_path"]),
-            reason=str(event["reason"]),
-            reason_evidence=dict(event.get("reason_evidence") or {}),
-            stage=str(event["stage"]),
-            agent=str(event["agent"]),
-            context_ref=str(event["context_ref"]),
-            story_id=str(event.get("story_id") or ""),
-            work_id=str(event.get("work_id") or ""),
-            scope_digest=str(event.get("scope_digest") or ""),
-            preregistered_by=str(event.get("preregistered_by") or ""),
-            plan_digest=str(event.get("plan_digest") or ""),
-            ledger=ledger,
+    def result(decision: str, event_ids: list[str], mutation_count: int) -> ReadExpansionApplyResultV1:
+        return ReadExpansionApplyResultV1(
+            decision=decision,
+            story_id=plan.story_id,
+            context_ref=plan.context_ref,
+            work_id=plan.work_id,
+            scope_digest=plan.scope_digest,
+            requested_refs=plan.requested_refs,
+            event_ids=tuple(sorted(item for item in event_ids if item)),
+            ledger_ref=plan.ledger_ref,
+            plan_digest=plan.plan_digest,
+            mutation_count=mutation_count,
         )
-        appended_ids.append(str(appended["event_id"]))
-    return ReadExpansionApplyResultV1(
-        decision="APPLIED",
-        story_id=plan.story_id,
-        context_ref=plan.context_ref,
-        work_id=plan.work_id,
-        scope_digest=plan.scope_digest,
-        requested_refs=plan.requested_refs,
-        event_ids=tuple(sorted([*existing_ids, *appended_ids])),
-        ledger_ref=plan.ledger_ref,
-        plan_digest=plan.plan_digest,
-        mutation_count=len(appended_ids),
-    )
+
+    appended_ids: list[str] = []
+    append_error: Exception | None = None
+    try:
+        for event in pending:
+            appended, _path = append_event(
+                root,
+                requested_path=str(event["requested_path"]),
+                reason=str(event["reason"]),
+                reason_evidence=dict(event.get("reason_evidence") or {}),
+                stage=str(event["stage"]),
+                agent=str(event["agent"]),
+                context_ref=str(event["context_ref"]),
+                story_id=str(event.get("story_id") or ""),
+                work_id=str(event.get("work_id") or ""),
+                scope_digest=str(event.get("scope_digest") or ""),
+                preregistered_by=str(event.get("preregistered_by") or ""),
+                plan_digest=str(event.get("plan_digest") or ""),
+                ledger=ledger,
+            )
+            appended_ids.append(str(appended["event_id"]))
+    except Exception as exc:  # append may have committed before its response failed.
+        append_error = exc
+
+    try:
+        postcheck_events, postcheck_errors = load_events(ledger_path)
+        if postcheck_errors:
+            return result("PARTIAL", [*existing_ids, *appended_ids], len(appended_ids))
+        postcheck_ids: list[str] = []
+        exact = True
+        for requested_ref in missing_refs:
+            matches = _matching_preregistration_events(
+                postcheck_events,
+                story_id=plan.story_id,
+                stage=plan.stage,
+                context_ref=plan.context_ref,
+                work_id=plan.work_id,
+                scope_digest=plan.scope_digest,
+                reason=plan.reason,
+                reason_evidence=plan.reason_evidence,
+                requested_ref=requested_ref,
+            )
+            ids = [str(event.get("event_id") or "") for event in matches]
+            postcheck_ids.extend(ids)
+            exact = exact and len(matches) == 1 and bool(ids[0])
+        if append_error is not None:
+            if exact:
+                return result("PARTIAL", [*existing_ids, *postcheck_ids], len(appended_ids))
+            raise append_error
+        if not exact or set(postcheck_ids) != set(appended_ids):
+            return result("PARTIAL", [*existing_ids, *postcheck_ids], len(appended_ids))
+        return result("APPLIED", [*existing_ids, *postcheck_ids], len(appended_ids))
+    except Exception as exc:
+        if append_error is exc and not appended_ids:
+            raise
+        # After append, an unreadable postcheck is an uncertain immutable write.
+        if appended_ids or append_error is not None:
+            return result("PARTIAL", [*existing_ids, *appended_ids], len(appended_ids))
+        raise
 
 
 def validate_event(

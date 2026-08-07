@@ -172,6 +172,7 @@ def _print_cr_help() -> None:
         "  summary    Generate process/changes/summaries/<CR>.summary.json.\n"
         "  brief      Print a goal-oriented CR brief from summary/frontmatter.\n"
         "  goal-brief Print all CRs attached to one goal_ref.\n"
+        "  query      Query an explicitly declared immutable legacy CR or follow-up.\n"
         "  impact-report Print a side-effect-free impact surface migration report as JSON.\n"
         "  terminate  Plan or apply an exact-OID, typed, recoverable native CR termination.\n"
         "  status-sync Plan or apply a typed CR status projection transaction.\n"
@@ -196,6 +197,7 @@ def _print_cr_help() -> None:
         "  meta-flow cr brief --id CR-101 --project-root .\n"
         "  meta-flow cr brief --id CR-101 --mode enforce --project-root .\n"
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
+        "  meta-flow cr query --id CR-174 --project-root .\n"
         "  meta-flow cr impact-report --project-root .\n"
         '  meta-flow cr terminate --id CR-101 --work-id WORK-101 --status cancelled --reason "superseded by a clean replacement" --expected-process-oid <oid> --project-root .\n'
         '  meta-flow cr terminate --id CR-101 --work-id WORK-101 --status cancelled --reason "superseded by a clean replacement" --expected-process-oid <oid> --expected-plan-digest <digest> --authorization-file authorization.json --apply --project-root .\n'
@@ -525,6 +527,32 @@ def _dispatch_cr_diagnostic_command(
     project_root: Path,
     dependencies: dict[str, Any],
 ) -> int | None:
+    if command == "query":
+        if not parsed.cr_id:
+            raise SystemExit("--id is required")
+        from meta_flow.workflow.legacy_evidence_registry import (
+            LegacyEvidenceError,
+            query_declared_legacy_evidence,
+        )
+
+        try:
+            result = query_declared_legacy_evidence(
+                project_root,
+                query_id=parsed.cr_id,
+            )
+        except LegacyEvidenceError as exc:
+            result = {
+                "schema_version": 1,
+                "decision": "BLOCKED",
+                "error_code": exc.code,
+                "message": str(exc),
+                "query_id": parsed.cr_id,
+                "mutation_count": 0,
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 2
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
     if command == "check":
         errors = dependencies["collect_check_errors"](project_root)
         warnings = dependencies["collect_check_warnings"](project_root)
@@ -658,7 +686,7 @@ def main(
         f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, "
         "terminate, status-sync, status-sync-inspect, status-sync-resume, status-sync-rollback, status-sync-abandon, "
         "aggregate, branch-open, branch-publish, branch-merge, branch-finish, close, check, "
-        "public-operations-check, conflicts"
+        "query, public-operations-check, conflicts"
     )
 
 

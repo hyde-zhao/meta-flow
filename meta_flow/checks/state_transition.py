@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
+import re
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -739,6 +741,108 @@ def project_cp6_development_plan(
                 }
             )
     return projected, tuple(transitions)
+
+
+CP6_REVALIDATION_PHASES = (
+    "AUTHORIZED",
+    "PREREGISTERED",
+    "EVIDENCE_CORRELATED",
+    "PROJECTED",
+    "COMPLETE",
+)
+_REVALIDATION_EVENT_KINDS = (
+    "authorization", "preregistration", "preflight", "projection", "completion",
+)
+_REVALIDATION_EVENT_FIELDS = frozenset(
+    {"attempt_id", "phase", "evidence_kind", "evidence_digest", "previous_digest"}
+)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def project_cp6_revalidation_attempt(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    expected_identity: Mapping[str, str],
+    formal_story_status: str,
+) -> dict[str, Any]:
+    """纯函数：投影一个 attempt 的五阶段 overlay，绝不修改 Story formal status。
+
+    事件必须是同一 attempt 的严格前缀；跳跃、回退、重复、跨 attempt 和
+    revalidation 造成的 formal-status 回退一律 fail-closed。
+    """
+
+    if formal_story_status not in {
+        "ready-for-verification", "verified", "verified-with-risk", "done",
+    }:
+        return {
+            "decision": "BLOCKED", "phase": "", "reason_codes": ["FORMAL_STORY_STATUS_NOT_REVALIDATABLE"],
+            "formal_story_status": formal_story_status,
+        }
+    identity_fields = {"cr_id", "story_id", "work_id", "attempt_id"}
+    if set(expected_identity) != identity_fields or not all(str(expected_identity[key]) for key in identity_fields):
+        return {"decision": "BLOCKED", "phase": "", "reason_codes": ["REVALIDATION_EXPECTED_IDENTITY_INVALID"], "formal_story_status": formal_story_status}
+    refs: set[str] = set()
+    phases: list[str] = []
+    previous_digest = ""
+    for event in events:
+        required = {"schema_version", "evidence_ref", "bytes", "bytes_digest", "kind", "previous_digest", "outer_identity"}
+        if set(event) != required:
+            return {
+                "decision": "BLOCKED", "phase": "", "reason_codes": ["REVALIDATION_OBSERVATION_SHAPE_INVALID"],
+                "formal_story_status": formal_story_status,
+            }
+        ref = str(event["evidence_ref"])
+        if not ref.startswith("process/") or ".." in ref.split("/") or ref in refs:
+            return {
+                "decision": "BLOCKED", "phase": "", "reason_codes": ["REVALIDATION_EVIDENCE_REF_INVALID"],
+                "formal_story_status": formal_story_status,
+            }
+        refs.add(ref)
+        raw = event["bytes"]
+        if not isinstance(raw, bytes) or hashlib.sha256(raw).hexdigest() != str(event["bytes_digest"]):
+            return {
+                "decision": "BLOCKED", "phase": "", "reason_codes": ["REVALIDATION_EVIDENCE_BYTES_INVALID"],
+                "formal_story_status": formal_story_status,
+            }
+        try:
+            inner = json.loads(raw)
+        except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
+            return {
+                "decision": "BLOCKED", "phase": "", "reason_codes": ["REVALIDATION_EVIDENCE_JSON_INVALID"],
+                "formal_story_status": formal_story_status,
+            }
+        if not isinstance(inner, Mapping) or set(inner) != {"schema_version", "kind", "cr_id", "story_id", "work_id", "attempt_id", "previous_digest", "sequence"} or inner.get("schema_version") != 1:
+            return {
+                "decision": "BLOCKED", "phase": "", "reason_codes": ["REVALIDATION_EVIDENCE_SCHEMA_INVALID"],
+                "formal_story_status": formal_story_status,
+            }
+        expected_kind = _REVALIDATION_EVENT_KINDS[len(phases)] if len(phases) < len(_REVALIDATION_EVENT_KINDS) else ""
+        if (
+            inner.get("kind") != expected_kind
+            or event["kind"] != expected_kind
+            or inner.get("previous_digest") != previous_digest
+            or event["previous_digest"] != previous_digest
+            or inner.get("sequence") != len(phases) + 1
+        ):
+            return {
+                "decision": "BLOCKED", "phase": "", "reason_codes": ["REVALIDATION_EVENT_LINEAGE_INVALID"],
+                "formal_story_status": formal_story_status,
+            }
+        if any(inner.get(key) != expected_identity[key] for key in identity_fields) or event["outer_identity"] != dict(expected_identity):
+            return {
+                "decision": "BLOCKED", "phase": "", "reason_codes": ["REVALIDATION_EVENT_IDENTITY_INVALID"],
+                "formal_story_status": formal_story_status,
+            }
+        phases.append(CP6_REVALIDATION_PHASES[len(phases)])
+        previous_digest = str(event["bytes_digest"])
+    return {
+        "decision": "READY",
+        "phase": phases[-1] if phases else "",
+        "next_phase": CP6_REVALIDATION_PHASES[len(phases)] if len(phases) < len(CP6_REVALIDATION_PHASES) else "",
+        "complete": len(phases) == len(CP6_REVALIDATION_PHASES),
+        "formal_story_status": formal_story_status,
+        "reason_codes": [],
+    }
 
 
 CHRONOLOGY_KINDS = {

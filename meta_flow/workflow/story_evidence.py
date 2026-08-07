@@ -3,20 +3,36 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
 from meta_flow.checks import cp_result, state_transition
-from meta_flow.context_pack import story_contract
+from meta_flow.checks.frozen_cp6_evidence import (
+    Cp6RevalidationReceiptV1,
+    FrozenCp6EvidenceError,
+    build_cp6_revalidation_receipt,
+    freeze_cp6_revalidation_authorization,
+    freeze_cp6_revalidation_receipt,
+)
+from meta_flow.context_pack import read_expansion, story_contract
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.project.scale import load_yaml_object
+from meta_flow.semantics.authority import (
+    render_authority_apply_result,
+    render_authority_input_blocked,
+    render_human_wire,
+    validate_authority_binding,
+)
 from meta_flow.state import event_ledger
 
 EVIDENCE_ROOT_REL = Path("process/evidence")
@@ -166,6 +182,49 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _create_once_json(path: Path, data: dict[str, Any]) -> dict[str, Any]:
+    """以 create-once 语义写入 canonical JSON，不覆盖任何既有 bytes。"""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(data, stream, ensure_ascii=False, sort_keys=True)
+        stream.write("\n")
+    return {"status": "APPLIED", "mutation_count": 1}
+
+
+def _target_bytes_observation(path: Path) -> tuple[str, bytes]:
+    """读取 writer 前后目标状态；不可观察按 unknown 处理，不能宣称零 mutation。"""
+
+    try:
+        if not path.exists():
+            return ("missing", b"")
+        if not path.is_file():
+            return ("non-file", b"")
+        return ("file", path.read_bytes())
+    except OSError:
+        return ("unknown", b"")
+
+
+def _writer_exception_result(
+    path: Path,
+    before: tuple[str, bytes],
+    *,
+    blocked_code: str,
+    partial_code: str,
+) -> dict[str, Any]:
+    """依据实际 preimage/postimage 分类 writer exception。"""
+
+    after = _target_bytes_observation(path)
+    if before[0] == "unknown" or after[0] == "unknown" or after != before:
+        return {
+            "status": "PARTIAL",
+            "decision": "PARTIAL",
+            "mutation_count": 1,
+            "reason_codes": [partial_code],
+        }
+    return _blocked_revalidation(blocked_code)
 
 
 def _infer_project_root(path: Path) -> Path:
@@ -968,6 +1027,2221 @@ def apply_cp6_story_projection(
     }
 
 
+_REVALIDATION_AUTHORIZATION_FIELDS = frozenset(
+    {
+        "previous_cp6_ref", "superseding_cp5_ref", "approval_ref",
+        "work_authorization_ref", "plan_preimage_digest", "downstream_set_digest", "downstream_set",
+    }
+)
+_REVALIDATION_PREFLIGHT_FIELDS = frozenset(
+    {"packet_digest", "read_log_digest", "return_digest", "evidence_digest",
+     "result_digest", "checkpoint_digest", "plan_digest", "downstream_set_digest", "p01_event_ref"}
+)
+_REVALIDATION_DOWNSTREAM_POLICY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "logical_ref",
+        "bytes_digest",
+        "consumers",
+        "policy_digest",
+        "current_receipts",
+    }
+)
+
+
+def _blocked_revalidation(code: str) -> dict[str, Any]:
+    return {"status": "BLOCKED", "decision": "BLOCKED", "mutation_count": 0, "reason_codes": [code]}
+
+
+def plan_cp6_revalidation(
+    authorization: Cp6RevalidationReceiptV1 | Mapping[str, Any],
+    *,
+    source_observation: Mapping[str, Any],
+    target_observation: Mapping[str, Any],
+    downstream_policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    """把授权、源、目标与下游策略冻结为可重放的 immutable plan。"""
+
+    try:
+        receipt = authorization if isinstance(authorization, Cp6RevalidationReceiptV1) else freeze_cp6_revalidation_receipt(**authorization)
+    except (FrozenCp6EvidenceError, TypeError):
+        return _blocked_revalidation("AUTHORIZATION_INVALID")
+    if receipt.kind != "authorization" or set(receipt.payload) != _REVALIDATION_AUTHORIZATION_FIELDS:
+        return _blocked_revalidation("AUTHORIZATION_FIELDS_INVALID")
+    source = dict(source_observation)
+    if set(source) != {"release_oid", "process_oid", "scope_digest"} or source != {
+        "release_oid": receipt.release_oid,
+        "process_oid": receipt.process_oid,
+        "scope_digest": receipt.scope_digest,
+    }:
+        return _blocked_revalidation("AUTHORIZATION_SNAPSHOT_DRIFT")
+    target = dict(target_observation)
+    if (
+        set(target) != {"logical_ref", "exists", "preimage_digest"}
+        or not _is_process_logical_ref(target.get("logical_ref"))
+        or not isinstance(target.get("exists"), bool)
+        or (target["exists"] and not _is_sha256(target.get("preimage_digest")))
+        or (not target["exists"] and target.get("preimage_digest") != "")
+    ):
+        return _blocked_revalidation("TARGET_OBSERVATION_INVALID")
+    policy = dict(downstream_policy)
+    consumers = policy.get("consumers")
+    if (
+        set(policy) != _REVALIDATION_DOWNSTREAM_POLICY_FIELDS
+        or policy.get("schema_version") != 1
+        or not _is_process_logical_ref(policy.get("logical_ref"))
+        or not _is_sha256(policy.get("bytes_digest"))
+        or not isinstance(consumers, Mapping)
+        or policy.get("policy_digest") != canonical_digest(consumers)
+        or policy.get("current_receipts") != receipt.payload["downstream_set"]
+    ):
+        return _blocked_revalidation("DOWNSTREAM_POLICY_INVALID")
+    plan_payload = {
+        "operation": "story.revalidate-cp6",
+        "authorization_digest": receipt.as_dict()["payload_digest"],
+        "attempt_id": receipt.attempt_id,
+        "target_kind": "authorization",
+        "source_observation": source,
+        "target_observation": target,
+        "downstream_policy": policy,
+    }
+    return {
+        "status": "READY", "decision": "READY", "mutation_count": 1,
+        "plan": plan_payload, "plan_digest": canonical_digest(plan_payload),
+    }
+
+
+def apply_cp6_revalidation_receipt(
+    target: Path,
+    receipt: Cp6RevalidationReceiptV1 | Mapping[str, Any],
+    *,
+    expected_plan_digest: str,
+    plan: Mapping[str, Any],
+    observe_current: Any,
+    create_once_writer: Any,
+    postcheck_reader: Any,
+) -> dict[str, Any]:
+    """在 apply 时重新观察全部冻结轴，并以 create-once 语义写入 receipt。"""
+
+    try:
+        frozen = receipt if isinstance(receipt, Cp6RevalidationReceiptV1) else freeze_cp6_revalidation_receipt(**receipt)
+    except (FrozenCp6EvidenceError, TypeError):
+        return _blocked_revalidation("RECEIPT_INVALID")
+    current_plan_digest = canonical_digest(dict(plan))
+    expected_authorization_digest = frozen.as_dict()["payload_digest"]
+    if (
+        not expected_plan_digest
+        or current_plan_digest != expected_plan_digest
+        or str(plan.get("authorization_digest") or "") != expected_authorization_digest
+        or str(plan.get("attempt_id") or "") != frozen.attempt_id
+        or str(plan.get("target_kind") or "") != frozen.kind
+    ):
+        return _blocked_revalidation("EXPECTED_PLAN_DIGEST_DRIFT")
+    if set(plan) != {
+        "operation", "authorization_digest", "attempt_id", "target_kind",
+        "source_observation", "target_observation", "downstream_policy",
+    }:
+        return _blocked_revalidation("EXPECTED_PLAN_SHAPE_INVALID")
+    try:
+        current = observe_current()
+    except Exception:
+        return _blocked_revalidation("APPLY_CURRENT_OBSERVATION_UNAVAILABLE")
+    if not isinstance(current, Mapping) or set(current) != {
+        "source_observation", "target_observation", "downstream_policy",
+    }:
+        return _blocked_revalidation("APPLY_CURRENT_OBSERVATION_INVALID")
+    if dict(current["source_observation"]) != dict(plan["source_observation"]):
+        return _blocked_revalidation("APPLY_SOURCE_OBSERVATION_DRIFT")
+    if dict(current["downstream_policy"]) != dict(plan["downstream_policy"]):
+        return _blocked_revalidation("APPLY_DOWNSTREAM_POLICY_DRIFT")
+    planned_target = dict(plan["target_observation"])
+    current_target = dict(current["target_observation"])
+    if (
+        set(current_target) != {"logical_ref", "exists", "preimage_digest"}
+        or current_target.get("logical_ref") != planned_target.get("logical_ref")
+        or not _is_process_logical_ref(current_target.get("logical_ref"))
+    ):
+        return _blocked_revalidation("APPLY_TARGET_OBSERVATION_DRIFT")
+    payload = frozen.as_dict()
+    if target.exists():
+        try:
+            raw = target.read_bytes()
+            existing = json.loads(raw)
+        except (OSError, ValueError):
+            return _blocked_revalidation("CREATE_ONCE_TARGET_CONFLICT")
+        if (
+            current_target.get("exists") is not True
+            or current_target.get("preimage_digest") != hashlib.sha256(raw).hexdigest()
+        ):
+            return _blocked_revalidation("APPLY_TARGET_OBSERVATION_DRIFT")
+        if existing != payload:
+            return _blocked_revalidation("CREATE_ONCE_TARGET_CONFLICT")
+        return {
+            "status": "NO_CHANGE", "decision": "NO_CHANGE", "mutation_count": 0,
+            "plan_digest": current_plan_digest,
+        }
+    if current_target != planned_target or current_target.get("exists") is not False:
+        return _blocked_revalidation("APPLY_TARGET_OBSERVATION_DRIFT")
+    before_write = _target_bytes_observation(target)
+    if before_write[0] != "missing":
+        return _blocked_revalidation("APPLY_TARGET_OBSERVATION_DRIFT")
+    try:
+        create_once_writer(target, payload)
+    except FileExistsError:
+        return _blocked_revalidation("CREATE_ONCE_TARGET_CONFLICT")
+    except OSError:
+        return _writer_exception_result(
+            target,
+            before_write,
+            blocked_code="WRITE_FAILED_BEFORE_MUTATION",
+            partial_code="WRITE_INTERRUPTED_AFTER_MUTATION",
+        )
+    try:
+        if postcheck_reader(target) != payload:
+            return {
+                "status": "PARTIAL", "decision": "PARTIAL", "mutation_count": 1,
+                "reason_codes": ["POSTCHECK_MISMATCH"],
+            }
+    except (OSError, ValueError):
+        return {
+            "status": "PARTIAL", "decision": "PARTIAL", "mutation_count": 1,
+            "reason_codes": ["POSTCHECK_UNAVAILABLE"],
+        }
+    return {"status": "APPLIED", "decision": "PASS", "mutation_count": 1, "plan_digest": current_plan_digest}
+
+
+def recover_cp6_revalidation_receipt(
+    target: Path,
+    receipt: Cp6RevalidationReceiptV1 | Mapping[str, Any],
+    *, attempt_id: str,
+) -> dict[str, Any]:
+    """仅确认同 attempt 的已存在 receipt；不删除或重写 immutable 历史。"""
+
+    try:
+        frozen = receipt if isinstance(receipt, Cp6RevalidationReceiptV1) else freeze_cp6_revalidation_receipt(**receipt)
+    except (FrozenCp6EvidenceError, TypeError):
+        return _blocked_revalidation("RECOVERY_RECEIPT_INVALID")
+    if frozen.attempt_id != attempt_id:
+        return _blocked_revalidation("RECOVERY_CROSS_ATTEMPT")
+    try:
+        existing = _read_json(target)
+    except (OSError, ValueError):
+        return _blocked_revalidation("RECOVERY_TARGET_MISSING")
+    if existing != frozen.as_dict():
+        return _blocked_revalidation("RECOVERY_POSTCONDITION_MISMATCH")
+    return {"status": "NO_CHANGE", "decision": "NO_CHANGE", "mutation_count": 0, "attempt_id": attempt_id}
+
+
+def validate_cp6_revalidation_preflight(
+    authorization: Cp6RevalidationReceiptV1 | Mapping[str, Any],
+    *,
+    required_digests: Mapping[str, str],
+    p01_event: Mapping[str, Any],
+) -> dict[str, Any]:
+    """验证 mandatory evidence spine 与 P01 exact-one preregistration 关联。"""
+
+    try:
+        auth = authorization if isinstance(authorization, Cp6RevalidationReceiptV1) else freeze_cp6_revalidation_receipt(**authorization)
+    except (FrozenCp6EvidenceError, TypeError):
+        return _blocked_revalidation("AUTHORIZATION_INVALID")
+    if auth.kind != "authorization" or set(required_digests) != (_REVALIDATION_PREFLIGHT_FIELDS - {"p01_event_ref"}):
+        return _blocked_revalidation("PREFLIGHT_REQUIRED_SET_INVALID")
+    if any(
+        not isinstance(value, str) or len(value) != 64 or value.lower() != value
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in required_digests.values()
+    ):
+        return _blocked_revalidation("PREFLIGHT_DIGEST_INVALID")
+    if set(p01_event) != {
+        "logical_ref", "event_bytes", "event_bytes_digest", "current_event_bytes_digest",
+    }:
+        return _blocked_revalidation("P01_PREREGISTRATION_OBSERVATION_INVALID")
+    raw_event = p01_event.get("event_bytes")
+    if not isinstance(raw_event, bytes):
+        return _blocked_revalidation("P01_PREREGISTRATION_EVENT_BYTES_INVALID")
+    try:
+        parsed_event = json.loads(raw_event)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _blocked_revalidation("P01_PREREGISTRATION_EVENT_BYTES_INVALID")
+    if not isinstance(parsed_event, Mapping):
+        return _blocked_revalidation("P01_PREREGISTRATION_EVENT_BYTES_INVALID")
+    p01_result = validate_p01_preregistration_exact_one(
+        ledger_events=[p01_event],
+        expected_identity={
+            "story_id": auth.story_id,
+            "work_id": auth.work_id,
+            "attempt_id": auth.attempt_id,
+            "scope_digest": auth.scope_digest,
+        },
+        current_selection_digest=str(parsed_event.get("selection_digest") or ""),
+    )
+    if p01_result["decision"] != "READY":
+        return _blocked_revalidation("P01_PREREGISTRATION_CORRELATION_INVALID")
+    receipt = build_cp6_revalidation_receipt(
+        kind="preflight", cr_id=auth.cr_id, story_id=auth.story_id, work_id=auth.work_id,
+        attempt_id=auth.attempt_id, release_oid=auth.release_oid, process_oid=auth.process_oid,
+        scope_digest=auth.scope_digest,
+        payload={
+            "authorization_digest": auth.as_dict()["payload_digest"],
+            **dict(sorted(required_digests.items())),
+            "p01_event_ref": str(p01_event["logical_ref"]),
+        },
+    )
+    return {"status": "READY", "decision": "READY", "mutation_count": 1, "receipt": receipt.as_dict()}
+
+
+def admit_revalidation_downstream(
+    *, consumer: str, expected_digests: Mapping[str, str], current_digests: Mapping[str, str],
+) -> dict[str, Any]:
+    """下游只接受 exact current digest 集合；不从状态或文件名推断 currentness。"""
+
+    del consumer, expected_digests, current_digests
+    return _blocked_revalidation("DOWNSTREAM_UNVALIDATED_CALLER_MAPPING")
+
+
+def validate_p01_preregistration_exact_one(
+    *,
+    packet: Mapping[str, Any] | None = None,
+    ledger_events: list[Mapping[str, Any]] | None = None,
+    expected_identity: Mapping[str, Any] | None = None,
+    current_selection_digest: str = "",
+    events: list[Mapping[str, Any]] | None = None,
+    current_digest: str = "",
+) -> dict[str, Any]:
+    """从 immutable event observation 验证 P01 exact-one current preregistration。"""
+
+    observed = list(ledger_events if ledger_events is not None else (events or []))
+    selection_digest = current_selection_digest or current_digest
+    if len(observed) != 1 or not _is_sha256(selection_digest):
+        return _blocked_revalidation("P01_PREREGISTRATION_CARDINALITY_INVALID")
+    candidate = observed[0]
+    if "event_bytes" in candidate:
+        if set(candidate) != {
+            "logical_ref", "event_bytes", "event_bytes_digest", "current_event_bytes_digest",
+        } or not _is_process_logical_ref(candidate.get("logical_ref")):
+            return _blocked_revalidation("P01_PREREGISTRATION_OBSERVATION_INVALID")
+        raw = candidate.get("event_bytes")
+        if not isinstance(raw, bytes):
+            return _blocked_revalidation("P01_PREREGISTRATION_EVENT_BYTES_INVALID")
+        digest = hashlib.sha256(raw).hexdigest()
+        if (
+            candidate.get("event_bytes_digest") != digest
+            or candidate.get("current_event_bytes_digest") != digest
+        ):
+            return _blocked_revalidation("P01_PREREGISTRATION_CURRENTNESS_INVALID")
+        try:
+            event = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _blocked_revalidation("P01_PREREGISTRATION_EVENT_BYTES_INVALID")
+    else:
+        event = candidate
+    if not isinstance(event, Mapping):
+        return _blocked_revalidation("P01_PREREGISTRATION_EVIDENCE_INVALID")
+    event_packet = event.get("packet")
+    selected = event.get("selected_refs")
+    if not isinstance(event_packet, Mapping) or not isinstance(selected, list):
+        return _blocked_revalidation("P01_PREREGISTRATION_EVIDENCE_INVALID")
+    if packet is not None and dict(event_packet) != dict(packet):
+        return _blocked_revalidation("P01_PREREGISTRATION_PACKET_MISMATCH")
+    try:
+        required = read_expansion.select_required_preregistration_refs(event_packet)
+    except ValueError:
+        return _blocked_revalidation("P01_PREREGISTRATION_SELECTOR_INVALID")
+    if (
+        tuple(selected) != required
+        or str(event.get("selection_digest") or "") != canonical_digest(selected)
+        or str(event.get("selection_digest") or "") != selection_digest
+    ):
+        return _blocked_revalidation("P01_PREREGISTRATION_CURRENTNESS_INVALID")
+    identity = dict(expected_identity or {})
+    if any(event.get(field) != value for field, value in identity.items()):
+        return _blocked_revalidation("P01_PREREGISTRATION_IDENTITY_MISMATCH")
+    if (
+        event.get("stage") != "CP6"
+        or event.get("requested_ref") != required[0]
+        or event.get("preregistered_by") != "host"
+        or event.get("reason") != "summary_insufficient"
+        or event.get("reason_evidence") != {"missing_slots": ["full_lld_body"]}
+        or not _is_sha256(event.get("bytes_digest"))
+    ):
+        return _blocked_revalidation("P01_PREREGISTRATION_EVIDENCE_INVALID")
+    return {
+        "status": "READY",
+        "decision": "READY",
+        "mutation_count": 0,
+        "logical_ref": str(candidate.get("logical_ref") or ""),
+        "selection_digest": selection_digest,
+    }
+
+
+def validate_cp6_revalidation_spine(
+    *, authorization: Mapping[str, Any], observations: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """从八个 immutable bytes observations 验证 mandatory evidence spine。"""
+
+    roles = (
+        ("packet", "context-packet"), ("read_log", "read-expansion-log"),
+        ("return", "story-return"), ("evidence", "evidence-index"),
+        ("result", "cp6-result"), ("checkpoint", "checkpoint-result"),
+        ("plan", "development-plan"), ("downstream", "downstream-receipt-set"),
+    )
+    if len(observations) != len(roles):
+        return _blocked_revalidation("REVALIDATION_SPINE_CARDINALITY_INVALID")
+    identity = {
+        "story_id": authorization.get("story_id"),
+        "work_id": authorization.get("work_id"),
+        "attempt_id": authorization.get("attempt_id"),
+        "authorization_digest": authorization.get("payload_digest"),
+    }
+    if not all(isinstance(value, str) and value for value in identity.values()):
+        return _blocked_revalidation("REVALIDATION_SPINE_AUTHORIZATION_INVALID")
+    previous = ""
+    seen_refs: set[str] = set()
+    outer_fields = {
+        "role", "kind", "logical_ref", "bytes", "bytes_digest", "story_id",
+        "work_id", "attempt_id", "authorization_digest", "previous_digest",
+    }
+    inner_fields = {
+        "schema_version", "role", "kind", "story_id", "work_id", "attempt_id",
+        "authorization_digest", "previous_digest",
+    }
+    for observation, (role, kind) in zip(observations, roles, strict=True):
+        if set(observation) != outer_fields:
+            return _blocked_revalidation("REVALIDATION_SPINE_OBSERVATION_SHAPE_INVALID")
+        ref = observation.get("logical_ref")
+        raw = observation.get("bytes")
+        if not _is_process_logical_ref(ref) or ref in seen_refs or not isinstance(raw, bytes):
+            return _blocked_revalidation("REVALIDATION_SPINE_OBSERVATION_INVALID")
+        seen_refs.add(str(ref))
+        digest = hashlib.sha256(raw).hexdigest()
+        if observation.get("bytes_digest") != digest:
+            return _blocked_revalidation("REVALIDATION_SPINE_BYTES_DIGEST_MISMATCH")
+        try:
+            inner = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _blocked_revalidation("REVALIDATION_SPINE_BYTES_INVALID")
+        expected = {
+            "schema_version": 1, "role": role, "kind": kind,
+            **identity, "previous_digest": previous,
+        }
+        if not isinstance(inner, Mapping) or set(inner) != inner_fields or dict(inner) != expected:
+            return _blocked_revalidation("REVALIDATION_SPINE_INNER_BINDING_MISMATCH")
+        expected_outer = {key: value for key, value in expected.items() if key != "schema_version"}
+        if any(observation.get(key) != value for key, value in expected_outer.items()):
+            return _blocked_revalidation("REVALIDATION_SPINE_OUTER_BINDING_MISMATCH")
+        previous = digest
+    return {"status": "READY", "decision": "READY", "mutation_count": 0}
+
+
+def validate_cp6_revalidation_input_contract(
+    *, input_spec: Mapping[str, Any], resolve: Any, exists: Any, read: Any,
+) -> dict[str, Any]:
+    """按 consumer requirement 执行 resolve→exists→read 的精确 I/O 契约。"""
+
+    requirement = input_spec.get("consumer_requirement")
+    if requirement != "required":
+        return {"status": "NOT_REQUIRED", "decision": "NOT_REQUIRED", "mutation_count": 0, "read_count": 0}
+    ref = input_spec.get("logical_ref")
+    expected_digest = input_spec.get("expected_bytes_digest")
+    if not _is_process_logical_ref(ref) or not _is_sha256(expected_digest):
+        return _blocked_revalidation("REVALIDATION_INPUT_SPEC_INVALID") | {"read_count": 0}
+    try:
+        route = resolve(ref)
+    except Exception:
+        return _blocked_revalidation("REVALIDATION_INPUT_ROUTE_UNAVAILABLE") | {"read_count": 0}
+    if not isinstance(route, Mapping) or route.get("status") != "ready":
+        return _blocked_revalidation("REVALIDATION_INPUT_ROUTE_INVALID") | {"read_count": 0}
+    expected_lineage = input_spec.get("expected_lineage")
+    if isinstance(expected_lineage, Mapping) and any(
+        route.get(field) != value for field, value in expected_lineage.items()
+    ):
+        return _blocked_revalidation("REVALIDATION_INPUT_LINEAGE_MISMATCH") | {"read_count": 0}
+    try:
+        if not exists(ref):
+            return _blocked_revalidation("REVALIDATION_INPUT_TARGET_MISSING") | {"read_count": 0}
+        raw = read(ref)
+    except Exception:
+        return _blocked_revalidation("REVALIDATION_INPUT_READ_UNAVAILABLE") | {"read_count": 0}
+    if not isinstance(raw, bytes) or hashlib.sha256(raw).hexdigest() != expected_digest:
+        return _blocked_revalidation("REVALIDATION_INPUT_DIGEST_MISMATCH") | {"read_count": 1}
+    return {"status": "READY", "decision": "READY", "mutation_count": 0, "read_count": 1}
+
+
+def recover_missing_cp6_revalidation_completion(
+    *,
+    authorization: Cp6RevalidationReceiptV1 | Mapping[str, Any],
+    preflight: Cp6RevalidationReceiptV1 | Mapping[str, Any],
+    projection: Mapping[str, Any],
+    target_observation: Mapping[str, Any],
+    create_once_writer: Any,
+    postcheck_reader: Any,
+) -> dict[str, Any]:
+    """仅为同一已关联 attempt create-once 恢复缺失 completion。"""
+
+    try:
+        auth = authorization if isinstance(authorization, Cp6RevalidationReceiptV1) else freeze_cp6_revalidation_receipt(**authorization)
+        pre = preflight if isinstance(preflight, Cp6RevalidationReceiptV1) else freeze_cp6_revalidation_receipt(**preflight)
+    except (FrozenCp6EvidenceError, TypeError):
+        return _blocked_revalidation("COMPLETION_RECOVERY_RECEIPT_INVALID")
+    auth_digest = auth.as_dict()["payload_digest"]
+    pre_digest = pre.as_dict()["payload_digest"]
+    if (
+        auth.kind != "authorization"
+        or pre.kind != "preflight"
+        or (auth.cr_id, auth.story_id, auth.work_id, auth.attempt_id)
+        != (pre.cr_id, pre.story_id, pre.work_id, pre.attempt_id)
+        or pre.payload.get("authorization_digest") != auth_digest
+    ):
+        return _blocked_revalidation("COMPLETION_RECOVERY_CROSS_ATTEMPT")
+    raw = projection.get("bytes")
+    ref = projection.get("logical_ref")
+    if not isinstance(raw, bytes) or not _is_process_logical_ref(ref):
+        return _blocked_revalidation("COMPLETION_RECOVERY_PROJECTION_INVALID")
+    projection_digest = hashlib.sha256(raw).hexdigest()
+    if projection.get("bytes_digest") != projection_digest:
+        return _blocked_revalidation("COMPLETION_RECOVERY_PROJECTION_DIGEST_MISMATCH")
+    try:
+        inner = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _blocked_revalidation("COMPLETION_RECOVERY_PROJECTION_INVALID")
+    inner_fields = {
+        "schema_version", "kind", "cr_id", "story_id", "work_id", "attempt_id",
+        "preflight_digest", "phase",
+    }
+    expected_inner = {
+        "schema_version": 1, "kind": "projection", "cr_id": auth.cr_id,
+        "story_id": auth.story_id, "work_id": auth.work_id, "attempt_id": auth.attempt_id,
+        "preflight_digest": pre_digest, "phase": "COMPLETE",
+    }
+    if not isinstance(inner, Mapping) or set(inner) != inner_fields or dict(inner) != expected_inner:
+        return _blocked_revalidation("COMPLETION_RECOVERY_PROJECTION_LINEAGE_MISMATCH")
+    if any(projection.get(field) != value for field, value in expected_inner.items()):
+        return _blocked_revalidation("COMPLETION_RECOVERY_PROJECTION_OUTER_MISMATCH")
+    if set(target_observation) != {"logical_ref", "path", "exists", "preimage_digest"}:
+        return _blocked_revalidation("COMPLETION_RECOVERY_TARGET_INVALID")
+    target = target_observation.get("path")
+    if not isinstance(target, Path) or not _is_process_logical_ref(target_observation.get("logical_ref")):
+        return _blocked_revalidation("COMPLETION_RECOVERY_TARGET_INVALID")
+    completion = build_cp6_revalidation_receipt(
+        kind="completion", cr_id=auth.cr_id, story_id=auth.story_id, work_id=auth.work_id,
+        attempt_id=auth.attempt_id, release_oid=auth.release_oid, process_oid=auth.process_oid,
+        scope_digest=auth.scope_digest,
+        payload={
+            "authorization_digest": auth_digest,
+            "preflight_digest": pre_digest,
+            "projection_digest": projection_digest,
+            "downstream_set_digest": auth.payload["downstream_set_digest"],
+        },
+    )
+    payload = completion.as_dict()
+    if target.exists():
+        try:
+            raw_target = target.read_bytes()
+            existing = json.loads(raw_target)
+        except (OSError, ValueError):
+            return _blocked_revalidation("COMPLETION_RECOVERY_TARGET_CONFLICT")
+        if (
+            target_observation.get("exists") is not True
+            or target_observation.get("preimage_digest") != hashlib.sha256(raw_target).hexdigest()
+            or existing != payload
+        ):
+            return _blocked_revalidation("COMPLETION_RECOVERY_TARGET_CONFLICT")
+        return {"status": "NO_CHANGE", "decision": "NO_CHANGE", "mutation_count": 0}
+    if target_observation.get("exists") is not False or target_observation.get("preimage_digest") != "":
+        return _blocked_revalidation("COMPLETION_RECOVERY_TARGET_DRIFT")
+    before_write = _target_bytes_observation(target)
+    if before_write[0] != "missing":
+        return _blocked_revalidation("COMPLETION_RECOVERY_TARGET_DRIFT")
+    try:
+        create_once_writer(target, payload)
+    except FileExistsError:
+        return _blocked_revalidation("COMPLETION_RECOVERY_TARGET_CONFLICT")
+    except OSError:
+        return _writer_exception_result(
+            target,
+            before_write,
+            blocked_code="COMPLETION_RECOVERY_WRITE_FAILED",
+            partial_code="COMPLETION_RECOVERY_WRITE_INTERRUPTED_AFTER_MUTATION",
+        )
+    try:
+        if postcheck_reader(target) != payload:
+            return {"status": "PARTIAL", "decision": "PARTIAL", "mutation_count": 1}
+    except (OSError, ValueError):
+        return {"status": "PARTIAL", "decision": "PARTIAL", "mutation_count": 1}
+    return {"status": "RECOVERED", "decision": "PASS", "mutation_count": 1, "receipt": payload}
+
+
+def admit_revalidation_downstream_receipts(
+    *,
+    consumer: str,
+    receipt_refs: list[str],
+    plan_observation: Mapping[str, Any],
+    current_attempt: Mapping[str, Any],
+    expected_authorization_digest: str,
+    authorized_downstream_set: list[Mapping[str, Any]],
+    resolve_receipt: Any,
+    select_current: Any,
+) -> dict[str, Any]:
+    """从 plan-bound policy、receipt bytes 与 current selector 做下游准入。"""
+
+    if set(plan_observation) != {"authorization_digest", "bound_policy", "plan_digest"}:
+        return _blocked_revalidation("DOWNSTREAM_PLAN_INVALID")
+    plan_payload = {key: value for key, value in plan_observation.items() if key != "plan_digest"}
+    policy = plan_observation.get("bound_policy")
+    if not isinstance(policy, Mapping) or set(policy) != {"schema_version", "consumers", "policy_digest"}:
+        return _blocked_revalidation("DOWNSTREAM_POLICY_INVALID")
+    if policy.get("schema_version") != 1:
+        return _blocked_revalidation("DOWNSTREAM_POLICY_VERSION_INVALID")
+    if not _is_sha256(plan_observation.get("authorization_digest")):
+        return _blocked_revalidation("DOWNSTREAM_AUTHORIZATION_DIGEST_INVALID")
+    if (
+        not _is_sha256(expected_authorization_digest)
+        or plan_observation.get("authorization_digest")
+        != expected_authorization_digest
+    ):
+        return _blocked_revalidation("DOWNSTREAM_AUTHORIZATION_DIGEST_MISMATCH")
+    policy_payload = {"schema_version": policy["schema_version"], "consumers": policy["consumers"]}
+    if policy.get("policy_digest") != canonical_digest(policy_payload):
+        return _blocked_revalidation("DOWNSTREAM_POLICY_DIGEST_MISMATCH")
+    if plan_observation.get("plan_digest") != canonical_digest(plan_payload):
+        return _blocked_revalidation("DOWNSTREAM_PLAN_DIGEST_MISMATCH")
+    consumers = policy.get("consumers")
+    if not isinstance(consumers, Mapping) or not consumers:
+        return _blocked_revalidation("DOWNSTREAM_POLICY_CONSUMERS_INVALID")
+    for declared_consumer, declared_producers in consumers.items():
+        if (
+            not isinstance(declared_consumer, str)
+            or not declared_consumer
+            or not isinstance(declared_producers, list)
+            or not declared_producers
+            or any(not isinstance(producer, str) or not producer for producer in declared_producers)
+            or len(set(declared_producers)) != len(declared_producers)
+        ):
+            return _blocked_revalidation("DOWNSTREAM_POLICY_CONSUMERS_INVALID")
+    if consumer not in consumers:
+        return _blocked_revalidation("DOWNSTREAM_CONSUMER_UNKNOWN")
+    expected_producers = list(consumers[consumer])
+    if not isinstance(authorized_downstream_set, list) or any(
+        not isinstance(item, Mapping)
+        or set(item) != {"producer", "receipt_digest", "attempt_id"}
+        or not isinstance(item.get("producer"), str)
+        or not item.get("producer")
+        or not _is_sha256(item.get("receipt_digest"))
+        or item.get("attempt_id") != current_attempt.get("attempt_id")
+        for item in authorized_downstream_set
+    ):
+        return _blocked_revalidation("DOWNSTREAM_AUTHORIZED_SET_INVALID")
+    if expected_producers != [item["producer"] for item in authorized_downstream_set]:
+        return _blocked_revalidation("DOWNSTREAM_AUTHORIZED_SET_MISMATCH")
+    if len(receipt_refs) < len(expected_producers):
+        return _blocked_revalidation("DOWNSTREAM_RECEIPT_SET_MISSING")
+    if len(receipt_refs) > len(expected_producers):
+        return _blocked_revalidation("DOWNSTREAM_RECEIPT_SET_EXTRA")
+    if (
+        set(current_attempt) != {"story_id", "attempt_id", "plan_digest"}
+        or not isinstance(current_attempt.get("story_id"), str)
+        or not current_attempt.get("story_id")
+        or not isinstance(current_attempt.get("attempt_id"), str)
+        or not current_attempt.get("attempt_id")
+        or not _is_sha256(current_attempt.get("plan_digest"))
+        or current_attempt.get("plan_digest") != plan_observation.get("plan_digest")
+    ):
+        return _blocked_revalidation("DOWNSTREAM_ATTEMPT_INVALID")
+    parsed: list[dict[str, Any]] = []
+    raw_receipts: list[bytes] = []
+    for ref in receipt_refs:
+        if not _is_process_logical_ref(ref):
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_REF_INVALID")
+        try:
+            raw_receipt = resolve_receipt(ref)
+            payload = json.loads(raw_receipt)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_BYTES_INVALID")
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema_version", "producer", "consumer", "story_id", "attempt_id",
+        } or payload.get("schema_version") != 1:
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_SHAPE_INVALID")
+        parsed.append(payload)
+        raw_receipts.append(raw_receipt)
+    actual_producers = [payload["producer"] for payload in parsed]
+    if actual_producers != expected_producers:
+        if sorted(actual_producers) == sorted(expected_producers):
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_ORDER_MISMATCH")
+        return _blocked_revalidation("DOWNSTREAM_RECEIPT_PRODUCER_MISMATCH")
+    if any(
+        hashlib.sha256(raw).hexdigest() != authorized["receipt_digest"]
+        for raw, authorized in zip(
+            raw_receipts,
+            authorized_downstream_set,
+            strict=True,
+        )
+    ):
+        return _blocked_revalidation("DOWNSTREAM_RECEIPT_DIGEST_MISMATCH")
+    for ref, producer, payload in zip(receipt_refs, expected_producers, parsed, strict=True):
+        if payload.get("story_id") != current_attempt.get("story_id"):
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_STORY_MISMATCH")
+        if payload.get("consumer") != consumer:
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_CONSUMER_MISMATCH")
+        if payload.get("attempt_id") != current_attempt.get("attempt_id"):
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_ATTEMPT_MISMATCH")
+        try:
+            selection = select_current(producer, consumer)
+        except Exception:
+            return _blocked_revalidation("DOWNSTREAM_CURRENT_SELECTOR_UNAVAILABLE")
+        if (
+            not isinstance(selection, Mapping)
+            or set(selection) != {"current_ref", "superseded_by"}
+            or not _is_process_logical_ref(selection.get("current_ref"))
+            or (
+                selection.get("superseded_by") != ""
+                and not _is_process_logical_ref(selection.get("superseded_by"))
+            )
+        ):
+            return _blocked_revalidation("DOWNSTREAM_CURRENT_SELECTOR_INVALID")
+        if selection.get("superseded_by"):
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_SUPERSEDED")
+        if selection.get("current_ref") != ref:
+            return _blocked_revalidation("DOWNSTREAM_RECEIPT_NOT_CURRENT")
+    return {"status": "READY", "decision": "READY", "mutation_count": 0, "consumer": consumer}
+
+
+def _is_sha256(value: object) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{64}", str(value or "")))
+
+
+def _is_process_logical_ref(value: object) -> bool:
+    result = str(value or "")
+    return (
+        result.startswith("process/")
+        and "\\" not in result
+        and all(segment not in {"", ".", ".."} for segment in result.split("/"))
+    )
+
+
+def _operation_blocked(action: str, code: str) -> dict[str, Any]:
+    return _blocked_revalidation(code) | {
+        "action": action,
+        "exit_code": 2,
+        "postcondition": "UNVERIFIED",
+    }
+
+
+def _valid_mutation_count(value: Any) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _service_state(result: Mapping[str, Any]) -> tuple[str, bool]:
+    decision = result.get("decision")
+    status = result.get("status")
+    if decision is not None and not isinstance(decision, str):
+        return "", False
+    if status is not None and not isinstance(status, str):
+        return "", False
+    normalized_decision = str(decision or "").upper()
+    normalized_status = str(status or "").upper()
+    if normalized_decision and normalized_status and normalized_decision != normalized_status:
+        return "", False
+    return normalized_decision or normalized_status, True
+
+
+def _parse_typed_service_result(
+    action: str,
+    name: str,
+    result: Any,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Total closed-world parser；返回 parsed data 或 typed operation failure。"""
+
+    if not isinstance(result, Mapping) or not result:
+        return None, _operation_blocked(
+            action, f"REVALIDATION_{name.upper()}_RESULT_INVALID"
+        )
+    payload = dict(result)
+    state, state_valid = _service_state(payload)
+    if not state_valid:
+        return None, _operation_blocked(
+            action, f"REVALIDATION_{name.upper()}_RESULT_CONFLICT"
+        )
+    if state in {"BLOCKED", "PARTIAL"}:
+        allowed_fields = {
+            "decision", "status", "mutation_count", "reason_codes", "exit_code",
+        }
+        count = payload.get("mutation_count")
+        reason_codes = payload.get("reason_codes")
+        expected_count = 1 if state == "PARTIAL" and action in {
+            "apply", "recover", "completion",
+        } else 0
+        if (
+            not set(payload).issubset(allowed_fields)
+            or "mutation_count" not in payload
+            or not _valid_mutation_count(count)
+            or count != expected_count
+            or not isinstance(reason_codes, list)
+            or not reason_codes
+            or any(not isinstance(code, str) or not code for code in reason_codes)
+            or ("exit_code" in payload and payload["exit_code"] != 2)
+        ):
+            return None, _operation_blocked(
+                action, f"REVALIDATION_{name.upper()}_RESULT_INVALID"
+            )
+        return None, {
+            "action": action,
+            "status": state,
+            "decision": state,
+            "mutation_count": count,
+            "postcondition": "UNVERIFIED",
+            "reason_codes": list(reason_codes),
+            "exit_code": 2,
+        }
+    if name == "resolve":
+        if not state:
+            try:
+                receipt = freeze_cp6_revalidation_receipt(**payload).as_dict()
+            except (FrozenCp6EvidenceError, TypeError):
+                return None, _operation_blocked(
+                    action, "REVALIDATION_RESOLVE_RESULT_INVALID"
+                )
+            return {"payload": receipt}, None
+        if (
+            set(payload) != {"status", "mutation_count", "payload"}
+            or state != "READY"
+            or not _valid_mutation_count(payload.get("mutation_count"))
+            or payload["mutation_count"] != 0
+            or not isinstance(payload.get("payload"), Mapping)
+        ):
+            return None, _operation_blocked(
+                action, "REVALIDATION_RESOLVE_RESULT_INVALID"
+            )
+        try:
+            receipt = freeze_cp6_revalidation_receipt(
+                **dict(payload["payload"])
+            ).as_dict()
+        except (FrozenCp6EvidenceError, TypeError):
+            return None, _operation_blocked(
+                action, "REVALIDATION_RESOLVE_RESULT_INVALID"
+            )
+        return {"payload": receipt}, None
+    if name == "observe_current":
+        if (
+            set(payload) != {"status", "mutation_count", "observation"}
+            or state != "CURRENT"
+            or not _valid_mutation_count(payload.get("mutation_count"))
+            or payload["mutation_count"] != 0
+            or not isinstance(payload.get("observation"), Mapping)
+            or not payload["observation"]
+        ):
+            return None, _operation_blocked(
+                action, "REVALIDATION_OBSERVE_CURRENT_RESULT_INVALID"
+            )
+        return {"observation": dict(payload["observation"])}, None
+    if name == "create_once_writer":
+        if (
+            set(payload) != {"status", "mutation_count"}
+            or state != "APPLIED"
+            or not _valid_mutation_count(payload.get("mutation_count"))
+            or payload["mutation_count"] != 1
+        ):
+            return None, _operation_blocked(
+                action, "REVALIDATION_CREATE_ONCE_WRITER_RESULT_INVALID"
+            )
+        return {}, None
+    if name == "postcheck_reader":
+        if not state:
+            try:
+                receipt = freeze_cp6_revalidation_receipt(**payload).as_dict()
+            except (FrozenCp6EvidenceError, TypeError):
+                return None, _operation_blocked(
+                    action, "REVALIDATION_POSTCHECK_READER_RESULT_INVALID"
+                )
+            return {"payload": receipt}, None
+        if (
+            set(payload) != {"status", "mutation_count", "payload"}
+            or state != "VERIFIED"
+            or not _valid_mutation_count(payload.get("mutation_count"))
+            or payload["mutation_count"] != 0
+            or not isinstance(payload.get("payload"), Mapping)
+        ):
+            return None, _operation_blocked(
+                action, "REVALIDATION_POSTCHECK_READER_RESULT_INVALID"
+            )
+        try:
+            receipt = freeze_cp6_revalidation_receipt(
+                **dict(payload["payload"])
+            ).as_dict()
+        except (FrozenCp6EvidenceError, TypeError):
+            return None, _operation_blocked(
+                action, "REVALIDATION_POSTCHECK_READER_RESULT_INVALID"
+            )
+        return {"payload": receipt}, None
+    if name == "projector":
+        required = {"decision", "phase", "complete"}
+        allowed = required | {"next_phase", "formal_story_status", "reason_codes"}
+        if (
+            not required.issubset(payload)
+            or not set(payload).issubset(allowed)
+            or state != "READY"
+            or payload.get("phase") != "COMPLETE"
+            or payload.get("complete") is not True
+        ):
+            return None, _operation_blocked(
+                action, "REVALIDATION_PROJECTOR_INCOMPLETE"
+            )
+        return {"projection": payload}, None
+    return None, _operation_blocked(
+        action, f"REVALIDATION_{name.upper()}_RESULT_INVALID"
+    )
+
+
+def run_cp6_revalidation_operation(
+    request: Mapping[str, Any], services: Mapping[str, Any],
+) -> dict[str, Any]:
+    """按 action-specific service graph 执行 generic child operation。"""
+
+    action = str(request.get("action") or "")
+    traces = {
+        "plan": ("resolve", "observe_current"),
+        "apply": ("resolve", "observe_current", "create_once_writer", "postcheck_reader"),
+        "replay": ("resolve", "observe_current", "postcheck_reader"),
+        "inspect": ("resolve", "postcheck_reader"),
+        "recover": ("resolve", "observe_current", "create_once_writer", "postcheck_reader"),
+        "completion": (
+            "resolve", "observe_current", "projector", "create_once_writer", "postcheck_reader",
+        ),
+    }
+    if action not in traces:
+        return _blocked_revalidation("REVALIDATION_ACTION_INVALID") | {
+            "action": action, "exit_code": 2, "postcondition": "UNVERIFIED",
+        }
+    required = set(traces[action])
+    if any(name not in services or not callable(services[name]) for name in required):
+        return _blocked_revalidation("REVALIDATION_SERVICE_MISSING") | {
+            "action": action, "exit_code": 2, "postcondition": "UNVERIFIED",
+        }
+    target = request.get("target")
+    authorization = request.get("authorization")
+    last_result: Any = None
+    resolved_payload: Mapping[str, Any] | None = None
+    writer_preimage: tuple[str, bytes] | None = None
+    for name in traces[action]:
+        service = services[name]
+        try:
+            if name == "resolve":
+                last_result = service(authorization)
+            elif name == "observe_current":
+                last_result = service(request)
+            elif name == "projector":
+                last_result = service(
+                    request.get("event_observations") or [],
+                    expected_identity=request.get("expected_identity") or {},
+                    formal_story_status=str(request.get("formal_story_status") or "ready-for-verification"),
+                )
+            elif name == "create_once_writer":
+                if not isinstance(target, Path) or resolved_payload is None:
+                    return _operation_blocked(action, "REVALIDATION_WRITE_INPUT_INVALID")
+                writer_preimage = _target_bytes_observation(target)
+                if writer_preimage[0] == "unknown":
+                    return _operation_blocked(action, "REVALIDATION_TARGET_PREIMAGE_UNAVAILABLE")
+                last_result = service(target, dict(resolved_payload))
+            else:
+                last_result = service(target)
+        except FileExistsError:
+            if name == "create_once_writer":
+                return _operation_blocked(
+                    action, "REVALIDATION_CREATE_ONCE_TARGET_CONFLICT"
+                )
+            return _operation_blocked(action, f"REVALIDATION_{name.upper()}_FAILED")
+        except Exception:
+            if name == "create_once_writer" and isinstance(target, Path) and writer_preimage is not None:
+                classified = _writer_exception_result(
+                    target,
+                    writer_preimage,
+                    blocked_code="REVALIDATION_CREATE_ONCE_WRITER_FAILED",
+                    partial_code="REVALIDATION_CREATE_ONCE_WRITER_PARTIAL",
+                )
+                classified.update(
+                    {"action": action, "exit_code": 2, "postcondition": "UNVERIFIED"}
+                )
+                return classified
+            return _operation_blocked(action, f"REVALIDATION_{name.upper()}_FAILED")
+        parsed_result, failure = _parse_typed_service_result(action, name, last_result)
+        if failure is not None:
+            if (
+                name == "create_once_writer"
+                and failure["decision"] == "BLOCKED"
+                and isinstance(target, Path)
+                and writer_preimage is not None
+                and _target_bytes_observation(target) != writer_preimage
+            ):
+                return {
+                    "action": action,
+                    "status": "PARTIAL",
+                    "decision": "PARTIAL",
+                    "mutation_count": 1,
+                    "postcondition": "UNVERIFIED",
+                    "reason_codes": ["REVALIDATION_CREATE_ONCE_WRITER_PARTIAL"],
+                    "exit_code": 2,
+                }
+            if name == "postcheck_reader" and writer_preimage is not None:
+                return {
+                    "action": action,
+                    "status": "PARTIAL",
+                    "decision": "PARTIAL",
+                    "mutation_count": 1,
+                    "postcondition": "UNVERIFIED",
+                    "reason_codes": ["REVALIDATION_POSTCHECK_INVALID_AFTER_MUTATION"],
+                    "exit_code": 2,
+                }
+            return failure
+        if parsed_result is None:
+            return _operation_blocked(
+                action, f"REVALIDATION_{name.upper()}_RESULT_INVALID"
+            )
+        if name == "resolve":
+            resolved_payload = dict(parsed_result["payload"])
+        if name == "postcheck_reader":
+            if (
+                resolved_payload is None
+                or dict(parsed_result["payload"]) != dict(resolved_payload)
+            ):
+                if writer_preimage is not None:
+                    return {
+                        "action": action,
+                        "status": "PARTIAL",
+                        "decision": "PARTIAL",
+                        "mutation_count": 1,
+                        "postcondition": "UNVERIFIED",
+                        "reason_codes": ["REVALIDATION_POSTCHECK_MISMATCH"],
+                        "exit_code": 2,
+                    }
+                return _operation_blocked(action, "REVALIDATION_POSTCHECK_MISMATCH")
+    statuses = {
+        "plan": "READY", "apply": "APPLIED", "replay": "NO_CHANGE",
+        "inspect": "READY", "recover": "RECOVERED", "completion": "COMPLETE",
+    }
+    result = {
+        "action": action,
+        "status": statuses[action],
+        "decision": "PASS",
+        "mutation_count": 1 if action in {"apply", "recover", "completion"} else 0,
+        "postcondition": "VERIFIED",
+        "exit_code": 0,
+    }
+    if action == "completion" and isinstance(last_result, Mapping):
+        result["phase"] = "COMPLETE"
+    return result
+
+
+def _read_process_json(project_root: Path, logical_ref: object) -> dict[str, Any]:
+    if not _is_process_logical_ref(logical_ref):
+        raise ValueError("revalidation input must be a canonical process logical ref")
+    payload = _read_json(
+        _resolve_runtime_path(project_root, Path(str(logical_ref)))
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("revalidation JSON input must be an object")
+    return payload
+
+
+def _read_process_bytes(project_root: Path, logical_ref: object) -> bytes:
+    if not _is_process_logical_ref(logical_ref):
+        raise ValueError("revalidation input must be a canonical process logical ref")
+    return _resolve_runtime_path(project_root, Path(str(logical_ref))).read_bytes()
+
+
+def _current_target_observation(
+    project_root: Path,
+    logical_ref: str,
+) -> tuple[Path, dict[str, Any]]:
+    if not _is_process_logical_ref(logical_ref):
+        raise ValueError("target must be a canonical process logical ref")
+    target = _resolve_runtime_path(project_root, Path(logical_ref))
+    state = _target_bytes_observation(target)
+    if state[0] == "unknown" or state[0] == "non-file":
+        raise ValueError("target preimage is unavailable or is not a regular file")
+    return target, {
+        "logical_ref": logical_ref,
+        "exists": state[0] == "file",
+        "preimage_digest": hashlib.sha256(state[1]).hexdigest()
+        if state[0] == "file"
+        else "",
+    }
+
+
+_REVALIDATION_ID_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _revalidation_namespace(receipt: Cp6RevalidationReceiptV1) -> str:
+    """返回由 Work/attempt identity 唯一决定的 Work-owned namespace。"""
+
+    for value in (receipt.work_id, receipt.attempt_id):
+        if _REVALIDATION_ID_SEGMENT.fullmatch(value) is None:
+            raise ValueError("revalidation identity is not safe for a logical ref")
+    return f"process/works/{receipt.work_id}/revalidation/{receipt.attempt_id}"
+
+
+def _expected_revalidation_target_ref(
+    receipt: Cp6RevalidationReceiptV1,
+    *,
+    action: str,
+) -> str:
+    kind_by_action = {
+        "plan": "authorization",
+        "apply": "authorization",
+        "replay": "authorization",
+        "inspect": "authorization",
+        "recover": "completion",
+        "completion": "completion",
+    }
+    if action not in kind_by_action:
+        raise ValueError("revalidation action has no target capability")
+    return (
+        f"{_revalidation_namespace(receipt)}/receipts/"
+        f"{kind_by_action[action]}.json"
+    )
+
+
+def _expected_revalidation_input_ref(
+    receipt: Cp6RevalidationReceiptV1,
+    *,
+    name: str,
+) -> str:
+    filenames = {
+        "downstream_policy": "CURRENT-DOWNSTREAM-POLICY.json",
+        "admission_plan": "DOWNSTREAM-ADMISSION-PLAN.json",
+        "current_selections": "CURRENT-DOWNSTREAM-SELECTIONS.json",
+    }
+    if name not in filenames:
+        raise ValueError("unknown revalidation canonical input")
+    return f"{_revalidation_namespace(receipt)}/{filenames[name]}"
+
+
+def _git_head(repository: Path) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "--verify", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    oid = completed.stdout.strip()
+    if completed.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", oid) is None:
+        raise ValueError("current Git HEAD is unavailable")
+    return oid
+
+
+def _current_revalidation_source(
+    project_root: Path,
+    receipt: Cp6RevalidationReceiptV1,
+) -> dict[str, Any]:
+    """从 live Git HEAD 与 receipt 指向的 canonical Work 观察 source/scope。"""
+
+    expected_work_ref = f"process/works/{receipt.work_id}/WORK.yaml"
+    if receipt.payload.get("work_authorization_ref") != expected_work_ref:
+        raise ValueError("authorization Work ref does not match its identity")
+    work_path = _resolve_runtime_path(project_root, Path(expected_work_ref))
+    work = load_yaml_object(work_path)
+    base_oids = work.get("base_oids")
+    release_oid = _git_head(project_root)
+    process_oid = _git_head(work_path.parent)
+    observed = {
+        "release_oid": release_oid,
+        "process_oid": process_oid,
+        "scope_digest": work.get("scope_digest"),
+    }
+    expected = {
+        "release_oid": receipt.release_oid,
+        "process_oid": receipt.process_oid,
+        "scope_digest": receipt.scope_digest,
+    }
+    if (
+        work.get("work_id") != receipt.work_id
+        or not isinstance(base_oids, dict)
+        or set(base_oids) != {"release", "process"}
+        or base_oids != {"release": release_oid, "process": process_oid}
+        or observed != expected
+    ):
+        raise ValueError("authorization is not bound to current source/Work truth")
+    return observed
+
+
+_REVALIDATION_AUTHORITY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "story_id",
+        "attempt_id",
+        "authorization_ref",
+        "authorization_bytes_digest",
+        "authorization_payload_digest",
+        "allowed_target_kinds",
+        "lineage",
+        "inputs",
+    }
+)
+_REVALIDATION_AUTHORITY_LINEAGE_FIELDS = frozenset(
+    {
+        "previous_cp6_ref",
+        "previous_cp6_bytes_digest",
+        "superseding_cp5_ref",
+        "superseding_cp5_bytes_digest",
+        "approval_ref",
+        "approval_bytes_digest",
+    }
+)
+_REVALIDATION_AUTHORITY_INPUT_FIELDS = frozenset(
+    {
+        "downstream_policy_ref",
+        "downstream_policy_bytes_digest",
+        "admission_plan_ref",
+        "admission_plan_bytes_digest",
+        "current_selections_ref",
+        "current_selections_bytes_digest",
+    }
+)
+
+
+def _authorized_revalidation_input_bytes(
+    project_root: Path,
+    receipt: Cp6RevalidationReceiptV1,
+    authority: Mapping[str, Any],
+    *,
+    name: str,
+    logical_ref: object | None = None,
+) -> bytes:
+    inputs = authority.get("inputs")
+    if not isinstance(inputs, Mapping):
+        raise ValueError("revalidation authority inputs are unavailable")
+    expected_ref = _expected_revalidation_input_ref(receipt, name=name)
+    authority_ref = inputs.get(f"{name}_ref")
+    selected_ref = expected_ref if logical_ref is None else str(logical_ref or "")
+    if authority_ref != expected_ref or selected_ref != expected_ref:
+        raise ValueError("revalidation input ref is not owner-authorized")
+    raw = _read_process_bytes(project_root, expected_ref)
+    if hashlib.sha256(raw).hexdigest() != inputs.get(f"{name}_bytes_digest"):
+        raise ValueError("revalidation input bytes are not owner-authorized")
+    return raw
+
+
+def _current_revalidation_authority(
+    project_root: Path,
+    receipt: Cp6RevalidationReceiptV1,
+    *,
+    authorization_ref: str,
+    authorization_bytes: bytes,
+    action: str,
+) -> dict[str, Any]:
+    """从 canonical Work 读取 owner-issued attempt/capability authority。"""
+
+    work_ref = f"process/works/{receipt.work_id}/WORK.yaml"
+    work = load_yaml_object(_resolve_runtime_path(project_root, Path(work_ref)))
+    authority = work.get("revalidation_authority")
+    if not isinstance(authority, dict) or set(authority) != _REVALIDATION_AUTHORITY_FIELDS:
+        raise ValueError("Work revalidation authority schema is not closed")
+    allowed = authority.get("allowed_target_kinds")
+    target_kind = {
+        "plan": "authorization",
+        "apply": "authorization",
+        "replay": "authorization",
+        "inspect": "authorization",
+        "recover": "completion",
+        "completion": "completion",
+    }.get(action)
+    if (
+        authority.get("schema_version") != 1
+        or authority.get("story_id") != receipt.story_id
+        or authority.get("attempt_id") != receipt.attempt_id
+        or authority.get("authorization_ref") != authorization_ref
+        or authority.get("authorization_bytes_digest")
+        != hashlib.sha256(authorization_bytes).hexdigest()
+        or authority.get("authorization_payload_digest")
+        != receipt.as_dict()["payload_digest"]
+        or not isinstance(allowed, list)
+        or allowed != ["authorization", "completion"]
+        or target_kind not in allowed
+    ):
+        raise ValueError("authorization is not issued by the Work owner")
+    lineage = authority.get("lineage")
+    if not isinstance(lineage, dict) or set(lineage) != _REVALIDATION_AUTHORITY_LINEAGE_FIELDS:
+        raise ValueError("revalidation authority lineage schema is not closed")
+    lineage_contract = (
+        ("previous_cp6", "previous_cp6_ref"),
+        ("superseding_cp5", "superseding_cp5_ref"),
+        ("approval", "approval_ref"),
+    )
+    for authority_name, receipt_name in lineage_contract:
+        logical_ref = receipt.payload.get(receipt_name)
+        if (
+            lineage.get(f"{authority_name}_ref") != logical_ref
+            or not _is_process_logical_ref(logical_ref)
+        ):
+            raise ValueError("authorization lineage ref is not owner-authorized")
+        raw = _read_process_bytes(project_root, logical_ref)
+        if hashlib.sha256(raw).hexdigest() != lineage.get(
+            f"{authority_name}_bytes_digest"
+        ):
+            raise ValueError("authorization lineage bytes are not owner-authorized")
+    inputs = authority.get("inputs")
+    if not isinstance(inputs, dict) or set(inputs) != _REVALIDATION_AUTHORITY_INPUT_FIELDS:
+        raise ValueError("revalidation authority input schema is not closed")
+    for name in ("downstream_policy", "admission_plan", "current_selections"):
+        _authorized_revalidation_input_bytes(
+            project_root,
+            receipt,
+            authority,
+            name=name,
+        )
+    return authority
+
+
+def _current_revalidation_policy(
+    project_root: Path,
+    receipt: Cp6RevalidationReceiptV1,
+    authority: Mapping[str, Any],
+    logical_ref: object,
+) -> dict[str, Any]:
+    expected_ref = _expected_revalidation_input_ref(receipt, name="downstream_policy")
+    raw = _authorized_revalidation_input_bytes(
+        project_root,
+        receipt,
+        authority,
+        name="downstream_policy",
+        logical_ref=logical_ref,
+    )
+    try:
+        policy = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("downstream policy bytes are invalid") from exc
+    if not isinstance(policy, dict) or set(policy) != {
+        "schema_version",
+        "consumers",
+        "policy_digest",
+        "current_receipts",
+    }:
+        raise ValueError("downstream policy schema is not closed")
+    return {
+        **policy,
+        "logical_ref": expected_ref,
+        "bytes_digest": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def _current_revalidation_admission_plan(
+    project_root: Path,
+    receipt: Cp6RevalidationReceiptV1,
+    authority: Mapping[str, Any],
+    logical_ref: object,
+) -> dict[str, Any]:
+    raw = _authorized_revalidation_input_bytes(
+        project_root,
+        receipt,
+        authority,
+        name="admission_plan",
+        logical_ref=logical_ref,
+    )
+    try:
+        plan = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("admission plan bytes are invalid") from exc
+    if not isinstance(plan, dict):
+        raise ValueError("admission plan must be an object")
+    if set(plan) != {"authorization_digest", "bound_policy", "plan_digest"}:
+        raise ValueError("admission plan schema is not closed")
+    if plan.get("authorization_digest") != receipt.as_dict()["payload_digest"]:
+        raise ValueError("admission plan is not bound to the current authorization")
+    return plan
+
+
+def _current_revalidation_selections(
+    project_root: Path,
+    receipt: Cp6RevalidationReceiptV1,
+    authority: Mapping[str, Any],
+    logical_ref: object,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    raw = _authorized_revalidation_input_bytes(
+        project_root,
+        receipt,
+        authority,
+        name="current_selections",
+        logical_ref=logical_ref,
+    )
+    try:
+        selector = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("current selector bytes are invalid") from exc
+    if not isinstance(selector, dict):
+        raise ValueError("current selector must be an object")
+    if set(selector) != {"schema_version", "selections", "selection_digest"}:
+        raise ValueError("current selector schema is not closed")
+    selections = selector.get("selections")
+    if (
+        selector.get("schema_version") != 1
+        or not isinstance(selections, list)
+        or selector.get("selection_digest") != canonical_digest(selections)
+    ):
+        raise ValueError("current selector digest/schema is invalid")
+    selection_index: dict[tuple[str, str], dict[str, Any]] = {}
+    for selection in selections:
+        if (
+            not isinstance(selection, dict)
+            or set(selection)
+            != {"producer", "consumer", "current_ref", "superseded_by"}
+            or not isinstance(selection.get("producer"), str)
+            or not selection["producer"]
+            or not isinstance(selection.get("consumer"), str)
+            or not selection["consumer"]
+        ):
+            raise ValueError("current selector entry is invalid")
+        key = (selection["producer"], selection["consumer"])
+        if key in selection_index:
+            raise ValueError("current selector contains a duplicate identity")
+        selection_index[key] = selection
+    return selection_index
+
+
+def _load_revalidation_action_context(
+    project_root: Path,
+    context_ref: object,
+    *,
+    action: str,
+) -> dict[str, Any]:
+    context = _read_process_json(project_root, context_ref)
+    if (
+        set(context) != {"schema_version", "action", "payload"}
+        or context.get("schema_version") != 1
+        or context.get("action") != action
+        or not isinstance(context.get("payload"), dict)
+    ):
+        raise ValueError("revalidation action context schema/action mismatch")
+    fields = {
+        "plan": {"downstream_policy_ref"},
+        "apply": {
+            "plan_ref",
+            "expected_plan_digest",
+            "downstream_policy_ref",
+        },
+        "recover": {"preflight_ref", "projection_ref"},
+        "completion": {
+            "required_digests", "p01_event_ref", "projection_ref", "consumer",
+            "receipt_refs", "admission_plan_ref", "current_selections_ref",
+        },
+    }
+    payload = dict(context["payload"])
+    if action not in fields or set(payload) != fields[action]:
+        raise ValueError("revalidation action context payload fields mismatch")
+    return payload
+
+
+def _public_domain_failure(action: str, result: Mapping[str, Any]) -> dict[str, Any] | None:
+    decision = result.get("decision")
+    count = result.get("mutation_count")
+    if decision not in {"BLOCKED", "PARTIAL"}:
+        return None
+    if not _valid_mutation_count(count):
+        return _operation_blocked(action, "REVALIDATION_DOMAIN_RESULT_INVALID")
+    return {
+        "action": action,
+        "status": decision,
+        "decision": decision,
+        "mutation_count": count,
+        "postcondition": "UNVERIFIED",
+        "reason_codes": list(result.get("reason_codes") or []),
+        "exit_code": 2,
+    }
+
+
+def _public_domain_success(
+    action: str,
+    result: Mapping[str, Any],
+    *,
+    status: str,
+    mutation_count: int,
+) -> dict[str, Any]:
+    output = dict(result)
+    output.update(
+        {
+            "action": action,
+            "status": status,
+            "decision": "PASS",
+            "mutation_count": mutation_count,
+            "postcondition": "VERIFIED",
+            "exit_code": 0,
+        }
+    )
+    return output
+
+
+def _current_revalidation_generation_base(
+    project_root: Path,
+    receipt: Cp6RevalidationReceiptV1,
+    *,
+    authorization_ref: str,
+    authorization_bytes: bytes,
+    action: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """重新取得同一代 owner authority 与 live source。"""
+
+    current_authorization_bytes = _read_process_bytes(
+        project_root,
+        authorization_ref,
+    )
+    if current_authorization_bytes != authorization_bytes:
+        raise ValueError("authorization bytes changed during mutation")
+    authority = _current_revalidation_authority(
+        project_root,
+        receipt,
+        authorization_ref=authorization_ref,
+        authorization_bytes=current_authorization_bytes,
+        action=action,
+    )
+    source = _current_revalidation_source(project_root, receipt)
+    return authority, source
+
+
+def _generation_bound_create_once_services(
+    *,
+    create_once_writer: Any,
+    postcheck_reader: Any,
+    precommit: Any,
+    postcommit: Any,
+) -> tuple[Any, Any]:
+    """把 create-once 与 target postcheck 绑定到同一代输入。"""
+
+    def write(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            precommit()
+        except Exception as exc:
+            raise OSError("revalidation generation changed before mutation") from exc
+        result = create_once_writer(path, payload)
+        try:
+            postcommit()
+        except Exception as exc:
+            raise OSError("revalidation generation changed after mutation") from exc
+        return result
+
+    def read(path: Path) -> dict[str, Any]:
+        result = postcheck_reader(path)
+        try:
+            postcommit()
+        except Exception as exc:
+            raise OSError(
+                "revalidation generation changed during target postcheck"
+            ) from exc
+        return result
+
+    return write, read
+
+
+def _projection_observation(
+    project_root: Path,
+    logical_ref: object,
+) -> dict[str, Any]:
+    raw = _read_process_bytes(project_root, logical_ref)
+    try:
+        inner = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("projection observation bytes are invalid") from exc
+    if not isinstance(inner, dict):
+        raise ValueError("projection observation must contain an object")
+    return {
+        **inner,
+        "logical_ref": str(logical_ref),
+        "bytes": raw,
+        "bytes_digest": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def _run_default_cp6_revalidation_operation(
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    """从 canonical action context 调用真实 domain functions。"""
+
+    action = str(request.get("action") or "")
+    project_root = Path(request.get("project_root") or Path.cwd()).resolve()
+    authorization_ref = request.get("authorization")
+    target_ref = str(request.get("target") or "")
+    try:
+        authorization_bytes = _read_process_bytes(project_root, authorization_ref)
+        authorization_raw = json.loads(authorization_bytes)
+        if not isinstance(authorization_raw, dict):
+            raise ValueError("authorization must contain one JSON object")
+        authorization = freeze_cp6_revalidation_receipt(**authorization_raw)
+        if authorization.kind != "authorization":
+            raise ValueError("authorization ref must contain an authorization receipt")
+        authority, source_observation = _current_revalidation_generation_base(
+            project_root,
+            authorization,
+            authorization_ref=str(authorization_ref or ""),
+            authorization_bytes=authorization_bytes,
+            action=action,
+        )
+        expected_target_ref = _expected_revalidation_target_ref(
+            authorization,
+            action=action,
+        )
+        if target_ref != expected_target_ref:
+            raise ValueError("target is outside the authorization capability")
+        target, target_observation = _current_target_observation(
+            project_root, target_ref
+        )
+        if action in {"replay", "inspect"}:
+            replay = recover_cp6_revalidation_receipt(
+                target, authorization, attempt_id=authorization.attempt_id
+            )
+            failure = _public_domain_failure(action, replay)
+            if failure is not None:
+                return failure
+            return _public_domain_success(
+                action,
+                replay,
+                status="NO_CHANGE" if action == "replay" else "READY",
+                mutation_count=0,
+            )
+        context = _load_revalidation_action_context(
+            project_root, request.get("context"), action=action
+        )
+        if action == "plan":
+            downstream_policy = _current_revalidation_policy(
+                project_root,
+                authorization,
+                authority,
+                context["downstream_policy_ref"],
+            )
+            result = plan_cp6_revalidation(
+                authorization,
+                source_observation=source_observation,
+                target_observation=target_observation,
+                downstream_policy=downstream_policy,
+            )
+            failure = _public_domain_failure(action, result)
+            if failure is not None:
+                return failure
+            return _public_domain_success(
+                action, result, status="READY", mutation_count=0
+            )
+        if action == "apply":
+            plan_document = _read_process_json(project_root, context["plan_ref"])
+            if (
+                set(plan_document)
+                != {
+                    "action",
+                    "status",
+                    "decision",
+                    "mutation_count",
+                    "postcondition",
+                    "exit_code",
+                    "plan",
+                    "plan_digest",
+                }
+                or plan_document.get("action") != "plan"
+                or plan_document.get("status") != "READY"
+                or plan_document.get("decision") != "PASS"
+                or plan_document.get("mutation_count") != 0
+                or plan_document.get("postcondition") != "VERIFIED"
+                or plan_document.get("exit_code") != 0
+                or not isinstance(plan_document.get("plan"), Mapping)
+                or plan_document.get("plan_digest")
+                != canonical_digest(dict(plan_document["plan"]))
+            ):
+                return _operation_blocked(action, "REVALIDATION_PLAN_REF_INVALID")
+            def current_apply_inputs() -> tuple[dict[str, Any], dict[str, Any]]:
+                current_authority, current_source = (
+                    _current_revalidation_generation_base(
+                        project_root,
+                        authorization,
+                        authorization_ref=str(authorization_ref or ""),
+                        authorization_bytes=authorization_bytes,
+                        action=action,
+                    )
+                )
+                current_policy = _current_revalidation_policy(
+                    project_root,
+                    authorization,
+                    current_authority,
+                    context["downstream_policy_ref"],
+                )
+                return current_source, current_policy
+
+            def observe_apply_current() -> dict[str, Any]:
+                current_source, current_policy = current_apply_inputs()
+                _current_target, current_target = _current_target_observation(
+                    project_root,
+                    target_ref,
+                )
+                return {
+                    "source_observation": current_source,
+                    "target_observation": current_target,
+                    "downstream_policy": current_policy,
+                }
+
+            def validate_apply_precommit() -> None:
+                current = observe_apply_current()
+                expected = {
+                    "source_observation": plan_document["plan"][
+                        "source_observation"
+                    ],
+                    "target_observation": plan_document["plan"][
+                        "target_observation"
+                    ],
+                    "downstream_policy": plan_document["plan"][
+                        "downstream_policy"
+                    ],
+                }
+                if current != expected:
+                    raise ValueError("apply generation changed before mutation")
+
+            def validate_apply_postcommit() -> None:
+                current_source, current_policy = current_apply_inputs()
+                if (
+                    current_source != plan_document["plan"]["source_observation"]
+                    or current_policy != plan_document["plan"]["downstream_policy"]
+                ):
+                    raise ValueError("apply generation changed after mutation")
+
+            apply_writer, apply_reader = _generation_bound_create_once_services(
+                create_once_writer=_create_once_json,
+                postcheck_reader=_read_json,
+                precommit=validate_apply_precommit,
+                postcommit=validate_apply_postcommit,
+            )
+            result = apply_cp6_revalidation_receipt(
+                target,
+                authorization,
+                expected_plan_digest=str(context["expected_plan_digest"] or ""),
+                plan=plan_document["plan"],
+                observe_current=observe_apply_current,
+                create_once_writer=apply_writer,
+                postcheck_reader=apply_reader,
+            )
+            failure = _public_domain_failure(action, result)
+            if failure is not None:
+                return failure
+            return _public_domain_success(
+                action,
+                result,
+                status=str(result.get("status") or "APPLIED"),
+                mutation_count=int(result.get("mutation_count") or 0),
+            )
+        if action == "recover":
+            def current_recover_generation() -> dict[str, Any]:
+                current_authority, current_source = (
+                    _current_revalidation_generation_base(
+                        project_root,
+                        authorization,
+                        authorization_ref=str(authorization_ref or ""),
+                        authorization_bytes=authorization_bytes,
+                        action=action,
+                    )
+                )
+                current_preflight_bytes = _read_process_bytes(
+                    project_root,
+                    context["preflight_ref"],
+                )
+                current_preflight = json.loads(current_preflight_bytes)
+                if not isinstance(current_preflight, dict):
+                    raise ValueError("recover preflight must remain an object")
+                current_projection = _projection_observation(
+                    project_root,
+                    context["projection_ref"],
+                )
+                fingerprint = canonical_digest({
+                    "authority_digest": canonical_digest(current_authority),
+                    "source": current_source,
+                    "preflight_bytes_digest": hashlib.sha256(
+                        current_preflight_bytes
+                    ).hexdigest(),
+                    "projection_bytes_digest": current_projection["bytes_digest"],
+                })
+                return {
+                    "fingerprint": fingerprint,
+                    "preflight": current_preflight,
+                    "projection": current_projection,
+                }
+
+            recover_generation = current_recover_generation()
+            expected_recover_generation = recover_generation["fingerprint"]
+
+            def validate_recover_generation() -> None:
+                current = current_recover_generation()
+                if current["fingerprint"] != expected_recover_generation:
+                    raise ValueError("recover generation changed during mutation")
+
+            recover_writer, recover_reader = (
+                _generation_bound_create_once_services(
+                    create_once_writer=_create_once_json,
+                    postcheck_reader=_read_json,
+                    precommit=validate_recover_generation,
+                    postcommit=validate_recover_generation,
+                )
+            )
+            result = recover_missing_cp6_revalidation_completion(
+                authorization=authorization,
+                preflight=recover_generation["preflight"],
+                projection=recover_generation["projection"],
+                target_observation={
+                    **target_observation,
+                    "path": target,
+                },
+                create_once_writer=recover_writer,
+                postcheck_reader=recover_reader,
+            )
+            failure = _public_domain_failure(action, result)
+            if failure is not None:
+                return failure
+            return _public_domain_success(
+                action,
+                result,
+                status=str(result.get("status") or "RECOVERED"),
+                mutation_count=int(result.get("mutation_count") or 0),
+            )
+        if action == "completion":
+            def current_completion_generation() -> dict[str, Any]:
+                current_authority, current_source = (
+                    _current_revalidation_generation_base(
+                        project_root,
+                        authorization,
+                        authorization_ref=str(authorization_ref or ""),
+                        authorization_bytes=authorization_bytes,
+                        action=action,
+                    )
+                )
+                event_ref = context["p01_event_ref"]
+                event_bytes = _read_process_bytes(project_root, event_ref)
+                event_digest = hashlib.sha256(event_bytes).hexdigest()
+                current_preflight = validate_cp6_revalidation_preflight(
+                    authorization,
+                    required_digests=context["required_digests"],
+                    p01_event={
+                        "logical_ref": str(event_ref),
+                        "event_bytes": event_bytes,
+                        "event_bytes_digest": event_digest,
+                        "current_event_bytes_digest": event_digest,
+                    },
+                )
+                if _public_domain_failure(action, current_preflight) is not None:
+                    raise ValueError("completion preflight is not current")
+                current_projection = _projection_observation(
+                    project_root,
+                    context["projection_ref"],
+                )
+                current_plan = _current_revalidation_admission_plan(
+                    project_root,
+                    authorization,
+                    current_authority,
+                    context["admission_plan_ref"],
+                )
+                current_selections = _current_revalidation_selections(
+                    project_root,
+                    authorization,
+                    current_authority,
+                    context["current_selections_ref"],
+                )
+                current_downstream = admit_revalidation_downstream_receipts(
+                    consumer=str(context["consumer"]),
+                    receipt_refs=list(context["receipt_refs"]),
+                    plan_observation=current_plan,
+                    current_attempt={
+                        "story_id": authorization.story_id,
+                        "attempt_id": authorization.attempt_id,
+                        "plan_digest": current_plan.get("plan_digest"),
+                    },
+                    expected_authorization_digest=authorization.as_dict()[
+                        "payload_digest"
+                    ],
+                    authorized_downstream_set=list(
+                        authorization.payload["downstream_set"]
+                    ),
+                    resolve_receipt=lambda ref: _read_process_bytes(
+                        project_root,
+                        ref,
+                    ),
+                    select_current=lambda producer, consumer: {
+                        "current_ref": current_selections[(producer, consumer)][
+                            "current_ref"
+                        ],
+                        "superseded_by": current_selections[(producer, consumer)][
+                            "superseded_by"
+                        ],
+                    },
+                )
+                if _public_domain_failure(action, current_downstream) is not None:
+                    raise ValueError("completion downstream set is not current")
+                selection_snapshot = [
+                    {
+                        "producer": producer,
+                        "consumer": consumer,
+                        **selection,
+                    }
+                    for (producer, consumer), selection in sorted(
+                        current_selections.items()
+                    )
+                ]
+                receipt_snapshot = [
+                    {
+                        "logical_ref": ref,
+                        "bytes_digest": hashlib.sha256(
+                            _read_process_bytes(project_root, ref)
+                        ).hexdigest(),
+                    }
+                    for ref in context["receipt_refs"]
+                ]
+                fingerprint = canonical_digest({
+                    "authority_digest": canonical_digest(current_authority),
+                    "source": current_source,
+                    "event_bytes_digest": event_digest,
+                    "preflight_digest": current_preflight["receipt"][
+                        "payload_digest"
+                    ],
+                    "projection_bytes_digest": current_projection["bytes_digest"],
+                    "admission_plan_digest": canonical_digest(current_plan),
+                    "selection_digest": canonical_digest(selection_snapshot),
+                    "receipt_snapshot": receipt_snapshot,
+                    "downstream_digest": canonical_digest(current_downstream),
+                })
+                return {
+                    "fingerprint": fingerprint,
+                    "preflight": current_preflight["receipt"],
+                    "projection": current_projection,
+                }
+
+            completion_generation = current_completion_generation()
+            expected_completion_generation = completion_generation["fingerprint"]
+
+            def validate_completion_generation() -> None:
+                current = current_completion_generation()
+                if current["fingerprint"] != expected_completion_generation:
+                    raise ValueError("completion generation changed during mutation")
+
+            completion_writer, completion_reader = (
+                _generation_bound_create_once_services(
+                    create_once_writer=_create_once_json,
+                    postcheck_reader=_read_json,
+                    precommit=validate_completion_generation,
+                    postcommit=validate_completion_generation,
+                )
+            )
+            result = recover_missing_cp6_revalidation_completion(
+                authorization=authorization,
+                preflight=completion_generation["preflight"],
+                projection=completion_generation["projection"],
+                target_observation={**target_observation, "path": target},
+                create_once_writer=completion_writer,
+                postcheck_reader=completion_reader,
+            )
+            failure = _public_domain_failure(action, result)
+            if failure is not None:
+                return failure
+            return _public_domain_success(
+                action,
+                result,
+                status="COMPLETE",
+                mutation_count=int(result.get("mutation_count") or 0),
+            )
+    except (FrozenCp6EvidenceError, KeyError, OSError, TypeError, ValueError):
+        return _operation_blocked(action, "REVALIDATION_DEFAULT_INPUT_INVALID")
+    return _operation_blocked(action, "REVALIDATION_ACTION_INVALID")
+
+
+# P02 bootstrap deliberately does not reuse ``revalidate-cp6``.  The latter is
+# a legacy multi-action operation whose authority is Work-bound; this issuer is
+# a narrow, receipt-bound, two-target operation and must never open WORK.yaml.
+_AUTHORITY_ISSUE_REQUIRED_FLAGS = (
+    "--project-root", "--work-ref", "--story-id", "--attempt-id", "--approval-ref",
+    "--previous-cp6-result-ref", "--superseding-cp5-result-ref", "--scope-digest",
+)
+_AUTHORITY_ISSUE_REF_RE = re.compile(r"^process/(?!.*(?:^|/)\.\.?/)[A-Za-z0-9][A-Za-z0-9._/-]*$")
+_AUTHORITY_ISSUE_WORK_RE = re.compile(r"^process/works/([A-Za-z0-9][A-Za-z0-9._-]*)/WORK\.yaml$")
+_AUTHORITY_ISSUE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_AUTHORITY_ISSUE_OID_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _authority_issue_json_bytes(payload: Mapping[str, Any]) -> bytes:
+    return (json.dumps(dict(payload), ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _authority_issue_digest(payload: Mapping[str, Any]) -> str:
+    return hashlib.sha256(_authority_issue_json_bytes(payload)).hexdigest()
+
+
+def _authority_issue_ref(value: object, field: str) -> str:
+    result = str(value or "")
+    if not _AUTHORITY_ISSUE_REF_RE.fullmatch(result) or "//" in result:
+        raise ValueError(f"{field} must be a canonical process ref")
+    return result
+
+
+def _authority_issue_read_json(project_root: Path, logical_ref: object, field: str) -> tuple[str, bytes, dict[str, Any]]:
+    ref = _authority_issue_ref(logical_ref, field)
+    raw = _read_process_bytes(project_root, ref)
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{field} bytes are not one JSON object") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{field} must contain one JSON object")
+    return ref, raw, payload
+
+
+def _authority_issue_oid(payload: Mapping[str, Any], name: str) -> str:
+    candidates = (
+        payload.get(name),
+        (payload.get("repository_oids") or {}).get(
+            "release_head" if name == "release_oid" else "process_head"
+        ) if isinstance(payload.get("repository_oids"), Mapping) else None,
+    )
+    for candidate in candidates:
+        if isinstance(candidate, str) and _AUTHORITY_ISSUE_OID_RE.fullmatch(candidate):
+            return candidate
+    raise ValueError(f"{name} is absent from immutable input")
+
+
+def _authority_issue_target_bytes(project_root: Path, logical_ref: str) -> tuple[Path, bytes | None]:
+    path = _resolve_runtime_ref(project_root, logical_ref)
+    try:
+        if not path.exists():
+            return path, None
+        if not path.is_file():
+            raise ValueError("authority target is not a regular file")
+        return path, path.read_bytes()
+    except OSError as exc:
+        raise ValueError("authority target observation is unavailable") from exc
+
+
+def _authority_issue_sidecar_ref(receipt_ref: str) -> str:
+    suffix = "/receipts/authorization.json"
+    if not receipt_ref.endswith(suffix):
+        raise ValueError("receipt ref does not have the canonical authorization suffix")
+    return receipt_ref[: -len(suffix)] + "/receipts/authorization-binding.v2.json"
+
+
+def _authority_issue_plan(
+    project_root: Path,
+    *,
+    work_ref: object,
+    story_id: object,
+    attempt_id: object,
+    approval_ref: object,
+    previous_ref: object,
+    superseding_ref: object,
+    scope_digest: object,
+) -> dict[str, Any]:
+    """Build the closed P02 bootstrap plan without reading the Work object."""
+
+    work_match = _AUTHORITY_ISSUE_WORK_RE.fullmatch(str(work_ref or ""))
+    if work_match is None:
+        raise ValueError("work_ref must be exactly process/works/<work-id>/WORK.yaml")
+    work_id = work_match.group(1)
+    story = str(story_id or "")
+    attempt = str(attempt_id or "")
+    if not STORY_ID_RE.fullmatch(story) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", attempt):
+        raise ValueError("story_id or attempt_id is invalid")
+    if not isinstance(scope_digest, str) or not _AUTHORITY_ISSUE_DIGEST_RE.fullmatch(scope_digest):
+        raise ValueError("scope_digest must be a lowercase sha256 digest")
+    approval_logical_ref, approval_bytes, approval_payload = _authority_issue_read_json(
+        project_root, approval_ref, "approval_ref"
+    )
+    previous, previous_bytes, previous_payload = _authority_issue_read_json(project_root, previous_ref, "previous_cp6_result_ref")
+    superseding, superseding_bytes, superseding_payload = _authority_issue_read_json(project_root, superseding_ref, "superseding_cp5_result_ref")
+    cr_id = str(approval_payload.get("cr_id") or "")
+    if not re.fullmatch(r"CR-[0-9]+(?:-[A-Za-z0-9._-]+)*", cr_id):
+        raise ValueError("approval_ref must provide an exact cr_id")
+    release_oid = _authority_issue_oid(previous_payload, "release_oid")
+    process_oid = _authority_issue_oid(previous_payload, "process_oid")
+    if (release_oid, process_oid) != (
+        _authority_issue_oid(superseding_payload, "release_oid"),
+        _authority_issue_oid(superseding_payload, "process_oid"),
+    ):
+        raise ValueError("immutable input OIDs disagree")
+    receipt_ref = f"process/works/{work_id}/revalidation/{attempt}/receipts/authorization.json"
+    sidecar_ref = _authority_issue_sidecar_ref(receipt_ref)
+    receipt_path, receipt_before = _authority_issue_target_bytes(project_root, receipt_ref)
+    sidecar_path, sidecar_before = _authority_issue_target_bytes(project_root, sidecar_ref)
+    del receipt_path, sidecar_path  # target paths are never persisted or emitted.
+    previous_digest = hashlib.sha256(previous_bytes).hexdigest()
+    superseding_digest = hashlib.sha256(superseding_bytes).hexdigest()
+    approval_digest = hashlib.sha256(approval_bytes).hexdigest()
+    plan_preimage_digest = canonical_digest({
+        "approval_digest": approval_digest,
+        "previous_cp6_digest": previous_digest,
+        "superseding_cp5_digest": superseding_digest,
+        "release_oid": release_oid,
+        "process_oid": process_oid,
+        "scope_digest": scope_digest,
+        "work_id": work_id,
+        "story_id": story,
+        "attempt_id": attempt,
+    })
+    receipt = {
+        "schema_version": 1, "cr_id": cr_id, "story_id": story, "work_id": work_id,
+        "attempt_id": attempt, "release_oid": release_oid, "process_oid": process_oid,
+        "scope_digest": scope_digest, "previous_cp6_ref": previous,
+        "previous_cp6_digest": previous_digest, "superseding_cp5_ref": superseding,
+        "superseding_cp5_digest": superseding_digest, "plan_preimage_digest": plan_preimage_digest,
+        "allowed_write_paths": [
+            f"process/works/{work_id}/revalidation/{attempt}/artifacts/return.json"
+        ],
+    }
+    # Reuse the frozen P01 parser as the compatibility oracle before any write.
+    freeze_cp6_revalidation_authorization(**receipt)
+    receipt_bytes = _authority_issue_json_bytes(receipt)
+    receipt_digest = hashlib.sha256(receipt_bytes).hexdigest()
+    binding_payload = {
+        "schema_version": "Cp6RevalidationAuthorizationBindingV2", "receipt_ref": receipt_ref,
+        "receipt_digest": receipt_digest, "cr_id": cr_id, "story_id": story,
+        "work_id": work_id, "attempt_id": attempt,
+        "approval_ref": approval_logical_ref,
+        "approval_digest": approval_digest,
+        "owner_authority": "oa-v2-" + canonical_digest({
+            "receipt_digest": receipt_digest, "approval_digest": approval_digest,
+            "scope_digest": scope_digest,
+        }),
+        "binding_payload_digest": canonical_digest({
+            "receipt_digest": receipt_digest, "approval_digest": approval_digest,
+            "previous_cp6_digest": previous_digest, "superseding_cp5_digest": superseding_digest,
+        }),
+        "plan_preimage_digest": plan_preimage_digest, "release_oid": release_oid,
+        "process_oid": process_oid, "scope_digest": scope_digest,
+    }
+    validate_authority_binding(
+        binding_payload,
+        receipt=receipt,
+        approval_ref=approval_logical_ref,
+        approval_digest=approval_digest,
+    )
+    sidecar_bytes = _authority_issue_json_bytes(binding_payload)
+    sidecar_digest = hashlib.sha256(sidecar_bytes).hexdigest()
+    plan_core = {
+        "operation": "issue-revalidation-authority", "cr_id": cr_id, "story_id": story,
+        "work_id": work_id, "attempt_id": attempt, "receipt_digest": receipt_digest,
+        "sidecar_digest": sidecar_digest, "approval_digest": approval_digest,
+        "plan_preimage_digest": plan_preimage_digest,
+        "target_order": ["authorization-receipt", "authority-binding"],
+    }
+    return {
+        "schema_version": 1, "action": "plan", "status": "READY", "decision": "PASS",
+        "mutation_count": 0, "receipt": receipt, "sidecar": binding_payload,
+        "plan_digest": canonical_digest(plan_core),
+        "targets": [
+            {"target_kind": "authorization-receipt", "logical_ref": receipt_ref,
+             "preimage_digest": hashlib.sha256(receipt_before).hexdigest() if receipt_before is not None else None,
+             "candidate_digest": receipt_digest},
+            {"target_kind": "authority-binding", "logical_ref": sidecar_ref,
+             "preimage_digest": hashlib.sha256(sidecar_before).hexdigest() if sidecar_before is not None else None,
+             "candidate_digest": sidecar_digest},
+        ],
+    }
+
+
+def _authority_issue_result(plan: Mapping[str, Any], *, status: str, receipt_count: int, sidecar_count: int, pair_state: str, recovery_origin: str | None, error: str | None = None) -> dict[str, Any]:
+    """兼容 facade；closed tuple 的唯一 owner 位于 semantics.authority。"""
+
+    return render_authority_apply_result(
+        plan_digest=str(plan["plan_digest"]),
+        targets=plan["targets"],
+        status=status,
+        receipt_count=receipt_count,
+        sidecar_count=sidecar_count,
+        pair_state=pair_state,
+        recovery_origin=recovery_origin,
+        error=error,
+    )
+
+
+def _authority_issue_create_once(path: Path, data: bytes) -> None:
+    """Internal injection seam for targeted writer-fault tests; not public CLI."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("xb") as stream:
+        stream.write(data)
+
+
+def _authority_issue_postcheck_bytes(path: Path) -> bytes:
+    """Internal postcondition seam; faults remain unrepresentable in the CLI."""
+
+    return path.read_bytes()
+
+
+def _authority_issue_observe_created_target(path: Path) -> tuple[int, str]:
+    """writer 抛错后按文件系统事实观测本次 create-once mutation。
+
+    返回 ``(count, state)``；原 preimage 必为 absent，因此 target 一旦存在就表示
+    本次调用已经发生不可覆盖 mutation。观测自身不可用时采用保守 count=1，
+    并把 pair durability 降为 unknown，绝不把潜在 mutation 报成零。
+    """
+
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return 0, "absent"
+    except OSError:
+        return 1, "unknown"
+    return 1, "present"
+
+
+def _apply_authority_issue(project_root: Path, plan: Mapping[str, Any], expected_plan_digest: object) -> dict[str, Any]:
+    if expected_plan_digest != plan["plan_digest"]:
+        raise ValueError("expected_plan_digest does not match the current plan")
+    receipt_ref = str(plan["targets"][0]["logical_ref"])
+    sidecar_ref = str(plan["targets"][1]["logical_ref"])
+    receipt_path, receipt_before = _authority_issue_target_bytes(project_root, receipt_ref)
+    sidecar_path, sidecar_before = _authority_issue_target_bytes(project_root, sidecar_ref)
+    receipt_bytes = _authority_issue_json_bytes(plan["receipt"])
+    sidecar_bytes = _authority_issue_json_bytes(plan["sidecar"])
+    if sidecar_before is not None and receipt_before != receipt_bytes:
+        raise ValueError("sidecar without the exact receipt is noncanonical")
+    if receipt_before not in {None, receipt_bytes} or sidecar_before not in {None, sidecar_bytes}:
+        raise ValueError("immutable authority target bytes differ")
+    if receipt_before == receipt_bytes and sidecar_before == sidecar_bytes:
+        return _authority_issue_result(plan, status="NO_CHANGE", receipt_count=0, sidecar_count=0, pair_state="active", recovery_origin=None)
+    receipt_count = 0
+    sidecar_count = 0
+    try:
+        if receipt_before is None:
+            _authority_issue_create_once(receipt_path, receipt_bytes)
+            receipt_count = 1
+    except OSError:
+        receipt_count, observed = _authority_issue_observe_created_target(receipt_path)
+        if receipt_count == 0:
+            return _authority_issue_result(plan, status="BLOCKED", receipt_count=0, sidecar_count=0, pair_state="nonactive", recovery_origin=None, error="E_FAULT_BEFORE_RECEIPT")
+        return _authority_issue_result(
+            plan,
+            status="PARTIAL",
+            receipt_count=receipt_count,
+            sidecar_count=0,
+            pair_state="unknown" if observed == "unknown" else "nonactive",
+            recovery_origin=None,
+            error="E_FAULT_AFTER_RECEIPT",
+        )
+    try:
+        if sidecar_before is None:
+            _authority_issue_create_once(sidecar_path, sidecar_bytes)
+            sidecar_count = 1
+    except OSError:
+        observed_count, observed = _authority_issue_observe_created_target(sidecar_path)
+        sidecar_count = max(sidecar_count, observed_count)
+        return _authority_issue_result(
+            plan,
+            status="PARTIAL",
+            receipt_count=receipt_count,
+            sidecar_count=sidecar_count,
+            pair_state="unknown" if observed == "unknown" else "nonactive",
+            recovery_origin=None,
+            error=(
+                "E_FAULT_AFTER_SIDECAR"
+                if sidecar_count == 1
+                else "E_FAULT_AFTER_RECEIPT"
+            ),
+        )
+    try:
+        receipt_after = _authority_issue_postcheck_bytes(receipt_path)
+        sidecar_after = _authority_issue_postcheck_bytes(sidecar_path)
+    except OSError:
+        return _authority_issue_result(plan, status="PARTIAL", receipt_count=receipt_count, sidecar_count=sidecar_count, pair_state="unknown", recovery_origin=None, error="E_POSTCHECK_UNKNOWN")
+    if receipt_after != receipt_bytes or sidecar_after != sidecar_bytes:
+        return _authority_issue_result(plan, status="PARTIAL", receipt_count=receipt_count, sidecar_count=sidecar_count, pair_state="nonactive", recovery_origin=None, error="E_FAULT_AFTER_SIDECAR")
+    if receipt_count == 1 and sidecar_count == 1:
+        return _authority_issue_result(plan, status="APPLIED", receipt_count=1, sidecar_count=1, pair_state="active", recovery_origin=None)
+    if receipt_count == 0 and sidecar_count == 1:
+        return _authority_issue_result(plan, status="RECOVERED", receipt_count=0, sidecar_count=1, pair_state="active", recovery_origin="receipt-only")
+    return _authority_issue_result(plan, status="PARTIAL", receipt_count=receipt_count, sidecar_count=sidecar_count, pair_state="nonactive", recovery_origin=None, error="E_FAULT_AFTER_RECEIPT")
+
+
 def _print_story_help() -> None:
     print(
         "usage: meta-flow story <command> [options]\n\n"
@@ -978,6 +3252,8 @@ def _print_story_help() -> None:
         "  verify-packet   Build a CP7 Story Verify Packet from a CP6 Return Packet.\n\n"
         "  plan-check      Validate DEVELOPMENT-PLAN as the Story management truth source.\n\n"
         "  project-cp6     Project a recorded CP6 PASS into DEVELOPMENT-PLAN.\n"
+        "  revalidate-cp6 Plan a strict immutable CP6 revalidation attempt.\n"
+        "  issue-revalidation-authority Issue a frozen receipt plus private binding sidecar.\n"
         "  lld-check       Validate full-lld, batch-lld, technical-note, or waived evidence structure.\n"
         "  cp5-context-check Validate CP5 capsule-first context policy.\n\n"
         "Examples:\n"
@@ -986,17 +3262,94 @@ def _print_story_help() -> None:
         "  meta-flow story verify-packet --from-return process/returns/STORY-CR123-S01.CP6.return.json --story process/stories/STORY-CR123-S01.md --project-root .\n"
         "  meta-flow story plan-check --project-root .\n"
         "  meta-flow story project-cp6 --result process/checks/CP6-STORY-CR123-S01.result.json --project-root .\n"
+        "  meta-flow story revalidate-cp6 --authorization process/works/W/revalidation/A/AUTHORIZATION.json --release-oid <oid> --process-oid <oid> --scope-digest <sha256> --plan-preimage-digest <sha256> --downstream-set-digest <sha256> --project-root .\n"
         "  meta-flow story lld-check --lld process/stories/STORY-CR123-S01-LLD.md --project-root .\n"
         "  meta-flow story cp5-context-check --context process/context/CP5-LLD-CONTEXT.yaml --project-root .\n"
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def _authority_issue_main(args: list[str]) -> int:
+    """Parse the deliberately small public grammar for the bootstrap issuer."""
+
+    if not args or args[0] in {"-h", "--help"}:
+        print(
+            "usage: meta-flow story issue-revalidation-authority {plan,apply} "
+            "--project-root <release-root> --work-ref <process-ref> --story-id <exact-id> "
+            "--attempt-id <token> --approval-ref <process-ref> "
+            "--previous-cp6-result-ref <process-ref> --superseding-cp5-result-ref <process-ref> "
+            "--scope-digest <sha256> [--expected-plan-digest <sha256>] [--format {json,human}]"
+        )
+        return 0
+    action = args[0]
+    if action not in {"plan", "apply"}:
+        return 3
+    tokens = args[1:]
+    if any(token.startswith("-") and token not in {*_AUTHORITY_ISSUE_REQUIRED_FLAGS, "--expected-plan-digest", "--format"} for token in tokens):
+        return 3
+    if len(tokens) % 2:
+        return 3
+    pairs = list(zip(tokens[::2], tokens[1::2], strict=True))
+    names = [name for name, _value in pairs]
+    if len(names) != len(set(names)) or any(name not in {*_AUTHORITY_ISSUE_REQUIRED_FLAGS, "--expected-plan-digest", "--format"} for name in names):
+        return 3
+    values = dict(pairs)
+    if any(flag not in values for flag in _AUTHORITY_ISSUE_REQUIRED_FLAGS):
+        return 3
+    if names.index("--project-root") > names.index("--work-ref"):
+        return 3
+    if action == "plan" and "--expected-plan-digest" in values:
+        return 3
+    if action == "apply" and "--expected-plan-digest" not in values:
+        return 3
+    output_format = values.get("--format", "json")
+    if output_format not in {"json", "human"}:
+        return 3
+    try:
+        plan = _authority_issue_plan(
+            Path(values["--project-root"]).resolve(),
+            work_ref=values["--work-ref"], story_id=values["--story-id"],
+            attempt_id=values["--attempt-id"], approval_ref=values["--approval-ref"],
+            previous_ref=values["--previous-cp6-result-ref"],
+            superseding_ref=values["--superseding-cp5-result-ref"],
+            scope_digest=values["--scope-digest"],
+        )
+        result = plan if action == "plan" else _apply_authority_issue(
+            Path(values["--project-root"]).resolve(), plan, values["--expected-plan-digest"]
+        )
+    except (FrozenCp6EvidenceError, OSError, TypeError, ValueError) as exc:
+        result = render_authority_input_blocked(
+            action=action,
+            message=str(exc),
+            expected_plan_digest=values.get("--expected-plan-digest", ""),
+        )
+    if output_format == "json":
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    else:
+        print(render_human_wire(result))
+    return int(result["exit_code"] if "exit_code" in result else 0)
+
+
+def _print_revalidation_help() -> None:
+    print(
+        "usage: meta-flow story revalidate-cp6 --action "
+        "{plan,apply,replay,inspect,recover,completion} "
+        "--authorization <process-ref> --target <process-ref> "
+        "[--context <process-ref>] [--output {json,human}]"
+    )
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    services: Mapping[str, Any] | None = None,
+) -> int:
     args = list(argv or [])
     if not args or args[0] in {"-h", "--help"}:
         _print_story_help()
         return 0
     command = args[0]
+    if command == "issue-revalidation-authority":
+        return _authority_issue_main(args[1:])
     if command == "return-check":
         parser = argparse.ArgumentParser(prog="meta-flow story return-check")
         parser.add_argument("--project-root", type=Path, default=None)
@@ -1127,6 +3480,48 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 2
+    if command == "revalidate-cp6":
+        if any(value in {"-h", "--help"} for value in args[1:]):
+            _print_revalidation_help()
+            return 0
+        parser = argparse.ArgumentParser(prog="meta-flow story revalidate-cp6")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--authorization", type=Path, required=True)
+        parser.add_argument("--target", type=Path, required=True)
+        parser.add_argument("--context", type=Path, default=None)
+        parser.add_argument("--action", required=True)
+        parser.add_argument("--output", choices=("json", "human"), default="json")
+        try:
+            parsed = parser.parse_args(args[1:])
+        except SystemExit:
+            return 2
+        if parsed.action not in {"plan", "apply", "replay", "inspect", "recover", "completion"}:
+            return 2
+        request = {
+            "action": parsed.action,
+            "output": parsed.output,
+            "authorization": parsed.authorization,
+            "target": parsed.target,
+            "context": parsed.context,
+            "project_root": parsed.project_root,
+        }
+        if services is None:
+            output = _run_default_cp6_revalidation_operation(request)
+        else:
+            output = run_cp6_revalidation_operation(
+                request=request,
+                services=dict(services),
+            )
+        if parsed.output == "json":
+            print(json.dumps(output, ensure_ascii=False, sort_keys=True))
+        else:
+            print(
+                " ".join(
+                    f"{key}={output.get(key)}"
+                    for key in ("action", "status", "decision", "mutation_count", "postcondition")
+                )
+            )
+        return int(output.get("exit_code") or 0)
     if command == "lld-check":
         parser = argparse.ArgumentParser(prog="meta-flow story lld-check")
         parser.add_argument("--project-root", type=Path, default=None)

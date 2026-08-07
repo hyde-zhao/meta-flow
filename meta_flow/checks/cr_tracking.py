@@ -20,6 +20,24 @@ from meta_flow.project.process_route import (
     _resolve_runtime_ref,
     require_process_route,
 )
+from meta_flow.semantics.cr_status import (
+    NATIVE_GATE_STATUSES as ALLOWED_GATE_STATUSES,
+)
+from meta_flow.semantics.cr_status import (
+    NATIVE_LIFECYCLE_STATUSES as ALLOWED_LIFECYCLE_STATUSES,
+)
+from meta_flow.semantics.cr_status import (
+    NATIVE_READINESS_STATUSES as ALLOWED_READINESS_STATUSES,
+)
+from meta_flow.semantics.cr_status import (
+    normalize_gate_status,
+    normalize_lifecycle_status,
+    normalize_readiness_status,
+    validate_native_status_tuple,
+)
+from meta_flow.semantics.cr_status import (
+    validate_native_transition as validate_native_transition,
+)
 from meta_flow.state import checkpoint_projection as canonical_checkpoint_projection
 from meta_flow.state import current, event_ledger
 
@@ -39,21 +57,6 @@ ALLOWED_FOLLOW_UP_STATUSES = {
 }
 UNFINISHED_FORMAL_STATUSES = {"open", "active", "blocked", "pending"}
 FINISHED_FORMAL_STATUSES = {"closed", "cancelled", "superseded", "implemented", "approved"}
-ALLOWED_LIFECYCLE_STATUSES = {"candidate", "active", "blocked", "closed", "cancelled", "superseded"}
-ALLOWED_READINESS_STATUSES = {"ready", "ready_with_risk", "not_ready", "n/a"}
-ALLOWED_GATE_STATUSES = {
-    "not_started",
-    "cp2_pending",
-    "cp3_pending",
-    "cp5_pending",
-    "cp7_pending",
-    "cp8_pending",
-    "implementation_in_progress",
-    "verification_in_progress",
-    "cp8_closed",
-    "cp8_recovery_closed",
-    "closed",
-}
 ALLOWED_CR_KINDS = {
     "requirement-change",
     "architecture-realignment",
@@ -407,146 +410,6 @@ def strip_scalar(value: str) -> str:
     return raw.strip().strip("`").strip().strip('"').strip("'")
 
 
-def normalize_lifecycle_status(value: str, *, fallback_status: str = "") -> str:
-    lifecycle = strip_scalar(value).lower().replace("-", "_")
-    if lifecycle in ALLOWED_LIFECYCLE_STATUSES:
-        return lifecycle
-    status = normalize_status(fallback_status)
-    if status in {"candidate", "spike_candidate"}:
-        return "candidate"
-    if status in {"open", "pending"}:
-        return "active"
-    if status in {"active", "blocked", "closed", "cancelled", "superseded"}:
-        return status
-    if status in {"converted-to-spike", "converted_to_spike"}:
-        return "active"
-    return lifecycle
-
-
-def normalize_readiness_status(value: str) -> str:
-    readiness = strip_scalar(value).lower().replace("-", "_")
-    if readiness in {"na", "not_applicable", "not-applicable"}:
-        return "n/a"
-    return readiness
-
-
-def normalize_gate_status(value: str, *, fallback_gate: str = "") -> str:
-    gate = strip_scalar(value or fallback_gate).lower().replace("-", "_")
-    if gate in {"not_started", "未启动"}:
-        return "not_started"
-    if gate in {"not-started"}:
-        return "not_started"
-    return gate
-
-
-def validate_native_status_tuple(
-    lifecycle_status: str,
-    readiness_status: str,
-    gate_status: str,
-) -> list[str]:
-    """Validate the canonical vNext lifecycle/readiness/gate tuple."""
-
-    lifecycle = normalize_lifecycle_status(lifecycle_status)
-    readiness = normalize_readiness_status(readiness_status)
-    gate = normalize_gate_status(gate_status)
-    if lifecycle == "candidate":
-        legal = readiness == "not_ready" and gate == "not_started"
-    elif lifecycle in {"active", "blocked"}:
-        legal = readiness == "not_ready" and gate in {
-            "cp2_pending",
-            "cp3_pending",
-            "cp5_pending",
-            "implementation_in_progress",
-            "verification_in_progress",
-            "cp7_pending",
-            "cp8_pending",
-        }
-    elif lifecycle == "closed":
-        legal = readiness in {"ready", "ready_with_risk"} and gate in {
-            "closed",
-            "cp8_closed",
-            "cp8_recovery_closed",
-        }
-    elif lifecycle in {"cancelled", "superseded"}:
-        legal = readiness == "n/a" and gate == "closed"
-    else:
-        legal = False
-    if legal:
-        return []
-    return [f"illegal native status tuple: {lifecycle or '-'} / {readiness or '-'} / {gate or '-'}"]
-
-
-def validate_native_transition(
-    before: tuple[str, str, str],
-    after: tuple[str, str, str],
-    *,
-    historical_migration: bool = False,
-) -> list[str]:
-    """Validate one explicit native transition; terminal reactivation is never legal."""
-
-    target_errors = validate_native_status_tuple(*after)
-    if target_errors:
-        return target_errors
-    source = tuple(
-        (
-            normalize_lifecycle_status(before[0]),
-            normalize_readiness_status(before[1]),
-            normalize_gate_status(before[2]),
-        )
-    )
-    target = tuple(
-        (
-            normalize_lifecycle_status(after[0]),
-            normalize_readiness_status(after[1]),
-            normalize_gate_status(after[2]),
-        )
-    )
-    if historical_migration:
-        if target[0] == "active" and source[0] in {"closed", "cancelled", "superseded"}:
-            return ["historical migration must not reactivate a terminal CR"]
-        return []
-    if source == target:
-        return []
-    allowed: set[tuple[tuple[str, str, str], tuple[str, str, str]]] = set()
-    active_gates = [
-        "cp2_pending",
-        "cp3_pending",
-        "cp5_pending",
-        "implementation_in_progress",
-        "verification_in_progress",
-        "cp7_pending",
-        "cp8_pending",
-    ]
-    for left, right in zip(active_gates, active_gates[1:], strict=False):
-        allowed.add((("active", "not_ready", left), ("active", "not_ready", right)))
-    allowed.update(
-        {
-            (("candidate", "not_ready", "not_started"), ("active", "not_ready", "cp2_pending")),
-            (("candidate", "not_ready", "not_started"), ("active", "not_ready", "cp3_pending")),
-            (("active", "not_ready", "cp8_pending"), ("closed", "ready", "cp8_closed")),
-            (("active", "not_ready", "cp8_pending"), ("closed", "ready_with_risk", "cp8_closed")),
-            (
-                ("blocked", "not_ready", "cp8_pending"),
-                ("closed", "ready_with_risk", "cp8_recovery_closed"),
-            ),
-        }
-    )
-    for gate in active_gates:
-        allowed.add((("active", "not_ready", gate), ("blocked", "not_ready", gate)))
-        allowed.add((("blocked", "not_ready", gate), ("active", "not_ready", gate)))
-        for lifecycle in ("active", "blocked"):
-            for readiness in ("ready", "ready_with_risk"):
-                allowed.add(
-                    (
-                        (lifecycle, "not_ready", gate),
-                        ("closed", readiness, "closed"),
-                    )
-                )
-    if (source, target) not in allowed:
-        return [f"illegal native status transition: {'/'.join(source)} -> {'/'.join(target)}"]
-    return []
-
-
 def normalize_kind(value: str, *, fallback_status: str = "") -> str:
     kind = strip_scalar(value).lower()
     if kind in {"cr", "change", "follow-up", "follow_up"}:
@@ -627,12 +490,18 @@ def find_state_v2_refs(state_path: Path) -> list[StateRef]:
     return [StateRef(key="active_change", value=str(value or ""), line_no=1)]
 
 
-def discover_formal_crs(change_root: Path) -> dict[str, FormalCR]:
+def discover_formal_crs(
+    change_root: Path,
+    *,
+    excluded_legacy_paths: frozenset[Path] = frozenset(),
+) -> dict[str, FormalCR]:
     crs: dict[str, FormalCR] = {}
     if not change_root.is_dir():
         return crs
     for path in sorted(change_root.glob("CR-*.md")):
         if "FOLLOW-UP" in path.name:
+            continue
+        if path.resolve() in excluded_legacy_paths:
             continue
         text = read_text(path)
         fields = parse_frontmatter(text)
@@ -1542,7 +1411,11 @@ def collect_errors_and_warnings(
 
 
 def print_summary(
-    formal_crs: dict[str, FormalCR], rows: list[FollowUpRow], index_items: list[IndexItem]
+    formal_crs: dict[str, FormalCR],
+    rows: list[FollowUpRow],
+    index_items: list[IndexItem],
+    *,
+    registered_legacy_ids: tuple[str, ...] = (),
 ) -> None:
     active = sorted(
         cr.cr_id
@@ -1566,6 +1439,10 @@ def print_summary(
     print("CR tracking summary")
     print(f"- active formal CRs: {', '.join(active) if active else 'none'}")
     print(f"- blocked formal CRs: {', '.join(blocked) if blocked else 'none'}")
+    print(
+        "- registered legacy evidence: "
+        + (", ".join(registered_legacy_ids) if registered_legacy_ids else "none")
+    )
     print(f"- follow-up candidates: {', '.join(candidates) if candidates else 'none'}")
     print(f"- spike candidates: {', '.join(spike_candidates) if spike_candidates else 'none'}")
     print(
@@ -1616,7 +1493,23 @@ def main(argv: list[str] | None = None) -> int:
     state_path = route.resolve_ref("process/STATE.md")
     change_root = route.resolve_ref("process/changes")
     index_path = change_root / "CR-INDEX.json"
-    formal_crs = discover_formal_crs(change_root)
+    from meta_flow.workflow.legacy_evidence_registry import (
+        LegacyEvidenceError,
+        load_declared_legacy_evidence_registry,
+    )
+
+    try:
+        legacy_bundle = load_declared_legacy_evidence_registry(
+            project_root,
+            consumer_id="cr-tracking",
+        )
+    except LegacyEvidenceError as exc:
+        print(f"BLOCKED: {exc.code}: {exc}", file=sys.stderr)
+        return 2
+    formal_crs = discover_formal_crs(
+        change_root,
+        excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
+    )
     follow_up_rows = discover_follow_up_rows(project_root, args.tracking)
     expected_semantic_digest = ""
     projection_errors: list[str] = []
@@ -1626,7 +1519,11 @@ def main(argv: list[str] | None = None) -> int:
         from meta_flow.workflow import cr_lifecycle
 
         expected_semantic_digest = str(
-            cr_lifecycle.build_index(project_root).get("semantic_digest") or ""
+            cr_lifecycle.build_index(
+                project_root,
+                excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
+            ).get("semantic_digest")
+            or ""
         )
     except ValueError as exc:
         projection_errors.append(f"formal CR truth cannot build native index: {exc}")
@@ -1678,7 +1575,17 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 warnings.append(message)
 
-    print_summary(formal_crs, follow_up_rows, index_items)
+    registered_legacy_ids = tuple(
+        match.group(0)
+        for registration in legacy_bundle.registrations
+        if (match := CR_ID_RE.search(registration.evidence_logical_ref)) is not None
+    )
+    print_summary(
+        formal_crs,
+        follow_up_rows,
+        index_items,
+        registered_legacy_ids=registered_legacy_ids,
+    )
     for warning in warnings:
         print(f"WARNING: {warning}", file=sys.stderr)
     for error in errors:

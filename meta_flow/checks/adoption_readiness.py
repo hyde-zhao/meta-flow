@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from meta_flow.design import product_governance
+from meta_flow.project.process_route_adapter import (
+    RouteConsumerError,
+    RouteConsumerView,
+    resolve_configured_consumer_route,
+)
 from meta_flow.state import current
 from meta_flow.workspace.routing import ProcessRouteHealth, check_process_route
 
@@ -49,6 +54,34 @@ def _workspace_item(root: Path, health: ProcessRouteHealth) -> ReadinessItem:
         impact="process route health controls whether Meta Flow can safely write process artifacts.",
         next_action="Run meta-flow workspace bootstrap --artifact-root <relative-artifact-root> --project-name <project-name>.",
         messages=messages,
+    )
+
+
+def _binding_workspace_item(root: Path, route: RouteConsumerView) -> ReadinessItem:
+    return ReadinessItem(
+        item_id="workspace-route",
+        status="PASS",
+        evidence=[
+            _rel(root, root / ".meta-flow" / "workspace.yaml"),
+            route.source,
+        ],
+        impact="tracked sibling binding resolves the canonical process repository.",
+        next_action="No legacy link/bootstrap action is required.",
+        messages=[
+            f"route_mode={route.route_mode}",
+            f"process_root={route.process_root}",
+        ],
+    )
+
+
+def _blocked_binding_workspace_item(error: RouteConsumerError) -> ReadinessItem:
+    return ReadinessItem(
+        item_id="workspace-route",
+        status="FAIL",
+        evidence=[".meta-flow/workspace.yaml"],
+        impact="tracked process route is present but cannot be resolved safely.",
+        next_action="Repair the tracked binding; do not restore a legacy process symlink.",
+        messages=[f"{error.code}: {error}"],
     )
 
 
@@ -203,10 +236,24 @@ def _human_gate_item(root: Path, process_root: Path | None) -> ReadinessItem:
 
 def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
     root = project_root.resolve()
-    health = check_process_route(root)
-    process_root = health.project_process_root if health.ok else None
+    try:
+        route = resolve_configured_consumer_route(
+            root,
+            consumer_id="adoption-readiness",
+        )
+    except RouteConsumerError as error:
+        workspace_item = _blocked_binding_workspace_item(error)
+        process_root = None
+    else:
+        if route is None:
+            health = check_process_route(root)
+            workspace_item = _workspace_item(root, health)
+            process_root = health.project_process_root if health.ok else None
+        else:
+            workspace_item = _binding_workspace_item(root, route)
+            process_root = route.process_root
     return [
-        _workspace_item(root, health),
+        workspace_item,
         _state_item(root, process_root),
         _cr_tracking_item(root, process_root),
         _identity_item(root),

@@ -16,6 +16,21 @@ from typing import Any
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.project.read_contract import ReadContextProtocol
+from meta_flow.semantics.attempt import (
+    ALL_ATTEMPT_STATUSES as ALL_ATTEMPT_STATUSES,
+)
+from meta_flow.semantics.attempt import (
+    NONTERMINAL_ATTEMPT_STATUSES as NONTERMINAL_ATTEMPT_STATUSES,
+)
+from meta_flow.semantics.attempt import (
+    TERMINAL_ATTEMPT_STATUSES as TERMINAL_ATTEMPT_STATUSES,
+)
+from meta_flow.semantics.attempt import (
+    TERMINAL_SUCCESS_RESULTS as TERMINAL_SUCCESS_RESULTS,
+)
+from meta_flow.semantics.attempt import (
+    TERMINAL_SUCCESS_STATUSES as TERMINAL_SUCCESS_STATUSES,
+)
 
 KNOWN_LEDGER_RELS = {
     "checkpoint": Path("process/state/CHECKPOINT-LEDGER.ndjson"),
@@ -62,22 +77,6 @@ DISPATCH_EVENT_REQUIRED_FIELDS = {
         "status",
     ),
 }
-TERMINAL_SUCCESS_STATUSES = frozenset({"completed", "success", "succeeded", "passed"})
-TERMINAL_SUCCESS_RESULTS = frozenset({"pass", "success", "succeeded", "completed"})
-TERMINAL_ATTEMPT_STATUSES = frozenset(
-    {
-        "completed",
-        "success",
-        "succeeded",
-        "passed",
-        "failed",
-        "interrupted",
-        "cancelled",
-        "superseded",
-    }
-)
-NONTERMINAL_ATTEMPT_STATUSES = frozenset({"submitted", "running", "retrying"})
-ALL_ATTEMPT_STATUSES = TERMINAL_ATTEMPT_STATUSES | NONTERMINAL_ATTEMPT_STATUSES
 GATE_APPROVAL_KIND_VERSION = 1
 
 

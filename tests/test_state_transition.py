@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -8,11 +9,16 @@ from io import StringIO
 from pathlib import Path
 
 from meta_flow.checks import state_transition
-from meta_flow.checks.frozen_cp6_evidence import FrozenCp6EvidenceV1
+from meta_flow.checks.frozen_cp6_evidence import (
+    FrozenCp6EvidenceV1,
+    build_cp6_revalidation_receipt,
+)
+from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.state.checkpoint_projection import (
     CheckpointHeadV1,
     CheckpointProjectionV1,
 )
+from meta_flow.workflow import story_evidence
 
 
 def cp5_projection(
@@ -93,7 +99,248 @@ def write_state(root: Path, payload: dict) -> Path:
     return path
 
 
+def write_revalidation_event_observations(root: Path, identity: dict[str, str]) -> list[dict]:
+    """写入五阶段真实事件 bytes，并返回 projector 消费的不可变 observations。"""
+
+    kinds = ("authorization", "preregistration", "preflight", "projection", "completion")
+    observations: list[dict] = []
+    previous_digest = ""
+    for index, kind in enumerate(kinds, start=1):
+        payload = {
+            "schema_version": 1, "kind": kind, **identity,
+            "previous_digest": previous_digest, "sequence": index,
+        }
+        raw = (json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        path = root / f"{index:02d}-{kind}.json"
+        path.write_bytes(raw)
+        observations.append({
+            "schema_version": 1,
+            "evidence_ref": f"process/receipts/{path.name}",
+            "bytes": path.read_bytes(), "bytes_digest": digest, "kind": kind,
+            "previous_digest": previous_digest, "outer_identity": dict(identity),
+        })
+        previous_digest = digest
+    return observations
+
+
 class StateTransitionTests(unittest.TestCase):
+    def test_a003_pgr3_f002_projector_requires_receipt_byte_observations(self) -> None:
+        """PGR3-F002：正向投影必须来自 immutable receipt bytes/ref，而非手写摘要。"""
+        identity = {
+            "cr_id": "CR-X", "story_id": "STORY-X", "work_id": "W-X",
+            "attempt_id": "attempt-random-42",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            observations = write_revalidation_event_observations(Path(directory), identity)
+            result = state_transition.project_cp6_revalidation_attempt(
+                observations, expected_identity=identity,
+                formal_story_status="ready-for-verification",
+            )
+            self.assertEqual(("READY", "COMPLETE", True), (result["decision"], result["phase"], result["complete"]))
+            self.assertEqual("ready-for-verification", result["formal_story_status"])
+            mutations = {
+                "ref": {"evidence_ref": "process/../escape.json"},
+                "bytes": {"bytes": b"tampered"},
+                "digest": {"bytes_digest": "0" * 64},
+                "kind": {"kind": "wrong"},
+                "previous": {"previous_digest": "0" * 64},
+                "identity": {"outer_identity": {**identity, "attempt_id": "other"}},
+            }
+            for name, mutation in mutations.items():
+                changed = [dict(item) for item in observations]
+                changed[2].update(mutation)
+                with self.subTest(name=name):
+                    blocked = state_transition.project_cp6_revalidation_attempt(
+                        changed, expected_identity=identity,
+                        formal_story_status="ready-for-verification",
+                    )
+                    self.assertEqual("BLOCKED", blocked["decision"])
+            for field, value in (
+                ("kind", "wrong"), ("previous_digest", "0" * 64),
+                ("cr_id", "CR-OTHER"), ("story_id", "STORY-OTHER"),
+                ("work_id", "W-OTHER"), ("attempt_id", "other"),
+                ("schema_version", 99), ("extra", True),
+            ):
+                changed = [dict(item) for item in observations]
+                inner = json.loads(changed[2]["bytes"])
+                inner[field] = value
+                raw = (json.dumps(inner, ensure_ascii=False, sort_keys=True) + "\n").encode()
+                changed[2]["bytes"] = raw
+                changed[2]["bytes_digest"] = hashlib.sha256(raw).hexdigest()
+                blocked = state_transition.project_cp6_revalidation_attempt(changed, expected_identity=identity, formal_story_status="ready-for-verification")
+                self.assertEqual("BLOCKED", blocked["decision"])
+            for raw in (b"{invalid", json.dumps({"schema_version": 1}).encode()):
+                changed = [dict(item) for item in observations]
+                changed[2]["bytes"] = raw
+                changed[2]["bytes_digest"] = hashlib.sha256(raw).hexdigest()
+                self.assertEqual("BLOCKED", state_transition.project_cp6_revalidation_attempt(changed, expected_identity=identity, formal_story_status="ready-for-verification")["decision"])
+            sequence = [dict(item) for item in observations]
+            inner = json.loads(sequence[2]["bytes"])
+            inner["sequence"] = 999
+            raw = (json.dumps(inner, ensure_ascii=False, sort_keys=True) + "\n").encode()
+            sequence[2]["bytes"] = raw
+            sequence[2]["bytes_digest"] = hashlib.sha256(raw).hexdigest()
+            self.assertEqual(
+                "BLOCKED",
+                state_transition.project_cp6_revalidation_attempt(
+                    sequence, expected_identity=identity,
+                    formal_story_status="ready-for-verification",
+                )["decision"],
+            )
+            invalid_utf8 = [dict(item) for item in observations]
+            invalid_utf8[2]["bytes"] = b"\xff"
+            invalid_utf8[2]["bytes_digest"] = hashlib.sha256(b"\xff").hexdigest()
+            self.assertEqual(
+                "BLOCKED",
+                state_transition.project_cp6_revalidation_attempt(
+                    invalid_utf8, expected_identity=identity,
+                    formal_story_status="ready-for-verification",
+                )["decision"],
+            )
+            duplicate = [*observations, dict(observations[0])]
+            self.assertEqual("BLOCKED", state_transition.project_cp6_revalidation_attempt(duplicate, expected_identity=identity, formal_story_status="ready-for-verification")["decision"])
+            writes = []
+            completion_target = Path(directory) / "completion.json"
+            downstream_set = [{
+                "producer": "P02",
+                "receipt_digest": "a" * 64,
+                "attempt_id": identity["attempt_id"],
+            }]
+            authorization = build_cp6_revalidation_receipt(
+                kind="authorization",
+                **identity,
+                release_oid="b" * 40,
+                process_oid="c" * 40,
+                scope_digest="d" * 64,
+                payload={
+                    "previous_cp6_ref": "process/checks/previous.json",
+                    "superseding_cp5_ref": "process/checks/cp5.json",
+                    "approval_ref": "process/checkpoints/approval.json",
+                    "work_authorization_ref": "process/works/W-X/WORK.yaml",
+                    "plan_preimage_digest": "e" * 64,
+                    "downstream_set_digest": canonical_digest(downstream_set),
+                    "downstream_set": downstream_set,
+                },
+            ).as_dict()
+            completion = story_evidence.run_cp6_revalidation_operation(
+                request={
+                    "action": "completion", "output": "json",
+                    "authorization": authorization,
+                    "target": completion_target, "event_observations": observations,
+                    "expected_identity": identity,
+                    "formal_story_status": "ready-for-verification",
+                },
+                services={
+                    "resolve": lambda value: value,
+                    "observe_current": lambda *_args, **_kwargs: {
+                        "status": "CURRENT", "mutation_count": 0,
+                        "observation": {"target_exists": completion_target.exists()},
+                    },
+                    "projector": state_transition.project_cp6_revalidation_attempt,
+                    "create_once_writer": story_evidence._create_once_json,
+                    "postcheck_reader": story_evidence._read_json,
+                    "formal_truth_writer": lambda payload: writes.append(payload),
+                },
+            )
+            self.assertEqual("COMPLETE", completion["phase"])
+            self.assertEqual([], writes)
+
+            tampered = [dict(item) for item in observations]
+            inner = json.loads(tampered[2]["bytes"])
+            inner["story_id"] = "STORY-OTHER"
+            raw = (json.dumps(inner, ensure_ascii=False, sort_keys=True) + "\n").encode()
+            tampered[2]["bytes"] = raw
+            tampered[2]["bytes_digest"] = hashlib.sha256(raw).hexdigest()
+            blocked_target = Path(directory) / "blocked-completion.json"
+            blocked_calls = {"completion_writer": 0, "formal_writer": 0}
+
+            def fail_completion_writer(*_args, **_kwargs):
+                blocked_calls["completion_writer"] += 1
+                self.fail("completion writer called after projector BLOCKED")
+
+            def fail_formal_writer(*_args, **_kwargs):
+                blocked_calls["formal_writer"] += 1
+                self.fail("formal truth writer called after projector BLOCKED")
+
+            blocked_completion = story_evidence.run_cp6_revalidation_operation(
+                request={
+                    "action": "completion", "output": "json",
+                    "authorization": authorization,
+                    "target": blocked_target, "event_observations": tampered,
+                    "expected_identity": identity,
+                    "formal_story_status": "ready-for-verification",
+                },
+                services={
+                    "resolve": lambda value: value,
+                    "observe_current": lambda *_args, **_kwargs: {
+                        "status": "CURRENT", "mutation_count": 0,
+                        "observation": {"target_exists": blocked_target.exists()},
+                    },
+                    "projector": state_transition.project_cp6_revalidation_attempt,
+                    "create_once_writer": fail_completion_writer,
+                    "postcheck_reader": lambda *_args, **_kwargs: self.fail(
+                        "postcheck called after projector BLOCKED"
+                    ),
+                    "formal_truth_writer": fail_formal_writer,
+                },
+            )
+            self.assertEqual(
+                ("BLOCKED", 0, 2),
+                (
+                    blocked_completion["decision"],
+                    blocked_completion["mutation_count"],
+                    blocked_completion["exit_code"],
+                ),
+            )
+            self.assertEqual({"completion_writer": 0, "formal_writer": 0}, blocked_calls)
+            self.assertFalse(blocked_target.exists())
+    # A3 mapping: TC02/03 initial admission, TC04/05 validated attempt chain,
+    # COMP02 non-revalidation transition regression.
+    def test_a3_tc04_tc05_bare_phase_mappings_cannot_complete_attempt(self) -> None:
+        identity = {"cr_id": "CR-X", "story_id": "STORY-X", "work_id": "W-X", "attempt_id": "a1"}
+        result = state_transition.project_cp6_revalidation_attempt(
+            [
+                {"attempt_id": "a1", "phase": phase}
+                for phase in state_transition.CP6_REVALIDATION_PHASES
+            ],
+            expected_identity=identity,
+            formal_story_status="ready-for-verification",
+        )
+        self.assertEqual("BLOCKED", result["decision"])
+
+    def test_p02_attempt_projector_is_monotonic_and_preserves_formal_status(self) -> None:
+        identity = {"cr_id": "CR-X", "story_id": "STORY-X", "work_id": "W-X", "attempt_id": "a1"}
+        with tempfile.TemporaryDirectory() as directory:
+            events = write_revalidation_event_observations(Path(directory), identity)
+            for count, phase in enumerate(state_transition.CP6_REVALIDATION_PHASES, start=1):
+                result = state_transition.project_cp6_revalidation_attempt(
+                    events[:count], expected_identity=identity,
+                    formal_story_status="ready-for-verification",
+                )
+                self.assertEqual(("READY", phase), (result["decision"], result["phase"]))
+                self.assertEqual(count == len(events), result["complete"])
+                self.assertEqual("ready-for-verification", result["formal_story_status"])
+
+    def test_p02_attempt_projector_fails_closed_for_skip_duplicate_and_cross_attempt(self) -> None:
+        identity = {"cr_id": "CR-X", "story_id": "STORY-X", "work_id": "W-X", "attempt_id": "a1"}
+        with tempfile.TemporaryDirectory() as directory:
+            events = write_revalidation_event_observations(Path(directory), identity)
+            cases = {
+                "skip": events[1:2],
+                "duplicate": [events[0], events[0]],
+                "cross-attempt": [{**events[0], "outer_identity": {**identity, "attempt_id": "other"}}],
+                "bad-kind": [{**events[0], "kind": "wrong"}],
+                "bad-digest": [{**events[0], "bytes_digest": "A" * 64}],
+            }
+            for name, candidate in cases.items():
+                with self.subTest(name=name):
+                    result = state_transition.project_cp6_revalidation_attempt(
+                        candidate, expected_identity=identity,
+                        formal_story_status="ready-for-verification",
+                    )
+                    self.assertEqual("BLOCKED", result["decision"])
+
     def _c0_result(
         self,
         *,

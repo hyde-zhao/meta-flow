@@ -11,7 +11,7 @@ CR_ID_RE = re.compile(r"CR-\d+")
 
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
 
-ALLOWED_LIFECYCLE_STATUSES = {
+FORMAL_CR_STATUSES = {
     "candidate",
     "proposed",
     "active",
@@ -23,6 +23,9 @@ ALLOWED_LIFECYCLE_STATUSES = {
     "cancelled",
     "blocked",
 }
+
+# 兼容旧 import；这是 formal CR 文档 status，不是 native 三元组 lifecycle。
+ALLOWED_LIFECYCLE_STATUSES = FORMAL_CR_STATUSES
 
 FINISHED_STATUSES = {"closed", "superseded", "cancelled"}
 

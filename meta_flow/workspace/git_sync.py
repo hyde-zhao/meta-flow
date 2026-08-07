@@ -355,26 +355,56 @@ def repo_status(label: str, path: Path) -> GitRepoStatus:
 
 
 def workspace_repositories(project_root: Path) -> tuple[list[GitRepoStatus], list[str]]:
-    health = check_process_route(project_root)
-    warnings = list(health.warnings)
-    if health.blocking:
-        errors = "; ".join(health.errors) or health.status
+    # 延迟导入避免 onboarding_contract -> git_sync -> process_route 的初始化环。
+    from meta_flow.project.process_route_adapter import (
+        RouteConsumerError,
+        resolve_configured_consumer_route,
+    )
+
+    try:
+        route = resolve_configured_consumer_route(
+            project_root,
+            consumer_id="workspace-git-discovery",
+        )
+    except RouteConsumerError as error:
         return (
             [
                 GitRepoStatus(
                     label="workspace-route",
                     root=project_root.resolve(),
                     is_git_repo=False,
-                    error=f"process-route-blocking: {errors}",
+                    error=f"process-route-blocking: {error.code}: {error}",
                 )
             ],
-            warnings,
+            [],
         )
+    if route is not None:
+        candidates = [
+            ("project", route.project_root),
+            ("process", route.process_root),
+        ]
+        warnings: list[str] = []
+    else:
+        health = check_process_route(project_root)
+        warnings = list(health.warnings)
+        if health.blocking:
+            errors = "; ".join(health.errors) or health.status
+            return (
+                [
+                    GitRepoStatus(
+                        label="workspace-route",
+                        root=project_root.resolve(),
+                        is_git_repo=False,
+                        error=f"process-route-blocking: {errors}",
+                    )
+                ],
+                warnings,
+            )
 
-    candidates: list[tuple[str, Path]] = [("project", health.project_root)]
-    artifact_path = health.artifact_root or health.project_process_root
-    if artifact_path is not None:
-        candidates.append(("artifact", artifact_path))
+        candidates = [("project", health.project_root)]
+        artifact_path = health.artifact_root or health.project_process_root
+        if artifact_path is not None:
+            candidates.append(("artifact", artifact_path))
 
     repos: list[GitRepoStatus] = []
     seen_roots: set[Path] = set()
@@ -478,10 +508,14 @@ def push_workspace(
     allow_dirty: bool = False,
     capability: _LegacyRouteAuthorization | None = None,
 ) -> tuple[int, list[str]]:
-    if (project_root.resolve() / ".meta-flow" / "workspace.yaml").exists():
+    binding_present = (
+        project_root.resolve() / ".meta-flow" / "workspace.yaml"
+    ).exists()
+    if binding_present and not dry_run:
         return 2, [
             "workspace_push: BLOCKED",
-            "- ERROR: legacy_policy_denied: portable vNext binding is present",
+            "- ERROR: legacy_policy_denied: portable vNext binding only permits "
+            "workspace push precheck; use canonical repository push for mutation",
         ]
     repos, warnings = workspace_repositories(project_root)
     lines = format_git_status(repos, warnings)

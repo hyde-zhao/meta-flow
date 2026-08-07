@@ -109,6 +109,7 @@ def build_index(
     read_context: ReadContextProtocol | None = None,
     resolve_runtime_ref_fn: Any | None = None,
     rel_fn: Any | None = None,
+    excluded_legacy_paths: frozenset[Path] = frozenset(),
 ) -> dict[str, Any]:
     """Build a pure projection from formal CR files only.
 
@@ -124,6 +125,7 @@ def build_index(
         project_root,
         _resolve_runtime_ref_fn=resolver,
         _rel_fn=relative,
+        excluded_legacy_paths=excluded_legacy_paths,
     )
     minimum = _native_cr_minimum(
         project_root,
@@ -199,7 +201,21 @@ def plan_index(project_root: Path, *, rebuild_corrupt: bool=False) -> dict[str, 
     project_root = project_root.resolve()
     path = resolve_runtime_ref(project_root, CR_INDEX_REL.as_posix())
     try:
-        expected = build_index(project_root)
+        excluded_legacy_paths: frozenset[Path] = frozenset()
+        if (project_root / '.meta-flow' / 'workspace.yaml').is_file():
+            from meta_flow.workflow.legacy_evidence_registry import (
+                load_declared_legacy_evidence_registry,
+            )
+
+            legacy_bundle = load_declared_legacy_evidence_registry(
+                project_root,
+                consumer_id='cr-index',
+            )
+            excluded_legacy_paths = frozenset(legacy_bundle.evidence_paths)
+        expected = build_index(
+            project_root,
+            excluded_legacy_paths=excluded_legacy_paths,
+        )
     except ValueError as exc:
         return {'decision': 'BLOCKED', 'action': 'none', 'mutation_count': 0, 'reason': str(exc), 'index_ref': CR_INDEX_REL.as_posix()}
     expected_digest = str(expected['semantic_digest'])

@@ -93,6 +93,29 @@
       }
     },
     {
+      "operation": "story.issue-revalidation-authority",
+      "entry": ["meta-flow", "story", "issue-revalidation-authority"],
+      "input_version": "Cp6RevalidationAuthorityIssueInputV1",
+      "output_version": "Cp6RevalidationAuthorityPairV2",
+      "mutation_mode": "dry-run-digest-apply",
+      "authorization_mode": "expected-plan-digest",
+      "projector": "meta_flow.workflow.story_evidence._authority_issue_plan",
+      "l3_journey": "L3-STORY",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [
+          "--work-ref",
+          "--approval-ref",
+          "--previous-cp6-result-ref",
+          "--superseding-cp5-result-ref"
+        ],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "context.read-log",
       "entry": ["meta-flow", "context", "read-log"],
       "input_version": "ReadExpansionEventV1",
@@ -154,6 +177,24 @@
       "mutation_mode": "dry-run-typed-apply",
       "authorization_mode": "typed-user-confirmation",
       "projector": "meta_flow.workflow.cr_lifecycle.plan_status_sync",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "cr.query",
+      "entry": ["meta-flow", "cr", "query"],
+      "input_version": "DeclaredLegacyEvidenceQueryV1",
+      "output_version": "ImmutableLegacyEvidenceViewV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.workflow.legacy_evidence_registry.query_declared_legacy_evidence",
       "l3_journey": "L3-CR",
       "path_contract": {
         "binding_mode": "required",

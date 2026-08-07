@@ -1773,8 +1773,10 @@ class S01ProjectionContractTests(unittest.TestCase):
 
     def test_dispatch_terminal_source_owner_invariant(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        owner = root / "meta_flow" / "state" / "event_ledger.py"
+        semantic_owner = root / "meta_flow" / "semantics" / "attempt.py"
+        projector_owner = root / "meta_flow" / "state" / "event_ledger.py"
         consumers = (
+            projector_owner,
             root / "meta_flow" / "checks" / "cp_result.py",
             root / "meta_flow" / "checks" / "audit_report.py",
             root / "meta_flow" / "checks" / "handoff_dispatch.py",
@@ -1788,7 +1790,7 @@ class S01ProjectionContractTests(unittest.TestCase):
             "ALL_ATTEMPT_STATUSES",
         }
 
-        owner_tree = ast.parse(owner.read_text(encoding="utf-8"))
+        owner_tree = ast.parse(semantic_owner.read_text(encoding="utf-8"))
         owner_assignments = {
             target.id
             for node in ast.walk(owner_tree)
@@ -1800,9 +1802,10 @@ class S01ProjectionContractTests(unittest.TestCase):
             )
             if isinstance(target, ast.Name) and target.id in protected_names
         }
+        projector_tree = ast.parse(projector_owner.read_text(encoding="utf-8"))
         projector_owners = [
             node
-            for node in ast.walk(owner_tree)
+            for node in ast.walk(projector_tree)
             if isinstance(node, ast.FunctionDef)
             and node.name == "project_dispatch_attempt"
         ]

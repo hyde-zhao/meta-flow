@@ -20,14 +20,22 @@ from meta_flow.project.onboarding_contract import (
     OnboardingAuthorization,
 )
 from meta_flow.project.process_route import (
+    IndependentProcessRoute,
     ProcessRouteError,
     _resolve_runtime_ref,
     require_process_route,
     require_project_process_route,
     resolve_ref_main,
 )
+from meta_flow.project.process_route_adapter import (
+    RouteConsumerError,
+    resolve_configured_consumer_route,
+    resolve_consumer_route,
+)
 from meta_flow.project.scale import dump_yaml, load_yaml_object
+from meta_flow.semantics.route import ROUTE_CONSUMER_POLICIES
 from meta_flow.workflow import cr_lifecycle
+from meta_flow.workspace.git_sync import push_workspace, workspace_repositories
 
 
 def _git(root: Path, *args: str) -> str:
@@ -264,3 +272,299 @@ def test_cr_tracking_main_fails_closed_when_binding_is_missing(
     assert code == 2
     assert "BLOCKED: route_not_initialized" in captured.err
     assert "workspace link" not in captured.err
+
+
+def _adapter_route(tmp_path: Path, *, mode: str = "sibling-binding") -> IndependentProcessRoute:
+    return IndependentProcessRoute(
+        project_root=tmp_path / "release",
+        process_root=tmp_path / "process",
+        project_id="demo",
+        layout_version="independent-process-repo-v1",
+        route_mode=mode,
+        source=".meta-flow/workspace.yaml",
+    )
+
+
+def test_route_consumer_adapter_projects_canonical_route_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from meta_flow.project import process_route_adapter
+
+    route = _adapter_route(tmp_path)
+    calls = 0
+
+    def provider(project_root: Path) -> IndependentProcessRoute:
+        nonlocal calls
+        calls += 1
+        assert project_root == tmp_path
+        return route
+
+    monkeypatch.setattr(process_route_adapter, "require_process_route", provider)
+
+    view = resolve_consumer_route(tmp_path, consumer_id="workspace-check")
+
+    assert calls == 1
+    assert view.consumer_id == "workspace-check"
+    assert view.project_id == route.project_id
+    assert view.project_root is route.project_root
+    assert view.process_root is route.process_root
+    assert view.route_mode == route.route_mode
+    assert view.source == route.source
+    assert view.classification == "canonical-binding-read"
+    assert view.status == "healthy"
+    assert view.blocking is False
+
+
+@pytest.mark.parametrize(
+    "provider_code, expected_code",
+    [
+        ("route_not_initialized", "route_not_initialized"),
+        ("route_invalid", "route_invalid"),
+        ("process_repo_missing", "process_repo_missing"),
+        ("route_conflict", "route_conflict"),
+        ("route_project_mismatch", "route_project_mismatch"),
+        ("logical_ref_invalid", "logical_ref_invalid"),
+    ],
+)
+def test_route_consumer_adapter_normalizes_known_provider_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_code: str,
+    expected_code: str,
+) -> None:
+    from meta_flow.project import process_route_adapter
+
+    def provider(_project_root: Path) -> IndependentProcessRoute:
+        raise ProcessRouteError(provider_code, "provider failed")
+
+    monkeypatch.setattr(process_route_adapter, "require_process_route", provider)
+
+    with pytest.raises(RouteConsumerError) as raised:
+        resolve_consumer_route(tmp_path, consumer_id="workspace-check")
+
+    assert raised.value.code == expected_code
+    assert raised.value.blocking is True
+    assert isinstance(raised.value.cause, ProcessRouteError)
+
+
+def test_route_consumer_adapter_fails_closed_for_unknown_provider_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from meta_flow.project import process_route_adapter
+
+    def provider(_project_root: Path) -> IndependentProcessRoute:
+        raise RuntimeError("harness unavailable")
+
+    monkeypatch.setattr(process_route_adapter, "require_process_route", provider)
+
+    with pytest.raises(RouteConsumerError) as raised:
+        resolve_consumer_route(tmp_path, consumer_id="workspace-check")
+
+    assert raised.value.code == "route_provider_unavailable"
+    assert isinstance(raised.value.cause, RuntimeError)
+
+
+@pytest.mark.parametrize("consumer_id", ["", "UPPER", "two words", "consumer/"])
+def test_route_consumer_adapter_rejects_invalid_consumer_before_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, consumer_id: str
+) -> None:
+    from meta_flow.project import process_route_adapter
+
+    def provider(_project_root: Path) -> IndependentProcessRoute:
+        pytest.fail("invalid consumer_id must not invoke the canonical provider")
+
+    monkeypatch.setattr(process_route_adapter, "require_process_route", provider)
+
+    with pytest.raises(RouteConsumerError) as raised:
+        resolve_consumer_route(tmp_path, consumer_id=consumer_id)
+
+    assert raised.value.code == "route_consumer_invalid"
+
+
+def test_route_consumer_adapter_rejects_unexpected_mode_without_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from meta_flow.project import process_route_adapter
+
+    def provider(_project_root: Path) -> IndependentProcessRoute:
+        pytest.fail("unsupported expected mode must not invoke the canonical provider")
+
+    monkeypatch.setattr(process_route_adapter, "require_process_route", provider)
+
+    with pytest.raises(RouteConsumerError) as raised:
+        resolve_consumer_route(
+            tmp_path, consumer_id="workspace-check", expected_mode="relative-symlink"
+        )
+
+    assert raised.value.code == "route_mode_unexpected"
+
+
+def test_route_consumer_adapter_rejects_resolved_mode_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from meta_flow.project import process_route_adapter
+
+    monkeypatch.setattr(
+        process_route_adapter,
+        "require_process_route",
+        lambda _project_root: _adapter_route(tmp_path, mode="relative-symlink"),
+    )
+
+    with pytest.raises(RouteConsumerError) as raised:
+        resolve_consumer_route(tmp_path, consumer_id="workspace-check")
+
+    assert raised.value.code == "route_mode_unexpected"
+
+
+def test_route_consumer_adapter_view_is_immutable_and_has_no_legacy_imports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import FrozenInstanceError
+
+    from meta_flow.project import process_route_adapter
+
+    monkeypatch.setattr(
+        process_route_adapter,
+        "require_process_route",
+        lambda _project_root: _adapter_route(tmp_path),
+    )
+    view = resolve_consumer_route(tmp_path, consumer_id="workspace-check")
+
+    with pytest.raises(FrozenInstanceError):
+        view.consumer_id = "other"  # type: ignore[misc]
+
+    source = Path(process_route_adapter.__file__).read_text(encoding="utf-8")
+    assert "meta_flow.workspace" not in source
+    assert "meta_flow.checks" not in source
+    assert "meta_flow.cli" not in source
+    assert "check_process_route" not in source
+
+
+def test_route_semantic_kernel_owns_all_seven_direct_consumers() -> None:
+    assert set(ROUTE_CONSUMER_POLICIES) == {
+        "require-process-health",
+        "legacy-workspace-link-postcheck",
+        "legacy-workspace-bootstrap-postcheck",
+        "workspace-git-discovery",
+        "adoption-readiness",
+        "workspace-doctor",
+        "workspace-check",
+    }
+    assert {
+        key
+        for key, policy in ROUTE_CONSUMER_POLICIES.items()
+        if policy.vnext_read
+    } == {
+        "workspace-git-discovery",
+        "adoption-readiness",
+        "workspace-doctor",
+        "workspace-check",
+    }
+
+
+def test_configured_route_returns_none_only_for_explicit_legacy_workspace(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    assert (
+        resolve_configured_consumer_route(legacy, consumer_id="workspace-check")
+        is None
+    )
+
+
+def test_workspace_check_and_git_discovery_use_sibling_binding_without_link(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, process = _release(tmp_path)
+
+    with pytest.raises(SystemExit) as raised:
+        cli._run_workspace(["check", "--project-root", str(release)])
+
+    captured = capsys.readouterr()
+    assert raised.value.code == 0
+    assert "process_route_health: healthy" in captured.out
+    assert "route_mode: sibling-binding" in captured.out
+    assert "process path is missing" not in captured.out
+    assert not (release / "process").exists()
+
+    repos, warnings = workspace_repositories(release)
+    by_label = {repo.label: repo for repo in repos}
+    assert warnings == []
+    assert by_label["project"].root == release
+    assert by_label["process"].root == process
+    assert by_label["project"].is_git_repo is True
+    assert by_label["process"].is_git_repo is True
+
+
+def test_workspace_push_dry_run_uses_sibling_binding_repository_discovery(
+    tmp_path: Path,
+) -> None:
+    release, process = _release(tmp_path)
+    release_remote = tmp_path / "release.git"
+    process_remote = tmp_path / "process.git"
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(release_remote)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(process_remote)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    _git(release, "remote", "add", "origin", str(release_remote))
+    _git(process, "remote", "add", "origin", str(process_remote))
+    _git(process, "add", ".")
+    _git(
+        process,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "initial process",
+    )
+    process_branch = _git(process, "branch", "--show-current")
+    _git(release, "push", "-u", "origin", "main")
+    _git(process, "push", "-u", "origin", process_branch)
+
+    status, lines = push_workspace(release, dry_run=True, allow_dirty=True)
+
+    assert status == 0
+    assert any("- project: git push --dry-run origin main" in line for line in lines)
+    assert any(
+        f"- process: git push --dry-run origin {process_branch}" in line
+        for line in lines
+    )
+    assert not (release / "process").exists()
+
+
+def test_workspace_push_mutation_stays_blocked_for_sibling_binding(
+    tmp_path: Path,
+) -> None:
+    release, _process = _release(tmp_path)
+
+    status, lines = push_workspace(release, dry_run=False, allow_dirty=True)
+
+    assert status == 2
+    assert any("canonical repository push" in line for line in lines)
+
+
+def test_adoption_readiness_recognizes_sibling_binding_without_link(
+    tmp_path: Path,
+) -> None:
+    from meta_flow.checks import adoption_readiness
+
+    release, process = _release(tmp_path)
+    items = adoption_readiness.collect_adoption_readiness(release)
+    workspace_item = next(item for item in items if item.item_id == "workspace-route")
+
+    assert workspace_item.status == "PASS"
+    assert any("route_mode=sibling-binding" in message for message in workspace_item.messages)
+    assert any(str(process) in message for message in workspace_item.messages)
+    assert not (release / "process").exists()
