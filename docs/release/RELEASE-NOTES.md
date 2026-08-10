@@ -1,8 +1,10 @@
 ---
 project_id: "meta-flow"
-release_scope: "meta-flow-governance-kernel-projection-convergence"
-release_decision: "READY_WITH_RISK"
+release_scope: "cr-069-bounded-execution-control-kernel"
+release_artifact_profile: "full"
+release_decision: "NOT_READY"
 created_at: "2026-06-17T13:49:25+08:00"
+updated_at: "2026-08-10T00:00:00+08:00"
 ---
 
 # Release Notes
@@ -29,6 +31,7 @@ created_at: "2026-06-17T13:49:25+08:00"
 | 1.15-candidate | 2026-07-23 | host-orchestrator | CR-057 Linux 项目接入能力成熟候选：统一 12 字段计划、双仓 6 个 exact OID 检查点、snapshot seed、typed authorization、partial/recovery 和隔离 F1/F2；CP8 自动预检为 `READY_WITH_RISK`，等待人工终验。 |
 | 1.16-candidate | 2026-07-23 | host-orchestrator | CR-058 治理执行闭环候选：固化 G2 CP8-before-publication、G0/G1 profile N/A、canonical truth、失败恢复上限、leaf path 计数、native projection 与 usage 降本闭环；独立 CP7 PASS，CP8 推荐 `READY_WITH_RISK`。 |
 | 1.17-candidate | 2026-07-27 | host-orchestrator / meta-qa-critical | CR-061 治理内核投影收敛候选：统一 terminal-success、dispatch identity、Story admission、read-expansion、状态投影、ledger migration 和 Public Operation Contract Registry；C0 及独立 CP7 PASS，等待 CP8 人工终验。 |
+| 1.18-candidate | 2026-08-10 | host-orchestrator / meta-qa-critical | CR-069 有界执行控制内核：产品实现已作为 `4030ff1654d2e6f552f90bb6f23604117e41940d` 推送；CP7 技术验证 PASS，但 cost closure 为不可豁免 `FAIL`，因此发布就绪保持 `NOT_READY`。 |
 
 ## 发布范围
 
@@ -210,6 +213,48 @@ fail closed。publication evidence、target policy 和 typed authorization 采�
 
 当前用户已单独授权解决该 publication blocker 后执行双仓 commit/push；该授权仍不等于 merge、
 tag、正式 release、GOV-006/GOV-007、legacy、真实外部项目或 Windows 原生工作。
+
+## CR-069 候选发布切片
+
+### 候选身份与结论
+
+| 项 | 值 |
+|---|---|
+| 产品实现提交 | `4030ff1654d2e6f552f90bb6f23604117e41940d` |
+| 远端分支 | `origin/main`，已核对远端 exact OID |
+| 当前包版本 | `0.4.0`；本 CR 未执行版本提升、tag 或正式 release |
+| 推荐后续版本 | `0.5.0` MINOR 候选；需独立版本与 release 授权 |
+| 发布资料 profile | `full` |
+| CP7 技术结论 | PASS；P0/P1/P2=`0/0/0` |
+| CP8 发布就绪 | `NOT_READY` |
+
+### 用户可见变化
+
+- 新增 execution-control kernel，以单一 package-owned policy、闭合 receipt 和 fresh apply proof 控制有界容器 admission。
+- 新增 canonical consumer scanner，检查 owner、consumer、dispatcher 与安全敏感私有入口的闭合关系；扫描结果确定性且零写入。
+- 新增 provider activation receipt；loader 对 source、manifest、policy 或 evidence 漂移返回 `STALE`/`BLOCKED`，不允许调用方自签绕过。
+- 生命周期 failure evidence、occurrence、closure audit 和 projection 使用闭合 typed contract，失败在授权消费和 domain write 之前 fail closed。
+- legacy read compatibility 保留为显式只读边界；新写入路径保持 `enforce-new`，不恢复隐式 legacy mutation。
+
+### 质量证据
+
+| 层级 | 结果 |
+|---|---|
+| targeted | `105 passed` |
+| consumer scanner | 两次 READY、stdout byte-identical；262 sources、83 subjects、151 edges、16 classifications、8 个退出计数为 0、mutation=0 |
+| closure | `42 passed` |
+| compatibility | `412 passed + 29 subtests` |
+| full | `1908 passed + 687 subtests` |
+| static / diff | Ruff 14 路径 PASS；working-tree 与 cached diff check PASS |
+| 独立 QA | PASS；当前 exact preimage P0/P1/P2=`0/0/0` |
+
+### 发布阻断与范围边界
+
+- CR-069 的产品正确性已通过验证，但治理成本闭环为 `FAIL`：reads 1106/96、writes 406/48、check groups 13/13、token proxy 770819/192000、人工交互 8/6。
+- 现行 waiver policy 明确禁止把 `FAIL` 或 `NOT_READY` 改写成风险接受，因此不能以“承认超预算”替代 CP8 PASS 或 native close。
+- native negative termination 也尚未可用：当前 plan 因 `PROJECT.yaml` / P4 `PHASE.yaml` 不在目标 Work 业务 scope 而 `BLOCKED/0 write`；必须先以单一有界 recovery carrier 修复 control-plane authority，不能手工扩大旧 scope。
+- 162 个原 unknown leaf 已 162/162 归入 9 个闭合类别；它们均为当前 CR、已完成 P4 Work 的不可变证据或 active Phase 真相，归档/删除均为 0。归属修复不反向改变超预算事实。
+- 本候选未执行安装、升级、tag、正式 release、外部项目操作、legacy 写入或生产运行。产品提交已经推送，不代表 package 已发布或 consumer 已安装。
 
 ## CR-061 候选发布切片
 
