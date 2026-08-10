@@ -29,7 +29,8 @@ class ModuleBoundarySccTests(unittest.TestCase):
         status_sync = "meta_flow.workflow.cr_status_sync"
         transaction = "meta_flow.workflow.cr_status_transaction"
         termination = "meta_flow.workflow.cr_termination"
-        leaves = {
+        termination_journal = "meta_flow.workflow.cr_termination_journal"
+        direct_leaves = {
             analysis,
             index,
             model,
@@ -39,6 +40,7 @@ class ModuleBoundarySccTests(unittest.TestCase):
             transaction,
             termination,
         }
+        closure_leaves = {termination_journal, *direct_leaves}
         leaf_edges = {
             (analysis, index),
             (analysis, model),
@@ -67,6 +69,7 @@ class ModuleBoundarySccTests(unittest.TestCase):
             (termination, model),
             (termination, projection),
             (termination, records),
+            (termination, termination_journal),
             (transaction, model),
             (transaction, projection),
             (transaction, records),
@@ -75,27 +78,25 @@ class ModuleBoundarySccTests(unittest.TestCase):
         cli_report = module_boundaries.check_import_graph(
             repo_root,
             targets={cli},
-            touched=leaves,
+            touched=closure_leaves,
             allowed_edges=leaf_edges,
         )
-        self.assertEqual(sorted({cli, *leaves}), cli_report["closure"])
+        self.assertEqual(sorted({cli, *closure_leaves}), cli_report["closure"])
         self.assertEqual(sorted(leaf_edges), cli_report["edges"])
         self.assertEqual([], cli_report["undeclared_edges"])
         self.assertEqual([], cli_report["self_loops"])
         self.assertEqual([], cli_report["known_scc_drift"])
         self.assertEqual([], cli_report["findings"])
 
-        facade_edges = leaf_edges | {(facade, cli)} | {
-            (facade, leaf) for leaf in leaves
-        }
+        facade_edges = leaf_edges | {(facade, cli)} | {(facade, leaf) for leaf in direct_leaves}
         facade_report = module_boundaries.check_import_graph(
             repo_root,
             targets={facade},
-            touched={cli, *leaves},
+            touched={cli, *closure_leaves},
             allowed_edges=facade_edges,
         )
         self.assertEqual(
-            sorted({facade, cli, *leaves}),
+            sorted({facade, cli, *closure_leaves}),
             facade_report["closure"],
         )
         self.assertEqual(sorted(facade_edges), facade_report["edges"])
@@ -104,7 +105,10 @@ class ModuleBoundarySccTests(unittest.TestCase):
         self.assertEqual([], facade_report["known_scc_drift"])
         self.assertEqual([], facade_report["findings"])
 
-        for module, expected in ((cli, leaves), (facade, {cli, *leaves})):
+        for module, expected in (
+            (cli, direct_leaves),
+            (facade, {cli, *direct_leaves}),
+        ):
             with self.subTest(module=module):
                 source = repo_root / (module.replace(".", "/") + ".py")
                 tree = ast.parse(source.read_text(encoding="utf-8"))
@@ -164,17 +168,11 @@ class ModuleBoundarySccTests(unittest.TestCase):
         source = repo_root / "meta_flow" / "workflow" / "cr_analysis.py"
         tree = ast.parse(source.read_text(encoding="utf-8"))
         direct_modules = {
-            node.module
-            for node in tree.body
-            if isinstance(node, ast.ImportFrom) and node.module
+            node.module for node in tree.body if isinstance(node, ast.ImportFrom) and node.module
         }
         self.assertEqual(
             {index, projection, records, model},
-            {
-                module
-                for module in direct_modules
-                if module.startswith("meta_flow.workflow.cr_")
-            },
+            {module for module in direct_modules if module.startswith("meta_flow.workflow.cr_")},
         )
         self.assertTrue(
             {
@@ -195,6 +193,7 @@ class ModuleBoundarySccTests(unittest.TestCase):
         projection = "meta_flow.workflow.cr_projection"
         records = "meta_flow.workflow.cr_records"
         model = "meta_flow.workflow.cr_model"
+        termination_journal = "meta_flow.workflow.cr_termination_journal"
         allowed_edges = {
             (index, model),
             (index, projection),
@@ -206,17 +205,27 @@ class ModuleBoundarySccTests(unittest.TestCase):
             (termination, model),
             (termination, projection),
             (termination, records),
+            (termination, termination_journal),
         }
 
         report = module_boundaries.check_import_graph(
             repo_root,
             targets={termination},
-            touched={index, projection, records, model},
+            touched={index, projection, records, model, termination_journal},
             allowed_edges=allowed_edges,
         )
 
         self.assertEqual(
-            sorted({termination, index, projection, records, model}),
+            sorted(
+                {
+                    termination,
+                    termination_journal,
+                    index,
+                    projection,
+                    records,
+                    model,
+                }
+            ),
             report["closure"],
         )
         self.assertEqual(sorted(allowed_edges), report["edges"])
@@ -228,17 +237,11 @@ class ModuleBoundarySccTests(unittest.TestCase):
         source = repo_root / "meta_flow" / "workflow" / "cr_termination.py"
         tree = ast.parse(source.read_text(encoding="utf-8"))
         direct_modules = {
-            node.module
-            for node in tree.body
-            if isinstance(node, ast.ImportFrom) and node.module
+            node.module for node in tree.body if isinstance(node, ast.ImportFrom) and node.module
         }
         self.assertEqual(
-            {index, projection, records, model},
-            {
-                module
-                for module in direct_modules
-                if module.startswith("meta_flow.workflow.cr_")
-            },
+            {index, projection, records, model, termination_journal},
+            {module for module in direct_modules if module.startswith("meta_flow.workflow.cr_")},
         )
         self.assertTrue(
             {
@@ -373,7 +376,11 @@ class ModuleBoundarySccTests(unittest.TestCase):
                 allowed_edges=set(),
                 known_sccs={
                     frozenset(
-                        {"workspace.git_sync", "workspace.legacy_route_adapter", "workspace.routing"}
+                        {
+                            "workspace.git_sync",
+                            "workspace.legacy_route_adapter",
+                            "workspace.routing",
+                        }
                     ): frozenset()
                 },
             )
@@ -388,7 +395,9 @@ class ModuleBoundarySccTests(unittest.TestCase):
                 ],
                 report["known_scc_drift"],
             )
-            self.assertFalse(any(finding.startswith("SCC(size>1): workspace") for finding in report["findings"]))
+            self.assertFalse(
+                any(finding.startswith("SCC(size>1): workspace") for finding in report["findings"])
+            )
 
     def test_graph_ignores_function_imports_and_scope_external_edges(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -431,18 +440,14 @@ class ModuleBoundarySccTests(unittest.TestCase):
         )
         self.assertFalse(
             any(
-                isinstance(node, (ast.FunctionDef, ast.ClassDef))
-                and node.name.startswith("test_")
+                isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name.startswith("test_")
                 for node in ast.walk(support_tree)
             )
         )
         self.assertFalse(any(isinstance(node, ast.Assert) for node in ast.walk(support_tree)))
         self.assertFalse(
             any(
-                (
-                    isinstance(node, ast.ImportFrom)
-                    and (node.module or "").startswith("meta_flow")
-                )
+                (isinstance(node, ast.ImportFrom) and (node.module or "").startswith("meta_flow"))
                 or (
                     isinstance(node, ast.Import)
                     and any(alias.name.startswith("meta_flow") for alias in node.names)
@@ -465,9 +470,7 @@ class ModuleBoundarySccTests(unittest.TestCase):
 
         for name in ("test_cr_status_sync.py", "test_cr_status_transaction.py"):
             with self.subTest(owner_test=name):
-                tree = ast.parse(
-                    (repo_root / "tests" / name).read_text(encoding="utf-8")
-                )
+                tree = ast.parse((repo_root / "tests" / name).read_text(encoding="utf-8"))
                 imports_facade_test_or_production = any(
                     (
                         isinstance(node, ast.ImportFrom)
@@ -477,8 +480,7 @@ class ModuleBoundarySccTests(unittest.TestCase):
                     or (
                         isinstance(node, ast.Import)
                         and any(
-                            alias.name
-                            in {"test_cr_lifecycle", "meta_flow.workflow.cr_lifecycle"}
+                            alias.name in {"test_cr_lifecycle", "meta_flow.workflow.cr_lifecycle"}
                             for alias in node.names
                         )
                     )
@@ -501,7 +503,9 @@ class ModuleBoundarySccTests(unittest.TestCase):
                     )
                     or (
                         isinstance(node, ast.Import)
-                        and any(alias.name == "meta_flow.workflow.cr_lifecycle" for alias in node.names)
+                        and any(
+                            alias.name == "meta_flow.workflow.cr_lifecycle" for alias in node.names
+                        )
                     )
                     for node in ast.walk(tree)
                 )
