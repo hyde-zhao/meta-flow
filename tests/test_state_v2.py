@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from meta_flow import cli
 from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
@@ -81,6 +83,19 @@ def write_state_fixture(root: Path, state: dict) -> None:
     current.ensure_base_ledgers(root)
 
 
+def filesystem_snapshot(root: Path) -> dict[str, tuple[str, bytes | str]]:
+    snapshot: dict[str, tuple[str, bytes | str]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            snapshot[relative] = ("symlink", os.readlink(path))
+        elif path.is_dir():
+            snapshot[relative] = ("directory", "")
+        else:
+            snapshot[relative] = ("file", path.read_bytes())
+    return snapshot
+
+
 class StateV2Tests(unittest.TestCase):
     def test_binding_only_state_writes_to_process_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -128,6 +143,71 @@ class StateV2Tests(unittest.TestCase):
             self.assertEqual(0, exit_code)
             second_text = (root / "process" / "state" / "STATE.current.json").read_text(encoding="utf-8")
             self.assertEqual(first_text, second_text)
+
+    def test_init_dry_run_is_deterministic_and_invokes_no_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = filesystem_snapshot(root)
+            outputs: list[str] = []
+            with (
+                patch.object(current, "init_current_state", side_effect=AssertionError("writer")),
+                patch.object(current, "write_current_state", side_effect=AssertionError("writer")),
+                patch.object(current, "ensure_base_ledgers", side_effect=AssertionError("writer")),
+            ):
+                for _attempt in range(2):
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        exit_code = current.main(
+                            [
+                                "init",
+                                "--project-root",
+                                str(root),
+                                "--project-id",
+                                "demo-project",
+                                "--dry-run",
+                            ]
+                        )
+                    self.assertEqual(0, exit_code)
+                    outputs.append(output.getvalue())
+
+            self.assertEqual(before, filesystem_snapshot(root))
+            self.assertEqual(outputs[0], outputs[1])
+            payload = json.loads(outputs[0])
+            self.assertEqual("StateDryRunPlanV1", payload["kind"])
+            self.assertEqual("state.init", payload["operation"])
+            self.assertEqual("READY", payload["decision"])
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(0, payload["mutation_count"])
+            self.assertEqual(9, payload["planned_mutation_count"])
+            self.assertEqual(64, len(payload["semantic_digest"]))
+            self.assertNotIn(str(root), outputs[0])
+            self.assertTrue(all(ref.startswith("process/") for ref in payload["target_refs"]))
+
+            self.assertEqual(
+                0,
+                current.main(
+                    ["init", "--project-root", str(root), "--project-id", "demo-project"]
+                ),
+            )
+            initialized = filesystem_snapshot(root)
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = current.main(
+                    [
+                        "init",
+                        "--project-root",
+                        str(root),
+                        "--project-id",
+                        "demo-project",
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(0, exit_code)
+            self.assertEqual(initialized, filesystem_snapshot(root))
+            no_change = json.loads(output.getvalue())
+            self.assertEqual("NO_CHANGE", no_change["decision"])
+            self.assertEqual(0, no_change["mutation_count"])
+            self.assertEqual(0, no_change["planned_mutation_count"])
 
     def test_migrate_v2_creates_lightweight_current_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -209,6 +289,61 @@ class StateV2Tests(unittest.TestCase):
                 (root / "process" / "current" / "handoff.ref").read_text(encoding="utf-8"),
             )
             self.assertTrue((root / "process" / "current" / "handoff").is_symlink())
+
+    def test_current_refresh_dry_run_is_deterministic_and_invokes_no_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.write_current_state(root, current.default_current_state(root))
+            before = filesystem_snapshot(root)
+            outputs: list[str] = []
+            with (
+                patch.object(current, "refresh_current_entry", side_effect=AssertionError("writer")),
+                patch.object(current, "_write_json", side_effect=AssertionError("writer")),
+                patch.object(
+                    current,
+                    "_ensure_current_alias_gitignore",
+                    side_effect=AssertionError("writer"),
+                ),
+                patch.object(current, "_write_pointer", side_effect=AssertionError("writer")),
+            ):
+                for _attempt in range(2):
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        exit_code = current.main(
+                            ["current-refresh", "--project-root", str(root), "--dry-run"]
+                        )
+                    self.assertEqual(0, exit_code)
+                    outputs.append(output.getvalue())
+
+            self.assertEqual(before, filesystem_snapshot(root))
+            self.assertEqual(outputs[0], outputs[1])
+            payload = json.loads(outputs[0])
+            self.assertEqual("StateDryRunPlanV1", payload["kind"])
+            self.assertEqual("state.current-refresh", payload["operation"])
+            self.assertEqual("READY", payload["decision"])
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(0, payload["mutation_count"])
+            self.assertGreater(payload["planned_mutation_count"], 0)
+            self.assertEqual(64, len(payload["semantic_digest"]))
+            self.assertNotIn(str(root), outputs[0])
+            self.assertTrue(all(ref.startswith("process/") for ref in payload["target_refs"]))
+
+            self.assertEqual(
+                0,
+                current.main(["current-refresh", "--project-root", str(root)]),
+            )
+            refreshed = filesystem_snapshot(root)
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = current.main(
+                    ["current-refresh", "--project-root", str(root), "--dry-run"]
+                )
+            self.assertEqual(0, exit_code)
+            self.assertEqual(refreshed, filesystem_snapshot(root))
+            no_change = json.loads(output.getvalue())
+            self.assertEqual("NO_CHANGE", no_change["decision"])
+            self.assertEqual(0, no_change["mutation_count"])
+            self.assertEqual(0, no_change["planned_mutation_count"])
 
     def test_current_refresh_preserves_gitignore_and_keeps_aliases_out_of_git(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

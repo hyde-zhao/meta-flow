@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import subprocess
 import sys
@@ -48,29 +49,13 @@ AUTHORIZATION_MODES = {
     "expected-plan-digest",
     "typed-user-confirmation",
 }
-PUBLIC_OPERATION_ENTRIES = {
-    "cp.projection": ("meta-flow", "cp", "projection"),
-    "event.append": ("meta-flow", "event", "append"),
-    "story.project-cp6": ("meta-flow", "story", "project-cp6"),
-    "story.issue-revalidation-authority": (
-        "meta-flow",
-        "story",
-        "issue-revalidation-authority",
-    ),
-    "context.read-log": ("meta-flow", "context", "read-log"),
-    "cr.terminate": ("meta-flow", "cr", "terminate"),
-    "cr.status-sync": ("meta-flow", "cr", "status-sync"),
-    "cr.close": ("meta-flow", "cr", "close"),
-    "cr.query": ("meta-flow", "cr", "query"),
-    "cr.conflicts.proposed": ("meta-flow", "cr", "conflicts", "--proposed"),
-    "public-operations.check": ("meta-flow", "cr", "public-operations-check"),
-    "repository.commit": ("meta-flow", "repository", "commit"),
-    "repository.push": ("meta-flow", "repository", "push"),
-    "route.c0-cutover-plan": ("meta-flow", "route", "c0-cutover-plan"),
-    "route.c0-cutover-apply": ("meta-flow", "route", "c0-cutover-apply"),
-    "human-gate.ask-user": ("meta-flow", "ask-user", "human-gate"),
-    "human-gate.check": ("meta-flow", "check", "human-gate"),
-}
+PUBLIC_OPERATION_DECLARATION_NAME = "PUBLIC_OPERATION_DECLARATIONS"
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("public-operations.check", ("meta-flow", "cr", "public-operations-check")),
+)
+MAX_DECLARATION_SOURCE_FILES = 512
+MAX_DECLARATION_SOURCE_BYTES = 32 * 1024 * 1024
+MAX_DECLARATION_FILE_BYTES = 2 * 1024 * 1024
 L3_JOURNEYS = {
     "L3-EVENT",
     "L3-STORY",
@@ -79,6 +64,150 @@ L3_JOURNEYS = {
     "L3-REPOSITORY",
     "L3-HUMAN-GATE",
 }
+
+
+@dataclass(frozen=True)
+class PublicOperationDeclarationV1:
+    """One public operation declaration discovered at its source owner."""
+
+    operation: str
+    entry: tuple[str, ...]
+    source_ref: str
+
+
+def _declaration_literal(node: ast.stmt) -> ast.expr | None:
+    if isinstance(node, ast.Assign):
+        names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+        return node.value if PUBLIC_OPERATION_DECLARATION_NAME in names else None
+    if (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == PUBLIC_OPERATION_DECLARATION_NAME
+    ):
+        return node.value
+    return None
+
+
+def discover_public_operation_declarations(
+    declaration_root: Path | None = None,
+) -> tuple[tuple[PublicOperationDeclarationV1, ...], dict[str, Any]]:
+    """Discover owner declarations without importing or executing owner modules."""
+
+    configured_root = declaration_root or Path(__file__).resolve().parents[1]
+    if configured_root.is_symlink():
+        raise ValueError("public operation declaration root must not be a symlink")
+    package_root = configured_root.resolve()
+    if not package_root.is_dir() or package_root.name != "meta_flow":
+        raise ValueError("public operation declaration root must be one meta_flow directory")
+    for candidate in package_root.rglob("*"):
+        if candidate.is_symlink():
+            relative = candidate.relative_to(package_root).as_posix()
+            raise ValueError(f"public operation declaration source contains symlink: {relative}")
+
+    source_paths = sorted(package_root.rglob("*.py"))
+    if len(source_paths) > MAX_DECLARATION_SOURCE_FILES:
+        raise ValueError(
+            "public operation declaration source file budget exceeded: "
+            f"{len(source_paths)} > {MAX_DECLARATION_SOURCE_FILES}"
+        )
+    declarations: list[PublicOperationDeclarationV1] = []
+    declaration_sources: list[str] = []
+    scanned_bytes = 0
+    for path in source_paths:
+        if not path.is_file():
+            raise ValueError(
+                "public operation declaration source is not a regular file: "
+                + path.relative_to(package_root).as_posix()
+            )
+        try:
+            source_bytes = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(
+                "public operation declaration source unreadable: "
+                + path.relative_to(package_root).as_posix()
+            ) from exc
+        size = len(source_bytes)
+        if size > MAX_DECLARATION_FILE_BYTES:
+            raise ValueError(
+                "public operation declaration source file budget exceeded: "
+                f"{path.relative_to(package_root).as_posix()}={size}"
+            )
+        scanned_bytes += size
+        if scanned_bytes > MAX_DECLARATION_SOURCE_BYTES:
+            raise ValueError(
+                "public operation declaration source byte budget exceeded: "
+                f"{scanned_bytes} > {MAX_DECLARATION_SOURCE_BYTES}"
+            )
+        relative = path.relative_to(package_root).as_posix()
+        try:
+            source_text = source_bytes.decode("utf-8")
+            tree = ast.parse(source_text, filename=relative)
+        except (SyntaxError, UnicodeError) as exc:
+            raise ValueError(f"public operation declaration source invalid: {relative}") from exc
+        literals = [
+            literal
+            for node in tree.body
+            if (literal := _declaration_literal(node)) is not None
+        ]
+        if len(literals) > 1:
+            raise ValueError(f"duplicate declaration blocks in {relative}")
+        if not literals:
+            continue
+        try:
+            raw_declarations = ast.literal_eval(literals[0])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"public operation declarations must be literal: {relative}") from exc
+        if not isinstance(raw_declarations, (list, tuple)) or not raw_declarations:
+            raise ValueError(f"public operation declarations must be non-empty: {relative}")
+        source_ref = f"meta_flow/{relative}"
+        declaration_sources.append(source_ref)
+        for item in raw_declarations:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                raise ValueError(f"public operation declaration shape invalid: {relative}")
+            operation, raw_entry = item
+            if not isinstance(operation, str) or not operation or "." not in operation:
+                raise ValueError(f"public operation declaration id invalid: {relative}")
+            if (
+                not isinstance(raw_entry, (list, tuple))
+                or not raw_entry
+                or any(not isinstance(part, str) or not part for part in raw_entry)
+                or raw_entry[0] != "meta-flow"
+            ):
+                raise ValueError(f"public operation declaration entry invalid: {relative}")
+            declarations.append(
+                PublicOperationDeclarationV1(operation, tuple(raw_entry), source_ref)
+            )
+
+    if not declarations:
+        raise ValueError("public operation declarations are empty")
+    by_operation: dict[str, PublicOperationDeclarationV1] = {}
+    by_entry: dict[tuple[str, ...], PublicOperationDeclarationV1] = {}
+    for declaration in declarations:
+        previous_operation = by_operation.get(declaration.operation)
+        if previous_operation is not None:
+            raise ValueError(
+                "duplicate public operation declaration id: "
+                f"{declaration.operation} in {previous_operation.source_ref} and "
+                f"{declaration.source_ref}"
+            )
+        previous_entry = by_entry.get(declaration.entry)
+        if previous_entry is not None:
+            raise ValueError(
+                "duplicate public operation declaration entry: "
+                f"{list(declaration.entry)} in {previous_entry.source_ref} and "
+                f"{declaration.source_ref}"
+            )
+        by_operation[declaration.operation] = declaration
+        by_entry[declaration.entry] = declaration
+    result = tuple(sorted(declarations, key=lambda item: item.operation))
+    return result, {
+        "mode": "package-source-declarations-v1",
+        "package_ref": "meta_flow",
+        "scanned_file_count": len(source_paths),
+        "scanned_byte_count": scanned_bytes,
+        "declaration_source_refs": sorted(declaration_sources),
+        "discovered_operation_count": len(result),
+    }
 
 
 @dataclass(frozen=True)
@@ -289,11 +418,32 @@ def validate_public_operations(
     registry_path: Path = DEFAULT_REGISTRY_REL,
     check_console: bool = True,
     read_context: ReadContextProtocol | None = None,
+    declaration_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Compare registry truth with the frozen public command inventory."""
+    """Compare registry truth with package-wide owner declarations and console help."""
 
     errors: list[str] = []
     console_results: list[dict[str, Any]] = []
+    try:
+        declarations, discovery = discover_public_operation_declarations(declaration_root)
+    except (OSError, ValueError) as exc:
+        return {
+            "schema_version": 3,
+            "kind": "PublicOperationRegistryCheckV3",
+            "decision": "FAIL",
+            "documented_operation_count": 0,
+            "undocumented_public_operations": [],
+            "unknown_registry_operations": [],
+            "l3_journey_count": 0,
+            "console_results": [],
+            "discovery": {
+                "mode": "package-source-declarations-v1",
+                "package_ref": "meta_flow",
+                "status": "FAIL",
+            },
+            "errors": [str(exc)],
+        }
+    declared_by_id = {declaration.operation: declaration for declaration in declarations}
     try:
         contracts = load_public_operation_registry(
             project_root,
@@ -302,29 +452,30 @@ def validate_public_operations(
         )
     except (OSError, ValueError) as exc:
         return {
-            "schema_version": 2,
-            "kind": "PublicOperationRegistryCheckV2",
+            "schema_version": 3,
+            "kind": "PublicOperationRegistryCheckV3",
             "decision": "FAIL",
             "documented_operation_count": 0,
-            "undocumented_public_operations": sorted(PUBLIC_OPERATION_ENTRIES),
+            "undocumented_public_operations": sorted(declared_by_id),
             "unknown_registry_operations": [],
             "l3_journey_count": 0,
             "console_results": [],
+            "discovery": discovery,
             "errors": [str(exc)],
         }
     by_id = {contract.operation: contract for contract in contracts}
-    undocumented = sorted(set(PUBLIC_OPERATION_ENTRIES) - set(by_id))
-    unknown = sorted(set(by_id) - set(PUBLIC_OPERATION_ENTRIES))
+    undocumented = sorted(set(declared_by_id) - set(by_id))
+    unknown = sorted(set(by_id) - set(declared_by_id))
     if undocumented:
         errors.append("undocumented public operations: " + ", ".join(undocumented))
     if unknown:
         errors.append("unknown registry operations: " + ", ".join(unknown))
-    for operation, expected_entry in PUBLIC_OPERATION_ENTRIES.items():
+    for operation, declaration in declared_by_id.items():
         contract = by_id.get(operation)
-        if contract is not None and contract.entry != expected_entry:
+        if contract is not None and contract.entry != declaration.entry:
             errors.append(
                 f"{operation} entry mismatch: "
-                f"expected={list(expected_entry)} actual={list(contract.entry)}"
+                f"expected={list(declaration.entry)} actual={list(contract.entry)}"
             )
     if check_console:
         console = Path(sys.executable).with_name("meta-flow")
@@ -367,14 +518,15 @@ def validate_public_operations(
                                 f"declared logical process argument {argument}"
                             )
     return {
-        "schema_version": 2,
-        "kind": "PublicOperationRegistryCheckV2",
+        "schema_version": 3,
+        "kind": "PublicOperationRegistryCheckV3",
         "decision": "PASS" if not errors else "FAIL",
         "documented_operation_count": len(contracts),
         "undocumented_public_operations": undocumented,
         "unknown_registry_operations": unknown,
         "l3_journey_count": len({contract.l3_journey for contract in contracts}),
         "console_results": console_results,
+        "discovery": discovery,
         "errors": errors,
     }
 

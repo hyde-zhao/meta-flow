@@ -36,6 +36,9 @@ from meta_flow.semantics.attempt import (
     TERMINAL_SUCCESS_STATUSES as TERMINAL_SUCCESS_STATUSES,
 )
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("event.append", ("meta-flow", "event", "append")),
+)
 KNOWN_LEDGER_RELS = {
     "checkpoint": Path("process/state/CHECKPOINT-LEDGER.ndjson"),
     "handoff": Path("process/state/HANDOFF-LEDGER.ndjson"),

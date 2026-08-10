@@ -227,7 +227,7 @@
       "operation": "public-operations.check",
       "entry": ["meta-flow", "cr", "public-operations-check"],
       "input_version": "PublicOperationContractRegistryV2",
-      "output_version": "PublicOperationRegistryCheckV2",
+      "output_version": "PublicOperationRegistryCheckV3",
       "mutation_mode": "zero-write",
       "authorization_mode": "none",
       "projector": "meta_flow.policies.public_operations.validate_public_operations",

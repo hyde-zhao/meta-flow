@@ -53,6 +53,7 @@ BASE_LEDGER_RELS = (
     Path("process/state/RUN-LEDGER.ndjson"),
     Path("process/state/READ-EXPANSION-LEDGER.ndjson"),
 )
+STATE_DRY_RUN_KIND = "StateDryRunPlanV1"
 WORKFLOW_HEALTH_COUNTER_KEYS = {
     "repeated_issue_count",
     "hld_revision_count",
@@ -687,6 +688,63 @@ def init_current_state(
     return write_current_state(project_root, state, force=force)
 
 
+def _state_dry_run_payload(
+    *,
+    operation: str,
+    planned_targets: list[str],
+    target_refs: list[str],
+    semantic_input: dict[str, Any],
+) -> dict[str, Any]:
+    unique_planned = sorted(set(planned_targets))
+    return {
+        "schema_version": 1,
+        "kind": STATE_DRY_RUN_KIND,
+        "operation": operation,
+        "decision": "NO_CHANGE" if not unique_planned else "READY",
+        "dry_run": True,
+        "mutation_count": 0,
+        "planned_mutation_count": len(unique_planned),
+        "target_refs": target_refs,
+        "semantic_digest": _sha256_json(semantic_input),
+    }
+
+
+def plan_init_current_state(
+    project_root: Path,
+    *,
+    project_id: str | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Plan ``state init`` without invoking a writer or creating a parent directory."""
+
+    root = project_root.resolve()
+    target_refs = [
+        STATE_CURRENT_REL.as_posix(),
+        *(item.as_posix() for item in BASE_LEDGER_RELS),
+    ]
+    planned_targets: list[str] = []
+    for logical_ref in target_refs:
+        path = _resolve_runtime_ref(root, logical_ref)
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise FileExistsError(f"state init target is not a regular file: {logical_ref}")
+        if logical_ref == STATE_CURRENT_REL.as_posix():
+            if force or not path.is_file():
+                planned_targets.append(logical_ref)
+        elif not path.is_file():
+            planned_targets.append(logical_ref)
+    return _state_dry_run_payload(
+        operation="state.init",
+        planned_targets=planned_targets,
+        target_refs=target_refs,
+        semantic_input={
+            "operation": "state.init",
+            "project_id": project_id or root.name,
+            "force": force,
+            "planned_targets": sorted(planned_targets),
+        },
+    )
+
+
 def _bootstrap_legacy_state_at_process_root(
     project_root: Path,
     process_root: Path,
@@ -1157,20 +1215,13 @@ def _current_alias_gitignore_block() -> str:
     return "\n".join(lines) + "\n"
 
 
-def _ensure_current_alias_gitignore(current_dir: Path) -> Path:
-    """在过程仓根目录维护精确的 current alias 忽略规则。"""
-
-    gitignore_path = current_dir.parent / ".gitignore"
-    if gitignore_path.is_symlink() or (gitignore_path.exists() and not gitignore_path.is_file()):
-        raise FileExistsError(f"{gitignore_path} 不是可安全更新的常规文件")
-
-    existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else ""
+def _render_current_alias_gitignore(existing: str) -> str:
     has_begin = CURRENT_ALIAS_GITIGNORE_BEGIN in existing
     has_end = CURRENT_ALIAS_GITIGNORE_END in existing
     if has_begin != has_end:
-        raise ValueError(f"{gitignore_path} 的 current alias managed block 不完整")
+        raise ValueError("current alias managed block 不完整")
     if existing.count(CURRENT_ALIAS_GITIGNORE_BEGIN) > 1 or existing.count(CURRENT_ALIAS_GITIGNORE_END) > 1:
-        raise ValueError(f"{gitignore_path} 的 current alias managed block 重复")
+        raise ValueError("current alias managed block 重复")
 
     block = _current_alias_gitignore_block()
     if has_begin:
@@ -1186,6 +1237,21 @@ def _ensure_current_alias_gitignore(current_dir: Path) -> Path:
         if prefix and not prefix.endswith("\n\n"):
             prefix += "\n"
         rendered = prefix + block
+    return rendered
+
+
+def _ensure_current_alias_gitignore(current_dir: Path) -> Path:
+    """在过程仓根目录维护精确的 current alias 忽略规则。"""
+
+    gitignore_path = current_dir.parent / ".gitignore"
+    if gitignore_path.is_symlink() or (gitignore_path.exists() and not gitignore_path.is_file()):
+        raise FileExistsError(f"{gitignore_path} 不是可安全更新的常规文件")
+
+    existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else ""
+    try:
+        rendered = _render_current_alias_gitignore(existing)
+    except ValueError as exc:
+        raise ValueError(f"{gitignore_path} 的 {exc}") from exc
 
     if rendered == existing:
         return gitignore_path
@@ -1217,6 +1283,100 @@ def _write_pointer(current_dir: Path, project_root: Path, name: str, rel_ref: st
             link_path.unlink()
     except OSError:
         pass
+
+
+def _pointer_planned_targets(
+    current_dir: Path,
+    project_root: Path,
+    name: str,
+    rel_ref: str | None,
+) -> list[str]:
+    planned: list[str] = []
+    ref_logical = (STATE_CURRENT_DIR_REL / f"{name}.ref").as_posix()
+    alias_logical = (STATE_CURRENT_DIR_REL / name).as_posix()
+    ref_path = current_dir / f"{name}.ref"
+    link_path = current_dir / name
+    if not rel_ref:
+        if ref_path.is_symlink() or ref_path.is_file():
+            planned.append(ref_logical)
+        if link_path.is_symlink() or link_path.is_file():
+            planned.append(alias_logical)
+        return planned
+
+    rendered_ref = rel_ref + "\n"
+    if not ref_path.is_file() or ref_path.read_text(encoding="utf-8") != rendered_ref:
+        planned.append(ref_logical)
+    target = _resolve_runtime_path(project_root, rel_ref)
+    if target.exists():
+        relative_target = os.path.relpath(target, start=current_dir)
+        if not link_path.is_symlink() or os.readlink(link_path) != relative_target:
+            planned.append(alias_logical)
+    elif link_path.is_symlink() or link_path.is_file():
+        planned.append(alias_logical)
+    return planned
+
+
+def plan_current_entry_refresh(project_root: Path) -> dict[str, Any]:
+    """Plan ``state current-refresh`` from read-only observations."""
+
+    root = project_root.resolve()
+    entry = build_current_entry(root)
+    candidate_semantic = dict(entry)
+    candidate_semantic.pop("updated_at", None)
+    current_dir = _resolve_runtime_ref(root, STATE_CURRENT_DIR_REL.as_posix())
+    path = _resolve_runtime_ref(root, STATE_CURRENT_ENTRY_REL.as_posix())
+    gitignore_path = current_dir.parent / ".gitignore"
+    if gitignore_path.is_symlink() or (gitignore_path.exists() and not gitignore_path.is_file()):
+        raise FileExistsError("process/.gitignore is not a regular file")
+    existing_gitignore = (
+        gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else ""
+    )
+    rendered_gitignore = _render_current_alias_gitignore(existing_gitignore)
+
+    planned_targets: list[str] = []
+    if rendered_gitignore != existing_gitignore:
+        planned_targets.append("process/.gitignore")
+    existing = _read_json(path) if path.is_file() else {}
+    existing_semantic = dict(existing)
+    existing_semantic.pop("updated_at", None)
+    if not existing or existing_semantic != candidate_semantic:
+        planned_targets.append(STATE_CURRENT_ENTRY_REL.as_posix())
+
+    pointer_refs = {
+        "state": entry["state_ref"],
+        "cr-index": entry.get("cr_index_ref"),
+        "change": entry.get("change_ref"),
+        "context": entry.get("context_ref"),
+        "checkpoint": entry.get("checkpoint_ref"),
+        "story": entry.get("story_packet_ref"),
+        "release": entry.get("release_context_ref"),
+        "handoff": entry.get("handoff_ref"),
+    }
+    for name in CURRENT_ALIAS_NAMES:
+        planned_targets.extend(
+            _pointer_planned_targets(current_dir, root, name, pointer_refs[name])
+        )
+
+    target_refs = [
+        "process/.gitignore",
+        STATE_CURRENT_ENTRY_REL.as_posix(),
+        *(
+            (STATE_CURRENT_DIR_REL / suffix).as_posix()
+            for name in CURRENT_ALIAS_NAMES
+            for suffix in (f"{name}.ref", name)
+        ),
+    ]
+    return _state_dry_run_payload(
+        operation="state.current-refresh",
+        planned_targets=planned_targets,
+        target_refs=target_refs,
+        semantic_input={
+            "operation": "state.current-refresh",
+            "candidate": candidate_semantic,
+            "pointer_refs": pointer_refs,
+            "planned_targets": sorted(planned_targets),
+        },
+    )
 
 
 def refresh_current_entry(
@@ -2013,10 +2173,10 @@ def _print_state_help() -> None:
         "  check       Validate STATE.current.json and generated STATE.md budgets.\n"
         "  compact     Render the human summary and run state check; it does not slim state or compact ledgers.\n\n"
         "Examples:\n"
-        "  meta-flow state init --project-root . --project-id my-project\n"
+        "  meta-flow state init --project-root . --project-id my-project --dry-run\n"
         "  meta-flow state migrate-v2 --project-root .\n"
         "  meta-flow state render --project-root . --force\n"
-        "  meta-flow state current-refresh --project-root .\n"
+        "  meta-flow state current-refresh --project-root . --dry-run\n"
         "  meta-flow state health-update --project-root . --phase CP5 --increment cp_retry_count=1\n"
         "  meta-flow state slim --project-root . --dry-run\n"
         "  meta-flow state slim --project-root . --apply --render\n"
@@ -2051,6 +2211,19 @@ def main(argv: list[str] | None = None) -> int:
     project_root = parsed.project_root.resolve()
 
     if command == "init":
+        if parsed.dry_run:
+            print(
+                json.dumps(
+                    plan_init_current_state(
+                        project_root,
+                        project_id=parsed.project_id,
+                        force=parsed.force,
+                    ),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
         path = init_current_state(project_root, project_id=parsed.project_id, force=parsed.force)
         print(f"wrote: {path}")
         return 0
@@ -2064,6 +2237,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote: {path}")
         return 0
     if command == "current-refresh":
+        if parsed.dry_run:
+            print(
+                json.dumps(
+                    plan_current_entry_refresh(project_root),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
         path = refresh_current_entry(project_root)
         print(f"wrote: {path}")
         return 0

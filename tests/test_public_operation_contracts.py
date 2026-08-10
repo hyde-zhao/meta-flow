@@ -2274,11 +2274,139 @@ class PublicOperationContractTests(unittest.TestCase):
         )
 
         self.assertEqual("PASS", result["decision"], result["errors"])
+        self.assertEqual(3, result["schema_version"])
+        self.assertEqual("PublicOperationRegistryCheckV3", result["kind"])
         self.assertEqual(17, result["documented_operation_count"])
         self.assertEqual([], result["undocumented_public_operations"])
         self.assertEqual([], result["unknown_registry_operations"])
         self.assertEqual(6, result["l3_journey_count"])
         self.assertTrue(all(item["discovered"] for item in result["console_results"]))
+        self.assertEqual("package-source-declarations-v1", result["discovery"]["mode"])
+        self.assertEqual(17, result["discovery"]["discovered_operation_count"])
+        self.assertGreater(result["discovery"]["scanned_file_count"], 100)
+        self.assertTrue(
+            all(
+                ref.startswith("meta_flow/")
+                for ref in result["discovery"]["declaration_source_refs"]
+            )
+        )
+        self.assertFalse(hasattr(public_operations, "PUBLIC_OPERATION_ENTRIES"))
+
+    def test_package_declaration_discovery_is_open_world_without_checker_edits(self) -> None:
+        source = json.loads(
+            (PROJECT_ROOT / public_operations.DEFAULT_REGISTRY_REL).read_text(encoding="utf-8")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            registry = release / public_operations.DEFAULT_REGISTRY_REL
+            registry.parent.mkdir(parents=True)
+            contract = json.loads(json.dumps(source["operations"][0]))
+            contract["operation"] = "future.operation"
+            contract["entry"] = ["meta-flow", "future", "operation"]
+            contract["path_contract"]["logical_process_arguments"] = []
+            registry.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "kind": "PublicOperationContractRegistryV2",
+                        "operations": [contract],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            package = root / "source" / "meta_flow"
+            package.mkdir(parents=True)
+            (package / "future_owner.py").write_text(
+                "PUBLIC_OPERATION_DECLARATIONS = "
+                "((\"future.operation\", (\"meta-flow\", \"future\", \"operation\")),)\n",
+                encoding="utf-8",
+            )
+
+            result = public_operations.validate_public_operations(
+                release,
+                check_console=False,
+                declaration_root=package,
+            )
+
+        self.assertEqual("PASS", result["decision"], result["errors"])
+        self.assertEqual(1, result["discovery"]["discovered_operation_count"])
+        self.assertEqual(
+            ["meta_flow/future_owner.py"],
+            result["discovery"]["declaration_source_refs"],
+        )
+
+    def test_package_declaration_discovery_mutants_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "meta_flow"
+            package.mkdir()
+            owner = package / "owner.py"
+            owner.write_text(
+                "PUBLIC_OPERATION_DECLARATIONS = "
+                "((\"future.operation\", (\"meta-flow\", \"future\")),)\n",
+                encoding="utf-8",
+            )
+            duplicate = package / "duplicate.py"
+            duplicate.write_text(owner.read_text(encoding="utf-8"), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate public operation declaration"):
+                public_operations.discover_public_operation_declarations(package)
+
+            duplicate.write_text(
+                "PUBLIC_OPERATION_DECLARATIONS = "
+                "((\"future.second\", (\"meta-flow\", \"future\")),)\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate public operation declaration entry"):
+                public_operations.discover_public_operation_declarations(package)
+
+            duplicate.unlink()
+            owner.write_text(
+                "PUBLIC_OPERATION_DECLARATIONS = build_at_runtime()\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "must be literal"):
+                public_operations.discover_public_operation_declarations(package)
+
+            owner.write_text("VALUE = 1\n", encoding="utf-8")
+            symlink = package / "linked.py"
+            symlink.symlink_to(owner.name)
+            with self.assertRaisesRegex(ValueError, "contains symlink"):
+                public_operations.discover_public_operation_declarations(package)
+
+    def test_package_declaration_discovery_budget_fails_without_partial_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "meta_flow"
+            package.mkdir()
+            (package / "owner.py").write_text(
+                "PUBLIC_OPERATION_DECLARATIONS = "
+                "((\"future.operation\", (\"meta-flow\", \"future\")),)\n",
+                encoding="utf-8",
+            )
+            original_files = public_operations.MAX_DECLARATION_SOURCE_FILES
+            original_file_bytes = public_operations.MAX_DECLARATION_FILE_BYTES
+            original_total_bytes = public_operations.MAX_DECLARATION_SOURCE_BYTES
+            try:
+                public_operations.MAX_DECLARATION_SOURCE_FILES = 0
+                with self.assertRaisesRegex(ValueError, "file budget exceeded"):
+                    public_operations.discover_public_operation_declarations(package)
+
+                public_operations.MAX_DECLARATION_SOURCE_FILES = original_files
+                public_operations.MAX_DECLARATION_FILE_BYTES = 0
+                with self.assertRaisesRegex(ValueError, "source file budget exceeded"):
+                    public_operations.discover_public_operation_declarations(package)
+
+                public_operations.MAX_DECLARATION_FILE_BYTES = original_file_bytes
+                public_operations.MAX_DECLARATION_SOURCE_BYTES = 0
+                with self.assertRaisesRegex(ValueError, "source byte budget exceeded"):
+                    public_operations.discover_public_operation_declarations(package)
+            finally:
+                public_operations.MAX_DECLARATION_SOURCE_FILES = original_files
+                public_operations.MAX_DECLARATION_FILE_BYTES = original_file_bytes
+                public_operations.MAX_DECLARATION_SOURCE_BYTES = original_total_bytes
 
     def test_registry_unknown_field_missing_operation_and_path_drift_fail_closed(
         self,
@@ -2338,6 +2466,16 @@ class PublicOperationContractTests(unittest.TestCase):
                 root,
                 check_console=True,
             )
+            unknown_operation = json.loads(json.dumps(source))
+            unknown_operation["operations"][-1]["operation"] = "future.unknown"
+            registry.write_text(
+                json.dumps(unknown_operation, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            unknown_registry_operation = public_operations.validate_public_operations(
+                root,
+                check_console=False,
+            )
 
         self.assertEqual("FAIL", invalid_shape["decision"])
         self.assertIn("extra=['unknown']", invalid_shape["errors"][0])
@@ -2356,6 +2494,11 @@ class PublicOperationContractTests(unittest.TestCase):
             "human-gate.check public entry does not expose declared logical "
             "process argument --not-a-public-argument",
             invalid_argument_contract["errors"],
+        )
+        self.assertEqual("FAIL", unknown_registry_operation["decision"])
+        self.assertEqual(
+            ["future.unknown"],
+            unknown_registry_operation["unknown_registry_operations"],
         )
 
     def test_four_real_console_l3_journeys_and_failure_injections(self) -> None:

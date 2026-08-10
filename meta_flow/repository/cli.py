@@ -24,6 +24,11 @@ from meta_flow.repository.publisher import (
     plan_push,
 )
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("repository.commit", ("meta-flow", "repository", "commit")),
+    ("repository.push", ("meta-flow", "repository", "push")),
+)
+
 
 def _publication_inputs(parsed: argparse.Namespace) -> dict[str, object]:
     if parsed.publication_context_ref:

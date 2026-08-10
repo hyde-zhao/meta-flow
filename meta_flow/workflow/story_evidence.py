@@ -35,6 +35,13 @@ from meta_flow.semantics.authority import (
 )
 from meta_flow.state import event_ledger
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("story.project-cp6", ("meta-flow", "story", "project-cp6")),
+    (
+        "story.issue-revalidation-authority",
+        ("meta-flow", "story", "issue-revalidation-authority"),
+    ),
+)
 EVIDENCE_ROOT_REL = Path("process/evidence")
 DESIGN_DELTA_ROOT_REL = Path("process/design-deltas")
 DEVELOPMENT_PLAN_REL = Path("process/DEVELOPMENT-PLAN.yaml")

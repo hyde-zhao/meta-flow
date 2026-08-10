@@ -19,6 +19,9 @@ from meta_flow.project.process_route import ProcessRouteError, _resolve_runtime_
 from meta_flow.project.read_contract import ReadContextProtocol, ReadContractError
 from meta_flow.state.event_ledger import load_events
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("cp.projection", ("meta-flow", "cp", "projection")),
+)
 CHECKPOINT_LEDGER_REF = "process/state/CHECKPOINT-LEDGER.ndjson"
 PROJECTION_OWNER = "meta_flow.state.checkpoint_projection:CanonicalCheckpointProjectionV1"
 PROJECTION_VERSION = "CanonicalCheckpointProjectionV1"

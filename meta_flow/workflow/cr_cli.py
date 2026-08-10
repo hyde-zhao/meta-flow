@@ -48,6 +48,14 @@ from meta_flow.workflow.cr_termination import (
     plan_cr_termination,
 )
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("cr.terminate", ("meta-flow", "cr", "terminate")),
+    ("cr.status-sync", ("meta-flow", "cr", "status-sync")),
+    ("cr.close", ("meta-flow", "cr", "close")),
+    ("cr.query", ("meta-flow", "cr", "query")),
+    ("cr.conflicts.proposed", ("meta-flow", "cr", "conflicts", "--proposed")),
+)
+
 
 def aggregate_main(
     argv: list[str] | None = None,

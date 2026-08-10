@@ -32,6 +32,9 @@ from meta_flow.state.current import now_utc
 from meta_flow.work.model import load_work
 from meta_flow.work.scope import check_scope
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("context.read-log", ("meta-flow", "context", "read-log")),
+)
 REQUIRED_EVENT_FIELDS = {
     "event_id",
     "event_type",

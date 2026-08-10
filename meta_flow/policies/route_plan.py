@@ -12,6 +12,10 @@ from typing import Any
 from meta_flow.policies import c0_cutover, gate_profiles
 from meta_flow.project.process_route import ProcessRouteError, _resolve_runtime_ref
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("route.c0-cutover-plan", ("meta-flow", "route", "c0-cutover-plan")),
+    ("route.c0-cutover-apply", ("meta-flow", "route", "c0-cutover-apply")),
+)
 CHECKPOINTS = tuple(f"CP{index}" for index in range(9))
 HUMAN_GATE_CHECKPOINTS = {"CP2", "CP3", "CP5", "CP8"}
 CP_TO_PHASE = {

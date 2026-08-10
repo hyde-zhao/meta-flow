@@ -12,6 +12,8 @@ def test_retained_public_operations_are_zero_write_and_none() -> None:
     registry = Path("delivery/doc/PUBLIC-OPERATION-CONTRACTS.yaml")
     contracts = load_yaml_object(registry)
     entries = {item["operation"]: item for item in contracts["operations"]}
+    declarations, _receipt = public_operations.discover_public_operation_declarations()
+    discovered_entries = {item.operation: item.entry for item in declarations}
     expected = {
         "route.c0-cutover-plan": ("C0CutoverPlanV2", "zero-write", "none"),
         "route.c0-cutover-apply": ("C0CutoverReceiptV2", "zero-write", "none"),
@@ -22,7 +24,7 @@ def test_retained_public_operations_are_zero_write_and_none() -> None:
         assert entry["output_version"] == output_version
         assert entry["mutation_mode"] == mutation_mode
         assert entry["authorization_mode"] == authorization_mode
-        assert public_operations.PUBLIC_OPERATION_ENTRIES[operation] == tuple(entry["entry"])
+        assert discovered_entries[operation] == tuple(entry["entry"])
 
 
 def test_four_retired_cli_commands_are_fail_closed_without_project_access() -> None:

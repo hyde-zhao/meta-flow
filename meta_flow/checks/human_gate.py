@@ -14,6 +14,10 @@ from meta_flow.project.process_route import ProcessRouteError, resolve_process_r
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.work.decision_bundle import validate_bundle
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("human-gate.check", ("meta-flow", "check", "human-gate")),
+)
+
 ALLOWED_DECISION_TYPES = {
     "scope",
     "architecture",

@@ -16,6 +16,10 @@ from meta_flow.checks.human_gate import (
 )
 from meta_flow.project.process_route import ProcessRouteError
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("human-gate.ask-user", ("meta-flow", "ask-user", "human-gate")),
+)
+
 
 def _clean_cell(value: str) -> str:
     return " ".join(value.replace("|", "/").split())
