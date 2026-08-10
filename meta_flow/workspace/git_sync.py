@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from meta_flow.workspace.routing import check_process_route
+from meta_flow.workspace.routing import inspect_legacy_consumer_route
 
 if TYPE_CHECKING:
     from meta_flow.workspace.legacy_route_adapter import _LegacyRouteAuthorization
@@ -385,7 +385,10 @@ def workspace_repositories(project_root: Path) -> tuple[list[GitRepoStatus], lis
         ]
         warnings: list[str] = []
     else:
-        health = check_process_route(project_root)
+        health = inspect_legacy_consumer_route(
+            project_root,
+            consumer_id="workspace-git-discovery",
+        )
         warnings = list(health.warnings)
         if health.blocking:
             errors = "; ".join(health.errors) or health.status

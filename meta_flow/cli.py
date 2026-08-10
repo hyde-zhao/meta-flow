@@ -13,7 +13,7 @@ from pathlib import Path
 from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.workspace.routing import (
     bootstrap_process_workspace,
-    check_process_route,
+    inspect_legacy_consumer_route,
     legacy_workspace_plan,
     link_process_workspace,
 )
@@ -188,7 +188,10 @@ def _run_workspace_doctor() -> int:
                 f"- process_root: {route.process_root}",
             ]
     else:
-        health = check_process_route(root)
+        health = inspect_legacy_consumer_route(
+            root,
+            consumer_id="workspace-doctor",
+        )
         state_path = root / LEGACY_STATE_REL
         process_dirs = (
             root / Path("process/checks"),
@@ -819,7 +822,10 @@ def _run_workspace(args: list[str]) -> None:
             print(f"- project_id: {route.project_id}")
             print(f"- process_root: {route.process_root}")
             raise SystemExit(0)
-        health = check_process_route(root)
+        health = inspect_legacy_consumer_route(
+            root,
+            consumer_id="workspace-check",
+        )
         for line in health.format_lines():
             print(line)
         raise SystemExit(1 if health.blocking else 0)

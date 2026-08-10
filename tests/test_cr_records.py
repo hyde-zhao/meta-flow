@@ -26,6 +26,7 @@ RECORD_MEMBERS = {
 
 ALLOWED_EXTERNALS = {
     "meta_flow.design.feature_registry", "meta_flow.policies.authz",
+    "meta_flow.project.process_route.format_runtime_ref",
     "meta_flow.project.process_route._resolve_runtime_ref",
     "meta_flow.project.scale.load_yaml_object", "meta_flow.workspace.git_sync.run_git",
 }

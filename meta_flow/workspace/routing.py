@@ -212,7 +212,7 @@ def _parse_state_summary(state_path: Path) -> tuple[str, dict[str, str]]:
     return project_id, {key: value for key, value in artifact_routing.items() if value}
 
 
-def check_process_route(project_root: Path) -> ProcessRouteHealth:
+def _check_process_route(project_root: Path) -> ProcessRouteHealth:
     project_root = project_root.resolve()
     link_path = project_root / "process"
     state_path = link_path / "STATE.md"
@@ -328,13 +328,40 @@ def check_process_route(project_root: Path) -> ProcessRouteHealth:
     )
 
 
+def check_process_route(project_root: Path) -> ProcessRouteHealth:
+    """兼容的低层 legacy health API；生产 consumer 应使用分类 gateway。"""
+
+    return _check_process_route(project_root)
+
+
+def inspect_legacy_consumer_route(
+    project_root: Path,
+    *,
+    consumer_id: str,
+) -> ProcessRouteHealth:
+    """按 canonical policy 执行显式 legacy fallback，不承接 vNext binding。"""
+
+    policy = route_consumer_policy(consumer_id)
+    if not policy.legacy_fallback:
+        raise ValueError(f"consumer {consumer_id!r} is not allowed to use legacy fallback")
+    root = project_root.resolve(strict=False)
+    if policy.vnext_read and (root / ".meta-flow" / "workspace.yaml").is_file():
+        raise ValueError(
+            f"consumer {consumer_id!r} must use the canonical binding route adapter"
+        )
+    return _check_process_route(root)
+
+
 def require_process_health(project_root: Path) -> ProcessRouteHealth:
     """legacy-only guard；vNext read consumer 必须使用 process_route_adapter。"""
 
     policy = route_consumer_policy("require-process-health")
     if policy.classification is not RouteConsumerClass.DEPRECATED:  # pragma: no cover
         raise AssertionError("require_process_health semantic policy drifted")
-    health = check_process_route(project_root)
+    health = inspect_legacy_consumer_route(
+        project_root,
+        consumer_id="require-process-health",
+    )
     if health.blocking:
         lines = [
             "Process route health check failed; workflow is blocked until the process route is restored.",
@@ -527,7 +554,10 @@ def _link_process_workspace_unchecked(
     policy = route_consumer_policy(postcheck_consumer_id)
     if policy.classification is not RouteConsumerClass.LEGACY_MUTATION_POSTCONDITION:
         raise AssertionError("legacy mutation postcheck semantic policy drifted")
-    return check_process_route(project_root)
+    return inspect_legacy_consumer_route(
+        project_root,
+        consumer_id=postcheck_consumer_id,
+    )
 
 
 def link_process_workspace(
@@ -617,7 +647,10 @@ def bootstrap_process_workspace(
         policy = route_consumer_policy("legacy-workspace-bootstrap-postcheck")
         if policy.classification is not RouteConsumerClass.LEGACY_MUTATION_POSTCONDITION:
             raise AssertionError("legacy bootstrap postcheck semantic policy drifted")
-        health = check_process_route(project_root)
+        health = inspect_legacy_consumer_route(
+            project_root,
+            consumer_id="legacy-workspace-bootstrap-postcheck",
+        )
     except BaseException:
         claim.finish("PARTIAL")
         raise

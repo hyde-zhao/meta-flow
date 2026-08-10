@@ -25,7 +25,11 @@ from meta_flow.checks.frozen_cp6_evidence import (
 )
 from meta_flow.context_pack import read_expansion, story_contract
 from meta_flow.project.onboarding_contract import canonical_digest
-from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.process_route import (
+    _resolve_runtime_path,
+    _resolve_runtime_ref,
+    format_runtime_ref,
+)
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.semantics.authority import (
     render_authority_apply_result,
@@ -241,30 +245,6 @@ def _infer_project_root(path: Path) -> Path:
     return Path.cwd().resolve()
 
 
-def _rel(project_root: Path, path: Path) -> str:
-    try:
-        return path.resolve().relative_to(project_root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
-    """把 release/process 物理路径还原为可持久化的 canonical logical ref。"""
-
-    root = project_root.resolve()
-    resolved = path.resolve(strict=False)
-    try:
-        return resolved.relative_to(root).as_posix()
-    except ValueError:
-        process_marker = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml")
-        process_root = process_marker.parent.resolve(strict=False)
-        try:
-            process_relative = resolved.relative_to(process_root)
-        except ValueError as exc:
-            raise ValueError("runtime path is outside the release and bound process repositories") from exc
-        return f"process/{process_relative.as_posix()}"
-
-
 def _runtime_root(project_root: Path | None, path: Path) -> Path:
     if project_root is not None:
         return project_root.resolve()
@@ -351,7 +331,7 @@ def validate_lld_structure(
     root = project_root.resolve() if project_root else _infer_project_root(lld_path)
     path = _resolve_runtime_path(root, lld_path)
     if not path.is_file():
-        return [f"LLD evidence missing: {_rel(root, path)}"], []
+        return [f"LLD evidence missing: {format_runtime_ref(root, path)}"], []
     text = path.read_text(encoding="utf-8", errors="ignore")
     frontmatter = _markdown_frontmatter(text)
     inferred = _infer_lld_evidence_type(path, text, evidence_type)
@@ -430,7 +410,7 @@ def validate_cp5_context_capsule(context_path: Path, *, project_root: Path | Non
     path = context_path.resolve()
     root = project_root.resolve() if project_root else _infer_project_root(path)
     if not path.is_file():
-        return [f"CP5 context missing: {_rel(root, path)}"], []
+        return [f"CP5 context missing: {format_runtime_ref(root, path)}"], []
     try:
         payload = _load_context_payload(path)
     except (OSError, ValueError) as exc:
@@ -555,7 +535,7 @@ def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, st
     errors: list[str] = []
     warnings: list[str] = []
     if not path.is_file():
-        return [f"missing story management truth source: {_rel(root, path)}"], warnings
+        return [f"missing story management truth source: {format_runtime_ref(root, path)}"], warnings
     try:
         plan = load_yaml_object(path)
     except (OSError, ValueError) as exc:
@@ -602,7 +582,9 @@ def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, st
         *sorted((root / "docs" / "features").glob("*/TASKS.md")),
     ]
     legacy_story_ids: dict[str, set[str]] = {
-        _rel(root, legacy): _legacy_story_ids(legacy) for legacy in legacy_paths if legacy.is_file()
+        format_runtime_ref(root, legacy): _legacy_story_ids(legacy)
+        for legacy in legacy_paths
+        if legacy.is_file()
     }
     unknown_refs: list[str] = []
     for rel_path, story_ids in legacy_story_ids.items():
@@ -626,7 +608,7 @@ def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, st
             )
 
     legacy_task_ids: dict[str, set[str]] = {
-        _rel(root, path): _task_ids_from_markdown(path)
+        format_runtime_ref(root, path): _task_ids_from_markdown(path)
         for path in sorted((root / "docs" / "features").glob("*/TASKS.md"))
     }
     unknown_tasks: list[str] = []
@@ -663,7 +645,7 @@ def validate_return_packet(
     root = _runtime_root(project_root, return_path)
     return_path = _resolve_runtime_path(root, return_path)
     if not return_path.is_file():
-        return [f"Story return packet missing: {_canonical_runtime_ref(root, return_path)}"], []
+        return [f"Story return packet missing: {format_runtime_ref(root, return_path)}"], []
     errors: list[str] = []
     warnings: list[str] = []
     try:
@@ -675,7 +657,7 @@ def validate_return_packet(
     if packet_path:
         packet_path = _resolve_runtime_path(root, packet_path)
         if not packet_path.is_file():
-            errors.append(f"Story context packet missing: {_canonical_runtime_ref(root, packet_path)}")
+            errors.append(f"Story context packet missing: {format_runtime_ref(root, packet_path)}")
         else:
             try:
                 context = _read_json(packet_path.resolve())
@@ -702,7 +684,7 @@ def validate_return_packet(
         if packet.get("stage") != context.get("stage"):
             errors.append(f"stage mismatch: return={packet.get('stage')} context={context.get('stage')}")
         expected = str(context.get("expected_return_packet") or "")
-        if expected and _canonical_runtime_ref(root, return_path) != expected:
+        if expected and format_runtime_ref(root, return_path) != expected:
             warnings.append(f"return path differs from expected_return_packet: expected {expected}")
 
     touched_files = [_changed_file_path(entry) for entry in _as_list(packet.get("touched_files")) if _changed_file_path(entry)]
@@ -776,7 +758,7 @@ def build_evidence_index(
         "story_id": story_id,
         "cr_id": packet.get("cr_id"),
         "stage": stage,
-        "return_ref": _canonical_runtime_ref(root, return_path),
+        "return_ref": format_runtime_ref(root, return_path),
         "changed_files": _as_list(packet.get("touched_files")),
         "commands": _as_list(verification.get("commands_run")),
         "tests": _as_list(verification.get("tests")),
@@ -794,7 +776,7 @@ def validate_evidence_index(index_path: Path, *, project_root: Path | None = Non
     root = _runtime_root(project_root, index_path)
     index_path = _resolve_runtime_path(root, index_path)
     if not index_path.is_file():
-        return [f"Evidence index missing: {_canonical_runtime_ref(root, index_path)}"], []
+        return [f"Evidence index missing: {format_runtime_ref(root, index_path)}"], []
     errors: list[str] = []
     warnings: list[str] = []
     try:
@@ -897,7 +879,7 @@ def build_verify_packet_from_return(
     if not return_path.is_file():
         raise ValueError(
             "CP6 Return Packet missing: "
-            + _canonical_runtime_ref(root, return_path)
+            + format_runtime_ref(root, return_path)
         )
     packet = load_return_packet(return_path)
     story_id = str(packet.get("story_id") or "")
@@ -913,7 +895,7 @@ def build_verify_packet_from_return(
         cr_id=str(packet.get("cr_id") or ""),
         budget=budget,
         output=output,
-        cp6_return_ref=_canonical_runtime_ref(root, return_path),
+        cp6_return_ref=format_runtime_ref(root, return_path),
     )
 
 
@@ -926,7 +908,7 @@ def build_cp6_story_projection_plan(
 
     root = project_root.resolve()
     result_path = _resolve_runtime_path(root, result_path)
-    result_ref = _canonical_runtime_ref(root, result_path)
+    result_ref = format_runtime_ref(root, result_path)
     errors, _warnings = cp_result.validate_cp_result(
         result_path,
         project_root=root,
@@ -3389,7 +3371,7 @@ def main(
                 return_path=parsed.return_path,
                 output=parsed.output,
             )
-            print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
+            print(f"wrote: {format_runtime_ref(parsed.project_root, path)}")
             return 0
         except (OSError, ValueError) as exc:
             print("Evidence Index Build: FAIL")
@@ -3433,7 +3415,7 @@ def main(
             print("Story Verify Packet: BLOCKED")
             print(f"- {exc}")
             return 2
-        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
+        print(f"wrote: {format_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "plan-check":
         parser = argparse.ArgumentParser(prog="meta-flow story plan-check")

@@ -30,7 +30,11 @@ from meta_flow.design.product_governance import (
 )
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
-from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.process_route import (
+    _resolve_runtime_path,
+    _resolve_runtime_ref,
+    format_runtime_ref,
+)
 from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.state.current import (
     STATE_CURRENT_ENTRY_REL,
@@ -147,18 +151,6 @@ def _as_posix(path: Path | str) -> str:
     return Path(path).as_posix()
 
 
-def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
-    """将过程仓物理输出还原为公开 CLI 可显示的 logical ref。"""
-
-    root = project_root.resolve()
-    resolved = path.resolve(strict=False)
-    try:
-        return resolved.relative_to(root).as_posix()
-    except ValueError:
-        process_root = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml").parent
-        return f"process/{resolved.relative_to(process_root.resolve()).as_posix()}"
-
-
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -205,7 +197,7 @@ def _required_evidence_from_cp2(project_root: Path, cr_id: str) -> list[dict[str
                 continue
             seen.add(entry_id)
             copied = dict(entry)
-            copied["source_result_ref"] = path.relative_to(project_root).as_posix()
+            copied["source_result_ref"] = format_runtime_ref(project_root, path)
             entries.append(copied)
     return entries
 
@@ -806,7 +798,7 @@ def explain_context_pack(
     context = _load_context(resolved_path)
     budget = context.get("budget") or {}
     print("Context Pack:")
-    print(f"- path: {_canonical_runtime_ref(root, resolved_path)}")
+    print(f"- path: {format_runtime_ref(root, resolved_path)}")
     print(f"- project_id: {context.get('project_id')}")
     print(f"- stage: {context.get('stage')}")
     print(f"- profile: {context.get('profile')}")
@@ -881,7 +873,7 @@ def main(argv: list[str] | None = None) -> int:
             output=parsed.output,
             write_policy=not parsed.no_write_policy,
         )
-        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
+        print(f"wrote: {format_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "check":
         parser = argparse.ArgumentParser(prog="meta-flow context check")

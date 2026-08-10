@@ -36,7 +36,11 @@ from meta_flow.design.product_governance import (
 from meta_flow.policies.authz import AUTHZ_POLICY_REL
 from meta_flow.policies.gate_profiles import GATE_PROFILES_REL
 from meta_flow.project.onboarding_contract import canonical_digest
-from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
+from meta_flow.project.process_route import (
+    _resolve_runtime_path,
+    _resolve_runtime_ref,
+    format_runtime_ref,
+)
 from meta_flow.project.scale import _parse_yaml_lines, _strip_comment, load_yaml_object
 from meta_flow.state.current import (
     STATE_CURRENT_ENTRY_REL,
@@ -187,29 +191,10 @@ def _as_mapping_summary(value: Any) -> str:
     return str(value or "")
 
 
-def _rel(project_root: Path, path: Path) -> str:
-    try:
-        return path.relative_to(project_root).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
 def _runtime_output_path(project_root: Path, output: Path | None, default: Path) -> Path:
     """输出若是 process 逻辑引用，必须经 binding resolver，而非落入 release。"""
 
     return _resolve_runtime_path(project_root, output) if output is not None else default
-
-
-def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
-    """将绑定过程仓的物理路径还原为可安全显示的 logical ref。"""
-
-    root = project_root.resolve()
-    resolved = path.resolve(strict=False)
-    try:
-        return resolved.relative_to(root).as_posix()
-    except ValueError:
-        process_root = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml").parent
-        return f"process/{resolved.relative_to(process_root.resolve()).as_posix()}"
 
 
 def _path_tokens(project_root: Path, rel_path: str) -> int:
@@ -787,7 +772,7 @@ def build_story_packet(
     story_rel = (
         story_input_ref
         if not Path(story_input_ref).is_absolute() and story_input_ref.startswith("process/")
-        else _rel(project_root, story_path)
+        else format_runtime_ref(project_root, story_path)
     )
     story, projected_gate = _projected_story_contract(
         project_root,
@@ -1386,7 +1371,7 @@ def explain_story_packet(packet_path: Path, *, project_root: Path | None = None)
     packet = _load_packet(resolved_packet)
     budget = packet.get("budget") or {}
     print("Story Context Packet:")
-    print(f"- path: {_canonical_runtime_ref(root, resolved_packet)}")
+    print(f"- path: {format_runtime_ref(root, resolved_packet)}")
     print(f"- packet_type: {packet.get('packet_type')}")
     print(f"- stage: {packet.get('stage')}")
     print(f"- story_id: {packet.get('story_id')}")
@@ -1451,7 +1436,7 @@ def main(argv: list[str] | None = None) -> int:
         if decision in {"BLOCKED", "PARTIAL"}:
             print(f"Story packet: {decision}")
             return 1
-        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
+        print(f"wrote: {format_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "check-story-packet":
         parser = argparse.ArgumentParser(prog="meta-flow context check-story-packet")

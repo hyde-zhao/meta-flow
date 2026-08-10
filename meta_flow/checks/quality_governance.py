@@ -19,6 +19,7 @@ from meta_flow.evals.runner import parse_yaml_subset
 from meta_flow.project.process_route import (
     _resolve_injected_process_ref,
     _resolve_runtime_ref,
+    format_runtime_ref,
 )
 from meta_flow.state import event_ledger
 
@@ -557,7 +558,7 @@ def _load_cp_results(root: Path) -> tuple[list[dict[str, Any]], list[str], list[
     checks_root = _resolve_runtime_ref(root, "process/checks")
     for result_path in sorted(checks_root.glob("*.result.json")):
         result_errors, result_warnings = cp_result.validate_cp_result(result_path, project_root=root)
-        rel_path = result_path.relative_to(root).as_posix()
+        rel_path = format_runtime_ref(root, result_path)
         correction_id = corrected_targets.get(rel_path)
         if correction_id:
             warnings.extend(
@@ -567,7 +568,10 @@ def _load_cp_results(root: Path) -> tuple[list[dict[str, Any]], list[str], list[
             )
         else:
             errors.extend(f"{rel_path}: {error}" for error in result_errors)
-        warnings.extend(f"{result_path.relative_to(root).as_posix()}: {warning}" for warning in result_warnings)
+        warnings.extend(
+            f"{format_runtime_ref(root, result_path)}: {warning}"
+            for warning in result_warnings
+        )
         try:
             results.append(cp_result.load_cp_result(result_path))
         except ValueError as exc:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 from pathlib import Path
@@ -7,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from meta_flow import cli
-from meta_flow.checks import cr_tracking
+from meta_flow.checks import cr_tracking, quality_governance
+from meta_flow.context_pack import builder
 from meta_flow.project.onboarding import (
     PROCESS_METADATA_REL,
     ProjectInitRequest,
@@ -23,6 +25,7 @@ from meta_flow.project.process_route import (
     IndependentProcessRoute,
     ProcessRouteError,
     _resolve_runtime_ref,
+    format_runtime_ref,
     require_process_route,
     require_project_process_route,
     resolve_ref_main,
@@ -36,6 +39,7 @@ from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.semantics.route import ROUTE_CONSUMER_POLICIES
 from meta_flow.workflow import cr_lifecycle
 from meta_flow.workspace.git_sync import push_workspace, workspace_repositories
+from meta_flow.workspace.routing import inspect_legacy_consumer_route
 
 
 def _git(root: Path, *args: str) -> str:
@@ -92,6 +96,99 @@ def test_binding_only_route_resolves_process_ref_without_process_link(tmp_path: 
     assert route.process_root == process.resolve()
     assert route.resolve_ref("process/checks/CP0.json") == expected.resolve()
     assert route.source == ".meta-flow/workspace.yaml"
+
+
+def test_route_formats_release_and_sibling_process_paths_as_canonical_refs(
+    tmp_path: Path,
+) -> None:
+    release, process = _release(tmp_path)
+    result_path = process / "checks" / "CP2-CR-069.result.json"
+    result_path.parent.mkdir()
+    result_path.write_text("{}\n", encoding="utf-8")
+    alias_path = process / "result-alias.json"
+    alias_path.symlink_to(result_path.relative_to(process))
+
+    route = require_process_route(release)
+
+    assert route.format_ref(release / "README.md") == "README.md"
+    assert route.format_ref(result_path) == "process/checks/CP2-CR-069.result.json"
+    assert route.format_ref(alias_path) == "process/checks/CP2-CR-069.result.json"
+    assert format_runtime_ref(release, result_path) == "process/checks/CP2-CR-069.result.json"
+
+
+@pytest.mark.parametrize("root_kind", ["release", "process"])
+def test_route_formatter_rejects_repository_roots(
+    tmp_path: Path,
+    root_kind: str,
+) -> None:
+    release, process = _release(tmp_path)
+    route = require_process_route(release)
+
+    with pytest.raises(ProcessRouteError) as raised:
+        route.format_ref(release if root_kind == "release" else process)
+
+    assert raised.value.error_code == "logical_ref_invalid"
+
+
+def test_route_formatter_rejects_paths_outside_both_repositories(tmp_path: Path) -> None:
+    release, _process = _release(tmp_path)
+    outside = tmp_path / "outside.txt"
+
+    with pytest.raises(ProcessRouteError) as raised:
+        require_process_route(release).format_ref(outside)
+
+    assert raised.value.error_code == "logical_ref_escape"
+
+
+def test_sibling_binding_consumers_share_canonical_formatter_without_relative_to_crash(
+    tmp_path: Path,
+) -> None:
+    release, process = _release(tmp_path)
+    checks = process / "checks"
+    changes = process / "changes"
+    summaries = changes / "summaries"
+    archive = process / "archive" / "CR-069"
+    stories = process / "stories"
+    evidence = process / "evidence"
+    for directory in (checks, summaries, archive, stories, evidence):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    cp2_path = checks / "CP2-CR-069.result.json"
+    cp2_path.write_text(
+        json.dumps(
+            {
+                "cr_id": "CR-069",
+                "commitments": {
+                    "required_evidence": [{"id": "EV-R2", "required": True}]
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (changes / "CR-069.md").write_text("# CR-069\n", encoding="utf-8")
+    (summaries / "CR-069.summary.json").write_text("{}\n", encoding="utf-8")
+    (archive / "evidence-index.json").write_text("{}\n", encoding="utf-8")
+    (stories / "STORY-ST-EI-069-IMPLEMENTATION.md").write_text(
+        "# implementation\n", encoding="utf-8"
+    )
+    (evidence / "ST-EI-069.index.json").write_text("{}\n", encoding="utf-8")
+
+    required = builder._required_evidence_from_cp2(release, "CR-069")
+    _results, errors, warnings = quality_governance._load_cp_results(release)
+    manifest = cr_tracking.build_protected_object_manifest(
+        release,
+        cr_id="CR-069",
+        story_id="ST-EI-069",
+    )
+
+    assert required[0]["source_result_ref"] == "process/checks/CP2-CR-069.result.json"
+    assert any("process/checks/CP2-CR-069.result.json" in item for item in [*errors, *warnings])
+    object_refs = {item["path"] for item in manifest["objects"]}
+    assert "process/checks/CP2-CR-069.result.json" in object_refs
+    assert "process/stories/STORY-ST-EI-069-IMPLEMENTATION.md" in object_refs
+    assert "process/evidence/ST-EI-069.index.json" in object_refs
+    assert not any(str(process.resolve()) in ref for ref in object_refs)
 
 
 def test_mutation_route_binds_explicit_project_id(tmp_path: Path) -> None:
@@ -460,6 +557,66 @@ def test_route_semantic_kernel_owns_all_seven_direct_consumers() -> None:
         "workspace-doctor",
         "workspace-check",
     }
+
+
+def test_legacy_gateway_rejects_unknown_consumer_and_binding_downgrade(
+    tmp_path: Path,
+) -> None:
+    release, _process = _release(tmp_path)
+
+    with pytest.raises(ValueError, match="unregistered route consumer"):
+        inspect_legacy_consumer_route(release, consumer_id="unknown-consumer")
+    with pytest.raises(ValueError, match="canonical binding route adapter"):
+        inspect_legacy_consumer_route(release, consumer_id="workspace-check")
+
+
+def test_all_seven_route_callers_use_classified_gateway_not_low_level_checker() -> None:
+    package_root = Path(cli.__file__).resolve().parent
+    gateway_calls: list[tuple[Path, ast.Call]] = []
+    low_level_calls: list[tuple[Path, ast.Call]] = []
+    for source_path in sorted(package_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            name = (
+                function.id
+                if isinstance(function, ast.Name)
+                else function.attr
+                if isinstance(function, ast.Attribute)
+                else ""
+            )
+            if name == "inspect_legacy_consumer_route":
+                gateway_calls.append((source_path, node))
+            elif name == "check_process_route":
+                low_level_calls.append((source_path, node))
+
+    assert low_level_calls == []
+    assert len(gateway_calls) == 7
+
+
+def test_logical_ref_consumers_do_not_reimplement_canonical_formatter() -> None:
+    package_root = Path(cli.__file__).resolve().parent
+    consumer_refs = (
+        "checks/cp_result.py",
+        "checks/cr_tracking.py",
+        "context_pack/builder.py",
+        "context_pack/story_contract.py",
+        "workflow/cr_records.py",
+        "workflow/story_evidence.py",
+    )
+
+    for relative in consumer_refs:
+        source = (package_root / relative).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        local_formatters = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in {"_canonical_runtime_ref", "format_rel"}
+        }
+        assert local_formatters == set(), relative
 
 
 def test_configured_route_returns_none_only_for_explicit_legacy_workspace(

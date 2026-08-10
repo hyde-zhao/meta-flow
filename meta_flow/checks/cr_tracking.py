@@ -18,6 +18,7 @@ from meta_flow.project.process_route import (
     ProcessRouteError,
     _resolve_runtime_path,
     _resolve_runtime_ref,
+    format_runtime_ref,
     require_process_route,
 )
 from meta_flow.semantics.cr_status import (
@@ -233,35 +234,37 @@ def build_protected_object_manifest(
 
     root = project_root.resolve()
     compact_id = cr_id.replace("-", "")
-    candidate_paths: set[Path] = {
-        Path(f"process/changes/{cr_id}.md"),
-        Path(f"process/changes/summaries/{cr_id}.summary.json"),
-        Path(f"process/archive/{cr_id}/evidence-index.json"),
+    candidate_refs: set[str] = {
+        f"process/changes/{cr_id}.md",
+        f"process/changes/summaries/{cr_id}.summary.json",
+        f"process/archive/{cr_id}/evidence-index.json",
     }
     checks_root = _resolve_runtime_ref(root, "process/checks")
     if checks_root.is_dir():
-        candidate_paths.update(
-            path.relative_to(root)
+        candidate_refs.update(
+            format_runtime_ref(root, path)
             for path in checks_root.glob("*.result.json")
             if compact_id in path.name or cr_id in path.name
         )
     stories_root = _resolve_runtime_ref(root, "process/stories")
     if stories_root.is_dir():
-        candidate_paths.update(
-            path.relative_to(root) for path in stories_root.glob("STORY-ST-EI-*-IMPLEMENTATION.md")
+        candidate_refs.update(
+            format_runtime_ref(root, path)
+            for path in stories_root.glob("STORY-ST-EI-*-IMPLEMENTATION.md")
         )
     evidence_root = _resolve_runtime_ref(root, "process/evidence")
     if evidence_root.is_dir():
-        candidate_paths.update(
-            path.relative_to(root) for path in evidence_root.glob("ST-EI-*.index.json")
+        candidate_refs.update(
+            format_runtime_ref(root, path)
+            for path in evidence_root.glob("ST-EI-*.index.json")
         )
 
     objects: list[dict[str, Any]] = []
-    for rel_path in sorted(candidate_paths, key=lambda item: item.as_posix()):
-        path = _safe_project_file(root, rel_path.as_posix())
+    for logical_ref in sorted(candidate_refs):
+        path = _safe_project_file(root, logical_ref)
         objects.append(
             {
-                "path": rel_path.as_posix(),
+                "path": logical_ref,
                 "object_type": "protected_file",
                 "original_sha256": _sha256_bytes(path.read_bytes()),
                 "immutable": True,
@@ -841,13 +844,6 @@ def index_item_from_mapping(mapping: dict[str, str], line_no: int) -> IndexItem:
     )
 
 
-def format_rel(project_root: Path, path: Path) -> str:
-    try:
-        return path.relative_to(project_root).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
 def formal_cr_for_follow_up_row(
     project_root: Path, formal_crs: dict[str, FormalCR], row: FollowUpRow
 ) -> FormalCR | None:
@@ -1046,7 +1042,7 @@ def validate_native_evidence_projection(project_root: Path, formal: FormalCR) ->
             if "OPEN" in cells:
                 errors.append(
                     f"{formal.cr_id} accepted ADR has stale OPEN decision queue row "
-                    f"{format_rel(project_root, adr_path)}:{line_no}"
+                    f"{format_runtime_ref(project_root, adr_path)}:{line_no}"
                 )
     return errors
 
@@ -1088,7 +1084,7 @@ def collect_errors_and_warnings(
             )
 
     for cr in formal_crs.values():
-        location = format_rel(project_root, cr.path)
+        location = format_runtime_ref(project_root, cr.path)
         if cr.lifecycle_status and cr.lifecycle_status not in ALLOWED_LIFECYCLE_STATUSES:
             errors.append(
                 f"{location} invalid lifecycle_status for {cr.cr_id}: {cr.lifecycle_status}"
@@ -1169,7 +1165,7 @@ def collect_errors_and_warnings(
     rows_by_id: dict[str, list[FollowUpRow]] = {}
     for row in rows:
         rows_by_id.setdefault(row.item_id, []).append(row)
-        location = f"{format_rel(project_root, row.source_path)}:{row.line_no}"
+        location = f"{format_runtime_ref(project_root, row.source_path)}:{row.line_no}"
         if not CANDIDATE_ID_RE.fullmatch(row.item_id):
             errors.append(f"{location} invalid follow-up id format: {row.item_id}")
         if row.status not in ALLOWED_FOLLOW_UP_STATUSES:
@@ -1207,7 +1203,7 @@ def collect_errors_and_warnings(
             if row.lifecycle_status == "candidate":
                 errors.append(
                     f"{location} {row.item_id} is still {row.status} but formal CR file exists: "
-                    f"{format_rel(project_root, formal.path)}"
+                    f"{format_runtime_ref(project_root, formal.path)}"
                 )
             if row.lifecycle_status == "active" and formal.status in FINISHED_FORMAL_STATUSES:
                 errors.append(
@@ -1246,7 +1242,7 @@ def collect_errors_and_warnings(
     for cr in formal_crs.values():
         if cr.source != "cp8-follow-up":
             continue
-        location = format_rel(project_root, cr.path)
+        location = format_runtime_ref(project_root, cr.path)
         expected_row_id = cr.source_follow_up_id or cr.cr_id
         if expected_row_id not in rows_by_id:
             warnings.append(
@@ -1269,7 +1265,7 @@ def collect_errors_and_warnings(
             )
             continue
         for row in linked_source_rows:
-            row_location = f"{format_rel(project_root, row.source_path)}:{row.line_no}"
+            row_location = f"{format_runtime_ref(project_root, row.source_path)}:{row.line_no}"
             if is_formal_active(cr):
                 if row.lifecycle_status != "active":
                     errors.append(
@@ -1287,7 +1283,8 @@ def collect_errors_and_warnings(
 
     for cr in active_formal:
         if not any(
-            item.item_id == cr.cr_id or item.formal_path == format_rel(project_root, cr.path)
+            item.item_id == cr.cr_id
+            or item.formal_path == format_runtime_ref(project_root, cr.path)
             for item in index_items
         ):
             message = f"CR-INDEX.json does not mention active formal CR {cr.cr_id}"
@@ -1392,7 +1389,8 @@ def collect_errors_and_warnings(
         for row in row_group:
             if row.lifecycle_status != index_item.lifecycle_status:
                 warnings.append(
-                    f"{format_rel(project_root, row.source_path)}:{row.line_no} {item_id} lifecycle_status={row.lifecycle_status} "
+                    f"{format_runtime_ref(project_root, row.source_path)}:{row.line_no} "
+                    f"{item_id} lifecycle_status={row.lifecycle_status} "
                     f"differs from CR-INDEX lifecycle_status={index_item.lifecycle_status}"
                 )
 
@@ -1557,13 +1555,15 @@ def main(argv: list[str] | None = None) -> int:
     legacy_index_paths = find_legacy_cr_index_paths(project_root)
     if legacy_index_paths and not args.allow_legacy_yaml:
         errors.extend(
-            f"legacy CR index is not allowed in canonical JSON mode: {format_rel(project_root, path)}; "
+            f"legacy CR index is not allowed in canonical JSON mode: "
+            f"{format_runtime_ref(project_root, path)}; "
             "migrate/delete it or pass --allow-legacy-yaml for read-only legacy fallback"
             for path in legacy_index_paths
         )
     elif legacy_index_paths:
         warnings.extend(
-            f"legacy CR index present as read-only fallback: {format_rel(project_root, path)}; CR-INDEX.json remains canonical"
+            f"legacy CR index present as read-only fallback: "
+            f"{format_runtime_ref(project_root, path)}; CR-INDEX.json remains canonical"
             for path in legacy_index_paths
         )
 

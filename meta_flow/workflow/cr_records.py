@@ -9,7 +9,7 @@ from typing import Any
 
 from meta_flow.design import feature_registry
 from meta_flow.policies import authz
-from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.process_route import _resolve_runtime_ref, format_runtime_ref
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.workflow.cr_model import (
     CR_ID_RE,
@@ -113,18 +113,12 @@ def update_frontmatter_fields(path: Path, updates: dict[str, str]) -> bool:
     path.write_text(updated, encoding="utf-8")
     return True
 
+
 def _rel(project_root: Path, path: Path) -> str:
-    project_root = project_root.resolve()
-    path = path.resolve(strict=False)
-    try:
-        return path.relative_to(project_root).as_posix()
-    except ValueError:
-        process_root = _process_root(project_root)
-        try:
-            relative = path.relative_to(process_root)
-        except ValueError:
-            raise ValueError(f"path is outside release and process repositories: {path}") from None
-        return (Path("process") / relative).as_posix()
+    """保留 records facade owner；格式语义由 canonical route service 提供。"""
+
+    return format_runtime_ref(project_root, path)
+
 
 def _process_root(project_root: Path) -> Path:
     """Resolve the process root for binding projects and legacy test fixtures."""
@@ -132,6 +126,7 @@ def _process_root(project_root: Path) -> Path:
     return _resolve_runtime_ref(project_root.resolve(), "process/PROJECT.yaml").parent.resolve(
         strict=False
     )
+
 
 def _cr_id_from_path(path: Path) -> str:
     match = CR_ID_RE.search(path.name)

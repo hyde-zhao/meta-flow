@@ -14,7 +14,7 @@ from meta_flow.project.process_route_adapter import (
     resolve_configured_consumer_route,
 )
 from meta_flow.state import current
-from meta_flow.workspace.routing import ProcessRouteHealth, check_process_route
+from meta_flow.workspace.routing import ProcessRouteHealth, inspect_legacy_consumer_route
 
 
 @dataclass(frozen=True)
@@ -246,7 +246,10 @@ def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
         process_root = None
     else:
         if route is None:
-            health = check_process_route(root)
+            health = inspect_legacy_consumer_route(
+                root,
+                consumer_id="adoption-readiness",
+            )
             workspace_item = _workspace_item(root, health)
             process_root = health.project_process_root if health.ok else None
         else:

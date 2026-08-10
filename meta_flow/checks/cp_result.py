@@ -21,6 +21,7 @@ from meta_flow.project.process_route import (
     ProcessRouteError,
     _resolve_runtime_path,
     _resolve_runtime_ref,
+    format_runtime_ref,
 )
 from meta_flow.state import checkpoint_projection, event_ledger
 from meta_flow.state.current import now_utc
@@ -62,32 +63,6 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-
-
-def _rel(project_root: Path, path: Path) -> str:
-    try:
-        return path.resolve().relative_to(project_root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _canonical_runtime_ref(project_root: Path, path: Path) -> str:
-    """把 release/process 物理路径还原为 canonical logical ref。"""
-
-    root = project_root.resolve()
-    resolved = path.resolve(strict=False)
-    try:
-        return resolved.relative_to(root).as_posix()
-    except ValueError:
-        process_marker = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml")
-        process_root = process_marker.parent.resolve(strict=False)
-        try:
-            process_relative = resolved.relative_to(process_root)
-        except ValueError as exc:
-            raise ValueError(
-                "runtime path is outside the release and bound process repositories"
-            ) from exc
-        return f"process/{process_relative.as_posix()}"
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -955,7 +930,7 @@ def _canonical_checkpoint_findings(
         f"CHECKPOINT_PROJECTION_{finding.code}: {finding.message}"
         for finding in projection.findings
     ]
-    result_ref = _canonical_runtime_ref(root, result_path)
+    result_ref = format_runtime_ref(root, result_path)
     # Producer 可先校验尚未 append 的新 result；只有 ledger 已引用该 ref 时，
     # result-check 才对它施加 current-head 身份约束。append 前的图一致性由
     # preflight_checkpoint_ledger_append 在零写阶段负责。
@@ -1035,7 +1010,7 @@ def _candidate_route_plan_paths(root: Path, result: dict[str, Any]) -> list[Path
     cr_id = str(result.get("cr_id") or "")
     if cr_id:
         refs.extend(
-            _canonical_runtime_ref(root, path)
+            format_runtime_ref(root, path)
             for path in sorted(
                 _resolve_runtime_ref(root, "process/checks").glob(f"CP0-*{cr_id}*.route-plan.json")
             )
@@ -1086,7 +1061,7 @@ def validate_cp_result(
     root = project_root.resolve() if project_root is not None else Path.cwd().resolve()
     result_path = _resolve_runtime_path(root, result_path)
     if not result_path.is_file():
-        return [f"CP result missing: {_canonical_runtime_ref(root, result_path)}"], []
+        return [f"CP result missing: {format_runtime_ref(root, result_path)}"], []
     errors: list[str] = []
     warnings: list[str] = []
     try:
@@ -1358,8 +1333,8 @@ def build_checkpoint_event(project_root: Path, result_path: Path) -> dict[str, A
         "event_type": "checkpoint_result",
         "checkpoint": checkpoint,
         "decision": result.get("decision"),
-        "result_ref": _canonical_runtime_ref(root, result_path),
-        "summary_ref": _canonical_runtime_ref(root, summary_path),
+        "result_ref": format_runtime_ref(root, result_path),
+        "summary_ref": format_runtime_ref(root, summary_path),
         "story_id": result.get("story_id"),
         "cr_id": result.get("cr_id"),
         "context_ref": result.get("context_ref"),
@@ -1530,7 +1505,7 @@ def build_applicability_aggregate(
     root = project_root.resolve()
     route_plan_path = _resolve_runtime_path(root, route_plan_path)
     route_plan = _read_json(route_plan_path)
-    route_ref = _canonical_runtime_ref(root, route_plan_path)
+    route_ref = format_runtime_ref(root, route_plan_path)
     return {
         "schema_version": 1,
         "kind": "checkpoint_applicability_aggregate",
@@ -1726,7 +1701,7 @@ def main(argv: list[str] | None = None) -> int:
             output=parsed.output,
             project_root=parsed.project_root,
         )
-        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
+        print(f"wrote: {format_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "ledger-append":
         parser = argparse.ArgumentParser(prog="meta-flow cp ledger-append")
@@ -1757,10 +1732,10 @@ def main(argv: list[str] | None = None) -> int:
         if preflight["decision"] == "NO_CHANGE":
             print(
                 "Checkpoint Ledger Append: NO_CHANGE "
-                f"({_canonical_runtime_ref(parsed.project_root, path)})"
+                f"({format_runtime_ref(parsed.project_root, path)})"
             )
             return 0
-        print(f"appended: {_canonical_runtime_ref(parsed.project_root, path)}")
+        print(f"appended: {format_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "applicability-build":
         parser = argparse.ArgumentParser(prog="meta-flow cp applicability-build")
@@ -1775,7 +1750,7 @@ def main(argv: list[str] | None = None) -> int:
             parsed.output,
             cr_id=parsed.cr_id,
         )
-        print(f"wrote: {_canonical_runtime_ref(parsed.project_root, path)}")
+        print(f"wrote: {format_runtime_ref(parsed.project_root, path)}")
         return 0
     if command == "applicability-check":
         parser = argparse.ArgumentParser(prog="meta-flow cp applicability-check")

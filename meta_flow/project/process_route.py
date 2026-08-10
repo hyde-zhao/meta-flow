@@ -49,6 +49,11 @@ class IndependentProcessRoute:
 
         return _resolve_injected_process_ref(self.process_root, logical_ref)
 
+    def format_ref(self, path: Path) -> str:
+        """把 release/process 物理路径格式化为唯一 canonical 引用。"""
+
+        return _format_injected_runtime_ref(self.project_root, self.process_root, path)
+
     def success_payload(self, logical_ref: str) -> dict[str, Any]:
         return {
             "schema_version": 1,
@@ -114,6 +119,46 @@ def _resolve_injected_process_ref(process_root: Path, logical_ref: str) -> Path:
     return candidate
 
 
+def _format_injected_runtime_ref(
+    project_root: Path,
+    process_root: Path,
+    path: Path,
+) -> str:
+    """使用已验证的双仓根格式化物理路径，不执行 route discovery。"""
+
+    root = project_root.resolve(strict=False)
+    routed_root = process_root.resolve(strict=False)
+    candidate = path if path.is_absolute() else root / path
+    resolved = candidate.resolve(strict=False)
+
+    if resolved in {root, routed_root}:
+        raise ProcessRouteError(
+            "logical_ref_invalid",
+            "repository roots are not artifact references",
+        )
+
+    try:
+        process_relative = resolved.relative_to(routed_root)
+    except ValueError:
+        process_relative = None
+    if process_relative is not None:
+        return (PurePosixPath("process") / PurePosixPath(process_relative.as_posix())).as_posix()
+
+    try:
+        release_relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise ProcessRouteError(
+            "logical_ref_escape",
+            "runtime path is outside the release and bound process repositories",
+        ) from exc
+    if release_relative.parts[:1] == ("process",):
+        raise ProcessRouteError(
+            "route_conflict",
+            "release-local process path conflicts with the bound process repository",
+        )
+    return PurePosixPath(release_relative.as_posix()).as_posix()
+
+
 def require_process_route(project_root: Path) -> IndependentProcessRoute:
     """解析唯一 binding 路由；任何不健康状态均 fail closed。"""
 
@@ -165,6 +210,31 @@ def resolve_process_ref(project_root: Path, logical_ref: str) -> Path:
     """供 Python 顶层入口使用的单次 route + ref 解析捷径。"""
 
     return require_process_route(project_root).resolve_ref(logical_ref)
+
+
+def format_runtime_ref(project_root: Path, path: Path) -> str:
+    """把运行时物理路径还原为 release-relative 或 ``process/...`` 引用。"""
+
+    root = project_root.resolve(strict=False)
+    candidate = path if path.is_absolute() else root / path
+    resolved = candidate.resolve(strict=False)
+    try:
+        release_relative = resolved.relative_to(root)
+    except ValueError:
+        release_relative = None
+    if release_relative is not None and (
+        release_relative.parts[:1] != ("process",)
+        or not (root / ".meta-flow" / "workspace.yaml").is_file()
+    ):
+        if not release_relative.parts:
+            raise ProcessRouteError(
+                "logical_ref_invalid",
+                "repository roots are not artifact references",
+            )
+        return PurePosixPath(release_relative.as_posix()).as_posix()
+
+    process_marker = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml")
+    return _format_injected_runtime_ref(root, process_marker.parent, resolved)
 
 
 def _resolve_runtime_ref(project_root: Path, logical_ref: str) -> Path:
@@ -245,6 +315,7 @@ def resolve_ref_main(argv: list[str] | None = None) -> int:
 __all__ = [
     "IndependentProcessRoute",
     "ProcessRouteError",
+    "format_runtime_ref",
     "require_project_process_route",
     "require_process_route",
     "resolve_process_ref",
