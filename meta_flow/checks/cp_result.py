@@ -8,12 +8,14 @@ import json
 import re
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from meta_flow.checks import state_transition
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS
 from meta_flow.context_pack import read_expansion
+from meta_flow.execution_control.contract import FINGERPRINT_KEYS, canonical_digest
 from meta_flow.policies import failure_routing
 from meta_flow.project.process_route import (
     ProcessRouteError,
@@ -22,6 +24,9 @@ from meta_flow.project.process_route import (
 )
 from meta_flow.state import checkpoint_projection, event_ledger
 from meta_flow.state.current import now_utc
+
+if TYPE_CHECKING:
+    from meta_flow.execution_control.closure import ClosureCohortV1, ClosureInventoryItemV1
 
 CHECKPOINT_LEDGER_REL = Path("process/state/CHECKPOINT-LEDGER.ndjson")
 ITEM_STATUSES = {"PASS", "FAIL", "BLOCKED", "N/A", "WAIVED"}
@@ -335,6 +340,438 @@ def build_input_artifact_hashes(
             raise ValueError(f"INPUT_HASH_MISSING: {ref}")
         hashes[ref] = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
     return hashes
+
+
+@dataclass(frozen=True, slots=True)
+class CpEvidenceInventoryProjectionV1:
+    """Checkpoint owner 投影出的只读 result/evidence inventory。"""
+
+    result_items: tuple[ClosureInventoryItemV1, ...]
+    evidence_items: tuple[ClosureInventoryItemV1, ...]
+    findings: tuple[str, ...]
+    mutation_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class NativeClosureAuthorityProjectionV1:
+    """由 canonical CP6 current head 与 exact Return/Evidence 派生的只读 authority。"""
+
+    decision: str
+    reason_codes: tuple[str, ...]
+    story_id: str
+    cr_id: str
+    cohort_revision: int
+    result_ref: str
+    result_digest: str
+    checkpoint_event_id: str
+    checkpoint_ledger_digest: str
+    return_ref: str
+    return_digest: str
+    evidence_ref: str
+    evidence_digest: str
+    input_artifact_hashes: tuple[tuple[str, str], ...]
+    container_refs: tuple[str, ...]
+    dispatch_refs: tuple[str, ...]
+    receipt_refs: tuple[str, ...]
+    bounded_refs: tuple[str, ...]
+    fingerprints: tuple[tuple[str, str], ...]
+    authority_digest: str
+    mutation_count: int = 0
+
+    def as_dict(self, *, include_authority_digest: bool = True) -> dict[str, Any]:
+        payload = {
+            "schema_version": 1,
+            "decision": self.decision,
+            "reason_codes": list(self.reason_codes),
+            "story_id": self.story_id,
+            "cr_id": self.cr_id,
+            "cohort_revision": self.cohort_revision,
+            "result_ref": self.result_ref,
+            "result_digest": self.result_digest,
+            "checkpoint_event_id": self.checkpoint_event_id,
+            "checkpoint_ledger_digest": self.checkpoint_ledger_digest,
+            "return_ref": self.return_ref,
+            "return_digest": self.return_digest,
+            "evidence_ref": self.evidence_ref,
+            "evidence_digest": self.evidence_digest,
+            "input_artifact_hashes": dict(self.input_artifact_hashes),
+            "container_refs": list(self.container_refs),
+            "dispatch_refs": list(self.dispatch_refs),
+            "receipt_refs": list(self.receipt_refs),
+            "bounded_refs": list(self.bounded_refs),
+            "fingerprints": dict(self.fingerprints),
+            "mutation_count": self.mutation_count,
+        }
+        if include_authority_digest:
+            payload["authority_digest"] = self.authority_digest
+        return payload
+
+
+def _blocked_closure_authority(
+    *,
+    story_id: str,
+    expected_cohort_revision: int,
+    reasons: list[str],
+    cr_id: str = "",
+) -> NativeClosureAuthorityProjectionV1:
+    revision = (
+        expected_cohort_revision
+        if type(expected_cohort_revision) is int and expected_cohort_revision > 0
+        else 1
+    )
+    empty_fingerprints = tuple(
+        (key, hashlib.sha256(b"").hexdigest()) for key in sorted(FINGERPRINT_KEYS)
+    )
+    partial = NativeClosureAuthorityProjectionV1(
+        decision="BLOCKED",
+        reason_codes=tuple(sorted(set(reasons))),
+        story_id=story_id,
+        cr_id=cr_id,
+        cohort_revision=revision,
+        result_ref="",
+        result_digest="",
+        checkpoint_event_id="",
+        checkpoint_ledger_digest="",
+        return_ref="",
+        return_digest="",
+        evidence_ref="",
+        evidence_digest="",
+        input_artifact_hashes=(),
+        container_refs=(),
+        dispatch_refs=(),
+        receipt_refs=(),
+        bounded_refs=(),
+        fingerprints=empty_fingerprints,
+        authority_digest="",
+    )
+    return partial
+
+
+def _json_mapping(path: Path, *, subject: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{subject} must be one readable UTF-8 JSON object") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{subject} must be one JSON object")
+    return value
+
+
+def project_native_closure_authority(
+    project_root: Path,
+    *,
+    story_id: str,
+    expected_cohort_revision: int,
+) -> NativeClosureAuthorityProjectionV1:
+    """定位 unit-bound CP6 current head；caller 不能提交 authority/ref/digest。"""
+
+    root = project_root.resolve()
+    if not story_id or type(expected_cohort_revision) is not int or expected_cohort_revision < 1:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=max(expected_cohort_revision, 1),
+            reasons=["CLOSURE_AUTHORITY_INPUT_INVALID"],
+        )
+    ledger_path = _resolve_runtime_ref(root, CHECKPOINT_LEDGER_REL.as_posix())
+    events, ledger_errors = event_ledger.load_events(ledger_path)
+    candidates = [
+        item
+        for item in events
+        if str(item.get("checkpoint") or "").upper() == "CP6"
+        and str(item.get("story_id") or "") == story_id
+    ]
+    cr_ids = {str(item.get("cr_id") or "") for item in candidates if item.get("cr_id")}
+    if ledger_errors or len(cr_ids) != 1:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            reasons=[*ledger_errors, "CLOSURE_CP6_LEDGER_IDENTITY_UNAVAILABLE"],
+        )
+    cr_id = next(iter(cr_ids))
+    projection = checkpoint_projection.load_checkpoint_projection(
+        root,
+        cr_id=cr_id,
+        checkpoint="CP6",
+    )
+    head = projection.head("CP6", subject_id=story_id)
+    if projection.decision != "PASS" or head is None:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=[
+                *(item.code for item in projection.findings),
+                "CLOSURE_CP6_CURRENT_HEAD_UNAVAILABLE",
+            ],
+        )
+    matching_events = [item for item in candidates if item.get("event_id") == head.event_id]
+    if len(matching_events) != 1:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=["CLOSURE_CP6_LEDGER_EVENT_AMBIGUOUS"],
+        )
+    result_ref = head.result_ref
+    try:
+        result_path = _input_artifact_path(root, result_ref)
+        result_bytes = result_path.read_bytes()
+        result = _json_mapping(result_path, subject="CP6 result")
+    except (OSError, TypeError, ValueError) as exc:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=[f"CLOSURE_CP6_RESULT_INVALID_{type(exc).__name__.upper()}"],
+        )
+    errors, warnings = validate_cp_result(
+        result_path,
+        project_root=root,
+        check_consistency=True,
+        correlation_profile="strict",
+    )
+    result_revision = result.get("closure_cohort_revision", result.get("check_attempt"))
+    if (
+        errors
+        or warnings
+        or result.get("decision") != "PASS"
+        or result.get("story_id") != story_id
+        or result.get("cr_id") != cr_id
+        or result_revision != expected_cohort_revision
+    ):
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=[
+                *(f"CP6_ERROR:{item}" for item in errors),
+                *(f"CP6_WARNING:{item}" for item in warnings),
+                "CLOSURE_CP6_STRICT_CORRELATION_FAILED",
+            ],
+        )
+    declared_hashes = result.get("input_artifact_hashes")
+    if not isinstance(declared_hashes, Mapping) or not declared_hashes:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=["CLOSURE_CP6_INPUT_HASHES_REQUIRED"],
+        )
+    normalized_hashes: list[tuple[str, str]] = []
+    hash_findings: list[str] = []
+    for raw_ref, raw_digest in sorted(declared_hashes.items()):
+        ref = str(raw_ref)
+        digest = str(raw_digest)
+        if not SHA256_RE.fullmatch(digest):
+            hash_findings.append(f"CLOSURE_INPUT_HASH_INVALID:{ref}")
+            continue
+        try:
+            actual = "sha256:" + hashlib.sha256(_input_artifact_path(root, ref).read_bytes()).hexdigest()
+        except (OSError, ValueError):
+            actual = ""
+        if actual != digest:
+            hash_findings.append(f"CLOSURE_INPUT_HASH_DRIFT:{ref}")
+        normalized_hashes.append((ref, digest))
+    evidence_ref = str(result.get("evidence_ref") or "")
+    return_refs = [ref for ref, _ in normalized_hashes if ref.startswith("process/returns/")]
+    if len(return_refs) != 1 or evidence_ref not in dict(normalized_hashes):
+        hash_findings.append("CLOSURE_RETURN_EVIDENCE_BINDING_INCOMPLETE")
+    if hash_findings:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=hash_findings,
+        )
+    return_ref = return_refs[0]
+    try:
+        return_path = _input_artifact_path(root, return_ref)
+        evidence_path = _input_artifact_path(root, evidence_ref)
+        return_payload = _json_mapping(return_path, subject="Return Packet")
+        evidence_payload = _json_mapping(evidence_path, subject="Evidence Index")
+    except (OSError, ValueError) as exc:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=[f"CLOSURE_RETURN_EVIDENCE_INVALID_{type(exc).__name__.upper()}"],
+        )
+    if any(
+        payload.get("story_id") != story_id or payload.get("cr_id") != cr_id
+        for payload in (return_payload, evidence_payload)
+    ):
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=["CLOSURE_RETURN_EVIDENCE_IDENTITY_MISMATCH"],
+        )
+    container_ref = f"process/works/{cr_id}/WORK.yaml"
+    container_refs = (container_ref,) if _input_artifact_path(root, container_ref).is_file() else ()
+    dispatch_refs = tuple(sorted(str(item) for item in _as_list(result.get("dispatch_refs")) if item))
+    receipt_refs = tuple(
+        sorted(
+            ref
+            for ref, _ in normalized_hashes
+            if ref.endswith(".receipt.json") and "/evidence/validation/" in ref
+        )
+    )
+    if not container_refs or not dispatch_refs or not receipt_refs:
+        return _blocked_closure_authority(
+            story_id=story_id,
+            expected_cohort_revision=expected_cohort_revision,
+            cr_id=cr_id,
+            reasons=["CLOSURE_CANONICAL_OWNER_REF_SET_INCOMPLETE"],
+        )
+    result_digest = hashlib.sha256(result_bytes).hexdigest()
+    return_digest = hashlib.sha256(return_path.read_bytes()).hexdigest()
+    evidence_digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    checkpoint_ledger_digest = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
+    package_sources = {
+        ref: hashlib.sha256((root / ref).read_bytes()).hexdigest()
+        for ref in (
+            "meta_flow/execution_control/contract.py",
+            "meta_flow/execution_control/closure.py",
+            "meta_flow/checks/cp_result.py",
+        )
+        if (root / ref).is_file()
+    }
+    fingerprint_payloads = {
+        "facts": {"result": result_digest, "return": return_digest, "evidence": evidence_digest},
+        "scope": {"container_refs": container_refs, "input_hashes": normalized_hashes},
+        "authorization": {"checkpoint_event_id": head.event_id, "ledger": checkpoint_ledger_digest},
+        "contract": package_sources,
+        "consumer": {"story_id": story_id, "dispatch_refs": dispatch_refs},
+        "ownership": {"touched_files": return_payload.get("touched_files", [])},
+        "slice": {"cr_id": cr_id, "cohort_revision": expected_cohort_revision},
+        "test": {"commands": evidence_payload.get("commands", []), "tests": evidence_payload.get("tests", [])},
+        "source": {"checker": result.get("checker_provenance", {}), "package": package_sources},
+        "profile": {"checkpoint": "CP6", "correlation": "strict"},
+    }
+    fingerprints = tuple(
+        (key, canonical_digest(fingerprint_payloads[key])) for key in sorted(FINGERPRINT_KEYS)
+    )
+    bounded_refs = tuple(
+        sorted(
+            {
+                result_ref,
+                return_ref,
+                evidence_ref,
+                container_ref,
+                *dispatch_refs,
+                *receipt_refs,
+                *(ref for ref, _ in normalized_hashes),
+            }
+        )
+    )
+    partial = NativeClosureAuthorityProjectionV1(
+        decision="PASS",
+        reason_codes=(),
+        story_id=story_id,
+        cr_id=cr_id,
+        cohort_revision=expected_cohort_revision,
+        result_ref=result_ref,
+        result_digest=result_digest,
+        checkpoint_event_id=head.event_id,
+        checkpoint_ledger_digest=checkpoint_ledger_digest,
+        return_ref=return_ref,
+        return_digest=return_digest,
+        evidence_ref=evidence_ref,
+        evidence_digest=evidence_digest,
+        input_artifact_hashes=tuple(normalized_hashes),
+        container_refs=container_refs,
+        dispatch_refs=dispatch_refs,
+        receipt_refs=receipt_refs,
+        bounded_refs=bounded_refs,
+        fingerprints=fingerprints,
+        authority_digest="",
+    )
+    return replace(
+        partial,
+        authority_digest=canonical_digest(partial.as_dict(include_authority_digest=False)),
+    )
+
+
+def _closure_evidence_refs(result: Mapping[str, Any]) -> tuple[str, ...]:
+    refs = {_ref_path(result.get("evidence_ref"))}
+    for item in _as_list(result.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        refs.update(_ref_path(ref) for ref in _as_list(item.get("evidence_refs")))
+    refs.discard("")
+    return tuple(sorted(refs))
+
+
+def project_cp_evidence_inventory(
+    project_root: Path,
+    *,
+    cohort: ClosureCohortV1,
+    result_refs: tuple[str, ...],
+) -> CpEvidenceInventoryProjectionV1:
+    """复用 result checker/current-head 语义，并只读核验 exact evidence bytes。"""
+
+    # 保持 cp_result 为 closure 的 canonical owner，同时避免顶层循环导入。
+    # 延迟导入让 closure 能在 closed registry 建立时冻结本函数对象本身。
+    from meta_flow.execution_control.closure import inventory_item
+
+    root = project_root.resolve()
+    normalized_refs = tuple(sorted(str(ref) for ref in result_refs))
+    if not normalized_refs or len(set(normalized_refs)) != len(normalized_refs):
+        raise ValueError("result_refs must be non-empty and unique")
+    result_items: list[ClosureInventoryItemV1] = []
+    evidence_items: list[ClosureInventoryItemV1] = []
+    findings: list[str] = []
+    for result_ref in normalized_refs:
+        result_path = _input_artifact_path(root, result_ref)
+        errors, warnings = validate_cp_result(
+            result_path,
+            project_root=root,
+            check_consistency=True,
+            correlation_profile="strict",
+        )
+        findings.extend(f"{result_ref}:{finding}" for finding in (*errors, *warnings))
+        result: dict[str, Any] = {}
+        if result_path.is_file():
+            try:
+                result = load_cp_result(result_path)
+            except ValueError as exc:
+                findings.append(f"{result_ref}:{exc}")
+        result_items.append(
+            inventory_item(
+                kind="result",
+                ref=result_ref,
+                cohort=cohort,
+                dangling=bool(errors) or str(result.get("decision") or "") != "PASS",
+            )
+        )
+        evidence_refs = _closure_evidence_refs(result)
+        if not evidence_refs:
+            evidence_refs = (f"{result_ref}#required-evidence-unavailable",)
+        declared_hashes = result.get("input_artifact_hashes")
+        if not isinstance(declared_hashes, Mapping):
+            declared_hashes = {}
+        for evidence_ref in evidence_refs:
+            evidence_path = _input_artifact_path(root, evidence_ref)
+            declared = str(declared_hashes.get(evidence_ref) or "")
+            dangling = True
+            if evidence_path.is_file() and SHA256_RE.fullmatch(declared):
+                actual = "sha256:" + hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+                dangling = actual != declared
+            if dangling:
+                findings.append(f"{result_ref}:EVIDENCE_MISSING_OR_DIGEST_DRIFT:{evidence_ref}")
+            evidence_items.append(
+                inventory_item(
+                    kind="evidence",
+                    ref=evidence_ref,
+                    cohort=cohort,
+                    dangling=dangling,
+                )
+            )
+    return CpEvidenceInventoryProjectionV1(
+        result_items=tuple(result_items),
+        evidence_items=tuple(evidence_items),
+        findings=tuple(sorted(set(findings))),
+    )
 
 
 def _validate_dispatch_refs(root: Path, result: dict[str, Any]) -> list[str]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -20,6 +22,16 @@ from meta_flow.evolution import (
     write_evolution_package_create_only,
 )
 from meta_flow.project.model import Project, load_project, write_project_create_only
+from meta_flow.project.onboarding import (
+    ProjectInitRequest,
+    apply_project_init,
+    plan_project_init,
+)
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    OnboardingAuthorization,
+)
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.retrospective import (
     RETROSPECTIVE_DIMENSIONS,
@@ -36,6 +48,66 @@ from meta_flow.retrospective import (
 from meta_flow.work.budget import G1_BUDGET, BudgetLimit
 from meta_flow.work.model import load_work
 from meta_flow.work.scope import WorkScope
+from meta_flow.work.store import WorkInitApplyError
+
+
+def git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def init_bound_project(root: Path) -> tuple[Path, Path]:
+    release = root / "demo"
+    release.mkdir()
+    git(release, "init", "-b", "main")
+    (release / "README.md").write_text("# Demo\n", encoding="utf-8")
+    git(release, "add", "README.md")
+    git(
+        release,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "initial",
+    )
+    plan = plan_project_init(ProjectInitRequest(release, "demo", "Demo"))
+    payload = plan.as_dict()
+    apply_project_init(
+        plan,
+        OnboardingAuthorization(
+            1,
+            "evolution-fixture",
+            AUTHORIZATION_SOURCE,
+            AUTHORIZATION_KIND,
+            payload["operation"],
+            payload["decision_ref"],
+            payload["project_id"],
+            payload["plan_digest"],
+            payload["base_oids"],
+            "2099-01-01T00:00:00+00:00",
+        ),
+    )
+    process = root / "demo-process"
+    git(process, "add", ".")
+    git(
+        process,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "initial process",
+    )
+    return release, process
 
 
 def dimensions() -> tuple[RetrospectiveDimension, ...]:
@@ -331,36 +403,130 @@ def test_evolution_provenance_rejects_tampered_fact_confirmation(tmp_path: Path)
 def test_separate_typed_authorization_materializes_normal_work_without_publication(
     tmp_path: Path,
 ) -> None:
-    write_project_create_only(
-        tmp_path,
-        Project(schema_version=1, project_id="demo", name="Demo", status="active"),
-    )
-    write_retrospective_create_only(tmp_path, make_retro())
+    release, process = init_bound_project(tmp_path)
+    write_retrospective_create_only(process, make_retro())
     retro = confirm_retrospective_facts(
-        tmp_path,
+        process,
         "RETRO-001",
         confirmation_ref="decisions/RETRO-001-facts.yaml",
     )
-    accept_candidate(tmp_path)
-    package = make_package(retro)
-    write_evolution_package_create_only(tmp_path, package)
-    plan = build_evolution_start_plan(package, observed_baseline_oid="a" * 40)
+    accept_candidate(process)
+    baseline = git(release, "rev-parse", "HEAD")
+    package = replace(make_package(retro), baseline_oid=baseline)
+    write_evolution_package_create_only(process, package)
+    plan = build_evolution_start_plan(package, observed_baseline_oid=baseline)
     authorization = EvolutionStartAuthorization(
         authorization_id="AUTH-EVO-001",
         evolution_id="EVO-001",
         purpose="implementation_start",
         plan_digest=plan.plan_digest,
-        baseline_oid="a" * 40,
+        baseline_oid=baseline,
         expires_at="2099-01-01T00:00:00+00:00",
     )
 
-    receipt = materialize_evolution_work(tmp_path, plan, authorization)
+    receipt = materialize_evolution_work(release, plan, authorization)
 
     assert receipt.decision == "PASS"
     assert receipt.publication_count == 0
     assert receipt.recursive_trigger_count == 0
-    assert load_work(tmp_path, "EVOW-001").kind == "evolution"
-    assert load_project(tmp_path).active_work_refs == ("works/EVOW-001/WORK.yaml",)
+    assert load_work(process, "EVOW-001").kind == "work"
+    assert load_work(process, "EVOW-001").execution_unit is not None
+    assert load_project(process).active_work_refs == ("works/EVOW-001/WORK.yaml",)
+
+
+def test_evolution_request_is_not_written_before_fresh_package_check(
+    tmp_path: Path,
+) -> None:
+    release, process = init_bound_project(tmp_path)
+    write_retrospective_create_only(process, make_retro())
+    retro = confirm_retrospective_facts(
+        process,
+        "RETRO-001",
+        confirmation_ref="decisions/RETRO-001-facts.yaml",
+    )
+    accept_candidate(process)
+    baseline = git(release, "rev-parse", "HEAD")
+    package = replace(make_package(retro), baseline_oid=baseline)
+    package_path = write_evolution_package_create_only(process, package)
+    plan = build_evolution_start_plan(package, observed_baseline_oid=baseline)
+    authorization = EvolutionStartAuthorization(
+        authorization_id="AUTH-EVO-001",
+        evolution_id=package.evolution_id,
+        purpose="implementation_start",
+        plan_digest=plan.plan_digest,
+        baseline_oid=baseline,
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+    package_path.write_text(
+        package_path.read_text(encoding="utf-8").replace(
+            package.objective,
+            package.objective + "（drift）",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="package changed"):
+        materialize_evolution_work(release, plan, authorization)
+
+    assert not (process / plan.work.request_ref).exists()
+    assert not (process / plan.work.work_ref).exists()
+    assert load_project(process).active_work_refs == ()
+
+
+def test_evolution_partial_keeps_exact_request_and_work_without_unlink(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    release, process = init_bound_project(tmp_path)
+    write_retrospective_create_only(process, make_retro())
+    retro = confirm_retrospective_facts(
+        process,
+        "RETRO-001",
+        confirmation_ref="decisions/RETRO-001-facts.yaml",
+    )
+    accept_candidate(process)
+    baseline = git(release, "rev-parse", "HEAD")
+    package = replace(make_package(retro), baseline_oid=baseline)
+    write_evolution_package_create_only(process, package)
+    plan = build_evolution_start_plan(package, observed_baseline_oid=baseline)
+    authorization = EvolutionStartAuthorization(
+        authorization_id="AUTH-EVO-001",
+        evolution_id=package.evolution_id,
+        purpose="implementation_start",
+        plan_digest=plan.plan_digest,
+        baseline_oid=baseline,
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+
+    def fail_project(*_args, **_kwargs):
+        raise OSError("injected project writer failure")
+
+    monkeypatch.setattr("meta_flow.work.store.replace_project", fail_project)
+    with pytest.raises(WorkInitApplyError) as raised:
+        materialize_evolution_work(release, plan, authorization)
+
+    receipt = raised.value.receipt
+    assert receipt.decision == "PARTIAL_MUTATION"
+    assert receipt.domain_mutation_count == 3
+    assert set(receipt.durable_refs) == {
+        "works/EVOW-001",
+        "works/EVOW-001/REQUEST.md",
+        "works/EVOW-001/WORK.yaml",
+    }
+    assert receipt.coordination_mutation_count == 2
+    assert (process / plan.work.request_ref).is_file()
+    assert (process / plan.work.work_ref).is_file()
+    assert load_project(process).active_work_refs == ()
+
+
+def test_evolution_materializer_has_no_direct_request_writer_or_compensating_unlink() -> None:
+    source = inspect.getsource(materialize_evolution_work)
+    assert ".write_text(" not in source
+    assert ".write_bytes(" not in source
+    assert ".mkdir(" not in source
+    assert ".unlink(" not in source
+    assert "plan_work_init_from_release_root" in source
+    assert "apply_work_init" in source
 
 
 def test_start_blocks_baseline_drift_and_authorization_cannot_include_publication(tmp_path: Path) -> None:

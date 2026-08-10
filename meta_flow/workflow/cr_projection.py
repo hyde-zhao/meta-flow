@@ -46,6 +46,21 @@ class NativeCRStatusProjectionV1:
     def as_dict(self) -> dict[str, Any]:
         return {**self.__dict__, 'kind': 'NativeCRStatusProjectionV1', 'schema_version': 1, 'findings': list(self.findings)}
 
+@dataclass(frozen=True)
+class CheckpointIndexRowV1:
+    """Checkpoint Index 的非持久化 typed row。"""
+    checkpoint: str
+    status: str
+    result_ref: str = ''
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r'CP[0-8]', self.checkpoint):
+            raise ValueError(f'invalid checkpoint index row: {self.checkpoint}')
+        if not self.status or any(char in self.status for char in ('\n', '\r', '|')):
+            raise ValueError(f'invalid checkpoint index status: {self.checkpoint}')
+        if any(char in self.result_ref for char in ('\n', '\r', '|', '`')):
+            raise ValueError(f'invalid checkpoint result ref: {self.checkpoint}')
+
 class AggregateCompletionProjector:
     """Project one persisted PASS aggregate through CR ledger and current-state writers."""
 
@@ -94,8 +109,8 @@ def _checkpoint_result_projection(
     *,
     resolver: Any | None = None,
     read_context: ReadContextProtocol | None = None,
-) -> dict[str, str]:
-    """只消费 canonical owner 选出的 CR-level current heads。"""
+) -> dict[str, CheckpointIndexRowV1]:
+    """只消费 canonical owner 选出的 CR-level current heads，并保留 exact ref。"""
     kwargs = {"resolver": resolver} if resolver is not None else {}
     projection = checkpoint_projection.load_checkpoint_projection(
         project_root,
@@ -105,7 +120,22 @@ def _checkpoint_result_projection(
     )
     if projection.findings:
         raise ValueError('checkpoint projection failed: ' + '; '.join((f'{finding.code}:{finding.message}' for finding in projection.findings)))
-    return {head.checkpoint: head.decision for head in projection.heads if head.subject_id == cr_id and re.fullmatch('CP[0-8]', head.checkpoint)}
+    rows: dict[str, CheckpointIndexRowV1] = {}
+    for head in projection.heads:
+        if head.subject_id != cr_id:
+            continue
+        if not re.fullmatch(r'CP[0-8]', head.checkpoint):
+            raise ValueError(f'invalid canonical checkpoint head: {head.checkpoint}')
+        if head.checkpoint in rows:
+            raise ValueError(f'duplicate canonical checkpoint head: {head.checkpoint}')
+        if not head.result_ref or head.result_ref == '—':
+            raise ValueError(f'canonical checkpoint head missing result_ref: {head.checkpoint}')
+        rows[head.checkpoint] = CheckpointIndexRowV1(
+            checkpoint=head.checkpoint,
+            status=head.decision,
+            result_ref=head.result_ref,
+        )
+    return rows
 
 def _render_exact_section_rows(text: str, heading: str, replacements: dict[str, str]) -> str:
     """Replace exact first-column table rows inside one optional section."""
@@ -135,18 +165,195 @@ def _render_exact_section_rows(text: str, heading: str, replacements: dict[str, 
         seen.add(key)
     return ''.join(lines)
 
-def render_status_body_projection(text: str, *, lifecycle_status: str, readiness_status: str, gate_status: str, checkpoint_results: dict[str, str] | None=None) -> str:
+def _markdown_line_ending(raw: str) -> str:
+    if raw.endswith('\r\n'):
+        return '\r\n'
+    if raw.endswith('\n'):
+        return '\n'
+    return ''
+
+def _markdown_table_cells(raw: str) -> list[str] | None:
+    line = raw.rstrip('\r\n')
+    if not line.startswith('|') or not line.endswith('|'):
+        return None
+    return [cell.strip() for cell in line[1:-1].split('|')]
+
+def _render_markdown_table_row(cells: list[str], line_ending: str) -> str:
+    return '| ' + ' | '.join(cells) + ' |' + line_ending
+
+def _checkpoint_number(checkpoint: str) -> int:
+    if not re.fullmatch(r'CP[0-8]', checkpoint):
+        raise ValueError(f'invalid Checkpoint Index key: {checkpoint}')
+    return int(checkpoint[2:])
+
+def _checkpoint_ref_cell(result_ref: str, *, template: str = '') -> str:
+    if not result_ref:
+        return '—'
+    normalized_template = template.strip()
+    if normalized_template and normalized_template != '—':
+        if normalized_template.startswith('`') and normalized_template.endswith('`'):
+            return f'`{result_ref}`'
+        return result_ref
+    return f'`{result_ref}`'
+
+def _render_checkpoint_index_rows(
+    text: str,
+    replacements: dict[str, CheckpointIndexRowV1],
+) -> str:
+    """在唯一且合法的 Checkpoint Index table 内确定性更新或插入行。"""
+    heading_pattern = re.compile(r'^## (?:(?:\d+(?:\.\d+)*)\.?\s+)?Checkpoint Index$')
+    lines = text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if heading_pattern.fullmatch(line.rstrip('\r\n'))]
+    if not starts:
+        return text
+    if len(starts) != 1:
+        raise ValueError('duplicate CR body section: Checkpoint Index')
+    for checkpoint, row in replacements.items():
+        _checkpoint_number(checkpoint)
+        if row.checkpoint != checkpoint:
+            raise ValueError(f'checkpoint row identity mismatch: {checkpoint}/{row.checkpoint}')
+
+    section_start = starts[0] + 1
+    section_end = next(
+        (index for index in range(section_start, len(lines)) if lines[index].startswith('## ')),
+        len(lines),
+    )
+    header_index = next(
+        (index for index in range(section_start, section_end) if lines[index].strip()),
+        None,
+    )
+    if header_index is None:
+        raise ValueError('Checkpoint Index table header is missing')
+    header = _markdown_table_cells(lines[header_index])
+    if header is None or len(header) < 2:
+        raise ValueError('Checkpoint Index table header is malformed')
+    normalized_header = [cell.strip().lower().replace('_', ' ') for cell in header]
+    checkpoint_names = {'checkpoint', 'cp', '检查点'}
+    status_names = {'status', '状态'}
+    if normalized_header[0] not in checkpoint_names:
+        raise ValueError('Checkpoint Index table schema is unsupported')
+    status_indexes = [index for index, name in enumerate(normalized_header) if name in status_names]
+    if len(status_indexes) != 1:
+        raise ValueError('Checkpoint Index table schema is unsupported')
+    status_index = status_indexes[0]
+    if status_index == 0:
+        raise ValueError('Checkpoint Index status column is malformed')
+    ref_names = {'ref', 'result ref', 'machine result ref', '机器结果 ref', '机器结果引用'}
+    ref_indexes = [index for index, name in enumerate(normalized_header) if name in ref_names]
+    if len(header) == 2:
+        if ref_indexes:
+            raise ValueError('two-column Checkpoint Index must not declare a result ref column')
+        ref_index: int | None = None
+    else:
+        if len(ref_indexes) != 1:
+            raise ValueError('Checkpoint Index result ref column is missing or ambiguous')
+        ref_index = ref_indexes[0]
+
+    separator_index = header_index + 1
+    if separator_index >= section_end:
+        raise ValueError('Checkpoint Index table separator is missing')
+    separator = _markdown_table_cells(lines[separator_index])
+    if separator is None or len(separator) != len(header) or not all(
+        re.fullmatch(r':?-{3,}:?', cell) for cell in separator
+    ):
+        raise ValueError('Checkpoint Index table separator is malformed')
+
+    data_start = separator_index + 1
+    data_end = data_start
+    entries: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    previous_number = -1
+    table_ref_template = ''
+    while data_end < section_end:
+        raw = lines[data_end]
+        if not raw.strip():
+            break
+        cells = _markdown_table_cells(raw)
+        if cells is None:
+            break
+        if len(cells) != len(header):
+            raise ValueError('Checkpoint Index table column count drift')
+        checkpoint = cells[0]
+        number = _checkpoint_number(checkpoint)
+        if checkpoint in seen:
+            raise ValueError(f'duplicate CR body table row: Checkpoint Index/{checkpoint}')
+        if number <= previous_number:
+            raise ValueError('Checkpoint Index rows are not in numeric order')
+        seen.add(checkpoint)
+        previous_number = number
+        if ref_index is not None and cells[ref_index] and cells[ref_index] != '—' and not table_ref_template:
+            table_ref_template = cells[ref_index]
+        replacement = replacements.get(checkpoint)
+        rendered_row = raw
+        if replacement is not None:
+            cells[status_index] = replacement.status
+            if ref_index is not None and replacement.result_ref:
+                cells[ref_index] = _checkpoint_ref_cell(
+                    replacement.result_ref,
+                    template=cells[ref_index],
+                )
+            rendered_row = _render_markdown_table_row(cells, _markdown_line_ending(raw))
+        entries.append((checkpoint, rendered_row))
+        data_end += 1
+
+    if any(_markdown_table_cells(lines[index]) is not None for index in range(data_end, section_end)):
+        raise ValueError('Checkpoint Index contains a non-contiguous table')
+
+    line_ending = _markdown_line_ending(lines[header_index]) or '\n'
+    for checkpoint, row in replacements.items():
+        if checkpoint in seen:
+            continue
+        cells = ['—'] * len(header)
+        cells[0] = checkpoint
+        cells[status_index] = row.status
+        if ref_index is not None:
+            cells[ref_index] = _checkpoint_ref_cell(
+                row.result_ref,
+                template=table_ref_template,
+            )
+        entries.append((checkpoint, _render_markdown_table_row(cells, line_ending)))
+    entries.sort(key=lambda item: _checkpoint_number(item[0]))
+    table_ends_at_eof = data_end == len(lines)
+    preserve_final_newline = not table_ends_at_eof or text.endswith(('\n', '\r'))
+    rendered_entries: list[str] = []
+    for index, (_checkpoint, raw) in enumerate(entries):
+        is_final = index == len(entries) - 1
+        existing_ending = _markdown_line_ending(raw)
+        desired_ending = (
+            (existing_ending or line_ending)
+            if not is_final or preserve_final_newline
+            else ''
+        )
+        rendered_entries.append(raw.rstrip('\r\n') + desired_ending)
+    if rendered_entries and data_start > 0 and not _markdown_line_ending(lines[data_start - 1]):
+        lines[data_start - 1] = lines[data_start - 1] + line_ending
+    lines[data_start:data_end] = rendered_entries
+    return ''.join(lines)
+
+def render_status_body_projection(text: str, *, lifecycle_status: str, readiness_status: str, gate_status: str, checkpoint_results: dict[str, CheckpointIndexRowV1 | str] | None=None) -> str:
     """Project lifecycle truth into the optional CR body status tables."""
     rendered = _render_exact_section_rows(text, 'CR 类型与门禁策略', {'生命周期状态': lifecycle_status, '就绪状态': readiness_status, '门禁状态': gate_status})
-    checkpoint_projection = dict(checkpoint_results or {})
+    checkpoint_projection = {
+        checkpoint: (
+            row
+            if isinstance(row, CheckpointIndexRowV1)
+            else CheckpointIndexRowV1(checkpoint=checkpoint, status=row)
+        )
+        for checkpoint, row in (checkpoint_results or {}).items()
+    }
     checkpoint = _gate_checkpoint_projection(gate_status)
     if checkpoint is not None:
         checkpoint_id, checkpoint_status = checkpoint
         if checkpoint_status == 'approved' or checkpoint_id not in checkpoint_projection:
-            checkpoint_projection[checkpoint_id] = checkpoint_status
+            existing = checkpoint_projection.get(checkpoint_id)
+            checkpoint_projection[checkpoint_id] = CheckpointIndexRowV1(
+                checkpoint=checkpoint_id,
+                status=checkpoint_status,
+                result_ref=existing.result_ref if existing is not None else '',
+            )
     if not checkpoint_projection:
         return rendered
-    return _render_exact_section_rows(rendered, 'Checkpoint Index', checkpoint_projection)
+    return _render_checkpoint_index_rows(rendered, checkpoint_projection)
 
 def summary_from_cr_file(
     project_root: Path,

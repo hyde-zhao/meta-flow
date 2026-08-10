@@ -11,14 +11,24 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from meta_flow.execution_control.contract import ExecutionUnitV1
+from meta_flow.execution_control.runtime_context import (
+    RequestMaterializationCandidateV1,
+    target_preimage_digest,
+)
 from meta_flow.project.model import is_safe_ref
+from meta_flow.project.process_route import require_project_process_route
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.retrospective import Retrospective, load_retrospective
 from meta_flow.work.budget import BudgetLimit
 from meta_flow.work.model import Work, build_work, load_work
 from meta_flow.work.risk import ClassificationDecision
 from meta_flow.work.scope import WorkScope
-from meta_flow.work.store import WorkInitReceipt, apply_work_init, plan_work_init
+from meta_flow.work.store import (
+    WorkInitReceipt,
+    apply_work_init,
+    plan_work_init_from_release_root,
+)
 
 EVOLUTION_SCHEMA_VERSION = 1
 EVOLUTION_RESULT_SCHEMA_VERSION = 1
@@ -703,7 +713,16 @@ def build_evolution_start_plan(
         classification=classification,
         release_base_oid=package.baseline_oid,
         process_base_oid="",
-        kind="evolution",
+        execution_unit=ExecutionUnitV1(
+            unit_id=package.work_id,
+            root_concept="meta-flow-evolution",
+            slice_id=package.evolution_id,
+            container_role="primary",
+            revision=1,
+            supersedes_unit_id="",
+            contract_ref=package.ref,
+            contract_digest=package.digest,
+        ),
     )
     source = {
         "schema_version": 1,
@@ -744,14 +763,27 @@ def _validate_start_authorization(
         raise ValueError("implementation authorization is expired")
 
 
+def _render_evolution_request(package: EvolutionPackage) -> bytes:
+    return (
+        "# 已批准的 Meta Flow 进化 Work\n\n"
+        f"来源进化包：`{package.ref}`\n\n"
+        f"目标：{package.objective}\n\n"
+        "本次只授权创建正常 Work；不授权 commit、push、production 写入或递归自进化。\n"
+    ).encode()
+
+
 def materialize_evolution_work(
-    process_root: Path,
+    release_root: Path,
     plan: EvolutionStartPlan,
     authorization: EvolutionStartAuthorization,
 ) -> EvolutionStartReceipt:
     if plan.blocked:
         raise ValueError("evolution start plan is blocked")
     _validate_start_authorization(plan, authorization)
+    route = require_project_process_route(
+        release_root.resolve(), project_id=plan.package.project_id
+    )
+    process_root = route.process_root
     persisted = load_evolution_package(process_root, plan.package.evolution_id)
     if persisted.digest != plan.package.digest:
         raise ValueError("evolution package changed after planning")
@@ -761,22 +793,27 @@ def materialize_evolution_work(
     )
     if fresh.plan_digest != plan.plan_digest:
         raise ValueError("evolution start plan is stale")
-    request_path = process_root.resolve() / plan.work.request_ref
-    if request_path.exists() or request_path.is_symlink():
-        raise FileExistsError("evolution Work REQUEST already exists")
-    request_path.parent.mkdir(parents=True, exist_ok=True)
-    request_path.write_text(
-        "# 已批准的 Meta Flow 进化 Work\n\n"
-        f"来源进化包：`{plan.package.ref}`\n\n"
-        f"目标：{plan.package.objective}\n\n"
-        "本次只授权创建正常 Work；不授权 commit、push、production 写入或递归自进化。\n",
-        encoding="utf-8",
+    _validate_start_authorization(fresh, authorization)
+    request_path = process_root / fresh.work.request_ref
+    candidate = RequestMaterializationCandidateV1.build(
+        request_ref=fresh.work.request_ref,
+        content_bytes=_render_evolution_request(persisted),
+        source_kind="evolution-package-v1",
+        source_ref=persisted.ref,
+        source_digest=persisted.digest,
+        before_preimage_digest=target_preimage_digest(request_path),
     )
-    try:
-        work_receipt = apply_work_init(plan_work_init(process_root, plan.work))
-    except Exception:
-        request_path.unlink()
-        raise
+    work_plan = plan_work_init_from_release_root(
+        release_root,
+        fresh.work,
+        request_candidate=candidate,
+    )
+    if work_plan.execution_context is None:
+        raise ValueError("evolution Work execution context is unavailable")
+    if work_plan.execution_context.release_oid != persisted.baseline_oid:
+        raise ValueError("evolution package baseline differs from canonical release OID")
+    _validate_start_authorization(fresh, authorization)
+    work_receipt = apply_work_init(work_plan)
     return EvolutionStartReceipt(
         authorization_id=authorization.authorization_id,
         evolution_id=plan.package.evolution_id,
@@ -860,10 +897,17 @@ def write_evolution_result_create_only(process_root: Path, result: EvolutionResu
     package = load_evolution_package(process_root, result.evolution_id)
     validate_evolution_provenance(process_root, package)
     work = load_work(process_root, result.work_id)
+    unit = work.execution_unit
     if (
         work.work_id != package.work_id
         or work.project_id != package.project_id
-        or work.kind != "evolution"
+        or work.kind not in {"work", "cr"}
+        or unit is None
+        or unit.unit_id != package.work_id
+        or unit.root_concept != "meta-flow-evolution"
+        or unit.slice_id != package.evolution_id
+        or unit.contract_ref != package.ref
+        or unit.contract_digest != package.digest
         or work.status not in {"ready_for_verification", "completed"}
     ):
         raise ValueError("evolution result requires its matching verified normal Work")

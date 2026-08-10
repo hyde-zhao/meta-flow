@@ -20,6 +20,7 @@ namespaces = true
 
 [tool.setuptools.package-data]
 delivery = ["**/*.md", "**/*.yaml", "**/*.json", "**/*.sh", "**/*.ps1", "**/*.py"]
+"meta_flow.execution_control" = ["provider/*.json"]
 
 [dependency-groups]
 dev = [

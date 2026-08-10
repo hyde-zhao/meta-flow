@@ -81,7 +81,19 @@ def init_project(root: Path) -> tuple[Path, Path, str]:
             "2099-01-01T00:00:00+00:00",
         ),
     )
-    return release, root / "demo-process", git(release, "rev-parse", "HEAD")
+    process = root / "demo-process"
+    git(process, "add", ".")
+    git(
+        process,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "initial process",
+    )
+    return release, process, git(release, "rev-parse", "HEAD")
 
 
 def retro_payload() -> dict[str, object]:

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
+from meta_flow.execution_control.migration import current_execution_control_policy
 from meta_flow.work.model import Work
 from meta_flow.work.validation_fingerprint import VALIDATION_LAYERS
 from meta_flow.work.validation_planner import ValidationExecutionPlan
@@ -22,6 +23,10 @@ class ReviewPlan:
     route_mode: str
     dispatch_mode: str
     stages: tuple[str, ...]
+    execution_control_mode: str = "enforce-new"
+    provider_receipt_status: str = "MISSING"
+    provider_readiness: str = "UNAVAILABLE_PENDING_CP7_CP8"
+    invalidated_layers: tuple[str, ...] = ("provider-qualified-readiness",)
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,10 @@ class ValidationPlan:
     stages: tuple[str, ...]
     layer_decisions: dict[str, str]
     next_layer: str
+    execution_control_mode: str = "enforce-new"
+    provider_receipt_status: str = "MISSING"
+    provider_readiness: str = "UNAVAILABLE_PENDING_CP7_CP8"
+    invalidated_layers: tuple[str, ...] = ("provider-qualified-readiness",)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -48,7 +57,19 @@ class ValidationPlan:
             "errors": list(self.errors),
             "stages": list(self.stages),
             "layer_decisions": self.layer_decisions.copy(),
+            "invalidated_layers": list(self.invalidated_layers),
         }
+
+
+def _with_execution_control_assurance(plan: ReviewPlan | ValidationPlan):
+    policy = current_execution_control_policy()
+    return replace(
+        plan,
+        execution_control_mode=policy.effective_writer_mode,
+        provider_receipt_status=policy.candidate_receipt_status,
+        provider_readiness="UNAVAILABLE_PENDING_CP7_CP8",
+        invalidated_layers=("provider-qualified-readiness",),
+    )
 
 
 def build_review_plan(
@@ -64,7 +85,7 @@ def build_review_plan(
         else ("clarification", "design", "implementation", "verification")
     )
     if work.risk_profile == "G0":
-        return ReviewPlan(
+        return _with_execution_control_assurance(ReviewPlan(
             "G0",
             "self-check",
             0,
@@ -74,9 +95,9 @@ def build_review_plan(
             profile.mode,
             profile.dispatch_mode,
             stages,
-        )
+        ))
     if work.risk_profile == "G1":
-        return ReviewPlan(
+        return _with_execution_control_assurance(ReviewPlan(
             "G1",
             "work-scoped-lightweight",
             1,
@@ -86,10 +107,10 @@ def build_review_plan(
             profile.mode,
             profile.dispatch_mode,
             stages,
-        )
+        ))
     required = ("hld_ref", "adr_ref", "human_design_gate_ref", "independent_reviewer_ref")
     missing = tuple(key for key in required if not evidence.get(key))
-    return ReviewPlan(
+    return _with_execution_control_assurance(ReviewPlan(
         "G2",
         "full-architecture-and-independent-review",
         1,
@@ -99,7 +120,7 @@ def build_review_plan(
         profile.mode,
         profile.dispatch_mode,
         stages,
-    )
+    ))
 
 
 def build_validation_plan(
@@ -133,7 +154,7 @@ def build_validation_plan(
         if execution_plan is not None
         else {layer: "PLANNED" for layer in VALIDATION_LAYERS}
     )
-    return ValidationPlan(
+    return _with_execution_control_assurance(ValidationPlan(
         risk_profile=work.risk_profile,
         check_ids=declared,
         risk_mapping=mapping,
@@ -151,4 +172,4 @@ def build_validation_plan(
         ),
         layer_decisions=layer_decisions,
         next_layer=execution_plan.next_layer if execution_plan is not None else "targeted",
-    )
+    ))

@@ -162,7 +162,8 @@ def start_main(argv: list[str]) -> int:
     parser.add_argument("--apply", action="store_true")
     parsed = parser.parse_args(argv)
     try:
-        process_root = _process_root(parsed.project_root)
+        release_root = parsed.project_root.resolve()
+        process_root = _process_root(release_root)
         package = load_evolution_package(process_root, parsed.id)
         validate_evolution_provenance(process_root, package)
         plan = build_evolution_start_plan(
@@ -173,7 +174,7 @@ def start_main(argv: list[str]) -> int:
             if parsed.authorization is None:
                 raise ValueError("--apply requires a typed --authorization file")
             receipt = materialize_evolution_work(
-                process_root,
+                release_root,
                 plan,
                 _authorization(parsed.authorization),
             )

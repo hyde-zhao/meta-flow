@@ -8,6 +8,11 @@ from pathlib import Path
 import pytest
 
 from meta_flow import cli
+from meta_flow.execution_control.admission import (
+    acquire_admission_lock,
+    release_admission_lock,
+)
+from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.project.governance import (
     Phase,
     load_governance_snapshot,
@@ -43,7 +48,13 @@ from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.route_profile import RouteProfile
 from meta_flow.work.scope import WorkScope
-from meta_flow.work.store import apply_work_init, close_work, plan_work_init
+from meta_flow.work.store import (
+    WorkInitApplyError,
+    apply_work_init,
+    close_work,
+    plan_work_init,
+    plan_work_init_from_release_root,
+)
 
 
 def git(root: Path, *args: str) -> str:
@@ -91,7 +102,19 @@ def init_project(root: Path) -> tuple[Path, Path]:
             "2099-01-01T00:00:00+00:00",
         ),
     )
-    return release, root / "demo-process"
+    process = root / "demo-process"
+    git(process, "add", ".")
+    git(
+        process,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "initial process",
+    )
+    return release, process
 
 
 def make_request(process: Path, work_id: str = "W-001") -> str:
@@ -126,11 +149,93 @@ def make_work(process: Path, work_id: str = "W-001"):
     )
 
 
-def test_work_init_dry_run_then_apply_indexes_project(tmp_path: Path) -> None:
-    _release, process = init_project(tmp_path)
-    work = make_work(process)
+def typed_work(work):
+    return replace(
+        work,
+        execution_unit=ExecutionUnitV1(
+            unit_id=work.work_id,
+            root_concept="work-init",
+            slice_id=work.work_id,
+            container_role="primary",
+            revision=1,
+            supersedes_unit_id="",
+            contract_ref=work.request_ref,
+            contract_digest="c" * 64,
+        ),
+    )
 
-    plan = plan_work_init(process, work)
+
+def snapshot_domain_files(process: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(process).as_posix(): path.read_bytes()
+        for path in sorted(process.rglob("*"))
+        if path.is_file() and ".git" not in path.parts
+    }
+
+
+@pytest.mark.parametrize(
+    ("target_state", "typed", "context_kind", "expected", "blocked"),
+    (
+        ("missing", False, "canonical", "BLOCKED_NEW_OBJECT_REQUIRES_EXECUTION_UNIT", True),
+        ("missing", False, "legacy", "BLOCKED_NEW_OBJECT_REQUIRES_EXECUTION_UNIT", True),
+        ("missing", True, "canonical", "ADMISSION_REQUIRED", False),
+        ("missing", True, "legacy", "BLOCKED_EXECUTION_CONTEXT_REQUIRED", True),
+        ("current", False, "canonical", "NOOP_GRANDFATHERED_READ_ONLY", False),
+        ("current", False, "legacy", "NOOP_GRANDFATHERED_READ_ONLY", False),
+        ("repair", False, "canonical", "BLOCKED_LEGACY_HISTORY_WRITE_FORBIDDEN", True),
+        ("repair", False, "legacy", "BLOCKED_LEGACY_HISTORY_WRITE_FORBIDDEN", True),
+        ("current", True, "canonical", "NOOP_TYPED_CURRENT", False),
+        ("current", True, "legacy", "NOOP_TYPED_EXISTING_READ_ONLY", False),
+        ("repair", True, "canonical", "TYPED_REPAIR_AFTER_ADMISSION", False),
+        ("repair", True, "legacy", "BLOCKED_EXECUTION_CONTEXT_REQUIRED", True),
+    ),
+)
+def test_work_init_revision7_closed_compatibility_matrix_is_zero_write(
+    tmp_path: Path,
+    target_state: str,
+    typed: bool,
+    context_kind: str,
+    expected: str,
+    blocked: bool,
+) -> None:
+    release, process = init_project(tmp_path)
+    work = make_work(process)
+    if typed:
+        work = typed_work(work)
+    if target_state in {"current", "repair"}:
+        write_work_create_only(process, work)
+    if target_state == "current":
+        project = load_project(process)
+        replace_project(
+            process,
+            replace(project, active_work_refs=(work.work_ref,)),
+            expected_project_id=project.project_id,
+        )
+
+    before = snapshot_domain_files(process)
+    plan = (
+        plan_work_init_from_release_root(release, work)
+        if context_kind == "canonical"
+        else plan_work_init(process, work)
+    )
+    after = snapshot_domain_files(process)
+
+    assert plan.compatibility_decision == expected
+    assert plan.blocked is blocked
+    assert before == after
+    payload = plan.as_dict()
+    assert payload["domain_mutation_count"] == 0
+    assert payload["coordination_mutation_count"] == 0
+    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    assert str(release) not in rendered
+    assert str(process) not in rendered
+
+
+def test_work_init_dry_run_then_apply_indexes_project(tmp_path: Path) -> None:
+    release, process = init_project(tmp_path)
+    work = typed_work(make_work(process))
+
+    plan = plan_work_init_from_release_root(release, work)
     assert not plan.blocked
     assert plan.as_dict()["mutation_count"] == 0
     assert not (process / work.work_ref).exists()
@@ -138,7 +243,9 @@ def test_work_init_dry_run_then_apply_indexes_project(tmp_path: Path) -> None:
     receipt = apply_work_init(plan)
 
     assert receipt.decision == "PASS"
-    assert receipt.mutation_count == 2
+    assert receipt.domain_mutation_count == 2
+    assert receipt.coordination_mutation_count == 2
+    assert receipt.mutation_count == 4
     assert receipt.project_index_updated
     assert load_work(process, "W-001") == work
     assert load_project(process).active_work_refs == ("works/W-001/WORK.yaml",)
@@ -153,6 +260,13 @@ def test_work_init_plan_reuses_project_and_request_in_one_snapshot(
 ) -> None:
     _release, process = init_project(tmp_path)
     work = make_work(process)
+    write_work_create_only(process, work)
+    project = load_project(process)
+    replace_project(
+        process,
+        replace(project, active_work_refs=(work.work_ref,)),
+        expected_project_id=project.project_id,
+    )
     metrics = IOMetrics("work-init-plan", enabled=True)
     context = OperationReadContext(
         process,
@@ -172,11 +286,11 @@ def test_work_init_plan_reuses_project_and_request_in_one_snapshot(
 
 
 def test_work_init_is_idempotent(tmp_path: Path) -> None:
-    _release, process = init_project(tmp_path)
-    work = make_work(process)
-    apply_work_init(plan_work_init(process, work))
+    release, process = init_project(tmp_path)
+    work = typed_work(make_work(process))
+    apply_work_init(plan_work_init_from_release_root(release, work))
 
-    second = plan_work_init(process, work)
+    second = plan_work_init_from_release_root(release, work)
     receipt = apply_work_init(second)
 
     assert {action.action for action in second.actions} == {"noop"}
@@ -185,34 +299,89 @@ def test_work_init_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_work_init_can_repair_matching_unindexed_work_after_partial_state(tmp_path: Path) -> None:
-    _release, process = init_project(tmp_path)
-    work = make_work(process)
+    release, process = init_project(tmp_path)
+    work = typed_work(make_work(process))
     write_work_create_only(process, work)
 
-    plan = plan_work_init(process, work)
+    plan = plan_work_init_from_release_root(release, work)
     receipt = apply_work_init(plan)
 
     assert not plan.blocked
-    assert receipt.mutation_count == 1
+    assert receipt.domain_mutation_count == 1
+    assert receipt.coordination_mutation_count == 2
     assert receipt.project_index_updated
     assert load_project(process).active_work_refs == (work.work_ref,)
 
 
 def test_request_change_makes_work_plan_stale_before_mutation(tmp_path: Path) -> None:
-    _release, process = init_project(tmp_path)
-    work = make_work(process)
-    plan = plan_work_init(process, work)
+    release, process = init_project(tmp_path)
+    work = typed_work(make_work(process))
+    plan = plan_work_init_from_release_root(release, work)
     (process / work.request_ref).write_text("changed\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="stale"):
+    with pytest.raises(WorkInitApplyError) as raised:
         apply_work_init(plan)
 
+    assert raised.value.receipt.decision == "BLOCKED"
+    assert raised.value.receipt.domain_mutation_count == 0
+    assert raised.value.receipt.coordination_mutation_count == 2
     assert not (process / work.work_ref).exists()
     assert load_project(process).active_work_refs == ()
 
 
+def test_work_init_lock_contention_blocks_without_domain_mutation(tmp_path: Path) -> None:
+    release, process = init_project(tmp_path)
+    work = typed_work(make_work(process))
+    plan = plan_work_init_from_release_root(release, work)
+    assert plan.admission_plan is not None
+    git_common = process / git(process, "rev-parse", "--git-common-dir")
+    held = acquire_admission_lock(
+        git_common,
+        plan.admission_plan,
+        owner_token="independent-holder",
+        owner_process_identity="test-holder",
+    )
+    assert held.decision == "PASS" and held.handle is not None
+    try:
+        with pytest.raises(WorkInitApplyError) as raised:
+            apply_work_init(plan)
+        receipt = raised.value.receipt
+        assert receipt.decision == "BLOCKED"
+        assert receipt.domain_mutation_count == 0
+        assert receipt.coordination_mutation_count == 0
+        assert receipt.durable_lock_count == 1
+        assert not (process / work.work_ref).exists()
+    finally:
+        assert release_admission_lock(git_common, held.handle).decision == "PASS"
+
+
+def test_work_init_reports_exact_partial_after_first_domain_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    release, process = init_project(tmp_path)
+    work = typed_work(make_work(process))
+    plan = plan_work_init_from_release_root(release, work)
+
+    def fail_project(*_args, **_kwargs):
+        raise OSError("injected project writer failure")
+
+    monkeypatch.setattr("meta_flow.work.store.replace_project", fail_project)
+    with pytest.raises(WorkInitApplyError) as raised:
+        apply_work_init(plan)
+
+    receipt = raised.value.receipt
+    assert receipt.decision == "PARTIAL_MUTATION"
+    assert receipt.domain_mutation_count == 1
+    assert receipt.coordination_mutation_count == 2
+    assert receipt.durable_refs == (work.work_ref,)
+    assert receipt.recovery_route == "stop-and-inspect-partial-mutation"
+    assert (process / work.work_ref).is_file()
+    assert load_project(process).active_work_refs == ()
+
+
 def test_work_plan_blocks_missing_or_out_of_scope_request(tmp_path: Path) -> None:
-    _release, process = init_project(tmp_path)
+    release, process = init_project(tmp_path)
     missing = build_work(
         work_id="W-001",
         project_id="demo",
@@ -226,14 +395,14 @@ def test_work_plan_blocks_missing_or_out_of_scope_request(tmp_path: Path) -> Non
         process_base_oid="",
     )
 
-    plan = plan_work_init(process, missing)
+    plan = plan_work_init_from_release_root(release, typed_work(missing))
 
     assert plan.blocked
     assert {item.code for item in plan.conflicts} >= {"request_missing", "request_out_of_scope"}
 
 
 def test_scope_declaration_cannot_exceed_profile_budget(tmp_path: Path) -> None:
-    _release, process = init_project(tmp_path)
+    release, process = init_project(tmp_path)
     request_ref = make_request(process)
     reads = (request_ref, *(f"docs/{index}.md" for index in range(8)))
     work = build_work(
@@ -249,7 +418,7 @@ def test_scope_declaration_cannot_exceed_profile_budget(tmp_path: Path) -> None:
         process_base_oid="",
     )
 
-    plan = plan_work_init(process, work)
+    plan = plan_work_init_from_release_root(release, typed_work(work))
 
     assert plan.blocked
     assert "read_scope_over_budget" in {item.code for item in plan.conflicts}
@@ -302,6 +471,20 @@ def test_work_cli_end_to_end_and_top_level_dispatch(tmp_path: Path, capsys: pyte
         "documentation",
         "--touched-path-count",
         "1",
+        "--execution-unit-id",
+        "W-001",
+        "--execution-root-concept",
+        "work-init",
+        "--execution-slice-id",
+        "W-001",
+        "--execution-container-role",
+        "primary",
+        "--execution-revision",
+        "1",
+        "--execution-contract-ref",
+        request_ref,
+        "--execution-contract-digest",
+        "c" * 64,
     ]
 
     dry_code = init_main(common)
@@ -371,7 +554,7 @@ def test_g0_functional_agent_override_blocks_before_root_resolution(
 
 
 def test_legacy_cp_route_requires_g2_formal_cr_gate_evidence_and_scope(tmp_path: Path) -> None:
-    _release, process = init_project(tmp_path)
+    release, process = init_project(tmp_path)
     request_ref = make_request(process)
     gate_ref = "gates/G2-DESIGN.md"
     classification = classify_work(
@@ -393,13 +576,18 @@ def test_legacy_cp_route_requires_g2_formal_cr_gate_evidence_and_scope(tmp_path:
             legacy_cp_compatibility=True,
         ),
     )
+    work = typed_work(work)
 
-    missing_ref = plan_work_init(process, work)
-    missing_file = plan_work_init(process, work, human_design_gate_ref=gate_ref)
+    missing_ref = plan_work_init_from_release_root(release, work)
+    missing_file = plan_work_init_from_release_root(
+        release, work, human_design_gate_ref=gate_ref
+    )
     gate_path = process / gate_ref
     gate_path.parent.mkdir(parents=True)
     gate_path.write_text("approved: true\n", encoding="utf-8")
-    ready = plan_work_init(process, work, human_design_gate_ref=gate_ref)
+    ready = plan_work_init_from_release_root(
+        release, work, human_design_gate_ref=gate_ref
+    )
 
     assert "route_profile_blocked" in {item.code for item in missing_ref.conflicts}
     assert "human_design_gate_missing" in {item.code for item in missing_file.conflicts}
@@ -412,7 +600,8 @@ def test_usage_add_cli_records_over_limit_fact_then_blocks_mutation(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     release, process = init_project(tmp_path)
-    apply_work_init(plan_work_init(process, make_work(process)))
+    work = typed_work(make_work(process))
+    apply_work_init(plan_work_init_from_release_root(release, work))
 
     exit_code = usage_add_main(
         [
@@ -448,8 +637,8 @@ def test_work_start_pause_resume_and_close_minimally_updates_project(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     release, process = init_project(tmp_path)
-    work = make_work(process)
-    apply_work_init(plan_work_init(process, work))
+    work = typed_work(make_work(process))
+    apply_work_init(plan_work_init_from_release_root(release, work))
 
     assert transition_main(
         "start", ["--project-root", str(release), "--work-id", "W-001"]
@@ -487,7 +676,7 @@ def test_work_start_pause_resume_and_close_minimally_updates_project(
 
 
 def test_phase_work_index_is_added_on_init_and_projected_on_close(tmp_path: Path) -> None:
-    _release, process = init_project(tmp_path)
+    release, process = init_project(tmp_path)
     phase = Phase(1, "demo", "PH-001", "完成首个阶段", "active")
     write_phase_create_only(process, phase)
     project = load_project(process)
@@ -496,11 +685,12 @@ def test_phase_work_index_is_added_on_init_and_projected_on_close(tmp_path: Path
         replace(project, active_phase_ref=phase.phase_ref),
         expected_project_id=project.project_id,
     )
-    work = replace(make_work(process), phase_ref=phase.phase_ref)
+    work = typed_work(replace(make_work(process), phase_ref=phase.phase_ref))
 
-    receipt = apply_work_init(plan_work_init(process, work))
+    receipt = apply_work_init(plan_work_init_from_release_root(release, work))
 
-    assert receipt.mutation_count == 3
+    assert receipt.domain_mutation_count == 3
+    assert receipt.coordination_mutation_count == 2
     assert load_phase(process, phase.phase_ref).work_refs == (work.work_ref,)
     update_work_status(
         process,
@@ -542,8 +732,8 @@ def test_resume_blocks_after_release_oid_drift(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     release, process = init_project(tmp_path)
-    work = make_work(process)
-    apply_work_init(plan_work_init(process, work))
+    work = typed_work(make_work(process))
+    apply_work_init(plan_work_init_from_release_root(release, work))
     transition_main("start", ["--project-root", str(release), "--work-id", "W-001"])
     capsys.readouterr()
     transition_main("pause", ["--project-root", str(release), "--work-id", "W-001"])
@@ -574,9 +764,15 @@ def test_resume_blocks_after_release_oid_drift(
 def test_review_and_validation_cli_are_work_scoped(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "meta_flow.execution_control.migration._receipt_path",
+        lambda: tmp_path / "missing-provider-receipt.json",
+    )
     release, process = init_project(tmp_path)
-    apply_work_init(plan_work_init(process, make_work(process)))
+    work = typed_work(make_work(process))
+    apply_work_init(plan_work_init_from_release_root(release, work))
 
     assert review_plan_main(
         ["--project-root", str(release), "--work-id", "W-001"]
@@ -584,6 +780,9 @@ def test_review_and_validation_cli_are_work_scoped(
     review = json.loads(capsys.readouterr().out)
     assert review["review_mode"] == "self-check"
     assert review["max_independent_reviews"] == 0
+    assert review["execution_control_mode"] == "enforce-new"
+    assert review["provider_receipt_status"] == "MISSING"
+    assert review["provider_readiness"] == "UNAVAILABLE_PENDING_CP7_CP8"
 
     assert validation_plan_main(
         [
@@ -598,6 +797,8 @@ def test_review_and_validation_cli_are_work_scoped(
     validation = json.loads(capsys.readouterr().out)
     assert validation["decision"] == "READY"
     assert validation["check_ids"] == ["pytest-docs"]
+    assert validation["execution_control_mode"] == "enforce-new"
+    assert validation["provider_readiness"] == "UNAVAILABLE_PENDING_CP7_CP8"
 
     assert project_query_main(["--project-root", str(release)]) == 0
     query = json.loads(capsys.readouterr().out)
@@ -610,8 +811,8 @@ def test_close_fails_without_result_and_keeps_work_active(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     release, process = init_project(tmp_path)
-    work = make_work(process)
-    apply_work_init(plan_work_init(process, work))
+    work = typed_work(make_work(process))
+    apply_work_init(plan_work_init_from_release_root(release, work))
     transition_main("start", ["--project-root", str(release), "--work-id", "W-001"])
     capsys.readouterr()
 

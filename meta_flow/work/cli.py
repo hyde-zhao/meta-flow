@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from meta_flow.execution_control.contract import CONTAINER_ROLES, ExecutionUnitV1
 from meta_flow.project.model import load_project
 from meta_flow.project.process_route import require_process_route
 from meta_flow.project.scale import load_yaml_object
@@ -30,7 +31,7 @@ from meta_flow.work.store import (
     WorkInitApplyError,
     apply_work_init,
     close_work,
-    plan_work_init,
+    plan_work_init_from_release_root,
 )
 from meta_flow.work.usage import UsageEvent, append_usage_event
 from meta_flow.work.validation_planner import build_validation_execution_plan
@@ -79,6 +80,42 @@ def _route_profile(parsed: argparse.Namespace) -> RouteProfile:
         mode=parsed.route_mode,
         dispatch_mode=parsed.dispatch_mode,
         legacy_cp_compatibility=parsed.legacy_cp_compatibility,
+    )
+
+
+def _add_execution_unit_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--execution-unit-id")
+    parser.add_argument("--execution-root-concept")
+    parser.add_argument("--execution-slice-id")
+    parser.add_argument("--execution-container-role", choices=sorted(CONTAINER_ROLES))
+    parser.add_argument("--execution-revision", type=int)
+    parser.add_argument("--execution-supersedes-unit-id", default="")
+    parser.add_argument("--execution-contract-ref")
+    parser.add_argument("--execution-contract-digest")
+
+
+def _execution_unit(parsed: argparse.Namespace) -> ExecutionUnitV1 | None:
+    required = {
+        "unit_id": parsed.execution_unit_id,
+        "root_concept": parsed.execution_root_concept,
+        "slice_id": parsed.execution_slice_id,
+        "container_role": parsed.execution_container_role,
+        "revision": parsed.execution_revision,
+        "contract_ref": parsed.execution_contract_ref,
+        "contract_digest": parsed.execution_contract_digest,
+    }
+    supplied = {key for key, value in required.items() if value is not None}
+    if not supplied and not parsed.execution_supersedes_unit_id:
+        return None
+    if supplied != set(required):
+        missing = ",".join(sorted(set(required) - supplied))
+        raise ValueError(f"execution unit requires all identity/contract fields: missing={missing}")
+    return ExecutionUnitV1.from_mapping(
+        {
+            **required,
+            "supersedes_unit_id": parsed.execution_supersedes_unit_id,
+        },
+        work_id=parsed.work_id,
     )
 
 
@@ -159,8 +196,10 @@ def init_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true")
     _add_risk_arguments(parser)
     _add_route_arguments(parser)
+    _add_execution_unit_arguments(parser)
     parsed = parser.parse_args(argv or [])
     try:
+        execution_unit = _execution_unit(parsed)
         classification = classify_work(
             _risk_facts(parsed),
             requested_cr=parsed.requested_cr,
@@ -195,9 +234,10 @@ def init_main(argv: list[str] | None = None) -> int:
             release_base_oid=_head_oid(release_root),
             process_base_oid=_head_oid(process_root),
             route_profile=profile,
+            execution_unit=execution_unit,
         )
-        plan = plan_work_init(
-            process_root,
+        plan = plan_work_init_from_release_root(
+            release_root,
             work,
             human_design_gate_ref=parsed.human_design_gate_ref,
         )

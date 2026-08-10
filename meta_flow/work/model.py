@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.project.model import is_safe_ref
 from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import dump_yaml, load_yaml_object
@@ -49,6 +50,7 @@ WORK_ALLOWED_KEYS = {
     "risk_reason_codes",
     "required_gates",
     "route_profile",
+    "execution_unit",
     "scope",
     "scope_digest",
     "budget",
@@ -61,6 +63,7 @@ WORK_REQUIRED_KEYS = WORK_ALLOWED_KEYS - {
     "phase_ref",
     "result_ref",
     "route_profile",
+    "execution_unit",
     "updated_at",
 }
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -96,6 +99,7 @@ class Work:
     usage_ref: str
     release_base_oid: str
     process_base_oid: str
+    execution_unit: ExecutionUnitV1 | None = None
     result_ref: str = ""
     updated_at: str = ""
 
@@ -132,6 +136,8 @@ class Work:
         }
         if self.phase_ref:
             payload["phase_ref"] = self.phase_ref
+        if self.execution_unit is not None:
+            payload["execution_unit"] = self.execution_unit.as_dict()
         if self.result_ref:
             payload["result_ref"] = self.result_ref
         if self.updated_at:
@@ -261,6 +267,31 @@ def validate_work_payload(
         for error in route_decision.errors:
             _finding(findings, "route_profile", error, key="route_profile")
 
+    execution_unit_payload = payload.get("execution_unit")
+    if execution_unit_payload is not None:
+        if payload.get("kind") != "work":
+            _finding(
+                findings,
+                "execution_unit",
+                "execution_unit v1 is supported only by the Work envelope",
+                key="execution_unit",
+            )
+        if not isinstance(execution_unit_payload, Mapping):
+            _finding(
+                findings,
+                "execution_unit",
+                "execution_unit must be a closed mapping",
+                key="execution_unit",
+            )
+        else:
+            try:
+                ExecutionUnitV1.from_mapping(
+                    execution_unit_payload,
+                    work_id=str(payload.get("work_id") or ""),
+                )
+            except ValueError as exc:
+                _finding(findings, "execution_unit", str(exc), key="execution_unit")
+
     scope_payload = payload.get("scope")
     if not isinstance(scope_payload, dict):
         _finding(findings, "scope", "scope must be an object", key="scope")
@@ -330,6 +361,7 @@ def work_from_payload(payload: Mapping[str, Any]) -> Work:
     assert isinstance(scope_payload, dict)
     assert isinstance(budget_payload, dict)
     assert isinstance(base_oids, dict)
+    execution_unit_payload = payload.get("execution_unit")
     return Work(
         schema_version=int(payload["schema_version"]),
         work_id=str(payload["work_id"]),
@@ -354,6 +386,14 @@ def work_from_payload(payload: Mapping[str, Any]) -> Work:
         usage_ref=str(payload["usage_ref"]),
         release_base_oid=str(base_oids["release"]),
         process_base_oid=str(base_oids["process"]),
+        execution_unit=(
+            ExecutionUnitV1.from_mapping(
+                execution_unit_payload,
+                work_id=str(payload["work_id"]),
+            )
+            if isinstance(execution_unit_payload, Mapping)
+            else None
+        ),
         result_ref=str(payload.get("result_ref") or ""),
         updated_at=str(payload.get("updated_at") or ""),
     )
@@ -372,6 +412,7 @@ def build_work(
     phase_ref: str = "",
     kind: str | None = None,
     route_profile: RouteProfile = SAFE_ROUTE_PROFILE,
+    execution_unit: ExecutionUnitV1 | None = None,
 ) -> Work:
     if classification.blocked or classification.budget is None:
         raise ValueError("blocked classification cannot create a Work")
@@ -395,6 +436,7 @@ def build_work(
         usage_ref=f"works/{work_id}/USAGE.json",
         release_base_oid=release_base_oid,
         process_base_oid=process_base_oid,
+        execution_unit=execution_unit,
     )
     findings = validate_work_payload(work.as_dict())
     if findings:

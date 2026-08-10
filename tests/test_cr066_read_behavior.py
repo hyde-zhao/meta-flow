@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 import json
+import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,8 +13,14 @@ from meta_flow.context_pack.read_expansion import (
     build_event,
     validate_reason_evidence,
 )
+from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.policies import public_operations
-from meta_flow.project.model import Project, write_project_create_only
+from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    OnboardingAuthorization,
+)
 from meta_flow.project.read_contract import ReadContextProtocol, ReadContractError
 from meta_flow.work.io_metrics import IOMetrics
 from meta_flow.work.model import build_work
@@ -24,7 +32,7 @@ from meta_flow.work.route_profile import (
     route_profile_from_payload,
 )
 from meta_flow.work.scope import WorkScope
-from meta_flow.work.store import apply_work_init, plan_work_init
+from meta_flow.work.store import apply_work_init, plan_work_init_from_release_root
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALID_REASON_EVIDENCE = {
@@ -44,6 +52,62 @@ VALID_REASON_EVIDENCE = {
     "human_audit": {"authorization_ref": "checkpoints/C66-G2.md"},
     "summary_insufficient": {"missing_slots": ["rollback", "owner"]},
 }
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ("git", *args), cwd=root, text=True, capture_output=True, check=True
+    ).stdout.strip()
+
+
+def _init_routine_fixture(root: Path) -> tuple[Path, Path, str, str]:
+    release = root / "fixture"
+    release.mkdir()
+    _git(release, "init", "-b", "main")
+    (release / "README.md").write_text("# Fixture\n", encoding="utf-8")
+    _git(release, "add", "README.md")
+    _git(
+        release,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "initial",
+    )
+    plan = plan_project_init(ProjectInitRequest(release, "fixture", "Fixture"))
+    payload = plan.as_dict()
+    apply_project_init(
+        plan,
+        OnboardingAuthorization(
+            1,
+            "cr066-routine-fixture",
+            AUTHORIZATION_SOURCE,
+            AUTHORIZATION_KIND,
+            payload["operation"],
+            payload["decision_ref"],
+            payload["project_id"],
+            payload["plan_digest"],
+            payload["base_oids"],
+            "2099-01-01T00:00:00+00:00",
+        ),
+    )
+    process = root / "fixture-process"
+    _git(process, "add", ".")
+    _git(
+        process,
+        "-c",
+        "user.name=Meta Flow Test",
+        "-c",
+        "user.email=meta-flow@example.invalid",
+        "commit",
+        "-m",
+        "initial process",
+    )
+    return release, process, _git(release, "rev-parse", "HEAD"), _git(
+        process, "rev-parse", "HEAD"
+    )
 
 
 def _write_read_objects(root: Path, count: int = 6) -> None:
@@ -278,12 +342,9 @@ def test_routine_work_is_direct_and_creates_no_legacy_artifacts(
         risk_profile=risk_profile,
         work_kind="work",
     )
-    write_project_create_only(
-        tmp_path,
-        Project(1, "fixture", "Fixture", "active"),
-    )
+    release, process, release_oid, process_oid = _init_routine_fixture(tmp_path)
     request_ref = f"works/{risk_profile}-W/REQUEST.md"
-    request = tmp_path / request_ref
+    request = process / request_ref
     request.parent.mkdir(parents=True)
     request.write_text("confirmed routine request\n", encoding="utf-8")
     facts = (
@@ -305,14 +366,27 @@ def test_routine_work_is_direct_and_creates_no_legacy_artifacts(
             ("targeted",),
         ),
         classification=classification,
-        release_base_oid="a" * 40,
-        process_base_oid="b" * 40,
+        release_base_oid=release_oid,
+        process_base_oid=process_oid,
     )
-    plan = plan_work_init(tmp_path, work)
+    work = replace(
+        work,
+        execution_unit=ExecutionUnitV1(
+            unit_id=work.work_id,
+            root_concept="routine-work",
+            slice_id=work.work_id,
+            container_role="primary",
+            revision=1,
+            supersedes_unit_id="",
+            contract_ref="process/contracts/routine-four-stage-v1.json",
+            contract_digest="c" * 64,
+        ),
+    )
+    plan = plan_work_init_from_release_root(release, work)
     receipt = apply_work_init(plan)
     created = [
-        path.relative_to(tmp_path).as_posix()
-        for path in tmp_path.rglob("*")
+        path.relative_to(process).as_posix()
+        for path in process.rglob("*")
         if path.is_file()
     ]
 

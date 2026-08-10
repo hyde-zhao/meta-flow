@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 
+import pytest
+
 from meta_flow.workflow import cr_projection
 from unittest.mock import Mock, patch
 from pathlib import Path
@@ -65,10 +67,11 @@ def _write_converged_native_projection_fixture(root: Path) -> dict[str, object]:
     }
 
 
-def test_projection_owner_exports_frozen_twenty_members() -> None:
+def test_projection_owner_exports_frozen_public_members() -> None:
     expected = {
         "CR_LEDGER_REL", "CR_ARCHIVE_ROOT_REL", "STATE_CURRENT_REL",
-        "NativeCRStatusProjectionV1", "AggregateCompletionProjector",
+        "NativeCRStatusProjectionV1", "CheckpointIndexRowV1",
+        "AggregateCompletionProjector",
         "_gate_checkpoint_projection", "_checkpoint_result_projection",
         "_render_exact_section_rows", "render_status_body_projection",
         "summary_from_cr_file", "write_summary", "write_evidence_index",
@@ -77,6 +80,317 @@ def test_projection_owner_exports_frozen_twenty_members() -> None:
         "_acquire_status_sync_writer_lock", "_release_status_sync_writer_lock",
     }
     assert {name for name in expected if hasattr(cr_projection, name)} == expected
+
+
+def test_checkpoint_result_projection_preserves_exact_ref_and_cr_subject_only(
+    tmp_path: Path,
+) -> None:
+    projection = Mock(
+        findings=(),
+        heads=(
+            Mock(
+                checkpoint="CP0",
+                subject_id="CR-069",
+                decision="PASS",
+                result_ref="process/checks/CP0-CR-069.result.json",
+            ),
+            Mock(
+                checkpoint="CP0",
+                subject_id="STORY-CR069-F1-S0",
+                decision="PASS",
+                result_ref="process/checks/CP0-STORY.result.json",
+            ),
+        ),
+    )
+    with patch.object(
+        cr_projection.checkpoint_projection,
+        "load_checkpoint_projection",
+        return_value=projection,
+    ):
+        rows = cr_projection._checkpoint_result_projection(tmp_path, "CR-069")
+
+    assert rows == {
+        "CP0": cr_projection.CheckpointIndexRowV1(
+            checkpoint="CP0",
+            status="PASS",
+            result_ref="process/checks/CP0-CR-069.result.json",
+        )
+    }
+
+
+def test_checkpoint_result_projection_fails_closed_on_owner_findings(
+    tmp_path: Path,
+) -> None:
+    finding = Mock(code="CURRENT_HEAD_CONFLICT", message="conflict")
+    projection = Mock(findings=(finding,), heads=())
+    with patch.object(
+        cr_projection.checkpoint_projection,
+        "load_checkpoint_projection",
+        return_value=projection,
+    ), pytest.raises(ValueError, match="CURRENT_HEAD_CONFLICT"):
+        cr_projection._checkpoint_result_projection(tmp_path, "CR-069")
+
+
+def test_checkpoint_result_projection_rejects_duplicate_or_incomplete_heads(
+    tmp_path: Path,
+) -> None:
+    duplicate = Mock(
+        checkpoint="CP0",
+        subject_id="CR-069",
+        decision="PASS",
+        result_ref="process/checks/CP0.result.json",
+    )
+    projection = Mock(findings=(), heads=(duplicate, duplicate))
+    with patch.object(
+        cr_projection.checkpoint_projection,
+        "load_checkpoint_projection",
+        return_value=projection,
+    ), pytest.raises(ValueError, match="duplicate canonical checkpoint head"):
+        cr_projection._checkpoint_result_projection(tmp_path, "CR-069")
+
+    projection = Mock(
+        findings=(),
+        heads=(Mock(checkpoint="CP1", subject_id="CR-069", decision="PASS", result_ref=""),),
+    )
+    with patch.object(
+        cr_projection.checkpoint_projection,
+        "load_checkpoint_projection",
+        return_value=projection,
+    ), pytest.raises(ValueError, match="missing result_ref"):
+        cr_projection._checkpoint_result_projection(tmp_path, "CR-069")
+
+
+def test_checkpoint_index_renderer_updates_inserts_orders_and_is_idempotent() -> None:
+    text = (
+        "# CR-069\n\n## Checkpoint Index\n\n"
+        "| Checkpoint | Status | Ref |\n"
+        "|---|---|---|\n"
+        "| CP0 | stale | `process/checks/stale.json` |\n"
+        "| CP2 | pending | — |\n\n"
+        "## Next\n\nkeep\n"
+    )
+    rows = {
+        "CP0": cr_projection.CheckpointIndexRowV1(
+            "CP0", "PASS", "process/checks/CP0.result.json"
+        ),
+        "CP1": cr_projection.CheckpointIndexRowV1(
+            "CP1", "PASS", "process/checks/CP1.result.json"
+        ),
+    }
+
+    rendered = cr_projection.render_status_body_projection(
+        text,
+        lifecycle_status="active",
+        readiness_status="NOT_READY",
+        gate_status="implementation_in_progress",
+        checkpoint_results=rows,
+    )
+
+    assert "| CP0 | PASS | `process/checks/CP0.result.json` |" in rendered
+    assert "| CP1 | PASS | `process/checks/CP1.result.json` |" in rendered
+    assert "| CP2 | pending | — |" in rendered
+    assert "| CP6 | in-progress | — |" in rendered
+    assert [
+        rendered.index(f"| CP{number} |") for number in (0, 1, 2, 6)
+    ] == sorted(rendered.index(f"| CP{number} |") for number in (0, 1, 2, 6))
+    assert cr_projection.render_status_body_projection(
+        rendered,
+        lifecycle_status="active",
+        readiness_status="NOT_READY",
+        gate_status="implementation_in_progress",
+        checkpoint_results=rows,
+    ) == rendered
+    assert "## Next\n\nkeep\n" in rendered
+
+
+def test_checkpoint_index_renderer_supports_two_columns_and_preserves_extra_columns() -> None:
+    two_column = (
+        "## Checkpoint Index\n"
+        "| Checkpoint | Status |\n"
+        "|---|---|\n"
+        "| CP0 | stale |\n"
+    )
+    row = cr_projection.CheckpointIndexRowV1(
+        "CP0", "PASS", "process/checks/CP0.result.json"
+    )
+    assert cr_projection._render_checkpoint_index_rows(two_column, {"CP0": row}) == (
+        "## Checkpoint Index\n"
+        "| Checkpoint | Status |\n"
+        "|---|---|\n"
+        "| CP0 | PASS |\n"
+    )
+
+    extra_column = (
+        "## Checkpoint Index\n"
+        "| Checkpoint | Note | Status | Ref |\n"
+        "|---|---|---|---|\n"
+        "| CP0 | keep | stale | `old` |\n"
+    )
+    assert "| CP0 | keep | PASS | `process/checks/CP0.result.json` |" in (
+        cr_projection._render_checkpoint_index_rows(extra_column, {"CP0": row})
+    )
+
+    chinese_header = (
+        "## Checkpoint Index\n"
+        "| CP | 状态 | 机器结果 ref |\n"
+        "|---|---|---|\n"
+        "| CP0 | stale | `old` |\n"
+    )
+    assert "| CP0 | PASS | `process/checks/CP0.result.json` |" in (
+        cr_projection._render_checkpoint_index_rows(chinese_header, {"CP0": row})
+    )
+
+
+def test_checkpoint_index_renderer_preserves_gate_ref_and_crlf() -> None:
+    text = (
+        "## Checkpoint Index\r\n"
+        "| Checkpoint | Status | Ref |\r\n"
+        "|---|---|---|\r\n"
+        "| CP6 | pending | `process/checks/pending.json` |\r\n"
+    )
+    rendered = cr_projection.render_status_body_projection(
+        text,
+        lifecycle_status="active",
+        readiness_status="NOT_READY",
+        gate_status="implementation_in_progress",
+        checkpoint_results={},
+    )
+    assert "| CP6 | in-progress | `process/checks/pending.json` |\r\n" in rendered
+    assert "\n" not in rendered.replace("\r\n", "")
+
+    cp8 = cr_projection.CheckpointIndexRowV1(
+        "CP8", "PASS", "process/checks/CP8.result.json"
+    )
+    closed = cr_projection.render_status_body_projection(
+        "## Checkpoint Index\n| Checkpoint | Status | Ref |\n|---|---|---|\n",
+        lifecycle_status="closed",
+        readiness_status="READY",
+        gate_status="closed",
+        checkpoint_results={"CP8": cp8},
+    )
+    assert "| CP8 | approved | `process/checks/CP8.result.json` |" in closed
+
+
+@pytest.mark.parametrize(
+    ("text", "line_ending"),
+    [
+        (
+            "## Checkpoint Index\n"
+            "| Checkpoint | Status | Ref |\n"
+            "|---|---|---|\n"
+            "| CP0 | PASS | `process/checks/CP0.result.json` |",
+            "\n",
+        ),
+        (
+            "## Checkpoint Index\n"
+            "| Checkpoint | Status | Ref |\n"
+            "|---|---|---|",
+            "\n",
+        ),
+        (
+            "## Checkpoint Index\r\n"
+            "| Checkpoint | Status | Ref |\r\n"
+            "|---|---|---|\r\n"
+            "| CP0 | PASS | `process/checks/CP0.result.json` |",
+            "\r\n",
+        ),
+    ],
+)
+def test_checkpoint_index_renderer_preserves_eof_without_newline_and_is_idempotent(
+    text: str,
+    line_ending: str,
+) -> None:
+    rows = {
+        "CP0": cr_projection.CheckpointIndexRowV1(
+            "CP0", "PASS", "process/checks/CP0.result.json"
+        ),
+        "CP1": cr_projection.CheckpointIndexRowV1(
+            "CP1", "PASS", "process/checks/CP1.result.json"
+        ),
+    }
+
+    rendered = cr_projection._render_checkpoint_index_rows(text, rows)
+
+    assert not rendered.endswith(("\n", "\r"))
+    assert (
+        "| CP0 | PASS | `process/checks/CP0.result.json` |"
+        + line_ending
+        + "| CP1 | PASS | `process/checks/CP1.result.json` |"
+    ) in rendered
+    assert cr_projection._render_checkpoint_index_rows(rendered, rows) == rendered
+
+
+def test_lifecycle_facade_accepts_legacy_string_checkpoint_projection() -> None:
+    from meta_flow.workflow.cr_lifecycle import render_status_body_projection
+
+    text = (
+        "## Checkpoint Index\n"
+        "| CP | 状态 |\n"
+        "|---|---|\n"
+        "| CP0 | pending |\n"
+    )
+
+    rendered = render_status_body_projection(
+        text,
+        lifecycle_status="active",
+        readiness_status="NOT_READY",
+        gate_status="cp3_pending",
+        checkpoint_results={"CP0": "PASS"},
+    )
+
+    assert "| CP0 | PASS |" in rendered
+    assert "| CP3 | pending |" in rendered
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (
+            "## Checkpoint Index\n| Checkpoint | Status | Ref |\n|---|---|---|\n| CP0 | PASS | — |\n"
+            "| CP0 | PASS | — |\n",
+            "duplicate CR body table row",
+        ),
+        (
+            "## Checkpoint Index\n| Checkpoint | Status | Ref |\n|---|---|\n",
+            "separator is malformed",
+        ),
+        (
+            "## Checkpoint Index\n| Checkpoint | Status | Evidence |\n|---|---|---|\n",
+            "result ref column is missing",
+        ),
+        (
+            "## Checkpoint Index\n| Checkpoint | Status | Ref |\n|---|---|---|\n| CP9 | PASS | — |\n",
+            "invalid Checkpoint Index key",
+        ),
+        (
+            "## Checkpoint Index\n| Checkpoint | Status | Ref |\n|---|---|---|\n| CP2 | PASS | — |\n"
+            "| CP1 | PASS | — |\n",
+            "not in numeric order",
+        ),
+    ],
+)
+def test_checkpoint_index_renderer_fails_closed_on_malformed_tables(
+    text: str, message: str
+) -> None:
+    before = text.encode("utf-8")
+    with pytest.raises(ValueError, match=message):
+        cr_projection._render_checkpoint_index_rows(
+            text,
+            {"CP0": cr_projection.CheckpointIndexRowV1("CP0", "PASS", "result.json")},
+        )
+    assert text.encode("utf-8") == before
+
+
+def test_checkpoint_index_renderer_rejects_duplicate_section_and_keeps_absent_optional() -> None:
+    row = cr_projection.CheckpointIndexRowV1("CP0", "PASS", "result.json")
+    absent = "# CR\n\nno checkpoint section\n"
+    assert cr_projection._render_checkpoint_index_rows(absent, {"CP0": row}) == absent
+    duplicate = (
+        "## Checkpoint Index\n| Checkpoint | Status |\n|---|---|\n"
+        "## Checkpoint Index\n| Checkpoint | Status |\n|---|---|\n"
+    )
+    with pytest.raises(ValueError, match="duplicate CR body section"):
+        cr_projection._render_checkpoint_index_rows(duplicate, {"CP0": row})
 
 
 def test_projection_kernel_value_object_shape_is_stable() -> None:

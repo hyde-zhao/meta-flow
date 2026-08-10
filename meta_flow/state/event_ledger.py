@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import sys
 from collections.abc import Mapping
@@ -11,8 +13,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
+from meta_flow.execution_control.contract import canonical_digest as execution_control_digest
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.project.read_contract import ReadContextProtocol
@@ -38,6 +42,7 @@ KNOWN_LEDGER_RELS = {
     "dispatch": Path("process/state/AGENT-DISPATCH-LEDGER.ndjson"),
     "run": Path("process/state/RUN-LEDGER.ndjson"),
     "gate": Path("process/state/GATE-LEDGER.ndjson"),
+    "execution-control": Path("process/state/EXECUTION-CONTROL-LEDGER.ndjson"),
 }
 
 LEDGER_REQUIRED_FIELDS = {
@@ -78,6 +83,25 @@ DISPATCH_EVENT_REQUIRED_FIELDS = {
     ),
 }
 GATE_APPROVAL_KIND_VERSION = 1
+_EXECUTION_CONTROL_EVENT_FIELDS = frozenset(
+    {
+        "event_id",
+        "event_type",
+        "unit_id",
+        "attempt_id",
+        "evidence_ref",
+        "check_result_digest",
+        "observation_key_digest",
+        "identity_digest",
+        "contract_revision",
+        "classification_digest",
+        "slice_route_digest",
+        "attempt_plan_digest",
+        "observed_at",
+        "payload_digest",
+    }
+)
+_LOWER_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class GateApprovalKindV1(StrEnum):
@@ -236,6 +260,127 @@ class HandoffDispatchRecordV1:
         return dict(self.values).get(key, default)
 
 
+@dataclass(frozen=True, slots=True)
+class FindingObservationEventV1:
+    """Execution Control append-only finding observation 的唯一 event wire。"""
+
+    event_id: str
+    event_type: str
+    unit_id: str
+    attempt_id: str
+    evidence_ref: str
+    check_result_digest: str
+    observation_key_digest: str
+    identity_digest: str
+    contract_revision: int
+    classification_digest: str
+    slice_route_digest: str
+    attempt_plan_digest: str
+    observed_at: str
+    payload_digest: str
+
+    def __post_init__(self) -> None:
+        if self.event_type != "finding_observation":
+            raise ValueError("unsupported execution-control event type")
+        for field in ("event_id", "unit_id", "attempt_id", "observed_at"):
+            if not isinstance(getattr(self, field), str) or not getattr(self, field).strip():
+                raise ValueError(f"{field} is required")
+        if not isinstance(self.evidence_ref, str) or not self.evidence_ref.startswith("process/"):
+            raise ValueError("evidence_ref must be one process logical ref")
+        if ".." in Path(self.evidence_ref).parts or "\\" in self.evidence_ref:
+            raise ValueError("evidence_ref must not escape the process route")
+        if type(self.contract_revision) is not int or self.contract_revision < 1:
+            raise ValueError("contract_revision must be a positive integer")
+        for field in (
+            "check_result_digest",
+            "observation_key_digest",
+            "identity_digest",
+            "classification_digest",
+            "slice_route_digest",
+            "attempt_plan_digest",
+            "payload_digest",
+        ):
+            if not isinstance(getattr(self, field), str) or not _LOWER_SHA256_RE.fullmatch(
+                getattr(self, field)
+            ):
+                raise ValueError(f"{field} must be one lowercase SHA-256 digest")
+        expected_key = execution_control_digest(
+            {
+                "unit_id": self.unit_id,
+                "attempt_id": self.attempt_id,
+                "check_result_digest": self.check_result_digest,
+                "identity_digest": self.identity_digest,
+            }
+        )
+        if self.observation_key_digest != expected_key:
+            raise ValueError("finding observation key is not canonically derived")
+        if self.event_id != f"EC-OBS-{expected_key[:32]}":
+            raise ValueError("finding observation event_id is not canonically derived")
+        if self.payload_digest != execution_control_digest(self._payload_without_digest()):
+            raise ValueError("finding observation payload digest mismatch")
+
+    @classmethod
+    def build(cls, **fields: Any) -> FindingObservationEventV1:
+        seed = {**fields, "event_type": "finding_observation"}
+        return cls(**seed, payload_digest=execution_control_digest(seed))
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> FindingObservationEventV1:
+        if not isinstance(payload, Mapping) or frozenset(payload) != _EXECUTION_CONTROL_EVENT_FIELDS:
+            raise ValueError("finding observation fields mismatch")
+        return cls(**{field: payload[field] for field in _EXECUTION_CONTROL_EVENT_FIELDS})
+
+    def _payload_without_digest(self) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "unit_id": self.unit_id,
+            "attempt_id": self.attempt_id,
+            "evidence_ref": self.evidence_ref,
+            "check_result_digest": self.check_result_digest,
+            "observation_key_digest": self.observation_key_digest,
+            "identity_digest": self.identity_digest,
+            "contract_revision": self.contract_revision,
+            "classification_digest": self.classification_digest,
+            "slice_route_digest": self.slice_route_digest,
+            "attempt_plan_digest": self.attempt_plan_digest,
+            "observed_at": self.observed_at,
+        }
+
+    def as_dict(self) -> dict[str, Any]:
+        return {**self._payload_without_digest(), "payload_digest": self.payload_digest}
+
+
+@dataclass(frozen=True, slots=True)
+class FindingOccurrenceProjectionV1:
+    decision: str
+    identity_digest: str
+    occurrence: int
+    event_ids: tuple[str, ...]
+    head_digest: str
+    finding_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FindingLedgerProjectionV1:
+    """一次扫描生成的只读投影；identity/key 查询不再重复扫描 ledger。"""
+
+    decision: str
+    finding_codes: tuple[str, ...]
+    by_identity: Mapping[str, FindingOccurrenceProjectionV1]
+    by_observation_key: Mapping[str, FindingObservationEventV1]
+
+
+@dataclass(frozen=True, slots=True)
+class FindingObservationAppendResultV1:
+    decision: str
+    conflicts: tuple[str, ...]
+    occurrence: int
+    head_digest: str
+    domain_mutation_count: int
+    idempotent: bool
+
+
 def normalize_terminal_status(value: object) -> str:
     """Normalize status exactly once for every terminal-success consumer."""
 
@@ -384,6 +529,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _ledger_type_from_path(path: Path) -> str:
     name = path.name.upper()
+    if "EXECUTION-CONTROL" in name:
+        return "execution-control"
     if "CHECKPOINT" in name:
         return "checkpoint"
     if "HANDOFF" in name:
@@ -438,6 +585,162 @@ def load_events(
         event["_line_no"] = line_no
         events.append(event)
     return events, errors
+
+
+def execution_control_ledger_preimage(path: Path) -> str:
+    """返回 exact ledger bytes digest；缺失文件的 preimage 是空 bytes。"""
+
+    data = path.read_bytes() if path.is_file() else b""
+    return hashlib.sha256(data).hexdigest()
+
+
+def project_execution_control_ledger(
+    events: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
+) -> FindingLedgerProjectionV1:
+    """一次扫描 closed append-only events，生成 identity/key 的只读索引。"""
+
+    findings: list[str] = []
+    seen_event_ids: set[str] = set()
+    seen_keys: set[str] = set()
+    grouped: dict[str, list[FindingObservationEventV1]] = {}
+    by_key: dict[str, FindingObservationEventV1] = {}
+    for raw in events:
+        clean = {str(key): value for key, value in raw.items() if key != "_line_no"}
+        try:
+            event = FindingObservationEventV1.from_mapping(clean)
+        except (TypeError, ValueError):
+            findings.append("EXECUTION_CONTROL_EVENT_INVALID")
+            continue
+        if event.event_id in seen_event_ids:
+            findings.append("EXECUTION_CONTROL_EVENT_ID_DUPLICATE")
+        if event.observation_key_digest in seen_keys:
+            findings.append("EXECUTION_CONTROL_OBSERVATION_KEY_DUPLICATE")
+        seen_event_ids.add(event.event_id)
+        seen_keys.add(event.observation_key_digest)
+        grouped.setdefault(event.identity_digest, []).append(event)
+        by_key.setdefault(event.observation_key_digest, event)
+    codes = tuple(sorted(set(findings)))
+    decision = "BLOCKED" if codes else "PASS"
+    by_identity = {
+        identity: FindingOccurrenceProjectionV1(
+            decision=decision,
+            identity_digest=identity,
+            occurrence=len(matching),
+            event_ids=tuple(event.event_id for event in matching),
+            head_digest=execution_control_digest(
+                [event.payload_digest for event in matching]
+            ),
+            finding_codes=codes,
+        )
+        for identity, matching in grouped.items()
+    }
+    return FindingLedgerProjectionV1(
+        decision=decision,
+        finding_codes=codes,
+        by_identity=MappingProxyType(by_identity),
+        by_observation_key=MappingProxyType(by_key),
+    )
+
+
+def project_finding_occurrence(
+    events: tuple[Mapping[str, Any], ...]
+    | list[Mapping[str, Any]]
+    | FindingLedgerProjectionV1,
+    *,
+    identity_digest: str,
+) -> FindingOccurrenceProjectionV1:
+    """从一次构建的投影 O(1) 查询；兼容 typed events 输入并先构建投影。"""
+
+    if not _LOWER_SHA256_RE.fullmatch(identity_digest):
+        raise ValueError("identity_digest must be one lowercase SHA-256 digest")
+    projected = (
+        events
+        if isinstance(events, FindingLedgerProjectionV1)
+        else project_execution_control_ledger(events)
+    )
+    existing = projected.by_identity.get(identity_digest)
+    if existing is not None:
+        return existing
+    return FindingOccurrenceProjectionV1(
+        decision=projected.decision,
+        identity_digest=identity_digest,
+        occurrence=0,
+        event_ids=(),
+        head_digest=execution_control_digest([]),
+        finding_codes=projected.finding_codes,
+    )
+
+
+def append_execution_control_event(
+    path: Path,
+    event: FindingObservationEventV1,
+    *,
+    expected_preimage_digest: str,
+) -> FindingObservationAppendResultV1:
+    """在持有外部 project lock 时按 exact preimage append；重放不抬高 occurrence。"""
+
+    if not _LOWER_SHA256_RE.fullmatch(expected_preimage_digest):
+        raise ValueError("expected_preimage_digest must be one lowercase SHA-256 digest")
+    current_preimage = execution_control_ledger_preimage(path)
+    if current_preimage != expected_preimage_digest:
+        return FindingObservationAppendResultV1(
+            "BLOCKED", ("EXECUTION_CONTROL_LEDGER_PREIMAGE_DRIFT",), 0, "", 0, False
+        )
+    if path.is_file():
+        events, errors = load_events(path)
+        if errors:
+            return FindingObservationAppendResultV1(
+                "BLOCKED", ("EXECUTION_CONTROL_LEDGER_INVALID",), 0, "", 0, False
+            )
+    else:
+        events = []
+    ledger_projection = project_execution_control_ledger(events)
+    projection = project_finding_occurrence(
+        ledger_projection, identity_digest=event.identity_digest
+    )
+    if projection.decision != "PASS":
+        return FindingObservationAppendResultV1(
+            "BLOCKED", projection.finding_codes, projection.occurrence, projection.head_digest, 0, False
+        )
+    existing = ledger_projection.by_observation_key.get(event.observation_key_digest)
+    if existing is not None:
+        if existing.payload_digest != event.payload_digest:
+            return FindingObservationAppendResultV1(
+                "BLOCKED",
+                ("EXECUTION_CONTROL_OBSERVATION_REPLAY_MISMATCH",),
+                projection.occurrence,
+                projection.head_digest,
+                0,
+                False,
+            )
+        return FindingObservationAppendResultV1(
+            "PASS", (), projection.occurrence, projection.head_digest, 0, True
+        )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            event.as_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ) + "\n"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        mutated = int(execution_control_ledger_preimage(path) != expected_preimage_digest)
+        return FindingObservationAppendResultV1(
+            "PARTIAL_MUTATION",
+            ("EXECUTION_CONTROL_EVENT_APPEND_PARTIAL",),
+            projection.occurrence,
+            projection.head_digest,
+            mutated,
+            False,
+        )
+    final = project_finding_occurrence(
+        [*events, event.as_dict()], identity_digest=event.identity_digest
+    )
+    return FindingObservationAppendResultV1(
+        "PASS", (), final.occurrence, final.head_digest, 1, False
+    )
 
 
 def _clean_event(event: Mapping[str, Any]) -> dict[str, Any]:
@@ -851,6 +1154,8 @@ def validate_event_before_append(
     if not isinstance(event, Mapping):
         raise TypeError("event must be an object")
     resolved_type = ledger_type or _ledger_type_from_path(path)
+    if resolved_type == "execution-control":
+        return FindingObservationEventV1.from_mapping(event).as_dict()
     event_type = str(event.get("event_type") or "")
     if event_type == "ledger_compacted":
         required = COMPACT_MARKER_REQUIRED_FIELDS
@@ -1018,6 +1323,11 @@ def validate_event_ledger(
     }
     for event in events:
         line_no = int(event.get("_line_no") or 0)
+        if ledger_type == "execution-control":
+            try:
+                FindingObservationEventV1.from_mapping(_clean_event(event))
+            except (TypeError, ValueError) as exc:
+                errors.append(f"line {line_no}: invalid execution-control event: {exc}")
         if event.get("event_type") == "ledger_compacted":
             fields = COMPACT_MARKER_REQUIRED_FIELDS
         elif ledger_type == "dispatch":
@@ -1095,7 +1405,14 @@ def validate_event_ledger(
             typed_attempt_events.setdefault((dispatch_id, attempt_id), []).append(event)
         if not any(
             event.get(field)
-            for field in ("created_at", "checked_at", "spawned_at", "completed_at", "timestamp")
+            for field in (
+                "created_at",
+                "checked_at",
+                "spawned_at",
+                "completed_at",
+                "timestamp",
+                "observed_at",
+            )
         ):
             warnings.append(f"line {line_no}: event has no timestamp field")
     if ledger_type == "dispatch":
