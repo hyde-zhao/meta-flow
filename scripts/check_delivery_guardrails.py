@@ -22,6 +22,7 @@ DELIVERY_ROOT = ROOT / "delivery"
 PROCESS_ROOT = ROOT / "process"
 CHANGE_ROOT = PROCESS_ROOT / "changes"
 PLATFORM_CONTRACTS = DELIVERY_ROOT / "doc" / "PLATFORM-CONTRACTS.yaml"
+DELIVERY_RUNTIME_CONTRACT = DELIVERY_ROOT / "rules" / "DELIVERY-RUNTIME-CONTRACT.json"
 ALLOWED_DELIVERY_DIRS = {"agents", "doc", "rules", "scripts", "skills"}
 ALLOWED_DELIVERY_SCRIPT_FILES = {
     "install-cli.py",
@@ -532,14 +533,6 @@ CR058_EXECUTION_CLOSURE_TOKEN_TARGETS = {
     ),
 }
 CR058_CANONICAL_MIRROR_PAIRS = (
-    (
-        "delivery/skills/state-router/SKILL.md",
-        ".agents/skills/state-router/SKILL.md",
-    ),
-    (
-        "delivery/skills/checkpoint-manager/SKILL.md",
-        ".agents/skills/checkpoint-manager/SKILL.md",
-    ),
     (
         "delivery/skills/release-readiness/SKILL.md",
         ".agents/skills/release-readiness/SKILL.md",
@@ -2626,6 +2619,291 @@ def collect_canonical_mirror_errors(
     return errors
 
 
+def _require_exact_object_keys(
+    value: object,
+    expected: set[str],
+    label: str,
+    errors: list[str],
+) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        errors.append(f"delivery runtime contract {label} must be an object")
+        return None
+    actual = set(value)
+    if actual != expected:
+        errors.append(
+            f"delivery runtime contract {label} keys must be exactly "
+            f"{sorted(expected)}: found {sorted(actual)}"
+        )
+        return None
+    return value
+
+
+def _load_delivery_runtime_contract(
+    root: Path,
+    errors: list[str],
+    contract: Mapping[str, object] | None = None,
+) -> Mapping[str, object] | None:
+    if contract is None:
+        path = root / "delivery/rules/DELIVERY-RUNTIME-CONTRACT.json"
+        if not path.is_file() or path.is_symlink():
+            errors.append("missing canonical delivery runtime contract")
+            return None
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            errors.append(f"invalid delivery runtime contract JSON: {exc}")
+            return None
+        contract = loaded
+
+    top = _require_exact_object_keys(
+        contract,
+        {
+            "schema_version",
+            "kind",
+            "canonical_owner_ref",
+            "human_contract_refs",
+            "platform_contract_ref",
+            "route_contract",
+            "state_contract",
+            "checkpoint_contract",
+            "source_roots",
+            "source_mirror_pairs",
+            "semantic_consumers",
+            "required_tokens_by_ref",
+            "forbidden_instructions",
+        },
+        "root",
+        errors,
+    )
+    if top is None:
+        return None
+    if top["schema_version"] != 1 or top["kind"] != "DeliveryRuntimeContractV1":
+        errors.append("delivery runtime contract identity must be version 1 / DeliveryRuntimeContractV1")
+    if top["canonical_owner_ref"] != "delivery/rules/DELIVERY-RUNTIME-CONTRACT.json":
+        errors.append("delivery runtime contract canonical_owner_ref is invalid")
+
+    route = _require_exact_object_keys(
+        top["route_contract"],
+        {
+            "default_mode",
+            "legacy_opt_in_mode",
+            "resolver_operation",
+            "logical_prefix",
+            "resolver_exit_2",
+            "persist_resolved_path",
+        },
+        "route_contract",
+        errors,
+    )
+    if route is not None and route != {
+        "default_mode": "sibling-binding",
+        "legacy_opt_in_mode": "relative-symlink",
+        "resolver_operation": "meta-flow project resolve-ref",
+        "logical_prefix": "process/",
+        "resolver_exit_2": "BLOCKED",
+        "persist_resolved_path": False,
+    }:
+        errors.append("delivery runtime route_contract semantic values are invalid")
+
+    state = _require_exact_object_keys(
+        top["state_contract"],
+        {
+            "machine_truth_ref",
+            "discovery_projection_ref",
+            "human_summary_ref",
+            "execution_statuses",
+            "explicit_null_handoff",
+            "legacy_missing_handoff_field",
+        },
+        "state_contract",
+        errors,
+    )
+    if state is not None:
+        expected_state = {
+            "machine_truth_ref": "process/state/STATE.current.json",
+            "discovery_projection_ref": "process/current/CURRENT.json",
+            "human_summary_ref": "process/STATE.md",
+            "execution_statuses": [
+                "idle",
+                "active",
+                "awaiting_gate",
+                "awaiting_authorization",
+                "blocked",
+            ],
+            "explicit_null_handoff": "authoritative-no-handoff",
+            "legacy_missing_handoff_field": "discovery-fallback-allowed",
+        }
+        if state != expected_state:
+            errors.append("delivery runtime state_contract semantic values are invalid")
+
+    checkpoint = _require_exact_object_keys(
+        top["checkpoint_contract"],
+        {
+            "automatic_truth_glob",
+            "automatic_summary_glob",
+            "human_gate_glob",
+            "event_ledger_ref",
+        },
+        "checkpoint_contract",
+        errors,
+    )
+    if checkpoint is not None and checkpoint != {
+        "automatic_truth_glob": "process/checks/CP*.result.json",
+        "automatic_summary_glob": "process/checks/CP*.summary.md",
+        "human_gate_glob": "process/checkpoints/CP*.md",
+        "event_ledger_ref": "process/state/CHECKPOINT-LEDGER.ndjson",
+    }:
+        errors.append("delivery runtime checkpoint_contract semantic values are invalid")
+
+    _require_exact_object_keys(
+        top["source_roots"],
+        {"rules", "agents", "skills", "platforms"},
+        "source_roots",
+        errors,
+    )
+    return top
+
+
+def collect_delivery_runtime_contract_errors(
+    root: Path = ROOT,
+    contract: Mapping[str, object] | None = None,
+) -> list[str]:
+    """校验 delivery runtime 唯一 owner、consumer 和 platform mirror 映射。"""
+
+    errors: list[str] = []
+    payload = _load_delivery_runtime_contract(root, errors, contract)
+    if payload is None:
+        return errors
+
+    human_refs = payload["human_contract_refs"]
+    consumer_refs = payload["semantic_consumers"]
+    required = payload["required_tokens_by_ref"]
+    forbidden = payload["forbidden_instructions"]
+    pairs = payload["source_mirror_pairs"]
+    if not isinstance(human_refs, list) or not all(isinstance(item, str) for item in human_refs):
+        errors.append("delivery runtime human_contract_refs must be a string list")
+    if not isinstance(consumer_refs, list) or not all(isinstance(item, str) for item in consumer_refs):
+        errors.append("delivery runtime semantic_consumers must be a string list")
+        consumer_refs = []
+    if not isinstance(required, Mapping):
+        errors.append("delivery runtime required_tokens_by_ref must be an object")
+        required = {}
+    if set(consumer_refs) != set(required):
+        errors.append("delivery runtime semantic_consumers must exactly match required token targets")
+
+    for rel_path, tokens in required.items():
+        if not isinstance(rel_path, str) or not isinstance(tokens, list) or not all(
+            isinstance(token, str) and token for token in tokens
+        ):
+            errors.append(f"delivery runtime required token entry is invalid: {rel_path!r}")
+            continue
+        path = root / rel_path
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"missing delivery runtime semantic consumer: {rel_path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        missing = [token for token in tokens if token not in text]
+        if missing:
+            errors.append(
+                f"{rel_path} missing delivery runtime contract tokens: {', '.join(missing)}"
+            )
+
+    if not isinstance(forbidden, list):
+        errors.append("delivery runtime forbidden_instructions must be a list")
+    else:
+        seen_rule_ids: set[str] = set()
+        for index, item in enumerate(forbidden):
+            rule = _require_exact_object_keys(
+                item,
+                {"rule_id", "token", "target_refs"},
+                f"forbidden_instructions[{index}]",
+                errors,
+            )
+            if rule is None:
+                continue
+            rule_id = rule["rule_id"]
+            token = rule["token"]
+            targets = rule["target_refs"]
+            if not isinstance(rule_id, str) or not rule_id or rule_id in seen_rule_ids:
+                errors.append(f"delivery runtime forbidden rule_id is invalid: {rule_id!r}")
+                continue
+            seen_rule_ids.add(rule_id)
+            if not isinstance(token, str) or not token:
+                errors.append(f"delivery runtime forbidden token is invalid: {rule_id}")
+                continue
+            if not isinstance(targets, list) or not targets or not all(
+                isinstance(target, str) for target in targets
+            ):
+                errors.append(f"delivery runtime forbidden targets are invalid: {rule_id}")
+                continue
+            for target in targets:
+                path = root / target
+                if not path.is_file() or path.is_symlink():
+                    errors.append(f"missing delivery runtime forbidden target: {target}")
+                    continue
+                if token in path.read_text(encoding="utf-8"):
+                    errors.append(
+                        f"delivery runtime forbidden instruction {rule_id} in {target}"
+                    )
+
+    platform_ref = payload["platform_contract_ref"]
+    if not isinstance(platform_ref, str):
+        errors.append("delivery runtime platform_contract_ref must be a string")
+        platform_payload: Mapping[str, object] = {}
+    else:
+        platform_path = root / platform_ref
+        try:
+            loaded_platform = json.loads(platform_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            errors.append(f"invalid delivery runtime platform contract: {exc}")
+            platform_payload = {}
+        else:
+            platform_payload = loaded_platform if isinstance(loaded_platform, Mapping) else {}
+            if platform_payload.get("delivery_runtime_contract") != payload["canonical_owner_ref"]:
+                errors.append("platform contract must reference the canonical delivery runtime contract")
+
+    if not isinstance(pairs, list):
+        errors.append("delivery runtime source_mirror_pairs must be a list")
+        pairs = []
+    seen_mirrors: set[str] = set()
+    for index, item in enumerate(pairs):
+        pair = _require_exact_object_keys(
+            item,
+            {"canonical_ref", "platform", "mirror_ref", "renderer"},
+            f"source_mirror_pairs[{index}]",
+            errors,
+        )
+        if pair is None:
+            continue
+        canonical_ref = pair["canonical_ref"]
+        platform = pair["platform"]
+        mirror_ref = pair["mirror_ref"]
+        renderer = pair["renderer"]
+        if not all(isinstance(value, str) and value for value in pair.values()):
+            errors.append(f"delivery runtime source/mirror pair {index} has invalid values")
+            continue
+        if renderer not in {"markdown-audit", "claude-agent", "codex-agent"}:
+            errors.append(f"delivery runtime source/mirror renderer is invalid: {renderer}")
+        if mirror_ref in seen_mirrors:
+            errors.append(f"delivery runtime mirror target is duplicated: {mirror_ref}")
+        seen_mirrors.add(mirror_ref)
+        if not (root / canonical_ref).is_file():
+            errors.append(f"missing delivery runtime canonical source: {canonical_ref}")
+        contracts = platform_payload.get("contracts", {})
+        platform_spec = contracts.get(platform, {}) if isinstance(contracts, Mapping) else {}
+        scopes = platform_spec.get("scopes", {}) if isinstance(platform_spec, Mapping) else {}
+        project = scopes.get("project", {}) if isinstance(scopes, Mapping) else {}
+        kind = "skills" if "/skills/" in canonical_ref else "agents"
+        expected_root = project.get(kind) if isinstance(project, Mapping) else None
+        if not isinstance(expected_root, str) or not (
+            mirror_ref == expected_root or mirror_ref.startswith(expected_root.rstrip("/") + "/")
+        ):
+            errors.append(
+                f"delivery runtime mirror target violates {platform} {kind} platform root: {mirror_ref}"
+            )
+    return errors
+
+
 def collect_canonical_mirror_self_check_errors() -> list[str]:
     """用隔离临时目录证明 mirror 可选边界与 drift 检测未失效。"""
 
@@ -3099,6 +3377,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_context_sufficiency_errors())
     errors.extend(collect_failure_waiver_errors())
     errors.extend(collect_cr058_execution_closure_errors())
+    errors.extend(collect_delivery_runtime_contract_errors())
     errors.extend(collect_delivery_asset_lifecycle_errors())
     errors.extend(collect_process_route_contract_errors())
     errors.extend(collect_installation_architecture_errors())

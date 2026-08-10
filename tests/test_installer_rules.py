@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -76,6 +77,56 @@ def _rewrite_skill_entries_as_legacy_directories(target: Path) -> Path:
 
 
 class InstallerRulesTests(unittest.TestCase):
+    def test_delivery_runtime_contract_renders_skill_and_agent_mirrors(self) -> None:
+        contract = json.loads(
+            Path("delivery/rules/DELIVERY-RUNTIME-CONTRACT.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        marker_commit = "abc1234"
+        generated = "2026-08-10T00:00:00Z"
+
+        for pair in contract["source_mirror_pairs"]:
+            canonical = Path(pair["canonical_ref"])
+            renderer = pair["renderer"]
+            with self.subTest(mirror=pair["mirror_ref"]):
+                if renderer == "markdown-audit":
+                    source = canonical.read_text(encoding="utf-8")
+                    rendered = install.inject_markdown_audit(
+                        source, marker_commit, generated
+                    )
+                    self.assertIn("myflow-managed: version=1.0.0", rendered)
+                    _, source_body = install.parse_frontmatter(source)
+                    marker = install.markdown_audit(marker_commit, generated)
+                    _, rendered_body = install.parse_frontmatter(
+                        rendered.replace(marker, "", 1)
+                    )
+                    self.assertEqual(
+                        source_body.strip(),
+                        rendered_body.strip(),
+                    )
+                    continue
+
+                agent = install.load_canonical_agent(canonical, permissive=False)
+                self.assertIsNotNone(agent)
+                assert agent is not None
+                if renderer == "claude-agent":
+                    rendered = install.render_claude_agent(
+                        agent, marker_commit, generated
+                    )
+                    self.assertTrue(rendered.endswith(agent.instructions + "\n"))
+                else:
+                    codex_agent = install.codex_agent_definition(agent)
+                    rendered = install.render_codex_agent(
+                        codex_agent, marker_commit, generated
+                    )
+                    payload = tomllib.loads(rendered)
+                    self.assertEqual(
+                        agent.instructions,
+                        payload["developer_instructions"].rstrip(),
+                    )
+                    self.assertEqual("meta-doc", payload["name"])
+
     def test_canonical_rules_publish_routine_work_efficiency_contract(self) -> None:
         content = Path("delivery/rules/AGENTS.md").read_text(encoding="utf-8")
 

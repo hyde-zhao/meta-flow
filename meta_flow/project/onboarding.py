@@ -1298,6 +1298,26 @@ def status_main(argv: list[str] | None = None) -> int:
         else:
             payload["project"] = project.as_dict()
             payload["default_governance_objects_read"] = 1
+            if project.roadmap_ref:
+                from meta_flow.project.governance_projection import (
+                    validate_governance_projection,
+                )
+
+                governance = validate_governance_projection(
+                    health.project_root,
+                    health.process_repo_root,
+                )
+                payload["governance_projection"] = governance
+                payload["long_term_governance_objects_read"] = 2 + len(
+                    governance.get("declared_truth", {}).get("phase_refs", [])
+                )
+                if governance["decision"] != "PASS":
+                    payload["ok"] = False
+                    payload["status"] = "governance_projection_invalid"
+                    payload["errors"] = [
+                        *payload["errors"],
+                        *governance["errors"],
+                    ]
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if payload["ok"] else 1
 

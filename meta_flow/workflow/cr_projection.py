@@ -452,13 +452,18 @@ def load_ledger_events(
             raise ValueError(f'{path}:{line_no} invalid JSON: {exc}') from exc
     return events
 
-def project_native_cr_status(project_root: Path, *, cr_id: str, resolve_runtime_ref: Any, rel: Any, load_index: Any) -> NativeCRStatusProjectionV1:
+def project_native_cr_status(project_root: Path, *, cr_id: str, resolve_runtime_ref: Any, rel: Any, load_index: Any, excluded_legacy_paths: frozenset[Path] | None = None) -> NativeCRStatusProjectionV1:
     """交叉验证 formal CR、summary、index 和 append-only ledger 的状态。
 
     publisher 等下游只能消费这个投影，不再各自解释 frontmatter。
     """
     findings: list[str] = []
-    formal_crs = discover_formal_crs(project_root, _resolve_runtime_ref_fn=resolve_runtime_ref, _rel_fn=rel)
+    formal_crs = discover_formal_crs(
+        project_root,
+        _resolve_runtime_ref_fn=resolve_runtime_ref,
+        _rel_fn=rel,
+        excluded_legacy_paths=excluded_legacy_paths,
+    )
     formal_path = formal_crs.get(cr_id)
     if formal_path is None:
         return NativeCRStatusProjectionV1(cr_id=cr_id, lifecycle_status='', readiness_status='', gate_status='', formal_cr_ref='', summary_ref='', ledger_event_id='', decision='BLOCKED', findings=('FORMAL_CR_MISSING',))

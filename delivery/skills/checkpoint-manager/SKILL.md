@@ -30,7 +30,7 @@ status: active
 - 关键决策门控：CP2 / CP3 / CP5 / CP8 生成人工审查稿和 Decision Brief；CP4 只生成自动预检并汇入 CP5。
 - 上下文门控：CP2 / CP3 / CP5 / CP6 / CP7 / CP8 必须检查对应 `process/context/*-CONTEXT.yaml`，或记录 `N/A` / `WAIVED` / `BLOCKED` 原因。
 
-本 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`：CP 机器真相源优先使用 result JSON、evidence index、ledger 和 context refs；Markdown 只作为人类摘要或人工门禁入口。
+本 Skill 必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md` 与唯一机器 owner `delivery/rules/DELIVERY-RUNTIME-CONTRACT.json`：CP 机器真相源使用 result JSON、evidence index、ledger 和 context refs；Markdown 只作为人类摘要或人工门禁入口。
 
 所有检查点必须采用 IPD 风格的四段结构：
 
@@ -45,13 +45,13 @@ status: active
 |---|---|---|
 | 机器检查结果 | `process/checks/CP{n}-{slug}.result.json` | CP 检查机器真相源，必须符合 `schemas/CP-RESULT.schema.json`，可用 `meta-flow cp result-check` 校验 |
 | 人类检查摘要 | `process/checks/CP{n}-{slug}.summary.md` | 由 result JSON 渲染的人类摘要，可用 `meta-flow cp render-summary` 生成 |
-| 自动检查结果 | `process/checks/CP{n}-{slug}.md` | 由 agent 填写，必须包含逐项 PASS / FAIL / N/A / WAIVED |
+| 自动检查结果 | `process/checks/CP{n}-{slug}.result.json` | 由 agent 写入的机器真相；逐项人类说明进入同 stem `*.summary.md` |
 | 讨论日志 | `process/discussions/CP{n}-*-DISCUSSION-LOG.md` | CP2 / CP3 人类审计与恢复日志；不替代正式产物 |
 | 讨论恢复点 | `process/checks/CP{n}-DISCUSSION-CHECKPOINT.json` | CP2 / CP3 中断恢复状态；缺失时自动检查必须说明 N/A 或 blocked 原因 |
 | 人工审查稿 | `process/checkpoints/CP{n}-{slug}.md` | 由 host-orchestrator 发起，必须包含 checklist、自动预检摘要、人工审查结果区 |
 | Story 设计证据人工审查稿 | `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md` | 全部目标 Story 的独立 LLD / Batch LLD Story 锚点 / 技术说明 / waived 证据统一确认 |
-| Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md` | meta-dev 自检结果，必须包含 Agent Dispatch Evidence |
-| Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md` | meta-qa 验证结果，必须包含 Agent Dispatch Evidence |
+| Story 编码完成结果 | `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.result.json` | meta-dev 自检机器结果，必须引用 Agent Dispatch Evidence |
+| Story 验证完成结果 | `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.result.json` | meta-qa 验证机器结果，必须引用 Agent Dispatch Evidence |
 | 阶段上下文胶囊 | `process/context/CP*-*-CONTEXT.yaml` | 默认读取入口；checkpoint 记录其状态和读取扩展理由 |
 | Story Context Contract | `process/context/stories/*.json` | Story 级 CP6 / CP7 默认读取入口 |
 | Evidence Index | `process/evidence/*.index.json` | CP6 / CP7 默认证据入口，避免复制完整日志和实现正文 |
@@ -66,7 +66,7 @@ status: active
 
 同一 CR 的 CP 不以内联章节作为真相源。CR 文档只能维护 `Checkpoint Index`、状态摘要和 ref；自动 CP 真相源是 `process/checks/CP*.result.json`，人工门禁真相源是 `process/checkpoints/CP*.md`，事件真相源是 `process/state/CHECKPOINT-LEDGER.ndjson` / `process/state/GATE-LEDGER.ndjson`。checkpoint-manager 不得把 CP result、Decision Brief、review 全文或历史 checkpoint 详情复制进 CR 正文。
 
-所有 `process/*` 检查点路径都必须先经过 process 路由健康检查。外置模式下，CP0 前必须存在 `<project-root>/process -> <artifact-root>/process/<project-name>` 软链接、`process/.meta-flow-process.yaml` 和与之匹配的 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`；路由记录必须使用锚点 + 相对路径，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。缺失、断链、项目名不匹配或路由冲突时，检查点结论只能是 `BLOCKED`。
+所有 `process/*` 检查点路径都必须先经过唯一 logical-ref resolver 的路由健康检查。binding-only 默认不得创建 `process` 软链接；只有独立 typed authorization 明确选择 `relative-symlink` 时才验证 legacy link。退出码 2、binding 冲突、项目身份或 reciprocal metadata 不一致时，检查点结论只能是 `BLOCKED`，不得自行拼接 sibling 或恢复链接。
 
 ## 结果状态
 
@@ -294,7 +294,7 @@ target:
 |---|---|---:|---:|---:|---|
 | STATE pending queue | `process/checkpoints/CP*.md` Decision Brief 与 `process/state/GATE-LEDGER.ndjson` | scanned / missing / n/a | 0 | 0 |  |
 | 委托 Agent 交还摘要 | `process/handoffs/*RETURN-SUMMARY.md` | scanned / missing / n/a | 0 | 0 |  |
-| 自动预检结果 | `process/checks/CP*.md` | scanned / missing / n/a | 0 | 0 |  |
+| 自动预检结果 | `process/checks/CP*.result.json` | scanned / missing / n/a | 0 | 0 |  |
 | discussion log / checkpoint | `process/discussions/*` / `process/checks/*DISCUSSION-CHECKPOINT.json` | scanned / missing / n/a | 0 | 0 |  |
 | 下游正式产物 | `HLD.md` / `LLD` / `REVIEW.md` / `FIXES.md` / release docs | scanned / missing / n/a | 0 | 0 |  |
 | 用户显式选择题 | 当前对话 / REQUEST / CR | scanned / missing / n/a | 0 | 0 |  |
@@ -451,7 +451,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 ## CP0 原始请求受理门
 
 - 类型：自动
-- 结果文件：`process/checks/CP0-REQUEST-INTAKE.md`
+- 结果文件：`process/checks/CP0-REQUEST-INTAKE.result.json`
 - 责任方：host-orchestrator
 - 阶段：`init -> requirement-clarification`
 
@@ -460,7 +460,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 条目 | 说明 |
 |---|---|
 | 原始请求存在 | 用户已有明确任务、变更请求或 `.input/` 输入 |
-| process 路由可用 | `meta-flow workspace check` 通过；首次初始化时已先用 `meta-flow workspace link --artifact-root <artifact_root> --project-name <project_name>` 或等价动作创建外置目录和软链接 |
+| process 路由可用 | 唯一 logical-ref resolver 通过；默认 `sibling-binding` 不存在 process link，legacy `relative-symlink` 必须有独立 typed authorization |
 | 工作目录可写 | `docs/`、`process/checks/`、`process/checkpoints/` 可创建；不得因缺少路由而直接创建本地 `process/` |
 | 编排器单例可判定 | Codex 下未发现多个活动 host-orchestrator |
 
@@ -472,7 +472,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 | 2 | 目标对象明确 | 区分新工作流、修改 meta-flow 本身、外部 production 交付 |
 | 3 | engagement mode 明确 | `production` 或 `meta-self-dev` 已设置 |
 | 4 | 输出位置明确 | 运行态、确认态、交付态路径可判定 |
-| 5 | process 软链接契约明确 | 外置模式下 `process/.meta-flow-process.yaml` 与 `STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml` 的 `artifact_root`、`project_process_root`、`link_path`、`project_name` 一致，且路径以锚点 + 相对路径记录；首次初始化前缺 artifact 目录时先向用户索取 |
+| 5 | process 路由契约明确 | `.meta-flow/workspace.yaml` 与 process reciprocal binding 的 project identity、route mode、sibling route 一致；默认无 link，legacy link 仅验证已授权兼容模式 |
 | 6 | 干系人或决策人明确 | 至少能判定谁负责人工确认 |
 | 7 | 初始优先级明确 | Must / Should / Could 或等价优先级已记录 |
 | 8 | 明显冲突已暴露 | 与现有规则冲突的内容已登记为开放问题 |
@@ -481,7 +481,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 | 条目 | 说明 |
 |---|---|
-| 初始化完成 | `STATE.md`、`REQUEST.md`、`INPUT-INDEX.md` 已就绪，且 `process` 路由健康 |
+| 初始化完成 | `STATE.current.json`、`REQUEST.md`、`INPUT-INDEX.md` 已就绪，generated `STATE.md` 可重建且 `process` 路由健康 |
 | 无阻断开放问题 | 不存在阻止进入场景发现的 BLOCKING 项 |
 
 ### Deliverables
@@ -489,12 +489,12 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `process/REQUEST.md`
 - `process/STATE.md`
 - `process/INPUT-INDEX.md`
-- `process/checks/CP0-REQUEST-INTAKE.md`
+- `process/checks/CP0-REQUEST-INTAKE.result.json`
 
 ## CP1 用户场景完备门
 
 - 类型：自动
-- 结果文件：`process/checks/CP1-USE-CASE-COMPLETENESS.md`
+- 结果文件：`process/checks/CP1-USE-CASE-COMPLETENESS.result.json`
 - 责任方：meta-pm
 - 阶段：`requirement-clarification`
 
@@ -530,12 +530,12 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 
 - `docs/product/USE-CASES.md`
 - `process/CLARIFICATION-LOG.md`
-- `process/checks/CP1-USE-CASE-COMPLETENESS.md`
+- `process/checks/CP1-USE-CASE-COMPLETENESS.result.json`
 
 ## CP2 需求 / 场景 / 范围基线门
 
 - 类型：自动预检 + 人工
-- 自动结果文件：`process/checks/CP2-REQUIREMENTS-BASELINE.md`
+- 自动结果文件：`process/checks/CP2-REQUIREMENTS-BASELINE.result.json`
 - 人工审查稿：`process/checkpoints/CP2-REQUIREMENTS-BASELINE.md`
 - 责任方：meta-pm / host-orchestrator
 
@@ -589,13 +589,13 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `docs/product/BACKLOG.md`
 - `process/discussions/CP2-SCENARIO-DISCUSSION-LOG.md`（或 N/A 说明）
 - `process/checks/CP2-DISCUSSION-CHECKPOINT.json`（或 N/A 说明）
-- `process/checks/CP2-REQUIREMENTS-BASELINE.md`
+- `process/checks/CP2-REQUIREMENTS-BASELINE.result.json`
 - `process/checkpoints/CP2-REQUIREMENTS-BASELINE.md`
 
 ## CP3 蓝图 / HLD 架构评审门
 
 - 类型：自动预检 + 人工
-- 自动结果文件：`process/checks/CP3-HLD-CONSISTENCY.md`
+- 自动结果文件：`process/checks/CP3-HLD-CONSISTENCY.result.json`
 - 人工审查稿：`process/checkpoints/CP3-HLD-REVIEW.md`
 - 责任方：meta-se / host-orchestrator
 
@@ -647,13 +647,13 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `docs/design/ARCHITECTURE-DECISION.md`（CP3 前为草案，CP3 后回写核心 ADR 确认结论）
 - `process/discussions/CP3-HLD-DISCUSSION-LOG.md`（或 N/A 说明）
 - `process/checks/CP3-DISCUSSION-CHECKPOINT.json`（或 N/A 说明）
-- `process/checks/CP3-HLD-CONSISTENCY.md`
+- `process/checks/CP3-HLD-CONSISTENCY.result.json`
 - `process/checkpoints/CP3-HLD-REVIEW.md`
 
 ## CP4 Story 拆解与并行安全门
 
 - 类型：自动预检（汇入 CP5）
-- 自动结果文件：`process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`
+- 自动结果文件：`process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.result.json`
 - 责任方：meta-se / host-orchestrator
 
 ### Entry Criteria
@@ -704,12 +704,12 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `process/DEVELOPMENT-PLAN.yaml`（Story 管理机器真相源）
 - `process/STORY-BACKLOG.md` / `process/STORY-STATUS.md`（可选 legacy / generated view）
 - `process/stories/STORY-*.md`
-- `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.md`
+- `process/checks/CP4-STORY-DAG-PARALLEL-SAFETY.result.json`
 
 ## CP5 Story 设计证据可实现性门
 
 - 类型：全量自动预检 + 全量人工
-- 自动结果文件：`process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
+- 自动结果文件：`process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.result.json`
 - 人工审查稿：`process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
 - 责任方：meta-dev / host-orchestrator
 
@@ -760,7 +760,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `process/stories/STORY-{id}-{story_slug}-LLD.md`（仅独立 `full-lld`）
 - `process/stories/BATCH-{cr_id-or-batch_id}-{slug}-LLD.md#story-story-{id}`（仅 `standard-lite` / `batch-lld`，每个 Story 必须有独立锚点）
 - `process/stories/STORY-{id}-{story_slug}.md` 的 `## 技术说明` 或 waived 证据（仅 `technical-note` / `waived`）
-- `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.md`
+- `process/checks/CP5-{story_id}-{story_slug}-LLD-IMPLEMENTABILITY.result.json`
 - `process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md`
 - 更新后的 `process/DEVELOPMENT-PLAN.yaml`
 - 可选派生的 `process/STORY-STATUS.md`
@@ -768,7 +768,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 ## CP6 Story 编码完成门
 
 - 类型：滚动自动
-- 结果文件：`process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md`
+- 结果文件：`process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.result.json`
 - 责任方：meta-dev
 
 ### Entry Criteria
@@ -823,14 +823,14 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `process/returns/STORY-{id}.CP6.return.json`
 - `process/evidence/STORY-{id}.CP6.index.json`
 - `process/design-deltas/STORY-{id}.delta.json`（仅设计 delta 存在时）
-- `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.md`
+- `process/checks/CP6-{story_id}-{story_slug}-CODING-DONE.result.json`
 - 更新后的 `process/DEVELOPMENT-PLAN.yaml` Story 状态
 - 对应 meta-dev handoff 的 `dispatch` 记录
 
 ## CP7 Story 验证完成门
 
 - 类型：滚动自动
-- 结果文件：`process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md`
+- 结果文件：`process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.result.json`
 - 责任方：meta-qa
 
 ### Entry Criteria
@@ -888,7 +888,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `docs/quality/FIXES.md`（若存在 findings；无 findings 时写 N/A 理由）
 - `process/returns/STORY-{id}.CP7.return.json`
 - `process/evidence/STORY-{id}.CP7.index.json`
-- `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.md`
+- `process/checks/CP7-{story_id}-{story_slug}-VERIFICATION-DONE.result.json`
 - 缺陷记录或风险接受记录
 - 更新后的 `process/DEVELOPMENT-PLAN.yaml` Story 状态
 - 可选派生的 `STORY-STATUS.md`
@@ -897,7 +897,7 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 ## CP8 交付就绪门
 
 - 类型：自动预检 + 人工
-- 自动结果文件：`process/checks/CP8-DELIVERY-READINESS.md`
+- 自动结果文件：`process/checks/CP8-DELIVERY-READINESS.result.json`
 - 人工审查稿：`process/checkpoints/CP8-DELIVERY-READINESS.md`
 - 责任方：meta-qa / meta-doc / host-orchestrator
 
@@ -957,15 +957,15 @@ CP2 / CP3 / CP5 / CP8 的人工门禁发起动作必须同时满足文件合规�
 - `docs/release/ROLLBACK.md`（或 CP8 N/A / waived 说明）
 - `docs/release/MIGRATION.md`（或 CP8 N/A / waived 说明）
 - `docs/release/FEEDBACK.md`（或 CP8 N/A / waived 说明）
-- `process/checks/CP8-DELIVERY-READINESS.md`
+- `process/checks/CP8-DELIVERY-READINESS.result.json`
 - `process/checkpoints/CP8-DELIVERY-READINESS.md`
 
 ## 执行规则
 
 1. 所有 CP 文件创建或更新后，必须回写 `process/checks/CP*.result.json` 与 `process/state/CHECKPOINT-LEDGER.ndjson` 中的路径和结论。
-1. 写入任何 CP 文件前必须确认 `process` 路由健康。首次初始化只允许在已建立外置过程目录和软链接后写入 `STATE.md` / `REQUEST.md` / `INPUT-INDEX.md`；若 artifact 目录未知、软链接断裂或路由冲突，先写 `BLOCKED` 结论或中断并要求用户提供目录，不得静默创建新的本地 `process/`。
+1. 写入任何 CP 文件前必须用唯一 resolver 确认 `process` 路由健康。binding-only 默认不创建软链接；首次初始化通过 native owner 写 `STATE.current.json`，再由 renderer 生成摘要。route 或 identity 冲突时中断，不得静默创建本地 `process/`。
 2. 人工检查点的自动预检未 `PASS` 或 `WAIVED` 前，host-orchestrator 不得发起人工确认。
-3. 人工确认通过后，host-orchestrator 必须把人工结论写回对应 `process/checkpoints/CP*.md` 的“人工审查结果”，并同步更新 `STATE.md`。
+3. 人工确认通过后，host-orchestrator 必须把人工结论写回对应 `process/checkpoints/CP*.md` 的“人工审查结果”，通过受控 writer 更新 `STATE.current.json`，再由 renderer 刷新人类摘要。
 4. 如果用户直接在对话中回复 `approve`，host-orchestrator 也必须补写人工审查结果文件，不能只改状态。`1/通过` 可作为历史兼容别名解析，但新提示不得再把多个等价别名混排给用户。
 5. `changes_requested` 必须路由给对应 agent 修订，并在重提时保留旧检查结果作为历史证据。
 6. `rejected` 必须回退到检查点定义的目标阶段或 Story 状态。
@@ -1002,7 +1002,7 @@ CP6 / CP7 的 `Agent Dispatch Evidence` 小节必须使用以下结构：
 ## 验收标准
 
 - [ ] CP0-CP8 均有 Entry Criteria、Checklist、Exit Criteria、Deliverables
-- [ ] 自动检查点均生成 `process/checks/CP*.md` 结果文件
+- [ ] 自动检查点均生成 `process/checks/CP*.result.json` 机器结果；需要人类摘要时生成同 stem `*.summary.md`
 - [ ] CP2 / CP3 / CP5 / CP8 人工检查点均生成 `process/checkpoints/CP*.md` 审查稿
 - [ ] 人工检查稿包含 Decision Brief
 - [ ] host-orchestrator 发起关键人工确认时明确提示 checklist 文件路径、自动预检结论、待决策项数量、待决策表格和三个 exact 回复

@@ -39,7 +39,7 @@ meta-flow project resolve-ref --project-root <release-root> --logical-ref <proce
 
 ## 统一上下文与输出契约
 
-必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md`。
+必须遵守 `delivery/rules/AGENT-SKILL-CONTRACT.md` 与唯一机器 owner `delivery/rules/DELIVERY-RUNTIME-CONTRACT.json`。
 
 ### Input Contract
 
@@ -68,7 +68,7 @@ meta-flow project resolve-ref --project-root <release-root> --logical-ref <proce
 
 若 CP8 capsule 或 `RELEASE-CONTEXT.yaml` 已能说明交付范围和风险，不要额外读取全部上游长文档；必须展开读取时，把原因写入 context `read_expansion_log` 或 `process/state/READ-EXPANSION-LEDGER.ndjson`。
 
-当文档对象是 Meta Flow 自身或包含工作流治理时，允许只读加载 `process/checks/CP*.md`、`process/checkpoints/CP*.md` 的路径和结论摘要，用于解释追溯链；不得复述 agent 推理过程。
+当文档对象是 Meta Flow 自身或包含工作流治理时，允许只读加载 `process/checks/CP*.result.json`、`process/checks/CP*.summary.md`、`process/checkpoints/CP*.md` 的路径和结论摘要，用于解释追溯链；不得复述 agent 推理过程。
 
 **产物类型判断**（加载后立即执行，影响后续章节结构选择）：
 
@@ -146,7 +146,7 @@ meta-flow project resolve-ref --project-root <release-root> --logical-ref <proce
 > 若工具在多步骤流程中设有自动检查或"暂停 + 等待人工确认"机制，为每个检查点明确说明：
 > - **触发时机**：在哪一步骤之后触发
 > - **检查点类型**：自动 / 自动预检 + 人工 / 滚动自动 / 批次自动预检 + 人工
-> - **检查结果路径**：自动结果写入 `process/checks/CP*.md`
+> - **检查结果路径**：自动机器结果写入 `process/checks/CP*.result.json`，人类摘要写入同 stem `process/checks/CP*.summary.md`
 > - **人工 checklist 路径**：人工审查稿写入 `process/checkpoints/CP*.md`
 > - **需要确认的内容**：仅人工检查点需要，以表格形式列出确认项
 > - **待人工决策项**：每个需要用户确定的信息必须列出决策 ID、决策类型、推荐方案、至少 1 个备选方案（优先 2 个）、优劣分析、影响 / 风险和回退 / 切换条件
@@ -162,7 +162,7 @@ meta-flow project resolve-ref --project-root <release-root> --logical-ref <proce
 
 **触发时机**：<步骤X 完成后>  
 **类型**：<自动 / 自动预检 + 人工 / 滚动自动 / 批次自动预检 + 人工>  
-**自动结果文件**：`process/checks/CP*.md`  
+**自动结果文件**：`process/checks/CP*.result.json`（人类摘要：同 stem `*.summary.md`）
 **人工 checklist 文件**：`process/checkpoints/CP*.md`
 **需要确认的内容**：
 
@@ -319,7 +319,7 @@ CP8 文档必须额外包含 “后续事项跟踪” 说明：
 ### CP<n>：<名称>
 
 **说明**：[检查点的目的和内容简述]
-**自动结果文件**：`process/checks/CP*.md`  
+**自动结果文件**：`process/checks/CP*.result.json`（人类摘要：同 stem `*.summary.md`）
 **人工 checklist 文件**：`process/checkpoints/CP*.md`
 
 **示例输出**：

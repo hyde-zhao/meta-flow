@@ -247,7 +247,60 @@ class StateV2Tests(unittest.TestCase):
             self.assertIn("process/state/STATE.current.json", text)
             entry = json.loads((root / "process" / "current" / "CURRENT.json").read_text(encoding="utf-8"))
             self.assertEqual("active", entry["status"])
+            self.assertEqual("init", entry["phase"])
             self.assertEqual("process/state/STATE.current.json", entry["state_ref"])
+
+    def test_current_refresh_projects_typed_authorization_wait_and_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = current.default_current_state(root)
+            state["current_phase"] = "requirement-clarification"
+            state["next_action"] = {
+                "type": "decide_publication",
+                "text": "decide publication",
+                "stop_reason": "authorization_required",
+            }
+            current.write_current_state(root, state)
+
+            current.refresh_current_entry(root)
+
+            entry = json.loads(
+                (root / "process" / "current" / "CURRENT.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual("awaiting_authorization", entry["status"])
+            self.assertEqual("requirement-clarification", entry["phase"])
+            self.assertEqual(
+                {
+                    "idle",
+                    "active",
+                    "awaiting_gate",
+                    "awaiting_authorization",
+                    "blocked",
+                },
+                set(current.CURRENT_EXECUTION_STATUSES),
+            )
+
+    def test_explicit_null_handoff_does_not_fall_back_to_historical_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            historical = root / "process" / "handoffs" / "NEXT-SESSION-OLD.md"
+            historical.parent.mkdir(parents=True)
+            historical.write_text("# historical\n", encoding="utf-8")
+            state = current.default_current_state(root)
+            state["next_session_handoff_ref"] = None
+            current.write_current_state(root, state)
+
+            current.refresh_current_entry(root)
+
+            entry = json.loads(
+                (root / "process" / "current" / "CURRENT.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIsNone(entry["handoff_ref"])
+            self.assertFalse((root / "process" / "current" / "handoff.ref").exists())
 
     def test_current_refresh_handles_idle_state_with_release_and_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -526,7 +579,11 @@ class StateV2Tests(unittest.TestCase):
             state = current.default_current_state(root)
             state["pending_checklist_path"] = "process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md"
             state["project_state_ref"] = "process/state/STATE.current.json"
+            checkpoint = root / "process" / "checkpoints" / "CP5-ALL-STORIES-LLD-BATCH.md"
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint.write_text("# CP5\n", encoding="utf-8")
             current.write_current_state(root, state)
+            current.render_state_file(root)
 
             output = StringIO()
             with redirect_stdout(output):
@@ -534,6 +591,52 @@ class StateV2Tests(unittest.TestCase):
 
             self.assertEqual(0, exit_code, output.getvalue())
             self.assertNotIn("unknown field", output.getvalue())
+
+    def test_enforce_rejects_generated_state_markdown_projection_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.write_current_state(root, current.default_current_state(root))
+            current.render_state_file(root)
+            markdown = root / "process" / "STATE.md"
+            markdown.write_text(
+                markdown.read_text(encoding="utf-8").replace(
+                    "Active CR: none", "Active CR: CR-STALE"
+                ),
+                encoding="utf-8",
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = current.main(
+                    ["check", "--project-root", str(root), "--mode", "enforce"]
+                )
+
+            self.assertEqual(1, exit_code)
+            self.assertIn(
+                "STATE.md does not exactly match the STATE.current.json render",
+                output.getvalue(),
+            )
+
+    def test_enforce_rejects_current_phase_and_ref_projection_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.write_current_state(root, current.default_current_state(root))
+            current.render_state_file(root)
+            entry_path = root / "process" / "current" / "CURRENT.json"
+            entry = json.loads(entry_path.read_text(encoding="utf-8"))
+            entry["phase"] = "story-execution"
+            entry["handoff_ref"] = "process/handoffs/STALE.md"
+            entry_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = current.main(
+                    ["check", "--project-root", str(root), "--mode", "enforce"]
+                )
+
+            self.assertEqual(1, exit_code)
+            self.assertIn("CURRENT.json phase='story-execution'", output.getvalue())
+            self.assertIn("CURRENT.json handoff_ref=", output.getvalue())
 
     def test_default_current_state_keys_are_partitioned_by_required_and_optional_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

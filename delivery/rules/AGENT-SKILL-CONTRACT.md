@@ -2,6 +2,8 @@
 
 本文件是功能 Agent 与高频 Skill 的共享契约。目标是把“默认多读一点保险”改成“先读最小上下文包，按契约扩展读取，输出只写摘要和引用”。
 
+运行时 delivery 语义的唯一机器 owner 是 `delivery/rules/DELIVERY-RUNTIME-CONTRACT.json`；本文件是人类规范 facade。route、STATE/CURRENT、checkpoint 真相路径、source/mirror 与平台 renderer 不得在下游另立冲突枚举。
+
 ## vNext Work-first Contract
 
 ### Binding-only 逻辑引用门
@@ -35,7 +37,7 @@
 1. 必须先读取本阶段 context pack 或 Story packet：
    - 阶段入口：`process/context/CP*-*.context.json` 或 legacy `process/context/*-CONTEXT.yaml`
    - Story 入口：`process/context/stories/*.json`
-2. 默认机器状态入口是 `process/state/STATE.current.json`；默认文件系统发现入口是 `process/current/CURRENT.json`，其 status 必须能表达 `idle`、`active`、`awaiting_gate` 或 `blocked`。`process/STATE.md` 只作为人类摘要、迁移兼容或人工审计输入，不得作为子 agent 默认读取入口。
+2. 默认机器状态入口是 `process/state/STATE.current.json`；默认文件系统发现入口是 `process/current/CURRENT.json`，其 status 必须能表达 `idle`、`active`、`awaiting_gate`、`awaiting_authorization` 或 `blocked`。`process/STATE.md` 只作为人类摘要、迁移兼容或人工审计输入，不得作为子 agent 默认读取入口。`next_session_handoff_ref` 字段存在且为显式 `null` 时表示 owner 已确认无 handoff，不得扫描历史文件回退；只有 legacy payload 缺少该字段时才允许发现回退。
 3. 只能默认读取 context / packet 中的 `allowed_reads`、`must_read` 或明确的 stage summary。以下对象必须进入 `do_not_read_by_default`：
    - `process/STATE.md`
    - `process/DEVELOPMENT-PLAN.yaml`

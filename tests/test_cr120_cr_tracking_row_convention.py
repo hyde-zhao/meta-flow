@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 from meta_flow.checks import cr_tracking
 from meta_flow.project.onboarding import ProjectInitRequest, apply_project_init, plan_project_init
@@ -290,6 +291,104 @@ gate_status: closed
     )
 
     assert not any("illegal native status tuple" in error for error in errors)
+
+
+def test_native_state_ref_does_not_require_legacy_status_field(tmp_path: Path) -> None:
+    path = _resolve_runtime_ref(tmp_path, "process/changes/CR-120-NATIVE.md")
+    _write(
+        path,
+        """---
+schema_version: 1
+kind: cr
+cr_id: CR-120
+title: native tuple fixture
+lifecycle_status: active
+readiness_status: NOT_READY
+gate_status: cp2_pending
+---
+""",
+    )
+    formal = cr_tracking.discover_formal_crs(path.parent)
+
+    _errors, warnings = cr_tracking.collect_errors_and_warnings(
+        project_root=tmp_path,
+        formal_crs=formal,
+        rows=[],
+        index_items=[],
+        next_action_refs=[],
+        state_refs=[
+            cr_tracking.StateRef(key="active_change", value="CR-120", line_no=1)
+        ],
+        allow_multiple_active=False,
+    )
+
+    assert not any("status=<empty>" in warning for warning in warnings)
+    assert not any("non-standard status" in warning for warning in warnings)
+
+
+def test_native_projection_closure_reports_exact_four_source_findings(tmp_path: Path) -> None:
+    path = _resolve_runtime_ref(tmp_path, "process/changes/CR-120-NATIVE.md")
+    _write(
+        path,
+        """---
+schema_version: 1
+kind: cr
+cr_id: CR-120
+title: native tuple fixture
+lifecycle_status: active
+readiness_status: NOT_READY
+gate_status: cp2_pending
+---
+""",
+    )
+    formal = cr_tracking.discover_formal_crs(path.parent)
+
+    errors = cr_tracking.validate_native_projection_closure(
+        formal,
+        projector=lambda _cr_id: SimpleNamespace(
+            decision="BLOCKED",
+            findings=("CR_SUMMARY_MISSING", "CR_LEDGER_STATUS_EVENT_MISSING"),
+        ),
+    )
+
+    assert errors == [
+        "native CR projection CR-120 is not converged: "
+        "CR_SUMMARY_MISSING,CR_LEDGER_STATUS_EVENT_MISSING"
+    ]
+
+
+def test_native_projection_closure_ignores_legacy_and_terminal_crs(
+    tmp_path: Path,
+) -> None:
+    native_path = _resolve_runtime_ref(tmp_path, "process/changes/CR-120-NATIVE.md")
+    _write(
+        native_path,
+        """---
+schema_version: 1
+kind: cr
+cr_id: CR-120
+title: native tuple fixture
+lifecycle_status: closed
+readiness_status: READY
+gate_status: closed
+---
+""",
+    )
+    legacy_path = _resolve_runtime_ref(tmp_path, "process/changes/CR-121-LEGACY.md")
+    _write(legacy_path, "---\ncr_id: CR-121\nstatus: closed\n---\n")
+    formal = cr_tracking.discover_formal_crs(native_path.parent)
+    called: list[str] = []
+
+    errors = cr_tracking.validate_native_projection_closure(
+        formal,
+        projector=lambda cr_id: (
+            called.append(cr_id)
+            or SimpleNamespace(decision="PASS", findings=())
+        ),
+    )
+
+    assert errors == []
+    assert called == []
 
 
 def test_native_formal_cr_rejects_jointly_stale_gate_checkpoint_result_and_adr(

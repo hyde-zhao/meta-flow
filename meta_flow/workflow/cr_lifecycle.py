@@ -186,6 +186,7 @@ def project_native_cr_status(
     project_root: Path,
     *,
     cr_id: str,
+    excluded_legacy_paths: frozenset[Path] | None = None,
 ) -> NativeCRStatusProjectionV1:
     return _projection_project_native_cr_status(
         project_root,
@@ -196,6 +197,7 @@ def project_native_cr_status(
             root,
             resolve_runtime_ref_fn=_resolve_runtime_ref,
         ),
+        excluded_legacy_paths=excluded_legacy_paths,
     )
 
 

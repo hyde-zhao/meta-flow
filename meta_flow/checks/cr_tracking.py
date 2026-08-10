@@ -1068,6 +1068,12 @@ def collect_errors_and_warnings(
                 f"STATE line {ref.line_no} {ref.key} points to missing formal CR: {ref.value}"
             )
             continue
+        if cr.native:
+            if cr.lifecycle_status in {"closed", "cancelled", "superseded"}:
+                errors.append(
+                    f"STATE line {ref.line_no} {ref.key} points to finished CR {ref.value} with lifecycle_status={cr.lifecycle_status}"
+                )
+            continue
         if ref.key != "active_change" and cr.status in FINISHED_FORMAL_STATUSES:
             continue
         if cr.status in FINISHED_FORMAL_STATUSES:
@@ -1077,10 +1083,6 @@ def collect_errors_and_warnings(
         elif cr.status not in UNFINISHED_FORMAL_STATUSES:
             warnings.append(
                 f"STATE line {ref.line_no} {ref.key} points to CR {ref.value} with non-standard status={cr.status or '<empty>'}"
-            )
-        if cr.lifecycle_status in {"closed", "cancelled", "superseded"}:
-            errors.append(
-                f"STATE line {ref.line_no} {ref.key} points to finished CR {ref.value} with lifecycle_status={cr.lifecycle_status}"
             )
 
     for cr in formal_crs.values():
@@ -1408,6 +1410,34 @@ def collect_errors_and_warnings(
     return errors, warnings
 
 
+def validate_native_projection_closure(
+    formal_crs: dict[str, FormalCR],
+    *,
+    projector: Any,
+) -> list[str]:
+    """Require every live native CR to converge across formal/summary/index/ledger truth.
+
+    Terminal evidence lineage and historical repair remain owned by R10; this
+    admission check must not rewrite or retroactively invalidate that corpus.
+    """
+
+    errors: list[str] = []
+    for cr_id, formal in sorted(formal_crs.items()):
+        if not formal.native or formal.lifecycle_status in {
+            "closed",
+            "cancelled",
+            "superseded",
+        }:
+            continue
+        projection = projector(cr_id)
+        if str(getattr(projection, "decision", "")) == "PASS":
+            continue
+        findings = tuple(getattr(projection, "findings", ()) or ())
+        detail = ",".join(str(item) for item in findings) or "UNKNOWN_PROJECTION_FAILURE"
+        errors.append(f"native CR projection {cr_id} is not converged: {detail}")
+    return errors
+
+
 def print_summary(
     formal_crs: dict[str, FormalCR],
     rows: list[FollowUpRow],
@@ -1552,6 +1582,19 @@ def main(argv: list[str] | None = None) -> int:
         allow_multiple_active=args.allow_multiple_active,
     )
     errors.extend(projection_errors)
+    try:
+        errors.extend(
+            validate_native_projection_closure(
+                formal_crs,
+                projector=lambda cr_id: cr_lifecycle.project_native_cr_status(
+                    project_root,
+                    cr_id=cr_id,
+                    excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
+                ),
+            )
+        )
+    except ValueError as exc:
+        errors.append(f"native CR projection cannot be evaluated: {exc}")
     legacy_index_paths = find_legacy_cr_index_paths(project_root)
     if legacy_index_paths and not args.allow_legacy_yaml:
         errors.extend(

@@ -20,7 +20,7 @@ status: active
 
 ## 目标
 
-读取并更新轻量运行态、ledger 和 legacy 状态摘要，根据当前阶段的退出条件判断是否可推进、是否需要回退、下一步应唤醒哪个 Agent，并保持状态机与 `skills/state-router/templates/STATE-TEMPLATE.md` 及 `delivery/rules/AGENT-SKILL-CONTRACT.md` 一致。
+读取并更新轻量运行态、ledger 和 legacy 状态摘要，根据当前阶段的退出条件判断是否可推进、是否需要回退、下一步应唤醒哪个 Agent，并保持状态机与 `skills/state-router/templates/STATE-TEMPLATE.md`、`delivery/rules/AGENT-SKILL-CONTRACT.md` 及唯一机器 owner `delivery/rules/DELIVERY-RUNTIME-CONTRACT.json` 一致。
 
 默认机器状态入口是 `process/state/STATE.current.json`。`STATE.md 是人类摘要` 和 legacy fallback；新项目不得把巨型 `process/STATE.md` 作为子 agent 默认读取入口。
 
@@ -41,8 +41,8 @@ status: active
 
 ## 前置条件
 
-- [ ] `process` 路由已检查：已存在健康 `process/STATE.md`，或已通过 `meta-flow workspace link` / 等价动作建立外置过程目录与软链接
-- [ ] `process/state/STATE.current.json` 已存在，或 legacy `process/STATE.md` 已存在；首次初始化必须在 `process` 路由健康、外置目标已确认后执行
+- [ ] 已通过唯一 logical-ref resolver 检查 `process` 路由；binding-only 默认不得创建 `process` 软链接，只有独立 typed authorization 明确选择 `relative-symlink` 才允许 legacy 兼容链接
+- [ ] `process/state/STATE.current.json` 已存在；仅 legacy payload 缺少 state v2 时才读取 `process/STATE.md`，且不得把人类摘要提升为机器真相
 - [ ] 当前阶段相关产物的存在性和确认状态可被检查
 
 ## 必须读取的输入
@@ -105,13 +105,12 @@ status: active
 
 ### 1. 初始化或读取状态
 
-0. 读写 `process/STATE.md` 前必须先执行 `meta-flow workspace check` 或等价检查。若 `process` 缺失、断链、`process/STATE.md` 缺失且不是首次初始化、`project_name` 不匹配或路由元数据冲突，必须阻断流程；不得直接创建本地 `process/STATE.md` 绕过外置路由。
-0.1 新项目和已迁移项目必须优先读取 `process/state/STATE.current.json`，并使用 ledgers 作为 CR、Story、Gate、Run、Handoff 和 Dispatch 的机器真相源；`process/STATE.md` 只用于人类摘要渲染和 legacy fallback。
-1. 首次初始化时，若用户或项目规则已确认 `artifact_root` 和 `project_name`，必须先执行或等价完成 `meta-flow workspace link --artifact-root <artifact_root> --project-name <project_name>`，创建 `<artifact-root>/process/<project-name>/`、基础子目录和 `<project-root>/process` 软链接，再以 `skills/state-router/templates/STATE-TEMPLATE.md` 初始化 `process/STATE.md`。
-2. `artifact_root`、`project_process_root`、`link_path` 必须以锚点 + 相对路径记录，不得写入设备相关绝对路径：`artifact_root` 相对 `project_root`，`project_process_root` 相对 `artifact_root`，`link_path` 相对 `project_root`。若无法用相对路径表达，必须先让用户确认新的 artifact 根路径或重新执行 `workspace link`。
-3. 若 `artifact_root` / `project_process_root` 未知，必须强制中断并要求用户提供目录；不得猜测 artifact 仓库位置，不得退回普通本地 `process/`。
-4. 仅当用户明确选择兼容模式，或当前仓库已存在未迁移的 legacy `process/` 且 ``STATE.current.json.artifact_routing_ref` 与 `process/.meta-flow-process.yaml`.routing_mode=local-directory`，才允许本地目录模式；必须写入 `artifact_routing.migration_status` 和后续迁移动作。
-5. 初始化 `process/STATE.md` 后，必须回填 `artifact_routing.routing_mode`、`path_format`、`artifact_root`、`artifact_root_anchor`、`project_process_root`、`project_process_root_anchor`、`link_path`、`link_path_anchor`、`project_name`、`health_status`、`migration_status` 和 `route_metadata`，并创建 `process/checks/`、`process/checkpoints/`、`process/context/`、`process/changes/`。
+0. 首次 I/O 前必须用唯一 resolver 解析需要的 `process/...` logical ref；退出码 2、binding 冲突或元数据不一致时立即 BLOCKED。binding-only 默认不得创建 `process` 软链接，也不得把 logical ref 改写成 sibling 物理路径。
+0.1 新项目和已迁移项目必须读取 `process/state/STATE.current.json`，并使用 ledgers 作为 CR、Story、Gate、Run、Handoff 和 Dispatch 的机器真相源；`process/STATE.md` 只用于受控的人类摘要渲染、人工审计和显式 legacy 迁移。
+1. 首次初始化走 native project/state 初始化入口，由 resolver 返回的过程仓根创建 state v2、current discovery 与必要子目录；Skill 不自行构造 artifact root、project process root 或 link path。
+2. 默认 route 必须是 `sibling-binding`。只有 Host Orchestrator 持有独立 typed authorization 且明确选择 `relative-symlink` 时，才可调用 legacy 兼容入口；本 Skill 不创建、恢复或猜测软链接。
+3. 受控 writer 写入 `STATE.current.json` 后，由 native renderer 生成 `process/STATE.md` 人类摘要并刷新 CURRENT；任何失败都不得用手写 Markdown 代替。
+4. 若 legacy 摘要需要迁移，必须先导入 native owner，再从 owner 重建摘要，不能把旧布尔值直接当作新检查点通过。
 5. 读取 `workflow_mode`、`fast_lane_reason`、`current_phase`、`current_agent`、`blocked`、`active_change`、`pending_gate`、`pending_checklist_path`、`active_delegation_ref`、`active_question_batch_ref`、`agent_dispatch_ref`、`checkpoint_ledger_ref`、`gate_decisions_ref`、`cr_tracking_ref`、`cr_ledger_ref`、`workflow_health_ref`、`decision_briefs` 和 `discussion_checkpoints`。
 6. 若 `blocked=true`，先返回阻塞原因，不允许静默推进。
 7. 若旧 `STATE.md` 的 `checkpoints` 仍是“需求/HLD/Story/终验”旧布尔结构，必须先迁移为 CP0-CP8 结构；迁移动作写入 `history`，不得把旧布尔值当作新检查点已通过。
@@ -399,7 +398,7 @@ Codex 多 agent 模式下，state-router 必须维护 `AGENT-DISPATCH-LEDGER.ndj
 4. active agent 视图中不得出现 `host-orchestrator`；发现时必须标记为 legacy/stale 并迁出到 archive 或 dispatch ledger，不得继续当作可调度功能 agent。
 5. active agent 失活或用户手动关闭时，必须在 dispatch ledger 记录重建原因，不能静默生成新线程。
 6. 若旧 `STATE.md` 存在 `agent_lifecycle`，必须迁移为 `AGENT-DISPATCH-LEDGER.ndjson` 与 `platform_capabilities_ref`；迁移本身不代表允许新建编排子 agent。
-7. Codex 工具面暴露 `spawn_agent` / `resume_agent` / `send_input` 时，必须将 `platform_capabilities.subagent_dispatch.available=true`、`method=codex-tools` 写入 `STATE.md`；若工具面不可用，必须写 `available=false`、`method=unavailable`、`limitation` 并阻断需要功能 Agent 的任务。
+7. Codex 工具面暴露 `spawn_agent` / `resume_agent` / `send_input` 时，必须通过受控 writer 将 `platform_capabilities.subagent_dispatch.available=true`、`method=codex-tools` 写入 `STATE.current.json` 的合法字段；若工具面不可用，写 `available=false`、`method=unavailable`、`limitation` 并阻断需要功能 Agent 的任务。不得直接编辑生成的 `STATE.md`。
 8. `subagent_auto_dispatch=enabled` 且 `subagent_dispatch.available=true` 时，创建 `mode=subagent` handoff 后必须立即调用真实子 agent 工具；不得只写 handoff 后继续由 Host Orchestrator 代做。
 9. Codex 动态思考 profile 只能改变实际 `codex_agent_name`，不能改变 canonical `role`；dispatch event 的 `role` 仍写 `meta-dev` / `meta-se` / `meta-qa`。
 10. ``process/state/AGENT-DISPATCH-LEDGER.ndjson` platform capability event.required_tools` 必须列出 `spawn_agent` / `resume_agent` / `send_input`；`process/state/AGENT-DISPATCH-LEDGER.ndjson codex_reasoning_profiles event` 必须保存 `meta-dev-debugger`、`meta-se-critical`、`meta-qa-critical` 的默认 / 升级映射。
@@ -442,7 +441,7 @@ Host Orchestrator 主进程会话只保留当前 scalar/ref，不得写入 activ
 | `next_exact_prompt` | 阶段任务、检查点、Story 实现 / 验证或 CR 收敛完成后给用户的可复制下一步准确提示词；不得只写“同意”“继续”“可以”等模糊词 |
 | `pending_decision_ids` | 本轮发起消息中实际展示给用户的 DQ ID；必须与 Decision Brief 和 `GATE-LEDGER.ndjson` gate event 一致 |
 | `pending_non_authorized_items` | 本轮 approve 不代表授权的事项，尤其是真实运行、凭据、外部接口、数据写入、publish、live / 交易类操作 |
-| `resume_instruction` | 用户回复后由同一主进程继续读取 `STATE.md`、回填 checkpoint 并推进；不得 spawn 编排子 agent |
+| `resume_instruction` | 用户回复后由同一主进程继续读取 `STATE.current.json`、回填 checkpoint 并推进；不得 spawn 编排子 agent |
 | `subagent_auto_dispatch` | `enabled` / `disabled`；同工作流真实子 agent 调度授权状态 |
 | `spawned_at` / `last_seen_at` / `awaiting_since` / `resumed_at` / `closed_at` | 编排器生命周期时间 |
 | `previous_agent_id` / `previous_thread_id` | legacy 迁移字段，记录被废弃的旧 `host-orchestrator` 编排子 agent 标识 |
@@ -452,12 +451,12 @@ Host Orchestrator 主进程会话只保留当前 scalar/ref，不得写入 activ
 规则：
 
 1. 发起 CP2 / CP3 / CP5 / CP8 关键人工检查点时，必须将 `status=awaiting-user`，并写入 `pending_gate`、`pending_checklist_path`、`pending_user_decision`、`next_exact_prompt`、`pending_decision_ids`、`pending_non_authorized_items`、`resume_instruction` 和 `awaiting_since`。Codex 可用 `meta-flow ask-user human-gate --checkpoint <process/checkpoints/CP*.md> --format codex-json` 生成 `request_user_input` 负载；不可用时发送 exact-text fallback。
-2. 用户确认、修改或拒绝后，Host Orchestrator 必须在当前主进程中重新读取 `STATE.md` 和相关检查点，回填人工结果并继续；不得使用 `spawn_agent` / `resume_agent` / `send_input` 启动或恢复编排子 agent。
+2. 用户确认、修改或拒绝后，Host Orchestrator 必须在当前主进程中重新读取 `STATE.current.json` 和相关检查点，回填人工结果并继续；不得使用 `spawn_agent` / `resume_agent` / `send_input` 启动或恢复编排子 agent。
 3. 回填 `approve` 或自动 CP `PASS` / `WAIVED` 后必须执行 post-approval transition loop：读取 active CR 的 `route_plan`，连续执行后续所有 `human_gate=none` 且未被阻塞的 CP / 阶段准备，直到到达下一个 `human_gate=required` 的 CP2 / CP3 / CP5 / CP8、`delivered`、`FAIL` / `BLOCKED` / `NEEDS_REWORK` / `NEEDS_DESIGN_CLARIFICATION`、授权边界或 workflow health 阈值。停下时必须在 `STATE.current.json.next_action.stop_reason` 或等价状态中写入 `required_human_gate`、`blocked`、`needs_rework`、`needs_design_clarification`、`authorization_required`、`workflow_health_threshold`、`delivered` 或 `no_remaining_route`；只写 approval ledger 不算完成。
 4. CP4 是 `human_gate=none` 的自动 CP；当 route plan 中 CP4 `decision=PASS` 且后续 CP5 `human_gate=required` 时，当前状态不得停在“等待用户继续 / 推进 CP5”，必须已打开 CP5 gate，或写明合法 `stop_reason`。该规则用 `meta-flow check state-transition --route-plan <route-plan.json> --result <CP4-result.json> --project-root .` 回归验证。
 5. CP2 / CP3 / CP5 / CP8 人工门禁 approve 后，必须用 `meta-flow check state-transition --route-plan <route-plan.json> --approved-gate CP{n} --project-root .` 验证已经推进到下一个 required gate、`delivered` 或合法 `stop_reason`。
 6. CP result 通过、人工门禁 approve、关闭 CR、推进阶段或推进 `delivered` 后，必须运行 `meta-flow cp result-check --result <process/checks/CP*.result.json> --check-consistency --project-root .` 和 `meta-flow cr status-sync --id <CR> --status <status> --project-root .`，确保 CR frontmatter、summary、index、`STATE.current.json` 和 lifecycle ledger 同步。
-7. 回填人工结果、关闭 CR、推进阶段或推进 `delivered` 前，必须重新读取 `STATE.md`、对应 `process/checks/CP*.md`、`process/checkpoints/CP*.md`、活跃 `CR-*.md` 和下游输出，并把结果写入 `history`。
+7. 回填人工结果、关闭 CR、推进阶段或推进 `delivered` 前，必须重新读取 `STATE.current.json`、对应 `process/checks/CP*.result.json`、`process/checkpoints/CP*.md`、活跃 formal CR 和下游引用；事件写入 native ledger，由 renderer 更新人类摘要。
 8. 若发现旧 `host-orchestrator` 编排子 agent 状态，必须迁移为 host scalar/ref，将旧 agent 标识写入 archive 或 dispatch ledger，并记录迁移原因。
 9. 若同时发现多个活跃的 legacy 编排子 agent 记录，必须阻断推进，要求人工选择保留的状态来源并关闭 / 标记其余记录为 `superseded`。
 10. 若 CR 模板的自动终验授权字段有效，且 CP8 自动预检 `PASS`、无 `BLOCKING` / `REQUIRED`，允许将人工结果写为 `approved` 并标注 `approval_source=user-preauthorized`；否则仍按默认人工确认处理。
@@ -493,10 +492,10 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 
 | 对象 | 路径 | 用途 |
 |---|---|---|
-| 运行时状态 | `process/STATE.md` | 当前状态机实例 |
+| 运行时状态 | `process/state/STATE.current.json` | 当前状态机机器真相 |
 | 状态模板 | `skills/state-router/templates/STATE-TEMPLATE.md` | 初始化与结构基线 |
 | CR 跟踪索引 | `process/changes/CR-INDEX.json` | active / blocked / candidate / spike_candidate / conflict 的机器可查询索引 |
-| 自动检查结果 | `process/checks/CP*.md` | 自动检查点和自动预检证据 |
+| 自动检查结果 | `process/checks/CP*.result.json` | 自动检查点和自动预检机器证据；`*.summary.md` 仅为人类摘要 |
 | 人工审查稿 | `process/checkpoints/CP*.md` | 人工检查点 checklist 与审查结果 |
 
 ## 约束
@@ -509,7 +508,7 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 - 回退必须记录原因、发起方和目标阶段
 - Agent 复用必须使用 exact key，不得用模糊角色名匹配替代
 - 并行队列必须由 Story DAG、依赖类型和文件所有权计算，不得只按 Wave 名称粗略并行
-- 仅使用当前 `process/STATE.md` 与 `skills/state-router/templates/STATE-TEMPLATE.md` 契约
+- 仅使用当前 `process/state/STATE.current.json`、`delivery/rules/DELIVERY-RUNTIME-CONTRACT.json` 与 native renderer 契约；模板只服务人类摘要兼容
 
 ## CR-058 merged gate 与恢复路由
 
@@ -521,9 +520,9 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 
 ## 验收标准
 
-- [ ] `STATE.md` 的阶段与下一步动作与实际产物状态一致
-- [ ] 初始化前已完成 process 路由健康检查；外置模式下 `process` 是指向 `<artifact-root>/process/<project_name>` 的健康软链接
-- [ ] 初始化时结构与 `skills/state-router/templates/STATE-TEMPLATE.md` 一致，且 `artifact_routing` 与 `.meta-flow-process.yaml` 一致
+- [ ] `STATE.current.json` 的阶段与下一步动作与实际产物状态一致，且 generated `STATE.md` 通过 exact render 检查
+- [ ] 初始化前已完成 logical-ref 路由健康检查；默认 sibling-binding 下不存在 `process` 软链接，legacy `relative-symlink` 仅在独立授权下验证
+- [ ] 初始化时机器状态通过 native schema，route metadata 与 reciprocal binding 一致
 - [ ] `process/checks/CP*.result.json` 与 `process/state/CHECKPOINT-LEDGER.ndjson` 与 `process/checks/CP*.md`、`process/checkpoints/CP*.md` 的结论一致
 - [ ] `approve` 或自动 CP `PASS` 后已通过 `meta-flow check state-transition`，证明状态推进到下一个 required gate、`delivered` 或合法 `stop_reason`
 - [ ] CP result / CR 状态变更后已运行 `meta-flow cp result-check --check-consistency` 和 `meta-flow cr status-sync --id <CR>`
@@ -567,7 +566,7 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 - 不要让 project memory、旧 HLD 或最近一次会话摘要替代当前 Project/Roadmap/Phase 机器事实
 - 当 CR 影响 Story、LLD、接口契约、文件所有权、`dev_gate` 或实现设计时，必须先形成 CR 影响范围的 `lld_design_batch`，批次确认前不得进入开发
 - 首次初始化时只允许从 `skills/state-router/templates/STATE-TEMPLATE.md` 复制，不允许凭空脑补字段
-- 首次初始化时不要直接 `mkdir process` 后写 `STATE.md`；外置模式必须先建立 artifact 目录和软链接。`workspace link` 创建后出现 `state_missing` 是新项目的正常下一步，不代表可以跳过 STATE 初始化。
-- 自动检查点失败时，不要发起人工确认；先把失败结果写入 `process/checks/CP*.md` 并路由给责任 agent 修复
+- 首次初始化时不要直接 `mkdir process` 或手写 `STATE.md`；应使用 binding-aware native 初始化入口创建机器 state，再由 renderer 生成摘要。
+- 自动检查点失败时，不要发起人工确认；先把失败结果写入 `process/checks/CP*.result.json` 和 checkpoint ledger，并路由给责任 agent 修复
 - 不要把 `delivery/skills/*/templates/` 中的模板文件当成运行态产物；只有 `docs/`、`process/`、`process/checkpoints/`、`delivery/` 中对应产物或 CP 自动检查里的逐项 N/A / WAIVED 说明才可作为推进证据
 - N/A / WAIVED 必须写明原因、影响范围和后续触发条件；空泛写“不适用”不能作为阶段推进证据

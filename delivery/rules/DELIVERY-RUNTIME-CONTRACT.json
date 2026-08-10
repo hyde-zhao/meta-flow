@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "kind": "DeliveryRuntimeContractV1",
+  "canonical_owner_ref": "delivery/rules/DELIVERY-RUNTIME-CONTRACT.json",
+  "human_contract_refs": [
+    "delivery/rules/AGENT-SKILL-CONTRACT.md",
+    "delivery/rules/DIRECTORY-CONTRACT.md"
+  ],
+  "platform_contract_ref": "delivery/doc/PLATFORM-CONTRACTS.yaml",
+  "route_contract": {
+    "default_mode": "sibling-binding",
+    "legacy_opt_in_mode": "relative-symlink",
+    "resolver_operation": "meta-flow project resolve-ref",
+    "logical_prefix": "process/",
+    "resolver_exit_2": "BLOCKED",
+    "persist_resolved_path": false
+  },
+  "state_contract": {
+    "machine_truth_ref": "process/state/STATE.current.json",
+    "discovery_projection_ref": "process/current/CURRENT.json",
+    "human_summary_ref": "process/STATE.md",
+    "execution_statuses": [
+      "idle",
+      "active",
+      "awaiting_gate",
+      "awaiting_authorization",
+      "blocked"
+    ],
+    "explicit_null_handoff": "authoritative-no-handoff",
+    "legacy_missing_handoff_field": "discovery-fallback-allowed"
+  },
+  "checkpoint_contract": {
+    "automatic_truth_glob": "process/checks/CP*.result.json",
+    "automatic_summary_glob": "process/checks/CP*.summary.md",
+    "human_gate_glob": "process/checkpoints/CP*.md",
+    "event_ledger_ref": "process/state/CHECKPOINT-LEDGER.ndjson"
+  },
+  "source_roots": {
+    "rules": "delivery/rules",
+    "agents": "delivery/agents",
+    "skills": "delivery/skills",
+    "platforms": "delivery/doc/PLATFORM-CONTRACTS.yaml"
+  },
+  "source_mirror_pairs": [
+    {
+      "canonical_ref": "delivery/skills/state-router/SKILL.md",
+      "platform": "codex",
+      "mirror_ref": ".agents/skills/state-router/SKILL.md",
+      "renderer": "markdown-audit"
+    },
+    {
+      "canonical_ref": "delivery/skills/checkpoint-manager/SKILL.md",
+      "platform": "codex",
+      "mirror_ref": ".agents/skills/checkpoint-manager/SKILL.md",
+      "renderer": "markdown-audit"
+    },
+    {
+      "canonical_ref": "delivery/skills/state-router/SKILL.md",
+      "platform": "claude",
+      "mirror_ref": ".claude/skills/state-router/SKILL.md",
+      "renderer": "markdown-audit"
+    },
+    {
+      "canonical_ref": "delivery/skills/checkpoint-manager/SKILL.md",
+      "platform": "claude",
+      "mirror_ref": ".claude/skills/checkpoint-manager/SKILL.md",
+      "renderer": "markdown-audit"
+    },
+    {
+      "canonical_ref": "delivery/agents/meta-doc.md",
+      "platform": "claude",
+      "mirror_ref": ".claude/agents/meta-doc.md",
+      "renderer": "claude-agent"
+    },
+    {
+      "canonical_ref": "delivery/agents/meta-doc.md",
+      "platform": "codex",
+      "mirror_ref": ".codex/agents/meta-doc.toml",
+      "renderer": "codex-agent"
+    }
+  ],
+  "semantic_consumers": [
+    "delivery/rules/AGENT-SKILL-CONTRACT.md",
+    "delivery/rules/DIRECTORY-CONTRACT.md",
+    "delivery/skills/state-router/SKILL.md",
+    "delivery/skills/checkpoint-manager/SKILL.md",
+    "delivery/agents/meta-doc.md",
+    "delivery/skills/README.md"
+  ],
+  "required_tokens_by_ref": {
+    "delivery/rules/AGENT-SKILL-CONTRACT.md": [
+      "DELIVERY-RUNTIME-CONTRACT.json",
+      "awaiting_authorization",
+      "显式 `null`"
+    ],
+    "delivery/rules/DIRECTORY-CONTRACT.md": [
+      "DELIVERY-RUNTIME-CONTRACT.json",
+      "awaiting_authorization",
+      "显式 `null`"
+    ],
+    "delivery/skills/state-router/SKILL.md": [
+      "DELIVERY-RUNTIME-CONTRACT.json",
+      "binding-only 默认不得创建 `process` 软链接",
+      "process/checks/CP*.result.json"
+    ],
+    "delivery/skills/checkpoint-manager/SKILL.md": [
+      "DELIVERY-RUNTIME-CONTRACT.json",
+      "binding-only 默认不得创建 `process` 软链接",
+      "process/checks/CP*.result.json"
+    ],
+    "delivery/agents/meta-doc.md": [
+      "DELIVERY-RUNTIME-CONTRACT.json",
+      "process/checks/CP*.result.json",
+      "process/checks/CP*.summary.md"
+    ],
+    "delivery/skills/README.md": [
+      "DELIVERY-RUNTIME-CONTRACT.json",
+      "process/checks/CP*.result.json"
+    ]
+  },
+  "forbidden_instructions": [
+    {
+      "rule_id": "no-default-workspace-link",
+      "token": "meta-flow workspace link --artifact-root",
+      "target_refs": [
+        "delivery/skills/state-router/SKILL.md",
+        "delivery/skills/checkpoint-manager/SKILL.md"
+      ]
+    },
+    {
+      "rule_id": "no-state-markdown-runtime-owner",
+      "token": "| `运行时状态` | `process/STATE.md` |",
+      "target_refs": [
+        "delivery/skills/state-router/SKILL.md"
+      ]
+    },
+    {
+      "rule_id": "no-markdown-automatic-truth",
+      "token": "自动结果写入 `process/checks/CP*.md`",
+      "target_refs": [
+        "delivery/agents/meta-doc.md",
+        "delivery/skills/README.md"
+      ]
+    },
+    {
+      "rule_id": "no-markdown-automatic-result-file",
+      "token": "**自动结果文件**：`process/checks/CP*.md`",
+      "target_refs": [
+        "delivery/agents/meta-doc.md"
+      ]
+    },
+    {
+      "rule_id": "no-markdown-automatic-checklist",
+      "token": "自动检查点均生成 `process/checks/CP*.md`",
+      "target_refs": [
+        "delivery/skills/checkpoint-manager/SKILL.md"
+      ]
+    },
+    {
+      "rule_id": "no-state-markdown-sync",
+      "token": "并同步更新 `STATE.md`",
+      "target_refs": [
+        "delivery/skills/checkpoint-manager/SKILL.md"
+      ]
+    }
+  ]
+}

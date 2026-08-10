@@ -2,6 +2,7 @@
   "version": 1,
   "format": "json-compatible-yaml",
   "last_verified": "2026-07-31",
+  "delivery_runtime_contract": "delivery/rules/DELIVERY-RUNTIME-CONTRACT.json",
   "installation_lifecycle": {
     "contract_version": "InstallationLifecycleV2",
     "qualified_host_platforms": ["linux"],

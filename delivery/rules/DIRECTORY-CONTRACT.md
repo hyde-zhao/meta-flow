@@ -2,6 +2,8 @@
 
 This contract defines the file-system layout used by Meta Flow agents and skills. It is a logical grouping contract, not a required physical migration of existing production `process/` directories.
 
+Runtime delivery semantics are machine-owned by `delivery/rules/DELIVERY-RUNTIME-CONTRACT.json`; this document is its human-readable directory facade. Platform target paths remain owned by `delivery/doc/PLATFORM-CONTRACTS.yaml`.
+
 ## vNext Independent Project Roots
 
 New projects use two sibling Git roots and reciprocal portable bindings. The default route has no local process link:
@@ -71,7 +73,7 @@ The symlink aliases are never formal truth and must not be staged. `current-refr
 
 `CURRENT.json` must include:
 
-- `status`: `idle`, `active`, `awaiting_gate`, or `blocked`
+- `status`: `idle`, `active`, `awaiting_gate`, `awaiting_authorization`, or `blocked`
 - `health`: `ok`, `stale_refs`, or `incomplete`
 - `state_ref`
 - `cr_index_ref`
@@ -84,7 +86,7 @@ The symlink aliases are never formal truth and must not be staged. `current-refr
 - `handoff_ref`
 - `stale_refs`
 
-Idle state is explicit. When `active_change`, `active_story`, and `pending_gate` are empty, `CURRENT.json.status` is `idle`; `context_ref`, `checkpoint_ref`, and `story_packet_ref` are normally `null`, while `release_context_ref` and `handoff_ref` point to the latest closed-CR release and next-session handoff when available.
+Idle state is explicit. When `active_change`, `active_story`, and `pending_gate` are empty and no typed authorization is pending, `CURRENT.json.status` is `idle`; `context_ref`, `checkpoint_ref`, and `story_packet_ref` are normally `null`. `next_session_handoff_ref` 字段存在且为显式 `null` 时，`handoff_ref` 必须保持 `null`；只有 legacy payload 缺少该字段时才允许发现最新历史 handoff。
 
 CR index canonical source is:
 

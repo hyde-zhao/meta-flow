@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import runpy
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,9 @@ collect_read_expansion_errors = GUARDRAIL[
     "collect_read_expansion_delivery_contract_errors"
 ]
 collect_canonical_mirror_errors = GUARDRAIL["collect_canonical_mirror_errors"]
+collect_delivery_runtime_contract_errors = GUARDRAIL[
+    "collect_delivery_runtime_contract_errors"
+]
 
 
 def test_installation_registry_and_discovery_are_exactly_closed() -> None:
@@ -263,3 +267,41 @@ def test_canonical_mirror_rejects_directory_and_symlink(tmp_path: Path) -> None:
     mirror.rmdir()
     os.symlink(canonical, mirror)
     assert collect_canonical_mirror_errors(tmp_path, pairs)
+
+
+def test_delivery_runtime_contract_is_closed_and_current() -> None:
+    assert collect_delivery_runtime_contract_errors() == []
+
+    payload = json.loads(
+        (ROOT / "delivery/rules/DELIVERY-RUNTIME-CONTRACT.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    payload["unexpected"] = True
+
+    errors = collect_delivery_runtime_contract_errors(ROOT, payload)
+
+    assert any("root keys must be exactly" in error for error in errors)
+
+
+def test_delivery_runtime_forbidden_rules_are_data_owned() -> None:
+    payload = json.loads(
+        (ROOT / "delivery/rules/DELIVERY-RUNTIME-CONTRACT.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    mutant = deepcopy(payload)
+    mutant["forbidden_instructions"].append(
+        {
+            "rule_id": "fixture-new-rule-without-python-change",
+            "token": "## Agent → Skill 关系",
+            "target_refs": ["delivery/skills/README.md"],
+        }
+    )
+
+    errors = collect_delivery_runtime_contract_errors(ROOT, mutant)
+
+    assert (
+        "delivery runtime forbidden instruction "
+        "fixture-new-rule-without-python-change in delivery/skills/README.md"
+    ) in errors

@@ -54,6 +54,10 @@ BASE_LEDGER_RELS = (
     Path("process/state/READ-EXPANSION-LEDGER.ndjson"),
 )
 STATE_DRY_RUN_KIND = "StateDryRunPlanV1"
+CURRENT_EXECUTION_STATUSES = frozenset(
+    {"idle", "active", "awaiting_gate", "awaiting_authorization", "blocked"}
+)
+AUTHORIZATION_STOP_REASONS = frozenset({"authorization_required"})
 WORKFLOW_HEALTH_COUNTER_KEYS = {
     "repeated_issue_count",
     "hld_revision_count",
@@ -791,6 +795,7 @@ def _bootstrap_legacy_state_at_process_root(
     entry = {
         "schema_version": 1,
         "status": _state_status(state),
+        "phase": state.get("current_phase") or None,
         "health": "ok",
         "active_change": None,
         "active_story": None,
@@ -951,6 +956,13 @@ def _state_status(state: dict[str, Any]) -> str:
         return "blocked"
     if state.get("pending_gate") or state.get("pending_checklist_path"):
         return "awaiting_gate"
+    next_action = state.get("next_action")
+    if (
+        isinstance(next_action, dict)
+        and str(next_action.get("stop_reason") or "").strip().lower()
+        in AUTHORIZATION_STOP_REASONS
+    ):
+        return "awaiting_authorization"
     if state.get("active_change") or state.get("active_story"):
         return "active"
     return "idle"
@@ -993,6 +1005,10 @@ def _choose_release_ref(
 def _choose_handoff_ref(
     project_root: Path, state: dict[str, Any], stale_refs: list[dict[str, str]]
 ) -> str | None:
+    # STATE.current 显式声明该字段时，null 也是 owner 的有效决定。
+    # 只有完全缺失该字段的 legacy payload 才允许历史发现回退。
+    if "next_session_handoff_ref" in state and not state.get("next_session_handoff_ref"):
+        return None
     handoff_ref = str(state.get("next_session_handoff_ref") or "")
     if handoff_ref:
         if not _is_existing_ref(project_root, handoff_ref):
@@ -1090,6 +1106,7 @@ def build_current_entry(
     return {
         "schema_version": 1,
         "status": status,
+        "phase": state.get("current_phase") or None,
         "health": health,
         "active_change": active_change,
         "active_story": active_story,
@@ -1149,16 +1166,24 @@ def validate_current_projection(project_root: Path) -> list[CurrentStateFinding]
     expected = build_current_entry(project_root)
     findings: list[CurrentStateFinding] = []
     relationship_fields = (
+        "schema_version",
         "active_change",
         "active_story",
         "pending_gate",
+        "phase",
+        "state_ref",
         "change_ref",
         "context_ref",
         "checkpoint_ref",
         "story_packet_ref",
         "cr_index_ref",
+        "available_index_refs",
+        "release_context_ref",
+        "handoff_ref",
+        "routing_ref",
         "status",
         "health",
+        "stale_refs",
     )
     for key in relationship_fields:
         if entry.get(key) != expected.get(key):
@@ -1173,17 +1198,42 @@ def validate_current_projection(project_root: Path) -> list[CurrentStateFinding]
                     key=key,
                 )
             )
-    stale_refs = entry.get("stale_refs")
-    if isinstance(stale_refs, list) and stale_refs:
+    expected_stale_refs = expected.get("stale_refs")
+    if isinstance(expected_stale_refs, list) and expected_stale_refs:
         findings.append(
             CurrentStateFinding(
                 severity="ERROR",
-                code="current_projection_stale_ref",
-                message=f"CURRENT.json contains stale refs: {stale_refs}",
+                code="current_projection_source_stale_ref",
+                message=f"STATE-derived CURRENT projection contains stale refs: {expected_stale_refs}",
                 key="stale_refs",
             )
         )
     return findings
+
+
+def validate_state_markdown_projection(
+    state: dict[str, Any], markdown_text: str
+) -> list[CurrentStateFinding]:
+    """Validate the generated human view against canonical State v2 bytes."""
+
+    if "generated-by: meta-flow state render" not in markdown_text:
+        return [
+            CurrentStateFinding(
+                severity="ERROR",
+                code="state_markdown_unmanaged",
+                message="STATE.md exists beside State v2 but is not a generated state render",
+            )
+        ]
+    expected = render_state_markdown(state)
+    if markdown_text == expected:
+        return []
+    return [
+        CurrentStateFinding(
+            severity="ERROR",
+            code="state_markdown_projection_drift",
+            message="STATE.md does not exactly match the STATE.current.json render",
+        )
+    ]
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -2147,7 +2197,8 @@ def check_current_state(
             errors.append(f"base ledger missing: {ledger_path}")
 
     if not markdown_path.is_file():
-        warnings.append(f"STATE.md summary missing: {markdown_path}")
+        message = f"STATE.md summary missing: {markdown_path}"
+        (errors if mode == "enforce" else warnings).append(message)
     else:
         md_max = int(budgets.get("state_md_max_bytes", DEFAULT_BUDGETS["state_md_max_bytes"]))
         md_size = markdown_path.stat().st_size
@@ -2156,6 +2207,17 @@ def check_current_state(
         md_text = markdown_path.read_text(encoding="utf-8", errors="ignore")
         if STATE_CURRENT_REL.as_posix() not in md_text:
             warnings.append("STATE.md does not reference process/state/STATE.current.json")
+        for finding in validate_state_markdown_projection(state, md_text):
+            target = errors if mode == "enforce" else warnings
+            target.append(finding.message)
+
+    # Injected process roots are used by read-only adoption inspection and do
+    # not necessarily have a configured runtime route.  The canonical project
+    # check path validates CURRENT through the binding-aware runtime resolver.
+    if injected_root is None:
+        for finding in validate_current_projection(project_root):
+            target = errors if mode == "enforce" else warnings
+            target.append(f"{finding.code}: {finding.message}")
     return errors, warnings
 
 
