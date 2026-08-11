@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from meta_flow.project.onboarding_contract import canonical_digest
+from meta_flow.semantics import outcome
 
 AUTHORITY_BINDING_SCHEMA = "Cp6RevalidationAuthorizationBindingV2"
 AUTHORITY_BINDING_FIELDS = frozenset(
@@ -147,8 +148,7 @@ def render_authority_apply_result(
 ) -> dict[str, Any]:
     """验证并渲染唯一的 authority apply outcome。"""
 
-    if status not in {"APPLIED", "RECOVERED", "NO_CHANGE", "BLOCKED", "PARTIAL"}:
-        raise ValueError("unknown authority issue status")
+    decision = outcome.authority_apply_decision(status)
     if (
         type(receipt_count) is not int
         or type(sidecar_count) is not int
@@ -208,13 +208,6 @@ def render_authority_apply_result(
     if not valid:
         raise ValueError(f"invalid {status.lower()} authority result")
 
-    decision = (
-        "PASS"
-        if status in {"APPLIED", "RECOVERED", "NO_CHANGE"}
-        else "BLOCKED"
-        if status == "BLOCKED"
-        else "PARTIAL"
-    )
     result = {
         "schema_version": 1,
         "action": "apply",

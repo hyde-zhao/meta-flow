@@ -229,6 +229,121 @@ class StateV2Tests(unittest.TestCase):
             self.assertTrue((root / "process" / "state" / "GATE-LEDGER.ndjson").is_file())
             self.assertTrue((root / "process" / "state" / "RUN-LEDGER.ndjson").is_file())
 
+    def test_migrate_v2_dry_run_is_deterministic_and_invokes_no_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "process").mkdir()
+            (root / "process" / "STATE.md").write_text(LEGACY_STATE, encoding="utf-8")
+            before = filesystem_snapshot(root)
+            outputs: list[str] = []
+            with (
+                patch.object(current, "write_current_state", side_effect=AssertionError("writer")),
+                patch.object(current, "ensure_base_ledgers", side_effect=AssertionError("writer")),
+                patch.object(
+                    current,
+                    "_write_current_state_file",
+                    side_effect=AssertionError("writer"),
+                ),
+            ):
+                for _attempt in range(2):
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        self.assertEqual(
+                            0,
+                            current.main(
+                                ["migrate-v2", "--project-root", str(root), "--dry-run"]
+                            ),
+                        )
+                    outputs.append(output.getvalue())
+
+            self.assertEqual(before, filesystem_snapshot(root))
+            self.assertEqual(outputs[0], outputs[1])
+            payload = json.loads(outputs[0])
+            self.assertEqual("state.migrate-v2", payload["operation"])
+            self.assertEqual(9, payload["planned_mutation_count"])
+            self.assertEqual(0, payload["mutation_count"])
+            self.assertNotIn(str(root), outputs[0])
+
+    def test_render_history_and_compact_dry_run_are_zero_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.write_current_state(root, current.default_current_state(root))
+            before = filesystem_snapshot(root)
+            with (
+                patch.object(current, "render_state_file", side_effect=AssertionError("writer")),
+                patch.object(current, "render_history_file", side_effect=AssertionError("writer")),
+                patch.object(current, "refresh_current_entry", side_effect=AssertionError("writer")),
+                patch.object(current, "_write_json", side_effect=AssertionError("writer")),
+                patch.object(current, "_write_pointer", side_effect=AssertionError("writer")),
+            ):
+                for command, operation in (
+                    ("render", "state.render"),
+                    ("history-render", "state.history-render"),
+                    ("compact", "state.compact"),
+                ):
+                    outputs: list[str] = []
+                    with self.subTest(command=command):
+                        for _attempt in range(2):
+                            output = StringIO()
+                            with redirect_stdout(output):
+                                self.assertEqual(
+                                    0,
+                                    current.main(
+                                        [command, "--project-root", str(root), "--dry-run"]
+                                    ),
+                                )
+                            outputs.append(output.getvalue())
+                        self.assertEqual(outputs[0], outputs[1])
+                        payload = json.loads(outputs[0])
+                        self.assertEqual(operation, payload["operation"])
+                        self.assertEqual(0, payload["mutation_count"])
+                        expected_planned = 1 if command == "history-render" else 0
+                        self.assertEqual(
+                            expected_planned,
+                            payload["planned_mutation_count"],
+                        )
+                        self.assertNotIn(str(root), outputs[0])
+            self.assertEqual(before, filesystem_snapshot(root))
+
+    def test_health_update_dry_run_is_deterministic_and_invokes_no_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current.write_current_state(root, current.default_current_state(root))
+            before = filesystem_snapshot(root)
+            outputs: list[str] = []
+            with (
+                patch.object(current, "update_workflow_health", side_effect=AssertionError("writer")),
+                patch.object(current, "update_current_state", side_effect=AssertionError("writer")),
+                patch.object(current, "_write_json", side_effect=AssertionError("writer")),
+            ):
+                for _attempt in range(2):
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        self.assertEqual(
+                            0,
+                            current.main(
+                                [
+                                    "health-update",
+                                    "--project-root",
+                                    str(root),
+                                    "--phase",
+                                    "CP5",
+                                    "--increment",
+                                    "cp_retry_count=1",
+                                    "--dry-run",
+                                ]
+                            ),
+                        )
+                    outputs.append(output.getvalue())
+
+            self.assertEqual(before, filesystem_snapshot(root))
+            self.assertEqual(outputs[0], outputs[1])
+            payload = json.loads(outputs[0])
+            self.assertEqual("state.health-update", payload["operation"])
+            self.assertEqual(2, payload["planned_mutation_count"])
+            self.assertEqual(0, payload["mutation_count"])
+            self.assertNotIn(str(root), outputs[0])
+
     def test_render_writes_human_summary_from_current_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -373,10 +488,10 @@ class StateV2Tests(unittest.TestCase):
             payload = json.loads(outputs[0])
             self.assertEqual("StateDryRunPlanV1", payload["kind"])
             self.assertEqual("state.current-refresh", payload["operation"])
-            self.assertEqual("READY", payload["decision"])
+            self.assertEqual("NO_CHANGE", payload["decision"])
             self.assertTrue(payload["dry_run"])
             self.assertEqual(0, payload["mutation_count"])
-            self.assertGreater(payload["planned_mutation_count"], 0)
+            self.assertEqual(0, payload["planned_mutation_count"])
             self.assertEqual(64, len(payload["semantic_digest"]))
             self.assertNotIn(str(root), outputs[0])
             self.assertTrue(all(ref.startswith("process/") for ref in payload["target_refs"]))
@@ -468,7 +583,7 @@ class StateV2Tests(unittest.TestCase):
                 current.CURRENT_ALIAS_GITIGNORE_BEGIN + "\n",
                 encoding="utf-8",
             )
-            current.write_current_state(root, current.default_current_state(root))
+            write_state_fixture(root, current.default_current_state(root))
 
             with self.assertRaisesRegex(ValueError, "managed block 不完整"):
                 current.refresh_current_entry(root)

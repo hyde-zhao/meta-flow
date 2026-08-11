@@ -42,6 +42,7 @@ from meta_flow.project.process_route import (
     format_runtime_ref,
 )
 from meta_flow.project.scale import _parse_yaml_lines, _strip_comment, load_yaml_object
+from meta_flow.semantics import preregistration
 from meta_flow.state.current import (
     STATE_CURRENT_ENTRY_REL,
     STATE_CURRENT_REL,
@@ -851,9 +852,9 @@ def build_story_packet(
                 "mode": "full",
                 # deny-default 目标在扩读授权前不得读取正文；授权后由 reader 计量。
                 "estimated_tokens": 0,
-                "trigger": "full_lld_required_by_policy",
+                "trigger": preregistration.FULL_LLD_REQUIRED_TRIGGER,
                 "reason": "story_lld",
-                "consumer_requirement": "required",
+                "consumer_requirement": preregistration.ConsumerRequirement.REQUIRED.value,
             }
         )
     denied_patterns = list(
@@ -975,6 +976,7 @@ def build_story_packet(
                 }
                 if revalidation_authorization else None
             ),
+            project_root=project_root,
         )
         if revalidation_authorization:
             packet_ref, return_ref = _revalidation_artifact_refs(revalidation_authorization)
@@ -1136,17 +1138,22 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
         # A full LLD remains deny-default; it may appear only as an explicit
         # on-demand read, never as a default allowed read.  The caller must
         # still write a read-expansion event when it is actually expanded.
-        is_full_lld = str(entry.get("trigger") or "") == "full_lld_required_by_policy"
+        is_full_lld = (
+            str(entry.get("trigger") or "")
+            == preregistration.FULL_LLD_REQUIRED_TRIGGER
+        )
         if _matches_any(rel_path, denied) and not str(entry.get("trigger") or ""):
             errors.append(f"read_if_needed deny-default path lacks explicit trigger: {rel_path}")
         elif _matches_any(rel_path, denied) or is_full_lld:
             pass
         if packet_schema_version in {3, 4}:
-            requirement = entry.get("consumer_requirement")
-            if not isinstance(requirement, str) or requirement not in {"required", "optional", "forbidden"}:
-                errors.append("read_if_needed consumer_requirement must be required, optional or forbidden")
-            elif requirement == "required" and entry.get("trigger") != "full_lld_required_by_policy":
-                errors.append("required read_if_needed entry must use full_lld_required_by_policy")
+            try:
+                preregistration.interpret_preregistration_entry(
+                    entry,
+                    strict=True,
+                )
+            except preregistration.PreregistrationSemanticsError as exc:
+                errors.append(str(exc))
     try:
         selected_preregistration_refs = list(
             read_expansion.select_required_preregistration_refs(packet)

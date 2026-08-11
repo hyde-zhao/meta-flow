@@ -365,11 +365,20 @@ class StoryEvidenceTests(unittest.TestCase):
             input_spec=required, resolve=resolve, exists=exists, read=lambda _ref: b"different",
         )
         self.assertEqual(("BLOCKED", 1), (digest_mismatch["decision"], digest_mismatch["read_count"]))
-        for requirement in ("optional", "N/A", "forbidden"):
+        for requirement in ("optional", "forbidden"):
             counters.update(resolve=0, exists=0, read=0)
             result = story_evidence.validate_cp6_revalidation_input_contract(input_spec={**required, "consumer_requirement": requirement}, resolve=resolve, exists=exists, read=read)
-            self.assertIn(result["decision"], {"READY", "NOT_REQUIRED"})
+            self.assertEqual("NOT_REQUIRED", result["decision"])
             self.assertEqual({"resolve": 0, "exists": 0, "read": 0}, counters)
+        counters.update(resolve=0, exists=0, read=0)
+        invalid = story_evidence.validate_cp6_revalidation_input_contract(
+            input_spec={**required, "consumer_requirement": "N/A"},
+            resolve=resolve,
+            exists=exists,
+            read=read,
+        )
+        self.assertEqual("BLOCKED", invalid["decision"])
+        self.assertEqual({"resolve": 0, "exists": 0, "read": 0}, counters)
 
     def test_a3_tc11_tc15_exact_one_and_spine_mismatch_cases_are_independent(self) -> None:
         """TC11/15: P01 0/1/>1/current/stale 和八项 spine/lineage 各自有子测试。"""
@@ -1458,10 +1467,13 @@ class StoryEvidenceTests(unittest.TestCase):
         lineage, calls = validate(route={"status": "ready", **identity, "story_id": "STORY-OTHER"})
         self.assertEqual(("BLOCKED", 0), (lineage["decision"], lineage["read_count"]))
         self.assertEqual({"resolve": 1, "exists": 0, "read": 0}, calls)
-        for requirement in ("optional", "N/A", "forbidden"):
+        for requirement in ("optional", "forbidden"):
             outcome, calls = validate(requirement=requirement)
-            self.assertIn(outcome["decision"], {"READY", "NOT_REQUIRED"})
+            self.assertEqual("NOT_REQUIRED", outcome["decision"])
             self.assertEqual({"resolve": 0, "exists": 0, "read": 0}, calls)
+        invalid, calls = validate(requirement="N/A")
+        self.assertEqual("BLOCKED", invalid["decision"])
+        self.assertEqual({"resolve": 0, "exists": 0, "read": 0}, calls)
 
     def test_a003_pgr3_f005_spine_recovery_downstream_observations(self) -> None:
         """PGR3-F005：真实观察 API 必须分别拥有 spine/recovery/policy 入口。"""

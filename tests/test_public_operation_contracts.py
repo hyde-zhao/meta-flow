@@ -2276,13 +2276,23 @@ class PublicOperationContractTests(unittest.TestCase):
         self.assertEqual("PASS", result["decision"], result["errors"])
         self.assertEqual(3, result["schema_version"])
         self.assertEqual("PublicOperationRegistryCheckV3", result["kind"])
-        self.assertEqual(17, result["documented_operation_count"])
+        self.assertEqual(26, result["documented_operation_count"])
         self.assertEqual([], result["undocumented_public_operations"])
         self.assertEqual([], result["unknown_registry_operations"])
         self.assertEqual(6, result["l3_journey_count"])
         self.assertTrue(all(item["discovered"] for item in result["console_results"]))
         self.assertEqual("package-source-declarations-v1", result["discovery"]["mode"])
-        self.assertEqual(17, result["discovery"]["discovered_operation_count"])
+        self.assertEqual(26, result["discovery"]["discovered_operation_count"])
+        self.assertEqual("PASS", result["governed_cli_reverse_coverage"]["status"])
+        self.assertEqual(1, result["governed_cli_reverse_coverage"]["entry_count"])
+        self.assertEqual(
+            [],
+            result["governed_cli_reverse_coverage"]["missing_declaration_entries"],
+        )
+        self.assertEqual(
+            [],
+            result["governed_cli_reverse_coverage"]["missing_contract_entries"],
+        )
         self.assertGreater(result["discovery"]["scanned_file_count"], 100)
         self.assertTrue(
             all(
@@ -2376,6 +2386,54 @@ class PublicOperationContractTests(unittest.TestCase):
             symlink.symlink_to(owner.name)
             with self.assertRaisesRegex(ValueError, "contains symlink"):
                 public_operations.discover_public_operation_declarations(package)
+
+    def test_governed_cli_reverse_coverage_rejects_route_without_declaration(self) -> None:
+        source = json.loads(
+            (PROJECT_ROOT / public_operations.DEFAULT_REGISTRY_REL).read_text(encoding="utf-8")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            registry = root / public_operations.DEFAULT_REGISTRY_REL
+            registry.parent.mkdir(parents=True)
+            registry.write_text(
+                json.dumps(source, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            package = root / "meta_flow"
+            package.mkdir()
+            (package / "owner.py").write_text(
+                "PUBLIC_OPERATION_DECLARATIONS = "
+                "((\"known.operation\", (\"meta-flow\", \"known\")),)\n",
+                encoding="utf-8",
+            )
+            source["operations"] = [
+                {
+                    **source["operations"][0],
+                    "operation": "known.operation",
+                    "entry": ["meta-flow", "known"],
+                }
+            ]
+            registry.write_text(
+                json.dumps(source, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            result = public_operations.validate_public_operations(
+                root,
+                check_console=False,
+                declaration_root=package,
+                governed_cli_entries=(("meta-flow", "check", "missing"),),
+            )
+
+        self.assertEqual("FAIL", result["decision"])
+        self.assertEqual(
+            [["meta-flow", "check", "missing"]],
+            result["governed_cli_reverse_coverage"]["missing_declaration_entries"],
+        )
+        self.assertEqual(
+            [["meta-flow", "check", "missing"]],
+            result["governed_cli_reverse_coverage"]["missing_contract_entries"],
+        )
 
     def test_package_declaration_discovery_budget_fails_without_partial_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

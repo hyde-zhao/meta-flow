@@ -324,8 +324,8 @@ def validate_truth_map(project_root: Path) -> tuple[list[str], list[str]]:
     data = load_truth_map(project_root)
     errors: list[str] = []
     warnings: list[str] = []
-    if data.get("schema_version") != 1:
-        errors.append("SOURCE-OF-TRUTH-MAP schema_version must be 1")
+    if data.get("schema_version") not in {1, 2}:
+        errors.append("SOURCE-OF-TRUTH-MAP schema_version must be 1 or 2")
     if data.get("machine_policy_ref") != SOURCE_OF_TRUTH_REL.as_posix():
         errors.append(f"machine_policy_ref must be {SOURCE_OF_TRUTH_REL.as_posix()}")
     objects = data.get("objects")
@@ -361,6 +361,13 @@ def validate_truth_map(project_root: Path) -> tuple[list[str], list[str]]:
             errors.append("process/STATE.md must not be machine_truth")
         if path_value.endswith(".summary.md") and machine_truth:
             errors.append(f"{object_id} summary markdown must not be machine_truth")
+        canonical_concept_id = item.get("canonical_concept_id")
+        owner = item.get("owner")
+        if data.get("schema_version") == 2 and (canonical_concept_id is not None or owner is not None):
+            if not isinstance(canonical_concept_id, str) or not canonical_concept_id:
+                errors.append(f"{object_id} canonical_concept_id must be non-empty")
+            if not isinstance(owner, str) or not owner:
+                errors.append(f"{object_id} owner must be non-empty")
     return errors, warnings
 
 

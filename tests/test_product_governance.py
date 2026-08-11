@@ -192,6 +192,44 @@ class ConceptGovernanceTests(unittest.TestCase):
 
 
 class PackageIdentityTests(unittest.TestCase):
+    def test_package_identity_accepts_v2_bound_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "docs" / "design" / "PACKAGE-IDENTITY.yaml"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "authority": "test",
+                        "project_name": "quant-lab",
+                        "distribution_name": "quant-lab",
+                        "import_package": "quant_lab",
+                        "cli_name": "qlab",
+                        "sources": {
+                            "cli": "pyproject.toml#project.scripts.qlab",
+                            "distribution": "pyproject.toml#project.name",
+                            "import": "quant_lab/__init__.py",
+                        },
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "quant_lab").mkdir()
+            (root / "quant_lab" / "__init__.py").write_text("", encoding="utf-8")
+            (root / "README.md").write_text("# quant-lab\n", encoding="utf-8")
+            (root / "pyproject.toml").write_text(
+                '[project]\nname = "quant-lab"\n[project.scripts]\nqlab = "quant_lab.cli:main"\n',
+                encoding="utf-8",
+            )
+
+            errors, warnings = product_governance.validate_package_identity(root)
+
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+
     def test_identity_init_writes_default_registry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

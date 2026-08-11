@@ -5,11 +5,14 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from meta_flow.project.onboarding_contract import canonical_digest
+from meta_flow.semantics import receipt as semantic_receipt
 
 FROZEN_CP6_EVIDENCE_SCHEMA_VERSION = 1
+FROZEN_CP6_EVIDENCE_V2_SCHEMA_VERSION = 2
 CP6_REVALIDATION_SCHEMA_VERSION = 1
 _OID_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -457,42 +460,203 @@ class FrozenCp6EvidenceV1:
         )
 
 
-def freeze_cp6_evidence(**payload: Any) -> FrozenCp6EvidenceV1:
-    """校验并冻结 V1 证据；未知 schema 或字段一律 fail-closed。"""
+@dataclass(frozen=True)
+class FrozenCp6EvidenceV2:
+    """绑定当前 semantic contract 的 CP6 证据快照。"""
 
-    return FrozenCp6EvidenceV1.from_dict(payload)
+    story_id: str
+    release_oid: str
+    process_oid: str
+    scope_digest: str
+    implementation_digest: str
+    dependency_digests: dict[str, str]
+    contract_digest: str
+    cp6_result_ref: str
+    schema_version: int = FROZEN_CP6_EVIDENCE_V2_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != FROZEN_CP6_EVIDENCE_V2_SCHEMA_VERSION:
+            raise FrozenCp6EvidenceError("unknown FrozenCp6Evidence schema_version")
+        if not self.story_id:
+            raise FrozenCp6EvidenceError("story_id is required")
+        _require_oid(self.release_oid, "release_oid")
+        _require_oid(self.process_oid, "process_oid")
+        for name, value in {
+            "scope_digest": self.scope_digest,
+            "implementation_digest": self.implementation_digest,
+            "contract_digest": self.contract_digest,
+            **self.dependency_digests,
+        }.items():
+            _require_digest(value, name)
+        _require_logical_ref(self.cp6_result_ref, "cp6_result_ref")
+        if not self.cp6_result_ref.startswith("process/checks/"):
+            raise FrozenCp6EvidenceError(
+                "cp6_result_ref must be a process/checks logical ref"
+            )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "story_id": self.story_id,
+            "release_oid": self.release_oid,
+            "process_oid": self.process_oid,
+            "scope_digest": self.scope_digest,
+            "implementation_digest": self.implementation_digest,
+            "dependency_digests": dict(sorted(self.dependency_digests.items())),
+            "contract_digest": self.contract_digest,
+            "cp6_result_ref": self.cp6_result_ref,
+        }
+
+    @property
+    def evidence_digest(self) -> str:
+        return canonical_digest(self.as_dict())
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> FrozenCp6EvidenceV2:
+        required = {
+            "schema_version",
+            "story_id",
+            "release_oid",
+            "process_oid",
+            "scope_digest",
+            "implementation_digest",
+            "dependency_digests",
+            "contract_digest",
+            "cp6_result_ref",
+        }
+        if set(payload) != required:
+            raise FrozenCp6EvidenceError("FrozenCp6EvidenceV2 fields mismatch")
+        dependencies = payload["dependency_digests"]
+        if not isinstance(dependencies, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in dependencies.items()
+        ):
+            raise FrozenCp6EvidenceError(
+                "dependency_digests must be a string mapping"
+            )
+        string_fields = required - {"schema_version", "dependency_digests"}
+        if type(payload["schema_version"]) is not int or any(
+            not isinstance(payload[field], str) for field in string_fields
+        ):
+            raise FrozenCp6EvidenceError("FrozenCp6EvidenceV2 field types are invalid")
+        return cls(
+            story_id=payload["story_id"],
+            release_oid=payload["release_oid"],
+            process_oid=payload["process_oid"],
+            scope_digest=payload["scope_digest"],
+            implementation_digest=payload["implementation_digest"],
+            dependency_digests=dict(sorted(dependencies.items())),
+            contract_digest=payload["contract_digest"],
+            cp6_result_ref=payload["cp6_result_ref"],
+            schema_version=payload["schema_version"],
+        )
+
+
+FrozenCp6Evidence = FrozenCp6EvidenceV1 | FrozenCp6EvidenceV2
+
+
+def freeze_cp6_evidence(**payload: Any) -> FrozenCp6Evidence:
+    """按显式 schema 校验证据；未知版本或字段一律 fail-closed。"""
+
+    schema_version = payload.get("schema_version")
+    if schema_version == FROZEN_CP6_EVIDENCE_SCHEMA_VERSION:
+        return FrozenCp6EvidenceV1.from_dict(payload)
+    if schema_version == FROZEN_CP6_EVIDENCE_V2_SCHEMA_VERSION:
+        return FrozenCp6EvidenceV2.from_dict(payload)
+    raise FrozenCp6EvidenceError("unknown FrozenCp6Evidence schema_version")
+
+
+def build_cp6_evidence_v2(
+    project_root: Path,
+    *,
+    story_id: str,
+    release_oid: str,
+    process_oid: str,
+    scope_digest: str,
+    implementation_digest: str,
+    dependency_digests: Mapping[str, str],
+    cp6_result_ref: str,
+) -> FrozenCp6EvidenceV2:
+    """从 validator 观察到的 current semantic contract 构造 V2。"""
+
+    contract = semantic_receipt.compile_semantic_contract(project_root)
+    return FrozenCp6EvidenceV2(
+        story_id=story_id,
+        release_oid=release_oid,
+        process_oid=process_oid,
+        scope_digest=scope_digest,
+        implementation_digest=implementation_digest,
+        dependency_digests=dict(dependency_digests),
+        contract_digest=contract.contract_digest,
+        cp6_result_ref=cp6_result_ref,
+    )
 
 
 def compare_frozen_evidence(
-    previous: FrozenCp6EvidenceV1 | Mapping[str, Any],
-    current: FrozenCp6EvidenceV1 | Mapping[str, Any],
+    previous: FrozenCp6Evidence | Mapping[str, Any],
+    current: FrozenCp6Evidence | Mapping[str, Any],
 ) -> dict[str, Any]:
-    """比较依赖摘要：未变只 reconfirm，变化则要求下游重验。"""
+    """比较依赖与语义摘要；任一变化均传播下游重验。"""
 
-    old = previous if isinstance(previous, FrozenCp6EvidenceV1) else FrozenCp6EvidenceV1.from_dict(previous)
-    new = current if isinstance(current, FrozenCp6EvidenceV1) else FrozenCp6EvidenceV1.from_dict(current)
+    old = (
+        previous
+        if isinstance(previous, (FrozenCp6EvidenceV1, FrozenCp6EvidenceV2))
+        else freeze_cp6_evidence(**dict(previous))
+    )
+    new = (
+        current
+        if isinstance(current, (FrozenCp6EvidenceV1, FrozenCp6EvidenceV2))
+        else freeze_cp6_evidence(**dict(current))
+    )
     if old.story_id != new.story_id:
         raise FrozenCp6EvidenceError("cannot compare evidence for different stories")
     changed = sorted(
         key for key in set(old.dependency_digests) | set(new.dependency_digests)
         if old.dependency_digests.get(key) != new.dependency_digests.get(key)
     )
-    return {
-        "decision": "revalidation-required" if changed else "reconfirmed",
-        "reason_codes": ["DEPENDENCY_DIGEST_CHANGED"] if changed else ["DEPENDENCY_DIGEST_RECONFIRMED"],
+    both_contract_bound = isinstance(old, FrozenCp6EvidenceV2) and isinstance(
+        new, FrozenCp6EvidenceV2
+    )
+    old_contract = old.contract_digest if isinstance(old, FrozenCp6EvidenceV2) else ""
+    new_contract = new.contract_digest if isinstance(new, FrozenCp6EvidenceV2) else ""
+    contract_changed = both_contract_bound and old_contract != new_contract
+    contract_binding_missing = not both_contract_bound
+    reason_codes: list[str] = []
+    if contract_binding_missing:
+        reason_codes.append("SEMANTIC_CONTRACT_BINDING_MISSING")
+    if contract_changed:
+        reason_codes.append("SEMANTIC_CONTRACT_DIGEST_CHANGED")
+    if changed:
+        reason_codes.append("DEPENDENCY_DIGEST_CHANGED")
+    if not reason_codes:
+        if isinstance(new, FrozenCp6EvidenceV2):
+            reason_codes.append("SEMANTIC_CONTRACT_DIGEST_RECONFIRMED")
+        reason_codes.append("DEPENDENCY_DIGEST_RECONFIRMED")
+    result = {
+        "decision": (
+            "revalidation-required"
+            if contract_binding_missing or contract_changed or changed
+            else "reconfirmed"
+        ),
+        "reason_codes": reason_codes,
         "changed_dependencies": changed,
         "evidence_digest": new.evidence_digest,
     }
+    if isinstance(old, FrozenCp6EvidenceV2) or isinstance(new, FrozenCp6EvidenceV2):
+        result["contract_changed"] = contract_changed
+    result["contract_binding_missing"] = contract_binding_missing
+    return result
 
 
 def project_story_admission(
-    evidence: FrozenCp6EvidenceV1 | Mapping[str, Any] | None,
+    evidence: FrozenCp6Evidence | Mapping[str, Any] | None,
     *,
     expected_dependency_digests: Mapping[str, str],
     bootstrap: Mapping[str, Any] | None = None,
     projected_gate: Mapping[str, Any] | None = None,
     revalidation_authorization: Cp6RevalidationAuthorizationV1 | Mapping[str, Any] | None = None,
     revalidation_identity: Mapping[str, str] | None = None,
+    project_root: Path | None = None,
 ) -> dict[str, Any]:
     """唯一 READY 入口；bootstrap 仅保留 provenance，绝不短路准入。"""
 
@@ -545,9 +709,43 @@ def project_story_admission(
             }
         return {"decision": "BLOCKED", "reason_codes": ["FROZEN_CP6_EVIDENCE_MISSING"], "dependency_state": "missing"}
     try:
-        frozen = evidence if isinstance(evidence, FrozenCp6EvidenceV1) else FrozenCp6EvidenceV1.from_dict(evidence)
+        frozen = (
+            evidence
+            if isinstance(evidence, (FrozenCp6EvidenceV1, FrozenCp6EvidenceV2))
+            else freeze_cp6_evidence(**dict(evidence))
+        )
     except FrozenCp6EvidenceError as exc:
         return {"decision": "BLOCKED", "reason_codes": ["FROZEN_CP6_EVIDENCE_INVALID"], "detail": str(exc), "dependency_state": "invalid"}
+    if isinstance(frozen, FrozenCp6EvidenceV1):
+        return {
+            "decision": "revalidation-required",
+            "reason_codes": ["SEMANTIC_CONTRACT_BINDING_MISSING"],
+            "dependency_state": "unbound",
+            "evidence_digest": frozen.evidence_digest,
+        }
+    contract_reason = ""
+    if project_root is None:
+        return {
+            "decision": "BLOCKED",
+            "reason_codes": ["SEMANTIC_CONTRACT_RECOMPUTE_REQUIRED"],
+            "dependency_state": "invalid",
+            "evidence_digest": frozen.evidence_digest,
+        }
+    contract_validation = semantic_receipt.validate_semantic_contract_digest(
+        project_root,
+        frozen.contract_digest,
+    )
+    if contract_validation["decision"] != "READY":
+        return {
+            **contract_validation,
+            "dependency_state": (
+                "changed"
+                if contract_validation["decision"] == "revalidation-required"
+                else "invalid"
+            ),
+            "evidence_digest": frozen.evidence_digest,
+        }
+    contract_reason = "SEMANTIC_CONTRACT_DIGEST_RECONFIRMED"
     if dict(sorted(expected_dependency_digests.items())) != frozen.dependency_digests:
         return {
             "decision": "revalidation-required",
@@ -555,19 +753,24 @@ def project_story_admission(
             "dependency_state": "changed",
             "evidence_digest": frozen.evidence_digest,
         }
+    reason_codes = ["FROZEN_CP6_EVIDENCE_VALID"]
+    if contract_reason:
+        reason_codes.append(contract_reason)
+    reason_codes.append("DEPENDENCY_DIGEST_RECONFIRMED")
     return {
         "decision": "READY",
-        "reason_codes": ["FROZEN_CP6_EVIDENCE_VALID", "DEPENDENCY_DIGEST_RECONFIRMED"],
+        "reason_codes": reason_codes,
         "dependency_state": "reconfirmed",
         "evidence_digest": frozen.evidence_digest,
     }
 
 
 def project_story_admissions(
-    evidence_by_story: Mapping[str, FrozenCp6EvidenceV1 | Mapping[str, Any] | None],
+    evidence_by_story: Mapping[str, FrozenCp6Evidence | Mapping[str, Any] | None],
     *,
     expected_dependency_digests_by_story: Mapping[str, Mapping[str, str]],
     projected_gates_by_story: Mapping[str, Mapping[str, Any]] | None = None,
+    project_root: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     """按稳定 Story ID 顺序批量投影，且每项只调用唯一 admission projector。"""
 
@@ -577,6 +780,7 @@ def project_story_admissions(
             evidence_by_story.get(story_id),
             expected_dependency_digests=expected_dependency_digests_by_story.get(story_id, {}),
             projected_gate=(projected_gates_by_story or {}).get(story_id),
+            project_root=project_root,
         )
         for story_id in story_ids
     }

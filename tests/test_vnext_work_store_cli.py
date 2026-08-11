@@ -33,16 +33,25 @@ from meta_flow.project.onboarding_contract import (
 from meta_flow.project.query import main as project_query_main
 from meta_flow.work.budget import BudgetLimit
 from meta_flow.work.cli import (
+    check_main,
     classify_main,
     init_main,
     review_plan_main,
     status_main,
     transition_main,
     usage_add_main,
+    usage_plan_main,
     validation_plan_main,
 )
 from meta_flow.work.io_metrics import IOMetrics
 from meta_flow.work.lifecycle import update_work_status
+from meta_flow.work.lifecycle_transaction import (
+    AUTHORIZATION_KIND as WORK_CLOSE_AUTHORIZATION_KIND,
+)
+from meta_flow.work.lifecycle_transaction import (
+    WorkCloseAuthorizationV1,
+    plan_work_close,
+)
 from meta_flow.work.model import build_work, load_work, write_work_create_only
 from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import RiskFacts, classify_work
@@ -55,6 +64,16 @@ from meta_flow.work.store import (
     plan_work_init,
     plan_work_init_from_release_root,
 )
+
+
+def test_work_check_help_uses_its_public_command_name(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        check_main(["--help"])
+
+    assert raised.value.code == 0
+    assert "usage: meta-flow work check" in capsys.readouterr().out
 
 
 def git(root: Path, *args: str) -> str:
@@ -171,6 +190,18 @@ def snapshot_domain_files(process: Path) -> dict[str, bytes]:
         for path in sorted(process.rglob("*"))
         if path.is_file() and ".git" not in path.parts
     }
+
+
+def work_close_authorization(plan, authorization_id: str = "work-close-test"):
+    return WorkCloseAuthorizationV1(
+        schema_version=1,
+        kind=WORK_CLOSE_AUTHORIZATION_KIND,
+        authorization_id=authorization_id,
+        work_id=plan.work_id,
+        plan_digest=plan.plan_digest,
+        target_refs=tuple(target.ref for target in plan.targets),
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
 
 
 @pytest.mark.parametrize(
@@ -595,7 +626,7 @@ def test_legacy_cp_route_requires_g2_formal_cr_gate_evidence_and_scope(tmp_path:
     assert ready.route_decision.stages == tuple(f"CP{index}" for index in range(9))
 
 
-def test_usage_add_cli_records_over_limit_fact_then_blocks_mutation(
+def test_usage_add_cli_requires_fresh_plan_and_blocks_over_limit_before_mutation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -603,7 +634,7 @@ def test_usage_add_cli_records_over_limit_fact_then_blocks_mutation(
     work = typed_work(make_work(process))
     apply_work_init(plan_work_init_from_release_root(release, work))
 
-    exit_code = usage_add_main(
+    plan_exit = usage_plan_main(
         [
             "--project-root",
             str(release),
@@ -619,17 +650,33 @@ def test_usage_add_cli_records_over_limit_fact_then_blocks_mutation(
             "100",
         ]
     )
+    plan_payload = json.loads(capsys.readouterr().out)
+    exit_code = usage_add_main(
+        [
+            "--project-root",
+            str(release),
+            "--work-id",
+            "W-001",
+            "--event-id",
+            "usage-over-limit",
+            "--stage",
+            "implementation",
+            "--reads",
+            "9",
+            "--tokens",
+            "100",
+            "--admission-digest",
+            plan_payload["plan_digest"],
+        ]
+    )
     payload = json.loads(capsys.readouterr().out)
 
+    assert plan_exit == 1
     assert exit_code == 1
-    assert payload["decision"] == "RECORDED_AND_BLOCKED"
-    assert payload["appended"] is True
-    assert payload["budget_decision"] == "EXCEEDED"
-    ledger = json.loads(
-        (process / "works" / "W-001" / "USAGE.json").read_text(encoding="utf-8")
-    )
-    assert ledger["events"][0]["event_id"] == "usage-over-limit"
-    assert sum(event["reads"] for event in ledger["events"]) == 9
+    assert plan_payload["decision"] == "BLOCKED"
+    assert payload["decision"] == "BLOCKED"
+    assert "operation admission blocks execution" in payload["error"]
+    assert not (process / "works" / "W-001" / "USAGE.json").exists()
 
 
 def test_work_start_pause_resume_and_close_minimally_updates_project(
@@ -659,6 +706,29 @@ def test_work_start_pause_resume_and_close_minimally_updates_project(
         json.dumps({"schema_version": 1, "work_id": "W-001", "decision": "PASS"}) + "\n",
         encoding="utf-8",
     )
+    close_plan = plan_work_close(
+        process,
+        "W-001",
+        expected_status="active",
+        outcome="completed",
+        result_ref=result_ref,
+    )
+    authorization_path = tmp_path / "work-close-authorization.json"
+    authorization_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": WORK_CLOSE_AUTHORIZATION_KIND,
+                "authorization_id": "work-close-cli-test",
+                "work_id": close_plan.work_id,
+                "plan_digest": close_plan.plan_digest,
+                "target_refs": [target.ref for target in close_plan.targets],
+                "expires_at": "2099-01-01T00:00:00+00:00",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     assert transition_main(
         "close",
         [
@@ -668,6 +738,9 @@ def test_work_start_pause_resume_and_close_minimally_updates_project(
             "W-001",
             "--result-ref",
             result_ref,
+            "--apply",
+            "--authorization",
+            str(authorization_path),
         ],
     ) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "completed"
@@ -713,12 +786,23 @@ def test_phase_work_index_is_added_on_init_and_projected_on_close(tmp_path: Path
     )
     assert load_project(process).active_work_refs == (work.work_ref,)
     assert load_phase(process, phase.phase_ref).work_refs == (work.work_ref,)
+    close_plan = plan_work_close(
+        process,
+        work.work_id,
+        expected_status="active",
+        outcome="completed",
+        result_ref=result_ref,
+    )
     close_work(
         process,
         work.work_id,
         expected_status="active",
         outcome="completed",
         result_ref=result_ref,
+        authorization=work_close_authorization(
+            close_plan,
+            "work-close-phase-projection-test",
+        ),
     )
 
     projected = load_phase(process, phase.phase_ref)

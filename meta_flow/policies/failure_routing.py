@@ -13,6 +13,7 @@ from typing import Any
 
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 from meta_flow.project.read_contract import ReadContextProtocol
+from meta_flow.semantics import outcome
 
 FAILURE_ROUTING_REL = Path("process/policies/FAILURE-ROUTING.json")
 WAIVER_POLICY_REL = Path("process/policies/WAIVER-POLICY.json")
@@ -25,15 +26,10 @@ FAILURE_ROUTES = {
     "block_release",
     "waive_with_risk_acceptance",
 }
-TERMINAL_BLOCKING_DECISIONS = {"FAIL", "BLOCKED"}
-RISK_ACCEPTANCE_DECISIONS = {"PASS_WITH_RISK", "WAIVED"}
+TERMINAL_BLOCKING_DECISIONS = frozenset({"FAIL", "BLOCKED"})
+RISK_ACCEPTANCE_DECISIONS = frozenset({"PASS_WITH_RISK", "WAIVED"})
 RELEASE_READY_WITH_RISK = "READY_WITH_RISK"
-FAILURE_CLASSES = {
-    "CHECK_HARNESS_ERROR",
-    "DETERMINISTIC_SCHEMA_REPAIR",
-    "REAL_CONTENT_FAILURE",
-    "PARTIAL_MUTATION",
-}
+FAILURE_CLASSES = outcome.FAILURE_CLASSES
 PROFILE_RECOVERY_MAX = {"G0": 1, "G1": 2, "G2": 2}
 NON_RECOVERABLE_FAILURES = {"REAL_CONTENT_FAILURE", "PARTIAL_MUTATION", "UNKNOWN"}
 DRIFT_FACTS = ("facts_digest", "scope_digest", "oid_digest", "authz_digest", "profile_digest")

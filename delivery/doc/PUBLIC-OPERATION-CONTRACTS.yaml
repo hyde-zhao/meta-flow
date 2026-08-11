@@ -278,6 +278,168 @@
       }
     },
     {
+      "operation": "work.close",
+      "entry": ["meta-flow", "work", "close"],
+      "input_version": "WorkClosePlanV1+WorkCloseAuthorizationV1",
+      "output_version": "WorkCloseReceiptV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.work.lifecycle_transaction.plan_work_close",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.usage-plan",
+      "entry": ["meta-flow", "work", "usage-plan"],
+      "input_version": "UsageEventV1",
+      "output_version": "UsageAdmissionPlanV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.work.usage_admission.plan_usage_admission",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.close-inspect",
+      "entry": ["meta-flow", "work", "close-inspect"],
+      "input_version": "WorkCloseTransactionManifestV1",
+      "output_version": "WorkCloseTransactionInspectionV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.work.lifecycle_transaction.inspect_work_close_transactions",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.close-recover",
+      "entry": ["meta-flow", "work", "close-recover"],
+      "input_version": "ConsumedWorkCloseAuthorizationV1+WorkCloseTransactionManifestV1",
+      "output_version": "WorkCloseReceiptV1",
+      "mutation_mode": "recovery-only",
+      "authorization_mode": "existing-consumed-authorization",
+      "projector": "meta_flow.work.lifecycle_transaction.recover_work_close_transaction",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.usage-add",
+      "entry": ["meta-flow", "work", "usage-add"],
+      "input_version": "UsageEventV1+UsageAdmissionPlanV1",
+      "output_version": "UsageAppendResultV1",
+      "mutation_mode": "dry-run-digest-apply",
+      "authorization_mode": "expected-plan-digest",
+      "projector": "meta_flow.work.usage.append_usage_event",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "governance-ownership.check",
+      "entry": ["meta-flow", "check", "governance-ownership"],
+      "input_version": "GovernanceConceptOwnersV2+GovernanceSourceOfTruthMapV2",
+      "output_version": "GovernanceOwnershipCheckV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.semantics.ownership.check_governance_ownership",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "terminal-lineage.check",
+      "entry": ["meta-flow", "check", "terminal-lineage"],
+      "input_version": "TerminalLineageDispositionsV1",
+      "output_version": "TerminalLineageReportV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.workflow.terminal_lineage.check_terminal_lineage",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "reference-lifecycle.check",
+      "entry": ["meta-flow", "check", "reference-lifecycle"],
+      "input_version": "ReferenceLifecycleCandidatesV1",
+      "output_version": "ReferenceLifecycleReportV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.project.reference_lifecycle.check_reference_lifecycle",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "detector-qualification.check",
+      "entry": ["meta-flow", "check", "detector-qualification"],
+      "input_version": "DetectorIncrementalBaselineV1",
+      "output_version": "DetectorQualificationReportV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.checks.detector_qualification.check_detector_qualification",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "human-gate.ask-user",
       "entry": ["meta-flow", "ask-user", "human-gate"],
       "input_version": "HumanGateRefV1",

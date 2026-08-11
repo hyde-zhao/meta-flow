@@ -30,6 +30,10 @@ class UsageEvent:
     token_measurement_status: str = "measured"
     proxy_method: str = ""
     unavailable_reason: str = ""
+    human_interactions: int = 0
+    design_revisions: int = 0
+    qa_attempts: int = 0
+    final_full_suites: int = 0
 
     def __post_init__(self) -> None:
         if not _EVENT_ID_RE.fullmatch(self.event_id):
@@ -39,6 +43,14 @@ class UsageEvent:
         self.as_usage()
 
     def as_usage(self) -> WorkUsage:
+        governance_values = (
+            self.human_interactions,
+            self.design_revisions,
+            self.qa_attempts,
+            self.final_full_suites,
+        )
+        if any(type(value) is not int or value < 0 for value in governance_values):
+            raise ValueError("usage governance counters must be non-negative integers")
         return WorkUsage(
             reads=self.reads,
             writes=self.writes,
@@ -54,6 +66,10 @@ class UsageEvent:
             "event_id": self.event_id,
             "stage": self.stage,
             **self.as_usage().as_dict(),
+            "human_interactions": self.human_interactions,
+            "design_revisions": self.design_revisions,
+            "qa_attempts": self.qa_attempts,
+            "final_full_suites": self.final_full_suites,
         }
 
 
@@ -174,7 +190,7 @@ def load_usage(process_root: Path, work: Work) -> UsageLedger:
         raise ValueError("usage ledger events must be a list")
     events: list[UsageEvent] = []
     seen: set[str] = set()
-    allowed = {
+    required = {
         "event_id",
         "stage",
         "reads",
@@ -185,8 +201,18 @@ def load_usage(process_root: Path, work: Work) -> UsageLedger:
         "proxy_method",
         "unavailable_reason",
     }
+    optional = {
+        "human_interactions",
+        "design_revisions",
+        "qa_attempts",
+        "final_full_suites",
+    }
     for raw in raw_events:
-        if not isinstance(raw, dict) or set(raw) != allowed:
+        if (
+            not isinstance(raw, dict)
+            or not required <= set(raw)
+            or set(raw) - required - optional
+        ):
             raise ValueError("usage event contains missing or unknown fields")
         event = UsageEvent(**raw)
         if event.event_id in seen:
@@ -225,10 +251,12 @@ def _write_ledger_atomic(path: Path, ledger: UsageLedger) -> None:
             temporary.unlink()
 
 
-def append_usage_event(
+def _append_usage_event_unlocked(
     process_root: Path,
     work_id: str,
     event: UsageEvent,
+    *,
+    expected_admission_digest: str,
 ) -> UsageAppendResult:
     work = load_work(process_root, work_id)
     ledger = load_usage(process_root, work)
@@ -250,6 +278,19 @@ def append_usage_event(
             work.usage_ref,
         )
 
+    from meta_flow.work.usage_admission import plan_usage_admission
+
+    admission = plan_usage_admission(process_root, work_id, event)
+    if not expected_admission_digest:
+        raise ValueError("usage append requires expected_admission_digest")
+    if admission.plan_digest != expected_admission_digest:
+        raise ValueError("usage admission plan drifted before append")
+    if not admission.allowed:
+        raise ValueError(
+            "usage admission blocks append: "
+            f"{admission.decision}:{','.join(admission.reason_codes)}"
+        )
+
     current = summarize_usage(ledger)
     decision = evaluate_budget(work.budget, current, delta=event.as_usage())
     updated = UsageLedger(
@@ -265,6 +306,45 @@ def append_usage_event(
         else "RECORDED_AND_BLOCKED"
     )
     return UsageAppendResult(terminal, event.event_id, True, decision, work.usage_ref)
+
+
+def append_usage_event(
+    process_root: Path,
+    work_id: str,
+    event: UsageEvent,
+    *,
+    expected_admission_digest: str,
+) -> UsageAppendResult:
+    """在 per-Work single-writer lock 内重算 admission 并原子追加。"""
+
+    work = load_work(process_root, work_id)
+    path = usage_path(process_root, work)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_name(f".{path.name}.writer.lock")
+    if lock.is_symlink():
+        raise ValueError("usage writer lock must not be a symlink")
+    try:
+        with lock.open("x", encoding="utf-8") as stream:
+            stream.write(event.event_id + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as exc:
+        raise ValueError("usage writer lock is already held") from exc
+    try:
+        return _append_usage_event_unlocked(
+            process_root,
+            work_id,
+            event,
+            expected_admission_digest=expected_admission_digest,
+        )
+    finally:
+        if (
+            lock.is_symlink()
+            or not lock.is_file()
+            or lock.read_text(encoding="utf-8").strip() != event.event_id
+        ):
+            raise ValueError("usage writer lock ownership changed")
+        lock.unlink()
 
 
 def stage_usage(ledger: UsageLedger) -> dict[str, dict[str, Any]]:

@@ -104,6 +104,7 @@ CURRENT_OPTIONAL_KEYS = {
     "pending_checklist_path",
     "project_state_ref",
     "workflow_health_ref",
+    "formal_truth_projection",
 }
 CURRENT_ALLOWED_KEYS = CURRENT_REQUIRED_KEYS | CURRENT_OPTIONAL_KEYS
 SECRET_LIKE_KEY_PARTS = (
@@ -146,6 +147,7 @@ CURRENT_FIELD_BUDGETS = {
     "release_context_ref": {"kind": "scalar", "max_bytes": 256},
     "target_project_profile_ref": {"kind": "scalar", "max_bytes": 256},
     "workflow_health_ref": {"kind": "scalar", "max_bytes": 256},
+    "formal_truth_projection": {"kind": "object", "max_json_bytes": 8192},
 }
 
 SLIM_ARCHIVE_KEYS = {
@@ -875,14 +877,55 @@ def migrate_legacy_state(project_root: Path) -> dict[str, Any]:
     return state
 
 
+def plan_migrate_legacy_state(
+    project_root: Path,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """在不创建目录或文件的前提下规划 legacy State v2 迁移。"""
+
+    root = project_root.resolve()
+    candidate = migrate_legacy_state(root)
+    validate_current_state_for_write(candidate)
+    target_refs = [
+        STATE_CURRENT_REL.as_posix(),
+        *(item.as_posix() for item in BASE_LEDGER_RELS),
+    ]
+    planned_targets: list[str] = []
+    state_path = current_state_path(root)
+    if state_path.is_symlink() or (state_path.exists() and not state_path.is_file()):
+        raise FileExistsError(f"state migrate-v2 target is not a regular file: {STATE_CURRENT_REL}")
+    if state_path.exists() and not force:
+        raise FileExistsError(f"{state_path} 已存在；如需覆盖请使用 --force")
+    planned_targets.append(STATE_CURRENT_REL.as_posix())
+    for logical_ref in (item.as_posix() for item in BASE_LEDGER_RELS):
+        path = _resolve_runtime_ref(root, logical_ref)
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise FileExistsError(f"state migrate-v2 target is not a regular file: {logical_ref}")
+        if not path.is_file():
+            planned_targets.append(logical_ref)
+    semantic_candidate = copy.deepcopy(candidate)
+    semantic_candidate.pop("updated_at", None)
+    return _state_dry_run_payload(
+        operation="state.migrate-v2",
+        planned_targets=planned_targets,
+        target_refs=target_refs,
+        semantic_input={
+            "operation": "state.migrate-v2",
+            "candidate": semantic_candidate,
+            "force": force,
+            "planned_targets": sorted(planned_targets),
+        },
+    )
+
+
 def write_current_state(project_root: Path, state: dict[str, Any], *, force: bool = False) -> Path:
     project_root = project_root.resolve()
     path = current_state_path(project_root)
     if path.exists() and not force:
         raise FileExistsError(f"{path} 已存在；如需覆盖请使用 --force")
     validate_current_state_for_write(state)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _write_current_state_file(path, state)
+    _apply_core_state_projection(project_root, state)
     ensure_base_ledgers(project_root)
     return path
 
@@ -892,6 +935,53 @@ def _write_current_state_file(path: Path, state: dict[str, Any]) -> None:
     tmp_path = path.with_name(f".{path.name}.tmp")
     tmp_path.write_text(text, encoding="utf-8")
     tmp_path.replace(path)
+
+
+def _apply_core_state_projection(
+    project_root: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """以一个可恢复事务刷新 STATE、STATE.md 与 CURRENT 三份核心投影。"""
+
+    project_root = project_root.resolve()
+    validate_current_state_for_write(state)
+    entry = build_current_entry(project_root, state_snapshot=state)
+    current_path = _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
+    current_dir = _resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
+    _preflight_current_alias_gitignore(current_dir)
+    existing_entry = _read_json(current_path) if current_path.is_file() else {}
+    existing_semantic = dict(existing_entry)
+    candidate_semantic = dict(entry)
+    existing_semantic.pop("updated_at", None)
+    candidate_semantic.pop("updated_at", None)
+    if existing_entry and existing_semantic == candidate_semantic:
+        entry["updated_at"] = existing_entry.get("updated_at")
+    from meta_flow.state.projection_transaction import apply_state_projection_transaction
+
+    apply_state_projection_transaction(
+        project_root,
+        {
+            STATE_CURRENT_REL.as_posix(): render_current_state_candidate(state).encode("utf-8"),
+            STATE_MD_REL.as_posix(): render_state_markdown(state).encode("utf-8"),
+            STATE_CURRENT_ENTRY_REL.as_posix(): (
+                json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8"),
+        },
+    )
+    _ensure_current_alias_gitignore(current_dir)
+    pointer_refs = {
+        "state": entry["state_ref"],
+        "cr-index": entry.get("cr_index_ref"),
+        "change": entry.get("change_ref"),
+        "context": entry.get("context_ref"),
+        "checkpoint": entry.get("checkpoint_ref"),
+        "story": entry.get("story_packet_ref"),
+        "release": entry.get("release_context_ref"),
+        "handoff": entry.get("handoff_ref"),
+    }
+    for name in CURRENT_ALIAS_NAMES:
+        _write_pointer(current_dir, project_root, name, pointer_refs[name])
+    return entry
 
 
 def load_current_state(
@@ -1121,7 +1211,7 @@ def build_current_entry(
         "release_context_ref": release_context_ref,
         "handoff_ref": handoff_ref,
         "routing_ref": state.get("routing_ref") or ROUTING_REL.as_posix(),
-        "updated_at": now_utc(),
+        "updated_at": state.get("updated_at") or now_utc(),
         "stale_refs": stale_refs,
     }
 
@@ -1311,6 +1401,21 @@ def _ensure_current_alias_gitignore(current_dir: Path) -> Path:
     return gitignore_path
 
 
+def _preflight_current_alias_gitignore(current_dir: Path) -> None:
+    """在核心投影事务前验证 alias 配置，保证失败时领域 mutation 为零。"""
+
+    gitignore_path = current_dir.parent / ".gitignore"
+    if gitignore_path.is_symlink() or (
+        gitignore_path.exists() and not gitignore_path.is_file()
+    ):
+        raise FileExistsError(f"{gitignore_path} 不是可安全更新的常规文件")
+    existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else ""
+    try:
+        _render_current_alias_gitignore(existing)
+    except ValueError as exc:
+        raise ValueError(f"{gitignore_path} 的 {exc}") from exc
+
+
 def _write_pointer(current_dir: Path, project_root: Path, name: str, rel_ref: str | None) -> None:
     if not rel_ref:
         _clear_pointer(current_dir, name)
@@ -1366,8 +1471,10 @@ def _pointer_planned_targets(
     return planned
 
 
-def plan_current_entry_refresh(project_root: Path) -> dict[str, Any]:
-    """Plan ``state current-refresh`` from read-only observations."""
+def _current_entry_refresh_plan(
+    project_root: Path,
+) -> tuple[list[str], list[str], dict[str, Any]]:
+    """返回 CURRENT refresh 的纯读取 target 与语义输入。"""
 
     root = project_root.resolve()
     entry = build_current_entry(root)
@@ -1416,16 +1523,24 @@ def plan_current_entry_refresh(project_root: Path) -> dict[str, Any]:
             for suffix in (f"{name}.ref", name)
         ),
     ]
+    semantic_input = {
+        "operation": "state.current-refresh",
+        "candidate": candidate_semantic,
+        "pointer_refs": pointer_refs,
+        "planned_targets": sorted(planned_targets),
+    }
+    return planned_targets, target_refs, semantic_input
+
+
+def plan_current_entry_refresh(project_root: Path) -> dict[str, Any]:
+    """Plan ``state current-refresh`` from read-only observations."""
+
+    planned_targets, target_refs, semantic_input = _current_entry_refresh_plan(project_root)
     return _state_dry_run_payload(
         operation="state.current-refresh",
         planned_targets=planned_targets,
         target_refs=target_refs,
-        semantic_input={
-            "operation": "state.current-refresh",
-            "candidate": candidate_semantic,
-            "pointer_refs": pointer_refs,
-            "planned_targets": sorted(planned_targets),
-        },
+        semantic_input=semantic_input,
     )
 
 
@@ -1441,10 +1556,9 @@ def refresh_current_entry(
         read_context=read_context,
         state_snapshot=state_snapshot,
     )
-    current_dir = _resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
-    current_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_current_alias_gitignore(current_dir)
     path = _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
+    current_dir = _resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
+    _preflight_current_alias_gitignore(current_dir)
     existing = _read_json(path) if path.is_file() else {}
     existing_semantic = dict(existing)
     candidate_semantic = dict(entry)
@@ -1452,8 +1566,17 @@ def refresh_current_entry(
     candidate_semantic.pop("updated_at", None)
     if existing and existing_semantic == candidate_semantic:
         entry["updated_at"] = existing.get("updated_at")
-    else:
-        _write_json(path, entry)
+    from meta_flow.state.projection_transaction import apply_state_projection_transaction
+
+    apply_state_projection_transaction(
+        project_root,
+        {
+            STATE_CURRENT_ENTRY_REL.as_posix(): (
+                json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+        },
+    )
+    _ensure_current_alias_gitignore(current_dir)
     pointer_refs = {
         "state": entry["state_ref"],
         "cr-index": entry.get("cr_index_ref"),
@@ -1499,12 +1622,12 @@ def load_workflow_health(
     return payload
 
 
-def update_workflow_health(
+def _build_workflow_health_update(
     project_root: Path,
     *,
     phase: str,
     increments: dict[str, int],
-) -> tuple[dict[str, Any], Path]:
+) -> tuple[dict[str, Any], Path, bool]:
     if not phase:
         raise ValueError("phase is required")
     unknown = sorted(set(increments) - WORKFLOW_HEALTH_COUNTER_KEYS)
@@ -1527,7 +1650,71 @@ def update_workflow_health(
     path = _resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
     after_semantic = copy.deepcopy(payload)
     after_semantic.pop("updated_at", None)
-    if path.is_file() and before_semantic == after_semantic:
+    return payload, path, not (path.is_file() and before_semantic == after_semantic)
+
+
+def plan_workflow_health_update(
+    project_root: Path,
+    *,
+    phase: str,
+    increments: dict[str, int],
+) -> dict[str, Any]:
+    """规划 workflow health 更新，并在任何 writer 前验证 State patch。"""
+
+    root = project_root.resolve()
+    payload, _path, changed = _build_workflow_health_update(
+        root,
+        phase=phase,
+        increments=increments,
+    )
+    planned_targets: list[str] = []
+    target_refs = [WORKFLOW_HEALTH_REL.as_posix(), STATE_CURRENT_REL.as_posix()]
+    state_candidate: dict[str, Any] | None = None
+    if changed:
+        planned_targets.append(WORKFLOW_HEALTH_REL.as_posix())
+        if current_state_path(root).is_file():
+            state_candidate = build_current_state_candidate(
+                root,
+                {
+                    "workflow_health_ref": WORKFLOW_HEALTH_REL.as_posix(),
+                    "updated_at": now_utc(),
+                },
+                actor="meta_flow.state.current",
+                reason="workflow health counter update",
+                mode="enforce",
+            )
+            state_candidate.pop("updated_at", None)
+            planned_targets.append(STATE_CURRENT_REL.as_posix())
+    semantic_payload = copy.deepcopy(payload)
+    semantic_payload.pop("updated_at", None)
+    return _state_dry_run_payload(
+        operation="state.health-update",
+        planned_targets=planned_targets,
+        target_refs=target_refs,
+        semantic_input={
+            "operation": "state.health-update",
+            "phase": phase,
+            "increments": dict(sorted(increments.items())),
+            "health_candidate": semantic_payload,
+            "state_candidate": state_candidate,
+            "planned_targets": sorted(planned_targets),
+        },
+    )
+
+
+def update_workflow_health(
+    project_root: Path,
+    *,
+    phase: str,
+    increments: dict[str, int],
+) -> tuple[dict[str, Any], Path]:
+    project_root = project_root.resolve()
+    payload, path, changed = _build_workflow_health_update(
+        project_root,
+        phase=phase,
+        increments=increments,
+    )
+    if not changed:
         return payload, path
     payload["updated_at"] = now_utc()
     _write_json(path, payload)
@@ -1559,7 +1746,6 @@ def update_current_state(
             "current-state patch validation failed: invalid_patch: patch must be a dict"
         )
     project_root = project_root.resolve()
-    path = current_state_path(project_root)
     candidate = build_current_state_candidate(
         project_root,
         patch,
@@ -1568,11 +1754,83 @@ def update_current_state(
         mode=mode,
     )
 
-    _write_current_state_file(path, candidate)
-    ensure_base_ledgers(project_root)
-    if render:
-        render_state_file(project_root, force=True)
+    _ = render  # 兼容旧调用；三份核心投影现在始终作为同一事务刷新。
+    _apply_core_state_projection(project_root, candidate)
     return candidate
+
+
+def plan_formal_truth_refresh(project_root: Path) -> dict[str, Any]:
+    """只读规划 PROJECT/ROADMAP/Phase/Work/CR 到 State v2 的刷新。"""
+
+    root = project_root.resolve()
+    state = load_current_state(root)
+    if not state:
+        raise FileNotFoundError(f"STATE.current.json missing: {current_state_path(root)}")
+    from meta_flow.state.formal_projection import (
+        build_formal_truth_snapshot,
+        derive_formal_truth_patch,
+    )
+
+    snapshot = build_formal_truth_snapshot(root)
+    patch = derive_formal_truth_patch(state, snapshot)
+    candidate = build_current_state_candidate(
+        root,
+        patch,
+        actor="meta_flow.state.formal_projection",
+        reason="refresh formal truth projection",
+        mode="enforce",
+    )
+    semantic_current = copy.deepcopy(state)
+    semantic_candidate = copy.deepcopy(candidate)
+    semantic_current.pop("updated_at", None)
+    semantic_candidate.pop("updated_at", None)
+    planned_targets = (
+        []
+        if semantic_current == semantic_candidate
+        else [
+            STATE_CURRENT_REL.as_posix(),
+            STATE_MD_REL.as_posix(),
+            STATE_CURRENT_ENTRY_REL.as_posix(),
+        ]
+    )
+    return _state_dry_run_payload(
+        operation="state.projection-refresh",
+        planned_targets=planned_targets,
+        target_refs=[
+            STATE_CURRENT_REL.as_posix(),
+            STATE_MD_REL.as_posix(),
+            STATE_CURRENT_ENTRY_REL.as_posix(),
+        ],
+        semantic_input={
+            "operation": "state.projection-refresh",
+            "formal_truth_source_digest": snapshot["source_digest"],
+            "candidate": semantic_candidate,
+            "planned_targets": planned_targets,
+        },
+    )
+
+
+def refresh_formal_truth_projection(project_root: Path) -> dict[str, Any]:
+    root = project_root.resolve()
+    state = load_current_state(root)
+    if not state:
+        raise FileNotFoundError(f"STATE.current.json missing: {current_state_path(root)}")
+    from meta_flow.state.formal_projection import (
+        build_formal_truth_snapshot,
+        derive_formal_truth_patch,
+    )
+
+    snapshot = build_formal_truth_snapshot(root)
+    patch = derive_formal_truth_patch(state, snapshot)
+    patch["updated_at"] = now_utc()
+    return update_current_state(
+        root,
+        patch,
+        actor="meta_flow.state.formal_projection",
+        reason="refresh formal truth projection",
+        mode="enforce",
+        render=True,
+    )
 
 
 def build_current_state_candidate(
@@ -1934,18 +2192,21 @@ def plan_slim_current_state(
 def apply_slim_current_state(project_root: Path, *, render: bool = False) -> dict[str, Any]:
     project_root = project_root.resolve()
     candidate, archive, report, timestamp = plan_slim_current_state(project_root)
-    archive_dir = _resolve_runtime_ref(project_root, STATE_ARCHIVE_ROOT_REL.as_posix()) / timestamp
-    archive_dir.mkdir(parents=True, exist_ok=False)
-    (archive_dir / "archived-fields.json").write_text(
-        json.dumps(archive, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    from meta_flow.state.projection_transaction import write_state_slim_archive
+
+    write_state_slim_archive(
+        project_root,
+        timestamp=timestamp,
+        archive_bytes=(
+            json.dumps(archive, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8"),
+        report_bytes=(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8"),
     )
-    (archive_dir / "slim-report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    _write_current_state_file(current_state_path(project_root), candidate)
+    _apply_core_state_projection(project_root, candidate)
     ensure_base_ledgers(project_root)
-    if render:
-        render_state_file(project_root, force=True)
+    _ = render  # 兼容旧参数；核心三投影始终同步刷新。
     return report
 
 
@@ -2001,21 +2262,98 @@ def render_state_markdown(state: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _plan_text_projection(
+    path: Path,
+    *,
+    logical_ref: str,
+    rendered: str,
+    force: bool,
+    managed_marker: str,
+    operation_label: str,
+) -> list[str]:
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise FileExistsError(f"{operation_label} target is not a regular file: {logical_ref}")
+    existing = path.read_text(encoding="utf-8", errors="ignore") if path.is_file() else None
+    if existing is not None and not force and managed_marker not in existing:
+        raise FileExistsError(
+            f"{path} 已存在且不是 {operation_label} 生成物；如需覆盖请使用 --force"
+        )
+    return [logical_ref] if existing != rendered else []
+
+
+def _state_render_plan(
+    project_root: Path,
+    *,
+    force: bool,
+) -> tuple[list[str], list[str], dict[str, Any]]:
+    root = project_root.resolve()
+    state = load_current_state(root)
+    if not state:
+        raise FileNotFoundError(f"未找到 v2 状态文件: {current_state_path(root)}")
+    rendered = render_state_markdown(state)
+    planned_targets = _plan_text_projection(
+        state_md_path(root),
+        logical_ref=STATE_MD_REL.as_posix(),
+        rendered=rendered,
+        force=force,
+        managed_marker="generated-by: meta-flow state render",
+        operation_label="state render",
+    )
+    current_planned, current_targets, current_semantic = _current_entry_refresh_plan(root)
+    planned_targets.extend(current_planned)
+    target_refs = [STATE_MD_REL.as_posix(), *current_targets]
+    semantic_input = {
+        "rendered_digest": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        "force": force,
+        "current_refresh": current_semantic,
+        "planned_targets": sorted(set(planned_targets)),
+    }
+    return planned_targets, list(dict.fromkeys(target_refs)), semantic_input
+
+
+def plan_state_render(project_root: Path, *, force: bool = False) -> dict[str, Any]:
+    planned_targets, target_refs, semantic_input = _state_render_plan(
+        project_root,
+        force=force,
+    )
+    return _state_dry_run_payload(
+        operation="state.render",
+        planned_targets=planned_targets,
+        target_refs=target_refs,
+        semantic_input={"operation": "state.render", **semantic_input},
+    )
+
+
+def plan_state_compact(project_root: Path, *, force: bool = False) -> dict[str, Any]:
+    """规划 compact 的唯一写阶段；state check 本身保持只读。"""
+
+    planned_targets, target_refs, semantic_input = _state_render_plan(
+        project_root,
+        force=force,
+    )
+    return _state_dry_run_payload(
+        operation="state.compact",
+        planned_targets=planned_targets,
+        target_refs=target_refs,
+        semantic_input={"operation": "state.compact", **semantic_input},
+    )
+
+
 def render_state_file(project_root: Path, *, force: bool = False) -> Path:
     project_root = project_root.resolve()
     state = load_current_state(project_root)
     if not state:
         raise FileNotFoundError(f"未找到 v2 状态文件: {current_state_path(project_root)}")
     path = state_md_path(project_root)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise FileExistsError(f"state render target is not a regular file: {STATE_MD_REL}")
     if path.exists() and not force:
         existing = path.read_text(encoding="utf-8", errors="ignore")
         if "generated-by: meta-flow state render" not in existing:
             raise FileExistsError(
                 f"{path} 已存在且不是 state render 生成物；如需覆盖请使用 --force"
             )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_state_markdown(state), encoding="utf-8")
-    refresh_current_entry(project_root)
+    _apply_core_state_projection(project_root, state)
     return path
 
 
@@ -2098,18 +2436,51 @@ def render_history_markdown(project_root: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def plan_history_render(project_root: Path, *, force: bool = False) -> dict[str, Any]:
+    root = project_root.resolve()
+    rendered = render_history_markdown(root)
+    logical_ref = STATE_HISTORY_REL.as_posix()
+    path = _resolve_runtime_ref(root, logical_ref)
+    planned_targets = _plan_text_projection(
+        path,
+        logical_ref=logical_ref,
+        rendered=rendered,
+        force=force,
+        managed_marker="generated-by: meta-flow state history-render",
+        operation_label="state history-render",
+    )
+    return _state_dry_run_payload(
+        operation="state.history-render",
+        planned_targets=planned_targets,
+        target_refs=[logical_ref],
+        semantic_input={
+            "operation": "state.history-render",
+            "rendered_digest": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+            "force": force,
+            "planned_targets": planned_targets,
+        },
+    )
+
+
 def render_history_file(project_root: Path, *, force: bool = False) -> Path:
     project_root = project_root.resolve()
     path = _resolve_runtime_ref(project_root, STATE_HISTORY_REL.as_posix())
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise FileExistsError(
+            f"state history-render target is not a regular file: {STATE_HISTORY_REL}"
+        )
     if path.exists() and not force:
         existing = path.read_text(encoding="utf-8", errors="ignore")
         if "generated-by: meta-flow state history-render" not in existing:
             raise FileExistsError(
                 f"{path} 已存在且不是 history-render 生成物；如需覆盖请使用 --force"
             )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_history_markdown(project_root), encoding="utf-8")
-    return path
+    from meta_flow.state.projection_transaction import replace_state_history_projection
+
+    return replace_state_history_projection(
+        project_root,
+        render_history_markdown(project_root).encode("utf-8"),
+    )
 
 
 def check_current_state(
@@ -2160,6 +2531,34 @@ def check_current_state(
     findings = validate_current_state_payload(state, mode=mode)
     warnings.extend(finding.as_cli_line() for finding in findings if finding.severity == "WARN")
     errors.extend(finding.as_cli_line() for finding in findings if finding.severity == "ERROR")
+    formal_project_path = read_ref("process/PROJECT.yaml")
+    formal_roadmap_path = read_ref("process/ROADMAP.yaml")
+    if formal_project_path.is_file() and formal_roadmap_path.is_file():
+        formal_target = errors if mode == "enforce" else warnings
+        try:
+            from meta_flow.state.formal_projection import (
+                build_formal_truth_snapshot,
+                derive_formal_truth_patch,
+            )
+
+            formal_snapshot = build_formal_truth_snapshot(
+                project_root,
+                process_root=injected_root,
+            )
+            formal_patch = derive_formal_truth_patch(state, formal_snapshot)
+        except (OSError, ValueError) as exc:
+            formal_target.append(f"formal_truth_projection_invalid: {exc}")
+        else:
+            if state.get("formal_truth_projection") != formal_snapshot:
+                formal_target.append(
+                    "formal_truth_projection_stale: STATE.current.json is not bound to the "
+                    "current PROJECT/ROADMAP/Phase/Work/CR truth"
+                )
+            for field in ("current_phase", "active_change", "blocked", "next_action"):
+                if state.get(field) != formal_patch[field]:
+                    formal_target.append(
+                        f"formal_truth_field_stale: {field} does not match the current formal truth"
+                    )
     legacy_long_keys = (set(state) & SLIM_ARCHIVE_KEYS) - CURRENT_ALLOWED_KEYS
     if legacy_long_keys or (set(state) - CURRENT_ALLOWED_KEYS - {"schema_version"}):
         warnings.append(
@@ -2215,6 +2614,14 @@ def check_current_state(
     # not necessarily have a configured runtime route.  The canonical project
     # check path validates CURRENT through the binding-aware runtime resolver.
     if injected_root is None:
+        from meta_flow.state.projection_transaction import inspect_state_projection_transaction
+
+        transaction = inspect_state_projection_transaction(project_root)
+        if transaction["decision"] != "PASS":
+            errors.extend(
+                f"state_projection_transaction: {finding}"
+                for finding in transaction.get("findings", [])
+            )
         for finding in validate_current_projection(project_root):
             target = errors if mode == "enforce" else warnings
             target.append(f"{finding.code}: {finding.message}")
@@ -2229,6 +2636,9 @@ def _print_state_help() -> None:
         "  migrate-v2  Create process/state/STATE.current.json from legacy process/STATE.md.\n"
         "  render      Render process/STATE.md as a human summary from STATE.current.json.\n"
         "  current-refresh Refresh process/current/CURRENT.json and current *.ref/symlink pointers.\n"
+        "  projection-refresh Refresh STATE/CURRENT/STATE.md from bounded formal truth.\n"
+        "  projection-inspect Inspect the durable STATE/CURRENT projection transaction.\n"
+        "  projection-recover Recover an interrupted STATE/CURRENT projection transaction.\n"
         "  history-render Render process/state/HISTORY.md as a deny-default audit view from ledgers.\n"
         "  health-update Update phase-level workflow health counters.\n"
         "  slim        Archive legacy long fields and rewrite STATE.current.json as v2 refs/scalars.\n"
@@ -2290,11 +2700,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote: {path}")
         return 0
     if command == "migrate-v2":
+        if parsed.dry_run:
+            print(
+                json.dumps(
+                    plan_migrate_legacy_state(project_root, force=parsed.force),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
         state = migrate_legacy_state(project_root)
         path = write_current_state(project_root, state, force=parsed.force)
         print(f"wrote: {path}")
         return 0
     if command == "render":
+        if parsed.dry_run:
+            print(
+                json.dumps(
+                    plan_state_render(project_root, force=parsed.force),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
         path = render_state_file(project_root, force=parsed.force)
         print(f"wrote: {path}")
         return 0
@@ -2311,7 +2739,57 @@ def main(argv: list[str] | None = None) -> int:
         path = refresh_current_entry(project_root)
         print(f"wrote: {path}")
         return 0
+    if command == "projection-refresh":
+        if parsed.apply and parsed.dry_run:
+            raise SystemExit("--apply and --dry-run are mutually exclusive")
+        if not parsed.apply:
+            print(
+                json.dumps(
+                    plan_formal_truth_refresh(project_root),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        state = refresh_formal_truth_projection(project_root)
+        print(
+            json.dumps(
+                {
+                    "decision": "PASS",
+                    "operation": "state.projection-refresh",
+                    "formal_truth_source_digest": state["formal_truth_projection"][
+                        "source_digest"
+                    ],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
+    if command == "projection-inspect":
+        from meta_flow.state.projection_transaction import inspect_state_projection_transaction
+
+        report = inspect_state_projection_transaction(project_root)
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0 if report["decision"] == "PASS" else 1
+    if command == "projection-recover":
+        if not parsed.apply:
+            raise SystemExit("projection-recover requires --apply")
+        from meta_flow.state.projection_transaction import recover_state_projection_transaction
+
+        report = recover_state_projection_transaction(project_root)
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0 if report["decision"] in {"NO_CHANGE", "RECOVERED"} else 1
     if command == "history-render":
+        if parsed.dry_run:
+            print(
+                json.dumps(
+                    plan_history_render(project_root, force=parsed.force),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
         path = render_history_file(project_root, force=parsed.force)
         print(f"wrote: {path}")
         return 0
@@ -2327,6 +2805,19 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(f"--increment value must be an integer: {item}") from exc
         if not increments:
             raise SystemExit("health-update requires at least one --increment key=value")
+        if parsed.dry_run:
+            print(
+                json.dumps(
+                    plan_workflow_health_update(
+                        project_root,
+                        phase=parsed.phase,
+                        increments=increments,
+                    ),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
         payload, path = update_workflow_health(
             project_root, phase=parsed.phase, increments=increments
         )
@@ -2377,6 +2868,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- ERROR: {error}")
         return 1 if errors else 0
     if command == "compact":
+        if parsed.dry_run:
+            print(
+                json.dumps(
+                    plan_state_compact(project_root, force=parsed.force),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
         render_state_file(project_root, force=parsed.force)
         errors, warnings = check_current_state(project_root, mode=parsed.mode)
         print("State v2 Compact: " + ("FAIL" if errors else "OK"))
@@ -2387,7 +2887,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if errors else 0
     raise SystemExit(
         "未知 state 命令: "
-        f"{command}. 目前支持: init, migrate-v2, render, current-refresh, history-render, health-update, slim, check, compact"
+        f"{command}. 目前支持: init, migrate-v2, render, current-refresh, projection-refresh, projection-inspect, projection-recover, history-render, health-update, slim, check, compact"
     )
 
 

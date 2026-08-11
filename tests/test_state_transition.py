@@ -10,7 +10,7 @@ from pathlib import Path
 
 from meta_flow.checks import state_transition
 from meta_flow.checks.frozen_cp6_evidence import (
-    FrozenCp6EvidenceV1,
+    build_cp6_evidence_v2,
     build_cp6_revalidation_receipt,
 )
 from meta_flow.project.onboarding_contract import canonical_digest
@@ -345,9 +345,12 @@ class StateTransitionTests(unittest.TestCase):
         self,
         *,
         failed_consumer: bool = False,
+        stale_semantic_contract: bool = False,
     ) -> state_transition.C0ResultV1:
+        project_root = Path(__file__).parents[1]
         frozen = [
-            FrozenCp6EvidenceV1(
+            build_cp6_evidence_v2(
+                project_root,
                 story_id=f"STORY-CR061-S0{index}",
                 release_oid="a" * 40,
                 process_oid="b" * 40,
@@ -358,6 +361,8 @@ class StateTransitionTests(unittest.TestCase):
             ).as_dict()
             for index in range(1, 4)
         ]
+        if stale_semantic_contract:
+            frozen[0] = {**frozen[0], "contract_digest": "0" * 64}
         consumers = [
             state_transition.project_c0_consumer(
                 consumer_id=f"C0-CONSUMER-{index:02d}",
@@ -374,6 +379,7 @@ class StateTransitionTests(unittest.TestCase):
             for index in range(1, 12)
         ]
         return state_transition.build_c0_result(
+            project_root=project_root,
             cr_id="CR-061",
             release_oid="a" * 40,
             process_oid="b" * 40,
@@ -407,6 +413,17 @@ class StateTransitionTests(unittest.TestCase):
         self.assertEqual(0, payload["bootstrap_consumer_count"])
         self.assertEqual(0, payload["legacy_projector_consumer_count"])
         self.assertEqual(payload, state_transition.C0ResultV1.from_dict(payload).as_dict())
+
+    def test_c0_blocks_stale_semantic_contract_before_ready(self) -> None:
+        payload = self._c0_result(stale_semantic_contract=True).as_dict()
+
+        self.assertEqual("BLOCKED", payload["decision"])
+        self.assertIn("C0_REPLAY_BLOCKED:STORY-CR061-S01", payload["blockers"])
+        self.assertIn("C0_REPLAY_MUST_PASS_3_OF_3", payload["blockers"])
+        self.assertEqual(
+            "revalidation-required",
+            payload["replay_results"][0]["admission_decision"],
+        )
 
     def test_c0_result_v1_rejects_unknown_field(self) -> None:
         payload = self._c0_result().as_dict()
@@ -1359,6 +1376,27 @@ class StateTransitionTests(unittest.TestCase):
                 )
 
                 self.assertTrue(any("must leave matching stop_reason" in error for error in errors))
+
+    def test_unknown_verification_decision_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route = write_route_plan(root)
+            state = write_state(
+                root,
+                {"next_action": {"type": "continue", "text": "unknown result"}},
+            )
+
+            errors, warnings = state_transition.validate_transition(
+                route_plan_path=route,
+                state_path=state,
+                checkpoint="CP7",
+                decision="CHECK_HARNESS_ERROR",
+            )
+
+            self.assertEqual([], warnings)
+            self.assertTrue(
+                any("not registered in the verification outcome family" in error for error in errors)
+            )
 
     def test_cli_reports_state_transition_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

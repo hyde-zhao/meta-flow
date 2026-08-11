@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import load_yaml_object
 
 DEFAULT_REGISTRY_REL = Path("delivery/doc/PUBLIC-OPERATION-CONTRACTS.yaml")
+GOVERNED_CLI_CONCEPTS_REL = Path("process/docs/design/CONCEPT-OWNERS.yaml")
 REGISTRY_FIELDS = {"schema_version", "kind", "operations"}
 CONTRACT_FIELDS = {
     "operation",
@@ -41,6 +43,7 @@ MUTATION_MODES = {
     "append-only-prevalidated",
     "dry-run-digest-apply",
     "dry-run-typed-apply",
+    "recovery-only",
     "explicit-output-file",
 }
 AUTHORIZATION_MODES = {
@@ -48,6 +51,7 @@ AUTHORIZATION_MODES = {
     "policy-enum",
     "expected-plan-digest",
     "typed-user-confirmation",
+    "existing-consumed-authorization",
 }
 PUBLIC_OPERATION_DECLARATION_NAME = "PUBLIC_OPERATION_DECLARATIONS"
 PUBLIC_OPERATION_DECLARATIONS = (
@@ -412,6 +416,50 @@ def load_public_operation_registry(
     return contracts
 
 
+def _load_governed_cli_entries(project_root: Path) -> tuple[tuple[tuple[str, ...], ...], dict[str, Any]]:
+    """从独立 concept-owner truth 中读取必须受公共契约覆盖的 CLI。"""
+
+    root = project_root.resolve()
+    workspace_config = root / ".meta-flow/workspace.yaml"
+    if not workspace_config.is_file():
+        return (), {
+            "status": "NOT_CONFIGURED",
+            "source_ref": GOVERNED_CLI_CONCEPTS_REL.as_posix(),
+            "entry_count": 0,
+        }
+    path = _resolve_runtime_path(root, GOVERNED_CLI_CONCEPTS_REL)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(
+            "governed CLI concept source missing or not regular: "
+            + GOVERNED_CLI_CONCEPTS_REL.as_posix()
+        )
+    payload = load_yaml_object(path)
+    mappings = payload.get("consumer_mappings")
+    if not isinstance(mappings, list):
+        raise ValueError("governed CLI concept source consumer_mappings must be a list")
+    entries: list[tuple[str, ...]] = []
+    for index, mapping in enumerate(mappings):
+        if not isinstance(mapping, dict) or mapping.get("kind") != "cli-public-operation":
+            continue
+        ref = mapping.get("ref")
+        if not isinstance(ref, str):
+            raise ValueError(f"governed CLI mapping {index} ref must be a string")
+        try:
+            entry = tuple(shlex.split(ref))
+        except ValueError as exc:
+            raise ValueError(f"governed CLI mapping {index} ref is invalid") from exc
+        if not entry or entry[0] != "meta-flow" or any(not part for part in entry):
+            raise ValueError(f"governed CLI mapping {index} must start with meta-flow")
+        entries.append(entry)
+    if len(set(entries)) != len(entries):
+        raise ValueError("governed CLI concept source contains duplicate entries")
+    return tuple(sorted(entries)), {
+        "status": "PASS",
+        "source_ref": GOVERNED_CLI_CONCEPTS_REL.as_posix(),
+        "entry_count": len(entries),
+    }
+
+
 def validate_public_operations(
     project_root: Path,
     *,
@@ -419,6 +467,7 @@ def validate_public_operations(
     check_console: bool = True,
     read_context: ReadContextProtocol | None = None,
     declaration_root: Path | None = None,
+    governed_cli_entries: tuple[tuple[str, ...], ...] | None = None,
 ) -> dict[str, Any]:
     """Compare registry truth with package-wide owner declarations and console help."""
 
@@ -477,6 +526,46 @@ def validate_public_operations(
                 f"{operation} entry mismatch: "
                 f"expected={list(declaration.entry)} actual={list(contract.entry)}"
             )
+    governed_receipt: dict[str, Any]
+    if governed_cli_entries is not None:
+        governed_entries = tuple(sorted(governed_cli_entries))
+        governed_receipt = {
+            "status": "INJECTED",
+            "source_ref": "injected-test-contract",
+            "entry_count": len(governed_entries),
+        }
+    elif read_context is not None:
+        governed_entries = ()
+        governed_receipt = {
+            "status": "NOT_EVALUATED_READ_CONTEXT",
+            "source_ref": GOVERNED_CLI_CONCEPTS_REL.as_posix(),
+            "entry_count": 0,
+        }
+    else:
+        try:
+            governed_entries, governed_receipt = _load_governed_cli_entries(project_root)
+        except (OSError, ValueError) as exc:
+            governed_entries = ()
+            governed_receipt = {
+                "status": "FAIL",
+                "source_ref": GOVERNED_CLI_CONCEPTS_REL.as_posix(),
+                "entry_count": 0,
+            }
+            errors.append(str(exc))
+    declared_entries = {declaration.entry for declaration in declarations}
+    registered_entries = {contract.entry for contract in contracts}
+    missing_governed_declarations = sorted(set(governed_entries) - declared_entries)
+    missing_governed_contracts = sorted(set(governed_entries) - registered_entries)
+    if missing_governed_declarations:
+        errors.append(
+            "governed CLI routes lack owner declarations: "
+            + ", ".join(" ".join(entry) for entry in missing_governed_declarations)
+        )
+    if missing_governed_contracts:
+        errors.append(
+            "governed CLI routes lack public contracts: "
+            + ", ".join(" ".join(entry) for entry in missing_governed_contracts)
+        )
     if check_console:
         console = Path(sys.executable).with_name("meta-flow")
         if not console.is_file():
@@ -527,6 +616,13 @@ def validate_public_operations(
         "l3_journey_count": len({contract.l3_journey for contract in contracts}),
         "console_results": console_results,
         "discovery": discovery,
+        "governed_cli_reverse_coverage": {
+            **governed_receipt,
+            "missing_declaration_entries": [
+                list(entry) for entry in missing_governed_declarations
+            ],
+            "missing_contract_entries": [list(entry) for entry in missing_governed_contracts],
+        },
         "errors": errors,
     }
 

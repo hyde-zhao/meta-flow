@@ -218,7 +218,7 @@ class FrozenCp6EvidenceTests(unittest.TestCase):
                     blocked["reason_codes"],
                 )
 
-    def test_p01_v2_normal_and_frozen_v1_admission_matrix_is_unchanged(self) -> None:
+    def test_normal_gate_stays_ready_but_frozen_v1_requires_v2_revalidation(self) -> None:
         normal_gate = {
             "story_id": "STORY-CR061-S04",
             "status": "dev-ready",
@@ -259,9 +259,15 @@ class FrozenCp6EvidenceTests(unittest.TestCase):
             evidence(dependency_digest="b" * 64),
             expected_dependency_digests=expected,
         )
-        self.assertEqual("READY", valid["decision"])
+        self.assertEqual("revalidation-required", valid["decision"])
+        self.assertEqual(
+            ["SEMANTIC_CONTRACT_BINDING_MISSING"], valid["reason_codes"]
+        )
         self.assertEqual("BLOCKED", missing["decision"])
         self.assertEqual("revalidation-required", mismatch["decision"])
+        self.assertEqual(
+            ["SEMANTIC_CONTRACT_BINDING_MISSING"], mismatch["reason_codes"]
+        )
 
     def test_a003_pgr3_f001_schema_requires_chain_operation_not_fixture_policy(self) -> None:
         """PGR3-F001：真实 self-consistent receipt 不得依赖 schema 内 producer 特例。"""
@@ -437,9 +443,13 @@ class FrozenCp6EvidenceTests(unittest.TestCase):
         with self.assertRaises(FrozenCp6EvidenceError):
             freeze_cp6_evidence(**payload)
 
-    def test_c11_unchanged_dependency_only_reconfirms(self) -> None:
+    def test_c11_unchanged_v1_dependency_still_requires_contract_binding(self) -> None:
         result = compare_frozen_evidence(evidence(), evidence())
-        self.assertEqual("reconfirmed", result["decision"])
+        self.assertEqual("revalidation-required", result["decision"])
+        self.assertEqual(
+            ["SEMANTIC_CONTRACT_BINDING_MISSING"], result["reason_codes"]
+        )
+        self.assertTrue(result["contract_binding_missing"])
         self.assertEqual([], result["changed_dependencies"])
 
     def test_c12_changed_dependency_requires_downstream_revalidation(self) -> None:

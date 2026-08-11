@@ -467,10 +467,38 @@ def load_work(
             loader=load_yaml_object,
         )
         byte_size = read_context.byte_size(logical_ref)
+    payload, _compatibility = normalize_legacy_work_payload(payload)
     findings = validate_work_payload(payload, byte_size=byte_size)
     if findings:
         raise ValueError("; ".join(finding.message for finding in findings))
     return work_from_payload(payload)
+
+
+def normalize_legacy_work_payload(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """只读适配已知 schema-v1 ``completed_at``，不改写历史 bytes。"""
+
+    normalized = dict(payload)
+    reasons: list[str] = []
+    if "completed_at" not in normalized:
+        return normalized, ()
+    completed_at = normalized.get("completed_at")
+    if normalized.get("schema_version") != WORK_SCHEMA_VERSION:
+        raise ValueError("legacy completed_at is only supported for Work schema_version 1")
+    if normalized.get("status") not in {"completed", "cancelled", "archived"}:
+        raise ValueError("legacy completed_at is only valid on a terminal Work")
+    if not isinstance(completed_at, str) or not completed_at.strip():
+        raise ValueError("legacy completed_at must be a non-empty string")
+    updated_at = normalized.get("updated_at")
+    if updated_at not in (None, "") and updated_at != completed_at:
+        reasons.append("LEGACY_COMPLETED_AT_PRESERVED_BY_EXISTING_UPDATED_AT")
+    elif not updated_at:
+        normalized["updated_at"] = completed_at
+        reasons.append("LEGACY_COMPLETED_AT_MAPPED_TO_UPDATED_AT")
+    normalized.pop("completed_at", None)
+    reasons.append("LEGACY_COMPLETED_AT_READ_COMPATIBILITY")
+    return normalized, tuple(reasons)
 
 
 def write_work_create_only(process_root: Path, work: Work) -> Path:

@@ -16,35 +16,22 @@ from typing import Any
 
 from meta_flow.checks.frozen_cp6_evidence import (
     FrozenCp6EvidenceError,
-    FrozenCp6EvidenceV1,
+    freeze_cp6_evidence,
     project_story_admission,
 )
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.semantics import outcome
 from meta_flow.state import event_ledger
 from meta_flow.state.checkpoint_projection import CheckpointProjectionV1
 
-PASS_LIKE_DECISIONS = {"PASS", "WAIVED", "PASS_WITH_RISK"}
-FAILURE_DECISIONS = {"FAIL", "BLOCKED", "NEEDS_REWORK", "NEEDS_DESIGN_CLARIFICATION"}
-ALLOWED_STOP_REASONS = {
-    "required_human_gate",
-    "blocked",
-    "needs_rework",
-    "needs_design_clarification",
-    "authorization_required",
-    "workflow_health_threshold",
-    "delivered",
-    "no_remaining_route",
-}
+PASS_LIKE_DECISIONS = outcome.PASS_LIKE_VERIFICATION_DECISIONS
+FAILURE_DECISIONS = outcome.FAILURE_VERIFICATION_DECISIONS
+ALLOWED_STOP_REASONS = outcome.ALL_TRANSITION_STOP_REASONS
 AWAIT_USER_ACTION_TYPES = {"await_user", "human_gate", "required_human_gate"}
-FAILURE_STOP_REASONS = {
-    "FAIL": {"blocked"},
-    "BLOCKED": {"blocked", "authorization_required", "workflow_health_threshold"},
-    "NEEDS_REWORK": {"needs_rework"},
-    "NEEDS_DESIGN_CLARIFICATION": {"needs_design_clarification"},
-}
-PASS_COMPATIBLE_INTERRUPT_REASONS = {"authorization_required", "workflow_health_threshold"}
-STALE_FAILURE_STOP_REASONS = {"blocked", "needs_rework", "needs_design_clarification"}
+FAILURE_STOP_REASONS = outcome.FAILURE_DECISION_TO_STOP_REASONS
+PASS_COMPATIBLE_INTERRUPT_REASONS = outcome.PASS_COMPATIBLE_INTERRUPT_REASONS
+STALE_FAILURE_STOP_REASONS = outcome.STALE_FAILURE_STOP_REASONS
 C0_SCHEMA_VERSION = 1
 C0_CONSUMER_PROJECTOR_REF = "meta_flow.checks.state_transition.project_c0_consumer"
 C0_RESULT_FIELDS = frozenset(
@@ -222,6 +209,7 @@ def project_c0_consumer(
 
 def build_c0_result(
     *,
+    project_root: Path,
     cr_id: str,
     release_oid: str,
     process_oid: str,
@@ -246,13 +234,14 @@ def build_c0_result(
     replay_results: list[dict[str, Any]] = []
     for raw in frozen_evidence:
         try:
-            frozen = FrozenCp6EvidenceV1.from_dict(raw)
+            frozen = freeze_cp6_evidence(**dict(raw))
         except FrozenCp6EvidenceError as exc:
             blockers.append(f"C0_FROZEN_EVIDENCE_INVALID:{exc}")
             continue
         admission = project_story_admission(
             frozen,
             expected_dependency_digests=frozen.dependency_digests,
+            project_root=project_root,
         )
         replay_decision = "PASS" if admission.get("decision") == "READY" else "BLOCKED"
         replay_results.append(
@@ -1156,19 +1145,14 @@ def _is_true_delivered_terminal(state: dict[str, Any]) -> bool:
 
 
 def _decision_compatible_stop_reasons(decision: str, expected: dict[str, str]) -> set[str]:
-    if decision in FAILURE_STOP_REASONS:
-        return set(FAILURE_STOP_REASONS[decision])
-    if decision in PASS_LIKE_DECISIONS:
-        reasons = set(PASS_COMPATIBLE_INTERRUPT_REASONS)
-        expected_kind = expected.get("kind") or ""
-        if expected_kind == "required_human_gate":
-            reasons.add("required_human_gate")
-        elif expected_kind == "delivered":
-            reasons.add("delivered")
-        elif expected_kind == "no_remaining_required_gate":
-            reasons.add("no_remaining_route")
-        return reasons
-    return set(ALLOWED_STOP_REASONS)
+    if not decision:
+        return set(ALLOWED_STOP_REASONS)
+    return set(
+        outcome.transition_stop_reasons(
+            decision,
+            str(expected.get("kind") or ""),
+        )
+    )
 
 
 def _has_valid_stop_reason(
@@ -1280,7 +1264,8 @@ def validate_auto_cp_transition(
     if index < 0:
         return [f"{checkpoint} is not present in route_plan.stages"], warnings
     human_gate = str(stages[index].get("human_gate") or "none")
-    if decision in FAILURE_DECISIONS:
+    disposition = outcome.classify_verification_decision(decision)
+    if disposition is outcome.VerificationDisposition.FAILURE:
         expected_failure = {"kind": "failure", "checkpoint": ""}
         if not _has_valid_stop_reason(state, expected_failure, decision=decision):
             errors.append(
@@ -1288,9 +1273,14 @@ def validate_auto_cp_transition(
                 "stop_reason in {" + ", ".join(sorted(FAILURE_STOP_REASONS[decision])) + "}"
             )
         return errors, warnings
-    if decision not in PASS_LIKE_DECISIONS:
+    if disposition is outcome.VerificationDisposition.NOT_APPLICABLE:
         warnings.append(
-            f"{checkpoint} decision={decision} is not pass-like; transition guard did not enforce auto-advance"
+            f"{checkpoint} decision=N/A is explicit not-applicable; transition guard did not enforce auto-advance"
+        )
+        return errors, warnings
+    if disposition is outcome.VerificationDisposition.UNKNOWN:
+        errors.append(
+            f"{checkpoint} decision={decision} is not registered in the verification outcome family"
         )
         return errors, warnings
     if human_gate != "none":

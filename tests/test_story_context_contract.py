@@ -724,7 +724,7 @@ class StoryContextContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "runtime state payload is empty or invalid"):
                 story_contract.build_story_packet(root, story_path=story, stage="CP6", budget=8000)
 
-    def test_runtime_state_projection_drift_is_refreshed(self) -> None:
+    def test_committed_runtime_state_generation_drift_requires_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_minimal_state(root)
@@ -735,16 +735,20 @@ class StoryContextContractTests(unittest.TestCase):
             write_cr_summary(root)
             story = write_story(root)
 
-            story_contract.build_story_packet(
-                root,
-                story_path=story,
-                stage="CP6",
-                budget=8000,
-            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "unresolved state projection transaction requires recovery",
+            ):
+                story_contract.build_story_packet(
+                    root,
+                    story_path=story,
+                    stage="CP6",
+                    budget=8000,
+                )
 
             current_entry = json.loads(current_path.read_text(encoding="utf-8"))
-            self.assertNotEqual("STORY-DRIFT", current_entry["active_story"])
-            self.assertEqual([], current.validate_current_projection(root))
+            self.assertEqual("STORY-DRIFT", current_entry["active_story"])
+            self.assertNotEqual([], current.validate_current_projection(root))
 
     def test_full_lld_story_puts_lld_in_read_if_needed_not_allowed_reads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

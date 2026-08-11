@@ -26,6 +26,7 @@ GATE_SEMANTIC_REGISTRY = {
     "meta_flow/policies/c0_cutover.py": "mutation-reference-only",
     "meta_flow/policies/failure_routing.py": "metadata-reference-only",
     "meta_flow/state/current.py": "inventory-reference-only",
+    "meta_flow/workflow/terminal_lineage.py": "inventory-reference-only",
     "meta_flow/cli.py": "optional-public-adapter",
     "meta_flow/state/checkpoint_projection.py": "adjacent-owner-boundary",
 }

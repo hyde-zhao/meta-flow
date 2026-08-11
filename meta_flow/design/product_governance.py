@@ -9,9 +9,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.process_route import _resolve_runtime_ref
+
 CAPABILITY_STATUS_REL = Path("docs/design/CAPABILITY-STATUS.yaml")
 CONCEPT_OWNERS_REL = Path("docs/design/CONCEPT-OWNERS.yaml")
 PACKAGE_IDENTITY_REL = Path("docs/design/PACKAGE-IDENTITY.yaml")
+CAPABILITY_REGISTRY_REL = Path("process/docs/design/CAPABILITY-REGISTRY.yaml")
+CANONICAL_CONCEPT_OWNERS_REL = Path("process/docs/design/CONCEPT-OWNERS.yaml")
 ALLOWED_CAPABILITY_STATUSES = {
     "implemented",
     "offline-fixture-only",
@@ -90,11 +94,17 @@ def _write_json_compatible_yaml(path: Path, data: dict[str, Any]) -> None:
 
 
 def capability_path(project_root: Path) -> Path:
-    return project_root / CAPABILITY_STATUS_REL
+    root = project_root.resolve()
+    if (root / ".meta-flow" / "workspace.yaml").is_file():
+        return _resolve_runtime_ref(root, CAPABILITY_REGISTRY_REL.as_posix())
+    return root / CAPABILITY_STATUS_REL
 
 
 def concept_path(project_root: Path) -> Path:
-    return project_root / CONCEPT_OWNERS_REL
+    root = project_root.resolve()
+    if (root / ".meta-flow" / "workspace.yaml").is_file():
+        return _resolve_runtime_ref(root, CANONICAL_CONCEPT_OWNERS_REL.as_posix())
+    return root / CONCEPT_OWNERS_REL
 
 
 def identity_path(project_root: Path) -> Path:
@@ -211,15 +221,40 @@ def validate_capability_status(project_root: Path) -> list[str]:
     data = load_capability_status(project_root)
     errors: list[str] = []
     if data.get("schema_version") != 1:
-        errors.append("CAPABILITY-STATUS schema_version must be 1")
+        errors.append("capability registry schema_version must be 1")
     capabilities = data.get("capabilities")
-    if not isinstance(capabilities, dict) or not capabilities:
-        return ["CAPABILITY-STATUS capabilities must be a non-empty object"]
-    for capability_id, item in capabilities.items():
+    canonical_registry = isinstance(capabilities, list)
+    if canonical_registry:
+        normalized_capabilities = {
+            str(item.get("id") or ""): item
+            for item in capabilities
+            if isinstance(item, dict) and item.get("id")
+        }
+        if len(normalized_capabilities) != len(capabilities):
+            errors.append("CAPABILITY-REGISTRY capability IDs must be non-empty and unique")
+    elif isinstance(capabilities, dict):
+        normalized_capabilities = capabilities
+    else:
+        return ["capability registry capabilities must be a non-empty object or list"]
+    if not normalized_capabilities:
+        return ["capability registry capabilities must be non-empty"]
+    for capability_id, item in normalized_capabilities.items():
         if not isinstance(item, dict):
             errors.append(f"{capability_id} must be an object")
             continue
         status = str(item.get("status") or "")
+        if canonical_registry:
+            if status not in {"active", "planned", "deprecated", "retired"}:
+                errors.append(f"{capability_id} invalid registry status: {status}")
+            for key in ("name", "domain", "owner_context"):
+                if not item.get(key):
+                    errors.append(f"{capability_id} missing {key}")
+            for key in ("feature_refs", "concept_refs", "aliases", "source_refs"):
+                if not isinstance(item.get(key), list):
+                    errors.append(f"{capability_id} {key} must be a list")
+            if "runtime_authorized" in item and not isinstance(item.get("runtime_authorized"), bool):
+                errors.append(f"{capability_id} runtime_authorized must be boolean")
+            continue
         if status not in ALLOWED_CAPABILITY_STATUSES:
             errors.append(f"{capability_id} invalid status: {status}")
         claim_level = str(item.get("docs_claim_level") or "")
@@ -254,7 +289,16 @@ def check_capability_claims(project_root: Path, artifact: Path | None = None) ->
     if errors:
         return errors, warnings
     data = load_capability_status(project_root)
-    capabilities = data.get("capabilities") or {}
+    raw_capabilities = data.get("capabilities") or {}
+    capabilities = (
+        {
+            str(item.get("id") or ""): item
+            for item in raw_capabilities
+            if isinstance(item, dict) and item.get("id")
+        }
+        if isinstance(raw_capabilities, list)
+        else raw_capabilities
+    )
     artifacts = [(project_root / artifact).resolve() if artifact and not artifact.is_absolute() else artifact.resolve()] if artifact else []
     if not artifacts:
         for candidate in (project_root / "README.md", project_root / "docs" / "README.md"):
@@ -292,8 +336,8 @@ def validate_concept_owners(project_root: Path) -> list[str]:
         return [f"CONCEPT-OWNERS missing: {path}"]
     data = load_concept_owners(project_root)
     errors: list[str] = []
-    if data.get("schema_version") != 1:
-        errors.append("CONCEPT-OWNERS schema_version must be 1")
+    if data.get("schema_version") not in {1, 2}:
+        errors.append("CONCEPT-OWNERS schema_version must be 1 or 2")
     concepts = data.get("concept_owners")
     if not isinstance(concepts, dict) or not concepts:
         return ["CONCEPT-OWNERS concept_owners must be a non-empty object"]
@@ -363,8 +407,30 @@ def validate_package_identity(project_root: Path) -> tuple[list[str], list[str]]
     data = load_package_identity(project_root)
     errors: list[str] = []
     warnings: list[str] = []
-    if data.get("schema_version") != 1:
-        errors.append("PACKAGE-IDENTITY schema_version must be 1")
+    schema_version = data.get("schema_version")
+    if schema_version == 2:
+        if not data.get("authority"):
+            errors.append("PACKAGE-IDENTITY v2 authority is required")
+        sources = data.get("sources")
+        if not isinstance(sources, dict) or not all(
+            isinstance(sources.get(key), str) and sources.get(key)
+            for key in ("cli", "distribution", "import")
+        ):
+            errors.append("PACKAGE-IDENTITY v2 sources must bind cli, distribution, and import")
+        data = {
+            **data,
+            "product_name": data.get("project_name"),
+            "repo_name": data.get("distribution_name"),
+            "python_import": data.get("import_package"),
+            "package_mode": True,
+            "legacy_aliases": data.get("legacy_aliases", []),
+            "public_api_files": data.get(
+                "public_api_files",
+                [f"{str(data.get('import_package') or '').replace('.', '/')}/__init__.py"],
+            ),
+        }
+    elif schema_version != 1:
+        errors.append("PACKAGE-IDENTITY schema_version must be 1 or 2")
     for key in ("product_name", "repo_name", "python_import", "cli_name"):
         if not data.get(key):
             errors.append(f"PACKAGE-IDENTITY missing {key}")

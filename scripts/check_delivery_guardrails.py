@@ -2536,6 +2536,25 @@ def collect_governance_lifecycle_errors() -> list[str]:
     return errors
 
 
+def collect_governance_ownership_errors() -> list[str]:
+    """把 R5 owner coverage 与 R13 增量 detector 作为机器硬门。"""
+
+    from meta_flow.checks.detector_qualification import check_detector_qualification
+    from meta_flow.semantics.ownership import validate_ownership
+
+    report = validate_ownership(ROOT)
+    errors = [
+        f"governance ownership: {error}"
+        for error in report.get("errors") or []
+    ]
+    detector = check_detector_qualification(ROOT)
+    errors.extend(
+        f"detector qualification: {finding}"
+        for finding in detector.get("findings") or []
+    )
+    return errors
+
+
 def collect_context_sufficiency_errors() -> list[str]:
     errors: list[str] = []
 
@@ -3374,6 +3393,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_read_expansion_delivery_contract_errors())
     errors.extend(collect_context_budgeted_e2e_errors())
     errors.extend(collect_governance_lifecycle_errors())
+    errors.extend(collect_governance_ownership_errors())
     errors.extend(collect_context_sufficiency_errors())
     errors.extend(collect_failure_waiver_errors())
     errors.extend(collect_cr058_execution_closure_errors())

@@ -19,6 +19,8 @@ from meta_flow.checks import cp_result, state_transition
 from meta_flow.checks.frozen_cp6_evidence import (
     Cp6RevalidationReceiptV1,
     FrozenCp6EvidenceError,
+    FrozenCp6EvidenceV2,
+    build_cp6_evidence_v2,
     build_cp6_revalidation_receipt,
     freeze_cp6_revalidation_authorization,
     freeze_cp6_revalidation_receipt,
@@ -31,6 +33,7 @@ from meta_flow.project.process_route import (
     format_runtime_ref,
 )
 from meta_flow.project.scale import load_yaml_object
+from meta_flow.semantics import preregistration
 from meta_flow.semantics.authority import (
     render_authority_apply_result,
     render_authority_input_blocked,
@@ -266,7 +269,11 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _slug_status(value: Any) -> str:
-    return str(value or "").strip().lower().replace("_", "-")
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return {
+        "completed": "done",
+        "completed-direct": "done",
+    }.get(normalized, normalized)
 
 
 def _markdown_frontmatter(text: str) -> dict[str, str]:
@@ -978,6 +985,49 @@ def build_cp6_story_projection_plan(
     return plan, projected, plan_path
 
 
+def build_cp6_semantic_evidence_v2(
+    project_root: Path,
+    *,
+    result_path: Path,
+    release_oid: str,
+    process_oid: str,
+    scope_digest: str,
+    implementation_digest: str,
+    dependency_digests: Mapping[str, str],
+) -> FrozenCp6EvidenceV2:
+    """从 checkpoint ledger 已记录的真实 CP6 PASS 构造 contract-bound V2。"""
+
+    root = project_root.resolve()
+    projection, _projected, _plan_path = build_cp6_story_projection_plan(
+        root,
+        result_path=result_path,
+    )
+    return build_cp6_evidence_v2(
+        root,
+        story_id=str(projection["story_id"]),
+        release_oid=release_oid,
+        process_oid=process_oid,
+        scope_digest=scope_digest,
+        implementation_digest=implementation_digest,
+        dependency_digests=dependency_digests,
+        cp6_result_ref=str(projection["result_ref"]),
+    )
+
+
+def _parse_dependency_digest_arguments(values: list[str]) -> dict[str, str]:
+    dependencies: dict[str, str] = {}
+    for value in values:
+        key, separator, digest = value.partition("=")
+        if not separator or not key or key in dependencies:
+            raise ValueError(
+                "--dependency-digest must be unique KEY=SHA256 values"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("--dependency-digest value must be a lowercase sha256")
+        dependencies[key] = digest
+    return dict(sorted(dependencies.items()))
+
+
 def apply_cp6_story_projection(
     project_root: Path,
     *,
@@ -1427,8 +1477,15 @@ def validate_cp6_revalidation_input_contract(
 ) -> dict[str, Any]:
     """按 consumer requirement 执行 resolve→exists→read 的精确 I/O 契约。"""
 
-    requirement = input_spec.get("consumer_requirement")
-    if requirement != "required":
+    try:
+        requirement = preregistration.parse_consumer_requirement(
+            input_spec.get("consumer_requirement")
+        )
+    except preregistration.PreregistrationSemanticsError:
+        return _blocked_revalidation(
+            "REVALIDATION_CONSUMER_REQUIREMENT_INVALID"
+        ) | {"read_count": 0}
+    if not preregistration.requirement_evaluates_target_io(requirement):
         return {"status": "NOT_REQUIRED", "decision": "NOT_REQUIRED", "mutation_count": 0, "read_count": 0}
     ref = input_spec.get("logical_ref")
     expected_digest = input_spec.get("expected_bytes_digest")
@@ -3440,8 +3497,18 @@ def main(
         parser.add_argument("--result", dest="result_path", type=Path, required=True)
         parser.add_argument("--expected-plan-digest", default="")
         parser.add_argument("--apply", action="store_true")
+        parser.add_argument("--freeze-semantic-evidence", action="store_true")
+        parser.add_argument("--release-oid", default="")
+        parser.add_argument("--process-oid", default="")
+        parser.add_argument("--scope-digest", default="")
+        parser.add_argument("--implementation-digest", default="")
+        parser.add_argument("--dependency-digest", action="append", default=[])
         parsed = parser.parse_args(args[1:])
         try:
+            if parsed.freeze_semantic_evidence and parsed.apply:
+                raise ValueError(
+                    "--freeze-semantic-evidence is a read-only plan operation; mutation=0"
+                )
             if parsed.apply:
                 output = apply_cp6_story_projection(
                     parsed.project_root,
@@ -3453,6 +3520,22 @@ def main(
                     parsed.project_root,
                     result_path=parsed.result_path,
                 )
+                if parsed.freeze_semantic_evidence:
+                    frozen = build_cp6_semantic_evidence_v2(
+                        parsed.project_root,
+                        result_path=parsed.result_path,
+                        release_oid=parsed.release_oid,
+                        process_oid=parsed.process_oid,
+                        scope_digest=parsed.scope_digest,
+                        implementation_digest=parsed.implementation_digest,
+                        dependency_digests=_parse_dependency_digest_arguments(
+                            parsed.dependency_digest
+                        ),
+                    )
+                    output = {
+                        "projection_plan": output,
+                        "frozen_evidence": frozen.as_dict(),
+                    }
             print(json.dumps(output, ensure_ascii=False, sort_keys=True))
             return 0
         except (OSError, ValueError) as exc:

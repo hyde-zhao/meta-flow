@@ -72,6 +72,41 @@ def write_py(root: Path, rel_path: str, text: str) -> Path:
 
 
 class ModuleBoundaryTests(unittest.TestCase):
+    def test_v2_boundary_contract_is_closed_and_rejects_undeclared_edge(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "docs" / "design" / "MODULE-BOUNDARIES.yaml"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "authority": "test",
+                        "boundary_count": 2,
+                        "allowed_import_edges": [],
+                        "forbidden_directions": [],
+                        "module_boundaries": {
+                            "core": {
+                                "package": "quant_lab.core",
+                                "owned_paths": ["quant_lab/core/**/*.py"],
+                            },
+                            "data": {
+                                "package": "quant_lab.data",
+                                "owned_paths": ["quant_lab/data/**/*.py"],
+                            },
+                        },
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            write_py(root, "quant_lab/core/runtime/main.py", "from quant_lab.data.reader import Reader\n")
+
+            errors, _warnings = module_boundaries.check_imports(root)
+
+            self.assertTrue(any("without may_import allowance" in error for error in errors))
+
     def test_init_writes_default_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

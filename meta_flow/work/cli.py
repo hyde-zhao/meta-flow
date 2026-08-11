@@ -22,6 +22,13 @@ from meta_flow.work.handoff import (
     write_handoff,
 )
 from meta_flow.work.lifecycle import update_work_status
+from meta_flow.work.lifecycle_transaction import (
+    WorkCloseAuthorizationV1,
+    apply_work_close,
+    inspect_work_close_transactions,
+    plan_work_close,
+    recover_work_close_transaction,
+)
 from meta_flow.work.model import build_work, load_work
 from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import HIGH_RISK_FIELDS, RiskFacts, classify_work
@@ -30,13 +37,25 @@ from meta_flow.work.scope import WorkScope, check_scope
 from meta_flow.work.store import (
     WorkInitApplyError,
     apply_work_init,
-    close_work,
     plan_work_init_from_release_root,
 )
-from meta_flow.work.usage import UsageEvent, append_usage_event
+from meta_flow.work.usage import UsageEvent
+from meta_flow.work.usage_admission import (
+    execute_admitted_operation,
+    plan_operation_admission,
+    plan_usage_admission,
+)
 from meta_flow.work.validation_planner import build_validation_execution_plan
 from meta_flow.work.validation_receipt import load_validation_receipt
 from meta_flow.workspace.git_sync import run_git
+
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("work.close", ("meta-flow", "work", "close")),
+    ("work.close-inspect", ("meta-flow", "work", "close-inspect")),
+    ("work.close-recover", ("meta-flow", "work", "close-recover")),
+    ("work.usage-plan", ("meta-flow", "work", "usage-plan")),
+    ("work.usage-add", ("meta-flow", "work", "usage-add")),
+)
 
 _CLI_HIGH_RISK = {key.replace("_", "-"): key for key in HIGH_RISK_FIELDS}
 
@@ -266,8 +285,8 @@ def init_main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def status_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="meta-flow work status")
+def _status_main(command: str, argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog=f"meta-flow work {command}")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--work-id", required=True)
     parsed = parser.parse_args(argv or [])
@@ -298,6 +317,14 @@ def status_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def status_main(argv: list[str] | None = None) -> int:
+    return _status_main("status", argv)
+
+
+def check_main(argv: list[str] | None = None) -> int:
+    return _status_main("check", argv)
+
+
 def transition_main(command: str, argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=f"meta-flow work {command}")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -312,19 +339,45 @@ def transition_main(command: str, argv: list[str] | None = None) -> int:
         parser.add_argument("--expected-status", default="active")
         parser.add_argument("--outcome", choices=["completed", "cancelled"], default="completed")
         parser.add_argument("--result-ref", default="")
+        parser.add_argument("--apply", action="store_true")
+        parser.add_argument("--authorization", type=Path)
     else:
         parser.add_argument("--expected-status", default=defaults[command][0])
     parsed = parser.parse_args(argv or [])
     try:
         release_root, process_root = _resolve_roots(parsed.project_root)
         if command == "close":
-            updated = close_work(
+            plan = plan_work_close(
                 process_root,
                 parsed.work_id,
                 expected_status=parsed.expected_status,
                 outcome=parsed.outcome,
                 result_ref=parsed.result_ref,
             )
+            if not parsed.apply:
+                print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+                return 0 if plan.ready else 1
+            if parsed.authorization is None:
+                raise ValueError("Work close --apply requires --authorization")
+            authorization_payload = json.loads(
+                parsed.authorization.read_text(encoding="utf-8")
+            )
+            if not isinstance(authorization_payload, dict):
+                raise ValueError("Work close authorization must be a JSON object")
+            authorization = WorkCloseAuthorizationV1.from_mapping(
+                authorization_payload
+            )
+            receipt = apply_work_close(process_root, plan, authorization)
+            payload = {
+                **receipt.as_dict(),
+                "status": (
+                    load_work(process_root, parsed.work_id).status
+                    if receipt.decision == "PASS"
+                    else ""
+                ),
+            }
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if receipt.decision == "PASS" else 1
         elif command == "resume":
             current = load_work(process_root, parsed.work_id)
             handoff = load_handoff(process_root, parsed.work_id)
@@ -538,6 +591,117 @@ def usage_add_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reads", type=int, default=0)
     parser.add_argument("--writes", type=int, default=0)
     parser.add_argument("--check-groups", type=int, default=0)
+    parser.add_argument("--human-interactions", type=int, default=0)
+    parser.add_argument("--design-revisions", type=int, default=0)
+    parser.add_argument("--qa-attempts", type=int, default=0)
+    parser.add_argument("--final-full-suites", type=int, default=0)
+    parser.add_argument("--tokens", type=int, default=None)
+    parser.add_argument(
+        "--token-status",
+        choices=["measured", "proxy", "unavailable"],
+        default="measured",
+    )
+    parser.add_argument("--proxy-method", default="")
+    parser.add_argument("--unavailable-reason", default="")
+    parser.add_argument("--admission-digest", required=True)
+    parsed = parser.parse_args(argv or [])
+    token_value = None if parsed.token_status == "unavailable" else (parsed.tokens or 0)
+    try:
+        _release_root, process_root = _resolve_roots(parsed.project_root)
+        event = UsageEvent(
+            event_id=parsed.event_id,
+            stage=parsed.stage,
+            reads=parsed.reads,
+            writes=parsed.writes,
+            check_groups=parsed.check_groups,
+            tokens=token_value,
+            token_measurement_status=parsed.token_status,
+            proxy_method=parsed.proxy_method,
+            unavailable_reason=parsed.unavailable_reason,
+            human_interactions=parsed.human_interactions,
+            design_revisions=parsed.design_revisions,
+            qa_attempts=parsed.qa_attempts,
+            final_full_suites=parsed.final_full_suites,
+        )
+        permit = plan_operation_admission(
+            process_root,
+            parsed.work_id,
+            event,
+            operation="usage-record",
+        )
+        if permit.usage_plan_digest != parsed.admission_digest:
+            raise ValueError("usage admission digest drifted before operation reservation")
+        operation_receipt, _operation_result = execute_admitted_operation(
+            process_root,
+            permit,
+            event,
+            lambda: None,
+        )
+        result = operation_receipt.reservation
+        if result is None:
+            raise ValueError("usage operation did not produce a reservation result")
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
+        return 1
+    payload = {
+        "decision": result.decision,
+        "event_id": result.event_id,
+        "appended": result.appended,
+        "budget_decision": result.budget.decision,
+        "exceeded_dimensions": list(result.budget.exceeded_dimensions),
+        "remaining": result.budget.remaining,
+        "ledger_ref": result.ledger_ref,
+        "operation_receipt": operation_receipt.as_dict(),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if result.decision in {"RECORDED", "NO_CHANGE"} else 1
+
+
+def close_inspect_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work close-inspect")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parsed = parser.parse_args(argv or [])
+    try:
+        _release_root, process_root = _resolve_roots(parsed.project_root)
+        report = inspect_work_close_transactions(process_root)
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
+        return 1
+    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if report["decision"] == "PASS" else 1
+
+
+def close_recover_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work close-recover")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--authorization-id", required=True)
+    parsed = parser.parse_args(argv or [])
+    try:
+        _release_root, process_root = _resolve_roots(parsed.project_root)
+        receipt = recover_work_close_transaction(
+            process_root,
+            parsed.authorization_id,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
+        return 1
+    print(json.dumps(receipt.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if receipt.decision in {"RECOVERED", "NO_CHANGE"} else 1
+
+
+def usage_plan_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work usage-plan")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--work-id", required=True)
+    parser.add_argument("--event-id", required=True)
+    parser.add_argument("--stage", required=True)
+    parser.add_argument("--reads", type=int, default=0)
+    parser.add_argument("--writes", type=int, default=0)
+    parser.add_argument("--check-groups", type=int, default=0)
+    parser.add_argument("--human-interactions", type=int, default=0)
+    parser.add_argument("--design-revisions", type=int, default=0)
+    parser.add_argument("--qa-attempts", type=int, default=0)
+    parser.add_argument("--final-full-suites", type=int, default=0)
     parser.add_argument("--tokens", type=int, default=None)
     parser.add_argument(
         "--token-status",
@@ -560,22 +724,17 @@ def usage_add_main(argv: list[str] | None = None) -> int:
             token_measurement_status=parsed.token_status,
             proxy_method=parsed.proxy_method,
             unavailable_reason=parsed.unavailable_reason,
+            human_interactions=parsed.human_interactions,
+            design_revisions=parsed.design_revisions,
+            qa_attempts=parsed.qa_attempts,
+            final_full_suites=parsed.final_full_suites,
         )
-        result = append_usage_event(process_root, parsed.work_id, event)
+        plan = plan_usage_admission(process_root, parsed.work_id, event)
     except (OSError, ValueError) as exc:
         print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
         return 1
-    payload = {
-        "decision": result.decision,
-        "event_id": result.event_id,
-        "appended": result.appended,
-        "budget_decision": result.budget.decision,
-        "exceeded_dimensions": list(result.budget.exceeded_dimensions),
-        "remaining": result.budget.remaining,
-        "ledger_ref": result.ledger_ref,
-    }
-    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if result.decision in {"RECORDED", "NO_CHANGE"} else 1
+    print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if plan.allowed else 1
 
 
 def decision_bundle_check_main(argv: list[str] | None = None) -> int:
@@ -648,7 +807,10 @@ def main(argv: list[str] | None = None) -> int:
             "  resume    Resume a paused Work.\n"
             "  block     Mark an active Work blocked.\n"
             "  close     Complete or cancel a Work and remove its active Project ref.\n"
-            "  usage-add Record one scoped usage event after a pre-mutation budget check.\n"
+            "  close-inspect Inspect Work close manifests, locks and terminal generations.\n"
+            "  close-recover Recover one consumed Work close authorization by exact manifest.\n"
+            "  usage-plan Build a zero-write 60/80/100 stage-aware usage admission plan.\n"
+            "  usage-add Record one scoped usage event bound to a fresh admission digest.\n"
             "  review-plan Build a risk-proportional review plan for this Work.\n"
             "  validation-plan Map every declared check to a concrete risk.\n"
             "  handoff    Persist one bounded paused/blocked Work handoff.\n"
@@ -665,8 +827,14 @@ def main(argv: list[str] | None = None) -> int:
         return init_main(forwarded)
     if command in {"start", "pause", "resume", "block", "close"}:
         return transition_main(command, forwarded)
+    if command == "close-inspect":
+        return close_inspect_main(forwarded)
+    if command == "close-recover":
+        return close_recover_main(forwarded)
     if command == "usage-add":
         return usage_add_main(forwarded)
+    if command == "usage-plan":
+        return usage_plan_main(forwarded)
     if command == "review-plan":
         return review_plan_main(forwarded)
     if command == "validation-plan":
@@ -679,8 +847,10 @@ def main(argv: list[str] | None = None) -> int:
         return decision_bundle_check_main(forwarded)
     if command == "git-inventory":
         return git_inventory_main(forwarded)
-    if command in {"status", "check"}:
+    if command == "status":
         return status_main(forwarded)
+    if command == "check":
+        return check_main(forwarded)
     raise SystemExit(
-        f"未知 work 命令: {command}. 目前支持: classify, init, start, pause, resume, block, close, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
+        f"未知 work 命令: {command}. 目前支持: classify, init, start, pause, resume, block, close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
     )

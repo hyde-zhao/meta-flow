@@ -28,7 +28,7 @@ from meta_flow.execution_control.runtime_context import (
     target_preimage_digest,
 )
 from meta_flow.project.governance import load_phase, replace_phase
-from meta_flow.project.model import Project, is_safe_ref, load_project, replace_project
+from meta_flow.project.model import Project, load_project, replace_project
 from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.work.model import Work, load_work, work_path, write_work_create_only
@@ -1139,63 +1139,29 @@ def close_work(
     expected_status: str,
     outcome: str,
     result_ref: str = "",
+    authorization: object | None = None,
 ) -> Work:
-    if outcome not in {"completed", "cancelled"}:
-        raise ValueError("outcome must be completed or cancelled")
-    if outcome == "completed":
-        if not result_ref or not is_safe_ref(result_ref):
-            raise ValueError("completed Work requires result_ref")
-        result_path = process_root.resolve() / result_ref
-        if not result_path.is_file():
-            raise ValueError(f"Work result is missing: {result_ref}")
-        result_payload = load_yaml_object(result_path)
-        if (
-            set(result_payload) != {"schema_version", "work_id", "decision"}
-            or result_payload.get("schema_version") != 1
-            or result_payload.get("work_id") != work_id
-            or result_payload.get("decision") != "PASS"
-        ):
-            raise ValueError("completed Work requires one exact matching PASS result")
-    from meta_flow.work.lifecycle import update_work_status
+    """兼容 facade；所有写入必须携带绑定当前 plan 的 typed authorization。"""
 
-    current = load_work(process_root, work_id)
-    if current.status == outcome and (outcome == "cancelled" or current.result_ref == result_ref):
-        closed = current
-    else:
-        closed = update_work_status(
-            process_root,
-            work_id,
-            expected_status=expected_status,
-            new_status=outcome,
-            result_ref=result_ref,
+    from meta_flow.work.lifecycle_transaction import (
+        WorkCloseAuthorizationV1,
+        apply_work_close,
+        plan_work_close,
+    )
+
+    if not isinstance(authorization, WorkCloseAuthorizationV1):
+        raise ValueError("Work close requires WorkCloseAuthorizationV1")
+    plan = plan_work_close(
+        process_root,
+        work_id,
+        expected_status=expected_status,
+        outcome=outcome,
+        result_ref=result_ref,
+    )
+    receipt = apply_work_close(process_root, plan, authorization)
+    if receipt.decision != "PASS":
+        raise ValueError(
+            "Work close transaction did not commit: "
+            f"{receipt.decision}:{','.join(receipt.reason_codes)}"
         )
-    project = load_project(process_root)
-    if closed.work_ref in project.active_work_refs:
-        updated = replace(
-            project,
-            active_work_refs=tuple(
-                ref for ref in project.active_work_refs if ref != closed.work_ref
-            ),
-        )
-        replace_project(
-            process_root,
-            updated,
-            expected_project_id=project.project_id,
-        )
-    if closed.phase_ref:
-        phase = load_phase(process_root, closed.phase_ref)
-        phase_work_refs = tuple(ref for ref in phase.work_refs if ref != closed.work_ref)
-        phase_result_refs = phase.result_refs
-        if result_ref and result_ref not in phase_result_refs:
-            phase_result_refs = (*phase_result_refs, result_ref)
-        if phase_work_refs != phase.work_refs or phase_result_refs != phase.result_refs:
-            replace_phase(
-                process_root,
-                replace(
-                    phase,
-                    work_refs=phase_work_refs,
-                    result_refs=phase_result_refs,
-                ),
-                expected_phase_id=phase.phase_id,
-            )
     return load_work(process_root, work_id)

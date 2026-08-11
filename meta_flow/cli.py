@@ -618,6 +618,10 @@ def _print_check_help() -> None:
         "  concept-overlap       Validate concept owners and changed-file overlap.\n"
         "  package-identity      Validate repo/package/import/CLI identity.\n\n"
         "  truth-map             Validate source-of-truth machine policy.\n"
+        "  governance-ownership  Validate canonical concept owners and consumer coverage.\n"
+        "  terminal-lineage      Project typed Work/CR/dispatch/gate/evidence current/history terminal lineage.\n"
+        "  reference-lifecycle   Validate legacy readability and retain/archive/delete reference decisions.\n"
+        "  detector-qualification Validate source-bounded incremental writer detector hard gate.\n"
         "  retention-policy      Validate process retention lifecycle policy.\n\n"
         "Examples:\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
@@ -747,6 +751,22 @@ def _run_check(args: list[str]) -> None:
         from meta_flow.policies import governance
 
         raise SystemExit(governance.main(["truth-map-check", *forwarded]))
+    if validator == "governance-ownership":
+        from meta_flow.semantics import ownership
+
+        raise SystemExit(ownership.main(forwarded))
+    if validator == "terminal-lineage":
+        from meta_flow.workflow import terminal_lineage
+
+        raise SystemExit(terminal_lineage.main(forwarded))
+    if validator == "reference-lifecycle":
+        from meta_flow.project import reference_lifecycle
+
+        raise SystemExit(reference_lifecycle.main(forwarded))
+    if validator == "detector-qualification":
+        from meta_flow.checks import detector_qualification
+
+        raise SystemExit(detector_qualification.main(forwarded))
     if validator == "retention-policy":
         from meta_flow.policies import governance
 
@@ -757,7 +777,7 @@ def _run_check(args: list[str]) -> None:
         "state-transition, story-return, evidence-index, lld-structure, design-delta, cp-result, event-ledger, handoff-dispatch, read-expansion, "
         "failure-routing, waiver-policy, "
         "module-boundaries, imports, architecture-fitness, risk-rings, capability-claims, concept-overlap, "
-        "package-identity, truth-map, retention-policy"
+        "package-identity, truth-map, governance-ownership, terminal-lineage, reference-lifecycle, detector-qualification, retention-policy"
     )
 
 

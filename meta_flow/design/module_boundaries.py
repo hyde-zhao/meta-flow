@@ -7,7 +7,7 @@ import ast
 import json
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from meta_flow.policies.gate_profiles import classify_gate_profile
@@ -148,7 +148,39 @@ def _as_list(value: Any) -> list[str]:
 
 def _module_boundaries(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     boundaries = data.get("module_boundaries") or {}
-    return {str(name): item for name, item in boundaries.items() if isinstance(item, dict)}
+    normalized = {
+        str(name): dict(item)
+        for name, item in boundaries.items()
+        if isinstance(item, dict)
+    }
+    if data.get("schema_version") != 2:
+        return normalized
+
+    allowed_edges = {
+        (str(edge.get("from") or ""), str(edge.get("to") or ""))
+        for edge in data.get("allowed_import_edges") or []
+        if isinstance(edge, dict)
+    }
+    forbidden_edges = {
+        (str(edge.get("from") or ""), str(edge.get("to") or ""))
+        for edge in data.get("forbidden_directions") or []
+        if isinstance(edge, dict)
+    }
+    for name, item in normalized.items():
+        item["paths"] = _as_list(item.get("owned_paths"))
+        item["may_import"] = [
+            str(normalized[target].get("package") or "")
+            for source, target in sorted(allowed_edges)
+            if source == name and target in normalized
+        ]
+        item["must_not_import"] = [
+            str(other.get("package") or "")
+            for other_name, other in normalized.items()
+            if other_name != name
+            and ((name, other_name) in forbidden_edges or ("*", other_name) in forbidden_edges)
+        ]
+        item["_edge_policy_closed"] = True
+    return normalized
 
 
 def validate_boundaries(project_root: Path) -> list[str]:
@@ -158,8 +190,9 @@ def validate_boundaries(project_root: Path) -> list[str]:
     if not path.is_file():
         return [f"MODULE-BOUNDARIES missing: {path}"]
     data = load_boundaries(project_root)
-    if data.get("schema_version") != 1:
-        errors.append("MODULE-BOUNDARIES schema_version must be 1")
+    schema_version = data.get("schema_version")
+    if schema_version not in {1, 2}:
+        errors.append("MODULE-BOUNDARIES schema_version must be 1 or 2")
     boundaries = _module_boundaries(data)
     if not boundaries:
         errors.append("module_boundaries must be a non-empty object")
@@ -185,6 +218,29 @@ def validate_boundaries(project_root: Path) -> list[str]:
         for list_key in ("may_import", "must_not_import"):
             if list_key in item and not isinstance(item.get(list_key), list):
                 errors.append(f"{name} {list_key} must be a list")
+    if schema_version == 2:
+        if not data.get("authority"):
+            errors.append("MODULE-BOUNDARIES v2 authority is required")
+        if data.get("boundary_count") != len(boundaries):
+            errors.append(
+                "MODULE-BOUNDARIES v2 boundary_count must match module_boundaries"
+            )
+        known = set(boundaries)
+        for list_key in ("allowed_import_edges", "forbidden_directions"):
+            edges = data.get(list_key)
+            if not isinstance(edges, list):
+                errors.append(f"MODULE-BOUNDARIES v2 {list_key} must be a list")
+                continue
+            for index, edge in enumerate(edges, 1):
+                if not isinstance(edge, dict):
+                    errors.append(f"MODULE-BOUNDARIES v2 {list_key}[{index}] must be an object")
+                    continue
+                source = str(edge.get("from") or "")
+                target = str(edge.get("to") or "")
+                if source not in known and not (list_key == "forbidden_directions" and source == "*"):
+                    errors.append(f"MODULE-BOUNDARIES v2 {list_key}[{index}] unknown from: {source or '-'}")
+                if target not in known:
+                    errors.append(f"MODULE-BOUNDARIES v2 {list_key}[{index}] unknown to: {target or '-'}")
     return errors
 
 
@@ -202,12 +258,21 @@ def _matches_prefix(module: str, prefix: str) -> bool:
     return module == prefix or module.startswith(prefix + ".")
 
 
+def _matches_owned_path(rel_path: str, pattern: str) -> bool:
+    normalized = rel_path.replace("\\", "/")
+    owned = pattern.replace("\\", "/").rstrip("/")
+    if not owned:
+        return False
+    if any(token in owned for token in ("*", "?", "[")):
+        return PurePosixPath(normalized).match(owned)
+    return normalized == owned or normalized.startswith(owned + "/")
+
+
 def _boundary_for_file(rel_path: str, boundaries: dict[str, dict[str, Any]]) -> str:
     normalized = rel_path.replace("\\", "/")
     for name, item in boundaries.items():
         for root in _as_list(item.get("paths")):
-            root_prefix = root.rstrip("/") + "/"
-            if normalized.startswith(root_prefix):
+            if _matches_owned_path(normalized, root):
                 return name
     return ""
 
@@ -367,7 +432,7 @@ def check_imports(project_root: Path) -> tuple[list[str], list[str]]:
             may_import = _as_list(source.get("may_import"))
             imported_package = str(boundaries[imported_boundary].get("package") or "")
             allowed = any(_matches_prefix(imported_package, allowed_package) for allowed_package in may_import)
-            if may_import and not allowed:
+            if (source.get("_edge_policy_closed") or may_import) and not allowed:
                 errors.append(
                     f"{record.rel_path}:{record.line_no} {record.source_boundary} imports {imported_boundary} "
                     f"without may_import allowance: {record.imported_module}"
@@ -381,8 +446,7 @@ def _boundary_touched_by_path(path: str, boundaries: dict[str, dict[str, Any]]) 
     normalized = path.replace("\\", "/")
     for name, item in boundaries.items():
         for root in _as_list(item.get("paths")):
-            root_prefix = root.rstrip("/") + "/"
-            if normalized == root.rstrip("/") or normalized.startswith(root_prefix):
+            if _matches_owned_path(normalized, root):
                 return name
     return ""
 

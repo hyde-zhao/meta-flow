@@ -28,6 +28,7 @@ from meta_flow.project.process_route import (
     require_process_route,
 )
 from meta_flow.project.read_contract import ReadContextProtocol
+from meta_flow.semantics import preregistration
 from meta_flow.state.current import now_utc
 from meta_flow.work.model import load_work
 from meta_flow.work.scope import check_scope
@@ -583,19 +584,23 @@ def select_required_preregistration_refs(packet: Mapping[str, Any]) -> tuple[str
     if not isinstance(entries, list):
         raise ValueError("READ_IF_NEEDED_INVALID")
     refs: list[str] = []
-    is_v3 = packet.get("schema_version") == 3
+    try:
+        strict = preregistration.packet_uses_strict_semantics(
+            packet.get("schema_version")
+        )
+    except preregistration.PreregistrationSemanticsError as exc:
+        raise ValueError(exc.code) from exc
     for entry in entries:
         if not isinstance(entry, Mapping):
             raise ValueError("READ_IF_NEEDED_ENTRY_INVALID")
-        requirement = entry.get("consumer_requirement")
-        if is_v3 and (not isinstance(requirement, str) or requirement not in {"required", "optional", "forbidden"}):
-            raise ValueError("CONSUMER_REQUIREMENT_INVALID")
-        trigger = entry.get("trigger")
-        if is_v3 and requirement == "required" and trigger != "full_lld_required_by_policy":
-            raise ValueError("REQUIRED_PREREGISTRATION_TRIGGER_INVALID")
-        if trigger != "full_lld_required_by_policy":
-            continue
-        if is_v3 and requirement != "required":
+        try:
+            semantics = preregistration.interpret_preregistration_entry(
+                entry,
+                strict=strict,
+            )
+        except preregistration.PreregistrationSemanticsError as exc:
+            raise ValueError(exc.code) from exc
+        if not semantics.select_required_ref:
             continue
         refs.append(_logical_process_ref(entry.get("path") or "", field="requested_ref"))
     selected = tuple(sorted(set(refs)))
@@ -608,21 +613,29 @@ def select_required_preregistration_refs(packet: Mapping[str, Any]) -> tuple[str
     return selected
 
 
-def _v2_entries(packet: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+def _v2_entries(
+    packet: Mapping[str, Any],
+) -> tuple[tuple[str, preregistration.ConsumerRequirement], ...]:
     """Validate v3 diagnostic inputs; selection remains owned by the selector."""
 
     entries = packet.get("read_if_needed")
     if not isinstance(entries, list):
         raise ValueError("READ_IF_NEEDED_INVALID")
-    projected: list[tuple[str, str]] = []
+    projected: list[tuple[str, preregistration.ConsumerRequirement]] = []
     for entry in entries:
         if not isinstance(entry, Mapping):
             raise ValueError("READ_IF_NEEDED_ENTRY_INVALID")
-        requirement = entry.get("consumer_requirement")
-        if not isinstance(requirement, str) or requirement not in {"required", "optional", "forbidden"}:
-            raise ValueError("CONSUMER_REQUIREMENT_INVALID")
+        try:
+            semantics = preregistration.interpret_preregistration_entry(
+                entry,
+                strict=True,
+            )
+        except preregistration.PreregistrationSemanticsError as exc:
+            raise ValueError(exc.code) from exc
+        if semantics.requirement is None:  # pragma: no cover - strict owner invariant
+            raise AssertionError("strict preregistration semantics omitted requirement")
         logical_ref = _logical_process_ref(entry.get("path") or "", field="requested_ref")
-        projected.append((logical_ref, requirement))
+        projected.append((logical_ref, semantics.requirement))
     return tuple(sorted(set(projected)))
 
 
@@ -737,7 +750,11 @@ def _build_host_preregistration_plan_v2(
     if action_refs != required_refs:
         blockers.append("HOST_PREREGISTRATION_REFS_MISMATCH")
     entry_requirements = {ref: requirement for ref, requirement in entries}
-    if any(entry_requirements.get(ref) == "forbidden" for ref in action_refs):
+    if any(
+        entry_requirements.get(ref)
+        is preregistration.ConsumerRequirement.FORBIDDEN
+        for ref in action_refs
+    ):
         blockers.append("FORBIDDEN_PREREGISTRATION_REF_REQUESTED")
     action_reason = str(action.get("reason") or "")
     action_evidence = action.get("reason_evidence")
@@ -753,19 +770,19 @@ def _build_host_preregistration_plan_v2(
 
     # The requirement gate is deliberately before resolver and target probes.
     for logical_ref, requirement in entries:
-        if requirement != "required":
-            diagnostics.append({"logical_ref": logical_ref, "logical_route": "not-evaluated", "physical_existence": "not-evaluated", "consumer_requirement": requirement})
+        if not preregistration.requirement_evaluates_target_io(requirement):
+            diagnostics.append({"logical_ref": logical_ref, "logical_route": "not-evaluated", "physical_existence": "not-evaluated", "consumer_requirement": requirement.value})
             continue
         try:
             target = _resolve_runtime_ref(root, logical_ref)
         except (OSError, ValueError):
-            diagnostics.append({"logical_ref": logical_ref, "logical_route": "blocked", "physical_existence": "not-evaluated", "consumer_requirement": requirement})
+            diagnostics.append({"logical_ref": logical_ref, "logical_route": "blocked", "physical_existence": "not-evaluated", "consumer_requirement": requirement.value})
             blockers.append(f"REQUESTED_REF_ROUTE_BLOCKED:{logical_ref}")
             continue
         if target.is_file():
-            diagnostics.append({"logical_ref": logical_ref, "logical_route": "resolved", "physical_existence": "present", "consumer_requirement": requirement})
+            diagnostics.append({"logical_ref": logical_ref, "logical_route": "resolved", "physical_existence": "present", "consumer_requirement": requirement.value})
         else:
-            diagnostics.append({"logical_ref": logical_ref, "logical_route": "resolved", "physical_existence": "missing", "consumer_requirement": requirement})
+            diagnostics.append({"logical_ref": logical_ref, "logical_route": "resolved", "physical_existence": "missing", "consumer_requirement": requirement.value})
             blockers.append(f"REQUESTED_REF_MISSING:{logical_ref}")
 
     try:

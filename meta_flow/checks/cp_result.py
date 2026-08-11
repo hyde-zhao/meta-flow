@@ -23,6 +23,7 @@ from meta_flow.project.process_route import (
     _resolve_runtime_ref,
     format_runtime_ref,
 )
+from meta_flow.semantics import outcome
 from meta_flow.state import checkpoint_projection, event_ledger
 from meta_flow.state.current import now_utc
 
@@ -31,8 +32,8 @@ if TYPE_CHECKING:
 
 CHECKPOINT_LEDGER_REL = Path("process/state/CHECKPOINT-LEDGER.ndjson")
 ITEM_STATUSES = {"PASS", "FAIL", "BLOCKED", "N/A", "WAIVED"}
-GENERAL_DECISIONS = {"PASS", "FAIL", "BLOCKED", "N/A", "WAIVED"}
-CP7_DECISIONS = GENERAL_DECISIONS | {"PASS_WITH_RISK", "NEEDS_REWORK", "NEEDS_DESIGN_CLARIFICATION"}
+GENERAL_DECISIONS = outcome.GENERAL_VERIFICATION_DECISIONS
+CP7_DECISIONS = outcome.CP7_VERIFICATION_DECISIONS
 EVIDENCE_STATUSES = {
     "MISSING_REQUIRED_EVIDENCE",
     "EXECUTED_NEGATIVE_RESULT",
@@ -41,7 +42,7 @@ EVIDENCE_STATUSES = {
     "NOT_APPLICABLE",
     "NEEDS_REVIEW",
 }
-RELEASE_DECISIONS = {"READY", "READY_WITH_RISK", "NOT_READY", "RELEASED", "FAILED"}
+RELEASE_DECISIONS = outcome.RELEASE_DECISIONS
 FACT_DIFF_DECISION_IMPACTS = {"READY", "READY_WITH_RISK", "NOT_READY", "NO_IMPACT"}
 SEVERITIES = {"BLOCKER", "HIGH", "MEDIUM", "LOW", "INFO"}
 CHECKPOINT_RE = re.compile(r"^CP[0-8]$")

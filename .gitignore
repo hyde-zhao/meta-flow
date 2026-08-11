@@ -9,6 +9,7 @@
 /process
 /checkpoints/
 .meta-workflow/
+/.meta-flow-runtime/
 /.meta-flow/INSTALL-MANIFEST.yaml
 
 # Internal docs are archived in meta-flow-artifacts; public docs under docs/ stay tracked.
