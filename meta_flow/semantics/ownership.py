@@ -652,10 +652,10 @@ def validate_ownership(project_root: Path) -> dict[str, Any]:
     )
     if (
         detector_profile.get("qualification")
-        != "source-bounded-r13-incremental-hard-gate"
+        != "product-full-baseline-plus-incremental-hard-gate-v2"
     ):
         errors.append(
-            "detector qualification must be source-bounded-r13-incremental-hard-gate"
+            "detector qualification must be product-full-baseline-plus-incremental-hard-gate-v2"
         )
     source_types = _string_list(
         detector_profile.get("source_types"),

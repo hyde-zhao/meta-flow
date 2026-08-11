@@ -424,8 +424,8 @@
     {
       "operation": "detector-qualification.check",
       "entry": ["meta-flow", "check", "detector-qualification"],
-      "input_version": "DetectorIncrementalBaselineV1",
-      "output_version": "DetectorQualificationReportV1",
+      "input_version": "DetectorQualifiedBaselineV2",
+      "output_version": "DetectorQualificationReportV2",
       "mutation_mode": "zero-write",
       "authorization_mode": "none",
       "projector": "meta_flow.checks.detector_qualification.check_detector_qualification",

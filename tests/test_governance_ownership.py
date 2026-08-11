@@ -51,7 +51,7 @@ def _fixture(tmp_path: Path) -> Path:
         },
         "detector_profile": {
             "profile_id": "fixture-source-bounded-v1",
-            "qualification": "source-bounded-r13-incremental-hard-gate",
+            "qualification": "product-full-baseline-plus-incremental-hard-gate-v2",
             "source_types": list(ownership.DETECTOR_SOURCE_TYPES),
             "ast_roots": ["meta_flow"],
             "known_blind_spots": ["dynamic imports are outside this fixture"],
