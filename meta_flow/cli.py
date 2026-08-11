@@ -621,7 +621,7 @@ def _print_check_help() -> None:
         "  governance-ownership  Validate canonical concept owners and consumer coverage.\n"
         "  terminal-lineage      Project typed Work/CR/dispatch/gate/evidence current/history terminal lineage.\n"
         "  reference-lifecycle   Validate legacy readability and retain/archive/delete reference decisions.\n"
-        "  detector-qualification Validate source-bounded incremental writer detector hard gate.\n"
+        "  detector-qualification Validate current full plus post-baseline incremental writer gate.\n"
         "  retention-policy      Validate process retention lifecycle policy.\n\n"
         "Examples:\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
