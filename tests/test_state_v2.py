@@ -513,6 +513,29 @@ class StateV2Tests(unittest.TestCase):
             self.assertEqual(0, no_change["mutation_count"])
             self.assertEqual(0, no_change["planned_mutation_count"])
 
+    def test_current_refresh_dry_run_blocks_cleanly_when_state_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = filesystem_snapshot(root)
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = current.main(
+                    ["current-refresh", "--project-root", str(root), "--dry-run"]
+                )
+
+            self.assertEqual(2, exit_code)
+            self.assertEqual(before, filesystem_snapshot(root))
+            payload = json.loads(output.getvalue())
+            self.assertEqual("StateDryRunPlanV1", payload["kind"])
+            self.assertEqual("state.current-refresh", payload["operation"])
+            self.assertEqual("BLOCKED", payload["decision"])
+            self.assertEqual("state_current_missing", payload["error_code"])
+            self.assertEqual(0, payload["mutation_count"])
+            self.assertEqual(0, payload["planned_mutation_count"])
+            self.assertNotIn(str(root), output.getvalue())
+            self.assertIn("meta-flow state init", payload["next_action"])
+
     def test_current_refresh_preserves_gitignore_and_keeps_aliases_out_of_git(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

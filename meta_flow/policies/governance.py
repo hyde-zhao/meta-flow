@@ -468,11 +468,13 @@ def _print_governance_help() -> None:
         "  truth-map-check   Validate process/policies/SOURCE-OF-TRUTH-MAP.yaml.\n"
         "  truth-map-render  Render docs/design/SOURCE-OF-TRUTH-MAP.md from the machine policy.\n"
         "  retention-check   Validate process/policies/RETENTION-POLICY.json.\n"
+        "  baseline-refresh  Plan or atomically refresh the declared long-term governance projection.\n"
         "  check             Run truth-map and retention checks.\n\n"
         "Examples:\n"
         "  meta-flow governance init --project-root .\n"
         "  meta-flow governance truth-map-check --project-root .\n"
         "  meta-flow governance retention-check --project-root .\n"
+        "  meta-flow governance baseline-refresh --project-root . --project-id <project-id> --immutable-commit-role release_input=release:<oid> --immutable-commit-role process_input=process:<oid>\n"
     )
 
 
@@ -482,6 +484,10 @@ def main(argv: list[str] | None = None) -> int:
         _print_governance_help()
         return 0
     command = args[0]
+    if command == "baseline-refresh":
+        from meta_flow.project import governance_projection
+
+        return governance_projection.baseline_refresh_main(args[1:])
     parser = argparse.ArgumentParser(prog=f"meta-flow governance {command}")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--force", action="store_true")
@@ -525,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- ERROR: {error}")
         return 1 if errors else 0
     raise SystemExit(
-        f"未知 governance 命令: {command}. 目前支持: init, truth-map-check, truth-map-render, retention-check, check"
+        f"未知 governance 命令: {command}. 目前支持: init, truth-map-check, truth-map-render, retention-check, baseline-refresh, check"
     )
 
 

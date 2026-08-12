@@ -368,6 +368,24 @@
       }
     },
     {
+      "operation": "governance.baseline-refresh",
+      "entry": ["meta-flow", "governance", "baseline-refresh"],
+      "input_version": "GovernanceBaselineRefreshPlanV1+ImmutableCommitRolesV1",
+      "output_version": "GovernanceBaselineRefreshReceiptV1",
+      "mutation_mode": "dry-run-digest-apply",
+      "authorization_mode": "expected-plan-digest",
+      "projector": "meta_flow.project.governance_projection.plan_governance_baseline_refresh",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "governance-ownership.check",
       "entry": ["meta-flow", "check", "governance-ownership"],
       "input_version": "GovernanceConceptOwnersV2+GovernanceSourceOfTruthMapV2",
@@ -380,6 +398,24 @@
         "binding_mode": "required",
         "project_root_argument": "--project-root",
         "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "project.phase-transition",
+      "entry": ["meta-flow", "project", "phase-transition"],
+      "input_version": "PhaseTransitionPlanV1+ImmutableCommitRolesV1",
+      "output_version": "PhaseTransitionReceiptV1",
+      "mutation_mode": "dry-run-digest-apply",
+      "authorization_mode": "expected-plan-digest",
+      "projector": "meta_flow.project.phase_transition.plan_phase_transition",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--from-phase-ref", "--to-phase-ref", "--closure-evidence-ref"],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0

@@ -85,7 +85,12 @@ def _blocked_binding_workspace_item(error: RouteConsumerError) -> ReadinessItem:
     )
 
 
-def _state_item(root: Path, process_root: Path | None) -> ReadinessItem:
+def _state_item(
+    root: Path,
+    process_root: Path | None,
+    *,
+    binding_aware: bool = False,
+) -> ReadinessItem:
     errors, warnings = current.check_current_state(
         root, process_root=process_root
     )
@@ -97,7 +102,13 @@ def _state_item(root: Path, process_root: Path | None) -> ReadinessItem:
             current.STATE_MD_REL.as_posix(),
         ],
         impact="STATE.current.json and base ledgers are required before CR, CP, and handoff events can be audited.",
-        next_action="Run meta-flow workspace bootstrap or meta-flow state init --project-root . followed by meta-flow state render.",
+        next_action=(
+            "Run meta-flow state init --project-root . --project-id <project-id>, "
+            "then meta-flow state render --project-root . and meta-flow state "
+            "current-refresh --project-root ."
+            if binding_aware
+            else "Run meta-flow workspace bootstrap or meta-flow state init --project-root . followed by meta-flow state render."
+        ),
         messages=[*warnings, *errors],
     )
 
@@ -199,7 +210,12 @@ def _quality_item(root: Path, process_root: Path | None) -> ReadinessItem:
     )
 
 
-def _workflow_item(root: Path, process_root: Path | None) -> ReadinessItem:
+def _workflow_item(
+    root: Path,
+    process_root: Path | None,
+    *,
+    binding_aware: bool = False,
+) -> ReadinessItem:
     routed_root = process_root or (root / "process")
     missing = [
         rel.as_posix()
@@ -211,12 +227,22 @@ def _workflow_item(root: Path, process_root: Path | None) -> ReadinessItem:
         status="FAIL" if missing else "PASS",
         evidence=[rel.as_posix() for rel in current.BASE_LEDGER_RELS],
         impact="Event ledgers are required for CP result, handoff, run, gate, and read expansion audit trails.",
-        next_action="Run meta-flow workspace bootstrap --project-root . --artifact-root <relative-artifact-root> --project-name <project-name>.",
+        next_action=(
+            "Run meta-flow state init --project-root . --project-id <project-id>; "
+            "the native State initializer creates all base ledgers."
+            if binding_aware
+            else "Run meta-flow workspace bootstrap --project-root . --artifact-root <relative-artifact-root> --project-name <project-name>."
+        ),
         messages=[f"base ledger missing: {path}" for path in missing],
     )
 
 
-def _human_gate_item(root: Path, process_root: Path | None) -> ReadinessItem:
+def _human_gate_item(
+    root: Path,
+    process_root: Path | None,
+    *,
+    binding_aware: bool = False,
+) -> ReadinessItem:
     required_dirs = [Path("process/checks"), Path("process/checkpoints"), Path("process/context")]
     routed_root = process_root or (root / "process")
     missing = [
@@ -224,14 +250,176 @@ def _human_gate_item(root: Path, process_root: Path | None) -> ReadinessItem:
         for rel in required_dirs
         if not (routed_root / rel.relative_to("process")).is_dir()
     ]
+    gate_required, route_errors, route_messages = _human_gate_requirement(
+        root,
+        routed_root,
+    )
+    if route_errors:
+        status = "FAIL"
+    elif missing and gate_required:
+        status = "FAIL"
+    elif missing:
+        status = "WARN"
+    else:
+        status = "PASS"
+    if route_errors:
+        next_action = (
+            "Repair STATE.current.json, the native CR index, and the active CR route_plan_ref; "
+            "then run meta-flow check human-gate --project-root ."
+        )
+    elif gate_required:
+        next_action = (
+            "Run meta-flow context build for the active CR and generate the applicable native "
+            "checkpoint evidence, then run meta-flow check human-gate --project-root ."
+        )
+    else:
+        next_action = (
+            "No gate scaffold is required for the current G0/G1 route. When a formal G2 change "
+            "starts, use meta-flow cr bootstrap and meta-flow context build, then validate with "
+            "meta-flow check human-gate."
+            if binding_aware
+            else "No gate scaffold is required until a formal G2 route starts."
+        )
     return ReadinessItem(
         item_id="human-gate-readiness",
-        status="FAIL" if missing else "PASS",
+        status=status,
         evidence=[rel.as_posix() for rel in required_dirs],
         impact="Human gates need checks, checkpoints, and context directories before CP2/CP3/CP5/CP8 launch.",
-        next_action="Run workspace bootstrap, then validate each gate with meta-flow check human-gate before asking the user.",
-        messages=[f"directory missing: {path}" for path in missing],
+        next_action=next_action,
+        messages=[
+            *route_messages,
+            *route_errors,
+            *(f"directory missing: {path}" for path in missing),
+        ],
     )
+
+
+def _safe_process_ref(process_root: Path, value: object, *, subject: str) -> Path:
+    ref = str(value or "").split("#", 1)[0].strip().strip('"').strip("'")
+    path = Path(ref)
+    if (
+        not ref.startswith("process/")
+        or path.is_absolute()
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError(f"{subject} must be one safe process/... logical ref")
+    candidate = (process_root / Path(*path.parts[1:])).resolve(strict=False)
+    if not candidate.is_relative_to(process_root.resolve()):
+        raise ValueError(f"{subject} escapes the process repository")
+    return candidate
+
+
+def _read_json_object(path: Path, *, subject: str) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{subject} missing or not a regular file")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{subject} invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{subject} must contain a JSON object")
+    return payload
+
+
+def _human_gate_requirement(
+    project_root: Path,
+    process_root: Path,
+) -> tuple[bool, list[str], list[str]]:
+    """从 bounded State/CR/route truth 判定当前是否需要人工门基础设施。"""
+
+    errors: list[str] = []
+    messages: list[str] = []
+    state_path = process_root / "state/STATE.current.json"
+    index_path = process_root / "changes/CR-INDEX.json"
+    state: dict[str, object] = {}
+    if state_path.is_symlink() or (state_path.exists() and not state_path.is_file()):
+        return False, ["STATE.current.json is not a regular file"], messages
+    if state_path.is_file():
+        try:
+            state = _read_json_object(state_path, subject="STATE.current.json")
+        except ValueError as exc:
+            return False, [str(exc)], messages
+
+    active_items: list[dict[str, object]] = []
+    if index_path.is_symlink() or (index_path.exists() and not index_path.is_file()):
+        return False, ["CR-INDEX.json is not a regular file"], messages
+    if index_path.is_file():
+        try:
+            index = _read_json_object(index_path, subject="CR-INDEX.json")
+        except ValueError as exc:
+            return False, [str(exc)], messages
+        from meta_flow.workflow.cr_lifecycle import validate_index_payload
+
+        index_errors = validate_index_payload(index)
+        if index_errors:
+            return False, [f"CR-INDEX.json projection error: {item}" for item in index_errors], messages
+        active_items = [
+            item
+            for item in index.get("items", [])
+            if isinstance(item, dict)
+            and str(item.get("lifecycle_status") or "").strip().lower()
+            in {"active", "blocked"}
+        ]
+
+    active_change = str(state.get("active_change") or "").strip()
+    pending_gate = str(state.get("pending_gate") or "").strip()
+    if not state and active_items:
+        return False, ["active formal CR exists while STATE.current.json is missing"], messages
+    if len(active_items) > 1:
+        identities = ", ".join(str(item.get("id") or "") for item in active_items)
+        return False, [f"multiple active/blocked formal CRs make the current route ambiguous: {identities}"], messages
+    indexed_change = str(active_items[0].get("id") or "") if active_items else ""
+    if active_change != indexed_change:
+        if active_change or indexed_change:
+            return False, [
+                "STATE.active_change and CR-INDEX active/blocked formal truth differ: "
+                f"{active_change or '-'} != {indexed_change or '-'}"
+            ], messages
+    if pending_gate:
+        messages.append(f"pending_gate={pending_gate}")
+        return True, errors, messages
+    if not active_items:
+        messages.append("no active/blocked formal CR; gate scaffold is on-demand")
+        return False, errors, messages
+
+    active = active_items[0]
+    try:
+        cr_path = _safe_process_ref(
+            process_root,
+            active.get("formal_cr_path"),
+            subject="active CR formal_cr_path",
+        )
+        if cr_path.is_symlink() or not cr_path.is_file():
+            raise ValueError("active CR formal truth missing or not a regular file")
+        from meta_flow.policies.route_plan import parse_cr_frontmatter
+
+        frontmatter = parse_cr_frontmatter(cr_path)
+        route_path = _safe_process_ref(
+            process_root,
+            frontmatter.get("route_plan_ref"),
+            subject="active CR route_plan_ref",
+        )
+        route = _read_json_object(route_path, subject="active CR route plan")
+    except (OSError, ValueError) as exc:
+        return False, [str(exc)], messages
+    if route.get("decision") == "BLOCKED":
+        return False, ["active CR route plan decision is BLOCKED"], messages
+    applicability = route.get("checkpoint_applicability")
+    if not isinstance(applicability, dict):
+        return False, ["active CR route plan checkpoint_applicability is missing or invalid"], messages
+    required = any(
+        isinstance(item, dict)
+        and bool(item.get("applies"))
+        and item.get("decision") != "WAIVED"
+        and item.get("human_gate") == "required"
+        for item in applicability.values()
+    )
+    messages.append(
+        "active formal CR route requires a human gate"
+        if required
+        else "active formal CR route has no applicable required human gate"
+    )
+    return required, errors, messages
 
 
 def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
@@ -244,6 +432,7 @@ def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
     except RouteConsumerError as error:
         workspace_item = _blocked_binding_workspace_item(error)
         process_root = None
+        binding_aware = True
     else:
         if route is None:
             health = inspect_legacy_consumer_route(
@@ -252,17 +441,19 @@ def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
             )
             workspace_item = _workspace_item(root, health)
             process_root = health.project_process_root if health.ok else None
+            binding_aware = False
         else:
             workspace_item = _binding_workspace_item(root, route)
             process_root = route.process_root
+            binding_aware = True
     return [
         workspace_item,
-        _state_item(root, process_root),
+        _state_item(root, process_root, binding_aware=binding_aware),
         _cr_tracking_item(root, process_root),
         _identity_item(root),
         _quality_item(root, process_root),
-        _workflow_item(root, process_root),
-        _human_gate_item(root, process_root),
+        _workflow_item(root, process_root, binding_aware=binding_aware),
+        _human_gate_item(root, process_root, binding_aware=binding_aware),
     ]
 
 

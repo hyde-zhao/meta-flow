@@ -53,6 +53,42 @@ _EXPORTS = {
         "meta_flow.project.state",
         "validate_project_objects",
     ),
+    "GovernanceBaselineRefreshPlan": (
+        "meta_flow.project.governance_projection",
+        "GovernanceBaselineRefreshPlan",
+    ),
+    "ImmutableCommitRole": (
+        "meta_flow.project.governance_projection",
+        "ImmutableCommitRole",
+    ),
+    "apply_governance_baseline_refresh": (
+        "meta_flow.project.governance_projection",
+        "apply_governance_baseline_refresh",
+    ),
+    "plan_governance_baseline_refresh": (
+        "meta_flow.project.governance_projection",
+        "plan_governance_baseline_refresh",
+    ),
+    "PhaseTransitionPlan": (
+        "meta_flow.project.phase_transition",
+        "PhaseTransitionPlan",
+    ),
+    "apply_phase_transition": (
+        "meta_flow.project.phase_transition",
+        "apply_phase_transition",
+    ),
+    "inspect_phase_transition": (
+        "meta_flow.project.phase_transition",
+        "inspect_phase_transition",
+    ),
+    "plan_phase_transition": (
+        "meta_flow.project.phase_transition",
+        "plan_phase_transition",
+    ),
+    "recover_phase_transition": (
+        "meta_flow.project.phase_transition",
+        "recover_phase_transition",
+    ),
 }
 
 __all__ = sorted(_EXPORTS)

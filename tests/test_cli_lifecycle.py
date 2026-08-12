@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from contextlib import redirect_stdout
 from io import StringIO
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from meta_flow import cli
 from meta_flow.installation.authorization import ClaimedAuthorization
 from meta_flow.installation.canonical import canonical_digest
 from meta_flow.installation.cli_executor import (
@@ -212,6 +215,41 @@ def test_diagnostics_are_ready_only_when_manifest_and_receipt_match() -> None:
     }
     assert missing["ready"] is False
     assert missing["findings"] == ["MANIFEST_MISSING", "RECEIPT_MISSING"]
+
+
+def test_version_reports_identity_readiness_separately_from_exact_delivery() -> None:
+    output = StringIO()
+    identity = {
+        "source": "checkout/meta-flow",
+        "version": "0.4.0",
+        "oid": "a" * 40,
+        "delivery_tree_digest": "b" * 64,
+        "rules_source_digest": "c" * 64,
+        "inventory_digest": "d" * 64,
+    }
+    installer = Path("/tmp/source/delivery/scripts/install.py")
+
+    with (
+        patch.object(cli, "_find_installer", return_value=installer),
+        patch(
+            "meta_flow.installation.identity.observe_checkout_source_identity",
+            return_value=identity,
+        ),
+        patch(
+            "meta_flow.installation.identity.observe_checkout_delivery_status",
+            return_value={
+                "worktree_clean": False,
+                "exact_commit_delivery": False,
+            },
+        ),
+        redirect_stdout(output),
+    ):
+        cli._run_version(["--format", "json"])
+
+    payload = json.loads(output.getvalue())
+    assert payload["ready"] is True
+    assert payload["worktree_clean"] is False
+    assert payload["exact_commit_delivery"] is False
 
 
 @pytest.mark.parametrize("surface", ["cli", "assets"])

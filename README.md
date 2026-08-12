@@ -212,6 +212,8 @@ meta-flow gate plan --profile process-lite --project-root .
 meta-flow governance init --project-root .
 meta-flow governance truth-map-check --project-root .
 meta-flow governance retention-check --project-root .
+meta-flow governance baseline-refresh --project-root . --project-id <project-id> --immutable-commit-role release_input=release:<oid> --immutable-commit-role process_input=process:<oid>
+meta-flow project phase-transition plan --project-root . --project-id <project-id> --from-phase-ref process/phases/<from>/PHASE.yaml --to-phase-ref process/phases/<to>/PHASE.yaml --closure-evidence-ref process/phases/<from>/PHASE-CLOSURE.json --effective-at <timestamp> --immutable-commit-role release_input=release:<oid> --immutable-commit-role process_input=process:<oid>
 meta-flow policy list --project-root .
 meta-flow policy check --artifact process/changes/summaries/CR-101.summary.json --project-root .
 meta-flow next
@@ -753,6 +755,7 @@ meta-flow check package-identity --project-root .
 meta-flow gate classify --changed-files README.md
 meta-flow governance truth-map-check --project-root .
 meta-flow governance retention-check --project-root .
+meta-flow governance baseline-refresh --project-root . --project-id <project-id> --immutable-commit-role release_input=release:<oid> --immutable-commit-role process_input=process:<oid>
 meta-flow policy list --project-root .
 ```
 

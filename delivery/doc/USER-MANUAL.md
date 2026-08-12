@@ -113,6 +113,73 @@ meta-flow project recover --project-root . \
 
 版本控制策略是：`.meta-flow/workspace.yaml` 属于发布仓机器真相源，必须提交；`.meta-flow/INSTALL-MANIFEST.yaml` 只记录本机项目级安装状态，必须 gitignore。工作区根 README 只作人类导航，不参与路由判定。
 
+### 0.3 长期治理基线投影
+
+active Phase 必须在 `result_refs` 中声明 `governance/GOVERNANCE-BASELINE.json`。该文件是由 native writer 管理的确定性投影，不应手工拼装。首次创建和后续刷新使用同一命令；默认行为与 `--dry-run` 都只输出计划，不写文件：
+
+```bash
+meta-flow governance baseline-refresh --project-root . --project-id <project-id> \
+  --immutable-commit-role release_input_baseline=release:<release-oid> \
+  --immutable-commit-role process_evidence_baseline=process:<process-oid>
+```
+
+计划输出包含 `plan_digest`、release/process HEAD OID、目标 `expected_preimage`、semantic digest 和 `planned_mutation_count`。确认计划后，apply 必须逐项回传这些观察值；任一声明、OID、plan digest 或目标 preimage 漂移都会在写入前阻断：
+
+```bash
+meta-flow governance baseline-refresh --project-root . --project-id <project-id> \
+  --immutable-commit-role release_input_baseline=release:<release-oid> \
+  --immutable-commit-role process_evidence_baseline=process:<process-oid> \
+  --apply \
+  --expected-plan-digest <plan-digest> \
+  --expected-release-oid <release-head-oid> \
+  --expected-process-oid <process-head-oid> \
+  --expected-preimage <absent-or-sha256>
+```
+
+writer 只对 `process/governance/GOVERNANCE-BASELINE.json` 做单文件原子替换；相同语义返回 `NOOP`、`mutation_count=0`，无需 inspect/recover。active Phase 未声明该 result ref、其他声明结果不存在、commit role 非法或不属于对应仓库历史时返回结构化 `BLOCKED`。
+
+### 0.4 Project / Phase 原生转换
+
+Phase 完成与下一 Phase 激活必须使用同一份七目标事务计划，不能依次手工修改 `PHASE.yaml`、`PROJECT.yaml`、治理基线与 State 投影。计划要求：from/to Phase 都由 Roadmap 声明；from Phase 的 Work 已终态；closure evidence 已由 from Phase 声明并存在于 process HEAD；to Phase 已声明 `governance/GOVERNANCE-BASELINE.json`；State v2 已初始化；全部事务目标路径无本地漂移。
+
+```bash
+meta-flow project phase-transition plan \
+  --project-root . \
+  --project-id <project-id> \
+  --from-phase-ref process/phases/<from>/PHASE.yaml \
+  --to-phase-ref process/phases/<to>/PHASE.yaml \
+  --closure-evidence-ref process/phases/<from>/PHASE-CLOSURE.json \
+  --effective-at <ISO-8601-with-timezone> \
+  --immutable-commit-role release_input=release:<release-oid> \
+  --immutable-commit-role process_input=process:<process-oid>
+```
+
+apply 必须回传计划中的 `plan_digest` 和两仓 HEAD OID：
+
+```bash
+meta-flow project phase-transition apply \
+  --project-root . \
+  --project-id <project-id> \
+  --from-phase-ref process/phases/<from>/PHASE.yaml \
+  --to-phase-ref process/phases/<to>/PHASE.yaml \
+  --closure-evidence-ref process/phases/<from>/PHASE-CLOSURE.json \
+  --effective-at <ISO-8601-with-timezone> \
+  --immutable-commit-role release_input=release:<release-oid> \
+  --immutable-commit-role process_input=process:<process-oid> \
+  --expected-plan-digest <plan-digest> \
+  --expected-release-oid <release-head-oid> \
+  --expected-process-oid <process-head-oid>
+```
+
+七个固定目标是 from/to `PHASE.yaml`、`PROJECT.yaml`、`GOVERNANCE-BASELINE.json`、`STATE.current.json`、`STATE.md` 与 `CURRENT.json`。单文件更新使用原子替换；整体是 journal 驱动、可检查、可恢复的逻辑事务，不宣称文件系统级多文件原子性。三份 State/CURRENT 目标必须通过 State projection 子事务更新，Phase writer 不得直接绕过 State transaction manifest。Phase 与 State writer lock 同时使用 create-only 身份文件和进程存活期 advisory lock：活跃 writer 不可被接管；进程退出后，`recover` 只接管与 journal 匹配或可证明尚未写入 PREPARED manifest 的遗留锁。Phase terminal journal 是恢复游标，不冻结七个 truth target；后续合法 native writer 更新目标后，旧 Phase journal 不得报 terminal generation drift。中断后先执行：
+
+```bash
+meta-flow project phase-transition inspect --project-root . --project-id <project-id>
+meta-flow project phase-transition recover --project-root . --project-id <project-id>
+```
+
+`PARTIAL` 或其他未终态 transaction 必须先恢复；即使新计划为相同 post-image，也必须先 inspect/recover，不能由 `NOOP` 绕过未决 journal。相同 post-image 且无未决 journal 时返回 `NOOP`、`mutation_count=0`。恢复不完整时，CLI 返回结构化 `PARTIAL` receipt；`mutation_count` 是恢复后仍与 frozen preimage 不同或无法验证的目标数，并列出 `attempted_refs`、`recovered_refs` 与 `unrecovered_refs`，不得统一报告为 0。
+
 旧 shared artifact 子目录采用只读来源索引，不调用 `project adopt`，也不复制旧 CR/CP/Story/ledger。成功执行 `project init --apply` 后、过程仓首次提交前，人工创建 `legacy/LEGACY-SOURCE.yaml`：
 
 ```yaml
@@ -299,6 +366,10 @@ meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action
 meta-flow version --format json
 meta-flow install qoder --scope project --project-dir /path/to/project
 ```
+
+`ready=true` 只表示 source identity 字段完整且可诊断，不等于当前 checkout 已形成不可变交付。
+必须同时检查 `worktree_clean=true` 与 `exact_commit_delivery=true`，才可以把 `oid` 解释为能够
+精确复现当前 provider bytes 的 delivery OID；dirty checkout 会明确返回这两个字段为 `false`。
 
 项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
 

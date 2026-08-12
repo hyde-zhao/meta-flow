@@ -4,6 +4,9 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from meta_flow.policies import governance
 from meta_flow.project import governance_projection
 
 
@@ -37,6 +40,45 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _bind(release: Path, process: Path, *, project_id: str = "demo") -> None:
+    _write(
+        release / ".meta-flow/workspace.yaml",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "layout_version": "independent-process-repo-v1",
+                "workflow_model": "vnext",
+                "project_id": project_id,
+                "repo_role": "release",
+                "route_mode": "sibling-binding",
+                "process_repo": {
+                    "anchor": "workspace_parent",
+                    "relative_path": process.name,
+                },
+            }
+        )
+        + "\n",
+    )
+    _write(
+        process / ".meta-flow-process.yaml",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "layout_version": "independent-process-repo-v1",
+                "workflow_model": "vnext",
+                "project_id": project_id,
+                "repo_role": "process",
+                "route_mode": "sibling-binding",
+                "release_repo": {
+                    "anchor": "workspace_parent",
+                    "relative_path": release.name,
+                },
+            }
+        )
+        + "\n",
+    )
+
+
 def _fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     release = tmp_path / "release"
     process = tmp_path / "process"
@@ -44,6 +86,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
     process.mkdir()
     _git(release, "init", "-b", "main")
     _git(process, "init", "-b", "main")
+    _bind(release, process)
     _write(release / "README.md", "# release\n")
     release_oid = _commit_all(release, "release baseline")
 
@@ -115,9 +158,7 @@ result_refs:
                 "oid": process_baseline_oid,
             },
         ],
-        "runtime_identity_roles": list(
-            governance_projection.RUNTIME_IDENTITY_ROLES
-        ),
+        "runtime_identity_roles": list(governance_projection.RUNTIME_IDENTITY_ROLES),
     }
     payload["semantic_digest"] = governance_projection.semantic_digest(payload)
     projection_path.write_text(
@@ -126,6 +167,27 @@ result_refs:
     )
     _commit_all(process, "publish governance projection")
     return release, process, payload
+
+
+def _writer_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, tuple[governance_projection.ImmutableCommitRole, ...]]:
+    release, process, _payload = _fixture(tmp_path)
+    (process / governance_projection.GOVERNANCE_PROJECTION_REL).unlink()
+    process_oid = _commit_all(process, "remove manually maintained projection")
+    roles = (
+        governance_projection.ImmutableCommitRole(
+            "release_input_baseline",
+            "release",
+            _git(release, "rev-parse", "HEAD"),
+        ),
+        governance_projection.ImmutableCommitRole(
+            "process_evidence_baseline",
+            "process",
+            process_oid,
+        ),
+    )
+    return release, process, roles
 
 
 def test_governance_projection_rebuilds_declared_truth_and_runtime_identity(
@@ -150,9 +212,7 @@ def test_governance_projection_blocks_phase_status_drift(tmp_path: Path) -> None
     release, process, _payload = _fixture(tmp_path)
     phase = process / "phases/P1/PHASE.yaml"
     phase.write_text(
-        phase.read_text(encoding="utf-8").replace(
-            "status: completed", "status: planned"
-        ),
+        phase.read_text(encoding="utf-8").replace("status: completed", "status: planned"),
         encoding="utf-8",
     )
 
@@ -166,9 +226,7 @@ def test_governance_projection_blocks_duplicate_active_phase(tmp_path: Path) -> 
     release, process, _payload = _fixture(tmp_path)
     phase = process / "phases/P1/PHASE.yaml"
     phase.write_text(
-        phase.read_text(encoding="utf-8").replace(
-            "status: completed", "status: active"
-        ),
+        phase.read_text(encoding="utf-8").replace("status: completed", "status: active"),
         encoding="utf-8",
     )
 
@@ -198,3 +256,215 @@ def test_governance_projection_blocks_repository_role_mixup(tmp_path: Path) -> N
         "immutable commit role release_input_baseline does not exist in process" in error
         for error in result["errors"]
     )
+
+
+def test_governance_baseline_refresh_plan_is_zero_write_and_supports_first_create(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _writer_fixture(tmp_path)
+    target = process / governance_projection.GOVERNANCE_PROJECTION_REL
+
+    plan = governance_projection.plan_governance_baseline_refresh(
+        release,
+        process,
+        project_id="demo",
+        immutable_commit_roles=roles,
+    )
+
+    assert plan.decision == "READY"
+    assert plan.target_preimage == "absent"
+    assert plan.planned_mutation_count == 1
+    assert plan.as_dict()["mutation_count"] == 0
+    assert plan.as_dict()["transaction"] == {
+        "strategy": "single-file-atomic-replace",
+        "recovery_required": False,
+    }
+    assert not target.exists()
+
+
+def test_governance_baseline_refresh_apply_and_noop_are_typed_and_validated(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _writer_fixture(tmp_path)
+    plan = governance_projection.plan_governance_baseline_refresh(
+        release,
+        process,
+        project_id="demo",
+        immutable_commit_roles=roles,
+    )
+
+    receipt = governance_projection.apply_governance_baseline_refresh(
+        plan,
+        expected_plan_digest=plan.plan_digest,
+        expected_release_oid=plan.release_oid,
+        expected_process_oid=plan.process_oid,
+        expected_preimage=plan.target_preimage,
+    )
+
+    assert receipt["decision"] == "PASS"
+    assert receipt["disposition"] == "APPLIED"
+    assert receipt["mutation_count"] == 1
+    assert (
+        governance_projection.validate_governance_projection(release, process)["decision"] == "PASS"
+    )
+
+    noop = governance_projection.plan_governance_baseline_refresh(
+        release,
+        process,
+        project_id="demo",
+        immutable_commit_roles=roles,
+    )
+    assert noop.decision == "NOOP"
+    before = (process / governance_projection.GOVERNANCE_PROJECTION_REL).read_bytes()
+    noop_receipt = governance_projection.apply_governance_baseline_refresh(
+        noop,
+        expected_plan_digest=noop.plan_digest,
+        expected_release_oid=noop.release_oid,
+        expected_process_oid=noop.process_oid,
+        expected_preimage=noop.target_preimage,
+    )
+    assert noop_receipt["disposition"] == "NOOP"
+    assert noop_receipt["mutation_count"] == 0
+    assert (process / governance_projection.GOVERNANCE_PROJECTION_REL).read_bytes() == before
+
+
+def test_governance_baseline_refresh_rejects_source_drift_before_write(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _writer_fixture(tmp_path)
+    plan = governance_projection.plan_governance_baseline_refresh(
+        release,
+        process,
+        project_id="demo",
+        immutable_commit_roles=roles,
+    )
+    phase = process / "phases/P1/PHASE.yaml"
+    phase.write_text(
+        phase.read_text(encoding="utf-8").replace("status: completed", "status: planned"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        governance_projection.GovernanceProjectionApplyError,
+        match="drifted after planning",
+    ):
+        governance_projection.apply_governance_baseline_refresh(
+            plan,
+            expected_plan_digest=plan.plan_digest,
+            expected_release_oid=plan.release_oid,
+            expected_process_oid=plan.process_oid,
+            expected_preimage=plan.target_preimage,
+        )
+
+    assert not (process / governance_projection.GOVERNANCE_PROJECTION_REL).exists()
+
+
+def test_governance_baseline_refresh_blocks_missing_active_phase_result_ref(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _writer_fixture(tmp_path)
+    phase = process / "phases/P2/PHASE.yaml"
+    phase.write_text(
+        phase.read_text(encoding="utf-8").replace("  - governance/GOVERNANCE-BASELINE.json\n", ""),
+        encoding="utf-8",
+    )
+
+    plan = governance_projection.plan_governance_baseline_refresh(
+        release,
+        process,
+        project_id="demo",
+        immutable_commit_roles=roles,
+    )
+
+    assert plan.decision == "BLOCKED"
+    assert plan.planned_mutation_count == 0
+    assert any("must declare" in error for error in plan.errors)
+
+
+def test_governance_baseline_refresh_cli_emits_plan_and_requires_expected_inputs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, process, roles = _writer_fixture(tmp_path)
+    role_args = [
+        value
+        for role in roles
+        for value in (
+            "--immutable-commit-role",
+            f"{role.role}={role.repository}:{role.oid}",
+        )
+    ]
+
+    exit_code = governance.main(
+        [
+            "baseline-refresh",
+            "--project-root",
+            str(release),
+            "--project-id",
+            "demo",
+            *role_args,
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["kind"] == "GovernanceBaselineRefreshPlanV1"
+    assert payload["decision"] == "READY"
+    assert payload["mutation_count"] == 0
+    assert not (process / governance_projection.GOVERNANCE_PROJECTION_REL).exists()
+
+    apply_code = governance.main(
+        [
+            "baseline-refresh",
+            "--project-root",
+            str(release),
+            "--project-id",
+            "demo",
+            *role_args,
+            "--apply",
+            "--expected-plan-digest",
+            payload["plan_digest"],
+            "--expected-release-oid",
+            payload["expected_oids"]["release_head"],
+            "--expected-process-oid",
+            payload["expected_oids"]["process_head"],
+            "--expected-preimage",
+            payload["expected_preimage"],
+        ]
+    )
+    applied = json.loads(capsys.readouterr().out)
+    assert apply_code == 0
+    assert applied["receipt"]["disposition"] == "APPLIED"
+    assert applied["receipt"]["mutation_count"] == 1
+
+
+def test_governance_baseline_refresh_cli_preserves_route_error_code(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, _process, roles = _writer_fixture(tmp_path)
+    role_args = [
+        value
+        for role in roles
+        for value in (
+            "--immutable-commit-role",
+            f"{role.role}={role.repository}:{role.oid}",
+        )
+    ]
+
+    exit_code = governance.main(
+        [
+            "baseline-refresh",
+            "--project-root",
+            str(release),
+            "--project-id",
+            "other",
+            *role_args,
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 2
+    assert payload["decision"] == "BLOCKED"
+    assert payload["error_code"] == "route_project_mismatch"
+    assert payload["mutation_count"] == 0

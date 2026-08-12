@@ -113,7 +113,18 @@ def test_repository_r13_incremental_hard_gate_is_currently_pass() -> None:
     assert report["full_source_baseline"]["decision"] == "PASS"
     assert report["full_source_baseline"]["ambiguous_writer_call_count"] == 0
     assert report["unresolved_unallowlisted_count"] == 0
-    assert report["allowlisted_dynamic_writer_call_count"] == 0
+    assert report["allowlisted_dynamic_writer_call_count"] == 6
+    qualified_calls = [item for item in report["writer_calls"] if item["target_kind"] == "dynamic"]
+    assert len(qualified_calls) == 6
+    assert {item["ref"] for item in qualified_calls} == {
+        "meta_flow/state/projection_transaction.py"
+    }
+    assert {item["function"] for item in qualified_calls} == {
+        "_platform_lock",
+        "_acquire_lock",
+        "_claim_lock",
+        "_release_lock",
+    }
 
 
 def test_repository_full_writer_baseline_is_currently_classified() -> None:
@@ -174,8 +185,7 @@ def test_full_writer_baseline_blocks_untyped_writer_like_method(tmp_path: Path) 
     source = root / "meta_flow/ambiguous.py"
     source.parent.mkdir(parents=True)
     source.write_text(
-        "def mutate(candidate):\n"
-        "    candidate.remove('unknown')\n",
+        "def mutate(candidate):\n    candidate.remove('unknown')\n",
         encoding="utf-8",
     )
 
@@ -183,9 +193,7 @@ def test_full_writer_baseline_blocks_untyped_writer_like_method(tmp_path: Path) 
 
     assert report["decision"] == "BLOCKED"
     assert report["ambiguous_writer_call_count"] == 1
-    assert report["ambiguous_calls"][0]["classification"] == (
-        "ambiguous-non-module-writer-method"
-    )
+    assert report["ambiguous_calls"][0]["classification"] == ("ambiguous-non-module-writer-method")
 
 
 def test_full_writer_baseline_blocks_dynamic_open_mode(tmp_path: Path) -> None:
@@ -202,9 +210,7 @@ def test_full_writer_baseline_blocks_dynamic_open_mode(tmp_path: Path) -> None:
     report = scan_full_writer_baseline(root, source_roots=("meta_flow",))
 
     assert report["decision"] == "BLOCKED"
-    assert report["ambiguous_calls"][0]["classification"] == (
-        "ambiguous-dynamic-open-mode"
-    )
+    assert report["ambiguous_calls"][0]["classification"] == ("ambiguous-dynamic-open-mode")
 
 
 def test_full_writer_baseline_stops_at_file_budget(
@@ -319,8 +325,7 @@ def test_extended_file_writer_primitives_are_detected(tmp_path: Path) -> None:
 def test_string_replace_on_path_named_value_is_not_a_file_writer(tmp_path: Path) -> None:
     root, baseline = _repo(tmp_path)
     (root / "meta_flow/new.py").write_text(
-        "def normalize(rel_path: str) -> str:\n"
-        "    return rel_path.replace('\\\\', '/')\n",
+        "def normalize(rel_path: str) -> str:\n    return rel_path.replace('\\\\', '/')\n",
         encoding="utf-8",
     )
 
@@ -400,6 +405,4 @@ def test_allowlist_rejects_unlisted_stale_missing_or_drifted_evidence(
 def test_non_ancestor_baseline_is_blocked(tmp_path: Path) -> None:
     root, _baseline = _repo(tmp_path)
 
-    assert check_baseline_ancestor(root, "0" * 40) == (
-        "DETECTOR_BASELINE_NOT_ANCESTOR",
-    )
+    assert check_baseline_ancestor(root, "0" * 40) == ("DETECTOR_BASELINE_NOT_ANCESTOR",)

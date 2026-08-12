@@ -21,6 +21,7 @@ from meta_flow.installation.contracts import (
 )
 from meta_flow.installation.identity import (
     normalize_component,
+    observe_checkout_delivery_status,
     resolve_source_identity,
     validate_source_identity,
 )
@@ -187,6 +188,41 @@ def test_resolve_source_identity_is_exact_and_returns_a_copy() -> None:
     with pytest.raises(InstallationContractError) as exc_info:
         resolve_source_identity(expected, source_identity(version="0.4.1"))
     assert exc_info.value.code is ContractErrorCode.IDENTITY_CONFLICT
+
+
+def test_checkout_delivery_status_distinguishes_clean_and_dirty_tree(tmp_path) -> None:
+    root = tmp_path / "checkout"
+    root.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    tracked = root / "tracked.txt"
+    tracked.write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Meta Flow Test",
+            "-c",
+            "user.email=meta-flow@example.invalid",
+            "commit",
+            "-m",
+            "baseline",
+        ],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+    assert observe_checkout_delivery_status(root) == {
+        "worktree_clean": True,
+        "exact_commit_delivery": True,
+    }
+
+    (root / "prospective.txt").write_text("dirty\n", encoding="utf-8")
+    assert observe_checkout_delivery_status(root) == {
+        "worktree_clean": False,
+        "exact_commit_delivery": False,
+    }
 
 
 def test_equivalent_unordered_inputs_have_byte_identical_plan_and_digest() -> None:

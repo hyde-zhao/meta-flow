@@ -11,7 +11,7 @@ status: active
 
 ## 目标
 
-校验安装脚本计划写入的目标目录是否符合 `delivery/doc/PLATFORM-CONTRACTS.yaml` 与 `PLATFORM-INSTALL-SPEC.md` 规范，包括目录结构、主入口文件、命名规范、路径组件冲突、Codex 禁止路径、OpenClaw manifest 完整性和 production 交付路由。
+校验安装脚本计划写入的目标目录是否符合 `delivery/doc/PLATFORM-CONTRACTS.yaml` 的机器契约；`delivery/doc/USER-MANUAL.md` 仅作为安装行为的可读说明。校验范围包括目录结构、主入口文件、命名规范、路径组件冲突、Codex 禁止路径、OpenClaw manifest 完整性和 production 交付路由。
 
 ## 适用范围
 
@@ -22,7 +22,7 @@ status: active
 
 ### 维度 1：目录结构（BLOCKING）
 
-按 `delivery/doc/PLATFORM-CONTRACTS.yaml` 中各平台的规范目录树逐一比对；`PLATFORM-INSTALL-SPEC.md` 仅作为可读说明。
+按 `delivery/doc/PLATFORM-CONTRACTS.yaml` 中各平台的规范目录树逐一比对；`delivery/doc/USER-MANUAL.md` 仅作为安装命令和行为的可读说明，不得覆盖机器契约。
 
 | 平台 | 项目级必须存在的路径 | 用户级必须存在的路径 |
 |------|----------------------|----------------------|
@@ -128,7 +128,7 @@ meta-flow install codex --scope project --project-dir <target> --component agent
 ## 执行步骤
 
 1. 确定目标平台、scope 与目标路径
-2. 读取 `delivery/doc/PLATFORM-CONTRACTS.yaml` 获取路径规则；读取 `PLATFORM-INSTALL-SPEC.md` 作为说明性对照
+2. 读取 `delivery/doc/PLATFORM-CONTRACTS.yaml` 获取路径规则；读取 `delivery/doc/USER-MANUAL.md` 作为说明性对照
 3. 校验安装脚本默认参数与 DryRun 输出
 4. 校验目标目录结构与关键入口文件
 5. 构造路径组件被文件占用的负向用例，确认安装器 fail fast 且无 traceback

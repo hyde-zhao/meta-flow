@@ -22,7 +22,9 @@ def test_state_projection_transaction_commits_exact_file_set(tmp_path: Path) -> 
 
     assert result["decision"] == "PASS"
     assert result["mutation_count"] == 3
-    assert projection_transaction.inspect_state_projection_transaction(tmp_path)["decision"] == "PASS"
+    assert (
+        projection_transaction.inspect_state_projection_transaction(tmp_path)["decision"] == "PASS"
+    )
     assert (tmp_path / "process/STATE.md").read_text(encoding="utf-8") == "state=after\n"
 
 
@@ -48,11 +50,20 @@ def test_hard_interrupt_is_detected_and_recoverable(tmp_path: Path) -> None:
     inspection = projection_transaction.inspect_state_projection_transaction(tmp_path)
     assert inspection["decision"] == "BLOCKED"
     assert inspection["state"] == "APPLYING"
+    manifest = json.loads(
+        (tmp_path / projection_transaction.MANIFEST_REL).read_text(encoding="utf-8")
+    )
+    stale_lock = tmp_path / projection_transaction.LOCK_REL
+    stale_lock.write_text(manifest["transaction_id"] + "\n", encoding="utf-8")
 
     recovered = projection_transaction.recover_state_projection_transaction(tmp_path)
 
     assert recovered["decision"] == "RECOVERED"
-    assert projection_transaction.inspect_state_projection_transaction(tmp_path)["decision"] == "PASS"
+    assert recovered["lock_recovered"] is True
+    assert not stale_lock.exists()
+    assert (
+        projection_transaction.inspect_state_projection_transaction(tmp_path)["decision"] == "PASS"
+    )
     assert json.loads(
         (tmp_path / "process/state/STATE.current.json").read_text(encoding="utf-8")
     ) == {"state": "before"}
@@ -110,3 +121,40 @@ def test_writer_lock_identity_drift_is_not_silently_deleted(tmp_path: Path) -> N
 
     lock_path = tmp_path / projection_transaction.LOCK_REL
     assert lock_path.read_text(encoding="utf-8") == "foreign-owner\n"
+
+
+def test_recovery_does_not_steal_live_state_writer_lock(tmp_path: Path) -> None:
+    projection_transaction.apply_state_projection_transaction(tmp_path, _targets("before"))
+    manifest_path = tmp_path / projection_transaction.MANIFEST_REL
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["state"] = "APPLYING"
+    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    lock_path = tmp_path / projection_transaction.LOCK_REL
+    handle = projection_transaction.acquire_transaction_lock(
+        lock_path,
+        manifest["transaction_id"],
+    )
+
+    try:
+        with pytest.raises(ValueError, match="active writer"):
+            projection_transaction.recover_state_projection_transaction(tmp_path)
+        assert lock_path.exists()
+    finally:
+        projection_transaction.release_transaction_lock(handle)
+
+
+def test_recovery_claims_orphan_lock_created_before_manifest(tmp_path: Path) -> None:
+    lock_path = projection_transaction.state_projection_lock_path(tmp_path)
+    handle = projection_transaction.acquire_transaction_lock(lock_path, "a" * 32)
+    # 模拟进程在 PREPARED manifest 写入前退出：OS 释放 advisory lock，锁文件仍在。
+    handle.stream.close()
+
+    assert (
+        projection_transaction.inspect_state_projection_transaction(tmp_path)["decision"]
+        == "BLOCKED"
+    )
+    recovered = projection_transaction.recover_state_projection_transaction(tmp_path)
+
+    assert recovered["decision"] == "NO_CHANGE"
+    assert recovered["lock_recovered"] is True
+    assert not lock_path.exists()

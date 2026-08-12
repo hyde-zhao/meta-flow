@@ -715,6 +715,38 @@ def _state_dry_run_payload(
     }
 
 
+def _state_dry_run_blocked_payload(
+    *,
+    operation: str,
+    target_refs: list[str],
+    error_code: str,
+    error: str,
+    next_action: str,
+) -> dict[str, Any]:
+    """返回稳定、零写入且不包含物理路径的 dry-run 阻断结果。"""
+
+    semantic_input = {
+        "operation": operation,
+        "decision": "BLOCKED",
+        "error_code": error_code,
+        "target_refs": target_refs,
+    }
+    return {
+        "schema_version": 1,
+        "kind": STATE_DRY_RUN_KIND,
+        "operation": operation,
+        "decision": "BLOCKED",
+        "dry_run": True,
+        "mutation_count": 0,
+        "planned_mutation_count": 0,
+        "target_refs": target_refs,
+        "semantic_digest": _sha256_json(semantic_input),
+        "error_code": error_code,
+        "errors": [error],
+        "next_action": next_action,
+    }
+
+
 def plan_init_current_state(
     project_root: Path,
     *,
@@ -1535,7 +1567,30 @@ def _current_entry_refresh_plan(
 def plan_current_entry_refresh(project_root: Path) -> dict[str, Any]:
     """Plan ``state current-refresh`` from read-only observations."""
 
-    planned_targets, target_refs, semantic_input = _current_entry_refresh_plan(project_root)
+    target_refs = [
+        "process/.gitignore",
+        STATE_CURRENT_ENTRY_REL.as_posix(),
+        *(
+            (STATE_CURRENT_DIR_REL / suffix).as_posix()
+            for name in CURRENT_ALIAS_NAMES
+            for suffix in (f"{name}.ref", name)
+        ),
+    ]
+    try:
+        planned_targets, target_refs, semantic_input = _current_entry_refresh_plan(
+            project_root
+        )
+    except FileNotFoundError:
+        return _state_dry_run_blocked_payload(
+            operation="state.current-refresh",
+            target_refs=target_refs,
+            error_code="state_current_missing",
+            error="process/state/STATE.current.json is missing",
+            next_action=(
+                "run meta-flow state init --project-root . --project-id <project-id> "
+                "before state current-refresh"
+            ),
+        )
     return _state_dry_run_payload(
         operation="state.current-refresh",
         planned_targets=planned_targets,
@@ -2728,14 +2783,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command == "current-refresh":
         if parsed.dry_run:
+            plan = plan_current_entry_refresh(project_root)
             print(
                 json.dumps(
-                    plan_current_entry_refresh(project_root),
+                    plan,
                     ensure_ascii=False,
                     sort_keys=True,
                 )
             )
-            return 0
+            return 2 if plan["decision"] == "BLOCKED" else 0
         path = refresh_current_entry(project_root)
         print(f"wrote: {path}")
         return 0

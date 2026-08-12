@@ -8,7 +8,9 @@ version = "0.4.0"
 description = "Meta Flow workflow asset installer and delivery package"
 readme = "delivery/README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0.2,<7",
+]
 
 [project.scripts]
 meta-flow = "meta_flow.cli:main"

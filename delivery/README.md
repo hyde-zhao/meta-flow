@@ -328,9 +328,10 @@ adapter，Windows 未资格化。
 - `recover --action inspect` 只读；`resume|rollback|abandon` 不能复用原授权，
   必须先重建 `lifecycle.recover` plan 并取得新的 single-use typed
   authorization。
-- `version --format json` 输出 version、exact OID、delivery tree、Rules
-  source 和 inventory digest；不完整事实明确返回
-  `IDENTITY_INCOMPLETE`。
+- `version --format json` 输出 version、OID、delivery tree、Rules source、inventory
+  digest、`worktree_clean` 与 `exact_commit_delivery`。`ready=true` 只表示 identity
+  可诊断；只有后两个字段同时为 true，当前 OID 才能解释为精确复现当前 bytes 的
+  immutable delivery。不完整事实明确返回 `IDENTITY_INCOMPLETE`。
 - v1→v2 只接受可验证 source/target/platform/scope/ownership；backup 必须
   在 v2 target mutation 前可读，missing/corrupt/unknown 只产生 BLOCKED
   candidate，mutation=0。

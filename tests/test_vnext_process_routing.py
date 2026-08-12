@@ -725,3 +725,23 @@ def test_adoption_readiness_recognizes_sibling_binding_without_link(
     assert any("route_mode=sibling-binding" in message for message in workspace_item.messages)
     assert any(str(process) in message for message in workspace_item.messages)
     assert not (release / "process").exists()
+    native_items = {
+        item.item_id: item
+        for item in items
+        if item.item_id
+        in {"state-v2", "workflow-ledgers", "human-gate-readiness"}
+    }
+    assert "meta-flow state init" in native_items["state-v2"].next_action
+    assert "meta-flow state init" in native_items["workflow-ledgers"].next_action
+    assert "meta-flow cr bootstrap" in native_items[
+        "human-gate-readiness"
+    ].next_action
+    assert "meta-flow context build" in native_items[
+        "human-gate-readiness"
+    ].next_action
+    assert "meta-flow check human-gate" in native_items[
+        "human-gate-readiness"
+    ].next_action
+    assert all(
+        "workspace bootstrap" not in item.next_action for item in native_items.values()
+    )

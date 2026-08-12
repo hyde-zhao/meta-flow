@@ -394,6 +394,7 @@ def _print_help() -> None:
         "  meta-flow gate classify --changed-files README.md\n"
         "  meta-flow route plan --cr-type process --gate-profile process-lite --cr-trait '{\"uses_existing_evidence_only\": true}'\n"
         "  meta-flow governance truth-map-check --project-root .\n"
+        "  meta-flow governance baseline-refresh --project-root . --project-id <project-id> --immutable-commit-role release_input=release:<oid> --immutable-commit-role process_input=process:<oid>\n"
         "  meta-flow policy list --project-root .\n"
         "  meta-flow project scaffold --project-root .\n"
         "  meta-flow project check --project-root .\n"
@@ -521,16 +522,21 @@ def _run_version(args: list[str]) -> None:
     parsed = parser.parse_args(args)
 
     from meta_flow import __version__
-    from meta_flow.installation.identity import observe_checkout_source_identity
+    from meta_flow.installation.identity import (
+        observe_checkout_delivery_status,
+        observe_checkout_source_identity,
+    )
 
     try:
         installer = _find_installer()
         repo_root = installer.parents[2]
         identity = observe_checkout_source_identity(repo_root)
+        delivery_status = observe_checkout_delivery_status(repo_root)
         payload: dict[str, object] = {
             "ready": True,
             "status": "READY",
             **identity,
+            **delivery_status,
         }
     except (OSError, ValueError) as exc:
         payload = {
@@ -542,6 +548,8 @@ def _run_version(args: list[str]) -> None:
             "delivery_tree_digest": "",
             "rules_source_digest": "",
             "inventory_digest": "",
+            "worktree_clean": False,
+            "exact_commit_delivery": False,
             "findings": [type(exc).__name__],
         }
     if parsed.format == "json":
@@ -551,6 +559,8 @@ def _run_version(args: list[str]) -> None:
     print(f"status: {payload['status']}")
     print(f"source: {payload['source']}")
     print(f"git_oid: {payload['oid'] or '-'}")
+    print(f"worktree_clean: {str(payload['worktree_clean']).lower()}")
+    print(f"exact_commit_delivery: {str(payload['exact_commit_delivery']).lower()}")
     print(f"delivery_tree_digest: {payload['delivery_tree_digest'] or '-'}")
 
 
@@ -1146,6 +1156,7 @@ def _run_project(args: list[str]) -> None:
             "  query     Read at most five directly referenced Project/Phase/Work objects.\n"
             "  resolve-ref  Resolve one process/... logical ref through the vNext binding.\n"
             "  scaffold  Preview or apply process/project/PROJECT.current.json scaffold.\n"
+            "  phase-transition  Plan/apply/inspect/recover one durable Project/Phase transition.\n"
             "  check     Validate vNext binding when present; otherwise validate legacy project governance.\n\n"
             "Examples:\n"
             "  meta-flow project init --project-root . --project-id demo\n"
@@ -1158,6 +1169,7 @@ def _run_project(args: list[str]) -> None:
             "  meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yaml --format json\n"
             "  meta-flow project scaffold --project-root .\n"
             "  meta-flow project scaffold --project-root . --apply\n"
+            "  meta-flow project phase-transition plan --project-root . --project-id demo --from-phase-ref process/phases/P1/PHASE.yaml --to-phase-ref process/phases/P2/PHASE.yaml --closure-evidence-ref process/phases/P1/CLOSURE.json --effective-at 2026-01-01T00:00:00Z --immutable-commit-role release_input=release:<oid> --immutable-commit-role process_input=process:<oid>\n"
             "  meta-flow project check --project-root .\n"
         )
         return
@@ -1191,6 +1203,10 @@ def _run_project(args: list[str]) -> None:
         from meta_flow.project import scaffold
 
         raise SystemExit(scaffold.main(forwarded))
+    if command == "phase-transition":
+        from meta_flow.project import phase_transition
+
+        raise SystemExit(phase_transition.main(forwarded))
     if command == "check":
         parser = argparse.ArgumentParser(add_help=False)
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -1198,12 +1214,17 @@ def _run_project(args: list[str]) -> None:
         if (parsed.project_root.resolve() / ".meta-flow" / "workspace.yaml").is_file():
             from meta_flow.project import onboarding
 
-            raise SystemExit(onboarding.status_main(forwarded))
+            raise SystemExit(
+                onboarding.status_main(
+                    forwarded,
+                    prog="meta-flow project check",
+                )
+            )
         from meta_flow.project import state
 
         raise SystemExit(state.main(forwarded))
     raise SystemExit(
-        f"未知 project 命令: {command}. 目前支持: init, adopt, recover, status, query, resolve-ref, scaffold, check"
+        f"未知 project 命令: {command}. 目前支持: init, adopt, recover, status, query, resolve-ref, scaffold, phase-transition, check"
     )
 
 

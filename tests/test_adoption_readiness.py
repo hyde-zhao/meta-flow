@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -94,7 +95,148 @@ def write_quality_fixture(process_root: Path) -> None:
     )
 
 
+def write_gate_route_fixture(
+    process_root: Path,
+    *,
+    active_change: str = "CR-001",
+    human_gate: str = "required",
+) -> None:
+    state = process_root / "state/STATE.current.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(
+        json.dumps({"active_change": active_change, "pending_gate": None}) + "\n",
+        encoding="utf-8",
+    )
+    cr_path = process_root / "changes/CR-001.md"
+    route_path = process_root / "routes/CR-001.route-plan.json"
+    cr_path.parent.mkdir(parents=True, exist_ok=True)
+    route_path.parent.mkdir(parents=True, exist_ok=True)
+    cr_path.write_text(
+        """---
+schema_version: 1
+kind: cr
+cr_id: CR-001
+route_plan_ref: process/routes/CR-001.route-plan.json
+---
+""",
+        encoding="utf-8",
+    )
+    route_path.write_text(
+        json.dumps(
+            {
+                "decision": "PASS",
+                "checkpoint_applicability": {
+                    "CP2": {
+                        "applies": True,
+                        "decision": "REQUIRED",
+                        "human_gate": human_gate,
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    item = {
+        "id": "CR-001",
+        "cr_type": "process",
+        "title": "fixture",
+        "lifecycle_status": "active",
+        "readiness_status": "READY",
+        "gate_status": "cp2_pending",
+        "formal_cr_path": "process/changes/CR-001.md",
+        "summary_ref": "process/changes/summaries/CR-001.summary.json",
+    }
+    semantic = {"schema_version": 1, "items": [item]}
+    digest = hashlib.sha256(
+        json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    (process_root / "changes/CR-INDEX.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": "2026-08-12T00:00:00Z",
+                "semantic_digest": digest,
+                "items": [item],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 class AdoptionReadinessTests(unittest.TestCase):
+    def test_human_gate_dirs_are_on_demand_before_g2(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = root / "process"
+            process.mkdir()
+
+            item = adoption_readiness._human_gate_item(
+                root,
+                process,
+                binding_aware=True,
+            )
+
+            self.assertEqual("WARN", item.status)
+            self.assertIn("meta-flow cr bootstrap", item.next_action)
+            self.assertNotIn("workspace bootstrap", item.next_action)
+            self.assertTrue(any("on-demand" in message for message in item.messages))
+
+    def test_human_gate_dirs_fail_when_active_route_requires_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = root / "process"
+            process.mkdir()
+            write_gate_route_fixture(process, human_gate="required")
+
+            item = adoption_readiness._human_gate_item(
+                root,
+                process,
+                binding_aware=True,
+            )
+
+            self.assertEqual("FAIL", item.status)
+            self.assertTrue(any("requires a human gate" in message for message in item.messages))
+            self.assertIn("meta-flow context build", item.next_action)
+            self.assertIn("meta-flow check human-gate", item.next_action)
+
+    def test_human_gate_dirs_warn_when_active_route_has_no_required_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = root / "process"
+            process.mkdir()
+            write_gate_route_fixture(process, human_gate="none")
+
+            item = adoption_readiness._human_gate_item(
+                root,
+                process,
+                binding_aware=True,
+            )
+
+            self.assertEqual("WARN", item.status)
+            self.assertTrue(
+                any("no applicable required human gate" in message for message in item.messages)
+            )
+
+    def test_human_gate_truth_conflict_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = root / "process"
+            process.mkdir()
+            write_gate_route_fixture(process, active_change="CR-002")
+
+            item = adoption_readiness._human_gate_item(
+                root,
+                process,
+                binding_aware=True,
+            )
+
+            self.assertEqual("FAIL", item.status)
+            self.assertTrue(any("differ" in message for message in item.messages))
+
     def test_adoption_doctor_fails_on_cr_index_semantic_digest_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

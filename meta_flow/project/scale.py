@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from meta_flow.policies import gate_profiles
 
@@ -33,6 +37,105 @@ AUTHORIZATION_KEYWORDS = (
     "gate_policy_mutation",
     "write_gate_profiles",
 )
+
+
+def _strip_comment(line: str) -> str:
+    """兼容少数 frontmatter 调用方的轻量行预处理。"""
+
+    in_quote: str | None = None
+    for index, char in enumerate(line):
+        if char in {"'", '"'}:
+            in_quote = None if in_quote == char else char
+        if char == "#" and in_quote is None:
+            return line[:index]
+    return line
+
+
+def _parse_legacy_scalar(value: str) -> Any:
+    text = value.strip()
+    if text == "":
+        return ""
+    if text in {"[]", "{}"}:
+        return [] if text == "[]" else {}
+    if text in {"true", "false"}:
+        return text == "true"
+    if text in {"null", "~"}:
+        return None
+    if (text.startswith('"') and text.endswith('"')) or (
+        text.startswith("'") and text.endswith("'")
+    ):
+        return text[1:-1]
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            return json.loads(text.replace("'", '"'))
+        except json.JSONDecodeError:
+            inner = text[1:-1].strip()
+            return [
+                piece.strip().strip('"').strip("'")
+                for piece in inner.split(",")
+                if piece.strip()
+            ]
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
+def _parse_yaml_lines(
+    lines: list[tuple[int, str]],
+    index: int,
+    indent: int,
+) -> tuple[Any, int]:
+    """保留给受控 frontmatter parser；canonical 文件读取使用 SafeLoader。"""
+
+    if index >= len(lines):
+        return {}, index
+    if lines[index][1].startswith("- "):
+        values: list[Any] = []
+        while index < len(lines) and lines[index][0] == indent and lines[index][1].startswith("- "):
+            rest = lines[index][1][2:].strip()
+            index += 1
+            if rest == "":
+                nested, index = _parse_yaml_lines(lines, index, indent + 2)
+                values.append(nested)
+            elif ":" in rest:
+                key, raw_value = rest.split(":", 1)
+                item: dict[str, Any] = {}
+                if raw_value.strip():
+                    item[key.strip()] = _parse_legacy_scalar(raw_value)
+                else:
+                    nested, index = _parse_yaml_lines(lines, index, indent + 2)
+                    item[key.strip()] = nested
+                while index < len(lines) and lines[index][0] > indent:
+                    child_indent, child_text = lines[index]
+                    if child_indent < indent + 2 or child_text.startswith("- "):
+                        break
+                    child_key, child_raw = child_text.split(":", 1)
+                    index += 1
+                    if child_raw.strip():
+                        item[child_key.strip()] = _parse_legacy_scalar(child_raw)
+                    else:
+                        nested, index = _parse_yaml_lines(lines, index, child_indent + 2)
+                        item[child_key.strip()] = nested
+                values.append(item)
+            else:
+                values.append(_parse_legacy_scalar(rest))
+        return values, index
+    values_dict: dict[str, Any] = {}
+    while index < len(lines) and lines[index][0] == indent and not lines[index][1].startswith("- "):
+        text = lines[index][1]
+        if ":" not in text:
+            raise ValueError(f"invalid YAML line: {text}")
+        key, raw_value = text.split(":", 1)
+        index += 1
+        if raw_value.strip():
+            values_dict[key.strip()] = _parse_legacy_scalar(raw_value)
+        elif index < len(lines) and lines[index][0] > indent:
+            nested, index = _parse_yaml_lines(lines, index, lines[index][0])
+            values_dict[key.strip()] = nested
+        else:
+            values_dict[key.strip()] = {}
+    return values_dict, index
 
 
 @dataclass(frozen=True)
@@ -68,109 +171,80 @@ def add_finding(
     findings.append(ProjectFinding(severity=severity, code=code, message=message, key=key))
 
 
-def _strip_comment(line: str) -> str:
-    in_quote: str | None = None
-    for index, char in enumerate(line):
-        if char in {"'", '"'}:
-            in_quote = None if in_quote == char else char
-        if char == "#" and in_quote is None:
-            return line[:index]
-    return line
+class _JsonCompatibleSafeLoader(yaml.SafeLoader):
+    """只启用 Meta Flow 既有 JSON-like 隐式标量语义。"""
 
 
-def _parse_scalar(value: str) -> Any:
-    text = value.strip()
-    if text == "":
-        return ""
-    if text in {"[]", "{}"}:
-        return [] if text == "[]" else {}
-    if text in {"true", "false"}:
-        return text == "true"
-    if text in {"null", "~"}:
-        return None
-    if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
-        return text[1:-1]
-    if text.startswith("[") and text.endswith("]"):
-        try:
-            return json.loads(text.replace("'", '"'))
-        except json.JSONDecodeError:
-            inner = text[1:-1].strip()
-            return [piece.strip().strip('"').strip("'") for piece in inner.split(",") if piece.strip()]
+_JsonCompatibleSafeLoader.yaml_implicit_resolvers = {}
+_JsonCompatibleSafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|false)$"),
+    list("tf"),
+)
+_JsonCompatibleSafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:null",
+    re.compile(r"^(?:~|null)$"),
+    ["~", "n"],
+)
+_JsonCompatibleSafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:int",
+    re.compile(r"^[-+]?[0-9]+$"),
+    list("-+0123456789"),
+)
+
+
+def _validate_json_compatible(value: Any, *, path: str = "$", seen: set[int] | None = None) -> None:
+    """拒绝 timestamp、binary、set、递归 alias 等非 JSON 机器真相。"""
+
+    if value is None or isinstance(value, str | bool | int):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path} contains a non-finite number")
+        return
+    visited = set() if seen is None else set(seen)
+    if isinstance(value, dict):
+        identity = id(value)
+        if identity in visited:
+            raise ValueError(f"{path} contains a recursive YAML alias")
+        visited.add(identity)
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{path} contains a non-string mapping key")
+            _validate_json_compatible(nested, path=f"{path}.{key}", seen=visited)
+        return
+    if isinstance(value, list):
+        identity = id(value)
+        if identity in visited:
+            raise ValueError(f"{path} contains a recursive YAML alias")
+        visited.add(identity)
+        for index, nested in enumerate(value):
+            _validate_json_compatible(nested, path=f"{path}[{index}]", seen=visited)
+        return
+    raise ValueError(f"{path} contains unsupported YAML value type: {type(value).__name__}")
+
+
+def _load_compatible_yaml(text: str) -> Any:
+    loader = _JsonCompatibleSafeLoader(text)
     try:
-        return int(text)
-    except ValueError:
-        return text
-
-
-def _parse_yaml_lines(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
-    if index >= len(lines):
-        return {}, index
-    if lines[index][1].startswith("- "):
-        values: list[Any] = []
-        while index < len(lines) and lines[index][0] == indent and lines[index][1].startswith("- "):
-            rest = lines[index][1][2:].strip()
-            index += 1
-            if rest == "":
-                nested, index = _parse_yaml_lines(lines, index, indent + 2)
-                values.append(nested)
-            elif ":" in rest:
-                key, raw_value = rest.split(":", 1)
-                item: dict[str, Any] = {}
-                if raw_value.strip():
-                    item[key.strip()] = _parse_scalar(raw_value)
-                else:
-                    nested, index = _parse_yaml_lines(lines, index, indent + 2)
-                    item[key.strip()] = nested
-                while index < len(lines) and lines[index][0] > indent:
-                    child_indent, child_text = lines[index]
-                    if child_indent < indent + 2 or child_text.startswith("- "):
-                        break
-                    child_key, child_raw = child_text.split(":", 1)
-                    index += 1
-                    if child_raw.strip():
-                        item[child_key.strip()] = _parse_scalar(child_raw)
-                    else:
-                        nested, index = _parse_yaml_lines(lines, index, child_indent + 2)
-                        item[child_key.strip()] = nested
-                values.append(item)
-            else:
-                values.append(_parse_scalar(rest))
-        return values, index
-
-    values: dict[str, Any] = {}
-    while index < len(lines) and lines[index][0] == indent and not lines[index][1].startswith("- "):
-        text = lines[index][1]
-        if ":" not in text:
-            raise ValueError(f"invalid YAML line: {text}")
-        key, raw_value = text.split(":", 1)
-        index += 1
-        if raw_value.strip():
-            values[key.strip()] = _parse_scalar(raw_value)
-        else:
-            if index < len(lines) and lines[index][0] > indent:
-                nested, index = _parse_yaml_lines(lines, index, lines[index][0])
-                values[key.strip()] = nested
-            else:
-                values[key.strip()] = {}
-    return values, index
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
 
 
 def load_yaml_object(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        prepared: list[tuple[int, str]] = []
-        for raw_line in text.splitlines():
-            line = _strip_comment(raw_line).rstrip()
-            if not line.strip():
-                continue
-            prepared.append((len(line) - len(line.lstrip(" ")), line.strip()))
-        data, index = _parse_yaml_lines(prepared, 0, prepared[0][0] if prepared else 0)
-        if index != len(prepared):
-            raise ValueError(f"{path} contains unsupported YAML structure") from exc
+    except json.JSONDecodeError:
+        try:
+            data = _load_compatible_yaml(text)
+        except yaml.YAMLError as exc:
+            problem = getattr(exc, "problem", None) or type(exc).__name__
+            raise ValueError(f"{path} contains invalid YAML: {problem}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a YAML object")
+    _validate_json_compatible(data)
     return data
 
 
@@ -231,7 +305,18 @@ def _format_scalar(value: Any) -> str:
     if isinstance(value, int | float):
         return str(value)
     text = str(value)
-    if text == "" or text.strip() != text or any(char in text for char in [":", "#", "[", "]", "{", "}"]):
+    yaml_indicator = text[:1] in "-?:,[]{}#&*!|>'\"%@`"
+    typed_plain_scalar = (
+        text in {"true", "false", "null", "~"}
+        or re.fullmatch(r"[-+]?[0-9]+", text) is not None
+    )
+    if (
+        text == ""
+        or text.strip() != text
+        or yaml_indicator
+        or typed_plain_scalar
+        or any(char in text for char in [":", "#", "[", "]", "{", "}", "\n", "\r", "\t"])
+    ):
         return json.dumps(text, ensure_ascii=False)
     return text
 

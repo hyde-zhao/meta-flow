@@ -187,9 +187,36 @@ def observe_checkout_source_identity(repo_root: Path) -> dict[str, str]:
     )
 
 
+def observe_checkout_delivery_status(repo_root: Path) -> dict[str, bool]:
+    """区分可识别 checkout 与可由 HEAD 精确复现的 immutable delivery。"""
+
+    root = repo_root.resolve()
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise ValueError("source checkout worktree status is unavailable")
+    worktree_clean = not completed.stdout.strip()
+    return {
+        "worktree_clean": worktree_clean,
+        "exact_commit_delivery": worktree_clean,
+    }
+
+
 __all__ = [
     "component_display",
     "normalize_component",
+    "observe_checkout_delivery_status",
     "observe_checkout_source_identity",
     "resolve_source_identity",
     "source_identity_conflicts",

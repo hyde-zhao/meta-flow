@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,14 @@ def _resolve(project_root: Path, logical_ref: str, process_root: Path | None) ->
     return process_root.resolve() / logical_ref.removeprefix("process/")
 
 
-def _load_object(project_root: Path, logical_ref: str, process_root: Path | None) -> dict[str, Any]:
+def _load_object(
+    project_root: Path,
+    logical_ref: str,
+    process_root: Path | None,
+    object_overrides: Mapping[str, tuple[dict[str, Any], bytes]] | None = None,
+) -> dict[str, Any]:
+    if object_overrides is not None and logical_ref in object_overrides:
+        return dict(object_overrides[logical_ref][0])
     path = _resolve(project_root, logical_ref, process_root)
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"formal truth source missing or not regular: {logical_ref}")
@@ -45,7 +53,13 @@ def _source_receipt(
     project_root: Path,
     logical_ref: str,
     process_root: Path | None,
+    object_overrides: Mapping[str, tuple[dict[str, Any], bytes]] | None = None,
 ) -> dict[str, str]:
+    if object_overrides is not None and logical_ref in object_overrides:
+        return {
+            "ref": logical_ref,
+            "digest": sha256(object_overrides[logical_ref][1]).hexdigest(),
+        }
     path = _resolve(project_root, logical_ref, process_root)
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"formal truth source missing or not regular: {logical_ref}")
@@ -109,22 +123,23 @@ def build_formal_truth_snapshot(
     project_root: Path,
     *,
     process_root: Path | None = None,
+    object_overrides: Mapping[str, tuple[dict[str, Any], bytes]] | None = None,
 ) -> dict[str, Any]:
     """只沿 PROJECT→ROADMAP→declared Phase/Work 构建有界 formal truth。"""
 
     root = project_root.resolve()
-    project = _load_object(root, PROJECT_REF, process_root)
+    project = _load_object(root, PROJECT_REF, process_root, object_overrides)
     roadmap_ref = str(project.get("roadmap_ref") or "")
     if not roadmap_ref or roadmap_ref.startswith("/") or ".." in Path(roadmap_ref).parts:
         raise ValueError("PROJECT roadmap_ref is missing or unsafe")
     roadmap_logical = "process/" + roadmap_ref.removeprefix("process/")
-    roadmap = _load_object(root, roadmap_logical, process_root)
+    roadmap = _load_object(root, roadmap_logical, process_root, object_overrides)
     raw_phase_refs = roadmap.get("phase_refs")
     if not isinstance(raw_phase_refs, list) or not raw_phase_refs:
         raise ValueError("ROADMAP phase_refs must be a non-empty list")
     sources = [
-        _source_receipt(root, PROJECT_REF, process_root),
-        _source_receipt(root, roadmap_logical, process_root),
+        _source_receipt(root, PROJECT_REF, process_root, object_overrides),
+        _source_receipt(root, roadmap_logical, process_root, object_overrides),
     ]
     active_phases: list[str] = []
     active_works: list[str] = []
@@ -134,8 +149,8 @@ def build_formal_truth_snapshot(
         if not isinstance(raw_ref, str) or not raw_ref.startswith("phases/"):
             raise ValueError("ROADMAP phase_ref must use phases/<id>/PHASE.yaml")
         logical_ref = "process/" + raw_ref
-        phase = _load_object(root, logical_ref, process_root)
-        sources.append(_source_receipt(root, logical_ref, process_root))
+        phase = _load_object(root, logical_ref, process_root, object_overrides)
+        sources.append(_source_receipt(root, logical_ref, process_root, object_overrides))
         phase_id = str(phase.get("phase_id") or "")
         status = str(phase.get("status") or "").lower()
         if not phase_id or not status:

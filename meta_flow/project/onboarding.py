@@ -1282,8 +1282,12 @@ def init_main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def status_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="meta-flow project status")
+def status_main(
+    argv: list[str] | None = None,
+    *,
+    prog: str = "meta-flow project status",
+) -> int:
+    parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parsed = parser.parse_args(argv or [])
     health = check_independent_process_route(parsed.project_root)

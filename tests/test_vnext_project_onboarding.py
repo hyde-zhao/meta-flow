@@ -575,6 +575,13 @@ def test_cli_init_and_auto_detecting_project_check(tmp_path: Path, capsys: pytes
     assert raised.value.code == 0
     assert auto_payload["status"] == "healthy"
 
+    with pytest.raises(SystemExit) as help_exit:
+        cli._run_project(["check", "--project-root", str(release), "--help"])
+    help_text = capsys.readouterr().out
+    assert help_exit.value.code == 0
+    assert "usage: meta-flow project check" in help_text
+    assert "usage: meta-flow project status" not in help_text
+
 
 def test_resolve_ref_cli_maps_logical_ref_without_process_entry(
     tmp_path: Path,
