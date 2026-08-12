@@ -139,9 +139,9 @@ def evaluate_budget(
         "tokens": int(projected.tokens or 0),
     }
     maximum = limit.as_dict()
-    # 硬预算是可用量的排他上界：达到 100% 时已经没有后续操作余量，
-    # 必须与超过上界一样 fail closed。
-    exceeded = tuple(key for key, value in actual.items() if value >= maximum[key])
+    # 硬预算是可消费的包含上界：最后一个合法单位可以把 remaining 降到 0；
+    # 只有 projected usage 真正超过上界时才 fail closed。
+    exceeded = tuple(key for key, value in actual.items() if value > maximum[key])
     remaining: dict[str, int | None] = {
         key: maximum[key] - value for key, value in actual.items()
     }

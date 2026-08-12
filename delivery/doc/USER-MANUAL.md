@@ -1121,10 +1121,15 @@ notes:
 G0 / G1 / G2 的单检查恢复上限分别为 1 / 2 / 2。G2 同一 finding 最多独立 re-QA
 2 次；G0 / G1 不启动独立 QA，只重跑受影响检查。
 
-Work usage 在每个阶段写入 `process/works/<work-id>/USAGE.json`。达到任一预算的 80%
-会警告；达到或超过 100%，或 token 无法测量时，当前事实仍会落账，但下一次 mutation
-会被拒绝。路径统计必须看 `changed_leaf_path_count` 和 `changed_leaf_paths`；终端中折叠
-显示的一条未跟踪目录只用于 UI，不能代表一个实际文件。
+Work usage 在每个阶段写入 `process/works/<work-id>/USAGE.json`。阶段配额按总预算与阶段
+share 向下取整，非零总预算的阶段最小配额为 1。准入只在 projected usage 严格大于阶段
+上限或总上限时返回 `BLOCKED`；恰好消费最后一个合法单位会返回可执行的 `REVIEW`，并以
+`post_action=PAUSE_AFTER_EXECUTION` 提示本次操作完成后暂停。达到 60% 返回
+`REVIEW_AFTER_EXECUTION`，达到 80% 返回 `PAUSE_AFTER_EXECUTION`，都不会在操作前拒绝
+仍处于上限内的事件；下一次造成超限的事件才会在写入前被拒绝。`usage-add` 会在锁内重算
+阶段与总量，并拒绝 stale admission digest；token 无法测量时始终在写入前阻断。路径统计
+必须看 `changed_leaf_path_count` 和 `changed_leaf_paths`；终端中折叠显示的一条未跟踪目录
+只用于 UI，不能代表一个实际文件。
 
 CP6 / CP8 前的 cost closure 必须同时满足：阶段 coverage=100%、当前 token proxy 未超过
 批准上限、去重后的 gate interaction 未超过批准上限、unknown leaf paths=0。历史

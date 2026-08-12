@@ -135,23 +135,20 @@ def test_preauthorized_ordinary_git_push_inherits_g0_or_g1() -> None:
 
 
 @pytest.mark.parametrize("dimension", ["reads", "writes", "check_groups", "tokens"])
-def test_budget_blocks_exact_limit_and_limit_plus_one(dimension: str) -> None:
-    exact_values = G0_BUDGET.as_dict()
-    exact = WorkUsage(
-        reads=exact_values["reads"],
-        writes=exact_values["writes"],
-        check_groups=exact_values["check_groups"],
-        tokens=exact_values["tokens"],
-    )
+def test_budget_allows_exact_limit_and_blocks_limit_plus_one(dimension: str) -> None:
+    exact_values = {"reads": 0, "writes": 0, "check_groups": 0, "tokens": 0}
+    exact_values[dimension] = G0_BUDGET.as_dict()[dimension]
+    exact = WorkUsage(**exact_values)
     delta_values = {"reads": 0, "writes": 0, "check_groups": 0, "tokens": 0}
     delta_values[dimension] = 1
 
     exact_decision = evaluate_budget(G0_BUDGET, exact)
     exceeded = evaluate_budget(G0_BUDGET, exact, delta=WorkUsage(**delta_values))
 
-    assert exact_decision.decision == "EXCEEDED"
-    assert not exact_decision.allowed
-    assert dimension in exact_decision.exceeded_dimensions
+    assert exact_decision.decision == "WARNING"
+    assert exact_decision.allowed
+    assert exact_decision.exceeded_dimensions == ()
+    assert exact_decision.remaining[dimension] == 0
     assert exceeded.decision == "EXCEEDED"
     assert not exceeded.allowed
     assert dimension in exceeded.exceeded_dimensions
@@ -164,7 +161,7 @@ def test_budget_blocks_exact_limit_and_limit_plus_one(dimension: str) -> None:
         (7_999, "OK"),
         (8_000, "WARNING"),
         (9_999, "WARNING"),
-        (10_000, "EXCEEDED"),
+        (10_000, "WARNING"),
         (10_001, "EXCEEDED"),
     ],
 )

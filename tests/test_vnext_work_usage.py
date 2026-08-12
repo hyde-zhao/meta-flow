@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from meta_flow.work.budget import BudgetLimit
+from meta_flow.work.budget import G1_BUDGET, BudgetLimit
 from meta_flow.work.model import build_work, load_work, write_work_create_only
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
@@ -27,20 +28,38 @@ from meta_flow.work.usage_admission import (
 )
 
 
-def init_work(root: Path, *, budget: BudgetLimit | None = None) -> None:
+def init_work(
+    root: Path,
+    *,
+    budget: BudgetLimit | None = None,
+    profile: str = "G0",
+) -> None:
     request_ref = "works/W-001/REQUEST.md"
     request = root / request_ref
     request.parent.mkdir(parents=True)
     request.write_text("confirmed\n", encoding="utf-8")
+    if profile == "G0":
+        classification = classify_work(
+            RiskFacts(change_kind="documentation", touched_path_count=1)
+        )
+    elif profile == "G1":
+        classification = classify_work(
+            RiskFacts(change_kind="code", touched_path_count=2, multi_step=True)
+        )
+    elif profile == "G2":
+        classification = classify_work(
+            RiskFacts(change_kind="code", touched_path_count=2, public_contract=True),
+            g2_budget=budget,
+        )
+    else:
+        raise ValueError(f"unsupported profile: {profile}")
     work = build_work(
         work_id="W-001",
         project_id="demo",
         objective="x",
         request_ref=request_ref,
         scope=WorkScope(1, (request_ref,), ("README.md",), ("pytest-docs",)),
-        classification=classify_work(
-            RiskFacts(change_kind="documentation", touched_path_count=1)
-        ),
+        classification=classification,
         release_base_oid="a" * 40,
         process_base_oid="",
     )
@@ -122,7 +141,7 @@ def test_over_budget_plan_blocks_before_usage_ledger_mutation(
     assert not usage_path.exists()
 
 
-def test_exact_budget_limit_is_blocked_before_record(tmp_path: Path) -> None:
+def test_request_above_stage_limit_is_blocked_before_record(tmp_path: Path) -> None:
     init_work(tmp_path)
 
     event = UsageEvent(
@@ -136,7 +155,7 @@ def test_exact_budget_limit_is_blocked_before_record(tmp_path: Path) -> None:
     plan = plan_usage_admission(tmp_path, "W-001", event)
 
     assert plan.decision == "BLOCKED"
-    assert "USAGE_HARD_STOP_100_PERCENT" in plan.reason_codes
+    assert "USAGE_STAGE_LIMIT_EXCEEDED:check_groups" in plan.reason_codes
     assert not (tmp_path / "works/W-001/USAGE.json").exists()
 
 
@@ -206,8 +225,8 @@ def test_invalid_proxy_and_unavailable_events_are_rejected() -> None:
     [
         (23, "READY", ""),
         (24, "REVIEW", "USAGE_REVIEW_60_PERCENT"),
-        (32, "PAUSE", "USAGE_RESERVE_BELOW_20_PERCENT"),
-        (40, "BLOCKED", "USAGE_HARD_STOP_100_PERCENT"),
+        (32, "REVIEW", "USAGE_RESERVE_BELOW_20_PERCENT"),
+        (40, "REVIEW", "USAGE_LIMIT_REACHED_100_PERCENT"),
     ],
 )
 def test_online_stage_admission_freezes_60_80_100_thresholds(
@@ -235,6 +254,269 @@ def test_online_stage_admission_freezes_60_80_100_thresholds(
     assert plan.stage_utilization["reads"] == (reads * 100 + 39) // 40
     if reason:
         assert reason in plan.reason_codes
+
+
+def test_first_verification_check_group_is_admitted_for_g1_work(
+    tmp_path: Path,
+) -> None:
+    init_work(tmp_path, profile="G1")
+    event = UsageEvent(
+        event_id="targeted-validation-1",
+        stage="verification",
+        reads=1,
+        check_groups=1,
+        tokens=1_500,
+    )
+
+    plan = plan_usage_admission(tmp_path, "W-001", event)
+    result = append_usage_event(
+        tmp_path,
+        "W-001",
+        event,
+        expected_admission_digest=plan.plan_digest,
+    )
+
+    assert load_work(tmp_path, "W-001").budget == G1_BUDGET
+    assert plan.decision in {"READY", "REVIEW"}
+    assert plan.allowed
+    assert plan.stage_utilization["check_groups"] == 100
+    assert plan.post_action == "PAUSE_AFTER_EXECUTION"
+    assert result.decision == "RECORDED"
+    assert result.budget.remaining["check_groups"] == 7
+
+    blocked = plan_usage_admission(
+        tmp_path,
+        "W-001",
+        UsageEvent(
+            event_id="targeted-validation-2",
+            stage="verification",
+            check_groups=1,
+        ),
+    )
+    assert blocked.decision == "BLOCKED"
+    assert "USAGE_STAGE_LIMIT_EXCEEDED:check_groups" in blocked.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("profile", "budget"),
+    [
+        ("G0", None),
+        ("G1", None),
+        ("G2", BudgetLimit(reads=5, writes=5, check_groups=5, tokens=5)),
+    ],
+)
+def test_minimum_stage_unit_is_consumable_for_every_risk_profile(
+    tmp_path: Path,
+    profile: str,
+    budget: BudgetLimit | None,
+) -> None:
+    init_work(tmp_path, profile=profile, budget=budget)
+
+    plan = plan_usage_admission(
+        tmp_path,
+        "W-001",
+        UsageEvent(
+            event_id=f"{profile.lower()}-minimum-unit",
+            stage="verification",
+            check_groups=1,
+        ),
+    )
+
+    assert plan.allowed
+    assert plan.stage_budget["check_groups"] == 1
+    assert plan.projected_stage["check_groups"] == 1
+    assert plan.stage_utilization["check_groups"] == 100
+    assert plan.post_action == "PAUSE_AFTER_EXECUTION"
+
+
+def test_last_legal_unit_of_three_unit_stage_budget_is_admitted(
+    tmp_path: Path,
+) -> None:
+    init_work(
+        tmp_path,
+        budget=BudgetLimit(reads=100, writes=100, check_groups=15, tokens=100_000),
+    )
+    append_admitted(
+        tmp_path,
+        UsageEvent(
+            event_id="verification-first-two",
+            stage="verification",
+            check_groups=2,
+        ),
+    )
+
+    final = UsageEvent(
+        event_id="verification-final-unit",
+        stage="verification",
+        check_groups=1,
+    )
+    plan = plan_usage_admission(tmp_path, "W-001", final)
+    result = append_usage_event(
+        tmp_path,
+        "W-001",
+        final,
+        expected_admission_digest=plan.plan_digest,
+    )
+
+    assert plan.allowed
+    assert plan.stage_utilization["check_groups"] == 100
+    assert result.decision == "RECORDED"
+
+    exceeded = plan_usage_admission(
+        tmp_path,
+        "W-001",
+        UsageEvent(
+            event_id="verification-over-stage",
+            stage="verification",
+            check_groups=1,
+        ),
+    )
+    assert exceeded.decision == "BLOCKED"
+    assert "USAGE_STAGE_LIMIT_EXCEEDED:check_groups" in exceeded.reason_codes
+
+
+def test_plan_and_add_admit_event_reaching_stage_and_total_limits_together(
+    tmp_path: Path,
+) -> None:
+    init_work(
+        tmp_path,
+        budget=BudgetLimit(reads=25, writes=25, check_groups=5, tokens=25),
+    )
+    for event in (
+        UsageEvent(event_id="requirements-unit", stage="requirements", check_groups=1),
+        UsageEvent(event_id="design-unit", stage="design", check_groups=1),
+        UsageEvent(event_id="implementation-units", stage="implementation", check_groups=2),
+    ):
+        append_admitted(tmp_path, event)
+    final = UsageEvent(
+        event_id="verification-unit",
+        stage="verification",
+        check_groups=1,
+    )
+
+    plan = plan_usage_admission(tmp_path, "W-001", final)
+    result = append_usage_event(
+        tmp_path,
+        "W-001",
+        final,
+        expected_admission_digest=plan.plan_digest,
+    )
+
+    assert plan.allowed
+    assert plan.projected_stage["check_groups"] == plan.stage_budget["check_groups"]
+    assert plan.projected_total["check_groups"] == plan.total_budget["check_groups"]
+    assert plan.post_action == "PAUSE_AFTER_EXECUTION"
+    assert result.decision == "RECORDED"
+    assert result.budget.decision == "WARNING"
+    assert result.budget.remaining["check_groups"] == 0
+
+
+@pytest.mark.parametrize("dimension", ["reads", "writes", "check_groups", "tokens"])
+def test_each_usage_dimension_can_consume_its_last_legal_stage_unit(
+    tmp_path: Path,
+    dimension: str,
+) -> None:
+    init_work(
+        tmp_path,
+        budget=BudgetLimit(reads=5, writes=5, check_groups=5, tokens=5),
+    )
+    values = {"reads": 0, "writes": 0, "check_groups": 0, "tokens": 0}
+    values[dimension] = 1
+
+    plan = plan_usage_admission(
+        tmp_path,
+        "W-001",
+        UsageEvent(event_id=f"exact-{dimension}", stage="verification", **values),
+    )
+
+    assert plan.allowed
+    assert plan.decision in {"READY", "REVIEW"}
+    assert plan.stage_utilization[dimension] == 100
+
+
+def test_stage_and_total_limits_are_checked_by_absolute_projected_usage(
+    tmp_path: Path,
+) -> None:
+    init_work(
+        tmp_path,
+        budget=BudgetLimit(reads=10, writes=10, check_groups=10, tokens=100),
+    )
+    usage_path = tmp_path / "works/W-001/USAGE.json"
+    usage_path.write_text(
+        json.dumps(
+            UsageLedger(
+                work_id="W-001",
+                events=(
+                    UsageEvent(
+                        event_id="historical-other-stage",
+                        stage="requirements",
+                        check_groups=8,
+                    ),
+                ),
+            ).as_dict()
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    total_exceeded = plan_usage_admission(
+        tmp_path,
+        "W-001",
+        UsageEvent(
+            event_id="total-over",
+            stage="implementation",
+            check_groups=3,
+        ),
+    )
+    stage_exceeded = plan_usage_admission(
+        tmp_path,
+        "W-001",
+        UsageEvent(
+            event_id="stage-over",
+            stage="verification",
+            reads=3,
+        ),
+    )
+
+    assert "USAGE_TOTAL_LIMIT_EXCEEDED:check_groups" in total_exceeded.reason_codes
+    assert "USAGE_STAGE_LIMIT_EXCEEDED:reads" in stage_exceeded.reason_codes
+
+
+def test_exact_limit_duplicate_remains_idempotent_and_requires_fresh_digest(
+    tmp_path: Path,
+) -> None:
+    init_work(tmp_path, profile="G1")
+    event = UsageEvent(
+        event_id="verification-only-unit",
+        stage="verification",
+        check_groups=1,
+    )
+    original = plan_usage_admission(tmp_path, "W-001", event)
+    append_usage_event(
+        tmp_path,
+        "W-001",
+        event,
+        expected_admission_digest=original.plan_digest,
+    )
+    fresh = plan_usage_admission(tmp_path, "W-001", event)
+
+    with pytest.raises(ValueError, match="plan drifted"):
+        append_usage_event(
+            tmp_path,
+            "W-001",
+            event,
+            expected_admission_digest=original.plan_digest,
+        )
+    duplicate = append_usage_event(
+        tmp_path,
+        "W-001",
+        event,
+        expected_admission_digest=fresh.plan_digest,
+    )
+
+    assert fresh.allowed
+    assert duplicate.decision == "NO_CHANGE"
+    assert len(load_usage(tmp_path, load_work(tmp_path, "W-001")).events) == 1
 
 
 def test_admitted_operation_reserves_usage_before_executor_runs(tmp_path: Path) -> None:

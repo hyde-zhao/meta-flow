@@ -260,10 +260,17 @@ def _append_usage_event_unlocked(
 ) -> UsageAppendResult:
     work = load_work(process_root, work_id)
     ledger = load_usage(process_root, work)
+    from meta_flow.work.usage_admission import plan_usage_admission
+
     existing = next((item for item in ledger.events if item.event_id == event.event_id), None)
+    if existing is not None and existing != event:
+        raise ValueError(f"usage event_id conflict: {event.event_id}")
+    admission = plan_usage_admission(process_root, work_id, event)
+    if not expected_admission_digest:
+        raise ValueError("usage append requires expected_admission_digest")
+    if admission.plan_digest != expected_admission_digest:
+        raise ValueError("usage admission plan drifted before append")
     if existing is not None:
-        if existing != event:
-            raise ValueError(f"usage event_id conflict: {event.event_id}")
         decision = evaluate_budget(work.budget, summarize_usage(ledger))
         duplicate_decision = (
             "NO_CHANGE"
@@ -277,14 +284,6 @@ def _append_usage_event_unlocked(
             decision,
             work.usage_ref,
         )
-
-    from meta_flow.work.usage_admission import plan_usage_admission
-
-    admission = plan_usage_admission(process_root, work_id, event)
-    if not expected_admission_digest:
-        raise ValueError("usage append requires expected_admission_digest")
-    if admission.plan_digest != expected_admission_digest:
-        raise ValueError("usage admission plan drifted before append")
     if not admission.allowed:
         raise ValueError(
             "usage admission blocks append: "

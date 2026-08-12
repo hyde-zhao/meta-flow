@@ -119,13 +119,55 @@ def _utilization(limit: BudgetLimit, usage: WorkUsage) -> dict[str, int | None]:
     return result
 
 
+def _usage_values(usage: WorkUsage) -> dict[str, int | None]:
+    return {
+        "reads": usage.reads,
+        "writes": usage.writes,
+        "check_groups": usage.check_groups,
+        "tokens": (
+            None
+            if usage.token_measurement_status == "unavailable"
+            else int(usage.tokens or 0)
+        ),
+    }
+
+
+def _exceeded_dimensions(
+    limit: BudgetLimit,
+    usage: WorkUsage,
+) -> tuple[str, ...]:
+    maximum = limit.as_dict()
+    return tuple(
+        key
+        for key, value in _usage_values(usage).items()
+        if value is not None and value > maximum[key]
+    )
+
+
+def _at_limit_dimensions(
+    limit: BudgetLimit,
+    usage: WorkUsage,
+) -> tuple[str, ...]:
+    maximum = limit.as_dict()
+    return tuple(
+        key
+        for key, value in _usage_values(usage).items()
+        if value is not None and maximum[key] > 0 and value == maximum[key]
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class UsageAdmissionPlanV1:
     decision: str
+    post_action: str
     work_id: str
     event_id: str
     stage: str
     measurement_basis: str
+    total_budget: dict[str, int]
+    stage_budget: dict[str, int]
+    projected_total: dict[str, Any]
+    projected_stage: dict[str, Any]
     total_utilization: dict[str, int | None]
     stage_utilization: dict[str, int | None]
     governance_usage: dict[str, dict[str, int]]
@@ -143,14 +185,20 @@ class UsageAdmissionPlanV1:
             "schema_version": 1,
             "kind": "UsageAdmissionPlanV1",
             "decision": self.decision,
+            "post_action": self.post_action,
             "work_id": self.work_id,
             "event_id": self.event_id,
             "stage": self.stage,
             "measurement_basis": self.measurement_basis,
+            "total_budget": self.total_budget,
+            "stage_budget": self.stage_budget,
+            "projected_total": self.projected_total,
+            "projected_stage": self.projected_stage,
             "thresholds": {
                 "review_percent": 60,
                 "pause_percent": 80,
                 "hard_stop_percent": 100,
+                "hard_stop_comparison": "projected_usage > allowed_usage",
             },
             "total_utilization": self.total_utilization,
             "stage_utilization": self.stage_utilization,
@@ -186,11 +234,18 @@ def plan_usage_admission(
         for existing in ledger.events:
             if normalize_stage(existing.stage) == stage:
                 stage_current = _add(stage_current, existing.as_usage())
-    projected_total = _add(summarize_usage(ledger), event.as_usage())
-    projected_stage = _add(stage_current, event.as_usage())
+    recorded_event = next(
+        (item for item in ledger.events if item.event_id == event.event_id),
+        None,
+    )
+    if recorded_event is not None and recorded_event != event:
+        raise ValueError(f"usage event_id conflict: {event.event_id}")
+    event_delta = WorkUsage() if recorded_event is not None else event.as_usage()
+    projected_total = _add(summarize_usage(ledger), event_delta)
+    projected_stage = _add(stage_current, event_delta)
     governance_totals = {
         field: sum(int(getattr(existing, field)) for existing in ledger.events)
-        + int(getattr(event, field))
+        + (0 if recorded_event is not None else int(getattr(event, field)))
         for field in GOVERNANCE_LIMITS
     }
     governance_usage = {
@@ -209,6 +264,10 @@ def plan_usage_admission(
         if value is not None
     ]
     maximum = max(values, default=0)
+    exceeded_total = _exceeded_dimensions(work.budget, projected_total)
+    exceeded_stage = _exceeded_dimensions(stage_limit, projected_stage)
+    at_total_limit = _at_limit_dimensions(work.budget, projected_total)
+    at_stage_limit = _at_limit_dimensions(stage_limit, projected_stage)
     exceeded_governance = [
         field
         for field, limit in GOVERNANCE_LIMITS.items()
@@ -216,26 +275,43 @@ def plan_usage_admission(
     ]
     if exceeded_governance:
         decision = "BLOCKED"
+        post_action = "BLOCK_EXECUTION"
         reasons.extend(
             f"USAGE_GOVERNANCE_LIMIT_EXCEEDED:{field}"
             for field in exceeded_governance
         )
     elif projected_total.token_measurement_status == "unavailable":
         decision = "BLOCKED"
+        post_action = "BLOCK_EXECUTION"
         reasons.append("USAGE_TELEMETRY_UNAVAILABLE")
     elif reasons:
         decision = "BLOCKED"
-    elif maximum >= 100:
+        post_action = "BLOCK_EXECUTION"
+    elif exceeded_total or exceeded_stage:
         decision = "BLOCKED"
+        post_action = "BLOCK_EXECUTION"
         reasons.append("USAGE_HARD_STOP_100_PERCENT")
+        reasons.extend(
+            f"USAGE_TOTAL_LIMIT_EXCEEDED:{field}" for field in exceeded_total
+        )
+        reasons.extend(
+            f"USAGE_STAGE_LIMIT_EXCEEDED:{field}" for field in exceeded_stage
+        )
+    elif at_total_limit or at_stage_limit:
+        decision = "REVIEW"
+        post_action = "PAUSE_AFTER_EXECUTION"
+        reasons.append("USAGE_LIMIT_REACHED_100_PERCENT")
     elif maximum >= 80:
-        decision = "PAUSE"
+        decision = "REVIEW"
+        post_action = "PAUSE_AFTER_EXECUTION"
         reasons.append("USAGE_RESERVE_BELOW_20_PERCENT")
     elif maximum >= 60:
         decision = "REVIEW"
+        post_action = "REVIEW_AFTER_EXECUTION"
         reasons.append("USAGE_REVIEW_60_PERCENT")
     else:
         decision = "READY"
+        post_action = "CONTINUE"
     ledger_digest = canonical_digest(ledger.as_dict())
     event_digest = canonical_digest(event.as_dict())
     digest_input = {
@@ -244,20 +320,30 @@ def plan_usage_admission(
         "event_id": event.event_id,
         "stage": stage,
         "measurement_basis": projected_total.token_measurement_status,
+        "total_budget": work.budget.as_dict(),
+        "stage_budget": stage_limit.as_dict(),
+        "projected_total": projected_total.as_dict(),
+        "projected_stage": projected_stage.as_dict(),
         "total_utilization": total_utilization,
         "stage_utilization": stage_utilization,
         "governance_usage": governance_usage,
         "reason_codes": sorted(set(reasons)),
         "decision": decision,
+        "post_action": post_action,
         "ledger_digest": ledger_digest,
         "event_digest": event_digest,
     }
     return UsageAdmissionPlanV1(
         decision=decision,
+        post_action=post_action,
         work_id=work_id,
         event_id=event.event_id,
         stage=stage,
         measurement_basis=projected_total.token_measurement_status,
+        total_budget=work.budget.as_dict(),
+        stage_budget=stage_limit.as_dict(),
+        projected_total=projected_total.as_dict(),
+        projected_stage=projected_stage.as_dict(),
         total_utilization=total_utilization,
         stage_utilization=stage_utilization,
         governance_usage=governance_usage,
@@ -271,6 +357,7 @@ def plan_usage_admission(
 @dataclass(frozen=True, slots=True)
 class OperationAdmissionPermitV1:
     decision: str
+    post_action: str
     work_id: str
     event_id: str
     operation: str
@@ -289,6 +376,7 @@ class OperationAdmissionPermitV1:
             "schema_version": 1,
             "kind": "OperationAdmissionPermitV1",
             "decision": self.decision,
+            "post_action": self.post_action,
             "work_id": self.work_id,
             "event_id": self.event_id,
             "operation": self.operation,
@@ -304,6 +392,7 @@ class OperationAdmissionPermitV1:
 @dataclass(frozen=True, slots=True)
 class OperationExecutionReceiptV1:
     decision: str
+    post_action: str
     work_id: str
     event_id: str
     operation: str
@@ -316,6 +405,7 @@ class OperationExecutionReceiptV1:
             "schema_version": 1,
             "kind": "OperationExecutionReceiptV1",
             "decision": self.decision,
+            "post_action": self.post_action,
             "work_id": self.work_id,
             "event_id": self.event_id,
             "operation": self.operation,
@@ -370,6 +460,7 @@ def plan_operation_admission(
         if governance_dimension and _positive_event_dimension(event, governance_dimension) != 1:
             blockers.append("GOVERNANCE_OPERATION_DELTA_MUST_BE_ONE")
     decision = "BLOCKED" if blockers else usage_plan.decision
+    post_action = "BLOCK_EXECUTION" if blockers else usage_plan.post_action
     source = {
         "schema_version": 1,
         "work_id": work_id,
@@ -379,10 +470,12 @@ def plan_operation_admission(
         "scope_digest": work.scope.digest,
         "usage_plan_digest": usage_plan.plan_digest,
         "decision": decision,
+        "post_action": post_action,
         "blockers": sorted(set(blockers)),
     }
     return OperationAdmissionPermitV1(
         decision=decision,
+        post_action=post_action,
         work_id=work_id,
         event_id=event.event_id,
         operation=operation,
@@ -428,6 +521,7 @@ def execute_admitted_operation(
         return (
             OperationExecutionReceiptV1(
                 decision="NO_CHANGE",
+                post_action=fresh.post_action,
                 work_id=permit.work_id,
                 event_id=permit.event_id,
                 operation=permit.operation,
@@ -441,6 +535,7 @@ def execute_admitted_operation(
     return (
         OperationExecutionReceiptV1(
             decision="PASS",
+            post_action=fresh.post_action,
             work_id=permit.work_id,
             event_id=permit.event_id,
             operation=permit.operation,

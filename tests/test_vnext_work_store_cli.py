@@ -31,7 +31,7 @@ from meta_flow.project.onboarding_contract import (
     OnboardingAuthorization,
 )
 from meta_flow.project.query import main as project_query_main
-from meta_flow.work.budget import BudgetLimit
+from meta_flow.work.budget import G1_BUDGET, BudgetLimit
 from meta_flow.work.cli import (
     check_main,
     classify_main,
@@ -64,6 +64,7 @@ from meta_flow.work.store import (
     plan_work_init,
     plan_work_init_from_release_root,
 )
+from meta_flow.work.usage import load_usage
 
 
 def test_work_check_help_uses_its_public_command_name(
@@ -677,6 +678,114 @@ def test_usage_add_cli_requires_fresh_plan_and_blocks_over_limit_before_mutation
     assert payload["decision"] == "BLOCKED"
     assert "operation admission blocks execution" in payload["error"]
     assert not (process / "works" / "W-001" / "USAGE.json").exists()
+
+
+def test_sibling_binding_g1_cli_admits_exact_verification_stage_unit(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, process = init_project(tmp_path)
+    work = replace(
+        make_work(process),
+        risk_profile="G1",
+        risk_reason_codes=("STANDARD_MULTI_FILE_OR_MULTI_STEP_CHANGE",),
+        budget=G1_BUDGET,
+    )
+    apply_work_init(plan_work_init_from_release_root(release, typed_work(work)))
+    arguments = [
+        "--project-root",
+        str(release),
+        "--work-id",
+        "W-001",
+        "--event-id",
+        "targeted-validation-1",
+        "--stage",
+        "verification",
+        "--reads",
+        "1",
+        "--check-groups",
+        "1",
+        "--tokens",
+        "1500",
+    ]
+
+    plan_exit = usage_plan_main(arguments)
+    plan = json.loads(capsys.readouterr().out)
+    add_exit = usage_add_main(
+        [*arguments, "--admission-digest", plan["plan_digest"]]
+    )
+    receipt = json.loads(capsys.readouterr().out)
+
+    assert not (release / "process").exists()
+    assert plan_exit == 0
+    assert plan["decision"] == "REVIEW"
+    assert plan["post_action"] == "PAUSE_AFTER_EXECUTION"
+    assert plan["stage_budget"]["check_groups"] == 1
+    assert plan["projected_stage"]["check_groups"] == 1
+    assert add_exit == 0
+    assert receipt["decision"] == "RECORDED"
+    assert receipt["admission_decision"] == "REVIEW"
+    assert receipt["post_action"] == "PAUSE_AFTER_EXECUTION"
+    assert receipt["remaining"]["check_groups"] == 7
+
+
+def test_usage_add_cli_rejects_stale_admission_digest_without_mutation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, process = init_project(tmp_path)
+    apply_work_init(
+        plan_work_init_from_release_root(release, typed_work(make_work(process)))
+    )
+    stale_arguments = [
+        "--project-root",
+        str(release),
+        "--work-id",
+        "W-001",
+        "--event-id",
+        "stale-event",
+        "--stage",
+        "implementation",
+        "--tokens",
+        "10",
+    ]
+    assert usage_plan_main(stale_arguments) == 0
+    stale_plan = json.loads(capsys.readouterr().out)
+    concurrent_arguments = [
+        "--project-root",
+        str(release),
+        "--work-id",
+        "W-001",
+        "--event-id",
+        "concurrent-event",
+        "--stage",
+        "implementation",
+        "--tokens",
+        "1",
+    ]
+    assert usage_plan_main(concurrent_arguments) == 0
+    concurrent_plan = json.loads(capsys.readouterr().out)
+    assert usage_add_main(
+        [
+            *concurrent_arguments,
+            "--admission-digest",
+            concurrent_plan["plan_digest"],
+        ]
+    ) == 0
+    capsys.readouterr()
+
+    exit_code = usage_add_main(
+        [*stale_arguments, "--admission-digest", stale_plan["plan_digest"]]
+    )
+    blocked = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert blocked["decision"] == "BLOCKED"
+    assert "digest drifted" in blocked["error"]
+    assert [
+        event.event_id
+        for event in load_usage(process, load_work(process, "W-001")).events
+    ] == ["concurrent-event"]
 
 
 def test_work_start_pause_resume_and_close_minimally_updates_project(

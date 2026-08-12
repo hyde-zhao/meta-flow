@@ -651,6 +651,8 @@ def usage_add_main(argv: list[str] | None = None) -> int:
         "exceeded_dimensions": list(result.budget.exceeded_dimensions),
         "remaining": result.budget.remaining,
         "ledger_ref": result.ledger_ref,
+        "admission_decision": permit.decision,
+        "post_action": permit.post_action,
         "operation_receipt": operation_receipt.as_dict(),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
