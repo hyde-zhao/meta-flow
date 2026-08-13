@@ -2,13 +2,32 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.project import governance_projection, phase_transition
+from meta_flow.project.governance import load_phase
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import current, projection_transaction
+from meta_flow.work.lifecycle import update_work_status
+from meta_flow.work.lifecycle_transaction import (
+    AUTHORIZATION_KIND,
+    SUCCESSOR_ROOT_REL,
+    WorkCloseAuthorizationV1,
+    acquire_shared_projection_writer_lock,
+    apply_work_close,
+    inspect_work_close_transactions,
+    plan_work_close,
+    release_shared_projection_writer_lock,
+)
+from meta_flow.work.model import build_work
+from meta_flow.work.risk import RiskFacts, classify_work
+from meta_flow.work.scope import WorkScope
+from meta_flow.work.store import apply_work_init, plan_work_init_from_release_root
 
 
 def _git(root: Path, *args: str) -> str:
@@ -179,6 +198,67 @@ def _plan(
     )
 
 
+def _close_active_phase_work(release: Path, process: Path, work_id: str) -> None:
+    phase = load_phase(process, "phases/P1/PHASE.yaml")
+    request_ref = f"works/{work_id}/REQUEST.md"
+    _write(process / request_ref, "# request\n")
+    work = build_work(
+        work_id=work_id,
+        project_id="demo",
+        objective="验证 Phase transition 后继 lineage",
+        request_ref=request_ref,
+        phase_ref=phase.phase_ref,
+        scope=WorkScope(1, (request_ref,), ("README.md",), ("targeted",)),
+        classification=classify_work(
+            RiskFacts(change_kind="code", touched_path_count=2, multi_step=True)
+        ),
+        release_base_oid="a" * 40,
+        process_base_oid="b" * 40,
+    )
+    work = replace(
+        work,
+        execution_unit=ExecutionUnitV1(
+            unit_id=work_id,
+            root_concept="phase-transition-lineage",
+            slice_id=work_id,
+            container_role="primary",
+            revision=1,
+            supersedes_unit_id="",
+            contract_ref=request_ref,
+            contract_digest="c" * 64,
+        ),
+    )
+    apply_work_init(plan_work_init_from_release_root(release, work))
+    update_work_status(process, work_id, expected_status="planned", new_status="active")
+    result_ref = f"works/{work_id}/RESULT.json"
+    _write(
+        process / result_ref,
+        json.dumps({"schema_version": 1, "work_id": work_id, "decision": "PASS"})
+        + "\n",
+    )
+    plan = plan_work_close(
+        process,
+        work_id,
+        expected_status="active",
+        outcome="completed",
+        result_ref=result_ref,
+    )
+    receipt = apply_work_close(
+        process,
+        plan,
+        WorkCloseAuthorizationV1(
+            1,
+            AUTHORIZATION_KIND,
+            "close-" + work_id.lower(),
+            work_id,
+            plan.plan_digest,
+            tuple(target.ref for target in plan.targets),
+            "2099-01-01T00:00:00+00:00",
+        ),
+    )
+    assert receipt.decision == "PASS"
+
+
 def test_phase_transition_plan_is_zero_write_and_freezes_seven_targets(
     tmp_path: Path,
 ) -> None:
@@ -230,6 +310,229 @@ def test_phase_transition_apply_updates_formal_truth_and_all_projections(
     )
     assert noop_receipt["disposition"] == "NOOP"
     assert noop_receipt["mutation_count"] == 0
+
+
+def test_phase_transition_blocks_before_write_when_shared_writer_is_held(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    plan = _plan(release, process, roles)
+    before = {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in plan.targets
+    }
+    writer_id = "concurrent-work-close"
+    lock = acquire_shared_projection_writer_lock(process, writer_id)
+    try:
+        with pytest.raises(ValueError, match="shared projection writer lock"):
+            phase_transition.apply_phase_transition(
+                plan,
+                expected_plan_digest=plan.plan_digest,
+                expected_release_oid=plan.release_oid,
+                expected_process_oid=plan.process_oid,
+            )
+    finally:
+        release_shared_projection_writer_lock(lock, writer_id)
+
+    assert before == {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in plan.targets
+    }
+    assert not (release / phase_transition.MANIFEST_REL).exists()
+
+
+def test_phase_transition_is_an_authorized_successor_of_prior_work_close(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    baseline = governance_projection.build_governance_projection(process, roles)
+    _write(
+        process / governance_projection.GOVERNANCE_PROJECTION_REL,
+        json.dumps(baseline, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    _close_active_phase_work(release, process, "W-001")
+    _commit(process, "freeze Work close generation before Phase transition")
+    plan = _plan(release, process, roles)
+
+    receipt = phase_transition.apply_phase_transition(
+        plan,
+        expected_plan_digest=plan.plan_digest,
+        expected_release_oid=plan.release_oid,
+        expected_process_oid=plan.process_oid,
+    )
+
+    assert receipt["shared_projection_successor_id"].startswith(
+        "project-phase-transition-"
+    )
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+
+
+def test_phase_transition_discards_successor_receipt_when_final_manifest_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    baseline = governance_projection.build_governance_projection(process, roles)
+    _write(
+        process / governance_projection.GOVERNANCE_PROJECTION_REL,
+        json.dumps(baseline, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    _close_active_phase_work(release, process, "W-001")
+    _commit(process, "freeze Work close generation before Phase transition")
+    plan = _plan(release, process, roles)
+    before = {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in plan.targets
+    }
+    original_write_manifest = phase_transition._write_manifest
+    injected = False
+
+    def fail_after_successor_receipt(path: Path, payload: Mapping[str, object]) -> None:
+        nonlocal injected
+        if payload.get("state") == "COMMITTED" and payload.get("successor_id") and not injected:
+            injected = True
+            raise OSError("injected final manifest write failure")
+        original_write_manifest(path, payload)
+
+    monkeypatch.setattr(phase_transition, "_write_manifest", fail_after_successor_receipt)
+    with pytest.raises(OSError, match="injected final manifest write failure"):
+        phase_transition.apply_phase_transition(
+            plan,
+            expected_plan_digest=plan.plan_digest,
+            expected_release_oid=plan.release_oid,
+            expected_process_oid=plan.process_oid,
+        )
+
+    assert injected is True
+    assert before == {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in plan.targets
+    }
+    successor_root = process / SUCCESSOR_ROOT_REL
+    assert not list(successor_root.glob("project-phase-transition-*.json"))
+    assert phase_transition.inspect_phase_transition(release, process)["decision"] == "PASS"
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+
+
+def test_phase_transition_recover_finalizes_successor_after_process_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    baseline = governance_projection.build_governance_projection(process, roles)
+    _write(
+        process / governance_projection.GOVERNANCE_PROJECTION_REL,
+        json.dumps(baseline, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    _close_active_phase_work(release, process, "W-001")
+    _commit(process, "freeze Work close generation before Phase transition")
+    plan = _plan(release, process, roles)
+    original_record = phase_transition.record_shared_projection_successor
+
+    def crash_before_successor(*_args: object, **_kwargs: object) -> str:
+        raise KeyboardInterrupt("injected process crash before successor receipt")
+
+    monkeypatch.setattr(
+        phase_transition,
+        "record_shared_projection_successor",
+        crash_before_successor,
+    )
+    with pytest.raises(KeyboardInterrupt, match="injected process crash"):
+        phase_transition.apply_phase_transition(
+            plan,
+            expected_plan_digest=plan.plan_digest,
+            expected_release_oid=plan.release_oid,
+            expected_process_oid=plan.process_oid,
+        )
+
+    manifest = json.loads((release / phase_transition.MANIFEST_REL).read_text(encoding="utf-8"))
+    assert manifest["state"] == "COMMITTED"
+    assert "successor_id" not in manifest
+    assert inspect_work_close_transactions(process)["decision"] == "BLOCKED"
+    (release / phase_transition.LOCK_REL).write_text(
+        manifest["transaction_id"] + "\n",
+        encoding="utf-8",
+    )
+    (release / projection_transaction.LOCK_REL).write_text(
+        manifest["transaction_id"] + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        phase_transition,
+        "record_shared_projection_successor",
+        original_record,
+    )
+    recovered = phase_transition.recover_phase_transition(release, process)
+
+    assert recovered["decision"] == "NO_CHANGE"
+    assert recovered["shared_projection_successor_id"].startswith(
+        "project-phase-transition-"
+    )
+    assert not (release / phase_transition.LOCK_REL).exists()
+    assert not (release / projection_transaction.LOCK_REL).exists()
+    assert phase_transition.inspect_phase_transition(release, process)["decision"] == "PASS"
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+
+
+def test_phase_transition_recover_reuses_successor_after_manifest_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    baseline = governance_projection.build_governance_projection(process, roles)
+    _write(
+        process / governance_projection.GOVERNANCE_PROJECTION_REL,
+        json.dumps(baseline, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    _close_active_phase_work(release, process, "W-001")
+    _commit(process, "freeze Work close generation before Phase transition")
+    plan = _plan(release, process, roles)
+    original_write_manifest = phase_transition._write_manifest
+    injected = False
+
+    def crash_after_successor_receipt(path: Path, payload: Mapping[str, object]) -> None:
+        nonlocal injected
+        if payload.get("state") == "COMMITTED" and payload.get("successor_id") and not injected:
+            injected = True
+            raise KeyboardInterrupt("injected process crash after successor receipt")
+        original_write_manifest(path, payload)
+
+    monkeypatch.setattr(
+        phase_transition,
+        "_write_manifest",
+        crash_after_successor_receipt,
+    )
+    with pytest.raises(KeyboardInterrupt, match="injected process crash"):
+        phase_transition.apply_phase_transition(
+            plan,
+            expected_plan_digest=plan.plan_digest,
+            expected_release_oid=plan.release_oid,
+            expected_process_oid=plan.process_oid,
+        )
+
+    manifest = json.loads((release / phase_transition.MANIFEST_REL).read_text(encoding="utf-8"))
+    assert manifest["state"] == "COMMITTED"
+    assert "successor_id" not in manifest
+    successor_paths = list(
+        (process / SUCCESSOR_ROOT_REL).glob("project-phase-transition-*.json")
+    )
+    assert len(successor_paths) == 1
+    expected_successor_id = successor_paths[0].stem
+
+    monkeypatch.setattr(
+        phase_transition,
+        "_write_manifest",
+        original_write_manifest,
+    )
+    recovered = phase_transition.recover_phase_transition(release, process)
+
+    assert recovered["decision"] == "NO_CHANGE"
+    assert recovered["shared_projection_successor_id"] == expected_successor_id
+    assert len(
+        list((process / SUCCESSOR_ROOT_REL).glob("project-phase-transition-*.json"))
+    ) == 1
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
 
 
 def test_phase_transition_preserves_state_writer_lineage_for_follow_up_update(
@@ -360,6 +663,33 @@ def test_phase_transition_recover_does_not_steal_live_writer_lock(tmp_path: Path
         assert lock_path.exists()
     finally:
         projection_transaction.release_transaction_lock(handle)
+
+
+def test_phase_transition_recovery_blocks_while_shared_writer_is_active(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    plan = _plan(release, process, roles)
+    phase_transition.apply_phase_transition(
+        plan,
+        expected_plan_digest=plan.plan_digest,
+        expected_release_oid=plan.release_oid,
+        expected_process_oid=plan.process_oid,
+    )
+    manifest_path = release / phase_transition.MANIFEST_REL
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["state"] = "APPLYING"
+    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    writer_id = "concurrent-work-close"
+    lock = acquire_shared_projection_writer_lock(process, writer_id)
+    try:
+        recovered = phase_transition.recover_phase_transition(release, process)
+    finally:
+        release_shared_projection_writer_lock(lock, writer_id)
+
+    assert recovered["decision"] == "BLOCKED"
+    assert "shared projection writer lock" in recovered["findings"][0]
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["state"] == "APPLYING"
 
 
 def test_phase_transition_rejects_preimage_drift_before_write(tmp_path: Path) -> None:

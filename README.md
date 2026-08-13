@@ -686,10 +686,11 @@ meta-flow 自身仓库级静态检查命令：
 uv run --python 3.11 python scripts/check_delivery_guardrails.py
 ```
 
-发布前 preflight 使用以下五门固定入口；每门的原始退出码、warning 和风险都必须保留，不能把 `OK_WITH_WARNINGS` 改写成全绿：
+发布前 preflight 使用以下六门固定入口；每门的原始退出码、warning 和风险都必须保留，不能把 `OK_WITH_WARNINGS` 改写成全绿。核心生命周期 dogfood 会在隔离的 sibling-binding 双仓中顺序执行三个 Work；Work init、状态转换和 close 成功返回前必须由各自 native writer 维护 State/CURRENT，不允许脚本调用手工 projection refresh 掩盖 writer 缺口；异常必须回滚或报告明确的 `PARTIAL_MUTATION`，遗留漂移必须被检查器 fail-closed。每次初始化和关闭后都检查 transaction lineage、治理基线、State/CURRENT 和 CR tracking：
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_core_lifecycle_dogfood.py
 uv run --python 3.11 ruff check .
 PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py
 PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow doctor all --project-root .

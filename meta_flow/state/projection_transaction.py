@@ -37,6 +37,13 @@ ALLOWED_TARGET_REFS = frozenset(
     }
 )
 TERMINAL_STATES = frozenset({"COMMITTED", "RECOVERED"})
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_AUTHORIZATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_LINEAGE_ENTRY_FIELDS = {
+    "anchor_close_authorization_id",
+    "anchor_close_digest",
+    "current_digest",
+}
 
 
 @dataclass
@@ -317,8 +324,8 @@ def _load_manifest(project_root: Path) -> tuple[Path, dict[str, Any] | None]:
         "applied_refs",
         "targets",
     }
-    if set(payload) - (expected | {"failure", "recovery_failures"}) or not expected.issubset(
-        payload
+    if set(payload) - (expected | {"failure", "recovery_failures", "lineage"}) or not (
+        expected.issubset(payload)
     ):
         raise ValueError("state projection transaction manifest fields mismatch")
     if payload["schema_version"] != 1 or payload["kind"] != "StateProjectionTransactionV1":
@@ -342,7 +349,172 @@ def _load_manifest(project_root: Path) -> tuple[Path, dict[str, Any] | None]:
             raise ValueError(f"state projection transaction {field} is not an ordered prefix")
     if len(payload["applied_refs"]) > len(payload["attempted_refs"]):
         raise ValueError("state projection transaction accounting is invalid")
+    lineage = _decode_lineage(payload.get("lineage", {}))
+    if payload["state"] in TERMINAL_STATES:
+        expected_field = (
+            "after_digest" if payload["state"] == "COMMITTED" else "before_digest"
+        )
+        for raw in targets:
+            ref = str(raw["ref"])
+            entry = lineage.get(ref)
+            expected_digest = str(raw[expected_field])
+            if (
+                entry is not None
+                and expected_digest != "missing"
+                and entry["current_digest"] != expected_digest
+            ):
+                raise ValueError(
+                    "state projection transaction lineage generation mismatch"
+                )
     return path, payload
+
+
+def _decode_lineage(raw_lineage: object) -> dict[str, dict[str, str]]:
+    """校验 State writer 对最新 Work-close generation 的继承声明。"""
+
+    if not isinstance(raw_lineage, Mapping):
+        raise ValueError("state projection transaction lineage must be an object")
+    lineage: dict[str, dict[str, str]] = {}
+    for raw_ref, raw_entry in raw_lineage.items():
+        ref = str(raw_ref)
+        if ref not in ALLOWED_TARGET_REFS or not isinstance(raw_entry, Mapping):
+            raise ValueError("state projection transaction lineage target is invalid")
+        if set(raw_entry) != _LINEAGE_ENTRY_FIELDS:
+            raise ValueError("state projection transaction lineage fields mismatch")
+        authorization_id = str(raw_entry.get("anchor_close_authorization_id") or "")
+        anchor_digest = str(raw_entry.get("anchor_close_digest") or "")
+        current_digest = str(raw_entry.get("current_digest") or "")
+        if (
+            not _AUTHORIZATION_ID_RE.fullmatch(authorization_id)
+            or not _DIGEST_RE.fullmatch(anchor_digest)
+            or not _DIGEST_RE.fullmatch(current_digest)
+        ):
+            raise ValueError("state projection transaction lineage identity is invalid")
+        lineage[ref] = {
+            "anchor_close_authorization_id": authorization_id,
+            "anchor_close_digest": anchor_digest,
+            "current_digest": current_digest,
+        }
+    return lineage
+
+
+def _work_close_generation_heads(project_root: Path) -> dict[str, dict[str, str]]:
+    """读取当前 binding 项目的最新 Work-close generation；独立 fixture 返回空集。"""
+
+    from meta_flow.project.process_route import require_process_route
+    from meta_flow.semantics.generation_lineage import committed_generation_heads
+
+    root = project_root.resolve()
+    try:
+        route = require_process_route(root)
+    except (OSError, ValueError):
+        if (root / ".meta-flow/workspace.yaml").exists():
+            raise
+        return {}
+    refs = tuple(ref.removeprefix("process/") for ref in sorted(ALLOWED_TARGET_REFS))
+    return committed_generation_heads(
+        route.process_root / ".meta-flow-runtime/work-close/transactions",
+        refs=refs,
+        current_digests={
+            ref.removeprefix("process/"): _digest(
+                _read_target(_resolve_runtime_ref(root, ref))
+            )
+            for ref in ALLOWED_TARGET_REFS
+        },
+    )
+
+
+def _build_lineage(
+    project_root: Path,
+    planned: list[dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    """把直接或既有的 Work-close 锚点传播到本次 State post-image。"""
+
+    root = project_root.resolve()
+    _manifest_path, previous = _load_manifest(root)
+    close_heads = _work_close_generation_heads(root)
+    current_by_ref = {
+        ref: _digest(_read_target(_resolve_runtime_ref(root, ref)))
+        for ref in ALLOWED_TARGET_REFS
+    }
+    previous_lineage = _effective_lineage(
+        previous,
+        close_heads=close_heads,
+        current_by_ref=current_by_ref,
+    )
+    planned_after = {
+        ref: _digest(after)
+        for ref, _before, after in (_decode_target(raw) for raw in planned)
+    }
+    lineage: dict[str, dict[str, str]] = {}
+    for ref in sorted(ALLOWED_TARGET_REFS):
+        close_ref = ref.removeprefix("process/")
+        head = close_heads.get(close_ref)
+        if head is None:
+            continue
+        before_digest = current_by_ref[ref]
+        anchor_id = str(head["authorization_id"])
+        anchor_digest = str(head["after_digest"])
+        previous_entry = previous_lineage.get(ref)
+        if before_digest == anchor_digest:
+            pass
+        elif (
+            previous_entry is not None
+            and previous_entry["anchor_close_authorization_id"] == anchor_id
+            and previous_entry["anchor_close_digest"] == anchor_digest
+            and previous_entry["current_digest"] == before_digest
+        ):
+            pass
+        else:
+            raise ValueError(
+                f"state projection has no authorized Work-close predecessor: {ref}"
+            )
+        lineage[ref] = {
+            "anchor_close_authorization_id": anchor_id,
+            "anchor_close_digest": anchor_digest,
+            "current_digest": planned_after.get(ref, before_digest),
+        }
+    return lineage
+
+
+def _effective_lineage(
+    payload: Mapping[str, Any] | None,
+    *,
+    close_heads: Mapping[str, Mapping[str, str]],
+    current_by_ref: Mapping[str, str],
+) -> dict[str, dict[str, str]]:
+    """读取显式 lineage，并对升级前的单槽 State manifest 做有界兼容。
+
+    旧 manifest 没有 ``lineage`` 字段，但其 COMMITTED after digest 与当前 bytes
+    一致时，仍可证明当前 generation 由最后一次 native State transaction 写入。
+    该兼容只用于把旧 generation 迁移到首次显式锚定；一旦字段存在，即使为空，
+    也不会回退到兼容推断。
+    """
+
+    if payload is None:
+        return {}
+    explicit = _decode_lineage(payload.get("lineage", {}))
+    if "lineage" in payload or payload.get("state") != "COMMITTED":
+        return explicit
+    inferred = dict(explicit)
+    for raw in payload.get("targets", []):
+        if not isinstance(raw, Mapping):
+            continue
+        ref = str(raw.get("ref") or "")
+        close_ref = ref.removeprefix("process/")
+        head = close_heads.get(close_ref)
+        after_digest = str(raw.get("after_digest") or "")
+        if (
+            head is not None
+            and after_digest != "missing"
+            and current_by_ref.get(ref) == after_digest
+        ):
+            inferred[ref] = {
+                "anchor_close_authorization_id": str(head["authorization_id"]),
+                "anchor_close_digest": str(head["after_digest"]),
+                "current_digest": after_digest,
+            }
+    return inferred
 
 
 def _restore_targets(project_root: Path, payload: dict[str, Any]) -> list[str]:
@@ -369,6 +541,18 @@ def _restore_targets(project_root: Path, payload: dict[str, Any]) -> list[str]:
     return failures
 
 
+def _rewind_lineage_to_preimage(payload: dict[str, Any]) -> None:
+    """成功回滚后令 lineage 与恢复到的 before generation 一致。"""
+
+    lineage = _decode_lineage(payload.get("lineage", {}))
+    for raw in payload["targets"]:
+        ref = str(raw["ref"])
+        before_digest = str(raw["before_digest"])
+        if ref in lineage and before_digest != "missing":
+            lineage[ref]["current_digest"] = before_digest
+    payload["lineage"] = lineage
+
+
 def inspect_state_projection_transaction(
     project_root: Path,
     *,
@@ -392,11 +576,57 @@ def inspect_state_projection_transaction(
             "findings": findings,
         }
     expected_after = payload["state"] == "COMMITTED"
+    work_close_heads: dict[str, dict[str, str]] = {}
+    if payload["state"] in TERMINAL_STATES:
+        try:
+            work_close_heads = _work_close_generation_heads(project_root)
+        except (OSError, ValueError):
+            # 无 vNext binding 的独立单元 fixture 没有跨 writer lineage。
+            work_close_heads = {}
+    current_by_ref = {
+        ref: _digest(_read_target(_resolve_runtime_ref(project_root, ref)))
+        for ref in ALLOWED_TARGET_REFS
+    }
+    lineage = _effective_lineage(
+        payload,
+        close_heads=work_close_heads,
+        current_by_ref=current_by_ref,
+    )
+    for ref in sorted(ALLOWED_TARGET_REFS):
+        close_ref = ref.removeprefix("process/")
+        head = work_close_heads.get(close_ref)
+        if head is None:
+            continue
+        current_digest = current_by_ref[ref]
+        entry = lineage.get(ref)
+        direct_close_generation = current_digest == head["after_digest"]
+        authorized_state_successor = bool(
+            entry
+            and entry["anchor_close_authorization_id"] == head["authorization_id"]
+            and entry["anchor_close_digest"] == head["after_digest"]
+            and entry["current_digest"] == current_digest
+        )
+        if not direct_close_generation and not authorized_state_successor:
+            findings.append(f"STATE_PROJECTION_LINEAGE_UNBOUND:{ref}")
     for raw in payload["targets"]:
         ref, before, after = _decode_target(raw)
         current = _read_target(_resolve_runtime_ref(project_root, ref))
         expected = after if expected_after else before
-        if payload["state"] in TERMINAL_STATES and _digest(current) != _digest(expected):
+        current_digest = _digest(current)
+        work_close_ref = ref.removeprefix("process/")
+        work_close_head = work_close_heads.get(work_close_ref)
+        superseded_by_work_close = bool(
+            work_close_head and work_close_head["after_digest"] == current_digest
+        )
+        state_successor = bool(
+            lineage.get(ref) and lineage[ref]["current_digest"] == current_digest
+        )
+        if (
+            payload["state"] in TERMINAL_STATES
+            and current_digest != _digest(expected)
+            and not superseded_by_work_close
+            and not state_successor
+        ):
             findings.append(f"TERMINAL_GENERATION_DRIFT:{ref}")
     if payload["state"] not in TERMINAL_STATES:
         findings.append(f"UNRESOLVED_STATE_PROJECTION_TRANSACTION:{payload['state']}")
@@ -406,6 +636,38 @@ def inspect_state_projection_transaction(
         "transaction_id": payload["transaction_id"],
         "findings": findings,
     }
+
+
+def state_projection_successor_head_digests(
+    project_root: Path,
+    *,
+    close_heads: Mapping[str, Mapping[str, str]],
+    _ignore_lock: bool = False,
+) -> dict[str, str]:
+    """返回由指定 Work-close head 合法派生出的当前 State generation。"""
+
+    inspection = inspect_state_projection_transaction(
+        project_root,
+        _ignore_lock=_ignore_lock,
+    )
+    if inspection["decision"] != "PASS":
+        return {}
+    _path, payload = _load_manifest(project_root)
+    if payload is None or payload["state"] != "COMMITTED":
+        return {}
+    lineage = _decode_lineage(payload.get("lineage", {}))
+    result: dict[str, str] = {}
+    for close_ref, head in close_heads.items():
+        ref = "process/" + close_ref
+        entry = lineage.get(ref)
+        if (
+            entry is not None
+            and entry["anchor_close_authorization_id"]
+            == str(head.get("authorization_id") or "")
+            and entry["anchor_close_digest"] == str(head.get("after_digest") or "")
+        ):
+            result[close_ref] = entry["current_digest"]
+    return result
 
 
 def recover_state_projection_transaction(
@@ -483,6 +745,8 @@ def recover_state_projection_transaction(
             }
         failures = _restore_targets(root, payload)
         payload["state"] = "PARTIAL" if failures else "RECOVERED"
+        if not failures:
+            _rewind_lineage_to_preimage(payload)
         payload["updated_at"] = _now()
         if failures:
             payload["recovery_failures"] = failures
@@ -523,11 +787,14 @@ def apply_state_projection_transaction(
             planned.append(_target_record(ref, before, after))
     if not planned:
         return {"decision": "NO_CHANGE", "mutation_count": 0, "applied_refs": []}
+    lineage = _build_lineage(root, planned)
     plan_identity = [
         {"ref": item["ref"], "before": item["before_digest"], "after": item["after_digest"]}
         for item in planned
     ]
-    transaction_id = _canonical_digest(plan_identity)[:32]
+    transaction_id = _canonical_digest(
+        {"targets": plan_identity, "lineage": lineage}
+    )[:32]
     _ensure_runtime_root(root)
     manifest_path = root / MANIFEST_REL
     lock_path = root / LOCK_REL
@@ -544,6 +811,7 @@ def apply_state_projection_transaction(
         "updated_at": created_at,
         "attempted_refs": [],
         "applied_refs": [],
+        "lineage": lineage,
         "targets": planned,
     }
     try:
@@ -561,7 +829,10 @@ def apply_state_projection_transaction(
             {"ref": item["ref"], "before": item["before_digest"], "after": item["after_digest"]}
             for item in locked_planned
         ]
-        if _canonical_digest(locked_identity)[:32] != transaction_id:
+        locked_lineage = _build_lineage(root, locked_planned)
+        if _canonical_digest(
+            {"targets": locked_identity, "lineage": locked_lineage}
+        )[:32] != transaction_id:
             raise ValueError("state projection target preimage drifted while acquiring writer lock")
         _write_manifest(manifest_path, payload)
         payload["state"] = "APPLYING"
@@ -589,6 +860,8 @@ def apply_state_projection_transaction(
         payload["failure"] = f"{type(exc).__name__}:{exc}"
         failures = _restore_targets(root, payload)
         payload["state"] = "PARTIAL" if failures else "RECOVERED"
+        if not failures:
+            _rewind_lineage_to_preimage(payload)
         payload["updated_at"] = _now()
         if failures:
             payload["recovery_failures"] = failures
@@ -660,6 +933,7 @@ __all__ = [
     "recover_state_projection_transaction",
     "release_transaction_lock",
     "state_projection_lock_path",
+    "state_projection_successor_head_digests",
     "transaction_lock_identity",
     "validate_transaction_lock",
     "write_state_slim_archive",

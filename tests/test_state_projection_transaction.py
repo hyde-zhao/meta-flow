@@ -28,6 +28,18 @@ def test_state_projection_transaction_commits_exact_file_set(tmp_path: Path) -> 
     assert (tmp_path / "process/STATE.md").read_text(encoding="utf-8") == "state=after\n"
 
 
+def test_terminal_generation_drift_without_authorized_successor_is_blocked(
+    tmp_path: Path,
+) -> None:
+    projection_transaction.apply_state_projection_transaction(tmp_path, _targets("after"))
+    (tmp_path / "process/STATE.md").write_text("external drift\n", encoding="utf-8")
+
+    inspection = projection_transaction.inspect_state_projection_transaction(tmp_path)
+
+    assert inspection["decision"] == "BLOCKED"
+    assert "TERMINAL_GENERATION_DRIFT:process/STATE.md" in inspection["findings"]
+
+
 def test_hard_interrupt_is_detected_and_recoverable(tmp_path: Path) -> None:
     projection_transaction.apply_state_projection_transaction(tmp_path, _targets("before"))
     real_replace = projection_transaction._replace_bytes

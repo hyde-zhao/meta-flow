@@ -138,6 +138,10 @@ meta-flow governance baseline-refresh --project-root . --project-id <project-id>
 
 writer 只对 `process/governance/GOVERNANCE-BASELINE.json` 做单文件原子替换；相同语义返回 `NOOP`、`mutation_count=0`，无需 inspect/recover。active Phase 未声明该 result ref、其他声明结果不存在、commit role 非法或不属于对应仓库历史时返回结构化 `BLOCKED`。
 
+完成带 `RESULT.json` 的 Work 时，`work close` 会把 Work、Project、active Phase、治理基线以及已经初始化的 State/CURRENT 核心投影放入同一份可恢复事务：Phase 新增 result ref、baseline 的 `active_result_refs` 和 State 的 active Work/next action 要么一起提交，要么一起回滚；未初始化 State 的旧项目保持兼容，存在不完整 State target 集时 fail-closed。`work close-inspect` 按每个共享 target 的后继 generation 检查当前 lineage head；历史 COMMITTED manifest 仍校验自身 bytes/digest 完整性，但不会因为后续原生 close 已合法接管 `PROJECT.yaml`、`PHASE.yaml`、baseline 或 State/CURRENT 而误报损坏。最新 generation 的外部漂移仍然 `BLOCKED`。
+
+若某个 Work 是由旧版本完成、其 Phase result ref 已存在但 baseline 尚未同步，可对同一终态 Work 重新生成 close plan。计划只包含 stale baseline target，并需绑定该计划的新 `WorkCloseAuthorizationV1`；apply 不会重写 Work、Project 或 Phase，也不应删除历史 manifest。
+
 ### 0.4 Project / Phase 原生转换
 
 Phase 完成与下一 Phase 激活必须使用同一份七目标事务计划，不能依次手工修改 `PHASE.yaml`、`PROJECT.yaml`、治理基线与 State 投影。计划要求：from/to Phase 都由 Roadmap 声明；from Phase 的 Work 已终态；closure evidence 已由 from Phase 声明并存在于 process HEAD；to Phase 已声明 `governance/GOVERNANCE-BASELINE.json`；State v2 已初始化；全部事务目标路径无本地漂移。
@@ -385,8 +389,11 @@ uv run --python 3.11 meta-flow install qoder --scope project --component full --
 
 meta-flow 源码仓的发布前 preflight：
 
+其中核心生命周期 dogfood 会创建临时 sibling-binding 双仓，执行 G1 最小 verification 配额的 `usage-plan → usage-add`，再顺序执行三个 Work；Work init、状态转换和 close 成功返回前必须由各自 native writer 维护 State/CURRENT，脚本不得调用手工 projection refresh 掩盖 writer 缺口。异常必须回滚或报告明确的 `PARTIAL_MUTATION`，遗留漂移必须被检查器 fail-closed。每次初始化和关闭后都要求 close-inspect、project check、State/CURRENT、governance baseline 与 CR tracking 同时通过。它不读取或修改任何 consumer 项目。
+
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_core_lifecycle_dogfood.py
 uv run --python 3.11 ruff check .
 PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py
 PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow doctor all --project-root .

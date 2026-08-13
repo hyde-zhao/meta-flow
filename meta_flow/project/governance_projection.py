@@ -387,6 +387,63 @@ def build_governance_projection_from_truth(
     return payload
 
 
+def build_governance_projection_for_phase_postimage(
+    process_root: Path,
+    *,
+    phase_ref: str,
+    phase_payload: dict[str, Any],
+    require_current: bool = True,
+) -> dict[str, Any]:
+    """基于一个冻结的 Phase post-image 刷新既有治理投影。
+
+    Work close 等上层多文件事务只能在既有投影与当前声明真相完全一致时调用
+    本函数。它保留已经验证并发布过的 immutable commit roles，仅替换调用方
+    明确拥有的 Phase post-image，避免上层 writer 重新推断身份角色或接纳陈旧
+    投影。
+    """
+
+    root = process_root.resolve()
+    projection_path = _safe_file(
+        root,
+        GOVERNANCE_PROJECTION_REL.as_posix(),
+        subject="governance projection",
+    )
+    try:
+        existing = json.loads(projection_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"governance projection is invalid JSON: {exc}") from exc
+    if not isinstance(existing, dict):
+        raise ValueError("governance projection must be a JSON object")
+    raw_roles = existing.get("immutable_commit_roles")
+    if not isinstance(raw_roles, list):
+        raise ValueError("immutable_commit_roles must be a list")
+    roles, role_errors = _normalize_immutable_commit_roles(raw_roles)
+    if role_errors:
+        raise ValueError("; ".join(role_errors))
+
+    current_truth = build_governance_truth(root)
+    expected_current = build_governance_projection_from_truth(current_truth, roles)
+    if require_current and existing != expected_current:
+        raise ValueError("governance projection must be current before Phase mutation")
+
+    project = load_project(root)
+    roadmap = load_yaml_object(_safe_file(root, project.roadmap_ref, subject="PROJECT.roadmap_ref"))
+    phase_refs = _string_list(roadmap.get("phase_refs"), subject="ROADMAP.phase_refs")
+    if phase_ref not in phase_refs:
+        raise ValueError("Phase post-image is not declared by ROADMAP.phase_refs")
+    phase_payloads = {
+        ref: load_yaml_object(_safe_file(root, ref, subject="ROADMAP.phase_refs[]"))
+        for ref in phase_refs
+    }
+    phase_payloads[phase_ref] = dict(phase_payload)
+    post_truth = build_governance_truth_from_payloads(
+        project.as_dict(),
+        roadmap,
+        phase_payloads,
+    )
+    return build_governance_projection_from_truth(post_truth, roles)
+
+
 def _target_preimage(path: Path, errors: list[str]) -> tuple[str, bytes | None]:
     if path.is_symlink() or (path.exists() and not path.is_file()):
         errors.append(
@@ -404,6 +461,12 @@ def _render_projection(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
         "utf-8"
     )
+
+
+def render_governance_projection(payload: dict[str, Any]) -> bytes:
+    """以治理投影唯一的 canonical JSON 格式渲染冻结 payload。"""
+
+    return _render_projection(payload)
 
 
 def _plan_digest(payload: dict[str, Any]) -> str:
@@ -528,48 +591,61 @@ def apply_governance_baseline_refresh(
             "expected plan digest/OIDs/preimage do not match the current plan"
         )
 
-    current_plan = plan_governance_baseline_refresh(
-        plan.release_root,
-        plan.process_root,
-        project_id=plan.project_id,
-        immutable_commit_roles=plan.immutable_commit_roles,
+    from meta_flow.work.lifecycle_transaction import (
+        acquire_shared_projection_writer_lock,
+        release_shared_projection_writer_lock,
     )
-    if current_plan.plan_digest != plan.plan_digest:
-        raise GovernanceProjectionApplyError(
-            "governance baseline source or target drifted after planning"
+
+    writer_id = "governance-baseline-" + plan.plan_digest[:32]
+    lock = acquire_shared_projection_writer_lock(plan.process_root, writer_id)
+    try:
+        current_plan = plan_governance_baseline_refresh(
+            plan.release_root,
+            plan.process_root,
+            project_id=plan.project_id,
+            immutable_commit_roles=plan.immutable_commit_roles,
         )
-    if current_plan.decision == "NOOP":
-        check = validate_governance_projection(plan.release_root, plan.process_root)
-        if check["decision"] != "PASS":
+        if current_plan.plan_digest != plan.plan_digest:
             raise GovernanceProjectionApplyError(
-                "existing governance projection failed validation: " + "; ".join(check["errors"])
+                "governance baseline source or target drifted after planning"
             )
+        if current_plan.decision == "NOOP":
+            check = validate_governance_projection(plan.release_root, plan.process_root)
+            if check["decision"] != "PASS":
+                raise GovernanceProjectionApplyError(
+                    "existing governance projection failed validation: "
+                    + "; ".join(check["errors"])
+                )
+            return {
+                "schema_version": 1,
+                "kind": GOVERNANCE_REFRESH_RECEIPT_KIND,
+                "operation": "governance.baseline-refresh",
+                "decision": "PASS",
+                "disposition": "NOOP",
+                "mutation_count": 0,
+                "target_ref": _logical(GOVERNANCE_PROJECTION_REL.as_posix()),
+                "semantic_digest": plan.projection["semantic_digest"],
+                "plan_digest": plan.plan_digest,
+            }
+        if current_plan.decision != "READY":
+            raise GovernanceProjectionApplyError(
+                "governance baseline refresh is no longer ready"
+            )
+
+        _atomic_replace(plan.target_path, _render_projection(plan.projection))
         return {
             "schema_version": 1,
             "kind": GOVERNANCE_REFRESH_RECEIPT_KIND,
             "operation": "governance.baseline-refresh",
             "decision": "PASS",
-            "disposition": "NOOP",
-            "mutation_count": 0,
+            "disposition": "APPLIED",
+            "mutation_count": 1,
             "target_ref": _logical(GOVERNANCE_PROJECTION_REL.as_posix()),
             "semantic_digest": plan.projection["semantic_digest"],
             "plan_digest": plan.plan_digest,
         }
-    if current_plan.decision != "READY":
-        raise GovernanceProjectionApplyError("governance baseline refresh is no longer ready")
-
-    _atomic_replace(plan.target_path, _render_projection(plan.projection))
-    return {
-        "schema_version": 1,
-        "kind": GOVERNANCE_REFRESH_RECEIPT_KIND,
-        "operation": "governance.baseline-refresh",
-        "decision": "PASS",
-        "disposition": "APPLIED",
-        "mutation_count": 1,
-        "target_ref": _logical(GOVERNANCE_PROJECTION_REL.as_posix()),
-        "semantic_digest": plan.projection["semantic_digest"],
-        "plan_digest": plan.plan_digest,
-    }
+    finally:
+        release_shared_projection_writer_lock(lock, writer_id)
 
 
 def validate_governance_projection(
@@ -890,10 +966,12 @@ __all__ = [
     "apply_governance_baseline_refresh",
     "baseline_refresh_main",
     "build_governance_projection",
+    "build_governance_projection_for_phase_postimage",
     "build_governance_projection_from_truth",
     "build_governance_truth",
     "build_governance_truth_from_payloads",
     "plan_governance_baseline_refresh",
+    "render_governance_projection",
     "semantic_digest",
     "validate_governance_projection",
 ]

@@ -971,8 +971,16 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
         return _make_work_init_receipt(plan, decision="PASS")
     if plan.process_root is None or plan.execution_context is None:
         raise ValueError("canonical Work init plan lacks execution context")
-    domain_baseline = _current_domain_preimages(plan)
+    from meta_flow.work.lifecycle_transaction import (
+        acquire_shared_projection_writer_lock,
+        assert_work_close_shared_projection_lineage,
+        record_work_init_shared_projection_successor,
+        refresh_state_projection_if_initialized,
+        release_shared_projection_writer_lock,
+    )
 
+    assert_work_close_shared_projection_lineage(plan.process_root)
+    domain_baseline = _current_domain_preimages(plan)
     if not mutating:
         fresh_noop = _plan_work_init_from_release_root(
             plan.release_root,
@@ -1023,6 +1031,8 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
     project_index_updated = False
     failure: Exception | None = None
     failure_codes: tuple[str, ...] = ()
+    shared_writer_lock = None
+    shared_writer_id = f"work-init-{plan.work.work_id}-{secrets.token_hex(8)}"
     try:
         fresh = _plan_work_init_from_release_root(
             plan.release_root,
@@ -1055,6 +1065,20 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             failure_codes = reservation.conflicts
             raise ValueError("Work init admission preimage drifted")
 
+        shared_writer_lock = acquire_shared_projection_writer_lock(
+            plan.process_root,
+            shared_writer_id,
+        )
+        assert_work_close_shared_projection_lineage(plan.process_root)
+        if _current_domain_preimages(plan) != domain_baseline:
+            failure_codes = ("ADMISSION_PREIMAGE_DRIFT",)
+            raise ValueError("Work init target preimage drifted before shared writer lock")
+        successor_before = {
+            ref: sha256((plan.process_root / ref).read_bytes()).hexdigest()
+            for ref in {"PROJECT.yaml", plan.work.phase_ref}
+            if ref and (plan.process_root / ref).is_file()
+        }
+
         action_by_ref = {action.ref: action for action in plan.actions}
         request_action = action_by_ref.get(plan.work.request_ref)
         if request_action is not None and request_action.action == "create":
@@ -1085,10 +1109,33 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
                     replace(phase, work_refs=(*phase.work_refs, plan.work.work_ref)),
                     expected_phase_id=phase.phase_id,
                 )
+        successor_id = record_work_init_shared_projection_successor(
+            plan.process_root,
+            work_id=plan.work.work_id,
+            before_digests=successor_before,
+        )
+        if successor_id:
+            coordination_mutations += 1
+        coordination_mutations += len(
+            refresh_state_projection_if_initialized(plan.process_root)
+        )
     except Exception as exc:
         failure = exc
         if not failure_codes:
             failure_codes = ("WORK_INIT_DOMAIN_WRITE_FAILED",)
+
+    if shared_writer_lock is not None:
+        try:
+            release_shared_projection_writer_lock(
+                shared_writer_lock,
+                shared_writer_id,
+            )
+        except Exception as exc:
+            if failure is None:
+                failure = exc
+            failure_codes = tuple(
+                sorted({*failure_codes, "SHARED_PROJECTION_LOCK_CLEANUP_FAILED"})
+            )
 
     released = release_admission_lock(
         process_git_common_dir,

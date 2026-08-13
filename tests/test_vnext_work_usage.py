@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import replace
+from math import floor
 from pathlib import Path
 
 import pytest
@@ -295,6 +296,109 @@ def test_first_verification_check_group_is_admitted_for_g1_work(
     )
     assert blocked.decision == "BLOCKED"
     assert "USAGE_STAGE_LIMIT_EXCEEDED:check_groups" in blocked.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("stage", "share"),
+    [
+        ("requirements", 0.20),
+        ("design", 0.20),
+        ("implementation", 0.40),
+        ("verification", 0.20),
+    ],
+)
+@pytest.mark.parametrize("total_check_groups", [1, 2, 3, 4, 5, 8, 15, 20])
+@pytest.mark.parametrize(
+    ("case", "current_offset", "request_offset", "allowed"),
+    [
+        ("exact-from-zero", None, 0, True),
+        ("last-unit", -1, 1, True),
+        ("over-one", 0, 1, False),
+        ("direct-over", None, 1, False),
+    ],
+)
+def test_stage_check_group_integer_boundary_matrix(
+    tmp_path: Path,
+    stage: str,
+    share: float,
+    total_check_groups: int,
+    case: str,
+    current_offset: int | None,
+    request_offset: int,
+    allowed: bool,
+) -> None:
+    """四阶段的小整数配额必须允许等于上限，只阻断真正超限。"""
+
+    init_work(
+        tmp_path,
+        budget=BudgetLimit(
+            reads=100,
+            writes=100,
+            check_groups=total_check_groups,
+            tokens=100_000,
+        ),
+    )
+    stage_limit = max(1, floor(total_check_groups * share))
+    if current_offset is None:
+        current = 0
+        request = stage_limit + request_offset
+    else:
+        current = stage_limit + current_offset
+        request = request_offset
+    if current:
+        append_admitted(
+            tmp_path,
+            UsageEvent(
+                event_id=f"{case}-{stage}-{total_check_groups}-current",
+                stage=stage,
+                check_groups=current,
+            ),
+        )
+
+    event = UsageEvent(
+        event_id=f"{case}-{stage}-{total_check_groups}-request",
+        stage=stage,
+        check_groups=request,
+    )
+    plan = plan_usage_admission(tmp_path, "W-001", event)
+
+    assert plan.stage_budget["check_groups"] == stage_limit
+    assert plan.projected_stage["check_groups"] == current + request
+    assert plan.allowed is allowed
+    if allowed:
+        assert plan.decision in {"READY", "REVIEW"}
+        assert "USAGE_HARD_STOP_100_PERCENT" not in plan.reason_codes
+        if current + request == stage_limit:
+            assert "USAGE_LIMIT_REACHED_100_PERCENT" in plan.reason_codes
+        result = append_usage_event(
+            tmp_path,
+            "W-001",
+            event,
+            expected_admission_digest=plan.plan_digest,
+        )
+        assert result.decision == "RECORDED"
+    else:
+        assert plan.decision == "BLOCKED"
+        assert "USAGE_HARD_STOP_100_PERCENT" in plan.reason_codes
+        assert "USAGE_STAGE_LIMIT_EXCEEDED:check_groups" in plan.reason_codes
+        before = (
+            (tmp_path / "works/W-001/USAGE.json").read_bytes()
+            if (tmp_path / "works/W-001/USAGE.json").is_file()
+            else None
+        )
+        with pytest.raises(ValueError, match="usage admission blocks append"):
+            append_usage_event(
+                tmp_path,
+                "W-001",
+                event,
+                expected_admission_digest=plan.plan_digest,
+            )
+        after = (
+            (tmp_path / "works/W-001/USAGE.json").read_bytes()
+            if (tmp_path / "works/W-001/USAGE.json").is_file()
+            else None
+        )
+        assert after == before
 
 
 @pytest.mark.parametrize(

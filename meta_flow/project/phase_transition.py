@@ -48,6 +48,12 @@ from meta_flow.state.projection_transaction import (
     transaction_lock_identity,
     validate_transaction_lock,
 )
+from meta_flow.work.lifecycle_transaction import (
+    acquire_shared_projection_writer_lock,
+    discard_shared_projection_successor,
+    record_shared_projection_successor,
+    release_shared_projection_writer_lock,
+)
 
 PUBLIC_OPERATION_DECLARATIONS = (
     ("project.phase-transition", ("meta-flow", "project", "phase-transition")),
@@ -665,8 +671,10 @@ def _load_manifest(release_root: Path) -> tuple[Path, dict[str, Any] | None]:
         "applied_refs",
         "targets",
     }
+    allowed = {*required, "failure", "recovery_failures", "successor_id"}
     if (
         not required.issubset(payload)
+        or set(payload) - allowed
         or payload.get("schema_version") != 1
         or payload.get("kind") != TRANSACTION_KIND
     ):
@@ -690,6 +698,11 @@ def _load_manifest(release_root: Path) -> tuple[Path, dict[str, Any] | None]:
             raise ValueError(f"phase transition manifest {field} is not an ordered prefix")
     if len(payload["applied_refs"]) > len(payload["attempted_refs"]):
         raise ValueError("phase transition manifest accounting is invalid")
+    successor_id = str(payload.get("successor_id") or "")
+    if successor_id and not re.fullmatch(
+        r"project-phase-transition-[0-9a-f]{32}", successor_id
+    ):
+        raise ValueError("phase transition successor_id is invalid")
     return path, payload
 
 
@@ -904,8 +917,29 @@ def recover_phase_transition(
     state_lock_path = state_projection_lock_path(release)
     state_handle: TransactionLockHandle | None = None
     phase_handle: TransactionLockHandle | None = None
+    shared_writer_handle = None
+    shared_writer_id = "phase-recover-" + transaction_id
     try:
         if payload["state"] in TERMINAL_STATES:
+            needs_successor_finalization = (
+                payload["state"] == "COMMITTED" and "successor_id" not in payload
+            )
+            if needs_successor_finalization:
+                shared_writer_handle = acquire_shared_projection_writer_lock(
+                    process_root,
+                    shared_writer_id,
+                )
+                if phase_lock_path.exists() or phase_lock_path.is_symlink():
+                    phase_handle = claim_transaction_lock(
+                        phase_lock_path,
+                        transaction_id,
+                        create_if_missing=False,
+                    )
+                else:
+                    phase_handle = acquire_transaction_lock(
+                        phase_lock_path,
+                        transaction_id,
+                    )
             state_lock_identity = transaction_lock_identity(state_lock_path)
             if state_lock_identity == transaction_id:
                 state_handle = claim_transaction_lock(
@@ -920,7 +954,9 @@ def recover_phase_transition(
                         "recovered_refs": [],
                         "findings": list(state_recovery.get("findings", [])),
                     }
-            if phase_lock_path.exists() or phase_lock_path.is_symlink():
+            if phase_handle is None and (
+                phase_lock_path.exists() or phase_lock_path.is_symlink()
+            ):
                 phase_handle = claim_transaction_lock(
                     phase_lock_path,
                     transaction_id,
@@ -931,13 +967,36 @@ def recover_phase_transition(
                 process_root,
                 _ignore_locks=True,
             )
+            if inspection["decision"] == "PASS" and needs_successor_finalization:
+                successor_before = {
+                    ref.removeprefix("process/"): str(raw["before_digest"])
+                    for raw in payload["targets"]
+                    if str(raw["ref"])
+                    not in STATE_TARGET_REFS | {"process/current/CURRENT.json"}
+                    and str(raw["before_digest"]) != "missing"
+                    for ref in (str(raw["ref"]),)
+                }
+                successor_id = record_shared_projection_successor(
+                    process_root,
+                    operation="project.phase-transition",
+                    writer_id=transaction_id,
+                    before_digests=successor_before,
+                    allowed_refs=tuple(successor_before),
+                )
+                payload["successor_id"] = successor_id
+                _write_manifest(manifest_path, payload)
             return {
                 "decision": "NO_CHANGE" if inspection["decision"] == "PASS" else "BLOCKED",
                 "state": payload["state"],
                 "recovered_refs": [],
                 "lock_recovered": state_handle is not None or phase_handle is not None,
+                "shared_projection_successor_id": str(payload.get("successor_id") or ""),
                 "findings": inspection["findings"],
             }
+        shared_writer_handle = acquire_shared_projection_writer_lock(
+            process_root,
+            shared_writer_id,
+        )
         state_handle = claim_transaction_lock(
             state_lock_path,
             transaction_id,
@@ -953,12 +1012,29 @@ def recover_phase_transition(
         if current_payload is None or current_payload["transaction_id"] != transaction_id:
             raise ValueError("Phase transition changed while acquiring recovery locks")
         payload = current_payload
+        cleanup_failures: list[str] = []
+        successor_id = str(payload.get("successor_id") or "")
+        if successor_id:
+            try:
+                discard_shared_projection_successor(
+                    process_root,
+                    successor_id=successor_id,
+                    operation="project.phase-transition",
+                    writer_id=transaction_id,
+                )
+                payload.pop("successor_id", None)
+            except (OSError, ValueError) as cleanup_exc:
+                cleanup_failures.append(
+                    "SUCCESSOR_RECEIPT_RECOVERY_FAILED:"
+                    f"{type(cleanup_exc).__name__}:{cleanup_exc}"
+                )
         failures, recovered_refs = _restore(
             release,
             process_root,
             payload,
             state_lock_handle=state_handle,
         )
+        failures = [*cleanup_failures, *failures]
         payload["state"] = "PARTIAL" if failures else "RECOVERED"
         if failures:
             payload["recovery_failures"] = failures
@@ -978,7 +1054,14 @@ def recover_phase_transition(
             "findings": [str(exc)],
         }
     finally:
-        _release_handles(phase_handle, state_handle)
+        try:
+            _release_handles(phase_handle, state_handle)
+        finally:
+            if shared_writer_handle is not None:
+                release_shared_projection_writer_lock(
+                    shared_writer_handle,
+                    shared_writer_id,
+                )
 
 
 def apply_phase_transition(
@@ -1029,10 +1112,12 @@ def apply_phase_transition(
             for ref in changed
         ]
     )[:32]
-    state_lock_handle = acquire_transaction_lock(
-        state_projection_lock_path(plan.release_root),
-        transaction_id,
+    shared_writer_id = "phase-transition-" + transaction_id
+    shared_writer_handle = acquire_shared_projection_writer_lock(
+        plan.process_root,
+        shared_writer_id,
     )
+    state_lock_handle: TransactionLockHandle | None = None
     phase_lock_handle: TransactionLockHandle | None = None
     ordered_refs = [
         *sorted(ref for ref in changed if ref not in STATE_TARGET_REFS),
@@ -1051,8 +1136,20 @@ def apply_phase_transition(
             for ref in ordered_refs
         ],
     }
+    successor_before = {
+        ref.removeprefix("process/"): str(raw["before_digest"])
+        for raw in payload["targets"]
+        if str(raw["ref"])
+        not in STATE_TARGET_REFS | {"process/current/CURRENT.json"}
+        and str(raw["before_digest"]) != "missing"
+        for ref in (str(raw["ref"]),)
+    }
     journal_started = False
     try:
+        state_lock_handle = acquire_transaction_lock(
+            state_projection_lock_path(plan.release_root),
+            transaction_id,
+        )
         phase_lock_handle = acquire_transaction_lock(lock_path, transaction_id)
         validate_transaction_lock(
             state_lock_handle,
@@ -1102,6 +1199,7 @@ def apply_phase_transition(
             state_targets[ref] = after
             _write_manifest(manifest_path, payload)
         if state_targets:
+            assert state_lock_handle is not None
             state_receipt = apply_state_projection_transaction(
                 plan.release_root,
                 state_targets,
@@ -1128,6 +1226,15 @@ def apply_phase_transition(
             )
         payload["state"] = "COMMITTED"
         _write_manifest(manifest_path, payload)
+        successor_id = record_shared_projection_successor(
+            plan.process_root,
+            operation="project.phase-transition",
+            writer_id=transaction_id,
+            before_digests=successor_before,
+            allowed_refs=tuple(successor_before),
+        )
+        payload["successor_id"] = successor_id
+        _write_manifest(manifest_path, payload)
         return {
             "schema_version": 1,
             "kind": RECEIPT_KIND,
@@ -1137,18 +1244,36 @@ def apply_phase_transition(
             "transaction_id": transaction_id,
             "mutation_count": len(changed),
             "applied_refs": list(payload["applied_refs"]),
+            "shared_projection_successor_id": successor_id,
             "plan_digest": plan.plan_digest,
         }
     except Exception as exc:
         if not journal_started:
             raise
         payload["failure"] = f"{type(exc).__name__}:{exc}"
+        cleanup_failures: list[str] = []
+        successor_id = str(payload.get("successor_id") or "")
+        if successor_id:
+            try:
+                discard_shared_projection_successor(
+                    plan.process_root,
+                    successor_id=successor_id,
+                    operation="project.phase-transition",
+                    writer_id=transaction_id,
+                )
+                payload.pop("successor_id", None)
+            except (OSError, ValueError) as cleanup_exc:
+                cleanup_failures.append(
+                    "SUCCESSOR_RECEIPT_RECOVERY_FAILED:"
+                    f"{type(cleanup_exc).__name__}:{cleanup_exc}"
+                )
         failures, recovered_refs = _restore(
             plan.release_root,
             plan.process_root,
             payload,
             state_lock_handle=state_lock_handle,
         )
+        failures = [*cleanup_failures, *failures]
         unrecovered_refs = []
         for raw in payload["targets"]:
             ref, before, _after = _decode_record(raw)
@@ -1191,7 +1316,13 @@ def apply_phase_transition(
             ) from exc
         raise
     finally:
-        _release_handles(phase_lock_handle, state_lock_handle)
+        try:
+            _release_handles(phase_lock_handle, state_lock_handle)
+        finally:
+            release_shared_projection_writer_lock(
+                shared_writer_handle,
+                shared_writer_id,
+            )
 
 
 def _cli_blocked(project_id: str, error_code: str, error: str) -> dict[str, Any]:

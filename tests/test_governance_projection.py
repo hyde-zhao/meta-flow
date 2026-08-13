@@ -328,6 +328,38 @@ def test_governance_baseline_refresh_apply_and_noop_are_typed_and_validated(
     assert (process / governance_projection.GOVERNANCE_PROJECTION_REL).read_bytes() == before
 
 
+def test_governance_baseline_refresh_blocks_before_write_when_shared_writer_is_held(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _writer_fixture(tmp_path)
+    plan = governance_projection.plan_governance_baseline_refresh(
+        release,
+        process,
+        project_id="demo",
+        immutable_commit_roles=roles,
+    )
+    from meta_flow.work.lifecycle_transaction import (
+        acquire_shared_projection_writer_lock,
+        release_shared_projection_writer_lock,
+    )
+
+    writer_id = "concurrent-work-close"
+    lock = acquire_shared_projection_writer_lock(process, writer_id)
+    try:
+        with pytest.raises(ValueError, match="writer lock is already held"):
+            governance_projection.apply_governance_baseline_refresh(
+                plan,
+                expected_plan_digest=plan.plan_digest,
+                expected_release_oid=plan.release_oid,
+                expected_process_oid=plan.process_oid,
+                expected_preimage=plan.target_preimage,
+            )
+    finally:
+        release_shared_projection_writer_lock(lock, writer_id)
+
+    assert not (process / governance_projection.GOVERNANCE_PROJECTION_REL).exists()
+
+
 def test_governance_baseline_refresh_rejects_source_drift_before_write(
     tmp_path: Path,
 ) -> None:

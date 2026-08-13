@@ -23,6 +23,20 @@ PROCESS_ROOT = ROOT / "process"
 CHANGE_ROOT = PROCESS_ROOT / "changes"
 PLATFORM_CONTRACTS = DELIVERY_ROOT / "doc" / "PLATFORM-CONTRACTS.yaml"
 DELIVERY_RUNTIME_CONTRACT = DELIVERY_ROOT / "rules" / "DELIVERY-RUNTIME-CONTRACT.json"
+CORE_LIFECYCLE_DOGFOOD_COMMAND = (
+    "PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python "
+    "scripts/check_core_lifecycle_dogfood.py"
+)
+CORE_LIFECYCLE_DOGFOOD_FILES = (
+    "tests/fixtures/core_lifecycle_dogfood.py",
+    "scripts/check_core_lifecycle_dogfood.py",
+    "tests/test_core_lifecycle_dogfood.py",
+)
+CORE_LIFECYCLE_DOGFOOD_DOCS = (
+    "README.md",
+    "delivery/README.md",
+    "delivery/doc/USER-MANUAL.md",
+)
 ALLOWED_DELIVERY_DIRS = {"agents", "doc", "rules", "scripts", "skills"}
 ALLOWED_DELIVERY_SCRIPT_FILES = {
     "install-cli.py",
@@ -3370,6 +3384,61 @@ def collect_installation_architecture_errors() -> list[str]:
     return errors
 
 
+def collect_core_lifecycle_dogfood_errors(root: Path = ROOT) -> list[str]:
+    """保证多 Work 核心生命周期自举验证始终属于发布硬门。"""
+
+    errors: list[str] = []
+    for relative in CORE_LIFECYCLE_DOGFOOD_FILES:
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"missing core lifecycle dogfood asset: {relative}")
+
+    implementation = root / "tests/fixtures/core_lifecycle_dogfood.py"
+    if implementation.is_file() and not implementation.is_symlink():
+        content = implementation.read_text(encoding="utf-8")
+        required_tokens = (
+            "meta_flow import cli as meta_flow_cli",
+            '"usage-plan"',
+            '"usage-add"',
+            '"close-inspect"',
+            '"project", "check"',
+            '"state", "check"',
+            "validate_current_projection",
+            "validate_governance_projection",
+            '"cr-tracking"',
+            '"W-000", "W-001", "W-002"',
+        )
+        for token in required_tokens:
+            if token not in content:
+                errors.append(
+                    "core lifecycle dogfood missing public contract token: " + token
+                )
+        work_slice = content.partition("def _prepare_work(")[2].partition(
+            "def _authorization_file("
+        )[0]
+        if "refresh_formal_truth_projection" in work_slice:
+            errors.append(
+                "core lifecycle dogfood must not manually refresh formal truth projections"
+            )
+        for forbidden in ("quant-lab", "/home/", "relative-symlink"):
+            if forbidden in content:
+                errors.append(
+                    "core lifecycle dogfood must stay isolated and binding-only: "
+                    + forbidden
+                )
+
+    for relative in CORE_LIFECYCLE_DOGFOOD_DOCS:
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"missing core lifecycle dogfood preflight doc: {relative}")
+            continue
+        if CORE_LIFECYCLE_DOGFOOD_COMMAND not in path.read_text(encoding="utf-8"):
+            errors.append(
+                f"core lifecycle dogfood command missing from preflight: {relative}"
+            )
+    return errors
+
+
 def collect_errors() -> list[str]:
     RUNTIME_WARNINGS.clear()
     errors: list[str] = []
@@ -3401,6 +3470,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_delivery_asset_lifecycle_errors())
     errors.extend(collect_process_route_contract_errors())
     errors.extend(collect_installation_architecture_errors())
+    errors.extend(collect_core_lifecycle_dogfood_errors())
 
     binding_profile_documents = {
         relative: (ROOT / relative).read_text(encoding="utf-8")

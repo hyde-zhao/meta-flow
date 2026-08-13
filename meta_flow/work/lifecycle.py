@@ -60,23 +60,76 @@ def update_work_status(
     new_status: str,
     result_ref: str = "",
 ) -> Work:
-    current = load_work(process_root, work_id)
-    if current.status != expected_status:
-        raise ValueError(
-            f"Work status changed: expected {expected_status}, current {current.status}"
-        )
-    updated = transition_work(current, new_status, result_ref=result_ref)
-    path = work_path(process_root, work_id)
-    temporary = path.with_name(f".{path.name}.tmp")
-    if temporary.exists() or temporary.is_symlink():
-        raise FileExistsError(f"temporary Work path already exists: {temporary}")
+    from meta_flow.work.lifecycle_transaction import (
+        acquire_shared_projection_writer_lock,
+        assert_work_close_shared_projection_lineage,
+        refresh_state_projection_if_initialized,
+        release_shared_projection_writer_lock,
+    )
+
+    root = process_root.resolve()
+    writer_id = "work-status-" + hashlib.sha256(
+        f"{work_id}:{expected_status}:{new_status}:{result_ref}".encode()
+    ).hexdigest()[:32]
+    shared_lock = acquire_shared_projection_writer_lock(root, writer_id)
+    successor_id = ""
     try:
-        temporary.write_text(dump_yaml(updated.as_dict()) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
-    finally:
+        assert_work_close_shared_projection_lineage(root)
+        current = load_work(root, work_id)
+        if current.status != expected_status:
+            raise ValueError(
+                f"Work status changed: expected {expected_status}, current {current.status}"
+            )
+        updated = transition_work(current, new_status, result_ref=result_ref)
+        path = work_path(root, work_id)
+        original = path.read_bytes()
+        before_digest = hashlib.sha256(original).hexdigest()
+        temporary = path.with_name(f".{path.name}.tmp")
         if temporary.exists() or temporary.is_symlink():
-            temporary.unlink()
-    return load_work(process_root, work_id)
+            raise FileExistsError(f"temporary Work path already exists: {temporary}")
+        try:
+            temporary.write_text(dump_yaml(updated.as_dict()) + "\n", encoding="utf-8")
+            os.replace(temporary, path)
+            try:
+                from meta_flow.work.lifecycle_transaction import (
+                    discard_shared_projection_successor,
+                    record_shared_projection_successor,
+                )
+
+                successor_id = record_shared_projection_successor(
+                    root,
+                    operation="work.status-transition",
+                    writer_id=writer_id,
+                    before_digests={f"works/{work_id}/WORK.yaml": before_digest},
+                    allowed_refs=(f"works/{work_id}/WORK.yaml",),
+                )
+                refresh_state_projection_if_initialized(root)
+            except Exception as refresh_exc:
+                if successor_id:
+                    discard_shared_projection_successor(
+                        root,
+                        successor_id=successor_id,
+                        operation="work.status-transition",
+                        writer_id=writer_id,
+                    )
+                rollback = path.with_name(f".{path.name}.rollback.tmp")
+                if rollback.exists() or rollback.is_symlink():
+                    raise RuntimeError(
+                        f"Work status rollback path already exists: {rollback}"
+                    ) from refresh_exc
+                try:
+                    rollback.write_bytes(original)
+                    os.replace(rollback, path)
+                finally:
+                    if rollback.exists() or rollback.is_symlink():
+                        rollback.unlink()
+                raise
+        finally:
+            if temporary.exists() or temporary.is_symlink():
+                temporary.unlink()
+        return load_work(root, work_id)
+    finally:
+        release_shared_projection_writer_lock(shared_lock, writer_id)
 
 
 def _execution_control_ledger_path(project_root: Path) -> Path:

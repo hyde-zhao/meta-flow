@@ -30,6 +30,9 @@ collect_canonical_mirror_errors = GUARDRAIL["collect_canonical_mirror_errors"]
 collect_delivery_runtime_contract_errors = GUARDRAIL[
     "collect_delivery_runtime_contract_errors"
 ]
+collect_core_lifecycle_dogfood_errors = GUARDRAIL[
+    "collect_core_lifecycle_dogfood_errors"
+]
 
 
 def test_installation_registry_and_discovery_are_exactly_closed() -> None:
@@ -48,6 +51,30 @@ def test_installation_registry_and_discovery_are_exactly_closed() -> None:
             "real HOME/external roots are rejected first"
         )
     }
+
+
+def test_core_lifecycle_dogfood_is_a_documented_release_hard_gate() -> None:
+    assert collect_core_lifecycle_dogfood_errors() == []
+
+    command = GUARDRAIL["CORE_LIFECYCLE_DOGFOOD_COMMAND"]
+    for relative in GUARDRAIL["CORE_LIFECYCLE_DOGFOOD_DOCS"]:
+        assert command in (ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_core_lifecycle_dogfood_forbids_manual_projection_refresh(tmp_path: Path) -> None:
+    fixture = tmp_path / "tests/fixtures/core_lifecycle_dogfood.py"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        "def _prepare_work():\n"
+        "    refresh_formal_truth_projection()\n\n"
+        "def _authorization_file():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    errors = collect_core_lifecycle_dogfood_errors(tmp_path)
+
+    assert any("must not manually refresh" in error for error in errors)
 
 
 def test_discovery_finds_unregistered_consumer_and_forbidden_delete() -> None:

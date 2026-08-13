@@ -359,10 +359,11 @@ uv run --python 3.11 meta-flow install claude --scope project --component full -
 uv run --python 3.11 meta-flow install qoder --scope project --component full --project-dir . --dry-run
 ```
 
-meta-flow 源码仓发布前 preflight 固定为 pytest、Ruff、delivery guardrail、Doctor、CR tracking 五门；逐门保留真实退出码、warning 和 risk ref，不把 warning 美化为 PASS：
+meta-flow 源码仓发布前 preflight 固定为 pytest、核心生命周期 dogfood、Ruff、delivery guardrail、Doctor、CR tracking 六门；逐门保留真实退出码、warning 和 risk ref，不把 warning 美化为 PASS。dogfood 只使用隔离的 sibling-binding 双仓，顺序执行三个 Work；Work init、状态转换和 close 成功返回前必须由各自 native writer 维护 State/CURRENT，不允许脚本调用手工 projection refresh 掩盖 writer 缺口；异常必须回滚或报告明确的 `PARTIAL_MUTATION`，遗留漂移必须被检查器 fail-closed。每次初始化和关闭后都校验 lineage、治理基线、State/CURRENT 与 CR tracking：
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q
+PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_core_lifecycle_dogfood.py
 uv run --python 3.11 ruff check .
 PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 python scripts/check_delivery_guardrails.py
 PYTHONDONTWRITEBYTECODE=1 uv run --python 3.11 meta-flow doctor all --project-root .

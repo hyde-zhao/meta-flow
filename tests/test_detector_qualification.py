@@ -113,17 +113,23 @@ def test_repository_r13_incremental_hard_gate_is_currently_pass() -> None:
     assert report["full_source_baseline"]["decision"] == "PASS"
     assert report["full_source_baseline"]["ambiguous_writer_call_count"] == 0
     assert report["unresolved_unallowlisted_count"] == 0
-    assert report["allowlisted_dynamic_writer_call_count"] == 6
+    assert report["allowlisted_dynamic_writer_call_count"] == 17
     qualified_calls = [item for item in report["writer_calls"] if item["target_kind"] == "dynamic"]
-    assert len(qualified_calls) == 6
+    assert len(qualified_calls) == 17
     assert {item["ref"] for item in qualified_calls} == {
-        "meta_flow/state/projection_transaction.py"
+        "meta_flow/state/projection_transaction.py",
+        "meta_flow/work/lifecycle.py",
+        "meta_flow/work/lifecycle_transaction.py",
     }
     assert {item["function"] for item in qualified_calls} == {
         "_platform_lock",
         "_acquire_lock",
         "_claim_lock",
         "_release_lock",
+        "acquire_shared_projection_writer_lock",
+        "record_shared_projection_successor",
+        "discard_shared_projection_successor",
+        "update_work_status",
     }
 
 
