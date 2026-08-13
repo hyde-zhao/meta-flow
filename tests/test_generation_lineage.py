@@ -80,6 +80,21 @@ def test_native_lineage_can_take_over_a_legacy_tail(tmp_path: Path) -> None:
     assert heads == {"STATE.md": sha256(b"3").hexdigest()}
 
 
+def test_duplicate_legacy_after_digest_is_one_equivalent_generation(
+    tmp_path: Path,
+) -> None:
+    _write_manifest(tmp_path, "close-w-000", before=b"0", after=b"same", ordinal=1)
+    _write_manifest(tmp_path, "close-w-001", before=b"other", after=b"same", ordinal=2)
+
+    heads = committed_generation_head_digests(
+        tmp_path,
+        refs=("STATE.md",),
+        current_digests={"STATE.md": sha256(b"same").hexdigest()},
+    )
+
+    assert heads == {"STATE.md": sha256(b"same").hexdigest()}
+
+
 def test_lineage_fork_is_fail_closed(tmp_path: Path) -> None:
     _write_manifest(
         tmp_path,

@@ -27,11 +27,11 @@ from meta_flow.execution_control.runtime_context import (
     build_execution_control_context,
     target_preimage_digest,
 )
-from meta_flow.project.governance import load_phase, replace_phase
-from meta_flow.project.model import Project, load_project, replace_project
+from meta_flow.project.governance import load_phase
+from meta_flow.project.model import Project, load_project
 from meta_flow.project.read_contract import ReadContextProtocol
-from meta_flow.project.scale import load_yaml_object
-from meta_flow.work.model import Work, load_work, work_path, write_work_create_only
+from meta_flow.project.scale import dump_yaml, load_yaml_object
+from meta_flow.work.model import Work, load_work, work_path
 from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.route_profile import RouteDecision, evaluate_route_profile
 from meta_flow.work.scope import check_scope
@@ -68,6 +68,7 @@ class WorkInitPlan:
     request_candidate: RequestMaterializationCandidateV1 | None
     target_preimages: tuple[tuple[str, str], ...]
     plan_digest: str
+    lineage_preflight: tuple[tuple[str, str, str, str], ...] = ()
 
     @property
     def blocked(self) -> bool:
@@ -88,6 +89,15 @@ class WorkInitPlan:
             "actions": [action.__dict__ for action in self.actions],
             "conflicts": [conflict.__dict__ for conflict in self.conflicts],
             "target_preimages": dict(self.target_preimages),
+            "lineage_preflight": [
+                {
+                    "ref": ref,
+                    "anchor_close_authorization_id": anchor,
+                    "predecessor_successor_id": predecessor,
+                    "before_digest": before_digest,
+                }
+                for ref, anchor, predecessor, before_digest in self.lineage_preflight
+            ],
             "context_digest": (
                 self.execution_context.context_digest
                 if self.execution_context is not None
@@ -131,6 +141,10 @@ class WorkInitReceipt:
     provider_receipt_status: str
     reason_codes: tuple[str, ...]
     recovery_route: str
+    transaction_id: str = ""
+    transaction_state: str = ""
+    recovery_required: bool = False
+    shared_projection_successor_id: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -148,6 +162,10 @@ class WorkInitReceipt:
             "provider_receipt_status": self.provider_receipt_status,
             "reason_codes": list(self.reason_codes),
             "recovery_route": self.recovery_route,
+            "transaction_id": self.transaction_id,
+            "transaction_state": self.transaction_state,
+            "recovery_required": self.recovery_required,
+            "shared_projection_successor_id": self.shared_projection_successor_id,
         }
 
 
@@ -181,6 +199,7 @@ def _plan_digest_source(
     context_digest: str,
     admission_plan: AdmissionPlanV1 | None,
     request_candidate: RequestMaterializationCandidateV1 | None,
+    lineage_preflight: tuple[tuple[str, str, str, str], ...] = (),
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -199,6 +218,7 @@ def _plan_digest_source(
         "request_candidate_digest": (
             request_candidate.candidate_digest if request_candidate is not None else ""
         ),
+        "lineage_preflight": [list(item) for item in lineage_preflight],
     }
 
 
@@ -663,6 +683,25 @@ def _plan_work_init_from_release_root(
                     )
                 )
 
+    governance_path = process_root / "governance/GOVERNANCE-BASELINE.json"
+    if governance_path.exists() or governance_path.is_symlink():
+        try:
+            from meta_flow.project.governance_projection import (
+                validate_governance_projection,
+            )
+
+            governance = validate_governance_projection(root, process_root)
+            if governance["decision"] != "PASS":
+                raise ValueError("; ".join(governance.get("errors", [])))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            conflicts.append(
+                WorkInitConflict(
+                    "WORK_INIT_GOVERNANCE_PREFLIGHT_BLOCKED",
+                    "governance/GOVERNANCE-BASELINE.json",
+                    f"governance projection must be current: {exc}",
+                )
+            )
+
     path = work_path(process_root, work.work_id)
     existing_matches = False
     if path.exists() or path.is_symlink():
@@ -775,6 +814,41 @@ def _plan_work_init_from_release_root(
             }.items()
         )
     )
+    lineage_preflight: tuple[tuple[str, str, str, str], ...] = ()
+    successor_refs = tuple(
+        action.ref
+        for action in actions
+        if action.action == "update"
+        and (
+            action.ref == "PROJECT.yaml"
+            or Path(action.ref).name == "PHASE.yaml"
+        )
+    )
+    if successor_refs and not conflicts:
+        try:
+            from meta_flow.work.lifecycle_transaction import (
+                plan_shared_projection_successor_preflight,
+            )
+
+            successor_before = {
+                ref: sha256((process_root / ref).read_bytes()).hexdigest()
+                for ref in successor_refs
+            }
+            lineage_preflight = plan_shared_projection_successor_preflight(
+                process_root,
+                operation="work.init",
+                writer_id=work.work_id,
+                before_digests=successor_before,
+                allowed_refs=successor_refs,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            conflicts.append(
+                WorkInitConflict(
+                    "WORK_INIT_LINEAGE_PREFLIGHT_BLOCKED",
+                    ",".join(successor_refs),
+                    str(exc),
+                )
+            )
     digest_source = _plan_digest_source(
         work=work,
         project=project,
@@ -789,6 +863,7 @@ def _plan_work_init_from_release_root(
         context_digest=execution_context.context_digest,
         admission_plan=admission_plan,
         request_candidate=request_candidate,
+        lineage_preflight=lineage_preflight,
     )
     return WorkInitPlan(
         process_root=process_root,
@@ -805,6 +880,7 @@ def _plan_work_init_from_release_root(
         request_candidate=request_candidate,
         target_preimages=target_preimages,
         plan_digest=_digest(digest_source),
+        lineage_preflight=lineage_preflight,
     )
 
 
@@ -887,6 +963,10 @@ def _make_work_init_receipt(
     durable_lock_count: int = 0,
     project_index_updated: bool = False,
     reason_codes: tuple[str, ...] = (),
+    transaction_id: str = "",
+    transaction_state: str = "",
+    recovery_required: bool = False,
+    shared_projection_successor_id: str = "",
 ) -> WorkInitReceipt:
     context = plan.execution_context
     return WorkInitReceipt(
@@ -908,8 +988,14 @@ def _make_work_init_receipt(
         recovery_route=(
             "stop-and-inspect-partial-mutation"
             if decision == "PARTIAL_MUTATION"
+            else "stop-and-replan"
+            if decision == "RECOVERED"
             else "none"
         ),
+        transaction_id=transaction_id,
+        transaction_state=transaction_state,
+        recovery_required=recovery_required,
+        shared_projection_successor_id=shared_projection_successor_id,
     )
 
 
@@ -937,16 +1023,132 @@ def _raise_apply_error(
     raise WorkInitApplyError(message, receipt)
 
 
-def _write_request_candidate(
-    process_root: Path,
-    candidate: RequestMaterializationCandidateV1,
-) -> None:
-    path = process_root / candidate.request_ref
-    if path.exists() or path.is_symlink():
-        raise FileExistsError("REQUEST target already exists")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("xb") as stream:
-        stream.write(candidate.content_bytes)
+def _render_yaml_bytes(payload: dict[str, Any]) -> bytes:
+    return (dump_yaml(payload) + "\n").encode("utf-8")
+
+
+def _work_init_transaction_targets(
+    plan: WorkInitPlan,
+) -> tuple[Any, ...]:
+    """基于 fresh plan 构造完整 post-image；此函数只读，不落盘。"""
+
+    if plan.process_root is None or plan.release_root is None:
+        raise ValueError("Work init transaction requires canonical roots")
+    from meta_flow.work.init_transaction import build_transaction_target
+    from meta_flow.work.lifecycle_transaction import build_state_projection_candidates
+
+    root = plan.process_root
+    action_by_ref = {action.ref: action for action in plan.actions}
+    candidates: list[tuple[str, bytes | None]] = []
+    overrides: dict[str, tuple[dict[str, Any], bytes]] = {}
+
+    request_action = action_by_ref.get(plan.work.request_ref)
+    if request_action is not None and request_action.action == "create":
+        if plan.request_candidate is None:
+            raise ValueError("REQUEST create action lacks a bound candidate")
+        candidates.append((plan.work.request_ref, plan.request_candidate.content_bytes))
+
+    work_bytes = _render_yaml_bytes(plan.work.as_dict())
+    work_action = action_by_ref.get(plan.work.work_ref)
+    if work_action is not None and work_action.action == "create":
+        candidates.append((plan.work.work_ref, work_bytes))
+    overrides["process/" + plan.work.work_ref] = (plan.work.as_dict(), work_bytes)
+
+    if plan.project is None:
+        raise ValueError("Work init transaction lacks Project")
+    project = plan.project
+    project_action = action_by_ref.get("PROJECT.yaml")
+    if project_action is not None and project_action.action == "update":
+        project = replace(
+            project,
+            active_work_refs=(*project.active_work_refs, plan.work.work_ref),
+        )
+        project_bytes = _render_yaml_bytes(project.as_dict())
+        candidates.append(("PROJECT.yaml", project_bytes))
+        overrides["process/PROJECT.yaml"] = (project.as_dict(), project_bytes)
+
+    if plan.work.phase_ref:
+        phase = load_phase(root, plan.work.phase_ref)
+        phase_action = action_by_ref.get(plan.work.phase_ref)
+        if phase_action is not None and phase_action.action == "update":
+            phase = replace(
+                phase,
+                work_refs=(*phase.work_refs, plan.work.work_ref),
+            )
+            phase_bytes = _render_yaml_bytes(phase.as_dict())
+            candidates.append((plan.work.phase_ref, phase_bytes))
+            overrides["process/" + plan.work.phase_ref] = (
+                phase.as_dict(),
+                phase_bytes,
+            )
+
+    # 先证明 State post-image 可构造，但由 State 自身事务 owner 落盘；否则会
+    # 绕过其 terminal-generation lineage。Work-init 外层 manifest 负责在后续
+    # 失败时回滚领域目标，再调用同一 State owner 收敛回旧 formal truth。
+    build_state_projection_candidates(root, object_overrides=overrides)
+
+    targets_list: list[Any] = []
+    for ref, after_bytes in candidates:
+        path = root / ref
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError(f"Work init transaction target is not regular: {ref}")
+        before_bytes = path.read_bytes() if path.is_file() else None
+        if before_bytes != after_bytes:
+            targets_list.append(
+                build_transaction_target(root, ref=ref, after_bytes=after_bytes)
+            )
+    targets = tuple(targets_list)
+    if not targets:
+        raise ValueError("mutating Work init produced no transaction targets")
+    if len(targets) > 7:
+        raise ValueError("Work init transaction target budget exceeded")
+    return targets
+
+
+def _validate_work_init_postimage(plan: WorkInitPlan) -> None:
+    """证明成功返回前 State/CURRENT、governance 与共享 lineage 已收敛。"""
+
+    if plan.process_root is None or plan.release_root is None:
+        raise ValueError("Work init postimage validation requires canonical roots")
+    from meta_flow.project.governance_projection import validate_governance_projection
+    from meta_flow.state import current as state_current
+    from meta_flow.state.formal_projection import (
+        build_formal_truth_snapshot,
+        derive_formal_truth_patch,
+    )
+    from meta_flow.work.lifecycle_transaction import (
+        assert_work_close_shared_projection_lineage,
+    )
+
+    root = plan.process_root
+    assert_work_close_shared_projection_lineage(root)
+    state_path = root / "state/STATE.current.json"
+    if state_path.is_file() and not state_path.is_symlink():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        snapshot = build_formal_truth_snapshot(
+            plan.release_root,
+            process_root=root,
+        )
+        patch = derive_formal_truth_patch(state, snapshot)
+        if state.get("formal_truth_projection") != snapshot or any(
+            state.get(field) != patch[field]
+            for field in ("current_phase", "active_change", "blocked", "next_action")
+        ):
+            raise ValueError("Work init State formal truth postimage is stale")
+        current_findings = state_current.validate_current_projection(plan.release_root)
+        if current_findings:
+            raise ValueError(
+                "Work init CURRENT postimage is stale: "
+                + "; ".join(item.message for item in current_findings)
+            )
+    governance_path = root / "governance/GOVERNANCE-BASELINE.json"
+    if governance_path.exists() or governance_path.is_symlink():
+        governance = validate_governance_projection(plan.release_root, root)
+        if governance["decision"] != "PASS":
+            raise ValueError(
+                "Work init governance projection postimage is stale: "
+                + "; ".join(governance.get("errors", []))
+            )
 
 
 def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
@@ -971,9 +1173,16 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
         return _make_work_init_receipt(plan, decision="PASS")
     if plan.process_root is None or plan.execution_context is None:
         raise ValueError("canonical Work init plan lacks execution context")
+    from meta_flow.work.init_transaction import (
+        apply_work_init_transaction_targets,
+        begin_work_init_transaction,
+        commit_work_init_transaction,
+        rollback_work_init_transaction,
+    )
     from meta_flow.work.lifecycle_transaction import (
         acquire_shared_projection_writer_lock,
         assert_work_close_shared_projection_lineage,
+        discard_shared_projection_successor,
         record_work_init_shared_projection_successor,
         refresh_state_projection_if_initialized,
         release_shared_projection_writer_lock,
@@ -1033,6 +1242,10 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
     failure_codes: tuple[str, ...] = ()
     shared_writer_lock = None
     shared_writer_id = f"work-init-{plan.work.work_id}-{secrets.token_hex(8)}"
+    transaction_id = ""
+    transaction_state = ""
+    successor_id = ""
+    state_refreshed = False
     try:
         fresh = _plan_work_init_from_release_root(
             plan.release_root,
@@ -1047,6 +1260,7 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             or fresh.execution_context is None
             or fresh.compatibility_decision != plan.compatibility_decision
             or fresh.target_preimages != plan.target_preimages
+            or fresh.lineage_preflight != plan.lineage_preflight
             or _context_authority_digest(fresh.execution_context)
             != _context_authority_digest(plan.execution_context)
         ):
@@ -1073,56 +1287,110 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
         if _current_domain_preimages(plan) != domain_baseline:
             failure_codes = ("ADMISSION_PREIMAGE_DRIFT",)
             raise ValueError("Work init target preimage drifted before shared writer lock")
+        targets = _work_init_transaction_targets(fresh)
         successor_before = {
-            ref: sha256((plan.process_root / ref).read_bytes()).hexdigest()
-            for ref in {"PROJECT.yaml", plan.work.phase_ref}
-            if ref and (plan.process_root / ref).is_file()
+            target.ref: target.before_digest
+            for target in targets
+            if target.ref == "PROJECT.yaml"
+            or Path(target.ref).name == "PHASE.yaml"
         }
-
-        action_by_ref = {action.ref: action for action in plan.actions}
-        request_action = action_by_ref.get(plan.work.request_ref)
-        if request_action is not None and request_action.action == "create":
-            if plan.request_candidate is None:
-                raise ValueError("REQUEST create action lacks a bound candidate")
-            _write_request_candidate(plan.process_root, plan.request_candidate)
-        work_action = action_by_ref.get(plan.work.work_ref)
-        if work_action is not None and work_action.action == "create":
-            write_work_create_only(plan.process_root, plan.work)
-        project_action = action_by_ref.get("PROJECT.yaml")
-        if project_action is not None and project_action.action == "update":
-            project = load_project(plan.process_root)
-            replace_project(
-                plan.process_root,
-                replace(
-                    project,
-                    active_work_refs=(*project.active_work_refs, plan.work.work_ref),
-                ),
-                expected_project_id=project.project_id,
-            )
-            project_index_updated = True
-        if plan.work.phase_ref:
-            phase_action = action_by_ref.get(plan.work.phase_ref)
-            if phase_action is not None and phase_action.action == "update":
-                phase = load_phase(plan.process_root, plan.work.phase_ref)
-                replace_phase(
-                    plan.process_root,
-                    replace(phase, work_refs=(*phase.work_refs, plan.work.work_ref)),
-                    expected_phase_id=phase.phase_id,
-                )
+        transaction_id = begin_work_init_transaction(
+            plan.process_root,
+            operation="work.init",
+            work_id=plan.work.work_id,
+            plan_digest=plan.plan_digest,
+            release_oid=fresh.execution_context.release_oid,
+            process_oid=fresh.execution_context.process_oid,
+            targets=targets,
+        )
+        transaction_state = "PREPARED"
+        coordination_mutations += 1
+        apply_work_init_transaction_targets(
+            plan.process_root,
+            transaction_id,
+        )
+        transaction_state = "APPLYING"
         successor_id = record_work_init_shared_projection_successor(
             plan.process_root,
             work_id=plan.work.work_id,
             before_digests=successor_before,
+            expected_preflight=plan.lineage_preflight,
         )
         if successor_id:
             coordination_mutations += 1
-        coordination_mutations += len(
-            refresh_state_projection_if_initialized(plan.process_root)
+        refreshed_refs = refresh_state_projection_if_initialized(plan.process_root)
+        coordination_mutations += len(refreshed_refs)
+        state_refreshed = bool(refreshed_refs)
+        _validate_work_init_postimage(fresh)
+        commit_work_init_transaction(
+            plan.process_root,
+            transaction_id,
+            successor_id=successor_id,
+        )
+        transaction_state = "COMMITTED"
+        project_index_updated = any(
+            action.ref == "PROJECT.yaml" and action.action == "update"
+            for action in plan.actions
         )
     except Exception as exc:
         failure = exc
         if not failure_codes:
             failure_codes = ("WORK_INIT_DOMAIN_WRITE_FAILED",)
+        if successor_id:
+            try:
+                if discard_shared_projection_successor(
+                    plan.process_root,
+                    successor_id=successor_id,
+                    operation="work.init",
+                    writer_id=plan.work.work_id,
+                ):
+                    coordination_mutations += 1
+                successor_id = ""
+            except Exception:
+                failure_codes = tuple(
+                    sorted(
+                        {
+                            *failure_codes,
+                            "WORK_INIT_SUCCESSOR_RECOVERY_FAILED",
+                        }
+                    )
+                )
+        if transaction_id and transaction_state != "COMMITTED":
+            try:
+                recovery = rollback_work_init_transaction(
+                    plan.process_root,
+                    transaction_id,
+                    failure=str(exc),
+                )
+                transaction_state = recovery.decision
+            except Exception:
+                recovery = None
+                transaction_state = "PARTIAL"
+            if recovery is None or recovery.recovery_required:
+                failure_codes = tuple(
+                    sorted(
+                        {
+                            *failure_codes,
+                            "WORK_INIT_TRANSACTION_RECOVERY_FAILED",
+                        }
+                    )
+                )
+        if state_refreshed and transaction_state == "RECOVERED":
+            try:
+                coordination_mutations += len(
+                    refresh_state_projection_if_initialized(plan.process_root)
+                )
+                state_refreshed = False
+            except Exception:
+                failure_codes = tuple(
+                    sorted(
+                        {
+                            *failure_codes,
+                            "WORK_INIT_STATE_RECOVERY_FAILED",
+                            "WORK_INIT_TRANSACTION_RECOVERY_FAILED",
+                        }
+                    )
+                )
 
     if shared_writer_lock is not None:
         try:
@@ -1155,10 +1423,21 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             durable_lock_count=released.durable_lock_count,
             project_index_updated=project_index_updated,
             reason_codes=failure_codes,
+            transaction_id=transaction_id,
+            transaction_state=transaction_state,
+            recovery_required=True,
+            shared_projection_successor_id=successor_id,
         )
         raise WorkInitApplyError("Work init admission lock cleanup failed", receipt)
     if failure is not None:
-        decision = "PARTIAL_MUTATION" if domain_refs else "BLOCKED"
+        recovery_failed = "WORK_INIT_TRANSACTION_RECOVERY_FAILED" in failure_codes
+        decision = (
+            "PARTIAL_MUTATION"
+            if domain_refs or recovery_failed or transaction_state == "COMMITTED"
+            else "RECOVERED"
+            if transaction_id
+            else "BLOCKED"
+        )
         receipt = _make_work_init_receipt(
             plan,
             decision=decision,
@@ -1167,6 +1446,10 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             durable_lock_count=0,
             project_index_updated=project_index_updated,
             reason_codes=failure_codes,
+            transaction_id=transaction_id,
+            transaction_state=transaction_state,
+            recovery_required=decision == "PARTIAL_MUTATION",
+            shared_projection_successor_id=successor_id,
         )
         raise WorkInitApplyError(str(failure), receipt) from failure
     return _make_work_init_receipt(
@@ -1176,7 +1459,424 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
         coordination_mutation_count=coordination_mutations,
         durable_lock_count=0,
         project_index_updated=project_index_updated,
+        transaction_id=transaction_id,
+        transaction_state=transaction_state,
+        shared_projection_successor_id=successor_id,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyWorkInitRecoveryPlanV1:
+    decision: str
+    release_root: Path
+    process_root: Path
+    work_id: str
+    release_oid: str
+    process_oid: str
+    targets: tuple[Any, ...]
+    lineage_preflight: tuple[tuple[str, str, str, str], ...]
+    blockers: tuple[str, ...]
+    plan_digest: str
+
+    @property
+    def ready(self) -> bool:
+        return self.decision == "READY" and not self.blockers
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "LegacyWorkInitRecoveryPlanV1",
+            "operation": "work.init.recover-legacy-partial",
+            "decision": self.decision,
+            "work_id": self.work_id,
+            "release_oid": self.release_oid,
+            "process_oid": self.process_oid,
+            "targets": [target.as_plan_dict() for target in self.targets],
+            "lineage_preflight": [
+                {
+                    "ref": ref,
+                    "anchor_close_authorization_id": anchor,
+                    "predecessor_successor_id": predecessor,
+                    "before_digest": before_digest,
+                }
+                for ref, anchor, predecessor, before_digest in self.lineage_preflight
+            ],
+            "blockers": list(self.blockers),
+            "plan_digest": self.plan_digest,
+            "mutation_count": 0,
+            "recovery_disposition": "exact-rollback",
+            "next_action": (
+                "apply this plan, stop, then rebuild Work-init plan"
+                if self.ready
+                else "resolve blockers without editing consumer truth by hand"
+            ),
+        }
+
+
+def recover_partial_work_init_transaction(
+    release_root: Path,
+    *,
+    transaction_id: str,
+    expected_plan_digest: str,
+) -> dict[str, Any]:
+    """恢复新协议留下的 PARTIAL/APPLYING manifest，并重新收敛 State。"""
+
+    from meta_flow.project.process_route import require_process_route
+    from meta_flow.work.init_transaction import (
+        inspect_work_init_transactions,
+        recover_work_init_transaction,
+    )
+    from meta_flow.work.lifecycle_transaction import (
+        acquire_shared_projection_writer_lock,
+        assert_work_close_shared_projection_lineage,
+        discard_shared_projection_successor,
+        refresh_state_projection_if_initialized,
+        release_shared_projection_writer_lock,
+        shared_projection_successor_for_writer,
+    )
+
+    release = release_root.resolve()
+    process = require_process_route(release).process_root.resolve()
+    release_oid = _repository_head_oid(release)
+    process_oid = _repository_head_oid(process)
+    writer_id = f"work-init-transaction-recover-{transaction_id[-32:]}"
+    shared_lock = acquire_shared_projection_writer_lock(process, writer_id)
+    try:
+        inspection = inspect_work_init_transactions(process)
+        matches = [
+            item
+            for item in inspection["transactions"]
+            if item["transaction_id"] == transaction_id
+        ]
+        if len(matches) != 1:
+            raise ValueError("Work-init transaction identity is unavailable")
+        transaction = matches[0]
+        if transaction["plan_digest"] != expected_plan_digest:
+            raise ValueError("Work-init transaction plan digest differs")
+        work_id = str(transaction["work_id"])
+        successor_id = shared_projection_successor_for_writer(
+            process,
+            operation="work.init",
+            writer_id=work_id,
+        )
+        if successor_id:
+            discard_shared_projection_successor(
+                process,
+                successor_id=successor_id,
+                operation="work.init",
+                writer_id=work_id,
+            )
+        receipt = recover_work_init_transaction(
+            process,
+            transaction_id,
+            expected_plan_digest=expected_plan_digest,
+            release_oid=release_oid,
+            process_oid=process_oid,
+        )
+        if receipt.decision != "RECOVERED":
+            return receipt.as_dict()
+        refreshed_refs = refresh_state_projection_if_initialized(process)
+        assert_work_close_shared_projection_lineage(process)
+        return {
+            **receipt.as_dict(),
+            "decision": "RECOVERED",
+            "state_refreshed_refs": list(refreshed_refs),
+            "next_action": "stop and rebuild the Work-init plan",
+        }
+    finally:
+        release_shared_projection_writer_lock(shared_lock, writer_id)
+
+
+def _repository_head_oid(root: Path) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    oid = completed.stdout.strip() if completed.returncode == 0 else ""
+    if len(oid) != 40 or any(character not in "0123456789abcdef" for character in oid):
+        raise ValueError("repository HEAD OID is unavailable")
+    return oid
+
+
+def plan_legacy_partial_work_init_recovery(
+    release_root: Path,
+    work_id: str,
+) -> LegacyWorkInitRecoveryPlanV1:
+    """识别 0.4.1 无 manifest 的 Work-init 部分写入并规划 exact rollback。"""
+
+    from meta_flow.project.governance_projection import validate_governance_projection
+    from meta_flow.project.process_route import require_process_route
+    from meta_flow.state import current as state_current
+    from meta_flow.state.formal_projection import (
+        build_formal_truth_snapshot,
+        derive_formal_truth_patch,
+    )
+    from meta_flow.work.init_transaction import (
+        build_transaction_target,
+        inspect_work_init_transactions,
+    )
+    from meta_flow.work.lifecycle_transaction import (
+        plan_shared_projection_successor_preflight,
+    )
+
+    release = release_root.resolve()
+    blockers: list[str] = []
+    targets: tuple[Any, ...] = ()
+    lineage_preflight: tuple[tuple[str, str, str, str], ...] = ()
+    try:
+        route = require_process_route(release)
+        process = route.process_root.resolve()
+        release_oid = _repository_head_oid(release)
+        process_oid = _repository_head_oid(process)
+    except (OSError, ValueError) as exc:
+        process = Path()
+        release_oid = ""
+        process_oid = ""
+        blockers.append(str(exc))
+    if not blockers:
+        try:
+            inspection = inspect_work_init_transactions(process, work_id=work_id)
+            if inspection["transactions"]:
+                raise ValueError(
+                    "Work already has a native Work-init transaction; recover that transaction"
+                )
+            work = load_work(process, work_id)
+            if work.status != "planned" or work.execution_unit is None:
+                raise ValueError(
+                    "legacy partial recovery requires one planned typed Work"
+                )
+            if not work.phase_ref:
+                raise ValueError("legacy partial recovery requires one declared Phase")
+            project = load_project(process)
+            phase = load_phase(process, work.phase_ref)
+            if project.active_work_refs.count(work.work_ref) != 1:
+                raise ValueError(
+                    "Project must contain the partial Work ref exactly once"
+                )
+            if phase.work_refs.count(work.work_ref) != 1:
+                raise ValueError(
+                    "Phase must contain the partial Work ref exactly once"
+                )
+            previous_project = replace(
+                project,
+                active_work_refs=tuple(
+                    ref for ref in project.active_work_refs if ref != work.work_ref
+                ),
+            )
+            previous_phase = replace(
+                phase,
+                work_refs=tuple(ref for ref in phase.work_refs if ref != work.work_ref),
+            )
+            project_bytes = _render_yaml_bytes(previous_project.as_dict())
+            phase_bytes = _render_yaml_bytes(previous_phase.as_dict())
+            previous_digests = {
+                "PROJECT.yaml": sha256(project_bytes).hexdigest(),
+                work.phase_ref: sha256(phase_bytes).hexdigest(),
+            }
+            lineage_preflight = plan_shared_projection_successor_preflight(
+                process,
+                operation="work.init",
+                writer_id=work.work_id,
+                before_digests=previous_digests,
+                allowed_refs=("PROJECT.yaml", work.phase_ref),
+            )
+            state_path = process / "state/STATE.current.json"
+            if state_path.is_file() and not state_path.is_symlink():
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                overrides = {
+                    "process/PROJECT.yaml": (
+                        previous_project.as_dict(),
+                        project_bytes,
+                    ),
+                    "process/" + work.phase_ref: (
+                        previous_phase.as_dict(),
+                        phase_bytes,
+                    ),
+                }
+                snapshot = build_formal_truth_snapshot(
+                    release,
+                    process_root=process,
+                    object_overrides=overrides,
+                )
+                patch = derive_formal_truth_patch(state, snapshot)
+                if state.get("formal_truth_projection") != snapshot or any(
+                    state.get(field) != patch[field]
+                    for field in (
+                        "current_phase",
+                        "active_change",
+                        "blocked",
+                        "next_action",
+                    )
+                ):
+                    raise ValueError(
+                        "State is not the exact pre-Work-init formal truth generation"
+                    )
+                current_findings = state_current.validate_current_projection(release)
+                if current_findings:
+                    raise ValueError(
+                        "CURRENT is not bound to the retained State generation: "
+                        + "; ".join(item.message for item in current_findings)
+                    )
+            governance_path = process / "governance/GOVERNANCE-BASELINE.json"
+            if governance_path.exists() or governance_path.is_symlink():
+                governance = validate_governance_projection(release, process)
+                if governance["decision"] != "PASS":
+                    raise ValueError(
+                        "governance projection is not current: "
+                        + "; ".join(governance.get("errors", []))
+                    )
+            targets = (
+                build_transaction_target(
+                    process,
+                    ref=work.work_ref,
+                    after_bytes=None,
+                ),
+                build_transaction_target(
+                    process,
+                    ref="PROJECT.yaml",
+                    after_bytes=project_bytes,
+                ),
+                build_transaction_target(
+                    process,
+                    ref=work.phase_ref,
+                    after_bytes=phase_bytes,
+                ),
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            blockers.append(str(exc))
+    fields = {
+        "schema_version": 1,
+        "operation": "work.init.recover-legacy-partial",
+        "work_id": work_id,
+        "release_oid": release_oid,
+        "process_oid": process_oid,
+        "targets": [target.as_plan_dict() for target in targets],
+        "lineage_preflight": [list(item) for item in lineage_preflight],
+        "blockers": blockers,
+    }
+    return LegacyWorkInitRecoveryPlanV1(
+        decision="BLOCKED" if blockers else "READY",
+        release_root=release,
+        process_root=process,
+        work_id=work_id,
+        release_oid=release_oid,
+        process_oid=process_oid,
+        targets=targets,
+        lineage_preflight=lineage_preflight,
+        blockers=tuple(blockers),
+        plan_digest=_digest(fields),
+    )
+
+
+def apply_legacy_partial_work_init_recovery(
+    plan: LegacyWorkInitRecoveryPlanV1,
+    *,
+    expected_plan_digest: str,
+) -> dict[str, Any]:
+    """应用 exact rollback；成功后返回 RECOVERED，并强制调用方停止重规划。"""
+
+    from meta_flow.project.governance_projection import validate_governance_projection
+    from meta_flow.state import current as state_current
+    from meta_flow.work.init_transaction import (
+        apply_work_init_transaction_targets,
+        begin_work_init_transaction,
+        commit_work_init_transaction,
+        rollback_work_init_transaction,
+    )
+    from meta_flow.work.lifecycle_transaction import (
+        acquire_shared_projection_writer_lock,
+        assert_work_close_shared_projection_lineage,
+        release_shared_projection_writer_lock,
+    )
+
+    if not plan.ready:
+        raise ValueError("blocked legacy Work-init recovery plan cannot apply")
+    if expected_plan_digest != plan.plan_digest:
+        raise ValueError("legacy Work-init recovery plan digest differs")
+    fresh = plan_legacy_partial_work_init_recovery(
+        plan.release_root,
+        plan.work_id,
+    )
+    if fresh.as_dict() != plan.as_dict():
+        raise ValueError("legacy Work-init recovery plan drifted before lock")
+    writer_id = f"work-init-recover-{plan.work_id}"
+    shared_lock = acquire_shared_projection_writer_lock(plan.process_root, writer_id)
+    transaction_id = ""
+    try:
+        locked = plan_legacy_partial_work_init_recovery(
+            plan.release_root,
+            plan.work_id,
+        )
+        if locked.as_dict() != plan.as_dict():
+            raise ValueError("legacy Work-init recovery plan drifted inside lock")
+        transaction_id = begin_work_init_transaction(
+            plan.process_root,
+            operation="work.init.recover-legacy-partial",
+            work_id=plan.work_id,
+            plan_digest=plan.plan_digest,
+            release_oid=plan.release_oid,
+            process_oid=plan.process_oid,
+            targets=plan.targets,
+        )
+        apply_work_init_transaction_targets(plan.process_root, transaction_id)
+        assert_work_close_shared_projection_lineage(plan.process_root)
+        state_errors, _state_warnings = state_current.check_current_state(
+            plan.release_root,
+            mode="enforce",
+        )
+        if state_errors:
+            raise ValueError(
+                "State is not current after legacy Work-init recovery: "
+                + "; ".join(state_errors)
+            )
+        governance_path = (
+            plan.process_root / "governance/GOVERNANCE-BASELINE.json"
+        )
+        if governance_path.exists() or governance_path.is_symlink():
+            governance = validate_governance_projection(
+                plan.release_root,
+                plan.process_root,
+            )
+            if governance["decision"] != "PASS":
+                raise ValueError(
+                    "governance projection is stale after recovery: "
+                    + "; ".join(governance.get("errors", []))
+                )
+        commit_work_init_transaction(
+            plan.process_root,
+            transaction_id,
+            successor_id="",
+        )
+        return {
+            "schema_version": 1,
+            "kind": "LegacyWorkInitRecoveryReceiptV1",
+            "operation": "work.init.recover-legacy-partial",
+            "decision": "RECOVERED",
+            "work_id": plan.work_id,
+            "plan_digest": plan.plan_digest,
+            "transaction_id": transaction_id,
+            "transaction_state": "COMMITTED",
+            "mutation_count": len(plan.targets),
+            "mutated_refs": [target.ref for target in plan.targets],
+            "recovery_required": False,
+            "next_action": "stop and rebuild the Work-init plan",
+        }
+    except Exception as exc:
+        if transaction_id:
+            rollback = rollback_work_init_transaction(
+                plan.process_root,
+                transaction_id,
+                failure=str(exc),
+            )
+            if rollback.recovery_required:
+                raise ValueError(
+                    "legacy Work-init recovery failed and requires transaction recovery"
+                ) from exc
+        raise
+    finally:
+        release_shared_projection_writer_lock(shared_lock, writer_id)
 
 
 def close_work(

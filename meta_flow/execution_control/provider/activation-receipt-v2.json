@@ -2,83 +2,43 @@
   "cohort_revision": 1,
   "context_revision": 1,
   "evidence_digests": {
-    "candidate_closure.command": "02888c1a785c83436861759a0700bd79d9e7b88b14b34d557f2abff1ce06bc69",
-    "candidate_closure.profile": "49b4cf8d70394a053d7eb39b760cf470e040cb4b05f1aa11faafdf9dbadc2b7a",
-    "candidate_closure.receipt": "33236cc49b7e2ec68958ebc3f3375d5465bffa7368a3b4b45dbf1669766d620f",
-    "candidate_closure.result": "11b057ec14a29663a97a828c9de8fe53be694beea980ee9ca89bd9153b17a7df",
-    "candidate_compatibility.command": "6026a9b01ac814725e649657a5984ac88cf89826649faa4eecbfa8250036c7a4",
-    "candidate_compatibility.profile": "ef6a3576d31cb5493c77431e44469c249bc6441fc8ac8c9d28e2dfa38d2f7d3c",
-    "candidate_compatibility.receipt": "512f1bc5337816aadf0c01d9b85e2c5d3ef97dd688d3a767f34c20149feee0d3",
-    "candidate_compatibility.result": "8fc81b487e16807df31e3e497ee11e1f79167a30162a58a35a643ae271015841",
-    "candidate_full.command": "50cd12aebc84f138f76d0140de78aca3eccb156126a212af39e0af5f0a20b9bf",
-    "candidate_full.profile": "ca5f72a4834ae88d19bbe292a979638a02655f1122e3b6d49d05f6e28bdffa6b",
-    "candidate_full.receipt": "7b5b08daf57ddb96e89b6c40cc92e264bc53d1e4ca3c82b1dc484c2d7c5e8dc4",
-    "candidate_full.result": "c97b71e53a969afcdb25e1c29d17bf7811bc084f5c29279c6efd08858b155e1b",
-    "candidate_targeted.command": "ffcf39cf828d01f284c1ca5ea8692fac50ac704e83f7538d5b3a7ed4d484c192",
-    "candidate_targeted.profile": "287eab610447d243d4833cb9cd43894afce3e26a29f9bb6b183e3905d5ba4424",
-    "candidate_targeted.receipt": "56e44b840e38f53ed17020048a8cddf5cd2d569dea068a5704f21d79da083334",
-    "candidate_targeted.result": "4ad6860722f28c869558412ed9b4323e2bfdb648761c791193fec4f8b893e023"
+    "candidate_closure.command": "b82844ad7de5ee45b4cee59ecdd1dc7a5bb6c5f214212eb06b0c902ecc99b159",
+    "candidate_closure.profile": "2913858a459ba9ff97decea53663c6bd3e4ee88389025698f68c8e6132f54d8c",
+    "candidate_closure.receipt": "4cd1158a06c44050c7f7e753780f16a5fcfb10a14e3597f8730341e5d5293acd",
+    "candidate_closure.result": "7a4cda79246bea81648e22db40035e5ace6ed92bdfdbee1cb6affe6bb0583cd3",
+    "candidate_compatibility.command": "ba5e8a609d644fa8f18e4d800a86fb20f56b3fed8e45d11c0a418b779ff66ee7",
+    "candidate_compatibility.profile": "4c1942b447afc1339127f3bde00f5b690370386c4eb7b3e513d79265f2df2b90",
+    "candidate_compatibility.receipt": "24d21f10e557571622c72a1d74d952a5f21103b0b901254464688cca7c21df50",
+    "candidate_compatibility.result": "13bb2f81173d8f77b8e6d864356571aaba009fef3bae7d23c9cb7244404517ff",
+    "candidate_full.command": "493b344045584bf145eb5dc350ca516d3458b6db2dcb4a60443b2757bc973bbc",
+    "candidate_full.profile": "22a5f688e5b8db9e456c1eb652d035e1453e26aa03c1aee5bafa071961950c96",
+    "candidate_full.receipt": "be24bbd11cd497519005dc588fc98d6450aa9c8f0d2027fabfb409605bf7ec6f",
+    "candidate_full.result": "bc2dad49a601da1411e58f0534896388fa4c1c17d372671ff6f603c62d7b90a4",
+    "candidate_targeted.command": "f4cc865d1f7067cfba4bd8134785f698fa0daf554d4eb9cdaf06ee264843c12e",
+    "candidate_targeted.profile": "7b0c856028e3c3cbfabc9d2cc2348e572908cbe93e15a2f1be5785212285bc46",
+    "candidate_targeted.receipt": "cf62fcecb719694cb4763651f4cc8903501e4323fa79923afa128340763d5496",
+    "candidate_targeted.result": "307dbc6fd5baf579dcec4f42aa3ab810323067ea57aec21a2c1d1088ff7591dc"
   },
   "generator_identity": "meta_flow.execution_control.migration:build_provider_activation_receipt:v2",
   "package_name": "meta-flow",
-  "package_version": "0.4.1",
+  "package_version": "0.5.0",
   "policy_revision": 1,
   "qualified_source_exclusions": [
     "meta_flow/execution_control/provider/activation-receipt-v2.json"
   ],
   "qualified_source_manifest": [
-    {
-      "bytes": 37881,
-      "ref": "meta_flow/evolution.py",
-      "sha256": "ff8dde3fc42767ada355b950afd9e30004398b9ea6510ca577b9f3ca8288d249"
-    },
-    {
-      "bytes": 10735,
-      "ref": "meta_flow/evolution_cli.py",
-      "sha256": "6f98877f63c6a09ce18478b5593e955833a84e02b4d754374d2fe89a161a5b5d"
-    },
-    {
-      "bytes": 30350,
-      "ref": "meta_flow/execution_control/admission.py",
-      "sha256": "64e88e9f3b7cda9a38833123fffd32d1a18d4cf5faf8eb5ea28587340bd6cfc5"
-    },
-    {
-      "bytes": 20965,
-      "ref": "meta_flow/execution_control/consumer_scan.py",
-      "sha256": "5ccd7c70c8fbebc2ff59c767e445783efa90873bf49d7fcc89c7a43b5d2f3b47"
-    },
-    {
-      "bytes": 23269,
-      "ref": "meta_flow/execution_control/contract.py",
-      "sha256": "7b02c642f9256723762bced9e636b9b31d838b6f1f226d76b3872095839300a9"
-    },
-    {
-      "bytes": 56599,
-      "ref": "meta_flow/execution_control/migration.py",
-      "sha256": "fc13eee372ca943dc7249df9812cbe956cf253c5484b094bfab66473ce1bddaf"
-    },
-    {
-      "bytes": 16974,
-      "ref": "meta_flow/execution_control/runtime_context.py",
-      "sha256": "ea31bef693c0ed8d8753524a2bad25d218715765e0e938dce59cc30358963f27"
-    },
-    {
-      "bytes": 6174,
-      "ref": "meta_flow/work/assurance.py",
-      "sha256": "495cb1f1489f99a2932472e3f08a742ed800661028495dcbfd5bf6c1cbdd4189"
-    },
-    {
-      "bytes": 37221,
-      "ref": "meta_flow/work/cli.py",
-      "sha256": "adc39aa7b3312bb1b2454b0f799784379884f362358ed8c46e91f1e177fb6e46"
-    },
-    {
-      "bytes": 45274,
-      "ref": "meta_flow/work/store.py",
-      "sha256": "164e69fc709eb892d939a9039b7d6ba4ecb3fda9934ef5a89ebd2e1f17529ebb"
-    }
+    {"bytes": 37881, "ref": "meta_flow/evolution.py", "sha256": "ff8dde3fc42767ada355b950afd9e30004398b9ea6510ca577b9f3ca8288d249"},
+    {"bytes": 10735, "ref": "meta_flow/evolution_cli.py", "sha256": "6f98877f63c6a09ce18478b5593e955833a84e02b4d754374d2fe89a161a5b5d"},
+    {"bytes": 30350, "ref": "meta_flow/execution_control/admission.py", "sha256": "64e88e9f3b7cda9a38833123fffd32d1a18d4cf5faf8eb5ea28587340bd6cfc5"},
+    {"bytes": 20965, "ref": "meta_flow/execution_control/consumer_scan.py", "sha256": "5ccd7c70c8fbebc2ff59c767e445783efa90873bf49d7fcc89c7a43b5d2f3b47"},
+    {"bytes": 23269, "ref": "meta_flow/execution_control/contract.py", "sha256": "7b02c642f9256723762bced9e636b9b31d838b6f1f226d76b3872095839300a9"},
+    {"bytes": 56599, "ref": "meta_flow/execution_control/migration.py", "sha256": "514ae849d0dc94e890cccc8bcc19d5d7ecd2742b56b9a4ef4c7295fc47e4765b"},
+    {"bytes": 16974, "ref": "meta_flow/execution_control/runtime_context.py", "sha256": "ea31bef693c0ed8d8753524a2bad25d218715765e0e938dce59cc30358963f27"},
+    {"bytes": 6174, "ref": "meta_flow/work/assurance.py", "sha256": "495cb1f1489f99a2932472e3f08a742ed800661028495dcbfd5bf6c1cbdd4189"},
+    {"bytes": 42555, "ref": "meta_flow/work/cli.py", "sha256": "1b892d2f6a3f2005f2925e8d231552d289879ac1f52c7e33c9d7f3ef0b5f0379"},
+    {"bytes": 73484, "ref": "meta_flow/work/store.py", "sha256": "e161d878a84991cd90741b71bfea485f13e14aa31c2a23c9560c43c744ff7527"}
   ],
-  "qualified_source_set_digest": "25045a2112c8cc7ad1f05c19801fb7194d82b8a237ca3d36c74a88b243c1d83b",
-  "receipt_digest": "26a8154efd70f44ca0797dd39354c3199c56e3be256b5f870e8eec7c554a72da",
+  "qualified_source_set_digest": "0dffcc400fe4ac4637949eabcfb71059b12642d0f9137e6fdd01d41e7ef25241",
+  "receipt_digest": "1d8fc176389f25ba064ca229ebdfb305956f360bc59d1d72535984a268fddd9f",
   "schema_version": 1
 }

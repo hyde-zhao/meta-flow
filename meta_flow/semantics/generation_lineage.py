@@ -202,16 +202,28 @@ def committed_generation_heads(
         if len(explicit_legacy_tails) > 1:
             raise ValueError(f"generation lineage legacy tail is ambiguous: {ref}")
         if not explicit_legacy_tails and current_digests and current_digests.get(ref):
-            matching_legacy_tails = {
-                str(manifest["authorization_id"])
+            matching_legacy = [
+                manifest
                 for manifest in legacy
-                for target in manifest["targets"]
-                if target["ref"] == ref
-                and target["after_digest"] == current_digests[ref]
-            }
-            if len(matching_legacy_tails) > 1:
-                raise ValueError(f"generation lineage legacy tail is ambiguous: {ref}")
-            explicit_legacy_tails = matching_legacy_tails
+                if any(
+                    target["ref"] == ref
+                    and target["after_digest"] == current_digests[ref]
+                    for target in manifest["targets"]
+                )
+            ]
+            if matching_legacy:
+                # 升级前 manifest 没有显式 predecessor。同一 ref 上多个 manifest
+                # 若产生完全相同的 after digest，则它们是一个可验证的 generation
+                # 等价集，而不是字节层 fork。保留全部 manifest 在 canonical 总序链
+                # 中，并以该等价集中排序最大的成员作为代表 tail；后继 receipt 仍
+                # 锚定这个可重算的代表，历史成员不会被删除或改写。
+                explicit_legacy_tails = {
+                    str(max(matching_legacy, key=lambda item: (
+                        str(item["updated_at"]),
+                        str(item["created_at"]),
+                        str(item["authorization_id"]),
+                    ))["authorization_id"])
+                }
         if explicit_legacy_tails:
             tail_id = next(iter(explicit_legacy_tails))
             legacy = [

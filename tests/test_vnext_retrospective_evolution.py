@@ -473,7 +473,7 @@ def test_evolution_request_is_not_written_before_fresh_package_check(
     assert load_project(process).active_work_refs == ()
 
 
-def test_evolution_partial_keeps_exact_request_and_work_without_unlink(
+def test_evolution_writer_failure_rolls_back_request_work_and_project(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -498,24 +498,30 @@ def test_evolution_partial_keeps_exact_request_and_work_without_unlink(
         expires_at="2099-01-01T00:00:00+00:00",
     )
 
-    def fail_project(*_args, **_kwargs):
-        raise OSError("injected project writer failure")
+    from meta_flow.work import init_transaction
 
-    monkeypatch.setattr("meta_flow.work.store.replace_project", fail_project)
+    original_replace = init_transaction._replace_target
+    calls = 0
+
+    def fail_project(path: Path, value: bytes | None) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise OSError("injected project writer failure")
+        original_replace(path, value)
+
+    monkeypatch.setattr(init_transaction, "_replace_target", fail_project)
     with pytest.raises(WorkInitApplyError) as raised:
         materialize_evolution_work(release, plan, authorization)
 
     receipt = raised.value.receipt
-    assert receipt.decision == "PARTIAL_MUTATION"
-    assert receipt.domain_mutation_count == 3
-    assert set(receipt.durable_refs) == {
-        "works/EVOW-001",
-        "works/EVOW-001/REQUEST.md",
-        "works/EVOW-001/WORK.yaml",
-    }
-    assert receipt.coordination_mutation_count == 2
-    assert (process / plan.work.request_ref).is_file()
-    assert (process / plan.work.work_ref).is_file()
+    assert receipt.decision == "RECOVERED"
+    assert receipt.domain_mutation_count == 0
+    assert receipt.transaction_state == "RECOVERED"
+    assert not receipt.recovery_required
+    assert receipt.recovery_route == "stop-and-replan"
+    assert not (process / plan.work.request_ref).exists()
+    assert not (process / plan.work.work_ref).exists()
     assert load_project(process).active_work_refs == ()
 
 

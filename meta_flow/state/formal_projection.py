@@ -168,8 +168,20 @@ def build_formal_truth_snapshot(
                 continue
             seen_work_refs.add(work_ref)
             work_logical = "process/" + work_ref
-            work = _load_object(root, work_logical, process_root)
-            sources.append(_source_receipt(root, work_logical, process_root))
+            work = _load_object(
+                root,
+                work_logical,
+                process_root,
+                object_overrides,
+            )
+            sources.append(
+                _source_receipt(
+                    root,
+                    work_logical,
+                    process_root,
+                    object_overrides,
+                )
+            )
             if str(work.get("status") or "").lower() not in TERMINAL_WORK:
                 active_works.append(str(work.get("work_id") or Path(work_ref).parent.name))
     active_crs, cr_sources = _active_cr_ids(root, process_root)

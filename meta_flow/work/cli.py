@@ -21,6 +21,7 @@ from meta_flow.work.handoff import (
     resume_precheck,
     write_handoff,
 )
+from meta_flow.work.init_transaction import inspect_work_init_transactions
 from meta_flow.work.lifecycle import update_work_status
 from meta_flow.work.lifecycle_transaction import (
     WorkCloseAuthorizationV1,
@@ -36,8 +37,11 @@ from meta_flow.work.route_profile import RouteProfile, evaluate_route_profile
 from meta_flow.work.scope import WorkScope, check_scope
 from meta_flow.work.store import (
     WorkInitApplyError,
+    apply_legacy_partial_work_init_recovery,
     apply_work_init,
+    plan_legacy_partial_work_init_recovery,
     plan_work_init_from_release_root,
+    recover_partial_work_init_transaction,
 )
 from meta_flow.work.usage import UsageEvent
 from meta_flow.work.usage_admission import (
@@ -53,6 +57,8 @@ PUBLIC_OPERATION_DECLARATIONS = (
     ("work.close", ("meta-flow", "work", "close")),
     ("work.close-inspect", ("meta-flow", "work", "close-inspect")),
     ("work.close-recover", ("meta-flow", "work", "close-recover")),
+    ("work.init-inspect", ("meta-flow", "work", "init-inspect")),
+    ("work.init-recover", ("meta-flow", "work", "init-recover")),
     ("work.usage-plan", ("meta-flow", "work", "usage-plan")),
     ("work.usage-add", ("meta-flow", "work", "usage-add")),
 )
@@ -691,6 +697,119 @@ def close_recover_main(argv: list[str] | None = None) -> int:
     return 0 if receipt.decision in {"RECOVERED", "NO_CHANGE"} else 1
 
 
+def init_inspect_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work init-inspect")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--work-id", required=True)
+    parsed = parser.parse_args(argv or [])
+    try:
+        release_root, process_root = _resolve_roots(parsed.project_root)
+        transactions = inspect_work_init_transactions(
+            process_root,
+            work_id=parsed.work_id,
+        )
+        recovery_plan = plan_legacy_partial_work_init_recovery(
+            release_root,
+            parsed.work_id,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    payload = {
+        "schema_version": 1,
+        "kind": "WorkInitInspectionV1",
+        "decision": (
+            "RECOVERY_REQUIRED"
+            if recovery_plan.ready
+            else transactions["decision"]
+        ),
+        "work_id": parsed.work_id,
+        "transactions": transactions,
+        "legacy_recovery_plan": recovery_plan.as_dict(),
+        "mutation_count": 0,
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if payload["decision"] in {"PASS", "RECOVERY_REQUIRED"} else 1
+
+
+def init_recover_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work init-recover")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--work-id")
+    parser.add_argument("--transaction-id")
+    parser.add_argument("--plan-digest", required=True)
+    parser.add_argument("--apply", action="store_true")
+    parsed = parser.parse_args(argv or [])
+    try:
+        if bool(parsed.work_id) == bool(parsed.transaction_id):
+            raise ValueError("choose exactly one of --work-id or --transaction-id")
+        release_root, process_root = _resolve_roots(parsed.project_root)
+        if parsed.transaction_id:
+            inspection = inspect_work_init_transactions(process_root)
+            matches = [
+                item
+                for item in inspection["transactions"]
+                if item["transaction_id"] == parsed.transaction_id
+            ]
+            if len(matches) != 1:
+                raise ValueError("Work-init transaction identity is unavailable")
+            transaction = matches[0]
+            if transaction["plan_digest"] != parsed.plan_digest:
+                raise ValueError("Work-init transaction plan digest differs")
+            if not parsed.apply:
+                print(
+                    json.dumps(
+                        {
+                            "decision": "READY",
+                            "operation": "work.init.recover-transaction",
+                            "transaction": transaction,
+                            "mutation_count": 0,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            receipt = recover_partial_work_init_transaction(
+                release_root,
+                transaction_id=parsed.transaction_id,
+                expected_plan_digest=parsed.plan_digest,
+            )
+            print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if receipt["decision"] == "RECOVERED" else 1
+        plan = plan_legacy_partial_work_init_recovery(
+            release_root,
+            str(parsed.work_id),
+        )
+        if parsed.plan_digest != plan.plan_digest:
+            raise ValueError("legacy Work-init recovery plan digest differs")
+        if not parsed.apply:
+            print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if plan.ready else 1
+        receipt = apply_legacy_partial_work_init_recovery(
+            plan,
+            expected_plan_digest=parsed.plan_digest,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if receipt["decision"] == "RECOVERED" else 1
+
+
 def usage_plan_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meta-flow work usage-plan")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -804,6 +923,8 @@ def main(argv: list[str] | None = None) -> int:
             "Commands:\n"
             "  classify  Explain Work/CR and G0/G1/G2 routing.\n"
             "  init      Preview or create one Work envelope.\n"
+            "  init-inspect Inspect Work-init transactions and exact legacy partial recovery.\n"
+            "  init-recover Apply one plan-digest-bound legacy partial exact rollback.\n"
             "  start     Move a planned Work to active.\n"
             "  pause     Pause an active Work.\n"
             "  resume    Resume a paused Work.\n"
@@ -827,6 +948,10 @@ def main(argv: list[str] | None = None) -> int:
         return classify_main(forwarded)
     if command == "init":
         return init_main(forwarded)
+    if command == "init-inspect":
+        return init_inspect_main(forwarded)
+    if command == "init-recover":
+        return init_recover_main(forwarded)
     if command in {"start", "pause", "resume", "block", "close"}:
         return transition_main(command, forwarded)
     if command == "close-inspect":
@@ -854,5 +979,5 @@ def main(argv: list[str] | None = None) -> int:
     if command == "check":
         return check_main(forwarded)
     raise SystemExit(
-        f"未知 work 命令: {command}. 目前支持: classify, init, start, pause, resume, block, close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
+        f"未知 work 命令: {command}. 目前支持: classify, init, init-inspect, init-recover, start, pause, resume, block, close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
     )

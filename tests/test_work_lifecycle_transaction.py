@@ -14,6 +14,8 @@ from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.project.governance import (
     Phase,
     Roadmap,
+    load_phase,
+    replace_phase,
     write_phase_create_only,
     write_roadmap_create_only,
 )
@@ -43,6 +45,7 @@ from meta_flow.state.projection_transaction import (
     release_transaction_lock,
     state_projection_lock_path,
 )
+from meta_flow.work.cli import init_inspect_main, init_recover_main
 from meta_flow.work.lifecycle import update_work_status
 from meta_flow.work.lifecycle_transaction import (
     AUTHORIZATION_KIND,
@@ -54,12 +57,13 @@ from meta_flow.work.lifecycle_transaction import (
     recover_work_close_transaction,
     release_shared_projection_writer_lock,
 )
-from meta_flow.work.model import build_work, load_work
+from meta_flow.work.model import build_work, load_work, write_work_create_only
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
 from meta_flow.work.store import (
     WorkInitApplyError,
     apply_work_init,
+    plan_legacy_partial_work_init_recovery,
     plan_work_init_from_release_root,
 )
 
@@ -303,6 +307,52 @@ def _close_prepared_phase_work(
         _authorization(plan, f"close-{work_id.lower()}"),
     )
     return plan, receipt
+
+
+def _close_cancelled_phase_work(
+    release: Path,
+    process: Path,
+    phase: Phase,
+    work_id: str,
+) -> None:
+    work = make_work(process, work_id, phase.phase_ref)
+    apply_work_init(plan_work_init_from_release_root(release, work))
+    update_work_status(process, work_id, expected_status="planned", new_status="active")
+    plan = plan_work_close(
+        process,
+        work_id,
+        expected_status="active",
+        outcome="cancelled",
+    )
+    receipt = apply_work_close(
+        process,
+        plan,
+        _authorization(plan, f"close-{work_id.lower()}"),
+    )
+    assert receipt.decision == "PASS"
+
+
+def _convert_two_closes_to_duplicate_legacy_generation(process: Path) -> None:
+    transaction_root = process / ".meta-flow-runtime/work-close/transactions"
+    manifests = []
+    for path in sorted(transaction_root.glob("close-w-*/manifest.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("lineage", None)
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        manifests.append(payload)
+    assert len(manifests) == 2
+    for ref in ("PROJECT.yaml", "phases/P1/PHASE.yaml"):
+        digests = {
+            next(target for target in item["targets"] if target["ref"] == ref)[
+                "after_digest"
+            ]
+            for item in manifests
+        }
+        assert len(digests) == 1
+    successor_root = process / ".meta-flow-runtime/work-close/successors"
+    if successor_root.is_dir():
+        for path in successor_root.glob("*.json"):
+            path.unlink()
 
 
 def test_plan_is_zero_write_and_binds_every_projection_target(tmp_path: Path) -> None:
@@ -863,9 +913,119 @@ def test_work_init_blocks_when_latest_close_generation_was_externally_modified(
     work = make_work(process, "W-002", phase.phase_ref)
     plan = plan_work_init_from_release_root(release, work)
 
-    with pytest.raises(ValueError, match="terminal generation mismatch"):
+    assert plan.blocked
+    assert "WORK_INIT_LINEAGE_PREFLIGHT_BLOCKED" in {
+        conflict.code for conflict in plan.conflicts
+    }
+    with pytest.raises(ValueError, match="preimage drift"):
         apply_work_init(plan)
     assert not (process / work.work_ref).exists()
+
+
+def test_duplicate_legacy_generation_is_one_auditable_equivalence_tail(
+    tmp_path: Path,
+) -> None:
+    release, process, phase = _governance_fixture(tmp_path)
+    _close_cancelled_phase_work(release, process, phase, "W-001")
+    _close_cancelled_phase_work(release, process, phase, "W-002")
+    _convert_two_closes_to_duplicate_legacy_generation(process)
+
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+    work = make_work(process, "W-003", phase.phase_ref)
+    plan = plan_work_init_from_release_root(release, work)
+
+    assert not plan.blocked
+    anchors = {item[0]: item[1] for item in plan.lineage_preflight}
+    assert anchors == {
+        "PROJECT.yaml": "close-w-002",
+        phase.phase_ref: "close-w-002",
+    }
+    receipt = apply_work_init(plan)
+
+    assert receipt.decision == "PASS"
+    assert receipt.shared_projection_successor_id.startswith("work-init-")
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+
+
+def test_legacy_partial_work_init_recovery_restores_exact_preimage(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, process, phase = _governance_fixture(tmp_path)
+    _close_cancelled_phase_work(release, process, phase, "W-001")
+    _close_cancelled_phase_work(release, process, phase, "W-002")
+    _convert_two_closes_to_duplicate_legacy_generation(process)
+    _enable_state_projection(release, process)
+    retained_state = {
+        ref: (process / ref).read_bytes()
+        for ref in (
+            "state/STATE.current.json",
+            "STATE.md",
+            "current/CURRENT.json",
+        )
+    }
+    work = make_work(process, "W-003", phase.phase_ref)
+    write_work_create_only(process, work)
+    project = load_project(process)
+    replace_project(
+        process,
+        replace(project, active_work_refs=(*project.active_work_refs, work.work_ref)),
+        expected_project_id=project.project_id,
+    )
+    current_phase = load_phase(process, phase.phase_ref)
+    replace_phase(
+        process,
+        replace(current_phase, work_refs=(*current_phase.work_refs, work.work_ref)),
+        expected_phase_id=current_phase.phase_id,
+    )
+    partial_bytes = {
+        ref: (process / ref).read_bytes()
+        for ref in (work.work_ref, "PROJECT.yaml", phase.phase_ref)
+    }
+
+    plan = plan_legacy_partial_work_init_recovery(release, work.work_id)
+    assert plan.ready
+    assert [target.ref for target in plan.targets] == [
+        work.work_ref,
+        "PROJECT.yaml",
+        phase.phase_ref,
+    ]
+    assert all((process / ref).read_bytes() == value for ref, value in partial_bytes.items())
+
+    assert (
+        init_inspect_main(
+            ["--project-root", str(release), "--work-id", work.work_id]
+        )
+        == 0
+    )
+    inspection = json.loads(capsys.readouterr().out)
+    assert inspection["decision"] == "RECOVERY_REQUIRED"
+    assert inspection["legacy_recovery_plan"]["plan_digest"] == plan.plan_digest
+
+    assert (
+        init_recover_main(
+            [
+                "--project-root",
+                str(release),
+                "--work-id",
+                work.work_id,
+                "--plan-digest",
+                plan.plan_digest,
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+
+    assert receipt["decision"] == "RECOVERED"
+    assert not (process / work.work_ref).exists()
+    assert work.work_ref not in load_project(process).active_work_refs
+    assert work.work_ref not in load_phase(process, phase.phase_ref).work_refs
+    assert all((process / ref).read_bytes() == value for ref, value in retained_state.items())
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+    errors, _warnings = state_current.check_current_state(release, mode="enforce")
+    assert errors == []
 
 
 def test_work_init_blocks_before_domain_write_when_lineage_writer_lock_is_held(
@@ -916,6 +1076,111 @@ def test_work_init_and_status_transition_keep_initialized_state_current(
     assert warnings == []
     assert state_current.validate_current_projection(release) == []
     assert inspect_work_close_transactions(process)["decision"] == "PASS"
+
+
+def test_work_init_governance_postimage_failure_rolls_back_domain_and_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, phase = _governance_fixture(tmp_path)
+    _enable_state_projection(release, process)
+    work = make_work(process, "W-001", phase.phase_ref)
+    plan = plan_work_init_from_release_root(release, work)
+    refs = (
+        "PROJECT.yaml",
+        phase.phase_ref,
+        "governance/GOVERNANCE-BASELINE.json",
+        "state/STATE.current.json",
+        "STATE.md",
+        "current/CURRENT.json",
+    )
+    before = {ref: (process / ref).read_bytes() for ref in refs}
+
+    governance_checks = 0
+
+    def fail_after_locked_preflight(*_args, **_kwargs):
+        nonlocal governance_checks
+        governance_checks += 1
+        if governance_checks == 1:
+            return {"decision": "PASS", "errors": []}
+        return {
+            "decision": "BLOCKED",
+            "errors": ["injected stale governance projection"],
+        }
+
+    monkeypatch.setattr(
+        "meta_flow.project.governance_projection.validate_governance_projection",
+        fail_after_locked_preflight,
+    )
+    with pytest.raises(WorkInitApplyError) as raised:
+        apply_work_init(plan)
+
+    receipt = raised.value.receipt
+    assert receipt.decision == "RECOVERED"
+    assert receipt.transaction_state == "RECOVERED"
+    assert receipt.domain_mutation_count == 0
+    assert not receipt.recovery_required
+    assert not (process / work.work_ref).exists()
+    exact_refs = refs[:3]
+    assert {ref: (process / ref).read_bytes() for ref in exact_refs} == {
+        ref: before[ref] for ref in exact_refs
+    }
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+    errors, warnings = state_current.check_current_state(release, mode="enforce")
+    assert errors == []
+    assert warnings == []
+    assert state_current.validate_current_projection(release) == []
+    assert state_current.load_current_state(release)["formal_truth_projection"][
+        "active_work_ids"
+    ] == []
+
+
+def test_work_init_successor_failure_rolls_back_domain_and_state_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, phase = _governance_fixture(tmp_path)
+    _close_cancelled_phase_work(release, process, phase, "W-000")
+    _enable_state_projection(release, process)
+    work = make_work(process, "W-001", phase.phase_ref)
+    plan = plan_work_init_from_release_root(release, work)
+    refs = (
+        "PROJECT.yaml",
+        phase.phase_ref,
+        "state/STATE.current.json",
+        "STATE.md",
+        "current/CURRENT.json",
+    )
+    before = {ref: (process / ref).read_bytes() for ref in refs}
+
+    def fail_successor(*_args, **_kwargs) -> str:
+        raise OSError("injected successor writer failure")
+
+    monkeypatch.setattr(
+        "meta_flow.work.lifecycle_transaction.record_work_init_shared_projection_successor",
+        fail_successor,
+    )
+    with pytest.raises(WorkInitApplyError) as raised:
+        apply_work_init(plan)
+
+    receipt = raised.value.receipt
+    assert receipt.decision == "RECOVERED"
+    assert receipt.transaction_state == "RECOVERED"
+    assert receipt.domain_mutation_count == 0
+    assert not receipt.recovery_required
+    assert not (process / work.work_ref).exists()
+    assert {ref: (process / ref).read_bytes() for ref in refs} == before
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+    errors, warnings = state_current.check_current_state(release, mode="enforce")
+    assert errors == []
+    assert warnings == []
+    from meta_flow.work.lifecycle_transaction import (
+        acquire_shared_projection_writer_lock,
+        release_shared_projection_writer_lock,
+    )
+
+    lock = acquire_shared_projection_writer_lock(process, "post-recovery-probe")
+    release_shared_projection_writer_lock(lock, "post-recovery-probe")
 
 
 def test_work_status_rolls_back_when_state_projection_refresh_fails(
@@ -1129,11 +1394,6 @@ def test_close_blocks_before_write_when_governance_baseline_is_stale(
     tmp_path: Path,
 ) -> None:
     release, process, phase = _governance_fixture(tmp_path)
-    projection_path = process / GOVERNANCE_PROJECTION_REL
-    stale = json.loads(projection_path.read_text(encoding="utf-8"))
-    stale["active_result_refs"] = []
-    stale["semantic_digest"] = semantic_digest(stale)
-    projection_path.write_text(json.dumps(stale) + "\n", encoding="utf-8")
     work = make_work(process, "W-001", phase.phase_ref)
     apply_work_init(plan_work_init_from_release_root(release, work))
     update_work_status(process, "W-001", expected_status="planned", new_status="active")
@@ -1142,6 +1402,11 @@ def test_close_blocks_before_write_when_governance_baseline_is_stale(
         json.dumps({"schema_version": 1, "work_id": "W-001", "decision": "PASS"}) + "\n",
         encoding="utf-8",
     )
+    projection_path = process / GOVERNANCE_PROJECTION_REL
+    stale = json.loads(projection_path.read_text(encoding="utf-8"))
+    stale["active_result_refs"] = []
+    stale["semantic_digest"] = semantic_digest(stale)
+    projection_path.write_text(json.dumps(stale) + "\n", encoding="utf-8")
     phase_before = (process / phase.phase_ref).read_bytes()
 
     plan = plan_work_close(
@@ -1156,6 +1421,28 @@ def test_close_blocks_before_write_when_governance_baseline_is_stale(
     assert "governance projection must be current" in "; ".join(plan.blockers)
     assert (process / phase.phase_ref).read_bytes() == phase_before
     assert load_work(process, "W-001").status == "active"
+
+
+def test_work_init_plan_blocks_stale_governance_before_domain_write(
+    tmp_path: Path,
+) -> None:
+    release, process, phase = _governance_fixture(tmp_path)
+    projection_path = process / GOVERNANCE_PROJECTION_REL
+    stale = json.loads(projection_path.read_text(encoding="utf-8"))
+    stale["active_result_refs"] = []
+    stale["semantic_digest"] = semantic_digest(stale)
+    projection_path.write_text(json.dumps(stale) + "\n", encoding="utf-8")
+    work = make_work(process, "W-001", phase.phase_ref)
+
+    plan = plan_work_init_from_release_root(release, work)
+
+    assert plan.blocked
+    assert {conflict.code for conflict in plan.conflicts} >= {
+        "WORK_INIT_GOVERNANCE_PREFLIGHT_BLOCKED"
+    }
+    assert not (process / work.work_ref).exists()
+    assert work.work_ref not in load_project(process).active_work_refs
+    assert work.work_ref not in load_phase(process, phase.phase_ref).work_refs
 
 
 def test_fourth_target_failure_rolls_back_phase_and_governance_baseline(

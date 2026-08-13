@@ -1,6 +1,6 @@
 ---
 project_id: "meta-flow"
-release_scope: "meta-flow-0.4.1"
+release_scope: "meta-flow-0.5.0"
 release_artifact_profile: "full"
 release_decision: "READY"
 created_at: "2026-06-17T13:49:25+08:00"
@@ -33,6 +33,41 @@ updated_at: "2026-08-13T00:00:00+08:00"
 | 1.17-candidate | 2026-07-27 | host-orchestrator / meta-qa-critical | CR-061 治理内核投影收敛候选：统一 terminal-success、dispatch identity、Story admission、read-expansion、状态投影、ledger migration 和 Public Operation Contract Registry；C0 及独立 CP7 PASS，等待 CP8 人工终验。 |
 | 1.18-candidate | 2026-08-10 | host-orchestrator / meta-qa-critical | CR-069 有界执行控制内核：产品实现已作为 `4030ff1654d2e6f552f90bb6f23604117e41940d` 推送；CP7 技术验证 PASS，但 cost closure 为不可豁免 `FAIL`，因此发布就绪保持 `NOT_READY`。 |
 | 1.19 | 2026-08-13 | Codex | 将已验证的 provider 修复收敛为 `0.4.1`：补齐 typed check artifact、checkpoint successor、dispatch correction/closure、共享治理投影 lineage；轮换 activation receipt v2，并完成 targeted、compatibility、full、构建和安装 dry-run。 |
+| 1.20 | 2026-08-13 | Codex | 发布 `0.5.0`：统一 duplicate legacy generation 语义，增加 Work-init 持久事务与 native inspect/recover，并将 State/CURRENT/governance 一致性纳入成功门。 |
+
+## 0.5.0 发布切片
+
+### 发布结论
+
+`0.5.0` 是新增公开恢复操作与事务合同的 MINOR 版本。用户已明确授权本轮完成双仓提交、推送、`v0.5.0` 标签和 GitHub Release；不包含消费者项目安装或 quant-lab 恢复 apply。
+
+| 项 | 结果 |
+|---|---|
+| 包版本真相 | `pyproject.toml`、`uv.lock`、`meta_flow.__version__`、provider migration contract 与 activation receipt 均为 `0.5.0` |
+| legacy generation | 相同 ref、相同 after digest 的无-lineage legacy manifest 形成可审计等价 generation；真实 fork 仍 fail closed |
+| Work-init preflight | lineage、predecessor、governance currentness 与 State post-image 可构造性在 domain write 前验证 |
+| Work-init transaction | `PREPARED → APPLYING → COMMITTED/RECOVERED/PARTIAL` 持久 manifest，绑定 OID、plan digest 和 exact target bytes/digests |
+| native recovery | 新增 `meta-flow work init-inspect` 与 `meta-flow work init-recover`，同时支持新事务和 0.4.1 legacy partial rollback |
+| consistency gate | 成功前验证 Project/Phase successor、State formal truth、CURRENT 与 governance baseline；失败时 exact rollback 或可恢复 PARTIAL |
+| provider qualification | 见 `docs/release/PROVIDER-QUALIFICATION-0.5.0.json` |
+
+### 验证摘要
+
+| 层 | 结果 |
+|---|---|
+| targeted | `99 passed` |
+| compatibility | `147 passed` |
+| full | `2317 passed + 712 subtests` |
+| writer hard gate | `386/386 classified`、`0 ambiguous`、`0 unresolved unallowlisted` |
+| consumer fixture | quant-lab 只读 inspect/recovery preview 为 `READY`，关键文件摘要前后不变 |
+| closure | Ruff、lock check、delivery guardrail、构建、安装 dry-run与 wheel 内容检查在发布前必须全部通过 |
+
+### 升级与恢复
+
+- 从 0.4.1 升级无需批量改写历史 close manifest；相同 after digest 的重复 legacy generation 会由 canonical evaluator 归一化。
+- 0.4.1 已留下的 Work-init `PARTIAL_MUTATION` 必须先运行 `work init-inspect`，再用返回的 exact plan digest 执行 `work init-recover --apply`；`RECOVERED` 后停止并重新 plan。
+- 已知 stale governance baseline 现在会使 Work-init plan 返回 `WORK_INIT_GOVERNANCE_PREFLIGHT_BLOCKED`，且 `mutation_count=0`。
+- 回滚到 0.4.1 不会自动删除 0.5.0 transaction manifest；回滚前必须确认没有非终结 Work-init transaction。
 
 ## 0.4.1 发布切片
 

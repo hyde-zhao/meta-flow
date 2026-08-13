@@ -21,7 +21,7 @@ from meta_flow.installation.planner import CHECKPOINT_SCALARS, CHECKPOINTS, comp
 def _source_identity() -> dict[str, str]:
     return {
         "source": "meta-flow-delivery",
-        "version": "0.4.1",
+        "version": "0.5.0",
         "oid": "a" * 40,
         "delivery_tree_digest": "b" * 64,
         "rules_source_digest": "c" * 64,

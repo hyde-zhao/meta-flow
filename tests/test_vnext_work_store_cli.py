@@ -276,8 +276,10 @@ def test_work_init_dry_run_then_apply_indexes_project(tmp_path: Path) -> None:
 
     assert receipt.decision == "PASS"
     assert receipt.domain_mutation_count == 2
-    assert receipt.coordination_mutation_count == 2
-    assert receipt.mutation_count == 4
+    assert receipt.coordination_mutation_count == 3
+    assert receipt.mutation_count == 5
+    assert receipt.transaction_state == "COMMITTED"
+    assert receipt.transaction_id.startswith("work-init-")
     assert receipt.project_index_updated
     assert load_work(process, "W-001") == work
     assert load_project(process).active_work_refs == ("works/W-001/WORK.yaml",)
@@ -340,7 +342,7 @@ def test_work_init_can_repair_matching_unindexed_work_after_partial_state(tmp_pa
 
     assert not plan.blocked
     assert receipt.domain_mutation_count == 1
-    assert receipt.coordination_mutation_count == 2
+    assert receipt.coordination_mutation_count == 3
     assert receipt.project_index_updated
     assert load_project(process).active_work_refs == (work.work_ref,)
 
@@ -387,7 +389,7 @@ def test_work_init_lock_contention_blocks_without_domain_mutation(tmp_path: Path
         assert release_admission_lock(git_common, held.handle).decision == "PASS"
 
 
-def test_work_init_reports_exact_partial_after_first_domain_write(
+def test_work_init_rolls_back_exactly_after_first_domain_write(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -395,21 +397,47 @@ def test_work_init_reports_exact_partial_after_first_domain_write(
     work = typed_work(make_work(process))
     plan = plan_work_init_from_release_root(release, work)
 
-    def fail_project(*_args, **_kwargs):
-        raise OSError("injected project writer failure")
+    from meta_flow.work import init_transaction
 
-    monkeypatch.setattr("meta_flow.work.store.replace_project", fail_project)
+    project_before = (process / "PROJECT.yaml").read_bytes()
+    request_before = (process / work.request_ref).read_bytes()
+    original_replace = init_transaction._replace_target
+    calls = 0
+
+    def fail_project(path: Path, value: bytes | None) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected project writer failure")
+        original_replace(path, value)
+
+    monkeypatch.setattr(init_transaction, "_replace_target", fail_project)
     with pytest.raises(WorkInitApplyError) as raised:
         apply_work_init(plan)
 
     receipt = raised.value.receipt
-    assert receipt.decision == "PARTIAL_MUTATION"
-    assert receipt.domain_mutation_count == 1
-    assert receipt.coordination_mutation_count == 2
-    assert receipt.durable_refs == (work.work_ref,)
-    assert receipt.recovery_route == "stop-and-inspect-partial-mutation"
-    assert (process / work.work_ref).is_file()
+    assert receipt.decision == "RECOVERED"
+    assert receipt.domain_mutation_count == 0
+    assert receipt.transaction_state == "RECOVERED"
+    assert not receipt.recovery_required
+    assert receipt.recovery_route == "stop-and-replan"
+    assert (process / "PROJECT.yaml").read_bytes() == project_before
+    assert (process / work.request_ref).read_bytes() == request_before
+    assert not (process / work.work_ref).exists()
     assert load_project(process).active_work_refs == ()
+    inspection = init_transaction.inspect_work_init_transactions(
+        process,
+        work_id=work.work_id,
+    )
+    assert inspection["decision"] == "PASS"
+    assert inspection["transactions"][0]["state"] == "RECOVERED"
+    from meta_flow.work.lifecycle_transaction import (
+        acquire_shared_projection_writer_lock,
+        release_shared_projection_writer_lock,
+    )
+
+    lock = acquire_shared_projection_writer_lock(process, "test-lock-after-recovery")
+    release_shared_projection_writer_lock(lock, "test-lock-after-recovery")
 
 
 def test_work_plan_blocks_missing_or_out_of_scope_request(tmp_path: Path) -> None:
@@ -872,7 +900,7 @@ def test_phase_work_index_is_added_on_init_and_projected_on_close(tmp_path: Path
     receipt = apply_work_init(plan_work_init_from_release_root(release, work))
 
     assert receipt.domain_mutation_count == 3
-    assert receipt.coordination_mutation_count == 2
+    assert receipt.coordination_mutation_count == 3
     assert load_phase(process, phase.phase_ref).work_refs == (work.work_ref,)
     update_work_status(
         process,

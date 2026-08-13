@@ -221,7 +221,7 @@ def test_version_reports_identity_readiness_separately_from_exact_delivery() -> 
     output = StringIO()
     identity = {
         "source": "checkout/meta-flow",
-        "version": "0.4.1",
+        "version": "0.5.0",
         "oid": "a" * 40,
         "delivery_tree_digest": "b" * 64,
         "rules_source_digest": "c" * 64,

@@ -119,7 +119,7 @@ def test_packaged_receipt_rotation_preserves_v1_and_selects_v2() -> None:
     release_root = Path(__file__).parents[1]
     package_root = release_root / "meta_flow"
     qualification_evidence_path = (
-        release_root / "docs/release/PROVIDER-QUALIFICATION-0.4.1.json"
+        release_root / "docs/release/PROVIDER-QUALIFICATION-0.5.0.json"
     )
     assert LEGACY_RECEIPT_REFS == (
         "meta_flow/execution_control/provider/activation-receipt-v1.json",
@@ -134,7 +134,7 @@ def test_packaged_receipt_rotation_preserves_v1_and_selects_v2() -> None:
     assert load_provider_activation_receipt().status == "CURRENT"
 
     current_payload = json.loads(current.read_text(encoding="utf-8"))
-    assert current_payload["package_version"] == "0.4.1"
+    assert current_payload["package_version"] == "0.5.0"
     assert current_payload["qualified_source_exclusions"] == [FIXED_RECEIPT_REF]
     assert current_payload["generator_identity"] == GENERATOR_IDENTITY
 

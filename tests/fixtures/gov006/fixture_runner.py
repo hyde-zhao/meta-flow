@@ -50,7 +50,7 @@ RESULT_FIELDS = (
 DIGEST = "a" * 64
 IDENTITY = {
     "source": "checkout/meta-flow",
-    "version": "0.4.1",
+    "version": "0.5.0",
     "oid": "b" * 40,
     "delivery_tree_digest": "c" * 64,
     "rules_source_digest": "d" * 64,

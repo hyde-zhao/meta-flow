@@ -350,6 +350,42 @@
       }
     },
     {
+      "operation": "work.init-inspect",
+      "entry": ["meta-flow", "work", "init-inspect"],
+      "input_version": "WorkIdV1",
+      "output_version": "WorkInitInspectionV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.work.store.plan_legacy_partial_work_init_recovery",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.init-recover",
+      "entry": ["meta-flow", "work", "init-recover"],
+      "input_version": "LegacyWorkInitRecoveryPlanV1",
+      "output_version": "LegacyWorkInitRecoveryReceiptV1",
+      "mutation_mode": "recovery-only",
+      "authorization_mode": "expected-plan-digest",
+      "projector": "meta_flow.work.store.apply_legacy_partial_work_init_recovery",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "work.usage-add",
       "entry": ["meta-flow", "work", "usage-add"],
       "input_version": "UsageEventV1+UsageAdmissionPlanV1",

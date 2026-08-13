@@ -140,6 +140,23 @@ writer 只对 `process/governance/GOVERNANCE-BASELINE.json` 做单文件原子�
 
 完成带 `RESULT.json` 的 Work 时，`work close` 会把 Work、Project、active Phase、治理基线以及已经初始化的 State/CURRENT 核心投影放入同一份可恢复事务：Phase 新增 result ref、baseline 的 `active_result_refs` 和 State 的 active Work/next action 要么一起提交，要么一起回滚；未初始化 State 的旧项目保持兼容，存在不完整 State target 集时 fail-closed。`work close-inspect` 按每个共享 target 的后继 generation 检查当前 lineage head；历史 COMMITTED manifest 仍校验自身 bytes/digest 完整性，但不会因为后续原生 close 已合法接管 `PROJECT.yaml`、`PHASE.yaml`、baseline 或 State/CURRENT 而误报损坏。最新 generation 的外部漂移仍然 `BLOCKED`。
 
+Work-init 同样使用持久 target 事务，并在任何领域写入前冻结共享 Project/Phase 的 lineage predecessor。升级前多个 close manifest 若对同一 ref 产生相同 `after_digest`，按“相同字节 generation 等价集”归一化，保留全部历史 manifest，并用稳定排序的代表 tail 建立可审计 successor；真实 fork、伪造 successor 或外部漂移仍 fail-closed。Work、Project、Phase、State/CURRENT 或 successor 任一步失败时，事务按 exact preimage 自动回滚并返回 `RECOVERED`，调用方必须停止并重新 plan；只有回滚也失败时才返回 `PARTIAL_MUTATION`。
+
+0.4.1 已产生、但没有 Work-init manifest 的部分写入，先零写检查：
+
+```bash
+meta-flow work init-inspect --project-root <release-root> --work-id <work-id>
+```
+
+当输出 `legacy_recovery_plan.decision=READY` 时，复制其 `plan_digest`，再执行 exact rollback：
+
+```bash
+meta-flow work init-recover --project-root <release-root> --work-id <work-id> \
+  --plan-digest <plan-digest> --apply
+```
+
+成功结果为 `RECOVERED`，保留先于 Work-init 已存在的 `REQUEST.md`，只删除未完成的 `WORK.yaml` 并恢复 Project/Phase exact bytes；随后必须停止并重新执行 `work init` plan。新协议留下的非终态 manifest 使用同一命令，将 `--work-id` 替换为 `--transaction-id`；两种身份不可同时提供。不得手工编辑 Project、Phase、State、manifest 或 successor receipt。
+
 若某个 Work 是由旧版本完成、其 Phase result ref 已存在但 baseline 尚未同步，可对同一终态 Work 重新生成 close plan。计划只包含 stale baseline target，并需绑定该计划的新 `WorkCloseAuthorizationV1`；apply 不会重写 Work、Project 或 Phase，也不应删除历史 manifest。
 
 ### 0.4 Project / Phase 原生转换

@@ -138,7 +138,7 @@ def _release_root_from_process(root: Path) -> Path:
     return release_root
 
 
-def _state_projection_candidates(
+def build_state_projection_candidates(
     root: Path,
     *,
     object_overrides: Mapping[str, tuple[dict[str, Any], bytes]],
@@ -445,7 +445,7 @@ def plan_work_close(
                 ),
             }
             candidates.extend(
-                _state_projection_candidates(root, object_overrides=overrides)
+                build_state_projection_candidates(root, object_overrides=overrides)
             )
 
         for ref, after in candidates:
@@ -1066,16 +1066,21 @@ def _lineage_generation_errors(
     state_projection_current = False
     by_id = {str(manifest["authorization_id"]): manifest for manifest in manifests}
     target_refs = {str(target["ref"]) for manifest in manifests for target in manifest["targets"]}
-
-    for manifest in manifests:
-        for ref, predecessor in (manifest.get("lineage") or {}).items():
-            previous = by_id.get(str(predecessor))
-            if (
-                previous is None
-                or previous.get("state") != "COMMITTED"
-                or not any(target.get("ref") == ref for target in previous["targets"])
-            ):
-                errors.append(f"work close lineage predecessor is invalid: {ref}:{predecessor}")
+    current_by_ref: dict[str, str] = {}
+    for ref in sorted(target_refs):
+        try:
+            current_by_ref[ref] = _digest_bytes((root / ref).read_bytes())
+        except OSError as exc:
+            errors.append(f"work close target unreadable: {ref}:{exc}")
+    try:
+        committed_heads = committed_generation_heads(
+            root / TRANSACTION_ROOT_REL,
+            refs=tuple(sorted(target_refs)),
+            current_digests=current_by_ref,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        errors.append(str(exc))
+        return errors
 
     for ref in sorted(target_refs):
         committed = [
@@ -1085,56 +1090,11 @@ def _lineage_generation_errors(
             and any(target.get("ref") == ref for target in manifest["targets"])
         ]
         if committed:
-            successors: dict[str, str] = {}
-            legacy = sorted(
-                [manifest for manifest in committed if "lineage" not in manifest],
-                key=_manifest_sort_key,
-            )
-            preferred_legacy_tails = {
-                str((manifest.get("lineage") or {}).get(ref) or "")
-                for manifest in committed
-                if (manifest.get("lineage") or {}).get(ref)
-            }
-            if not preferred_legacy_tails:
-                try:
-                    current_digest = _digest_bytes((root / ref).read_bytes())
-                except OSError:
-                    current_digest = ""
-                preferred_legacy_tails = {
-                    str(manifest["authorization_id"])
-                    for manifest in legacy
-                    for target in manifest["targets"]
-                    if target["ref"] == ref and target["after_digest"] == current_digest
-                }
-            if len(preferred_legacy_tails) == 1:
-                tail_id = next(iter(preferred_legacy_tails))
-                legacy = [
-                    manifest for manifest in legacy if str(manifest["authorization_id"]) != tail_id
-                ] + [
-                    manifest for manifest in legacy if str(manifest["authorization_id"]) == tail_id
-                ]
-            for previous, successor in zip(legacy, legacy[1:], strict=False):
-                successors[str(previous["authorization_id"])] = str(successor["authorization_id"])
-            for manifest in committed:
-                predecessor = str((manifest.get("lineage") or {}).get(ref) or "")
-                if not predecessor:
-                    continue
-                successor = str(manifest["authorization_id"])
-                existing = successors.get(predecessor)
-                if existing and existing != successor:
-                    errors.append(
-                        f"work close lineage has multiple successors: {ref}:{predecessor}"
-                    )
-                successors[predecessor] = successor
-            heads = [
-                manifest
-                for manifest in committed
-                if str(manifest["authorization_id"]) not in successors
-            ]
-            if len(heads) != 1:
+            head = committed_heads.get(ref)
+            if head is None:
                 errors.append(f"work close lineage head is ambiguous: {ref}")
                 continue
-            expected_manifest = heads[0]
+            expected_manifest = by_id[str(head["authorization_id"])]
             expected_generation = "after_digest"
         else:
             recovered = [
@@ -1160,10 +1120,8 @@ def _lineage_generation_errors(
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
-        try:
-            current_digest = _digest_bytes((root / ref).read_bytes())
-        except OSError as exc:
-            errors.append(f"work close target unreadable: {ref}:{exc}")
+        current_digest = current_by_ref.get(ref)
+        if current_digest is None:
             continue
         if current_digest != expected_digest:
             if ref in STATE_PROJECTION_REFS:
@@ -1199,6 +1157,76 @@ def assert_work_close_shared_projection_lineage(process_root: Path) -> None:
         raise ValueError("; ".join(errors))
 
 
+def plan_shared_projection_successor_preflight(
+    process_root: Path,
+    *,
+    operation: str,
+    writer_id: str,
+    before_digests: Mapping[str, str],
+    allowed_refs: tuple[str, ...],
+) -> tuple[tuple[str, str, str, str], ...]:
+    """在领域写入前冻结共享投影 successor 的唯一 predecessor。
+
+    返回项依次为 ``ref``、close anchor、前一 successor（可空）和 preimage
+    digest。legacy manifest 的等价 generation 归一化、显式 fork 检查与
+    close-inspect 共用 ``committed_generation_heads``，禁止 writer 自行猜 tail。
+    """
+
+    root = process_root.resolve()
+    _safe_authorization_id(writer_id)
+    if operation not in {
+        "work.init",
+        "work.status-transition",
+        "project.phase-transition",
+    }:
+        raise ValueError("shared projection successor operation is unsupported")
+    manifests = _load_terminal_manifests(root)
+    if not manifests:
+        return ()
+    receipts = _load_shared_successor_receipts(root)
+    existing = [
+        receipt
+        for receipt in receipts
+        if receipt["operation"] == operation and receipt["writer_id"] == writer_id
+    ]
+    if existing:
+        raise ValueError("shared projection successor writer identity was already consumed")
+    allowed = set(allowed_refs)
+    relevant_refs = tuple(
+        ref
+        for ref in sorted(before_digests)
+        if _is_shared_projection_ref(ref) and ref in allowed
+    )
+    close_heads = committed_generation_heads(
+        root / TRANSACTION_ROOT_REL,
+        refs=relevant_refs,
+        current_digests=before_digests,
+    )
+    anchors: list[tuple[str, str, str, str]] = []
+    for ref in relevant_refs:
+        close_head = close_heads.get(ref)
+        if close_head is None:
+            continue
+        predecessor_id, predecessor_digest = _shared_successor_head(
+            receipts,
+            ref=ref,
+            close_authorization_id=close_head["authorization_id"],
+            close_digest=close_head["after_digest"],
+        )
+        before_digest = before_digests[ref]
+        if predecessor_digest != before_digest:
+            raise ValueError(f"shared projection successor preimage drift: {ref}")
+        anchors.append(
+            (
+                ref,
+                close_head["authorization_id"],
+                predecessor_id,
+                before_digest,
+            )
+        )
+    return tuple(anchors)
+
+
 def record_shared_projection_successor(
     process_root: Path,
     *,
@@ -1206,6 +1234,7 @@ def record_shared_projection_successor(
     writer_id: str,
     before_digests: Mapping[str, str],
     allowed_refs: tuple[str, ...],
+    expected_preflight: tuple[tuple[str, str, str, str], ...] | None = None,
 ) -> str:
     """为已成功的 native writer 登记共享投影合法后继 generation。"""
 
@@ -1256,6 +1285,19 @@ def record_shared_projection_successor(
         ):
             raise ValueError("shared projection successor retry target mismatch")
         return str(receipt["successor_id"])
+    preflight = plan_shared_projection_successor_preflight(
+        root,
+        operation=operation,
+        writer_id=writer_id,
+        before_digests=before_digests,
+        allowed_refs=allowed_refs,
+    )
+    if expected_preflight is not None and preflight != expected_preflight:
+        raise ValueError("shared projection successor preflight drifted")
+    anchor_by_ref = {
+        ref: (close_authorization_id, predecessor_successor_id, before_digest)
+        for ref, close_authorization_id, predecessor_successor_id, before_digest in preflight
+    }
     target_records: list[dict[str, str]] = []
     for ref in relevant_refs:
         before_digest = before_digests[ref]
@@ -1266,21 +1308,16 @@ def record_shared_projection_successor(
         after_digest = _digest_bytes(after_bytes)
         if after_digest == before_digest:
             continue
-        close_head = close_heads.get(ref)
-        if close_head is None:
+        anchor = anchor_by_ref.get(ref)
+        if anchor is None:
             continue
-        predecessor_id, predecessor_digest = _shared_successor_head(
-            receipts,
-            ref=ref,
-            close_authorization_id=close_head["authorization_id"],
-            close_digest=close_head["after_digest"],
-        )
+        close_authorization_id, predecessor_id, predecessor_digest = anchor
         if predecessor_digest != before_digest:
             raise ValueError(f"shared projection successor preimage drift: {ref}")
         target_records.append(
             {
                 "ref": ref,
-                "anchor_close_authorization_id": close_head["authorization_id"],
+                "anchor_close_authorization_id": close_authorization_id,
                 "predecessor_successor_id": predecessor_id,
                 "before_digest": before_digest,
                 "after_digest": after_digest,
@@ -1363,11 +1400,30 @@ def discard_shared_projection_successor(
     return True
 
 
+def shared_projection_successor_for_writer(
+    process_root: Path,
+    *,
+    operation: str,
+    writer_id: str,
+) -> str:
+    """返回 writer 唯一 successor；不存在时返回空，重复时 fail-closed。"""
+
+    receipts = [
+        receipt
+        for receipt in _load_shared_successor_receipts(process_root.resolve())
+        if receipt["operation"] == operation and receipt["writer_id"] == writer_id
+    ]
+    if len(receipts) > 1:
+        raise ValueError("shared projection successor writer identity is duplicated")
+    return str(receipts[0]["successor_id"]) if receipts else ""
+
+
 def record_work_init_shared_projection_successor(
     process_root: Path,
     *,
     work_id: str,
     before_digests: Mapping[str, str],
+    expected_preflight: tuple[tuple[str, str, str, str], ...] | None = None,
 ) -> str:
     """为已成功的 Work init 登记 Project/Phase 合法后继 generation。"""
 
@@ -1380,6 +1436,7 @@ def record_work_init_shared_projection_successor(
             "PROJECT.yaml",
             *(ref for ref in before_digests if Path(ref).name == "PHASE.yaml"),
         ),
+        expected_preflight=expected_preflight,
     )
 
 
@@ -1664,12 +1721,15 @@ __all__ = [
     "acquire_shared_projection_writer_lock",
     "apply_work_close",
     "assert_work_close_shared_projection_lineage",
+    "build_state_projection_candidates",
     "discard_shared_projection_successor",
     "inspect_work_close_transactions",
     "plan_work_close",
+    "plan_shared_projection_successor_preflight",
     "refresh_state_projection_if_initialized",
     "record_work_init_shared_projection_successor",
     "record_shared_projection_successor",
     "recover_work_close_transaction",
     "release_shared_projection_writer_lock",
+    "shared_projection_successor_for_writer",
 ]
