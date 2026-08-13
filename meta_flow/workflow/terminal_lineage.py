@@ -178,11 +178,7 @@ def _work_records(process_root: Path) -> tuple[list[TerminalLineageRecordV1], li
             payload = load_yaml_object(path)
             work_id = str(payload.get("work_id") or path.parent.name)
             execution = payload.get("execution_unit")
-            revision = (
-                int(execution.get("revision") or 1)
-                if isinstance(execution, dict)
-                else 1
-            )
+            revision = int(execution.get("revision") or 1) if isinstance(execution, dict) else 1
             records.append(
                 _record(
                     "work",
@@ -304,11 +300,7 @@ def _validate_terminal_cr_evidence(
     for raw_ref in evidence_refs:
         ref = str(raw_ref or "")
         rel = Path(ref.removeprefix("process/"))
-        if (
-            not ref.startswith("process/")
-            or rel.is_absolute()
-            or ".." in rel.parts
-        ):
+        if not ref.startswith("process/") or rel.is_absolute() or ".." in rel.parts:
             findings.append(f"TERMINAL_CR_EVIDENCE_REF_INVALID:cr:{cr_id}:{ref or '-'}")
             continue
         candidate = (process_root / rel).resolve(strict=False)
@@ -328,6 +320,11 @@ def _dispatch_records(process_root: Path) -> tuple[list[TerminalLineageRecordV1]
     attempt_order: dict[tuple[str, str], int] = {}
     dispatch_attempts: dict[str, int] = {}
     for ordinal, row in enumerate(rows, 1):
+        # Correction rows amend one exact historical event.  They are not a new
+        # dispatch attempt generation and therefore must never become the
+        # current terminal-lineage head for the dispatch identity.
+        if row.get("event_type") == "dispatch_correction":
+            continue
         identity = str(row.get("dispatch_id") or "")
         if not identity:
             continue
@@ -484,7 +481,11 @@ def discover_terminal_lineage(
     return tuple(records), tuple(errors)
 
 
-def _load_dispositions(process_root: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
+def load_terminal_lineage_dispositions(
+    process_root: Path,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """读取并验证终态 lineage disposition 的公开机器契约。"""
+
     path = process_root / DISPOSITIONS_REL
     if not path.exists():
         return {}, []
@@ -521,23 +522,16 @@ def _load_dispositions(process_root: Path) -> tuple[dict[str, dict[str, Any]], l
         evidence_digests = item.get("evidence_digests")
         if not isinstance(evidence_refs, list) or not evidence_refs:
             errors.append(f"terminal lineage disposition evidence missing: {key}")
-        elif (
-            not isinstance(evidence_digests, dict)
-            or set(evidence_digests) != set(evidence_refs)
-        ):
+        elif not isinstance(evidence_digests, dict) or set(evidence_digests) != set(evidence_refs):
             errors.append(f"terminal lineage disposition evidence digests mismatch: {key}")
         else:
             for ref in evidence_refs:
                 if not isinstance(ref, str) or not ref.startswith("process/"):
-                    errors.append(
-                        f"terminal lineage disposition evidence ref invalid: {key}:{ref}"
-                    )
+                    errors.append(f"terminal lineage disposition evidence ref invalid: {key}:{ref}")
                     continue
                 candidate = process_root / ref.removeprefix("process/")
                 if candidate.is_symlink() or not candidate.is_file():
-                    errors.append(
-                        f"terminal lineage disposition evidence missing: {key}:{ref}"
-                    )
+                    errors.append(f"terminal lineage disposition evidence missing: {key}:{ref}")
                     continue
                 expected_digest = str(evidence_digests.get(ref) or "")
                 if not _SHA256_RE.fullmatch(expected_digest):
@@ -545,11 +539,13 @@ def _load_dispositions(process_root: Path) -> tuple[dict[str, dict[str, Any]], l
                         f"terminal lineage disposition evidence digest invalid: {key}:{ref}"
                     )
                 elif sha256(candidate.read_bytes()).hexdigest() != expected_digest:
-                    errors.append(
-                        f"terminal lineage disposition evidence drift: {key}:{ref}"
-                    )
+                    errors.append(f"terminal lineage disposition evidence drift: {key}:{ref}")
         result[key] = item
     return result, errors
+
+
+# 兼容既有内部测试与只读调用；新生产调用应使用公开名称。
+_load_dispositions = load_terminal_lineage_dispositions
 
 
 def project_terminal_lineage(
@@ -572,14 +568,31 @@ def project_terminal_lineage(
         if disposition is not None:
             unused_dispositions.discard(key)
             terminal_status = str(disposition.get("terminal_status") or "").lower()
-            if str(disposition.get("source_digest") or "") != latest.source_digest:
+            source_digest = str(disposition.get("source_digest") or "")
+            matched_source = next(
+                (item for item in ordered if item.source_digest == source_digest),
+                None,
+            )
+            if matched_source is None:
                 findings.append(f"DISPOSITION_SOURCE_DRIFT:{key}")
             elif not terminal_status:
                 findings.append(f"DISPOSITION_TERMINAL_STATUS_MISSING:{key}")
             elif terminal_status not in TERMINAL_VALUES_BY_KIND.get(latest.kind, set()):
-                findings.append(
-                    f"DISPOSITION_STATUS_NOT_TERMINAL:{key}:{terminal_status}"
-                )
+                findings.append(f"DISPOSITION_STATUS_NOT_TERMINAL:{key}:{terminal_status}")
+            elif matched_source is not latest and latest.terminal:
+                # A native terminal successor may consume a disposition that
+                # originally covered a nonterminal historical generation.  It
+                # is valid only when the successor preserves that exact
+                # terminal status; arbitrary later drift remains fail-closed.
+                if latest.status != terminal_status:
+                    findings.append(
+                        f"DISPOSITION_SUCCESSOR_STATUS_CONFLICT:{key}:"
+                        f"{terminal_status}:{latest.status or '-'}"
+                    )
+                else:
+                    latest = replace(latest, disposition_applied=True)
+            elif matched_source is not latest:
+                findings.append(f"DISPOSITION_SOURCE_DRIFT:{key}")
             else:
                 latest = replace(
                     latest,
@@ -639,11 +652,9 @@ def project_terminal_lineage(
 def check_terminal_lineage(project_root: Path) -> dict[str, Any]:
     route = require_process_route(project_root.resolve())
     records, discovery_errors = discover_terminal_lineage(route.process_root)
-    dispositions, disposition_errors = _load_dispositions(route.process_root)
+    dispositions, disposition_errors = load_terminal_lineage_dispositions(route.process_root)
     report = project_terminal_lineage(records, dispositions=dispositions)
-    report["findings"] = sorted(
-        set([*report["findings"], *discovery_errors, *disposition_errors])
-    )
+    report["findings"] = sorted(set([*report["findings"], *discovery_errors, *disposition_errors]))
     report["decision"] = "BLOCKED" if report["findings"] else "PASS"
     report["manifest_digest"] = canonical_digest(
         {key: value for key, value in report.items() if key != "manifest_digest"}
@@ -662,11 +673,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"decision": "BLOCKED", "errors": [str(exc)]}, ensure_ascii=False))
         return 1
     if not parsed.include_records:
-        report = {
-            key: value
-            for key, value in report.items()
-            if key not in {"current", "history"}
-        }
+        report = {key: value for key, value in report.items() if key not in {"current", "history"}}
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if report["decision"] == "PASS" else 1
 
@@ -675,5 +682,6 @@ __all__ = [
     "TerminalLineageRecordV1",
     "check_terminal_lineage",
     "discover_terminal_lineage",
+    "load_terminal_lineage_dispositions",
     "project_terminal_lineage",
 ]

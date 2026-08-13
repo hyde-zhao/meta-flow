@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.checks import cp_result
+from meta_flow.checks.check_artifact import (
+    CheckArtifactDescriptorV1,
+    CheckArtifactKind,
+    classify_check_artifact,
+)
 from meta_flow.checks.correction import validate_correction_event
 from meta_flow.context_pack import read_expansion
 from meta_flow.evals.runner import parse_yaml_subset
@@ -21,7 +26,7 @@ from meta_flow.project.process_route import (
     _resolve_runtime_ref,
     format_runtime_ref,
 )
-from meta_flow.state import event_ledger
+from meta_flow.state import checkpoint_projection, event_ledger
 
 QUALITY_MODEL_REL = Path("process/policies/QUALITY-MODEL.yaml")
 EVAL_MATRIX_REL = Path("process/policies/EVAL-MATRIX.yaml")
@@ -80,12 +85,8 @@ class QualityRouteDecision:
 def finding_fingerprint(finding: Mapping[str, Any]) -> str:
     payload = {
         "check_id": str(finding.get("check_id") or ""),
-        "normalized_contract_ref": str(
-            finding.get("normalized_contract_ref") or ""
-        ),
-        "affected_path_set": sorted(
-            str(item) for item in finding.get("affected_path_set") or []
-        ),
+        "normalized_contract_ref": str(finding.get("normalized_contract_ref") or ""),
+        "affected_path_set": sorted(str(item) for item in finding.get("affected_path_set") or []),
         "root_cause_class": str(finding.get("root_cause_class") or ""),
     }
     return hashlib.sha256(
@@ -155,11 +156,7 @@ def evaluate_quality_route(
             () if affected else ("NO_AFFECTED_REQUIRED_CHECK_GROUPS",),
         )
 
-    blockers = [
-        fact.upper()
-        for fact in QA_READINESS_FACTS
-        if not readiness_facts.get(fact)
-    ]
+    blockers = [fact.upper() for fact in QA_READINESS_FACTS if not readiness_facts.get(fact)]
     for fact in (
         "partial_mutation",
         "blocking_design_item",
@@ -323,17 +320,13 @@ def _contains_forbidden_source(value: Any) -> bool:
     return any(needle.lower() in lowered for needle in FORBIDDEN_MANUAL_SOURCE_NEEDLES)
 
 
-def quality_model_path(
-    project_root: Path, *, process_root: Path | None = None
-) -> Path:
+def quality_model_path(project_root: Path, *, process_root: Path | None = None) -> Path:
     if process_root is not None:
         return _resolve_injected_process_ref(process_root, QUALITY_MODEL_REL.as_posix())
     return _resolve_runtime_ref(project_root, QUALITY_MODEL_REL.as_posix())
 
 
-def eval_matrix_path(
-    project_root: Path, *, process_root: Path | None = None
-) -> Path:
+def eval_matrix_path(project_root: Path, *, process_root: Path | None = None) -> Path:
     if process_root is not None:
         return _resolve_injected_process_ref(process_root, EVAL_MATRIX_REL.as_posix())
     return _resolve_runtime_ref(project_root, EVAL_MATRIX_REL.as_posix())
@@ -356,21 +349,13 @@ def write_default_quality_policies(project_root: Path, *, force: bool = False) -
     return written
 
 
-def load_quality_model(
-    project_root: Path, *, process_root: Path | None = None
-) -> dict[str, Any]:
-    data, _errors = _read_policy(
-        quality_model_path(project_root, process_root=process_root)
-    )
+def load_quality_model(project_root: Path, *, process_root: Path | None = None) -> dict[str, Any]:
+    data, _errors = _read_policy(quality_model_path(project_root, process_root=process_root))
     return data
 
 
-def load_eval_matrix(
-    project_root: Path, *, process_root: Path | None = None
-) -> dict[str, Any]:
-    data, _errors = _read_policy(
-        eval_matrix_path(project_root, process_root=process_root)
-    )
+def load_eval_matrix(project_root: Path, *, process_root: Path | None = None) -> dict[str, Any]:
+    data, _errors = _read_policy(eval_matrix_path(project_root, process_root=process_root))
     return data
 
 
@@ -406,7 +391,9 @@ def validate_quality_model(
         if required not in allowed_sources:
             errors.append(f"QUALITY-MODEL allowed_sources missing derived source: {required}")
     if _contains_forbidden_source(metric_derivation):
-        errors.append("QUALITY-MODEL must not define dashboard, ranking, portfolio, or manual metrics truth sources")
+        errors.append(
+            "QUALITY-MODEL must not define dashboard, ranking, portfolio, or manual metrics truth sources"
+        )
 
     dimensions = _as_dict_list(data.get("dimensions"))
     if not dimensions:
@@ -426,11 +413,17 @@ def validate_quality_model(
             errors.append(f"QUALITY-MODEL dimension {dimension_id or index} missing gates")
         for gate in gates:
             if gate not in ALLOWED_GATES:
-                errors.append(f"QUALITY-MODEL dimension {dimension_id or index} has invalid gate: {gate}")
+                errors.append(
+                    f"QUALITY-MODEL dimension {dimension_id or index} has invalid gate: {gate}"
+                )
         if not _as_list(dimension.get("required_evidence")):
-            errors.append(f"QUALITY-MODEL dimension {dimension_id or index} missing required_evidence")
+            errors.append(
+                f"QUALITY-MODEL dimension {dimension_id or index} missing required_evidence"
+            )
         if not _as_list(dimension.get("derived_metrics")):
-            warnings.append(f"QUALITY-MODEL dimension {dimension_id or index} has no derived_metrics")
+            warnings.append(
+                f"QUALITY-MODEL dimension {dimension_id or index} has no derived_metrics"
+            )
     return errors, warnings
 
 
@@ -451,10 +444,14 @@ def validate_eval_matrix(
     if data.get("quality_model_ref") != QUALITY_MODEL_REL.as_posix():
         errors.append(f"EVAL-MATRIX quality_model_ref must be {QUALITY_MODEL_REL.as_posix()}")
     if _contains_forbidden_source(data):
-        errors.append("EVAL-MATRIX must not define dashboard, ranking, portfolio, or manual metrics truth sources")
+        errors.append(
+            "EVAL-MATRIX must not define dashboard, ranking, portfolio, or manual metrics truth sources"
+        )
 
     model = load_quality_model(project_root, process_root=process_root)
-    model_dimension_ids = {str(item.get("id")) for item in _as_dict_list(model.get("dimensions")) if item.get("id")}
+    model_dimension_ids = {
+        str(item.get("id")) for item in _as_dict_list(model.get("dimensions")) if item.get("id")
+    }
     if not model_dimension_ids:
         warnings.append("EVAL-MATRIX could not load quality model dimensions for cross-check")
 
@@ -473,12 +470,16 @@ def validate_eval_matrix(
         if not dimension:
             errors.append(f"EVAL-MATRIX case {case_id or index} missing quality_dimension")
         elif model_dimension_ids and dimension not in model_dimension_ids:
-            errors.append(f"EVAL-MATRIX case {case_id or index} references unknown quality_dimension: {dimension}")
+            errors.append(
+                f"EVAL-MATRIX case {case_id or index} references unknown quality_dimension: {dimension}"
+            )
         if not case.get("eval_ref"):
             errors.append(f"EVAL-MATRIX case {case_id or index} missing eval_ref")
         blocking_policy = str(case.get("blocking_policy") or "")
         if blocking_policy not in ALLOWED_BLOCKING_POLICIES:
-            errors.append(f"EVAL-MATRIX case {case_id or index} invalid blocking_policy: {blocking_policy or '-'}")
+            errors.append(
+                f"EVAL-MATRIX case {case_id or index} invalid blocking_policy: {blocking_policy or '-'}"
+            )
         if not _as_list(case.get("evidence_refs")):
             errors.append(f"EVAL-MATRIX case {case_id or index} missing evidence_refs")
     return errors, warnings
@@ -529,12 +530,15 @@ def _load_read_expansion_corrections(root: Path) -> tuple[dict[str, str], list[s
         try:
             event = json.loads(line)
         except json.JSONDecodeError as exc:
-            errors.append(f"{READ_EXPANSION_CORRECTION_REL.as_posix()}:{line_no}: invalid JSON: {exc}")
+            errors.append(
+                f"{READ_EXPANSION_CORRECTION_REL.as_posix()}:{line_no}: invalid JSON: {exc}"
+            )
             continue
         findings = validate_correction_event(event, chain=chain)
         if findings:
             errors.extend(
-                f"{READ_EXPANSION_CORRECTION_REL.as_posix()}:{line_no}: {finding}" for finding in findings
+                f"{READ_EXPANSION_CORRECTION_REL.as_posix()}:{line_no}: {finding}"
+                for finding in findings
             )
             continue
         target = event.get("target_ref") or {}
@@ -549,16 +553,118 @@ def _load_read_expansion_corrections(root: Path) -> tuple[dict[str, str], list[s
     return targets, errors
 
 
-def _load_cp_results(root: Path) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+def _check_artifact_inventory(
+    root: Path,
+) -> tuple[list[CheckArtifactDescriptorV1], list[str]]:
+    checks_root = _resolve_runtime_ref(root, "process/checks")
+    if not checks_root.is_dir():
+        return [], []
+    candidates = set(checks_root.glob("*.result.json"))
+    checkpoint_ledger = _resolve_runtime_ref(root, checkpoint_projection.CHECKPOINT_LEDGER_REF)
+    if checkpoint_ledger.is_file():
+        events, _load_errors = event_ledger.load_events(checkpoint_ledger)
+        for event in events:
+            if str(event.get("event_type") or "") not in checkpoint_projection.GRAPH_EVENT_TYPES:
+                continue
+            logical_ref = str(event.get("result_ref") or "")
+            if not logical_ref.startswith("process/checks/"):
+                continue
+            path = _resolve_runtime_ref(root, logical_ref)
+            if path.is_file():
+                candidates.add(path)
+    descriptors: list[CheckArtifactDescriptorV1] = []
+    errors: list[str] = []
+    for result_path in sorted(candidates):
+        rel_path = format_runtime_ref(root, result_path)
+        descriptor = classify_check_artifact(result_path, logical_ref=rel_path)
+        descriptors.append(descriptor)
+        errors.extend(f"{rel_path}: {finding}" for finding in descriptor.findings)
+    return descriptors, errors
+
+
+def _current_checkpoint_descriptors(
+    root: Path,
+    descriptors: list[CheckArtifactDescriptorV1],
+) -> tuple[list[CheckArtifactDescriptorV1], list[str], list[str]]:
+    """通过 canonical projector 选择 CP0..CP8 current heads。"""
+
+    checkpoint_descriptors = [
+        descriptor
+        for descriptor in descriptors
+        if descriptor.kind is CheckArtifactKind.CHECKPOINT_RESULT
+    ]
+    by_ref = {descriptor.logical_ref: descriptor for descriptor in descriptors}
+    pairs = sorted({(item.cr_id, item.checkpoint) for item in checkpoint_descriptors})
+    ledger = _resolve_runtime_ref(root, checkpoint_projection.CHECKPOINT_LEDGER_REF)
+    current: dict[str, CheckArtifactDescriptorV1] = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+    for cr_id, checkpoint in pairs:
+        candidates = [
+            item.logical_ref
+            for item in checkpoint_descriptors
+            if item.cr_id == cr_id and item.checkpoint == checkpoint
+        ]
+        projection = checkpoint_projection.load_checkpoint_projection(
+            root,
+            cr_id=cr_id,
+            checkpoint=checkpoint,
+            candidate_refs=candidates,
+        )
+        errors.extend(
+            f"checkpoint projection {cr_id}/{checkpoint}: {finding.code}: {finding.message}"
+            for finding in projection.findings
+        )
+        for head in projection.heads:
+            descriptor = by_ref.get(head.result_ref)
+            if descriptor is None:
+                errors.append(
+                    f"checkpoint projection {cr_id}/{checkpoint}: current head is absent from "
+                    f"typed inventory: {head.result_ref}"
+                )
+                continue
+            if descriptor.kind is not CheckArtifactKind.CHECKPOINT_RESULT:
+                errors.append(
+                    f"checkpoint projection {cr_id}/{checkpoint}: current head kind mismatch: "
+                    f"{head.result_ref}={descriptor.kind.value}"
+                )
+                continue
+            current[head.result_ref] = descriptor
+    if ledger.is_file():
+        for descriptor in checkpoint_descriptors:
+            if descriptor.logical_ref not in current:
+                warnings.append(
+                    f"{descriptor.logical_ref}: historical checkpoint result is not a current head"
+                )
+    return [current[ref] for ref in sorted(current)], errors, warnings
+
+
+def _load_cp_results_with_inventory(
+    root: Path,
+) -> tuple[
+    list[dict[str, Any]],
+    list[CheckArtifactDescriptorV1],
+    list[str],
+    list[str],
+]:
     results: list[dict[str, Any]] = []
     errors: list[str] = []
     warnings: list[str] = []
+    descriptors, inventory_errors = _check_artifact_inventory(root)
+    errors.extend(inventory_errors)
     corrected_targets, correction_errors = _load_read_expansion_corrections(root)
     errors.extend(correction_errors)
-    checks_root = _resolve_runtime_ref(root, "process/checks")
-    for result_path in sorted(checks_root.glob("*.result.json")):
-        result_errors, result_warnings = cp_result.validate_cp_result(result_path, project_root=root)
-        rel_path = format_runtime_ref(root, result_path)
+    current, projection_errors, projection_warnings = _current_checkpoint_descriptors(
+        root, descriptors
+    )
+    errors.extend(projection_errors)
+    warnings.extend(projection_warnings)
+    for descriptor in current:
+        result_path = _resolve_runtime_ref(root, descriptor.logical_ref)
+        result_errors, result_warnings = cp_result.validate_cp_result(
+            result_path, project_root=root
+        )
+        rel_path = descriptor.logical_ref
         correction_id = corrected_targets.get(rel_path)
         if correction_id:
             warnings.extend(
@@ -569,13 +675,21 @@ def _load_cp_results(root: Path) -> tuple[list[dict[str, Any]], list[str], list[
         else:
             errors.extend(f"{rel_path}: {error}" for error in result_errors)
         warnings.extend(
-            f"{format_runtime_ref(root, result_path)}: {warning}"
-            for warning in result_warnings
+            f"{format_runtime_ref(root, result_path)}: {warning}" for warning in result_warnings
         )
         try:
             results.append(cp_result.load_cp_result(result_path))
         except ValueError as exc:
             errors.append(str(exc))
+    return results, descriptors, errors, warnings
+
+
+def _load_cp_results(
+    root: Path,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """兼容既有内部 consumer；typed inventory 由显式扩展接口返回。"""
+
+    results, _descriptors, errors, warnings = _load_cp_results_with_inventory(root)
     return results, errors, warnings
 
 
@@ -591,7 +705,9 @@ def _load_ledger_counts(root: Path) -> tuple[dict[str, int], list[str], list[str
             counts[ledger_type] = 0
             continue
         errors.extend(f"{ledger_type}: {error}" for error in ledger_errors)
-        validate_errors, validate_warnings = event_ledger.validate_event_ledger(ledger, ledger_type=ledger_type)
+        validate_errors, validate_warnings = event_ledger.validate_event_ledger(
+            ledger, ledger_type=ledger_type
+        )
         errors.extend(f"{ledger_type}: {error}" for error in validate_errors)
         warnings.extend(f"{ledger_type}: {warning}" for warning in validate_warnings)
         counts[ledger_type] = len(events)
@@ -600,7 +716,7 @@ def _load_ledger_counts(root: Path) -> tuple[dict[str, int], list[str], list[str
 
 def run_workflow_doctor(project_root: Path) -> int:
     root = project_root.resolve()
-    cp_results, cp_errors, cp_warnings = _load_cp_results(root)
+    cp_results, check_artifacts, cp_errors, cp_warnings = _load_cp_results_with_inventory(root)
     ledger_counts, ledger_errors, ledger_warnings = _load_ledger_counts(root)
     read_ledger = _resolve_runtime_ref(root, READ_EXPANSION_REL.as_posix())
     read_summary = read_expansion.summarize_events(root, ledger=read_ledger)
@@ -610,7 +726,9 @@ def run_workflow_doctor(project_root: Path) -> int:
         read_errors = []
 
     decisions = collections.Counter(str(result.get("decision") or "-") for result in cp_results)
-    checkpoints = collections.Counter(str(result.get("checkpoint") or result.get("checkpoint_id") or "-") for result in cp_results)
+    checkpoints = collections.Counter(
+        str(result.get("checkpoint") or result.get("checkpoint_id") or "-") for result in cp_results
+    )
     blockers = sum(len(_as_list(result.get("blockers"))) for result in cp_results)
     item_statuses: collections.Counter[str] = collections.Counter()
     for result in cp_results:
@@ -624,6 +742,13 @@ def run_workflow_doctor(project_root: Path) -> int:
     print(f"project_root: {root}")
     print("metrics_mode: derived-only")
     print("manual_metrics_truth_source: none")
+    print(f"check_artifact_files: {len(check_artifacts)}")
+    print("check_artifact_kinds:")
+    artifact_kinds = collections.Counter(item.kind.value for item in check_artifacts)
+    for kind, count in sorted(artifact_kinds.items()):
+        print(f"- {kind}: {count}")
+    if not artifact_kinds:
+        print("- none")
     print(f"cp_result_files: {len(cp_results)}")
     print("cp_decisions:")
     for decision, count in sorted(decisions.items()):

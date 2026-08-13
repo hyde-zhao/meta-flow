@@ -1,0 +1,196 @@
+{
+  "kind": "ProviderReleaseQualificationEvidenceV1",
+  "layers": {
+    "candidate_closure": {
+      "command": {
+        "commands": [
+          "uv run --frozen ruff check .",
+          "uv lock --check",
+          "uv run --frozen python scripts/check_delivery_guardrails.py (isolated refreshed detector baseline)",
+          "meta-flow install codex --scope project --component full --project-dir <isolated-target> --dry-run",
+          "python delivery/scripts/install-cli.py reinstall --source <release-root> --dry-run",
+          "uv build",
+          "wheel metadata/content inspection"
+        ]
+      },
+      "profile": {
+        "name": "release-closure-0.4.1-v1",
+        "scope": [
+          "ruff",
+          "uv lock",
+          "delivery guardrail",
+          "Codex project install dry-run",
+          "CLI reinstall dry-run",
+          "sdist/wheel build",
+          "wheel metadata and content"
+        ]
+      },
+      "receipt": {
+        "command_digest": "02888c1a785c83436861759a0700bd79d9e7b88b14b34d557f2abff1ce06bc69",
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_closure",
+        "package_version": "0.4.1",
+        "profile_digest": "49b4cf8d70394a053d7eb39b760cf470e040cb4b05f1aa11faafdf9dbadc2b7a",
+        "provider_source_set_digest": "25045a2112c8cc7ad1f05c19801fb7194d82b8a237ca3d36c74a88b243c1d83b",
+        "result_digest": "11b057ec14a29663a97a828c9de8fe53be694beea980ee9ca89bd9153b17a7df",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "all closure commands exited 0; wheel metadata version 0.4.1; v1 and v2 receipts plus new modules are packaged",
+        "warnings": [
+          "setuptools emitted pre-existing namespace-package discovery warnings; expected delivery assets were verified in the wheel"
+        ]
+      }
+    },
+    "candidate_compatibility": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "pytest",
+          "-q",
+          "tests/test_check_artifact_inventory.py",
+          "tests/test_checkpoint_successor_transaction.py",
+          "tests/test_dispatch_correction.py",
+          "tests/test_dispatch_closure.py",
+          "tests/test_quality_governance.py",
+          "tests/test_terminal_lineage.py",
+          "tests/test_cp_result_event_ledger.py",
+          "tests/test_state_projection_transaction.py",
+          "tests/test_work_lifecycle_transaction.py",
+          "tests/test_core_lifecycle_dogfood.py",
+          "tests/test_governance_ownership.py"
+        ],
+        "environment": {
+          "PYTEST_ADDOPTS": "-p no:cacheprovider",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
+      },
+      "profile": {
+        "name": "multi-work-projection-compatibility-v1",
+        "scope": [
+          "typed check artifact inventory",
+          "checkpoint successor transaction",
+          "dispatch correction and closure",
+          "quality governance",
+          "terminal lineage",
+          "checkpoint/state/work lifecycle",
+          "core lifecycle dogfood",
+          "governance ownership"
+        ]
+      },
+      "receipt": {
+        "command_digest": "6026a9b01ac814725e649657a5984ac88cf89826649faa4eecbfa8250036c7a4",
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_compatibility",
+        "package_version": "0.4.1",
+        "profile_digest": "ef6a3576d31cb5493c77431e44469c249bc6441fc8ac8c9d28e2dfa38d2f7d3c",
+        "provider_source_set_digest": "25045a2112c8cc7ad1f05c19801fb7194d82b8a237ca3d36c74a88b243c1d83b",
+        "result_digest": "8fc81b487e16807df31e3e497ee11e1f79167a30162a58a35a643ae271015841",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "159 passed, 10 subtests passed"
+      }
+    },
+    "candidate_full": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "pytest",
+          "-q"
+        ],
+        "environment": {
+          "PYTEST_ADDOPTS": "-p no:cacheprovider",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "workspace": "isolated-sibling-binding-copy"
+      },
+      "profile": {
+        "name": "repository-full-isolated-binding-v1",
+        "scope": [
+          "entire pytest suite",
+          "sibling-binding dogfood",
+          "refreshed detector derived baseline in isolated process copy"
+        ]
+      },
+      "receipt": {
+        "command_digest": "50cd12aebc84f138f76d0140de78aca3eccb156126a212af39e0af5f0a20b9bf",
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_full",
+        "package_version": "0.4.1",
+        "profile_digest": "ca5f72a4834ae88d19bbe292a979638a02655f1122e3b6d49d05f6e28bdffa6b",
+        "provider_source_set_digest": "25045a2112c8cc7ad1f05c19801fb7194d82b8a237ca3d36c74a88b243c1d83b",
+        "result_digest": "c97b71e53a969afcdb25e1c29d17bf7811bc084f5c29279c6efd08858b155e1b",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "2307 passed, 712 subtests passed in 379.01s"
+      }
+    },
+    "candidate_targeted": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "pytest",
+          "-q",
+          "tests/test_execution_control_admission.py",
+          "tests/test_execution_control_closure.py",
+          "tests/test_execution_control_consumer_scan.py",
+          "tests/test_execution_control_contract.py",
+          "tests/test_execution_control_failure.py",
+          "tests/test_execution_control_migration.py",
+          "tests/test_vnext_work_assurance_handoff_query.py",
+          "tests/test_vnext_work_policy.py",
+          "tests/test_vnext_work_store_cli.py",
+          "tests/test_vnext_work_usage.py"
+        ],
+        "environment": {
+          "PYTEST_ADDOPTS": "-p no:cacheprovider",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
+      },
+      "profile": {
+        "name": "execution-control-provider-targeted-v1",
+        "scope": [
+          "execution-control admission/closure/consumer-scan/contract/failure/migration",
+          "vNext Work assurance/policy/store/usage"
+        ]
+      },
+      "receipt": {
+        "command_digest": "ffcf39cf828d01f284c1ca5ea8692fac50ac704e83f7538d5b3a7ed4d484c192",
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_targeted",
+        "package_version": "0.4.1",
+        "profile_digest": "287eab610447d243d4833cb9cd43894afce3e26a29f9bb6b183e3905d5ba4424",
+        "provider_source_set_digest": "25045a2112c8cc7ad1f05c19801fb7194d82b8a237ca3d36c74a88b243c1d83b",
+        "result_digest": "4ad6860722f28c869558412ed9b4323e2bfdb648761c791193fec4f8b893e023",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "406 passed"
+      }
+    }
+  },
+  "package_name": "meta-flow",
+  "package_version": "0.4.1",
+  "qualified_at": "2026-08-13",
+  "schema_version": 1
+}

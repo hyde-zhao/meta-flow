@@ -30,7 +30,7 @@ from meta_flow.installation.identity import (
 def source_identity(**updates: str) -> dict[str, str]:
     payload = {
         "source": "meta-flow-delivery",
-        "version": "0.4.0",
+        "version": "0.4.1",
         "oid": "a" * 40,
         "delivery_tree_digest": "b" * 64,
         "rules_source_digest": "c" * 64,
@@ -186,7 +186,7 @@ def test_resolve_source_identity_is_exact_and_returns_a_copy() -> None:
     assert resolved == expected
     assert resolved is not expected
     with pytest.raises(InstallationContractError) as exc_info:
-        resolve_source_identity(expected, source_identity(version="0.4.1"))
+        resolve_source_identity(expected, source_identity(version="0.4.2"))
     assert exc_info.value.code is ContractErrorCode.IDENTITY_CONFLICT
 
 

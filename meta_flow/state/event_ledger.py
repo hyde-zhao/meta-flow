@@ -36,9 +36,7 @@ from meta_flow.semantics.attempt import (
     TERMINAL_SUCCESS_STATUSES as TERMINAL_SUCCESS_STATUSES,
 )
 
-PUBLIC_OPERATION_DECLARATIONS = (
-    ("event.append", ("meta-flow", "event", "append")),
-)
+PUBLIC_OPERATION_DECLARATIONS = (("event.append", ("meta-flow", "event", "append")),)
 KNOWN_LEDGER_RELS = {
     "checkpoint": Path("process/state/CHECKPOINT-LEDGER.ndjson"),
     "handoff": Path("process/state/HANDOFF-LEDGER.ndjson"),
@@ -84,6 +82,46 @@ DISPATCH_EVENT_REQUIRED_FIELDS = {
         "approved_by",
         "status",
     ),
+    "dispatch_correction": (
+        "event_id",
+        "event_type",
+        "dispatch_id",
+        "attempt_id",
+        "corrects_event_id",
+        "original_event_digest",
+        "correction_fields",
+        "reason",
+        "evidence_refs",
+        "created_at",
+    ),
+    "dispatch_attempt_closure": (
+        "event_id",
+        "event_type",
+        "dispatch_id",
+        "attempt_id",
+        "story_id",
+        "canonical_role",
+        "checkpoint",
+        "dispatch_mode",
+        "tool_name",
+        "closes_event_id",
+        "original_event_digest",
+        "disposition_key",
+        "disposition_source_digest",
+        "status",
+        "terminal_result",
+        "reason",
+        "evidence_refs",
+        "evidence_digests",
+        "created_at",
+    ),
+}
+DISPATCH_DISPOSITION_RESULT_BY_STATUS = {
+    "blocked": "BLOCKED",
+    "failed": "FAIL",
+    "cancelled": "CANCELLED",
+    "superseded": "SUPERSEDED",
+    "interrupted": "INTERRUPTED",
 }
 GATE_APPROVAL_KIND_VERSION = 1
 _EXECUTION_CONTROL_EVENT_FIELDS = frozenset(
@@ -329,7 +367,10 @@ class FindingObservationEventV1:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> FindingObservationEventV1:
-        if not isinstance(payload, Mapping) or frozenset(payload) != _EXECUTION_CONTROL_EVENT_FIELDS:
+        if (
+            not isinstance(payload, Mapping)
+            or frozenset(payload) != _EXECUTION_CONTROL_EVENT_FIELDS
+        ):
             raise ValueError("finding observation fields mismatch")
         return cls(**{field: payload[field] for field in _EXECUTION_CONTROL_EVENT_FIELDS})
 
@@ -428,6 +469,226 @@ def typed_dispatch_attempt_from_event(
     )
 
 
+def dispatch_correction_index(
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """验证 DispatchCorrectionV1，并按 exact source event id 建立唯一索引。"""
+
+    sources = {
+        str(event.get("event_id") or ""): event
+        for event in events
+        if event.get("event_type") != "dispatch_correction" and str(event.get("event_id") or "")
+    }
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    errors: list[str] = []
+    for correction in events:
+        if correction.get("event_type") != "dispatch_correction":
+            continue
+        target_id = str(correction.get("corrects_event_id") or "")
+        grouped.setdefault(target_id, []).append(correction)
+    valid: dict[str, dict[str, Any]] = {}
+    for target_id, candidates in sorted(grouped.items()):
+        if len(candidates) != 1:
+            errors.append(f"dispatch correction fork: {target_id or '-'}")
+            continue
+        correction = candidates[0]
+        source = sources.get(target_id)
+        if source is None:
+            errors.append(f"dispatch correction target missing: {target_id or '-'}")
+            continue
+        fields = correction.get("correction_fields")
+        evidence_refs = correction.get("evidence_refs")
+        if not isinstance(fields, dict) or set(fields) != {"terminal_result"}:
+            errors.append(f"dispatch correction fields invalid: {target_id}")
+            continue
+        terminal_result = str(fields.get("terminal_result") or "").strip()
+        if not terminal_result:
+            errors.append(f"dispatch correction terminal_result missing: {target_id}")
+            continue
+        if (
+            source.get("event_type") != "dispatch"
+            or not source.get("attempt_id")
+            or normalize_terminal_status(source.get("status")) not in TERMINAL_ATTEMPT_STATUSES
+        ):
+            errors.append(f"dispatch correction source is not a terminal typed event: {target_id}")
+            continue
+        if source.get("terminal_result"):
+            errors.append(f"dispatch correction source already has terminal_result: {target_id}")
+            continue
+        if str(correction.get("dispatch_id") or "") != str(source.get("dispatch_id") or "") or str(
+            correction.get("attempt_id") or ""
+        ) != str(source.get("attempt_id") or ""):
+            errors.append(f"dispatch correction identity mismatch: {target_id}")
+            continue
+        expected_digest = canonical_digest(_clean_event(source))
+        if str(correction.get("original_event_digest") or "") != expected_digest:
+            errors.append(f"dispatch correction original_event_digest mismatch: {target_id}")
+            continue
+        if (
+            not isinstance(evidence_refs, list)
+            or not evidence_refs
+            or any(
+                not isinstance(ref, str) or not ref.startswith("process/") for ref in evidence_refs
+            )
+        ):
+            errors.append(f"dispatch correction evidence_refs invalid: {target_id}")
+            continue
+        identity = {
+            "corrects_event_id": target_id,
+            "original_event_digest": expected_digest,
+            "dispatch_id": str(source.get("dispatch_id") or ""),
+            "attempt_id": str(source.get("attempt_id") or ""),
+            "terminal_result": terminal_result,
+        }
+        expected_event_id = f"DISPATCH-CORRECTION-{canonical_digest(identity)[:32]}"
+        if str(correction.get("event_id") or "") != expected_event_id:
+            errors.append(f"dispatch correction event_id mismatch: {target_id}")
+            continue
+        valid[target_id] = correction
+    return valid, errors
+
+
+def dispatch_closure_index(
+    events: list[dict[str, Any]],
+    *,
+    process_root: Path | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """验证由 exact disposition 支持的 append-only dispatch closure。"""
+
+    sources = {
+        str(event.get("event_id") or ""): event
+        for event in events
+        if event.get("event_type") in {"dispatch", "inline_fallback"}
+        and str(event.get("event_id") or "")
+    }
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for closure in events:
+        if closure.get("event_type") == "dispatch_attempt_closure":
+            grouped.setdefault(str(closure.get("closes_event_id") or ""), []).append(closure)
+
+    dispositions: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    if grouped and process_root is not None:
+        from meta_flow.workflow.terminal_lineage import (
+            load_terminal_lineage_dispositions,
+        )
+
+        dispositions, disposition_errors = load_terminal_lineage_dispositions(
+            process_root.resolve()
+        )
+        errors.extend(
+            f"dispatch closure disposition invalid: {error}" for error in disposition_errors
+        )
+
+    valid: dict[str, dict[str, Any]] = {}
+    for source_id, candidates in sorted(grouped.items()):
+        if len(candidates) != 1:
+            errors.append(f"dispatch closure fork: {source_id or '-'}")
+            continue
+        closure = candidates[0]
+        source = sources.get(source_id)
+        if source is None:
+            errors.append(f"dispatch closure source missing: {source_id or '-'}")
+            continue
+        dispatch_id = str(source.get("dispatch_id") or "")
+        attempt_id = str(source.get("attempt_id") or "")
+        expected_source_digest = canonical_digest(_clean_event(source))
+        disposition_key = f"dispatch:{dispatch_id}"
+        status = normalize_terminal_status(closure.get("status"))
+        expected_result = DISPATCH_DISPOSITION_RESULT_BY_STATUS.get(status)
+        if source.get("event_type") not in {"dispatch", "inline_fallback"}:
+            errors.append(f"dispatch closure source type invalid: {source_id}")
+            continue
+        if (
+            not attempt_id
+            or normalize_terminal_status(source.get("status")) in TERMINAL_ATTEMPT_STATUSES
+        ):
+            errors.append(
+                f"dispatch closure source is not a nonterminal typed attempt: {source_id}"
+            )
+            continue
+        if (
+            str(closure.get("dispatch_id") or "") != dispatch_id
+            or str(closure.get("attempt_id") or "") != attempt_id
+        ):
+            errors.append(f"dispatch closure identity mismatch: {source_id}")
+            continue
+        if str(closure.get("original_event_digest") or "") != expected_source_digest:
+            errors.append(f"dispatch closure original_event_digest mismatch: {source_id}")
+            continue
+        if str(closure.get("disposition_key") or "") != disposition_key:
+            errors.append(f"dispatch closure disposition_key mismatch: {source_id}")
+            continue
+        if str(closure.get("disposition_source_digest") or "") != expected_source_digest:
+            errors.append(f"dispatch closure disposition_source_digest mismatch: {source_id}")
+            continue
+        if expected_result is None or str(closure.get("terminal_result") or "") != expected_result:
+            errors.append(f"dispatch closure terminal status/result invalid: {source_id}")
+            continue
+        for field in (
+            "story_id",
+            "canonical_role",
+            "checkpoint",
+            "dispatch_mode",
+            "tool_name",
+        ):
+            if str(closure.get(field) or "") != str(source.get(field) or ""):
+                errors.append(f"dispatch closure source field mismatch: {source_id}:{field}")
+        evidence_refs = closure.get("evidence_refs")
+        evidence_digests = closure.get("evidence_digests")
+        if (
+            not isinstance(evidence_refs, list)
+            or not evidence_refs
+            or not isinstance(evidence_digests, dict)
+            or set(evidence_digests) != set(evidence_refs)
+        ):
+            errors.append(f"dispatch closure evidence invalid: {source_id}")
+            continue
+        disposition = dispositions.get(disposition_key) if process_root is not None else None
+        if process_root is not None:
+            if disposition is None:
+                errors.append(f"dispatch closure disposition missing: {source_id}")
+                continue
+            if (
+                str(disposition.get("source_digest") or "") != expected_source_digest
+                or normalize_terminal_status(disposition.get("terminal_status")) != status
+                or str(disposition.get("reason") or "") != str(closure.get("reason") or "")
+                or disposition.get("evidence_refs") != evidence_refs
+                or disposition.get("evidence_digests") != evidence_digests
+            ):
+                errors.append(f"dispatch closure disposition binding mismatch: {source_id}")
+                continue
+        identity = {
+            "closes_event_id": source_id,
+            "original_event_digest": expected_source_digest,
+            "disposition_key": disposition_key,
+            "terminal_status": status,
+        }
+        expected_event_id = f"DISPATCH-CLOSURE-{canonical_digest(identity)[:32]}"
+        if str(closure.get("event_id") or "") != expected_event_id:
+            errors.append(f"dispatch closure event_id mismatch: {source_id}")
+            continue
+        if not any(
+            error.startswith(f"dispatch closure source field mismatch: {source_id}:")
+            for error in errors
+        ):
+            valid[source_id] = closure
+    return valid, errors
+
+
+def _effective_dispatch_event(
+    event: Mapping[str, Any],
+    corrections: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    effective = _clean_event(event)
+    correction = corrections.get(str(event.get("event_id") or ""))
+    if correction is not None:
+        fields = correction.get("correction_fields")
+        if isinstance(fields, Mapping):
+            effective.update(fields)
+    return effective
+
+
 def project_dispatch_attempt(input_value: ProjectionInputV1) -> ProjectionResultV1:
     """Project one dispatch identity without using event_id as a dispatch fallback."""
 
@@ -441,12 +702,21 @@ def project_dispatch_attempt(input_value: ProjectionInputV1) -> ProjectionResult
         for event in matching
         if event.get("corrects_missing_event_id") is True
     }
-    findings: list[str] = []
+    corrections, correction_errors = dispatch_correction_index(
+        [dict(event) for event in input_value.events]
+    )
+    findings: list[str] = list(correction_errors)
     typed: list[TypedDispatchAttemptV1] = []
     for event in matching:
-        if str(event.get("event_type") or "") not in {"dispatch", "inline_fallback"}:
+        if str(event.get("event_type") or "") not in {
+            "dispatch",
+            "inline_fallback",
+            "dispatch_attempt_closure",
+        }:
             continue
-        attempt, errors = typed_dispatch_attempt_from_event(event)
+        attempt, errors = typed_dispatch_attempt_from_event(
+            _effective_dispatch_event(event, corrections)
+        )
         key = (str(event.get("dispatch_id") or ""), str(event.get("attempt_id") or ""))
         if not (not event.get("event_id") and key in corrected_attempts):
             findings.extend(errors)
@@ -630,9 +900,7 @@ def project_execution_control_ledger(
             identity_digest=identity,
             occurrence=len(matching),
             event_ids=tuple(event.event_id for event in matching),
-            head_digest=execution_control_digest(
-                [event.payload_digest for event in matching]
-            ),
+            head_digest=execution_control_digest([event.payload_digest for event in matching]),
             finding_codes=codes,
         )
         for identity, matching in grouped.items()
@@ -646,9 +914,7 @@ def project_execution_control_ledger(
 
 
 def project_finding_occurrence(
-    events: tuple[Mapping[str, Any], ...]
-    | list[Mapping[str, Any]]
-    | FindingLedgerProjectionV1,
+    events: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] | FindingLedgerProjectionV1,
     *,
     identity_digest: str,
 ) -> FindingOccurrenceProjectionV1:
@@ -1175,6 +1441,25 @@ def validate_event_before_append(
     if missing:
         unique = ", ".join(dict.fromkeys(missing))
         raise ValueError(f"invalid {resolved_type} event missing required fields: {unique}")
+    if resolved_type == "dispatch" and event_type == "dispatch_correction":
+        existing, load_errors = load_events(path)
+        if load_errors and path.is_file():
+            raise ValueError(
+                "dispatch correction source ledger is invalid: " + "; ".join(load_errors)
+            )
+        _index, correction_errors = dispatch_correction_index([*existing, dict(event)])
+        if correction_errors:
+            raise ValueError("invalid dispatch correction: " + "; ".join(correction_errors))
+    if resolved_type == "dispatch" and event_type == "dispatch_attempt_closure":
+        existing, load_errors = load_events(path)
+        if load_errors and path.is_file():
+            raise ValueError("dispatch closure source ledger is invalid: " + "; ".join(load_errors))
+        _index, closure_errors = dispatch_closure_index(
+            [*existing, dict(event)],
+            process_root=path.parent.parent,
+        )
+        if closure_errors:
+            raise ValueError("invalid dispatch closure: " + "; ".join(closure_errors))
     if resolved_type == "gate" and event_type == "human_gate_approval":
         findings = _typed_gate_approval_findings(event)
         if findings:
@@ -1317,6 +1602,16 @@ def validate_event_ledger(
         warnings.append("event ledger is empty")
         return errors, warnings
     required = LEDGER_REQUIRED_FIELDS.get(ledger_type, ("event_type",))
+    correction_index: dict[str, dict[str, Any]] = {}
+    closure_index: dict[str, dict[str, Any]] = {}
+    if ledger_type == "dispatch":
+        correction_index, correction_errors = dispatch_correction_index(events)
+        errors.extend(correction_errors)
+        closure_index, closure_errors = dispatch_closure_index(
+            events,
+            process_root=path.parent.parent,
+        )
+        errors.extend(closure_errors)
     seen_event_ids: set[str] = set()
     typed_attempt_events: dict[tuple[str, str], list[dict[str, Any]]] = {}
     corrected_attempts = {
@@ -1384,7 +1679,7 @@ def validate_event_ledger(
 
         if (
             ledger_type == "dispatch"
-            and event.get("event_type") == "dispatch"
+            and event.get("event_type") in {"dispatch", "dispatch_attempt_closure"}
             and event.get("attempt_id")
         ):
             dispatch_id = str(event.get("dispatch_id") or "")
@@ -1402,9 +1697,15 @@ def validate_event_ledger(
                     f"line {line_no}: typed dispatch attempt requires dispatch_id and attempt_id"
                 )
             if status in TERMINAL_ATTEMPT_STATUSES and not event.get("terminal_result"):
-                errors.append(
-                    f"line {line_no}: terminal typed dispatch attempt requires terminal_result"
-                )
+                if event_id in correction_index:
+                    warnings.append(
+                        f"line {line_no}: missing terminal_result is covered by dispatch correction "
+                        f"{correction_index[event_id].get('event_id')}"
+                    )
+                else:
+                    errors.append(
+                        f"line {line_no}: terminal typed dispatch attempt requires terminal_result"
+                    )
             typed_attempt_events.setdefault((dispatch_id, attempt_id), []).append(event)
         if not any(
             event.get(field)
@@ -1456,9 +1757,13 @@ def validate_event_ledger(
 
 def _print_event_help() -> None:
     print(
-        "usage: meta-flow event <append|dispatch-not-required|inline-fallback|dispatch-check|check|list> [options]\n\n"
+        "usage: meta-flow event <append|correction-plan|correction-apply|closure-plan|closure-apply|dispatch-not-required|inline-fallback|dispatch-check|check|list> [options]\n\n"
         "Commands:\n"
         "  append  Append one JSON event to an NDJSON ledger.\n"
+        "  correction-plan  Build a zero-write DispatchCorrectionV1 batch plan.\n"
+        "  correction-apply Apply an exact OID/preimage-bound correction batch.\n"
+        "  closure-plan     Build a zero-write disposition-bound dispatch closure plan.\n"
+        "  closure-apply    Apply an exact OID/preimage-bound dispatch closure batch.\n"
         "  dispatch-not-required  Append a structured dispatch_not_required event.\n"
         "  inline-fallback        Append a structured inline_fallback dispatch event.\n"
         "  dispatch-check  Validate typed dispatch event/attempt closure evidence.\n"
@@ -1485,6 +1790,74 @@ def main(argv: list[str] | None = None) -> int:
         _print_event_help()
         return 0
     command = args[0]
+    if command in {"correction-plan", "correction-apply"}:
+        from meta_flow.state import dispatch_correction
+
+        parser = argparse.ArgumentParser(prog=f"meta-flow event {command}")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--source-event-id", action="append", required=True)
+        parser.add_argument("--terminal-result", required=True)
+        parser.add_argument("--reason", required=True)
+        parser.add_argument("--evidence-ref", action="append", required=True)
+        parser.add_argument("--created-at")
+        if command == "correction-apply":
+            parser.add_argument("--expected-plan-digest", required=True)
+            parser.add_argument("--expected-process-oid", required=True)
+        parsed = parser.parse_args(args[1:])
+        try:
+            plan = dispatch_correction.plan_dispatch_corrections(
+                parsed.project_root,
+                source_event_ids=tuple(parsed.source_event_id),
+                terminal_result=parsed.terminal_result,
+                reason=parsed.reason,
+                evidence_refs=tuple(parsed.evidence_ref),
+                created_at=parsed.created_at,
+            )
+            payload = (
+                plan.as_dict()
+                if command == "correction-plan"
+                else dispatch_correction.apply_dispatch_corrections(
+                    parsed.project_root,
+                    plan=plan,
+                    expected_plan_digest=parsed.expected_plan_digest,
+                    expected_process_oid=parsed.expected_process_oid,
+                )
+            )
+        except (OSError, ValueError) as exc:
+            payload = {"decision": "BLOCKED", "blockers": [str(exc)], "mutation_count": 0}
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if payload.get("decision") in {"READY", "NO_CHANGE", "APPLIED"} else 1
+    if command in {"closure-plan", "closure-apply"}:
+        from meta_flow.state import dispatch_closure
+
+        parser = argparse.ArgumentParser(prog=f"meta-flow event {command}")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--dispatch-id", action="append", required=True)
+        parser.add_argument("--created-at")
+        if command == "closure-apply":
+            parser.add_argument("--expected-plan-digest", required=True)
+            parser.add_argument("--expected-process-oid", required=True)
+        parsed = parser.parse_args(args[1:])
+        try:
+            plan = dispatch_closure.plan_dispatch_closures(
+                parsed.project_root,
+                dispatch_ids=tuple(parsed.dispatch_id),
+                created_at=parsed.created_at,
+            )
+            payload = (
+                plan.as_dict()
+                if command == "closure-plan"
+                else dispatch_closure.apply_dispatch_closures(
+                    parsed.project_root,
+                    plan=plan,
+                    expected_plan_digest=parsed.expected_plan_digest,
+                    expected_process_oid=parsed.expected_process_oid,
+                )
+            )
+        except (OSError, ValueError) as exc:
+            payload = {"decision": "BLOCKED", "blockers": [str(exc)], "mutation_count": 0}
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if payload.get("decision") in {"READY", "NO_CHANGE", "APPLIED"} else 1
     if command == "append":
         parser = argparse.ArgumentParser(prog="meta-flow event append")
         parser.add_argument("--project-root", type=Path, default=Path.cwd())

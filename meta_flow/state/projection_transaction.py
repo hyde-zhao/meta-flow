@@ -911,6 +911,22 @@ def atomic_replace_bytes(path: Path, value: bytes) -> Path:
     return path
 
 
+def atomic_remove_regular_file(path: Path) -> Path:
+    """删除一个已解析的普通文件，并持久化父目录变更。"""
+
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError(f"state projection target is not a regular file: {path}")
+    if not path.exists():
+        return path
+    path.unlink()
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return path
+
+
 # 公共别名只暴露已通过 writer qualification 的底层原语；调用方仍须维护独立
 # transaction journal、target allowlist、preimage 与恢复状态机。
 ensure_transaction_directory = _ensure_plain_directory
@@ -925,6 +941,7 @@ __all__ = [
     "TransactionLockHandle",
     "acquire_transaction_lock",
     "apply_state_projection_transaction",
+    "atomic_remove_regular_file",
     "atomic_replace_bytes",
     "claim_transaction_lock",
     "ensure_transaction_directory",

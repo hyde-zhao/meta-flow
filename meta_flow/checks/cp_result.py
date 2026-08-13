@@ -542,7 +542,9 @@ def project_native_closure_authority(
             hash_findings.append(f"CLOSURE_INPUT_HASH_INVALID:{ref}")
             continue
         try:
-            actual = "sha256:" + hashlib.sha256(_input_artifact_path(root, ref).read_bytes()).hexdigest()
+            actual = (
+                "sha256:" + hashlib.sha256(_input_artifact_path(root, ref).read_bytes()).hexdigest()
+            )
         except (OSError, ValueError):
             actual = ""
         if actual != digest:
@@ -584,7 +586,9 @@ def project_native_closure_authority(
         )
     container_ref = f"process/works/{cr_id}/WORK.yaml"
     container_refs = (container_ref,) if _input_artifact_path(root, container_ref).is_file() else ()
-    dispatch_refs = tuple(sorted(str(item) for item in _as_list(result.get("dispatch_refs")) if item))
+    dispatch_refs = tuple(
+        sorted(str(item) for item in _as_list(result.get("dispatch_refs")) if item)
+    )
     receipt_refs = tuple(
         sorted(
             ref
@@ -620,7 +624,10 @@ def project_native_closure_authority(
         "consumer": {"story_id": story_id, "dispatch_refs": dispatch_refs},
         "ownership": {"touched_files": return_payload.get("touched_files", [])},
         "slice": {"cr_id": cr_id, "cohort_revision": expected_cohort_revision},
-        "test": {"commands": evidence_payload.get("commands", []), "tests": evidence_payload.get("tests", [])},
+        "test": {
+            "commands": evidence_payload.get("commands", []),
+            "tests": evidence_payload.get("tests", []),
+        },
         "source": {"checker": result.get("checker_provenance", {}), "package": package_sources},
         "profile": {"checkpoint": "CP6", "correlation": "strict"},
     }
@@ -1577,13 +1584,17 @@ def validate_applicability_aggregate(
 
 def _print_cp_help() -> None:
     print(
-        "usage: meta-flow cp <result-check|input-hashes|render-summary|ledger-append|applicability-build|applicability-check> [options]\n\n"
+        "usage: meta-flow cp <result-check|input-hashes|render-summary|ledger-append|successor-plan|successor-apply|successor-inspect|successor-recover|applicability-build|applicability-check> [options]\n\n"
         "Commands:\n"
         "  result-check    Validate a machine-readable CP result JSON.\n"
         "  projection      Project canonical checkpoint current heads for one CR.\n"
         "  input-hashes    Build native file-byte digests for CP strict correlation.\n"
         "  render-summary  Render a compact Markdown summary from CP result JSON.\n"
         "  ledger-append   Append a checkpoint_result event to CHECKPOINT-LEDGER.ndjson.\n\n"
+        "  successor-plan Build a zero-write canonical successor plan for one current legacy result.\n"
+        "  successor-apply Apply a digest/OID/preimage-bound successor transaction.\n"
+        "  successor-inspect Inspect the durable successor transaction.\n"
+        "  successor-recover Recover an incomplete successor transaction to its preimage.\n\n"
         "  applicability-build  Build a CP8 checkpoint applicability aggregate from a route plan.\n"
         "  applicability-check  Validate a CP8 checkpoint applicability aggregate against its route plan.\n\n"
         "Examples:\n"
@@ -1594,6 +1605,7 @@ def _print_cp_help() -> None:
         "  meta-flow cp result-check --result process/checks/CP8-CR.result.json --project-root . --check-consistency\n"
         "  meta-flow cp render-summary --result process/checks/CP6-STORY.result.json\n"
         "  meta-flow cp ledger-append --result process/checks/CP6-STORY.result.json --project-root .\n"
+        "  meta-flow cp successor-plan --source process/checks/CP5-old.result.json --target process/checks/CP5-current.result.json --evidence-ref process/checkpoints/CP5.md --reason legacy-schema-migration --project-root .\n"
         "  meta-flow cp applicability-build --route-plan process/checks/CP0-CR156.route-plan.json --output process/checks/CP8-CR156.applicability.json --project-root .\n"
         "  meta-flow cp applicability-check --aggregate process/checks/CP8-CR156.applicability.json --project-root .\n"
     )
@@ -1605,6 +1617,54 @@ def main(argv: list[str] | None = None) -> int:
         _print_cp_help()
         return 0
     command = args[0]
+    if command in {"successor-plan", "successor-apply"}:
+        from meta_flow.state import checkpoint_successor
+
+        parser = argparse.ArgumentParser(prog=f"meta-flow cp {command}")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parser.add_argument("--source", required=True)
+        parser.add_argument("--target", required=True)
+        parser.add_argument("--evidence-ref", action="append", default=[])
+        parser.add_argument("--reason", required=True)
+        if command == "successor-apply":
+            parser.add_argument("--expected-plan-digest", required=True)
+            parser.add_argument("--expected-process-oid", required=True)
+        parsed = parser.parse_args(args[1:])
+        try:
+            plan = checkpoint_successor.plan_checkpoint_successor(
+                parsed.project_root,
+                source_ref=parsed.source,
+                target_ref=parsed.target,
+                evidence_refs=tuple(parsed.evidence_ref),
+                reason=parsed.reason,
+            )
+            payload = (
+                plan.as_dict()
+                if command == "successor-plan"
+                else checkpoint_successor.apply_checkpoint_successor(
+                    parsed.project_root,
+                    plan=plan,
+                    expected_plan_digest=parsed.expected_plan_digest,
+                    expected_process_oid=parsed.expected_process_oid,
+                )
+            )
+        except (OSError, ValueError) as exc:
+            payload = {"decision": "BLOCKED", "blockers": [str(exc)], "mutation_count": 0}
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if payload.get("decision") in {"READY", "NO_CHANGE", "APPLIED"} else 1
+    if command in {"successor-inspect", "successor-recover"}:
+        from meta_flow.state import checkpoint_successor
+
+        parser = argparse.ArgumentParser(prog=f"meta-flow cp {command}")
+        parser.add_argument("--project-root", type=Path, default=Path.cwd())
+        parsed = parser.parse_args(args[1:])
+        payload = (
+            checkpoint_successor.inspect_checkpoint_successor(parsed.project_root)
+            if command == "successor-inspect"
+            else checkpoint_successor.recover_checkpoint_successor(parsed.project_root)
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if payload.get("decision") in {"PASS", "NO_CHANGE", "RECOVERED"} else 1
     if command == "result-check":
         parser = argparse.ArgumentParser(prog="meta-flow cp result-check")
         parser.add_argument("--project-root", type=Path, default=None)

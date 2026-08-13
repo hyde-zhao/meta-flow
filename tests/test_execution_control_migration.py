@@ -6,14 +6,16 @@ import hashlib
 import inspect
 import json
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
 from meta_flow.execution_control.admission import execution_inventory_digest
 from meta_flow.execution_control.contract import ExecutionUnitV1, canonical_digest
 from meta_flow.execution_control.migration import (
+    FIXED_RECEIPT_REF,
     GENERATOR_IDENTITY,
+    LEGACY_RECEIPT_REFS,
     MATERIALIZATION_AUTHORIZATION_REF,
     PACKAGE_NAME,
     PACKAGE_VERSION,
@@ -78,6 +80,10 @@ def _write_package_sources(root: Path) -> None:
         source.write_bytes(ref.encode("utf-8"))
 
 
+def _receipt_locator(package_root: Path) -> Path:
+    return package_root.joinpath(*PurePosixPath(FIXED_RECEIPT_REF).parts[1:])
+
+
 def _receipt_payload(package_root: Path | None = None) -> dict[str, object]:
     manifest = []
     for ref in sorted(FROZEN_REQUIRED_SOURCE_OWNERS):
@@ -103,10 +109,45 @@ def _receipt_payload(package_root: Path | None = None) -> dict[str, object]:
         "qualified_source_set_digest": canonical_digest(manifest),
         "evidence_digests": evidence,
         "generator_identity": GENERATOR_IDENTITY,
-        "qualified_source_exclusions": ["meta_flow/execution_control/provider/activation-receipt-v1.json"],
+        "qualified_source_exclusions": [FIXED_RECEIPT_REF],
     }
     payload["receipt_digest"] = ProviderActivationReceiptV1.digest_payload(payload)
     return payload
+
+
+def test_packaged_receipt_rotation_preserves_v1_and_selects_v2() -> None:
+    release_root = Path(__file__).parents[1]
+    package_root = release_root / "meta_flow"
+    qualification_evidence_path = (
+        release_root / "docs/release/PROVIDER-QUALIFICATION-0.4.1.json"
+    )
+    assert LEGACY_RECEIPT_REFS == (
+        "meta_flow/execution_control/provider/activation-receipt-v1.json",
+    )
+    legacy = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[0]).parts[1:])
+    current = _receipt_locator(package_root)
+
+    assert hashlib.sha256(legacy.read_bytes()).hexdigest() == (
+        "37f1a9c7f3d28c8b4c0bacd2f6817c8cd900bdab71180321b437d335c0b1263a"
+    )
+    assert current.name == "activation-receipt-v2.json"
+    assert load_provider_activation_receipt().status == "CURRENT"
+
+    current_payload = json.loads(current.read_text(encoding="utf-8"))
+    assert current_payload["package_version"] == "0.4.1"
+    assert current_payload["qualified_source_exclusions"] == [FIXED_RECEIPT_REF]
+    assert current_payload["generator_identity"] == GENERATOR_IDENTITY
+
+    qualification_evidence = json.loads(
+        qualification_evidence_path.read_text(encoding="utf-8")
+    )
+    assert qualification_evidence["package_name"] == PACKAGE_NAME
+    assert qualification_evidence["package_version"] == PACKAGE_VERSION
+    for layer_name, layer_payload in qualification_evidence["layers"].items():
+        for evidence_part in ("profile", "command", "result", "receipt"):
+            assert current_payload["evidence_digests"][
+                f"{layer_name}.{evidence_part}"
+            ] == canonical_digest(layer_payload[evidence_part])
 
 
 def test_receipt_is_closed_fixed_locator_and_policy_never_changes_writer_mode(
@@ -114,7 +155,7 @@ def test_receipt_is_closed_fixed_locator_and_policy_never_changes_writer_mode(
 ) -> None:
     root = tmp_path / "meta_flow"
     _write_package_sources(root)
-    locator = root / "execution_control/provider/activation-receipt-v1.json"
+    locator = _receipt_locator(root)
     monkeypatch.setattr("meta_flow.execution_control.migration._package_root", lambda: root)
     monkeypatch.setattr("meta_flow.execution_control.migration._receipt_path", lambda: locator)
     missing = load_provider_activation_receipt()
@@ -160,7 +201,7 @@ def test_receipt_schema_mutants_and_legacy_materializer_is_fail_closed(
 ) -> None:
     root = tmp_path / "meta_flow"
     _write_package_sources(root)
-    locator = root / "execution_control/provider/activation-receipt-v1.json"
+    locator = _receipt_locator(root)
     monkeypatch.setattr("meta_flow.execution_control.migration._package_root", lambda: root)
     monkeypatch.setattr("meta_flow.execution_control.migration._receipt_path", lambda: locator)
     payload = _receipt_payload(root)
@@ -516,7 +557,7 @@ def _write_native_authority(
         "contract_id": "CR069-S5-MATERIALIZATION-AUTHORITY-V1",
         "decision": "APPROVED",
         "operation": "provider-receipt-create-only",
-        "target_ref": "meta_flow/execution_control/provider/activation-receipt-v1.json",
+        "target_ref": FIXED_RECEIPT_REF,
         "freeze_payload_digest": "acb49951388d83249acd5474db32fe33a1568943785ba38500333bdddb74a084",
         "provider_evidence_digests": _evidence_digests(),
         "native_chain_digest": native_chain_digest,
@@ -649,7 +690,7 @@ def test_direct_mint_low_writer_and_forged_proof_are_zero_write(
 ) -> None:
     package_root = tmp_path / "meta_flow"
     _write_package_sources(package_root)
-    locator = package_root / "execution_control/provider/activation-receipt-v1.json"
+    locator = _receipt_locator(package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._package_root", lambda: package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._receipt_path", lambda: locator)
     receipt = ProviderActivationReceiptV1.from_mapping(_receipt_payload(package_root))
@@ -667,7 +708,7 @@ def test_materialization_requires_fresh_plan_private_single_use_capability(
 ) -> None:
     package_root = tmp_path / "meta_flow"
     _write_package_sources(package_root)
-    locator = package_root / "execution_control/provider/activation-receipt-v1.json"
+    locator = _receipt_locator(package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._package_root", lambda: package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._receipt_path", lambda: locator)
     monkeypatch.setattr(
@@ -687,7 +728,7 @@ def test_materialization_requires_fresh_plan_private_single_use_capability(
     assert materialized.mutation_count == 2
     assert materialized.durable_refs == (
         "meta_flow/execution_control/provider",
-        "meta_flow/execution_control/provider/activation-receipt-v1.json",
+        FIXED_RECEIPT_REF,
     )
     replay_plan = apply_provider_receipt_materialization(plan)
     assert replay_plan.decision == "BLOCKED" and replay_plan.mutation_count == 0
@@ -698,7 +739,7 @@ def test_capability_target_drift_and_replay_block_before_writer(
 ) -> None:
     package_root = tmp_path / "meta_flow"
     _write_package_sources(package_root)
-    locator = package_root / "execution_control/provider/activation-receipt-v1.json"
+    locator = _receipt_locator(package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._package_root", lambda: package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._receipt_path", lambda: locator)
     snapshot = _snapshot(tmp_path, locator)
@@ -730,7 +771,7 @@ def test_apply_fresh_authority_drift_blocks_before_capability_and_write(
 ) -> None:
     package_root = tmp_path / "meta_flow"
     _write_package_sources(package_root)
-    locator = package_root / "execution_control/provider/activation-receipt-v1.json"
+    locator = _receipt_locator(package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._package_root", lambda: package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._receipt_path", lambda: locator)
     snapshots = iter(
@@ -757,7 +798,7 @@ def test_apply_rejects_cross_clone_runtime_root_replacement(
     root_b = tmp_path / "clone-b"
     package_root = root_a / "meta_flow"
     _write_package_sources(package_root)
-    locator = package_root / "execution_control/provider/activation-receipt-v1.json"
+    locator = _receipt_locator(package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._package_root", lambda: package_root)
     monkeypatch.setattr("meta_flow.execution_control.migration._receipt_path", lambda: locator)
     first = replace(
@@ -787,7 +828,7 @@ def test_gated_materializer_accounts_partial_write_exactly(
 ) -> None:
     root = tmp_path / "meta_flow"
     _write_package_sources(root)
-    locator = root / "execution_control/provider/activation-receipt-v1.json"
+    locator = _receipt_locator(root)
     monkeypatch.setattr("meta_flow.execution_control.migration._package_root", lambda: root)
     monkeypatch.setattr("meta_flow.execution_control.migration._receipt_path", lambda: locator)
     snapshot = _snapshot(tmp_path, locator)
@@ -808,7 +849,7 @@ def test_gated_materializer_accounts_partial_write_exactly(
     )
     assert partial.decision == "PARTIAL_MUTATION"
     assert partial.mutation_count == 2
-    assert partial.durable_refs[-1].endswith("activation-receipt-v1.json")
+    assert partial.durable_refs[-1] == FIXED_RECEIPT_REF
 
 
 def _unit(name: str) -> ExecutionUnitV1:

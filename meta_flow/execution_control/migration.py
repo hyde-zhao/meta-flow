@@ -18,14 +18,17 @@ from typing import Any
 
 from meta_flow.execution_control.contract import ContainerBudgetV1, canonical_digest
 
-FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v1.json"
+FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v2.json"
+LEGACY_RECEIPT_REFS = (
+    "meta_flow/execution_control/provider/activation-receipt-v1.json",
+)
 PACKAGE_NAME = "meta-flow"
-PACKAGE_VERSION = "0.4.0"
+PACKAGE_VERSION = "0.4.1"
 POLICY_REVISION = 1
 COHORT_REVISION = 1
 CONTEXT_REVISION = 1
 GENERATOR_IDENTITY = (
-    "meta_flow.execution_control.migration:build_provider_activation_receipt:v1"
+    "meta_flow.execution_control.migration:build_provider_activation_receipt:v2"
 )
 _SELF_EXCLUSION = FIXED_RECEIPT_REF
 _SOURCE_OWNERS = frozenset(
@@ -58,7 +61,7 @@ _FIELDS = frozenset(
 
 
 def _receipt_path() -> Path:
-    return Path(resources.files("meta_flow.execution_control").joinpath("provider/activation-receipt-v1.json"))
+    return Path(resources.files("meta_flow.execution_control").joinpath("provider/activation-receipt-v2.json"))
 
 
 def _package_root() -> Path:
@@ -1475,7 +1478,12 @@ def materialize_provider_activation_receipt(
 
 __all__ = [
     "ExecutionControlPolicyV1",
+    "FIXED_RECEIPT_REF",
+    "GENERATOR_IDENTITY",
+    "LEGACY_RECEIPT_REFS",
     "NativeMaterializationAuthorityV1",
+    "PACKAGE_NAME",
+    "PACKAGE_VERSION",
     "ProviderActivationReceiptV1",
     "ProviderMaterializationPlanV3",
     "ProviderQualificationEvidenceV1",

@@ -193,11 +193,16 @@ class QualityGovernanceTests(unittest.TestCase):
             copy_policy_templates(root)
             path = root / "process" / "policies" / "QUALITY-MODEL.yaml"
             text = path.read_text(encoding="utf-8")
-            path.write_text(text.replace("manual_truth_source: false", "manual_truth_source: true"), encoding="utf-8")
+            path.write_text(
+                text.replace("manual_truth_source: false", "manual_truth_source: true"),
+                encoding="utf-8",
+            )
 
             errors, _warnings = quality_governance.validate_quality_model(root)
 
-            self.assertIn("QUALITY-MODEL metric_derivation.manual_truth_source must be false", errors)
+            self.assertIn(
+                "QUALITY-MODEL metric_derivation.manual_truth_source must be false", errors
+            )
 
     def test_eval_matrix_rejects_unknown_quality_dimension(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -205,11 +210,18 @@ class QualityGovernanceTests(unittest.TestCase):
             copy_policy_templates(root)
             path = root / "process" / "policies" / "EVAL-MATRIX.yaml"
             text = path.read_text(encoding="utf-8")
-            path.write_text(text.replace("requirements_traceability", "unknown_dimension", 1), encoding="utf-8")
+            path.write_text(
+                text.replace("requirements_traceability", "unknown_dimension", 1), encoding="utf-8"
+            )
 
             errors, _warnings = quality_governance.validate_eval_matrix(root)
 
-            self.assertTrue(any("references unknown quality_dimension: unknown_dimension" in error for error in errors))
+            self.assertTrue(
+                any(
+                    "references unknown quality_dimension: unknown_dimension" in error
+                    for error in errors
+                )
+            )
 
     def test_quality_cli_and_doctor_commands_report_ok(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -218,8 +230,12 @@ class QualityGovernanceTests(unittest.TestCase):
 
             stream = StringIO()
             with redirect_stdout(stream):
-                model_code = quality_governance.quality_main(["model-check", "--project-root", str(root)])
-                eval_code = quality_governance.quality_main(["eval-check", "--project-root", str(root)])
+                model_code = quality_governance.quality_main(
+                    ["model-check", "--project-root", str(root)]
+                )
+                eval_code = quality_governance.quality_main(
+                    ["eval-check", "--project-root", str(root)]
+                )
                 doctor_code = quality_governance.run_quality_doctor(root)
 
             self.assertEqual(0, model_code)
@@ -263,6 +279,129 @@ class QualityGovernanceTests(unittest.TestCase):
             self.assertIn("- PASS: 1", output)
             self.assertIn("- run: 1", output)
             self.assertIn("manual_metrics_truth_source: none", output)
+
+    def test_workflow_doctor_routes_non_cp_artifacts_before_cp_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checks = root / "process" / "checks"
+            checks.mkdir(parents=True)
+            write_cp1_result(root)
+            (checks / "C0-CR-061-PROJECTOR-CUTOVER.result.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "kind": "C0ApplyResultV1",
+                        "checkpoint": "C0",
+                        "cr_id": "CR-061",
+                        "decision": "PASS",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (checks / "CR-068-FILE-OWNERSHIP-DAG.result.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "check_id": "CR-068-FILE-OWNERSHIP-DAG",
+                        "check_mode": "static-design-delta",
+                        "decision": "PASS_WITH_BASELINE_LIMITATION",
+                        "nodes": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                exit_code = quality_governance.run_workflow_doctor(root)
+
+            self.assertEqual(0, exit_code)
+            output = stream.getvalue()
+            self.assertIn("Workflow Doctor: OK", output)
+            self.assertIn("check_artifact_files: 3", output)
+            self.assertIn("cp_result_files: 1", output)
+            self.assertIn("- c0_apply_result: 1", output)
+            self.assertIn("- check_result: 1", output)
+            self.assertNotIn("checkpoint must be CP0..CP8: C0", output)
+
+    def test_workflow_doctor_unknown_artifact_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checks = root / "process" / "checks"
+            checks.mkdir(parents=True)
+            (checks / "unknown.result.json").write_text(
+                json.dumps({"schema_version": 1, "decision": "PASS", "arbitrary": True}) + "\n",
+                encoding="utf-8",
+            )
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                exit_code = quality_governance.run_workflow_doctor(root)
+
+            self.assertEqual(1, exit_code)
+            output = stream.getvalue()
+            self.assertIn("Workflow Doctor: FAIL", output)
+            self.assertIn(
+                "process/checks/unknown.result.json: artifact kind cannot be determined",
+                output,
+            )
+
+    def test_workflow_doctor_inventories_current_head_with_nonstandard_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checks = root / "process" / "checks"
+            checks.mkdir(parents=True)
+            result = checks / "CP5-CR-123.current.json"
+            result.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "checkpoint": "CP5",
+                        "cr_id": "CR-123",
+                        "decision": "PASS",
+                        "items": [
+                            {
+                                "id": "CP5-01",
+                                "name": "current head",
+                                "status": "PASS",
+                                "severity": "INFO",
+                                "evidence_refs": ["process/checks/evidence.json"],
+                            }
+                        ],
+                        "blockers": [],
+                        "waivers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            ledger = root / "process" / "state" / "CHECKPOINT-LEDGER.ndjson"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text(
+                json.dumps(
+                    {
+                        "event_id": "CP5-CR-123-V1",
+                        "event_type": "checkpoint_result",
+                        "checkpoint": "CP5",
+                        "cr_id": "CR-123",
+                        "decision": "PASS",
+                        "result_ref": "process/checks/CP5-CR-123.current.json",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            stream = StringIO()
+            with redirect_stdout(stream):
+                exit_code = quality_governance.run_workflow_doctor(root)
+
+            self.assertEqual(0, exit_code)
+            output = stream.getvalue()
+            self.assertIn("check_artifact_files: 1", output)
+            self.assertIn("cp_result_files: 1", output)
 
 
 if __name__ == "__main__":

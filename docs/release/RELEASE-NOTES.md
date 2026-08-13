@@ -1,10 +1,10 @@
 ---
 project_id: "meta-flow"
-release_scope: "cr-069-bounded-execution-control-kernel"
+release_scope: "meta-flow-0.4.1"
 release_artifact_profile: "full"
-release_decision: "NOT_READY"
+release_decision: "READY"
 created_at: "2026-06-17T13:49:25+08:00"
-updated_at: "2026-08-10T00:00:00+08:00"
+updated_at: "2026-08-13T00:00:00+08:00"
 ---
 
 # Release Notes
@@ -32,6 +32,34 @@ updated_at: "2026-08-10T00:00:00+08:00"
 | 1.16-candidate | 2026-07-23 | host-orchestrator | CR-058 治理执行闭环候选：固化 G2 CP8-before-publication、G0/G1 profile N/A、canonical truth、失败恢复上限、leaf path 计数、native projection 与 usage 降本闭环；独立 CP7 PASS，CP8 推荐 `READY_WITH_RISK`。 |
 | 1.17-candidate | 2026-07-27 | host-orchestrator / meta-qa-critical | CR-061 治理内核投影收敛候选：统一 terminal-success、dispatch identity、Story admission、read-expansion、状态投影、ledger migration 和 Public Operation Contract Registry；C0 及独立 CP7 PASS，等待 CP8 人工终验。 |
 | 1.18-candidate | 2026-08-10 | host-orchestrator / meta-qa-critical | CR-069 有界执行控制内核：产品实现已作为 `4030ff1654d2e6f552f90bb6f23604117e41940d` 推送；CP7 技术验证 PASS，但 cost closure 为不可豁免 `FAIL`，因此发布就绪保持 `NOT_READY`。 |
+| 1.19 | 2026-08-13 | Codex | 将已验证的 provider 修复收敛为 `0.4.1`：补齐 typed check artifact、checkpoint successor、dispatch correction/closure、共享治理投影 lineage；轮换 activation receipt v2，并完成 targeted、compatibility、full、构建和安装 dry-run。 |
+
+## 0.4.1 发布切片
+
+### 结论与边界
+
+`0.4.1` 已达到源码提交与远端推送条件。该结论不等于已创建 Git tag、已上传 PyPI、已执行生产安装，也不授权修改任何消费者项目。
+
+| 项 | 结果 |
+|---|---|
+| 包版本真相 | `pyproject.toml`、`uv.lock`、`meta_flow.__version__` 与 provider receipt 均为 `0.4.1` |
+| typed artifact routing | 非 CP 的 `*.result.json` 按 artifact kind 分派；未知类型 fail closed |
+| checkpoint successor | 提供 native plan/apply/inspect/recover，保留历史 bytes 并追加 successor 语义 |
+| dispatch correction/closure | append-only correction，绑定原始 digest，不从后续成功反推历史 terminal result |
+| lifecycle lineage | 合法后继事务可接管共享 Project/Phase generation；无合法后继的当前漂移仍阻断 |
+| provider qualification | 见 `docs/release/PROVIDER-QUALIFICATION-0.4.1.json` |
+| 发布动作边界 | 本次只提交并推送源码；不创建 tag，不上传包仓库，不安装消费者项目资产 |
+
+### 验证摘要
+
+| 层 | 结果 |
+|---|---|
+| targeted | `406 passed` |
+| compatibility | `159 passed + 10 subtests` |
+| full | 隔离 sibling-binding 副本中 `2307 passed + 712 subtests` |
+| closure | Ruff、lock check、delivery guardrail、两类安装 dry-run、sdist/wheel 构建与 wheel 内容检查均通过 |
+
+全量验证使用隔离的 sibling-binding 过程仓副本刷新 detector 派生基线；真实 `meta-flow-process` 未被本次源码发布修改。setuptools 仍输出既有 namespace-package discovery warning，但已核对 wheel 中的预期交付资产与版本元数据。
 
 ## 发布范围
 
