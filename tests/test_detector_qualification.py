@@ -113,10 +113,11 @@ def test_repository_r13_incremental_hard_gate_is_currently_pass() -> None:
     assert report["full_source_baseline"]["decision"] == "PASS"
     assert report["full_source_baseline"]["ambiguous_writer_call_count"] == 0
     assert report["unresolved_unallowlisted_count"] == 0
-    assert report["allowlisted_dynamic_writer_call_count"] == 24
+    assert report["allowlisted_dynamic_writer_call_count"] == 30
     qualified_calls = [item for item in report["writer_calls"] if item["target_kind"] == "dynamic"]
-    assert len(qualified_calls) == 24
+    assert len(qualified_calls) == 30
     assert {item["ref"] for item in qualified_calls} == {
+        "meta_flow/execution_control/repair_admission.py",
         "meta_flow/state/projection_transaction.py",
         "meta_flow/work/init_transaction.py",
         "meta_flow/work/lifecycle.py",
@@ -133,6 +134,10 @@ def test_repository_r13_incremental_hard_gate_is_currently_pass() -> None:
         "_ensure_plain_directory",
         "_write_atomic",
         "_remove_created_directories",
+        "_ensure_plain_claim_directory",
+        "_unlink_owned_regular",
+        "claim_repair_authorization",
+        "finish",
         "atomic_remove_regular_file",
         "update_work_status",
     }

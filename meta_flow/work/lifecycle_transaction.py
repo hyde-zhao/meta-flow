@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Protocol, TextIO
 
 try:  # pragma: no cover - Windows 分支由平台验证覆盖
     import fcntl
@@ -45,7 +45,7 @@ from meta_flow.state.formal_projection import (
     derive_formal_truth_patch,
 )
 from meta_flow.work.lifecycle import transition_work
-from meta_flow.work.model import load_work
+from meta_flow.work.model import load_work, with_status
 
 TRANSACTION_SCHEMA_VERSION = 1
 AUTHORIZATION_KIND = "work-close-authorization-v1"
@@ -69,7 +69,13 @@ _MANIFEST_FIELDS = {
     "applied_refs",
     "targets",
 }
-_MANIFEST_OPTIONAL_FIELDS = {"failure", "recovery_failures", "lineage"}
+_MANIFEST_OPTIONAL_FIELDS = {
+    "failure",
+    "recovery_failures",
+    "lineage",
+    "operation",
+    "publication_binding",
+}
 _TARGET_FIELDS = {
     "ref",
     "before_digest",
@@ -98,6 +104,15 @@ STATE_CURRENT_REF = "state/STATE.current.json"
 STATE_MD_REF = "STATE.md"
 CURRENT_REF = "current/CURRENT.json"
 STATE_PROJECTION_REFS = (STATE_CURRENT_REF, STATE_MD_REF, CURRENT_REF)
+SHARED_SUCCESSOR_OPERATIONS = frozenset(
+    {
+        "work.init",
+        "work.status-transition",
+        "project.phase-transition",
+        "project.phase-metadata",
+    }
+)
+PHASE_METADATA_MANIFEST_REL = Path(".meta-flow-runtime/phase-metadata/transaction.json")
 
 
 @dataclass
@@ -237,7 +252,102 @@ class WorkCloseTargetV1:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkPublicationBindingV1:
+    """专用 publication-close 冻结的不可变恢复上下文。"""
+
+    work_id: str
+    scope_digest: str
+    result_ref: str
+    handoff_ref: str
+    handoff_digest: str
+    publication_receipt_ref: str
+    publication_receipt_digest: str
+    repository_facts_digest: str
+    paused_oids: tuple[tuple[str, str], ...]
+    published_oids: tuple[tuple[str, str], ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "WorkPublicationBindingV1",
+            "work_id": self.work_id,
+            "scope_digest": self.scope_digest,
+            "result_ref": self.result_ref,
+            "handoff_ref": self.handoff_ref,
+            "handoff_digest": self.handoff_digest,
+            "publication_receipt_ref": self.publication_receipt_ref,
+            "publication_receipt_digest": self.publication_receipt_digest,
+            "repository_facts_digest": self.repository_facts_digest,
+            "paused_oids": dict(self.paused_oids),
+            "published_oids": dict(self.published_oids),
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> WorkPublicationBindingV1:
+        expected = {
+            "schema_version",
+            "kind",
+            "work_id",
+            "scope_digest",
+            "result_ref",
+            "handoff_ref",
+            "handoff_digest",
+            "publication_receipt_ref",
+            "publication_receipt_digest",
+            "repository_facts_digest",
+            "paused_oids",
+            "published_oids",
+        }
+        if set(payload) != expected:
+            raise ValueError("publication binding fields mismatch")
+        if (
+            payload.get("schema_version") != 1
+            or payload.get("kind") != "WorkPublicationBindingV1"
+        ):
+            raise ValueError("publication binding kind/version mismatch")
+        work_id = _safe_authorization_id(str(payload.get("work_id") or ""))
+        result_ref = str(payload.get("result_ref") or "")
+        handoff_ref = str(payload.get("handoff_ref") or "")
+        receipt_ref = str(payload.get("publication_receipt_ref") or "")
+        if not all(is_safe_ref(ref) for ref in (result_ref, handoff_ref, receipt_ref)):
+            raise ValueError("publication binding contains an unsafe ref")
+        digests = {
+            str(payload.get("scope_digest") or ""),
+            str(payload.get("handoff_digest") or ""),
+            str(payload.get("publication_receipt_digest") or ""),
+            str(payload.get("repository_facts_digest") or ""),
+        }
+        if any(not _DIGEST_RE.fullmatch(value) for value in digests):
+            raise ValueError("publication binding digest is invalid")
+        oid_sets: list[tuple[tuple[str, str], ...]] = []
+        for key in ("paused_oids", "published_oids"):
+            value = payload.get(key)
+            if not isinstance(value, Mapping) or set(value) != {"release", "process"}:
+                raise ValueError(f"publication binding {key} fields mismatch")
+            normalized = tuple((role, str(value[role])) for role in ("release", "process"))
+            if any(
+                not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", oid)
+                for _role, oid in normalized
+            ):
+                raise ValueError(f"publication binding {key} OID is invalid")
+            oid_sets.append(normalized)
+        return cls(
+            work_id=work_id,
+            scope_digest=str(payload["scope_digest"]),
+            result_ref=result_ref,
+            handoff_ref=handoff_ref,
+            handoff_digest=str(payload["handoff_digest"]),
+            publication_receipt_ref=receipt_ref,
+            publication_receipt_digest=str(payload["publication_receipt_digest"]),
+            repository_facts_digest=str(payload["repository_facts_digest"]),
+            paused_oids=oid_sets[0],
+            published_oids=oid_sets[1],
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class WorkClosePlanV1:
+    operation: str
     decision: str
     work_id: str
     expected_status: str
@@ -247,6 +357,7 @@ class WorkClosePlanV1:
     lineage: tuple[tuple[str, str], ...]
     blockers: tuple[str, ...]
     plan_digest: str
+    publication_binding: WorkPublicationBindingV1 | None = None
 
     @property
     def ready(self) -> bool:
@@ -255,7 +366,7 @@ class WorkClosePlanV1:
     def as_dict(self) -> dict[str, Any]:
         return {
             "schema_version": TRANSACTION_SCHEMA_VERSION,
-            "operation": "work.close",
+            "operation": self.operation,
             "decision": self.decision,
             "work_id": self.work_id,
             "expected_status": self.expected_status,
@@ -265,6 +376,9 @@ class WorkClosePlanV1:
             "lineage": dict(self.lineage),
             "blockers": list(self.blockers),
             "plan_digest": self.plan_digest,
+            "publication_binding": (
+                None if self.publication_binding is None else self.publication_binding.as_dict()
+            ),
             "mutation_count": 0,
         }
 
@@ -306,6 +420,8 @@ class WorkCloseAuthorizationV1:
         )
 
     def validate_for(self, plan: WorkClosePlanV1) -> None:
+        if plan.operation != "work.close" or plan.publication_binding is not None:
+            raise ValueError("standard work close authorization cannot approve publication-close")
         if self.schema_version != TRANSACTION_SCHEMA_VERSION or self.kind != AUTHORIZATION_KIND:
             raise ValueError("work close authorization kind/version mismatch")
         if self.work_id != plan.work_id or self.plan_digest != plan.plan_digest:
@@ -318,6 +434,12 @@ class WorkCloseAuthorizationV1:
             raise ValueError("work close authorization expires_at is invalid") from exc
         if expiry.tzinfo is None or expiry.astimezone(UTC) <= datetime.now(UTC):
             raise ValueError("work close authorization is expired")
+
+
+class WorkCloseAuthorizationProtocol(Protocol):
+    authorization_id: str
+
+    def validate_for(self, plan: WorkClosePlanV1) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,6 +500,7 @@ def plan_work_close(
     expected_status: str,
     outcome: str,
     result_ref: str = "",
+    _publication_binding: WorkPublicationBindingV1 | None = None,
 ) -> WorkClosePlanV1:
     """只读生成 Work/Project/Phase 的完整关闭候选。"""
 
@@ -392,6 +515,20 @@ def plan_work_close(
         )
         if already_closed:
             closed = current
+        elif _publication_binding is not None:
+            if (
+                expected_status != "paused"
+                or current.status != "paused"
+                or outcome != "completed"
+            ):
+                raise ValueError("publication-close requires paused -> completed")
+            if (
+                _publication_binding.work_id != current.work_id
+                or _publication_binding.scope_digest != current.scope.digest
+                or _publication_binding.result_ref != result_ref
+            ):
+                raise ValueError("publication-close binding does not match Work/scope/result")
+            closed = with_status(current, outcome, result_ref=result_ref)
         else:
             if current.status != expected_status:
                 raise ValueError(
@@ -468,7 +605,9 @@ def plan_work_close(
             blockers.append(str(exc))
     fields = {
         "schema_version": TRANSACTION_SCHEMA_VERSION,
-        "operation": "work.close",
+        "operation": (
+            "work.publication-close" if _publication_binding is not None else "work.close"
+        ),
         "work_id": work_id,
         "expected_status": expected_status,
         "outcome": outcome,
@@ -476,8 +615,12 @@ def plan_work_close(
         "targets": [target.as_plan_dict() for target in targets],
         "lineage": lineage,
         "blockers": blockers,
+        "publication_binding": (
+            None if _publication_binding is None else _publication_binding.as_dict()
+        ),
     }
     return WorkClosePlanV1(
+        operation=str(fields["operation"]),
         decision="BLOCKED" if blockers else "READY",
         work_id=work_id,
         expected_status=expected_status,
@@ -487,6 +630,7 @@ def plan_work_close(
         lineage=tuple(sorted(lineage.items())),
         blockers=tuple(blockers),
         plan_digest=_plan_digest(fields),
+        publication_binding=_publication_binding,
     )
 
 
@@ -690,11 +834,7 @@ def _load_shared_successor_receipts(root: Path) -> list[dict[str, Any]]:
         if (
             payload.get("schema_version") != 1
             or payload.get("kind") != "shared-projection-successor-v1"
-            or operation not in {
-                "work.init",
-                "work.status-transition",
-                "project.phase-transition",
-            }
+            or operation not in SHARED_SUCCESSOR_OPERATIONS
             or ("work_id" in payload and operation != "work.init")
             or path.stem != successor_id
         ):
@@ -726,6 +866,14 @@ def _load_shared_successor_receipts(root: Path) -> list[dict[str, Any]]:
                     GOVERNANCE_PROJECTION_REL.as_posix(),
                     *STATE_PROJECTION_REFS,
                 }
+            elif operation == "project.phase-metadata":
+                parts = Path(ref).parts
+                operation_ref_allowed = ref == GOVERNANCE_PROJECTION_REL.as_posix() or (
+                    len(parts) == 3
+                    and parts[0] == "phases"
+                    and bool(parts[1])
+                    and parts[2] == "PHASE.yaml"
+                )
             else:
                 operation_ref_allowed = ref not in STATE_PROJECTION_REFS
             if (
@@ -889,7 +1037,7 @@ def _lineage_for_targets(
 def _manifest(
     root: Path,
     plan: WorkClosePlanV1,
-    authorization: WorkCloseAuthorizationV1,
+    authorization: WorkCloseAuthorizationProtocol,
 ) -> dict[str, Any]:
     planned_lineage = dict(plan.lineage)
     current_lineage = _lineage_for_targets(
@@ -902,6 +1050,10 @@ def _manifest(
     return {
         "schema_version": TRANSACTION_SCHEMA_VERSION,
         "kind": "work-close-transaction-v1",
+        "operation": plan.operation,
+        "publication_binding": (
+            None if plan.publication_binding is None else plan.publication_binding.as_dict()
+        ),
         "authorization_id": authorization.authorization_id,
         "work_id": plan.work_id,
         "plan_digest": plan.plan_digest,
@@ -944,6 +1096,16 @@ def _validate_manifest(
         or manifest.get("kind") != "work-close-transaction-v1"
     ):
         raise ValueError("work close manifest kind/version mismatch")
+    operation = str(manifest.get("operation") or "work.close")
+    if operation not in {"work.close", "work.publication-close"}:
+        raise ValueError("work close manifest operation is invalid")
+    publication_binding = manifest.get("publication_binding")
+    if operation == "work.publication-close":
+        if not isinstance(publication_binding, Mapping):
+            raise ValueError("publication-close manifest binding is missing")
+        WorkPublicationBindingV1.from_mapping(publication_binding)
+    elif publication_binding is not None:
+        raise ValueError("standard work close manifest must not contain publication binding")
     authorization_id = _safe_authorization_id(str(manifest.get("authorization_id") or ""))
     if authorization_id != expected_authorization_id:
         raise ValueError("work close manifest authorization identity mismatch")
@@ -1058,6 +1220,24 @@ def _lineage_generation_errors(
     """
 
     errors: list[str] = []
+    phase_metadata_manifest = root / PHASE_METADATA_MANIFEST_REL
+    if phase_metadata_manifest.is_symlink() or (
+        phase_metadata_manifest.exists() and not phase_metadata_manifest.is_file()
+    ):
+        errors.append("Phase metadata transaction manifest is unsafe")
+    elif phase_metadata_manifest.is_file():
+        try:
+            phase_metadata_payload = json.loads(
+                phase_metadata_manifest.read_text(encoding="utf-8")
+            )
+            if (
+                not isinstance(phase_metadata_payload, Mapping)
+                or phase_metadata_payload.get("kind") != "PhaseMetadataTransactionV1"
+                or phase_metadata_payload.get("state") not in {"COMMITTED", "RECOVERED"}
+            ):
+                errors.append("unresolved Phase metadata transaction requires inspect/recover")
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"Phase metadata transaction manifest is invalid: {exc}")
     try:
         successor_receipts = _load_shared_successor_receipts(root)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -1174,11 +1354,7 @@ def plan_shared_projection_successor_preflight(
 
     root = process_root.resolve()
     _safe_authorization_id(writer_id)
-    if operation not in {
-        "work.init",
-        "work.status-transition",
-        "project.phase-transition",
-    }:
+    if operation not in SHARED_SUCCESSOR_OPERATIONS:
         raise ValueError("shared projection successor operation is unsupported")
     manifests = _load_terminal_manifests(root)
     if not manifests:
@@ -1240,11 +1416,7 @@ def record_shared_projection_successor(
 
     root = process_root.resolve()
     _safe_authorization_id(writer_id)
-    if operation not in {
-        "work.init",
-        "work.status-transition",
-        "project.phase-transition",
-    }:
+    if operation not in SHARED_SUCCESSOR_OPERATIONS:
         raise ValueError("shared projection successor operation is unsupported")
     manifests = _load_terminal_manifests(root)
     if not manifests:
@@ -1372,11 +1544,7 @@ def discard_shared_projection_successor(
     root = process_root.resolve()
     safe_successor_id = _safe_authorization_id(successor_id)
     safe_writer_id = _safe_authorization_id(writer_id)
-    if operation not in {
-        "work.init",
-        "work.status-transition",
-        "project.phase-transition",
-    }:
+    if operation not in SHARED_SUCCESSOR_OPERATIONS:
         raise ValueError("shared projection successor operation is unsupported")
     successor_root = root / SUCCESSOR_ROOT_REL
     if successor_root.is_symlink() or (
@@ -1443,7 +1611,7 @@ def record_work_init_shared_projection_successor(
 def apply_work_close(
     process_root: Path,
     plan: WorkClosePlanV1,
-    authorization: WorkCloseAuthorizationV1,
+    authorization: WorkCloseAuthorizationProtocol,
 ) -> WorkCloseReceiptV1:
     root = process_root.resolve()
     if not plan.ready:
@@ -1716,8 +1884,10 @@ __all__ = [
     "AUTHORIZATION_KIND",
     "SharedProjectionWriterLock",
     "WorkCloseAuthorizationV1",
+    "WorkCloseAuthorizationProtocol",
     "WorkClosePlanV1",
     "WorkCloseReceiptV1",
+    "WorkPublicationBindingV1",
     "acquire_shared_projection_writer_lock",
     "apply_work_close",
     "assert_work_close_shared_projection_lineage",

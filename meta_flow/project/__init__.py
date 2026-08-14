@@ -89,6 +89,30 @@ _EXPORTS = {
         "meta_flow.project.phase_transition",
         "recover_phase_transition",
     ),
+    "PhaseMetadataAuthorizationV1": (
+        "meta_flow.project.phase_metadata",
+        "PhaseMetadataAuthorizationV1",
+    ),
+    "PhaseMetadataPlan": (
+        "meta_flow.project.phase_metadata",
+        "PhaseMetadataPlan",
+    ),
+    "apply_phase_metadata_update": (
+        "meta_flow.project.phase_metadata",
+        "apply_phase_metadata_update",
+    ),
+    "inspect_phase_metadata": (
+        "meta_flow.project.phase_metadata",
+        "inspect_phase_metadata",
+    ),
+    "plan_phase_metadata_update": (
+        "meta_flow.project.phase_metadata",
+        "plan_phase_metadata_update",
+    ),
+    "recover_phase_metadata": (
+        "meta_flow.project.phase_metadata",
+        "recover_phase_metadata",
+    ),
 }
 
 __all__ = sorted(_EXPORTS)

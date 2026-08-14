@@ -20,10 +20,11 @@ from meta_flow.execution_control.contract import (
     ExecutionUnitV1,
     canonical_digest,
 )
+from meta_flow.execution_control.repair_admission import RepairAdmissionBindingV1
 
 POLICY_REVISION = 1
 CANONICAL_EVALUATOR_IDENTITY = (
-    "meta_flow.execution_control.admission.evaluate_execution_budget:v1"
+    "meta_flow.execution_control.admission.evaluate_execution_budget:v2"
 )
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,127}$")
@@ -112,6 +113,7 @@ def evaluate_execution_budget(
     *,
     concurrent_writer_count: int,
     child_work_count: int = 0,
+    authorized_repair_slices: tuple[tuple[str, str], ...] = (),
 ) -> BudgetEvaluationV1:
     """唯一预算 evaluator；产品准入和 kernel 自审都必须调用本函数。"""
 
@@ -124,6 +126,17 @@ def evaluate_execution_budget(
     ):
         if type(value) is not int or value < 0:
             raise ValueError(f"{field} must be a non-negative integer")
+    if (
+        not isinstance(authorized_repair_slices, tuple)
+        or not all(
+            isinstance(item, tuple)
+            and len(item) == 2
+            and all(isinstance(value, str) and value for value in item)
+            for item in authorized_repair_slices
+        )
+        or len(set(authorized_repair_slices)) != len(authorized_repair_slices)
+    ):
+        raise ValueError("authorized_repair_slices must be unique root/slice pairs")
 
     conflicts: set[str] = set()
     grouped: dict[tuple[str, str], Counter[str]] = {}
@@ -131,13 +144,14 @@ def evaluate_execution_budget(
         key = (unit.root_concept, unit.slice_id)
         grouped.setdefault(key, Counter())[unit.container_role] += 1
 
-    for counts in grouped.values():
+    for key, counts in grouped.items():
         if counts["primary"] > 1:
             conflicts.add("DUPLICATE_ACTIVE_SLICE_OWNER")
         if (
             counts["primary"] > policy.primary_max
             or counts["auxiliary"] > policy.auxiliary_max
-            or counts["repair"] > policy.repair_max
+            or counts["repair"]
+            > policy.repair_max + int(key in authorized_repair_slices)
         ):
             conflicts.add("CONTAINER_BUDGET_EXCEEDED")
     if child_work_count > 0:
@@ -188,6 +202,8 @@ def _candidate_context_digest(
     candidate: ExecutionUnitV1,
     terminal_predecessors: tuple[ExecutionUnitV1, ...],
     policy: ContainerBudgetV1,
+    repair_binding: RepairAdmissionBindingV1 | None,
+    existing_repair_bindings: tuple[RepairAdmissionBindingV1, ...],
 ) -> str:
     return canonical_digest(
         {
@@ -199,8 +215,68 @@ def _candidate_context_digest(
             "policy": policy.as_dict(),
             "evaluator_identity": CANONICAL_EVALUATOR_IDENTITY,
             "evaluator_digest": CANONICAL_EVALUATOR_DIGEST,
+            "repair_binding": (
+                repair_binding.as_dict() if repair_binding is not None else None
+            ),
+            "existing_repair_bindings": [
+                binding.as_dict() for binding in existing_repair_bindings
+            ],
         }
     )
+
+
+def _repair_binding_conflicts(
+    candidate: ExecutionUnitV1,
+    inventory: tuple[ExecutionUnitV1, ...],
+    repair_binding: RepairAdmissionBindingV1 | None,
+    existing_repair_bindings: tuple[RepairAdmissionBindingV1, ...],
+) -> tuple[str, ...]:
+    conflicts: set[str] = set()
+    binding_by_candidate = {
+        binding.candidate_work_id: binding for binding in existing_repair_bindings
+    }
+    if len(binding_by_candidate) != len(existing_repair_bindings):
+        conflicts.add("REPAIR_INVENTORY_AUTHORIZATION_DUPLICATE")
+    inventory_by_id = {unit.unit_id: unit for unit in inventory}
+    for unit in inventory:
+        binding = binding_by_candidate.get(unit.unit_id)
+        if unit.container_role == "repair":
+            if binding is None:
+                conflicts.add("REPAIR_INVENTORY_AUTHORIZATION_REQUIRED")
+            elif (
+                binding.candidate_unit_digest != canonical_digest(unit)
+                or binding.root_concept != unit.root_concept
+                or binding.slice_id != unit.slice_id
+            ):
+                conflicts.add("REPAIR_INVENTORY_AUTHORIZATION_DRIFT")
+        elif binding is not None:
+            conflicts.add("REPAIR_INVENTORY_AUTHORIZATION_ROLE_MISMATCH")
+    if set(binding_by_candidate) - set(inventory_by_id):
+        conflicts.add("REPAIR_INVENTORY_AUTHORIZATION_ORPHANED")
+    if candidate.container_role != "repair":
+        if repair_binding is not None:
+            conflicts.add("REPAIR_AUTHORIZATION_ROLE_MISMATCH")
+        return tuple(sorted(conflicts))
+    if repair_binding is None:
+        return ("REPAIR_AUTHORIZATION_REQUIRED",)
+    if (
+        repair_binding.candidate_work_id != candidate.unit_id
+        or repair_binding.candidate_unit_digest != canonical_digest(candidate)
+    ):
+        conflicts.add("REPAIR_AUTHORIZATION_CANDIDATE_MISMATCH")
+    if (
+        repair_binding.root_concept != candidate.root_concept
+        or repair_binding.slice_id != candidate.slice_id
+    ):
+        conflicts.add("REPAIR_AUTHORIZATION_SLICE_MISMATCH")
+    predecessor = tuple(
+        unit for unit in inventory if unit.unit_id == repair_binding.predecessor_work_id
+    )
+    if len(predecessor) != 1:
+        conflicts.add("REPAIR_PREDECESSOR_NOT_ACTIVE_OWNER")
+    elif canonical_digest(predecessor[0]) != repair_binding.predecessor_unit_digest:
+        conflicts.add("REPAIR_PREDECESSOR_EXECUTION_UNIT_DRIFT")
+    return tuple(sorted(conflicts))
 
 
 def plan_admission(
@@ -211,6 +287,8 @@ def plan_admission(
     *,
     terminal_predecessors: Iterable[ExecutionUnitV1] = (),
     active_concurrent_writer_count: int = 0,
+    repair_binding: RepairAdmissionBindingV1 | None = None,
+    existing_repair_bindings: Iterable[RepairAdmissionBindingV1] = (),
 ) -> AdmissionPlanV1:
     """构造零写入准入计划；不发现目录，也不调用任何 domain writer。"""
 
@@ -220,7 +298,21 @@ def plan_admission(
         raise ValueError("facts must be AdmissionFactsV1")
     inventory = _normalize_inventory(active_inventory)
     predecessors = _normalize_inventory(terminal_predecessors)
+    existing_bindings = tuple(
+        sorted(existing_repair_bindings, key=lambda item: item.candidate_work_id)
+    )
+    if not all(
+        isinstance(binding, RepairAdmissionBindingV1)
+        for binding in existing_bindings
+    ):
+        raise ValueError(
+            "existing_repair_bindings must contain RepairAdmissionBindingV1 values"
+        )
     conflicts = set(_supersession_conflicts(candidate, predecessors))
+    repair_conflicts = _repair_binding_conflicts(
+        candidate, inventory, repair_binding, existing_bindings
+    )
+    conflicts.update(repair_conflicts)
     if execution_inventory_digest(inventory) != facts.inventory_digest:
         conflicts.add("ADMISSION_PREIMAGE_DRIFT")
 
@@ -228,6 +320,23 @@ def plan_admission(
         (*inventory, candidate),
         policy,
         concurrent_writer_count=active_concurrent_writer_count + 1,
+        authorized_repair_slices=tuple(
+            sorted(
+                {
+                    *(
+                        (binding.root_concept, binding.slice_id)
+                        for binding in existing_bindings
+                    ),
+                    *(
+                        ((candidate.root_concept, candidate.slice_id),)
+                        if candidate.container_role == "repair"
+                        and repair_binding is not None
+                        and not repair_conflicts
+                        else ()
+                    ),
+                }
+            )
+        ),
     )
     conflicts.update(evaluation.conflicts)
     ordered_conflicts = tuple(sorted(conflicts))
@@ -235,7 +344,13 @@ def plan_admission(
         decision="BLOCKED" if ordered_conflicts else "READY",
         facts_digest=canonical_digest(facts),
         scope_digest=facts.scope_digest,
-        candidate_digest=_candidate_context_digest(candidate, predecessors, policy),
+        candidate_digest=_candidate_context_digest(
+            candidate,
+            predecessors,
+            policy,
+            repair_binding,
+            existing_bindings,
+        ),
         conflicts=ordered_conflicts,
         planned_domain_mutation_count=0,
         coordination_required=not ordered_conflicts,
@@ -736,6 +851,8 @@ def validate_admission_preimage(
     *,
     terminal_predecessors: Iterable[ExecutionUnitV1] = (),
     active_concurrent_writer_count: int = 0,
+    repair_binding: RepairAdmissionBindingV1 | None = None,
+    existing_repair_bindings: Iterable[RepairAdmissionBindingV1] = (),
 ) -> AdmissionReservationV1:
     """在持锁后重建 plan，并用 exact digest 完成 fresh CAS。"""
 
@@ -758,6 +875,8 @@ def validate_admission_preimage(
         fresh_facts,
         terminal_predecessors=terminal_predecessors,
         active_concurrent_writer_count=active_concurrent_writer_count,
+        repair_binding=repair_binding,
+        existing_repair_bindings=existing_repair_bindings,
     )
     fresh_digest = canonical_digest(fresh)
     if fresh_digest != planned_digest or fresh.blocked:

@@ -265,11 +265,8 @@ def _append_usage_event_unlocked(
     existing = next((item for item in ledger.events if item.event_id == event.event_id), None)
     if existing is not None and existing != event:
         raise ValueError(f"usage event_id conflict: {event.event_id}")
-    admission = plan_usage_admission(process_root, work_id, event)
     if not expected_admission_digest:
         raise ValueError("usage append requires expected_admission_digest")
-    if admission.plan_digest != expected_admission_digest:
-        raise ValueError("usage admission plan drifted before append")
     if existing is not None:
         decision = evaluate_budget(work.budget, summarize_usage(ledger))
         duplicate_decision = (
@@ -284,7 +281,15 @@ def _append_usage_event_unlocked(
             decision,
             work.usage_ref,
         )
-    if not admission.allowed:
+    admission = plan_usage_admission(process_root, work_id, event)
+    if admission.plan_digest != expected_admission_digest:
+        raise ValueError("usage admission plan drifted before append")
+    append_first_block = any(
+        reason == "USAGE_HARD_STOP_100_PERCENT"
+        or reason.startswith("USAGE_GOVERNANCE_LIMIT_EXCEEDED:")
+        for reason in admission.reason_codes
+    )
+    if not admission.allowed and not append_first_block:
         raise ValueError(
             "usage admission blocks append: "
             f"{admission.decision}:{','.join(admission.reason_codes)}"
@@ -301,7 +306,7 @@ def _append_usage_event_unlocked(
     _write_ledger_atomic(usage_path(process_root, work), updated)
     terminal = (
         "RECORDED"
-        if decision.allowed
+        if admission.allowed and decision.allowed
         else "RECORDED_AND_BLOCKED"
     )
     return UsageAppendResult(terminal, event.event_id, True, decision, work.usage_ref)

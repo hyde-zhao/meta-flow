@@ -21,6 +21,14 @@ from meta_flow.execution_control.contract import (
     canonical_digest,
 )
 from meta_flow.execution_control.migration import current_execution_control_policy
+from meta_flow.execution_control.repair_admission import (
+    RepairAdmissionBindingV1,
+    claim_repair_authorization,
+    load_existing_repair_bindings,
+    plan_repair_admission_binding,
+    render_repair_admission_binding,
+    repair_admission_binding_ref,
+)
 from meta_flow.execution_control.runtime_context import (
     ExecutionControlContextV1,
     RequestMaterializationCandidateV1,
@@ -69,6 +77,8 @@ class WorkInitPlan:
     target_preimages: tuple[tuple[str, str], ...]
     plan_digest: str
     lineage_preflight: tuple[tuple[str, str, str, str], ...] = ()
+    repair_authorization_path: Path | None = None
+    repair_admission_binding: RepairAdmissionBindingV1 | None = None
 
     @property
     def blocked(self) -> bool:
@@ -111,6 +121,11 @@ class WorkInitPlan:
             "admission": (
                 self.admission_plan.as_dict()
                 if self.admission_plan is not None
+                else None
+            ),
+            "repair_admission": (
+                self.repair_admission_binding.as_dict()
+                if self.repair_admission_binding is not None
                 else None
             ),
             "request_candidate_digest": (
@@ -200,6 +215,7 @@ def _plan_digest_source(
     admission_plan: AdmissionPlanV1 | None,
     request_candidate: RequestMaterializationCandidateV1 | None,
     lineage_preflight: tuple[tuple[str, str, str, str], ...] = (),
+    repair_admission_binding: RepairAdmissionBindingV1 | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -219,6 +235,11 @@ def _plan_digest_source(
             request_candidate.candidate_digest if request_candidate is not None else ""
         ),
         "lineage_preflight": [list(item) for item in lineage_preflight],
+        "repair_admission": (
+            repair_admission_binding.as_dict()
+            if repair_admission_binding is not None
+            else None
+        ),
     }
 
 
@@ -464,6 +485,7 @@ def _plan_work_init_from_release_root(
     work: Work,
     *,
     request_candidate: RequestMaterializationCandidateV1 | None = None,
+    repair_authorization_path: Path | None = None,
     human_design_gate_ref: str = "",
     operation: str,
 ) -> WorkInitPlan:
@@ -746,6 +768,7 @@ def _plan_work_init_from_release_root(
                 WorkInitAction("update", work.phase_ref, "append Work ref to Phase", target_preimage_digest(process_root / work.phase_ref))
             )
 
+    repair_binding: RepairAdmissionBindingV1 | None = None
     if work.execution_unit is None:
         if not existing_matches:
             compatibility_decision = "BLOCKED_NEW_OBJECT_REQUIRES_EXECUTION_UNIT"
@@ -777,12 +800,58 @@ def _plan_work_init_from_release_root(
                 conflicts.append(WorkInitConflict(reason, work.work_ref, reason))
             admission_plan = None
         else:
+            repair_evaluation = plan_repair_admission_binding(
+                process_root,
+                work,
+                release_oid=execution_context.release_oid,
+                process_oid=execution_context.process_oid,
+                authorization_path=repair_authorization_path,
+            )
+            for reason in repair_evaluation.conflicts:
+                conflicts.append(WorkInitConflict(reason, work.work_ref, reason))
+            repair_binding = repair_evaluation.binding
+            if repair_binding is not None:
+                binding_ref = repair_admission_binding_ref(work.work_id)
+                binding_path = process_root / binding_ref
+                if binding_path.exists() or binding_path.is_symlink():
+                    conflicts.append(
+                        WorkInitConflict(
+                            "REPAIR_ADMISSION_BINDING_TARGET_EXISTS",
+                            binding_ref,
+                            "repair admission binding target must be create-only",
+                        )
+                    )
+                else:
+                    actions.append(
+                        WorkInitAction(
+                            "create",
+                            binding_ref,
+                            "persist portable repair admission binding",
+                            target_preimage_digest(binding_path),
+                        )
+                    )
+            existing_repairs = load_existing_repair_bindings(
+                process_root, execution_context.inventory.units
+            )
+            for reason in existing_repairs.conflicts:
+                conflicts.append(WorkInitConflict(reason, work.work_ref, reason))
             policy = current_execution_control_policy()
+            admission_facts = execution_context.admission_facts()
+            if repair_binding is not None:
+                admission_facts = replace(
+                    admission_facts,
+                    authorization_digest=repair_binding.authorization_digest,
+                )
             admission_plan = plan_admission(
                 work.execution_unit,
                 execution_context.inventory.units,
                 policy.budget,
-                execution_context.admission_facts(),
+                admission_facts,
+                active_concurrent_writer_count=_repair_active_writer_count(
+                    execution_context, work, repair_binding
+                ),
+                repair_binding=repair_binding,
+                existing_repair_bindings=existing_repairs.bindings,
             )
             if admission_plan.blocked:
                 for reason in admission_plan.conflicts:
@@ -805,6 +874,18 @@ def _plan_work_init_from_release_root(
                     else {}
                 ),
                 work.work_ref: target_preimage_digest(path),
+                **(
+                    {
+                        repair_admission_binding_ref(work.work_id): (
+                            target_preimage_digest(
+                                process_root
+                                / repair_admission_binding_ref(work.work_id)
+                            )
+                        )
+                    }
+                    if repair_binding is not None
+                    else {}
+                ),
                 "PROJECT.yaml": target_preimage_digest(process_root / "PROJECT.yaml"),
                 **(
                     {work.phase_ref: target_preimage_digest(process_root / work.phase_ref)}
@@ -864,6 +945,7 @@ def _plan_work_init_from_release_root(
         admission_plan=admission_plan,
         request_candidate=request_candidate,
         lineage_preflight=lineage_preflight,
+        repair_admission_binding=repair_binding,
     )
     return WorkInitPlan(
         process_root=process_root,
@@ -881,6 +963,8 @@ def _plan_work_init_from_release_root(
         target_preimages=target_preimages,
         plan_digest=_digest(digest_source),
         lineage_preflight=lineage_preflight,
+        repair_authorization_path=repair_authorization_path,
+        repair_admission_binding=repair_binding,
     )
 
 
@@ -889,6 +973,7 @@ def plan_work_init_from_release_root(
     work: Work,
     *,
     request_candidate: RequestMaterializationCandidateV1 | None = None,
+    repair_authorization_path: Path | None = None,
     human_design_gate_ref: str = "",
 ) -> WorkInitPlan:
     """公开 canonical planner；调用方不能选择 apply context。"""
@@ -897,6 +982,7 @@ def plan_work_init_from_release_root(
         release_root,
         work,
         request_candidate=request_candidate,
+        repair_authorization_path=repair_authorization_path,
         human_design_gate_ref=human_design_gate_ref,
         operation="plan",
     )
@@ -929,6 +1015,22 @@ def _context_authority_digest(context: ExecutionControlContextV1) -> str:
             "provider_receipt_digest": context.provider_receipt_digest,
             "policy_digest": context.policy_digest,
         }
+    )
+
+
+def _repair_active_writer_count(
+    context: ExecutionControlContextV1,
+    work: Work,
+    binding: RepairAdmissionBindingV1 | None,
+) -> int:
+    if binding is None or work.execution_unit is None:
+        return 0
+    target = (
+        work.execution_unit.root_concept,
+        work.execution_unit.slice_id,
+    )
+    return context.inventory.untyped_active_writer_count + sum(
+        pair == target for pair in context.inventory.active_writer_slices
     )
 
 
@@ -1054,6 +1156,18 @@ def _work_init_transaction_targets(
         candidates.append((plan.work.work_ref, work_bytes))
     overrides["process/" + plan.work.work_ref] = (plan.work.as_dict(), work_bytes)
 
+    if plan.repair_admission_binding is not None:
+        binding_ref = repair_admission_binding_ref(plan.work.work_id)
+        binding_action = action_by_ref.get(binding_ref)
+        if binding_action is None or binding_action.action != "create":
+            raise ValueError("repair admission binding lacks create action")
+        candidates.append(
+            (
+                binding_ref,
+                render_repair_admission_binding(plan.repair_admission_binding),
+            )
+        )
+
     if plan.project is None:
         raise ValueError("Work init transaction lacks Project")
     project = plan.project
@@ -1121,6 +1235,17 @@ def _validate_work_init_postimage(plan: WorkInitPlan) -> None:
     )
 
     root = plan.process_root
+    if plan.repair_admission_binding is not None:
+        binding_path = root / repair_admission_binding_ref(plan.work.work_id)
+        try:
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            if (
+                RepairAdmissionBindingV1.from_mapping(binding)
+                != plan.repair_admission_binding
+            ):
+                raise ValueError("repair admission binding postimage drifted")
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("repair admission binding postimage is invalid") from exc
     assert_work_close_shared_projection_lineage(root)
     state_path = root / "state/STATE.current.json"
     if state_path.is_file() and not state_path.is_symlink():
@@ -1195,6 +1320,7 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             plan.release_root,
             plan.work,
             request_candidate=plan.request_candidate,
+            repair_authorization_path=plan.repair_authorization_path,
             human_design_gate_ref=plan.human_design_gate_ref,
             operation="apply",
         )
@@ -1202,6 +1328,8 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             fresh_noop.blocked
             or fresh_noop.compatibility_decision != plan.compatibility_decision
             or fresh_noop.target_preimages != plan.target_preimages
+            or fresh_noop.repair_admission_binding
+            != plan.repair_admission_binding
             or fresh_noop.execution_context is None
             or _context_authority_digest(fresh_noop.execution_context)
             != _context_authority_digest(plan.execution_context)
@@ -1246,11 +1374,14 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
     transaction_state = ""
     successor_id = ""
     state_refreshed = False
+    repair_claim = None
+    repair_claim_finalized = False
     try:
         fresh = _plan_work_init_from_release_root(
             plan.release_root,
             plan.work,
             request_candidate=plan.request_candidate,
+            repair_authorization_path=plan.repair_authorization_path,
             human_design_gate_ref=plan.human_design_gate_ref,
             operation="apply",
         )
@@ -1261,11 +1392,26 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             or fresh.compatibility_decision != plan.compatibility_decision
             or fresh.target_preimages != plan.target_preimages
             or fresh.lineage_preflight != plan.lineage_preflight
+            or fresh.repair_admission_binding != plan.repair_admission_binding
             or _context_authority_digest(fresh.execution_context)
             != _context_authority_digest(plan.execution_context)
         ):
             failure_codes = ("ADMISSION_PREIMAGE_DRIFT",)
             raise ValueError("Work init plan drifted inside the project lock")
+        fresh_admission_facts = fresh.execution_context.admission_facts()
+        if fresh.repair_admission_binding is not None:
+            fresh_admission_facts = replace(
+                fresh_admission_facts,
+                authorization_digest=(
+                    fresh.repair_admission_binding.authorization_digest
+                ),
+            )
+        fresh_existing_repairs = load_existing_repair_bindings(
+            plan.process_root, fresh.execution_context.inventory.units
+        )
+        if fresh_existing_repairs.conflicts:
+            failure_codes = fresh_existing_repairs.conflicts
+            raise ValueError("Work init repair inventory authorization drifted")
         reservation = validate_admission_preimage(
             plan.admission_plan,
             lock.handle,
@@ -1273,11 +1419,28 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             plan.work.execution_unit,
             fresh.execution_context.inventory.units,
             current_execution_control_policy().budget,
-            fresh.execution_context.admission_facts(),
+            fresh_admission_facts,
+            active_concurrent_writer_count=_repair_active_writer_count(
+                fresh.execution_context,
+                plan.work,
+                fresh.repair_admission_binding,
+            ),
+            repair_binding=fresh.repair_admission_binding,
+            existing_repair_bindings=fresh_existing_repairs.bindings,
         )
         if reservation.decision != "READY":
             failure_codes = reservation.conflicts
             raise ValueError("Work init admission preimage drifted")
+
+        if fresh.repair_admission_binding is not None:
+            try:
+                repair_claim = claim_repair_authorization(
+                    plan.process_root, fresh.repair_admission_binding
+                )
+            except Exception:
+                failure_codes = ("REPAIR_AUTHORIZATION_CLAIM_FAILED",)
+                raise
+            coordination_mutations += 1
 
         shared_writer_lock = acquire_shared_projection_writer_lock(
             plan.process_root,
@@ -1322,6 +1485,10 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
         coordination_mutations += len(refreshed_refs)
         state_refreshed = bool(refreshed_refs)
         _validate_work_init_postimage(fresh)
+        if repair_claim is not None:
+            repair_claim.finish("CONSUMED")
+            repair_claim_finalized = True
+            coordination_mutations += 1
         commit_work_init_transaction(
             plan.process_root,
             transaction_id,
@@ -1336,6 +1503,20 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
         failure = exc
         if not failure_codes:
             failure_codes = ("WORK_INIT_DOMAIN_WRITE_FAILED",)
+        if repair_claim is not None and not repair_claim_finalized:
+            try:
+                repair_claim.finish("FAILED")
+                repair_claim_finalized = True
+                coordination_mutations += 1
+            except Exception:
+                failure_codes = tuple(
+                    sorted(
+                        {
+                            *failure_codes,
+                            "REPAIR_AUTHORIZATION_CLAIM_FINALIZATION_FAILED",
+                        }
+                    )
+                )
         if successor_id:
             try:
                 if discard_shared_projection_successor(

@@ -159,7 +159,10 @@ def test_plan_is_pure_and_uses_one_budget_evaluator_for_all_conflicts() -> None:
             ContainerBudgetV1.policy_v1(),
             _facts(),
         )
-        assert blocked.conflicts == ("CONTAINER_BUDGET_EXCEEDED",)
+        expected = {"CONTAINER_BUDGET_EXCEEDED"}
+        if role == "repair":
+            expected.add("REPAIR_AUTHORIZATION_REQUIRED")
+        assert set(blocked.conflicts) == expected
 
     concurrent = plan_admission(
         candidate,
@@ -564,3 +567,34 @@ def test_budget_evaluator_is_order_independent_and_rejects_invalid_counts() -> N
             ContainerBudgetV1.policy_v1(),
             concurrent_writer_count=-1,
         )
+
+
+def test_repair_slot_is_scoped_to_exact_root_and_slice() -> None:
+    authorized = _unit(
+        "W-REPAIR-A",
+        role="repair",
+        root="root-a",
+        slice_id="slice-a",
+    )
+    unrelated = _unit(
+        "W-REPAIR-B",
+        role="repair",
+        root="root-b",
+        slice_id="slice-b",
+    )
+
+    exact = evaluate_execution_budget(
+        (authorized,),
+        ContainerBudgetV1.policy_v1(),
+        concurrent_writer_count=1,
+        authorized_repair_slices=(("root-a", "slice-a"),),
+    )
+    leaked = evaluate_execution_budget(
+        (authorized, unrelated),
+        ContainerBudgetV1.policy_v1(),
+        concurrent_writer_count=1,
+        authorized_repair_slices=(("root-a", "slice-a"),),
+    )
+
+    assert exact.decision == "READY"
+    assert leaked.conflicts == ("CONTAINER_BUDGET_EXCEEDED",)

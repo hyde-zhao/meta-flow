@@ -18,17 +18,21 @@ from typing import Any
 
 from meta_flow.execution_control.contract import ContainerBudgetV1, canonical_digest
 
-FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v2.json"
+FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v6.json"
 LEGACY_RECEIPT_REFS = (
     "meta_flow/execution_control/provider/activation-receipt-v1.json",
+    "meta_flow/execution_control/provider/activation-receipt-v2.json",
+    "meta_flow/execution_control/provider/activation-receipt-v3.json",
+    "meta_flow/execution_control/provider/activation-receipt-v4.json",
+    "meta_flow/execution_control/provider/activation-receipt-v5.json",
 )
 PACKAGE_NAME = "meta-flow"
-PACKAGE_VERSION = "0.5.0"
+PACKAGE_VERSION = "0.5.1"
 POLICY_REVISION = 1
 COHORT_REVISION = 1
 CONTEXT_REVISION = 1
 GENERATOR_IDENTITY = (
-    "meta_flow.execution_control.migration:build_provider_activation_receipt:v2"
+    "meta_flow.execution_control.migration:build_provider_activation_receipt:v6"
 )
 _SELF_EXCLUSION = FIXED_RECEIPT_REF
 _SOURCE_OWNERS = frozenset(
@@ -38,9 +42,12 @@ _SOURCE_OWNERS = frozenset(
         "meta_flow/execution_control/consumer_scan.py",
         "meta_flow/execution_control/contract.py",
         "meta_flow/execution_control/admission.py",
+        "meta_flow/execution_control/repair_admission.py",
         "meta_flow/work/store.py",
         "meta_flow/work/assurance.py",
         "meta_flow/work/cli.py",
+        "meta_flow/work/usage.py",
+        "meta_flow/work/usage_admission.py",
         "meta_flow/evolution.py",
         "meta_flow/evolution_cli.py",
     }
@@ -61,7 +68,7 @@ _FIELDS = frozenset(
 
 
 def _receipt_path() -> Path:
-    return Path(resources.files("meta_flow.execution_control").joinpath("provider/activation-receipt-v2.json"))
+    return Path(resources.files("meta_flow.execution_control").joinpath("provider/activation-receipt-v6.json"))
 
 
 def _package_root() -> Path:

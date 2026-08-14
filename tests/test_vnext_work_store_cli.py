@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from dataclasses import replace
@@ -8,11 +9,21 @@ from pathlib import Path
 import pytest
 
 from meta_flow import cli
+from meta_flow.execution_control import repair_admission as repair_admission_module
 from meta_flow.execution_control.admission import (
     acquire_admission_lock,
     release_admission_lock,
 )
 from meta_flow.execution_control.contract import ExecutionUnitV1
+from meta_flow.execution_control.repair_admission import (
+    AUTHORIZATION_KIND as REPAIR_AUTHORIZATION_KIND,
+)
+from meta_flow.execution_control.repair_admission import (
+    claim_repair_authorization,
+    repair_admission_binding_ref,
+    repair_authorization_claim_path,
+    repair_blocker_fingerprint,
+)
 from meta_flow.project.governance import (
     Phase,
     load_governance_snapshot,
@@ -185,6 +196,134 @@ def typed_work(work):
     )
 
 
+def execution_work(
+    process: Path,
+    work_id: str,
+    *,
+    role: str,
+    root_concept: str = "repair-root",
+    slice_id: str = "repair-slice",
+):
+    work = make_work(process, work_id)
+    return replace(
+        work,
+        execution_unit=ExecutionUnitV1(
+            unit_id=work_id,
+            root_concept=root_concept,
+            slice_id=slice_id,
+            container_role=role,
+            revision=1,
+            supersedes_unit_id="",
+            contract_ref=work.request_ref,
+            contract_digest="c" * 64,
+        ),
+    )
+
+
+def prepare_repair_authorization(
+    tmp_path: Path,
+    release: Path,
+    process: Path,
+    predecessor,
+    candidate,
+    *,
+    overrides: dict[str, object] | None = None,
+) -> Path:
+    blocker_ref = f"works/{predecessor.work_id}/BLOCKER.json"
+    blocker_path = process / blocker_ref
+    blocker_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "WorkBlockerEvidenceV1",
+                "work_id": predecessor.work_id,
+                "decision": "BLOCKED",
+                "blocker_id": "USAGE_HARD_STOP_100_PERCENT",
+                "classification": "usage_budget_hard_stop",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    blocker_digest = hashlib.sha256(blocker_path.read_bytes()).hexdigest()
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "kind": REPAIR_AUTHORIZATION_KIND,
+        "authorization_id": f"repair-{candidate.work_id}",
+        "authorization_source": "typed-user-confirmation",
+        "project_id": candidate.project_id,
+        "candidate_work_id": candidate.work_id,
+        "predecessor_work_id": predecessor.work_id,
+        "root_concept": candidate.execution_unit.root_concept,
+        "slice_id": candidate.execution_unit.slice_id,
+        "predecessor_scope_digest": predecessor.scope.digest,
+        "predecessor_status": "blocked",
+        "predecessor_blocker_category": "usage-hard-stop",
+        "predecessor_blocker_code": "USAGE_HARD_STOP_100_PERCENT",
+        "predecessor_blocker_ref": blocker_ref,
+        "predecessor_blocker_digest": blocker_digest,
+        "predecessor_blocker_fingerprint": repair_blocker_fingerprint(
+            predecessor_work_id=predecessor.work_id,
+            predecessor_status="blocked",
+            predecessor_scope_digest=predecessor.scope.digest,
+            predecessor_blocker_category="usage-hard-stop",
+            predecessor_blocker_code="USAGE_HARD_STOP_100_PERCENT",
+            predecessor_blocker_digest=blocker_digest,
+        ),
+        "candidate_scope_digest": candidate.scope.digest,
+        "release_oid": git(release, "rev-parse", "HEAD"),
+        "process_oid": git(process, "rev-parse", "HEAD"),
+        "expires_at": "2099-01-01T00:00:00+00:00",
+        "single_use": True,
+    }
+    payload.update(overrides or {})
+    if overrides and any(
+        field in overrides
+        for field in (
+            "predecessor_scope_digest",
+            "predecessor_blocker_category",
+            "predecessor_blocker_code",
+            "predecessor_blocker_digest",
+        )
+    ) and "predecessor_blocker_fingerprint" not in overrides:
+        payload["predecessor_blocker_fingerprint"] = repair_blocker_fingerprint(
+            predecessor_work_id=str(payload["predecessor_work_id"]),
+            predecessor_status=str(payload["predecessor_status"]),
+            predecessor_scope_digest=str(payload["predecessor_scope_digest"]),
+            predecessor_blocker_category=str(payload["predecessor_blocker_category"]),
+            predecessor_blocker_code=str(payload["predecessor_blocker_code"]),
+            predecessor_blocker_digest=str(payload["predecessor_blocker_digest"]),
+        )
+    path = tmp_path / f"{candidate.work_id}.repair-authorization.json"
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def blocked_repair_fixture(tmp_path: Path):
+    release, process = init_project(tmp_path)
+    predecessor = execution_work(process, "W-PRIMARY", role="primary")
+    apply_work_init(plan_work_init_from_release_root(release, predecessor))
+    update_work_status(
+        process,
+        predecessor.work_id,
+        expected_status="planned",
+        new_status="active",
+    )
+    update_work_status(
+        process,
+        predecessor.work_id,
+        expected_status="active",
+        new_status="blocked",
+    )
+    predecessor = load_work(process, predecessor.work_id)
+    candidate = execution_work(process, "W-REPAIR", role="repair")
+    authorization = prepare_repair_authorization(
+        tmp_path, release, process, predecessor, candidate
+    )
+    return release, process, predecessor, candidate, authorization
+
+
 def snapshot_domain_files(process: Path) -> dict[str, bytes]:
     return {
         path.relative_to(process).as_posix(): path.read_bytes()
@@ -287,6 +426,393 @@ def test_work_init_dry_run_then_apply_indexes_project(tmp_path: Path) -> None:
     assert findings == []
     assert snapshot is not None
     assert snapshot.objects_read == 2
+
+
+def test_repair_work_requires_typed_authorization_and_keeps_global_policy_closed(
+    tmp_path: Path,
+) -> None:
+    release, _process, _predecessor, candidate, _authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+
+    plan = plan_work_init_from_release_root(release, candidate)
+
+    assert plan.blocked
+    assert {
+        "CONTAINER_BUDGET_EXCEEDED",
+        "REPAIR_AUTHORIZATION_REQUIRED",
+    } <= {conflict.code for conflict in plan.conflicts}
+    assert plan.repair_admission_binding is None
+
+
+def test_typed_repair_authorization_creates_and_starts_one_native_repair_work(
+    tmp_path: Path,
+) -> None:
+    release, process, predecessor, candidate, authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+    predecessor_bytes = (process / predecessor.work_ref).read_bytes()
+
+    plan = plan_work_init_from_release_root(
+        release,
+        candidate,
+        repair_authorization_path=authorization,
+    )
+    receipt = apply_work_init(plan)
+    started = update_work_status(
+        process,
+        candidate.work_id,
+        expected_status="planned",
+        new_status="active",
+    )
+
+    assert not plan.blocked
+    assert plan.repair_admission_binding is not None
+    assert plan.as_dict()["repair_admission"]["predecessor_work_id"] == predecessor.work_id
+    assert str(authorization) not in json.dumps(plan.as_dict(), sort_keys=True)
+    assert receipt.decision == "PASS"
+    assert receipt.transaction_state == "COMMITTED"
+    assert started.status == "active"
+    assert (process / predecessor.work_ref).read_bytes() == predecessor_bytes
+    claim = repair_authorization_claim_path(
+        process, plan.repair_admission_binding.authorization_id
+    )
+    assert json.loads(claim.read_text(encoding="utf-8"))["state"] == "CONSUMED"
+    durable_binding = process / repair_admission_binding_ref(candidate.work_id)
+    assert json.loads(durable_binding.read_text(encoding="utf-8")) == (
+        plan.repair_admission_binding.as_dict()
+    )
+    with pytest.raises(ValueError, match="already consumed"):
+        claim_repair_authorization(process, plan.repair_admission_binding)
+    idempotent = plan_work_init_from_release_root(
+        release, load_work(process, candidate.work_id)
+    )
+    assert not idempotent.blocked
+    assert idempotent.compatibility_decision == "NOOP_TYPED_CURRENT"
+    followup = execution_work(
+        process,
+        "W-FOLLOWUP",
+        role="primary",
+        root_concept="followup-root",
+        slice_id="followup-slice",
+    )
+    followup_plan = plan_work_init_from_release_root(release, followup)
+    assert not followup_plan.blocked
+
+
+def test_repair_claim_failure_never_unlinks_a_replaced_foreign_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, _predecessor, candidate, authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+    plan = plan_work_init_from_release_root(
+        release,
+        candidate,
+        repair_authorization_path=authorization,
+    )
+    assert plan.repair_admission_binding is not None
+    claim_path = repair_authorization_claim_path(
+        process, plan.repair_admission_binding.authorization_id
+    )
+    real_fdopen = repair_admission_module.os.fdopen
+
+    def replace_then_fail(descriptor: int, *args, **kwargs):
+        stream = real_fdopen(descriptor, *args, **kwargs)
+        stream.close()
+        claim_path.unlink()
+        claim_path.write_text("foreign-owner\n", encoding="utf-8")
+        raise OSError("simulated post-create failure")
+
+    monkeypatch.setattr(repair_admission_module.os, "fdopen", replace_then_fail)
+
+    with pytest.raises(OSError, match="post-create failure"):
+        claim_repair_authorization(process, plan.repair_admission_binding)
+
+    assert claim_path.read_text(encoding="utf-8") == "foreign-owner\n"
+
+
+@pytest.mark.parametrize("binding_state", ("missing", "invalid"))
+def test_existing_repair_requires_its_portable_durable_binding(
+    tmp_path: Path,
+    binding_state: str,
+) -> None:
+    release, process, _predecessor, candidate, authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+    plan = plan_work_init_from_release_root(
+        release,
+        candidate,
+        repair_authorization_path=authorization,
+    )
+    apply_work_init(plan)
+    binding_path = process / repair_admission_binding_ref(candidate.work_id)
+    if binding_state == "missing":
+        binding_path.unlink()
+    else:
+        binding_path.write_text("{}\n", encoding="utf-8")
+    followup = execution_work(
+        process,
+        "W-FOLLOWUP",
+        role="primary",
+        root_concept="followup-root",
+        slice_id="followup-slice",
+    )
+    before = snapshot_domain_files(process)
+
+    followup_plan = plan_work_init_from_release_root(release, followup)
+
+    assert followup_plan.blocked
+    assert "REPAIR_INVENTORY_AUTHORIZATION_INVALID" in {
+        conflict.code for conflict in followup_plan.conflicts
+    }
+    assert snapshot_domain_files(process) == before
+
+
+def test_repair_work_cli_consumes_the_same_canonical_authorization(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, process, _predecessor, candidate, authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+    args = [
+        "--project-root",
+        str(release),
+        "--work-id",
+        candidate.work_id,
+        "--objective",
+        candidate.objective,
+        "--request-ref",
+        candidate.request_ref,
+        "--allowed-read",
+        candidate.request_ref,
+        "--allowed-read",
+        "README.md",
+        "--allowed-write",
+        "README.md",
+        "--required-check",
+        "pytest-docs",
+        "--change-kind",
+        "documentation",
+        "--touched-path-count",
+        "1",
+        "--execution-unit-id",
+        candidate.work_id,
+        "--execution-root-concept",
+        candidate.execution_unit.root_concept,
+        "--execution-slice-id",
+        candidate.execution_unit.slice_id,
+        "--execution-container-role",
+        "repair",
+        "--execution-revision",
+        "1",
+        "--execution-contract-ref",
+        candidate.request_ref,
+        "--execution-contract-digest",
+        "c" * 64,
+        "--repair-authorization",
+        str(authorization),
+    ]
+
+    dry_code = init_main(args)
+    dry = json.loads(capsys.readouterr().out)
+    apply_code = init_main([*args, "--apply"])
+    applied = json.loads(capsys.readouterr().out)
+
+    assert dry_code == 0
+    assert dry["decision"] == "READY"
+    assert dry["repair_admission"]["candidate_work_id"] == candidate.work_id
+    assert apply_code == 0
+    assert applied["receipt"]["decision"] == "PASS"
+    assert load_work(process, candidate.work_id).status == "planned"
+
+
+def test_repair_authorization_rejects_active_predecessor_but_not_other_slice(
+    tmp_path: Path,
+) -> None:
+    release, process = init_project(tmp_path)
+    predecessor = execution_work(process, "W-PRIMARY", role="primary")
+    apply_work_init(plan_work_init_from_release_root(release, predecessor))
+    update_work_status(
+        process,
+        predecessor.work_id,
+        expected_status="planned",
+        new_status="active",
+    )
+    predecessor = load_work(process, predecessor.work_id)
+    candidate = execution_work(process, "W-REPAIR", role="repair")
+    authorization = prepare_repair_authorization(
+        tmp_path, release, process, predecessor, candidate
+    )
+
+    active_plan = plan_work_init_from_release_root(
+        release, candidate, repair_authorization_path=authorization
+    )
+    assert "REPAIR_PREDECESSOR_STATUS_DRIFT" in {
+        conflict.code for conflict in active_plan.conflicts
+    }
+
+    update_work_status(
+        process,
+        predecessor.work_id,
+        expected_status="active",
+        new_status="blocked",
+    )
+    other = execution_work(
+        process,
+        "W-OTHER",
+        role="primary",
+        root_concept="other-root",
+        slice_id="other-slice",
+    )
+    apply_work_init(plan_work_init_from_release_root(release, other))
+    update_work_status(
+        process,
+        other.work_id,
+        expected_status="planned",
+        new_status="active",
+    )
+    authorization = prepare_repair_authorization(
+        tmp_path,
+        release,
+        process,
+        load_work(process, predecessor.work_id),
+        candidate,
+    )
+
+    other_slice_plan = plan_work_init_from_release_root(
+        release, candidate, repair_authorization_path=authorization
+    )
+    assert "CONCURRENT_WRITE_BUDGET_EXCEEDED" not in {
+        conflict.code for conflict in other_slice_plan.conflicts
+    }
+
+
+def test_repair_authorization_blocks_another_active_writer_in_the_same_slice(
+    tmp_path: Path,
+) -> None:
+    release, process, predecessor, candidate, _authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+    other = replace(
+        execution_work(process, "W-SAME-SLICE", role="primary"),
+        status="active",
+    )
+    write_work_create_only(process, other)
+    project = load_project(process)
+    replace_project(
+        process,
+        replace(project, active_work_refs=(*project.active_work_refs, other.work_ref)),
+        expected_project_id=project.project_id,
+    )
+    authorization = prepare_repair_authorization(
+        tmp_path, release, process, predecessor, candidate
+    )
+
+    plan = plan_work_init_from_release_root(
+        release, candidate, repair_authorization_path=authorization
+    )
+
+    assert "CONCURRENT_WRITE_BUDGET_EXCEEDED" in {
+        conflict.code for conflict in plan.conflicts
+    }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    (
+        ({"candidate_scope_digest": "f" * 64}, "REPAIR_AUTHORIZATION_CANDIDATE_SCOPE_DRIFT"),
+        ({"predecessor_scope_digest": "f" * 64}, "REPAIR_PREDECESSOR_SCOPE_DRIFT"),
+        ({"release_oid": "f" * 40}, "REPAIR_AUTHORIZATION_OID_DRIFT"),
+        ({"process_oid": "f" * 40}, "REPAIR_AUTHORIZATION_OID_DRIFT"),
+        ({"project_id": "other-project"}, "REPAIR_AUTHORIZATION_PROJECT_MISMATCH"),
+        ({"candidate_work_id": "W-OTHER"}, "REPAIR_AUTHORIZATION_CANDIDATE_MISMATCH"),
+        (
+            {
+                "predecessor_work_id": "W-OTHER",
+                "predecessor_blocker_ref": "works/W-OTHER/BLOCKER.json",
+            },
+            "REPAIR_PREDECESSOR_UNAVAILABLE",
+        ),
+        ({"root_concept": "other-root"}, "REPAIR_AUTHORIZATION_ROOT_MISMATCH"),
+        ({"slice_id": "other-slice"}, "REPAIR_AUTHORIZATION_SLICE_MISMATCH"),
+        ({"expires_at": "2000-01-01T00:00:00+00:00"}, "REPAIR_AUTHORIZATION_EXPIRED"),
+    ),
+)
+def test_repair_authorization_fails_closed_on_bound_fact_drift(
+    tmp_path: Path,
+    overrides: dict[str, object],
+    expected: str,
+) -> None:
+    release, process, predecessor, candidate, _authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+    authorization = prepare_repair_authorization(
+        tmp_path,
+        release,
+        process,
+        predecessor,
+        candidate,
+        overrides=overrides,
+    )
+
+    plan = plan_work_init_from_release_root(
+        release, candidate, repair_authorization_path=authorization
+    )
+
+    assert plan.blocked
+    assert expected in {conflict.code for conflict in plan.conflicts}
+    assert not (process / candidate.work_ref).exists()
+
+
+def test_repair_apply_revalidates_predecessor_under_lock_before_domain_mutation(
+    tmp_path: Path,
+) -> None:
+    release, process, predecessor, candidate, authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+    plan = plan_work_init_from_release_root(
+        release, candidate, repair_authorization_path=authorization
+    )
+    project_before = (process / "PROJECT.yaml").read_bytes()
+    update_work_status(
+        process,
+        predecessor.work_id,
+        expected_status="blocked",
+        new_status="active",
+    )
+
+    with pytest.raises(WorkInitApplyError) as raised:
+        apply_work_init(plan)
+
+    assert raised.value.receipt.domain_mutation_count == 0
+    assert not (process / candidate.work_ref).exists()
+    assert (process / "PROJECT.yaml").read_bytes() == project_before
+    assert not repair_authorization_claim_path(
+        process, plan.repair_admission_binding.authorization_id
+    ).exists()
+
+
+def test_repair_authorization_blocks_when_blocker_evidence_bytes_drift(
+    tmp_path: Path,
+) -> None:
+    release, process, predecessor, candidate, authorization = (
+        blocked_repair_fixture(tmp_path)
+    )
+    blocker = process / f"works/{predecessor.work_id}/BLOCKER.json"
+    blocker.write_bytes(blocker.read_bytes() + b"\n")
+
+    plan = plan_work_init_from_release_root(
+        release, candidate, repair_authorization_path=authorization
+    )
+
+    assert plan.blocked
+    assert "REPAIR_PREDECESSOR_BLOCKER_DRIFT" in {
+        conflict.code for conflict in plan.conflicts
+    }
+    assert not (process / candidate.work_ref).exists()
 
 
 def test_work_init_plan_reuses_project_and_request_in_one_snapshot(
@@ -705,7 +1231,8 @@ def test_usage_add_cli_requires_fresh_plan_and_blocks_over_limit_before_mutation
     assert plan_payload["decision"] == "BLOCKED"
     assert payload["decision"] == "BLOCKED"
     assert "operation admission blocks execution" in payload["error"]
-    assert not (process / "works" / "W-001" / "USAGE.json").exists()
+    ledger = load_usage(process, load_work(process, "W-001"))
+    assert [event.event_id for event in ledger.events] == ["usage-over-limit"]
 
 
 def test_sibling_binding_g1_cli_admits_exact_verification_stage_unit(

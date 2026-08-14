@@ -504,7 +504,7 @@ def execute_admitted_operation(
     )
     if fresh.permit_digest != permit.permit_digest:
         raise ValueError("operation admission permit drifted before execution")
-    if not fresh.allowed:
+    if fresh.blockers:
         raise ValueError(
             "operation admission blocks execution: "
             f"{fresh.decision}:{','.join(fresh.blockers)}"
@@ -517,6 +517,11 @@ def execute_admitted_operation(
         event,
         expected_admission_digest=permit.usage_plan_digest,
     )
+    if not fresh.allowed:
+        raise ValueError(
+            "operation admission blocks execution after usage append: "
+            f"{fresh.decision}:{','.join(fresh.blockers)}"
+        )
     if not reservation.appended:
         return (
             OperationExecutionReceiptV1(

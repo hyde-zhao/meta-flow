@@ -119,7 +119,7 @@ def test_conflicting_duplicate_event_id_is_rejected(tmp_path: Path) -> None:
     ("field", "value"),
     [("reads", 9), ("writes", 9), ("check_groups", 4), ("tokens", 32_001)],
 )
-def test_over_budget_plan_blocks_before_usage_ledger_mutation(
+def test_over_budget_plan_appends_attempt_before_blocking_domain_mutation(
     tmp_path: Path, field: str, value: int
 ) -> None:
     init_work(tmp_path)
@@ -129,17 +129,20 @@ def test_over_budget_plan_blocks_before_usage_ledger_mutation(
     event = UsageEvent(event_id="evt-over", stage="implementation", **kwargs)
     plan = plan_usage_admission(tmp_path, "W-001", event)
 
-    with pytest.raises(ValueError, match="usage admission blocks append"):
-        append_usage_event(
-            tmp_path,
-            "W-001",
-            event,
-            expected_admission_digest=plan.plan_digest,
-        )
+    result = append_usage_event(
+        tmp_path,
+        "W-001",
+        event,
+        expected_admission_digest=plan.plan_digest,
+    )
 
     assert plan.decision in {"PAUSE", "BLOCKED"}
     usage_path = tmp_path / "works" / "W-001" / "USAGE.json"
-    assert not usage_path.exists()
+    assert result.decision == "RECORDED_AND_BLOCKED"
+    assert [item.event_id for item in load_usage(tmp_path, load_work(tmp_path, "W-001")).events] == [
+        event.event_id
+    ]
+    assert usage_path.is_file()
 
 
 def test_request_above_stage_limit_is_blocked_before_record(tmp_path: Path) -> None:
@@ -381,24 +384,13 @@ def test_stage_check_group_integer_boundary_matrix(
         assert plan.decision == "BLOCKED"
         assert "USAGE_HARD_STOP_100_PERCENT" in plan.reason_codes
         assert "USAGE_STAGE_LIMIT_EXCEEDED:check_groups" in plan.reason_codes
-        before = (
-            (tmp_path / "works/W-001/USAGE.json").read_bytes()
-            if (tmp_path / "works/W-001/USAGE.json").is_file()
-            else None
+        result = append_usage_event(
+            tmp_path,
+            "W-001",
+            event,
+            expected_admission_digest=plan.plan_digest,
         )
-        with pytest.raises(ValueError, match="usage admission blocks append"):
-            append_usage_event(
-                tmp_path,
-                "W-001",
-                event,
-                expected_admission_digest=plan.plan_digest,
-            )
-        after = (
-            (tmp_path / "works/W-001/USAGE.json").read_bytes()
-            if (tmp_path / "works/W-001/USAGE.json").is_file()
-            else None
-        )
-        assert after == before
+        assert result.decision == "RECORDED_AND_BLOCKED"
 
 
 @pytest.mark.parametrize(
@@ -586,7 +578,7 @@ def test_stage_and_total_limits_are_checked_by_absolute_projected_usage(
     assert "USAGE_STAGE_LIMIT_EXCEEDED:reads" in stage_exceeded.reason_codes
 
 
-def test_exact_limit_duplicate_remains_idempotent_and_requires_fresh_digest(
+def test_exact_limit_duplicate_remains_idempotent_without_second_append(
     tmp_path: Path,
 ) -> None:
     init_work(tmp_path, profile="G1")
@@ -604,13 +596,12 @@ def test_exact_limit_duplicate_remains_idempotent_and_requires_fresh_digest(
     )
     fresh = plan_usage_admission(tmp_path, "W-001", event)
 
-    with pytest.raises(ValueError, match="plan drifted"):
-        append_usage_event(
-            tmp_path,
-            "W-001",
-            event,
-            expected_admission_digest=original.plan_digest,
-        )
+    replay = append_usage_event(
+        tmp_path,
+        "W-001",
+        event,
+        expected_admission_digest=original.plan_digest,
+    )
     duplicate = append_usage_event(
         tmp_path,
         "W-001",
@@ -619,6 +610,7 @@ def test_exact_limit_duplicate_remains_idempotent_and_requires_fresh_digest(
     )
 
     assert fresh.allowed
+    assert replay.decision == "NO_CHANGE"
     assert duplicate.decision == "NO_CHANGE"
     assert len(load_usage(tmp_path, load_work(tmp_path, "W-001")).events) == 1
 
@@ -751,6 +743,44 @@ def test_blocked_or_stale_operation_permit_never_calls_executor(tmp_path: Path) 
     assert calls == 0
 
 
+def test_over_budget_operation_appends_once_before_blocking_executor(
+    tmp_path: Path,
+) -> None:
+    init_work(tmp_path)
+    event = UsageEvent(
+        event_id="append-first-hard-stop",
+        stage="implementation",
+        writes=9,
+        tokens=1,
+    )
+    calls = 0
+
+    def executor() -> None:
+        nonlocal calls
+        calls += 1
+
+    first = plan_operation_admission(
+        tmp_path,
+        "W-001",
+        event,
+        operation="usage-record",
+    )
+    with pytest.raises(ValueError, match="after usage append"):
+        execute_admitted_operation(tmp_path, first, event, executor)
+    second = plan_operation_admission(
+        tmp_path,
+        "W-001",
+        event,
+        operation="usage-record",
+    )
+    with pytest.raises(ValueError, match="after usage append"):
+        execute_admitted_operation(tmp_path, second, event, executor)
+
+    ledger = load_usage(tmp_path, load_work(tmp_path, "W-001"))
+    assert calls == 0
+    assert [item.event_id for item in ledger.events] == [event.event_id]
+
+
 def test_governance_limits_are_admitted_before_real_operation(tmp_path: Path) -> None:
     init_work(tmp_path)
     first = UsageEvent(
@@ -799,6 +829,10 @@ def test_governance_limits_are_admitted_before_real_operation(tmp_path: Path) ->
         in plan_usage_admission(tmp_path, "W-001", second).reason_codes
     )
     assert calls == 0
+    assert [
+        item.event_id
+        for item in load_usage(tmp_path, load_work(tmp_path, "W-001")).events
+    ] == ["final-full-1", "final-full-2"]
 
 
 def test_usage_single_writer_lock_blocks_concurrent_reservation(tmp_path: Path) -> None:

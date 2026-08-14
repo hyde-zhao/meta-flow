@@ -30,7 +30,7 @@ from meta_flow.installation.identity import (
 def source_identity(**updates: str) -> dict[str, str]:
     payload = {
         "source": "meta-flow-delivery",
-        "version": "0.5.0",
+        "version": "0.5.1",
         "oid": "a" * 40,
         "delivery_tree_digest": "b" * 64,
         "rules_source_digest": "c" * 64,

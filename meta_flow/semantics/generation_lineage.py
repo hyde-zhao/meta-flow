@@ -24,7 +24,27 @@ _MANIFEST_FIELDS = {
     "applied_refs",
     "targets",
 }
-_MANIFEST_OPTIONAL_FIELDS = {"failure", "recovery_failures", "lineage"}
+_MANIFEST_OPTIONAL_FIELDS = {
+    "failure",
+    "recovery_failures",
+    "lineage",
+    "operation",
+    "publication_binding",
+}
+_PUBLICATION_BINDING_FIELDS = {
+    "schema_version",
+    "kind",
+    "work_id",
+    "scope_digest",
+    "result_ref",
+    "handoff_ref",
+    "handoff_digest",
+    "publication_receipt_ref",
+    "publication_receipt_digest",
+    "repository_facts_digest",
+    "paused_oids",
+    "published_oids",
+}
 _TARGET_FIELDS = {
     "ref",
     "before_digest",
@@ -70,6 +90,19 @@ def _validated_manifest(path: Path) -> dict[str, object]:
         raise ValueError(
             f"unresolved Work close transaction requires recovery: {authorization_id}:{state}"
         )
+    operation = str(payload.get("operation") or "work.close")
+    publication_binding = payload.get("publication_binding")
+    if operation == "work.publication-close":
+        if (
+            not isinstance(publication_binding, Mapping)
+            or set(publication_binding) != _PUBLICATION_BINDING_FIELDS
+            or publication_binding.get("schema_version") != 1
+            or publication_binding.get("kind") != "WorkPublicationBindingV1"
+            or publication_binding.get("work_id") != work_id
+        ):
+            raise ValueError("generation lineage publication binding is invalid")
+    elif operation != "work.close" or publication_binding is not None:
+        raise ValueError("generation lineage work close operation is invalid")
     raw_targets = payload.get("targets")
     lineage = payload.get("lineage", {})
     attempted_refs = payload.get("attempted_refs")

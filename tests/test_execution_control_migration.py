@@ -54,8 +54,11 @@ OID = "b" * 40
 FROZEN_REQUIRED_SOURCE_OWNERS = frozenset({
     "meta_flow/execution_control/runtime_context.py", "meta_flow/execution_control/migration.py",
     "meta_flow/execution_control/consumer_scan.py", "meta_flow/execution_control/contract.py",
-    "meta_flow/execution_control/admission.py", "meta_flow/work/store.py",
-    "meta_flow/work/assurance.py", "meta_flow/work/cli.py", "meta_flow/evolution.py",
+    "meta_flow/execution_control/admission.py", "meta_flow/execution_control/repair_admission.py",
+    "meta_flow/work/store.py",
+    "meta_flow/work/assurance.py", "meta_flow/work/cli.py",
+    "meta_flow/work/usage.py", "meta_flow/work/usage_admission.py",
+    "meta_flow/evolution.py",
     "meta_flow/evolution_cli.py",
 })
 
@@ -115,26 +118,46 @@ def _receipt_payload(package_root: Path | None = None) -> dict[str, object]:
     return payload
 
 
-def test_packaged_receipt_rotation_preserves_v1_and_selects_v2() -> None:
+def test_packaged_receipt_rotation_preserves_v1_through_v5_and_selects_v6() -> None:
     release_root = Path(__file__).parents[1]
     package_root = release_root / "meta_flow"
     qualification_evidence_path = (
-        release_root / "docs/release/PROVIDER-QUALIFICATION-0.5.0.json"
+        release_root / "docs/release/PROVIDER-QUALIFICATION-0.5.1.json"
     )
     assert LEGACY_RECEIPT_REFS == (
         "meta_flow/execution_control/provider/activation-receipt-v1.json",
+        "meta_flow/execution_control/provider/activation-receipt-v2.json",
+        "meta_flow/execution_control/provider/activation-receipt-v3.json",
+        "meta_flow/execution_control/provider/activation-receipt-v4.json",
+        "meta_flow/execution_control/provider/activation-receipt-v5.json",
     )
-    legacy = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[0]).parts[1:])
+    legacy_v1 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[0]).parts[1:])
+    legacy_v2 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[1]).parts[1:])
+    legacy_v3 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[2]).parts[1:])
+    legacy_v4 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[3]).parts[1:])
+    legacy_v5 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[4]).parts[1:])
     current = _receipt_locator(package_root)
 
-    assert hashlib.sha256(legacy.read_bytes()).hexdigest() == (
+    assert hashlib.sha256(legacy_v1.read_bytes()).hexdigest() == (
         "37f1a9c7f3d28c8b4c0bacd2f6817c8cd900bdab71180321b437d335c0b1263a"
     )
-    assert current.name == "activation-receipt-v2.json"
+    assert hashlib.sha256(legacy_v2.read_bytes()).hexdigest() == (
+        "63ea571d3f28e794d054f43c6be9f12f36a65f920ef45aa9597b2a4226aa2130"
+    )
+    assert hashlib.sha256(legacy_v3.read_bytes()).hexdigest() == (
+        "7423d0bb1c1605e6800641b71b90bda40f82076b790846112e6b580ab8bfdebd"
+    )
+    assert hashlib.sha256(legacy_v4.read_bytes()).hexdigest() == (
+        "372d3a49c1997ec58c1e1d2108e07d95059a5355131f7d771517efb7f8da7fff"
+    )
+    assert hashlib.sha256(legacy_v5.read_bytes()).hexdigest() == (
+        "fd62739690c958465faaa1308c98cf13341becb49922cb536406cd5d23b40c55"
+    )
+    assert current.name == "activation-receipt-v6.json"
     assert load_provider_activation_receipt().status == "CURRENT"
 
     current_payload = json.loads(current.read_text(encoding="utf-8"))
-    assert current_payload["package_version"] == "0.5.0"
+    assert current_payload["package_version"] == "0.5.1"
     assert current_payload["qualified_source_exclusions"] == [FIXED_RECEIPT_REF]
     assert current_payload["generator_identity"] == GENERATOR_IDENTITY
 
@@ -883,6 +906,7 @@ class _Work:
     scope: _Scope = _Scope()
     budget: _Budget = _Budget()
     risk_profile: str = "G2"
+    status: str = "planned"
     execution_unit: ExecutionUnitV1 | None = None
 
 

@@ -1,10 +1,10 @@
 ---
 project_id: "meta-flow"
-release_scope: "meta-flow-0.5.0"
+release_scope: "meta-flow-0.5.1"
 release_artifact_profile: "full"
 release_decision: "READY"
 created_at: "2026-06-17T13:49:25+08:00"
-updated_at: "2026-08-13T00:00:00+08:00"
+updated_at: "2026-08-14T00:00:00+08:00"
 ---
 
 # Release Notes
@@ -34,6 +34,46 @@ updated_at: "2026-08-13T00:00:00+08:00"
 | 1.18-candidate | 2026-08-10 | host-orchestrator / meta-qa-critical | CR-069 有界执行控制内核：产品实现已作为 `4030ff1654d2e6f552f90bb6f23604117e41940d` 推送；CP7 技术验证 PASS，但 cost closure 为不可豁免 `FAIL`，因此发布就绪保持 `NOT_READY`。 |
 | 1.19 | 2026-08-13 | Codex | 将已验证的 provider 修复收敛为 `0.4.1`：补齐 typed check artifact、checkpoint successor、dispatch correction/closure、共享治理投影 lineage；轮换 activation receipt v2，并完成 targeted、compatibility、full、构建和安装 dry-run。 |
 | 1.20 | 2026-08-13 | Codex | 发布 `0.5.0`：统一 duplicate legacy generation 语义，增加 Work-init 持久事务与 native inspect/recover，并将 State/CURRENT/governance 一致性纳入成功门。 |
+| 1.21 | 2026-08-14 | Codex | 为 `0.5.0` provider 补充 typed `work publication-close`：精确解释暂停后受权 publication OID 前进，保持普通 resume fail-closed，并原子关闭 Work 与刷新治理/State 投影；轮换 activation receipt v3。 |
+| 1.22-candidate | 2026-08-14 | Codex | 扩展 `work publication-close` 的批量发布契约：新增 V2 exact path coverage、prior Work/PASS 归属、candidate-set digest、recovery Work pending scope 与仓外 authorization 防漂移，同时保留 V1 兼容。 |
+| 1.23-candidate | 2026-08-14 | Codex | 修复 execution-control repair 角色不可达与 usage hard-stop 丢事件：新增 single-use typed repair admission，保持全局 `repair_max=0` 和单 writer 上限；预算超限事件改为 append-first、executor fail-closed。 |
+| 1.24 | 2026-08-14 | Codex | 发布 `0.5.1`：收敛 publication-close V2、typed repair admission、usage append-first 与原生 Phase metadata 五目标事务；轮换 activation receipt v6，并完成双仓资格化。 |
+
+## 0.5.1 发布切片
+
+### 发布结论
+
+`0.5.1` 是用户指定的向后兼容 PATCH 发布。它不改写历史 Work、usage、HANDOFF、base OID 或 Phase 生命周期；新增的公共操作和 typed authorization 均保持 deny-default、plan/apply 分离与 fail-closed。用户已授权提交、推送并发布到 GitHub；不包含消费者项目安装、quant-lab 恢复或 Phase transition apply。
+
+| 项 | 结果 |
+|---|---|
+| 包版本真相 | `pyproject.toml`、`uv.lock`、`meta_flow.__version__`、provider migration contract 与 activation receipt v6 均为 `0.5.1` |
+| publication close | V1 支持单 Work 发布后关闭；V2 对跨 Work 批量发布提供无遗漏、无重复的 path coverage、prior Work/PASS owner、candidate-set 和 recovery Work pending scope 绑定 |
+| repair admission | 保持全局 `repair_max=0`；仅凭 single-use `RepairAdmissionAuthorizationV1` 对 blocked predecessor 开放一个 exact repair slot，active writer、OID、scope、blocker 或 expiry 漂移均阻断 |
+| usage append-first | 合法 hard-stop usage event 先在锁内幂等追加，再阻断后续 operation；scope、stale digest 和 telemetry 错误继续保持写前阻断 |
+| Phase metadata | 新增 `project.phase-metadata plan/apply/inspect/recover`，只允许追加 closed Work typed evidence 或 planned Phase governance baseline ref，并原子维护 Phase、baseline、STATE、STATE.md 与 CURRENT |
+| shared lineage | `project.phase-metadata` 成为 canonical successor；native mutation 被 close-inspect 接受，直接编辑 Phase 仍识别为外部漂移 |
+| provider qualification | 见 `docs/release/PROVIDER-QUALIFICATION-0.5.1.json` |
+
+### 验证摘要
+
+| 层 | 结果 |
+|---|---|
+| targeted | `436 passed` |
+| compatibility | `146 passed + 21 subtests` |
+| full | `2367 passed + 712 subtests` |
+| writer hard gate | `393/393 classified`、`30/30 dynamic allowlisted`、`0 ambiguous`、`0 unresolved unallowlisted` |
+| public operation registry | `32/32` documented/discovered |
+| governance ownership | `9/9` concepts、`48/48` consumers |
+| closure | Ruff、lock、delivery guardrail、双平台安装 dry-run、sdist/wheel、Meta Flow dogfood 均通过 |
+
+### 升级、兼容与回滚
+
+- 从 0.5.0 升级不需要批量改写消费者文件；重新安装 exact 0.5.1 provider 后按原 native plan/apply 继续。
+- 若存在 publication-close、Work-init 或 Phase metadata 的 `PREPARED`、`APPLYING`、`PARTIAL` 状态，必须先用同版本 inspect/recover 收敛，再升级或降级。
+- `project.phase-metadata` 是 result-ref append-only writer，不是通用 Phase 编辑器；不能修改 status、work refs、目标或退出条件。
+- 回滚到 0.5.0 前必须确认没有依赖 0.5.1 才能恢复的非终态事务；已提交的 terminal manifest 和 successor receipt 属于审计证据，不删除。
+- 本发布不上传 PyPI，不安装或修改 quant-lab 等消费者项目。
 
 ## 0.5.0 发布切片
 
@@ -49,16 +89,20 @@ updated_at: "2026-08-13T00:00:00+08:00"
 | Work-init transaction | `PREPARED → APPLYING → COMMITTED/RECOVERED/PARTIAL` 持久 manifest，绑定 OID、plan digest 和 exact target bytes/digests |
 | native recovery | 新增 `meta-flow work init-inspect` 与 `meta-flow work init-recover`，同时支持新事务和 0.4.1 legacy partial rollback |
 | consistency gate | 成功前验证 Project/Phase successor、State formal truth、CURRENT 与 governance baseline；失败时 exact rollback 或可恢复 PARTIAL |
+| publication close | 新增 `meta-flow work publication-close`；绑定 immutable HANDOFF、双仓 old/new OID、实时远端、提交/待提交路径、scope、result、plan/target preimage 与 typed authorization，不全局放开 `paused → completed` |
+| batch publication close | `WorkPublicationReceiptV2` 对跨 Work changed paths 做无遗漏、无重复覆盖；prior Work 必须 completed/PASS/scope 精确匹配，recovery Work 仅解释其 active scope 内 pending paths，authorization 强制放在双仓外 |
+| repair admission | 全局 `repair_max=0` 不变；只有 `RepairAdmissionAuthorizationV1` 对 exact blocked predecessor、root/slice、scope、blocker、OID、expiry 和 single-use claim 全部校验通过时，才允许一个 repair candidate；同 slice active writer 仍阻断，portable `REPAIR-ADMISSION.json` 随 Work-init 原子持久化 |
+| usage append-first | stage/total/governance hard-stop event 在锁内幂等追加后阻断 executor；scope、stale digest 与 telemetry failure 继续保持写前阻断 |
 | provider qualification | 见 `docs/release/PROVIDER-QUALIFICATION-0.5.0.json` |
 
 ### 验证摘要
 
 | 层 | 结果 |
 |---|---|
-| targeted | `99 passed` |
-| compatibility | `147 passed` |
-| full | `2317 passed + 712 subtests` |
-| writer hard gate | `386/386 classified`、`0 ambiguous`、`0 unresolved unallowlisted` |
+| targeted | `396 passed` |
+| compatibility | `222 passed + 21 subtests` |
+| full | `2355 passed + 712 subtests` |
+| writer hard gate | `393/393 classified`、`30/30 dynamic allowlisted`、`0 ambiguous`、`0 unresolved unallowlisted` |
 | consumer fixture | quant-lab 只读 inspect/recovery preview 为 `READY`，关键文件摘要前后不变 |
 | closure | Ruff、lock check、delivery guardrail、构建、安装 dry-run与 wheel 内容检查在发布前必须全部通过 |
 
@@ -67,6 +111,7 @@ updated_at: "2026-08-13T00:00:00+08:00"
 - 从 0.4.1 升级无需批量改写历史 close manifest；相同 after digest 的重复 legacy generation 会由 canonical evaluator 归一化。
 - 0.4.1 已留下的 Work-init `PARTIAL_MUTATION` 必须先运行 `work init-inspect`，再用返回的 exact plan digest 执行 `work init-recover --apply`；`RECOVERED` 后停止并重新 plan。
 - 已知 stale governance baseline 现在会使 Work-init plan 返回 `WORK_INIT_GOVERNANCE_PREFLIGHT_BLOCKED`，且 `mutation_count=0`。
+- Work 因受权 commit/push 暂停且双仓 OID 已合法前进时，不得覆盖旧 HANDOFF/base OID 或绕过 resume-check；单 Work 发布使用 `WorkPublicationReceiptV1`，跨 Work 批量发布使用带 exact path coverage 的 `WorkPublicationReceiptV2`，先执行 `work publication-close` 零写计划，再以仓外 `WorkPublicationCloseAuthorizationV1` apply。无 publication OID 变化时仍走普通 resume。
 - 回滚到 0.4.1 不会自动删除 0.5.0 transaction manifest；回滚前必须确认没有非终结 Work-init transaction。
 
 ## 0.4.1 发布切片

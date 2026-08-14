@@ -1156,6 +1156,7 @@ def _run_project(args: list[str]) -> None:
             "  query     Read at most five directly referenced Project/Phase/Work objects.\n"
             "  resolve-ref  Resolve one process/... logical ref through the vNext binding.\n"
             "  scaffold  Preview or apply process/project/PROJECT.current.json scaffold.\n"
+            "  phase-metadata  Plan/apply/inspect/recover one typed Phase result_refs append.\n"
             "  phase-transition  Plan/apply/inspect/recover one durable Project/Phase transition.\n"
             "  check     Validate vNext binding when present; otherwise validate legacy project governance.\n\n"
             "Examples:\n"
@@ -1169,6 +1170,7 @@ def _run_project(args: list[str]) -> None:
             "  meta-flow project resolve-ref --project-root . --logical-ref process/PROJECT.yaml --format json\n"
             "  meta-flow project scaffold --project-root .\n"
             "  meta-flow project scaffold --project-root . --apply\n"
+            "  meta-flow project phase-metadata plan --project-root . --project-id demo --work-id W1 --phase-ref process/phases/P1/PHASE.yaml --append-result-ref process/works/W0/EVIDENCE.json --scope-digest <sha256> --effective-at 2026-01-01T00:00:00Z\n"
             "  meta-flow project phase-transition plan --project-root . --project-id demo --from-phase-ref process/phases/P1/PHASE.yaml --to-phase-ref process/phases/P2/PHASE.yaml --closure-evidence-ref process/phases/P1/CLOSURE.json --effective-at 2026-01-01T00:00:00Z --immutable-commit-role release_input=release:<oid> --immutable-commit-role process_input=process:<oid>\n"
             "  meta-flow project check --project-root .\n"
         )
@@ -1207,6 +1209,10 @@ def _run_project(args: list[str]) -> None:
         from meta_flow.project import phase_transition
 
         raise SystemExit(phase_transition.main(forwarded))
+    if command == "phase-metadata":
+        from meta_flow.project import phase_metadata
+
+        raise SystemExit(phase_metadata.main(forwarded))
     if command == "check":
         parser = argparse.ArgumentParser(add_help=False)
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -1224,7 +1230,7 @@ def _run_project(args: list[str]) -> None:
 
         raise SystemExit(state.main(forwarded))
     raise SystemExit(
-        f"未知 project 命令: {command}. 目前支持: init, adopt, recover, status, query, resolve-ref, scaffold, phase-transition, check"
+        f"未知 project 命令: {command}. 目前支持: init, adopt, recover, status, query, resolve-ref, scaffold, phase-metadata, phase-transition, check"
     )
 
 

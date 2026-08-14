@@ -31,6 +31,12 @@ from meta_flow.work.lifecycle_transaction import (
     recover_work_close_transaction,
 )
 from meta_flow.work.model import build_work, load_work
+from meta_flow.work.publication_close import (
+    WorkPublicationCloseAuthorizationV1,
+    apply_work_publication_close,
+    plan_work_publication_close,
+    require_external_publication_authorization_path,
+)
 from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import HIGH_RISK_FIELDS, RiskFacts, classify_work
 from meta_flow.work.route_profile import RouteProfile, evaluate_route_profile
@@ -57,6 +63,7 @@ PUBLIC_OPERATION_DECLARATIONS = (
     ("work.close", ("meta-flow", "work", "close")),
     ("work.close-inspect", ("meta-flow", "work", "close-inspect")),
     ("work.close-recover", ("meta-flow", "work", "close-recover")),
+    ("work.publication-close", ("meta-flow", "work", "publication-close")),
     ("work.init-inspect", ("meta-flow", "work", "init-inspect")),
     ("work.init-recover", ("meta-flow", "work", "init-recover")),
     ("work.usage-plan", ("meta-flow", "work", "usage-plan")),
@@ -218,6 +225,7 @@ def init_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allowed-write", action="append", default=[])
     parser.add_argument("--required-check", action="append", default=[])
     parser.add_argument("--scope-version", type=int, default=1)
+    parser.add_argument("--repair-authorization", type=Path)
     parser.add_argument("--apply", action="store_true")
     _add_risk_arguments(parser)
     _add_route_arguments(parser)
@@ -264,6 +272,7 @@ def init_main(argv: list[str] | None = None) -> int:
         plan = plan_work_init_from_release_root(
             release_root,
             work,
+            repair_authorization_path=parsed.repair_authorization,
             human_design_gate_ref=parsed.human_design_gate_ref,
         )
     except (OSError, ValueError) as exc:
@@ -434,6 +443,70 @@ def transition_main(command: str, argv: list[str] | None = None) -> int:
         )
     )
     return 0
+
+
+def publication_close_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work publication-close")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--work-id", required=True)
+    parser.add_argument("--result-ref", required=True)
+    parser.add_argument("--publication-receipt-ref", required=True)
+    parser.add_argument("--authorization", type=Path)
+    parser.add_argument("--apply", action="store_true")
+    parsed = parser.parse_args(argv or [])
+    try:
+        authorization_path: Path | None = None
+        if parsed.apply:
+            if parsed.authorization is None:
+                raise ValueError("Work publication-close --apply requires --authorization")
+            authorization_path = require_external_publication_authorization_path(
+                parsed.project_root,
+                parsed.authorization,
+            )
+        plan = plan_work_publication_close(
+            parsed.project_root,
+            parsed.work_id,
+            result_ref=parsed.result_ref,
+            publication_receipt_ref=parsed.publication_receipt_ref,
+        )
+        if not parsed.apply:
+            print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if plan.ready else 1
+        assert authorization_path is not None
+        authorization_payload = json.loads(authorization_path.read_text(encoding="utf-8"))
+        if not isinstance(authorization_payload, dict):
+            raise ValueError("Work publication-close authorization must be a JSON object")
+        authorization = WorkPublicationCloseAuthorizationV1.from_mapping(
+            authorization_payload
+        )
+        receipt = apply_work_publication_close(
+            parsed.project_root,
+            plan,
+            authorization,
+        )
+        payload = {
+            **receipt.as_dict(),
+            "operation": "work.publication-close",
+            "status": (
+                load_work(
+                    require_process_route(parsed.project_root.resolve()).process_root,
+                    parsed.work_id,
+                ).status
+                if receipt.decision == "PASS"
+                else ""
+            ),
+        }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if receipt.decision == "PASS" else 1
 
 
 def review_plan_main(argv: list[str] | None = None) -> int:
@@ -930,6 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
             "  resume    Resume a paused Work.\n"
             "  block     Mark an active Work blocked.\n"
             "  close     Atomically close Work/Project/Phase and refresh active governance baseline.\n"
+            "  publication-close Close a paused Work after exact authorized publication OID changes.\n"
             "  close-inspect Inspect Work close manifests, locks and lineage head generations.\n"
             "  close-recover Recover one consumed Work close authorization by exact manifest.\n"
             "  usage-plan Build a zero-write 60/80/100 stage-aware usage admission plan.\n"
@@ -954,6 +1028,8 @@ def main(argv: list[str] | None = None) -> int:
         return init_recover_main(forwarded)
     if command in {"start", "pause", "resume", "block", "close"}:
         return transition_main(command, forwarded)
+    if command == "publication-close":
+        return publication_close_main(forwarded)
     if command == "close-inspect":
         return close_inspect_main(forwarded)
     if command == "close-recover":
@@ -979,5 +1055,5 @@ def main(argv: list[str] | None = None) -> int:
     if command == "check":
         return check_main(forwarded)
     raise SystemExit(
-        f"未知 work 命令: {command}. 目前支持: classify, init, init-inspect, init-recover, start, pause, resume, block, close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
+        f"未知 work 命令: {command}. 目前支持: classify, init, init-inspect, init-recover, start, pause, resume, block, close, publication-close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
     )

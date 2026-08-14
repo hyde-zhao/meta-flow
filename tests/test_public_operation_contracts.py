@@ -600,7 +600,7 @@ def semantic_case(identifier: str, positive: str, negative: str) -> dict[str, st
     }
 
 
-# 显式 registry 让 pytest 收集 31 个唯一 param-id；每个 ID 绑定真实 node 与具体正/负断言，
+# 显式 registry 让 pytest 收集唯一 param-id；每个 ID 绑定真实 node 与具体正/负断言，
 # 不再从 ID 字符串自动生成伪语义 metadata。
 A3_SEMANTIC_CASES = (
     semantic_case("P02-TC-01", "closed authorization accepted", "escape ref/digest mismatch blocked"),
@@ -2276,13 +2276,13 @@ class PublicOperationContractTests(unittest.TestCase):
         self.assertEqual("PASS", result["decision"], result["errors"])
         self.assertEqual(3, result["schema_version"])
         self.assertEqual("PublicOperationRegistryCheckV3", result["kind"])
-        self.assertEqual(30, result["documented_operation_count"])
+        self.assertEqual(32, result["documented_operation_count"])
         self.assertEqual([], result["undocumented_public_operations"])
         self.assertEqual([], result["unknown_registry_operations"])
         self.assertEqual(6, result["l3_journey_count"])
         self.assertTrue(all(item["discovered"] for item in result["console_results"]))
         self.assertEqual("package-source-declarations-v1", result["discovery"]["mode"])
-        self.assertEqual(30, result["discovery"]["discovered_operation_count"])
+        self.assertEqual(32, result["discovery"]["discovered_operation_count"])
         self.assertEqual("PASS", result["governed_cli_reverse_coverage"]["status"])
         self.assertEqual(1, result["governed_cli_reverse_coverage"]["entry_count"])
         self.assertEqual(

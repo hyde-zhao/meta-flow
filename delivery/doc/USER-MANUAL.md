@@ -159,7 +159,59 @@ meta-flow work init-recover --project-root <release-root> --work-id <work-id> \
 
 若某个 Work 是由旧版本完成、其 Phase result ref 已存在但 baseline 尚未同步，可对同一终态 Work 重新生成 close plan。计划只包含 stale baseline target，并需绑定该计划的新 `WorkCloseAuthorizationV1`；apply 不会重写 Work、Project 或 Phase，也不应删除历史 manifest。
 
-### 0.4 Project / Phase 原生转换
+### 0.4 Phase 元数据原生追加
+
+已有关闭 Work 的机器 evidence 或下一 planned Phase 的治理基线声明，不得直接编辑
+`PHASE.yaml`。使用五目标 typed 事务追加 `result_refs`：目标 Phase、治理基线、
+`STATE.current.json`、`STATE.md` 与 `CURRENT.json` 要么一起收敛，要么恢复 exact
+preimage。
+
+```bash
+meta-flow project phase-metadata plan \
+  --project-root . \
+  --project-id <project-id> \
+  --work-id <active-authorizing-work-id> \
+  --phase-ref process/phases/<phase>/PHASE.yaml \
+  --append-result-ref process/works/<closed-work-id>/<evidence>.json \
+  --scope-digest <authorizing-work-scope-sha256> \
+  --effective-at <ISO-8601-with-timezone>
+```
+
+计划只接受两类 ref：由同一 Phase 下 `completed` Work 拥有、位于该 Work
+`allowed_writes` 的机器证据；或为 planned Phase 声明 canonical
+`governance/GOVERNANCE-BASELINE.json`。未知类型、跨 Phase owner、未终态 owner、
+scope 外 evidence 均在计划阶段 `BLOCKED`、零写入。重复追加返回 `NOOP`，保持全部
+目标 exact bytes。
+
+apply 使用位于 release/process 两仓之外的 `PhaseMetadataAuthorizationV1`；授权必须
+绑定 project/work/Phase、append refs、scope digest、计划摘要、目标集合及 preimage、
+双仓 OID、完整 repository facts digest 和过期时间：
+
+```bash
+meta-flow project phase-metadata apply \
+  --project-root . \
+  --project-id <project-id> \
+  --work-id <active-authorizing-work-id> \
+  --phase-ref process/phases/<phase>/PHASE.yaml \
+  --append-result-ref process/works/<closed-work-id>/<evidence>.json \
+  --scope-digest <authorizing-work-scope-sha256> \
+  --effective-at <ISO-8601-with-timezone> \
+  --authorization /tmp/phase-metadata-authorization.json
+```
+
+中断后必须先检查或恢复；`PARTIAL`/`RECOVERED` 当轮停止并重新 plan：
+
+```bash
+meta-flow project phase-metadata inspect --project-root . --project-id <project-id>
+meta-flow project phase-metadata recover --project-root . --project-id <project-id>
+```
+
+该事务只拥有 `result_refs` 去重追加，不是通用 Phase 编辑器；它不能修改 Phase
+status、work refs、目标或退出条件，也不能替代当前 Work 自己的 native close/result
+合同。成功 apply 会登记 `project.phase-metadata` shared-projection successor，因而
+`work close-inspect` 接受该合法 generation；直接编辑相同 Phase 仍会被识别为外部漂移。
+
+### 0.5 Project / Phase 原生转换
 
 Phase 完成与下一 Phase 激活必须使用同一份七目标事务计划，不能依次手工修改 `PHASE.yaml`、`PROJECT.yaml`、治理基线与 State 投影。计划要求：from/to Phase 都由 Roadmap 声明；from Phase 的 Work 已终态；closure evidence 已由 from Phase 声明并存在于 process HEAD；to Phase 已声明 `governance/GOVERNANCE-BASELINE.json`；State v2 已初始化；全部事务目标路径无本地漂移。
 
@@ -232,6 +284,75 @@ meta-flow work pause --project-root . --work-id W-001
 meta-flow work resume-check --project-root . --work-id W-001
 meta-flow work resume --project-root . --work-id W-001
 ```
+
+如果 Work 为完成受权 Git publication 而暂停，且 publication 已使 release/process OID
+合法前进，普通 `resume-check` 必须继续按原 HANDOFF fail-closed。不得覆盖 HANDOFF、
+`base_oids`、USAGE 或全局放开 `paused → completed`；改用专用零写计划：
+
+```bash
+meta-flow work publication-close \
+  --project-root . \
+  --work-id W-001 \
+  --result-ref process/works/W-001/RESULT.json \
+  --publication-receipt-ref process/works/W-001/PUBLICATION-RECEIPT.json
+```
+
+单 Work 直接发布时，`PUBLICATION-RECEIPT.json` 可以使用闭合的
+`WorkPublicationReceiptV1`：顶层精确包含
+`schema_version/kind/decision/project_id/work_id/scope_digest/result_ref/repositories`；
+`repositories` 精确包含 `release` 与 `process`。每个仓记录暂停 OID、发布 OID、
+remote/ref、从暂停到发布提交实际改变的 `changed_paths`、当前未提交的
+`pending_paths`，以及 commit/push typed authorization ID。OID 未变化的仓不得伪造
+changed path 或 authorization ID；OID 变化的仓三者必须非空。路径列表必须排序且去重。
+
+多个前序 Work 的合法变更被一次 commit/push 发布时，必须改用
+`WorkPublicationReceiptV2`。V2 在顶层增加 `recovery_work`，并要求每个 repository 增加
+`path_coverage`。`changed_paths` 必须被 coverage records 无遗漏、无重复地精确分区：
+
+- `prior_work` 覆盖记录绑定 `paths/owner_work_ref/owner_scope_digest/owner_result_ref`，并
+  声明 `owner_terminal_status=completed`。plan 会实时核对 owner Work 为 completed、result
+  是精确三字段 PASS、scope digest 未漂移，且每个路径确实位于该 Work 的写范围内。
+- `typed_candidate_set_authorization` 覆盖记录绑定 `paths/candidate_set_digest` 与仓级
+  commit/push authorization IDs。digest 使用
+  `publication_candidate_set_digest()` 的 canonical payload，精确包含仓角色、暂停/发布
+  OID、路径集和 authorization IDs；任一不一致均零写入 BLOCKED。
+
+若关闭恢复过程产生了新的 pending evidence，V2 可声明一个 `recovery_work`：
+`work_ref/scope_digest/required_status`，其中状态只能是 `active`。所有当前 pending paths
+必须逐项由原 Work scope、该 recovery Work scope 或本次原生 close target 解释；声明
+recovery Work 不会扩大到任意 dirty path，也不会改变原 Work 的 scope、HANDOFF、base OID
+或 usage 历史。
+
+计划会重新核对：HANDOFF identity/scope/OID、本地 HEAD、upstream、实时远端、暂停
+OID 到发布 OID 的 ancestry、Git committed/pending inventory、Work deny-default scope、
+精确 PASS result，以及普通 Work-close 的全部 target preimage/lineage。V2 还会把
+prior Work/result/recovery Work 的实时摘要和路径覆盖结论纳入
+`repository_facts_digest`，因此 apply fresh-plan 能识别证据漂移。至少一个仓必须发生
+可解释的 OID 变化；无变化时仍使用普通 resume。
+
+apply authorization 文件必须放在 release 与 process 两个仓库之外。CLI 会在读取和
+fresh-plan 前拒绝任何仓内路径（包括经 symlink 解析后落入仓内的路径）；因此无需、也
+不得在过程仓创建空 `CLOSE-AUTHORIZATION.json` 占位文件。推荐使用权限受控的临时目录
+或外部授权目录，例如 `/tmp/<work-id>-publication-close-authorization.json`。
+
+apply 只接受 `WorkPublicationCloseAuthorizationV1`，其字段精确绑定
+`work_id/plan_digest/target_refs/scope_digest/result_ref`、HANDOFF ref/digest、publication
+receipt ref/digest、repository facts digest、暂停/发布 OID、有效期和 `single_use=true`：
+
+```bash
+meta-flow work publication-close \
+  --project-root . \
+  --work-id W-001 \
+  --result-ref process/works/W-001/RESULT.json \
+  --publication-receipt-ref process/works/W-001/PUBLICATION-RECEIPT.json \
+  --authorization /tmp/W-001-publication-close-authorization.json \
+  --apply
+```
+
+成功复用 Work-close 持久事务，原子更新 Work、Project、active Phase、治理基线以及已
+初始化的 State/CURRENT；`close-inspect` 与 `close-recover` 同样适用。若 apply 返回
+`RECOVERED` 或 `PARTIAL`，必须停止并按现有 close recovery 协议处理，不能继续下一个
+Work 或 Phase transition。
 
 | 档位 | 资源硬上限 | 默认流程 |
 |---|---|---|
@@ -1150,10 +1271,56 @@ share 向下取整，非零总预算的阶段最小配额为 1。准入只在 pr
 上限或总上限时返回 `BLOCKED`；恰好消费最后一个合法单位会返回可执行的 `REVIEW`，并以
 `post_action=PAUSE_AFTER_EXECUTION` 提示本次操作完成后暂停。达到 60% 返回
 `REVIEW_AFTER_EXECUTION`，达到 80% 返回 `PAUSE_AFTER_EXECUTION`，都不会在操作前拒绝
-仍处于上限内的事件；下一次造成超限的事件才会在写入前被拒绝。`usage-add` 会在锁内重算
-阶段与总量，并拒绝 stale admission digest；token 无法测量时始终在写入前阻断。路径统计
+仍处于上限内的事件。下一次造成超限的事件会先以同一 `event_id` 幂等追加到 usage ledger，
+再阻断受控 executor 和后续 domain mutation；这样 hard-stop 尝试本身可审计，但不会被当成
+已执行的业务动作。scope 越界、stale permit / admission digest 与 token 无法测量仍在 usage
+写入前 fail-closed。`usage-add` 会在 single-writer lock 内重算阶段与总量；重复提交完全相同
+的 blocked event 返回 `NO_CHANGE_AND_BLOCKED`，不会追加第二条。路径统计
 必须看 `changed_leaf_path_count` 和 `changed_leaf_paths`；终端中折叠显示的一条未跟踪目录
 只用于 UI，不能代表一个实际文件。
+
+`--execution-container-role repair` 默认仍不可达，`ContainerBudgetV1.policy_v1()` 的
+`repair_max` 保持为 0。只有 `work init --repair-authorization <external-json>` 提供 closed
+`RepairAdmissionAuthorizationV1` 时，planner 才可为授权绑定的 exact root/slice 临时启用一个
+repair slot。授权必须绑定 candidate/predecessor Work、project、root/slice、双方 scope digest、
+blocked predecessor、`WorkBlockerEvidenceV1` 的原始摘要与语义 fingerprint、双仓 HEAD OID、
+带时区 expiry 和 `single_use=true`；apply 在 admission lock 内重新加载并 CAS，随后在 process
+Git common-dir 中 create-only 消费 authorization ID，并在同一 Work-init 事务创建
+`process/works/<candidate>/REPAIR-ADMISSION.json`。前者只承担本机 single-use 排他 claim，
+后者是可提交、可跨 clone 审计的 portable binding；后续准入按 Project 的 exact Work inventory
+逐项读取 binding，不做目录发现。前序 Work 为 active、同 root/slice 存在其他 active writer、
+任一 scope/OID/blocker/auth 漂移、授权过期或重放、已有 repair Work 缺失或篡改 portable
+binding 时，Work/Project/Phase 均保持零 domain mutation。该能力不允许改写 predecessor 的
+budget、usage、scope、base OID、HANDOFF 或生命周期历史。
+
+授权文件是 closed JSON；`predecessor_blocker_fingerprint` 必须按 provider 的
+`repair_blocker_fingerprint()` 对列出的六项 blocker 事实计算，不能手写任意摘要：
+
+```json
+{
+  "schema_version": 1,
+  "kind": "RepairAdmissionAuthorizationV1",
+  "authorization_id": "AUTH-REPAIR-001",
+  "authorization_source": "typed-user-confirmation",
+  "project_id": "demo",
+  "candidate_work_id": "W-REPAIR",
+  "predecessor_work_id": "W-PRIMARY",
+  "root_concept": "governance-recovery",
+  "slice_id": "close-recovery",
+  "predecessor_scope_digest": "<sha256>",
+  "predecessor_status": "blocked",
+  "predecessor_blocker_category": "usage-hard-stop",
+  "predecessor_blocker_code": "USAGE_HARD_STOP_100_PERCENT",
+  "predecessor_blocker_ref": "works/W-PRIMARY/BLOCKER.json",
+  "predecessor_blocker_digest": "<sha256-of-exact-bytes>",
+  "predecessor_blocker_fingerprint": "<sha256>",
+  "candidate_scope_digest": "<sha256>",
+  "release_oid": "<40-hex-oid>",
+  "process_oid": "<40-hex-oid>",
+  "expires_at": "2099-01-01T00:00:00+00:00",
+  "single_use": true
+}
+```
 
 CP6 / CP8 前的 cost closure 必须同时满足：阶段 coverage=100%、当前 token proxy 未超过
 批准上限、去重后的 gate interaction 未超过批准上限、unknown leaf paths=0。历史

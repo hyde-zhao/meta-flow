@@ -33,7 +33,7 @@ def digest(value: str) -> str:
 def source_identity() -> dict[str, str]:
     return {
         "source": "meta-flow-delivery",
-        "version": "0.5.0",
+        "version": "0.5.1",
         "oid": "a" * 40,
         "delivery_tree_digest": "b" * 64,
         "rules_source_digest": "c" * 64,
@@ -109,7 +109,7 @@ def manifest(entries: list[dict[str, object]] | None = None) -> dict[str, object
             "platform": "codex",
             "scope": "project",
             "component_set": ["agents", "skills"],
-            "source_version": "0.5.0",
+            "source_version": "0.5.1",
             "source_oid": "a" * 40,
             "target_digest": digest("target"),
             "facts_digest": digest("facts"),

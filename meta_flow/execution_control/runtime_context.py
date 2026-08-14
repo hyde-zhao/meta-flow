@@ -67,6 +67,9 @@ class ActiveExecutionInventoryV1:
     object_count: int
     objects_read: int
     inventory_digest: str
+    active_writer_count: int
+    active_writer_slices: tuple[tuple[str, str], ...]
+    untyped_active_writer_count: int
     mutation_count: int = 0
 
 
@@ -83,39 +86,58 @@ def project_active_execution_inventory(
     refs = tuple(project.active_work_refs)
     if len(refs) != len(set(refs)):
         return ActiveExecutionInventoryV1(
-            "BLOCKED", ("ACTIVE_INVENTORY_DUPLICATE_REF",), refs, (), (), 0, 0, _digest([])
+            "BLOCKED", ("ACTIVE_INVENTORY_DUPLICATE_REF",), refs, (), (), 0, 0, _digest([]), 0, (), 0
         )
     if len(refs) > max_objects:
         return ActiveExecutionInventoryV1(
-            "BLOCKED", ("ACTIVE_INVENTORY_BUDGET_EXCEEDED",), refs, (), (), 0, 0, _digest([])
+            "BLOCKED", ("ACTIVE_INVENTORY_BUDGET_EXCEEDED",), refs, (), (), 0, 0, _digest([]), 0, (), 0
         )
     units: list[ExecutionUnitV1] = []
     typed_refs: list[tuple[str, ExecutionUnitV1]] = []
     legacy_refs: list[str] = []
     objects_read = 0
+    active_writer_count = 0
+    active_writer_slices: list[tuple[str, str]] = []
+    untyped_active_writer_count = 0
     for ref in refs:
         try:
             work_id = _safe_work_id(ref)
         except ValueError:
             return ActiveExecutionInventoryV1(
-                "BLOCKED", ("ACTIVE_INVENTORY_UNSAFE_REF",), refs, (), (), 0, objects_read, _digest([])
+                "BLOCKED", ("ACTIVE_INVENTORY_UNSAFE_REF",), refs, (), (), 0, objects_read, _digest([]), 0, (), 0
             )
         try:
             work = load_work(process_root, work_id)
             objects_read += 1
         except (OSError, ValueError, KeyError):
             return ActiveExecutionInventoryV1(
-                "BLOCKED", ("ACTIVE_INVENTORY_DANGLING_REF",), refs, (), (), 0, objects_read, _digest([])
+                "BLOCKED", ("ACTIVE_INVENTORY_DANGLING_REF",), refs, (), (), 0, objects_read, _digest([]), 0, (), 0
             )
         if work.work_ref != ref:
             return ActiveExecutionInventoryV1(
-                "BLOCKED", ("ACTIVE_INVENTORY_REF_MISMATCH",), refs, (), (), 0, objects_read, _digest([])
+                "BLOCKED", ("ACTIVE_INVENTORY_REF_MISMATCH",), refs, (), (), 0, objects_read, _digest([]), 0, (), 0
             )
+        active_writer = work.status in {
+            "active",
+            "ready_for_review",
+            "ready_for_verification",
+        }
+        if active_writer:
+            active_writer_count += 1
         if work.execution_unit is not None:
             units.append(work.execution_unit)
             typed_refs.append((ref, work.execution_unit))
+            if active_writer:
+                active_writer_slices.append(
+                    (
+                        work.execution_unit.root_concept,
+                        work.execution_unit.slice_id,
+                    )
+                )
         else:
             legacy_refs.append(ref)
+            if active_writer:
+                untyped_active_writer_count += 1
     normalized = tuple(sorted(units, key=lambda item: item.unit_id))
     normalized_typed = tuple(sorted(typed_refs, key=lambda item: item[0]))
     normalized_legacy = tuple(sorted(legacy_refs))
@@ -133,6 +155,9 @@ def project_active_execution_inventory(
                 "legacy_refs": normalized_legacy,
             }
         ),
+        active_writer_count,
+        tuple(sorted(active_writer_slices)),
+        untyped_active_writer_count,
     )
 
 

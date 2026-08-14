@@ -333,7 +333,7 @@ def test_repository_profile_is_the_r5_source_bounded_gate() -> None:
 
     assert report["decision"] == "PASS"
     assert report["concept_coverage"]["discovered"] == 9
-    assert report["consumer_coverage"]["discovered"] == 46
+    assert report["consumer_coverage"]["discovered"] == 48
     assert report["outcome_candidate_dispositions"]["candidate_count"] == 66
     assert report["outcome_candidate_dispositions"]["disposed_count"] == 66
     assert report["detector"]["source_types"] == list(

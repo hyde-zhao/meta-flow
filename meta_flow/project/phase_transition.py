@@ -308,6 +308,14 @@ def plan_phase_transition(
     release = release_root.resolve()
     process = process_root.resolve()
     errors: list[str] = []
+    try:
+        from meta_flow.work.lifecycle_transaction import (
+            assert_work_close_shared_projection_lineage,
+        )
+
+        assert_work_close_shared_projection_lineage(process)
+    except (OSError, ValueError) as exc:
+        errors.append(str(exc))
     roles, role_errors = _normalize_immutable_commit_roles(immutable_commit_roles)
     errors.extend(role_errors)
     release_oid = _head_oid(release, repository="release", errors=errors)

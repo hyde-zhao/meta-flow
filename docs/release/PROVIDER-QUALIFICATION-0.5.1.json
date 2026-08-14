@@ -1,0 +1,186 @@
+{
+  "kind": "ProviderReleaseQualificationEvidenceV1",
+  "layers": {
+    "candidate_closure": {
+      "command": {
+        "commands": [
+          "uv run --frozen --python 3.11 ruff check .",
+          "uv lock --check",
+          "uv run --frozen --python 3.11 python scripts/check_delivery_guardrails.py",
+          "meta-flow check governance-ownership --project-root <release-root> --format json",
+          "meta-flow check detector-qualification --project-root <release-root>",
+          "meta-flow install codex --scope project --component full --project-dir <isolated-target> --dry-run",
+          "meta-flow install claude --scope project --component full --project-dir <isolated-target> --dry-run",
+          "uv build",
+          "wheel metadata/content inspection"
+        ]
+      },
+      "profile": {
+        "name": "provider-lifecycle-and-phase-metadata-release-closure-0.5.1-v1",
+        "scope": [
+          "ruff and lock consistency",
+          "delivery guardrail and writer qualification",
+          "Codex project and CLI installation dry-run",
+          "sdist/wheel build and metadata inspection"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_closure",
+        "package_version": "0.5.1",
+        "provider_source_set_digest": "e49dff05e1fca4dc4a033365775bdd3c716e5761498f7b185098ee883a9ae48b",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "Ruff, lock check, delivery guardrail, writer detector, governance ownership, Meta Flow dogfood project/close checks, Codex and Claude installation dry-runs, build and wheel v1-v6 receipt/content inspection passed",
+        "warnings": [
+          "setuptools emitted existing namespace-package discovery warnings; expected 0.5.1 metadata and delivery assets were verified in the wheel"
+        ]
+      }
+    },
+    "candidate_compatibility": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "tests/test_core_lifecycle_dogfood.py",
+          "tests/test_governance_projection.py",
+          "tests/test_state_projection_transaction.py",
+          "tests/test_state_formal_projection.py",
+          "tests/test_vnext_repository_publisher.py",
+          "tests/test_cr_lifecycle.py",
+          "tests/test_cr120_cr_tracking_row_convention.py",
+          "tests/test_vnext_process_routing.py"
+        ],
+        "environment": {
+          "PYTEST_ADDOPTS": "-p no:cacheprovider",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
+      },
+      "profile": {
+        "name": "provider-lifecycle-and-routing-compatibility-0.5.1-v1",
+        "scope": [
+          "core lifecycle dogfood",
+          "governance and State projection",
+          "State/CURRENT projection",
+          "repository publication, CR tracking and sibling-binding routing"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_compatibility",
+        "package_version": "0.5.1",
+        "provider_source_set_digest": "e49dff05e1fca4dc4a033365775bdd3c716e5761498f7b185098ee883a9ae48b",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "146 passed, 21 subtests passed"
+      }
+    },
+    "candidate_full": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q"
+        ],
+        "environment": {
+          "PYTEST_ADDOPTS": "-p no:cacheprovider",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
+      },
+      "profile": {
+        "name": "repository-full-0.5.1-v1",
+        "scope": [
+          "all Meta Flow tests and subtests"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_full",
+        "package_version": "0.5.1",
+        "provider_source_set_digest": "e49dff05e1fca4dc4a033365775bdd3c716e5761498f7b185098ee883a9ae48b",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "2367 passed, 712 subtests passed"
+      }
+    },
+    "candidate_targeted": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "tests/test_phase_metadata.py",
+          "tests/test_work_publication_close.py",
+          "tests/test_execution_control_admission.py",
+          "tests/test_execution_control_migration.py",
+          "tests/test_vnext_work_store_cli.py",
+          "tests/test_vnext_work_usage.py",
+          "tests/test_work_lifecycle_transaction.py",
+          "tests/test_phase_transition.py",
+          "tests/test_public_operation_contracts.py",
+          "tests/test_governance_ownership.py",
+          "tests/test_detector_qualification.py"
+        ],
+        "environment": {
+          "PYTEST_ADDOPTS": "-p no:cacheprovider",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        }
+      },
+      "profile": {
+        "name": "provider-lifecycle-and-phase-metadata-targeted-0.5.1-v1",
+        "scope": [
+          "repair authorization schema, blocker fingerprint and exact root/slice scope",
+          "global repair_max remains closed without typed single-use authorization",
+          "Work-init plan/apply CAS, native start and portable REPAIR-ADMISSION binding",
+          "active writer, expiry, replay, scope, OID, blocker and binding drift fail closed",
+          "usage hard-stop append-first with stale/scope/telemetry prewrite rejection",
+          "publication-close exact coverage and paused publication completion",
+          "Phase result_refs native plan/apply/inspect/recover with projection lineage",
+          "provider receipt v6, public operations and writer qualification"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_targeted",
+        "package_version": "0.5.1",
+        "provider_source_set_digest": "e49dff05e1fca4dc4a033365775bdd3c716e5761498f7b185098ee883a9ae48b",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "436 passed"
+      }
+    }
+  },
+  "package_name": "meta-flow",
+  "package_version": "0.5.1",
+  "qualified_at": "2026-08-14",
+  "schema_version": 1
+}
