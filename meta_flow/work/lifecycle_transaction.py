@@ -771,12 +771,7 @@ def release_shared_projection_writer_lock(
     """释放共享投影 writer 锁，并校验 capability 身份未漂移。"""
 
     _safe_authorization_id(writer_id)
-    if handle.stream.closed or handle.path.is_symlink() or not handle.path.is_file():
-        raise ValueError("shared projection writer lock ownership is unsafe")
-    path_stat = handle.path.stat()
-    handle_stat = os.fstat(handle.stream.fileno())
-    if (path_stat.st_dev, path_stat.st_ino) != (handle_stat.st_dev, handle_stat.st_ino):
-        raise ValueError("shared projection writer lock identity drifted")
+    validate_shared_projection_writer_lock(handle)
     try:
         if fcntl is not None:
             fcntl.flock(handle.stream.fileno(), fcntl.LOCK_UN)
@@ -785,6 +780,26 @@ def release_shared_projection_writer_lock(
             msvcrt.locking(handle.stream.fileno(), msvcrt.LK_UNLCK, 1)
     finally:
         handle.stream.close()
+
+
+def validate_shared_projection_writer_lock(
+    handle: SharedProjectionWriterLock,
+    *,
+    expected_path: Path | None = None,
+) -> None:
+    """验证共享 writer 的活跃 advisory-lock capability，不释放锁。"""
+
+    if expected_path is not None and handle.path.absolute() != expected_path.absolute():
+        raise ValueError("shared projection writer lock path differs from the expected lock")
+    if handle.stream.closed or handle.path.is_symlink() or not handle.path.is_file():
+        raise ValueError("shared projection writer lock ownership is unsafe")
+    try:
+        path_stat = handle.path.stat()
+        handle_stat = os.fstat(handle.stream.fileno())
+    except OSError as exc:
+        raise ValueError("shared projection writer lock ownership is unsafe") from exc
+    if (path_stat.st_dev, path_stat.st_ino) != (handle_stat.st_dev, handle_stat.st_ino):
+        raise ValueError("shared projection writer lock identity drifted")
 
 
 def _is_shared_projection_ref(ref: str) -> bool:
@@ -1209,6 +1224,8 @@ def _rollback(root: Path, manifest: dict[str, Any]) -> tuple[bool, list[str]]:
 def _lineage_generation_errors(
     root: Path,
     manifests: list[Mapping[str, Any]],
+    *,
+    state_lock_handle: Any | None = None,
 ) -> list[str]:
     """只把共享投影的 lineage head 与当前 generation 比较。
 
@@ -1313,7 +1330,8 @@ def _lineage_generation_errors(
 
                         state_projection_current = (
                             inspect_state_projection_transaction(
-                                _release_root_from_process(root)
+                                _release_root_from_process(root),
+                                _lock_handle=state_lock_handle,
                             )["decision"]
                             == "PASS"
                         )
@@ -1328,11 +1346,30 @@ def _lineage_generation_errors(
     return errors
 
 
-def assert_work_close_shared_projection_lineage(process_root: Path) -> None:
+def assert_work_close_shared_projection_lineage(
+    process_root: Path,
+    *,
+    _state_lock_handle: Any | None = None,
+) -> None:
     """供其他 native writer 在修改共享 Project/Phase 前验证 close lineage。"""
 
     root = process_root.resolve()
-    errors = _lineage_generation_errors(root, _load_terminal_manifests(root))
+    if _state_lock_handle is not None:
+        from meta_flow.state.projection_transaction import (
+            state_projection_lock_path,
+            transaction_lock_identity,
+            validate_transaction_lock,
+        )
+
+        expected_path = state_projection_lock_path(_release_root_from_process(root))
+        validate_transaction_lock(_state_lock_handle, expected_path=expected_path)
+        if transaction_lock_identity(expected_path) != _state_lock_handle.transaction_id:
+            raise ValueError("state projection writer lock capability identity drifted")
+    errors = _lineage_generation_errors(
+        root,
+        _load_terminal_manifests(root),
+        state_lock_handle=_state_lock_handle,
+    )
     if errors:
         raise ValueError("; ".join(errors))
 
@@ -1902,4 +1939,5 @@ __all__ = [
     "recover_work_close_transaction",
     "release_shared_projection_writer_lock",
     "shared_projection_successor_for_writer",
+    "validate_shared_projection_writer_lock",
 ]

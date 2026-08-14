@@ -49,10 +49,13 @@ from meta_flow.state.projection_transaction import (
     validate_transaction_lock,
 )
 from meta_flow.work.lifecycle_transaction import (
+    SHARED_WRITER_LOCK_REL,
+    SharedProjectionWriterLock,
     acquire_shared_projection_writer_lock,
     discard_shared_projection_successor,
     record_shared_projection_successor,
     release_shared_projection_writer_lock,
+    validate_shared_projection_writer_lock,
 )
 
 PUBLIC_OPERATION_DECLARATIONS = (
@@ -92,6 +95,16 @@ class PhaseTransitionPartialError(RuntimeError):
     def __init__(self, result: Mapping[str, Any]) -> None:
         super().__init__("Phase transition entered PARTIAL")
         self.result = dict(result)
+
+
+@dataclass(frozen=True)
+class _PhaseTransitionLockCapability:
+    """仅供持有本次三重 writer lock 的锁内重规划使用。"""
+
+    transaction_id: str
+    shared_writer_handle: SharedProjectionWriterLock
+    state_lock_handle: TransactionLockHandle
+    phase_lock_handle: TransactionLockHandle
 
 
 def _digest(value: bytes | None) -> str:
@@ -302,18 +315,40 @@ def plan_phase_transition(
     | list[ImmutableCommitRole]
     | tuple[dict[str, Any], ...]
     | list[dict[str, Any]],
+    _ignore_transaction_locks: bool = False,
+    _transaction_lock_capability: _PhaseTransitionLockCapability | None = None,
 ) -> PhaseTransitionPlan:
     """构造全部 post-image；此函数不得写入 release/process 工作树。"""
 
     release = release_root.resolve()
     process = process_root.resolve()
     errors: list[str] = []
+    state_lock_handle: TransactionLockHandle | None = None
+    if _ignore_transaction_locks:
+        try:
+            if _transaction_lock_capability is None:
+                raise ValueError(
+                    "Phase transition locked replan requires an exact lock capability"
+                )
+            _validate_locked_replan_capability(
+                release,
+                process,
+                _transaction_lock_capability,
+            )
+            state_lock_handle = _transaction_lock_capability.state_lock_handle
+        except (OSError, ValueError) as exc:
+            errors.append(str(exc))
+    elif _transaction_lock_capability is not None:
+        errors.append("Phase transition lock capability is only valid for locked replan")
     try:
         from meta_flow.work.lifecycle_transaction import (
             assert_work_close_shared_projection_lineage,
         )
 
-        assert_work_close_shared_projection_lineage(process)
+        assert_work_close_shared_projection_lineage(
+            process,
+            _state_lock_handle=state_lock_handle,
+        )
     except (OSError, ValueError) as exc:
         errors.append(str(exc))
     roles, role_errors = _normalize_immutable_commit_roles(immutable_commit_roles)
@@ -724,6 +759,34 @@ def _write_target(path: Path, value: bytes) -> None:
 
 def _state_lock_path(release_root: Path) -> Path:
     return release_root.resolve() / STATE_PROJECTION_LOCK_REL
+
+
+def _validate_locked_replan_capability(
+    release_root: Path,
+    process_root: Path,
+    capability: _PhaseTransitionLockCapability,
+) -> None:
+    """证明锁内 replan 只忽略当前 Phase transaction 自己的精确 State lock。"""
+
+    if not re.fullmatch(r"[0-9a-f]{32}", capability.transaction_id):
+        raise ValueError("Phase transition lock capability transaction_id is invalid")
+    if (
+        capability.state_lock_handle.transaction_id != capability.transaction_id
+        or capability.phase_lock_handle.transaction_id != capability.transaction_id
+    ):
+        raise ValueError("Phase transition lock capability transaction identity differs")
+    validate_shared_projection_writer_lock(
+        capability.shared_writer_handle,
+        expected_path=process_root.resolve() / SHARED_WRITER_LOCK_REL,
+    )
+    validate_transaction_lock(
+        capability.state_lock_handle,
+        expected_path=state_projection_lock_path(release_root),
+    )
+    validate_transaction_lock(
+        capability.phase_lock_handle,
+        expected_path=release_root.resolve() / LOCK_REL,
+    )
 
 
 def _lock_matches(path: Path, transaction_id: str) -> bool:
@@ -1180,6 +1243,13 @@ def apply_phase_transition(
             closure_evidence_ref=plan.closure_evidence_ref,
             effective_at=plan.effective_at,
             immutable_commit_roles=plan.immutable_commit_roles,
+            _ignore_transaction_locks=True,
+            _transaction_lock_capability=_PhaseTransitionLockCapability(
+                transaction_id=transaction_id,
+                shared_writer_handle=shared_writer_handle,
+                state_lock_handle=state_lock_handle,
+                phase_lock_handle=phase_lock_handle,
+            ),
         )
         if locked_plan.plan_digest != plan.plan_digest:
             raise ValueError(

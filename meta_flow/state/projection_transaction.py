@@ -557,13 +557,28 @@ def inspect_state_projection_transaction(
     project_root: Path,
     *,
     _ignore_lock: bool = False,
+    _lock_handle: TransactionLockHandle | None = None,
 ) -> dict[str, Any]:
+    if _ignore_lock and _lock_handle is not None:
+        return {
+            "decision": "BLOCKED",
+            "state": "INVALID",
+            "findings": ["state projection lock bypass inputs are mutually exclusive"],
+        }
     try:
         _path, payload = _load_manifest(project_root)
     except (OSError, ValueError) as exc:
         return {"decision": "BLOCKED", "state": "INVALID", "findings": [str(exc)]}
     findings: list[str] = []
-    if not _ignore_lock:
+    if _lock_handle is not None:
+        try:
+            expected_path = project_root.resolve() / LOCK_REL
+            _validate_lock_handle(_lock_handle, expected_path=expected_path)
+            if transaction_lock_identity(expected_path) != _lock_handle.transaction_id:
+                findings.append("STATE_PROJECTION_LOCK_IDENTITY_DRIFT")
+        except (OSError, ValueError) as exc:
+            findings.append(f"STATE_PROJECTION_LOCK_CAPABILITY_INVALID:{exc}")
+    elif not _ignore_lock:
         try:
             if transaction_lock_identity(project_root.resolve() / LOCK_REL) is not None:
                 findings.append("STATE_PROJECTION_LOCK_PRESENT")

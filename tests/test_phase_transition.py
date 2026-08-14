@@ -259,6 +259,21 @@ def _close_active_phase_work(release: Path, process: Path, work_id: str) -> None
     assert receipt.decision == "PASS"
 
 
+def _advance_state_after_work_close(release: Path) -> None:
+    """模拟 Work-close 后又由合法 State writer 接管当前 generation。"""
+
+    current.update_current_state(
+        release,
+        {"next_action": {"type": "continue", "text": "prepare Phase transition"}},
+        actor="test",
+        reason="advance State after Work close",
+    )
+    assert (
+        projection_transaction.inspect_state_projection_transaction(release)["decision"]
+        == "PASS"
+    )
+
+
 def test_phase_transition_plan_is_zero_write_and_freezes_seven_targets(
     tmp_path: Path,
 ) -> None:
@@ -365,6 +380,268 @@ def test_phase_transition_is_an_authorized_successor_of_prior_work_close(
         "project-phase-transition-"
     )
     assert inspect_work_close_transactions(process)["decision"] == "PASS"
+
+
+def test_phase_transition_locked_replan_accepts_its_exact_state_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    baseline = governance_projection.build_governance_projection(process, roles)
+    _write(
+        process / governance_projection.GOVERNANCE_PROJECTION_REL,
+        json.dumps(baseline, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    _close_active_phase_work(release, process, "W-LOCKED-REPLAN")
+    _advance_state_after_work_close(release)
+    _commit(process, "freeze State successor before Phase transition")
+    plan = _plan(release, process, roles)
+    assert plan.decision == "READY", plan.errors
+
+    original = phase_transition.plan_phase_transition
+    locked_digests: list[str] = []
+
+    def observe_locked_replan(*args: object, **kwargs: object) -> object:
+        replanned = original(*args, **kwargs)
+        if kwargs.get("_ignore_transaction_locks"):
+            locked_digests.append(replanned.plan_digest)
+        return replanned
+
+    monkeypatch.setattr(phase_transition, "plan_phase_transition", observe_locked_replan)
+    receipt = phase_transition.apply_phase_transition(
+        plan,
+        expected_plan_digest=plan.plan_digest,
+        expected_release_oid=plan.release_oid,
+        expected_process_oid=plan.process_oid,
+    )
+
+    assert locked_digests == [plan.plan_digest]
+    assert receipt["decision"] == "PASS"
+    assert receipt["mutation_count"] == 7
+    assert len(receipt["applied_refs"]) == 7
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+
+
+def test_phase_transition_foreign_state_lock_remains_blocked(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    baseline = governance_projection.build_governance_projection(process, roles)
+    _write(
+        process / governance_projection.GOVERNANCE_PROJECTION_REL,
+        json.dumps(baseline, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    _close_active_phase_work(release, process, "W-FOREIGN-LOCK")
+    _advance_state_after_work_close(release)
+    _commit(process, "freeze State successor before foreign lock")
+    ready = _plan(release, process, roles)
+    assert ready.decision == "READY", ready.errors
+    before = {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in ready.targets
+    }
+
+    handle = projection_transaction.acquire_transaction_lock(
+        projection_transaction.state_projection_lock_path(release),
+        "f" * 32,
+    )
+    try:
+        blocked = _plan(release, process, roles)
+        assert blocked.decision == "BLOCKED"
+        assert any("terminal generation mismatch" in error for error in blocked.errors)
+        with pytest.raises(ValueError, match="drifted after planning"):
+            phase_transition.apply_phase_transition(
+                ready,
+                expected_plan_digest=ready.plan_digest,
+                expected_release_oid=ready.release_oid,
+                expected_process_oid=ready.process_oid,
+            )
+    finally:
+        projection_transaction.release_transaction_lock(handle)
+
+    assert before == {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in ready.targets
+    }
+
+
+def test_phase_transition_locked_replan_rejects_target_preimage_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    plan = _plan(release, process, roles)
+    before = {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in plan.targets
+    }
+    original = phase_transition.acquire_transaction_lock
+    injected = False
+
+    def drift_after_state_lock(
+        lock_path: Path,
+        transaction_id: str,
+    ) -> projection_transaction.TransactionLockHandle:
+        nonlocal injected
+        handle = original(lock_path, transaction_id)
+        if lock_path == projection_transaction.state_projection_lock_path(release) and not injected:
+            injected = True
+            project_path = process / "PROJECT.yaml"
+            project_path.write_bytes(project_path.read_bytes() + b"# locked drift\n")
+        return handle
+
+    monkeypatch.setattr(
+        phase_transition,
+        "acquire_transaction_lock",
+        drift_after_state_lock,
+    )
+    with pytest.raises(ValueError, match="while acquiring writer locks"):
+        phase_transition.apply_phase_transition(
+            plan,
+            expected_plan_digest=plan.plan_digest,
+            expected_release_oid=plan.release_oid,
+            expected_process_oid=plan.process_oid,
+        )
+
+    assert injected is True
+    assert (process / "PROJECT.yaml").read_bytes() == before["process/PROJECT.yaml"] + b"# locked drift\n"
+    assert not (release / phase_transition.MANIFEST_REL).exists()
+    assert not projection_transaction.state_projection_lock_path(release).exists()
+    assert not (release / phase_transition.LOCK_REL).exists()
+    for ref, content in before.items():
+        if ref != "process/PROJECT.yaml":
+            assert (process / ref.removeprefix("process/")).read_bytes() == content
+
+
+@pytest.mark.parametrize("repository", ["release", "process"])
+def test_phase_transition_locked_replan_rejects_repository_oid_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    repository: str,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    plan = _plan(release, process, roles)
+    before = {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in plan.targets
+    }
+    original = phase_transition.acquire_transaction_lock
+    injected = False
+
+    def drift_oid_after_state_lock(
+        lock_path: Path,
+        transaction_id: str,
+    ) -> projection_transaction.TransactionLockHandle:
+        nonlocal injected
+        handle = original(lock_path, transaction_id)
+        if lock_path == projection_transaction.state_projection_lock_path(release) and not injected:
+            injected = True
+            drift_root = release if repository == "release" else process
+            _write(drift_root / "OID-DRIFT.txt", "external commit during lock acquisition\n")
+            _commit(drift_root, f"simulate {repository} OID drift")
+        return handle
+
+    monkeypatch.setattr(
+        phase_transition,
+        "acquire_transaction_lock",
+        drift_oid_after_state_lock,
+    )
+    with pytest.raises(ValueError, match="while acquiring writer locks"):
+        phase_transition.apply_phase_transition(
+            plan,
+            expected_plan_digest=plan.plan_digest,
+            expected_release_oid=plan.release_oid,
+            expected_process_oid=plan.process_oid,
+    )
+
+    assert injected is True
+    expected_oid = plan.release_oid if repository == "release" else plan.process_oid
+    drift_root = release if repository == "release" else process
+    assert _git(drift_root, "rev-parse", "HEAD") != expected_oid
+    assert before == {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in plan.targets
+    }
+    assert not (release / phase_transition.MANIFEST_REL).exists()
+    assert not projection_transaction.state_projection_lock_path(release).exists()
+    assert not (release / phase_transition.LOCK_REL).exists()
+
+
+def test_phase_transition_lock_bypass_without_capability_is_blocked(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+
+    blocked = phase_transition.plan_phase_transition(
+        release,
+        process,
+        project_id="demo",
+        from_phase_ref="process/phases/P1/PHASE.yaml",
+        to_phase_ref="process/phases/P2/PHASE.yaml",
+        closure_evidence_ref="process/phases/P1/CLOSURE.json",
+        effective_at="2026-08-12T00:00:00Z",
+        immutable_commit_roles=roles,
+        _ignore_transaction_locks=True,
+    )
+
+    assert blocked.decision == "BLOCKED"
+    assert "exact lock capability" in "; ".join(blocked.errors)
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_error"),
+    [
+        ("identity", "transaction identity differs"),
+        ("path", "path differs from the expected lock"),
+    ],
+)
+def test_phase_transition_rejects_foreign_or_misbound_lock_capability(
+    tmp_path: Path,
+    mode: str,
+    expected_error: str,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    transaction_id = "a" * 32
+    shared_writer_id = "phase-transition-" + transaction_id
+    shared = acquire_shared_projection_writer_lock(process, shared_writer_id)
+    _runtime_root, _manifest_path, phase_lock_path = phase_transition._runtime_paths(release)
+    state_lock_path = projection_transaction.state_projection_lock_path(release)
+    if mode == "path":
+        state_lock_path = release / phase_transition.TRANSACTION_ROOT_REL / "foreign-state.lock"
+    state_handle = projection_transaction.acquire_transaction_lock(
+        state_lock_path,
+        transaction_id,
+    )
+    phase_handle = projection_transaction.acquire_transaction_lock(
+        phase_lock_path,
+        transaction_id,
+    )
+    capability_id = "b" * 32 if mode == "identity" else transaction_id
+    try:
+        blocked = phase_transition.plan_phase_transition(
+            release,
+            process,
+            project_id="demo",
+            from_phase_ref="process/phases/P1/PHASE.yaml",
+            to_phase_ref="process/phases/P2/PHASE.yaml",
+            closure_evidence_ref="process/phases/P1/CLOSURE.json",
+            effective_at="2026-08-12T00:00:00Z",
+            immutable_commit_roles=roles,
+            _ignore_transaction_locks=True,
+            _transaction_lock_capability=phase_transition._PhaseTransitionLockCapability(
+                transaction_id=capability_id,
+                shared_writer_handle=shared,
+                state_lock_handle=state_handle,
+                phase_lock_handle=phase_handle,
+            ),
+        )
+    finally:
+        projection_transaction.release_transaction_lock(phase_handle)
+        projection_transaction.release_transaction_lock(state_handle)
+        release_shared_projection_writer_lock(shared, shared_writer_id)
+
+    assert blocked.decision == "BLOCKED"
+    assert expected_error in "; ".join(blocked.errors)
 
 
 def test_phase_transition_discards_successor_receipt_when_final_manifest_write_fails(
