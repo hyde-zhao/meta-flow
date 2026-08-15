@@ -76,8 +76,81 @@ uv tool install .
 export META_FLOW_PROVIDER_RECEIPT="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
 ```
 
-需要跨终端长期使用时，把 `META_FLOW_PROVIDER_RECEIPT` 的绝对路径加入 shell 启动配置或
-运行服务的环境配置。切换 Meta Flow 版本时必须同时切换 wheel 和 receipt，不能跨版本复用。
+上面的 `export` 只对当前终端有效。正式使用时应把 receipt 的绝对路径保存为当前用户的
+环境变量，不需要写入 `/etc/environment` 或配置 root/system-wide 变量。
+
+#### Linux Bash 用户变量
+
+下面的命令只需执行一次：
+
+```bash
+export META_FLOW_RECEIPT_PATH="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+
+printf '\nexport META_FLOW_PROVIDER_RECEIPT=%q\n' \
+  "$META_FLOW_RECEIPT_PATH" >> "$HOME/.bashrc"
+
+source "$HOME/.bashrc"
+```
+
+使用 Zsh 时，将写入目标和加载命令改为 `$HOME/.zshrc`：
+
+```zsh
+export META_FLOW_RECEIPT_PATH="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+
+printf '\nexport META_FLOW_PROVIDER_RECEIPT=%q\n' \
+  "$META_FLOW_RECEIPT_PATH" >> "$HOME/.zshrc"
+
+source "$HOME/.zshrc"
+```
+
+确认新终端能够读取：
+
+```bash
+printenv META_FLOW_PROVIDER_RECEIPT
+```
+
+#### Linux systemd 用户服务变量
+
+如果 `meta-flow` 由 systemd user service、后台 Agent 或桌面会话启动，还应写入用户级
+`environment.d`；文件内容必须使用绝对路径，不能依赖 shell 变量展开：
+
+```bash
+export META_FLOW_PROVIDER_RECEIPT="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+export META_FLOW_ENVIRONMENT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d"
+
+install -d -m 0755 "$META_FLOW_ENVIRONMENT_DIR"
+
+printf 'META_FLOW_PROVIDER_RECEIPT=%s\n' \
+  "$META_FLOW_PROVIDER_RECEIPT" \
+  > "$META_FLOW_ENVIRONMENT_DIR/50-meta-flow.conf"
+
+systemctl --user import-environment META_FLOW_PROVIDER_RECEIPT
+```
+
+`environment.d` 对后续登录和新启动的用户服务生效；已有服务需要重启。当前终端仍使用前面的
+`export` 或 shell 启动文件配置。
+
+#### Windows PowerShell 用户变量
+
+Windows host 当前尚未列入正式 CLI artifact 资格声明；如仅需配置同名用户变量，可使用：
+
+```powershell
+$ReceiptPath = "$env:LOCALAPPDATA\MetaFlow\releases\0.5.2\ProviderArtifactReceiptV1.json"
+
+[Environment]::SetEnvironmentVariable(
+    "META_FLOW_PROVIDER_RECEIPT",
+    $ReceiptPath,
+    "User"
+)
+```
+
+关闭并重新打开 PowerShell 后验证：
+
+```powershell
+[Environment]::GetEnvironmentVariable("META_FLOW_PROVIDER_RECEIPT", "User")
+```
+
+切换 Meta Flow 版本时必须同时切换 wheel 和用户变量中的 receipt 路径，不能跨版本复用。
 
 ### 4. 验证安装身份
 
