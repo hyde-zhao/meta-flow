@@ -2,6 +2,169 @@
 
 > 通用 Agent/Skill 工作流产物工厂 — 从需求到交付的全流程编排。
 
+## 正式安装与升级
+
+当前正式 CLI artifact 的已资格化宿主平台是 Linux，要求 Python 3.11+ 和
+[`uv`](https://docs.astral.sh/uv/)。正式 consumer 必须安装 GitHub Release 的 exact
+wheel，并绑定同一 Release 随附的 `ProviderArtifactReceiptV1.json`；不要从本地源码目录
+或 editable checkout 安装正式 provider。
+
+### 1. 下载正式 Release 资产
+
+下面以当前稳定版 `0.5.2` 为例。升级时只需把 `META_FLOW_VERSION` 改为目标版本：
+
+```bash
+export META_FLOW_VERSION=0.5.2
+export META_FLOW_RELEASE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/meta-flow/releases/${META_FLOW_VERSION}"
+
+install -d -m 0755 "$META_FLOW_RELEASE_DIR"
+
+gh release download "v${META_FLOW_VERSION}" \
+  --repo hyde-zhao/meta-flow \
+  --pattern "meta_flow-${META_FLOW_VERSION}-py3-none-any.whl" \
+  --pattern 'ProviderArtifactReceiptV1.json' \
+  --dir "$META_FLOW_RELEASE_DIR" \
+  --clobber
+```
+
+没有 GitHub CLI 时，可从
+[GitHub Releases](https://github.com/hyde-zhao/meta-flow/releases) 手工下载相同的 wheel 和
+receipt，并保存到同一个稳定目录。
+
+安装前应按 Release 页面提供的摘要校验文件。`0.5.2` 的已发布摘要为：
+
+```text
+e75782bf6064a5a2a6e23bb0349c5e504d35b455c25307febe3d724799463bf6  meta_flow-0.5.2-py3-none-any.whl
+c743b694a5fd8814cf540a9da8312ccdfa829af2d3ad51067157ddc558359138  ProviderArtifactReceiptV1.json
+```
+
+```bash
+sha256sum \
+  "$META_FLOW_RELEASE_DIR/meta_flow-${META_FLOW_VERSION}-py3-none-any.whl" \
+  "$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+```
+
+### 2. 安装或升级 CLI provider
+
+同一命令同时适用于首次安装和升级：
+
+```bash
+uv tool install \
+  --force \
+  --no-cache \
+  --python 3.11 \
+  "$META_FLOW_RELEASE_DIR/meta_flow-${META_FLOW_VERSION}-py3-none-any.whl"
+
+hash -r
+```
+
+`--force --no-cache` 会用下载的正式 wheel 替换旧版本、editable 安装或本地源码构建，
+避免旧构建缓存和 installer 元数据污染正式 payload 身份。不要使用下面这些命令作为
+正式 consumer 安装方式：
+
+```text
+uv tool install /path/to/meta-flow-checkout
+uv tool install --editable /path/to/meta-flow-checkout
+uv tool install .
+```
+
+### 3. 配置 Provider Receipt
+
+正式 mutation 准入必须能读取同版本 receipt：
+
+```bash
+export META_FLOW_PROVIDER_RECEIPT="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+```
+
+需要跨终端长期使用时，把 `META_FLOW_PROVIDER_RECEIPT` 的绝对路径加入 shell 启动配置或
+运行服务的环境配置。切换 Meta Flow 版本时必须同时切换 wheel 和 receipt，不能跨版本复用。
+
+### 4. 验证安装身份
+
+```bash
+meta-flow version --format json
+```
+
+正式安装至少必须满足：
+
+```text
+distribution_version = 目标版本
+editable = false
+identity_source = installed-artifact-receipt
+exact_commit_delivery = true
+release_readiness.decision = PASS
+provider_admission.decision = READY
+status = READY
+```
+
+如果出现 `PROVIDER_RECEIPT_MISSING`，说明当前进程没有读取到
+`META_FLOW_PROVIDER_RECEIPT`；如果出现 payload、artifact 或 capability mismatch，必须重新下载
+同一 Release 的 wheel 与 receipt，不得手工修改安装目录或 receipt。
+
+### 5. 安装平台资产到项目
+
+`platform` 可选 `codex`、`claude`、`openclaw` 或 `qoder`。项目级安装应始终显式提供绝对
+项目路径，并先执行 dry-run：
+
+```bash
+meta-flow install codex \
+  --scope project \
+  --project-dir /absolute/path/to/project \
+  --component full \
+  --dry-run
+```
+
+确认计划后执行真实安装：
+
+```bash
+meta-flow install codex \
+  --scope project \
+  --project-dir /absolute/path/to/project \
+  --component full
+```
+
+升级已安装的平台资产时使用同一原子 upgrade transaction：
+
+```bash
+meta-flow install codex \
+  --scope project \
+  --project-dir /absolute/path/to/project \
+  --component full \
+  --force-refresh \
+  --dry-run
+
+meta-flow install codex \
+  --scope project \
+  --project-dir /absolute/path/to/project \
+  --component full \
+  --force-refresh
+```
+
+### 6. 用户级安装与卸载
+
+用户级完整安装同样先 dry-run：
+
+```bash
+meta-flow install codex --scope user --component full --dry-run
+meta-flow install codex --scope user --component full
+```
+
+只移除受管平台资产：
+
+```bash
+meta-flow uninstall codex --scope project --project-dir /absolute/path/to/project
+meta-flow uninstall codex --scope user
+```
+
+移除 CLI provider：
+
+```bash
+uv tool uninstall meta-flow
+```
+
+卸载 CLI 后，可按需删除 shell 或服务环境中的 `META_FLOW_PROVIDER_RECEIPT` 配置；不要用 CLI
+卸载代替项目安装 manifest 所管理的平台资产卸载。
+
 ## vNext：默认使用每项目独立双仓与轻量 Work
 
 Meta Flow 的新默认不再是共享 artifact worktree、双 leg 或每项变化都跑 CP0-CP8。每个项目拥有一个发布库和一个独立过程库；发布库用 tracked 的 `.meta-flow/workspace.yaml` 定位 sibling `<project>-process`，过程库用 `.meta-flow-process.yaml` 反向绑定发布库。默认 `route_mode=sibling-binding`，不创建 `process` 软链接；因此项目 A 切分支不会改变项目 B 看到的过程文档。
@@ -340,7 +503,8 @@ meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name m
     └── scripts/
 ```
 
-安装测试优先使用全局命令或 `uv run`：
+源码开发阶段的安装 dry-run 测试可使用仓库环境中的 `uv run`；这不是正式 consumer 的
+provider 安装方式，正式安装必须使用上文的 Release wheel 与 receipt：
 
 ```bash
 uv run --python 3.11 meta-flow install codex --scope project --component full --project-dir . --dry-run
