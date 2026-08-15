@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.project import governance_projection, phase_metadata, phase_transition
 from meta_flow.project.governance import load_phase
+from meta_flow.project.model import load_project
 from meta_flow.project.scale import dump_yaml
 from meta_flow.state import current as state_current
 from meta_flow.state.formal_projection import build_formal_truth_snapshot
@@ -27,6 +29,11 @@ from meta_flow.work.model import build_work, load_work
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
 from meta_flow.work.store import apply_work_init, plan_work_init_from_release_root
+from meta_flow.workflow import cr_index
+from meta_flow.workflow.legacy_evidence_registry import (
+    load_declared_legacy_evidence_registry,
+    registered_legacy_cr_ids,
+)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -279,8 +286,12 @@ updated_at: 2026-08-01T00:00:00Z
             evidence_ref,
             f"works/{owner_id}/UNOWNED.json",
             "governance/GOVERNANCE-BASELINE.json",
+            "governance/CONSUMER-ACCEPTANCE-SPEC.yaml",
+            "changes/CR-174-legacy.md",
+            "works/CR-174/FOLLOW-UPS.yaml",
         ),
         writes=(
+            "PROJECT.yaml",
             "phases/P1/PHASE.yaml",
             "phases/P2/PHASE.yaml",
             "governance/GOVERNANCE-BASELINE.json",
@@ -295,6 +306,12 @@ updated_at: 2026-08-01T00:00:00Z
     assert (
         governance_projection.validate_governance_projection(release, process)["decision"] == "PASS"
     )
+    assert state_current.load_current_state(release)[
+        "formal_truth_projection"
+    ] == build_formal_truth_snapshot(release, process_root=process)
+    assert inspect_work_close_transactions(process)["decision"] == "PASS"
+    inspection = phase_metadata.inspect_phase_metadata(release, process)
+    assert inspection["decision"] == "PASS", inspection
     assert state_current.load_current_state(release)[
         "formal_truth_projection"
     ] == build_formal_truth_snapshot(release, process_root=process)
@@ -379,11 +396,112 @@ def test_active_phase_accepts_closed_work_evidence_and_keeps_all_projections_cur
     assert (
         governance_projection.validate_governance_projection(release, process)["decision"] == "PASS"
     )
+
+
+def test_phase_metadata_natively_adopts_project_level_legacy_registry(
+    tmp_path: Path,
+) -> None:
+    release, process, _evidence_ref, controller_id, _roles = _fixture(tmp_path)
+    evidence_ref = "changes/CR-174-legacy.md"
+    follow_up_ref = "works/CR-174/FOLLOW-UPS.yaml"
+    registry_ref = "governance/CONSUMER-ACCEPTANCE-SPEC.yaml"
+    _write(process / evidence_ref, "# CR-174\nstatus: closed-pass-with-risk\n")
+    _write(
+        process / follow_up_ref,
+        "- id: FU-CR174-001\n  status: deferred_required\n"
+        "- id: FU-CR174-002\n  status: deferred\n"
+        "- id: FU-CR174-003\n  status: deferred\n",
+    )
+    _write(
+        process / registry_ref,
+        dump_yaml(
+            {
+                "schema_version": 1,
+                "project_id": "demo",
+                "spec_id": "demo-consumer-acceptance-v1",
+                "spec_status": "ready-for-provider-delivery",
+                "immutable_consumer_inputs": [
+                    {
+                        "id": "CR174-BODY",
+                        "ref": evidence_ref,
+                        "sha256": sha256((process / evidence_ref).read_bytes()).hexdigest(),
+                    },
+                    {
+                        "id": "CR174-FOLLOW-UPS",
+                        "ref": follow_up_ref,
+                        "sha256": sha256((process / follow_up_ref).read_bytes()).hexdigest(),
+                    },
+                ],
+                "fixture_contract": [
+                    {
+                        "id": "FOLLOW-UPS-IMMUTABLE",
+                        "source": "CR174-FOLLOW-UPS",
+                        "expected": {
+                            "FU-CR174-001": "deferred_required",
+                            "FU-CR174-002": "deferred",
+                            "FU-CR174-003": "deferred",
+                        },
+                    }
+                ],
+            }
+        )
+        + "\n",
+    )
+    plan = _plan(
+        release,
+        process,
+        evidence_ref=registry_ref,
+        controller_id=controller_id,
+    )
+
+    assert plan.decision == "READY", plan.errors
+    assert set(plan.targets) == {
+        "process/PROJECT.yaml",
+        "process/phases/P1/PHASE.yaml",
+        "process/governance/GOVERNANCE-BASELINE.json",
+        "process/state/STATE.current.json",
+        "process/STATE.md",
+        "process/current/CURRENT.json",
+    }
+    receipt = phase_metadata.apply_phase_metadata_update(plan, _authorization(plan))
+
+    assert receipt["decision"] == "PASS"
+    assert receipt["mutation_count"] == 6
+    assert load_project(process).legacy_evidence_registry_ref == registry_ref
+    assert registry_ref in load_phase(process, "phases/P1/PHASE.yaml").result_refs
+    bundle = load_declared_legacy_evidence_registry(
+        release,
+        consumer_id="phase-metadata-test",
+    )
+    assert bundle.ownership_scope == "project"
+    assert registered_legacy_cr_ids(bundle) == ("CR-174",)
+    assert cr_index.build_index(
+        release,
+        excluded_legacy_paths=frozenset(bundle.evidence_paths),
+    )["items"] == []
+    assert (
+        governance_projection.validate_governance_projection(release, process)["decision"]
+        == "PASS"
+    )
     assert state_current.load_current_state(release)[
         "formal_truth_projection"
     ] == build_formal_truth_snapshot(release, process_root=process)
     assert inspect_work_close_transactions(process)["decision"] == "PASS"
-    assert phase_metadata.inspect_phase_metadata(release, process)["decision"] == "PASS"
+    inspection = phase_metadata.inspect_phase_metadata(release, process)
+    assert inspection["decision"] == "PASS", inspection
+    noop = _plan(
+        release,
+        process,
+        evidence_ref=registry_ref,
+        controller_id=controller_id,
+    )
+    assert noop.decision == "NOOP", noop.errors
+    noop_receipt = phase_metadata.apply_phase_metadata_update(
+        noop,
+        _authorization(noop, "legacy-registry-noop-auth"),
+    )
+    assert noop_receipt["disposition"] == "NOOP"
+    assert noop_receipt["mutation_count"] == 0
 
 
 def test_planned_phase_accepts_governance_baseline_and_repeat_is_exact_noop(

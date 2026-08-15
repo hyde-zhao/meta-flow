@@ -20,6 +20,61 @@ from meta_flow.workspace.routing import (
 
 LEGACY_STATE_CURRENT_REL = Path("process/state/STATE.current.json")
 LEGACY_STATE_REL = Path("process/STATE.md")
+_DIRECT_MUTATION_ENTRIES = {
+    ("capability", "init"),
+    ("concept", "init"),
+    ("context", "build"),
+    ("context", "build-story-packet"),
+    ("context", "read-log"),
+    ("cp", "applicability-build"),
+    ("cp", "ledger-append"),
+    ("cp", "render-summary"),
+    ("cp", "successor-apply"),
+    ("cp", "successor-recover"),
+    ("cr", "aggregate"),
+    ("cr", "branch-finish"),
+    ("cr", "branch-merge"),
+    ("cr", "branch-open"),
+    ("cr", "branch-publish"),
+    ("cr", "bootstrap"),
+    ("cr", "summary"),
+    ("event", "closure-apply"),
+    ("event", "correction-apply"),
+    ("event", "dispatch-not-required"),
+    ("event", "append"),
+    ("event", "inline-fallback"),
+    ("feature", "build"),
+    ("governance", "init"),
+    ("governance", "truth-map-render"),
+    ("identity", "init"),
+    ("module", "init"),
+    ("quality", "init"),
+    ("state", "current-refresh"),
+    ("state", "health-update"),
+    ("state", "history-render"),
+    ("state", "init"),
+    ("state", "migrate-v2"),
+    ("state", "render"),
+    ("state", "compact"),
+    ("story", "evidence-index"),
+    ("story", "issue-revalidation-authority"),
+    ("story", "verify-packet"),
+    ("validation", "run"),
+    ("work", "block"),
+    ("work", "handoff"),
+    ("work", "close-recover"),
+    ("work", "pause"),
+    ("work", "resume"),
+    ("work", "start"),
+    ("work", "usage-add"),
+    ("workspace", "push"),
+}
+_DIRECT_MUTATION_COMMANDS = {"ask-user"}
+_DIRECT_MUTATION_FLAGS = {"--write-default"}
+_ACTION_MUTATION_ENTRIES = {
+    ("project", "phase-metadata"): {"apply", "recover"},
+    ("project", "phase-transition"): {"apply", "recover"},
+}
 
 
 def _candidate_roots() -> list[Path]:
@@ -35,8 +90,19 @@ def _candidate_roots() -> list[Path]:
     return roots
 
 
+def _provider_candidate_roots() -> list[Path]:
+    """只从显式开发来源或实际导入 package 定位 provider 资产。"""
+
+    roots: list[Path] = []
+    if os.environ.get("META_FLOW_SOURCE"):
+        roots.append(Path(os.environ["META_FLOW_SOURCE"]).expanduser())
+    package_root = Path(__file__).resolve().parent
+    roots.extend([package_root.parent, *package_root.parents])
+    return roots
+
+
 def _find_installer() -> Path:
-    for root in _candidate_roots():
+    for root in _provider_candidate_roots():
         candidate = root / "delivery" / "scripts" / "install.py"
         if candidate.is_file():
             return candidate
@@ -53,6 +119,145 @@ def _find_workspace_root() -> Path:
         if (root / LEGACY_STATE_CURRENT_REL).is_file() or (root / LEGACY_STATE_REL).is_file():
             return root
     return Path.cwd()
+
+
+def _argument_value(args: list[str], name: str) -> str | None:
+    try:
+        index = args.index(name)
+    except ValueError:
+        return None
+    if index + 1 >= len(args):
+        return None
+    return args[index + 1]
+
+
+def _provider_target_root(args: list[str]) -> Path:
+    raw = _argument_value(args, "--project-root") or _argument_value(args, "--project-dir")
+    return Path(raw).expanduser().resolve() if raw else Path.cwd().resolve()
+
+
+def _is_provider_mutation(command: str, args: list[str]) -> bool:
+    invocation = (command, *(item for item in args if not item.startswith("-")))
+    if command in _DIRECT_MUTATION_COMMANDS:
+        return "--output" in args
+    if any(item in _DIRECT_MUTATION_FLAGS for item in args):
+        return True
+    if invocation[:2] in _DIRECT_MUTATION_ENTRIES:
+        return "--dry-run" not in args
+    action_mutations = _ACTION_MUTATION_ENTRIES.get(invocation[:2])
+    if (
+        action_mutations is not None
+        and len(invocation) > 2
+        and invocation[2] in action_mutations
+    ):
+        return True
+    if invocation[:2] in {
+        ("cr", "status-sync-resume"),
+        ("cr", "status-sync-rollback"),
+        ("cr", "status-sync-abandon"),
+    }:
+        return True
+    if invocation[:2] == ("cr", "impact-report"):
+        return "--output" in args
+    if invocation[:2] == ("route", "plan"):
+        return "--output" in args
+    if invocation[:2] == ("story", "revalidate-cp6"):
+        return (_argument_value(args, "--action") or "") in {
+            "apply",
+            "completion",
+            "recover",
+            "replay",
+        }
+    if command == "eval" and args:
+        eval_command = args[0]
+        if eval_command in {"mutate", "run"}:
+            return True
+        if eval_command == "runtime-run":
+            return (_argument_value(args, "--mode") or "manual-handoff") != "dry-run"
+        if eval_command in {"release-check", "suite-health"}:
+            return "--out" in args or "--json-out" in args
+        if eval_command == "install-check":
+            return "--eval" in args
+        if eval_command == "feedback":
+            return True
+        if eval_command == "backlog":
+            return len(args) > 1 and args[1] == "close"
+    if "--apply" in args:
+        return True
+    if invocation[:2] == ("work", "init-recover"):
+        action = _argument_value(args, "--action") or "inspect"
+        return action != "inspect"
+    return False
+
+
+def _raise_provider_admission_blocked(
+    *,
+    operation: str,
+    mode: str,
+    reason_codes: list[str],
+) -> None:
+    print(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "ProviderRuntimeAdmissionFailureV1",
+                "decision": "BLOCKED",
+                "operation": operation,
+                "mode": mode,
+                "reason_codes": sorted(set(reason_codes)),
+                "mutation_count": 0,
+                "next_action": "run meta-flow version --format json",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
+def _guard_provider_mutation(command: str, args: list[str]) -> None:
+    if not _is_provider_mutation(command, args):
+        return
+    from meta_flow.installation.identity import (
+        evaluate_provider_runtime_admission,
+        observe_provider_runtime_identity,
+    )
+
+    identity = observe_provider_runtime_identity()
+    explicit_mode = os.environ.get("META_FLOW_PROVIDER_MODE", "").strip()
+    if explicit_mode:
+        mode = explicit_mode
+    else:
+        target_root = _provider_target_root(args)
+        source_root_raw = identity.get("source_root")
+        source_root = Path(str(source_root_raw)).resolve() if source_root_raw else None
+        try:
+            target_root.relative_to(source_root) if source_root is not None else None
+        except ValueError:
+            mode = "release"
+        else:
+            mode = "development" if source_root is not None else "release"
+    if mode not in {"development", "release"}:
+        _raise_provider_admission_blocked(
+            operation=f"{command}.{args[0] if args else ''}".rstrip("."),
+            mode=mode,
+            reason_codes=["INVALID_PROVIDER_MODE"],
+        )
+    admission = evaluate_provider_runtime_admission(
+        identity,
+        mode=mode,
+        expected_identity_digest=(
+            os.environ.get("META_FLOW_EXPECTED_PROVIDER_IDENTITY_DIGEST") or None
+        ),
+    )
+    if admission["decision"] == "READY":
+        return
+    _raise_provider_admission_blocked(
+        operation=f"{command}.{args[0] if args else ''}".rstrip("."),
+        mode=mode,
+        reason_codes=list(admission["reason_codes"]),
+    )
 
 
 def _read_state() -> tuple[Path, str]:
@@ -416,8 +621,34 @@ def _print_help() -> None:
 
 
 def _run_installer(command: str, args: list[str]) -> None:
+    from meta_flow.installation.identity import (
+        evaluate_provider_runtime_admission,
+        observe_provider_runtime_identity,
+    )
+
+    explicit_provider_mode = os.environ.get("META_FLOW_PROVIDER_MODE", "").strip()
+    provider_mode = explicit_provider_mode or (
+        "development" if "--dry-run" in args else "release"
+    )
+    if provider_mode not in {"development", "release"}:
+        _raise_provider_admission_blocked(
+            operation=f"assets.{command}",
+            mode=provider_mode,
+            reason_codes=["INVALID_PROVIDER_MODE"],
+        )
+    if not any(item in {"-h", "--help"} for item in args):
+        identity = observe_provider_runtime_identity()
+        admission = evaluate_provider_runtime_admission(identity, mode=provider_mode)
+        if admission["decision"] != "READY":
+            _raise_provider_admission_blocked(
+                operation=f"assets.{command}",
+                mode=provider_mode,
+                reason_codes=list(admission["reason_codes"]),
+            )
     installer = _find_installer()
     forwarded = [*args]
+    if "--provider-mode" not in forwarded:
+        forwarded.extend(["--provider-mode", provider_mode])
     if command != "install":
         forwarded = [command, *forwarded]
     original_argv = sys.argv[:]
@@ -519,39 +750,34 @@ def _run_lifecycle_reinstaller(args: list[str]) -> None:
 def _run_version(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="meta-flow version")
     parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--mode", choices=("development", "release"), default="release")
     parsed = parser.parse_args(args)
 
-    from meta_flow import __version__
     from meta_flow.installation.identity import (
-        observe_checkout_delivery_status,
-        observe_checkout_source_identity,
+        evaluate_provider_runtime_admission,
+        observe_provider_runtime_identity,
     )
 
-    try:
-        installer = _find_installer()
-        repo_root = installer.parents[2]
-        identity = observe_checkout_source_identity(repo_root)
-        delivery_status = observe_checkout_delivery_status(repo_root)
-        payload: dict[str, object] = {
-            "ready": True,
-            "status": "READY",
-            **identity,
-            **delivery_status,
-        }
-    except (OSError, ValueError) as exc:
-        payload = {
-            "ready": False,
-            "status": "IDENTITY_INCOMPLETE",
-            "source": "installed/meta-flow",
-            "version": __version__,
-            "oid": "",
-            "delivery_tree_digest": "",
-            "rules_source_digest": "",
-            "inventory_digest": "",
-            "worktree_clean": False,
-            "exact_commit_delivery": False,
-            "findings": [type(exc).__name__],
-        }
+    identity = observe_provider_runtime_identity()
+    admission = evaluate_provider_runtime_admission(identity, mode=parsed.mode)
+    source_ready = identity["source_discovery"]["decision"] == "PASS"
+    release_ready = identity["release_readiness"]["decision"] == "PASS"
+    payload: dict[str, object] = {
+        **identity,
+        "version": identity["distribution_version"],
+        "source": identity["identity_source"],
+        "oid": identity["source_commit"] or "",
+        "delivery_tree_digest": identity["source_tree_digest"] or "",
+        "ready": source_ready,
+        "status": (
+            "READY"
+            if release_ready
+            else "SOURCE_READY_RELEASE_BLOCKED"
+            if source_ready
+            else "IDENTITY_INCOMPLETE"
+        ),
+        "provider_admission": admission,
+    }
     if parsed.format == "json":
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return
@@ -559,8 +785,12 @@ def _run_version(args: list[str]) -> None:
     print(f"status: {payload['status']}")
     print(f"source: {payload['source']}")
     print(f"git_oid: {payload['oid'] or '-'}")
+    print(f"module_path: {payload['module_path']}")
+    print(f"editable: {str(payload['editable']).lower()}")
     print(f"worktree_clean: {str(payload['worktree_clean']).lower()}")
     print(f"exact_commit_delivery: {str(payload['exact_commit_delivery']).lower()}")
+    print(f"release_readiness: {payload['release_readiness']['decision']}")
+    print(f"artifact_sha256: {payload['artifact_sha256'] or '-'}")
     print(f"delivery_tree_digest: {payload['delivery_tree_digest'] or '-'}")
 
 
@@ -1272,11 +1502,16 @@ def _run_waiver(args: list[str]) -> None:
 
 def main() -> None:
     args = sys.argv[1:]
+    if args == ["--version"]:
+        _run_version([])
+        return
     if not args or args[0] in {"-h", "--help"}:
         _print_help()
         return
 
     command = args[0]
+    if command not in {"version", "install", "upgrade", "uninstall", "reinstall"}:
+        _guard_provider_mutation(command, args[1:])
     if command == "status":
         _print_status()
         return

@@ -310,6 +310,7 @@ meta-flow uninstall codex --scope project --project-dir /path/to/project
 meta-flow reinstall codex --scope project --project-dir /path/to/project
 meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action inspect
 meta-flow version --format json
+meta-flow --version
 meta-flow install codex --help
 meta-flow uninstall codex --help
 ```
@@ -328,10 +329,19 @@ adapter，Windows 未资格化。
 - `recover --action inspect` 只读；`resume|rollback|abandon` 不能复用原授权，
   必须先重建 `lifecycle.recover` plan 并取得新的 single-use typed
   authorization。
-- `version --format json` 输出 version、OID、delivery tree、Rules source、inventory
-  digest、`worktree_clean` 与 `exact_commit_delivery`。`ready=true` 只表示 identity
-  可诊断；只有后两个字段同时为 true，当前 OID 才能解释为精确复现当前 bytes 的
-  immutable delivery。不完整事实明确返回 `IDENTITY_INCOMPLETE`。
+- `version --format json` 输出 `ProviderRuntimeIdentityV2`：实际 module/distribution
+  路径、editable 状态、完整 source OID、source/artifact/install digests、capability
+  profile、schema versions，以及相互独立的 `source_discovery` 与
+  `release_readiness`。普通 cwd 不参与 provider 归属判断。
+- editable 或 dirty checkout 只能作为 `development` provider；即使源码可诊断，状态也为
+  `SOURCE_READY_RELEASE_BLOCKED`。正式 release 必须从非 editable wheel 加载，并通过
+  `META_FLOW_PROVIDER_RECEIPT` 绑定 clean source full OID、wheel SHA-256 与 capability
+  profile；receipt 还绑定 wheel payload digest，运行时会按实际安装文件重新计算，防止
+  wheel 合格后安装内容被替换。
+- 公开 `meta-flow install|upgrade|uninstall|reinstall` 默认使用 `release` provider mode；
+  纯 `--dry-run` 自动使用 `development` 诊断模式且 mutation=0；真正安装/升级/卸载默认
+  `release`。也可以显式设置 `META_FLOW_PROVIDER_MODE`，但 development 结果永远不具备
+  发布资格。
 - v1→v2 只接受可验证 source/target/platform/scope/ownership；backup 必须
   在 v2 target mutation 前可读，missing/corrupt/unknown 只产生 BLOCKED
   candidate，mutation=0。

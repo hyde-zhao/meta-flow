@@ -4,14 +4,16 @@ import json
 import subprocess
 from collections.abc import Mapping
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from meta_flow.checks import cr_tracking
 from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.project import governance_projection, phase_transition
 from meta_flow.project.governance import load_phase
-from meta_flow.project.scale import load_yaml_object
+from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.state import current, projection_transaction
 from meta_flow.work.lifecycle import update_work_status
 from meta_flow.work.lifecycle_transaction import (
@@ -28,6 +30,11 @@ from meta_flow.work.model import build_work
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
 from meta_flow.work.store import apply_work_init, plan_work_init_from_release_root
+from meta_flow.workflow import cr_index
+from meta_flow.workflow.legacy_evidence_registry import (
+    load_declared_legacy_evidence_registry,
+    registered_legacy_cr_ids,
+)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -198,6 +205,95 @@ def _plan(
     )
 
 
+def _add_legacy_registry(
+    process: Path,
+    roles: tuple[governance_projection.ImmutableCommitRole, ...],
+    *,
+    target_mode: str,
+) -> tuple[governance_projection.ImmutableCommitRole, ...]:
+    evidence_ref = "changes/CR-174-legacy.md"
+    follow_up_ref = "works/CR-174/FOLLOW-UPS.yaml"
+    registry_ref = "phases/P1/CONSUMER-ACCEPTANCE-SPEC.yaml"
+    target_registry_ref = registry_ref
+    _write(process / evidence_ref, "# CR-174\nstatus: closed-pass-with-risk\n")
+    _write(
+        process / follow_up_ref,
+        "- id: FU-CR174-001\n  status: deferred_required\n"
+        "- id: FU-CR174-002\n  status: deferred\n"
+        "- id: FU-CR174-003\n  status: deferred\n",
+    )
+    registry_payload = {
+        "schema_version": 1,
+        "project_id": "demo",
+        "spec_id": "demo-consumer-acceptance-v1",
+        "spec_status": "ready-for-provider-delivery",
+        "immutable_consumer_inputs": [
+            {
+                "id": "CR174-BODY",
+                "ref": evidence_ref,
+                "sha256": sha256((process / evidence_ref).read_bytes()).hexdigest(),
+            },
+            {
+                "id": "CR174-FOLLOW-UPS",
+                "ref": follow_up_ref,
+                "sha256": sha256((process / follow_up_ref).read_bytes()).hexdigest(),
+            },
+        ],
+        "fixture_contract": [
+            {
+                "id": "FOLLOW-UPS-IMMUTABLE",
+                "source": "CR174-FOLLOW-UPS",
+                "expected": {
+                    "FU-CR174-001": "deferred_required",
+                    "FU-CR174-002": "deferred",
+                    "FU-CR174-003": "deferred",
+                },
+            }
+        ],
+    }
+    _write(
+        process / registry_ref,
+        dump_yaml(registry_payload) + "\n",
+    )
+    p1_path = process / "phases/P1/PHASE.yaml"
+    p1 = load_yaml_object(p1_path)
+    p1["result_refs"].append(registry_ref)
+    _write(p1_path, dump_yaml(p1) + "\n")
+    if target_mode == "same_phase_ref":
+        p2_path = process / "phases/P2/PHASE.yaml"
+        p2 = load_yaml_object(p2_path)
+        p2["result_refs"].append(registry_ref)
+        _write(p2_path, dump_yaml(p2) + "\n")
+    elif target_mode == "incomplete_successor":
+        target_registry_ref = "phases/P2/CONSUMER-ACCEPTANCE-SPEC.yaml"
+        empty_successor = {
+            **registry_payload,
+            "spec_id": "demo-consumer-acceptance-v2",
+            "immutable_consumer_inputs": [],
+            "fixture_contract": [],
+        }
+        _write(
+            process / target_registry_ref,
+            dump_yaml(empty_successor) + "\n",
+        )
+        p2_path = process / "phases/P2/PHASE.yaml"
+        p2 = load_yaml_object(p2_path)
+        p2["result_refs"].append(target_registry_ref)
+        _write(p2_path, dump_yaml(p2) + "\n")
+    elif target_mode == "project_level":
+        project_path = process / "PROJECT.yaml"
+        project = load_yaml_object(project_path)
+        project["legacy_evidence_registry_ref"] = registry_ref
+        _write(project_path, dump_yaml(project) + "\n")
+    elif target_mode != "missing":
+        raise AssertionError(f"unsupported target_mode: {target_mode}")
+    process_oid = _commit(process, "add immutable legacy registry fixture")
+    return tuple(
+        replace(item, oid=process_oid) if item.repository == "process" else item
+        for item in roles
+    )
+
+
 def _close_active_phase_work(release: Path, process: Path, work_id: str) -> None:
     phase = load_phase(process, "phases/P1/PHASE.yaml")
     request_ref = f"works/{work_id}/REQUEST.md"
@@ -313,7 +409,9 @@ def test_phase_transition_apply_updates_formal_truth_and_all_projections(
     assert (
         governance_projection.validate_governance_projection(release, process)["decision"] == "PASS"
     )
-    assert phase_transition.inspect_phase_transition(release, process)["decision"] == "PASS"
+    inspection = phase_transition.inspect_phase_transition(release, process)
+    assert inspection["decision"] == "PASS"
+    assert inspection["post_state_checks"] == plan.post_state_checks
 
     noop = _plan(release, process, roles)
     assert noop.decision == "NOOP", noop.errors
@@ -325,6 +423,172 @@ def test_phase_transition_apply_updates_formal_truth_and_all_projections(
     )
     assert noop_receipt["disposition"] == "NOOP"
     assert noop_receipt["mutation_count"] == 0
+
+
+def test_phase_transition_blocks_registry_loss_before_any_mutation(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    roles = _add_legacy_registry(process, roles, target_mode="missing")
+    before = {path: path.read_bytes() for path in process.rglob("*") if path.is_file()}
+
+    plan = _plan(release, process, roles)
+
+    assert plan.decision == "BLOCKED"
+    assert plan.error_code == "legacy_evidence_registry_continuity_lost"
+    assert plan.as_dict()["mutation_count"] == 0
+    assert plan.targets == {}
+    assert "CR-174" in "; ".join(plan.errors)
+    assert before == {path: path.read_bytes() for path in process.rglob("*") if path.is_file()}
+
+
+def test_phase_transition_preserves_phase_scoped_registry_and_cr_truth(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    roles = _add_legacy_registry(process, roles, target_mode="same_phase_ref")
+
+    plan = _plan(release, process, roles)
+
+    assert plan.decision == "READY", plan.errors
+    assert plan.post_state_checks["formal_cr_truth"] == "PASS"
+    assert plan.post_state_checks["cr_tracking"] == "PASS"
+    assert plan.post_state_checks["legacy_evidence_registry"]["registered_ids"] == [
+        "CR-174"
+    ]
+    receipt = phase_transition.apply_phase_transition(
+        plan,
+        expected_plan_digest=plan.plan_digest,
+        expected_release_oid=plan.release_oid,
+        expected_process_oid=plan.process_oid,
+    )
+    assert receipt["post_state_checks"] == plan.post_state_checks
+    active_bundle = load_declared_legacy_evidence_registry(
+        release,
+        consumer_id="phase-transition-test",
+    )
+    assert registered_legacy_cr_ids(active_bundle) == ("CR-174",)
+    assert cr_index.build_index(
+        release,
+        excluded_legacy_paths=frozenset(active_bundle.evidence_paths),
+    )["items"] == []
+    assert (
+        cr_tracking.main(
+            ["--project-root", str(release), "--strict-warnings"]
+        )
+        == 0
+    )
+    noop = _plan(release, process, roles)
+    assert noop.decision == "NOOP", noop.errors
+    assert noop.post_state_checks["legacy_evidence_registry"]["registered_ids"] == [
+        "CR-174"
+    ]
+
+
+def test_phase_transition_allows_project_owned_registry_without_target_duplication(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    roles = _add_legacy_registry(process, roles, target_mode="project_level")
+
+    plan = _plan(release, process, roles)
+
+    assert plan.decision == "READY", plan.errors
+    registry_check = plan.post_state_checks["legacy_evidence_registry"]
+    assert registry_check["ownership_scope"] == "project"
+    assert registry_check["registered_ids"] == ["CR-174"]
+
+
+def test_phase_transition_blocks_incomplete_successor_registry(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    roles = _add_legacy_registry(process, roles, target_mode="incomplete_successor")
+
+    plan = _plan(release, process, roles)
+
+    assert plan.decision == "BLOCKED"
+    assert plan.error_code == "legacy_evidence_registry_continuity_lost"
+    assert "CR-174" in "; ".join(plan.errors)
+    assert plan.as_dict()["mutation_count"] == 0
+
+
+def test_phase_transition_blocks_registry_bytes_that_drift_from_process_head(
+    tmp_path: Path,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    roles = _add_legacy_registry(process, roles, target_mode="same_phase_ref")
+    registry = process / "phases/P1/CONSUMER-ACCEPTANCE-SPEC.yaml"
+    registry.write_bytes(registry.read_bytes() + b"# uncommitted drift\n")
+
+    plan = _plan(release, process, roles)
+
+    assert plan.decision == "BLOCKED"
+    assert plan.error_code == "legacy_evidence_registry_digest_drift"
+    assert plan.targets == {}
+    assert plan.as_dict()["mutation_count"] == 0
+
+
+def test_phase_transition_blocks_post_state_cr_validator_failure_without_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    before = {path: path.read_bytes() for path in process.rglob("*") if path.is_file()}
+
+    def fail_post_state(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise ValueError("injected post-state formal CR truth failure")
+
+    monkeypatch.setattr(phase_transition, "_validate_post_state_cr_truth", fail_post_state)
+    plan = _plan(release, process, roles)
+
+    assert plan.decision == "BLOCKED"
+    assert plan.error_code == "phase_transition_post_state_cr_truth_invalid"
+    assert plan.targets == {}
+    assert before == {path: path.read_bytes() for path in process.rglob("*") if path.is_file()}
+
+
+def test_phase_transition_rolls_back_when_actual_post_state_cr_check_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process, roles = _fixture(tmp_path)
+    plan = _plan(release, process, roles)
+    before = {
+        ref: (process / ref.removeprefix("process/")).read_bytes()
+        for ref in plan.targets
+    }
+    original = phase_transition._validate_post_state_cr_truth
+    calls = 0
+
+    def fail_after_write(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise ValueError("injected actual post-state CR truth failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        phase_transition,
+        "_validate_post_state_cr_truth",
+        fail_after_write,
+    )
+    with pytest.raises(ValueError, match="actual post-state CR truth failure"):
+        phase_transition.apply_phase_transition(
+            plan,
+            expected_plan_digest=plan.plan_digest,
+            expected_release_oid=plan.release_oid,
+            expected_process_oid=plan.process_oid,
+        )
+
+    assert calls == 3
+    assert all(
+        (process / ref.removeprefix("process/")).read_bytes() == raw
+        for ref, raw in before.items()
+    )
+    inspection = phase_transition.inspect_phase_transition(release, process)
+    assert inspection["decision"] == "PASS"
+    assert inspection["state"] == "RECOVERED"
 
 
 def test_phase_transition_blocks_before_write_when_shared_writer_is_held(

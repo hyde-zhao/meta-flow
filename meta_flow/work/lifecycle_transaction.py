@@ -883,7 +883,10 @@ def _load_shared_successor_receipts(root: Path) -> list[dict[str, Any]]:
                 }
             elif operation == "project.phase-metadata":
                 parts = Path(ref).parts
-                operation_ref_allowed = ref == GOVERNANCE_PROJECTION_REL.as_posix() or (
+                operation_ref_allowed = ref in {
+                    "PROJECT.yaml",
+                    GOVERNANCE_PROJECTION_REL.as_posix(),
+                } or (
                     len(parts) == 3
                     and parts[0] == "phases"
                     and bool(parts[1])

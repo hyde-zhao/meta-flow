@@ -10,7 +10,11 @@ FIXTURE = runpy.run_path(
 run_core_lifecycle_dogfood = FIXTURE["run_core_lifecycle_dogfood"]
 
 
-def test_core_lifecycle_dogfood_is_binding_only_and_repeatable(tmp_path: Path) -> None:
+def test_core_lifecycle_dogfood_is_binding_only_and_repeatable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("META_FLOW_PROVIDER_MODE", "development")
     first = run_core_lifecycle_dogfood(tmp_path / "first")
     second = run_core_lifecycle_dogfood(tmp_path / "second")
 

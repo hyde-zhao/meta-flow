@@ -52,6 +52,11 @@ INSTALLATION_ROLE_REGISTRY = {
     "meta_flow/installation/contracts.py": "canonical_contract",
     "meta_flow/installation/canonical.py": "canonical_contract",
     "meta_flow/installation/identity.py": "source_identity",
+    "meta_flow/installation/artifact.py": "artifact_identity",
+    "scripts/qualify_provider_artifact.py": "artifact_qualification",
+    "scripts/run_provider_artifact_canary.py": "isolated_artifact_canary",
+    "tests/test_provider_artifact_receipt.py": "contract_test",
+    "tests/test_provider_runtime_identity.py": "contract_test",
     "tests/test_install_plan_contract.py": "contract_test",
     "meta_flow/installation/manifest.py": "manifest_ownership",
     "meta_flow/installation/ownership.py": "manifest_ownership",
@@ -1224,8 +1229,14 @@ def collect_installer_component_errors() -> list[str]:
             delivery_data = set(package_data.get("delivery", [])) if isinstance(package_data, dict) else set()
             if "meta_flow.*" not in package_includes:
                 errors.append("pyproject.toml must package meta_flow.* so installed meta-flow can expose runtime check commands")
-            if "delivery" not in package_includes or "delivery.scripts" not in package_includes:
-                errors.append("pyproject.toml must package delivery and delivery.scripts so installed meta-flow can locate delivery/scripts/install.py")
+            delivery_namespace_covered = bool(
+                {"delivery.scripts", "delivery.*"} & package_includes
+            )
+            if "delivery" not in package_includes or not delivery_namespace_covered:
+                errors.append(
+                    "pyproject.toml must package delivery and its namespace children so "
+                    "installed meta-flow can locate delivery/scripts/install.py"
+                )
             for required_pattern in ("**/*.md", "**/*.yaml", "**/*.sh", "**/*.ps1", "**/*.py"):
                 if required_pattern not in delivery_data:
                     errors.append(f"pyproject.toml delivery package-data missing pattern: {required_pattern}")
@@ -3183,6 +3194,10 @@ def _infer_installation_role(relative: str, content: str) -> str:
         return "lifecycle_docs"
     if relative == "scripts/check_delivery_guardrails.py":
         return "guardrail_owner"
+    if relative == "scripts/qualify_provider_artifact.py":
+        return "artifact_qualification"
+    if relative == "scripts/run_provider_artifact_canary.py":
+        return "isolated_artifact_canary"
     defined_symbols: set[str] = set()
     if relative.endswith(".py"):
         try:
@@ -3199,6 +3214,7 @@ def _infer_installation_role(relative: str, content: str) -> str:
                 )
             }
     symbol_roles = (
+        ("build_provider_artifact_receipt", "artifact_identity"),
         ("execute_asset_action", "asset_executor"),
         ("execute_cli_action", "cli_executor"),
         ("dispatch_authorized_actions", "authorization_dispatch"),

@@ -7,7 +7,7 @@ registration；模块不会发现、持久化或修改任何 registry / evidence
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -37,9 +37,16 @@ _FOLLOW_UP_ID_RE: Final = re.compile(r"(?m)^\s*(?:-\s*)?id\s*:\s*(?P<id>[A-Za-z0
 class LegacyEvidenceError(ValueError):
     """携带稳定 failure taxonomy 的 fail-closed 错误。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.details = dict(details or {})
 
 
 @dataclass(frozen=True)
@@ -99,12 +106,52 @@ class LegacyEvidenceView:
 
 @dataclass(frozen=True)
 class DeclaredLegacyEvidenceRegistry:
-    """由 PROJECT → active Phase → result_ref 显式声明的 registry。"""
+    """由 Project 持久声明或兼容 Phase result_ref 显式声明的 registry。"""
 
     registry_logical_ref: str
     registry_sha256: str
     registrations: tuple[LegacyEvidenceRegistration, ...]
     evidence_paths: tuple[Path, ...]
+    ownership_scope: str = "none"
+    declaration_phase_ref: str = ""
+
+
+ObjectOverrides = Mapping[str, tuple[Mapping[str, Any], bytes]]
+
+
+def _load_declared_object(
+    route: Any,
+    logical_ref: str,
+    object_overrides: ObjectOverrides | None,
+) -> tuple[dict[str, Any], bytes]:
+    if object_overrides is not None and logical_ref in object_overrides:
+        payload, raw = object_overrides[logical_ref]
+        return dict(payload), bytes(raw)
+    path = route.resolve_ref(logical_ref)
+    return load_yaml_object(path), path.read_bytes()
+
+
+def _registry_refs_from_phase(phase: Mapping[str, Any]) -> tuple[str, ...]:
+    result_refs = phase.get("result_refs")
+    if result_refs is None:
+        return ()
+    if not isinstance(result_refs, list) or not all(
+        isinstance(item, str) for item in result_refs
+    ):
+        raise LegacyEvidenceError(
+            "legacy_registry_invalid", "Phase result_refs must be a string list"
+        )
+    refs = tuple(
+        _normalize_declared_ref(item)
+        for item in result_refs
+        if Path(item).name == "CONSUMER-ACCEPTANCE-SPEC.yaml"
+    )
+    if len(refs) > 1:
+        raise LegacyEvidenceError(
+            "legacy_registry_conflict",
+            "a Phase must declare at most one consumer acceptance registry",
+        )
+    return refs
 
 
 def validate_legacy_evidence_registry(
@@ -136,20 +183,26 @@ def load_declared_legacy_evidence_registry(
     project_root: Path,
     *,
     consumer_id: str,
+    phase_ref: str | None = None,
+    object_overrides: ObjectOverrides | None = None,
 ) -> DeclaredLegacyEvidenceRegistry:
-    """加载 active Phase 明确声明的 consumer acceptance registry。
+    """加载 Project 持久声明或兼容 Phase 声明的 legacy registry。
 
-    只接受一个精确命名的 result ref；不扫描目录、不匹配 wildcard，也不从
-    non-native CR 文件反向推断兼容资格。registry 中的每个 evidence/follow-up
-    必须先通过 exact digest，再允许解析。
+    Project 的 ``legacy_evidence_registry_ref`` 是长期 owner。旧项目缺少该字段时，
+    只兼容读取指定 Phase（默认 active Phase）中一个精确命名的 result ref。
+    不扫描目录、不匹配 wildcard，也不从 non-native CR 文件反向推断兼容资格。
+    ``object_overrides`` 只用于原生事务的内存 post-state 视图。
     """
 
     if not isinstance(consumer_id, str) or not _SAFE_ID_RE.fullmatch(consumer_id):
         raise LegacyEvidenceError("legacy_registry_invalid", "consumer_id is invalid")
     try:
         route = require_process_route(project_root)
-        project_path = route.resolve_ref("process/PROJECT.yaml")
-        project = load_yaml_object(project_path)
+        project, _project_raw = _load_declared_object(
+            route,
+            "process/PROJECT.yaml",
+            object_overrides,
+        )
     except (OSError, ProcessRouteError, ValueError) as exc:
         raise LegacyEvidenceError("legacy_evidence_route_unavailable", str(exc)) from exc
     if str(project.get("project_id") or "") != route.project_id:
@@ -157,44 +210,47 @@ def load_declared_legacy_evidence_registry(
             "legacy_evidence_project_mismatch",
             "PROJECT project_id does not match route project_id",
         )
-    active_phase_ref = _normalize_declared_ref(str(project.get("active_phase_ref") or ""))
-    if not active_phase_ref:
-        return DeclaredLegacyEvidenceRegistry("", "", (), ())
-    try:
-        phase = load_yaml_object(route.resolve_ref(active_phase_ref))
-    except (OSError, ProcessRouteError, ValueError) as exc:
-        raise LegacyEvidenceError("legacy_evidence_route_unavailable", str(exc)) from exc
-    if str(phase.get("project_id") or "") != route.project_id:
-        raise LegacyEvidenceError(
-            "legacy_evidence_project_mismatch",
-            "active Phase project_id does not match route project_id",
-        )
-    result_refs = phase.get("result_refs")
-    if result_refs is None:
-        return DeclaredLegacyEvidenceRegistry("", "", (), ())
-    if not isinstance(result_refs, list) or not all(
-        isinstance(item, str) for item in result_refs
-    ):
-        raise LegacyEvidenceError(
-            "legacy_registry_invalid", "active Phase result_refs must be a string list"
-        )
-    registry_refs = tuple(
-        _normalize_declared_ref(item)
-        for item in result_refs
-        if Path(item).name == "CONSUMER-ACCEPTANCE-SPEC.yaml"
+    project_registry_ref = _normalize_declared_ref(
+        str(project.get("legacy_evidence_registry_ref") or "")
     )
-    if not registry_refs:
-        return DeclaredLegacyEvidenceRegistry("", "", (), ())
-    if len(registry_refs) != 1:
-        raise LegacyEvidenceError(
-            "legacy_registry_conflict",
-            "active Phase must declare at most one consumer acceptance registry",
+    declared_phase_ref = _normalize_declared_ref(
+        str(phase_ref if phase_ref is not None else project.get("active_phase_ref") or "")
+    )
+    registry_ref = project_registry_ref
+    ownership_scope = "project" if project_registry_ref else "none"
+    if not registry_ref and declared_phase_ref:
+        try:
+            phase, _phase_raw = _load_declared_object(
+                route,
+                declared_phase_ref,
+                object_overrides,
+            )
+        except (OSError, ProcessRouteError, ValueError) as exc:
+            raise LegacyEvidenceError("legacy_evidence_route_unavailable", str(exc)) from exc
+        if str(phase.get("project_id") or "") != route.project_id:
+            raise LegacyEvidenceError(
+                "legacy_evidence_project_mismatch",
+                "declared Phase project_id does not match route project_id",
+            )
+        registry_refs = _registry_refs_from_phase(phase)
+        if registry_refs:
+            registry_ref = registry_refs[0]
+            ownership_scope = "phase_compatibility"
+    if not registry_ref:
+        return DeclaredLegacyEvidenceRegistry(
+            "",
+            "",
+            (),
+            (),
+            ownership_scope="none",
+            declaration_phase_ref=declared_phase_ref,
         )
-    registry_ref = registry_refs[0]
     try:
-        registry_path = route.resolve_ref(registry_ref)
-        registry_raw = registry_path.read_bytes()
-        registry = load_yaml_object(registry_path)
+        registry, registry_raw = _load_declared_object(
+            route,
+            registry_ref,
+            object_overrides,
+        )
     except (OSError, ProcessRouteError, ValueError) as exc:
         raise LegacyEvidenceError("legacy_evidence_route_unavailable", str(exc)) from exc
     registrations, evidence_paths = _registrations_from_consumer_spec(
@@ -207,7 +263,102 @@ def load_declared_legacy_evidence_registry(
         registry_sha256=sha256(registry_raw).hexdigest(),
         registrations=validate_legacy_evidence_registry(registrations),
         evidence_paths=tuple(evidence_paths),
+        ownership_scope=ownership_scope,
+        declaration_phase_ref=declared_phase_ref,
     )
+
+
+def _registration_contract(
+    registration: LegacyEvidenceRegistration,
+) -> tuple[Any, ...]:
+    """返回不含 registry-local ID 的长期兼容合同。"""
+
+    return (
+        registration.project_id,
+        registration.evidence_kind,
+        registration.evidence_logical_ref,
+        registration.evidence_sha256,
+        registration.follow_up_logical_ref,
+        registration.follow_up_sha256,
+        registration.expected_lifecycle,
+        registration.expected_decision,
+        registration.expected_follow_up_count,
+        registration.expected_follow_up_ids,
+        registration.expected_follow_up_statuses,
+        registration.allowed_operations,
+    )
+
+
+def registered_legacy_cr_ids(
+    bundle: DeclaredLegacyEvidenceRegistry,
+) -> tuple[str, ...]:
+    """按数值顺序返回 registry 中精确绑定的 legacy CR ID。"""
+
+    ids: list[str] = []
+    for registration in bundle.registrations:
+        match = re.search(r"CR-\d+", registration.evidence_logical_ref)
+        if match is not None:
+            ids.append(match.group(0))
+    return tuple(sorted(ids, key=lambda item: (int(item.split("-", 1)[1]), item)))
+
+
+def validate_legacy_evidence_registry_continuity(
+    source: DeclaredLegacyEvidenceRegistry,
+    target: DeclaredLegacyEvidenceRegistry,
+) -> dict[str, Any]:
+    """证明 target 完整继承 source 的仍有效 legacy registration。"""
+
+    source_contracts = {
+        registration.evidence_logical_ref: _registration_contract(registration)
+        for registration in source.registrations
+    }
+    target_contracts = {
+        registration.evidence_logical_ref: _registration_contract(registration)
+        for registration in target.registrations
+    }
+    lost_refs = sorted(
+        ref
+        for ref, contract in source_contracts.items()
+        if target_contracts.get(ref) != contract
+    )
+    if (
+        source.registry_logical_ref
+        and source.registry_logical_ref == target.registry_logical_ref
+        and source.registry_sha256 != target.registry_sha256
+    ):
+        lost_refs = sorted(set(lost_refs) | set(source_contracts))
+    if lost_refs:
+        lost_ids = sorted(
+            {
+                match.group(0)
+                for ref in lost_refs
+                if (match := re.search(r"CR-\d+", ref)) is not None
+            },
+            key=lambda item: (int(item.split("-", 1)[1]), item),
+        )
+        details = {
+            "lost_registration_ids": lost_ids,
+            "source_registry_ref": source.registry_logical_ref,
+            "target_registry_ref": target.registry_logical_ref,
+            "source_registry_sha256": source.registry_sha256,
+            "target_registry_sha256": target.registry_sha256,
+        }
+        raise LegacyEvidenceError(
+            "legacy_evidence_registry_continuity_lost",
+            "legacy evidence registry continuity lost for "
+            + (", ".join(lost_ids) if lost_ids else ", ".join(lost_refs))
+            + f"; source={source.registry_logical_ref or 'none'}"
+            + f"; target={target.registry_logical_ref or 'none'}",
+            details=details,
+        )
+    return {
+        "decision": "PASS",
+        "source_registry_ref": source.registry_logical_ref,
+        "target_registry_ref": target.registry_logical_ref,
+        "registered_ids": list(registered_legacy_cr_ids(target)),
+        "registry_digest": target.registry_sha256,
+        "ownership_scope": target.ownership_scope,
+    }
 
 
 def query_declared_legacy_evidence(
@@ -691,5 +842,7 @@ __all__ = [
     "load_declared_legacy_evidence_registry",
     "list_registered_follow_ups",
     "query_declared_legacy_evidence",
+    "registered_legacy_cr_ids",
+    "validate_legacy_evidence_registry_continuity",
     "validate_legacy_evidence_registry",
 ]

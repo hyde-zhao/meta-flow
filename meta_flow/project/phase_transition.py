@@ -190,6 +190,18 @@ def _tracked_at_head(process_root: Path, relative_ref: str) -> bool:
     return result.returncode == 0
 
 
+def _head_file_sha256(process_root: Path, logical_ref: str) -> str:
+    _logical, relative = _logical_ref(logical_ref)
+    result = subprocess.run(
+        ["git", "-C", str(process_root), "show", f"HEAD:{relative}"],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"critical Phase transition input is not tracked at HEAD: {logical_ref}")
+    return hashlib.sha256(result.stdout).hexdigest()
+
+
 def _dirty_targets(process_root: Path, relative_refs: list[str]) -> list[str]:
     result = _git(process_root, "status", "--porcelain=v1", "--", *relative_refs)
     if result.returncode != 0:
@@ -213,6 +225,8 @@ class PhaseTransitionPlan:
     preimages: Mapping[str, str]
     decision: str
     errors: tuple[str, ...]
+    error_code: str
+    post_state_checks: Mapping[str, Any]
     plan_digest: str
 
     @property
@@ -255,6 +269,8 @@ class PhaseTransitionPlan:
                 "recovery_required_on_partial": True,
             },
             "errors": list(self.errors),
+            "error_code": self.error_code,
+            "post_state_checks": dict(self.post_state_checks),
             "plan_digest": self.plan_digest,
         }
 
@@ -272,6 +288,8 @@ def _blocked_plan(
     release_oid: str,
     process_oid: str,
     errors: list[str],
+    error_code: str = "phase_transition_preflight_blocked",
+    post_state_checks: Mapping[str, Any] | None = None,
 ) -> PhaseTransitionPlan:
     identity = {
         "operation": "project.phase-transition",
@@ -282,6 +300,8 @@ def _blocked_plan(
         "effective_at": effective_at,
         "expected_oids": [release_oid, process_oid],
         "errors": errors,
+        "error_code": error_code,
+        "post_state_checks": dict(post_state_checks or {}),
     }
     return PhaseTransitionPlan(
         release_root=release_root.resolve(),
@@ -298,8 +318,102 @@ def _blocked_plan(
         preimages={},
         decision="BLOCKED",
         errors=tuple(errors),
+        error_code=error_code,
+        post_state_checks=dict(post_state_checks or {}),
         plan_digest=_canonical_digest(identity),
     )
+
+
+def _validate_post_state_cr_truth(
+    release_root: Path,
+    process_root: Path,
+    *,
+    from_phase_ref: str,
+    to_phase_ref: str,
+    object_overrides: Mapping[str, tuple[dict[str, Any], bytes]],
+    state_candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """以纯读取 post-state 视图验证 registry continuity 与 formal-only CR truth。"""
+
+    from meta_flow.checks.cr_tracking import validate_formal_cr_truth_snapshot
+    from meta_flow.workflow.legacy_evidence_registry import (
+        LegacyEvidenceError,
+        load_declared_legacy_evidence_registry,
+        registered_legacy_cr_ids,
+        validate_legacy_evidence_registry_continuity,
+    )
+
+    source_registry = load_declared_legacy_evidence_registry(
+        release_root,
+        consumer_id="phase-transition",
+        phase_ref=from_phase_ref,
+    )
+    target_registry = load_declared_legacy_evidence_registry(
+        release_root,
+        consumer_id="phase-transition",
+        phase_ref=to_phase_ref,
+        object_overrides=object_overrides,
+    )
+    active_post_registry = load_declared_legacy_evidence_registry(
+        release_root,
+        consumer_id="phase-transition",
+        object_overrides=object_overrides,
+    )
+    if (
+        target_registry.registry_logical_ref != active_post_registry.registry_logical_ref
+        or target_registry.registry_sha256 != active_post_registry.registry_sha256
+        or target_registry.registrations != active_post_registry.registrations
+    ):
+        raise ValueError(
+            "post-state active Phase legacy registry differs from the target Phase registry"
+        )
+    continuity = validate_legacy_evidence_registry_continuity(
+        source_registry,
+        target_registry,
+    )
+    if target_registry.registry_logical_ref and (
+        _head_file_sha256(process_root, target_registry.registry_logical_ref)
+        != target_registry.registry_sha256
+    ):
+        raise LegacyEvidenceError(
+            "legacy_evidence_registry_digest_drift",
+            "target legacy evidence registry bytes differ from immutable process HEAD",
+        )
+    for registration in target_registry.registrations:
+        immutable_refs = (
+            (registration.evidence_logical_ref, registration.evidence_sha256),
+            (registration.follow_up_logical_ref, registration.follow_up_sha256),
+        )
+        for logical_ref, expected_digest in immutable_refs:
+            if _head_file_sha256(process_root, logical_ref) != expected_digest:
+                raise LegacyEvidenceError(
+                    "legacy_evidence_registry_digest_drift",
+                    "registered legacy evidence differs from immutable process HEAD: "
+                    + logical_ref,
+                )
+    registered_ids = registered_legacy_cr_ids(target_registry)
+    formal_truth = validate_formal_cr_truth_snapshot(
+        release_root,
+        process_root=process_root,
+        excluded_legacy_paths=frozenset(target_registry.evidence_paths),
+        registered_legacy_ids=registered_ids,
+        state_snapshot=state_candidate,
+    )
+    if formal_truth["decision"] != "PASS":
+        raise ValueError(
+            "post-state formal CR truth validation failed: "
+            + "; ".join(str(item) for item in formal_truth["errors"])
+        )
+    return {
+        "project_projection": "PASS",
+        "governance_projection": "PASS",
+        "state_projection": "PASS",
+        "formal_cr_truth": "PASS",
+        "cr_index_build": "PASS",
+        "cr_tracking": "PASS",
+        "formal_cr_truth_digest": formal_truth["semantic_digest"],
+        "legacy_evidence_registry": continuity,
+    }
 
 
 def plan_phase_transition(
@@ -573,6 +687,43 @@ def plan_phase_transition(
             errors=errors,
         )
 
+    try:
+        post_state_checks = _validate_post_state_cr_truth(
+            release,
+            process,
+            from_phase_ref=from_logical,
+            to_phase_ref=to_logical,
+            object_overrides=overrides,
+            state_candidate=state_candidate,
+        )
+    except ValueError as exc:
+        from meta_flow.workflow.legacy_evidence_registry import LegacyEvidenceError
+
+        error_code = (
+            exc.code
+            if isinstance(exc, LegacyEvidenceError)
+            else "phase_transition_post_state_cr_truth_invalid"
+        )
+        errors.append(str(exc))
+        return _blocked_plan(
+            release_root=release,
+            process_root=process,
+            project_id=project_id,
+            from_phase_ref=from_logical,
+            to_phase_ref=to_logical,
+            closure_evidence_ref=closure_logical,
+            effective_at=effective,
+            roles=roles,
+            release_oid=release_oid,
+            process_oid=process_oid,
+            errors=errors,
+            error_code=error_code,
+            post_state_checks={
+                "formal_cr_truth": "BLOCKED",
+                "failure": str(exc),
+            },
+        )
+
     targets: dict[str, bytes] = {
         from_logical: from_bytes,
         to_logical: to_bytes,
@@ -619,6 +770,8 @@ def plan_phase_transition(
         ],
         "decision": decision,
         "errors": errors,
+        "error_code": "" if decision != "BLOCKED" else "phase_transition_preflight_blocked",
+        "post_state_checks": post_state_checks,
     }
     return PhaseTransitionPlan(
         release_root=release,
@@ -635,6 +788,8 @@ def plan_phase_transition(
         preimages=preimages,
         decision=decision,
         errors=tuple(errors),
+        error_code="" if decision != "BLOCKED" else "phase_transition_preflight_blocked",
+        post_state_checks=post_state_checks,
         plan_digest=_canonical_digest(identity),
     )
 
@@ -714,7 +869,13 @@ def _load_manifest(release_root: Path) -> tuple[Path, dict[str, Any] | None]:
         "applied_refs",
         "targets",
     }
-    allowed = {*required, "failure", "recovery_failures", "successor_id"}
+    allowed = {
+        *required,
+        "failure",
+        "recovery_failures",
+        "successor_id",
+        "post_state_checks",
+    }
     if (
         not required.issubset(payload)
         or set(payload) - allowed
@@ -726,6 +887,10 @@ def _load_manifest(release_root: Path) -> tuple[Path, dict[str, Any] | None]:
         raise ValueError("phase transition transaction_id is invalid")
     if payload.get("state") not in {"PREPARED", "APPLYING", "PARTIAL", *TERMINAL_STATES}:
         raise ValueError("phase transition manifest state is invalid")
+    if "post_state_checks" in payload and not isinstance(
+        payload.get("post_state_checks"), Mapping
+    ):
+        raise ValueError("phase transition manifest post_state_checks is invalid")
     targets = payload.get("targets")
     if not isinstance(targets, list) or not targets:
         raise ValueError("phase transition manifest targets are invalid")
@@ -933,6 +1098,7 @@ def inspect_phase_transition(
         "decision": "BLOCKED" if findings else "PASS",
         "state": payload["state"],
         "transaction_id": payload["transaction_id"],
+        "post_state_checks": dict(payload.get("post_state_checks") or {}),
         "findings": findings,
     }
 
@@ -1173,6 +1339,7 @@ def apply_phase_transition(
             "decision": "PASS",
             "disposition": "NOOP",
             "mutation_count": 0,
+            "post_state_checks": dict(plan.post_state_checks),
             "plan_digest": plan.plan_digest,
         }
     changed = plan.changed_refs
@@ -1200,6 +1367,7 @@ def apply_phase_transition(
         "transaction_id": transaction_id,
         "state": "PREPARED",
         "project_id": plan.project_id,
+        "post_state_checks": dict(plan.post_state_checks),
         "attempted_refs": [],
         "applied_refs": [],
         "targets": [
@@ -1302,6 +1470,22 @@ def apply_phase_transition(
             raise RuntimeError(
                 "Phase transition postimage verification failed: " + ", ".join(drifted)
             )
+        actual_state = current.load_current_state(plan.release_root)
+        if not actual_state:
+            raise RuntimeError("Phase transition post-state STATE.current.json is unavailable")
+        actual_post_state_checks = _validate_post_state_cr_truth(
+            plan.release_root,
+            plan.process_root,
+            from_phase_ref=plan.from_phase_ref,
+            to_phase_ref=plan.to_phase_ref,
+            object_overrides={},
+            state_candidate=actual_state,
+        )
+        if actual_post_state_checks != dict(plan.post_state_checks):
+            raise RuntimeError(
+                "Phase transition post-state CR truth differs from the frozen preflight"
+            )
+        payload["post_state_checks"] = actual_post_state_checks
         payload["state"] = "COMMITTED"
         _write_manifest(manifest_path, payload)
         successor_id = record_shared_projection_successor(
@@ -1323,6 +1507,7 @@ def apply_phase_transition(
             "mutation_count": len(changed),
             "applied_refs": list(payload["applied_refs"]),
             "shared_projection_successor_id": successor_id,
+            "post_state_checks": actual_post_state_checks,
             "plan_digest": plan.plan_digest,
         }
     except Exception as exc:
@@ -1364,6 +1549,10 @@ def apply_phase_transition(
                 unrecovered_refs.append(ref)
                 failures.append(f"RECOVERY_ACCOUNTING_FAILED:{ref}:{type(verify_exc).__name__}")
         payload["state"] = "PARTIAL" if failures else "RECOVERED"
+        if not failures:
+            payload["post_state_checks"] = {
+                "decision": "RECOVERED_NOT_APPLIED",
+            }
         if failures:
             payload["recovery_failures"] = failures
         try:

@@ -173,6 +173,76 @@ def _cr_tracking_item(root: Path, process_root: Path | None) -> ReadinessItem:
     )
 
 
+def _legacy_registry_item(
+    root: Path,
+    process_root: Path | None,
+    *,
+    binding_aware: bool,
+) -> ReadinessItem:
+    if not binding_aware or process_root is None:
+        return ReadinessItem(
+            item_id="legacy-registry-ownership",
+            status="PASS",
+            evidence=[],
+            impact="Legacy registry ownership is evaluated only for vNext binding projects.",
+            next_action="No vNext legacy registry migration is required for this route.",
+            messages=[],
+        )
+    from meta_flow.workflow.legacy_evidence_registry import (
+        LegacyEvidenceError,
+        load_declared_legacy_evidence_registry,
+        registered_legacy_cr_ids,
+    )
+
+    try:
+        bundle = load_declared_legacy_evidence_registry(
+            root,
+            consumer_id="adoption-readiness",
+        )
+    except LegacyEvidenceError as exc:
+        return ReadinessItem(
+            item_id="legacy-registry-ownership",
+            status="FAIL",
+            evidence=["process/PROJECT.yaml"],
+            impact="Invalid legacy registry ownership can contaminate native formal CR truth.",
+            next_action="Repair the exact registry declaration and rerun meta-flow check cr-tracking.",
+            messages=[f"{exc.code}: {exc}"],
+        )
+    if not bundle.registrations:
+        return ReadinessItem(
+            item_id="legacy-registry-ownership",
+            status="PASS",
+            evidence=["process/PROJECT.yaml"],
+            impact="No registered legacy CR evidence currently requires persistent ownership.",
+            next_action="No legacy registry migration is required.",
+            messages=[],
+        )
+    registered = ", ".join(registered_legacy_cr_ids(bundle))
+    if bundle.ownership_scope == "project":
+        return ReadinessItem(
+            item_id="legacy-registry-ownership",
+            status="PASS",
+            evidence=["process/PROJECT.yaml", bundle.registry_logical_ref],
+            impact="Project-level ownership keeps immutable legacy CR classification across Phases.",
+            next_action="Keep the project-level ref and immutable evidence digests unchanged.",
+            messages=[f"registered legacy evidence: {registered}"],
+        )
+    return ReadinessItem(
+        item_id="legacy-registry-ownership",
+        status="WARN",
+        evidence=["process/PROJECT.yaml", bundle.registry_logical_ref],
+        impact="Active-Phase-only ownership can lose legacy CR classification at Phase transition.",
+        next_action=(
+            "Use a scoped meta-flow project phase-metadata plan/apply to append the exact registry "
+            "ref and atomically adopt PROJECT.legacy_evidence_registry_ref."
+        ),
+        messages=[
+            f"registered legacy evidence: {registered}",
+            "legacy_evidence_registry_ref is using Phase compatibility fallback",
+        ],
+    )
+
+
 def _identity_item(root: Path) -> ReadinessItem:
     report = product_governance.scan_delivery_routing(root)
     return ReadinessItem(
@@ -450,6 +520,11 @@ def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
         workspace_item,
         _state_item(root, process_root, binding_aware=binding_aware),
         _cr_tracking_item(root, process_root),
+        _legacy_registry_item(
+            root,
+            process_root,
+            binding_aware=binding_aware,
+        ),
         _identity_item(root),
         _quality_item(root, process_root),
         _workflow_item(root, process_root, binding_aware=binding_aware),

@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -39,6 +40,8 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from hashlib import sha256
+from importlib import metadata
 from pathlib import Path
 
 VALID_PLATFORMS = ("claude", "codex", "openclaw", "qoder")
@@ -267,6 +270,24 @@ def find_git_repo_root(start: Path) -> Path | None:
         if git_dir.is_dir() or git_dir.is_file():
             return candidate
     return None
+
+
+def find_provider_checkout_root(delivery_root: Path, script_path: Path) -> Path | None:
+    """仅当安装器脚本本身属于 provider checkout 时返回 Git root。
+
+    安装在 consumer 仓库 ``.venv`` 中的 wheel 不能因为祖先存在 ``.git``
+    就被误判为 editable provider。
+    """
+
+    candidate = find_git_repo_root(delivery_root)
+    if candidate is None:
+        return None
+    actual = script_path.resolve()
+    expected = {
+        (candidate / "delivery" / "scripts" / "install.py").resolve(),
+        (candidate / "scripts" / "install.py").resolve(),
+    }
+    return candidate if actual in expected else None
 
 
 def choose_existing(*candidates: Path) -> Path | None:
@@ -594,7 +615,7 @@ def manifest_path(workspace_root: Path, scope: str) -> Path:
 def canonical_commit(root: Path) -> str:
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
             check=True,
             capture_output=True,
             text=True,
@@ -602,6 +623,173 @@ def canonical_commit(root: Path) -> str:
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
     return result.stdout.strip() or "unknown"
+
+
+def source_worktree_clean(root: Path) -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return not result.stdout.strip()
+
+
+def source_delivery_tree_digest(root: Path) -> str:
+    delivery = root / "delivery" if (root / "delivery").is_dir() else root
+    records = {
+        (Path("delivery") / path.relative_to(delivery)).as_posix(): sha256(
+            path.read_bytes()
+        ).hexdigest()
+        for path in sorted(delivery.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    }
+    rendered = json.dumps(
+        records,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(rendered).hexdigest()
+
+
+def capability_profile_digest(root: Path) -> str:
+    delivery = root / "delivery" if (root / "delivery").is_dir() else root
+    contract = delivery / "doc" / "PUBLIC-OPERATION-CONTRACTS.yaml"
+    if not contract.is_file() or contract.is_symlink():
+        return ""
+    return sha256(contract.read_bytes()).hexdigest()
+
+
+def _is_generated_distribution_file(relative: Path) -> bool:
+    rendered = relative.as_posix()
+    if "__pycache__" in relative.parts or relative.suffix == ".pyc":
+        return True
+    if ".dist-info/" not in rendered:
+        return False
+    return relative.name in {"INSTALLER", "RECORD", "REQUESTED", "direct_url.json"}
+
+
+def installed_distribution_payload_digest(distribution_name: str = "meta-flow") -> str:
+    """重算实际安装 distribution payload，不信任 receipt 自报值。"""
+
+    try:
+        distribution = metadata.distribution(distribution_name)
+    except metadata.PackageNotFoundError:
+        return ""
+    root = Path(distribution.locate_file(".")).resolve()
+    records: dict[str, str] = {}
+    for item in distribution.files or ():
+        relative = Path(str(item))
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or _is_generated_distribution_file(relative)
+        ):
+            continue
+        candidate = Path(distribution.locate_file(item)).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if not candidate.is_file() or candidate.is_symlink():
+            continue
+        records[relative.as_posix()] = sha256(candidate.read_bytes()).hexdigest()
+    if not records:
+        return ""
+    rendered = json.dumps(
+        records,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return sha256(rendered).hexdigest()
+
+
+def distribution_version(root: Path) -> str:
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file() and (root.parent / "pyproject.toml").is_file():
+        pyproject = root.parent / "pyproject.toml"
+    if not pyproject.is_file():
+        return "unknown"
+    payload = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    project = payload.get("project")
+    if not isinstance(project, dict):
+        return "unknown"
+    value = project.get("version")
+    return str(value) if isinstance(value, str) and value else "unknown"
+
+
+def load_provider_receipt_facts(path_value: str) -> dict[str, object]:
+    if not path_value:
+        return {}
+    path = Path(path_value).expanduser().resolve()
+    if not path.is_file() or path.is_symlink():
+        fail("META_FLOW_PROVIDER_RECEIPT 必须指向普通文件。")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"无法解析 META_FLOW_PROVIDER_RECEIPT: {exc}")
+    required = {
+        "schema_version",
+        "kind",
+        "distribution_name",
+        "distribution_version",
+        "source_commit",
+        "source_dirty",
+        "source_tree_digest",
+        "artifact_filename",
+        "artifact_sha256",
+        "capability_profile_digest",
+        "installed_payload_digest",
+        "release_qualifying",
+        "receipt_digest",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        fail("META_FLOW_PROVIDER_RECEIPT 字段不完整。")
+    if payload.get("kind") != "ProviderArtifactReceiptV1" or payload.get("schema_version") != 1:
+        fail("META_FLOW_PROVIDER_RECEIPT identity 非法。")
+    for key in ("distribution_name", "distribution_version", "artifact_filename"):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            fail(f"META_FLOW_PROVIDER_RECEIPT {key} 非法。")
+    if not isinstance(payload.get("source_commit"), str) or not re.fullmatch(
+        r"[0-9a-f]{40}", payload["source_commit"]
+    ):
+        fail("META_FLOW_PROVIDER_RECEIPT source_commit 非法。")
+    for key in (
+        "source_tree_digest",
+        "artifact_sha256",
+        "capability_profile_digest",
+        "installed_payload_digest",
+        "receipt_digest",
+    ):
+        if not isinstance(payload.get(key), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", payload[key]
+        ):
+            fail(f"META_FLOW_PROVIDER_RECEIPT {key} 非法。")
+    if not isinstance(payload.get("source_dirty"), bool) or not isinstance(
+        payload.get("release_qualifying"), bool
+    ):
+        fail("META_FLOW_PROVIDER_RECEIPT boolean 字段非法。")
+    unsigned = {key: value for key, value in payload.items() if key != "receipt_digest"}
+    rendered = json.dumps(
+        unsigned,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    if payload["receipt_digest"] != sha256(rendered).hexdigest():
+        fail("META_FLOW_PROVIDER_RECEIPT digest 不匹配。")
+    if payload["release_qualifying"] == payload["source_dirty"]:
+        fail("META_FLOW_PROVIDER_RECEIPT release qualification 不一致。")
+    return payload
 
 
 def iso_now() -> str:
@@ -1648,6 +1836,12 @@ def parse_args() -> argparse.Namespace:
         parser.set_defaults(content=None, agent="", skill="", permissive=False)
     parser.add_argument("--dry-run", action="store_true", help="仅打印将执行的操作")
     parser.add_argument(
+        "--provider-mode",
+        choices=("development", "release"),
+        default="development",
+        help="provider 身份准入模式；公开 meta-flow CLI 默认使用 release",
+    )
+    parser.add_argument(
         "--force-refresh",
         action="store_true",
         help="在单一 upgrade transaction 中强制刷新受管内容",
@@ -1716,10 +1910,45 @@ def resolve_install_selection(args: argparse.Namespace) -> tuple[bool, bool, boo
 def main() -> None:
     args = parse_args()
     workspace_root = resolve_workspace_root(args.project_dir, args.scope)
-    repo_root = script_repo_root(Path(__file__))
-    layout = detect_source_layout(repo_root)
+    delivery_root = script_repo_root(Path(__file__))
+    layout = detect_source_layout(delivery_root)
     platform_contracts = load_platform_contracts(layout.platform_contracts)
-    commit = canonical_commit(repo_root)
+    checkout_root = find_provider_checkout_root(delivery_root, Path(__file__))
+    provider_receipt = load_provider_receipt_facts(
+        os.environ.get("META_FLOW_PROVIDER_RECEIPT", "")
+    )
+    if checkout_root is not None:
+        commit = canonical_commit(checkout_root)
+        worktree_clean = source_worktree_clean(checkout_root)
+    else:
+        commit = str(provider_receipt.get("source_commit") or "unknown")
+        worktree_clean = None
+    delivery_tree_digest = source_delivery_tree_digest(delivery_root)
+    profile_digest = capability_profile_digest(delivery_root)
+    package_version = (
+        str(provider_receipt.get("distribution_version"))
+        if provider_receipt
+        else distribution_version(delivery_root)
+    )
+    if args.provider_mode == "release":
+        if checkout_root is not None:
+            fail(
+                "release provider install requires a non-editable qualified artifact; "
+                "use --provider-mode development only for local checkout verification"
+            )
+        if not provider_receipt or provider_receipt.get("release_qualifying") is not True:
+            fail("release provider install requires one release-qualifying artifact receipt")
+        if provider_receipt.get("source_dirty") is not False:
+            fail("release provider artifact receipt must bind a clean source checkout")
+        if provider_receipt.get("source_tree_digest") != delivery_tree_digest:
+            fail("installed delivery tree differs from provider artifact receipt")
+        if provider_receipt.get("capability_profile_digest") != profile_digest:
+            fail("installed capability profile differs from provider artifact receipt")
+        installed_payload_digest = installed_distribution_payload_digest()
+        if not installed_payload_digest:
+            fail("installed provider payload digest is unavailable")
+        if provider_receipt.get("installed_payload_digest") != installed_payload_digest:
+            fail("installed provider payload differs from provider artifact receipt")
     generated = iso_now()
     target_manifest_path = manifest_path(workspace_root, args.scope)
 
@@ -1757,6 +1986,9 @@ def main() -> None:
         args.mode == "install"
         and existing_install is not None
         and existing_install.get("canonical_commit") == commit
+        and existing_install.get("source_tree_digest") == delivery_tree_digest
+        and existing_install.get("provider_receipt_digest")
+        == provider_receipt.get("receipt_digest")
         and isinstance(existing_install.get("installed_at"), str)
         and existing_install["installed_at"]
     ):
@@ -1866,6 +2098,25 @@ def main() -> None:
             "workspace_root": str(workspace_root),
             "meta_flow_root": str(install_state_root(workspace_root, args.scope)),
             "canonical_commit": commit,
+            "distribution_version": package_version,
+            "provider_mode": args.provider_mode,
+            "source_dirty": (
+                bool(provider_receipt.get("source_dirty"))
+                if checkout_root is None and provider_receipt
+                else worktree_clean is not True
+            ),
+            "source_tree_digest": delivery_tree_digest,
+            "artifact_sha256": provider_receipt.get("artifact_sha256"),
+            "provider_receipt_digest": provider_receipt.get("receipt_digest"),
+            "capability_profile_digest": profile_digest,
+            "installed_payload_digest": provider_receipt.get("installed_payload_digest"),
+            "schema_versions": {
+                "installation_manifest": 2,
+                "phase_metadata": 1,
+                "phase_transition": 1,
+                "provider_runtime_identity": 2,
+                "work_publication_receipt": 2,
+            },
             "warnings": warnings
             + [
                 f"canonical agent {agent.name} 忽略未支持字段: {', '.join(agent.extra_fields)}"

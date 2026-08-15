@@ -22,7 +22,7 @@ from meta_flow.project.governance_projection import (
     render_governance_projection,
     validate_governance_projection,
 )
-from meta_flow.project.model import load_project
+from meta_flow.project.model import load_project, validate_project_payload
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.state import current
 from meta_flow.state.formal_projection import (
@@ -76,6 +76,7 @@ STATE_TARGET_REFS = frozenset(
 )
 FIXED_TARGET_REFS = frozenset(
     {
+        "process/PROJECT.yaml",
         "process/governance/GOVERNANCE-BASELINE.json",
         *STATE_TARGET_REFS,
     }
@@ -239,6 +240,19 @@ def _validate_append_evidence(
     except (OSError, ValueError) as exc:
         errors.append(f"Phase result evidence is not a machine object: process/{append_ref}: {exc}")
         return errors
+    if Path(append_ref).name == "CONSUMER-ACCEPTANCE-SPEC.yaml":
+        if (
+            payload.get("schema_version") != 1
+            or not isinstance(payload.get("project_id"), str)
+            or payload.get("spec_status") != "ready-for-provider-delivery"
+            or not isinstance(payload.get("immutable_consumer_inputs"), list)
+            or not isinstance(payload.get("fixture_contract"), list)
+        ):
+            errors.append(
+                "legacy evidence registry identity/readiness contract is invalid: "
+                f"{append_ref}"
+            )
+        return errors
     if append_ref == GOVERNANCE_PROJECTION_REL.as_posix():
         if payload.get("kind") != GOVERNANCE_PROJECTION_KIND:
             errors.append(
@@ -275,6 +289,36 @@ def _validate_append_evidence(
     if decision not in {"PASS", "PASS_WITH_RISK"}:
         errors.append(f"Phase result evidence decision is not admissible: {append_ref}:{decision}")
     return errors
+
+
+def _legacy_registry_input_refs(
+    process_root: Path,
+    append_relatives: tuple[str, ...],
+) -> tuple[str, ...]:
+    registry_refs = tuple(
+        ref
+        for ref in append_relatives
+        if Path(ref).name == "CONSUMER-ACCEPTANCE-SPEC.yaml"
+    )
+    if not registry_refs:
+        return ()
+    if len(registry_refs) != 1:
+        raise ValueError("Phase metadata accepts at most one legacy evidence registry")
+    payload = load_yaml_object(process_root.resolve() / registry_refs[0])
+    raw_inputs = payload.get("immutable_consumer_inputs")
+    if not isinstance(raw_inputs, list):
+        raise ValueError("legacy evidence registry immutable_consumer_inputs must be a list")
+    refs: list[str] = []
+    for item in raw_inputs:
+        if not isinstance(item, dict):
+            raise ValueError("legacy evidence registry immutable input must be an object")
+        raw_ref = str(item.get("ref") or "")
+        logical_ref = raw_ref if raw_ref.startswith("process/") else "process/" + raw_ref
+        _logical, relative = _logical_ref(logical_ref)
+        refs.append(relative)
+    if len(refs) != len(set(refs)):
+        raise ValueError("legacy evidence registry immutable input refs must be unique")
+    return tuple(refs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,16 +647,38 @@ def plan_phase_metadata_update(
         errors.append("target Phase must be declared by ROADMAP.phase_refs")
     if phase.status not in {"active", "planned"}:
         errors.append("Phase metadata append requires an active or planned Phase")
+    append_relatives = tuple(_logical_ref(ref)[1] for ref in normalized_append)
+    registry_append_refs = tuple(
+        ref
+        for ref in append_relatives
+        if Path(ref).name == "CONSUMER-ACCEPTANCE-SPEC.yaml"
+    )
+    if len(registry_append_refs) > 1:
+        errors.append("Phase metadata accepts at most one legacy evidence registry")
+    if (
+        registry_append_refs
+        and project.legacy_evidence_registry_ref
+        and project.legacy_evidence_registry_ref != registry_append_refs[0]
+    ):
+        errors.append(
+            "PROJECT already owns a different legacy_evidence_registry_ref"
+        )
     target_relatives = (
         phase_relative,
+        *(("PROJECT.yaml",) if registry_append_refs else ()),
         GOVERNANCE_PROJECTION_REL.as_posix(),
         "state/STATE.current.json",
         "STATE.md",
         "current/CURRENT.json",
     )
     errors.extend(_scope_allows(authorizing_work, "write", target_relatives))
-    append_relatives = tuple(_logical_ref(ref)[1] for ref in normalized_append)
     errors.extend(_scope_allows(authorizing_work, "read", append_relatives))
+    try:
+        registry_input_refs = _legacy_registry_input_refs(process, append_relatives)
+    except (OSError, ValueError) as exc:
+        registry_input_refs = ()
+        errors.append(str(exc))
+    errors.extend(_scope_allows(authorizing_work, "read", registry_input_refs))
     for append_ref in append_relatives:
         errors.extend(
             _validate_append_evidence(
@@ -680,6 +746,18 @@ def plan_phase_metadata_update(
             errors=errors,
         )
     missing_refs = tuple(ref for ref in append_relatives if ref not in phase.result_refs)
+    project_registry_changed = bool(
+        registry_append_refs and not project.legacy_evidence_registry_ref
+    )
+    post_project = (
+        replace(
+            project,
+            legacy_evidence_registry_ref=registry_append_refs[0],
+            updated_at=effective,
+        )
+        if project_registry_changed
+        else project
+    )
     post_phase = (
         phase
         if not missing_refs
@@ -690,9 +768,13 @@ def plan_phase_metadata_update(
         )
     )
     phase_payload = post_phase.as_dict()
+    project_payload = post_project.as_dict()
     findings = validate_phase_payload(phase_payload)
+    project_findings = validate_project_payload(project_payload)
     if findings:
         errors.extend(item.message for item in findings)
+    if project_findings:
+        errors.extend(item.message for item in project_findings)
     try:
         governance = build_governance_projection_for_phase_postimage(
             process,
@@ -702,13 +784,34 @@ def plan_phase_metadata_update(
         )
         assert state is not None
         phase_bytes = _render_yaml(phase_payload)
-        overrides = {phase_logical: (phase_payload, phase_bytes)}
+        project_bytes = _render_yaml(project_payload)
+        overrides = {
+            phase_logical: (phase_payload, phase_bytes),
+            "process/PROJECT.yaml": (project_payload, project_bytes),
+        }
+        if registry_append_refs:
+            from meta_flow.workflow.legacy_evidence_registry import (
+                load_declared_legacy_evidence_registry,
+            )
+
+            registry_bundle = load_declared_legacy_evidence_registry(
+                release,
+                consumer_id="phase-metadata",
+                phase_ref=phase_logical,
+                object_overrides=overrides,
+            )
+            if registry_bundle.registry_logical_ref != normalized_append[
+                append_relatives.index(registry_append_refs[0])
+            ]:
+                raise ValueError(
+                    "project-level legacy registry post-state differs from requested append ref"
+                )
         post_snapshot = build_formal_truth_snapshot(
             release,
             process_root=process,
             object_overrides=overrides,
         )
-        if missing_refs:
+        if missing_refs or project_registry_changed:
             patch = derive_formal_truth_patch(state, post_snapshot)
             patch["updated_at"] = effective
             state_candidate = current.build_current_state_candidate(
@@ -725,6 +828,7 @@ def plan_phase_metadata_update(
         errors.append(str(exc))
         governance = {}
         phase_bytes = b""
+        project_bytes = b""
         state_candidate = state or {}
         current_entry = {}
     if errors:
@@ -752,7 +856,9 @@ def plan_phase_metadata_update(
         "process/STATE.md": current.render_state_markdown(state_candidate).encode("utf-8"),
         "process/current/CURRENT.json": _render_json(current_entry),
     }
-    if not missing_refs:
+    if project_registry_changed:
+        targets["process/PROJECT.yaml"] = project_bytes
+    if not missing_refs and not project_registry_changed:
         # 已存在的 ref 必须是 exact byte no-op；不得因重跑更新时间或重渲染格式。
         targets = {ref: _read_bytes(_target_path(process, ref)) or b"" for ref in targets}
     preimages: dict[str, str] = {}
@@ -922,7 +1028,7 @@ def _load_manifest(process_root: Path) -> tuple[Path, dict[str, Any] | None]:
         if not _DIGEST_RE.fullmatch(str(payload.get(field) or "")):
             raise ValueError(f"Phase metadata manifest {field} is invalid")
     targets = payload.get("targets")
-    if not isinstance(targets, list) or not 1 <= len(targets) <= 5:
+    if not isinstance(targets, list) or not 1 <= len(targets) <= 6:
         raise ValueError("Phase metadata manifest targets are invalid")
     decoded = [_decode_record(item) for item in targets if isinstance(item, Mapping)]
     refs = [item[0] for item in decoded]

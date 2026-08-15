@@ -211,6 +211,15 @@ status、work refs、目标或退出条件，也不能替代当前 Work 自己�
 合同。成功 apply 会登记 `project.phase-metadata` shared-projection successor，因而
 `work close-inspect` 接受该合法 generation；直接编辑相同 Phase 仍会被识别为外部漂移。
 
+`CONSUMER-ACCEPTANCE-SPEC.yaml` 是一个受限特例：当 scoped Work 通过同一命令追加
+一个精确 registry ref 时，plan 会先读取其中显式列出的 immutable input refs 并逐项
+验证 Work read scope；apply 再把该 ref 原子写入
+`PROJECT.legacy_evidence_registry_ref`，同时更新目标 Phase、治理基线、State/CURRENT 与
+shared lineage。此操作是 active-Phase-only 兼容声明迁移为项目级持久 owner 的 native
+入口，不扫描目录、不猜测 legacy CR，也不修改 legacy evidence 原文。PROJECT 已声明
+另一 registry、registry identity/digest 不合法或 evidence/follow-up 不在 scope 时均在
+写入前 `BLOCKED`。重复采用同一 registry 返回 `NOOP`。
+
 ### 0.5 Project / Phase 原生转换
 
 Phase 完成与下一 Phase 激活必须使用同一份七目标事务计划，不能依次手工修改 `PHASE.yaml`、`PROJECT.yaml`、治理基线与 State 投影。计划要求：from/to Phase 都由 Roadmap 声明；from Phase 的 Work 已终态；closure evidence 已由 from Phase 声明并存在于 process HEAD；to Phase 已声明 `governance/GOVERNANCE-BASELINE.json`；State v2 已初始化；全部事务目标路径无本地漂移。
@@ -245,6 +254,17 @@ meta-flow project phase-transition apply \
 ```
 
 七个固定目标是 from/to `PHASE.yaml`、`PROJECT.yaml`、`GOVERNANCE-BASELINE.json`、`STATE.current.json`、`STATE.md` 与 `CURRENT.json`。单文件更新使用原子替换；整体是 journal 驱动、可检查、可恢复的逻辑事务，不宣称文件系统级多文件原子性。三份 State/CURRENT 目标必须通过 State projection 子事务更新，Phase writer 不得直接绕过 State transaction manifest。Phase 与 State writer lock 同时使用 create-only 身份文件和进程存活期 advisory lock：活跃 writer 不可被接管；进程退出后，`recover` 只接管与 journal 匹配或可证明尚未写入 PREPARED manifest 的遗留锁。Phase terminal journal 是恢复游标，不冻结七个 truth target；后续合法 native writer 更新目标后，旧 Phase journal 不得报 terminal generation drift。中断后先执行：
+
+Phase transition 还会在七目标写入前构造 source Phase、target Phase 和 post-active 三个
+legacy registry 视图。Project 级 `legacy_evidence_registry_ref` 优先；旧项目仅兼容读取
+Phase `result_refs` 中唯一精确命名的 registry。若 source 中仍有效的 registration 在
+target 缺失、evidence/follow-up 合同或摘要漂移，计划返回
+`error_code=legacy_evidence_registry_continuity_lost`（或精确 digest drift code）、
+`mutation_count=0`。连续性通过后，planner 使用同一 `cr-tracking` 纯读取内核重建
+formal-only CR index，验证 legacy/native ID 互斥、现有 CR-INDEX semantic digest 与
+`STATE.current.active_change`；apply 在持锁重规划后、写入完成但标记 COMMITTED 前再次
+验证真实 post-state。后置验证失败会走 journal rollback，不允许留下
+`COMMITTED + cr-tracking failure`。receipt 与 inspect 均记录 `post_state_checks`。
 
 ```bash
 meta-flow project phase-transition inspect --project-root . --project-id <project-id>
@@ -506,12 +526,26 @@ meta-flow upgrade codex --scope project --project-dir /path/to/project
 meta-flow reinstall codex --scope project --project-dir /path/to/project
 meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action inspect
 meta-flow version --format json
+meta-flow --version
 meta-flow install qoder --scope project --project-dir /path/to/project
 ```
 
-`ready=true` 只表示 source identity 字段完整且可诊断，不等于当前 checkout 已形成不可变交付。
-必须同时检查 `worktree_clean=true` 与 `exact_commit_delivery=true`，才可以把 `oid` 解释为能够
-精确复现当前 provider bytes 的 delivery OID；dirty checkout 会明确返回这两个字段为 `false`。
+`ProviderRuntimeIdentityV2.source_discovery=PASS` 只表示实际导入 provider 可被诊断，不等于
+已经形成不可变交付。正式 consumer mutation 必须满足
+`release_readiness=PASS`、`editable=false`、`exact_commit_delivery=true`，并通过外部
+`ProviderArtifactReceiptV1` 把 clean source full OID、wheel SHA-256、wheel payload digest、
+capability profile 与安装运行时绑定；运行时会按实际安装文件重算 payload digest。
+editable/dirty checkout 明确返回
+`status=SOURCE_READY_RELEASE_BLOCKED`，不能作为 release acceptance。
+
+真实安装命令默认使用 `release` provider mode。纯 `--dry-run` 自动使用 mutation=0 的
+`development` 诊断模式；如需显式固定模式，可在本地开发验证中使用：
+
+```bash
+META_FLOW_PROVIDER_MODE=development meta-flow install codex --scope project --project-dir . --dry-run
+```
+
+development receipt 永远不具备 release qualification。
 
 项目级安装未提供 `--project-dir` 时，交互式终端会提示确认当前目录或输入其他目录；非交互环境必须显式传入 `--project-dir`。
 
@@ -566,7 +600,7 @@ legacy adapter，Windows 未资格化。
 | `meta-flow uninstall …` | 只移除 manifest-owned block/file/leaf | foreign 或 owned drift 均 BLOCKED |
 | `meta-flow reinstall …` | 单一 upgrade，`force_refresh=true` | transaction=1、authorization=1，不先卸载 |
 | `meta-flow recover …` | inspect/resume/rollback/abandon | inspect auth=0；其余必须新 plan、新授权 |
-| `meta-flow version --format json` | 只读来源 diagnostics | 不完整或漂移事实不能冒充 READY |
+| `meta-flow version --format json` | 只读 ProviderRuntimeIdentityV2 | source 可诊断与 release 可用分开判定；cwd 不拥有 provider identity |
 
 `reinstall` 明确禁止旧 `uninstall→install` 两事务路径。
 
@@ -583,6 +617,25 @@ journal、qualified executor、Manifest v2 和 terminal receipt。异常后先�
 ```bash
 meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action inspect
 ```
+
+正式 artifact 资格化必须在 clean checkout 上完成：
+
+```bash
+uv build --wheel --out-dir dist
+uv run --frozen --python 3.11 python scripts/qualify_provider_artifact.py \
+  --source-root . \
+  --wheel dist/meta_flow-<version>-py3-none-any.whl \
+  --output dist/PROVIDER-ARTIFACT-RECEIPT.json
+uv run --frozen --python 3.11 python scripts/run_provider_artifact_canary.py \
+  --wheel dist/meta_flow-<version>-py3-none-any.whl \
+  --receipt dist/PROVIDER-ARTIFACT-RECEIPT.json
+```
+
+canary 将 harness 复制到隔离临时目录，用新 venv 非 editable 安装 wheel，并执行
+sibling-binding、最小 usage 和三个顺序 Work 的核心生命周期；实际 import 路径必须位于
+该 venv，不能回落到 provider checkout。dirty candidate 仅可用
+`--allow-dirty` / `--allow-non-release` 验证链路，结果固定为 `PASS_WITH_RISK`，不得作为正式
+release receipt。
 
 `resume|rollback|abandon` 不会直接修改 journal，也不能复用原授权；调用方必须
 依据 target digest/preimage 重建 `lifecycle.recover` plan。v1 manifest

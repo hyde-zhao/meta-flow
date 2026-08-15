@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from contextlib import redirect_stdout
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -220,27 +219,36 @@ def test_diagnostics_are_ready_only_when_manifest_and_receipt_match() -> None:
 def test_version_reports_identity_readiness_separately_from_exact_delivery() -> None:
     output = StringIO()
     identity = {
-        "source": "checkout/meta-flow",
-        "version": "0.5.1",
-        "oid": "a" * 40,
-        "delivery_tree_digest": "b" * 64,
-        "rules_source_digest": "c" * 64,
-        "inventory_digest": "d" * 64,
+        "schema_version": 2,
+        "kind": "ProviderRuntimeIdentityV2",
+        "distribution_name": "meta-flow",
+        "distribution_version": "0.5.1",
+        "module_path": "/tmp/source/meta_flow/__init__.py",
+        "distribution_path": "/tmp/source",
+        "editable": True,
+        "identity_source": "editable-checkout",
+        "source_root": "/tmp/source",
+        "source_commit": "a" * 40,
+        "source_dirty": True,
+        "source_tree_digest": "b" * 64,
+        "artifact_sha256": None,
+        "installed_files_digest": "c" * 64,
+        "capability_profile_digest": "d" * 64,
+        "schema_versions": {"provider_runtime_identity": 2},
+        "source_discovery": {"decision": "PASS", "reason_codes": []},
+        "release_readiness": {
+            "decision": "BLOCKED",
+            "reason_codes": ["EDITABLE_INSTALL", "SOURCE_DIRTY"],
+        },
+        "worktree_clean": False,
+        "exact_commit_delivery": False,
+        "identity_digest": "e" * 64,
     }
-    installer = Path("/tmp/source/delivery/scripts/install.py")
 
     with (
-        patch.object(cli, "_find_installer", return_value=installer),
         patch(
-            "meta_flow.installation.identity.observe_checkout_source_identity",
+            "meta_flow.installation.identity.observe_provider_runtime_identity",
             return_value=identity,
-        ),
-        patch(
-            "meta_flow.installation.identity.observe_checkout_delivery_status",
-            return_value={
-                "worktree_clean": False,
-                "exact_commit_delivery": False,
-            },
         ),
         redirect_stdout(output),
     ):
@@ -248,6 +256,8 @@ def test_version_reports_identity_readiness_separately_from_exact_delivery() -> 
 
     payload = json.loads(output.getvalue())
     assert payload["ready"] is True
+    assert payload["status"] == "SOURCE_READY_RELEASE_BLOCKED"
+    assert payload["provider_admission"]["decision"] == "BLOCKED"
     assert payload["worktree_clean"] is False
     assert payload["exact_commit_delivery"] is False
 

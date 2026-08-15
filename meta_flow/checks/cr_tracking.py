@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -785,6 +786,60 @@ def validate_cr_index_projection(
     return errors
 
 
+def validate_formal_cr_truth_snapshot(
+    project_root: Path,
+    *,
+    process_root: Path,
+    excluded_legacy_paths: frozenset[Path],
+    registered_legacy_ids: tuple[str, ...] = (),
+    state_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """纯读取验证 formal-only CR index、legacy 分区与 State active_change。"""
+
+    from meta_flow.workflow import cr_index
+
+    errors: list[str] = []
+    expected: dict[str, Any] = {}
+    try:
+        expected = cr_index.build_index(
+            project_root,
+            excluded_legacy_paths=excluded_legacy_paths,
+        )
+    except (OSError, ValueError) as exc:
+        errors.append(f"formal CR truth cannot build native index: {exc}")
+    native_ids = tuple(
+        str(item.get("id") or "")
+        for item in expected.get("items", [])
+        if isinstance(item, Mapping)
+    )
+    overlap = sorted(set(native_ids) & set(registered_legacy_ids))
+    if overlap:
+        errors.append(
+            "legacy evidence and native formal CR truth overlap: " + ", ".join(overlap)
+        )
+    expected_digest = str(expected.get("semantic_digest") or "")
+    if expected_digest:
+        errors.extend(
+            validate_cr_index_projection(
+                process_root.resolve() / "changes/CR-INDEX.json",
+                expected_semantic_digest=expected_digest,
+            )
+        )
+    active_change = str((state_snapshot or {}).get("active_change") or "")
+    if active_change and active_change not in native_ids:
+        errors.append(
+            "STATE.current.active_change is absent from native formal CR truth: "
+            + active_change
+        )
+    return {
+        "decision": "BLOCKED" if errors else "PASS",
+        "errors": errors,
+        "native_ids": list(native_ids),
+        "registered_legacy_ids": list(registered_legacy_ids),
+        "semantic_digest": expected_digest,
+    }
+
+
 def find_legacy_cr_index_paths(project_root: Path) -> list[Path]:
     return [
         _resolve_runtime_path(project_root, rel)
@@ -1539,28 +1594,20 @@ def main(argv: list[str] | None = None) -> int:
         excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
     )
     follow_up_rows = discover_follow_up_rows(project_root, args.tracking)
-    expected_semantic_digest = ""
-    projection_errors: list[str] = []
-    try:
-        # Local import avoids making the tracking parser a lifecycle dependency
-        # during module initialization while still comparing against formal truth.
-        from meta_flow.workflow import cr_lifecycle
-
-        expected_semantic_digest = str(
-            cr_lifecycle.build_index(
-                project_root,
-                excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
-            ).get("semantic_digest")
-            or ""
-        )
-    except ValueError as exc:
-        projection_errors.append(f"formal CR truth cannot build native index: {exc}")
-    projection_errors.extend(
-        validate_cr_index_projection(
-            index_path,
-            expected_semantic_digest=expected_semantic_digest,
-        )
+    registered_legacy_ids = tuple(
+        match.group(0)
+        for registration in legacy_bundle.registrations
+        if (match := CR_ID_RE.search(registration.evidence_logical_ref)) is not None
     )
+    formal_truth_check = validate_formal_cr_truth_snapshot(
+        project_root,
+        process_root=route.process_root,
+        excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
+        registered_legacy_ids=registered_legacy_ids,
+    )
+    projection_errors = list(formal_truth_check["errors"])
+    from meta_flow.workflow import cr_lifecycle
+
     try:
         index_items = parse_cr_index_items(index_path)
         next_action_refs = parse_next_action_candidates(index_path)
@@ -1618,11 +1665,6 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 warnings.append(message)
 
-    registered_legacy_ids = tuple(
-        match.group(0)
-        for registration in legacy_bundle.registrations
-        if (match := CR_ID_RE.search(registration.evidence_logical_ref)) is not None
-    )
     print_summary(
         formal_crs,
         follow_up_rows,

@@ -25,6 +25,7 @@ PROJECT_ALLOWED_KEYS = {
     "roadmap_ref",
     "active_phase_ref",
     "active_work_refs",
+    "legacy_evidence_registry_ref",
     "updated_at",
 }
 PROJECT_REQUIRED_KEYS = {"schema_version", "project_id", "name", "status"}
@@ -59,6 +60,7 @@ class Project:
     active_phase_ref: str = ""
     active_work_refs: tuple[str, ...] = ()
     updated_at: str = ""
+    legacy_evidence_registry_ref: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -75,6 +77,8 @@ class Project:
             payload["active_phase_ref"] = self.active_phase_ref
         if self.active_work_refs:
             payload["active_work_refs"] = list(self.active_work_refs)
+        if self.legacy_evidence_registry_ref:
+            payload["legacy_evidence_registry_ref"] = self.legacy_evidence_registry_ref
         if self.updated_at:
             payload["updated_at"] = self.updated_at
         return payload
@@ -212,6 +216,20 @@ def validate_project_payload(
             "active_work_refs must not contain duplicates",
             key="active_work_refs",
         )
+    legacy_registry_ref = payload.get("legacy_evidence_registry_ref", "")
+    if legacy_registry_ref not in (None, ""):
+        if (
+            not isinstance(legacy_registry_ref, str)
+            or not is_safe_ref(legacy_registry_ref)
+            or Path(legacy_registry_ref).name != "CONSUMER-ACCEPTANCE-SPEC.yaml"
+        ):
+            _finding(
+                findings,
+                "ref_path",
+                "legacy_evidence_registry_ref must be one safe process-repo-relative "
+                "CONSUMER-ACCEPTANCE-SPEC.yaml path",
+                key="legacy_evidence_registry_ref",
+            )
     return findings
 
 
@@ -228,6 +246,9 @@ def project_from_payload(payload: Mapping[str, Any]) -> Project:
         roadmap_ref=str(payload.get("roadmap_ref") or ""),
         active_phase_ref=str(payload.get("active_phase_ref") or ""),
         active_work_refs=tuple(str(item) for item in payload.get("active_work_refs") or ()),
+        legacy_evidence_registry_ref=str(
+            payload.get("legacy_evidence_registry_ref") or ""
+        ),
         updated_at=str(payload.get("updated_at") or ""),
     )
 

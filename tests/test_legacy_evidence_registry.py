@@ -11,6 +11,7 @@ from meta_flow.workflow import cr_index, cr_records
 from meta_flow.workflow.legacy_evidence_registry import (
     ALLOWED_OPERATIONS,
     EVIDENCE_KIND,
+    DeclaredLegacyEvidenceRegistry,
     LegacyEvidenceError,
     LegacyEvidenceRegistration,
     convert_to_formal_cr,
@@ -19,7 +20,9 @@ from meta_flow.workflow.legacy_evidence_registry import (
     list_registered_follow_ups,
     load_declared_legacy_evidence_registry,
     query_declared_legacy_evidence,
+    registered_legacy_cr_ids,
     validate_legacy_evidence_registry,
+    validate_legacy_evidence_registry_continuity,
 )
 
 
@@ -168,6 +171,93 @@ def test_registry_is_exact_bound_and_fails_closed_before_compatibility(
             consumer_id="other-consumer",
         )
     assert consumer.value.code == "legacy_evidence_consumer_mismatch"
+
+
+def test_registry_continuity_rejects_same_ref_digest_drift() -> None:
+    registration = LegacyEvidenceRegistration(
+        schema_version=1,
+        registration_id="legacy-cr174-v1",
+        project_id="consumer",
+        consumer_id="phase-transition",
+        evidence_kind=EVIDENCE_KIND,
+        evidence_logical_ref="process/changes/CR-174-legacy.md",
+        evidence_sha256="a" * 64,
+        follow_up_logical_ref="process/works/CR-174/FOLLOW-UPS.yaml",
+        follow_up_sha256="b" * 64,
+        expected_lifecycle="closed-pass-with-risk",
+        expected_decision="PASS_WITH_RISK",
+        expected_follow_up_count=1,
+        expected_follow_up_ids=("FU-CR174-001",),
+        expected_follow_up_statuses=(("FU-CR174-001", "deferred"),),
+        allowed_operations=ALLOWED_OPERATIONS,
+    )
+    source = DeclaredLegacyEvidenceRegistry(
+        "process/governance/CONSUMER-ACCEPTANCE-SPEC.yaml",
+        "c" * 64,
+        (registration,),
+        (),
+        ownership_scope="project",
+    )
+    target = DeclaredLegacyEvidenceRegistry(
+        source.registry_logical_ref,
+        "d" * 64,
+        (registration,),
+        (),
+        ownership_scope="project",
+    )
+
+    with pytest.raises(LegacyEvidenceError) as mismatch:
+        validate_legacy_evidence_registry_continuity(source, target)
+
+    assert mismatch.value.code == "legacy_evidence_registry_continuity_lost"
+    assert mismatch.value.details["lost_registration_ids"] == ["CR-174"]
+    assert registered_legacy_cr_ids(source) == ("CR-174",)
+
+
+def test_registry_continuity_accepts_exact_successor_contract() -> None:
+    registration = LegacyEvidenceRegistration(
+        schema_version=1,
+        registration_id="legacy-cr174-v1",
+        project_id="consumer",
+        consumer_id="phase-transition",
+        evidence_kind=EVIDENCE_KIND,
+        evidence_logical_ref="process/changes/CR-174-legacy.md",
+        evidence_sha256="a" * 64,
+        follow_up_logical_ref="process/works/CR-174/FOLLOW-UPS.yaml",
+        follow_up_sha256="b" * 64,
+        expected_lifecycle="closed-pass-with-risk",
+        expected_decision="PASS_WITH_RISK",
+        expected_follow_up_count=1,
+        expected_follow_up_ids=("FU-CR174-001",),
+        expected_follow_up_statuses=(("FU-CR174-001", "deferred"),),
+        allowed_operations=ALLOWED_OPERATIONS,
+    )
+    successor_registration = LegacyEvidenceRegistration(
+        **{
+            **registration.__dict__,
+            "registration_id": "legacy-cr174-v2",
+        }
+    )
+    source = DeclaredLegacyEvidenceRegistry(
+        "process/phases/P1/CONSUMER-ACCEPTANCE-SPEC.yaml",
+        "c" * 64,
+        (registration,),
+        (),
+        ownership_scope="phase_compatibility",
+    )
+    target = DeclaredLegacyEvidenceRegistry(
+        "process/governance/CONSUMER-ACCEPTANCE-SPEC.yaml",
+        "d" * 64,
+        (successor_registration,),
+        (),
+        ownership_scope="project",
+    )
+
+    result = validate_legacy_evidence_registry_continuity(source, target)
+
+    assert result["decision"] == "PASS"
+    assert result["registered_ids"] == ["CR-174"]
+    assert result["ownership_scope"] == "project"
 
 
 def test_combined_legacy_status_and_relationship_free_follow_ups_are_preserved(

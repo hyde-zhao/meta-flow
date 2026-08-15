@@ -1,10 +1,10 @@
 ---
 project_id: "meta-flow"
-release_scope: "meta-flow-0.5.1"
+release_scope: "meta-flow-0.5.2"
 release_artifact_profile: "full"
 release_decision: "READY"
 created_at: "2026-06-17T13:49:25+08:00"
-updated_at: "2026-08-14T00:00:00+08:00"
+updated_at: "2026-08-15T00:00:00+08:00"
 ---
 
 # Release Notes
@@ -38,6 +38,45 @@ updated_at: "2026-08-14T00:00:00+08:00"
 | 1.22-candidate | 2026-08-14 | Codex | 扩展 `work publication-close` 的批量发布契约：新增 V2 exact path coverage、prior Work/PASS 归属、candidate-set digest、recovery Work pending scope 与仓外 authorization 防漂移，同时保留 V1 兼容。 |
 | 1.23-candidate | 2026-08-14 | Codex | 修复 execution-control repair 角色不可达与 usage hard-stop 丢事件：新增 single-use typed repair admission，保持全局 `repair_max=0` 和单 writer 上限；预算超限事件改为 append-first、executor fail-closed。 |
 | 1.24 | 2026-08-14 | Codex | 发布 `0.5.1`：收敛 publication-close V2、typed repair admission、usage append-first 与原生 Phase metadata 五目标事务；轮换 activation receipt v6，并完成双仓资格化。 |
+| 1.25 | 2026-08-15 | Codex | 发布 `0.5.2`：增加可复现 provider artifact 身份、严格 clean-install canary、统一 mutation 来源门禁，并把 legacy evidence registry 提升为 Project 持久真相；Phase transition 在写入前验证 post-state CR truth。 |
+
+## 0.5.2 发布切片
+
+### 发布结论
+
+`0.5.2` 是用户指定的向后兼容 PATCH 发布。它解决“同一版本可能来自不同 dirty editable 源码”的供应链歧义，并补齐跨 Phase legacy evidence 的长期 owner 与 transition post-state 门禁。旧 CR 原文、native CR index、历史 lifecycle event 和既有 terminal transaction 均不改写。
+
+| 项 | 结果 |
+|---|---|
+| 包版本真相 | `pyproject.toml`、`uv.lock` 与 `meta_flow.__version__` 均为 `0.5.2`；execution-control receipt v6 继续只约束其未变化的 0.5.1 owner source set |
+| 运行来源身份 | 新增 `meta-flow --version` 与 `meta-flow version --format json`，报告 distribution、module path、source commit/dirty、editable、artifact/capability/payload digest 与 release readiness |
+| mutation gate | 外部 consumer mutation 默认要求 clean、exact provider delivery；dirty editable source 只允许显式 development 模式和只读/诊断操作，契约失败返回结构化退出码 2 |
+| artifact qualification | 新增 `ProviderArtifactReceiptV1`、clean source qualification 与隔离 wheel canary；canary 删除 provider checkout 注入并证明实际从隔离安装导入 |
+| 安装 provenance | installer 使用完整 source OID，区分 provider checkout 与 consumer `.venv`，把 source/delivery/capability/installed-payload digest 写入安装 manifest |
+| Project legacy owner | `PROJECT.yaml` 可声明唯一 `legacy_evidence_registry_ref`；active-Phase-only 读取保留为兼容 fallback，并由 adoption doctor 提示迁移 |
+| Phase metadata | 原生 metadata writer 在追加 `CONSUMER-ACCEPTANCE-SPEC.yaml` 时原子维护 Project owner、Phase、governance、STATE、STATE.md 与 CURRENT |
+| Phase transition | plan/apply 使用内存 post-state 视图验证 registry continuity、immutable HEAD digest、formal-only CR discovery/index 和 CR tracking；失败零写入并返回稳定 error code |
+| provider qualification | 源码分层证据见 `docs/release/PROVIDER-QUALIFICATION-0.5.2.json`；正式 artifact receipt 随 GitHub Release 附件发布 |
+
+### 验证摘要
+
+| 层 | 结果 |
+|---|---|
+| targeted | `175 passed` |
+| compatibility | `146 passed + 21 subtests` |
+| full | `2407 passed + 712 subtests` |
+| writer hard gate | `399/399 classified`、`36/36 dynamic allowlisted`、`0 ambiguous`、`0 unresolved unallowlisted` |
+| static/contract | Ruff、lock、delivery guardrail、双仓 `git diff --check` 通过 |
+| artifact | 从 clean release commit 构建 wheel/sdist，严格 receipt 与无 checkout 隔离 canary 作为发布执行门 |
+
+### 升级、兼容与回滚
+
+- 从 0.5.1 升级无需批量改写 consumer 状态；未使用 legacy evidence 的项目不需要新增 Project 字段。
+- 仍使用 active Phase registry fallback 的项目可继续只读运行，但 adoption doctor 给出 warning；应通过原生 Phase metadata writer 将同一精确 registry ref 提升为 Project owner。
+- Phase transition 现在会在写入前拒绝 registry continuity 或 post-state CR truth 失败；这是 fail-closed 加强，不是把 legacy CR 转成 native CR。
+- 正式 consumer mutation 应先核验 `meta-flow version --format json` 的 `release_ready=true`；开发仓内测试需显式 development 模式。
+- 回滚到 0.5.1 前必须确认没有依赖 Project-level registry owner 才能保持 CR tracking 的 consumer，且所有 metadata/transition transaction 均为 terminal。
+- 本发布不上传 PyPI，不安装或修改 quant-lab 等 consumer，也不执行 consumer recovery、Phase transition、runtime、NAS、模拟盘、实盘或交易操作。
 
 ## 0.5.1 发布切片
 

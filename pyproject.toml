@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meta-flow"
-version = "0.5.1"
+version = "0.5.2"
 description = "Meta Flow workflow asset installer and delivery package"
 readme = "delivery/README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ meta-flow = "meta_flow.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["meta_flow", "meta_flow.*", "delivery", "delivery.scripts"]
+include = ["meta_flow", "meta_flow.*", "delivery", "delivery.*"]
 namespaces = true
 
 [tool.setuptools.package-data]
