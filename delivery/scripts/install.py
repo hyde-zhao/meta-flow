@@ -672,7 +672,13 @@ def _is_generated_distribution_file(relative: Path) -> bool:
         return True
     if ".dist-info/" not in rendered:
         return False
-    return relative.name in {"INSTALLER", "RECORD", "REQUESTED", "direct_url.json"}
+    return relative.name in {
+        "INSTALLER",
+        "RECORD",
+        "REQUESTED",
+        "direct_url.json",
+        "uv_cache.json",
+    }
 
 
 def installed_distribution_payload_digest(distribution_name: str = "meta-flow") -> str:

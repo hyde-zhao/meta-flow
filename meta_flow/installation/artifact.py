@@ -72,7 +72,13 @@ def _is_generated_distribution_file(relative: Path) -> bool:
         return True
     if ".dist-info/" not in rendered:
         return False
-    return relative.name in {"INSTALLER", "RECORD", "REQUESTED", "direct_url.json"}
+    return relative.name in {
+        "INSTALLER",
+        "RECORD",
+        "REQUESTED",
+        "direct_url.json",
+        "uv_cache.json",
+    }
 
 
 def _wheel_payload_digest(wheel: Path) -> str:
@@ -177,10 +183,16 @@ def artifact_receipt_conflicts(
     comparisons = {
         "distribution_name": runtime_identity.get("distribution_name"),
         "distribution_version": runtime_identity.get("distribution_version"),
-        "artifact_sha256": runtime_identity.get("artifact_sha256"),
         "capability_profile_digest": runtime_identity.get("capability_profile_digest"),
         "installed_payload_digest": runtime_identity.get("installed_payload_digest"),
     }
+    # 部分 installer（包括 uv）不会保留 direct_url.json，运行时因此无法从
+    # 安装目录重新取得原 wheel SHA。artifact receipt 是该字段的 owner；运行时
+    # 仍必须逐字验证 distribution、capability 与 installed payload。若 installer
+    # 提供了 archive hash，则把它作为额外一致性检查，绝不忽略真实漂移。
+    runtime_artifact_sha256 = runtime_identity.get("artifact_sha256")
+    if runtime_artifact_sha256 is not None:
+        comparisons["artifact_sha256"] = runtime_artifact_sha256
     for field, actual in comparisons.items():
         if receipt.get(field) != actual:
             conflicts.append(f"PROVIDER_RECEIPT_{field.upper()}_MISMATCH")

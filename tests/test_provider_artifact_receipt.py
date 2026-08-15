@@ -144,3 +144,32 @@ def test_runtime_payload_drift_is_rejected_even_when_archive_digest_matches() ->
     )
 
     assert conflicts == ("PROVIDER_RECEIPT_INSTALLED_PAYLOAD_DIGEST_MISMATCH",)
+
+
+def test_receipt_owns_artifact_digest_when_installer_omits_direct_url() -> None:
+    receipt = {
+        "schema_version": 1,
+        "kind": "ProviderArtifactReceiptV1",
+        "distribution_name": "meta-flow",
+        "distribution_version": "0.5.1",
+        "source_commit": "a" * 40,
+        "source_dirty": False,
+        "source_tree_digest": "b" * 64,
+        "artifact_filename": "meta_flow-0.5.1-py3-none-any.whl",
+        "artifact_sha256": "c" * 64,
+        "capability_profile_digest": "d" * 64,
+        "installed_payload_digest": "e" * 64,
+        "release_qualifying": True,
+    }
+    receipt["receipt_digest"] = artifact._canonical_digest(receipt)
+
+    assert artifact.artifact_receipt_conflicts(
+        receipt,
+        {
+            "distribution_name": "meta-flow",
+            "distribution_version": "0.5.1",
+            "artifact_sha256": None,
+            "capability_profile_digest": "d" * 64,
+            "installed_payload_digest": "e" * 64,
+        },
+    ) == ()

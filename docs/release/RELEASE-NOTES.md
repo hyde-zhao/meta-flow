@@ -51,7 +51,7 @@ updated_at: "2026-08-15T00:00:00+08:00"
 | 包版本真相 | `pyproject.toml`、`uv.lock` 与 `meta_flow.__version__` 均为 `0.5.2`；execution-control receipt v6 继续只约束其未变化的 0.5.1 owner source set |
 | 运行来源身份 | 新增 `meta-flow --version` 与 `meta-flow version --format json`，报告 distribution、module path、source commit/dirty、editable、artifact/capability/payload digest 与 release readiness |
 | mutation gate | 外部 consumer mutation 默认要求 clean、exact provider delivery；dirty editable source 只允许显式 development 模式和只读/诊断操作，契约失败返回结构化退出码 2 |
-| artifact qualification | 新增 `ProviderArtifactReceiptV1`、clean source qualification 与隔离 wheel canary；canary 删除 provider checkout 注入并证明实际从隔离安装导入 |
+| artifact qualification | 新增 `ProviderArtifactReceiptV1`、clean source qualification 与隔离 wheel canary；忽略 installer 生成的 `uv_cache.json`，在 `direct_url.json` 缺失时由已验证 receipt 提供 artifact SHA，同时仍逐字校验 installed payload 与 capability |
 | 安装 provenance | installer 使用完整 source OID，区分 provider checkout 与 consumer `.venv`，把 source/delivery/capability/installed-payload digest 写入安装 manifest |
 | Project legacy owner | `PROJECT.yaml` 可声明唯一 `legacy_evidence_registry_ref`；active-Phase-only 读取保留为兼容 fallback，并由 adoption doctor 提示迁移 |
 | Phase metadata | 原生 metadata writer 在追加 `CONSUMER-ACCEPTANCE-SPEC.yaml` 时原子维护 Project owner、Phase、governance、STATE、STATE.md 与 CURRENT |
@@ -62,9 +62,9 @@ updated_at: "2026-08-15T00:00:00+08:00"
 
 | 层 | 结果 |
 |---|---|
-| targeted | `175 passed` |
+| targeted | `178 passed` |
 | compatibility | `146 passed + 21 subtests` |
-| full | `2407 passed + 712 subtests` |
+| full | `2410 passed + 712 subtests` |
 | writer hard gate | `399/399 classified`、`36/36 dynamic allowlisted`、`0 ambiguous`、`0 unresolved unallowlisted` |
 | static/contract | Ruff、lock、delivery guardrail、双仓 `git diff --check` 通过 |
 | artifact | 从 clean release commit 构建 wheel/sdist，严格 receipt 与无 checkout 隔离 canary 作为发布执行门 |

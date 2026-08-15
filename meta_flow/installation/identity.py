@@ -267,7 +267,13 @@ def _is_generated_distribution_file(relative: Path) -> bool:
         return True
     if ".dist-info/" not in rendered:
         return False
-    return relative.name in {"INSTALLER", "RECORD", "REQUESTED", "direct_url.json"}
+    return relative.name in {
+        "INSTALLER",
+        "RECORD",
+        "REQUESTED",
+        "direct_url.json",
+        "uv_cache.json",
+    }
 
 
 def _direct_url_payload(distribution: metadata.Distribution) -> dict[str, Any]:
@@ -475,6 +481,9 @@ def observe_provider_runtime_identity(
             if not receipt_reasons and source_root is None:
                 source_commit = str(receipt["source_commit"])
                 source_tree_digest = str(receipt["source_tree_digest"])
+                if artifact_sha256 is None:
+                    artifact_sha256 = str(receipt["artifact_sha256"])
+                    identity_source = "installed-artifact-receipt"
     else:
         receipt_reasons.append("PROVIDER_RECEIPT_MISSING")
 

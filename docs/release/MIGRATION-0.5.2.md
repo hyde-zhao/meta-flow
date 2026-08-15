@@ -18,6 +18,7 @@
 - 外部 consumer mutation 默认拒绝 dirty/non-exact provider；只读命令仍可用于诊断。
 - `meta-flow --version` 输出简短版本，`meta-flow version --format json` 输出完整 provider provenance。
 - installer manifest 增加完整 source OID、source/delivery/capability/installed-payload digest 和 artifact receipt 身份。
+- `uv_cache.json` 等 installer 生成元数据不进入稳定 payload digest；installer 未保留 `direct_url.json` 时，artifact SHA 由已验证 receipt 提供，installed payload 与 capability 仍必须匹配。
 - Project schema 新增可选 `legacy_evidence_registry_ref`；旧 active Phase 声明仍作为兼容 fallback。
 - Phase metadata 对 legacy registry append 扩展为六目标原子事务，并验证 registry 输入与 Project identity。
 - Phase transition 在 mutation 前验证 registry continuity、immutable digest、formal CR truth/index 和 CR tracking。

@@ -98,7 +98,7 @@
       "result": {
         "decision": "PASS",
         "exit_code": 0,
-        "summary": "2407 passed, 712 subtests passed"
+        "summary": "2410 passed, 712 subtests passed"
       }
     },
     "candidate_targeted": {
@@ -146,7 +146,7 @@
       "result": {
         "decision": "PASS",
         "exit_code": 0,
-        "summary": "175 passed"
+        "summary": "178 passed"
       }
     }
   },

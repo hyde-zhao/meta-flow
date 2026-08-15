@@ -173,6 +173,67 @@ def test_non_editable_archive_identity_is_release_ready(
     assert observed["exact_commit_delivery"] is True
 
 
+def test_release_receipt_attests_artifact_when_uv_omits_direct_url(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    site_packages = tmp_path / "venv" / "site-packages"
+    module_path = site_packages / "meta_flow" / "__init__.py"
+    contract = site_packages / "delivery" / "doc" / "PUBLIC-OPERATION-CONTRACTS.yaml"
+    dist_info = site_packages / "meta_flow-0.5.2.dist-info"
+    module_path.parent.mkdir(parents=True)
+    contract.parent.mkdir(parents=True)
+    dist_info.mkdir(parents=True)
+    module_path.write_text('__version__ = "0.5.2"\n', encoding="utf-8")
+    contract.write_text("{}\n", encoding="utf-8")
+    (dist_info / "uv_cache.json").write_text('{"generated": true}\n', encoding="utf-8")
+    capability_digest = sha256(contract.read_bytes()).hexdigest()
+    installed_payload_digest = identity._canonical_digest(
+        {
+            "delivery/doc/PUBLIC-OPERATION-CONTRACTS.yaml": capability_digest,
+            "meta_flow/__init__.py": sha256(module_path.read_bytes()).hexdigest(),
+        }
+    )
+    receipt = {
+        "schema_version": 1,
+        "kind": "ProviderArtifactReceiptV1",
+        "distribution_name": "meta-flow",
+        "distribution_version": "0.5.2",
+        "source_commit": "b" * 40,
+        "source_dirty": False,
+        "source_tree_digest": "c" * 64,
+        "artifact_filename": "meta_flow-0.5.2-py3-none-any.whl",
+        "artifact_sha256": "a" * 64,
+        "capability_profile_digest": capability_digest,
+        "installed_payload_digest": installed_payload_digest,
+        "release_qualifying": True,
+    }
+    receipt["receipt_digest"] = sha256(
+        json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    receipt_path = tmp_path / "provider-receipt.json"
+    receipt_path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+    distribution = _FakeDistribution(site_packages, direct_url={})
+    distribution.files.append(Path("meta_flow-0.5.2.dist-info/uv_cache.json"))
+    monkeypatch.setattr(identity.metadata, "distribution", lambda _name: distribution)
+
+    observed = identity.observe_provider_runtime_identity(
+        module_path=module_path,
+        environment={"META_FLOW_PROVIDER_RECEIPT": str(receipt_path)},
+    )
+
+    assert observed["artifact_sha256"] == "a" * 64
+    assert observed["identity_source"] == "installed-artifact-receipt"
+    assert observed["installed_files_digest"] == installed_payload_digest
+    assert observed["release_readiness"] == {"decision": "PASS", "reason_codes": []}
+    assert observed["exact_commit_delivery"] is True
+
+
 def test_non_editable_venv_inside_git_checkout_is_not_misclassified_as_editable(
     tmp_path: Path,
     monkeypatch,

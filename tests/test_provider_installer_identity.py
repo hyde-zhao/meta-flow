@@ -86,6 +86,39 @@ def test_delivery_tree_digest_is_content_bound_and_root_shape_independent(
     assert install.source_delivery_tree_digest(delivery) != from_delivery
 
 
+def test_installed_payload_digest_ignores_uv_generated_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    site_packages = tmp_path / "site-packages"
+    module = site_packages / "meta_flow" / "__init__.py"
+    metadata_file = site_packages / "meta_flow-0.5.2.dist-info" / "METADATA"
+    uv_cache = site_packages / "meta_flow-0.5.2.dist-info" / "uv_cache.json"
+    module.parent.mkdir(parents=True)
+    metadata_file.parent.mkdir(parents=True)
+    module.write_text('__version__ = "0.5.2"\n', encoding="utf-8")
+    metadata_file.write_text("Name: meta-flow\nVersion: 0.5.2\n", encoding="utf-8")
+    uv_cache.write_text('{"generated": true}\n', encoding="utf-8")
+
+    class Distribution:
+        files = [
+            Path("meta_flow/__init__.py"),
+            Path("meta_flow-0.5.2.dist-info/METADATA"),
+            Path("meta_flow-0.5.2.dist-info/uv_cache.json"),
+        ]
+
+        @staticmethod
+        def locate_file(item: object) -> Path:
+            return site_packages / Path(str(item))
+
+    monkeypatch.setattr(install.metadata, "distribution", lambda _name: Distribution())
+    before = install.installed_distribution_payload_digest()
+    uv_cache.write_text('{"generated": "changed"}\n', encoding="utf-8")
+
+    assert before
+    assert install.installed_distribution_payload_digest() == before
+
+
 def test_installer_provider_receipt_loader_rejects_incomplete_payload(
     tmp_path: Path,
     capsys,

@@ -4,9 +4,9 @@
 
 - [x] `pyproject.toml`、`uv.lock` 与 `meta_flow.__version__` 均为 `0.5.2`。
 - [x] execution-control activation receipt v6 的 owner source set 未变化且仍为 CURRENT。
-- [x] targeted：`175 passed`。
+- [x] targeted：`178 passed`。
 - [x] compatibility：`146 passed + 21 subtests`。
-- [x] full：`2407 passed + 712 subtests`。
+- [x] full：`2410 passed + 712 subtests`。
 - [x] writer detector：`399/399` classified、`36/36` dynamic allowlisted、0 ambiguous、0 unresolved。
 - [ ] Ruff、lock、delivery guardrail、双仓 `git diff --check` 最终通过。
 - [ ] 从 clean source commit 构建 0.5.2 wheel/sdist。
