@@ -16,11 +16,11 @@
 
 ## 发布执行
 
-- [ ] 提交并推送 `meta-flow` 与 `meta-flow-process`。
-- [ ] 创建并推送 annotated tag `v0.5.3`。
-- [ ] 创建 GitHub Release `Meta Flow 0.5.3`，附加 wheel、sdist 与 artifact receipt。
-- [ ] 核验 source/process branch、tag target、release target 与 artifact 摘要。
-- [ ] 回填 process release context 的 exact OID、tag object、URL 与 artifact digests。
+- [x] 提交并推送 `meta-flow` 与 `meta-flow-process`；发布后文档 backfill 作为 tag 之后的普通 main 提交。
+- [x] 创建并推送 annotated tag `v0.5.3`，tag target 为 `419464397aac08877f5b3467eb46bff71cfa072b`。
+- [x] 创建 GitHub Release `Meta Flow 0.5.3`，附加 wheel、sdist 与 artifact receipt。
+- [x] 核验 source/process branch、tag target、release target、asset size 与 artifact SHA-256。
+- [x] 回填 process release context 的 exact source/process OID、tag object、URL 与 artifact digests。
 
 ## 明确不执行
 

@@ -34,6 +34,12 @@ receipt，并保存到同一个稳定目录。
 安装前应按 `v0.5.3` Release 页面公布的 SHA-256 校验 wheel 与 receipt；摘要在正式
 artifact 从 clean tagged source 构建并完成隔离 canary 后发布，不能用旧版本摘要替代。
 
+```text
+b987c4ecc7646f523224e512afb176efcb8c3842d9332807204ba2ff4d8c94ab  meta_flow-0.5.3-py3-none-any.whl
+403dc0ff9f6338470709a01a92b0db414b2bd236077f09a8544c521e5245176a  meta_flow-0.5.3.tar.gz
+c0a8a334a9cd8e1477d2fa2533016c6f31f06a7f252c506bc57d6e3fa0ee3876  ProviderArtifactReceiptV1.json
+```
+
 ```bash
 sha256sum \
   "$META_FLOW_RELEASE_DIR/meta_flow-${META_FLOW_VERSION}-py3-none-any.whl" \
