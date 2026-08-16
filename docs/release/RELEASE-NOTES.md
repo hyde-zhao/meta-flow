@@ -1,10 +1,10 @@
 ---
 project_id: "meta-flow"
-release_scope: "meta-flow-0.5.2"
+release_scope: "meta-flow-0.5.3"
 release_artifact_profile: "full"
-release_decision: "READY"
+release_decision: "READY_WITH_RISK"
 created_at: "2026-06-17T13:49:25+08:00"
-updated_at: "2026-08-15T00:00:00+08:00"
+updated_at: "2026-08-16T22:29:52+08:00"
 ---
 
 # Release Notes
@@ -39,6 +39,42 @@ updated_at: "2026-08-15T00:00:00+08:00"
 | 1.23-candidate | 2026-08-14 | Codex | 修复 execution-control repair 角色不可达与 usage hard-stop 丢事件：新增 single-use typed repair admission，保持全局 `repair_max=0` 和单 writer 上限；预算超限事件改为 append-first、executor fail-closed。 |
 | 1.24 | 2026-08-14 | Codex | 发布 `0.5.1`：收敛 publication-close V2、typed repair admission、usage append-first 与原生 Phase metadata 五目标事务；轮换 activation receipt v6，并完成双仓资格化。 |
 | 1.25 | 2026-08-15 | Codex | 发布 `0.5.2`：增加可复现 provider artifact 身份、严格 clean-install canary、统一 mutation 来源门禁，并把 legacy evidence registry 提升为 Project 持久真相；Phase transition 在写入前验证 post-state CR truth。 |
+| 1.26 | 2026-08-16 | Codex | 发布 `0.5.3`：交付 CR-071 的 fail-closed init preflight、受控 scope amendment、typed refs、兼容观测/退役、七维 receipt 复用、投影恢复与 atomic correction 合同；接受三项非本 CR 基线失败且不使用 waiver。 |
+
+## 0.5.3 发布切片
+
+### 发布结论
+
+`0.5.3` 是向后兼容的 PATCH 发布。CR-071 九个 Story 已全部实现并完成聚合 CP7；CP8 以 `READY_WITH_RISK` 批准发布。风险接受仅覆盖三个发布前已存在、与 CR-071 无归因关系的 full-suite 失败；`new_failure_count=0`、`waiver=false`、open HIGH/BLOCKER=0。真实 correction append 与 effective-authority cutover 不在本发布授权内，未执行。
+
+| 项 | 结果 |
+|---|---|
+| 包版本真相 | `pyproject.toml`、`uv.lock`、`meta_flow.__version__` 与 execution-control activation receipt v8 均为 `0.5.3`；v1-v7 receipt 字节保持不可变 |
+| Work safety | `work init` 的 plan/apply 共同消费 typed refs、validation policy、directory envelope 与唯一 validation graph；apply 重新采集 OID、dirty inventory 和 preimage，漂移时零写阻断 |
+| scope amendment | 新增 append-only successor revision、三目标原子事务、失效传播和真实 CLI；BL-001 admission 前置已闭合 |
+| receipt reuse | 七维 concrete equivalence table 只能由精确 loader 消费；evidence digest、basis 或单权威 graph 漂移时拒绝复用 |
+| compatibility observation | 可信事件适配、CAS/hash-chain 持久观测、epoch/comparison basis 与只产生 proposal 的 retirement admission |
+| projection/correction | missing-evidence-only 恢复与 typed correction lineage/atomic persistence 合同已实现；本次没有执行真实 correction 或 authority cutover |
+| provider qualification | 源码分层证据见 `docs/release/PROVIDER-QUALIFICATION-0.5.3.json`；正式 artifact receipt 随 GitHub Release 发布 |
+
+### 验证摘要
+
+| 层 | 结果 |
+|---|---|
+| targeted | `370 passed + 116 subtests` |
+| compatibility | `829 passed + 363 subtests`（一个精确 stale-count repair 后有效结果） |
+| independent high-risk subset | `377 passed + 108 subtests` |
+| full | `2558 passed + 716 subtests + 3 pre-existing failures`；`new_failure_count=0`、`waiver=false` |
+| provider rotation | v8 fixed locator、v1-v7 immutable history、provider-specific `60 passed` |
+| decision | aggregate CP7 `PASS_WITH_RISK`；CP8 `READY_WITH_RISK` |
+
+### 升级、兼容与回滚
+
+- 从 0.5.2 升级不批量改写历史 Work、CR、ledger 或 raw findings；新字段和 v2 wire 均保持显式、fail-closed。
+- 在真实 consumer mutation 前核验 GitHub Release 的 wheel 与 `ProviderArtifactReceiptV1.json`，并运行 `meta-flow version --format json`。
+- scope amendment、correction、authority cutover 与兼容 reader retirement 均必须走各自原生 plan/apply 和独立 typed authorization；发布批准不能替代运行授权。
+- 回滚到 0.5.2 前先确认没有 0.5.3 创建的非终态事务；terminal successor、receipt 与观测历史保留，不得删除或改写。
+- 本发布不上传 PyPI，不安装或修改 quant-lab 等 consumer，不执行真实 correction/cutover、生产 runtime、凭据、NAS、模拟盘、实盘或交易操作。
 
 ## 0.5.2 发布切片
 

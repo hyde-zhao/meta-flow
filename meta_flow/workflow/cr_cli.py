@@ -9,6 +9,13 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from meta_flow.work.model import ScopeAmendPlanV1, ScopeDeltaV1, apply_scope_amend
+from meta_flow.work.scope_amend import (
+    admit_scope_amend_predecessor,
+    apply_scope_amend_transaction,
+    load_scope_amend_authorization,
+    plan_scope_amend_from_release_root,
+)
 from meta_flow.workflow.cr_analysis import (
     build_impact_report,
     collect_check_errors,
@@ -53,8 +60,112 @@ PUBLIC_OPERATION_DECLARATIONS = (
     ("cr.status-sync", ("meta-flow", "cr", "status-sync")),
     ("cr.close", ("meta-flow", "cr", "close")),
     ("cr.query", ("meta-flow", "cr", "query")),
+    ("cr.scope-amend", ("meta-flow", "cr", "scope-amend")),
     ("cr.conflicts.proposed", ("meta-flow", "cr", "conflicts", "--proposed")),
 )
+
+
+def render_scope_amend_plan(plan: ScopeAmendPlanV1) -> dict[str, object]:
+    """CLI adapter: render the already-authoritative, zero-write plan only."""
+    return {"decision": "READY", "plan_digest": plan.plan_digest, "mutation_count": plan.mutation_count}
+
+
+def render_scope_amend_apply(plan: ScopeAmendPlanV1, fresh_snapshot_digest: str) -> dict[str, object]:
+    """CLI adapter does not decide scope legality or mutate revisions/indexes."""
+    return apply_scope_amend(plan, fresh_snapshot_digest=fresh_snapshot_digest)
+
+
+def scope_amend_main(
+    argv: list[str] | None = None,
+    *,
+    plan_factory: Any = plan_scope_amend_from_release_root,
+    apply_factory: Any = apply_scope_amend_transaction,
+) -> int:
+    """Plan/apply one typed, append-only Work scope successor transaction."""
+
+    parser = argparse.ArgumentParser(prog="meta-flow cr scope-amend")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--authorization-file", type=Path, required=True)
+    parser.add_argument("--predecessor-receipt", type=Path, required=True)
+    parser.add_argument("--add-story", action="append", default=[])
+    parser.add_argument("--add-owned-leaf", action="append", default=[])
+    parser.add_argument("--add-dependency", action="append", default=[])
+    parser.add_argument("--add-acceptance-ref", action="append", default=[])
+    parser.add_argument("--reason", default="")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--expected-plan-digest", default="")
+    parsed = parser.parse_args(list(argv or []))
+    try:
+        authorization = load_scope_amend_authorization(parsed.authorization_file)
+        receipts = _load_scope_amend_receipts(parsed.predecessor_receipt)
+        admit_scope_amend_predecessor(authorization, receipts)
+        delta = ScopeDeltaV1(
+            1,
+            tuple(sorted(parsed.add_story)),
+            tuple(sorted(parsed.add_owned_leaf)),
+            tuple(sorted(parsed.add_dependency)),
+            tuple(sorted(parsed.add_acceptance_ref)),
+            parsed.reason,
+        )
+        plan = plan_factory(
+            parsed.project_root,
+            authorization=authorization,
+            delta=delta,
+            predecessor_receipts=receipts,
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 1
+    if not parsed.apply:
+        print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if not parsed.expected_plan_digest:
+        print(
+            json.dumps(
+                {
+                    "decision": "BLOCKED",
+                    "error": "scope-amend apply requires --expected-plan-digest",
+                    "mutation_count": 0,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 1
+    try:
+        result = apply_factory(
+            plan,
+            expected_plan_digest=parsed.expected_plan_digest,
+            predecessor_receipts=receipts,
+        )
+    except (OSError, ValueError) as exc:
+        result = {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0}
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if result["decision"] == "PASS" else 1
+
+
+def _load_scope_amend_receipts(path: Path) -> list[dict[str, Any]]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("predecessor receipt path is unsafe")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("predecessor receipt is unreadable") from exc
+    if isinstance(payload, dict) and set(payload) == {"schema_version", "receipts"}:
+        if payload["schema_version"] != 1:
+            raise ValueError("predecessor receipt schema mismatch")
+        payload = payload["receipts"]
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise ValueError("predecessor receipt must contain a receipt list")
+    return payload
 
 
 def aggregate_main(
@@ -182,6 +293,7 @@ def _print_cr_help() -> None:
         "  goal-brief Print all CRs attached to one goal_ref.\n"
         "  query      Query an explicitly declared immutable legacy CR or follow-up.\n"
         "  impact-report Print a side-effect-free impact surface migration report as JSON.\n"
+        "  scope-amend Plan/apply one typed append-only Work scope successor revision.\n"
         "  terminate  Plan or apply an exact-OID, typed, recoverable native CR termination.\n"
         "  status-sync Plan or apply a typed CR status projection transaction.\n"
         "  status-sync-inspect Inspect unresolved private status-sync manifests.\n"
@@ -207,6 +319,7 @@ def _print_cr_help() -> None:
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow cr query --id CR-174 --project-root .\n"
         "  meta-flow cr impact-report --project-root .\n"
+        "  meta-flow cr scope-amend --authorization-file auth.json --predecessor-receipt predecessor.json --add-owned-leaf path/to/leaf --project-root .\n"
         '  meta-flow cr terminate --id CR-101 --work-id WORK-101 --status cancelled --reason "superseded by a clean replacement" --expected-process-oid <oid> --project-root .\n'
         '  meta-flow cr terminate --id CR-101 --work-id WORK-101 --status cancelled --reason "superseded by a clean replacement" --expected-process-oid <oid> --expected-plan-digest <digest> --authorization-file authorization.json --apply --project-root .\n'
         "  meta-flow cr status-sync --id CR-101 --status closed --readiness READY_WITH_RISK --gate-status cp8_closed --work-id WORK-101 --effective-at <timestamp> --project-root .\n"
@@ -283,6 +396,7 @@ def _dispatch_cr_projection_command(
             scope=parsed.scope,
             gate_status=parsed.gate_status,
             readiness=parsed.readiness,
+            rebuild_corrupt=parsed.rebuild,
         )
         for key, path in paths.items():
             print(f"{key}: {path}")
@@ -669,6 +783,8 @@ def main(
             args[1:],
             projector_factory=dependencies["AggregateCompletionProjector"],
         )
+    if command == "scope-amend":
+        return scope_amend_main(args[1:])
     if command == "public-operations-check":
         from meta_flow.policies import public_operations
 
@@ -693,7 +809,7 @@ def main(
     raise SystemExit(
         f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, "
         "terminate, status-sync, status-sync-inspect, status-sync-resume, status-sync-rollback, status-sync-abandon, "
-        "aggregate, branch-open, branch-publish, branch-merge, branch-finish, close, check, "
+        "aggregate, scope-amend, branch-open, branch-publish, branch-merge, branch-finish, close, check, "
         "query, public-operations-check, conflicts"
     )
 

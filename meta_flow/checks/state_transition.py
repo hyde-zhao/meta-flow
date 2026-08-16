@@ -1231,14 +1231,15 @@ def _is_automatic_phase_in_progress(
     also must not fail merely because the automatic work has not finished.
     """
 
-    if expected.get("kind") != "required_human_gate" or checkpoint not in {"CP5", "CP6", "CP7"}:
+    if expected.get("kind") != "required_human_gate" or checkpoint not in {"CP3", "CP5", "CP6", "CP7"}:
         return False
     stages = [stage for stage in route.get("stages") or [] if isinstance(stage, dict)]
     if checkpoint != "CP7" and not _has_automatic_stage_before_gate(
         stages, checkpoint, expected.get("checkpoint") or ""
     ):
         return False
-    if state.get("pending_gate") or str(state.get("current_phase") or "") != "story-execution":
+    automatic_phases = {"story-execution", "story-planning", "solution-design", "lld-design"}
+    if state.get("pending_gate") or str(state.get("current_phase") or "") not in automatic_phases:
         return False
     if checkpoint == "CP7" and not state.get("active_story"):
         # CP7 is rolling.  The final Story must clear active_story and open

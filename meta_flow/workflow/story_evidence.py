@@ -536,7 +536,50 @@ def _task_ids_from_markdown(path: Path) -> set[str]:
     return set(re.findall(r"\b(?:TASK|T)-[A-Za-z0-9][A-Za-z0-9._-]*\b", text))
 
 
-def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, strict_legacy: bool = False) -> tuple[list[str], list[str]]:
+def validate_per_cr_story_plan_truth_source(
+    plan: Mapping[str, Any],
+    *,
+    expected_cr_id: str = "",
+    project_root: Path | None = None,
+) -> list[str]:
+    """Validate an explicit per-CR source; generic and per-CR declarations collide."""
+    source = plan.get("story_management_truth_source")
+    declared = plan.get("per_cr_story_plan_truth_source")
+    if declared is None:
+        return []
+    if source:
+        return ["GENERIC_PER_CR_COLLISION"]
+    if not isinstance(declared, Mapping) or set(declared) != {"schema_version", "project_id", "cr_id", "plan_ref", "plan_sha256"}:
+        return ["SCHEMA_MISMATCH"]
+    if declared.get("schema_version") != 1:
+        return ["SCHEMA_MISMATCH"]
+    ref = declared.get("plan_ref")
+    if not isinstance(ref, str) or not re.fullmatch(r"process/(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9][A-Za-z0-9._/-]*", ref):
+        return ["OUTSIDE_PROCESS_REF"]
+    if not isinstance(declared.get("project_id"), str) or not declared["project_id"]:
+        return ["PROJECT_MISMATCH"]
+    if expected_cr_id and declared.get("cr_id") != expected_cr_id:
+        return ["CR_MISMATCH"]
+    if not isinstance(declared.get("plan_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", declared["plan_sha256"]):
+        return ["STALE_PLAN_DIGEST"]
+    if project_root is not None:
+        try:
+            declared_path = _resolve_runtime_ref(project_root.resolve(), ref)
+            raw = declared_path.read_bytes()
+        except (OSError, ValueError):
+            return ["MISSING_TRUTH_SOURCE"]
+        if hashlib.sha256(raw).hexdigest() != declared["plan_sha256"]:
+            return ["STALE_PLAN_DIGEST"]
+    return []
+
+
+def validate_story_plan(
+    project_root: Path,
+    *,
+    plan_path: Path | None = None,
+    strict_legacy: bool = False,
+    expected_plan_sha256: str = "",
+) -> tuple[list[str], list[str]]:
     root = project_root.resolve()
     path = _resolve_runtime_path(root, plan_path or DEVELOPMENT_PLAN_REL)
     errors: list[str] = []
@@ -547,13 +590,40 @@ def validate_story_plan(project_root: Path, *, plan_path: Path | None = None, st
         plan = load_yaml_object(path)
     except (OSError, ValueError) as exc:
         return [f"invalid development plan: {exc}"], warnings
-    truth_source = str(plan.get("story_management_truth_source") or "").strip()
-    if truth_source and truth_source != DEVELOPMENT_PLAN_REL.as_posix():
-        errors.append(
-            f"story_management_truth_source must be {DEVELOPMENT_PLAN_REL.as_posix()}: {truth_source}"
+    expected_cr_id = str(plan.get("change_id") or "")
+    errors.extend(
+        validate_per_cr_story_plan_truth_source(
+            plan,
+            expected_cr_id=expected_cr_id,
+            project_root=root,
         )
+    )
+    truth_source = str(plan.get("story_management_truth_source") or "").strip()
+    if truth_source and (not truth_source.startswith("process/") or truth_source.startswith("/")):
+        errors.append("story_management_truth_source must be a process logical ref")
     if not truth_source:
         warnings.append("story_management_truth_source is missing; defaulting to process/DEVELOPMENT-PLAN.yaml")
+    elif not errors:
+        try:
+            declared_path = _resolve_runtime_ref(root, truth_source)
+        except (OSError, ValueError):
+            errors.append("MISSING_TRUTH_SOURCE")
+        else:
+            if declared_path.resolve(strict=False) != path.resolve(strict=False):
+                errors.append("GENERIC_PER_CR_COLLISION")
+            elif truth_source != DEVELOPMENT_PLAN_REL.as_posix():
+                if not re.fullmatch(r"[0-9a-f]{64}", expected_plan_sha256):
+                    errors.append(
+                        "per-CR story plan check requires --expected-plan-sha256"
+                    )
+                else:
+                    try:
+                        actual_digest = hashlib.sha256(declared_path.read_bytes()).hexdigest()
+                    except OSError:
+                        errors.append("MISSING_TRUTH_SOURCE")
+                    else:
+                        if actual_digest != expected_plan_sha256:
+                            errors.append("STALE_PLAN_DIGEST")
 
     story_entries = _iter_plan_story_entries(plan)
     if not story_entries:
@@ -3479,11 +3549,13 @@ def main(
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
         parser.add_argument("--plan", dest="plan_path", type=Path, default=None)
         parser.add_argument("--strict-legacy", action="store_true")
+        parser.add_argument("--expected-plan-sha256", default="")
         parsed = parser.parse_args(args[1:])
         errors, warnings = validate_story_plan(
             parsed.project_root,
             plan_path=parsed.plan_path,
             strict_legacy=parsed.strict_legacy,
+            expected_plan_sha256=parsed.expected_plan_sha256,
         )
         print("Story Plan Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:

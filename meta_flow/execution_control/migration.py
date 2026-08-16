@@ -18,21 +18,23 @@ from typing import Any
 
 from meta_flow.execution_control.contract import ContainerBudgetV1, canonical_digest
 
-FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v6.json"
+FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v8.json"
 LEGACY_RECEIPT_REFS = (
     "meta_flow/execution_control/provider/activation-receipt-v1.json",
     "meta_flow/execution_control/provider/activation-receipt-v2.json",
     "meta_flow/execution_control/provider/activation-receipt-v3.json",
     "meta_flow/execution_control/provider/activation-receipt-v4.json",
     "meta_flow/execution_control/provider/activation-receipt-v5.json",
+    "meta_flow/execution_control/provider/activation-receipt-v6.json",
+    "meta_flow/execution_control/provider/activation-receipt-v7.json",
 )
 PACKAGE_NAME = "meta-flow"
-PACKAGE_VERSION = "0.5.1"
+PACKAGE_VERSION = "0.5.3"
 POLICY_REVISION = 1
 COHORT_REVISION = 1
 CONTEXT_REVISION = 1
 GENERATOR_IDENTITY = (
-    "meta_flow.execution_control.migration:build_provider_activation_receipt:v6"
+    "meta_flow.execution_control.migration:build_provider_activation_receipt:v8"
 )
 _SELF_EXCLUSION = FIXED_RECEIPT_REF
 _SOURCE_OWNERS = frozenset(
@@ -68,7 +70,7 @@ _FIELDS = frozenset(
 
 
 def _receipt_path() -> Path:
-    return Path(resources.files("meta_flow.execution_control").joinpath("provider/activation-receipt-v6.json"))
+    return Path(resources.files("meta_flow.execution_control").joinpath("provider/activation-receipt-v8.json"))
 
 
 def _package_root() -> Path:

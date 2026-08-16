@@ -1,0 +1,358 @@
+status: draft
+version: "1.1"
+source_revision: "CR-071@cp2-revision-2"
+source_requirements:
+  - docs/product/REQUIREMENTS.md
+source_use_cases:
+  - docs/product/USE-CASES.md
+formal_cp2_status: pending
+revision_history:
+  - version: "1.0"
+    date: "2026-08-15"
+    summary: "MF-1～MF-6 initial 18-scenario baseline"
+  - version: "1.1"
+    date: "2026-08-15"
+    summary: "Incrementally absorbed six CP2 changes_requested deltas without changing scenario IDs"
+scenarios:
+  - id: SCN-MF1-01
+    title: "合法 Work 初始化执行全生命周期零写预检"
+    type: positive
+    priority: HIGH
+    persona: P-01
+    source_refs:
+      requirements: [REQ-MF1-01, REQ-MF1-02, REQ-MF1-03]
+      use_cases: [UC-WORK-PREFLIGHT]
+      stories: [ST-MF1]
+    trigger: "维护者准备初始化 Work，但尚未 apply"
+    context: "route、OID/preimage、scope、budget 和 typed refs 均合法"
+    preconditions: ["只读预检已授权", "目标快照可读"]
+    steps:
+      - action: "以同一快照分别调用 preflight/apply 的 shared validation core，并捕获写集合摘要"
+        expected: "normalized item/decision graph 100% 一致；preflight 返回 PASS、完整 lifecycle 模拟项和 mutation=0，差异仅限 orchestration/presentation"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF1-02
+    title: "无效 revision/scope/budget 在 apply 前被零写阻断"
+    type: negative
+    priority: HIGH
+    persona: P-01
+    source_refs:
+      requirements: [REQ-MF1-01, REQ-MF1-02, REQ-MF1-03]
+      use_cases: [UC-WORK-PREFLIGHT]
+      stories: [ST-N-MF1]
+    trigger: "preflight 输入包含 stale revision、未闭合 scope 或超限 budget"
+    context: "至少一个 lifecycle 前置项无效"
+    preconditions: ["目标 bytes 快照已记录"]
+    steps:
+      - action: "以同一无效快照执行 preflight/apply shared-core validation 并比较前后摘要"
+        expected: "两个入口返回相同 BLOCKED/FAIL item/error graph；preflight 所有目标 bytes 与 ledger/state 均不变"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF1-03
+    title: "on-touch obligations 缺失时预检拒绝计划"
+    type: precheck
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-MF1-02]
+      use_cases: [UC-WORK-PREFLIGHT]
+      stories: [ST-N-MF1]
+    trigger: "计划会触碰需同步的治理对象但未声明 obligation"
+    context: "主输入合法，on-touch closure 不完整"
+    preconditions: ["on-touch policy 可读"]
+    steps:
+      - action: "执行 preflight obligation scan"
+        expected: "列出缺失 obligation 和补齐入口，mutation=0"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF2-01
+    title: "合法 scope delta 生成 append-only 新 revision"
+    type: positive
+    priority: HIGH
+    persona: P-01
+    source_refs:
+      requirements: [REQ-MF2-01, REQ-MF2-02, REQ-MF2-03]
+      use_cases: [UC-SCOPE-AMENDMENT]
+      stories: [ST-MF2]
+    trigger: "active Work 需要增加已获授权的读写或检查路径"
+    context: "revision/preimage 一致且 delta 可分类"
+    preconditions: ["BL-001 revision>1 legal supersession admission 已通过", "predecessor/inventory 可确定接纳", "typed authorization 覆盖 delta", "受影响证据可枚举"]
+    steps:
+      - action: "plan 后 apply scope-amend"
+        expected: "MF-2 admission/E2E 先通过；旧 revision 不变，新 revision 含 delta、重新授权与 invalidation set"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF2-02
+    title: "stale preimage 或未知路径导致 scope-amend 零写失败"
+    type: negative
+    priority: HIGH
+    persona: P-01
+    source_refs:
+      requirements: [REQ-MF2-01, REQ-MF2-02, REQ-MF2-03]
+      use_cases: [UC-SCOPE-AMENDMENT]
+      stories: [ST-N-MF2]
+    trigger: "BL-001 supersession admission 未通过，或 apply 时 revision/preimage 已漂移或 delta 含 unknown path"
+    context: "plan 快照不可复用"
+    preconditions: ["原 revision bytes 摘要已记录"]
+    steps:
+      - action: "尝试 apply scope-amend"
+        expected: "MF-2 实现/E2E 或 apply 被拒绝并给出重新 plan/补齐 predecessor inventory 指引，不产生 partial revision"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF2-03
+    title: "缺少 typed authorization 时拒绝扩大范围"
+    type: permission
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-MF2-02, REQ-MF2-03]
+      use_cases: [UC-SCOPE-AMENDMENT]
+      stories: [ST-N-MF2]
+    trigger: "delta 机械合法但授权不覆盖新增操作"
+    context: "deny-default 权限边界"
+    preconditions: ["当前授权集合可读"]
+    steps:
+      - action: "执行 amend authorization precheck"
+        expected: "fail closed，指出缺少的 typed authorization，mutation=0"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF3-01
+    title: "typed ref 按 repository role 解析 release/process 对象"
+    type: positive
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-MF3-01, REQ-MF3-02, REQ-MF3-03]
+      use_cases: [UC-TYPED-REFS]
+      stories: [ST-MF3]
+    trigger: "合同同时引用 release 与 process 对象"
+    context: "schema/version 和 role 有效"
+    preconditions: ["project route identity 健康"]
+    steps:
+      - action: "解析并 canonicalize refs"
+        expected: "输出明确 repository role、logical namespace 和一致前缀语义"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF3-02
+    title: "unknown role 或相邻字段前缀矛盾时 fail closed"
+    type: negative
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-MF3-01, REQ-MF3-02]
+      use_cases: [UC-TYPED-REFS]
+      stories: [ST-N-MF3]
+    trigger: "输入含未知仓角色或相反隐式前缀规则"
+    context: "ref 不能唯一解释"
+    preconditions: ["ambiguous fixtures 可重放"]
+    steps:
+      - action: "运行 typed ref contract check"
+        expected: "返回明确 error code，不猜 sibling、不默认仓、不 mutation"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF3-03
+    title: "v1 ref 在兼容期获得确定读取或迁移诊断"
+    type: boundary
+    priority: HIGH
+    persona: P-01
+    source_refs:
+      requirements: [REQ-MF3-03]
+      use_cases: [UC-TYPED-REFS]
+      stories: [ST-N-MF3]
+    trigger: "reader 接收到迁移期 v1 ref"
+    context: "read-old/write-new 兼容窗口"
+    preconditions: ["legacy provenance 保留"]
+    steps:
+      - action: "读取 v1 ref、写入新 ref，并运行 declared-scope residual/ambiguity checks"
+        expected: "v1 可确定读取或明确报错；新 writer v1 输出=0、declared-scope v1 residual=0、ambiguous/misread 检出率=100%；连续两个 full-validation 快照 v1 input observed=0 前不得提议 reader 退役"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF4-01
+    title: "canonical validation policy 唯一决定 full 层执行要求"
+    type: positive
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-MF4-01, REQ-MF4-02, REQ-MF4-03]
+      use_cases: [UC-FULL-REGRESSION-SEMANTICS]
+      stories: [ST-MF4]
+    trigger: "编排器构造 targeted→compatibility→full 执行计划"
+    context: "输入使用 canonical successor policy"
+    preconditions: ["validation profile 可读"]
+    steps:
+      - action: "解释 policy 并生成分层执行计划"
+        expected: "语义仅表示默认执行策略，required full 层保留且不存在禁令解释"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF4-02
+    title: "legacy 字段不能导致 required full 层被静默跳过"
+    type: negative
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-MF4-01, REQ-MF4-02, REQ-MF4-03]
+      use_cases: [UC-FULL-REGRESSION-SEMANTICS]
+      stories: [ST-N-MF4]
+    trigger: "legacy 字段值可能被误读为 full regression 禁令"
+    context: "迁移 reader 处理 v1 profile"
+    preconditions: ["profile 其他字段要求 full"]
+    steps:
+      - action: "归一化 legacy profile 并检查执行层"
+        expected: "输出迁移 provenance，仍计划 full 层或明确报错，不静默跳过"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF4-03
+    title: "canonical 与 legacy 输入产生等价分层决策"
+    type: boundary
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-MF4-02, REQ-MF4-03]
+      use_cases: [UC-FULL-REGRESSION-SEMANTICS]
+      stories: [ST-N-MF4]
+    trigger: "同一业务意图分别由 canonical/v1 fixture 表达"
+    context: "兼容窗口内的等价输入"
+    preconditions: ["read-old/write-new 迁移合同可用"]
+    steps:
+      - action: "比较两类输入的 normalized policy/layer plan，并记录连续 full-validation v1 观测快照"
+        expected: "决策等价且 legacy 来源可追踪；writer v1 输出=0、residual=0、ambiguous/misread 检出率=100%；仅连续两个快照 v1 observed=0 后可提议 reader 退役"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF5-01
+    title: "七类 identity 一致时复用稳定验证层"
+    type: positive
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-MF5-01, REQ-MF5-02, REQ-MF5-03]
+      use_cases: [UC-VALIDATION-REUSE]
+      stories: [ST-MF5]
+    trigger: "新 Work/revision 请求复用既有 receipt"
+    context: "canonical semantic-equivalence matrix 判定 source/profile/command/environment/runner/evidence/provenance 语义等价"
+    preconditions: ["receipt/evidence 可验证", "无 FAIL 或 partial mutation", "等价 runner/environment fixture 包含 raw string 或 machine incidental differences"]
+    steps:
+      - action: "运行 canonical semantic-equivalence identity check"
+        expected: "等价 fixture 误拒绝数=0；稳定层 reuse=PASS，receipt 引用原 evidence/provenance 并产生可核验 digest"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF5-02
+    title: "任一 identity 漂移时拒绝受影响层复用"
+    type: negative
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-MF5-01, REQ-MF5-02]
+      use_cases: [UC-VALIDATION-REUSE]
+      stories: [ST-N-MF5]
+    trigger: "候选 receipt 的至少一个 identity 与当前执行不一致"
+    context: "canonical matrix 中的单层或多层安全相关非等价漂移"
+    preconditions: ["current identity 与候选 receipt 均可读"]
+    steps:
+      - action: "计算差异与失效层"
+        expected: "安全相关漂移拒绝率=100%；拒绝受影响层，只计划失效层重跑，不用旧 PASS 掩盖漂移"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF5-03
+    title: "evidence/provenance 不可读时 receipt fail closed"
+    type: external-failure
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-MF5-02, REQ-MF5-03]
+      use_cases: [UC-VALIDATION-REUSE]
+      stories: [ST-N-MF5]
+    trigger: "receipt 指向缺失证据或 provenance/digest 不一致"
+    context: "证据依赖失败"
+    preconditions: ["候选 receipt 本身可解析"]
+    steps:
+      - action: "请求复用并验证 evidence/provenance"
+        expected: "返回 BLOCKED/FAIL 和恢复步骤，receipt 不可复用，安排受影响层重跑"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF6-01
+    title: "未登记失败使 state/current 同步降级并列出来源"
+    type: positive
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-MF6-01, REQ-MF6-02, REQ-MF6-03]
+      use_cases: [UC-UNREGISTERED-FAILURE-VISIBILITY]
+      stories: [ST-MF6]
+    trigger: "projection inputs 包含 ledger 外失败或 baseline drift"
+    context: "formal truth 可读且失败源存在"
+    preconditions: ["state/current renderer 使用同一 source set"]
+    steps:
+      - action: "重建 state/current projection"
+        expected: "两者均列出 failure/source，health/readiness 降级且 next action 可追踪"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF6-02
+    title: "失败归属未知时 projection fail closed"
+    type: negative
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-MF6-01, REQ-MF6-02]
+      use_cases: [UC-UNREGISTERED-FAILURE-VISIBILITY]
+      stories: [ST-N-MF6]
+    trigger: "检测到失败但缺少 owner/source 归属证据"
+    context: "unknown failure ownership"
+    preconditions: ["原 projection 显示健康"]
+    steps:
+      - action: "执行 projection consistency check"
+        expected: "health 降级并要求补证，不创建虚假 owner/绿色状态"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-MF6-03
+    title: "补齐有效归属证据后一次 reprojection 退出阻断并收敛"
+    type: boundary
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-MF6-03]
+      use_cases: [UC-UNREGISTERED-FAILURE-VISIBILITY]
+      stories: [ST-N-MF6]
+    trigger: "SCN-MF6-02 因归属证据不足而阻断后，补齐有效 owner/source evidence"
+    context: "两阶段 failure recovery 与稳定输入 no-op"
+    preconditions: ["阻断 projection 快照可读", "新增证据通过真实性与归属校验"]
+    steps:
+      - action: "只执行一次 reprojection，随后以相同 source digest 再投影一次"
+        expected: "第一次退出 blocked 且 state/current failure/health facts 收敛；不得手改派生状态；第二次除允许时间字段外语义 mutation=0"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+coverage_summary:
+  total: 18
+  by_type:
+    positive: 6
+    negative: 6
+    boundary: 3
+    permission: 1
+    empty-data: 0
+    external-failure: 1
+    precheck: 1
+  high_priority: 18
+  high_priority_positive_and_negative_covered: true
+  requirement_refs_total: 18
+  requirement_refs_covered: 18
+  use_case_refs_total: 6
+  use_case_refs_covered: 6
+  gaps: []
+  review_deltas_covered: [REV-01, REV-02, REV-03, REV-04, REV-05, REV-06]

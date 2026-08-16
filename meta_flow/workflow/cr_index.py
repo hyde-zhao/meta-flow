@@ -30,6 +30,62 @@ CR_INDEX_REL = Path('process/changes/CR-INDEX.json')
 
 INDEX_SCHEMA_VERSION = 1
 
+
+def load_terminal_predecessor_inventory(
+    receipts: list[dict[str, Any]],
+    *,
+    cr_id: str,
+    predecessor_revision_id: str,
+    expected_digest: str,
+    expected_revision_bytes_digest: str = "",
+) -> dict[str, Any]:
+    """BL-001 admission: exactly one terminal, digest-bound predecessor receipt."""
+    matches = [receipt for receipt in receipts if receipt.get('cr_id') == cr_id and receipt.get('predecessor_revision_id') == predecessor_revision_id]
+    if not matches:
+        raise ValueError('MISSING_PREDECESSOR_INVENTORY')
+    if len(matches) != 1:
+        raise ValueError('AMBIGUOUS_PREDECESSOR')
+    receipt = matches[0]
+    if receipt.get('terminal_status') not in {'verified', 'completed', 'closed'}:
+        raise ValueError('NON_TERMINAL_PREDECESSOR')
+    inventory = receipt.get('inventory')
+    if (
+        not isinstance(inventory, list)
+        or not inventory
+        or inventory != sorted(set(inventory))
+        or any(not isinstance(item, str) or not item for item in inventory)
+        or receipt.get('inventory_digest') != expected_digest
+        or _canonical_digest(inventory) != expected_digest
+        or (
+            expected_revision_bytes_digest
+            and receipt.get('revision_bytes_digest')
+            != expected_revision_bytes_digest
+        )
+    ):
+        raise ValueError('STALE_PREDECESSOR_BINDING')
+    return dict(receipt)
+
+
+def rebuild_scope_amend_index(revision: dict[str, Any]) -> dict[str, Any]:
+    """A deterministic derived projection, never a separately editable truth."""
+    required = {
+        'schema_version', 'cr_id', 'work_id', 'revision_id',
+        'predecessor_revision_id', 'predecessor_revision_bytes_digest',
+        'scope_digest', 'previous_scope', 'scope', 'invalidated_refs',
+        'plan_digest', 'validation_graph_digest',
+    }
+    if set(revision) != required or revision.get('schema_version') != 2:
+        raise ValueError('INVALID_SCOPE_AMEND_REVISION')
+    return {
+        'cr_id': revision['cr_id'],
+        'work_id': revision['work_id'],
+        'revision_id': revision['revision_id'],
+        'scope_digest': revision['scope_digest'],
+        'plan_digest': revision['plan_digest'],
+        'validation_graph_digest': revision['validation_graph_digest'],
+        'predecessor_revision_id': revision['predecessor_revision_id'],
+    }
+
 def _cr_numeric_sort_key(cr_id: str) -> tuple[int, str]:
     match = re.fullmatch('CR-(\\d+)', cr_id)
     return (int(match.group(1)), cr_id) if match else (sys.maxsize, cr_id)
@@ -286,7 +342,16 @@ def _write_cp0_result(project_root: Path, cr_id: str, context_ref: str) -> Path:
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return result_path
 
-def bootstrap_cr(project_root: Path, *, cr_id: str, title: str, scope: str, gate_status: str='cp2_pending', readiness: str='READY') -> dict[str, Path]:
+def bootstrap_cr(
+    project_root: Path,
+    *,
+    cr_id: str,
+    title: str,
+    scope: str,
+    gate_status: str = 'cp2_pending',
+    readiness: str = 'READY',
+    rebuild_corrupt: bool = False,
+) -> dict[str, Path]:
     project_root = project_root.resolve()
     from meta_flow.context_pack import builder
     from meta_flow.policies import failure_routing
@@ -296,7 +361,7 @@ def bootstrap_cr(project_root: Path, *, cr_id: str, title: str, scope: str, gate
     summary = summary_from_cr_file(project_root, cr_path)
     summary_path = write_summary(project_root, cr_id, summary)
     evidence_path = write_evidence_index(project_root, cr_id, summary)
-    index_path = write_index(project_root)
+    index_path = write_index(project_root, rebuild_corrupt=rebuild_corrupt)
     context, context_path = builder.build_context_pack(project_root, stage='CP0', profile='adoption-bootstrap', cr_id=cr_id)
     context_ref = rel(project_root, context_path)
     _update_current_active_change(project_root, cr_id, context_ref)

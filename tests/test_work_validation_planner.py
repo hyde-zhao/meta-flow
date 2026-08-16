@@ -4,7 +4,22 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from test_semantic_identity import _value
 
+from meta_flow.evidence.receipt_equivalence import (
+    PlannerReuseEvidenceV1,
+    PlannerReuseReasonV1,
+    ReceiptReuseFactV1,
+    ReceiptReuseStatusV1,
+    build_planner_reuse_evidence,
+)
+from meta_flow.evidence.semantic_identity import (
+    APPROVED_DIMENSIONS,
+    DimensionClassificationV1,
+    build_semantic_identity,
+    load_embedded_concrete_equivalence_table,
+)
+from meta_flow.work.validation_kernel import capture_validation_snapshot, evaluate_work
 from meta_flow.work.validation_planner import build_validation_execution_plan
 from meta_flow.work.validation_receipt import (
     create_validation_receipt,
@@ -39,6 +54,39 @@ def inputs():
     )
 
 
+def authority_graph():
+    return evaluate_work(
+        capture_validation_snapshot(
+            "init-preflight",
+            {
+                "release_oid": "a" * 40,
+                "process_oid": "b" * 40,
+                "dirty_owned": True,
+            },
+        )
+    )
+
+
+def evidence_for(receipts):
+    graph = authority_graph()
+    fact = ReceiptReuseFactV1(
+        ReceiptReuseStatusV1.REUSE_ELIGIBLE,
+        (DimensionClassificationV1.EQUIVALENT,) * 7,
+        True,
+        False,
+    )
+    return graph, {
+        item.receipt_digest: PlannerReuseEvidenceV1(
+            fact,
+            True,
+            PlannerReuseReasonV1.ELIGIBLE_FOR_KERNEL,
+            item.receipt_digest,
+            graph.graph_digest,
+        )
+        for item in receipts
+    }
+
+
 def test_validation_starts_targeted_and_stops_downstream() -> None:
     fingerprints, commands = inputs()
 
@@ -54,11 +102,15 @@ def test_validation_starts_targeted_and_stops_downstream() -> None:
 
 def test_exact_pass_reuses_and_advances_one_layer() -> None:
     fingerprints, commands = inputs()
+    receipts = (receipt("targeted"),)
+    graph, evidence = evidence_for(receipts)
 
     plan = build_validation_execution_plan(
         fingerprints=fingerprints,
         command_identities=commands,
-        receipts=(receipt("targeted"),),
+        receipts=receipts,
+        reuse_evidence=evidence,
+        authority_graph=graph,
     )
 
     assert [step.action for step in plan.steps] == [
@@ -96,17 +148,88 @@ def test_fail_or_command_mismatch_is_never_reused() -> None:
 
 def test_all_exact_passes_reuse_without_execution() -> None:
     fingerprints, commands = inputs()
+    receipts = tuple(receipt(layer) for layer in LAYERS)
+    graph, evidence = evidence_for(receipts)
 
     plan = build_validation_execution_plan(
         fingerprints=fingerprints,
         command_identities=commands,
-        receipts=tuple(receipt(layer) for layer in LAYERS),
+        receipts=receipts,
+        reuse_evidence=evidence,
+        authority_graph=graph,
     )
 
     assert plan.decision == "REUSED_ALL"
     assert plan.next_layer == ""
     assert plan.full_execution_count == 0
     assert {step.action for step in plan.steps} == {"REUSED_UNCHANGED"}
+
+
+def test_exact_pass_without_adapter_or_same_authority_graph_is_never_reused() -> None:
+    fingerprints, commands = inputs()
+    prior = receipt("targeted")
+    graph, evidence = evidence_for((prior,))
+
+    missing = build_validation_execution_plan(
+        fingerprints=fingerprints,
+        command_identities=commands,
+        receipts=(prior,),
+    )
+    wrong_graph = evaluate_work(
+        capture_validation_snapshot(
+            "init-preflight",
+            {
+                "release_oid": "c" * 40,
+                "process_oid": "d" * 40,
+                "dirty_owned": True,
+            },
+        )
+    )
+    drifted = build_validation_execution_plan(
+        fingerprints=fingerprints,
+        command_identities=commands,
+        receipts=(prior,),
+        reuse_evidence=evidence,
+        authority_graph=wrong_graph,
+    )
+
+    assert missing.steps[0].action == "RUN"
+    assert drifted.steps[0].action == "RUN"
+    assert graph.graph_digest != wrong_graph.graph_digest
+
+
+def test_real_equivalence_adapter_pass_is_consumed_by_sole_authority_graph() -> None:
+    fingerprints, commands = inputs()
+    prior = receipt("targeted")
+    graph = authority_graph()
+    identity = build_semantic_identity(
+        table=load_embedded_concrete_equivalence_table(),
+        values={dimension: _value(dimension) for dimension in APPROVED_DIMENSIONS},
+        receipt_evidence_digest=prior.receipt_digest,
+        decision_graph_digest=graph.graph_digest,
+    )
+    adapter = build_planner_reuse_evidence(
+        receipt=identity,
+        current=identity,
+        planner_receipt_digest=prior.receipt_digest,
+        basis_comparable=True,
+        authority_graph_digest=graph.graph_digest,
+        authority_decision=graph.decision.value,
+        authority_path_count=graph.authoritative_decision_path_count,
+        duplicate_rule_owner_count=graph.duplicate_rule_owner_count,
+        dependency_rule_owner="validation_kernel",
+    )
+
+    plan = build_validation_execution_plan(
+        fingerprints=fingerprints,
+        command_identities=commands,
+        receipts=(prior,),
+        reuse_evidence={prior.receipt_digest: adapter},
+        authority_graph=graph,
+    )
+
+    assert adapter.eligible_for_kernel
+    assert plan.steps[0].action == "REUSED_UNCHANGED"
 
 
 def test_receipt_is_digest_bound_create_only_and_full_pass_has_one_owner(tmp_path: Path) -> None:

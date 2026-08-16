@@ -342,7 +342,11 @@ def _load_manifest(path: Path) -> dict[str, Any]:
         or payload.get("kind") != "work-init-transaction-v1"
         or transaction_id != path.parent.name
         or payload.get("state") not in TRANSACTION_STATES
-        or payload.get("operation") not in {"work.init", "work.init.recover-legacy-partial"}
+        or payload.get("operation") not in {
+            "work.init",
+            "work.init.recover-legacy-partial",
+            "work.scope-amend",
+        }
         or not _IDENTITY_RE.fullmatch(str(payload.get("work_id") or ""))
         or not _DIGEST_RE.fullmatch(str(payload.get("plan_digest") or ""))
         or not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("release_oid") or ""))

@@ -36,6 +36,35 @@ def test_index_payload_validation_rejects_invalid_shape() -> None:
     assert cr_index.validate_index_payload({"schema_version": 999})
 
 
+def test_terminal_predecessor_inventory_and_rebuild_projection_are_closed() -> None:
+    inventory_digest = cr_index._canonical_digest(["x"])
+    receipt = {"cr_id": "CR-071", "predecessor_revision_id": "R1", "terminal_status": "verified", "inventory": ["x"], "inventory_digest": inventory_digest, "revision_bytes_digest": "b" * 64}
+    assert cr_index.load_terminal_predecessor_inventory([receipt], cr_id="CR-071", predecessor_revision_id="R1", expected_digest=inventory_digest, expected_revision_bytes_digest="b" * 64)["inventory"] == ["x"]
+    revision = {
+        "schema_version": 2,
+        "cr_id": "CR-071",
+        "work_id": "CR-071-R2",
+        "revision_id": "R2",
+        "predecessor_revision_id": "R1",
+        "predecessor_revision_bytes_digest": "b" * 64,
+        "scope_digest": "a" * 64,
+        "previous_scope": ["old"],
+        "scope": ["new", "old"],
+        "invalidated_refs": [],
+        "plan_digest": "c" * 64,
+        "validation_graph_digest": "d" * 64,
+    }
+    assert cr_index.rebuild_scope_amend_index(revision) == {
+        "cr_id": "CR-071",
+        "work_id": "CR-071-R2",
+        "revision_id": "R2",
+        "scope_digest": "a" * 64,
+        "plan_digest": "c" * 64,
+        "validation_graph_digest": "d" * 64,
+        "predecessor_revision_id": "R1",
+    }
+
+
 def test_index_build_validate_plan_and_write_owner_behaviour(tmp_path: Path) -> None:
     _write_cr(tmp_path)
     built = cr_index.build_index(tmp_path)
@@ -77,3 +106,26 @@ def test_index_bootstrap_owner_writes_expected_artifacts(tmp_path: Path) -> None
     assert paths["cr"].is_file()
     assert paths["index"].is_file()
     assert paths["cp0_result"].is_file()
+
+
+def test_index_bootstrap_can_rebuild_projection_after_new_formal_truth(tmp_path: Path) -> None:
+    current.write_current_state(
+        tmp_path, current.default_current_state(tmp_path, project_id="target-project")
+    )
+    _write_cr(tmp_path, "CR-100")
+    cr_index.write_index(tmp_path)
+
+    paths = cr_index.bootstrap_cr(
+        tmp_path,
+        cr_id="CR-101",
+        title="bootstrap",
+        scope="scope",
+        readiness="READY",
+        rebuild_corrupt=True,
+    )
+
+    assert paths["cr"].is_file()
+    assert [item["id"] for item in cr_index.load_index(tmp_path)["items"]] == [
+        "CR-100",
+        "CR-101",
+    ]

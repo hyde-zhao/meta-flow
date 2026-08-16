@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -77,6 +79,270 @@ class WorkFinding:
     code: str
     message: str
     key: str | None = None
+
+
+@dataclass(frozen=True)
+class ScopeDeltaV1:
+    """Closed, add-only scope amendment input; no removal vocabulary exists."""
+
+    schema_version: int
+    add_story_ids: tuple[str, ...] = ()
+    add_owned_leaves: tuple[str, ...] = ()
+    add_dependency_edges: tuple[str, ...] = ()
+    add_acceptance_refs: tuple[str, ...] = ()
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1:
+            raise ValueError("INVALID_SCOPE_DELTA")
+        all_values = self.add_story_ids + self.add_owned_leaves + self.add_dependency_edges + self.add_acceptance_refs
+        if not all_values:
+            raise ValueError("INVALID_SCOPE_DELTA")
+        for values in (self.add_story_ids, self.add_owned_leaves, self.add_dependency_edges, self.add_acceptance_refs):
+            if tuple(sorted(set(values))) != values or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", value) for value in values):
+                raise ValueError("INVALID_SCOPE_DELTA")
+
+
+@dataclass(frozen=True)
+class PredecessorInventoryReceiptV1:
+    cr_id: str
+    predecessor_revision_id: str
+    terminal_status: str
+    inventory: tuple[str, ...]
+    inventory_digest: str
+    revision_bytes_digest: str
+
+    def __post_init__(self) -> None:
+        if (
+            not _ID_RE.fullmatch(self.cr_id)
+            or not _ID_RE.fullmatch(self.predecessor_revision_id)
+            or self.terminal_status not in {"verified", "completed", "closed"}
+            or tuple(sorted(set(self.inventory))) != self.inventory
+            or not self.inventory
+            or not re.fullmatch(r"[0-9a-f]{64}", self.inventory_digest)
+            or not re.fullmatch(r"[0-9a-f]{64}", self.revision_bytes_digest)
+        ):
+            raise ValueError("STALE_PREDECESSOR_BINDING")
+
+
+@dataclass(frozen=True)
+class ScopeAmendPlanV1:
+    revision_id: str
+    predecessor: PredecessorInventoryReceiptV1 | None
+    scope_digest: str
+    snapshot_digest: str
+    plan_digest: str
+    mutation_count: int = 0
+    cr_id: str = ""
+    work_id: str = ""
+    current_scope: tuple[str, ...] = ()
+    result_scope: tuple[str, ...] = ()
+    authorization_digest: str = ""
+    envelope_digest: str = ""
+    validation_graph_digest: str = ""
+    snapshot_bindings: tuple[tuple[str, str], ...] = ()
+    invalidated_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class WorkRevisionV2:
+    schema_version: int
+    cr_id: str
+    work_id: str
+    revision_id: str
+    predecessor_revision_id: str
+    predecessor_revision_bytes_digest: str
+    scope_digest: str
+    previous_scope: tuple[str, ...]
+    scope: tuple[str, ...]
+    invalidated_refs: tuple[str, ...]
+    plan_digest: str
+    validation_graph_digest: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != 2
+            or not all(
+                _ID_RE.fullmatch(value)
+                for value in (
+                    self.cr_id,
+                    self.work_id,
+                    self.revision_id,
+                    self.predecessor_revision_id,
+                )
+            )
+            or any(
+                not re.fullmatch(r"[0-9a-f]{64}", value)
+                for value in (
+                    self.predecessor_revision_bytes_digest,
+                    self.scope_digest,
+                    self.plan_digest,
+                    self.validation_graph_digest,
+                )
+            )
+            or tuple(sorted(set(self.scope))) != self.scope
+            or not set(self.previous_scope) < set(self.scope)
+            or tuple(sorted(set(self.invalidated_refs))) != self.invalidated_refs
+        ):
+            raise ValueError("INVALID_SCOPE_AMEND_REVISION")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "cr_id": self.cr_id,
+            "work_id": self.work_id,
+            "revision_id": self.revision_id,
+            "predecessor_revision_id": self.predecessor_revision_id,
+            "predecessor_revision_bytes_digest": self.predecessor_revision_bytes_digest,
+            "scope_digest": self.scope_digest,
+            "previous_scope": list(self.previous_scope),
+            "scope": list(self.scope),
+            "invalidated_refs": list(self.invalidated_refs),
+            "plan_digest": self.plan_digest,
+            "validation_graph_digest": self.validation_graph_digest,
+        }
+
+
+def validate_scope_delta(
+    current_scope: tuple[str, ...],
+    delta: ScopeDeltaV1,
+    authorized_leaves: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return a strict canonical superset or fail closed before any plan/write."""
+    additions = tuple(
+        sorted(
+            set(
+                delta.add_story_ids
+                + delta.add_owned_leaves
+                + delta.add_dependency_edges
+                + delta.add_acceptance_refs
+            )
+        )
+    )
+    if (
+        not additions
+        or any(leaf in current_scope for leaf in delta.add_owned_leaves)
+        or not set(delta.add_owned_leaves).issubset(authorized_leaves)
+    ):
+        raise ValueError("SCOPE_NARROWING")
+    result = tuple(sorted(set(current_scope) | set(additions)))
+    if len(result) <= len(current_scope):
+        raise ValueError("SCOPE_NARROWING")
+    return result
+
+
+def plan_scope_amend(
+    *,
+    revision_id: str,
+    current_scope: tuple[str, ...],
+    delta: ScopeDeltaV1,
+    authorized_leaves: tuple[str, ...],
+    predecessor: PredecessorInventoryReceiptV1 | None,
+    snapshot_digest: str,
+    cr_id: str = "",
+    work_id: str = "",
+    authorization_digest: str = "",
+    envelope_digest: str = "",
+    validation_graph_digest: str = "",
+    snapshot_bindings: tuple[tuple[str, str], ...] = (),
+    invalidated_refs: tuple[str, ...] = (),
+) -> ScopeAmendPlanV1:
+    if not _ID_RE.fullmatch(revision_id) or not re.fullmatch(r"[0-9a-f]{64}", snapshot_digest):
+        raise ValueError("INVALID_SCOPE_DELTA")
+    if predecessor is None or predecessor.terminal_status not in {"verified", "completed", "closed"} or not predecessor.inventory:
+        raise ValueError("MISSING_PREDECESSOR_INVENTORY")
+    scope = validate_scope_delta(current_scope, delta, authorized_leaves)
+    scope_digest = hashlib.sha256(
+        json.dumps(scope, separators=(",", ":")).encode()
+    ).hexdigest()
+    bindings = tuple(sorted(snapshot_bindings))
+    invalidations = tuple(sorted(set(invalidated_refs)))
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "revision_id": revision_id,
+                "scope_digest": scope_digest,
+                "predecessor": predecessor.inventory_digest,
+                "snapshot": snapshot_digest,
+                "cr_id": cr_id,
+                "work_id": work_id,
+                "authorization_digest": authorization_digest,
+                "envelope_digest": envelope_digest,
+                "validation_graph_digest": validation_graph_digest,
+                "snapshot_bindings": bindings,
+                "invalidated_refs": invalidations,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    return ScopeAmendPlanV1(
+        revision_id,
+        predecessor,
+        scope_digest,
+        snapshot_digest,
+        digest,
+        0,
+        cr_id,
+        work_id,
+        tuple(sorted(current_scope)),
+        scope,
+        authorization_digest,
+        envelope_digest,
+        validation_graph_digest,
+        bindings,
+        invalidations,
+    )
+
+
+def apply_scope_amend(
+    plan: ScopeAmendPlanV1,
+    *,
+    fresh_snapshot_digest: str,
+    fresh_snapshot_bindings: tuple[tuple[str, str], ...] | None = None,
+) -> dict[str, object]:
+    """Return the append-only successor admitted by an exact fresh snapshot."""
+    if (
+        fresh_snapshot_digest != plan.snapshot_digest
+        or (
+            fresh_snapshot_bindings is not None
+            and tuple(sorted(fresh_snapshot_bindings)) != plan.snapshot_bindings
+        )
+    ):
+        return {"decision": "REPLAN_REQUIRED", "mutation_count": 0, "plan_digest": plan.plan_digest}
+    if not all(
+        (
+            plan.cr_id,
+            plan.work_id,
+            plan.current_scope,
+            plan.result_scope,
+            plan.authorization_digest,
+            plan.envelope_digest,
+            plan.validation_graph_digest,
+        )
+    ):
+        return {"decision": "READY", "mutation_count": 0, "plan_digest": plan.plan_digest}
+    assert plan.predecessor is not None
+    revision = WorkRevisionV2(
+        2,
+        plan.cr_id,
+        plan.work_id,
+        plan.revision_id,
+        plan.predecessor.predecessor_revision_id,
+        plan.predecessor.revision_bytes_digest,
+        plan.scope_digest,
+        plan.current_scope,
+        plan.result_scope,
+        plan.invalidated_refs,
+        plan.plan_digest,
+        plan.validation_graph_digest,
+    )
+    return {
+        "decision": "READY",
+        "mutation_count": 0,
+        "plan_digest": plan.plan_digest,
+        "revision": revision,
+    }
 
 
 @dataclass(frozen=True)
@@ -269,11 +535,11 @@ def validate_work_payload(
 
     execution_unit_payload = payload.get("execution_unit")
     if execution_unit_payload is not None:
-        if payload.get("kind") != "work":
+        if payload.get("kind") not in {"work", "cr"}:
             _finding(
                 findings,
                 "execution_unit",
-                "execution_unit v1 is supported only by the Work envelope",
+                "execution_unit v1 is supported only by Work/CR execution envelopes",
                 key="execution_unit",
             )
         if not isinstance(execution_unit_payload, Mapping):

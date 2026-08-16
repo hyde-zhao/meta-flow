@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,216 @@ ROADMAP_REF = "process/ROADMAP.yaml"
 CR_LEDGER_REF = "process/state/CR-LEDGER.ndjson"
 TERMINAL_WORK = frozenset({"completed", "cancelled", "archived"})
 TERMINAL_CR = frozenset({"closed", "cancelled", "superseded", "archived"})
+
+
+# CR-071 S07 deliberately keeps recovery assessment and planning independent
+# from the derived-projection writer.  These types do not know a process path
+# and consequently cannot write a gate, lifecycle truth, ledger, or projection.
+_PREDICATES = (
+    "location", "owner", "current_lineage", "integrity", "completeness", "freshness", "validity"
+)
+_PRESERVED_BLOCKERS = frozenset({"partial", "recovered", "human-pending"})
+
+
+@dataclass(frozen=True)
+class ExpectedEvidenceSchemaV1:
+    """Independent, closed evidence requirements for a recovery candidate."""
+
+    identity: Mapping[str, Any]
+    selection: Mapping[str, Any]
+    integrity: Mapping[str, Any]
+    completeness: Mapping[str, Any]
+    freshness: Mapping[str, Any]
+    validity: Mapping[str, Any]
+    producer_contract_digest: str
+    schema_digest: str
+
+
+@dataclass(frozen=True)
+class FailureAssessmentV1:
+    decision: str
+    reason_code: str
+    mutation_count: int
+    reprojection_count: int
+    predicate_results: Mapping[str, bool]
+    preserved_blockers: tuple[str, ...]
+    source_evidence_digest: str
+    expected_schema_digest: str
+
+
+@dataclass(frozen=True)
+class ReprojectionPlanV1:
+    decision: str
+    mutation_count: int
+    assessment_digest: str
+    source_evidence_digest: str
+    expected_schema_digest: str
+    target_projection_ref: str
+    target_projection_preimage_digest: str
+    target_blocker_id: str
+    target_blocker_preimage_digest: str
+    release_oid: str
+    process_oid: str
+    dirty_inventory_digest: str
+    scope_authz_plan_digest: str
+    native_writer_id: str
+    plan_digest: str
+
+
+@dataclass(frozen=True)
+class ProjectionMutationReceiptV1:
+    decision: str
+    mutation_count: int
+    plan_digest: str
+    source_evidence_digest: str
+    target_blocker_id: str
+    reason_code: str = ""
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _blocker_kind(value: Any) -> str:
+    return str(value or "unknown").strip().lower().replace("_", "-").replace(" ", "-")
+
+
+def _digest_fields(value: Mapping[str, Any]) -> str:
+    return _canonical_digest(dict(value))
+
+
+def _receipt(
+    decision: str, plan: ReprojectionPlanV1, *, reason_code: str = ""
+) -> ProjectionMutationReceiptV1:
+    return ProjectionMutationReceiptV1(
+        decision=decision,
+        mutation_count=1 if decision == "APPLIED" else 0,
+        plan_digest=plan.plan_digest,
+        source_evidence_digest=plan.source_evidence_digest,
+        target_blocker_id=plan.target_blocker_id,
+        reason_code=reason_code,
+    )
+
+
+def evaluate_reprojection(
+    expected: ExpectedEvidenceSchemaV1 | Mapping[str, Any],
+    failure: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    blockers: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+) -> FailureAssessmentV1:
+    """Return a positive-sufficient, zero-write recovery assessment.
+
+    The candidate must explicitly report every closed predicate as ``True``.
+    Absence, a non-boolean value, unfamiliar blocker, source drift, or a
+    non-exact original reason is a deny; no inference is permitted here.
+    """
+
+    expected_values = _mapping(expected.__dict__ if isinstance(expected, ExpectedEvidenceSchemaV1) else expected)
+    schema_digest = str(expected_values.get("schema_digest") or "")
+    source_digest = str(failure.get("source_evidence_digest") or "")
+    predicate_values = _mapping(candidate.get("predicate_results"))
+    predicates = {name: predicate_values.get(name) is True for name in _PREDICATES}
+    preserved = tuple(sorted(
+        _blocker_kind(item.get("class") or item.get("status") or item.get("id"))
+        for item in blockers
+        if isinstance(item, Mapping)
+    ))
+    reason = ""
+    if not schema_digest or expected_values.get("derived_from_failure_projection") is True:
+        reason = "EXPECTED_SCHEMA_UNAVAILABLE"
+    elif str(failure.get("reason_code") or "") != "missing-evidence":
+        reason = "ORIGINAL_REASON_NOT_MISSING_EVIDENCE"
+    elif int(failure.get("reprojection_count") or 0) != 0:
+        reason = "REPROJECTION_ALREADY_ATTEMPTED"
+    elif candidate.get("candidate_count") != 1:
+        reason = "AMBIGUOUS_OR_MISSING_CANDIDATE"
+    elif candidate.get("source_identity_matches") is not True:
+        reason = "SOURCE_IDENTITY_DRIFT"
+    elif not all(predicates.values()):
+        reason = "VALID_ARTIFACT_BUT_INSUFFICIENT"
+    elif any(value in _PRESERVED_BLOCKERS or value not in {"missing-evidence"} for value in preserved):
+        reason = "HIGHER_OR_UNKNOWN_BLOCKER_PRESENT"
+    decision = "RECOVERABLE" if not reason else "DENY"
+    return FailureAssessmentV1(
+        decision=decision, reason_code=reason, mutation_count=0,
+        reprojection_count=int(failure.get("reprojection_count") or 0),
+        predicate_results=predicates, preserved_blockers=preserved,
+        source_evidence_digest=source_digest, expected_schema_digest=schema_digest,
+    )
+
+
+def plan_reprojection(
+    assessment: FailureAssessmentV1,
+    target: Mapping[str, Any],
+    authz_scope: Mapping[str, Any],
+) -> ReprojectionPlanV1:
+    """Build a pure, closed-delta plan.  It never applies a projection."""
+
+    target_values = _mapping(target)
+    authz = _mapping(authz_scope)
+    values = {
+        "assessment_digest": _digest_fields(assessment.__dict__),
+        "source_evidence_digest": assessment.source_evidence_digest,
+        "expected_schema_digest": assessment.expected_schema_digest,
+        "target_projection_ref": str(target_values.get("target_projection_ref") or ""),
+        "target_projection_preimage_digest": str(target_values.get("target_projection_preimage_digest") or ""),
+        "target_blocker_id": str(target_values.get("target_blocker_id") or ""),
+        "target_blocker_preimage_digest": str(target_values.get("target_blocker_preimage_digest") or ""),
+        "release_oid": str(authz.get("release_oid") or ""),
+        "process_oid": str(authz.get("process_oid") or ""),
+        "dirty_inventory_digest": str(authz.get("dirty_inventory_digest") or ""),
+        "scope_authz_plan_digest": str(authz.get("scope_authz_plan_digest") or ""),
+        "native_writer_id": str(authz.get("native_writer_id") or ""),
+    }
+    complete = all(values.values())
+    decision = "READY" if assessment.decision == "RECOVERABLE" and complete else "DENY"
+    plan_digest = _canonical_digest({"decision": decision, **values})
+    return ReprojectionPlanV1(decision=decision, mutation_count=0, plan_digest=plan_digest, **values)
+
+
+def apply_reprojection_plan(
+    plan: ReprojectionPlanV1,
+    fresh_repository_snapshot: Mapping[str, Any],
+    native_writer: Callable[[ReprojectionPlanV1, Mapping[str, Any]], Mapping[str, Any]] | None,
+) -> ProjectionMutationReceiptV1:
+    """Delegate one guarded apply to the existing native writer, or no-op.
+
+    This boundary compares fresh facts rather than trusting the planning
+    context.  It intentionally has no filesystem write primitive: only the
+    injected native writer can perform the one allowed projection mutation.
+    """
+
+    fresh = _mapping(fresh_repository_snapshot)
+    if plan.decision != "READY":
+        return _receipt("BLOCKED_REPLAN", plan, reason_code="PLAN_NOT_READY")
+    identity = (plan.source_evidence_digest, plan.expected_schema_digest, plan.target_blocker_id)
+    if identity in {tuple(item) for item in fresh.get("applied_source_keys", ()) if isinstance(item, (tuple, list))}:
+        return _receipt("NO_CHANGE", plan)
+    required = {
+        "release_oid": plan.release_oid,
+        "process_oid": plan.process_oid,
+        "dirty_inventory_digest": plan.dirty_inventory_digest,
+        "target_projection_preimage_digest": plan.target_projection_preimage_digest,
+        "target_blocker_preimage_digest": plan.target_blocker_preimage_digest,
+        "scope_authz_plan_digest": plan.scope_authz_plan_digest,
+        "native_writer_id": plan.native_writer_id,
+        "source_evidence_digest": plan.source_evidence_digest,
+    }
+    if any(str(fresh.get(key) or "") != value for key, value in required.items()):
+        return _receipt("BLOCKED_REPLAN", plan, reason_code="FRESH_FACT_DRIFT")
+    blocker_classes = {
+        _blocker_kind(item.get("class") or item.get("status"))
+        for item in fresh.get("blockers", ())
+        if isinstance(item, Mapping)
+    }
+    if any(item in _PRESERVED_BLOCKERS or item not in {"missing-evidence"} for item in blocker_classes):
+        return _receipt("BLOCKED_REPLAN", plan, reason_code="HIGHER_OR_UNKNOWN_BLOCKER_PRESENT")
+    if native_writer is None:
+        return _receipt("BLOCKED_REPLAN", plan, reason_code="NATIVE_WRITER_UNAVAILABLE")
+    result = _mapping(native_writer(plan, fresh))
+    if result.get("decision") != "APPLIED" or result.get("mutation_count") != 1:
+        return _receipt("BLOCKED_REPLAN", plan, reason_code="NATIVE_WRITER_DENIED")
+    return _receipt("APPLIED", plan)
 
 
 def _canonical_digest(value: Any) -> str:
@@ -245,6 +456,14 @@ def derive_formal_truth_patch(
     current_phase = active_phases[0] if len(active_phases) == 1 else (
         "multiple-active-phases" if active_phases else "project-completion"
     )
+    pending_gate = str(state.get("pending_gate") or "")
+    pending_checklist_path = str(state.get("pending_checklist_path") or "")
+    if pending_gate and pending_checklist_path:
+        next_action = {
+            "type": "human_gate",
+            "text": f"Review pending human gate {pending_gate}.",
+            "stop_reason": "required_human_gate",
+        }
     merged_refs = list(
         dict.fromkeys(
             [

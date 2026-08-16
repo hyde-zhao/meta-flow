@@ -1185,6 +1185,41 @@ meta-flow cr check --project-root .
 
 `status-sync` 不复制 CP result 或 Decision Brief 正文到 CR；CR 正文仍只保留 checkpoint refs 和状态摘要。
 
+### CR-071：派生失败投影的受控恢复
+
+CR-071 的 projection-integrity 机制使用下列只读/检查入口；这些命令和检查结果不授权
+真实 ledger 更正、cutover、安装、发布或 Git 操作：
+
+```bash
+meta-flow project resolve-ref --project-root <release-root> --logical-ref process/checks/<ref>.json --format json
+meta-flow state-transition --route-plan <route-plan.json> --state <state.json> --checkpoint CP4 --decision PASS
+meta-flow state-transition --route-plan <route-plan.json> --state <state.json> --approved-gate CP3
+```
+
+迁移与兼容性：旧的“artifact exists 即解除 blocker”行为不再兼容。恢复候选必须拥有独立
+`ExpectedEvidenceSchemaV1`，唯一 canonical candidate，以及 location、owner、current-lineage、
+integrity、completeness、freshness、validity 的全部正向 PASS。assessment 与
+`ReprojectionPlanV1` 始终是零写；计划不表示 blocker 已被解除。
+
+真正的 derived-projection 写入只可由既有 native formal-projection writer 执行。它必须在
+独立的新鲜上下文重新绑定 release/process OID、dirty inventory、target 与 blocker preimage、
+scope/authz/plan/source digest 和 writer identity。任一漂移返回 `BLOCKED_REPLAN` 且
+`mutation_count=0`；首次成功只可移除精确的 missing-evidence derived blocker 并返回一次
+`APPLIED` receipt。相同 source/schema/blocker 重放为 `NO_CHANGE`、零写。human pending、
+`PARTIAL`、`RECOVERED`、任何其他/未知或更高优先级 blocker 永远不能被该恢复路径清除。
+
+S00 的 remediation completion 之后仍必须等待一项绑定当前 OID、三个 source preimage、完成
+evidence digest 与 allowed fields 的独立 typed authorization。CP3/CP4/CP5 设计或审批不替代
+该授权；没有它时不得生成 correction plan、执行 apply 或 cutover。
+
+状态转换中，CP3 approved 可以进入真实 CP4 automatic 设计/LLD 工作，不能伪造 CP5。只有
+CP4 完成且真实 CP5 checklist/ref 已存在时，才可进入 `pending_gate=CP5`，并以
+`next_action.type=await_user` 等待人工门。fresh zero-write transition probe 失败时保持
+`CHECK_HARNESS_ERROR`，不得创建或修改状态文件以掩盖问题。
+
+修订记录：2026-08-16（CR-071 S07）新增 positive-sufficient recovery、native-writer-only
+guarded apply、CP3→CP4 automatic→CP5 pending 的 transition 说明，以及上述授权停止边界。
+
 ### 6.6 何时显式声明 meta-self-dev
 
 如果这次目标是优化当前元工作流本身，而不是为某个目标产物交付方案，请在第一轮明确说明：

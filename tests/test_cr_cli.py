@@ -86,6 +86,10 @@ class CRCliContractTests(unittest.TestCase):
             "_dispatch_cr_status_sync_recovery_command",
             "_dispatch_cr_diagnostic_command",
             "main",
+            "render_scope_amend_plan",
+            "render_scope_amend_apply",
+            "scope_amend_main",
+            "_load_scope_amend_receipts",
         }
         functions = {
             node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
@@ -236,6 +240,37 @@ class CRCliContractTests(unittest.TestCase):
                     "terminate",
                 },
                 observed,
+            )
+
+    def test_bootstrap_forwards_explicit_rebuild_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dependencies = self._dependencies(root)
+
+            with redirect_stdout(StringIO()):
+                self.assertEqual(
+                    0,
+                    cr_cli.main(
+                        [
+                            "bootstrap",
+                            "--id",
+                            "CR-101",
+                            "--rebuild",
+                            "--project-root",
+                            str(root),
+                        ],
+                        dispatch_dependencies=dependencies,
+                    ),
+                )
+
+            dependencies["bootstrap_cr"].assert_called_once_with(
+                root.resolve(),
+                cr_id="CR-101",
+                title="Meta Flow adoption bootstrap",
+                scope="Bootstrap Meta Flow adoption readiness for this target project.",
+                gate_status="cp2_pending",
+                readiness="READY",
+                rebuild_corrupt=True,
             )
 
     def test_help_unknown_and_invalid_paths_keep_exit_mapping(self) -> None:

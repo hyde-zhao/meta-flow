@@ -7,7 +7,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from meta_flow.evidence.receipt_equivalence import PlannerReuseEvidenceV1
 from meta_flow.work.validation_fingerprint import VALIDATION_LAYERS
+from meta_flow.work.validation_kernel import DecisionStatus, NormalizedDecisionGraphV1
 from meta_flow.work.validation_receipt import ValidationReceipt
 
 _HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -48,6 +50,8 @@ def build_validation_execution_plan(
     command_identities: Mapping[str, str],
     receipts: tuple[ValidationReceipt, ...] = (),
     layers: tuple[str, ...] = VALIDATION_LAYERS,
+    reuse_evidence: Mapping[str, PlannerReuseEvidenceV1] | None = None,
+    authority_graph: NormalizedDecisionGraphV1 | None = None,
 ) -> ValidationExecutionPlan:
     if not layers or any(layer not in VALIDATION_LAYERS for layer in layers):
         raise ValueError("validation layers must be a non-empty supported subset")
@@ -59,6 +63,14 @@ def build_validation_execution_plan(
     for value in (*fingerprints.values(), *command_identities.values()):
         if not _HEX_RE.fullmatch(value):
             raise ValueError("validation fingerprints and command identities must be sha256 digests")
+
+    evidence_by_receipt = dict(reuse_evidence or {})
+    if any(
+        not _HEX_RE.fullmatch(key)
+        or not isinstance(value, PlannerReuseEvidenceV1)
+        for key, value in evidence_by_receipt.items()
+    ):
+        raise ValueError("reuse evidence must be keyed by receipt SHA-256")
 
     steps: list[ValidationStep] = []
     errors: list[str] = []
@@ -82,14 +94,27 @@ def build_validation_execution_plan(
             execution_scheduled = True
             continue
         if passes:
+            receipt = passes[0]
+            evidence = evidence_by_receipt.get(receipt.receipt_digest)
+            if _reuse_authorized(receipt, evidence, authority_graph):
+                steps.append(
+                    ValidationStep(
+                        layer,
+                        "REUSED_UNCHANGED",
+                        "exact PASS plus semantic evidence and sole-authority graph match",
+                        receipt.receipt_digest,
+                    )
+                )
+                continue
             steps.append(
                 ValidationStep(
                     layer,
-                    "REUSED_UNCHANGED",
-                    "exact fingerprint, command and prior PASS match",
-                    passes[0].receipt_digest,
+                    "RUN",
+                    "exact PASS lacks current semantic evidence or sole-authority graph binding",
                 )
             )
+            next_layer = layer
+            execution_scheduled = True
             continue
         reason = "matching prior FAIL is never reusable" if exact else "no exact PASS receipt"
         steps.append(ValidationStep(layer, "RUN", reason))
@@ -108,4 +133,21 @@ def build_validation_execution_plan(
         next_layer,
         1 if next_layer == "full" else 0,
         tuple(errors),
+    )
+
+
+def _reuse_authorized(
+    receipt: ValidationReceipt,
+    evidence: PlannerReuseEvidenceV1 | None,
+    graph: NormalizedDecisionGraphV1 | None,
+) -> bool:
+    return bool(
+        evidence is not None
+        and evidence.eligible_for_kernel
+        and evidence.planner_receipt_digest == receipt.receipt_digest
+        and graph is not None
+        and graph.decision is DecisionStatus.PASS
+        and graph.authoritative_decision_path_count == 1
+        and graph.duplicate_rule_owner_count == 0
+        and evidence.authority_graph_digest == graph.graph_digest
     )

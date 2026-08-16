@@ -973,11 +973,17 @@ class StateTransitionTests(unittest.TestCase):
             self.assertEqual([], errors)
             self.assertEqual([], warnings)
 
-    def test_approved_cp3_requires_post_approval_transition_to_cp5(self) -> None:
+    def test_approved_cp3_accepts_real_cp4_automatic_work_before_cp5_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             route = write_route_plan(root)
-            state = write_state(root, {"next_action": {"type": "continue", "text": "approval writeback complete"}})
+            state = write_state(
+                root,
+                {
+                    "current_phase": "lld-design",
+                    "next_action": {"type": "continue", "text": "complete CP4 design evidence"},
+                },
+            )
 
             errors, _warnings = state_transition.validate_transition(
                 route_plan_path=route,
@@ -985,7 +991,24 @@ class StateTransitionTests(unittest.TestCase):
                 approved_gate="CP3",
             )
 
-            self.assertTrue(any("pending_gate=CP5" in error for error in errors))
+            self.assertEqual([], errors)
+
+    def test_cp4_pass_opens_real_cp5_pending_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route = write_route_plan(root)
+            state = write_state(
+                root,
+                {
+                    "pending_gate": "CP5",
+                    "pending_checklist_path": "process/checkpoints/CP5-ALL-STORIES-LLD-BATCH.md",
+                    "next_action": {"type": "await_user", "text": "review CP5"},
+                },
+            )
+            errors, warnings = state_transition.validate_transition(
+                route_plan_path=route, state_path=state, checkpoint="CP4", decision="PASS"
+            )
+            self.assertEqual(([], []), (errors, warnings))
 
     def test_approved_cp5_accepts_auto_advance_to_cp8_gate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

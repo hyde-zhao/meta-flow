@@ -170,6 +170,24 @@
       }
     },
     {
+      "operation": "cr.scope-amend",
+      "entry": ["meta-flow", "cr", "scope-amend"],
+      "input_version": "ScopeAmendAuthorizationV1",
+      "output_version": "ScopeAmendTransactionPlanV1",
+      "mutation_mode": "dry-run-digest-apply",
+      "authorization_mode": "existing-consumed-authorization",
+      "projector": "meta_flow.work.scope_amend.plan_scope_amend_from_release_root",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "cr.close",
       "entry": ["meta-flow", "cr", "close"],
       "input_version": "StatusSyncPlanV1",

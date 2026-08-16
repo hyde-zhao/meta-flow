@@ -4,12 +4,17 @@ from pathlib import Path
 
 import pytest
 
+from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.work.budget import BudgetLimit
 from meta_flow.work.lifecycle import ALLOWED_TRANSITIONS, transition_work, update_work_status
 from meta_flow.work.model import (
     WORK_MAX_BYTES,
+    PredecessorInventoryReceiptV1,
+    ScopeDeltaV1,
+    apply_scope_amend,
     build_work,
     load_work,
+    plan_scope_amend,
     validate_work_payload,
     work_from_payload,
     write_work_create_only,
@@ -25,6 +30,20 @@ from meta_flow.work.route_profile import (
 from meta_flow.work.scope import WorkScope, exact_scope_difference
 
 RELEASE_OID = "a" * 40
+
+
+def test_scope_delta_is_add_only_and_apply_requires_fresh_snapshot() -> None:
+    delta = ScopeDeltaV1(1, add_story_ids=("STORY-NEW",), add_owned_leaves=("leaf.py",))
+    receipt = PredecessorInventoryReceiptV1("CR-071", "R1", "verified", ("old",), "a" * 64, "b" * 64)
+    plan = plan_scope_amend(revision_id="R2", current_scope=("old",), delta=delta, authorized_leaves=("leaf.py",), predecessor=receipt, snapshot_digest="c" * 64)
+    assert plan.mutation_count == 0
+    assert apply_scope_amend(plan, fresh_snapshot_digest="d" * 64)["decision"] == "REPLAN_REQUIRED"
+
+
+def test_scope_delta_rejects_unknown_or_noop_additions() -> None:
+    receipt = PredecessorInventoryReceiptV1("CR-071", "R1", "verified", ("old",), "a" * 64, "b" * 64)
+    with pytest.raises(ValueError, match="SCOPE_NARROWING"):
+        plan_scope_amend(revision_id="R2", current_scope=("old",), delta=ScopeDeltaV1(1, add_story_ids=("STORY-OLD",), add_owned_leaves=("bad.py",)), authorized_leaves=(), predecessor=receipt, snapshot_digest="c" * 64)
 
 
 def test_exact_scope_difference_never_treats_partial_staging_as_pass() -> None:
@@ -75,6 +94,24 @@ def test_build_work_round_trips_all_profiles(tmp_path: Path, profile: str) -> No
     assert load_work(tmp_path, "W-001") == work
     assert validate_work_payload(work.as_dict()) == []
     assert work.scope.digest == work.as_dict()["scope_digest"]
+
+
+def test_formal_cr_execution_envelope_accepts_typed_execution_unit() -> None:
+    work = make_work(profile="G2")
+    payload = work.as_dict()
+    payload["execution_unit"] = ExecutionUnitV1(
+        unit_id=work.work_id,
+        root_concept="formal-cr-execution",
+        slice_id=work.work_id,
+        container_role="primary",
+        revision=1,
+        supersedes_unit_id="",
+        contract_ref="process/changes/CR-001.md",
+        contract_digest="c" * 64,
+    ).as_dict()
+
+    assert payload["kind"] == "cr"
+    assert validate_work_payload(payload) == []
 
 
 def test_blocked_g2_classification_cannot_create_work() -> None:

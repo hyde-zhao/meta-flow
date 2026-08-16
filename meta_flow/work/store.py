@@ -40,6 +40,10 @@ from meta_flow.project.model import Project, load_project
 from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.work.model import Work, load_work, work_path
+from meta_flow.work.production_validation import (
+    ProductionValidationV1,
+    validate_production_write_plan,
+)
 from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.route_profile import RouteDecision, evaluate_route_profile
 from meta_flow.work.scope import check_scope
@@ -79,6 +83,7 @@ class WorkInitPlan:
     lineage_preflight: tuple[tuple[str, str, str, str], ...] = ()
     repair_authorization_path: Path | None = None
     repair_admission_binding: RepairAdmissionBindingV1 | None = None
+    validation: ProductionValidationV1 | None = None
 
     @property
     def blocked(self) -> bool:
@@ -134,6 +139,7 @@ class WorkInitPlan:
                 else ""
             ),
             "plan_digest": self.plan_digest,
+            "validation": self.validation.as_dict() if self.validation is not None else None,
             "domain_mutation_count": 0,
             "coordination_mutation_count": 0,
             "mutation_count": 0,
@@ -216,6 +222,7 @@ def _plan_digest_source(
     request_candidate: RequestMaterializationCandidateV1 | None,
     lineage_preflight: tuple[tuple[str, str, str, str], ...] = (),
     repair_admission_binding: RepairAdmissionBindingV1 | None = None,
+    validation: ProductionValidationV1 | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -239,6 +246,9 @@ def _plan_digest_source(
             repair_admission_binding.as_dict()
             if repair_admission_binding is not None
             else None
+        ),
+        "validation_graph_digest": (
+            validation.graph.graph_digest if validation is not None else ""
         ),
     }
 
@@ -930,6 +940,52 @@ def _plan_work_init_from_release_root(
                     str(exc),
                 )
             )
+    validation: ProductionValidationV1 | None = None
+    try:
+        write_refs = tuple(
+            sorted(action.ref for action in actions if action.action != "noop")
+        )
+        validation = validate_production_write_plan(
+            operation="init-preflight" if operation == "plan" else "init-apply",
+            process_root=process_root,
+            release_oid=execution_context.release_oid,
+            process_oid=execution_context.process_oid,
+            dirty_inventory_digest=execution_context.dirty_path_digest,
+            dirty_owned=execution_context.decision == "READY",
+            owner_id=work.work_id,
+            wave_id="work-init",
+            merge_order=0,
+            write_refs=write_refs,
+            target_preimages=target_preimages,
+            scope_digest=work.scope.digest,
+            budget_digest=canonical_digest(work.budget.as_dict()),
+            authorization_digest=execution_context.authorization_digest,
+            resolver_identity=execution_context.route_digest,
+            policy_identity=execution_context.policy_digest,
+            risk_class=work.risk_profile,
+            gate_status=("BLOCKED" if route_decision.blocked else "PASS"),
+            dependency_receipt_status=(
+                "BLOCKED" if admission_plan is not None and admission_plan.blocked else "PASS"
+            ),
+            execution_context_status=execution_context.decision,
+        )
+    except (OSError, ValueError) as exc:
+        conflicts.append(
+            WorkInitConflict(
+                "WORK_VALIDATION_CAPTURE_BLOCKED",
+                work.work_ref,
+                str(exc),
+            )
+        )
+    else:
+        if not validation.passed:
+            conflicts.append(
+                WorkInitConflict(
+                    "WORK_VALIDATION_GRAPH_BLOCKED",
+                    work.work_ref,
+                    ",".join(item.code for item in validation.graph.items),
+                )
+            )
     digest_source = _plan_digest_source(
         work=work,
         project=project,
@@ -946,6 +1002,7 @@ def _plan_work_init_from_release_root(
         request_candidate=request_candidate,
         lineage_preflight=lineage_preflight,
         repair_admission_binding=repair_binding,
+        validation=validation,
     )
     return WorkInitPlan(
         process_root=process_root,
@@ -965,6 +1022,7 @@ def _plan_work_init_from_release_root(
         lineage_preflight=lineage_preflight,
         repair_authorization_path=repair_authorization_path,
         repair_admission_binding=repair_binding,
+        validation=validation,
     )
 
 
@@ -1298,6 +1356,8 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
         return _make_work_init_receipt(plan, decision="PASS")
     if plan.process_root is None or plan.execution_context is None:
         raise ValueError("canonical Work init plan lacks execution context")
+    if plan.validation is None or not plan.validation.passed:
+        raise ValueError("canonical Work init plan lacks a PASS validation graph")
     from meta_flow.work.init_transaction import (
         apply_work_init_transaction_targets,
         begin_work_init_transaction,
@@ -1331,6 +1391,9 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             or fresh_noop.repair_admission_binding
             != plan.repair_admission_binding
             or fresh_noop.execution_context is None
+            or fresh_noop.validation is None
+            or fresh_noop.validation.graph.graph_digest
+            != plan.validation.graph.graph_digest
             or _context_authority_digest(fresh_noop.execution_context)
             != _context_authority_digest(plan.execution_context)
         ):
@@ -1393,6 +1456,9 @@ def apply_work_init(plan: WorkInitPlan) -> WorkInitReceipt:
             or fresh.target_preimages != plan.target_preimages
             or fresh.lineage_preflight != plan.lineage_preflight
             or fresh.repair_admission_binding != plan.repair_admission_binding
+            or fresh.validation is None
+            or fresh.validation.graph.graph_digest
+            != plan.validation.graph.graph_digest
             or _context_authority_digest(fresh.execution_context)
             != _context_authority_digest(plan.execution_context)
         ):

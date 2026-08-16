@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -38,6 +39,51 @@ def write_plan(root: Path, stories: list[dict]) -> Path:
 
 
 class StoryPlanCheckTests(unittest.TestCase):
+    def test_plan_check_accepts_explicit_per_cr_truth_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "process" / "DEVELOPMENT-PLAN-CR071.yaml"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"plan: exact\n")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            plan = {"per_cr_story_plan_truth_source": {"schema_version": 1, "project_id": "test", "cr_id": "CR-071", "plan_ref": "process/DEVELOPMENT-PLAN-CR071.yaml", "plan_sha256": digest}}
+            self.assertEqual([], story_evidence.validate_per_cr_story_plan_truth_source(plan, expected_cr_id="CR-071", project_root=root))
+            path.write_bytes(b"plan: exact\n\n")
+            self.assertEqual(["STALE_PLAN_DIGEST"], story_evidence.validate_per_cr_story_plan_truth_source(plan, expected_cr_id="CR-071", project_root=root))
+            plan["story_management_truth_source"] = "process/DEVELOPMENT-PLAN.yaml"
+            self.assertEqual(["GENERIC_PER_CR_COLLISION"], story_evidence.validate_per_cr_story_plan_truth_source(plan))
+
+    def test_per_cr_plan_check_binds_current_raw_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "process" / "DEVELOPMENT-PLAN-CR071.yaml"
+            path.parent.mkdir(parents=True)
+            payload = {
+                "project_id": "test-project",
+                "change_id": "CR-071",
+                "story_management_truth_source": "process/DEVELOPMENT-PLAN-CR071.yaml",
+                "waves": [{"wave": "W1", "stories": [{"story_id": "STORY-001", "title": "A", "status": "draft"}]}],
+            }
+            path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+
+            self.assertEqual(
+                [],
+                story_evidence.validate_story_plan(
+                    root,
+                    plan_path=Path("process/DEVELOPMENT-PLAN-CR071.yaml"),
+                    expected_plan_sha256=digest,
+                )[0],
+            )
+            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            self.assertIn(
+                "STALE_PLAN_DIGEST",
+                story_evidence.validate_story_plan(
+                    root,
+                    plan_path=Path("process/DEVELOPMENT-PLAN-CR071.yaml"),
+                    expected_plan_sha256=digest,
+                )[0],
+            )
     def test_plan_check_accepts_development_plan_truth_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

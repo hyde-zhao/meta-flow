@@ -1,0 +1,149 @@
+{
+  "kind": "ProviderReleaseQualificationEvidenceV1",
+  "layers": {
+    "candidate_closure": {
+      "command": {
+        "commands": [
+          "uv run --frozen --python 3.11 ruff check meta_flow/execution_control/migration.py meta_flow/migration/observation_storage.py tests/test_execution_control_migration.py tests/test_observation_storage.py",
+          "uv lock --check",
+          "git diff --check in source and process repositories",
+          "clean source artifact qualification and isolated canary before tag"
+        ]
+      },
+      "profile": {
+        "name": "provider-activation-receipt-v8-closure-0.5.3-v1",
+        "scope": [
+          "activation receipt generator and migration contract lint",
+          "durable observation-store lint and exact writer qualification",
+          "tracked and prospective-untracked whitespace/error checks",
+          "clean artifact receipt and isolated consumer canary as post-commit pre-tag gates"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_closure",
+        "package_version": "0.5.3",
+        "provider_source_set_digest": "aa2b2e18fb460a3b0cfa279099cabfa25461e065dd192e7a678afa7e007bc631",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "detector_residual": "one pre-existing cr_index writer remains outside the exact observation-store qualification scope",
+        "observation_storage_writer_qualification_ref": "process/governance/OBSERVATION-STORAGE-WRITER-QUALIFICATION.md",
+        "observation_storage_writer_qualification_sha256": "9509fff7e710da7976f339b171da878b6d9689ff82fd90ec4926ca9e991ab9e2",
+        "exit_code": 0,
+        "summary": "Scoped Ruff and exact five-writer qualification passed; clean artifact receipt and isolated canary remain mandatory post-commit pre-tag gates"
+      }
+    },
+    "candidate_compatibility": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "tests/test_provider_artifact_receipt.py",
+          "tests/test_provider_installer_identity.py",
+          "tests/test_provider_runtime_identity.py"
+        ]
+      },
+      "profile": {
+        "name": "provider-activation-artifact-runtime-compatibility-0.5.3-v1",
+        "scope": [
+          "provider artifact receipt source and payload bindings",
+          "installer provider identity compatibility",
+          "runtime provider identity and stale-receipt behavior"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_compatibility",
+        "package_version": "0.5.3",
+        "provider_source_set_digest": "aa2b2e18fb460a3b0cfa279099cabfa25461e065dd192e7a678afa7e007bc631",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "25 passed"
+      }
+    },
+    "candidate_full": {
+      "command": {
+        "commands": [
+          "uv run --frozen --python 3.11 pytest -q tests/test_execution_control_migration.py tests/test_observation_storage.py -k 'not packaged_receipt_rotation_preserves_v1_through_v7_and_selects_v8'",
+          "uv run --frozen --python 3.11 pytest -q tests/test_provider_artifact_receipt.py tests/test_provider_installer_identity.py tests/test_provider_runtime_identity.py"
+        ]
+      },
+      "profile": {
+        "name": "provider-activation-receipt-v8-pre-materialization-full-0.5.3-v1",
+        "scope": [
+          "all provider activation receipt schema, loader, qualification and materializer tests except the necessarily post-create packaged-current assertion",
+          "durable observation storage regression",
+          "provider artifact, installer and runtime identity compatibility"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_full",
+        "package_version": "0.5.3",
+        "provider_source_set_digest": "aa2b2e18fb460a3b0cfa279099cabfa25461e065dd192e7a678afa7e007bc631",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "59 passed, 1 post-materialization assertion deselected"
+      }
+    },
+    "candidate_targeted": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "tests/test_execution_control_migration.py",
+          "tests/test_observation_storage.py",
+          "-k",
+          "not packaged_receipt_rotation_preserves_v1_through_v7_and_selects_v8"
+        ]
+      },
+      "profile": {
+        "name": "provider-activation-receipt-v8-targeted-0.5.3-v1",
+        "scope": [
+          "v1-v7 immutable receipt history and v8 fixed-locator rotation",
+          "closed schema and source-manifest currentness",
+          "fresh plan, native authority, create-only capability and replay protection",
+          "atomic observation persistence lock/CAS regression"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_targeted",
+        "package_version": "0.5.3",
+        "provider_source_set_digest": "aa2b2e18fb460a3b0cfa279099cabfa25461e065dd192e7a678afa7e007bc631",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "34 passed, 1 post-materialization assertion deselected"
+      }
+    }
+  },
+  "package_name": "meta-flow",
+  "package_version": "0.5.3",
+  "qualified_at": "2026-08-16",
+  "schema_version": 1
+}

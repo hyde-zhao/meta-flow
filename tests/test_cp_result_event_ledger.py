@@ -17,6 +17,7 @@ from meta_flow.work.read_context import OperationReadContext
 
 GATE_SEMANTIC_REGISTRY = {
     "meta_flow/state/event_ledger.py": "producer-validator-projector-owner",
+    "meta_flow/state/dispatch_correction.py": "correction-transaction-writer-source-binding",
     "meta_flow/checks/cr_tracking.py": "passage-consumer",
     "meta_flow/checks/state_transition.py": "passage-consumer",
     "meta_flow/repository/publisher.py": "passage-consumer",
@@ -275,6 +276,131 @@ def write_cp8_result(root: Path, payload: dict[str, object] | None = None) -> Pa
     base.update(payload or {})
     path.write_text(json.dumps(base, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def _s00_baseline() -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "finding_id": "CR071-LEDGER-RAW-001",
+            "source_ledger_ref": "process/state/GATE-LEDGER.ndjson",
+            "source_line": 175,
+            "source_event_id": "GATE-CR071-CP2-CHANGES-REQUESTED-20260815-V1",
+            "original_bytes_digest": "2460f014e141e1ce74c60ca691f3c32b640c57cc48408f6bcbabd65d161d3744",
+            "allowed_correction_fields": ("gate",),
+        },
+        {
+            "finding_id": "CR071-LEDGER-RAW-002",
+            "source_ledger_ref": "process/state/AGENT-DISPATCH-LEDGER.ndjson",
+            "source_line": 539,
+            "source_event_id": "DISPATCH-CR071-CP2-META-PM-REV2-RESUMED-20260815-V1",
+            "original_bytes_digest": "f481829d6580c11749796aea07177a987c074e25fd8c5fa7df8814ab41b2bf41",
+            "allowed_correction_fields": ("dispatch_id", "canonical_role"),
+        },
+        {
+            "finding_id": "CR071-LEDGER-RAW-003",
+            "source_ledger_ref": "process/state/AGENT-DISPATCH-LEDGER.ndjson",
+            "source_line": 540,
+            "source_event_id": "DISPATCH-CR071-CP2-META-PM-REV2-COMPLETED-20260815-V1",
+            "original_bytes_digest": "3492d2e3d57399fd12a03ed56696d890aad507e4755a0b99ca01ef7c3832e509",
+            "allowed_correction_fields": ("dispatch_id", "canonical_role"),
+        },
+    )
+
+
+def _s00_event(*, baseline_index: int = 0, **overrides: object) -> dict[str, object]:
+    source = _s00_baseline()[baseline_index]
+    event: dict[str, object] = {
+        "schema_version": 1,
+        "event_id": "CORR-001",
+        "event_type": "compensates",
+        "source_ledger_ref": source["source_ledger_ref"],
+        "source_line": source["source_line"],
+        "source_event_id": source["source_event_id"],
+        "original_bytes_digest": source["original_bytes_digest"],
+        "preimage_release_oid": "1" * 40,
+        "preimage_process_oid": "2" * 40,
+        "target_preimage_digest": "6" * 64,
+        "correction_fields": event_ledger.canonical_correction_fields(
+            str(source["finding_id"])
+        ),
+        "authoritative_evidence_refs": ("process/checks/CP5-CR071-FORMAL.result.json",),
+        "authoritative_evidence_digests": ("3" * 64,),
+        "remediation_story_ref": "process/stories/CR-071/STORY-CR071-S00-ledger-remediation-lineage.md",
+        "implementation_completion_evidence_ref": "process/evidence/STORY-CR071-S00.CP6.index.json",
+        "implementation_completion_evidence_digest": "4" * 64,
+        "previous_effective_event_id": "",
+        "previous_effective_event_digest": "",
+        "typed_authorization_ref": "process/authorizations/CR-071-S00.json",
+        "created_by": "native-ledger-owner",
+        "created_at": "2026-08-16T00:00:00Z",
+    }
+    event.update(overrides)
+    return event
+
+
+def test_s00_closed_lineage_validation_and_dual_reports_are_pure() -> None:
+    baseline = _s00_baseline()
+    events = (_s00_event(), _s00_event(baseline_index=1, event_id="CORR-002"), _s00_event(baseline_index=2, event_id="CORR-003"))
+    completion = {"digest": "4" * 64}
+    assert all(event_ledger.validate_typed_correction_event(event, baseline, completion).decision == "PASS" for event in events)
+    assert event_ledger.validate_typed_correction_event(_s00_event(correction_fields={"waiver": True}), baseline, completion).code == "CORRECTION_FIELD_NOT_ALLOWED"
+    assert event_ledger.validate_typed_correction_event(_s00_event(correction_fields={"gate": "WRONG"}), baseline, completion).code == "CORRECTION_VALUE_MISMATCH"
+    assert event_ledger.validate_typed_correction_event(_s00_event(preimage_release_oid="bad"), baseline, completion).code == "REPOSITORY_PREIMAGE_INVALID"
+    assert event_ledger.validate_typed_correction_event(_s00_event(event_type="legacy"), baseline, completion).code == "UNKNOWN_CORRECTION_EVENT_TYPE"
+    lineage = event_ledger.build_correction_lineage(events, baseline, completion)
+    assert lineage.decision == "PASS"
+    raw = event_ledger.build_raw_history_report(baseline)
+    assert (raw.raw_history_finding_count, raw.raw_schema_failure_count) == (3, 5)
+    assert event_ledger.build_effective_lineage_report(lineage, None).availability == "unavailable"
+    receipt = {
+        "decision": "APPLIED",
+        "atomic": True,
+        "lineage_digest": event_ledger.correction_lineage_digest(lineage),
+        "head_set_digest": event_ledger.canonical_digest(list(lineage.heads)),
+        "accepted_event_digest_set": event_ledger.canonical_digest(list(lineage.accepted_event_digests)),
+        "plan_digest": "5" * 64,
+        "completion_digest": "4" * 64,
+    }
+    assert event_ledger.build_effective_lineage_report(lineage, receipt).effective_global_failure_count == 0
+    assert event_ledger.build_effective_lineage_report(lineage, {"decision": "APPLIED", "atomic": True}).availability == "unavailable"
+    empty_lineage = event_ledger.build_correction_lineage((), baseline, completion)
+    assert event_ledger.build_effective_lineage_report(empty_lineage, receipt).availability == "unavailable"
+
+
+def test_s00_lineage_denies_fork_cycle_and_dangling_predecessor() -> None:
+    baseline = _s00_baseline()
+    root = _s00_event()
+    fork = _s00_event(event_id="CORR-002")
+    completion = {"digest": "4" * 64}
+    assert "FORK_DETECTED" in event_ledger.build_correction_lineage((root, fork), baseline, completion).errors
+    cycle = _s00_event(previous_effective_event_id="CORR-001", previous_effective_event_digest="5" * 64)
+    assert "PREDECESSOR_DIGEST_MISMATCH" in event_ledger.build_correction_lineage((cycle,), baseline, completion).errors
+    dangling = _s00_event(previous_effective_event_id="MISSING", previous_effective_event_digest="5" * 64)
+    assert "DANGLING_PREDECESSOR" in event_ledger.build_correction_lineage((dangling,), baseline, completion).errors
+    duplicate = _s00_event()
+    assert event_ledger.build_correction_lineage((root, duplicate), baseline, completion).errors == ("DUPLICATE_EVENT_ID",)
+
+
+def test_s00_raw_report_requires_exact_complete_unique_canonical_baseline() -> None:
+    baseline = _s00_baseline()
+    assert event_ledger.build_raw_history_report(baseline).decision == "PASS"
+    assert event_ledger.build_raw_history_report(baseline[:2]).decision == "BLOCKED"
+    assert event_ledger.build_raw_history_report((baseline[0], baseline[0], baseline[2])).decision == "BLOCKED"
+    wrong = ({**baseline[0], "source_line": 176}, baseline[1], baseline[2])
+    assert event_ledger.build_raw_history_report(wrong).decision == "BLOCKED"
+
+
+def test_s00_rejects_forged_baseline_and_minimal_events_before_effective_report() -> None:
+    baseline = _s00_baseline()
+    completion = {"digest": "4" * 64}
+    forged = tuple({"event_id": f"FORGED-{index}", **{key: value for key, value in event.items() if key.startswith("source_") or key == "original_bytes_digest"}} for index, event in enumerate((_s00_event(), _s00_event(baseline_index=1), _s00_event(baseline_index=2))))
+    fake_baseline = ({**baseline[0], "finding_id": "FAKE"}, baseline[1], baseline[2])
+    assert event_ledger.validate_typed_correction_event(_s00_event(), fake_baseline, completion).code == "CANONICAL_BASELINE_REQUIRED"
+    lineage = event_ledger.build_correction_lineage(forged, baseline, completion)
+    assert lineage.decision == "BLOCKED"
+    completion_mismatch = _s00_event(implementation_completion_evidence_digest="5" * 64)
+    assert event_ledger.build_correction_lineage((completion_mismatch,), baseline, completion).errors == ("COMPLETION_EVIDENCE_DRIFT",)
+    assert event_ledger.build_effective_lineage_report(lineage, {"decision": "APPLIED", "atomic": True, "lineage_digest": "0" * 64, "head_set_digest": "0" * 64, "accepted_event_digest_set": "0" * 64, "plan_digest": "0" * 64, "completion_digest": "4" * 64}).availability == "unavailable"
 
 
 class CPResultEventLedgerTests(unittest.TestCase):

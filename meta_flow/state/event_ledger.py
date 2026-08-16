@@ -425,6 +425,597 @@ class FindingObservationAppendResultV1:
     idempotent: bool
 
 
+# CR-071 S00 keeps this contract separate from the older DispatchCorrectionV1
+# compatibility mechanism.  These pure types never read or write a ledger.
+_S00_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_S00_OID_RE = re.compile(r"^[0-9a-f]{40}$")
+_S00_EVENT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "event_id",
+        "event_type",
+        "source_ledger_ref",
+        "source_line",
+        "source_event_id",
+        "original_bytes_digest",
+        "preimage_release_oid",
+        "preimage_process_oid",
+        "target_preimage_digest",
+        "correction_fields",
+        "authoritative_evidence_refs",
+        "authoritative_evidence_digests",
+        "remediation_story_ref",
+        "implementation_completion_evidence_ref",
+        "implementation_completion_evidence_digest",
+        "previous_effective_event_id",
+        "previous_effective_event_digest",
+        "typed_authorization_ref",
+        "created_by",
+        "created_at",
+    }
+)
+_S00_CANONICAL_BASELINE = (
+    ("CR071-LEDGER-RAW-001", "process/state/GATE-LEDGER.ndjson", 175, "GATE-CR071-CP2-CHANGES-REQUESTED-20260815-V1", "2460f014e141e1ce74c60ca691f3c32b640c57cc48408f6bcbabd65d161d3744", ("gate",)),
+    ("CR071-LEDGER-RAW-002", "process/state/AGENT-DISPATCH-LEDGER.ndjson", 539, "DISPATCH-CR071-CP2-META-PM-REV2-RESUMED-20260815-V1", "f481829d6580c11749796aea07177a987c074e25fd8c5fa7df8814ab41b2bf41", ("dispatch_id", "canonical_role")),
+    ("CR071-LEDGER-RAW-003", "process/state/AGENT-DISPATCH-LEDGER.ndjson", 540, "DISPATCH-CR071-CP2-META-PM-REV2-COMPLETED-20260815-V1", "3492d2e3d57399fd12a03ed56696d890aad507e4755a0b99ca01ef7c3832e509", ("dispatch_id", "canonical_role")),
+)
+_S00_CANONICAL_CORRECTION_VALUES = MappingProxyType(
+    {
+        "CR071-LEDGER-RAW-001": MappingProxyType(
+            {"gate": "GATE_CR071_CP2_PRODUCT_BASELINE_V1"}
+        ),
+        "CR071-LEDGER-RAW-002": MappingProxyType(
+            {
+                "dispatch_id": "DISPATCH-CR071-CP2-META-PM-REV2-RESUMED-20260815-V1",
+                "canonical_role": "meta-pm",
+            }
+        ),
+        "CR071-LEDGER-RAW-003": MappingProxyType(
+            {
+                "dispatch_id": "DISPATCH-CR071-CP2-META-PM-REV2-COMPLETED-20260815-V1",
+                "canonical_role": "meta-pm",
+            }
+        ),
+    }
+)
+_CORRECTION_TRANSACTION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "transaction_id",
+        "event_type",
+        "status",
+        "corrections",
+        "preimage_release_oid",
+        "preimage_process_oid",
+        "release_dirty_inventory_digest",
+        "process_dirty_inventory_digest",
+        "source_preimages",
+        "transaction_ledger_preimage",
+        "completion_evidence",
+        "typed_authorization_ref",
+        "typed_authorization_digest",
+        "plan_digest",
+        "previous_transaction_id",
+        "previous_transaction_digest",
+        "lineage_digest",
+        "head_set_digest",
+        "accepted_event_digest_set",
+        "created_by",
+        "created_at",
+    }
+)
+_CORRECTION_SOURCE_LEDGER_REFS = frozenset(
+    {
+        "process/state/GATE-LEDGER.ndjson",
+        "process/state/AGENT-DISPATCH-LEDGER.ndjson",
+    }
+)
+_CORRECTION_COMPLETION_STORIES = frozenset(
+    {"STORY-CR071-S00", "STORY-CR071-S08"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationResultV1:
+    decision: str
+    code: str
+    event_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectionLineageV1:
+    decision: str
+    heads: tuple[tuple[str, str, str], ...]
+    accepted_event_digests: tuple[tuple[str, str], ...]
+    completion_digest: str
+    errors: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RawHistoryReportV1:
+    raw_history_finding_count: int
+    raw_schema_failure_count: int
+    finding_ids: tuple[str, ...]
+    decision: str = "PASS"
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveLineageReportV1:
+    decision: str
+    effective_global_failure_count: int | None
+    availability: str
+    lineage_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveCorrectionAuthorityV1:
+    transaction_id: str
+    transaction_record_digest: str
+    lineage_digest: str
+    head_set_digest: str
+    accepted_event_digest_set: str
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectionTransactionScanV1:
+    decision: str
+    record_count: int
+    transaction_digests: tuple[tuple[str, str], ...]
+    authority: EffectiveCorrectionAuthorityV1 | None
+    errors: tuple[str, ...]
+
+
+def _s00_source_key(value: Mapping[str, Any]) -> str:
+    return "|".join(str(value.get(field) or "") for field in ("source_ledger_ref", "source_line", "source_event_id", "original_bytes_digest"))
+
+
+def _s00_baseline_by_key(baseline: tuple[Mapping[str, Any], ...]) -> dict[str, Mapping[str, Any]]:
+    return {_s00_source_key(item): item for item in baseline}
+
+
+def _s00_is_canonical_baseline(baseline: tuple[Mapping[str, Any], ...]) -> bool:
+    expected = {
+        "|".join((ledger_ref, str(line), event_id, digest)): (finding_id, allowed)
+        for finding_id, ledger_ref, line, event_id, digest, allowed in _S00_CANONICAL_BASELINE
+    }
+    actual = _s00_baseline_by_key(baseline)
+    return len(baseline) == len(expected) == len(actual) and set(actual) == set(expected) and all(
+        str(actual[key].get("finding_id") or "") == finding_id
+        and tuple(actual[key].get("allowed_correction_fields") or ()) == allowed
+        for key, (finding_id, allowed) in expected.items()
+    )
+
+
+def canonical_correction_fields(finding_id: str) -> dict[str, str]:
+    """Return a mutable copy of the frozen correction values for one finding."""
+
+    values = _S00_CANONICAL_CORRECTION_VALUES.get(finding_id)
+    if values is None:
+        raise ValueError(f"unknown canonical correction finding: {finding_id}")
+    return dict(values)
+
+
+def validate_typed_correction_event(event: Mapping[str, Any], baseline: tuple[Mapping[str, Any], ...], completion_evidence: Mapping[str, Any] | None) -> ValidationResultV1:
+    """Validate one closed typed correction wire.  This function is pure."""
+    if not _s00_is_canonical_baseline(baseline):
+        return ValidationResultV1("BLOCKED", "CANONICAL_BASELINE_REQUIRED")
+    if not isinstance(event, Mapping) or frozenset(event) != _S00_EVENT_FIELDS:
+        return ValidationResultV1("BLOCKED", "CLOSED_SCHEMA_MISMATCH")
+    event_id = str(event.get("event_id") or "")
+    if event.get("schema_version") != 1 or not event_id:
+        return ValidationResultV1("BLOCKED", "INVALID_EVENT_ID", event_id)
+    if event.get("event_type") not in {"compensates", "supersedes"}:
+        return ValidationResultV1("BLOCKED", "UNKNOWN_CORRECTION_EVENT_TYPE", event_id)
+    source = _s00_baseline_by_key(baseline).get(_s00_source_key(event))
+    if source is None:
+        return ValidationResultV1("BLOCKED", "SOURCE_BINDING_MISMATCH", event_id)
+    fields, allowed = event.get("correction_fields"), source.get("allowed_correction_fields")
+    if not isinstance(fields, Mapping) or not fields or not isinstance(allowed, (tuple, list)) or not set(fields).issubset(set(allowed)) or any(not str(key) or value is None for key, value in fields.items()):
+        return ValidationResultV1("BLOCKED", "CORRECTION_FIELD_NOT_ALLOWED", event_id)
+    canonical_fields = _S00_CANONICAL_CORRECTION_VALUES.get(
+        str(source.get("finding_id") or "")
+    )
+    if canonical_fields is None or dict(fields) != dict(canonical_fields):
+        return ValidationResultV1("BLOCKED", "CORRECTION_VALUE_MISMATCH", event_id)
+    refs, digests = event.get("authoritative_evidence_refs"), event.get("authoritative_evidence_digests")
+    if not isinstance(refs, (tuple, list)) or not isinstance(digests, (tuple, list)) or not refs or len(refs) != len(digests) or any(not isinstance(ref, str) or not ref.startswith("process/") for ref in refs) or any(not isinstance(digest, str) or not _S00_SHA256_RE.fullmatch(digest) for digest in digests):
+        return ValidationResultV1("BLOCKED", "EVIDENCE_INSUFFICIENT", event_id)
+    expected = "" if completion_evidence is None else str(completion_evidence.get("digest") or "")
+    if not isinstance(completion_evidence, Mapping) or event.get("remediation_story_ref") != "process/stories/CR-071/STORY-CR071-S00-ledger-remediation-lineage.md" or not str(event.get("implementation_completion_evidence_ref") or "").startswith("process/") or event.get("implementation_completion_evidence_digest") != expected or not _S00_SHA256_RE.fullmatch(expected):
+        return ValidationResultV1("BLOCKED", "COMPLETION_EVIDENCE_DRIFT", event_id)
+    if any(not _S00_SHA256_RE.fullmatch(str(event.get(field) or "")) for field in ("original_bytes_digest", "implementation_completion_evidence_digest", "target_preimage_digest")):
+        return ValidationResultV1("BLOCKED", "DIGEST_INVALID", event_id)
+    if any(
+        not _S00_OID_RE.fullmatch(str(event.get(field) or ""))
+        for field in ("preimage_release_oid", "preimage_process_oid")
+    ):
+        return ValidationResultV1("BLOCKED", "REPOSITORY_PREIMAGE_INVALID", event_id)
+    if not str(event.get("typed_authorization_ref") or "").startswith("process/"):
+        return ValidationResultV1("BLOCKED", "TYPED_AUTHORIZATION_REQUIRED", event_id)
+    predecessor_id, predecessor_digest = str(event.get("previous_effective_event_id") or ""), str(event.get("previous_effective_event_digest") or "")
+    if bool(predecessor_id) != bool(predecessor_digest) or (predecessor_digest and not _S00_SHA256_RE.fullmatch(predecessor_digest)):
+        return ValidationResultV1("BLOCKED", "PREDECESSOR_BINDING_INVALID", event_id)
+    return ValidationResultV1("PASS", "PASS", event_id)
+
+
+def correction_lineage_digest(lineage: CorrectionLineageV1) -> str:
+    return canonical_digest({"heads": list(lineage.heads), "accepted_event_digests": list(lineage.accepted_event_digests), "completion_digest": lineage.completion_digest, "errors": list(lineage.errors)})
+
+
+def build_correction_lineage(events: tuple[Mapping[str, Any], ...], baseline: tuple[Mapping[str, Any], ...], completion_evidence: Mapping[str, Any] | None) -> CorrectionLineageV1:
+    """Construct a deterministic unique-head graph without declaring authority."""
+    completion_digest = "" if completion_evidence is None else str(completion_evidence.get("digest") or "")
+
+    def empty(errors: tuple[str, ...] | list[str]) -> CorrectionLineageV1:
+        return CorrectionLineageV1("BLOCKED", (), (), completion_digest, tuple(sorted(set(errors))))
+    if not _s00_is_canonical_baseline(baseline):
+        return empty(("CANONICAL_BASELINE_REQUIRED",))
+    baseline_by_key = _s00_baseline_by_key(baseline)
+    event_ids = [str(event.get("event_id") or "") for event in events]
+    if not all(event_ids) or len(event_ids) != len(set(event_ids)):
+        return empty(("DUPLICATE_EVENT_ID",))
+    by_id = {str(event["event_id"]): event for event in events}
+    errors: list[str] = []
+    for event in by_id.values():
+        result = validate_typed_correction_event(event, baseline, completion_evidence)
+        if result.decision != "PASS":
+            errors.append(result.code)
+    if errors:
+        return empty(errors)
+    source_by_id = {event_id: _s00_source_key(event) for event_id, event in by_id.items() if event_id and _s00_source_key(event) in baseline_by_key}
+    if len(source_by_id) != len(by_id):
+        errors.append("SOURCE_BINDING_MISMATCH")
+    successors: dict[tuple[str, str], int] = {}
+    for event_id, source_key in source_by_id.items():
+        predecessor = str(by_id[event_id].get("previous_effective_event_id") or "")
+        predecessor_digest = str(by_id[event_id].get("previous_effective_event_digest") or "")
+        if predecessor and (predecessor not in by_id or source_by_id.get(predecessor) != source_key):
+            errors.append("DANGLING_PREDECESSOR")
+            continue
+        if predecessor and predecessor_digest != canonical_digest(by_id[predecessor]):
+            errors.append("PREDECESSOR_DIGEST_MISMATCH")
+            continue
+        key = (source_key, predecessor or "__root__")
+        successors[key] = successors.get(key, 0) + 1
+    if any(count > 1 for count in successors.values()):
+        errors.append("FORK_DETECTED")
+    for event_id in sorted(source_by_id):
+        seen: set[str] = set()
+        cursor = event_id
+        while cursor:
+            if cursor in seen:
+                errors.append("CYCLE_DETECTED")
+                break
+            seen.add(cursor)
+            cursor = str(by_id[cursor].get("previous_effective_event_id") or "")
+            if cursor and cursor not in by_id:
+                break
+    if errors:
+        return empty(errors)
+    heads: list[tuple[str, str, str]] = []
+    for source_key in sorted(baseline_by_key):
+        members = [event_id for event_id, key in source_by_id.items() if key == source_key]
+        predecessors = {str(by_id[event_id].get("previous_effective_event_id") or "") for event_id in members}
+        terminal = sorted(set(members) - predecessors)
+        if len(terminal) > 1:
+            return empty(("FORK_DETECTED",))
+        if terminal:
+            head_id = terminal[0]
+            heads.append((source_key, head_id, canonical_digest(by_id[head_id])))
+    accepted = tuple(sorted((event_id, canonical_digest(event)) for event_id, event in by_id.items()))
+    return CorrectionLineageV1("PASS", tuple(heads), accepted, completion_digest, ())
+
+
+def build_raw_history_report(baseline: tuple[Mapping[str, Any], ...]) -> RawHistoryReportV1:
+    if not _s00_is_canonical_baseline(baseline):
+        return RawHistoryReportV1(0, 0, (), "BLOCKED")
+    return RawHistoryReportV1(3, 5, tuple(item[0] for item in _S00_CANONICAL_BASELINE))
+
+
+def build_effective_lineage_report(lineage: CorrectionLineageV1, cutover_receipt: Mapping[str, Any] | None) -> EffectiveLineageReportV1:
+    digest = correction_lineage_digest(lineage)
+    expected_source_keys = tuple(sorted(_s00_source_key({"source_ledger_ref": item[1], "source_line": item[2], "source_event_id": item[3], "original_bytes_digest": item[4]}) for item in _S00_CANONICAL_BASELINE))
+    actual_source_keys = tuple(source_key for source_key, _head_id, _head_digest in lineage.heads)
+    head_set_digest = canonical_digest(list(lineage.heads))
+    accepted_event_digest_set = canonical_digest(list(lineage.accepted_event_digests))
+    if (
+        lineage.decision != "PASS"
+        or actual_source_keys != expected_source_keys
+        or not isinstance(cutover_receipt, Mapping)
+        or cutover_receipt.get("decision") != "APPLIED"
+        or cutover_receipt.get("atomic") is not True
+        or cutover_receipt.get("lineage_digest") != digest
+        or cutover_receipt.get("head_set_digest") != head_set_digest
+        or cutover_receipt.get("accepted_event_digest_set") != accepted_event_digest_set
+        or cutover_receipt.get("completion_digest") != lineage.completion_digest
+        or any(not _S00_SHA256_RE.fullmatch(str(cutover_receipt.get(field) or "")) for field in ("plan_digest", "completion_digest"))
+    ):
+        return EffectiveLineageReportV1("BLOCKED", None, "unavailable", digest)
+    return EffectiveLineageReportV1("PASS", 0, "available", digest)
+
+
+def correction_transaction_plan_digest(record: Mapping[str, Any]) -> str:
+    """Digest the immutable plan basis without creating a self-reference."""
+
+    basis = {str(key): value for key, value in record.items() if key != "plan_digest"}
+    return canonical_digest(
+        {"kind": "CorrectionTransactionPlanBindingV1", "record": basis}
+    )
+
+
+def correction_transaction_record_digest(record: Mapping[str, Any]) -> str:
+    """Return the canonical digest used by chain and derived authority bindings."""
+
+    return canonical_digest(dict(record))
+
+
+def canonical_correction_transaction_line(record: Mapping[str, Any]) -> bytes:
+    """Render one canonical UTF-8 NDJSON record including its terminating LF."""
+
+    return (
+        json.dumps(
+            dict(record),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _valid_utc_timestamp(value: object) -> bool:
+    text = str(value or "")
+    if not text.endswith("Z"):
+        return False
+    try:
+        datetime.fromisoformat(text[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return True
+
+
+def validate_correction_transaction(
+    record: Mapping[str, Any],
+    baseline: tuple[Mapping[str, Any], ...],
+    completion_evidence_digests: Mapping[str, str],
+    authorization_evidence_digests: Mapping[str, str],
+) -> ValidationResultV1:
+    """Validate one closed committed correction transaction without I/O."""
+
+    if not _s00_is_canonical_baseline(baseline):
+        return ValidationResultV1("BLOCKED", "CANONICAL_BASELINE_REQUIRED")
+    if not isinstance(record, Mapping) or frozenset(record) != _CORRECTION_TRANSACTION_FIELDS:
+        return ValidationResultV1("BLOCKED", "CLOSED_TRANSACTION_SCHEMA_MISMATCH")
+    transaction_id = str(record.get("transaction_id") or "")
+    if (
+        record.get("schema_version") != 1
+        or not re.fullmatch(r"CORRECTION-TX-[0-9a-f]{32}", transaction_id)
+        or record.get("event_type") != "correction_transaction"
+        or record.get("status") != "committed"
+    ):
+        return ValidationResultV1("BLOCKED", "TRANSACTION_IDENTITY_INVALID", transaction_id)
+    if any(
+        not _S00_OID_RE.fullmatch(str(record.get(field) or ""))
+        for field in ("preimage_release_oid", "preimage_process_oid")
+    ):
+        return ValidationResultV1("BLOCKED", "REPOSITORY_PREIMAGE_INVALID", transaction_id)
+    if any(
+        not _S00_SHA256_RE.fullmatch(str(record.get(field) or ""))
+        for field in (
+            "release_dirty_inventory_digest",
+            "process_dirty_inventory_digest",
+            "transaction_ledger_preimage",
+            "typed_authorization_digest",
+            "plan_digest",
+            "lineage_digest",
+            "head_set_digest",
+            "accepted_event_digest_set",
+        )
+    ):
+        return ValidationResultV1("BLOCKED", "TRANSACTION_DIGEST_INVALID", transaction_id)
+    previous_id = str(record.get("previous_transaction_id") or "")
+    previous_digest = str(record.get("previous_transaction_digest") or "")
+    if bool(previous_id) != bool(previous_digest) or (
+        previous_digest and not _S00_SHA256_RE.fullmatch(previous_digest)
+    ):
+        return ValidationResultV1(
+            "BLOCKED", "PREVIOUS_TRANSACTION_BINDING_INVALID", transaction_id
+        )
+    if not str(record.get("created_by") or "").strip() or not _valid_utc_timestamp(
+        record.get("created_at")
+    ):
+        return ValidationResultV1("BLOCKED", "TRANSACTION_AUDIT_INVALID", transaction_id)
+
+    source_preimages = record.get("source_preimages")
+    if not isinstance(source_preimages, (tuple, list)) or len(source_preimages) != 2:
+        return ValidationResultV1("BLOCKED", "SOURCE_PREIMAGE_REQUIRED", transaction_id)
+    source_digest_by_ref: dict[str, str] = {}
+    for binding in source_preimages:
+        if not isinstance(binding, Mapping) or frozenset(binding) != {
+            "logical_ref",
+            "digest",
+        }:
+            return ValidationResultV1(
+                "BLOCKED", "SOURCE_PREIMAGE_INVALID", transaction_id
+            )
+        logical_ref = str(binding.get("logical_ref") or "")
+        digest = str(binding.get("digest") or "")
+        if logical_ref in source_digest_by_ref or not _S00_SHA256_RE.fullmatch(digest):
+            return ValidationResultV1(
+                "BLOCKED", "SOURCE_PREIMAGE_INVALID", transaction_id
+            )
+        source_digest_by_ref[logical_ref] = digest
+    if frozenset(source_digest_by_ref) != _CORRECTION_SOURCE_LEDGER_REFS:
+        return ValidationResultV1("BLOCKED", "SOURCE_PREIMAGE_REQUIRED", transaction_id)
+
+    completion_evidence = record.get("completion_evidence")
+    if not isinstance(completion_evidence, (tuple, list)) or len(completion_evidence) != 2:
+        return ValidationResultV1(
+            "BLOCKED", "COMPLETION_EVIDENCE_REQUIRED", transaction_id
+        )
+    completion_by_story: dict[str, tuple[str, str]] = {}
+    for binding in completion_evidence:
+        if not isinstance(binding, Mapping) or frozenset(binding) != {
+            "story_id",
+            "evidence_ref",
+            "evidence_digest",
+        }:
+            return ValidationResultV1(
+                "BLOCKED", "COMPLETION_EVIDENCE_INVALID", transaction_id
+            )
+        story_id = str(binding.get("story_id") or "")
+        evidence_ref = str(binding.get("evidence_ref") or "")
+        evidence_digest = str(binding.get("evidence_digest") or "")
+        if (
+            story_id in completion_by_story
+            or not evidence_ref.startswith("process/")
+            or not _S00_SHA256_RE.fullmatch(evidence_digest)
+            or completion_evidence_digests.get(evidence_ref) != evidence_digest
+        ):
+            return ValidationResultV1(
+                "BLOCKED", "COMPLETION_EVIDENCE_INVALID", transaction_id
+            )
+        completion_by_story[story_id] = (evidence_ref, evidence_digest)
+    if frozenset(completion_by_story) != _CORRECTION_COMPLETION_STORIES:
+        return ValidationResultV1(
+            "BLOCKED", "COMPLETION_EVIDENCE_REQUIRED", transaction_id
+        )
+
+    authorization_ref = str(record.get("typed_authorization_ref") or "")
+    authorization_digest = str(record.get("typed_authorization_digest") or "")
+    if (
+        not authorization_ref.startswith("process/")
+        or authorization_evidence_digests.get(authorization_ref) != authorization_digest
+    ):
+        return ValidationResultV1(
+            "BLOCKED", "TYPED_AUTHORIZATION_REQUIRED", transaction_id
+        )
+
+    corrections = record.get("corrections")
+    if not isinstance(corrections, (tuple, list)) or len(corrections) != 3:
+        return ValidationResultV1("BLOCKED", "EXACT_THREE_CORRECTIONS_REQUIRED", transaction_id)
+    s00_completion_digest = completion_by_story["STORY-CR071-S00"][1]
+    correction_events = tuple(corrections)
+    source_keys: set[str] = set()
+    for event in correction_events:
+        if not isinstance(event, Mapping):
+            return ValidationResultV1(
+                "BLOCKED", "CLOSED_SCHEMA_MISMATCH", transaction_id
+            )
+        validation = validate_typed_correction_event(
+            event, baseline, {"digest": s00_completion_digest}
+        )
+        if validation.decision != "PASS":
+            return ValidationResultV1("BLOCKED", validation.code, transaction_id)
+        if (
+            event.get("preimage_release_oid") != record.get("preimage_release_oid")
+            or event.get("preimage_process_oid") != record.get("preimage_process_oid")
+            or event.get("target_preimage_digest")
+            != source_digest_by_ref.get(str(event.get("source_ledger_ref") or ""))
+        ):
+            return ValidationResultV1(
+                "BLOCKED", "CORRECTION_PREIMAGE_DRIFT", transaction_id
+            )
+        source_keys.add(_s00_source_key(event))
+    if source_keys != set(_s00_baseline_by_key(baseline)):
+        return ValidationResultV1(
+            "BLOCKED", "EXACT_THREE_CORRECTIONS_REQUIRED", transaction_id
+        )
+
+    lineage = build_correction_lineage(
+        correction_events, baseline, {"digest": s00_completion_digest}
+    )
+    if lineage.decision != "PASS":
+        return ValidationResultV1(
+            "BLOCKED", "CORRECTION_LINEAGE_INVALID", transaction_id
+        )
+    if (
+        record.get("lineage_digest") != correction_lineage_digest(lineage)
+        or record.get("head_set_digest") != canonical_digest(list(lineage.heads))
+        or record.get("accepted_event_digest_set")
+        != canonical_digest(list(lineage.accepted_event_digests))
+    ):
+        return ValidationResultV1(
+            "BLOCKED", "CORRECTION_LINEAGE_BINDING_DRIFT", transaction_id
+        )
+    if record.get("plan_digest") != correction_transaction_plan_digest(record):
+        return ValidationResultV1("BLOCKED", "PLAN_BINDING_DRIFT", transaction_id)
+    return ValidationResultV1("PASS", "PASS", transaction_id)
+
+
+def scan_correction_transactions(
+    payload: bytes,
+    baseline: tuple[Mapping[str, Any], ...],
+    completion_evidence_digests: Mapping[str, str],
+    authorization_evidence_digests: Mapping[str, str],
+) -> CorrectionTransactionScanV1:
+    """Validate the whole append-only ledger and derive exactly one authority."""
+
+    def blocked(*errors: str) -> CorrectionTransactionScanV1:
+        return CorrectionTransactionScanV1(
+            "BLOCKED", 0, (), None, tuple(sorted(set(errors)))
+        )
+
+    if payload and not payload.endswith(b"\n"):
+        return blocked("MALFORMED_TRANSACTION_TAIL")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return blocked("TRANSACTION_LEDGER_NOT_UTF8")
+    records: list[Mapping[str, Any]] = []
+    for line in text.splitlines():
+        if not line:
+            return blocked("EMPTY_TRANSACTION_RECORD")
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            return blocked("MALFORMED_TRANSACTION_RECORD")
+        if not isinstance(record, Mapping):
+            return blocked("MALFORMED_TRANSACTION_RECORD")
+        if record.get("schema_version") == 1 and frozenset(record) != _CORRECTION_TRANSACTION_FIELDS:
+            return blocked("SCHEMA_MIGRATION_REQUIRED")
+        validation = validate_correction_transaction(
+            record,
+            baseline,
+            completion_evidence_digests,
+            authorization_evidence_digests,
+        )
+        if validation.decision != "PASS":
+            return blocked(validation.code)
+        records.append(record)
+    if not records:
+        return CorrectionTransactionScanV1("PASS", 0, (), None, ())
+    transaction_ids = [str(record.get("transaction_id") or "") for record in records]
+    if len(transaction_ids) != len(set(transaction_ids)):
+        return blocked("DUPLICATE_TRANSACTION_ID")
+    digests = tuple(
+        (
+            str(record["transaction_id"]),
+            correction_transaction_record_digest(record),
+        )
+        for record in records
+    )
+    for index, record in enumerate(records):
+        expected_id = "" if index == 0 else digests[index - 1][0]
+        expected_digest = "" if index == 0 else digests[index - 1][1]
+        if (
+            record.get("previous_transaction_id") != expected_id
+            or record.get("previous_transaction_digest") != expected_digest
+        ):
+            return blocked("TRANSACTION_CHAIN_DRIFT")
+    last = records[-1]
+    authority = EffectiveCorrectionAuthorityV1(
+        transaction_id=str(last["transaction_id"]),
+        transaction_record_digest=digests[-1][1],
+        lineage_digest=str(last["lineage_digest"]),
+        head_set_digest=str(last["head_set_digest"]),
+        accepted_event_digest_set=str(last["accepted_event_digest_set"]),
+    )
+    return CorrectionTransactionScanV1(
+        "PASS", len(records), digests, authority, ()
+    )
+
+
 def normalize_terminal_status(value: object) -> str:
     """Normalize status exactly once for every terminal-success consumer."""
 
