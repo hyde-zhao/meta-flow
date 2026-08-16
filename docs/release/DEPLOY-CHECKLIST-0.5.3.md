@@ -10,9 +10,9 @@
 - [x] independent high-risk subset：`377 passed + 108 subtests`。
 - [x] full：`2558 passed + 716 subtests + 3 pre-existing failures`；新失败 0、waiver=false。
 - [x] Ruff、lock 与双仓 diff-check 通过；delivery guardrail 仅保留 CP8 已接受的缺失 ignored active-skill mirror，以及已声明的 detector baseline/cr_index residual，未放宽规则或使用 waiver。
-- [ ] 从 clean source commit 构建 0.5.3 wheel/sdist。
-- [ ] 生成 `ProviderArtifactReceiptV1`，要求 `release_qualifying=true`。
-- [ ] 隔离安装 wheel，证明 `provider_checkout_imported=false` 且 core lifecycle canary 通过。
+- [x] 从 clean source commit 构建 0.5.3 wheel/sdist；最终 tag commit 形成后再做一次等价重建。
+- [x] `ProviderArtifactReceiptV1` 预发布资格验证为 `release_qualifying=true`；最终附件绑定最终 tag commit。
+- [x] 隔离安装 wheel：`provider_checkout_imported=false`、install dry-run PASS、core lifecycle PASS；最终附件重建后再次复验。
 
 ## 发布执行
 
