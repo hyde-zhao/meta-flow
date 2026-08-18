@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "kind": "ProviderReleaseQualificationEvidenceV1",
+  "package_name": "meta-flow",
+  "package_version": "0.6.0",
+  "qualified_at": "2026-08-18",
+  "source_fingerprints": {
+    "detector_source_manifest_sha256": "1e734fdaa76af32e71d805bd15f69728bda58d768c6f3e2bdc05b70c5b36f0d8",
+    "detector_writer_manifest_sha256": "63c89612bb57618d7bcd5bd1ff4b9c0601b0e0f81dfacc67b9291e9f4ee6a066",
+    "detector_qualification_report_sha256": "ff96bf2c957be1bdbcdf1917cfeb7acebf289bd94e44fc57a07fab8936f9d814"
+  },
+  "layers": {
+    "candidate_targeted": {
+      "profile": {
+        "name": "integrity-stabilization-targeted-0.6.0-v1",
+        "scope": [
+          "cross-object lifecycle and scope amendment production paths",
+          "typed State projection correction and recovery",
+          "owner-derived CR summary and follow-up checks",
+          "closed source, wheel and installed-payload digest policy",
+          "structured route failure boundary and Work admission contracts"
+        ]
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "All approved A1-A4 targeted and production-path slices passed; the final scope-amend determinism correction passed 61 tests and 12 subtests"
+      }
+    },
+    "candidate_compatibility": {
+      "profile": {
+        "name": "integrity-stabilization-compatibility-0.6.0-v1",
+        "scope": [
+          "0.5.3 reader accepts the new CR summary projection",
+          "0.5.3 reader accepts the closed V1 artifact receipt and ignores the sidecar",
+          "0.5.3 State inspector rejects the new V2 correction manifest",
+          "0.6.0 reader preserves V1 correction-history decoding"
+        ]
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "Compatibility Matrix C4, C5 and C6 passed in isolated installed-provider fixtures"
+      }
+    },
+    "candidate_full": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q"
+        ]
+      },
+      "profile": {
+        "name": "integrity-stabilization-full-regression-0.6.0-v1",
+        "scope": [
+          "complete product test suite on the final candidate source"
+        ]
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "2635 passed, 716 subtests passed, 0 failed, 20 warnings"
+      }
+    },
+    "candidate_closure": {
+      "command": {
+        "commands": [
+          "uv run --frozen --python 3.11 ruff check .",
+          "uv lock --check",
+          "PYTHONDONTWRITEBYTECODE=1 uv run --frozen --python 3.11 python scripts/check_delivery_guardrails.py",
+          "clean source artifact qualification and isolated consumer canary after the final source commit"
+        ]
+      },
+      "profile": {
+        "name": "integrity-stabilization-closure-0.6.0-v1",
+        "scope": [
+          "407/407 full writer classification with zero ambiguity",
+          "45/45 incremental dynamic-writer allowlisting with zero unresolved findings",
+          "delivery guardrail, Ruff, lock and whitespace checks",
+          "clean source, exact wheel receipt and no-checkout isolated canary as post-commit pre-publication gates"
+        ]
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "Source-layer closure passed; the final artifact receipt, digest-policy sidecar and consumer canary must remain external release evidence bound to the final clean source commit"
+      }
+    }
+  },
+  "artifact_gate": {
+    "decision": "PENDING_POST_COMMIT_EVIDENCE",
+    "required": [
+      "clean ProviderArtifactReceiptV1 with release_qualifying=true",
+      "DigestPolicySidecarV1 bound to the same source observation",
+      "wheel and sdist exact SHA-256 values",
+      "isolated consumer lifecycle canary with provider_checkout_imported=false",
+      "Codex and Claude project full-install dry-runs"
+    ],
+    "publication_rule": "Artifact results are recorded in the process Release Context and attached to the publication; they are not embedded here because artifact hashes cannot self-bind the source archive that contains this file"
+  }
+}
