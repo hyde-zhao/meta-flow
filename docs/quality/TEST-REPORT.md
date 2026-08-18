@@ -30,6 +30,7 @@ R4/R4a 的 dotfile scope admission、原生 successor transaction 与 canonical 
 
 ## Warning 分类
 
+- release-candidate 完整回归曾暴露 `scope-amend` coordination 计数测试依赖秒级 timestamp rollover；固定同秒 clock 后证明真实语义只更新 `STATE.current.json`，`STATE.md`/`CURRENT.json` 应保持 byte no-op。测试现已改为确定性验证该合同，最终 artifact 前必须以新 source commit 重跑完整回归；
 - legacy receipt 缺 sidecar：一个版本的受控兼容 warning，不影响新 receipt fail-closed 合同；
 - duplicate zip name：对抗性 fixture 的预期 warning；
 - 没有凭据、网络、外部 consumer 或生产运行被测试进程授权。

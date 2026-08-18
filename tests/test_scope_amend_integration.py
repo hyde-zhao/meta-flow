@@ -323,10 +323,21 @@ def test_scope_amend_v2_rejects_predecessor_objective_drift(tmp_path: Path) -> N
 
 def test_scope_amend_refreshes_initialized_state_in_the_locked_operation(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     release, process, authorization, receipts = fixture(tmp_path)
     enable_state_projection(release, process)
     before_snapshot = build_formal_truth_snapshot(release)
+    before_projection_bytes = {
+        ref: (process / ref).read_bytes()
+        for ref in (
+            "state/STATE.current.json",
+            "STATE.md",
+            "current/CURRENT.json",
+        )
+    }
+    stable_updated_at = state_current.load_current_state(release)["updated_at"]
+    monkeypatch.setattr(state_current, "now_utc", lambda: stable_updated_at)
     plan = plan_scope_amend_from_release_root(
         release,
         authorization=authorization,
@@ -350,8 +361,15 @@ def test_scope_amend_refreshes_initialized_state_in_the_locked_operation(
 
     assert result["decision"] == "PASS"
     assert result["domain_mutation_count"] == 3
-    assert result["coordination_mutation_count"] == 2
-    assert result["mutation_count"] == 5
+    assert result["coordination_mutation_count"] == 1
+    assert result["mutation_count"] == 4
+    assert (process / "state/STATE.current.json").read_bytes() != before_projection_bytes[
+        "state/STATE.current.json"
+    ]
+    assert (process / "STATE.md").read_bytes() == before_projection_bytes["STATE.md"]
+    assert (process / "current/CURRENT.json").read_bytes() == before_projection_bytes[
+        "current/CURRENT.json"
+    ]
     state = state_current.load_current_state(release)
     after_snapshot = build_formal_truth_snapshot(release)
     assert after_snapshot["source_digest"] != before_snapshot["source_digest"]
