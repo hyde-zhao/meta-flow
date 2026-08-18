@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from delivery.scripts.digest_policy import (
+    load_known_generated_refs,
+    observe_delivery_tree,
+    payload_exclusion_reason,
+)
 from meta_flow.installation.contracts import (
     COMPONENT_SET_MEMBERS,
     SOURCE_IDENTITY_FIELDS,
@@ -166,16 +171,7 @@ def observe_checkout_source_identity(repo_root: Path) -> dict[str, str]:
         text=True,
     )
     oid = completed.stdout.strip().lower()
-    files = sorted(
-        path
-        for path in delivery.rglob("*")
-        if path.is_file() and not path.is_symlink()
-    )
-    tree_records = {
-        path.relative_to(root).as_posix(): sha256(path.read_bytes()).hexdigest()
-        for path in files
-    }
-    from meta_flow.installation.canonical import canonical_digest
+    tree_observation = observe_delivery_tree(root)
 
     pyproject = root / "pyproject.toml"
     if not pyproject.is_file() or pyproject.is_symlink():
@@ -193,7 +189,7 @@ def observe_checkout_source_identity(repo_root: Path) -> dict[str, str]:
             "source": "checkout/meta-flow",
             "version": version,
             "oid": oid,
-            "delivery_tree_digest": canonical_digest(tree_records),
+            "delivery_tree_digest": tree_observation.included_manifest_digest,
             "rules_source_digest": sha256(rules.read_bytes()).hexdigest(),
             "inventory_digest": sha256(inventory.read_bytes()).hexdigest(),
         }
@@ -261,21 +257,6 @@ def _package_checkout_root(imported_path: Path) -> Path | None:
     return root if expected == imported_path.resolve() else None
 
 
-def _is_generated_distribution_file(relative: Path) -> bool:
-    rendered = relative.as_posix()
-    if "__pycache__" in relative.parts or relative.suffix == ".pyc":
-        return True
-    if ".dist-info/" not in rendered:
-        return False
-    return relative.name in {
-        "INSTALLER",
-        "RECORD",
-        "REQUESTED",
-        "direct_url.json",
-        "uv_cache.json",
-    }
-
-
 def _direct_url_payload(distribution: metadata.Distribution) -> dict[str, Any]:
     raw = distribution.read_text("direct_url.json")
     if not raw:
@@ -319,12 +300,20 @@ def _installed_files_digest(
     distribution_root: Path,
 ) -> str | None:
     records: dict[str, str] = {}
+    delivery = distribution_root / "delivery"
+    known_generated_refs = (
+        load_known_generated_refs(delivery) if delivery.is_dir() else ()
+    )
     for item in distribution.files or ():
         relative = Path(str(item))
         if (
             relative.is_absolute()
             or ".." in relative.parts
-            or _is_generated_distribution_file(relative)
+            or payload_exclusion_reason(
+                relative.as_posix(),
+                known_generated_refs=known_generated_refs,
+            )
+            is not None
         ):
             continue
         candidate = (distribution_root / relative).resolve()
@@ -459,7 +448,7 @@ def observe_provider_runtime_identity(
         )
 
         try:
-            receipt_path = Path(receipt_path_raw).expanduser().resolve()
+            receipt_path = Path(os.path.abspath(Path(receipt_path_raw).expanduser()))
             receipt = load_provider_artifact_receipt(receipt_path)
         except (OSError, ValueError, json.JSONDecodeError):
             receipt_reasons.append("PROVIDER_RECEIPT_INVALID")

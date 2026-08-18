@@ -27,6 +27,7 @@ from meta_flow.workflow.cr_projection import (
     STATE_CURRENT_REL,
     load_ledger_events,
     summary_from_cr_file,
+    validate_summary_semantics,
 )
 from meta_flow.workflow.cr_records import (
     CR_SUMMARY_ROOT_REL,
@@ -139,6 +140,24 @@ def collect_check_errors(project_root: Path) -> list[str]:
                 f"{cr_id} scope/authz {blocker.get('level')} {blocker.get('code')}: "
                 f"required_capabilities={capabilities}{suffix}"
             )
+        summary_path = _resolve_runtime_ref(project_root, record.summary_ref)
+        if summary_path.is_file():
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                if not isinstance(summary, dict):
+                    raise ValueError("summary must be a JSON object")
+                errors.extend(
+                    f"{record.summary_ref} {cr_id} {finding}"
+                    for finding in validate_summary_semantics(
+                        project_root,
+                        cr_id,
+                        summary,
+                    )
+                )
+            except (json.JSONDecodeError, OSError, ValueError) as exc:
+                errors.append(
+                    f"{record.summary_ref} {cr_id} summary semantic check failed: {exc}"
+                )
     return errors
 
 

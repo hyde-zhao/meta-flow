@@ -21,6 +21,7 @@ GATE_SEMANTIC_REGISTRY = {
     "meta_flow/checks/cr_tracking.py": "passage-consumer",
     "meta_flow/checks/state_transition.py": "passage-consumer",
     "meta_flow/repository/publisher.py": "passage-consumer",
+    "meta_flow/workflow/cr_projection.py": "passage-consumer",
     "meta_flow/work/usage.py": "count-only-exception",
     "meta_flow/workflow/cr_status_sync.py": "transport-adapter",
     "meta_flow/policies/route_plan.py": "mutation-reference-only",
@@ -1848,7 +1849,7 @@ class S01ProjectionContractTests(unittest.TestCase):
         )
         roles = tuple(GATE_SEMANTIC_REGISTRY.values())
         self.assertEqual(1, roles.count("producer-validator-projector-owner"))
-        self.assertEqual(3, roles.count("passage-consumer"))
+        self.assertEqual(4, roles.count("passage-consumer"))
         self.assertEqual(1, roles.count("count-only-exception"))
 
     def test_gate_semantic_guardrail_positive_fixture_finds_rogue_consumer(

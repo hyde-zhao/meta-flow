@@ -547,6 +547,16 @@ def plan_work_close(
             (closed.work_ref, _render(closed.as_dict())),
             ("PROJECT.yaml", _render(updated_project.as_dict())),
         ]
+        overrides: dict[str, tuple[dict[str, Any], bytes]] = {
+            "process/PROJECT.yaml": (
+                updated_project.as_dict(),
+                _render(updated_project.as_dict()),
+            ),
+            "process/" + closed.work_ref: (
+                closed.as_dict(),
+                _render(closed.as_dict()),
+            ),
+        }
         if closed.phase_ref:
             phase = load_phase(root, closed.phase_ref)
             phase_results = phase.result_refs
@@ -567,23 +577,13 @@ def plan_work_close(
                     require_current=not already_closed,
                 )
                 candidates.append((baseline_ref, render_governance_projection(governance)))
-            overrides = {
-                "process/PROJECT.yaml": (
-                    updated_project.as_dict(),
-                    _render(updated_project.as_dict()),
-                ),
-                "process/" + closed.phase_ref: (
-                    updated_phase.as_dict(),
-                    _render(updated_phase.as_dict()),
-                ),
-                "process/" + closed.work_ref: (
-                    closed.as_dict(),
-                    _render(closed.as_dict()),
-                ),
-            }
-            candidates.extend(
-                build_state_projection_candidates(root, object_overrides=overrides)
+            overrides["process/" + closed.phase_ref] = (
+                updated_phase.as_dict(),
+                _render(updated_phase.as_dict()),
             )
+        candidates.extend(
+            build_state_projection_candidates(root, object_overrides=overrides)
+        )
 
         for ref, after in candidates:
             path = root / ref

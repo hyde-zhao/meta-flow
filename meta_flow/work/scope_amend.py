@@ -23,12 +23,21 @@ from meta_flow.work.init_transaction import (
     commit_work_init_transaction,
     rollback_work_init_transaction,
 )
+from meta_flow.work.lifecycle_transaction import (
+    STATE_PROJECTION_REFS,
+    acquire_shared_projection_writer_lock,
+    assert_work_close_shared_projection_lineage,
+    build_state_projection_candidates,
+    refresh_state_projection_if_initialized,
+    release_shared_projection_writer_lock,
+)
 from meta_flow.work.model import (
     PredecessorInventoryReceiptV1,
     ScopeAmendPlanV1,
     ScopeDeltaV1,
     Work,
     WorkRevisionV2,
+    WorkRevisionV3,
     apply_scope_amend,
     load_work,
     plan_scope_amend,
@@ -136,19 +145,124 @@ class ScopeAmendAuthorizationV1:
 
 
 @dataclass(frozen=True)
+class ScopeAmendAuthorizationV2:
+    """V2 binds one objective replacement into the same successor transaction."""
+
+    schema_version: int
+    operation: str
+    authorization_id: str
+    cr_id: str
+    work_id: str
+    predecessor_revision_id: str
+    successor_revision_id: str
+    predecessor_revision_bytes_digest: str
+    authorized_leaves: tuple[str, ...]
+    effective_at: str
+    predecessor_objective: str
+    replacement_objective: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != 2
+            or self.operation != "work.scope-amend"
+            or not all(
+                _ID_RE.fullmatch(value)
+                for value in (
+                    self.authorization_id,
+                    self.cr_id,
+                    self.work_id,
+                    self.predecessor_revision_id,
+                    self.successor_revision_id,
+                )
+            )
+            or not _DIGEST_RE.fullmatch(self.predecessor_revision_bytes_digest)
+            or tuple(sorted(set(self.authorized_leaves))) != self.authorized_leaves
+            or any(
+                not item
+                or item.startswith("/")
+                or "\\" in item
+                or ".." in Path(item).parts
+                for item in self.authorized_leaves
+            )
+            or not self.effective_at
+            or not self.predecessor_objective.strip()
+            or not self.replacement_objective.strip()
+            or self.predecessor_objective == self.replacement_objective
+        ):
+            raise ValueError("scope amendment authorization is invalid")
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.as_dict())
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "operation": self.operation,
+            "authorization_id": self.authorization_id,
+            "cr_id": self.cr_id,
+            "work_id": self.work_id,
+            "predecessor_revision_id": self.predecessor_revision_id,
+            "successor_revision_id": self.successor_revision_id,
+            "predecessor_revision_bytes_digest": self.predecessor_revision_bytes_digest,
+            "authorized_leaves": list(self.authorized_leaves),
+            "effective_at": self.effective_at,
+            "predecessor_objective": self.predecessor_objective,
+            "replacement_objective": self.replacement_objective,
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: dict[str, Any]) -> ScopeAmendAuthorizationV2:
+        expected = {
+            "schema_version",
+            "operation",
+            "authorization_id",
+            "cr_id",
+            "work_id",
+            "predecessor_revision_id",
+            "successor_revision_id",
+            "predecessor_revision_bytes_digest",
+            "authorized_leaves",
+            "effective_at",
+            "predecessor_objective",
+            "replacement_objective",
+        }
+        if set(payload) != expected or not isinstance(payload["authorized_leaves"], list):
+            raise ValueError("scope amendment authorization fields mismatch")
+        return cls(
+            payload["schema_version"],
+            payload["operation"],
+            payload["authorization_id"],
+            payload["cr_id"],
+            payload["work_id"],
+            payload["predecessor_revision_id"],
+            payload["successor_revision_id"],
+            payload["predecessor_revision_bytes_digest"],
+            tuple(payload["authorized_leaves"]),
+            payload["effective_at"],
+            payload["predecessor_objective"],
+            payload["replacement_objective"],
+        )
+
+
+ScopeAmendAuthorization = ScopeAmendAuthorizationV1 | ScopeAmendAuthorizationV2
+
+
+@dataclass(frozen=True)
 class ScopeAmendTransactionPlanV1:
     release_root: Path
     process_root: Path
     work: Work
     successor_work: Work
-    authorization: ScopeAmendAuthorizationV1
+    authorization: ScopeAmendAuthorization
     delta: ScopeDeltaV1
     predecessor: PredecessorInventoryReceiptV1
     core_plan: ScopeAmendPlanV1
     validation: ProductionValidationV1
     target_preimages: tuple[tuple[str, str], ...]
+    projection_preimages: tuple[tuple[str, str], ...]
     target_postimages: tuple[tuple[str, bytes], ...]
-    revision: WorkRevisionV2
+    revision: WorkRevisionV2 | WorkRevisionV3
     receipt_payload: dict[str, object]
     operation: str
 
@@ -157,7 +271,7 @@ class ScopeAmendTransactionPlanV1:
         return self.core_plan.plan_digest
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "schema_version": 1,
             "decision": "READY",
             "operation": self.operation,
@@ -168,6 +282,7 @@ class ScopeAmendTransactionPlanV1:
             "scope_digest": self.core_plan.scope_digest,
             "plan_digest": self.plan_digest,
             "target_preimages": dict(self.target_preimages),
+            "projection_preimages": dict(self.projection_preimages),
             "target_postimage_digests": {
                 ref: canonical_digest({"bytes_sha256": _bytes_digest(value)})
                 for ref, value in self.target_postimages
@@ -176,9 +291,15 @@ class ScopeAmendTransactionPlanV1:
             "validation": self.validation.as_dict(),
             "mutation_count": 0,
         }
+        if isinstance(self.authorization, ScopeAmendAuthorizationV2):
+            payload["objective_transition"] = {
+                "previous": self.authorization.predecessor_objective,
+                "replacement": self.authorization.replacement_objective,
+            }
+        return payload
 
 
-def load_scope_amend_authorization(path: Path) -> ScopeAmendAuthorizationV1:
+def load_scope_amend_authorization(path: Path) -> ScopeAmendAuthorization:
     if path.is_symlink() or not path.is_file():
         raise ValueError("scope amendment authorization path is unsafe")
     try:
@@ -187,11 +308,15 @@ def load_scope_amend_authorization(path: Path) -> ScopeAmendAuthorizationV1:
         raise ValueError("scope amendment authorization is unreadable") from exc
     if not isinstance(payload, dict):
         raise ValueError("scope amendment authorization must be an object")
-    return ScopeAmendAuthorizationV1.from_mapping(payload)
+    if payload.get("schema_version") == 1:
+        return ScopeAmendAuthorizationV1.from_mapping(payload)
+    if payload.get("schema_version") == 2:
+        return ScopeAmendAuthorizationV2.from_mapping(payload)
+    raise ValueError("scope amendment authorization version is invalid")
 
 
 def admit_scope_amend_predecessor(
-    authorization: ScopeAmendAuthorizationV1,
+    authorization: ScopeAmendAuthorization,
     predecessor_receipts: list[dict[str, Any]],
 ) -> PredecessorInventoryReceiptV1:
     """Run mandatory BL-001 admission before any delta normalization."""
@@ -228,7 +353,7 @@ def admit_scope_amend_predecessor(
 def plan_scope_amend_from_release_root(
     release_root: Path,
     *,
-    authorization: ScopeAmendAuthorizationV1,
+    authorization: ScopeAmendAuthorization,
     delta: ScopeDeltaV1,
     predecessor_receipts: list[dict[str, Any]],
     operation: str = "plan",
@@ -243,6 +368,11 @@ def plan_scope_amend_from_release_root(
         raise ValueError("scope amendment Work/CR identity mismatch")
     if authorization.successor_revision_id == authorization.predecessor_revision_id:
         raise ValueError("scope amendment successor must differ from predecessor")
+    if (
+        isinstance(authorization, ScopeAmendAuthorizationV2)
+        and authorization.predecessor_objective != work.objective
+    ):
+        raise ValueError("scope amendment predecessor objective drifted")
     predecessor = admit_scope_amend_predecessor(
         authorization,
         predecessor_receipts,
@@ -266,8 +396,31 @@ def plan_scope_amend_from_release_root(
         raise ValueError("scope amendment exceeds Work budget")
     successor_work = replace(
         work,
+        objective=(
+            authorization.replacement_objective
+            if isinstance(authorization, ScopeAmendAuthorizationV2)
+            else work.objective
+        ),
         scope=result_scope,
         updated_at=authorization.effective_at,
+    )
+    successor_work_bytes = (dump_yaml(successor_work.as_dict()) + "\n").encode("utf-8")
+    # Scope amendment changes the canonical Work bytes even though the active Work
+    # identity is stable.  That bytes change is part of formal truth and therefore
+    # changes the projection source digest.  Prove the State post-image can be built
+    # during both plan and apply, and bind its current preimages into the plan.
+    projection_candidates = build_state_projection_candidates(
+        process_root,
+        object_overrides={
+            "process/" + work.work_ref: (
+                successor_work.as_dict(),
+                successor_work_bytes,
+            )
+        },
+    )
+    projection_preimages = tuple(
+        (ref, target_preimage_digest(process_root / ref))
+        for ref, _candidate in projection_candidates
     )
     invalidated_refs = tuple(
         sorted(
@@ -331,6 +484,22 @@ def plan_scope_amend_from_release_root(
                 "authorization_digest": authorization.digest,
                 "validation_graph_digest": validation.graph.graph_digest,
                 **{f"preimage:{ref}": digest for ref, digest in target_preimages},
+                **{
+                    f"projection_preimage:{ref}": digest
+                    for ref, digest in projection_preimages
+                },
+                **(
+                    {
+                        "predecessor_objective_digest": canonical_digest(
+                            {"objective": authorization.predecessor_objective}
+                        ),
+                        "replacement_objective_digest": canonical_digest(
+                            {"objective": authorization.replacement_objective}
+                        ),
+                    }
+                    if isinstance(authorization, ScopeAmendAuthorizationV2)
+                    else {}
+                ),
             }.items()
         )
     )
@@ -348,6 +517,16 @@ def plan_scope_amend_from_release_root(
         validation_graph_digest=validation.graph.graph_digest,
         snapshot_bindings=snapshot_bindings,
         invalidated_refs=invalidated_refs,
+        previous_objective=(
+            authorization.predecessor_objective
+            if isinstance(authorization, ScopeAmendAuthorizationV2)
+            else ""
+        ),
+        result_objective=(
+            authorization.replacement_objective
+            if isinstance(authorization, ScopeAmendAuthorizationV2)
+            else ""
+        ),
     )
     result = apply_scope_amend(
         core_plan,
@@ -355,11 +534,15 @@ def plan_scope_amend_from_release_root(
         fresh_snapshot_bindings=snapshot_bindings,
     )
     revision = result.get("revision")
-    if result["decision"] != "READY" or not isinstance(revision, WorkRevisionV2):
+    if result["decision"] != "READY" or not isinstance(
+        revision,
+        (WorkRevisionV2, WorkRevisionV3),
+    ):
         raise ValueError("scope amendment successor revision was not admitted")
-    receipt_payload = {
-        "schema_version": 1,
-        "kind": "ScopeAmendReceiptV1",
+    objective_amendment = isinstance(authorization, ScopeAmendAuthorizationV2)
+    receipt_payload: dict[str, object] = {
+        "schema_version": 2 if objective_amendment else 1,
+        "kind": "ScopeAmendReceiptV2" if objective_amendment else "ScopeAmendReceiptV1",
         "decision": "PASS",
         "cr_id": authorization.cr_id,
         "work_id": authorization.work_id,
@@ -373,10 +556,13 @@ def plan_scope_amend_from_release_root(
         "derived_index": rebuild_scope_amend_index(revision.as_dict()),
         "mutation_count": 3,
     }
+    if objective_amendment:
+        receipt_payload["previous_objective"] = authorization.predecessor_objective
+        receipt_payload["objective"] = authorization.replacement_objective
     target_postimages = tuple(
         sorted(
             (
-                (work.work_ref, (dump_yaml(successor_work.as_dict()) + "\n").encode("utf-8")),
+                (work.work_ref, successor_work_bytes),
                 (revision_ref, _json_bytes(revision.as_dict())),
                 (receipt_ref, _json_bytes(receipt_payload)),
             )
@@ -393,6 +579,7 @@ def plan_scope_amend_from_release_root(
         core_plan,
         validation,
         target_preimages,
+        projection_preimages,
         target_postimages,
         revision,
         receipt_payload,
@@ -412,7 +599,26 @@ def apply_scope_amend_transaction(
             "reason_code": "PLAN_DIGEST_MISMATCH",
             "mutation_count": 0,
         }
+    writer_id = "scope-amend-" + sha256(
+        plan.authorization.authorization_id.encode("utf-8")
+    ).hexdigest()[:32]
     try:
+        shared_lock = acquire_shared_projection_writer_lock(
+            plan.process_root,
+            writer_id,
+        )
+    except (OSError, ValueError):
+        return {
+            "decision": "REPLAN_REQUIRED",
+            "reason_code": "SHARED_PROJECTION_LOCK_UNAVAILABLE",
+            "mutation_count": 0,
+        }
+
+    transaction_id = ""
+    domain_applied = False
+    fresh: ScopeAmendTransactionPlanV1 | None = None
+    try:
+        assert_work_close_shared_projection_lineage(plan.process_root)
         fresh = plan_scope_amend_from_release_root(
             plan.release_root,
             authorization=plan.authorization,
@@ -420,50 +626,62 @@ def apply_scope_amend_transaction(
             predecessor_receipts=predecessor_receipts,
             operation="apply",
         )
-    except (OSError, ValueError):
-        return {
-            "decision": "REPLAN_REQUIRED",
-            "reason_code": "FRESH_VALIDATION_FAILED",
-            "mutation_count": 0,
-        }
-    if (
-        fresh.plan_digest != plan.plan_digest
-        or fresh.target_preimages != plan.target_preimages
-        or fresh.validation.graph.graph_digest != plan.validation.graph.graph_digest
-        or fresh.target_postimages != plan.target_postimages
-    ):
-        return {
-            "decision": "REPLAN_REQUIRED",
-            "reason_code": "SNAPSHOT_DRIFT",
-            "mutation_count": 0,
-        }
-    targets = tuple(
-        build_transaction_target(fresh.process_root, ref=ref, after_bytes=value)
-        for ref, value in fresh.target_postimages
-    )
-    transaction_id = begin_work_init_transaction(
-        fresh.process_root,
-        operation="work.scope-amend",
-        work_id=fresh.work.work_id,
-        plan_digest=fresh.plan_digest,
-        release_oid=fresh.validation.snapshot.release_oid,
-        process_oid=fresh.validation.snapshot.process_oid,
-        targets=targets,
-    )
-    try:
+        if (
+            fresh.plan_digest != plan.plan_digest
+            or fresh.target_preimages != plan.target_preimages
+            or fresh.projection_preimages != plan.projection_preimages
+            or fresh.validation.graph.graph_digest != plan.validation.graph.graph_digest
+            or fresh.target_postimages != plan.target_postimages
+        ):
+            return {
+                "decision": "REPLAN_REQUIRED",
+                "reason_code": "SNAPSHOT_DRIFT",
+                "mutation_count": 0,
+            }
+        if any(
+            target_preimage_digest(fresh.process_root / ref) != digest
+            for ref, digest in fresh.projection_preimages
+        ):
+            return {
+                "decision": "REPLAN_REQUIRED",
+                "reason_code": "PROJECTION_PREIMAGE_DRIFT",
+                "mutation_count": 0,
+            }
+        targets = tuple(
+            build_transaction_target(fresh.process_root, ref=ref, after_bytes=value)
+            for ref, value in fresh.target_postimages
+        )
+        transaction_id = begin_work_init_transaction(
+            fresh.process_root,
+            operation="work.scope-amend",
+            work_id=fresh.work.work_id,
+            plan_digest=fresh.plan_digest,
+            release_oid=fresh.validation.snapshot.release_oid,
+            process_oid=fresh.validation.snapshot.process_oid,
+            targets=targets,
+        )
         applied_refs = apply_work_init_transaction_targets(
             fresh.process_root,
             transaction_id,
         )
+        domain_applied = True
         for ref, expected in fresh.target_postimages:
             if (fresh.process_root / ref).read_bytes() != expected:
                 raise ValueError("scope amendment transaction postimage drift")
+        refreshed_refs = refresh_state_projection_if_initialized(fresh.process_root)
+        _validate_scope_amend_postimage(fresh)
         transaction = commit_work_init_transaction(
             fresh.process_root,
             transaction_id,
             successor_id=fresh.revision.revision_id,
         )
     except Exception as exc:
+        if not transaction_id or fresh is None:
+            return {
+                "decision": "REPLAN_REQUIRED",
+                "reason_code": "FRESH_VALIDATION_FAILED",
+                "mutation_count": 0,
+            }
         recovery = rollback_work_init_transaction(
             fresh.process_root,
             transaction_id,
@@ -471,11 +689,21 @@ def apply_scope_amend_transaction(
         )
         if recovery.recovery_required:
             raise ValueError("scope amendment transaction recovery failed") from exc
+        # 即使 State writer 在完成持久化后才抛错，赋值语句也不会留下成功
+        # 标志。因此只要领域目标曾落盘且 State 已初始化，就在领域回滚后
+        # 无条件用同一原生 owner 收敛回旧 formal truth。
+        if domain_applied and fresh.projection_preimages:
+            try:
+                refresh_state_projection_if_initialized(fresh.process_root)
+            except Exception as recovery_exc:
+                raise ValueError("scope amendment State recovery failed") from recovery_exc
         return {
             "decision": "REPLAN_REQUIRED",
             "reason_code": "TRANSACTION_RECOVERED",
             "mutation_count": 0,
         }
+    finally:
+        release_shared_projection_writer_lock(shared_lock, writer_id)
     return {
         "decision": "PASS",
         "plan_digest": fresh.plan_digest,
@@ -490,8 +718,45 @@ def apply_scope_amend_transaction(
         "work_ref": fresh.work.work_ref,
         "invalidated_refs": list(fresh.core_plan.invalidated_refs),
         "derived_index": fresh.receipt_payload["derived_index"],
-        "mutation_count": len(applied_refs),
+        "domain_mutation_count": len(applied_refs),
+        "coordination_mutation_count": len(refreshed_refs),
+        "mutation_count": len(applied_refs) + len(refreshed_refs),
     }
+
+
+def _validate_scope_amend_postimage(plan: ScopeAmendTransactionPlanV1) -> None:
+    """成功返回前证明 State/CURRENT 已消费新的 Work bytes。"""
+
+    state_paths = [plan.process_root / ref for ref in STATE_PROJECTION_REFS]
+    present = [path.is_file() and not path.is_symlink() for path in state_paths]
+    if not any(present):
+        return
+    if not all(present):
+        raise ValueError("scope amendment State projection target set is incomplete")
+
+    from meta_flow.state import current as state_current
+    from meta_flow.state.formal_projection import (
+        build_formal_truth_snapshot,
+        derive_formal_truth_patch,
+    )
+
+    state = state_current.load_current_state(plan.release_root)
+    snapshot = build_formal_truth_snapshot(
+        plan.release_root,
+        process_root=plan.process_root,
+    )
+    patch = derive_formal_truth_patch(state, snapshot)
+    if state.get("formal_truth_projection") != snapshot or any(
+        state.get(field) != patch[field]
+        for field in ("current_phase", "active_change", "blocked", "next_action")
+    ):
+        raise ValueError("scope amendment State formal truth postimage is stale")
+    findings = state_current.validate_current_projection(plan.release_root)
+    if findings:
+        raise ValueError(
+            "scope amendment CURRENT postimage is stale: "
+            + "; ".join(item.message for item in findings)
+        )
 
 
 def _result_work_scope(current: WorkScope, delta: ScopeDeltaV1) -> WorkScope:
@@ -521,6 +786,7 @@ def _bytes_digest(value: bytes) -> str:
 
 
 __all__ = [
+    "ScopeAmendAuthorizationV2",
     "ScopeAmendAuthorizationV1",
     "ScopeAmendTransactionPlanV1",
     "admit_scope_amend_predecessor",

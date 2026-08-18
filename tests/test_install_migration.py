@@ -324,7 +324,9 @@ def test_install_script_public_parser_normalizes_lifecycle_intent(
 def test_public_main_never_references_two_transaction_reinstaller() -> None:
     import inspect
 
-    source = inspect.getsource(cli.main)
+    boundary = inspect.getsource(cli.main)
+    source = inspect.getsource(cli._dispatch_main)
 
+    assert "_dispatch_main()" in boundary
     assert "_run_reinstaller(" not in source
     assert "_run_lifecycle_reinstaller(" in source

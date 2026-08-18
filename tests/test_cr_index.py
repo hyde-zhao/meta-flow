@@ -7,6 +7,8 @@ from meta_flow.state import current
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 
 def _write_cr(root: Path, cr_id: str = "CR-101") -> Path:
     path = root / "process" / "changes" / f"{cr_id}.md"
@@ -129,3 +131,30 @@ def test_index_bootstrap_can_rebuild_projection_after_new_formal_truth(tmp_path:
         "CR-100",
         "CR-101",
     ]
+
+
+def test_index_bootstrap_cp0_summary_rejects_symlink_without_overwriting_target(
+    tmp_path: Path,
+) -> None:
+    current.write_current_state(
+        tmp_path,
+        current.default_current_state(tmp_path, project_id="target-project"),
+    )
+    summary = tmp_path / "process/checks/CP0-CR-001-BOOTSTRAP.result.summary.md"
+    summary.parent.mkdir(parents=True, exist_ok=True)
+    victim = tmp_path / "victim.md"
+    victim_bytes = b"do not overwrite\n"
+    victim.write_bytes(victim_bytes)
+    summary.symlink_to(victim)
+
+    with pytest.raises(FileExistsError, match="CP0 summary target already exists"):
+        cr_index.bootstrap_cr(
+            tmp_path,
+            cr_id="CR-001",
+            title="bootstrap",
+            scope="scope",
+            readiness="READY",
+        )
+
+    assert summary.is_symlink()
+    assert victim.read_bytes() == victim_bytes

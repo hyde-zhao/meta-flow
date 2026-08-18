@@ -1,10 +1,10 @@
 ---
 project_id: "meta-flow"
-release_scope: "meta-flow-0.5.3"
+release_scope: "meta-flow-0.6.0-candidate"
 release_artifact_profile: "full"
-release_decision: "READY_WITH_RISK"
+release_decision: "NOT_READY"
 created_at: "2026-06-17T13:49:25+08:00"
-updated_at: "2026-08-16T22:29:52+08:00"
+updated_at: "2026-08-17T19:55:35+08:00"
 ---
 
 # Release Notes
@@ -40,6 +40,42 @@ updated_at: "2026-08-16T22:29:52+08:00"
 | 1.24 | 2026-08-14 | Codex | 发布 `0.5.1`：收敛 publication-close V2、typed repair admission、usage append-first 与原生 Phase metadata 五目标事务；轮换 activation receipt v6，并完成双仓资格化。 |
 | 1.25 | 2026-08-15 | Codex | 发布 `0.5.2`：增加可复现 provider artifact 身份、严格 clean-install canary、统一 mutation 来源门禁，并把 legacy evidence registry 提升为 Project 持久真相；Phase transition 在写入前验证 post-state CR truth。 |
 | 1.26 | 2026-08-16 | Codex | 发布 `0.5.3`：交付 CR-071 的 fail-closed init preflight、受控 scope amendment、typed refs、兼容观测/退役、七维 receipt 复用、投影恢复与 atomic correction 合同；接受三项非本 CR 基线失败且不使用 waiver。 |
+| 1.27-candidate | 2026-08-17 | Codex | 0.6.0 Integrity Stabilization 候选：跨对象生命周期同源收敛、typed projection correction、summary owner、闭合 digest policy、scope/objective successor amendment 与结构化错误边界；等待最终 qualification、clean artifact build、canary 和发布门。 |
+| 1.28-candidate | 2026-08-17 | Codex | R4/R4a 修复 root dotfile scope admission，使 canonical quality/release 文档成为普通 tracked candidates；此前 qualification 因后续源码变化失效，发布继续保持 NOT_READY。 |
+| 1.29-candidate | 2026-08-17 | Codex | final detector requalification 完成：407/407 classified、45/45 incremental dynamic allowlisted、0 unresolved，guardrail 与 2635 项完整回归全绿；继续等待 clean artifact 证据。 |
+
+## 0.6.0 发布切片（候选）
+
+### 当前结论
+
+`0.6.0` 是 MINOR 候选，不是 PATCH。它新增公共操作和 manifest/schema 版本，收紧旧 writer 行为，并修复跨对象真相、summary owner、release digest 与路由错误边界。当前 `release_decision=NOT_READY`：final detector qualification、delivery guardrail 与完整回归已全绿，但 clean source commit、provider artifact qualification、artifact build、isolated canary 和人工发布门尚未完成。
+
+| 项 | 候选结果 |
+|---|---|
+| 生命周期一致性 | Work close / status / scope amendment 与 State/CURRENT 使用共享 writer lock 和同一 formal truth；R3 已原子替换 Work objective 为 0.6.0 |
+| correction | 新增 `state projection-correct` typed transaction；新 correction manifest 使用 V2 identity，使安装态 0.5.3 明确 fail closed；热修期 V1 历史仍可由新 reader 读取 |
+| summary owner | `decision_status` 从 canonical gate projection 派生，follow-up 从 release disposition owner 派生；终态 pending、伪造候选和无 owner follow-up 被拒绝 |
+| digest policy | source / wheel / install 共用闭合 exclusion policy；receipt 字段保持 V1，策略绑定使用独立 sidecar；symlink、duplicate、outside、tracked-generated fail closed |
+| scope/objective successor | `cr scope-amend` 支持 V2 typed objective replacement，并允许授权安全根级 dotfile；V1 历史授权仍可读，V2 revision/receipt 明确记录目标变化并支持晚期回滚 |
+| 错误与合同 | route failure 返回结构化错误而非 traceback；`kind=cr + execution_unit` 与 admission 支持域一致；bootstrap writer 归入原子 owner |
+
+### 版本与兼容
+
+- 从 0.5.3 升级必须整体替换 writer、inspector 和 detector baseline；不支持同一过程仓的新旧 writer 混用。
+- 0.6.0 reader 可读取热修期间的 V1 correction manifest；0.5.3 reader 对新 V2 correction manifest 返回 `BLOCKED / INVALID`。
+- 若 0.6.0 尚未对过程仓执行任何新 writer，可回退程序版本；一旦产生 V2 correction 或其他 0.6.0-only 事务，回退前必须按 `docs/release/ROLLBACK.md` 使用升级前快照和同版本 inspect 验证，禁止直接运行 0.5.3 writer。
+- 本候选不授权 commit、push、tag、GitHub Release、PyPI、外部 consumer 安装、真实生产写、凭据或任何 correction apply。
+
+### 验证摘要（qualification 前）
+
+| 层 | 结果 |
+|---|---|
+| scope/objective amendment | `10 passed`，含 V1 兼容、V2 正向、CLI mismatch、predecessor drift 与晚期回滚 |
+| correction | `17 passed`；真实安装态 0.5.3 对 V2 manifest fail closed |
+| A3 digest/provider 组合 | `341 passed + 55 subtests` |
+| detector / guardrail | full 407/407 classified、0 ambiguous；incremental dynamic 45/45 allowlisted、0 unresolved、findings=[]；guardrail exit 0 |
+| 完整回归 | `2635 passed + 716 subtests + 0 failed + 20 warnings`，用时 583.30 秒 |
+| 当前缺口 | clean provider receipt、wheel/sdist、isolated canary 与人工发布门；最终结论保持 NOT_READY |
 
 ## 0.5.3 发布切片
 

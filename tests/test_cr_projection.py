@@ -404,6 +404,10 @@ def test_projection_summary_ledger_and_atomic_writer_owner_behaviour(tmp_path: P
     cr_path = _write_cr(tmp_path)
     summary = cr_projection.summary_from_cr_file(tmp_path, cr_path)
     assert summary["id"] == "CR-101"
+    assert summary["decision_status"] == "n/a"
+    assert "decision" not in summary
+    assert "followup_candidates" not in summary
+    assert "follow_up_tracking_ref" not in summary
     assert cr_projection.write_summary(tmp_path, "CR-101", summary).is_file()
     assert cr_projection.write_evidence_index(tmp_path, "CR-101", summary).is_file()
     cr_projection.append_ledger_event(tmp_path, {"id": "CR-101", "event": "active"})
@@ -412,6 +416,308 @@ def test_projection_summary_ledger_and_atomic_writer_owner_behaviour(tmp_path: P
     cr_projection._atomic_write_text(output, "one\n")
     cr_projection._atomic_write_text(output, "two\n")
     assert output.read_text(encoding="utf-8") == "two\n"
+
+
+def test_summary_projects_typed_gate_decision_and_controlled_release_dispositions(
+    tmp_path: Path,
+) -> None:
+    cr_path = _write_cr(tmp_path)
+    cr_path.write_text(
+        cr_path.read_text(encoding="utf-8").replace(
+            'lifecycle_status: "active"',
+            'lifecycle_status: "closed"',
+        ),
+        encoding="utf-8",
+    )
+    gate_ledger = tmp_path / "process/state/GATE-LEDGER.ndjson"
+    gate_ledger.parent.mkdir(parents=True)
+    gate_ledger.write_text(
+        json.dumps(
+            {
+                "event_id": "GATE-CR101-CP8-APPROVED",
+                "event_type": "human_gate_approval",
+                "gate": "GATE-CR101-CP8",
+                "status": "approved",
+                "decision": "approve",
+                "cr_id": "CR-101",
+                "work_id": "W-101",
+                "approval_kind_version": 1,
+                "approval_kind": "checkpoint_passage",
+                "checkpoint": "CP8",
+                "result_ref": "process/checks/CP8-CR-101.result.json",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    release_ref = "process/release/RELEASE-CONTEXT-CR101.yaml"
+    release_path = tmp_path / release_ref
+    release_path.parent.mkdir(parents=True)
+    release_path.write_text(
+        json.dumps(
+            {
+                "cr_id": "CR-101",
+                "release_decision": "READY_WITH_RISK",
+                "fact_diff": [
+                    {
+                        "promise_ref": "CR101-BASELINE",
+                        "status": "EXECUTED_NEGATIVE_RESULT",
+                        "decision_impact": "READY_WITH_RISK",
+                        "risk_ref": "RISK-CR101-BASELINE",
+                        "evidence_refs": ["process/evidence/baseline.json"],
+                    },
+                    {
+                        "promise_ref": "CR101-CORRECTION",
+                        "status": "DEFERRED_FOLLOW_UP",
+                        "risk_ref": "RISK-CR101-CORRECTION",
+                        "evidence_refs": ["process/evidence/correction.json"],
+                    },
+                ],
+                "publication_result": {
+                    "decision": "RELEASED",
+                    "risk_disposition": {"waiver": False, "new_failure_count": 0},
+                },
+                "follow_up_summary": ["repair baseline", "authorize correction later"],
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = cr_projection.summary_from_cr_file(tmp_path, cr_path)
+
+    assert summary["decision_status"] == "approved"
+    assert summary["follow_up_tracking_ref"] == release_ref
+    assert [item["candidate_id"] for item in summary["followup_candidates"]] == [
+        "CR101-CORRECTION",
+        "RISK-CR101-BASELINE",
+    ]
+    assert cr_projection.validate_summary_semantics(tmp_path, "CR-101", summary) == []
+
+
+def test_summary_rejects_invalid_latest_typed_gate_approval(tmp_path: Path) -> None:
+    cr_path = _write_cr(tmp_path)
+    gate_ledger = tmp_path / "process/state/GATE-LEDGER.ndjson"
+    gate_ledger.parent.mkdir(parents=True)
+    valid = {
+        "event_id": "GATE-CR101-CP8-APPROVED",
+        "event_type": "human_gate_approval",
+        "gate": "GATE-CR101-CP8",
+        "status": "approved",
+        "decision": "approve",
+        "cr_id": "CR-101",
+        "work_id": "W-101",
+        "approval_kind_version": 1,
+        "approval_kind": "checkpoint_passage",
+        "checkpoint": "CP8",
+        "result_ref": "process/checks/CP8-CR-101.result.json",
+    }
+    invalid_latest = {
+        **valid,
+        "event_id": "GATE-CR101-CP8-INVALID-LATEST",
+        "work_id": "",
+    }
+    gate_ledger.write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in (valid, invalid_latest))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="gate decision owner approval is invalid"):
+        cr_projection.summary_from_cr_file(tmp_path, cr_path)
+
+
+@pytest.mark.parametrize(
+    ("fact_diff", "error"),
+    [
+        (
+            [
+                {
+                    "promise_ref": "CR101-CORRECTION",
+                    "status": "DEFERRED_FOLLOW_UP",
+                    "evidence_refs": ["../outside.json"],
+                }
+            ],
+            "follow-up disposition evidence ref is invalid",
+        ),
+        (
+            [
+                {
+                    "promise_ref": "CR101-CORRECTION",
+                    "status": "DEFERRED_FOLLOW_UP",
+                    "evidence_refs": ["process/evidence/one.json"],
+                },
+                {
+                    "promise_ref": "CR101-CORRECTION",
+                    "status": "DEFERRED_FOLLOW_UP",
+                    "evidence_refs": ["process/evidence/two.json"],
+                },
+            ],
+            "follow-up disposition candidate is duplicated",
+        ),
+        (
+            [
+                {
+                    "promise_ref": "CR101-CORRECTION",
+                    "status": "DEFERRED_FOLLOW_UP",
+                    "evidence_refs": [],
+                }
+            ],
+            "follow-up disposition evidence is missing",
+        ),
+    ],
+)
+def test_summary_rejects_untraceable_release_dispositions(
+    tmp_path: Path,
+    fact_diff: list[dict[str, object]],
+    error: str,
+) -> None:
+    cr_path = _write_cr(tmp_path)
+    release_path = tmp_path / "process/release/RELEASE-CONTEXT-CR101.yaml"
+    release_path.parent.mkdir(parents=True)
+    release_path.write_text(
+        json.dumps({"cr_id": "CR-101", "fact_diff": fact_diff}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=error):
+        cr_projection.summary_from_cr_file(tmp_path, cr_path)
+
+
+def test_summary_semantics_rejects_forged_follow_up_candidate(tmp_path: Path) -> None:
+    release_path = tmp_path / "process/release/RELEASE-CONTEXT-CR101.yaml"
+    release_path.parent.mkdir(parents=True)
+    release_path.write_text(
+        json.dumps({"cr_id": "CR-101", "follow_up_summary": ["tracked"]}) + "\n",
+        encoding="utf-8",
+    )
+
+    findings = cr_projection.validate_summary_semantics(
+        tmp_path,
+        "CR-101",
+        {
+            "id": "CR-101",
+            "status": "closed",
+            "follow_up_tracking_ref": "process/release/RELEASE-CONTEXT-CR101.yaml",
+            "followup_candidates": [
+                {
+                    "candidate_id": "CR101-FORGED",
+                    "disposition": "DEFERRED_FOLLOW_UP",
+                    "risk_ref": None,
+                    "evidence_refs": ["process/evidence/forged.json"],
+                    "source_ref": "process/release/RELEASE-CONTEXT-CR101.yaml",
+                }
+            ],
+        },
+    )
+
+    assert "followup_candidates diverge from disposition owner" in findings
+
+
+def test_summary_does_not_infer_risk_acceptance_before_publication(
+    tmp_path: Path,
+) -> None:
+    cr_path = _write_cr(tmp_path)
+    release_path = tmp_path / "process/release/RELEASE-CONTEXT-CR101.yaml"
+    release_path.parent.mkdir(parents=True)
+    release_path.write_text(
+        json.dumps(
+            {
+                "cr_id": "CR-101",
+                "release_decision": "READY_WITH_RISK",
+                "fact_diff": [
+                    {
+                        "promise_ref": "CR101-BASELINE",
+                        "status": "EXECUTED_NEGATIVE_RESULT",
+                        "decision_impact": "READY_WITH_RISK",
+                        "risk_ref": "RISK-CR101-BASELINE",
+                        "evidence_refs": ["process/evidence/baseline.json"],
+                    }
+                ],
+                "publication_result": {
+                    "decision": "PENDING",
+                    "risk_disposition": {"new_failure_count": 0},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = cr_projection.summary_from_cr_file(tmp_path, cr_path)
+
+    assert "followup_candidates" not in summary
+    assert "follow_up_tracking_ref" not in summary
+
+
+def test_summary_semantics_rejects_decision_status_not_owned_by_gate(
+    tmp_path: Path,
+) -> None:
+    _write_cr(tmp_path)
+
+    findings = cr_projection.validate_summary_semantics(
+        tmp_path,
+        "CR-101",
+        {
+            "id": "CR-101",
+            "full_ref": "process/changes/CR-101.md",
+            "status": "active",
+            "decision_status": "approved",
+        },
+    )
+
+    assert "decision_status diverges from its gate decision owner" in findings
+
+
+def test_summary_semantics_rejects_terminal_pending_and_untracked_release_follow_up(
+    tmp_path: Path,
+) -> None:
+    release_path = tmp_path / "process/release/RELEASE-CONTEXT-CR101.yaml"
+    release_path.parent.mkdir(parents=True)
+    release_path.write_text(
+        json.dumps(
+            {
+                "cr_id": "CR-101",
+                "release_decision": "READY_WITH_RISK",
+                "follow_up_summary": ["unowned follow-up"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    findings = cr_projection.validate_summary_semantics(
+        tmp_path,
+        "CR-101",
+        {
+            "id": "CR-101",
+            "status": "closed",
+            "decision_status": "pending",
+        },
+    )
+
+    assert "closed CR cannot have decision_status=pending" in findings
+    assert "release follow-up has no disposition or tracking ref" in findings
+
+
+def test_new_reader_treats_legacy_summary_decision_as_not_applicable(tmp_path: Path) -> None:
+    legacy_summary = {
+        "id": "CR-101",
+        "status": "closed",
+        "decision": "pending",
+        "followup_candidates": [],
+    }
+
+    assert (
+        cr_projection.validate_summary_semantics(
+            tmp_path,
+            "CR-101",
+            legacy_summary,
+        )
+        == []
+    )
 
 
 def test_projection_writers_skip_volatile_or_byte_identical_rewrites(tmp_path: Path) -> None:

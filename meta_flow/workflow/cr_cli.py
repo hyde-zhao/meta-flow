@@ -11,6 +11,7 @@ from typing import Any
 
 from meta_flow.work.model import ScopeAmendPlanV1, ScopeDeltaV1, apply_scope_amend
 from meta_flow.work.scope_amend import (
+    ScopeAmendAuthorizationV2,
     admit_scope_amend_predecessor,
     apply_scope_amend_transaction,
     load_scope_amend_authorization,
@@ -92,11 +93,21 @@ def scope_amend_main(
     parser.add_argument("--add-dependency", action="append", default=[])
     parser.add_argument("--add-acceptance-ref", action="append", default=[])
     parser.add_argument("--reason", default="")
+    parser.add_argument("--replace-objective", default=None)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--expected-plan-digest", default="")
     parsed = parser.parse_args(list(argv or []))
     try:
         authorization = load_scope_amend_authorization(parsed.authorization_file)
+        if isinstance(authorization, ScopeAmendAuthorizationV2):
+            if parsed.replace_objective != authorization.replacement_objective:
+                raise ValueError(
+                    "scope amendment replacement objective does not match authorization"
+                )
+        elif parsed.replace_objective is not None:
+            raise ValueError(
+                "scope amendment V1 authorization cannot replace objective"
+            )
         receipts = _load_scope_amend_receipts(parsed.predecessor_receipt)
         admit_scope_amend_predecessor(authorization, receipts)
         delta = ScopeDeltaV1(

@@ -9,6 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.model import is_safe_ref
 from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.workflow.cr_model import parse_frontmatter
@@ -356,6 +357,34 @@ def build_formal_truth_snapshot(
     active_works: list[str] = []
     phase_statuses: dict[str, str] = {}
     seen_work_refs: set[str] = set()
+
+    def include_work(work_ref: object, *, owner: str) -> None:
+        if not isinstance(work_ref, str) or not is_safe_ref(
+            work_ref,
+            prefix="works",
+        ):
+            raise ValueError(f"{owner} work_ref is unsafe: {work_ref}")
+        if work_ref in seen_work_refs:
+            return
+        seen_work_refs.add(work_ref)
+        work_logical = "process/" + work_ref
+        work = _load_object(
+            root,
+            work_logical,
+            process_root,
+            object_overrides,
+        )
+        sources.append(
+            _source_receipt(
+                root,
+                work_logical,
+                process_root,
+                object_overrides,
+            )
+        )
+        if str(work.get("status") or "").lower() not in TERMINAL_WORK:
+            active_works.append(str(work.get("work_id") or Path(work_ref).parent.name))
+
     for raw_ref in raw_phase_refs:
         if not isinstance(raw_ref, str) or not raw_ref.startswith("phases/"):
             raise ValueError("ROADMAP phase_ref must use phases/<id>/PHASE.yaml")
@@ -373,28 +402,12 @@ def build_formal_truth_snapshot(
         if not isinstance(work_refs, list):
             raise ValueError(f"Phase work_refs must be a list: {logical_ref}")
         for work_ref in work_refs:
-            if not isinstance(work_ref, str) or not work_ref.startswith("works/"):
-                raise ValueError(f"Phase work_ref is unsafe: {work_ref}")
-            if work_ref in seen_work_refs:
-                continue
-            seen_work_refs.add(work_ref)
-            work_logical = "process/" + work_ref
-            work = _load_object(
-                root,
-                work_logical,
-                process_root,
-                object_overrides,
-            )
-            sources.append(
-                _source_receipt(
-                    root,
-                    work_logical,
-                    process_root,
-                    object_overrides,
-                )
-            )
-            if str(work.get("status") or "").lower() not in TERMINAL_WORK:
-                active_works.append(str(work.get("work_id") or Path(work_ref).parent.name))
+            include_work(work_ref, owner="Phase")
+    project_work_refs = project.get("active_work_refs") or []
+    if not isinstance(project_work_refs, list):
+        raise ValueError("PROJECT active_work_refs must be a list")
+    for work_ref in project_work_refs:
+        include_work(work_ref, owner="PROJECT")
     active_crs, cr_sources = _active_cr_ids(root, process_root)
     sources.extend(cr_sources)
     source_digest = _canonical_digest(sources)

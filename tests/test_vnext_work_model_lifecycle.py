@@ -46,6 +46,31 @@ def test_scope_delta_rejects_unknown_or_noop_additions() -> None:
         plan_scope_amend(revision_id="R2", current_scope=("old",), delta=ScopeDeltaV1(1, add_story_ids=("STORY-OLD",), add_owned_leaves=("bad.py",)), authorized_leaves=(), predecessor=receipt, snapshot_digest="c" * 64)
 
 
+def test_scope_delta_accepts_safe_root_dotfile_owned_leaf() -> None:
+    delta = ScopeDeltaV1(1, add_owned_leaves=(".gitignore",))
+
+    assert delta.add_owned_leaves == (".gitignore",)
+
+
+@pytest.mark.parametrize(
+    "leaf",
+    (
+        "",
+        "/.gitignore",
+        ".",
+        "..",
+        "./.gitignore",
+        "../.gitignore",
+        "config/../.gitignore",
+        "config//settings",
+        "config\\settings",
+    ),
+)
+def test_scope_delta_rejects_unsafe_owned_leaf(leaf: str) -> None:
+    with pytest.raises(ValueError, match="INVALID_SCOPE_DELTA"):
+        ScopeDeltaV1(1, add_owned_leaves=(leaf,))
+
+
 def test_exact_scope_difference_never_treats_partial_staging_as_pass() -> None:
     result = exact_scope_difference(
         ("release/a.py", "process/WORK.yaml"),

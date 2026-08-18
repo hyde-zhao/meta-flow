@@ -151,39 +151,30 @@ def test_unchanged_historical_writer_is_outside_incremental_denominator(
     assert calls == ()
 
 
-def test_repository_r13_incremental_hard_gate_preserves_only_preexisting_blocker() -> None:
+def test_repository_r14_incremental_hard_gate_has_no_unqualified_current_writer() -> None:
     root = Path(__file__).parents[1]
 
     report = check_detector_qualification(root)
 
-    assert report["decision"] == "BLOCKED"
+    assert report["decision"] == "PASS"
     assert report["qualification"] == "product-full-baseline-plus-incremental-hard-gate-v2"
     assert report["legacy_d0_calibration"]["unresolved_file_writer_calls"] == 1053
     assert report["full_source_baseline"]["decision"] == "PASS"
     assert report["full_source_baseline"]["ambiguous_writer_call_count"] == 0
-    assert report["unresolved_unallowlisted_count"] == 1
-    assert report["allowlisted_dynamic_writer_call_count"] == 41
+    assert report["unresolved_unallowlisted_count"] == 0
+    assert report["allowlisted_dynamic_writer_call_count"] == 45
     unresolved_findings = [
         finding
         for finding in report["findings"]
         if finding.startswith("DETECTOR_NEW_UNRESOLVED_WRITER:")
     ]
-    assert unresolved_findings == [
-        "DETECTOR_NEW_UNRESOLVED_WRITER:"
-        "7cae419855a1fc8c8162890ee9a4b1cbd0a1297634d032c215770e5e7c4c373f:"
-        "meta_flow/workflow/cr_index.py:375"
-    ]
+    assert unresolved_findings == []
     dynamic_calls = [
         item for item in report["writer_calls"] if item["target_kind"] == "dynamic"
     ]
-    qualified_calls = [
-        item
-        for item in dynamic_calls
-        if item["call_id"]
-        != "7cae419855a1fc8c8162890ee9a4b1cbd0a1297634d032c215770e5e7c4c373f"
-    ]
-    assert len(dynamic_calls) == 42
-    assert len(qualified_calls) == 41
+    qualified_calls = dynamic_calls
+    assert len(dynamic_calls) == 45
+    assert len(qualified_calls) == 45
     assert {item["ref"] for item in qualified_calls} == {
         "meta_flow/execution_control/repair_admission.py",
         "meta_flow/migration/observation_storage.py",
@@ -199,6 +190,7 @@ def test_repository_r13_incremental_hard_gate_preserves_only_preexisting_blocker
         "_acquire_lock",
         "_claim_lock",
         "_release_lock",
+        "correct_state_projection_transaction",
         "acquire_shared_projection_writer_lock",
         "record_shared_projection_successor",
         "discard_shared_projection_successor",
@@ -212,6 +204,8 @@ def test_repository_r13_incremental_hard_gate_preserves_only_preexisting_blocker
         "finish",
         "main",
         "atomic_remove_regular_file",
+        "_write_bytes_atomic",
+        "_restore",
         "update_work_status",
     }
 

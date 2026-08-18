@@ -132,15 +132,17 @@ class StateV2Tests(unittest.TestCase):
             ):
                 self.assertTrue((root / "process" / "state" / name).is_file(), name)
 
-    def test_init_is_idempotent_without_force(self) -> None:
+    def test_init_is_blocked_after_projection_manifest_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             current.main(["init", "--project-root", str(root), "--project-id", "demo-project"])
             first_text = (root / "process" / "state" / "STATE.current.json").read_text(encoding="utf-8")
 
-            exit_code = current.main(["init", "--project-root", str(root), "--project-id", "other-project"])
+            with self.assertRaisesRegex(ValueError, "bootstrap is forbidden"):
+                current.main(
+                    ["init", "--project-root", str(root), "--project-id", "other-project"]
+                )
 
-            self.assertEqual(0, exit_code)
             second_text = (root / "process" / "state" / "STATE.current.json").read_text(encoding="utf-8")
             self.assertEqual(first_text, second_text)
 
@@ -190,9 +192,8 @@ class StateV2Tests(unittest.TestCase):
                 ),
             )
             initialized = filesystem_snapshot(root)
-            output = StringIO()
-            with redirect_stdout(output):
-                exit_code = current.main(
+            with self.assertRaisesRegex(ValueError, "bootstrap is forbidden"):
+                current.main(
                     [
                         "init",
                         "--project-root",
@@ -202,12 +203,7 @@ class StateV2Tests(unittest.TestCase):
                         "--dry-run",
                     ]
                 )
-            self.assertEqual(0, exit_code)
             self.assertEqual(initialized, filesystem_snapshot(root))
-            no_change = json.loads(output.getvalue())
-            self.assertEqual("NO_CHANGE", no_change["decision"])
-            self.assertEqual(0, no_change["mutation_count"])
-            self.assertEqual(0, no_change["planned_mutation_count"])
 
     def test_migrate_v2_creates_lightweight_current_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

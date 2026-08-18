@@ -21,6 +21,13 @@ from meta_flow.project.process_route import (
 )
 from meta_flow.project.read_contract import ReadContextProtocol
 
+PUBLIC_OPERATION_DECLARATIONS = (
+    (
+        "state.projection-correct",
+        ("meta-flow", "state", "projection-correct"),
+    ),
+)
+
 STATE_SCHEMA_VERSION = 2
 STATE_CURRENT_REL = Path("process/state/STATE.current.json")
 STATE_CURRENT_DIR_REL = Path("process/current")
@@ -652,6 +659,27 @@ def state_md_path(project_root: Path) -> Path:
     return _resolve_runtime_ref(project_root, STATE_MD_REL.as_posix())
 
 
+def _reject_bootstrap_with_existing_projection_manifest(project_root: Path) -> None:
+    """禁止 init/migrate 绕过已建立的投影事务世代。
+
+    一旦 runtime manifest 存在，三个核心投影就只能经常规投影事务推进；
+    bootstrap/force 不能再作为覆盖现有世代的旁路。
+    """
+
+    from meta_flow.state.projection_transaction import MANIFEST_REL
+
+    manifest_path = project_root.resolve() / MANIFEST_REL
+    if manifest_path.is_symlink() or (
+        manifest_path.exists() and not manifest_path.is_file()
+    ):
+        raise ValueError("state projection transaction manifest is unsafe")
+    if manifest_path.is_file():
+        raise ValueError(
+            "state bootstrap is forbidden after a projection transaction manifest exists; "
+            "use a typed state projection operation"
+        )
+
+
 def default_current_state(project_root: Path, *, project_id: str | None = None) -> dict[str, Any]:
     return {
         "schema_version": STATE_SCHEMA_VERSION,
@@ -686,7 +714,9 @@ def ensure_base_ledgers(project_root: Path) -> None:
 def init_current_state(
     project_root: Path, *, project_id: str | None = None, force: bool = False
 ) -> Path:
-    path = current_state_path(project_root.resolve())
+    project_root = project_root.resolve()
+    _reject_bootstrap_with_existing_projection_manifest(project_root)
+    path = current_state_path(project_root)
     if path.exists() and not force:
         ensure_base_ledgers(project_root)
         return path
@@ -756,6 +786,7 @@ def plan_init_current_state(
     """Plan ``state init`` without invoking a writer or creating a parent directory."""
 
     root = project_root.resolve()
+    _reject_bootstrap_with_existing_projection_manifest(root)
     target_refs = [
         STATE_CURRENT_REL.as_posix(),
         *(item.as_posix() for item in BASE_LEDGER_RELS),
@@ -917,6 +948,7 @@ def plan_migrate_legacy_state(
     """在不创建目录或文件的前提下规划 legacy State v2 迁移。"""
 
     root = project_root.resolve()
+    _reject_bootstrap_with_existing_projection_manifest(root)
     candidate = migrate_legacy_state(root)
     validate_current_state_for_write(candidate)
     target_refs = [
@@ -953,6 +985,7 @@ def plan_migrate_legacy_state(
 
 def write_current_state(project_root: Path, state: dict[str, Any], *, force: bool = False) -> Path:
     project_root = project_root.resolve()
+    _reject_bootstrap_with_existing_projection_manifest(project_root)
     path = current_state_path(project_root)
     if path.exists() and not force:
         raise FileExistsError(f"{path} 已存在；如需覆盖请使用 --force")
@@ -2694,6 +2727,7 @@ def _print_state_help() -> None:
         "  projection-refresh Refresh STATE/CURRENT/STATE.md from bounded formal truth.\n"
         "  projection-inspect Inspect the durable STATE/CURRENT projection transaction.\n"
         "  projection-recover Recover an interrupted STATE/CURRENT projection transaction.\n"
+        "  projection-correct Correct a drifted-terminal projection transaction via typed authorization.\n"
         "  history-render Render process/state/HISTORY.md as a deny-default audit view from ledgers.\n"
         "  health-update Update phase-level workflow health counters.\n"
         "  slim        Archive legacy long fields and rewrite STATE.current.json as v2 refs/scalars.\n"
@@ -2734,6 +2768,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--phase", default="")
     parser.add_argument("--increment", action="append", default=[])
+    parser.add_argument("--authorization", type=Path, default=None)
     parsed = parser.parse_args(args[1:])
     project_root = parsed.project_root.resolve()
 
@@ -2836,6 +2871,31 @@ def main(argv: list[str] | None = None) -> int:
         report = recover_state_projection_transaction(project_root)
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
         return 0 if report["decision"] in {"NO_CHANGE", "RECOVERED"} else 1
+    if command == "projection-correct":
+        from meta_flow.state.projection_transaction import (
+            ProjectionCorrectAuthorizationV2,
+            correct_state_projection_transaction,
+            plan_state_projection_correction,
+        )
+
+        if not parsed.apply:
+            plan = plan_state_projection_correction(project_root)
+            print(json.dumps(plan, ensure_ascii=False, sort_keys=True))
+            return 0 if plan["decision"] == "READY" else 1
+        if parsed.authorization is None:
+            raise SystemExit("projection-correct --apply requires --authorization")
+        try:
+            authorization_payload = json.loads(
+                parsed.authorization.read_text(encoding="utf-8")
+            )
+            authorization = ProjectionCorrectAuthorizationV2.from_mapping(
+                authorization_payload
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise SystemExit(f"projection-correct authorization is invalid: {exc}") from exc
+        receipt = correct_state_projection_transaction(project_root, authorization)
+        print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+        return 0 if receipt["decision"] == "PASS" else 1
     if command == "history-render":
         if parsed.dry_run:
             print(
@@ -2943,7 +3003,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if errors else 0
     raise SystemExit(
         "未知 state 命令: "
-        f"{command}. 目前支持: init, migrate-v2, render, current-refresh, projection-refresh, projection-inspect, projection-recover, history-render, health-update, slim, check, compact"
+        f"{command}. 目前支持: init, migrate-v2, render, current-refresh, projection-refresh, projection-inspect, projection-recover, projection-correct, history-render, health-update, slim, check, compact"
     )
 
 

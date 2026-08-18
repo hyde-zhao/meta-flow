@@ -10,7 +10,11 @@ import runpy
 import sys
 from pathlib import Path
 
-from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.process_route import (
+    ProcessRouteError,
+    _resolve_runtime_ref,
+    require_process_route,
+)
 from meta_flow.workspace.routing import (
     bootstrap_process_workspace,
     inspect_legacy_consumer_route,
@@ -1500,7 +1504,21 @@ def _run_waiver(args: list[str]) -> None:
     raise SystemExit(failure_routing.waiver_main(args))
 
 
-def main() -> None:
+def _preflight_top_level_process_route(command: str, args: list[str]) -> None:
+    """阻止顶层 check 命令把错误根静默解释为 legacy 布局。"""
+
+    if not args or (command, args[0]) not in {
+        ("project", "check"),
+        ("state", "check"),
+    }:
+        return
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parsed, _unknown = parser.parse_known_args(args[1:])
+    require_process_route(parsed.project_root)
+
+
+def _dispatch_main() -> None:
     args = sys.argv[1:]
     if args == ["--version"]:
         _run_version([])
@@ -1510,6 +1528,7 @@ def main() -> None:
         return
 
     command = args[0]
+    _preflight_top_level_process_route(command, args[1:])
     if command not in {"version", "install", "upgrade", "uninstall", "reinstall"}:
         _guard_provider_mutation(command, args[1:])
     if command == "status":
@@ -1628,5 +1647,31 @@ def main() -> None:
         "install, upgrade, uninstall, reinstall, recover, version, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, route, identity, ledger, "
         "governance, module, policy, project, work, retrospective, evolution, repository, quality, story, validation, waiver, ask-user, state, status, next, doctor"
     )
+
+
+def main() -> None:
+    """顶层 CLI 错误边界：契约型路由失败必须稳定、零写且不暴露 traceback。"""
+
+    try:
+        _dispatch_main()
+    except ProcessRouteError as exc:
+        print(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "ok": False,
+                    "decision": "BLOCKED",
+                    "error_code": "PROCESS_ROUTE_UNHEALTHY",
+                    "route_error_code": exc.error_code,
+                    "message": str(exc),
+                    "logical_ref": exc.logical_ref,
+                    "hint": "--project-root must reference the release repository root with a healthy .meta-flow/workspace.yaml binding",
+                    "mutation_count": 0,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        raise SystemExit(1) from None
 if __name__ == "__main__":
     main()

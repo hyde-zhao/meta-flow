@@ -324,11 +324,23 @@ def _load_manifest(project_root: Path) -> tuple[Path, dict[str, Any] | None]:
         "applied_refs",
         "targets",
     }
-    if set(payload) - (expected | {"failure", "recovery_failures", "lineage"}) or not (
-        expected.issubset(payload)
-    ):
+    if set(payload) - (
+        expected | {"failure", "recovery_failures", "lineage", "correction"}
+    ) or not expected.issubset(payload):
         raise ValueError("state projection transaction manifest fields mismatch")
-    if payload["schema_version"] != 1 or payload["kind"] != "StateProjectionTransactionV1":
+    has_correction = "correction" in payload
+    if has_correction:
+        _decode_correction(payload["correction"])
+    manifest_identity = (payload["schema_version"], payload["kind"])
+    allowed_identities = (
+        {
+            (1, "StateProjectionTransactionV1"),
+            (2, "StateProjectionTransactionV2"),
+        }
+        if has_correction
+        else {(1, "StateProjectionTransactionV1")}
+    )
+    if manifest_identity not in allowed_identities:
         raise ValueError("state projection transaction manifest kind/version mismatch")
     if not re.fullmatch(r"[0-9a-f]{32}", str(payload["transaction_id"])):
         raise ValueError("state projection transaction id is invalid")
@@ -776,6 +788,441 @@ def recover_state_projection_transaction(
     finally:
         if owned_lock and handle is not None:
             _release_lock(handle)
+
+
+CORRECTION_AUTHORIZATION_KIND = "state-projection-correct-authorization-v1"
+CORRECTION_AUTHORIZATION_V2_KIND = "state-projection-correct-authorization-v2"
+CORRECTION_FIELDS = {
+    "corrected_transaction_id",
+    "authorization_id",
+    "old_manifest_digest",
+    "corrected_at",
+}
+CORRECTION_V2_FIELDS = CORRECTION_FIELDS | {
+    "authorization_schema_version",
+    "writer_provenance",
+}
+CORRECTION_ROOT_REL = TRANSACTION_ROOT_REL / "corrections"
+
+
+def _decode_writer_provenance(raw: object) -> dict[str, Any]:
+    """校验 correction 当前 bytes 的来源解释；unknown 必须显式声明原因。"""
+
+    expected = {
+        "mode",
+        "writer_id",
+        "evidence_ref",
+        "evidence_digest",
+        "reason",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected:
+        raise ValueError("state projection correction writer provenance fields mismatch")
+    mode = raw.get("mode")
+    writer_id = raw.get("writer_id")
+    evidence_ref = raw.get("evidence_ref")
+    evidence_digest = raw.get("evidence_digest")
+    reason = raw.get("reason")
+    if mode == "source-writer-evidence":
+        if (
+            not isinstance(writer_id, str)
+            or not _AUTHORIZATION_ID_RE.fullmatch(writer_id)
+            or not isinstance(evidence_ref, str)
+            or not evidence_ref
+            or evidence_ref.startswith(("/", "./"))
+            or "\\" in evidence_ref
+            or ".." in Path(evidence_ref).parts
+            or not isinstance(evidence_digest, str)
+            or not _DIGEST_RE.fullmatch(evidence_digest)
+            or reason is not None
+        ):
+            raise ValueError("state projection correction source writer evidence is invalid")
+    elif mode == "unknown-writer":
+        if (
+            writer_id is not None
+            or evidence_ref is not None
+            or evidence_digest is not None
+            or not isinstance(reason, str)
+            or len(reason.strip()) < 8
+        ):
+            raise ValueError("state projection correction unknown writer declaration is invalid")
+    else:
+        raise ValueError("state projection correction writer provenance mode is invalid")
+    return {
+        "mode": str(mode),
+        "writer_id": writer_id,
+        "evidence_ref": evidence_ref,
+        "evidence_digest": evidence_digest,
+        "reason": reason,
+    }
+
+
+def _decode_correction(raw: object) -> dict[str, Any]:
+    """校验 drifted-terminal correction 的溯源对象；不改动三个投影文件本身。"""
+
+    if not isinstance(raw, Mapping):
+        raise ValueError("state projection correction fields mismatch")
+    raw_fields = frozenset(raw)
+    if raw_fields not in {
+        frozenset(CORRECTION_FIELDS),
+        frozenset(CORRECTION_V2_FIELDS),
+    }:
+        raise ValueError("state projection correction fields mismatch")
+    corrected_transaction_id = str(raw.get("corrected_transaction_id") or "")
+    authorization_id = str(raw.get("authorization_id") or "")
+    old_manifest_digest = str(raw.get("old_manifest_digest") or "")
+    if (
+        not re.fullmatch(r"[0-9a-f]{32}", corrected_transaction_id)
+        or not _AUTHORIZATION_ID_RE.fullmatch(authorization_id)
+        or not _DIGEST_RE.fullmatch(old_manifest_digest)
+        or not isinstance(raw.get("corrected_at"), str)
+    ):
+        raise ValueError("state projection correction identity is invalid")
+    decoded: dict[str, Any] = {
+        "corrected_transaction_id": corrected_transaction_id,
+        "authorization_id": authorization_id,
+        "old_manifest_digest": old_manifest_digest,
+        "corrected_at": str(raw["corrected_at"]),
+    }
+    if raw_fields == frozenset(CORRECTION_V2_FIELDS):
+        if raw.get("authorization_schema_version") != 2:
+            raise ValueError("state projection correction authorization version is invalid")
+        decoded["authorization_schema_version"] = 2
+        decoded["writer_provenance"] = _decode_writer_provenance(
+            raw.get("writer_provenance")
+        )
+    return decoded
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionCorrectAuthorizationV1:
+    """typed authorization：绑定被矫正事务、drift refs、preimage 与旧 manifest bytes。"""
+
+    schema_version: int
+    kind: str
+    authorization_id: str
+    corrected_transaction_id: str
+    drift_refs: tuple[str, ...]
+    preimage_digests: dict[str, str]
+    old_manifest_digest: str
+    expires_at: str
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> ProjectionCorrectAuthorizationV1:
+        expected = {
+            "schema_version",
+            "kind",
+            "authorization_id",
+            "corrected_transaction_id",
+            "drift_refs",
+            "preimage_digests",
+            "old_manifest_digest",
+            "expires_at",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != expected:
+            raise ValueError("state projection correction authorization fields mismatch")
+        refs = payload["drift_refs"]
+        preimages = payload["preimage_digests"]
+        if (
+            payload["schema_version"] != 1
+            or payload["kind"] != CORRECTION_AUTHORIZATION_KIND
+            or not _AUTHORIZATION_ID_RE.fullmatch(str(payload["authorization_id"]))
+            or not re.fullmatch(r"[0-9a-f]{32}", str(payload["corrected_transaction_id"]))
+            or not _DIGEST_RE.fullmatch(str(payload["old_manifest_digest"]))
+            or not isinstance(refs, list)
+            or not all(ref in ALLOWED_TARGET_REFS for ref in refs)
+            or refs != sorted(set(refs))
+            or not isinstance(preimages, dict)
+            or set(preimages) != set(refs)
+            or not all(_DIGEST_RE.fullmatch(str(v)) for v in preimages.values())
+        ):
+            raise ValueError("state projection correction authorization is invalid")
+        try:
+            expiry = datetime.fromisoformat(str(payload["expires_at"]).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("state projection correction authorization expires_at is invalid") from exc
+        if expiry.tzinfo is None or expiry.astimezone(UTC) <= datetime.now(UTC):
+            raise ValueError("state projection correction authorization is expired")
+        return cls(
+            schema_version=1,
+            kind=CORRECTION_AUTHORIZATION_KIND,
+            authorization_id=str(payload["authorization_id"]),
+            corrected_transaction_id=str(payload["corrected_transaction_id"]),
+            drift_refs=tuple(str(ref) for ref in refs),
+            preimage_digests={str(k): str(v) for k, v in preimages.items()},
+            old_manifest_digest=str(payload["old_manifest_digest"]),
+            expires_at=str(payload["expires_at"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionCorrectAuthorizationV2:
+    """当前 correction apply 合同；在 V1 bindings 上增加 writer 来源解释。"""
+
+    schema_version: int
+    kind: str
+    authorization_id: str
+    corrected_transaction_id: str
+    drift_refs: tuple[str, ...]
+    preimage_digests: dict[str, str]
+    old_manifest_digest: str
+    expires_at: str
+    writer_provenance: dict[str, Any]
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> ProjectionCorrectAuthorizationV2:
+        expected = {
+            "schema_version",
+            "kind",
+            "authorization_id",
+            "corrected_transaction_id",
+            "drift_refs",
+            "preimage_digests",
+            "old_manifest_digest",
+            "expires_at",
+            "writer_provenance",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != expected:
+            raise ValueError("state projection correction authorization fields mismatch")
+        refs = payload["drift_refs"]
+        preimages = payload["preimage_digests"]
+        if (
+            payload["schema_version"] != 2
+            or payload["kind"] != CORRECTION_AUTHORIZATION_V2_KIND
+            or not _AUTHORIZATION_ID_RE.fullmatch(str(payload["authorization_id"]))
+            or not re.fullmatch(r"[0-9a-f]{32}", str(payload["corrected_transaction_id"]))
+            or not _DIGEST_RE.fullmatch(str(payload["old_manifest_digest"]))
+            or not isinstance(refs, list)
+            or not all(ref in ALLOWED_TARGET_REFS for ref in refs)
+            or refs != sorted(set(refs))
+            or not isinstance(preimages, dict)
+            or set(preimages) != set(refs)
+            or not all(_DIGEST_RE.fullmatch(str(value)) for value in preimages.values())
+        ):
+            raise ValueError("state projection correction authorization is invalid")
+        try:
+            expiry = datetime.fromisoformat(str(payload["expires_at"]).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                "state projection correction authorization expires_at is invalid"
+            ) from exc
+        if expiry.tzinfo is None or expiry.astimezone(UTC) <= datetime.now(UTC):
+            raise ValueError("state projection correction authorization is expired")
+        return cls(
+            schema_version=2,
+            kind=CORRECTION_AUTHORIZATION_V2_KIND,
+            authorization_id=str(payload["authorization_id"]),
+            corrected_transaction_id=str(payload["corrected_transaction_id"]),
+            drift_refs=tuple(str(ref) for ref in refs),
+            preimage_digests={str(key): str(value) for key, value in preimages.items()},
+            old_manifest_digest=str(payload["old_manifest_digest"]),
+            expires_at=str(payload["expires_at"]),
+            writer_provenance=_decode_writer_provenance(payload["writer_provenance"]),
+        )
+
+
+def plan_state_projection_correction(
+    project_root: Path, *, ignore_lock: bool = False
+) -> dict[str, Any]:
+    """zero-write 输出 drifted-terminal 矫正计划与授权绑定材料。"""
+
+    root = project_root.resolve()
+    manifest_path, payload = _load_manifest(root)
+    if payload is None:
+        return {
+            "decision": "BLOCKED",
+            "kind": "StateProjectionCorrectionPlanV1",
+            "blockers": ["no committed state projection transaction to correct"],
+            "schema_version": 1,
+        }
+    inspection = inspect_state_projection_transaction(root, _ignore_lock=ignore_lock)
+    drift_refs = sorted(
+        finding.split(":", 1)[1]
+        for finding in inspection["findings"]
+        if finding.startswith("TERMINAL_GENERATION_DRIFT:")
+    )
+    blockers = [
+        finding
+        for finding in inspection["findings"]
+        if not finding.startswith("TERMINAL_GENERATION_DRIFT:")
+    ]
+    if payload["state"] != "COMMITTED":
+        blockers.append(f"correction supports COMMITTED drift only: {payload['state']}")
+    preimage_digests = {
+        ref: _digest(_read_target(_resolve_runtime_ref(root, ref)))
+        for ref in ALLOWED_TARGET_REFS
+        if ref in drift_refs
+    }
+    return {
+        "decision": "READY" if drift_refs and not blockers else "BLOCKED",
+        "kind": "StateProjectionCorrectionPlanV1",
+        "blockers": blockers or (["no terminal generation drift to correct"] if not drift_refs else []),
+        "transaction_id": payload["transaction_id"],
+        "drift_refs": drift_refs,
+        "preimage_digests": preimage_digests,
+        "old_manifest_digest": _digest(manifest_path.read_bytes()),
+        "schema_version": 1,
+    }
+
+
+def correct_state_projection_transaction(
+    project_root: Path,
+    authorization: ProjectionCorrectAuthorizationV2,
+) -> dict[str, Any]:
+    """以 typed authorization 将 drifted-terminal 事务重锚到当前 bytes。
+
+    只重写 runtime manifest（记录 correction 溯源），不触碰三个投影文件，
+    不删除旧审计信息（旧 manifest bytes 由 receipt 与 correction 溯源保留 digest）。
+    """
+
+    if not isinstance(authorization, ProjectionCorrectAuthorizationV2):
+        raise ValueError("state projection correction apply requires V2 authorization")
+    root = project_root.resolve()
+    receipt_dir = root / CORRECTION_ROOT_REL
+    if receipt_dir.is_symlink() or (
+        receipt_dir.exists() and not receipt_dir.is_dir()
+    ):
+        raise ValueError("state projection correction receipt directory is unsafe")
+    receipt_path = receipt_dir / f"{authorization.authorization_id}.json"
+    if receipt_path.is_symlink() or receipt_path.exists():
+        raise ValueError("state projection correction authorization_id was already consumed")
+    plan = plan_state_projection_correction(root)
+    if plan["decision"] != "READY":
+        raise ValueError("state projection correction plan is not READY")
+    if plan["transaction_id"] != authorization.corrected_transaction_id:
+        raise ValueError("state projection correction does not bind the current transaction")
+    if plan["drift_refs"] != list(authorization.drift_refs):
+        raise ValueError("state projection correction drift refs mismatch")
+    if plan["old_manifest_digest"] != authorization.old_manifest_digest:
+        raise ValueError("state projection correction old manifest digest mismatch")
+    for ref, expected_digest in authorization.preimage_digests.items():
+        current = _digest(_read_target(_resolve_runtime_ref(root, ref)))
+        if current != expected_digest:
+            raise ValueError(f"state projection correction preimage drifted: {ref}")
+
+    _manifest_path, old_payload = _load_manifest(root)
+    assert _manifest_path is not None and old_payload is not None
+    old_expected_after = {
+        ref: after
+        for ref, _before, after in (_decode_target(raw) for raw in old_payload["targets"])
+    }
+    planned: list[dict[str, Any]] = []
+    for ref in sorted(ALLOWED_TARGET_REFS):
+        before = old_expected_after.get(ref)
+        after = _read_target(_resolve_runtime_ref(root, ref))
+        planned.append(_target_record(ref, before, after))
+    transaction_id = _canonical_digest(
+        {
+            "correction_of": old_payload["transaction_id"],
+            "authorization_id": authorization.authorization_id,
+            "old_manifest_digest": authorization.old_manifest_digest,
+            "writer_provenance_digest": _canonical_digest(
+                authorization.writer_provenance
+            ),
+        }
+    )[:32]
+    _ensure_runtime_root(root)
+    manifest_path = root / MANIFEST_REL
+    lock_path = root / LOCK_REL
+    handle = _claim_lock(lock_path, transaction_id, create_if_missing=True)
+    assert handle is not None
+    manifest_replaced = False
+    receipt_dir_existed = receipt_dir.exists()
+    old_manifest_bytes = manifest_path.read_bytes()
+    try:
+        locked_plan = plan_state_projection_correction(root, ignore_lock=True)
+        if (
+            locked_plan["decision"] != "READY"
+            or locked_plan["old_manifest_digest"] != authorization.old_manifest_digest
+        ):
+            raise ValueError("state projection correction target drifted while acquiring lock")
+        now = _now()
+        payload: dict[str, Any] = {
+            "schema_version": 2,
+            "kind": "StateProjectionTransactionV2",
+            "transaction_id": transaction_id,
+            "state": "COMMITTED",
+            "created_at": now,
+            "updated_at": now,
+            "attempted_refs": [item["ref"] for item in planned],
+            "applied_refs": [item["ref"] for item in planned],
+            "targets": planned,
+            "correction": {
+                "corrected_transaction_id": old_payload["transaction_id"],
+                "authorization_id": authorization.authorization_id,
+                "old_manifest_digest": authorization.old_manifest_digest,
+                "corrected_at": now,
+                "authorization_schema_version": 2,
+                "writer_provenance": authorization.writer_provenance,
+            },
+        }
+        _load_manifest_from_payload(payload)
+        _write_manifest(manifest_path, payload)
+        manifest_replaced = True
+        inspection = inspect_state_projection_transaction(root, _ignore_lock=True)
+        if inspection["decision"] != "PASS":
+            raise ValueError("state projection correction did not converge inspection")
+        receipt = {
+            "schema_version": 2,
+            "kind": "StateProjectionCorrectionReceiptV2",
+            "decision": "PASS",
+            "authorization_id": authorization.authorization_id,
+            "corrected_transaction_id": old_payload["transaction_id"],
+            "new_transaction_id": transaction_id,
+            "drift_refs": list(authorization.drift_refs),
+            "old_manifest_digest": authorization.old_manifest_digest,
+            "new_manifest_digest": _digest(manifest_path.read_bytes()),
+            "writer_provenance": authorization.writer_provenance,
+            "corrected_at": now,
+        }
+        receipt_dir.mkdir(parents=True, exist_ok=True)
+        _replace_bytes(
+            receipt_path,
+            (json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+                "utf-8"
+            ),
+        )
+        return receipt
+    except Exception:
+        rollback_failure: Exception | None = None
+        if manifest_replaced:
+            try:
+                _replace_bytes(manifest_path, old_manifest_bytes)
+            except Exception as rollback_exc:  # pragma: no cover - 双重 I/O 故障
+                rollback_failure = rollback_exc
+        if receipt_path.is_file() and not receipt_path.is_symlink():
+            try:
+                receipt_path.unlink()
+            except OSError as rollback_exc:  # pragma: no cover - 双重 I/O 故障
+                rollback_failure = rollback_failure or rollback_exc
+        if not receipt_dir_existed and receipt_dir.is_dir():
+            try:
+                receipt_dir.rmdir()
+            except OSError:
+                pass
+        if rollback_failure is not None:
+            raise RuntimeError(
+                "state projection correction failed and manifest rollback did not complete"
+            ) from rollback_failure
+        raise
+    finally:
+        _release_lock(handle)
+
+
+def _load_manifest_from_payload(payload: Mapping[str, Any]) -> None:
+    """写入前自校验：新 manifest 的 target/correction 必须通过严格解码路径。"""
+
+    for raw in payload["targets"]:
+        _decode_target(raw)
+    _decode_correction(payload["correction"])
+    if (
+        payload["state"] not in TERMINAL_STATES
+        or payload["schema_version"] != 2
+        or payload["kind"] != "StateProjectionTransactionV2"
+    ):
+        raise ValueError("state projection correction manifest kind/state mismatch")
+    refs = [item["ref"] for item in payload["targets"]]
+    if payload["attempted_refs"] != refs or payload["applied_refs"] != refs:
+        raise ValueError("state projection correction manifest accounting mismatch")
 
 
 def apply_state_projection_transaction(

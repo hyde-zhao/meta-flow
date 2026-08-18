@@ -14,6 +14,11 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 
+from delivery.scripts.digest_policy import (
+    DigestPolicyViolation,
+    observe_delivery_tree,
+)
+
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
@@ -39,6 +44,7 @@ CORE_LIFECYCLE_DOGFOOD_DOCS = (
 )
 ALLOWED_DELIVERY_DIRS = {"agents", "doc", "rules", "scripts", "skills"}
 ALLOWED_DELIVERY_SCRIPT_FILES = {
+    "digest_policy.py",
     "install-cli.py",
     "install.py",
     "install.sh",
@@ -53,6 +59,8 @@ INSTALLATION_ROLE_REGISTRY = {
     "meta_flow/installation/canonical.py": "canonical_contract",
     "meta_flow/installation/identity.py": "source_identity",
     "meta_flow/installation/artifact.py": "artifact_identity",
+    "delivery/scripts/digest_policy.py": "canonical_digest_policy",
+    "delivery/doc/SOURCE-DIGEST-GENERATED-MANIFEST.json": "canonical_digest_policy",
     "scripts/qualify_provider_artifact.py": "artifact_qualification",
     "scripts/run_provider_artifact_canary.py": "isolated_artifact_canary",
     "tests/test_provider_artifact_receipt.py": "contract_test",
@@ -3176,6 +3184,11 @@ def _infer_installation_role(relative: str, content: str) -> str:
         "meta_flow/cli.py",
     }:
         return "public_adapter"
+    if relative in {
+        "delivery/scripts/digest_policy.py",
+        "delivery/doc/SOURCE-DIGEST-GENERATED-MANIFEST.json",
+    }:
+        return "canonical_digest_policy"
     if relative == "meta_flow/installation/__init__.py":
         return "compatibility_facade"
     if relative in {
@@ -3400,6 +3413,16 @@ def collect_installation_architecture_errors() -> list[str]:
     return errors
 
 
+def collect_digest_exclusion_policy_errors(root: Path = ROOT) -> list[str]:
+    """把 tracked generated 与不安全 delivery owner 提升为发布 guardrail。"""
+
+    try:
+        observe_delivery_tree(root, require_generated_manifest=True)
+    except DigestPolicyViolation as exc:
+        return [f"delivery digest policy violation: {finding}" for finding in exc.findings]
+    return []
+
+
 def collect_core_lifecycle_dogfood_errors(root: Path = ROOT) -> list[str]:
     """保证多 Work 核心生命周期自举验证始终属于发布硬门。"""
 
@@ -3486,6 +3509,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_delivery_asset_lifecycle_errors())
     errors.extend(collect_process_route_contract_errors())
     errors.extend(collect_installation_architecture_errors())
+    errors.extend(collect_digest_exclusion_policy_errors())
     errors.extend(collect_core_lifecycle_dogfood_errors())
 
     binding_profile_documents = {

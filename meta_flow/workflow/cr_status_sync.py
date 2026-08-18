@@ -555,7 +555,9 @@ def plan_status_sync(
     summary = summary_from_cr_file(
         project_root,
         cr_path,
+        status=target_status,
         readiness=target_readiness,
+        gate_status=target_gate,
         read_context=context,
         text=before_text,
         rel_fn=rel_from_context,

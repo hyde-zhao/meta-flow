@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import warnings
 import zipfile
 from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from delivery.scripts.digest_policy import (
+    build_digest_policy_sidecar,
+    load_digest_policy_sidecar,
+    load_known_generated_refs,
+    observe_wheel_payload,
+    sidecar_path_for_receipt,
+)
 from meta_flow.installation.identity import (
     observe_checkout_delivery_status,
     observe_checkout_source_identity,
@@ -66,32 +75,32 @@ def _wheel_version(wheel: Path) -> tuple[str, str]:
         return name, version
 
 
-def _is_generated_distribution_file(relative: Path) -> bool:
-    rendered = relative.as_posix()
-    if "__pycache__" in relative.parts or relative.suffix == ".pyc":
-        return True
-    if ".dist-info/" not in rendered:
-        return False
-    return relative.name in {
-        "INSTALLER",
-        "RECORD",
-        "REQUESTED",
-        "direct_url.json",
-        "uv_cache.json",
-    }
-
-
-def _wheel_payload_digest(wheel: Path) -> str:
+def _wheel_payload_digest(
+    wheel: Path,
+    *,
+    known_generated_refs: tuple[str, ...] | None = None,
+) -> str:
     with zipfile.ZipFile(wheel) as archive:
-        records = {
-            name: sha256(archive.read(name)).hexdigest()
-            for name in sorted(archive.namelist())
-            if not name.endswith("/")
-            and not _is_generated_distribution_file(Path(name))
-        }
-    if not records:
+        observation = observe_wheel_payload(
+            archive,
+            known_generated_refs=known_generated_refs,
+        )
+    if not observation.records:
         raise ValueError("provider wheel payload is empty")
-    return _canonical_digest(records)
+    return observation.included_manifest_digest
+
+
+def _wheel_delivery_tree_digest(
+    wheel: Path,
+    *,
+    known_generated_refs: tuple[str, ...] | None = None,
+) -> tuple[str, int]:
+    with zipfile.ZipFile(wheel) as archive:
+        observation = observe_wheel_payload(
+            archive,
+            known_generated_refs=known_generated_refs,
+        )
+    return observation.delivery_manifest_digest, observation.delivery_file_count
 
 
 def build_provider_artifact_receipt(source_root: Path, wheel_path: Path) -> dict[str, Any]:
@@ -109,6 +118,15 @@ def build_provider_artifact_receipt(source_root: Path, wheel_path: Path) -> dict
     contract = root / "delivery" / "doc" / "PUBLIC-OPERATION-CONTRACTS.yaml"
     if not contract.is_file() or contract.is_symlink():
         raise ValueError("provider capability contract is missing")
+    known_generated_refs = load_known_generated_refs(root / "delivery")
+    wheel_delivery_digest, wheel_delivery_file_count = _wheel_delivery_tree_digest(
+        wheel,
+        known_generated_refs=known_generated_refs,
+    )
+    if wheel_delivery_file_count < 1:
+        raise ValueError("provider wheel has no delivery payload")
+    if wheel_delivery_digest != source["delivery_tree_digest"]:
+        raise ValueError("provider wheel delivery payload differs from source delivery tree")
     payload: dict[str, Any] = {
         "schema_version": ARTIFACT_RECEIPT_SCHEMA_VERSION,
         "kind": ARTIFACT_RECEIPT_KIND,
@@ -120,11 +138,27 @@ def build_provider_artifact_receipt(source_root: Path, wheel_path: Path) -> dict
         "artifact_filename": wheel.name,
         "artifact_sha256": sha256(wheel.read_bytes()).hexdigest(),
         "capability_profile_digest": sha256(contract.read_bytes()).hexdigest(),
-        "installed_payload_digest": _wheel_payload_digest(wheel),
+        "installed_payload_digest": _wheel_payload_digest(
+            wheel,
+            known_generated_refs=known_generated_refs,
+        ),
         "release_qualifying": status["worktree_clean"],
     }
     payload["receipt_digest"] = _canonical_digest(payload)
     return payload
+
+
+def build_provider_artifact_bundle(
+    source_root: Path,
+    wheel_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """构造字段不变的 V1 receipt 与独立 DigestPolicySidecarV1。"""
+
+    receipt = build_provider_artifact_receipt(source_root, wheel_path)
+    sidecar = build_digest_policy_sidecar(source_root)
+    if sidecar["included_manifest_digest"] != receipt["source_tree_digest"]:
+        raise ValueError("provider receipt and digest policy sidecar source digest differ")
+    return receipt, sidecar
 
 
 def validate_provider_artifact_receipt(payload: object) -> dict[str, Any]:
@@ -167,12 +201,20 @@ def validate_provider_artifact_receipt(payload: object) -> dict[str, Any]:
 
 
 def load_provider_artifact_receipt(path: Path) -> dict[str, Any]:
-    resolved = path.expanduser().resolve()
+    resolved = Path(os.path.abspath(path.expanduser()))
     if not resolved.is_file() or resolved.is_symlink():
         raise ValueError("provider artifact receipt must be one regular file")
-    return validate_provider_artifact_receipt(
+    receipt = validate_provider_artifact_receipt(
         json.loads(resolved.read_text(encoding="utf-8"))
     )
+    _sidecar, sidecar_warnings = load_digest_policy_sidecar(
+        resolved,
+        expected_included_manifest_digest=receipt["source_tree_digest"],
+        allow_missing=True,
+    )
+    for warning in sidecar_warnings:
+        warnings.warn(warning, RuntimeWarning, stacklevel=2)
+    return receipt
 
 
 def artifact_receipt_conflicts(
@@ -207,7 +249,9 @@ __all__ = [
     "ARTIFACT_RECEIPT_KIND",
     "ARTIFACT_RECEIPT_SCHEMA_VERSION",
     "artifact_receipt_conflicts",
+    "build_provider_artifact_bundle",
     "build_provider_artifact_receipt",
     "load_provider_artifact_receipt",
     "validate_provider_artifact_receipt",
+    "sidecar_path_for_receipt",
 ]

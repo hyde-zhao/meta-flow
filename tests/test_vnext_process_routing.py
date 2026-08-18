@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -335,6 +336,85 @@ def test_top_level_project_dispatch_exposes_resolve_ref(
 
     assert raised.value.code == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def _run_top_level_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    args: list[str],
+) -> tuple[int | str | None, dict, str]:
+    monkeypatch.setattr(sys, "argv", ["meta-flow", *args])
+    with pytest.raises(SystemExit) as raised:
+        cli.main()
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out) if captured.out.strip().startswith("{") else {}
+    return raised.value.code, payload, captured.err
+
+
+def test_top_level_route_boundary_accepts_release_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release, _process = _release(tmp_path)
+
+    code, payload, error = _run_top_level_cli(
+        monkeypatch,
+        capsys,
+        ["project", "check", "--project-root", str(release)],
+    )
+
+    assert code == 0
+    assert payload.get("error_code") != "PROCESS_ROUTE_UNHEALTHY"
+    assert "Traceback" not in error
+
+
+@pytest.mark.parametrize(
+    "root_kind",
+    ["process-root", "wrong-directory", "missing-workspace", "invalid-workspace"],
+)
+def test_top_level_route_boundary_returns_structured_zero_write_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    root_kind: str,
+) -> None:
+    release, process = _release(tmp_path)
+    if root_kind == "process-root":
+        project_root = process
+    elif root_kind == "wrong-directory":
+        project_root = tmp_path / "wrong"
+        project_root.mkdir()
+    elif root_kind == "missing-workspace":
+        (release / ".meta-flow" / "workspace.yaml").unlink()
+        project_root = release
+    else:
+        (release / ".meta-flow" / "workspace.yaml").write_text(
+            "not: [valid\n",
+            encoding="utf-8",
+        )
+        project_root = release
+
+    code, payload, error = _run_top_level_cli(
+        monkeypatch,
+        capsys,
+        ["project", "check", "--project-root", str(project_root)],
+    )
+
+    assert code == 1
+    assert payload == {
+        "schema_version": 1,
+        "ok": False,
+        "decision": "BLOCKED",
+        "error_code": "PROCESS_ROUTE_UNHEALTHY",
+        "route_error_code": payload["route_error_code"],
+        "message": payload["message"],
+        "logical_ref": payload["logical_ref"],
+        "hint": "--project-root must reference the release repository root with a healthy .meta-flow/workspace.yaml binding",
+        "mutation_count": 0,
+    }
+    assert payload["route_error_code"] in {"route_not_initialized", "route_invalid"}
+    assert "Traceback" not in error
 
 
 def test_cr_tracking_main_uses_binding_only_route_without_process_link(

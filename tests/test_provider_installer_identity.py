@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import sys
 from hashlib import sha256
 from pathlib import Path
 
@@ -67,6 +69,26 @@ def test_provider_checkout_detection_does_not_claim_consumer_venv(
         install.find_provider_checkout_root(checkout_script.parents[1], checkout_script)
         == consumer
     )
+
+
+def test_standalone_delivery_installer_loads_adjacent_digest_policy(
+    tmp_path: Path,
+) -> None:
+    source_delivery = Path(install.__file__).resolve().parents[1]
+    standalone = tmp_path / "delivery"
+    shutil.copytree(source_delivery, standalone)
+
+    completed = subprocess.run(
+        [sys.executable, str(standalone / "scripts" / "install.py"), "--help"],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "<platform> [options]" in completed.stdout
+    assert "--provider-mode" in completed.stdout
 
 
 def test_delivery_tree_digest_is_content_bound_and_root_shape_independent(

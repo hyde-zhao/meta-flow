@@ -12,10 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from meta_flow.project.model import is_safe_ref
 from meta_flow.checks import cr_tracking
 from meta_flow.project.read_contract import ReadContextProtocol
-from meta_flow.state import checkpoint_projection, current
-from meta_flow.workflow.cr_model import now_utc
+from meta_flow.project.scale import _load_compatible_yaml
+from meta_flow.state import checkpoint_projection, current, event_ledger
+from meta_flow.workflow.cr_model import now_utc, parse_frontmatter
 from meta_flow.workflow.cr_records import (
     CR_SUMMARY_ROOT_REL, _first_section_summary, _git_fact, _impact_split_payload,
     _normalized_capability_refs, _process_root, _record_required_evidence, _rel,
@@ -29,6 +31,302 @@ CR_LEDGER_REL = Path('process/state/CR-LEDGER.ndjson')
 CR_ARCHIVE_ROOT_REL = Path('process/archive')
 
 STATE_CURRENT_REL = Path('process/state/STATE.current.json')
+
+DECISION_STATUSES = frozenset({'n/a', 'pending', 'approved', 'rejected', 'closed'})
+GATE_LEDGER_REF = 'process/state/GATE-LEDGER.ndjson'
+SUMMARY_FOLLOW_UP_DISPOSITIONS = frozenset(
+    {'DEFERRED_FOLLOW_UP', 'RISK_ACCEPTED_FOR_RELEASE'}
+)
+_SUMMARY_CANDIDATE_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+
+
+def _resolve_summary_owner_ref(
+    project_root: Path,
+    logical_ref: str,
+    read_context: ReadContextProtocol | None,
+) -> Path:
+    return (
+        _resolve_runtime_ref(project_root, logical_ref)
+        if read_context is None
+        else read_context.resolve_path(logical_ref)
+    )
+
+
+def _load_gate_decision_events(
+    project_root: Path,
+    *,
+    read_context: ReadContextProtocol | None,
+) -> list[dict[str, Any]]:
+    path = _resolve_summary_owner_ref(project_root, GATE_LEDGER_REF, read_context)
+    if not path.exists():
+        return []
+    events, errors = event_ledger.load_events(
+        path,
+        read_context=read_context,
+        logical_ref=GATE_LEDGER_REF if read_context is not None else '',
+    )
+    if errors:
+        raise ValueError('gate decision owner is invalid: ' + '; '.join(errors))
+    return events
+
+
+def _decision_status_from_owners(
+    project_root: Path,
+    cr_id: str,
+    cr_text: str,
+    *,
+    read_context: ReadContextProtocol | None,
+) -> str:
+    events = _load_gate_decision_events(
+        project_root,
+        read_context=read_context,
+    )
+    approval_by_id = {
+        approval.event_id: approval
+        for approval in event_ledger.project_gate_approvals(events)
+        if approval.cr_id == cr_id
+    }
+    for event in reversed(events):
+        if str(event.get('cr_id') or '') != cr_id:
+            continue
+        approval = approval_by_id.get(str(event.get('event_id') or ''))
+        event_type = str(event.get('event_type') or '')
+        decision = str(event.get('decision') or '').strip().lower()
+        status = str(event.get('status') or '').strip().lower()
+        if approval is not None:
+            if approval.finding_codes:
+                raise ValueError(
+                    'gate decision owner approval is invalid: '
+                    + ','.join(approval.finding_codes)
+                )
+            if approval.passage:
+                return 'approved'
+            if decision in {'reject', 'rejected'} or status == 'rejected':
+                return 'rejected'
+            continue
+        if event_type in {'human_gate_rejected', 'human_gate_rejection'}:
+            return 'rejected'
+        if event_type in {
+            'human_gate_launched',
+            'human_gate_changes_requested',
+            'human_gate_postlaunch_evidence',
+        } and (decision.startswith('pending') or status.startswith('pending')):
+            return 'pending'
+
+    formal_decision = str(parse_frontmatter(cr_text).get('approval_result') or '').lower()
+    return {
+        'approve': 'approved',
+        'approved': 'approved',
+        'reject': 'rejected',
+        'rejected': 'rejected',
+        'pending': 'pending',
+        'closed': 'closed',
+    }.get(formal_decision, 'n/a')
+
+
+def _load_summary_release_context(
+    project_root: Path,
+    cr_id: str,
+    *,
+    read_context: ReadContextProtocol | None,
+) -> tuple[str, dict[str, Any]] | None:
+    compact = cr_id.replace('-', '')
+    candidate_refs = (
+        f'process/release/RELEASE-CONTEXT-{compact}.yaml',
+        'process/release/RELEASE-CONTEXT.yaml',
+        f'process/release/RELEASE-CONTEXT-{compact}.json',
+    )
+    matches: list[tuple[str, dict[str, Any]]] = []
+    for logical_ref in candidate_refs:
+        path = _resolve_summary_owner_ref(project_root, logical_ref, read_context)
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError(f'release context owner path is unsafe: {logical_ref}')
+        if not path.is_file():
+            continue
+        text = (
+            path.read_text(encoding='utf-8')
+            if read_context is None
+            else read_context.read_text(logical_ref)
+        )
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = _load_compatible_yaml(text)
+        if not isinstance(payload, dict):
+            raise ValueError(f'release context owner is not an object: {logical_ref}')
+        if str(payload.get('cr_id') or '') == cr_id:
+            matches.append((logical_ref, payload))
+    if len(matches) > 1:
+        raise ValueError(f'multiple release context owners found for {cr_id}')
+    return matches[0] if matches else None
+
+
+def _follow_up_projection(
+    release_ref: str,
+    release_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    candidates: dict[str, dict[str, Any]] = {}
+    release_decision = str(release_context.get('release_decision') or '').upper()
+    publication_result = release_context.get('publication_result')
+    publication_result = publication_result if isinstance(publication_result, dict) else {}
+    publication_decision = str(publication_result.get('decision') or '').upper()
+    risk_disposition = publication_result.get('risk_disposition')
+    risk_disposition = risk_disposition if isinstance(risk_disposition, dict) else {}
+    fact_diff = release_context.get('fact_diff')
+    for raw in fact_diff if isinstance(fact_diff, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        status = str(raw.get('status') or '').upper()
+        decision_impact = str(raw.get('decision_impact') or '').upper()
+        candidate_id = str(raw.get('promise_ref') or raw.get('risk_ref') or '')
+        risk_ref = str(raw.get('risk_ref') or '')
+        evidence_refs = raw.get('evidence_refs')
+        evidence = [str(ref) for ref in evidence_refs] if isinstance(evidence_refs, list) else []
+        disposition = ''
+        if status == 'DEFERRED_FOLLOW_UP':
+            disposition = status
+        elif (
+            status == 'EXECUTED_NEGATIVE_RESULT'
+            and risk_ref
+            and decision_impact == 'READY_WITH_RISK'
+            and release_decision == 'READY_WITH_RISK'
+            and publication_decision == 'RELEASED'
+            and risk_disposition
+        ):
+            candidate_id = risk_ref
+            disposition = 'RISK_ACCEPTED_FOR_RELEASE'
+        if not candidate_id or not disposition:
+            continue
+        if not _SUMMARY_CANDIDATE_ID_RE.fullmatch(candidate_id):
+            raise ValueError(f'follow-up disposition candidate id is invalid: {candidate_id}')
+        if risk_ref and not _SUMMARY_CANDIDATE_ID_RE.fullmatch(risk_ref):
+            raise ValueError(f'follow-up disposition risk ref is invalid: {risk_ref}')
+        if not evidence:
+            raise ValueError(f'follow-up disposition evidence is missing: {candidate_id}')
+        if any(not is_safe_ref(ref, prefix='process') for ref in evidence):
+            raise ValueError(f'follow-up disposition evidence ref is invalid: {candidate_id}')
+        candidate = {
+            'candidate_id': candidate_id,
+            'disposition': disposition,
+            'risk_ref': risk_ref or None,
+            'evidence_refs': evidence,
+            'source_ref': release_ref,
+        }
+        if candidate_id in candidates:
+            raise ValueError(f'follow-up disposition candidate is duplicated: {candidate_id}')
+        candidates[candidate_id] = candidate
+    return [candidates[key] for key in sorted(candidates)]
+
+
+def validate_summary_semantics(
+    project_root: Path,
+    cr_id: str,
+    summary: dict[str, Any],
+    *,
+    read_context: ReadContextProtocol | None = None,
+) -> list[str]:
+    findings: list[str] = []
+    decision_status = str(summary.get('decision_status') or 'n/a').lower()
+    if decision_status not in DECISION_STATUSES:
+        findings.append(f'invalid decision_status: {decision_status}')
+    if 'decision_status' in summary:
+        formal_ref = summary.get('full_ref')
+        if not isinstance(formal_ref, str) or not is_safe_ref(
+            formal_ref,
+            prefix='process',
+        ):
+            findings.append('decision_status has no valid formal CR owner ref')
+        else:
+            formal_path = _resolve_summary_owner_ref(
+                project_root,
+                formal_ref,
+                read_context,
+            )
+            if not formal_path.is_file():
+                findings.append('decision_status formal CR owner is missing')
+            else:
+                formal_text = (
+                    formal_path.read_text(encoding='utf-8')
+                    if read_context is None
+                    else read_context.read_text(formal_ref)
+                )
+                expected_decision_status = _decision_status_from_owners(
+                    project_root,
+                    cr_id,
+                    formal_text,
+                    read_context=read_context,
+                )
+                if decision_status != expected_decision_status:
+                    findings.append('decision_status diverges from its gate decision owner')
+    if str(summary.get('status') or '').lower() == 'closed' and decision_status == 'pending':
+        findings.append('closed CR cannot have decision_status=pending')
+    candidates = summary.get('followup_candidates')
+    if candidates is not None and not isinstance(candidates, list):
+        findings.append('followup_candidates must be a list when present')
+        candidates = []
+    tracking_ref = str(summary.get('follow_up_tracking_ref') or '')
+    owner = _load_summary_release_context(
+        project_root,
+        cr_id,
+        read_context=read_context,
+    )
+    if owner is None:
+        if candidates or tracking_ref:
+            findings.append('follow-up projection has no release/disposition owner')
+        return findings
+    release_ref, release_context = owner
+    expected_candidates = _follow_up_projection(release_ref, release_context)
+    follow_up_summary = release_context.get('follow_up_summary')
+    fact_diff = release_context.get('fact_diff')
+    release_has_follow_up = bool(follow_up_summary) or bool(expected_candidates) or any(
+        isinstance(item, dict)
+        and str(item.get('status') or '').upper() == 'DEFERRED_FOLLOW_UP'
+        for item in fact_diff if isinstance(fact_diff, list)
+    )
+    if release_has_follow_up and not candidates and not tracking_ref:
+        findings.append('release follow-up has no disposition or tracking ref')
+    if tracking_ref and tracking_ref != release_ref:
+        findings.append('follow_up_tracking_ref does not identify its release owner')
+    for candidate in candidates or []:
+        if not isinstance(candidate, dict):
+            findings.append('followup candidate must be an object')
+            continue
+        if set(candidate) != {
+            'candidate_id',
+            'disposition',
+            'risk_ref',
+            'evidence_refs',
+            'source_ref',
+        }:
+            findings.append('followup candidate fields mismatch')
+            continue
+        candidate_id = str(candidate.get('candidate_id') or '')
+        disposition = str(candidate.get('disposition') or '')
+        evidence_refs = candidate.get('evidence_refs')
+        risk_ref = candidate.get('risk_ref')
+        if (
+            not _SUMMARY_CANDIDATE_ID_RE.fullmatch(candidate_id)
+            or disposition not in SUMMARY_FOLLOW_UP_DISPOSITIONS
+            or not isinstance(evidence_refs, list)
+            or any(
+                not isinstance(ref, str) or not is_safe_ref(ref, prefix='process')
+                for ref in evidence_refs
+            )
+            or (
+                risk_ref is not None
+                and (
+                    not isinstance(risk_ref, str)
+                    or not _SUMMARY_CANDIDATE_ID_RE.fullmatch(risk_ref)
+                )
+            )
+            or candidate.get('source_ref') != release_ref
+        ):
+            findings.append('followup candidate is not traceable to its disposition owner')
+    if candidates is not None and candidates != expected_candidates:
+        findings.append('followup_candidates diverge from disposition owner')
+    if expected_candidates and tracking_ref != release_ref:
+        findings.append('owned follow-up candidates require their tracking ref')
+    return findings
 
 @dataclass(frozen=True)
 class NativeCRStatusProjectionV1:
@@ -359,7 +657,9 @@ def summary_from_cr_file(
     project_root: Path,
     path: Path,
     *,
+    status: str | None = None,
     readiness: str | None = None,
+    gate_status: str | None = None,
     read_context: ReadContextProtocol | None = None,
     text: str | None = None,
     rel_fn: Any | None = None,
@@ -378,7 +678,27 @@ def summary_from_cr_file(
         read_context=read_context,
         text=text,
     )
-    summary = {'id': record.cr_id, 'cr_type': record.cr_type, 'title': record.title, 'status': record.status, 'readiness': readiness or record.readiness, 'gate_status': record.gate_status, 'gate_profile': record.gate_profile, 'decision': 'pending', 'scope_summary': _section_summary(text, '## 变更描述') or [record.title], 'impact_surface': record.impact_surface, **_impact_split_payload(record), 'impact_capability_resolution': record.impact_capability_resolution, 'impact_capability_normalized': _normalized_capability_refs(record.impact_capability_resolution), 'conflict_keys': record.conflict_keys, 'remaining_risks': record.risk_refs, 'followup_candidates': [], 'authz_policy_refs': record.authz_policy_refs, 'goal_ref': record.goal_ref, 'goal_statement': record.goal_statement or _first_section_summary(text, '## 目标影响摘要'), 'user_goal_impact': record.user_goal_impact, 'split_rationale': record.split_rationale or _first_section_summary(text, '## 拆分理由'), 'why_not_merge_with_parent': record.why_not_merge_with_parent, 'why_not_story_or_task': record.why_not_story_or_task, 'approval_focus': record.approval_focus, 'decision_burden': record.decision_burden, 'approve_effect': record.approve_effect or _first_section_summary(text, '## approve 后果'), 'reject_effect': record.reject_effect, 'not_authorized_by_approve': record.not_authorized_by_approve or _section_summary(text, '## 不授权范围'), 'product_baseline_refresh_required': record.product_baseline_refresh_required, 'required_phase': record.required_phase, 'required_agent': record.required_agent, 'required_gate': record.required_gate, 'block_story_decomposition_until': record.block_story_decomposition_until, 'affected_product_docs': record.affected_product_docs, 'affected_use_cases': record.affected_use_cases, 'routing_design_ref': record.routing_design_ref, 'required_evidence': _record_required_evidence(record, text), 'required_capabilities': record.required_capabilities, 'full_ref': record.full_ref, 'evidence_index_ref': (CR_ARCHIVE_ROOT_REL / record.cr_id / 'evidence-index.json').as_posix(), 'updated_at': now_utc()}
+    projected_status = status or record.status
+    decision_status = _decision_status_from_owners(
+        project_root,
+        record.cr_id,
+        text,
+        read_context=read_context,
+    )
+    if projected_status == 'closed' and decision_status == 'pending':
+        raise ValueError('closed CR cannot have decision_status=pending')
+    release_owner = _load_summary_release_context(
+        project_root,
+        record.cr_id,
+        read_context=read_context,
+    )
+    summary = {'id': record.cr_id, 'cr_type': record.cr_type, 'title': record.title, 'status': projected_status, 'readiness': readiness or record.readiness, 'gate_status': gate_status or record.gate_status, 'gate_profile': record.gate_profile, 'decision_status': decision_status, 'scope_summary': _section_summary(text, '## 变更描述') or [record.title], 'impact_surface': record.impact_surface, **_impact_split_payload(record), 'impact_capability_resolution': record.impact_capability_resolution, 'impact_capability_normalized': _normalized_capability_refs(record.impact_capability_resolution), 'conflict_keys': record.conflict_keys, 'remaining_risks': record.risk_refs, 'authz_policy_refs': record.authz_policy_refs, 'goal_ref': record.goal_ref, 'goal_statement': record.goal_statement or _first_section_summary(text, '## 目标影响摘要'), 'user_goal_impact': record.user_goal_impact, 'split_rationale': record.split_rationale or _first_section_summary(text, '## 拆分理由'), 'why_not_merge_with_parent': record.why_not_merge_with_parent, 'why_not_story_or_task': record.why_not_story_or_task, 'approval_focus': record.approval_focus, 'decision_burden': record.decision_burden, 'approve_effect': record.approve_effect or _first_section_summary(text, '## approve 后果'), 'reject_effect': record.reject_effect, 'not_authorized_by_approve': record.not_authorized_by_approve or _section_summary(text, '## 不授权范围'), 'product_baseline_refresh_required': record.product_baseline_refresh_required, 'required_phase': record.required_phase, 'required_agent': record.required_agent, 'required_gate': record.required_gate, 'block_story_decomposition_until': record.block_story_decomposition_until, 'affected_product_docs': record.affected_product_docs, 'affected_use_cases': record.affected_use_cases, 'routing_design_ref': record.routing_design_ref, 'required_evidence': _record_required_evidence(record, text), 'required_capabilities': record.required_capabilities, 'full_ref': record.full_ref, 'evidence_index_ref': (CR_ARCHIVE_ROOT_REL / record.cr_id / 'evidence-index.json').as_posix(), 'updated_at': now_utc()}
+    if release_owner is not None:
+        release_ref, release_context = release_owner
+        follow_up_candidates = _follow_up_projection(release_ref, release_context)
+        if follow_up_candidates:
+            summary['followup_candidates'] = follow_up_candidates
+            summary['follow_up_tracking_ref'] = release_ref
     blockers, needs_review = collect_scope_authz_findings(record, text=text)
     summary['scope_authz_consistency'] = {'decision': 'BLOCKED' if blockers else 'NEEDS_REVIEW' if needs_review else 'PASS', 'blockers': blockers, 'needs_review': needs_review}
     governance_findings = collect_governance_dependency_findings(project_root, record)
@@ -508,6 +828,10 @@ def project_native_cr_status(project_root: Path, *, cr_id: str, resolve_runtime_
             findings.append('CR_SUMMARY_FORMAL_REF_DIVERGED')
         if summary_tuple != formal_tuple:
             findings.append('CR_SUMMARY_STATUS_DIVERGED')
+        findings.extend(
+            'CR_SUMMARY_SEMANTIC:' + finding
+            for finding in validate_summary_semantics(project_root, cr_id, summary)
+        )
     ledger_events = [event for event in load_ledger_events(project_root, resolve_runtime_ref_fn=resolve_runtime_ref) if str(event.get('id') or event.get('cr_id') or '') == cr_id and all((key in event for key in ('status', 'readiness', 'gate_status')))]
     ledger_event = ledger_events[-1] if ledger_events else None
     ledger_event_id = ''

@@ -19,11 +19,6 @@
 /docs/方案编写补充约定与个人偏好.md
 /docs/design
 /docs/features
-/docs/quality
-/docs/release/DEPLOY-CHECKLIST.md
-/docs/release/FEEDBACK.md
-/docs/release/MIGRATION.md
-/docs/release/ROLLBACK.md
 
 # Build artifacts
 build/

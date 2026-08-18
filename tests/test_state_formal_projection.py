@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from meta_flow.state import current, formal_projection
 
 
@@ -93,6 +95,39 @@ def test_projection_refresh_is_zero_write_then_transactionally_converges(
     assert "Phase: P1" in (tmp_path / "process/STATE.md").read_text(encoding="utf-8")
 
 
+def test_formal_snapshot_includes_direct_project_work(tmp_path: Path) -> None:
+    _formal_fixture(tmp_path)
+    project_path = tmp_path / "process/PROJECT.yaml"
+    project = json.loads(project_path.read_text(encoding="utf-8"))
+    project["active_work_refs"] = ["works/W-DIRECT/WORK.yaml"]
+    _write_json(project_path, project)
+    _write_json(
+        tmp_path / "process/works/W-DIRECT/WORK.yaml",
+        {
+            "schema_version": 1,
+            "work_id": "W-DIRECT",
+            "project_id": "fixture",
+            "status": "active",
+        },
+    )
+
+    snapshot = formal_projection.build_formal_truth_snapshot(tmp_path)
+
+    assert snapshot["active_work_ids"] == ["W-DIRECT"]
+    assert "process/works/W-DIRECT/WORK.yaml" in snapshot["source_refs"]
+
+
+def test_formal_snapshot_rejects_unsafe_direct_project_work_ref(tmp_path: Path) -> None:
+    _formal_fixture(tmp_path)
+    project_path = tmp_path / "process/PROJECT.yaml"
+    project = json.loads(project_path.read_text(encoding="utf-8"))
+    project["active_work_refs"] = ["works/../outside/WORK.yaml"]
+    _write_json(project_path, project)
+
+    with pytest.raises(ValueError, match="PROJECT work_ref is unsafe"):
+        formal_projection.build_formal_truth_snapshot(tmp_path)
+
+
 def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
     tmp_path: Path,
 ) -> None:
@@ -101,8 +136,8 @@ def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
     checkpoint_path = tmp_path / checkpoint_ref
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text("# CP2\n", encoding="utf-8")
-    state = current.load_current_state(tmp_path)
-    state.update(
+    current.update_current_state(
+        tmp_path,
         {
             "pending_gate": "CP2",
             "pending_checklist_path": checkpoint_ref,
@@ -111,10 +146,12 @@ def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
                 "text": "Review CP2.",
                 "stop_reason": "required_human_gate",
             },
-        }
+            "updated_at": current.now_utc(),
+        },
+        actor="tests.formal_projection",
+        reason="install pending human gate fixture through the transaction kernel",
+        mode="enforce",
     )
-    current.write_current_state(tmp_path, state, force=True)
-    current.render_state_file(tmp_path, force=True)
 
     refreshed = current.refresh_formal_truth_projection(tmp_path)
     errors, warnings = current.check_current_state(tmp_path, mode="enforce")

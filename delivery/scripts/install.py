@@ -44,6 +44,21 @@ from hashlib import sha256
 from importlib import metadata
 from pathlib import Path
 
+try:
+    from delivery.scripts.digest_policy import (
+        load_digest_policy_sidecar,
+        load_known_generated_refs,
+        observe_delivery_tree,
+        payload_exclusion_reason,
+    )
+except ModuleNotFoundError:  # standalone delivery checkout 以 scripts/ 为 sys.path
+    from digest_policy import (
+        load_digest_policy_sidecar,
+        load_known_generated_refs,
+        observe_delivery_tree,
+        payload_exclusion_reason,
+    )
+
 VALID_PLATFORMS = ("claude", "codex", "openclaw", "qoder")
 PLATFORM_ALIASES = {"claude-code": "claude", "qoder-cli": "qoder", "qodercli": "qoder"}
 VALID_SCOPES = ("project", "user")
@@ -641,21 +656,7 @@ def source_worktree_clean(root: Path) -> bool | None:
 
 
 def source_delivery_tree_digest(root: Path) -> str:
-    delivery = root / "delivery" if (root / "delivery").is_dir() else root
-    records = {
-        (Path("delivery") / path.relative_to(delivery)).as_posix(): sha256(
-            path.read_bytes()
-        ).hexdigest()
-        for path in sorted(delivery.rglob("*"))
-        if path.is_file() and not path.is_symlink()
-    }
-    rendered = json.dumps(
-        records,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return sha256(rendered).hexdigest()
+    return observe_delivery_tree(root).included_manifest_digest
 
 
 def capability_profile_digest(root: Path) -> str:
@@ -666,19 +667,18 @@ def capability_profile_digest(root: Path) -> str:
     return sha256(contract.read_bytes()).hexdigest()
 
 
-def _is_generated_distribution_file(relative: Path) -> bool:
-    rendered = relative.as_posix()
-    if "__pycache__" in relative.parts or relative.suffix == ".pyc":
-        return True
-    if ".dist-info/" not in rendered:
-        return False
-    return relative.name in {
-        "INSTALLER",
-        "RECORD",
-        "REQUESTED",
-        "direct_url.json",
-        "uv_cache.json",
-    }
+def _is_generated_distribution_file(
+    relative: Path,
+    *,
+    known_generated_refs: tuple[str, ...] = (),
+) -> bool:
+    return (
+        payload_exclusion_reason(
+            relative.as_posix(),
+            known_generated_refs=known_generated_refs,
+        )
+        is not None
+    )
 
 
 def installed_distribution_payload_digest(distribution_name: str = "meta-flow") -> str:
@@ -689,13 +689,20 @@ def installed_distribution_payload_digest(distribution_name: str = "meta-flow") 
     except metadata.PackageNotFoundError:
         return ""
     root = Path(distribution.locate_file(".")).resolve()
+    delivery = root / "delivery"
+    known_generated_refs = (
+        load_known_generated_refs(delivery) if delivery.is_dir() else ()
+    )
     records: dict[str, str] = {}
     for item in distribution.files or ():
         relative = Path(str(item))
         if (
             relative.is_absolute()
             or ".." in relative.parts
-            or _is_generated_distribution_file(relative)
+            or _is_generated_distribution_file(
+                relative,
+                known_generated_refs=known_generated_refs,
+            )
         ):
             continue
         candidate = Path(distribution.locate_file(item)).resolve()
@@ -735,7 +742,7 @@ def distribution_version(root: Path) -> str:
 def load_provider_receipt_facts(path_value: str) -> dict[str, object]:
     if not path_value:
         return {}
-    path = Path(path_value).expanduser().resolve()
+    path = Path(os.path.abspath(Path(path_value).expanduser()))
     if not path.is_file() or path.is_symlink():
         fail("META_FLOW_PROVIDER_RECEIPT 必须指向普通文件。")
     try:
@@ -795,6 +802,16 @@ def load_provider_receipt_facts(path_value: str) -> dict[str, object]:
         fail("META_FLOW_PROVIDER_RECEIPT digest 不匹配。")
     if payload["release_qualifying"] == payload["source_dirty"]:
         fail("META_FLOW_PROVIDER_RECEIPT release qualification 不一致。")
+    try:
+        _sidecar, sidecar_warnings = load_digest_policy_sidecar(
+            path,
+            expected_included_manifest_digest=payload["source_tree_digest"],
+            allow_missing=True,
+        )
+    except ValueError as exc:
+        fail(f"META_FLOW_PROVIDER_RECEIPT digest policy sidecar 非法: {exc}")
+    for warning in sidecar_warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
     return payload
 
 

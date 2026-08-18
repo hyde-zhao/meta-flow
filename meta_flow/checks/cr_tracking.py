@@ -1171,6 +1171,30 @@ def collect_errors_and_warnings(
             )
         if cr.native and cr.lifecycle_status in {"active", "blocked"}:
             errors.extend(validate_native_evidence_projection(project_root, cr))
+        if cr.native:
+            summary_ref = f"process/changes/summaries/{cr.cr_id}.summary.json"
+            summary_path = _resolve_runtime_ref(project_root, summary_ref)
+            if summary_path.is_file():
+                try:
+                    summary = json.loads(read_text(summary_path))
+                    if not isinstance(summary, dict):
+                        raise ValueError("summary must be a JSON object")
+                    # Local import avoids reversing the canonical
+                    # cr_projection -> cr_tracking ownership dependency.
+                    from meta_flow.workflow.cr_projection import (
+                        validate_summary_semantics,
+                    )
+
+                    errors.extend(
+                        f"{summary_ref} {cr.cr_id} {finding}"
+                        for finding in validate_summary_semantics(
+                            project_root,
+                            cr.cr_id,
+                            summary,
+                        )
+                    )
+                except (json.JSONDecodeError, OSError, ValueError) as exc:
+                    errors.append(f"{summary_ref} {cr.cr_id} summary semantic check failed: {exc}")
 
     top_refs = [ref for ref in state_refs if ref.key == "active_change" and ref.value]
     nested_refs = [

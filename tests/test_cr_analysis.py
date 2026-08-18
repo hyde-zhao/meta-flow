@@ -116,6 +116,43 @@ def write_impact_rules(root: Path, rules: list[dict[str, str | bool]]) -> Path:
 
 
 class CRAnalysisTests(unittest.TestCase):
+    def test_cr_check_rejects_release_follow_up_without_summary_disposition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_feature_registry(root)
+            write_capability_registry(root)
+            cr_path = write_cr(root, "CR-101")
+            summary = cr_projection.summary_from_cr_file(root, cr_path)
+            summary.pop("decision_status", None)
+            summary["decision"] = "pending"
+            summary["followup_candidates"] = []
+            cr_projection.write_summary(root, "CR-101", summary)
+            cr_index.write_index(root)
+            release_path = _resolve_runtime_ref(
+                root,
+                "process/release/RELEASE-CONTEXT-CR101.yaml",
+            )
+            release_path.parent.mkdir(parents=True, exist_ok=True)
+            release_path.write_text(
+                json.dumps(
+                    {
+                        "cr_id": "CR-101",
+                        "release_decision": "READY_WITH_RISK",
+                        "follow_up_summary": ["untracked follow-up"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            errors = cr_analysis.collect_check_errors(root)
+
+            self.assertIn(
+                "process/changes/summaries/CR-101.summary.json CR-101 "
+                "release follow-up has no disposition or tracking ref",
+                errors,
+            )
+
     def test_exact_inventory_and_dependency_boundary(self) -> None:
         source = Path(cr_analysis.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)

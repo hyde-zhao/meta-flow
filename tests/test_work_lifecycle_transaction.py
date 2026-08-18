@@ -405,6 +405,66 @@ def test_apply_commits_work_and_project_under_one_consumed_authorization(
     assert inspect_work_close_transactions(process)["decision"] == "PASS"
 
 
+def test_direct_project_work_close_atomically_refreshes_initialized_state(
+    tmp_path: Path,
+) -> None:
+    release, process, _phase = _governance_fixture(tmp_path)
+    work = make_work(process)
+    apply_work_init(plan_work_init_from_release_root(release, work))
+    update_work_status(
+        process,
+        work.work_id,
+        expected_status="planned",
+        new_status="active",
+    )
+    result_ref = "works/W-001/RESULT.json"
+    (process / result_ref).write_text(
+        json.dumps({"schema_version": 1, "work_id": "W-001", "decision": "PASS"})
+        + "\n",
+        encoding="utf-8",
+    )
+    _enable_state_projection(release, process)
+    state_before = state_current.load_current_state(release)["formal_truth_projection"]
+
+    plan = plan_work_close(
+        process,
+        "W-001",
+        expected_status="active",
+        outcome="completed",
+        result_ref=result_ref,
+    )
+
+    assert plan.ready, plan.blockers
+    assert [target.ref for target in plan.targets] == [
+        "works/W-001/WORK.yaml",
+        "PROJECT.yaml",
+        "state/STATE.current.json",
+        "STATE.md",
+    ]
+    receipt = apply_work_close(
+        process,
+        plan,
+        _authorization(plan, "close-direct-with-state"),
+    )
+
+    assert receipt.decision == "PASS"
+    assert receipt.mutation_count == 4
+    state_after = state_current.load_current_state(release)["formal_truth_projection"]
+    assert state_after["active_work_ids"] == []
+    assert state_after["source_digest"] != state_before["source_digest"]
+    errors, _warnings = state_current.check_current_state(release, mode="enforce")
+    assert errors == []
+    retry = plan_work_close(
+        process,
+        "W-001",
+        expected_status="active",
+        outcome="completed",
+        result_ref=result_ref,
+    )
+    assert retry.ready
+    assert retry.targets == ()
+
+
 def test_stale_or_retargeted_authorization_blocks_before_writer(tmp_path: Path) -> None:
     _release, process, result_ref = _active_fixture(tmp_path)
     plan = plan_work_close(

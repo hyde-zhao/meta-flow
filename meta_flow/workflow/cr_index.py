@@ -68,15 +68,20 @@ def load_terminal_predecessor_inventory(
 
 def rebuild_scope_amend_index(revision: dict[str, Any]) -> dict[str, Any]:
     """A deterministic derived projection, never a separately editable truth."""
-    required = {
+    required_v2 = {
         'schema_version', 'cr_id', 'work_id', 'revision_id',
         'predecessor_revision_id', 'predecessor_revision_bytes_digest',
         'scope_digest', 'previous_scope', 'scope', 'invalidated_refs',
         'plan_digest', 'validation_graph_digest',
     }
-    if set(revision) != required or revision.get('schema_version') != 2:
+    required_v3 = required_v2 | {'previous_objective', 'objective'}
+    schema_version = revision.get('schema_version')
+    if not (
+        (schema_version == 2 and set(revision) == required_v2)
+        or (schema_version == 3 and set(revision) == required_v3)
+    ):
         raise ValueError('INVALID_SCOPE_AMEND_REVISION')
-    return {
+    index = {
         'cr_id': revision['cr_id'],
         'work_id': revision['work_id'],
         'revision_id': revision['revision_id'],
@@ -85,6 +90,15 @@ def rebuild_scope_amend_index(revision: dict[str, Any]) -> dict[str, Any]:
         'validation_graph_digest': revision['validation_graph_digest'],
         'predecessor_revision_id': revision['predecessor_revision_id'],
     }
+    if schema_version == 3:
+        index['objective'] = revision['objective']
+        index['objective_transition_digest'] = _canonical_digest(
+            {
+                'previous_objective': revision['previous_objective'],
+                'objective': revision['objective'],
+            }
+        )
+    return index
 
 def _cr_numeric_sort_key(cr_id: str) -> tuple[int, str]:
     match = re.fullmatch('CR-(\\d+)', cr_id)
@@ -372,7 +386,16 @@ def bootstrap_cr(
     cp0_result_path = _write_cp0_result(project_root, cr_id, context_ref)
     cp0_summary_path = cp0_result_path.with_suffix('.summary.md')
     from meta_flow.checks import cp_result
-    cp0_summary_path.write_text(cp_result.render_summary(json.loads(cp0_result_path.read_text(encoding='utf-8'))), encoding='utf-8')
+    if cp0_summary_path.exists() or cp0_summary_path.is_symlink():
+        raise FileExistsError(
+            f'bootstrap CP0 summary target already exists: {cp0_summary_path}'
+        )
+    _atomic_write_text(
+        cp0_summary_path,
+        cp_result.render_summary(
+            json.loads(cp0_result_path.read_text(encoding='utf-8'))
+        ),
+    )
     ledger_path = append_ledger_event(project_root, {'event': 'active', 'id': cr_id, 'cr_type': summary.get('cr_type'), 'status': 'active', 'readiness': summary.get('readiness'), 'summary_ref': rel(project_root, summary_path), 'full_ref': summary.get('full_ref'), 'evidence_index_ref': rel(project_root, evidence_path), 'context_ref': context_ref, 'cp0_result_ref': rel(project_root, cp0_result_path), 'created_at': now_utc()})
     return {'cr': cr_path, 'summary': summary_path, 'evidence_index': evidence_path, 'index': index_path, 'context': context_path, 'cp0_result': cp0_result_path, 'cp0_summary': cp0_summary_path, 'ledger': ledger_path}
 

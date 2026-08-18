@@ -101,7 +101,28 @@ def test_work_wire_adds_optional_closed_execution_unit_without_rewriting_history
 
     formal_cr = _work(unit).as_dict()
     formal_cr["kind"] = "cr"
-    assert "execution_unit" in {finding.code for finding in validate_work_payload(formal_cr)}
+    # A0-KIND-CR-EXECUTION-UNIT-ADR-V1：CR 是合法 execution envelope，
+    # scope-amend 的真实 successor Work 已依赖该组合，不能由旧测试反向禁止。
+    assert validate_work_payload(formal_cr) == []
+    assert work_from_payload(formal_cr).execution_unit == unit
+
+
+@pytest.mark.parametrize("kind", ["work", "cr"])
+def test_work_validator_and_admission_share_execution_envelope_kind_domain(
+    kind: str,
+) -> None:
+    unit = _unit("W-001")
+    payload = _work(unit).as_dict()
+    payload["kind"] = kind
+
+    assert validate_work_payload(payload) == []
+    assert work_from_payload(payload).execution_unit == unit
+    assert plan_admission(
+        unit,
+        (),
+        ContainerBudgetV1.policy_v1(),
+        _facts(),
+    ).decision == "READY"
 
 
 def test_cli_requires_complete_identity_contract_and_has_no_policy_override() -> None:
