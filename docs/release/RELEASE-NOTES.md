@@ -4,7 +4,7 @@ release_scope: "meta-flow-0.6.0-candidate"
 release_artifact_profile: "full"
 release_decision: "NOT_READY"
 created_at: "2026-06-17T13:49:25+08:00"
-updated_at: "2026-08-17T19:55:35+08:00"
+updated_at: "2026-08-18T09:56:27+08:00"
 ---
 
 # Release Notes
@@ -43,12 +43,13 @@ updated_at: "2026-08-17T19:55:35+08:00"
 | 1.27-candidate | 2026-08-17 | Codex | 0.6.0 Integrity Stabilization 候选：跨对象生命周期同源收敛、typed projection correction、summary owner、闭合 digest policy、scope/objective successor amendment 与结构化错误边界；等待最终 qualification、clean artifact build、canary 和发布门。 |
 | 1.28-candidate | 2026-08-17 | Codex | R4/R4a 修复 root dotfile scope admission，使 canonical quality/release 文档成为普通 tracked candidates；此前 qualification 因后续源码变化失效，发布继续保持 NOT_READY。 |
 | 1.29-candidate | 2026-08-17 | Codex | final detector requalification 完成：407/407 classified、45/45 incremental dynamic allowlisted、0 unresolved，guardrail 与 2635 项完整回归全绿；继续等待 clean artifact 证据。 |
+| 1.30-candidate | 2026-08-18 | Codex | 双仓 source-freeze 前置提交已成对推送且工作树 clean/synced；本次只收敛过时发布事实，最终 product OID 在该 evidence commit 后捕获，再进入隔离 artifact build、provider qualification 与 canary。 |
 
 ## 0.6.0 发布切片（候选）
 
 ### 当前结论
 
-`0.6.0` 是 MINOR 候选，不是 PATCH。它新增公共操作和 manifest/schema 版本，收紧旧 writer 行为，并修复跨对象真相、summary owner、release digest 与路由错误边界。当前 `release_decision=NOT_READY`：final detector qualification、delivery guardrail 与完整回归已全绿，但 clean source commit、provider artifact qualification、artifact build、isolated canary 和人工发布门尚未完成。
+`0.6.0` 是 MINOR 候选，不是 PATCH。它新增公共操作和 manifest/schema 版本，收紧旧 writer 行为，并修复跨对象真相、summary owner、release digest 与路由错误边界。当前 `release_decision=NOT_READY`：clean source commit、final detector qualification、delivery guardrail 与完整回归已完成；provider artifact qualification、artifact build、isolated canary 和人工发布门尚未完成。
 
 | 项 | 候选结果 |
 |---|---|
@@ -64,7 +65,7 @@ updated_at: "2026-08-17T19:55:35+08:00"
 - 从 0.5.3 升级必须整体替换 writer、inspector 和 detector baseline；不支持同一过程仓的新旧 writer 混用。
 - 0.6.0 reader 可读取热修期间的 V1 correction manifest；0.5.3 reader 对新 V2 correction manifest 返回 `BLOCKED / INVALID`。
 - 若 0.6.0 尚未对过程仓执行任何新 writer，可回退程序版本；一旦产生 V2 correction 或其他 0.6.0-only 事务，回退前必须按 `docs/release/ROLLBACK.md` 使用升级前快照和同版本 inspect 验证，禁止直接运行 0.5.3 writer。
-- 本候选不授权 commit、push、tag、GitHub Release、PyPI、外部 consumer 安装、真实生产写、凭据或任何 correction apply。
+- 双仓前置 commit/push 已执行；本轮允许完成发布事实 evidence commit/push、隔离 artifact build、provider qualification 与 canary，仍不授权 tag、GitHub Release、PyPI、外部 consumer 安装、真实生产写、凭据或任何 correction apply。
 
 ### 验证摘要（qualification 前）
 

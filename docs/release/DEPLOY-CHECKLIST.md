@@ -22,6 +22,7 @@ release_decision: NOT_READY
 | 检查 | 当前状态 | 放行条件 |
 |---|---|---|
 | 版本三真相 | PASS | pyproject、runtime version、uv.lock 均为 0.6.0 |
+| 双仓 source freeze preflight | PASS | 前置提交已成对推送且 clean/synced；最终 product OID 在本次 evidence commit 后捕获并用于 artifact qualification |
 | canonical quality/release docs tracking | PASS | 六个 canonical 文件不再被 `.gitignore` 吞掉；未使用 `git add -f` |
 | detector full/incremental gate | PASS | full 407/407 classified、0 ambiguous；incremental dynamic 45/45 allowlisted、0 unresolved、findings=[] |
 | provider qualification | PENDING | clean checkout，receipt + digest sidecar 原子生成 |
@@ -41,4 +42,4 @@ release_decision: NOT_READY
 
 ## 不授权项
 
-本清单不授权 provider artifact qualification、commit、push、tag、GitHub Release、PyPI、真实安装、外部 consumer mutation、凭据读取或生产写。CP8 readiness 也不等于 `RELEASED`。
+双仓前置 commit/push 已执行；本轮允许完成发布事实 evidence commit/push、隔离 artifact build、provider qualification 与 canary。仍不授权 tag、GitHub Release、PyPI、真实安装、外部 consumer mutation、凭据读取或生产写；CP8 readiness 也不等于 `RELEASED`。

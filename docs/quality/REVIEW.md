@@ -2,7 +2,7 @@
 status: pass_pending_artifact
 version: "0.6.0-candidate"
 release_decision: NOT_READY
-updated_at: "2026-08-17T19:55:35+08:00"
+updated_at: "2026-08-18T09:56:27+08:00"
 ---
 
 # 0.6.0 Quality Review
@@ -14,7 +14,7 @@ updated_at: "2026-08-17T19:55:35+08:00"
 | REV-060-001 | HIGH | CLOSED | 0.5.3 曾静默接受 V1 correction provenance；新 writer 改为 V2 manifest identity，真实旧 inspector 返回 `BLOCKED / INVALID` |
 | REV-060-002 | HIGH | CLOSED | Work objective 固定 0.5.5；新增向后兼容的 scope-amend V2 typed objective replacement，R3 原生事务已收敛 Work/State/CURRENT |
 | REV-060-003 | RELEASE BLOCKING | CLOSED | R4a 后重新冻结 source baseline；407/407 writer 全部分类、0 ambiguous，incremental dynamic 45/45 allowlisted、0 unresolved，guardrail 与完整回归恢复全绿 |
-| REV-060-004 | RELEASE BLOCKING | OPEN | provider release receipt 需要 clean checkout；commit、build、canary、tag/release 均尚未授权或执行 |
+| REV-060-004 | RELEASE BLOCKING | OPEN | 双仓 clean 前置提交已成对推送；本轮允许完成发布事实 evidence commit/push 与 provider build/qualification/canary，但均尚未执行，tag/GitHub Release 仍未授权 |
 | REV-060-005 | CONTRACT DEFECT | CLOSED | `ScopeAmendAuthorizationV1` 接受 `.gitignore`，但 `ScopeDeltaV1` 首字符规则误拒绝根级 dotfile；R4a 统一安全 leaf 语义并增加正负向/真实事务测试，R4 原生 successor 已 COMMITTED |
 
 ## 设计与实现审查
