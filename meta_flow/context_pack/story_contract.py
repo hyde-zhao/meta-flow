@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from fnmatch import fnmatch
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -84,6 +85,53 @@ _CANONICAL_DEV_GATE_FIELDS = (
     "implementation_authorized",
     "lld_confirmed",
 )
+_PRODUCTION_PATH_CONTRACT_FIELDS = {
+    "schema_version",
+    "story_id",
+    "work_id",
+    "feature_design_refs",
+    "lld_ref",
+    "production_entrypoints",
+    "reachable_core_paths",
+    "public_operation_ids",
+    "mutation_mode",
+    "authorization_refs",
+    "receipt_refs",
+    "zero_write_proof_refs",
+    "targeted_test_refs",
+    "negative_test_refs",
+    "compatibility_test_refs",
+    "output_evidence_contract",
+    "file_ownership_digest",
+    "contract_digest",
+}
+_PRODUCTION_PATH_DECLARATION_FIELDS = {
+    "schema_version",
+    "production_entrypoints",
+    "reachable_core_paths",
+    "public_operation_ids",
+    "mutation_mode",
+    "authorization_refs",
+    "receipt_refs",
+    "zero_write_proof_refs",
+    "targeted_test_refs",
+    "negative_test_refs",
+    "compatibility_test_refs",
+    "output_evidence_contract",
+}
+_NON_PRODUCTION_PATH_PARTS = {
+    "__pycache__",
+    "doc",
+    "docs",
+    "fixture",
+    "fixtures",
+    "helper",
+    "helpers",
+    "template",
+    "templates",
+    "test",
+    "tests",
+}
 
 
 def _frontmatter(text: str) -> str:
@@ -184,6 +232,189 @@ def _stable_unique(values: list[str]) -> list[str]:
         if value not in result:
             result.append(value)
     return result
+
+
+def _canonical_string_list(value: Any, *, field: str) -> list[str]:
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, str) or not item.strip() or item != item.strip()
+        for item in value
+    ):
+        raise ValueError(f"ProductionPathContractV1 {field} must be a string list")
+    return sorted(set(value))
+
+
+def _is_production_python_path(value: str) -> bool:
+    if (
+        not value.endswith(".py")
+        or value.startswith("/")
+        or "\\" in value
+        or "://" in value
+    ):
+        return False
+    parts = value.split("/")
+    return bool(parts) and all(
+        part not in {"", ".", ".."} and part.lower() not in _NON_PRODUCTION_PATH_PARTS
+        for part in parts
+    )
+
+
+def validate_production_path_contract(
+    contract: Mapping[str, Any],
+    *,
+    ownership_primary: tuple[str, ...] | list[str] = (),
+    registry_operations: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> tuple[str, ...]:
+    """校验 closed production-path 合同；错误码供 CP6 直接 fail-closed。"""
+
+    errors: list[str] = []
+    if set(contract) != _PRODUCTION_PATH_CONTRACT_FIELDS:
+        return ("PRODUCTION_CONTRACT_FIELDS_MISMATCH",)
+    if contract.get("schema_version") != 1:
+        errors.append("PRODUCTION_CONTRACT_SCHEMA_INVALID")
+    for field in ("story_id", "work_id", "lld_ref", "output_evidence_contract"):
+        value = contract.get(field)
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            errors.append(f"PRODUCTION_CONTRACT_{field.upper()}_INVALID")
+    list_fields = (
+        "feature_design_refs",
+        "production_entrypoints",
+        "reachable_core_paths",
+        "public_operation_ids",
+        "authorization_refs",
+        "receipt_refs",
+        "zero_write_proof_refs",
+        "targeted_test_refs",
+        "negative_test_refs",
+        "compatibility_test_refs",
+    )
+    normalized_lists: dict[str, list[str]] = {}
+    for field in list_fields:
+        value = contract.get(field)
+        if (
+            not isinstance(value, list)
+            or any(not isinstance(item, str) or not item for item in value)
+            or value != sorted(set(value))
+        ):
+            errors.append(f"PRODUCTION_CONTRACT_{field.upper()}_INVALID")
+            normalized_lists[field] = []
+        else:
+            normalized_lists[field] = value
+
+    entrypoints = normalized_lists["production_entrypoints"]
+    core_paths = normalized_lists["reachable_core_paths"]
+    if not entrypoints or not core_paths or any(
+        not _is_production_python_path(path) for path in (*entrypoints, *core_paths)
+    ):
+        errors.append("PRODUCTION_PATH_UNREACHABLE")
+    primary = set(ownership_primary)
+    if primary and not primary.intersection(core_paths):
+        errors.append("PRODUCTION_CORE_OUTSIDE_PRIMARY_OWNERSHIP")
+
+    if not all(
+        normalized_lists[field]
+        for field in ("targeted_test_refs", "negative_test_refs", "compatibility_test_refs")
+    ):
+        errors.append("PRODUCTION_TEST_EVIDENCE_MISSING")
+    mutation_mode = contract.get("mutation_mode")
+    if mutation_mode == "mutating":
+        if not normalized_lists["authorization_refs"]:
+            errors.append("MUTATION_AUTHORIZATION_MISSING")
+        if not normalized_lists["receipt_refs"]:
+            errors.append("MUTATION_RECEIPT_MISSING")
+    elif mutation_mode == "zero-write":
+        if not normalized_lists["zero_write_proof_refs"]:
+            errors.append("ZERO_WRITE_PROOF_MISSING")
+    else:
+        errors.append("PRODUCTION_MUTATION_MODE_INVALID")
+
+    operation_ids = normalized_lists["public_operation_ids"]
+    if registry_operations is not None:
+        registered = set(registry_operations)
+        if any(operation_id not in registered for operation_id in operation_ids):
+            errors.append("PUBLIC_OPERATION_UNREGISTERED")
+    if any(not re.fullmatch(r"[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+", item) for item in operation_ids):
+        errors.append("PUBLIC_OPERATION_ID_INVALID")
+
+    ownership_digest = contract.get("file_ownership_digest")
+    if not isinstance(ownership_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", ownership_digest):
+        errors.append("OWNERSHIP_DIGEST_INVALID")
+    contract_digest = contract.get("contract_digest")
+    if not isinstance(contract_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", contract_digest):
+        errors.append("CONTRACT_DIGEST_INVALID")
+    else:
+        expected = canonical_digest(
+            {key: value for key, value in contract.items() if key != "contract_digest"}
+        )
+        if contract_digest != expected:
+            errors.append("CONTRACT_DIGEST_MISMATCH")
+    return tuple(sorted(set(errors)))
+
+
+def build_production_path_contract(
+    story: Mapping[str, Any],
+    *,
+    ownership_digest: str,
+    registry_operations: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> dict[str, Any]:
+    """从 Story 声明与 native ownership 构造稳定的 ProductionPathContractV1。"""
+
+    declaration = story.get("production_contract")
+    if not isinstance(declaration, Mapping):
+        raise ValueError("PRODUCTION_CONTRACT_MISSING")
+    if set(declaration) != _PRODUCTION_PATH_DECLARATION_FIELDS:
+        raise ValueError("PRODUCTION_CONTRACT_DECLARATION_FIELDS_MISMATCH")
+    ownership = story.get("file_ownership")
+    ownership = ownership if isinstance(ownership, Mapping) else {}
+    lld_gate = story.get("lld_gate")
+    lld_gate = lld_gate if isinstance(lld_gate, Mapping) else {}
+    contract: dict[str, Any] = {
+        "schema_version": declaration.get("schema_version"),
+        "story_id": str(story.get("story_id") or ""),
+        "work_id": str(story.get("work_id") or ""),
+        "feature_design_refs": _canonical_string_list(
+            story.get("feature_design_refs"), field="feature_design_refs"
+        ),
+        "lld_ref": str(lld_gate.get("evidence_ref") or ""),
+        "production_entrypoints": _canonical_string_list(
+            declaration.get("production_entrypoints"), field="production_entrypoints"
+        ),
+        "reachable_core_paths": _canonical_string_list(
+            declaration.get("reachable_core_paths"), field="reachable_core_paths"
+        ),
+        "public_operation_ids": _canonical_string_list(
+            declaration.get("public_operation_ids"), field="public_operation_ids"
+        ),
+        "mutation_mode": str(declaration.get("mutation_mode") or ""),
+        "authorization_refs": _canonical_string_list(
+            declaration.get("authorization_refs"), field="authorization_refs"
+        ),
+        "receipt_refs": _canonical_string_list(
+            declaration.get("receipt_refs"), field="receipt_refs"
+        ),
+        "zero_write_proof_refs": _canonical_string_list(
+            declaration.get("zero_write_proof_refs"), field="zero_write_proof_refs"
+        ),
+        "targeted_test_refs": _canonical_string_list(
+            declaration.get("targeted_test_refs"), field="targeted_test_refs"
+        ),
+        "negative_test_refs": _canonical_string_list(
+            declaration.get("negative_test_refs"), field="negative_test_refs"
+        ),
+        "compatibility_test_refs": _canonical_string_list(
+            declaration.get("compatibility_test_refs"), field="compatibility_test_refs"
+        ),
+        "output_evidence_contract": str(declaration.get("output_evidence_contract") or ""),
+        "file_ownership_digest": ownership_digest,
+    }
+    contract["contract_digest"] = canonical_digest(contract)
+    errors = validate_production_path_contract(
+        contract,
+        ownership_primary=_as_list(ownership.get("primary")),
+        registry_operations=registry_operations,
+    )
+    if errors:
+        raise ValueError(",".join(errors))
+    return contract
 
 
 def _as_mapping_summary(value: Any) -> str:
@@ -478,6 +709,12 @@ def _projected_story_contract(
     projected = _normalize_story_card_v1(story, story_text)
     ownership = plan_story.get("file_ownership")
     ownership = ownership if isinstance(ownership, dict) else {}
+    projected["file_ownership"] = ownership
+    plan_lld_gate = plan_story.get("lld_gate")
+    if isinstance(plan_lld_gate, dict):
+        projected["lld_gate"] = plan_lld_gate
+    if plan_story.get("work_id"):
+        projected["work_id"] = str(plan_story["work_id"])
     dependencies = plan_story.get("dependency_type")
     dependencies = dependencies if isinstance(dependencies, list) else []
     if not projected.get("feature_contract_summary"):
@@ -948,6 +1185,24 @@ def build_story_packet(
             "estimator": "chars_div_4",
         },
     }
+    production_declaration = story.get("production_contract")
+    if (
+        stage == "CP6"
+        and isinstance(production_declaration, Mapping)
+        and production_declaration.get("schema_version") == 1
+    ):
+        from meta_flow.policies.public_operations import load_public_operation_registry
+
+        registry_operations = {
+            contract.operation for contract in load_public_operation_registry(project_root)
+        }
+        ownership = story.get("file_ownership")
+        ownership = ownership if isinstance(ownership, Mapping) else {}
+        packet["production_path_contract"] = build_production_path_contract(
+            story,
+            ownership_digest=canonical_digest(dict(ownership)),
+            registry_operations=registry_operations,
+        )
     revalidation_authorization: Cp6RevalidationAuthorizationV1 | None = None
     if revalidation_authorization_ref:
         if stage != "CP6":
@@ -1211,6 +1466,12 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
         errors.append("parent_context_ref is required for CP6/CP7 story packets")
     if packet.get("stage") == "CP6" and not packet.get("expected_return_packet"):
         errors.append("expected_return_packet is required for CP6 story packets")
+    production_contract = packet.get("production_path_contract")
+    if production_contract is not None:
+        if not isinstance(production_contract, dict):
+            errors.append("production_path_contract must be an object")
+        else:
+            errors.extend(validate_production_path_contract(production_contract))
     if packet_schema_version == 4:
         binding = packet.get("revalidation_binding")
         required_binding = {

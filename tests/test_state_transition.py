@@ -1056,6 +1056,37 @@ class StateTransitionTests(unittest.TestCase):
             self.assertEqual([], errors)
             self.assertEqual([], warnings)
 
+    def test_approved_cp5_accepts_formal_active_phase_during_automatic_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route = write_route_plan(root)
+            state = write_state(
+                root,
+                {
+                    "current_phase": "P5-release-governance-convergence",
+                    "active_change": "CR-072",
+                    "pending_gate": None,
+                    "next_action": {
+                        "type": "continue_active_change",
+                        "text": "Continue active formal change CR-072.",
+                        "stop_reason": None,
+                    },
+                    "formal_truth_projection": {
+                        "active_phase_ids": ["P5-release-governance-convergence"],
+                        "active_cr_ids": ["CR-072"],
+                    },
+                },
+            )
+
+            errors, warnings = state_transition.validate_transition(
+                route_plan_path=route,
+                state_path=state,
+                approved_gate="CP5",
+            )
+
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+
     def test_approved_cp8_accepts_true_delivered_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

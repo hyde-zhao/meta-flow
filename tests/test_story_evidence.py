@@ -939,6 +939,83 @@ class StoryEvidenceTests(unittest.TestCase):
 
             self.assertIn("touched file outside allowed_write_paths: quant_lab/research/scanner.py", errors)
 
+    def test_return_check_accepts_explicit_cp7_aggregate_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            return_path = write_return_packet(root)
+            packet = json.loads(return_path.read_text(encoding="utf-8"))
+            packet.update(
+                {
+                    "stage": "CP7",
+                    "status": "verified",
+                    "aggregate_context": True,
+                    "aggregate_story_ids": [
+                        packet["story_id"],
+                        "STORY-CR123-S02",
+                    ],
+                }
+            )
+            return_path.write_text(
+                json.dumps(packet, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            context_path = root / "process/context/CP7-CR123.context.json"
+            context_path.parent.mkdir(parents=True, exist_ok=True)
+            context_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "stage": "CP7",
+                        "story_id": None,
+                        "cr_id": "CR-123",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            errors, warnings = story_evidence.validate_return_packet(
+                return_path,
+                packet_path=context_path,
+                project_root=root,
+            )
+
+            self.assertEqual([], errors)
+            self.assertEqual([], warnings)
+
+    def test_return_check_rejects_implicit_cp7_aggregate_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            return_path = write_return_packet(root)
+            packet = json.loads(return_path.read_text(encoding="utf-8"))
+            packet.update({"stage": "CP7", "status": "verified"})
+            return_path.write_text(json.dumps(packet) + "\n", encoding="utf-8")
+            context_path = root / "process/context/CP7-CR123.context.json"
+            context_path.parent.mkdir(parents=True, exist_ok=True)
+            context_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "stage": "CP7",
+                        "story_id": None,
+                        "cr_id": "CR-123",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            errors, _warnings = story_evidence.validate_return_packet(
+                return_path,
+                packet_path=context_path,
+                project_root=root,
+            )
+
+            self.assertIn(
+                "story_id mismatch: return=STORY-CR123-S01 context=None",
+                errors,
+            )
+
     def test_return_check_rejects_forbidden_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1670,6 +1747,69 @@ class StoryEvidenceTests(unittest.TestCase):
                     replay["status"], replay["mutation_count"], replay["receipt_mutation_count"],
                     replay["sidecar_mutation_count"], replay["pair_state"], replay["recovery_origin"],
                 ))
+
+    def test_p02_bootstrap_binds_live_heads_only_when_both_legacy_inputs_lack_oids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def resolver(_root: Path, logical: object) -> Path:
+                return root / str(logical)
+
+            def write(ref: str, payload: dict) -> None:
+                path = root / ref
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+            approval_ref = "process/checkpoints/approval.json"
+            previous_ref = "process/checks/previous.json"
+            superseding_ref = "process/checks/superseding.json"
+            write(approval_ref, {"cr_id": "CR-072"})
+            write(previous_ref, {"decision": "PASS"})
+            write(superseding_ref, {"decision": "PASS"})
+            with (
+                patch.object(story_evidence, "_resolve_runtime_path", side_effect=resolver),
+                patch.object(story_evidence, "_resolve_runtime_ref", side_effect=resolver),
+                patch.object(
+                    story_evidence,
+                    "_git_head",
+                    side_effect=["a" * 40, "b" * 40],
+                ),
+            ):
+                plan = story_evidence._authority_issue_plan(
+                    root,
+                    work_ref="process/works/CR-072-WB/WORK.yaml",
+                    story_id="STORY-CR072-S03",
+                    attempt_id="revalidation-002",
+                    approval_ref=approval_ref,
+                    previous_ref=previous_ref,
+                    superseding_ref=superseding_ref,
+                    scope_digest="c" * 64,
+                )
+
+            self.assertEqual(
+                "live-head-legacy-bootstrap", plan["repository_oid_source"]
+            )
+            self.assertEqual("a" * 40, plan["receipt"]["release_oid"])
+            self.assertEqual("b" * 40, plan["receipt"]["process_oid"])
+
+            write(superseding_ref, {"release_oid": "a" * 40})
+            with (
+                patch.object(story_evidence, "_resolve_runtime_path", side_effect=resolver),
+                patch.object(story_evidence, "_resolve_runtime_ref", side_effect=resolver),
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "immutable input OIDs are incomplete"
+                ):
+                    story_evidence._authority_issue_plan(
+                        root,
+                        work_ref="process/works/CR-072-WB/WORK.yaml",
+                        story_id="STORY-CR072-S03",
+                        attempt_id="revalidation-003",
+                        approval_ref=approval_ref,
+                        previous_ref=previous_ref,
+                        superseding_ref=superseding_ref,
+                        scope_digest="c" * 64,
+                    )
 
     def test_p02_bootstrap_authority_rejects_collision_and_invalid_counter_tuple(self) -> None:
         """BS-TC-07/13：不同 bytes 不覆盖，closed counter tuple 不可构造。"""

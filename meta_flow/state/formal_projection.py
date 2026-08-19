@@ -19,6 +19,7 @@ ROADMAP_REF = "process/ROADMAP.yaml"
 CR_LEDGER_REF = "process/state/CR-LEDGER.ndjson"
 TERMINAL_WORK = frozenset({"completed", "cancelled", "archived"})
 TERMINAL_CR = frozenset({"closed", "cancelled", "superseded", "archived"})
+FORMAL_TRUTH_REPLACE_PATHS = frozenset({"formal_truth_projection"})
 
 
 # CR-071 S07 deliberately keeps recovery assessment and planning independent
@@ -495,4 +496,8 @@ def derive_formal_truth_patch(
     }
 
 
-__all__ = ["build_formal_truth_snapshot", "derive_formal_truth_patch"]
+__all__ = [
+    "FORMAL_TRUTH_REPLACE_PATHS",
+    "build_formal_truth_snapshot",
+    "derive_formal_truth_patch",
+]

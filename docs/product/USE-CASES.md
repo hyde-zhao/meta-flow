@@ -1,8 +1,8 @@
 ---
-status: draft
-version: "1.1"
-confirmed_by: ""
-confirmed_at: ""
+status: confirmed
+version: "1.2"
+confirmed_by: "user"
+confirmed_at: "2026-08-18T08:02:17Z"
 engagement_mode: meta-self-dev
 scenario_subject_type: implementation-carrier
 scenario_subject_id: "meta-flow"
@@ -13,8 +13,9 @@ delivery_routing:
   mode: meta-flow-delivery
   output_root: "meta-flow/"
   source: meta-self-dev
-total_use_cases: 6
-formal_cp2_status: pending
+total_use_cases: 12
+formal_cp2_status: approved
+formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
 ---
 
 # CR-071 使用场景基线
@@ -25,6 +26,7 @@ formal_cp2_status: pending
 |---|---|---|---|---|
 | 1.0 | 2026-08-15 | meta-pm | 为 MF-1～MF-6 建立初始场景基线 | 按 CR-071 文档处理决策新增；正式 CP2 确认待定 |
 | 1.1 | 2026-08-15 | meta-pm | 吸收 CP2 changes_requested 六项增量 | 保留 6 个 UC；formal CP2 仍 pending |
+| 1.2 | 2026-08-18 | meta-pm | 增量建立 CR-072 单一 0.6.1 Release Package 场景族 | 保留 CR-071 全部 UC/映射；新增 UC-PLAN-COMPILER～UC-PUBLISHED-ASSET-CONSUMER；CP2 已批准 |
 
 ## 用户画像（Personas）
 
@@ -81,8 +83,8 @@ formal_cp2_status: pending
 
 | 确认项 | 结论 | 确认来源 |
 |---|---|---|
-| 场景主体 | 已回答，待 CP2 正式确认 | 用户最新 freeform；`process/works/CR-071-R2/REQUEST.md` |
-| 交付出口 | 已回答，待 CP2 正式确认 | Meta Flow 本体边界；CR-071 文档处理决策 |
+| 场景主体 | 已回答并经 CP2 正式确认 | 用户最新 freeform；`process/works/CR-071-R2/REQUEST.md` |
+| 交付出口 | 已回答并经 CP2 正式确认 | Meta Flow 本体边界；CR-071 文档处理决策 |
 | 主选方案 | OPT-01 | 用户要求“继续完成 meta-flow 侧的改进点进行能力补齐” |
 
 ## Scenario Gray Areas
@@ -94,7 +96,7 @@ formal_cp2_status: pending
 | 灰区 ID | 问题 | 为什么重要 | 影响面 | 推荐讨论顺序 | 状态 | canonical refs |
 |---|---|---|---|---:|---|---|
 | SGA-01 | 本轮主体是 Meta Flow 六项能力，还是同时扩大到外部目标项目制度？ | 决定仓库边界、授权和真相源数量 | 范围、复杂度、验证、交付出口 | 1 | resolved-by-freeform | REQUEST、CR-071、SGQ-001 |
-| SGA-02 | legacy 兼容期采用 read-old/write-new、双写还是硬切换？ | 决定迁移风险、诊断和退役成本 | 范围、验证、维护、后续门控 | 2 | quantified-recommendation-pending-gate | CR-071 验收标准 3/4、CP2-DQ-02、SM-06 |
+| SGA-02 | legacy 兼容期采用 read-old/write-new、双写还是硬切换？ | 决定迁移风险、诊断和退役成本 | 范围、验证、维护、后续门控 | 2 | quantified-recommendation-approved | CR-071 验收标准 3/4、CP2-DQ-02、SM-06 |
 | SGA-03 | init-preflight 是局部语法检查还是全生命周期零写模拟？ | 决定能否提前发现 scope、revision、budget 与 on-touch 错误 | 用户价值、复杂度、验证 | 3 | resolved-with-shared-core-invariant | CR-071 验收标准 1、CP2 revision 2 |
 | SGA-04 | receipt 漂移后全量重跑还是只重跑失效层？ | 决定验证成本与错误复用风险 | 性能、证据、验证、维护 | 4 | resolved-with-semantic-equivalence-thresholds | CR-071 验收标准 5、SM-03 |
 
@@ -121,6 +123,7 @@ formal_cp2_status: pending
 | ID | 想法 / 风险 / 扩展场景 | 来源 | 延后原因 | 触发重启条件 |
 |---|---|---|---|---|
 | DEF-02 | legacy reader 的实际退役日期 | SGA-02 | 当前基线已量化退役就绪门槛，但实际日期需要迁移期观测 | SM-06 全部达标并经后续正式决策批准 |
+| DEF-072-01 | 将 0.6.1 bootstrap 机制复用到后续版本 | CR-072 SemVer 边界 | 一次性 bootstrap 只能为 0.6.1 保留，不得成为一般跳过分类器 | 新 CR 且独立 SemVer/兼容评审通过 |
 
 ## 使用场景列表
 
@@ -236,6 +239,84 @@ formal_cp2_status: pending
 2. 分类未登记失败、漂移和未知归属。
 3. 同步 state/current 的降级事实或 fail-closed 结论。
 
+---
+
+## CR-072 / 0.6.1 Release Package 增量场景
+
+> 本节是增量基线：CR-071 的 UC 与指标保持可追溯，CR-072 增量已由 CP2 确认。Work A（稳定化/消费者完整性）与 Work B（治理编译器/成本/发布机器门）是同一 0.6.1 价值包的实施单元；不得形成中间版本、资格化或发布。
+
+### UC-PLAN-COMPILER：把候选 Work 归一为可裁决的 Package
+
+| 字段 | 内容 |
+|---|---|
+| **使用角色** | P-01、P-02、P-03 |
+| **触发条件** | 编排者准备将 Work A、Work B 纳入唯一 0.6.1 Package |
+| **输入** | Work 候选、Plan IR、依赖、priority、ownership、public CLI 注册和 package manifest |
+| **处理逻辑** | 编译器只接受完整、可归属、可排序且 public CLI 已注册的候选；缺字段、重复 owner、无效 priority 或未注册 public CLI 均 fail closed |
+| **输出/结果** | canonical Package plan、completeness/ownership/priority 诊断与零写拒绝结果 |
+| **前置条件** | 两 Work 仅为 planned；无 CP2 之后的 Story 或实现对象 |
+| **排除情况** | 不创建 Work/Story、不执行 package apply |
+
+### UC-CLOSURE-BUILD：按受影响 closure 构建唯一包
+
+| 字段 | 内容 |
+|---|---|
+| **使用角色** | P-01、P-03 |
+| **触发条件** | 一个候选对象或依赖 SHA 发生变化，需要计算构建影响面 |
+| **输入** | direct/transitive dependency graph、literal SHA、changed roots、package manifest |
+| **处理逻辑** | 直接和传递依赖均进入 closure；SHA 必须按 literal 解释；只重建 affected closure，未受影响对象不被伪造为需要重建 |
+| **输出/结果** | 可复核 closure、affected-only build plan，或 deterministic BLOCKED |
+| **前置条件** | graph 与 package identity 可解析 |
+| **排除情况** | 不执行真实 build，不以全量重建掩盖 closure 缺陷 |
+
+### UC-PROCESS-COST：由 measure-only 过渡到可审计硬门
+
+| 字段 | 内容 |
+|---|---|
+| **使用角色** | P-02、P-03 |
+| **触发条件** | Package 需要报告自身过程成本或评价资格化次数 |
+| **输入** | append-only 成本记录、zero-write receipt、baseline、hard-gate policy |
+| **处理逻辑** | 初期只测量并保留 baseline；启用 hard gate 后超过阈值、未关闭 harness error 或重复 qualification 必须阻断；相同输入重算为语义 no-op |
+| **输出/结果** | machine-derived 指标、门控决策与恢复指引 |
+| **前置条件** | 指标来源和阈值版本可追溯 |
+| **排除情况** | 不靠人工汇总或隐含时间戳证明成本合规 |
+
+### UC-SEMVER-DECISION：真实分类后仅一次 bootstrap 选择 0.6.1
+
+| 字段 | 内容 |
+|---|---|
+| **使用角色** | P-02、P-03 |
+| **触发条件** | source freeze 前需要决定唯一版本 |
+| **输入** | 兼容性影响、SemVer classifier 结论、typed bootstrap token、目标版本 |
+| **处理逻辑** | classifier 必须真实推荐 minor/0.7.0；仅 non-breaking 情况可由不可复用的 typed bootstrap 选择 0.6.1；breaking change 始终 BLOCKED |
+| **输出/结果** | 分类证据、一次性版本决策或 BLOCKED |
+| **前置条件** | 兼容性输入和 bootstrap 身份可验证 |
+| **排除情况** | 不伪造 PATCH，不把 bootstrap 复用于后续版本 |
+
+### UC-RELEASE-ORDER：以一次 release lineage 完成最终交付
+
+| 字段 | 内容 |
+|---|---|
+| **使用角色** | P-01、P-02、P-03 |
+| **触发条件** | Work A/B 均满足候选完成条件并准备聚合发布 |
+| **输入** | source fingerprint、version decision、qualification receipt、build/canary evidence、release state |
+| **处理逻辑** | 固定顺序为 source freeze → version decision → fingerprint → qualification → build → clean-home canary → tag/release；freeze drift、重复 qualification 或顺序倒置均阻断并只回到受影响步骤 |
+| **输出/结果** | 一个 aggregate lineage 或可解释的恢复 plan |
+| **前置条件** | 两 Work 均在同一 Package 内；CP8 与发布授权另行取得 |
+| **排除情况** | Work A 完成后不得单独 release/receipt/sidecar |
+
+### UC-PUBLISHED-ASSET-CONSUMER：以干净 home 验证已发布资产消费者完整性
+
+| 字段 | 内容 |
+|---|---|
+| **使用角色** | P-01、P-03 |
+| **触发条件** | 最终 build 后需要验证发布资产，而非源树偶然可用性 |
+| **输入** | 已构建资产、isolated clean-home、公开 CLI 入口、canary contract |
+| **处理逻辑** | canary 仅消费已发布资产；缺失 package 文件、未注册 CLI、home 污染或真实安装授权不足均明确失败；通过后仍不等于 release 已执行 |
+| **输出/结果** | planned canary evidence contract 或 fail-closed 诊断 |
+| **前置条件** | 后续获得独立安装/运行授权；本阶段只定义验证场景 |
+| **排除情况** | 不读取凭据、不做真实安装、不触碰外部项目 |
+
 <!-- coverage-checklist: begin -->
 ## 附录：覆盖自检表
 
@@ -250,6 +331,7 @@ formal_cp2_status: pending
 | D7 | 异常维度 | 已覆盖 | 全部 UC | 零写失败、权限拒绝、迁移错误、identity drift、fail closed 均覆盖 |
 | D8 | 集成维度 | 已覆盖 | 全部 UC | Work、validation、state/current、context/ledger 边界明确 |
 | Dx-01 | 审计与可追溯 | 已补充 | 全部 UC | 每项必须保留 source、revision、evidence/provenance 或失败来源 |
+| Dx-02 | 发布血缘与消费者 | 已补充 | UC-PLAN-COMPILER～UC-PUBLISHED-ASSET-CONSUMER | 覆盖 package、closure、cost、SemVer、一次 qualification、freeze drift 和 clean-home canary |
 <!-- coverage-checklist: end -->
 
 ## 附录：治理变更记录
@@ -258,3 +340,4 @@ formal_cp2_status: pending
 |---|---|---|---|---|
 | 1.0 | 产品基线 | 不存在 | `draft` | CR-071 要求新增产品基线；CP2 人工批准尚未发生 |
 | 1.1 | CP2 review delta | V1 将 BL-001 延后，且缺少五项量化/恢复约束 | 在原 6 UC 上补齐 MF-2 硬前置、shared-core、v1 迁移、semantic-equivalence、单次 reprojection 和 CP4 inventory 追踪 | 响应 formal CP2 `changes_requested`；ID 与 formal gate 状态不变 |
+| 1.2 | CR-072 Package 基线 | CR-071 的 6 UC / 18 REQ / 18 SCN / 12 Story 保持可追溯 | 追加 6 UC、12 REQ、12 SCN 和 12 产品 outcome Story；建立 Work A/B 单一 0.6.1 release lineage | CR-071 历史批准不重开；CR-072 于 2026-08-18 经 CP2 批准 |

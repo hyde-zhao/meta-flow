@@ -11,10 +11,10 @@ wheel，并绑定同一 Release 随附的 `ProviderArtifactReceiptV1.json`；不
 
 ### 1. 下载正式 Release 资产
 
-下面以当前稳定版 `0.5.3` 为例。升级时只需把 `META_FLOW_VERSION` 改为目标版本：
+下面以唯一目标版 `0.6.1` 为例。升级时只需把 `META_FLOW_VERSION` 改为目标版本：
 
 ```bash
-export META_FLOW_VERSION=0.5.3
+export META_FLOW_VERSION=0.6.1
 export META_FLOW_RELEASE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/meta-flow/releases/${META_FLOW_VERSION}"
 
 install -d -m 0755 "$META_FLOW_RELEASE_DIR"
@@ -22,28 +22,27 @@ install -d -m 0755 "$META_FLOW_RELEASE_DIR"
 gh release download "v${META_FLOW_VERSION}" \
   --repo hyde-zhao/meta-flow \
   --pattern "meta_flow-${META_FLOW_VERSION}-py3-none-any.whl" \
+  --pattern "meta_flow-${META_FLOW_VERSION}.tar.gz" \
   --pattern 'ProviderArtifactReceiptV1.json' \
+  --pattern 'ProviderArtifactReceiptV1.digest-policy.json' \
   --dir "$META_FLOW_RELEASE_DIR" \
   --clobber
 ```
 
 没有 GitHub CLI 时，可从
-[GitHub Releases](https://github.com/hyde-zhao/meta-flow/releases) 手工下载相同的 wheel 和
-receipt，并保存到同一个稳定目录。
+[GitHub Releases](https://github.com/hyde-zhao/meta-flow/releases) 手工下载相同的 wheel、
+sdist、receipt 和 digest-policy sidecar，并保存到同一个稳定目录。
 
-安装前应按 `v0.5.3` Release 页面公布的 SHA-256 校验 wheel 与 receipt；摘要在正式
+安装前应按 `v0.6.1` Release 页面公布的 SHA-256 校验四项资产；摘要在正式
 artifact 从 clean tagged source 构建并完成隔离 canary 后发布，不能用旧版本摘要替代。
-
-```text
-b987c4ecc7646f523224e512afb176efcb8c3842d9332807204ba2ff4d8c94ab  meta_flow-0.5.3-py3-none-any.whl
-403dc0ff9f6338470709a01a92b0db414b2bd236077f09a8544c521e5245176a  meta_flow-0.5.3.tar.gz
-c0a8a334a9cd8e1477d2fa2533016c6f31f06a7f252c506bc57d6e3fa0ee3876  ProviderArtifactReceiptV1.json
-```
+在最终构建前不填写 0.6.1 SHA placeholder。
 
 ```bash
 sha256sum \
   "$META_FLOW_RELEASE_DIR/meta_flow-${META_FLOW_VERSION}-py3-none-any.whl" \
-  "$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+  "$META_FLOW_RELEASE_DIR/meta_flow-${META_FLOW_VERSION}.tar.gz" \
+  "$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json" \
+  "$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.digest-policy.json"
 ```
 
 ### 2. 安装或升级 CLI provider
@@ -75,7 +74,7 @@ uv tool install .
 正式 mutation 准入必须能读取同版本 receipt：
 
 ```bash
-export META_FLOW_PROVIDER_RECEIPT="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+export META_FLOW_PROVIDER_RECEIPT="$(realpath -- "$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json")"
 ```
 
 上面的 `export` 只对当前终端有效。正式使用时应把 receipt 的绝对路径保存为当前用户的
@@ -86,7 +85,7 @@ export META_FLOW_PROVIDER_RECEIPT="$META_FLOW_RELEASE_DIR/ProviderArtifactReceip
 下面的命令只需执行一次：
 
 ```bash
-export META_FLOW_RECEIPT_PATH="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+export META_FLOW_RECEIPT_PATH="$(realpath -- "$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json")"
 
 printf '\nexport META_FLOW_PROVIDER_RECEIPT=%q\n' \
   "$META_FLOW_RECEIPT_PATH" >> "$HOME/.bashrc"
@@ -97,7 +96,7 @@ source "$HOME/.bashrc"
 使用 Zsh 时，将写入目标和加载命令改为 `$HOME/.zshrc`：
 
 ```zsh
-export META_FLOW_RECEIPT_PATH="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+export META_FLOW_RECEIPT_PATH="$(realpath -- "$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json")"
 
 printf '\nexport META_FLOW_PROVIDER_RECEIPT=%q\n' \
   "$META_FLOW_RECEIPT_PATH" >> "$HOME/.zshrc"
@@ -117,15 +116,16 @@ printenv META_FLOW_PROVIDER_RECEIPT
 `environment.d`；文件内容必须使用绝对路径，不能依赖 shell 变量展开：
 
 ```bash
-export META_FLOW_PROVIDER_RECEIPT="$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json"
+export META_FLOW_RECEIPT_PATH="$(realpath -- "$META_FLOW_RELEASE_DIR/ProviderArtifactReceiptV1.json")"
 export META_FLOW_ENVIRONMENT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d"
 
 install -d -m 0755 "$META_FLOW_ENVIRONMENT_DIR"
 
 printf 'META_FLOW_PROVIDER_RECEIPT=%s\n' \
-  "$META_FLOW_PROVIDER_RECEIPT" \
+  "$META_FLOW_RECEIPT_PATH" \
   > "$META_FLOW_ENVIRONMENT_DIR/50-meta-flow.conf"
 
+export META_FLOW_PROVIDER_RECEIPT="$META_FLOW_RECEIPT_PATH"
 systemctl --user import-environment META_FLOW_PROVIDER_RECEIPT
 ```
 
@@ -137,7 +137,7 @@ systemctl --user import-environment META_FLOW_PROVIDER_RECEIPT
 Windows host 当前尚未列入正式 CLI artifact 资格声明；如仅需配置同名用户变量，可使用：
 
 ```powershell
-$ReceiptPath = "$env:LOCALAPPDATA\MetaFlow\releases\0.5.3\ProviderArtifactReceiptV1.json"
+$ReceiptPath = "$env:LOCALAPPDATA\MetaFlow\releases\0.6.1\ProviderArtifactReceiptV1.json"
 
 [Environment]::SetEnvironmentVariable(
     "META_FLOW_PROVIDER_RECEIPT",

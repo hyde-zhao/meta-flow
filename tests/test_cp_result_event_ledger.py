@@ -23,6 +23,7 @@ GATE_SEMANTIC_REGISTRY = {
     "meta_flow/repository/publisher.py": "passage-consumer",
     "meta_flow/workflow/cr_projection.py": "passage-consumer",
     "meta_flow/work/usage.py": "count-only-exception",
+    "meta_flow/checks/process_cost.py": "cost-metrics-consumer",
     "meta_flow/workflow/cr_status_sync.py": "transport-adapter",
     "meta_flow/policies/route_plan.py": "mutation-reference-only",
     "meta_flow/policies/c0_cutover.py": "mutation-reference-only",
@@ -137,6 +138,11 @@ def _gate_guardrail_differences(
             or "canonical-projector-call" in tokens
         ):
             role_mismatches.append(f"{path}:count-only-contract")
+        elif role == "cost-metrics-consumer" and (
+            "gate-ledger-ref" not in tokens
+            or "raw-human-gate-approval" in tokens
+        ):
+            role_mismatches.append(f"{path}:cost-metrics-contract")
         elif role in {
             "transport-adapter",
             "mutation-reference-only",
@@ -1851,6 +1857,7 @@ class S01ProjectionContractTests(unittest.TestCase):
         self.assertEqual(1, roles.count("producer-validator-projector-owner"))
         self.assertEqual(4, roles.count("passage-consumer"))
         self.assertEqual(1, roles.count("count-only-exception"))
+        self.assertEqual(1, roles.count("cost-metrics-consumer"))
 
     def test_gate_semantic_guardrail_positive_fixture_finds_rogue_consumer(
         self,

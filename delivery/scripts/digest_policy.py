@@ -19,6 +19,8 @@ KNOWN_GENERATED_MANIFEST_REF = (
 )
 DIGEST_POLICY_SIDECAR_SCHEMA_VERSION = 1
 DIGEST_POLICY_SIDECAR_SUFFIX = ".digest-policy.json"
+_STRICT_SIDECAR_FROM_VERSION = (0, 6, 1)
+_RELEASE_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _EXCLUSION_REASONS = (
     "__pycache__",
@@ -480,6 +482,14 @@ def sidecar_path_for_receipt(receipt_path: Path) -> Path:
     return target.with_name(target.stem + DIGEST_POLICY_SIDECAR_SUFFIX)
 
 
+def digest_policy_sidecar_required(version: str) -> bool:
+    """返回该正式版本是否必须携带 digest-policy sidecar。"""
+
+    if not isinstance(version, str) or not _RELEASE_VERSION_RE.fullmatch(version):
+        raise ValueError("provider distribution version must be major.minor.patch")
+    return tuple(int(part) for part in version.split(".")) >= _STRICT_SIDECAR_FROM_VERSION
+
+
 def load_digest_policy_sidecar(
     receipt_path: Path,
     *,
@@ -515,6 +525,7 @@ __all__ = [
     "KNOWN_GENERATED_MANIFEST_REF",
     "build_digest_policy_sidecar",
     "canonical_digest",
+    "digest_policy_sidecar_required",
     "exclusion_policy_digest",
     "load_digest_policy_sidecar",
     "load_known_generated_refs",

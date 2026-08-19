@@ -11,8 +11,10 @@ import pytest
 from meta_flow.work.budget import G1_BUDGET, BudgetLimit
 from meta_flow.work.model import build_work, load_work, write_work_create_only
 from meta_flow.work.risk import RiskFacts, classify_work
+from meta_flow.work.route_profile import ROUTINE_STAGES
 from meta_flow.work.scope import WorkScope
 from meta_flow.work.usage import (
+    ChangedPathInventory,
     UsageEvent,
     UsageLedger,
     append_usage_event,
@@ -98,7 +100,204 @@ def test_usage_append_is_idempotent_and_stage_addressable(tmp_path: Path) -> Non
     assert second.decision == "NO_CHANGE"
     assert not second.appended
     assert len(ledger.events) == 1
-    assert stage_usage(ledger)["requirement"]["tokens"] == 1_200
+    assert ledger.events[0].stage == "requirements"
+    assert stage_usage(ledger)["requirements"]["tokens"] == 1_200
+
+
+@pytest.mark.parametrize("stage", ROUTINE_STAGES)
+def test_every_routine_stage_is_admitted_by_usage_budget(
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    """route 的四个正式阶段必须全部命中一个 canonical usage bucket。"""
+
+    init_work(
+        tmp_path,
+        budget=BudgetLimit(
+            reads=100,
+            writes=100,
+            check_groups=100,
+            tokens=100_000,
+        ),
+    )
+
+    plan = plan_usage_admission(
+        tmp_path,
+        "W-001",
+        UsageEvent(event_id=f"routine-{stage}", stage=stage, tokens=1),
+    )
+
+    assert plan.allowed
+    assert plan.stage == ("requirements" if stage == "clarification" else stage)
+    assert "USAGE_STAGE_NOT_BUDGETED" not in plan.reason_codes
+
+
+def test_routine_stage_usage_reaches_full_canonical_coverage(tmp_path: Path) -> None:
+    init_work(
+        tmp_path,
+        budget=BudgetLimit(
+            reads=100,
+            writes=100,
+            check_groups=100,
+            tokens=100_000,
+        ),
+    )
+    for stage in ROUTINE_STAGES:
+        append_admitted(
+            tmp_path,
+            UsageEvent(event_id=f"coverage-{stage}", stage=stage, tokens=1),
+        )
+    ledger = load_usage(tmp_path, load_work(tmp_path, "W-001"))
+    inventory = ChangedPathInventory(0, (), (), (), (), ())
+
+    closure = build_cost_closure(
+        ledger=ledger,
+        required_stages=ROUTINE_STAGES,
+        gate_events=(),
+        changed_path_inventory=inventory,
+    )
+
+    assert [event.stage for event in ledger.events] == [
+        "requirements",
+        "design",
+        "implementation",
+        "verification",
+    ]
+    assert closure["stage_coverage"] == {
+        "required_stages": list(ROUTINE_STAGES),
+        "observed_stages": [
+            "design",
+            "implementation",
+            "requirements",
+            "verification",
+        ],
+        "missing_stages": [],
+        "coverage_ratio": 1.0,
+    }
+
+
+@pytest.mark.parametrize(
+    "stage",
+    (
+        "clarification",
+        "requirement",
+        "requirement-confirmation",
+        "requirements-confirmation",
+    ),
+)
+def test_requirement_stage_aliases_are_written_to_one_canonical_bucket(
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    init_work(tmp_path)
+
+    append_admitted(
+        tmp_path,
+        UsageEvent(event_id=f"canonical-{stage}", stage=stage, tokens=1),
+    )
+    ledger = load_usage(tmp_path, load_work(tmp_path, "W-001"))
+
+    assert [event.stage for event in ledger.events] == ["requirements"]
+    assert list(stage_usage(ledger)) == ["requirements"]
+
+
+def test_historical_aliases_aggregate_without_rewriting_ledger(tmp_path: Path) -> None:
+    init_work(tmp_path)
+    usage_path = tmp_path / "works/W-001/USAGE.json"
+    usage_path.write_text(
+        json.dumps(
+            UsageLedger(
+                work_id="W-001",
+                events=tuple(
+                    UsageEvent(event_id=f"legacy-{index}", stage=stage, tokens=1)
+                    for index, stage in enumerate(
+                        (
+                            "clarification",
+                            "requirement",
+                            "requirement-confirmation",
+                            "requirements-confirmation",
+                        )
+                    )
+                ),
+            ).as_dict()
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    before = usage_path.read_bytes()
+
+    ledger = load_usage(tmp_path, load_work(tmp_path, "W-001"))
+    aggregated = stage_usage(ledger)
+
+    assert usage_path.read_bytes() == before
+    assert list(aggregated) == ["requirements"]
+    assert aggregated["requirements"]["tokens"] == 4
+
+
+def test_alias_replay_is_semantic_noop_and_preserves_historical_bytes(
+    tmp_path: Path,
+) -> None:
+    init_work(tmp_path)
+    usage_path = tmp_path / "works/W-001/USAGE.json"
+    historical = UsageEvent(
+        event_id="legacy-replay",
+        stage="requirement-confirmation",
+        tokens=1,
+    )
+    usage_path.write_text(
+        json.dumps(UsageLedger(work_id="W-001", events=(historical,)).as_dict())
+        + "\n",
+        encoding="utf-8",
+    )
+    before = usage_path.read_bytes()
+    replay = UsageEvent(
+        event_id="legacy-replay",
+        stage="clarification",
+        tokens=1,
+    )
+    plan = plan_usage_admission(tmp_path, "W-001", replay)
+
+    result = append_usage_event(
+        tmp_path,
+        "W-001",
+        replay,
+        expected_admission_digest=plan.plan_digest,
+    )
+
+    assert result.decision == "NO_CHANGE"
+    assert not result.appended
+    assert usage_path.read_bytes() == before
+
+
+def test_unknown_usage_stage_is_blocked_without_persistent_mutation(
+    tmp_path: Path,
+) -> None:
+    init_work(tmp_path)
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    event = UsageEvent(event_id="unknown-stage", stage="unknown", tokens=1)
+
+    plan = plan_usage_admission(tmp_path, "W-001", event)
+
+    assert plan.decision == "BLOCKED"
+    assert plan.as_dict()["mutation_count"] == 0
+    assert "USAGE_STAGE_NOT_BUDGETED" in plan.reason_codes
+    with pytest.raises(ValueError, match="USAGE_STAGE_NOT_BUDGETED"):
+        append_usage_event(
+            tmp_path,
+            "W-001",
+            event,
+            expected_admission_digest=plan.plan_digest,
+        )
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_conflicting_duplicate_event_id_is_rejected(tmp_path: Path) -> None:

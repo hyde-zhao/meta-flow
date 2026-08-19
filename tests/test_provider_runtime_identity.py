@@ -3,12 +3,45 @@ from __future__ import annotations
 import json
 import subprocess
 from hashlib import sha256
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from meta_flow import cli
 from meta_flow.installation import identity
+
+
+def _version_identity(*reasons: str) -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "kind": "ProviderRuntimeIdentityV2",
+        "distribution_name": "meta-flow",
+        "distribution_version": "0.6.1",
+        "module_path": "/provider/meta_flow/__init__.py",
+        "distribution_path": "/provider",
+        "editable": False,
+        "identity_source": "installed-artifact",
+        "source_root": None,
+        "source_commit": "a" * 40,
+        "source_dirty": False,
+        "source_tree_digest": "b" * 64,
+        "artifact_sha256": "c" * 64,
+        "installed_files_digest": "d" * 64,
+        "capability_profile_digest": "e" * 64,
+        "provider_receipt_path": None,
+        "provider_receipt_digest": None,
+        "schema_versions": {"provider_runtime_identity": 2},
+        "source_discovery": {"decision": "PASS", "reason_codes": []},
+        "release_readiness": {
+            "decision": "BLOCKED" if reasons else "PASS",
+            "reason_codes": list(reasons),
+        },
+        "worktree_clean": None,
+        "exact_commit_delivery": not reasons,
+        "identity_digest": "f" * 64,
+    }
 
 
 class _FakeDistribution:
@@ -422,3 +455,161 @@ def test_provider_mutation_classifier_covers_apply_append_and_direct_status() ->
         ["revalidate-cp6", "--action", "inspect"],
     )
     assert not cli._is_provider_mutation("check", ["cr-tracking"])
+
+
+def test_receipt_path_classifier_distinguishes_missing_not_found_and_unsafe(
+    tmp_path: Path,
+) -> None:
+    regular = tmp_path / "receipt.json"
+    regular.write_text("{}\n", encoding="utf-8")
+    directory = tmp_path / "receipt-dir"
+    directory.mkdir()
+    symlink = tmp_path / "receipt-link.json"
+    symlink.symlink_to(regular)
+    broken = tmp_path / "broken-receipt.json"
+    broken.symlink_to(tmp_path / "absent-target.json")
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(tmp_path, target_is_directory=True)
+
+    assert identity.classify_provider_receipt_path("") == (
+        None,
+        "PROVIDER_RECEIPT_MISSING",
+    )
+    assert identity.classify_provider_receipt_path(
+        str(tmp_path / "absent.json")
+    )[1] == "PROVIDER_RECEIPT_NOT_FOUND"
+    assert identity.classify_provider_receipt_path(str(directory))[1] == (
+        "PROVIDER_RECEIPT_UNSAFE"
+    )
+    assert identity.classify_provider_receipt_path(str(symlink))[1] == (
+        "PROVIDER_RECEIPT_UNSAFE"
+    )
+    assert identity.classify_provider_receipt_path(str(broken))[1] == (
+        "PROVIDER_RECEIPT_UNSAFE"
+    )
+    assert identity.classify_provider_receipt_path(
+        str(linked_parent / regular.name)
+    )[1] == "PROVIDER_RECEIPT_UNSAFE"
+    assert identity.classify_provider_receipt_path(str(regular)) == (
+        regular,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    (
+        ("PROVIDER_RECEIPT_MISSING", "PROVIDER_RECEIPT_MISSING"),
+        ("PROVIDER_RECEIPT_NOT_FOUND", "PROVIDER_RECEIPT_BLOCKED"),
+        ("PROVIDER_RECEIPT_UNSAFE", "PROVIDER_RECEIPT_BLOCKED"),
+        ("PROVIDER_RECEIPT_INVALID", "PROVIDER_RECEIPT_BLOCKED"),
+        (
+            "PROVIDER_RECEIPT_DISTRIBUTION_VERSION_MISMATCH",
+            "PROVIDER_RECEIPT_BLOCKED",
+        ),
+        ("SOURCE_DIRTY", "IDENTITY_INCOMPLETE"),
+    ),
+)
+def test_provider_runtime_status_has_a_closed_diagnostic_taxonomy(
+    reason: str,
+    expected: str,
+) -> None:
+    observed = _version_identity(reason)
+    admission = {"decision": "BLOCKED", "reason_codes": [reason]}
+
+    assert identity.provider_runtime_status(observed, admission) == expected
+
+
+def test_provider_runtime_status_is_ready_only_when_both_inputs_pass() -> None:
+    assert identity.provider_runtime_status(
+        _version_identity(),
+        {"decision": "READY", "reason_codes": []},
+    ) == "READY"
+    assert identity.provider_runtime_status(
+        _version_identity(),
+        {"decision": "BLOCKED", "reason_codes": ["PROVIDER_IDENTITY_DRIFT"]},
+    ) == "IDENTITY_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected_reason"),
+    (
+        ({}, "PROVIDER_RECEIPT_MISSING"),
+        (
+            {"META_FLOW_PROVIDER_RECEIPT": "missing-provider-receipt.json"},
+            "PROVIDER_RECEIPT_NOT_FOUND",
+        ),
+    ),
+)
+def test_runtime_observation_preserves_receipt_path_reason(
+    environment: dict[str, str],
+    expected_reason: str,
+) -> None:
+    observed = identity.observe_provider_runtime_identity(environment=environment)
+
+    assert expected_reason in observed["release_readiness"]["reason_codes"]
+
+
+def test_invalid_and_symlink_receipts_fail_closed_without_rewriting(
+    tmp_path: Path,
+) -> None:
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("not-json\n", encoding="utf-8")
+    link = tmp_path / "receipt.json"
+    link.symlink_to(invalid)
+    before = invalid.read_bytes()
+
+    invalid_observation = identity.observe_provider_runtime_identity(
+        environment={"META_FLOW_PROVIDER_RECEIPT": str(invalid)},
+    )
+    symlink_observation = identity.observe_provider_runtime_identity(
+        environment={"META_FLOW_PROVIDER_RECEIPT": str(link)},
+    )
+
+    assert "PROVIDER_RECEIPT_INVALID" in invalid_observation[
+        "release_readiness"
+    ]["reason_codes"]
+    assert "PROVIDER_RECEIPT_UNSAFE" in symlink_observation[
+        "release_readiness"
+    ]["reason_codes"]
+    assert invalid.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("reasons", "expected"),
+    (
+        ((), "READY"),
+        (("PROVIDER_RECEIPT_MISSING",), "PROVIDER_RECEIPT_MISSING"),
+        (("PROVIDER_RECEIPT_NOT_FOUND",), "PROVIDER_RECEIPT_BLOCKED"),
+        (
+            ("PROVIDER_RECEIPT_DISTRIBUTION_VERSION_MISMATCH",),
+            "PROVIDER_RECEIPT_BLOCKED",
+        ),
+    ),
+)
+def test_version_cli_consumes_the_shared_runtime_status(
+    reasons: tuple[str, ...],
+    expected: str,
+) -> None:
+    observed = _version_identity(*reasons)
+    admission = {
+        "decision": "BLOCKED" if reasons else "READY",
+        "reason_codes": list(reasons),
+    }
+    output = StringIO()
+
+    with (
+        patch(
+            "meta_flow.installation.identity.observe_provider_runtime_identity",
+            return_value=observed,
+        ),
+        patch(
+            "meta_flow.installation.identity.evaluate_provider_runtime_admission",
+            return_value=admission,
+        ),
+        patch("sys.stdout", output),
+    ):
+        cli._run_version(["--format", "json"])
+
+    payload = json.loads(output.getvalue())
+    assert payload["status"] == expected

@@ -1239,13 +1239,23 @@ def _is_automatic_phase_in_progress(
     ):
         return False
     automatic_phases = {"story-execution", "story-planning", "solution-design", "lld-design"}
-    if state.get("pending_gate") or str(state.get("current_phase") or "") not in automatic_phases:
+    current_phase = str(state.get("current_phase") or "")
+    action_type = str(_next_action(state).get("type") or "")
+    formal = state.get("formal_truth_projection")
+    formal = formal if isinstance(formal, dict) else {}
+    formal_phase_in_progress = (
+        current_phase in (formal.get("active_phase_ids") or [])
+        and state.get("active_change") in (formal.get("active_cr_ids") or [])
+        and action_type == "continue_active_change"
+    )
+    if state.get("pending_gate") or (
+        current_phase not in automatic_phases and not formal_phase_in_progress
+    ):
         return False
     if checkpoint == "CP7" and not state.get("active_story"):
         # CP7 is rolling.  The final Story must clear active_story and open
         # CP8; an earlier Story may advance the dependency graph instead.
         return False
-    action_type = str(_next_action(state).get("type") or "")
     if action_type in AWAIT_USER_ACTION_TYPES or action_type in {"blocked", "done"}:
         return False
     return bool(state.get("active_change")) and bool(str(state.get("current_phase") or "").strip())

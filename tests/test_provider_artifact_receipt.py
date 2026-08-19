@@ -74,6 +74,7 @@ def test_artifact_receipt_binds_clean_source_and_wheel(
 
 def test_qualification_entrypoint_writes_receipt_and_policy_sidecar(
     tmp_path: Path,
+    capsys,
 ) -> None:
     source = tmp_path / "source"
     delivery = source / "delivery"
@@ -156,6 +157,11 @@ def test_qualification_entrypoint_writes_receipt_and_policy_sidecar(
         sidecar_path.read_text(encoding="utf-8")
     )["included_manifest_digest"]
     assert set(receipt) == artifact._FIELDS
+    result = json.loads(capsys.readouterr().out)
+    assert result["kind"] == "ProviderArtifactQualificationResultV1"
+    assert result["decision"] == "PASS"
+    assert result["qualification_increment"] == 0
+    assert result["mutation_count"] == 2
 
 
 def test_qualification_bundle_restores_both_preimages_when_commit_marker_fails(
@@ -291,7 +297,8 @@ def test_receipt_digest_and_runtime_conflicts_fail_closed(tmp_path: Path) -> Non
     receipt["receipt_digest"] = artifact._canonical_digest(unsigned)
     path = tmp_path / "receipt.json"
     path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
-    loaded = artifact.load_provider_artifact_receipt(path)
+    with pytest.warns(RuntimeWarning, match="DIGEST_POLICY_SIDECAR_MISSING_LEGACY"):
+        loaded = artifact.load_provider_artifact_receipt(path)
     conflicts = artifact.artifact_receipt_conflicts(
         loaded,
         {
@@ -303,6 +310,35 @@ def test_receipt_digest_and_runtime_conflicts_fail_closed(tmp_path: Path) -> Non
         },
     )
     assert conflicts == ("PROVIDER_RECEIPT_ARTIFACT_SHA256_MISMATCH",)
+
+
+def test_new_receipt_requires_regular_digest_policy_sidecar(tmp_path: Path) -> None:
+    receipt = {
+        "schema_version": 1,
+        "kind": "ProviderArtifactReceiptV1",
+        "distribution_name": "meta-flow",
+        "distribution_version": "0.6.1",
+        "source_commit": "a" * 40,
+        "source_dirty": False,
+        "source_tree_digest": "b" * 64,
+        "artifact_filename": "meta_flow-0.6.1-py3-none-any.whl",
+        "artifact_sha256": "c" * 64,
+        "capability_profile_digest": "d" * 64,
+        "installed_payload_digest": "e" * 64,
+        "release_qualifying": True,
+    }
+    receipt["receipt_digest"] = artifact._canonical_digest(receipt)
+    path = tmp_path / "ProviderArtifactReceiptV1.json"
+    path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sidecar is missing"):
+        artifact.load_provider_artifact_receipt(path)
+
+    victim = tmp_path / "victim.json"
+    victim.write_text("{}\n", encoding="utf-8")
+    artifact.sidecar_path_for_receipt(path).symlink_to(victim)
+    with pytest.raises(ValueError, match="sidecar path is unsafe"):
+        artifact.load_provider_artifact_receipt(path)
 
 
 def test_runtime_payload_drift_is_rejected_even_when_archive_digest_matches() -> None:

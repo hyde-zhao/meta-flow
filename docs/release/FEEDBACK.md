@@ -1,23 +1,34 @@
 ---
-status: candidate
-version: "0.6.0"
+status: frozen_candidate
+version: "0.6.1"
 release_artifact_profile: full
 release_decision: NOT_READY
 ---
 
-# 0.6.0 Feedback
+# Meta Flow 0.6.1 Feedback
 
-## 反馈与观察
+## 反馈回流入口
 
 | ID | 信号 | 阈值 | 分流 |
 |---|---|---|---|
-| OBS-060-01 | detector 新增 unresolved/stale allowlist | 任意 1 条 | defect；阻断发布或后续 source change |
-| OBS-060-02 | scope/objective amendment 出现 REPLAN/PARTIAL | 任意非 PASS terminal | 同版本 inspect/recover；禁止继续切片 |
-| OBS-060-03 | 旧工具接受 V2 correction | 任意复现 | HIGH compatibility defect |
-| OBS-060-04 | source/wheel/install digest 不一致 | 任意复现 | release blocker |
-| OBS-060-05 | route 错误暴露 traceback | 任意复现 | defect，附结构化输入类别而非敏感路径日志 |
-| OBS-060-06 | 过程/产品文件比再次超过 2 | 下一变更包 ratio > 2 | B 包 cost convergence 输入 |
+| OBS-072-01 | receipt/sidecar、asset name 或 README 下载路径不一致 | 任意复现 | release blocker / stabilization defect |
+| OBS-072-02 | clean-home canary 非 READY、editable 或导入 checkout | 任意复现 | provider integrity blocker |
+| OBS-072-03 | `clarification` usage 仍被拒绝或错误计费 | 任意复现 | usage admission regression |
+| OBS-072-04 | handwritten plan 被当作 canonical authority | 任意复现 | compiler authority defect |
+| OBS-072-05 | closure 漏 affected Story/owner/public operation | 任意复现 | closure completeness defect |
+| OBS-072-06 | SemVer bootstrap 可复用或分类器伪装 PATCH | 任意复现 | release governance HIGH |
+| OBS-072-07 | 发布动作乱序或 qualification/build/canary 重复 | 任意复现 | release-order blocker |
+| OBS-072-08 | `CHECK_HARNESS_ERROR` 被计作内容 PASS/FAIL | 任意复现 | checker truth defect |
+| OBS-072-09 | 过程/产品文件比继续上升或 token telemetry 仍缺失 | 下一发布包 | cost convergence follow-up |
 
-## 回流边界
+## CP8 风险回流
 
-本文件只保存反馈入口，不启动 CR。需要后续治理的项必须在人工发布门后进入正式 follow-up tracking；B 包 0.6.1 只是用户指定候选，仍需自身 CP2 和 SemVer 门，不由本文件预授权。
+`R-072-COST` 在本发布保持 open、unwaived。CP8 只能选择显式接受 `READY_WITH_RISK`、要求修改或拒绝，不能声称成本硬目标已满足。若人工门批准本地候选，该决定进入过程仓风险台账；本文件不自行创建新 CR/Work。
+
+## 发布后观察
+
+未来获得远端发布授权并实际发布后，观察安装失败、digest 不一致、compiler/closure 漏判、release-order 重复、平台路径差异和 Workflow Health 成本趋势。达到任一阻断阈值时保留 exact receipt/fingerprint，按最小回归范围进入现有维护流程；不为 checker 重跑或单次观测自动创建新治理对象。
+
+## 授权边界
+
+反馈记录不授权 push、tag/release、外部 consumer 操作、生产写或新 CR。正式 follow-up 必须经独立 scope 与 native admission。

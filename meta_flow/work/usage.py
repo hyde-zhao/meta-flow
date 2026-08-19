@@ -7,7 +7,7 @@ import os
 import re
 import subprocess
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,22 @@ from meta_flow.work.model import Work, load_work
 USAGE_SCHEMA_VERSION = 1
 _EVENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _STAGE_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+STAGE_ALIASES = {
+    "clarification": "requirements",
+    "requirement": "requirements",
+    "requirement-confirmation": "requirements",
+    "requirements-confirmation": "requirements",
+    "solution-design": "design",
+    "validation": "verification",
+    "verify": "verification",
+}
+
+
+def normalize_stage(value: str) -> str:
+    """把 route/历史阶段名映射到稳定的 usage budget bucket。"""
+
+    normalized = value.strip().lower()
+    return STAGE_ALIASES.get(normalized, normalized)
 
 
 @dataclass(frozen=True)
@@ -71,6 +87,13 @@ class UsageEvent:
             "qa_attempts": self.qa_attempts,
             "final_full_suites": self.final_full_suites,
         }
+
+
+def canonicalize_usage_event(event: UsageEvent) -> UsageEvent:
+    """返回适合 admission、比较和新写入的 canonical usage event。"""
+
+    stage = normalize_stage(event.stage)
+    return event if stage == event.stage else replace(event, stage=stage)
 
 
 @dataclass(frozen=True)
@@ -258,12 +281,13 @@ def _append_usage_event_unlocked(
     *,
     expected_admission_digest: str,
 ) -> UsageAppendResult:
+    event = canonicalize_usage_event(event)
     work = load_work(process_root, work_id)
     ledger = load_usage(process_root, work)
     from meta_flow.work.usage_admission import plan_usage_admission
 
     existing = next((item for item in ledger.events if item.event_id == event.event_id), None)
-    if existing is not None and existing != event:
+    if existing is not None and canonicalize_usage_event(existing) != event:
         raise ValueError(f"usage event_id conflict: {event.event_id}")
     if not expected_admission_digest:
         raise ValueError("usage append requires expected_admission_digest")
@@ -321,6 +345,7 @@ def append_usage_event(
 ) -> UsageAppendResult:
     """在 per-Work single-writer lock 内重算 admission 并原子追加。"""
 
+    event = canonicalize_usage_event(event)
     work = load_work(process_root, work_id)
     path = usage_path(process_root, work)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -354,7 +379,7 @@ def append_usage_event(
 def stage_usage(ledger: UsageLedger) -> dict[str, dict[str, Any]]:
     stages: dict[str, list[UsageEvent]] = {}
     for event in ledger.events:
-        stages.setdefault(event.stage, []).append(event)
+        stages.setdefault(normalize_stage(event.stage), []).append(event)
     return {
         stage: _combine(tuple(events)).as_dict()
         for stage, events in sorted(stages.items())
@@ -489,9 +514,11 @@ def build_cost_closure(
 ) -> dict[str, Any]:
     usage = summarize_usage(ledger)
     expected_stages = tuple(dict.fromkeys(required_stages))
-    observed_stages = {event.stage for event in ledger.events}
+    observed_stages = {normalize_stage(event.stage) for event in ledger.events}
     missing_stages = [
-        stage for stage in expected_stages if stage not in observed_stages
+        stage
+        for stage in expected_stages
+        if normalize_stage(stage) not in observed_stages
     ]
     stage_coverage = (
         1.0

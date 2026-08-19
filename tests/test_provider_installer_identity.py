@@ -205,3 +205,31 @@ def test_installer_provider_receipt_loader_rejects_digest_drift(
     with pytest.raises(SystemExit):
         install.load_provider_receipt_facts(str(path))
     assert "digest 不匹配" in capsys.readouterr().err
+
+
+def test_installer_requires_sidecar_for_0_6_1_receipt(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "kind": "ProviderArtifactReceiptV1",
+        "distribution_name": "meta-flow",
+        "distribution_version": "0.6.1",
+        "source_commit": "a" * 40,
+        "source_dirty": False,
+        "source_tree_digest": "b" * 64,
+        "artifact_filename": "meta_flow-0.6.1-py3-none-any.whl",
+        "artifact_sha256": "c" * 64,
+        "capability_profile_digest": "d" * 64,
+        "installed_payload_digest": "e" * 64,
+        "release_qualifying": True,
+    }
+    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    payload["receipt_digest"] = sha256(rendered).hexdigest()
+    path = tmp_path / "ProviderArtifactReceiptV1.json"
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        install.load_provider_receipt_facts(str(path))
+    assert "sidecar is missing" in capsys.readouterr().err

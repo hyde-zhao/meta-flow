@@ -756,7 +756,17 @@ def validate_return_packet(
             errors.append(f"missing required field: {key}")
 
     if context:
-        if packet.get("story_id") != context.get("story_id"):
+        aggregate_context = (
+            stage == "CP7"
+            and context.get("stage") == "CP7"
+            and context.get("story_id") is None
+            and packet.get("cr_id") == context.get("cr_id")
+            and packet.get("aggregate_context") is True
+            and isinstance(packet.get("aggregate_story_ids"), list)
+            and bool(packet.get("aggregate_story_ids"))
+            and packet.get("story_id") in packet.get("aggregate_story_ids", [])
+        )
+        if packet.get("story_id") != context.get("story_id") and not aggregate_context:
             errors.append(f"story_id mismatch: return={packet.get('story_id')} context={context.get('story_id')}")
         if packet.get("stage") != context.get("stage"):
             errors.append(f"stage mismatch: return={packet.get('stage')} context={context.get('stage')}")
@@ -3107,6 +3117,46 @@ def _authority_issue_oid(payload: Mapping[str, Any], name: str) -> str:
     raise ValueError(f"{name} is absent from immutable input")
 
 
+def _authority_issue_repository_oids(
+    project_root: Path,
+    process_anchor: Path,
+    previous: Mapping[str, Any],
+    superseding: Mapping[str, Any],
+) -> tuple[str, str, str]:
+    """Resolve immutable OIDs, with a fail-closed legacy bootstrap.
+
+    Only when both immutable inputs entirely lack both OIDs do we bind the
+    receipt to the live release/process HEADs.  Caller-supplied OIDs are not
+    accepted, and a partial or mixed legacy input remains invalid.
+    """
+
+    def optional(payload: Mapping[str, Any], name: str) -> str | None:
+        try:
+            return _authority_issue_oid(payload, name)
+        except ValueError:
+            return None
+
+    previous_pair = (
+        optional(previous, "release_oid"),
+        optional(previous, "process_oid"),
+    )
+    superseding_pair = (
+        optional(superseding, "release_oid"),
+        optional(superseding, "process_oid"),
+    )
+    if all(previous_pair) and all(superseding_pair):
+        if previous_pair != superseding_pair:
+            raise ValueError("immutable input OIDs disagree")
+        return str(previous_pair[0]), str(previous_pair[1]), "immutable-inputs"
+    if any(previous_pair) or any(superseding_pair):
+        raise ValueError("immutable input OIDs are incomplete")
+    return (
+        _git_head(project_root),
+        _git_head(process_anchor.parent),
+        "live-head-legacy-bootstrap",
+    )
+
+
 def _authority_issue_target_bytes(project_root: Path, logical_ref: str) -> tuple[Path, bytes | None]:
     path = _resolve_runtime_ref(project_root, logical_ref)
     try:
@@ -3157,13 +3207,13 @@ def _authority_issue_plan(
     cr_id = str(approval_payload.get("cr_id") or "")
     if not re.fullmatch(r"CR-[0-9]+(?:-[A-Za-z0-9._-]+)*", cr_id):
         raise ValueError("approval_ref must provide an exact cr_id")
-    release_oid = _authority_issue_oid(previous_payload, "release_oid")
-    process_oid = _authority_issue_oid(previous_payload, "process_oid")
-    if (release_oid, process_oid) != (
-        _authority_issue_oid(superseding_payload, "release_oid"),
-        _authority_issue_oid(superseding_payload, "process_oid"),
-    ):
-        raise ValueError("immutable input OIDs disagree")
+    superseding_path = _resolve_runtime_ref(project_root, superseding)
+    release_oid, process_oid, repository_oid_source = _authority_issue_repository_oids(
+        project_root,
+        superseding_path,
+        previous_payload,
+        superseding_payload,
+    )
     receipt_ref = f"process/works/{work_id}/revalidation/{attempt}/receipts/authorization.json"
     sidecar_ref = _authority_issue_sidecar_ref(receipt_ref)
     receipt_path, receipt_before = _authority_issue_target_bytes(project_root, receipt_ref)
@@ -3227,11 +3277,13 @@ def _authority_issue_plan(
         "work_id": work_id, "attempt_id": attempt, "receipt_digest": receipt_digest,
         "sidecar_digest": sidecar_digest, "approval_digest": approval_digest,
         "plan_preimage_digest": plan_preimage_digest,
+        "repository_oid_source": repository_oid_source,
         "target_order": ["authorization-receipt", "authority-binding"],
     }
     return {
         "schema_version": 1, "action": "plan", "status": "READY", "decision": "PASS",
         "mutation_count": 0, "receipt": receipt, "sidecar": binding_payload,
+        "repository_oid_source": repository_oid_source,
         "plan_digest": canonical_digest(plan_core),
         "targets": [
             {"target_kind": "authorization-receipt", "logical_ref": receipt_ref,

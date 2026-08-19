@@ -1,11 +1,11 @@
 ---
-status: draft
-version: "1.1"
-confirmed: false
-confirmed_by: ""
-confirmed_at: ""
-ready_for_design: false
-source_change: "CR-071"
+status: confirmed
+version: "1.2"
+confirmed: true
+confirmed_by: "user"
+confirmed_at: "2026-08-18T08:02:17Z"
+ready_for_design: true
+source_change: "CR-071 + CR-072"
 source_use_cases:
   - UC-WORK-PREFLIGHT
   - UC-SCOPE-AMENDMENT
@@ -13,9 +13,16 @@ source_use_cases:
   - UC-FULL-REGRESSION-SEMANTICS
   - UC-VALIDATION-REUSE
   - UC-UNREGISTERED-FAILURE-VISIBILITY
-total_requirements: 18
+  - UC-PLAN-COMPILER
+  - UC-CLOSURE-BUILD
+  - UC-PROCESS-COST
+  - UC-SEMVER-DECISION
+  - UC-RELEASE-ORDER
+  - UC-PUBLISHED-ASSET-CONSUMER
+total_requirements: 30
 blocking_open_questions: 0
-formal_cp2_status: pending
+formal_cp2_status: approved
+formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
 ---
 
 # CR-071 结构化需求
@@ -28,7 +35,7 @@ formal_cp2_status: pending
 | 变更来源 | `process/changes/CR-071.md`、`process/works/CR-071-R2/REQUEST.md` |
 | 目标产物类型 | `mixed`（tool/CLI、schema/typed contract、workflow/projection） |
 | 治理方式 | `review-gated` / `strict` |
-| 当前判定 | 内容缺口为 0；因 CP2 人工批准尚未发生，`ready_for_design=false` |
+| 当前判定 | 内容缺口为 0；CR-072 CP2 已批准，`ready_for_design=true`；实现仍受 CP3/CP4/CP5 约束 |
 
 ## 修订记录
 
@@ -36,6 +43,7 @@ formal_cp2_status: pending
 |---|---|---|---|---|
 | 1.0 | 2026-08-15 | meta-pm | 为 MF-1～MF-6 建立 18 条初始需求 | 按 CR-071 决策新增，不覆盖历史对象 |
 | 1.1 | 2026-08-15 | meta-pm | 在原 18 个 ID 上吸收 CP2 revision 2 六项 review delta | 增量修订；不新增 MF、REQ 或正式批准 |
+| 1.2 | 2026-08-18 | meta-pm | 追加 CR-072 的 0.6.1 Package、closure、成本、SemVer、release-order 与消费者完整性需求 | 保留全部 CR-071 REQ；新增 REQ-072-01～12；CP2 已批准 |
 
 ## 需求条目
 
@@ -59,6 +67,18 @@ formal_cp2_status: pending
 | REQ-MF6-01 | 功能 | state/current projection 必须显式列出未登记失败、来源和 health/readiness 降级 | P0 | Given ledger 外失败或 baseline drift，When 生成 projection，Then state 与 current 均暴露 failure ID/source 并不再显示健康绿色 | UC-UNREGISTERED-FAILURE-VISIBILITY；CR-071 AC-6 |
 | REQ-MF6-02 | 约束 | 缺少失败归属证据时 projection 必须 fail closed，不得把 unknown 静默归为 healthy | P0 | Given failure 存在但 owner/source 归属不足，When 投影，Then health 降级且 next action 指向补证/阻断，不伪造 owner 状态且不得手工修改 lifecycle/readiness/gate 等派生状态 | UC-UNREGISTERED-FAILURE-VISIBILITY；CR-071 AC-6；REV-05 |
 | REQ-MF6-03 | 非功能 | 有效归属证据补齐后，一次成功 reprojection 必须退出阻断并使 state/current 收敛；稳定输入的再次投影保持语义 no-op | P1 | Given 因缺证阻断的 projection，When 补齐有效证据并执行一次 reprojection，Then blocked 状态退出且 state/current failure/health facts 一致；不得手工改派生状态，之后相同 source digest 的重投影语义 mutation=0 | UC-UNREGISTERED-FAILURE-VISIBILITY；SM-04；REV-05 |
+| REQ-072-01 | 功能 | 系统必须将两个 planned Work 编译为单一 0.6.1 Package Plan，并裁决 package completeness、priority、ownership 和 public CLI registration | P0 | Given Work A/B 与候选 Package，When 编译 Plan，Then 输出唯一 canonical Plan IR；缺 package 字段、priority、owner 或 CLI 注册时 BLOCKED 且 mutation=0 | UC-PLAN-COMPILER；CR-072 |
+| REQ-072-02 | 约束 | Package Plan 必须拒绝冲突 owner、重复/无效 priority 和未注册 public CLI，且不得以隐式默认值补齐 | P0 | Given 不完整或冲突输入，When 执行 compiler precheck，Then 返回逐项诊断、责任归属与恢复入口，不产生 Work/Story/状态写入 | UC-PLAN-COMPILER；RISK-PROCESS-BLOAT |
+| REQ-072-03 | 功能 | closure-build 必须计算 direct 与 transitive affected closure，并将 SHA 作为 literal 输入处理 | P0 | Given changed root 与依赖图，When 计算 closure，Then 所有 direct/transitive dependent 被包含、SHA 不被归一化猜测，缺图或无效 SHA 时 BLOCKED | UC-CLOSURE-BUILD；CR-072 |
+| REQ-072-04 | 非功能 | closure-build 只能计划 affected-only rebuild；稳定且不受影响的对象保持语义 no-op | P1 | Given 无影响输入或稳定 fingerprint，When 重新计算，Then build set 不扩大且除允许时间字段外 mutation=0 | UC-CLOSURE-BUILD；UC-PROCESS-COST |
+| REQ-072-05 | 功能 | 系统必须从 append-only 记录和 receipt 派生 Package 自身过程成本，并先支持 measure-only baseline | P0 | Given 可验证的记录，When 生成 cost report，Then 输出来源、digest、qualification count 与 baseline comparison，不以人工汇总替代 | UC-PROCESS-COST；CR-072 |
+| REQ-072-06 | 约束 | measure-only 转 hard-gate 后，超过批准阈值、unresolved CHECK_HARNESS_ERROR 或 qualification count>1 必须 fail closed | P0 | Given hard-gate 已启用且任一条件触发，When admission/qualification 评估，Then BLOCKED、列出受影响步骤与恢复条件 | UC-PROCESS-COST；UC-RELEASE-ORDER |
+| REQ-072-07 | 功能 | SemVer classifier 必须先真实输出 minor/0.7.0 候选；不能将结构性改造伪装为 PATCH | P0 | Given 兼容性影响，When 分类，Then 输出可审计分类理由；breaking input 直接 BLOCKED | UC-SEMVER-DECISION；RISK-BREAKING-PATCH |
+| REQ-072-08 | 兼容 | 仅允许 reusable=false 的 typed 0.6.1 bootstrap 覆盖非 breaking 的分类选择，且 token 不可复用 | P0 | Given non-breaking 分类与有效 token，When 请求 0.6.1，Then 只生成一次 0.6.1 decision；重复或跨版本使用 token 均 BLOCKED | UC-SEMVER-DECISION；CP2-DQ-02 |
+| REQ-072-09 | 功能 | 发布状态机必须强制 source freeze → version decision → fingerprint → qualification → build → canary → tag/release 的顺序 | P0 | Given aggregate Package，When 任一步开始，Then 必须有前一步同源证据；倒序、跳步或 freeze drift 均 BLOCKED 并只失效受影响步骤 | UC-RELEASE-ORDER；CR-072 |
+| REQ-072-10 | 约束 | 一个 Package 的 qualification、build、canary、CP8 与 release 各只允许最终一次；Work A/Work B 不得产生中间 release lineage | P0 | Given 任一 Work 单独完成或已有 qualification，When 请求中间动作/重复动作，Then 拒绝并保留唯一 aggregate lineage | UC-RELEASE-ORDER；RISK-QUALIFICATION-REPEAT |
+| REQ-072-11 | 功能 | 最终 canary 必须在 clean-home 中仅消费 published asset，并验证 package completeness 与 public CLI 可用性 | P0 | Given 已构建资产和隔离 home，When 执行后续授权 canary，Then 不依赖源树；缺 asset/CLI 或 home 污染均确定失败 | UC-PUBLISHED-ASSET-CONSUMER；CR-072 |
+| REQ-072-12 | 约束 | CR-072 不得通过新增 CR、Work、Story、CP 或中间 receipt 解决 checker/recovery；权限、安装、网络、发布均保持 deny-default | P1 | Given 任一恢复或检查修复提议，When 评估 scope，Then 超出 CR=1、Work=2、CP2=1 或非授权动作时返回新 revision/独立授权入口 | UC-PROCESS-COST；UC-RELEASE-ORDER |
 
 ## 变更记录
 
@@ -66,6 +86,7 @@ formal_cp2_status: pending
 |---|---|---|---|---|
 | 1.0 | 初始化 | REQ-MF1-01～REQ-MF6-03 | CR-071 产品基线重整 | 新增 18 条需求；CP2 人工确认前保持 draft |
 | 1.1 | 增量修订 | REQ-MF1-01～02、REQ-MF2-01/03、REQ-MF3-03、REQ-MF4-02、REQ-MF5-01～02、REQ-MF6-02～03 | formal CP2 changes_requested 六项 delta | 保留全部 18 个 ID；BL-001 归为 MF-2 前置，不新增 MF-7；formal CP2 仍 pending |
+| 1.2 | 增量新增 | REQ-072-01～12 | CR-072 单一 0.6.1 Package 目标 | 不覆盖 CR-071；两 Work 仍 planned，未授权实施/资格化/发布 |
 
 ## 风险与假设
 
@@ -78,6 +99,10 @@ formal_cp2_status: pending
 | RA-005 | 假设 | canonical successor 字段的具体名称属于 CP3 schema 设计，不改变本文件冻结的产品语义 | REQ-MF4-01～03 | CP3 候选字段必须逐一通过“非禁令语义”场景模拟 |
 | RA-006 | 风险 | preflight/apply 若各自维护校验规则会产生决策漂移 | REQ-MF1-01～02 | CP3 将 shared validation core/decision graph 设为 architecture invariant；fixture 对比 normalized decision |
 | RA-007 | 风险 | 补证后若依赖手改派生状态，会掩盖 projection 未收敛 | REQ-MF6-02～03 | 两阶段 fixture：先 fail closed，补证后只允许一次 reprojection 收敛 |
+| RA-072-01 | 风险 | bootstrap 被复用或被误当 PATCH 会绕过兼容裁决 | REQ-072-07～08 | typed reusable=false token、breaking change BLOCKED、决策审计 |
+| RA-072-02 | 风险 | freeze drift 或重复 qualification 产生双血缘/双成本 | REQ-072-09～10 | fingerprint 重验、qualification-once hard gate、affected-only recovery |
+| RA-072-03 | 风险 | canary 从源树或污染 home 获得假阳性 | REQ-072-11 | clean-home、published-asset-only 与 CLI/package completeness fixture |
+| RA-072-04 | 风险 | checker 恢复导致过程对象膨胀 | REQ-072-12 | CR=1/Work=2/CP2=1 预算，超出时新 revision/授权 |
 
 ## CP4 Mandatory Decomposition / Regression Inventory
 
@@ -101,12 +126,13 @@ formal_cp2_status: pending
 | M1 - Work 生命周期安全 | REQ-MF1-01～REQ-MF2-03 | 先把晚发现和非法范围扩张变成 apply 前确定诊断 |
 | M2 - 公共合同迁移 | REQ-MF3-01～REQ-MF4-03 | 冻结 typed ref 与 validation policy 的 canonical/legacy 语义 |
 | M3 - 证据与投影可信 | REQ-MF5-01～REQ-MF6-03 | 安全复用稳定验证层并暴露未登记失败 |
+| M4 - 0.6.1 单一 Package | REQ-072-01～12 | 编译两个 Work、保护 closure/成本/SemVer/release-order，并在一次血缘中验证已发布资产消费者 |
 
 ## 默认假设（REQUIRED 级别澄清采用的默认值）
 
 | ID | 假设内容 | 影响范围 |
 |---|---|---|
-| AS-001 | 基线按 CP2 review delta 采用 read-old/write-new 推荐合同和量化门槛；formal CP2 未批准前不得据此实施、退役 reader 或标记 approved | REQ-MF3-03、REQ-MF4-02 |
+| AS-001 | 基线已按 CP2 review delta 冻结 read-old/write-new 合同和量化门槛；未达量化门槛且未经后续正式批准不得退役 reader | REQ-MF3-03、REQ-MF4-02 |
 | AS-002 | 本地 fixture/dry-run 是 CP2 后验证设计的默认入口，不代表真实运行授权 | 全部需求 |
 
 ## 明确排除项（Out of Scope）
@@ -126,5 +152,9 @@ formal_cp2_status: pending
 
 | Decision ID | 类型 | 状态 | 说明 |
 |---|---|---|---|
-| CP2-DQ-01 | scope | pending | 是否冻结 revision 2：MF-1～MF-6、BL-001 作为 MF-2 enabling prerequisite、CP3 shared-core invariant、CP4 四源码/四测试 mandatory inventory，且不新增 MF-7 |
-| CP2-DQ-02 | implementation | pending-formal-freeze | formal CP2 是否冻结 review delta 指定的 read-old/write-new 及 SM-06 量化门槛；内容缺口已关闭但不等于已批准 |
+| CP2-DQ-01 | scope | approved-2026-08-16 | 冻结 revision 2：MF-1～MF-6、BL-001 作为 MF-2 enabling prerequisite、CP3 shared-core invariant、CP4 四源码/四测试 mandatory inventory，且不新增 MF-7 |
+| CP2-DQ-02 | implementation | approved-2026-08-16 | formal CP2 冻结 review delta 指定的 read-old/write-new 及 SM-06 量化门槛 |
+| CP2-DQ-01-072 | scope | approved-2026-08-18 | 冻结单一 0.6.1 Package、两个 planned Work 和一次最终 release lineage，不产生中间版本/资格化/发布 |
+| CP2-DQ-02-072 | compatibility | approved-2026-08-18 | 冻结不可复用的 typed 0.6.1 bootstrap；breaking change 仍必须 BLOCKED |
+| CP2-DQ-03-072 | admission | approved-2026-08-18 | 接受 P5-0.6.1-release-convergence admission 建议，后续由长期治理 owner 更新 Roadmap/Phase |
+| CP2-DQ-04-072 | sequencing | approved-2026-08-18 | 接受先 measure-only，再在 Work A 后实施 Work B 主体并最终一次 qualification/release 的顺序 |

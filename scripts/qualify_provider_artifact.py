@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(
                 "provider source is dirty; release qualification requires a clean checkout"
             )
-        _write_bundle_atomic(args.output, receipt, sidecar)
+        sidecar_path = _write_bundle_atomic(args.output, receipt, sidecar)
     except (OSError, ValueError) as exc:
         print(
             json.dumps(
@@ -110,7 +110,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 2
-    print(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "ProviderArtifactQualificationResultV1",
+                "decision": "PASS",
+                "mutation_count": 2,
+                "qualification_increment": 0,
+                "receipt_path": str(Path(os.path.abspath(args.output.expanduser()))),
+                "sidecar_path": str(sidecar_path),
+                "receipt_digest": receipt["receipt_digest"],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 

@@ -8,12 +8,14 @@ import re
 import warnings
 import zipfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from delivery.scripts.digest_policy import (
     build_digest_policy_sidecar,
+    digest_policy_sidecar_required,
     load_digest_policy_sidecar,
     load_known_generated_refs,
     observe_wheel_payload,
@@ -45,6 +47,34 @@ _FIELDS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderReleaseAssetSetV1:
+    """一个版本的四项公开发布资产及其语义摘要。"""
+
+    schema_version: int
+    distribution_name: str
+    distribution_version: str
+    wheel_filename: str
+    sdist_filename: str
+    receipt_filename: str
+    sidecar_filename: str
+    required_count: int
+    semantic_digest: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "distribution_name": self.distribution_name,
+            "distribution_version": self.distribution_version,
+            "wheel_filename": self.wheel_filename,
+            "sdist_filename": self.sdist_filename,
+            "receipt_filename": self.receipt_filename,
+            "sidecar_filename": self.sidecar_filename,
+            "required_count": self.required_count,
+            "semantic_digest": self.semantic_digest,
+        }
+
+
 def _canonical_digest(payload: object) -> str:
     rendered = json.dumps(
         payload,
@@ -54,6 +84,47 @@ def _canonical_digest(payload: object) -> str:
         allow_nan=False,
     )
     return sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _release_version_tuple(version: str) -> tuple[int, int, int]:
+    if not isinstance(version, str) or not re.fullmatch(r"^[0-9]+\.[0-9]+\.[0-9]+$", version):
+        raise ValueError("provider distribution version must be major.minor.patch")
+    return tuple(int(part) for part in version.split("."))  # type: ignore[return-value]
+
+
+def build_provider_release_asset_set(version: str) -> ProviderReleaseAssetSetV1:
+    """由一个严格版本生成唯一、closed 的四资产清单。"""
+
+    _release_version_tuple(version)
+    receipt_filename = "ProviderArtifactReceiptV1.json"
+    semantic: dict[str, object] = {
+        "schema_version": 1,
+        "distribution_name": "meta-flow",
+        "distribution_version": version,
+        "wheel_filename": f"meta_flow-{version}-py3-none-any.whl",
+        "sdist_filename": f"meta_flow-{version}.tar.gz",
+        "receipt_filename": receipt_filename,
+        "sidecar_filename": sidecar_path_for_receipt(Path(receipt_filename)).name,
+        "required_count": 4,
+    }
+    leaves = tuple(
+        str(semantic[field])
+        for field in (
+            "wheel_filename",
+            "sdist_filename",
+            "receipt_filename",
+            "sidecar_filename",
+        )
+    )
+    if len(set(leaves)) != 4 or any(
+        not leaf or Path(leaf).name != leaf or Path(leaf).is_absolute()
+        for leaf in leaves
+    ):
+        raise ValueError("provider release asset filenames must be four unique safe leaves")
+    return ProviderReleaseAssetSetV1(
+        **semantic,
+        semantic_digest=_canonical_digest(semantic),
+    )
 
 
 def _wheel_version(wheel: Path) -> tuple[str, str]:
@@ -177,6 +248,7 @@ def validate_provider_artifact_receipt(payload: object) -> dict[str, Any]:
     ):
         if not isinstance(normalized.get(key), str) or not normalized[key]:
             raise ValueError(f"provider artifact receipt {key} is invalid")
+    _release_version_tuple(normalized["distribution_version"])
     if not _OID_RE.fullmatch(str(normalized.get("source_commit") or "")):
         raise ValueError("provider artifact receipt source_commit is invalid")
     for key in (
@@ -210,7 +282,9 @@ def load_provider_artifact_receipt(path: Path) -> dict[str, Any]:
     _sidecar, sidecar_warnings = load_digest_policy_sidecar(
         resolved,
         expected_included_manifest_digest=receipt["source_tree_digest"],
-        allow_missing=True,
+        allow_missing=not digest_policy_sidecar_required(
+            receipt["distribution_version"]
+        ),
     )
     for warning in sidecar_warnings:
         warnings.warn(warning, RuntimeWarning, stacklevel=2)
@@ -248,9 +322,12 @@ def artifact_receipt_conflicts(
 __all__ = [
     "ARTIFACT_RECEIPT_KIND",
     "ARTIFACT_RECEIPT_SCHEMA_VERSION",
+    "ProviderReleaseAssetSetV1",
     "artifact_receipt_conflicts",
     "build_provider_artifact_bundle",
     "build_provider_artifact_receipt",
+    "build_provider_release_asset_set",
+    "digest_policy_sidecar_required",
     "load_provider_artifact_receipt",
     "validate_provider_artifact_receipt",
     "sidecar_path_for_receipt",

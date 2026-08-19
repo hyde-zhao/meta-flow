@@ -1,0 +1,351 @@
+{
+  "allowed_import_edges": [
+    {
+      "from": "checks",
+      "to": "context_pack"
+    },
+    {
+      "from": "checks",
+      "to": "design"
+    },
+    {
+      "from": "checks",
+      "to": "evals"
+    },
+    {
+      "from": "checks",
+      "to": "evidence"
+    },
+    {
+      "from": "checks",
+      "to": "policies"
+    },
+    {
+      "from": "checks",
+      "to": "project"
+    },
+    {
+      "from": "checks",
+      "to": "state"
+    },
+    {
+      "from": "checks",
+      "to": "work"
+    },
+    {
+      "from": "checks",
+      "to": "workflow"
+    },
+    {
+      "from": "checks",
+      "to": "workspace"
+    },
+    {
+      "from": "context_pack",
+      "to": "checks"
+    },
+    {
+      "from": "context_pack",
+      "to": "design"
+    },
+    {
+      "from": "context_pack",
+      "to": "policies"
+    },
+    {
+      "from": "context_pack",
+      "to": "project"
+    },
+    {
+      "from": "context_pack",
+      "to": "state"
+    },
+    {
+      "from": "context_pack",
+      "to": "workflow"
+    },
+    {
+      "from": "design",
+      "to": "policies"
+    },
+    {
+      "from": "design",
+      "to": "project"
+    },
+    {
+      "from": "evals",
+      "to": "project"
+    },
+    {
+      "from": "evidence",
+      "to": "checks"
+    },
+    {
+      "from": "policies",
+      "to": "checks"
+    },
+    {
+      "from": "policies",
+      "to": "design"
+    },
+    {
+      "from": "policies",
+      "to": "project"
+    },
+    {
+      "from": "policies",
+      "to": "workflow"
+    },
+    {
+      "from": "project",
+      "to": "checks"
+    },
+    {
+      "from": "project",
+      "to": "policies"
+    },
+    {
+      "from": "project",
+      "to": "state"
+    },
+    {
+      "from": "project",
+      "to": "work"
+    },
+    {
+      "from": "project",
+      "to": "workspace"
+    },
+    {
+      "from": "repository",
+      "to": "project"
+    },
+    {
+      "from": "repository",
+      "to": "workspace"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "checks"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "context_pack"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "design"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "evals"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "installation"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "policies"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "project"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "repository"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "state"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "validation"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "work"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "workflow"
+    },
+    {
+      "from": "root-entrypoints",
+      "to": "workspace"
+    },
+    {
+      "from": "state",
+      "to": "checks"
+    },
+    {
+      "from": "state",
+      "to": "evals"
+    },
+    {
+      "from": "state",
+      "to": "project"
+    },
+    {
+      "from": "state",
+      "to": "workflow"
+    },
+    {
+      "from": "validation",
+      "to": "project"
+    },
+    {
+      "from": "work",
+      "to": "project"
+    },
+    {
+      "from": "work",
+      "to": "workspace"
+    },
+    {
+      "from": "workflow",
+      "to": "checks"
+    },
+    {
+      "from": "workflow",
+      "to": "context_pack"
+    },
+    {
+      "from": "workflow",
+      "to": "design"
+    },
+    {
+      "from": "workflow",
+      "to": "policies"
+    },
+    {
+      "from": "workflow",
+      "to": "project"
+    },
+    {
+      "from": "workflow",
+      "to": "state"
+    },
+    {
+      "from": "workflow",
+      "to": "work"
+    },
+    {
+      "from": "workflow",
+      "to": "workspace"
+    },
+    {
+      "from": "workspace",
+      "to": "state"
+    }
+  ],
+  "authority": "CP3-DQ-GOV006-FU-CP3-05",
+  "boundary_count": 15,
+  "forbidden_directions": [
+    {
+      "from": "installation",
+      "reason": "installation must not depend on CLI root entrypoints",
+      "to": "root-entrypoints"
+    },
+    {
+      "from": "*",
+      "reason": "package modules must not reverse-depend on entrypoints",
+      "to": "root-entrypoints"
+    }
+  ],
+  "module_boundaries": {
+    "checks": {
+      "owned_paths": [
+        "meta_flow/checks/**/*.py"
+      ],
+      "package": "meta_flow.checks"
+    },
+    "context_pack": {
+      "owned_paths": [
+        "meta_flow/context_pack/**/*.py"
+      ],
+      "package": "meta_flow.context_pack"
+    },
+    "design": {
+      "owned_paths": [
+        "meta_flow/design/**/*.py"
+      ],
+      "package": "meta_flow.design"
+    },
+    "evals": {
+      "owned_paths": [
+        "meta_flow/evals/**/*.py"
+      ],
+      "package": "meta_flow.evals"
+    },
+    "evidence": {
+      "owned_paths": [
+        "meta_flow/evidence/**/*.py"
+      ],
+      "package": "meta_flow.evidence"
+    },
+    "installation": {
+      "owned_paths": [
+        "meta_flow/installation/**/*.py"
+      ],
+      "package": "meta_flow.installation"
+    },
+    "policies": {
+      "owned_paths": [
+        "meta_flow/policies/**/*.py"
+      ],
+      "package": "meta_flow.policies"
+    },
+    "project": {
+      "owned_paths": [
+        "meta_flow/project/**/*.py"
+      ],
+      "package": "meta_flow.project"
+    },
+    "repository": {
+      "owned_paths": [
+        "meta_flow/repository/**/*.py"
+      ],
+      "package": "meta_flow.repository"
+    },
+    "root-entrypoints": {
+      "owned_paths": [
+        "meta_flow/*.py"
+      ],
+      "package": "meta_flow"
+    },
+    "state": {
+      "owned_paths": [
+        "meta_flow/state/**/*.py"
+      ],
+      "package": "meta_flow.state"
+    },
+    "validation": {
+      "owned_paths": [
+        "meta_flow/validation/**/*.py"
+      ],
+      "package": "meta_flow.validation"
+    },
+    "work": {
+      "owned_paths": [
+        "meta_flow/work/**/*.py"
+      ],
+      "package": "meta_flow.work"
+    },
+    "workflow": {
+      "owned_paths": [
+        "meta_flow/workflow/**/*.py"
+      ],
+      "package": "meta_flow.workflow"
+    },
+    "workspace": {
+      "owned_paths": [
+        "meta_flow/workspace/**/*.py"
+      ],
+      "package": "meta_flow.workspace"
+    }
+  },
+  "schema_version": 2
+}

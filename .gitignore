@@ -17,7 +17,10 @@
 /docs/MODIFICATION-LOG.md
 /docs/SKILL-DEVELOPMENT-STANDARD.md
 /docs/方案编写补充约定与个人偏好.md
-/docs/design
+# Internal design evidence is ignored; two release-root checker contracts are tracked.
+/docs/design/*
+!/docs/design/PACKAGE-IDENTITY.yaml
+!/docs/design/MODULE-BOUNDARIES.yaml
 /docs/features
 
 # Build artifacts

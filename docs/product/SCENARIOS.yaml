@@ -1,11 +1,14 @@
-status: draft
-version: "1.1"
-source_revision: "CR-071@cp2-revision-2"
+status: confirmed
+version: "1.2"
+source_revision: "CR-071@cp2-revision-2 + CR-072@0.6.1-package-approved"
 source_requirements:
   - docs/product/REQUIREMENTS.md
 source_use_cases:
   - docs/product/USE-CASES.md
-formal_cp2_status: pending
+formal_cp2_status: approved
+confirmed_by: "user"
+confirmed_at: "2026-08-18T08:02:17Z"
+formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
 revision_history:
   - version: "1.0"
     date: "2026-08-15"
@@ -13,6 +16,9 @@ revision_history:
   - version: "1.1"
     date: "2026-08-15"
     summary: "Incrementally absorbed six CP2 changes_requested deltas without changing scenario IDs"
+  - version: "1.2"
+    date: "2026-08-18"
+    summary: "Added CR-072 0.6.1 package/compiler/closure/cost/SemVer/release/consumer scenarios; CR-071 IDs retained"
 scenarios:
   - id: SCN-MF1-01
     title: "合法 Work 初始化执行全生命周期零写预检"
@@ -338,21 +344,237 @@ scenarios:
     evidence_type: automated
     automation_status: planned
     gap_reason: ""
+  - id: SCN-072-01
+    title: "完整 Work A/B Package 被编译为唯一 canonical Plan"
+    type: positive
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-072-01, REQ-072-02]
+      use_cases: [UC-PLAN-COMPILER]
+      stories: [ST-072-PLAN]
+    trigger: "两个 planned Work 提交 0.6.1 Package 候选"
+    context: "manifest、owner、priority、依赖和 public CLI registration 完整"
+    preconditions: ["CP2 后才可进入实现；本场景仅定义 planned 验证"]
+    steps:
+      - action: "编译 Package Plan IR"
+        expected: "输出唯一 Package、两 Work 归属、确定排序和 CLI registration evidence；不创建对象"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-02
+    title: "缺 package completeness、priority、owner 或 public CLI 时 compiler 零写阻断"
+    type: negative
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-072-01, REQ-072-02, REQ-072-12]
+      use_cases: [UC-PLAN-COMPILER]
+      stories: [ST-N-072-PLAN]
+    trigger: "候选 Package 含缺字段、重复 owner、无效 priority 或未注册 CLI"
+    context: "deny-default compiler admission"
+    preconditions: ["输入快照可读"]
+    steps:
+      - action: "运行 compiler precheck"
+        expected: "逐项 BLOCKED、指出 owner/recovery，mutation=0，未创建 Work/Story/CP"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-03
+    title: "direct/transitive closure 和 literal SHA 决定 affected-only rebuild"
+    type: positive
+    priority: HIGH
+    persona: P-01
+    source_refs:
+      requirements: [REQ-072-03, REQ-072-04]
+      use_cases: [UC-CLOSURE-BUILD]
+      stories: [ST-072-CLOSURE]
+    trigger: "一个已知 root/SHA 发生变化"
+    context: "依赖图含 direct 与 transitive 关系"
+    preconditions: ["canonical graph 与 package identity 可解析"]
+    steps:
+      - action: "计算 closure 和 rebuild plan"
+        expected: "包含所有受影响 direct/transitive 对象、按 literal SHA 追踪，未受影响对象不进入 build"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-04
+    title: "缺 graph、非法 SHA 或稳定输入时 closure fail closed/no-op"
+    type: boundary
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-072-03, REQ-072-04]
+      use_cases: [UC-CLOSURE-BUILD]
+      stories: [ST-N-072-CLOSURE]
+    trigger: "closure 输入不完整、SHA 非 literal 或 fingerprint 未变"
+    context: "失败恢复与无影响边界"
+    preconditions: ["上次 closure 摘要可读"]
+    steps:
+      - action: "重算 closure"
+        expected: "不完整输入 BLOCKED；稳定输入 affected set 不扩大且语义 no-op"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-05
+    title: "measure-only 成本报告可追溯且重复计算 no-op"
+    type: positive
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-072-05]
+      use_cases: [UC-PROCESS-COST]
+      stories: [ST-072-COST]
+    trigger: "Package 生成成本 baseline"
+    context: "append-only records 与 receipts 均可验证"
+    preconditions: ["policy 处于 measure-only"]
+    steps:
+      - action: "派生两次 cost report"
+        expected: "报告包含来源/digest/count/baseline；第二次除时间字段外语义 no-op"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-06
+    title: "hard-gate 阶段拒绝超阈值、harness error 或重复 qualification"
+    type: negative
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-072-05, REQ-072-06, REQ-072-10]
+      use_cases: [UC-PROCESS-COST, UC-RELEASE-ORDER]
+      stories: [ST-N-072-COST]
+    trigger: "hard-gate 后成本超阈值、CHECK_HARNESS_ERROR 未关闭或 qualification count>1"
+    context: "不以 harness error 伪装内容失败"
+    preconditions: ["批准的 hard-gate policy 可读"]
+    steps:
+      - action: "执行 admission 判断"
+        expected: "明确标记 CHECK_HARNESS_ERROR 或 BLOCKED、列恢复条件，禁止 qualification/release"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-07
+    title: "真实 SemVer 分类后一次 bootstrap 决定 0.6.1"
+    type: positive
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-072-07, REQ-072-08]
+      use_cases: [UC-SEMVER-DECISION]
+      stories: [ST-072-SEMVER]
+    trigger: "source freeze 前出现 non-breaking minor/0.7.0 classifier 建议"
+    context: "typed bootstrap 为 reusable=false 且尚未消费"
+    preconditions: ["兼容性证据可审计"]
+    steps:
+      - action: "执行 classifier 后请求 bootstrap"
+        expected: "保留真实分类理由并只生成一次 0.6.1 decision；不是 PATCH 伪装"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-08
+    title: "breaking change 或 bootstrap 重用被 SemVer 门阻断"
+    type: negative
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-072-07, REQ-072-08]
+      use_cases: [UC-SEMVER-DECISION]
+      stories: [ST-N-072-SEMVER]
+    trigger: "分类器检测 breaking change，或同一 token 被第二次/跨版本使用"
+    context: "兼容边界保护"
+    preconditions: ["分类或 token provenance 可读"]
+    steps:
+      - action: "请求版本决策"
+        expected: "BLOCKED，保留真实分类，不能选择 0.6.1/patch 作为绕过"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-09
+    title: "严格 release-order 形成一次 aggregate qualification/build/canary 血缘"
+    type: positive
+    priority: HIGH
+    persona: P-02
+    source_refs:
+      requirements: [REQ-072-09, REQ-072-10]
+      use_cases: [UC-RELEASE-ORDER]
+      stories: [ST-072-RELEASE]
+    trigger: "两个 Work 都满足聚合候选完成条件"
+    context: "唯一 0.6.1 Package"
+    preconditions: ["source freeze 与 version decision 已验证"]
+    steps:
+      - action: "规划 freeze→decision→fingerprint→qualification→build→canary→tag/release"
+        expected: "每步只有一次且同一 lineage；本阶段不执行这些动作"
+    evidence_type: manual
+    automation_status: planned
+    gap_reason: "需要后续独立运行/发布授权"
+  - id: SCN-072-10
+    title: "freeze drift、倒序或 Work A 单独发布只失效受影响步骤"
+    type: negative
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-072-09, REQ-072-10, REQ-072-12]
+      use_cases: [UC-RELEASE-ORDER]
+      stories: [ST-N-072-RELEASE]
+    trigger: "freeze 后 fingerprint 漂移、步骤倒序或 Work A 请求中间 receipt/release"
+    context: "一次最终发布血缘"
+    preconditions: ["先前步骤摘要可读"]
+    steps:
+      - action: "评估 transition"
+        expected: "BLOCKED，只失效 drift 影响步骤；不生成中间版本、qualification、build、canary 或 release"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
+  - id: SCN-072-11
+    title: "clean-home published-asset canary 只消费已构建 Package"
+    type: positive
+    priority: HIGH
+    persona: P-01
+    source_refs:
+      requirements: [REQ-072-11]
+      use_cases: [UC-PUBLISHED-ASSET-CONSUMER]
+      stories: [ST-072-CONSUMER]
+    trigger: "最终 build 后获得独立 canary 授权"
+    context: "隔离 clean-home 与 published asset"
+    preconditions: ["后续授权可用；本轮仅验证 contract"]
+    steps:
+      - action: "由 clean-home 调用 public CLI"
+        expected: "仅依赖 published asset，验证 package completeness/CLI；不把 source tree 作为回退"
+    evidence_type: manual
+    automation_status: planned
+    gap_reason: "CP2 不授权真实安装或运行"
+  - id: SCN-072-12
+    title: "缺 asset、CLI、隔离性或授权时 consumer canary fail closed"
+    type: permission
+    priority: HIGH
+    persona: P-03
+    source_refs:
+      requirements: [REQ-072-11, REQ-072-12]
+      use_cases: [UC-PUBLISHED-ASSET-CONSUMER]
+      stories: [ST-N-072-CONSUMER]
+    trigger: "资产不完整、CLI 未注册、home 污染或无安装/运行授权"
+    context: "消费者完整性与权限边界"
+    preconditions: ["canary 计划已定义"]
+    steps:
+      - action: "执行前置检查或后续授权 canary"
+        expected: "BLOCKED/FAIL 并给出恢复入口；不读取凭据、不真实安装、不降级到源树"
+    evidence_type: automated
+    automation_status: planned
+    gap_reason: ""
 coverage_summary:
-  total: 18
+  total: 30
   by_type:
-    positive: 6
-    negative: 6
-    boundary: 3
-    permission: 1
+    positive: 11
+    negative: 11
+    boundary: 4
+    permission: 2
     empty-data: 0
     external-failure: 1
     precheck: 1
-  high_priority: 18
+  high_priority: 30
   high_priority_positive_and_negative_covered: true
-  requirement_refs_total: 18
-  requirement_refs_covered: 18
-  use_case_refs_total: 6
-  use_case_refs_covered: 6
+  requirement_refs_total: 30
+  requirement_refs_covered: 30
+  use_case_refs_total: 12
+  use_case_refs_covered: 12
   gaps: []
   review_deltas_covered: [REV-01, REV-02, REV-03, REV-04, REV-05, REV-06]

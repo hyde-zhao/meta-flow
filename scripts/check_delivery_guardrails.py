@@ -65,6 +65,8 @@ INSTALLATION_ROLE_REGISTRY = {
     "scripts/run_provider_artifact_canary.py": "isolated_artifact_canary",
     "tests/test_provider_artifact_receipt.py": "contract_test",
     "tests/test_provider_runtime_identity.py": "contract_test",
+    "tests/test_cr072_release_asset_completeness.py": "contract_test",
+    "tests/test_cr072_provider_canary_contract.py": "contract_test",
     "tests/test_install_plan_contract.py": "contract_test",
     "meta_flow/installation/manifest.py": "manifest_ownership",
     "meta_flow/installation/ownership.py": "manifest_ownership",

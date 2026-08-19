@@ -12,20 +12,13 @@ from meta_flow.execution_control.contract import canonical_digest
 from meta_flow.work.budget import BudgetLimit, WorkUsage
 from meta_flow.work.model import load_work
 from meta_flow.work.scope import check_scope
+from meta_flow.work.usage import canonicalize_usage_event, normalize_stage
 
 STAGE_SHARES = {
     "requirements": 0.20,
     "design": 0.20,
     "implementation": 0.40,
     "verification": 0.20,
-}
-STAGE_ALIASES = {
-    "requirement": "requirements",
-    "requirement-confirmation": "requirements",
-    "requirements-confirmation": "requirements",
-    "solution-design": "design",
-    "validation": "verification",
-    "verify": "verification",
 }
 GOVERNANCE_LIMITS = {
     "human_interactions": 3,
@@ -45,11 +38,6 @@ GOVERNANCE_OPERATION_DIMENSIONS = {
     "final-full-suite": "final_full_suites",
 }
 SYSTEM_OPERATION_KINDS = {"usage-record"}
-
-
-def normalize_stage(value: str) -> str:
-    normalized = value.strip().lower()
-    return STAGE_ALIASES.get(normalized, normalized)
 
 
 def _stage_limit(limit: BudgetLimit, stage: str) -> BudgetLimit:
@@ -220,6 +208,7 @@ def plan_usage_admission(
 
     from meta_flow.work.usage import load_usage, summarize_usage
 
+    event = canonicalize_usage_event(event)
     work = load_work(process_root, work_id)
     ledger = load_usage(process_root, work)
     stage = normalize_stage(str(event.stage))
@@ -238,7 +227,10 @@ def plan_usage_admission(
         (item for item in ledger.events if item.event_id == event.event_id),
         None,
     )
-    if recorded_event is not None and recorded_event != event:
+    if (
+        recorded_event is not None
+        and canonicalize_usage_event(recorded_event) != event
+    ):
         raise ValueError(f"usage event_id conflict: {event.event_id}")
     event_delta = WorkUsage() if recorded_event is not None else event.as_usage()
     projected_total = _add(summarize_usage(ledger), event_delta)

@@ -20,6 +20,7 @@ from meta_flow.project.process_route import (
     _resolve_runtime_ref,
 )
 from meta_flow.project.read_contract import ReadContextProtocol
+from meta_flow.state.formal_projection import FORMAL_TRUTH_REPLACE_PATHS
 
 PUBLIC_OPERATION_DECLARATIONS = (
     (
@@ -636,15 +637,41 @@ def _raise_on_error(
     raise StateValidationError(f"{subject} validation failed{context}: {messages}")
 
 
+def merge_current_state(
+    base: dict[str, Any],
+    patch: dict[str, Any],
+    *,
+    replace_paths: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """递归合并普通 patch，只对内部 allowlist 的 typed root 做精确替换。"""
+
+    unknown = sorted(set(replace_paths) - FORMAL_TRUTH_REPLACE_PATHS)
+    if unknown:
+        raise StateValidationError("unknown current-state replace paths: " + ", ".join(unknown))
+
+    def merge(
+        current: dict[str, Any], update: dict[str, Any], *, parent: str = ""
+    ) -> dict[str, Any]:
+        candidate = copy.deepcopy(current)
+        for key, value in update.items():
+            path = f"{parent}.{key}" if parent else key
+            if path in replace_paths:
+                candidate[key] = copy.deepcopy(value)
+                continue
+            existing = candidate.get(key)
+            if isinstance(existing, dict) and isinstance(value, dict):
+                candidate[key] = merge(existing, value, parent=path)
+            else:
+                candidate[key] = copy.deepcopy(value)
+        return candidate
+
+    return merge(base, patch)
+
+
 def _deep_merge_current_state(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    candidate = copy.deepcopy(base)
-    for key, value in patch.items():
-        existing = candidate.get(key)
-        if isinstance(existing, dict) and isinstance(value, dict):
-            candidate[key] = _deep_merge_current_state(existing, value)
-        else:
-            candidate[key] = copy.deepcopy(value)
-    return candidate
+    """兼容既有内部调用的普通递归 merge。"""
+
+    return merge_current_state(base, patch)
 
 
 def current_state_path(project_root: Path) -> Path:
@@ -1710,6 +1737,111 @@ def load_workflow_health(
     return payload
 
 
+def build_process_cost_health_summary(
+    report_ref: str, report: dict[str, Any]
+) -> dict[str, Any]:
+    """只投影成本报告的 ref/digest/mode/decision/soft-risk count。"""
+
+    if not _is_relative_state_ref(report_ref) or not report_ref.startswith("process/"):
+        raise ValueError("process cost report_ref is unsafe")
+    if report.get("kind") != "ProcessCostReportV1":
+        raise ValueError("process cost report kind is invalid")
+    report_digest = report.get("report_digest")
+    if (
+        not isinstance(report_digest, str)
+        or len(report_digest) != 64
+        or any(character not in "0123456789abcdef" for character in report_digest)
+    ):
+        raise ValueError("process cost report digest is invalid")
+    digest_input = copy.deepcopy(report)
+    digest_input.pop("report_digest", None)
+    canonical = json.dumps(
+        digest_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    if hashlib.sha256(canonical).hexdigest() != report_digest:
+        raise ValueError("process cost report digest mismatch")
+    mode = report.get("mode")
+    if not isinstance(mode, dict):
+        raise ValueError("process cost report mode is invalid")
+    soft_risks = report.get("soft_risks")
+    if not isinstance(soft_risks, list) or any(not isinstance(item, str) for item in soft_risks):
+        raise ValueError("process cost soft risks are invalid")
+    decision = report.get("decision")
+    if decision not in {"PASS", "PASS_WITH_RISK", "BLOCKED"}:
+        raise ValueError("process cost structural decision is invalid")
+    return {
+        "report_ref": report_ref,
+        "report_digest": report_digest,
+        "mode": str(mode.get("empirical") or ""),
+        "structural_decision": decision,
+        "soft_risk_count": len(soft_risks),
+    }
+
+
+def build_workflow_health_process_cost_candidate(
+    base: dict[str, Any], *, report_ref: str, report: dict[str, Any]
+) -> dict[str, Any]:
+    candidate = copy.deepcopy(base)
+    candidate.setdefault("schema_version", 1)
+    candidate.setdefault("phase_counters", {})
+    candidate["process_cost"] = build_process_cost_health_summary(report_ref, report)
+    return candidate
+
+
+def plan_cost_health_projection(
+    project_root: Path,
+    report: dict[str, Any],
+    *,
+    report_ref: str,
+    expected_preimage: str,
+) -> dict[str, Any]:
+    """构造 fresh-preimage-bound 的零写 cost-health projection plan。"""
+
+    root = project_root.resolve()
+    path = _resolve_runtime_ref(root, WORKFLOW_HEALTH_REL.as_posix())
+    raw = path.read_bytes() if path.is_file() and not path.is_symlink() else b""
+    observed_preimage = hashlib.sha256(raw).hexdigest()
+    base = load_workflow_health(root)
+    candidate = build_workflow_health_process_cost_candidate(
+        base, report_ref=report_ref, report=report
+    )
+    before_semantic = copy.deepcopy(base)
+    after_semantic = copy.deepcopy(candidate)
+    before_semantic.pop("updated_at", None)
+    after_semantic.pop("updated_at", None)
+    if observed_preimage != expected_preimage:
+        decision = "BLOCKED"
+        targets: list[str] = []
+    elif before_semantic == after_semantic:
+        decision = "NO_CHANGE"
+        targets = []
+    else:
+        decision = "READY"
+        targets = [WORKFLOW_HEALTH_REL.as_posix()]
+        if current_state_path(root).is_file():
+            targets.append(STATE_CURRENT_REL.as_posix())
+    semantic = {
+        "operation": "state.cost-health-project",
+        "report_ref": report_ref,
+        "report_digest": candidate["process_cost"]["report_digest"],
+        "expected_preimage": expected_preimage,
+        "observed_preimage": observed_preimage,
+        "decision": decision,
+        "planned_targets": targets,
+    }
+    return {
+        "schema_version": 1,
+        "kind": "ProcessCostHealthProjectionPlanV1",
+        "decision": decision,
+        "mutation_count": 0,
+        "planned_mutation_count": len(targets),
+        "target_refs": [WORKFLOW_HEALTH_REL.as_posix(), STATE_CURRENT_REL.as_posix()],
+        "planned_targets": targets,
+        "process_cost": candidate["process_cost"],
+        "plan_digest": _sha256_json(semantic),
+    }
+
+
 def _build_workflow_health_update(
     project_root: Path,
     *,
@@ -1828,6 +1960,7 @@ def update_current_state(
     reason: str = "",
     mode: str = "enforce",
     render: bool = False,
+    _replace_paths: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     if not isinstance(patch, dict):
         raise StateValidationError(
@@ -1840,6 +1973,7 @@ def update_current_state(
         actor=actor,
         reason=reason,
         mode=mode,
+        replace_paths=_replace_paths,
     )
 
     _ = render  # 兼容旧调用；三份核心投影现在始终作为同一事务刷新。
@@ -1860,13 +1994,16 @@ def plan_formal_truth_refresh(project_root: Path) -> dict[str, Any]:
     )
 
     snapshot = build_formal_truth_snapshot(root)
-    patch = derive_formal_truth_patch(state, snapshot)
+    gate_patch, gate_convergence = _derive_approved_pending_gate_patch(root, state)
+    gate_base = merge_current_state(state, gate_patch)
+    patch = {**gate_patch, **derive_formal_truth_patch(gate_base, snapshot)}
     candidate = build_current_state_candidate(
         root,
         patch,
         actor="meta_flow.state.formal_projection",
         reason="refresh formal truth projection",
         mode="enforce",
+        replace_paths=FORMAL_TRUTH_REPLACE_PATHS,
     )
     semantic_current = copy.deepcopy(state)
     semantic_candidate = copy.deepcopy(candidate)
@@ -1892,7 +2029,9 @@ def plan_formal_truth_refresh(project_root: Path) -> dict[str, Any]:
         semantic_input={
             "operation": "state.projection-refresh",
             "formal_truth_source_digest": snapshot["source_digest"],
+            "gate_convergence": gate_convergence,
             "candidate": semantic_candidate,
+            "replace_paths": sorted(FORMAL_TRUTH_REPLACE_PATHS),
             "planned_targets": planned_targets,
         },
     )
@@ -1909,7 +2048,9 @@ def refresh_formal_truth_projection(project_root: Path) -> dict[str, Any]:
     )
 
     snapshot = build_formal_truth_snapshot(root)
-    patch = derive_formal_truth_patch(state, snapshot)
+    gate_patch, _gate_convergence = _derive_approved_pending_gate_patch(root, state)
+    gate_base = merge_current_state(state, gate_patch)
+    patch = {**gate_patch, **derive_formal_truth_patch(gate_base, snapshot)}
     patch["updated_at"] = now_utc()
     return update_current_state(
         root,
@@ -1918,6 +2059,85 @@ def refresh_formal_truth_projection(project_root: Path) -> dict[str, Any]:
         reason="refresh formal truth projection",
         mode="enforce",
         render=True,
+        _replace_paths=FORMAL_TRUTH_REPLACE_PATHS,
+    )
+
+
+def _derive_approved_pending_gate_patch(
+    project_root: Path,
+    state: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """从 current checkpoint head 与 typed gate passage 收敛 stale pending gate。"""
+
+    pending_gate = str(state.get("pending_gate") or "")
+    cr_id = str(state.get("active_change") or "")
+    if not pending_gate or not cr_id:
+        return {}, {"decision": "NO_CHANGE", "reason": "NO_PENDING_GATE"}
+    from meta_flow.state import checkpoint_projection, event_ledger
+
+    try:
+        projection = checkpoint_projection.load_checkpoint_projection(
+            project_root,
+            cr_id=cr_id,
+            checkpoint=pending_gate,
+        )
+        head = projection.head(pending_gate)
+        gate_path = _resolve_runtime_ref(
+            project_root, "process/state/GATE-LEDGER.ndjson"
+        )
+        gate_events, load_errors = event_ledger.load_events(gate_path)
+        approvals = [
+            item
+            for item in event_ledger.project_gate_approvals(gate_events)
+            if item.passage
+            and item.cr_id == cr_id
+            and item.checkpoint == pending_gate
+            and head is not None
+            and item.result_ref == head.result_ref
+        ]
+    except (OSError, TypeError, ValueError):
+        return {}, {
+            "decision": "NO_CHANGE",
+            "reason": "GATE_PROJECTION_UNAVAILABLE",
+        }
+    if projection.findings or load_errors or head is None:
+        return {}, {
+            "decision": "NO_CHANGE",
+            "reason": "GATE_PROJECTION_NOT_CURRENT",
+        }
+    if len(approvals) != 1:
+        return {}, {
+            "decision": "NO_CHANGE",
+            "reason": "EXACT_GATE_PASSAGE_UNAVAILABLE",
+            "matching_passage_count": len(approvals),
+            "result_ref": head.result_ref,
+        }
+    source_refs = list(
+        dict.fromkeys(
+            [
+                *(
+                    item
+                    for item in state.get("source_refs", [])
+                    if isinstance(item, str)
+                ),
+                "process/state/GATE-LEDGER.ndjson",
+                head.result_ref,
+            ]
+        )
+    )
+    return (
+        {
+            "pending_gate": None,
+            "pending_checklist_path": None,
+            "source_refs": source_refs[:24],
+        },
+        {
+            "decision": "CONVERGE",
+            "checkpoint": pending_gate,
+            "cr_id": cr_id,
+            "result_ref": head.result_ref,
+            "approval_event_id": approvals[0].event_id,
+        },
     )
 
 
@@ -1930,6 +2150,7 @@ def build_current_state_candidate(
     mode: str = "enforce",
     base_state: dict[str, Any] | None = None,
     read_context: ReadContextProtocol | None = None,
+    replace_paths: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Build and validate a current-state candidate without writing it."""
 
@@ -1951,7 +2172,7 @@ def build_current_state_candidate(
         project_root,
         read_context=read_context,
     )
-    candidate = _deep_merge_current_state(base, patch)
+    candidate = merge_current_state(base, patch, replace_paths=replace_paths)
     candidate_findings = validate_current_state_payload(candidate, mode=mode)
     _raise_on_error(
         candidate_findings, subject="STATE.current.json candidate", actor=actor, reason=reason

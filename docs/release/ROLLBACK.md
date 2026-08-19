@@ -1,28 +1,31 @@
 ---
-status: candidate
-version: "0.6.0"
+status: frozen_candidate
+version: "0.6.1"
 release_artifact_profile: full
 release_decision: NOT_READY
 ---
 
-# 0.6.0 Rollback
+# Meta Flow 0.6.1 Rollback
 
 ## 回滚边界
 
-回滚目标为 0.5.3。程序包回滚与过程仓状态回滚不是同一动作：0.6.0 产生的 append-only revision/receipt 不得删除或改写；旧 reader 不理解 V2 correction，因此不能在含 V2 manifest 的过程仓上直接恢复写操作。
+回滚目标是已发布的 0.6.0。程序包回退不得删除或改写 0.6.1 已产生的 append-only ledger、receipt、Story/Work/CR 历史或 release-order evidence。当前仅形成本地候选，未授权远端发布或外部 consumer mutation。
 
-## 触发与步骤
+## 触发条件与动作
 
-| 场景 | 处理 |
-|---|---|
-| 尚未执行任何 0.6.0 writer | 可回退程序包，随后以 0.5.3 只读检查确认；不要复用 0.6.0 plan |
-| 已有 terminal 0.6.0 事务但无 V2 correction | 保留 append-only evidence；先用 0.6.0 inspect 证明 terminal，再由人工决定是否允许旧工具只读 |
-| 已产生 V2 correction manifest | 禁止直接运行 0.5.3；保持 0.6.0 inspector，或从升级前双仓/runtime 精确快照恢复后再验证 |
-| 非终态或恢复失败 | 停止；保留现场，使用同版本 native inspect/recover，不做手工文件回滚 |
+| Trigger | 条件 | 动作 | 验证 |
+|---|---|---|---|
+| RB-072-01 | qualification/build/canary 任一失败 | 停止发布序列；保留失败 evidence，不重做已计数动作 | release-order state 未越过失败步骤 |
+| RB-072-02 | source freeze 后源码漂移 | 候选失效；不得复用 qualification 或 full receipt | 新 fingerprint 明确阻断旧 evidence |
+| RB-072-03 | 发现 breaking/unknown compatibility | 阻断 0.6.1；调整设计或重新进入版本决策 | SemVer decision 为 BLOCKED |
+| RB-072-04 | 本地候选未发布 | 不做 Git 历史破坏；保留提交并等待新指令 | 远端无 0.6.1 发布事实 |
+| RB-072-05 | 未来发布后出现回归 | 由独立授权执行 0.6.0 安装/发布回滚 | 0.6.0 runtime READY，过程真相只追加不改写 |
 
-## 回滚验证
+## 安全规则
 
-- 双仓 OID、dirty inventory 和目标 preimage 与获批回滚计划一致；
-- project/work/cr/state/projection 检查无未决事务；
-- 不删除 correction receipt、scope revision、event ledger 或其他 append-only lineage；
-- 不执行 `git reset --hard`、递归清理、强推或外部 consumer 写入。
+- 不使用 `git reset --hard`、强推、删除 tag 或手工删除 ledger/receipt。
+- 非终态 native transaction 必须用同版本 inspect/recover 收敛。
+- 0.6.1 新 CLI/schema 的消费者在回退前先确认未依赖新写入格式。
+- 回滚计划不授权任何外部安装、数据写或远端操作。
+
+动态候选 OID、artifact digest 与失败位置以 `process/release/RELEASE-CONTEXT.yaml` 为准。

@@ -56,7 +56,9 @@ The directory groups below describe legacy/G2 extended evidence locations and re
 
 ## Meta-flow Self-development Canonical Docs
 
-For this repository, `process/docs/**` is the only writable canonical location for internal product, design, feature, quality, and internal release evidence. The tracked root `docs/` tree is limited to public entry points and public release documents. Do not create ignored copies or compatibility symlinks for `docs/product`, `docs/design`, `docs/features`, or `docs/quality`; the expected internal canonical copy count is exactly one.
+For this repository, `process/docs/**` is the only writable canonical location for internal product, design, feature, quality, and internal release evidence. The tracked root `docs/` tree is limited to public entry points and public release documents. Do not create ignored copies or compatibility symlinks for `docs/product`, internal design evidence under `docs/design`, `docs/features`, or `docs/quality`; the expected internal canonical copy count is exactly one.
+
+Two release-root machine contracts are explicit exceptions to the internal-document rule: `docs/design/PACKAGE-IDENTITY.yaml` and `docs/design/MODULE-BOUNDARIES.yaml`. They are not HLD or design evidence; the production checkers consume them relative to the release root, so they must be tracked, writable machine truth and must not be ignored. `process/policies/SOURCE-OF-TRUTH-MAP.yaml` owns these exact paths. Every other Meta Flow self-development design document, including the human Source-of-Truth summary, remains canonical only under `process/docs/design/**`; no other release-root `docs/design/**` exception is permitted.
 
 Production projects continue to follow their own documented delivery layout. This repository-specific rule must not be projected onto a production repository without an explicit routing decision.
 

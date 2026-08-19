@@ -333,6 +333,95 @@ def current_git_heads(root: Path):
 
 
 class StoryContextContractTests(unittest.TestCase):
+    def _production_story(self) -> dict[str, object]:
+        return {
+            "story_id": "STORY-CR072-S03",
+            "work_id": "CR-072-WB-GOVERNANCE-001",
+            "feature_design_refs": ["process/docs/features/cr072-cost-semver/DESIGN.md"],
+            "lld_gate": {
+                "evidence_ref": "process/stories/STORY-CR072-S03-PRODUCTION-COST-LLD.md"
+            },
+            "file_ownership": {
+                "primary": ["meta_flow/checks/process_cost.py"],
+                "shared": ["meta_flow/cli.py", "meta_flow/package_cli.py"],
+            },
+            "production_contract": {
+                "schema_version": 1,
+                "production_entrypoints": ["meta_flow/cli.py"],
+                "reachable_core_paths": [
+                    "meta_flow/checks/process_cost.py",
+                    "meta_flow/package_cli.py",
+                ],
+                "public_operation_ids": ["package.cost-report"],
+                "mutation_mode": "zero-write",
+                "authorization_refs": [],
+                "receipt_refs": [],
+                "zero_write_proof_refs": [
+                    "tests/test_cr072_process_cost.py::test_cost_report_cli_is_zero_write"
+                ],
+                "targeted_test_refs": ["tests/test_cr072_process_cost.py"],
+                "negative_test_refs": [
+                    "tests/test_story_context_contract.py::test_production_path_contract_rejects_helper_only"
+                ],
+                "compatibility_test_refs": ["tests/test_public_operation_contracts.py"],
+                "output_evidence_contract": "ProductionPathContractV1+ProcessCostReportV1",
+            },
+        }
+
+    def test_production_path_contract(self) -> None:
+        story = self._production_story()
+        ownership_digest = canonical_digest(story["file_ownership"])
+
+        contract = story_contract.build_production_path_contract(
+            story,
+            ownership_digest=ownership_digest,
+            registry_operations={"package.cost-report"},
+        )
+        replay = story_contract.build_production_path_contract(
+            story,
+            ownership_digest=ownership_digest,
+            registry_operations={"package.cost-report"},
+        )
+
+        self.assertEqual(contract, replay)
+        self.assertEqual([], list(story_contract.validate_production_path_contract(contract)))
+        self.assertEqual(ownership_digest, contract["file_ownership_digest"])
+
+    def test_production_path_contract_rejects_helper_only(self) -> None:
+        story = self._production_story()
+        story["production_contract"]["production_entrypoints"] = [
+            "tests/helpers/build_report.py"
+        ]
+
+        with self.assertRaisesRegex(ValueError, "PRODUCTION_PATH_UNREACHABLE"):
+            story_contract.build_production_path_contract(
+                story,
+                ownership_digest=canonical_digest(story["file_ownership"]),
+                registry_operations={"package.cost-report"},
+            )
+
+        story = self._production_story()
+        story["production_contract"]["production_entrypoints"] = [
+            "meta_flow/helpers/build_report.py"
+        ]
+        with self.assertRaisesRegex(ValueError, "PRODUCTION_PATH_UNREACHABLE"):
+            story_contract.build_production_path_contract(
+                story,
+                ownership_digest=canonical_digest(story["file_ownership"]),
+                registry_operations={"package.cost-report"},
+            )
+
+    def test_production_path_contract_rejects_missing_zero_write_proof(self) -> None:
+        story = self._production_story()
+        story["production_contract"]["zero_write_proof_refs"] = []
+
+        with self.assertRaisesRegex(ValueError, "ZERO_WRITE_PROOF_MISSING"):
+            story_contract.build_production_path_contract(
+                story,
+                ownership_digest=canonical_digest(story["file_ownership"]),
+                registry_operations={"package.cost-report"},
+            )
+
     def test_canonical_full_lld_uses_exact_gate_ref_for_read_and_preregistration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

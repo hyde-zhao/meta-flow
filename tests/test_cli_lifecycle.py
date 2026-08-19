@@ -256,7 +256,7 @@ def test_version_reports_identity_readiness_separately_from_exact_delivery() -> 
 
     payload = json.loads(output.getvalue())
     assert payload["ready"] is True
-    assert payload["status"] == "SOURCE_READY_RELEASE_BLOCKED"
+    assert payload["status"] == "IDENTITY_INCOMPLETE"
     assert payload["provider_admission"]["decision"] == "BLOCKED"
     assert payload["worktree_clean"] is False
     assert payload["exact_commit_delivery"] is False

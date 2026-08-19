@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -128,6 +130,141 @@ def test_formal_snapshot_rejects_unsafe_direct_project_work_ref(tmp_path: Path) 
         formal_projection.build_formal_truth_snapshot(tmp_path)
 
 
+def test_typed_formal_root_replacement_removes_stale_keys_but_normal_merge_preserves(
+    tmp_path: Path,
+) -> None:
+    _ = tmp_path
+    base = {
+        "formal_truth_projection": {
+            "phase_statuses": {"P0": "completed", "P1": "active"},
+            "metadata": {"old": True},
+        },
+        "next_action": {"type": "continue", "text": "old", "stop_reason": None},
+    }
+    patch = {
+        "formal_truth_projection": {
+            "phase_statuses": {"P1": "active"},
+            "metadata": {"new": True},
+        },
+        "next_action": {"text": "new"},
+    }
+
+    replaced = current.merge_current_state(
+        base,
+        patch,
+        replace_paths=formal_projection.FORMAL_TRUTH_REPLACE_PATHS,
+    )
+    merged = current.merge_current_state(base, patch)
+
+    assert replaced["formal_truth_projection"]["phase_statuses"] == {"P1": "active"}
+    assert replaced["formal_truth_projection"]["metadata"] == {"new": True}
+    assert replaced["next_action"] == {
+        "type": "continue",
+        "text": "new",
+        "stop_reason": None,
+    }
+    assert "P0" in merged["formal_truth_projection"]["phase_statuses"]
+    with pytest.raises(current.StateValidationError, match="unknown current-state replace paths"):
+        current.merge_current_state(base, patch, replace_paths=frozenset({"next_action"}))
+
+
+def test_formal_refresh_exactly_replaces_stale_phase_collection(tmp_path: Path) -> None:
+    _formal_fixture(tmp_path)
+    current.update_current_state(
+        tmp_path,
+        {
+            "formal_truth_projection": {
+                "schema_version": 1,
+                "phase_statuses": {"P0": "completed", "P1": "active"},
+                "active_phase_ids": ["P1"],
+                "active_work_ids": [],
+                "active_cr_ids": [],
+                "source_refs": [],
+                "source_digest": "0" * 64,
+            },
+            "updated_at": current.now_utc(),
+        },
+        actor="tests.formal_projection",
+        reason="install stale typed collection fixture",
+        mode="enforce",
+    )
+
+    refreshed = current.refresh_formal_truth_projection(tmp_path)
+
+    assert refreshed["formal_truth_projection"]["phase_statuses"] == {"P1": "active"}
+    assert "P0" not in refreshed["formal_truth_projection"]["phase_statuses"]
+
+
+def _cost_report(*, decision: str = "PASS", soft_risks: list[str] | None = None) -> dict:
+    report = {
+        "schema_version": 1,
+        "kind": "ProcessCostReportV1",
+        "mode": {"empirical": "measure-only", "structural_safety": "hard"},
+        "soft_risks": list(soft_risks or []),
+        "decision": decision,
+    }
+    canonical = json.dumps(
+        report, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    report["report_digest"] = hashlib.sha256(canonical).hexdigest()
+    return report
+
+
+def test_process_cost_health_projection_is_closed_zero_write_and_preimage_bound(
+    tmp_path: Path,
+) -> None:
+    _formal_fixture(tmp_path)
+    report = _cost_report(decision="PASS_WITH_RISK", soft_risks=["RATIO_HIGH"])
+    report_ref = "process/works/CR-072-WB-GOVERNANCE-001/evidence/cost.json"
+    summary = current.build_process_cost_health_summary(report_ref, report)
+
+    assert summary == {
+        "report_ref": report_ref,
+        "report_digest": report["report_digest"],
+        "mode": "measure-only",
+        "structural_decision": "PASS_WITH_RISK",
+        "soft_risk_count": 1,
+    }
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    empty_preimage = hashlib.sha256(b"").hexdigest()
+    plan = current.plan_cost_health_projection(
+        tmp_path,
+        report,
+        report_ref=report_ref,
+        expected_preimage=empty_preimage,
+    )
+    blocked = current.plan_cost_health_projection(
+        tmp_path,
+        report,
+        report_ref=report_ref,
+        expected_preimage="f" * 64,
+    )
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    assert plan["decision"] == "READY"
+    assert plan["mutation_count"] == 0
+    assert plan["planned_mutation_count"] == 2
+    assert blocked["decision"] == "BLOCKED"
+    assert before == after
+
+
+def test_process_cost_health_summary_rejects_detail_or_digest_drift(tmp_path: Path) -> None:
+    _ = tmp_path
+    report = _cost_report()
+    report["soft_risks"].append("DRIFT")
+
+    with pytest.raises(ValueError, match="digest mismatch"):
+        current.build_process_cost_health_summary("process/evidence/cost.json", report)
+
+
 def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
     tmp_path: Path,
 ) -> None:
@@ -166,6 +303,107 @@ def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
         "text": "Review pending human gate CP2.",
         "stop_reason": "required_human_gate",
     }
+
+
+def test_projection_refresh_converges_pending_gate_bound_to_current_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _formal_fixture(tmp_path)
+    current.update_current_state(
+        tmp_path,
+        {
+            "active_change": "CR-072",
+            "pending_gate": "CP5",
+            "pending_checklist_path": "process/checkpoints/CP5.md",
+            "updated_at": current.now_utc(),
+        },
+        actor="tests.formal_projection",
+        reason="install stale approved gate projection",
+        mode="enforce",
+    )
+    from meta_flow.state import checkpoint_projection, event_ledger
+
+    head = SimpleNamespace(result_ref="process/checks/CP5-current.result.json")
+    projection = SimpleNamespace(
+        findings=(),
+        head=lambda checkpoint: head if checkpoint == "CP5" else None,
+    )
+    approval = SimpleNamespace(
+        passage=True,
+        cr_id="CR-072",
+        checkpoint="CP5",
+        result_ref=head.result_ref,
+        event_id="GATE-CP5-APPROVED",
+    )
+    gate_path = tmp_path / "process/state/GATE-LEDGER.ndjson"
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        checkpoint_projection,
+        "load_checkpoint_projection",
+        lambda *args, **kwargs: projection,
+    )
+    monkeypatch.setattr(event_ledger, "load_events", lambda path: ([{}], []))
+    monkeypatch.setattr(
+        event_ledger, "project_gate_approvals", lambda events: [approval]
+    )
+
+    _patch, gate_convergence = current._derive_approved_pending_gate_patch(
+        tmp_path, current.load_current_state(tmp_path)
+    )
+    plan = current.plan_formal_truth_refresh(tmp_path)
+    refreshed = current.refresh_formal_truth_projection(tmp_path)
+
+    assert gate_convergence["decision"] == "CONVERGE"
+    assert plan["decision"] == "READY"
+    assert refreshed["pending_gate"] is None
+    assert refreshed["pending_checklist_path"] is None
+    assert refreshed["next_action"]["type"] == "continue_active_phase"
+
+
+def test_projection_refresh_keeps_pending_gate_when_approval_targets_old_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _formal_fixture(tmp_path)
+    current.update_current_state(
+        tmp_path,
+        {
+            "active_change": "CR-072",
+            "pending_gate": "CP5",
+            "pending_checklist_path": "process/checkpoints/CP5.md",
+            "updated_at": current.now_utc(),
+        },
+        actor="tests.formal_projection",
+        reason="install pending gate projection",
+        mode="enforce",
+    )
+    from meta_flow.state import checkpoint_projection, event_ledger
+
+    head = SimpleNamespace(result_ref="process/checks/CP5-current.result.json")
+    projection = SimpleNamespace(findings=(), head=lambda checkpoint: head)
+    old_approval = SimpleNamespace(
+        passage=True,
+        cr_id="CR-072",
+        checkpoint="CP5",
+        result_ref="process/checks/CP5-old.result.json",
+        event_id="GATE-CP5-OLD-APPROVED",
+    )
+    gate_path = tmp_path / "process/state/GATE-LEDGER.ndjson"
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        checkpoint_projection,
+        "load_checkpoint_projection",
+        lambda *args, **kwargs: projection,
+    )
+    monkeypatch.setattr(event_ledger, "load_events", lambda path: ([{}], []))
+    monkeypatch.setattr(
+        event_ledger, "project_gate_approvals", lambda events: [old_approval]
+    )
+
+    refreshed = current.refresh_formal_truth_projection(tmp_path)
+
+    assert refreshed["pending_gate"] == "CP5"
 
 
 def test_formal_cr_truth_overrides_stale_active_ledger_event(tmp_path: Path) -> None:

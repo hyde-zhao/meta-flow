@@ -1,0 +1,13 @@
+{
+  "authority": "CP3-DQ-GOV006-FU-CP3-05",
+  "cli_name": "meta-flow",
+  "distribution_name": "meta-flow",
+  "import_package": "meta_flow",
+  "project_name": "meta-flow",
+  "schema_version": 2,
+  "sources": {
+    "cli": "pyproject.toml#project.scripts.meta-flow",
+    "distribution": "pyproject.toml#project.name",
+    "import": "meta_flow/__init__.py"
+  }
+}

@@ -552,6 +552,7 @@ def _print_help() -> None:
         "  ledger     Plan or apply retention/archive compaction for NDJSON event ledgers.\n"
         "  module     Validate module boundaries, imports, risk rings, and architecture fitness.\n"
         "  policy     List, expand, and validate authorization policies.\n"
+        "  package    Compile and inspect one release package through zero-write adapters.\n"
         "  project    Scaffold and validate process/project governance state.\n"
         "  quality    Validate quality model and eval matrix policies.\n"
         "  repository Plan/apply one allowlisted commit or exact-OID fast-forward push.\n"
@@ -605,6 +606,8 @@ def _print_help() -> None:
         "  meta-flow governance truth-map-check --project-root .\n"
         "  meta-flow governance baseline-refresh --project-root . --project-id <project-id> --immutable-commit-role release_input=release:<oid> --immutable-commit-role process_input=process:<oid>\n"
         "  meta-flow policy list --project-root .\n"
+        "  meta-flow package cost-report --cr CR-072 --project-root . --format json\n"
+        "  meta-flow package compile --cr CR-072 --project-root . --format json\n"
         "  meta-flow project scaffold --project-root .\n"
         "  meta-flow project check --project-root .\n"
         "  meta-flow quality model-check --project-root .\n"
@@ -760,12 +763,12 @@ def _run_version(args: list[str]) -> None:
     from meta_flow.installation.identity import (
         evaluate_provider_runtime_admission,
         observe_provider_runtime_identity,
+        provider_runtime_status,
     )
 
     identity = observe_provider_runtime_identity()
     admission = evaluate_provider_runtime_admission(identity, mode=parsed.mode)
     source_ready = identity["source_discovery"]["decision"] == "PASS"
-    release_ready = identity["release_readiness"]["decision"] == "PASS"
     payload: dict[str, object] = {
         **identity,
         "version": identity["distribution_version"],
@@ -773,13 +776,7 @@ def _run_version(args: list[str]) -> None:
         "oid": identity["source_commit"] or "",
         "delivery_tree_digest": identity["source_tree_digest"] or "",
         "ready": source_ready,
-        "status": (
-            "READY"
-            if release_ready
-            else "SOURCE_READY_RELEASE_BLOCKED"
-            if source_ready
-            else "IDENTITY_INCOMPLETE"
-        ),
+        "status": provider_runtime_status(identity, admission),
         "provider_admission": admission,
     }
     if parsed.format == "json":
@@ -1504,6 +1501,14 @@ def _run_waiver(args: list[str]) -> None:
     raise SystemExit(failure_routing.waiver_main(args))
 
 
+def _run_package(args: list[str]) -> None:
+    """根 CLI 只做命令组派发，package 规则由专用 adapter/core 持有。"""
+
+    from meta_flow import package_cli
+
+    raise SystemExit(package_cli.main(args))
+
+
 def _preflight_top_level_process_route(command: str, args: list[str]) -> None:
     """阻止顶层 check 命令把错误根静默解释为 legacy 布局。"""
 
@@ -1591,6 +1596,9 @@ def _dispatch_main() -> None:
     if command == "policy":
         _run_policy(args[1:])
         return
+    if command == "package":
+        _run_package(args[1:])
+        return
     if command == "project":
         _run_project(args[1:])
         return
@@ -1645,7 +1653,7 @@ def _dispatch_main() -> None:
     raise SystemExit(
         "未知命令: "
         "install, upgrade, uninstall, reinstall, recover, version, check, capability, concept, context, cp, cr, design, event, eval, feature, failure, gate, route, identity, ledger, "
-        "governance, module, policy, project, work, retrospective, evolution, repository, quality, story, validation, waiver, ask-user, state, status, next, doctor"
+        "governance, module, policy, package, project, work, retrospective, evolution, repository, quality, story, validation, waiver, ask-user, state, status, next, doctor"
     )
 
 

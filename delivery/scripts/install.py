@@ -46,6 +46,7 @@ from pathlib import Path
 
 try:
     from delivery.scripts.digest_policy import (
+        digest_policy_sidecar_required,
         load_digest_policy_sidecar,
         load_known_generated_refs,
         observe_delivery_tree,
@@ -53,6 +54,7 @@ try:
     )
 except ModuleNotFoundError:  # standalone delivery checkout 以 scripts/ 为 sys.path
     from digest_policy import (
+        digest_policy_sidecar_required,
         load_digest_policy_sidecar,
         load_known_generated_refs,
         observe_delivery_tree,
@@ -806,7 +808,9 @@ def load_provider_receipt_facts(path_value: str) -> dict[str, object]:
         _sidecar, sidecar_warnings = load_digest_policy_sidecar(
             path,
             expected_included_manifest_digest=payload["source_tree_digest"],
-            allow_missing=True,
+            allow_missing=not digest_policy_sidecar_required(
+                payload["distribution_version"]
+            ),
         )
     except ValueError as exc:
         fail(f"META_FLOW_PROVIDER_RECEIPT digest policy sidecar 非法: {exc}")

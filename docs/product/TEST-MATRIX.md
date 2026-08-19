@@ -1,9 +1,12 @@
 ---
-status: draft
-version: "1.1"
+status: confirmed
+version: "1.2"
 source_scenarios: "docs/product/SCENARIOS.yaml"
-source_change: "CR-071"
-formal_cp2_status: pending
+source_change: "CR-071 + CR-072"
+formal_cp2_status: approved
+confirmed_by: "user"
+confirmed_at: "2026-08-18T08:02:17Z"
+formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
 ---
 
 # CR-071 Test Matrix
@@ -14,6 +17,8 @@ formal_cp2_status: pending
 |---|---|---|---|
 | 1.0 | 2026-08-15 | 建立 18 行 planned 覆盖矩阵 | formal CP2 pending |
 | 1.1 | 2026-08-15 | 将 CP2 revision 2 六项 delta 绑定到既有场景，并增加 CP4 强制盘点 | 行数仍为 18；不声明测试已实现或执行 |
+| 1.2 | 2026-08-18 | 追加 CR-072 12 条 Package 验证场景 | 行数为 30；均为 planned，不声明实现、运行、qualification 或发布 |
+| 1.3 | 2026-08-19 | 回填 CR-072 CP6/聚合 CP7 fixture 与 contract 证据 | 12 条均已绑定自动化；SCN-072-09/11 的真实发布/安装态运行保持 conditional-runtime |
 
 ## 覆盖矩阵
 
@@ -37,6 +42,18 @@ formal_cp2_status: pending
 | SCN-MF6-01 | REQ-MF6-01, REQ-MF6-02, REQ-MF6-03 | ST-MF6 | projection / integration | planned | pending | `planned: unregistered failure and baseline drift fixture` | — |
 | SCN-MF6-02 | REQ-MF6-01, REQ-MF6-02 | ST-N-MF6 | security / fail-closed | planned | pending | `planned: missing ownership evidence fail-closed fixture` | — |
 | SCN-MF6-03 | REQ-MF6-03 | ST-N-MF6 | recovery / boundary | planned | pending | `planned: add valid evidence → one reprojection exits block/converges; no manual derived-state edits; stable-source no-op` | — |
+| SCN-072-01 | REQ-072-01, REQ-072-02 | ST-072-PLAN | compiler / contract | covered | verified | `tests/test_cr072_package_compiler.py`; `process/docs/features/cr072-aggregate-release/VERIFICATION.md` | — |
+| SCN-072-02 | REQ-072-01, REQ-072-02, REQ-072-12 | ST-N-072-PLAN | precheck / fail-closed | covered | verified | `tests/test_cr072_package_compiler.py` negative/zero-write matrix | — |
+| SCN-072-03 | REQ-072-03, REQ-072-04 | ST-072-CLOSURE | closure / integration | covered | verified | `tests/test_cr072_closure_build.py` direct/transitive/affected-only matrix | — |
+| SCN-072-04 | REQ-072-03, REQ-072-04 | ST-N-072-CLOSURE | boundary / recovery | covered | verified | `tests/test_cr072_closure_build.py` invalid SHA/graph/no-op matrix | — |
+| SCN-072-05 | REQ-072-05 | ST-072-COST | metrics / no-op | covered | verified | `tests/test_cr072_process_cost.py`; `meta-flow package cost-report --cr CR-072` | — |
+| SCN-072-06 | REQ-072-05, REQ-072-06, REQ-072-10 | ST-N-072-COST | hard-gate / failure | covered | verified | `tests/test_cr072_process_cost.py`, `tests/test_cr072_release_order.py` | — |
+| SCN-072-07 | REQ-072-07, REQ-072-08 | ST-072-SEMVER | SemVer / contract | covered | verified | `tests/test_cr072_semver_decision.py`; production CLI dogfood | — |
+| SCN-072-08 | REQ-072-07, REQ-072-08 | ST-N-072-SEMVER | compatibility / fail-closed | covered | verified | `tests/test_cr072_semver_decision.py` breaking/reuse/cross-version matrix | — |
+| SCN-072-09 | REQ-072-09, REQ-072-10 | ST-072-RELEASE | release-order / manual | covered | conditional-runtime | `tests/test_cr072_release_order.py`, `tests/test_cr072_provider_source_qualification.py` | 真实 freeze/qualification/build/canary/tag/release 仍需独立授权 |
+| SCN-072-10 | REQ-072-09, REQ-072-10, REQ-072-12 | ST-N-072-RELEASE | state-machine / recovery | covered | verified | `tests/test_cr072_release_order.py` drift/order/intermediate/recovery matrix | — |
+| SCN-072-11 | REQ-072-11 | ST-072-CONSUMER | consumer / canary | covered | conditional-runtime | `tests/test_cr072_provider_canary_contract.py`, `tests/test_cr072_release_asset_completeness.py` | 安装态 published asset canary 等待最终独立授权 |
+| SCN-072-12 | REQ-072-11, REQ-072-12 | ST-N-072-CONSUMER | permission / fail-closed | covered | verified | `tests/test_cr072_provider_canary_contract.py` missing asset/CLI/home/auth negative matrix | — |
 
 ## 覆盖统计
 
@@ -49,6 +66,7 @@ formal_cp2_status: pending
 | 权限 / 安全场景 | 3 | 3 | 0 | 0 | 0 | scope authorization、typed ref ambiguity、unknown failure owner |
 | 外部失败场景 | 1 | 1 | 0 | 0 | 0 | receipt evidence/provenance 不可读 |
 | precheck 场景 | 1 | 1 | 0 | 0 | 0 | on-touch obligation closure |
+| CR-072 Package 场景 | 12 | 0 | 12 | 0 | 0 | 10 条 fixture/contract 已 verified；SCN-072-09/11 已覆盖但真实发布/安装态执行为 conditional-runtime |
 
 ## 需求覆盖追踪
 
@@ -60,12 +78,18 @@ formal_cp2_status: pending
 | MF-4 | UC-FULL-REGRESSION-SEMANTICS | REQ-MF4-01～03 | SCN-MF4-01～03 | ST-MF4, ST-N-MF4 | covered-by-plan |
 | MF-5 | UC-VALIDATION-REUSE | REQ-MF5-01～03 | SCN-MF5-01～03 | ST-MF5, ST-N-MF5 | covered-by-plan |
 | MF-6 | UC-UNREGISTERED-FAILURE-VISIBILITY | REQ-MF6-01～03 | SCN-MF6-01～03 | ST-MF6, ST-N-MF6 | covered-by-plan |
+| 072-1 | UC-PLAN-COMPILER | REQ-072-01～02 | SCN-072-01～02 | ST-072-PLAN, ST-N-072-PLAN | covered-by-plan |
+| 072-2 | UC-CLOSURE-BUILD | REQ-072-03～04 | SCN-072-03～04 | ST-072-CLOSURE, ST-N-072-CLOSURE | covered-by-plan |
+| 072-3 | UC-PROCESS-COST | REQ-072-05～06 | SCN-072-05～06 | ST-072-COST, ST-N-072-COST | covered-by-plan |
+| 072-4 | UC-SEMVER-DECISION | REQ-072-07～08 | SCN-072-07～08 | ST-072-SEMVER, ST-N-072-SEMVER | covered-by-plan |
+| 072-5 | UC-RELEASE-ORDER | REQ-072-09～10, REQ-072-12 | SCN-072-09～10 | ST-072-RELEASE, ST-N-072-RELEASE | covered-by-plan |
+| 072-6 | UC-PUBLISHED-ASSET-CONSUMER | REQ-072-11～12 | SCN-072-11～12 | ST-072-CONSUMER, ST-N-072-CONSUMER | covered-by-plan |
 
 ## 缺口处理
 
 | Gap ID | 来源 | 缺口 | 阻断等级 | 推荐处理 | 责任方 |
 |---|---|---|---|---|---|
-| GAP-000 | 全部场景 | 当前无产品级覆盖缺口；自动化尚处于 planned 是 CP2 阶段预期状态 | OPTIONAL | CP4 分解后绑定真实测试文件，CP6/CP7 回填 covered 和执行证据 | meta-se / meta-dev / meta-qa |
+| GAP-000 | 全部场景 | 当前无产品级覆盖缺口；CR-072 已回填 12/12，既有 MF 场景仍按各自历史状态维护 | OPTIONAL | 聚合 CP7 继续绑定验证报告；真实 runtime 项仅在独立授权后更新执行状态 | meta-qa |
 
 ## CP2 Revision 2 Delta Trace
 
@@ -93,6 +117,6 @@ formal_cp2_status: pending
 
 ## 人工验收边界
 
-- 本矩阵中的 `planned` 不声明测试已经实现或运行。
+- 本矩阵中的 `planned` 仍不声明测试已经实现或运行；CR-072 行已按 1.3 回填为 `covered`。
 - CP2 approve 只冻结产品范围和推荐合同，不授权真实运行、外部写入、发布或安装。
 - targeted → compatibility → full 的执行证据必须在后续分层验证阶段产生。

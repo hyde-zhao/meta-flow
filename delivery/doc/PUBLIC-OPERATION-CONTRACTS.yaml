@@ -21,6 +21,122 @@
       }
     },
     {
+      "operation": "package.cost-report",
+      "entry": ["meta-flow", "package", "cost-report"],
+      "input_version": "ProcessCostQueryV1",
+      "output_version": "ProcessCostReportV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.checks.process_cost.build_process_cost_report",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "package.compile",
+      "entry": ["meta-flow", "package", "compile"],
+      "input_version": "PackagePlanInputV1",
+      "output_version": "PackagePlanIRV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.workflow.package_compiler.compile_package_plan",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "package.closure-build",
+      "entry": ["meta-flow", "package", "closure-build"],
+      "input_version": "ClosureRequestV1",
+      "output_version": "ClosureResultV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.workflow.closure_build.build_affected_closure",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "package.semver-decide",
+      "entry": ["meta-flow", "package", "semver-decide"],
+      "input_version": "SemVerDecisionInputV1",
+      "output_version": "SemVerDecisionV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.policies.semver_decision.decide_semver",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "package.release-check",
+      "entry": ["meta-flow", "package", "release-check"],
+      "input_version": "ReleaseEventV1",
+      "output_version": "ReleaseCheckResultV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.workflow.release_order.check_release_transition",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--state", "--candidate-event", "--evidence"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "package.release-advance",
+      "entry": ["meta-flow", "package", "release-advance"],
+      "input_version": "ReleaseAdvanceInputV1",
+      "output_version": "AggregateReleaseTransitionReceiptV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.workflow.release_order.plan_release_advance",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [
+          "--state",
+          "--candidate-event",
+          "--snapshot",
+          "--fresh-snapshot",
+          "--authorization",
+          "--ledger-ref",
+          "--projection-ref"
+        ],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "route.c0-cutover-plan",
       "entry": ["meta-flow", "route", "c0-cutover-plan"],
       "input_version": "C0ResultV1",

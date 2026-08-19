@@ -345,6 +345,55 @@ def _schema_versions() -> dict[str, int]:
     }
 
 
+def classify_provider_receipt_path(raw: str) -> tuple[Path | None, str | None]:
+    """在读取 receipt 前区分缺失、不存在和不安全路径。"""
+
+    value = raw.strip()
+    if not value:
+        return None, "PROVIDER_RECEIPT_MISSING"
+    path = Path(os.path.abspath(Path(value).expanduser()))
+    try:
+        if any(candidate.is_symlink() for candidate in (path, *path.parents)):
+            return path, "PROVIDER_RECEIPT_UNSAFE"
+        if not path.exists():
+            return path, "PROVIDER_RECEIPT_NOT_FOUND"
+        if not path.is_file():
+            return path, "PROVIDER_RECEIPT_UNSAFE"
+    except OSError:
+        return path, "PROVIDER_RECEIPT_UNSAFE"
+    return path, None
+
+
+def provider_runtime_status(
+    identity: Mapping[str, Any],
+    admission: Mapping[str, Any],
+) -> str:
+    """从同一份 readiness/admission 真相派生稳定的顶层状态。"""
+
+    readiness = identity.get("release_readiness")
+    readiness_reasons = (
+        readiness.get("reason_codes", [])
+        if isinstance(readiness, Mapping)
+        else ["RELEASE_READINESS_MISSING"]
+    )
+    admission_reasons = admission.get("reason_codes", [])
+    reasons = {
+        str(reason)
+        for reason in (*readiness_reasons, *admission_reasons)
+    }
+    if (
+        isinstance(readiness, Mapping)
+        and readiness.get("decision") == "PASS"
+        and admission.get("decision") == "READY"
+    ):
+        return "READY"
+    if "PROVIDER_RECEIPT_MISSING" in reasons:
+        return "PROVIDER_RECEIPT_MISSING"
+    if any(reason.startswith("PROVIDER_RECEIPT_") for reason in reasons):
+        return "PROVIDER_RECEIPT_BLOCKED"
+    return "IDENTITY_INCOMPLETE"
+
+
 def observe_provider_runtime_identity(
     *,
     distribution_name: str = "meta-flow",
@@ -441,14 +490,18 @@ def observe_provider_runtime_identity(
     provider_receipt_digest: str | None = None
     receipt_reasons: list[str] = []
     receipt_path_raw = env.get("META_FLOW_PROVIDER_RECEIPT", "").strip()
-    if receipt_path_raw:
+    receipt_path, receipt_path_reason = classify_provider_receipt_path(
+        receipt_path_raw
+    )
+    if receipt_path_reason is not None:
+        receipt_reasons.append(receipt_path_reason)
+    elif receipt_path is not None:
         from meta_flow.installation.artifact import (
             artifact_receipt_conflicts,
             load_provider_artifact_receipt,
         )
 
         try:
-            receipt_path = Path(os.path.abspath(Path(receipt_path_raw).expanduser()))
             receipt = load_provider_artifact_receipt(receipt_path)
         except (OSError, ValueError, json.JSONDecodeError):
             receipt_reasons.append("PROVIDER_RECEIPT_INVALID")
@@ -473,8 +526,6 @@ def observe_provider_runtime_identity(
                 if artifact_sha256 is None:
                     artifact_sha256 = str(receipt["artifact_sha256"])
                     identity_source = "installed-artifact-receipt"
-    else:
-        receipt_reasons.append("PROVIDER_RECEIPT_MISSING")
 
     source_discovery_reasons = sorted(set(findings))
     source_discovery = {
@@ -570,11 +621,13 @@ def evaluate_provider_runtime_admission(
 
 
 __all__ = [
+    "classify_provider_receipt_path",
     "component_display",
     "normalize_component",
     "observe_checkout_delivery_status",
     "observe_checkout_source_identity",
     "observe_provider_runtime_identity",
+    "provider_runtime_status",
     "evaluate_provider_runtime_admission",
     "PROVIDER_RUNTIME_IDENTITY_KIND",
     "PROVIDER_RUNTIME_IDENTITY_SCHEMA_VERSION",
