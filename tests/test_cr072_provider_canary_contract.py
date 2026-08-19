@@ -112,11 +112,15 @@ def test_clean_home_canary_uses_four_assets_and_public_cli(
             str(paths["receipt"]),
             "--harness",
             str(paths["harness"]),
+            "--output",
+            str(tmp_path / "canary-result.json"),
         ]
     )
 
     result = json.loads(capsys.readouterr().out)
     assert exit_code == 0
+    assert result == json.loads((tmp_path / "canary-result.json").read_text(encoding="utf-8"))
+    assert result["exit_code"] == 0
     assert result["decision"] == "PASS"
     assert result["provider_checkout_imported"] is False
     assert result["source_fallback_count"] == 0
@@ -152,10 +156,17 @@ def test_release_canary_requires_sdist_and_fails_closed_on_symlink(
             str(paths["receipt"]),
             "--harness",
             str(paths["harness"]),
+            "--output",
+            str(tmp_path / "missing-sdist-result.json"),
         ]
     )
     assert missing_sdist == 1
-    assert "requires the canonical sdist" in capsys.readouterr().out
+    missing_result = json.loads(capsys.readouterr().out)
+    assert "requires the canonical sdist" in missing_result["error"]
+    assert missing_result["exit_code"] == 1
+    assert missing_result == json.loads(
+        (tmp_path / "missing-sdist-result.json").read_text(encoding="utf-8")
+    )
 
     paths["sdist"].unlink()
     victim = tmp_path / "victim.tar.gz"
@@ -171,10 +182,14 @@ def test_release_canary_requires_sdist_and_fails_closed_on_symlink(
             str(paths["receipt"]),
             "--harness",
             str(paths["harness"]),
+            "--output",
+            str(tmp_path / "unsafe-sdist-result.json"),
         ]
     )
     assert unsafe_sdist == 1
-    assert "sdist path is unsafe" in capsys.readouterr().out
+    unsafe_result = json.loads(capsys.readouterr().out)
+    assert "sdist path is unsafe" in unsafe_result["error"]
+    assert unsafe_result["exit_code"] == 1
     assert victim.read_bytes() == b"do not follow"
 
 
@@ -222,6 +237,8 @@ def test_missing_public_version_cli_is_deterministically_blocked(
             str(paths["receipt"]),
             "--harness",
             str(paths["harness"]),
+            "--output",
+            str(tmp_path / "missing-cli-result.json"),
         ]
     )
 
@@ -229,3 +246,58 @@ def test_missing_public_version_cli_is_deterministically_blocked(
     assert exit_code == 1
     assert result["decision"] == "BLOCKED"
     assert result["error"] == "public meta-flow version CLI is unavailable"
+    assert result["exit_code"] == 1
+    assert result == json.loads(
+        (tmp_path / "missing-cli-result.json").read_text(encoding="utf-8")
+    )
+
+
+def test_canary_output_is_create_only_and_symlink_safe(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    _receipt, paths = _published_shape(tmp_path)
+    occupied = tmp_path / "occupied-result.json"
+    occupied.write_text("do not replace\n", encoding="utf-8")
+
+    occupied_exit = CANARY["main"](
+        [
+            "--wheel",
+            str(paths["wheel"]),
+            "--sdist",
+            str(paths["sdist"]),
+            "--receipt",
+            str(paths["receipt"]),
+            "--harness",
+            str(paths["harness"]),
+            "--output",
+            str(occupied),
+        ]
+    )
+
+    assert occupied_exit == 1
+    assert "output must be a missing regular-file leaf" in capsys.readouterr().out
+    assert occupied.read_text(encoding="utf-8") == "do not replace\n"
+
+    victim = tmp_path / "victim-result.json"
+    victim.write_text("do not follow\n", encoding="utf-8")
+    unsafe = tmp_path / "unsafe-result.json"
+    unsafe.symlink_to(victim)
+    unsafe_exit = CANARY["main"](
+        [
+            "--wheel",
+            str(paths["wheel"]),
+            "--sdist",
+            str(paths["sdist"]),
+            "--receipt",
+            str(paths["receipt"]),
+            "--harness",
+            str(paths["harness"]),
+            "--output",
+            str(unsafe),
+        ]
+    )
+
+    assert unsafe_exit == 1
+    assert "output must be a missing regular-file leaf" in capsys.readouterr().out
+    assert victim.read_text(encoding="utf-8") == "do not follow\n"

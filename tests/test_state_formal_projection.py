@@ -305,6 +305,83 @@ def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
     }
 
 
+def test_projection_refresh_preserves_single_active_cr_failure_stop(
+    tmp_path: Path,
+) -> None:
+    _formal_fixture(tmp_path)
+    formal_ref = tmp_path / "process/changes/CR-072.md"
+    formal_ref.write_text(
+        "---\nkind: cr\ncr_id: CR-072\nlifecycle_status: active\nstatus: active\n---\n",
+        encoding="utf-8",
+    )
+    current.refresh_formal_truth_projection(tmp_path)
+    current.update_current_state(
+        tmp_path,
+        {
+            "blocked": True,
+            "next_action": {
+                "type": "blocked",
+                "text": "CP8 automatic precheck failed.",
+                "stop_reason": "blocked",
+            },
+            "updated_at": current.now_utc(),
+        },
+        actor="tests.formal_projection",
+        reason="install an explicit single-CR failure stop",
+        mode="enforce",
+    )
+
+    refreshed = current.refresh_formal_truth_projection(tmp_path)
+    errors, warnings = current.check_current_state(tmp_path, mode="enforce")
+
+    assert errors == []
+    assert warnings == []
+    assert refreshed["active_change"] == "CR-072"
+    assert refreshed["blocked"] is True
+    assert refreshed["next_action"] == {
+        "type": "blocked",
+        "text": "CP8 automatic precheck failed.",
+        "stop_reason": "blocked",
+    }
+
+
+def test_projection_refresh_clears_failure_stop_after_formal_cr_closes(
+    tmp_path: Path,
+) -> None:
+    _formal_fixture(tmp_path)
+    formal_ref = tmp_path / "process/changes/CR-072.md"
+    formal_ref.write_text(
+        "---\nkind: cr\ncr_id: CR-072\nlifecycle_status: active\nstatus: active\n---\n",
+        encoding="utf-8",
+    )
+    current.refresh_formal_truth_projection(tmp_path)
+    current.update_current_state(
+        tmp_path,
+        {
+            "blocked": True,
+            "next_action": {
+                "type": "blocked",
+                "text": "CP8 automatic precheck failed.",
+                "stop_reason": "blocked",
+            },
+            "updated_at": current.now_utc(),
+        },
+        actor="tests.formal_projection",
+        reason="install an explicit single-CR failure stop",
+        mode="enforce",
+    )
+    formal_ref.write_text(
+        "---\nkind: cr\ncr_id: CR-072\nlifecycle_status: closed\nstatus: closed\n---\n",
+        encoding="utf-8",
+    )
+
+    refreshed = current.refresh_formal_truth_projection(tmp_path)
+
+    assert refreshed["active_change"] is None
+    assert refreshed["blocked"] is False
+    assert refreshed["next_action"]["type"] == "continue_active_phase"
+
+
 def test_projection_refresh_converges_pending_gate_bound_to_current_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

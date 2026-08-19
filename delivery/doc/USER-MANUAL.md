@@ -621,19 +621,22 @@ meta-flow recover --journal .meta-flow/transactions/txn-id.journal.json --action
 正式 artifact 资格化必须在 clean checkout 上完成：
 
 ```bash
-uv build --wheel --out-dir dist
+uv build --out-dir dist
 uv run --frozen --python 3.11 python scripts/qualify_provider_artifact.py \
   --source-root . \
   --wheel dist/meta_flow-<version>-py3-none-any.whl \
-  --output dist/PROVIDER-ARTIFACT-RECEIPT.json
+  --output dist/ProviderArtifactReceiptV1.json
 uv run --frozen --python 3.11 python scripts/run_provider_artifact_canary.py \
   --wheel dist/meta_flow-<version>-py3-none-any.whl \
-  --receipt dist/PROVIDER-ARTIFACT-RECEIPT.json
+  --sdist dist/meta_flow-<version>.tar.gz \
+  --receipt dist/ProviderArtifactReceiptV1.json \
+  --output dist/ProviderArtifactConsumerCanaryReceiptV1.json
 ```
 
 canary 将 harness 复制到隔离临时目录，用新 venv 非 editable 安装 wheel，并执行
 sibling-binding、最小 usage 和三个顺序 Work 的核心生命周期；实际 import 路径必须位于
-该 venv，不能回落到 provider checkout。dirty candidate 仅可用
+该 venv，不能回落到 provider checkout。`--output` 是 create-only 的终态回执，成功和失败
+都写入 `decision` 与 `exit_code`；目标已存在、symlink 或父路径不安全时 fail closed。dirty candidate 仅可用
 `--allow-dirty` / `--allow-non-release` 验证链路，结果固定为 `PASS_WITH_RISK`，不得作为正式
 release receipt。
 

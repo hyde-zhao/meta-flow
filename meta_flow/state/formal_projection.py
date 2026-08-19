@@ -29,6 +29,9 @@ _PREDICATES = (
     "location", "owner", "current_lineage", "integrity", "completeness", "freshness", "validity"
 )
 _PRESERVED_BLOCKERS = frozenset({"partial", "recovered", "human-pending"})
+_EXPLICIT_FAILURE_STOP_REASONS = frozenset(
+    {"blocked", "needs_rework", "needs_design_clarification"}
+)
 
 
 @dataclass(frozen=True)
@@ -472,6 +475,27 @@ def derive_formal_truth_patch(
     )
     pending_gate = str(state.get("pending_gate") or "")
     pending_checklist_path = str(state.get("pending_checklist_path") or "")
+    formal_conflict = len(active_phases) > 1 or len(active_crs) > 1
+    current_action = state.get("next_action")
+    current_action = current_action if isinstance(current_action, Mapping) else {}
+    explicit_failure_stop = (
+        not formal_conflict
+        and len(active_crs) == 1
+        and str(state.get("active_change") or "") == active_change
+        and bool(state.get("blocked"))
+        and not pending_gate
+        and not pending_checklist_path
+        and str(current_action.get("type") or "") == "blocked"
+        and str(current_action.get("stop_reason") or "")
+        in _EXPLICIT_FAILURE_STOP_REASONS
+        and bool(str(current_action.get("text") or "").strip())
+    )
+    if explicit_failure_stop:
+        next_action = {
+            "type": "blocked",
+            "text": str(current_action["text"]),
+            "stop_reason": str(current_action["stop_reason"]),
+        }
     if pending_gate and pending_checklist_path:
         next_action = {
             "type": "human_gate",
@@ -489,7 +513,7 @@ def derive_formal_truth_patch(
     return {
         "current_phase": current_phase,
         "active_change": active_change,
-        "blocked": len(active_phases) > 1 or len(active_crs) > 1,
+        "blocked": formal_conflict or explicit_failure_stop,
         "next_action": next_action,
         "formal_truth_projection": snapshot,
         "source_refs": merged_refs[:24],

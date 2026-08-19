@@ -50,6 +50,21 @@ release_decision: NOT_READY
 - 不批量改写历史 Work、Story、ledger 或 receipt；详见 `docs/release/MIGRATION.md`。
 - 0.6.1 的 SemVer bootstrap 是一次性初始化事实，不成为后续版本的 waiver 或 precedent。
 
+## 治理生命周期
+
+- Governance Truth Map 明确区分机器真相、append-only 事件和可重建摘要；派生状态不能覆盖有效的失败停止事实。
+- Retention Policy 继续约束关闭 CR 的默认上下文和历史证据保留，`cr_type` 与 `conflict_keys` 用于变更分类及冲突预检。
+
+## Context sufficiency / read expansion governance
+
+- 默认上下文继续采用 capsule-first 和 deny-default；必要全文扩读写入 `READ-EXPANSION-LEDGER`。
+- Story return、CP summary、Decision Brief 和 Feature 设计摘要继续受 output profile budgets 约束，避免恢复与发布阶段重复复制长证据。
+
+## Failure routing / waiver governance
+
+- 高严重度失败按 `FAILURE-ROUTING.json` 路由，waiver 必须符合 `WAIVER-POLICY.json` 并携带 scope、expiry 和 approval ref。
+- 未授权运行、凭据、缺失证据、缺少真实 dispatch、错误的 runtime-ready 声明和 canary terminal receipt 缺失均为不可豁免事项，不能被风险接受替代 PASS。
+
 ## 验证与发布证据
 
 | 层 | 冻结前结论 | 权威后续证据 |

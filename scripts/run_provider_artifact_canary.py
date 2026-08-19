@@ -58,6 +58,57 @@ def _regular_file(path: Path, *, label: str) -> Path:
     return target
 
 
+def _terminal_receipt_target(path: Path) -> Path:
+    """验证 create-only 终态回执目标，不跟随 symlink 或创建父目录。"""
+
+    target = Path(os.path.abspath(path.expanduser()))
+    current = Path(target.anchor)
+    for part in target.parts[1:-1]:
+        current /= part
+        if current.is_symlink() or not current.is_dir():
+            raise ValueError("provider artifact canary output parent is unsafe")
+    if target.is_symlink() or target.exists():
+        raise ValueError("provider artifact canary output must be a missing regular-file leaf")
+    return target
+
+
+def _render_terminal_receipt(payload: dict[str, object]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def _emit_terminal_receipt(
+    output: Path,
+    payload: dict[str, object],
+    *,
+    exit_code: int,
+) -> int:
+    terminal = {**payload, "exit_code": exit_code}
+    rendered = _render_terminal_receipt(terminal)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(output, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as exc:
+        fallback = {
+            "schema_version": 1,
+            "kind": "ProviderArtifactConsumerCanaryReceiptV1",
+            "decision": "BLOCKED",
+            "error": f"terminal receipt write failed: {exc}",
+            "exit_code": 1,
+        }
+        print(_render_terminal_receipt(fallback).decode("utf-8"), end="")
+        return 1
+    print(rendered.decode("utf-8"), end="")
+    return exit_code
+
+
 def _isolated_environment(
     root: Path,
     *,
@@ -102,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wheel", type=Path, required=True)
     parser.add_argument("--sdist", type=Path)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--harness",
         type=Path,
@@ -109,7 +161,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--allow-non-release", action="store_true")
     args = parser.parse_args(argv)
+    output: Path | None = None
     try:
+        output = _terminal_receipt_target(args.output)
         wheel = _regular_file(args.wheel, label="wheel")
         receipt_path = _regular_file(args.receipt, label="receipt")
         harness = _regular_file(args.harness, label="harness")
@@ -246,22 +300,20 @@ def main(argv: list[str] | None = None) -> int:
                 "install_dry_run": "PASS",
             }
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        print(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "kind": "ProviderArtifactConsumerCanaryReceiptV1",
-                    "decision": "BLOCKED",
-                    "error": str(exc),
-                },
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
+        blocked = {
+            "schema_version": 1,
+            "kind": "ProviderArtifactConsumerCanaryReceiptV1",
+            "decision": "BLOCKED",
+            "error": str(exc),
+        }
+        if output is None:
+            print(
+                _render_terminal_receipt({**blocked, "exit_code": 1}).decode("utf-8"),
+                end="",
             )
-        )
-        return 1
-    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0
+            return 1
+        return _emit_terminal_receipt(output, blocked, exit_code=1)
+    return _emit_terminal_receipt(output, result, exit_code=0)
 
 
 if __name__ == "__main__":
