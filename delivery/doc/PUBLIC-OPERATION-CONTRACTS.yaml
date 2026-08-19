@@ -3,6 +3,24 @@
   "kind": "PublicOperationContractRegistryV2",
   "operations": [
     {
+      "operation": "check.post-close",
+      "entry": ["meta-flow", "check", "post-close"],
+      "input_version": "PostCloseReconciliationQueryV1",
+      "output_version": "PostCloseReconciliationCheckV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.checks.post_close.check_post_close",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": ["--release-context"],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "cp.projection",
       "entry": ["meta-flow", "cp", "projection"],
       "input_version": "CheckpointProjectionQueryV1",

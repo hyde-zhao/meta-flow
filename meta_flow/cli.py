@@ -613,6 +613,7 @@ def _print_help() -> None:
         "  meta-flow quality model-check --project-root .\n"
         "  meta-flow quality eval-check --project-root .\n"
         "  meta-flow check cr-tracking --project-root .\n"
+        "  meta-flow check post-close --id CR-072 --project-root . --format json\n"
         "  meta-flow workspace check\n"
         "  meta-flow workspace link --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
         "  meta-flow workspace bootstrap --artifact-root ../meta-flow-artifacts --project-name meta-flow\n"
@@ -838,6 +839,7 @@ def _print_check_help() -> None:
         "Validators:\n"
         "  human-gate   Validate CP2/CP3/CP5/CP8 Decision Brief and optional launch message.\n"
         "  cr-tracking       Validate CR tracking consistency across STATE, CR files, follow-up tables, and CR-INDEX.\n"
+        "  post-close        Validate a closed CR's release owner, final CP8 binding, follow-up, issues, and capabilities.\n"
         "  state-transition  Validate approve/auto-CP advance-to-next-gate behavior.\n\n"
         "  design-ownership       Validate FEATURE-REGISTRY ownership fields.\n"
         "  story-to-feature-trace Validate Story feature refs and LLD policy.\n\n"
@@ -868,6 +870,7 @@ def _print_check_help() -> None:
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP3-HLD-REVIEW.md\n"
         "  meta-flow check human-gate --checkpoint process/checkpoints/CP5-STORY-DESIGN-REVIEW.md --launch-message-file process/checkpoints/CP5-LAUNCH-MESSAGE.md\n"
         "  meta-flow check cr-tracking --project-root .\n"
+        "  meta-flow check post-close --id CR-072 --project-root . --format json\n"
         "  meta-flow check state-transition --route-plan process/checks/CP0-CR158.route-plan.json --result process/checks/CP4-CR158.result.json --project-root .\n"
         "  meta-flow check state-transition --route-plan process/checks/CP0-CR158.route-plan.json --approved-gate CP3 --project-root .\n"
         "  meta-flow check design-ownership --project-root .\n"
@@ -908,6 +911,10 @@ def _run_check(args: list[str]) -> None:
         from meta_flow.checks import cr_tracking
 
         raise SystemExit(cr_tracking.main(forwarded))
+    if validator == "post-close":
+        from meta_flow.checks import post_close
+
+        raise SystemExit(post_close.main(forwarded))
     if validator == "state-transition":
         from meta_flow.checks import state_transition
 
@@ -1014,7 +1021,7 @@ def _run_check(args: list[str]) -> None:
         raise SystemExit(governance.main(["retention-check", *forwarded]))
     raise SystemExit(
         "未知检查器: "
-        f"{validator}. 目前支持: human-gate, cr-tracking, design-ownership, story-to-feature-trace, "
+        f"{validator}. 目前支持: human-gate, cr-tracking, post-close, design-ownership, story-to-feature-trace, "
         "state-transition, story-return, evidence-index, lld-structure, design-delta, cp-result, event-ledger, handoff-dispatch, read-expansion, "
         "failure-routing, waiver-policy, "
         "module-boundaries, imports, architecture-fitness, risk-rings, capability-claims, concept-overlap, "

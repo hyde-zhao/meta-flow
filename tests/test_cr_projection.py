@@ -652,6 +652,51 @@ def test_summary_does_not_infer_risk_acceptance_before_publication(
     assert "follow_up_tracking_ref" not in summary
 
 
+def test_summary_accepts_released_mapping_fact_diff_owner(tmp_path: Path) -> None:
+    cr_path = _write_cr(tmp_path)
+    release_path = tmp_path / "process/release/RELEASE-CONTEXT-CR101.yaml"
+    release_path.parent.mkdir(parents=True)
+    release_path.write_text(
+        json.dumps(
+            {
+                "cr_id": "CR-101",
+                "release_decision": "RELEASED",
+                "fact_diff": {
+                    "items": [
+                        {
+                            "promise_ref": "CR101-COST",
+                            "status": "EXECUTED_NEGATIVE_RESULT",
+                            "decision_impact": "READY_WITH_RISK",
+                            "risk_ref": "RISK-CR101-COST",
+                            "evidence_refs": ["process/evidence/cost.json"],
+                        }
+                    ]
+                },
+                "publication_result": {
+                    "decision": "RELEASED",
+                    "risk_disposition": {"waiver": False},
+                },
+                "follow_up_summary": ["cost calibration"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = cr_projection.summary_from_cr_file(tmp_path, cr_path)
+
+    assert summary["followup_candidates"] == [
+        {
+            "candidate_id": "RISK-CR101-COST",
+            "disposition": "RISK_ACCEPTED_FOR_RELEASE",
+            "risk_ref": "RISK-CR101-COST",
+            "evidence_refs": ["process/evidence/cost.json"],
+            "source_ref": "process/release/RELEASE-CONTEXT-CR101.yaml",
+        }
+    ]
+    assert cr_projection.validate_summary_semantics(tmp_path, "CR-101", summary) == []
+
+
 def test_summary_semantics_rejects_decision_status_not_owned_by_gate(
     tmp_path: Path,
 ) -> None:

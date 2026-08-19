@@ -173,7 +173,12 @@ def _follow_up_projection(
     risk_disposition = publication_result.get('risk_disposition')
     risk_disposition = risk_disposition if isinstance(risk_disposition, dict) else {}
     fact_diff = release_context.get('fact_diff')
-    for raw in fact_diff if isinstance(fact_diff, list) else []:
+    fact_diff_items = (
+        fact_diff.get('items')
+        if isinstance(fact_diff, dict)
+        else fact_diff
+    )
+    for raw in fact_diff_items if isinstance(fact_diff_items, list) else []:
         if not isinstance(raw, dict):
             continue
         status = str(raw.get('status') or '').upper()
@@ -189,7 +194,7 @@ def _follow_up_projection(
             status == 'EXECUTED_NEGATIVE_RESULT'
             and risk_ref
             and decision_impact == 'READY_WITH_RISK'
-            and release_decision == 'READY_WITH_RISK'
+            and release_decision in {'READY_WITH_RISK', 'RELEASED'}
             and publication_decision == 'RELEASED'
             and risk_disposition
         ):
