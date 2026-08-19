@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from hashlib import sha256
 from pathlib import Path
@@ -8,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from meta_flow.checks.detector_qualification import (
-    BASELINE_REL,
     WriterCallV1,
     check_baseline_ancestor,
     check_detector_qualification,
@@ -16,51 +14,47 @@ from meta_flow.checks.detector_qualification import (
     scan_full_writer_baseline,
     scan_incremental_writers,
 )
-from meta_flow.project.process_route import require_process_route
 
-OBSERVATION_WRITER_EVIDENCE_SHA256 = (
-    "9509fff7e710da7976f339b171da878b6d9689ff82fd90ec4926ca9e991ab9e2"
-)
 OBSERVATION_WRITER_CALLS = {
-    "70927273969163e40a03b1d032a37dafa74c1a17a1b839bd810a48dd1b25102b": (
+    "26adaf23ee3b339374d22f561afd13624fedbe072bf1070bf80f9c0c8b1b0ec3": (
         "meta_flow/migration/observation_storage.py",
         "compare_and_swap",
         96,
         "open",
-        "<dynamic>",
-        "dynamic",
+        "self.path.with_name(f'.{self.path.name}.lock')",
+        "symbolic-path",
     ),
-    "1e133e56debea2cbf9047c81cc3ce81db760c5343e0ec9ea3d3bd9d7305676c0": (
+    "ff7fa0a6ffeb22fd3b8dd0ca1338937581509e563a9e6f4a7cfd5bdd1a91e839": (
         "meta_flow/migration/observation_storage.py",
         "compare_and_swap",
         100,
         "write",
-        "<dynamic>",
-        "dynamic",
+        "self.path.with_name(f'.{self.path.name}.lock')",
+        "symbolic-path",
     ),
-    "cd3e46f49f0e47aa29d4f6dd15be4674d9d77706ee9b4ea7b3c28e3845b3c35b": (
+    "3b0b9a960a9eafc033026b4ea06557da03d9fe76cd864c1b3677886b3b7b03a2": (
         "meta_flow/migration/observation_storage.py",
         "compare_and_swap",
         117,
         "write",
-        "<dynamic>",
+        "descriptor",
         "dynamic",
     ),
-    "0919d309dbae3c4b6e4c0ca9784aa1f07f9be9eb8c161ea6f26355d24370dbe6": (
+    "16e7658120d087776866201cc0e7df6ac616027452cf7fb02eca46686c5e3169": (
         "meta_flow/migration/observation_storage.py",
         "compare_and_swap",
         120,
         "replace",
-        "<dynamic>",
-        "dynamic",
+        "self.path",
+        "symbolic-path",
     ),
-    "e3a2e9a9d027921684837ce93083351efa3a053c8d22c953adccb46f81f9c25c": (
+    "184615795a0587ca35a719244516e8370593875e1236f6b01002371b4fde6500": (
         "meta_flow/migration/observation_storage.py",
         "compare_and_swap",
         128,
         "unlink",
-        "<dynamic>",
-        "dynamic",
+        "Path(temporary_name)",
+        "symbolic-path",
     ),
 }
 
@@ -162,64 +156,31 @@ def test_repository_r14_incremental_hard_gate_has_no_unqualified_current_writer(
     assert report["full_source_baseline"]["decision"] == "PASS"
     assert report["full_source_baseline"]["ambiguous_writer_call_count"] == 0
     assert report["unresolved_unallowlisted_count"] == 0
-    assert report["allowlisted_dynamic_writer_call_count"] == 45
+    assert report["allowlisted_dynamic_writer_call_count"] == 0
+    assert report["incremental_writer_call_count"] == 0
     unresolved_findings = [
         finding
         for finding in report["findings"]
         if finding.startswith("DETECTOR_NEW_UNRESOLVED_WRITER:")
     ]
     assert unresolved_findings == []
-    dynamic_calls = [
-        item for item in report["writer_calls"] if item["target_kind"] == "dynamic"
-    ]
-    qualified_calls = dynamic_calls
-    assert len(dynamic_calls) == 45
-    assert len(qualified_calls) == 45
-    assert {item["ref"] for item in qualified_calls} == {
-        "meta_flow/execution_control/repair_admission.py",
-        "meta_flow/migration/observation_storage.py",
-        "meta_flow/state/projection_transaction.py",
-        "meta_flow/work/init_transaction.py",
-        "meta_flow/work/lifecycle.py",
-        "meta_flow/work/lifecycle_transaction.py",
-        "scripts/qualify_provider_artifact.py",
-        "scripts/run_provider_artifact_canary.py",
-    }
-    assert {item["function"] for item in qualified_calls} == {
-        "_platform_lock",
-        "_acquire_lock",
-        "_claim_lock",
-        "_release_lock",
-        "correct_state_projection_transaction",
-        "acquire_shared_projection_writer_lock",
-        "record_shared_projection_successor",
-        "discard_shared_projection_successor",
-        "_ensure_plain_directory",
-        "_write_atomic",
-        "_remove_created_directories",
-        "_ensure_plain_claim_directory",
-        "_unlink_owned_regular",
-        "claim_repair_authorization",
-        "compare_and_swap",
-        "finish",
-        "main",
-        "atomic_remove_regular_file",
-        "_write_bytes_atomic",
-        "_restore",
-        "update_work_status",
-    }
+    assert report["writer_calls"] == []
 
 
-def test_repository_observation_writer_qualification_is_exact_and_evidence_bound() -> None:
+def test_repository_observation_writer_full_baseline_is_exact() -> None:
     root = Path(__file__).parents[1]
-    report = check_detector_qualification(root)
+    report = scan_full_writer_baseline(
+        root,
+        source_roots=("meta_flow", "scripts"),
+        include_calls=True,
+    )
     observed = {
         item["call_id"]: (
             item["ref"],
             item["function"],
             item["line"],
             item["operation"],
-            item["target"],
+            item["target_expression"],
             item["target_kind"],
         )
         for item in report["writer_calls"]
@@ -230,26 +191,6 @@ def test_repository_observation_writer_qualification_is_exact_and_evidence_bound
         "meta_flow/migration/observation_storage.py" in finding
         for finding in report["findings"]
     )
-
-    process_root = require_process_route(root).process_root
-    baseline = json.loads((process_root / BASELINE_REL).read_text(encoding="utf-8"))
-    entries = {
-        item["call_id"]: item
-        for item in baseline["dynamic_allowlist"]
-        if item["owner"] == "meta_flow.migration.observation_storage"
-    }
-    assert set(entries) == set(OBSERVATION_WRITER_CALLS)
-    assert all(
-        item["evidence_ref"]
-        == "process/governance/OBSERVATION-STORAGE-WRITER-QUALIFICATION.md"
-        and item["evidence_sha256"] == OBSERVATION_WRITER_EVIDENCE_SHA256
-        and item["reason"].strip()
-        for item in entries.values()
-    )
-    evidence = process_root / entries[next(iter(entries))]["evidence_ref"].removeprefix(
-        "process/"
-    )
-    assert sha256(evidence.read_bytes()).hexdigest() == OBSERVATION_WRITER_EVIDENCE_SHA256
     source = root / "meta_flow/migration/observation_storage.py"
     assert (
         sha256(source.read_bytes()).hexdigest()
