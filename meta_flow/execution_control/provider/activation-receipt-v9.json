@@ -1,0 +1,99 @@
+{
+  "cohort_revision": 1,
+  "context_revision": 1,
+  "evidence_digests": {
+    "candidate_closure.command": "c4b5b72c31bf0e9c0ac67de5985870a70c5a25cfc7a48305a8b43a0835e8ea88",
+    "candidate_closure.profile": "17239f95b178ba472011708f31d765a5286d1af49d57348ae602df4385da3b63",
+    "candidate_closure.receipt": "c117d1a5102dd4dcfbddcd1fc822325db571259f0f816395dcec2e15c49c3964",
+    "candidate_closure.result": "8e0b12746f4e26c5a0e54f72b7f62f47789519c388eb8ca6625710e6b5ae9596",
+    "candidate_compatibility.command": "35c66c604d97fe6a60fd549ca606b2a0bc5884b21cf0a26b844d2c3ea855352a",
+    "candidate_compatibility.profile": "4b3b8a38deb2336fabd6c35fc18f5a98896fb70b6395f94ecc5c1be20475f272",
+    "candidate_compatibility.receipt": "b38a3dc7d389960abd0348bd383183ce0caaaf8991d1bf9f295db303d62e2e5a",
+    "candidate_compatibility.result": "7effc0884bb91db68f44f949ddc9ce25934a435bb6ef83ab6bcf815a0c4f1efa",
+    "candidate_full.command": "79ecdd639441996c7a9fef571dd6ff00c1f53d4a07a5a0b12b3f07c0d1b7b14e",
+    "candidate_full.profile": "db58dafa65a97fa1180f11161eeb4ad5889484cfd18319ec8b7855789613b1d0",
+    "candidate_full.receipt": "21d8aec7992beb98360c391da64b41c805e4a602768036c0f23888d9c1c316a4",
+    "candidate_full.result": "c2f4578c5b15e4daa65b18c3914d997dbba098fd738fefe27219e77619db91a4",
+    "candidate_targeted.command": "c1e38fbb9075ac30ad95115807ef00b38dbdeb2df47c95c354b2b62f9f6e23b6",
+    "candidate_targeted.profile": "5947c6c5350f24899e035164b2037aa39e33176b49aa30bed25cbd6f204b3750",
+    "candidate_targeted.receipt": "ebfcac8e88c33c5f8ffcde8883e74e419b0442e6f3300277ff2793696f7d62c5",
+    "candidate_targeted.result": "8850ca1bb2810bb8c5dde8e8582aa5236f0dc29d1b7116155127070561b834ca"
+  },
+  "generator_identity": "meta_flow.execution_control.migration:build_provider_activation_receipt:v9",
+  "package_name": "meta-flow",
+  "package_version": "0.6.1",
+  "policy_revision": 1,
+  "qualified_source_exclusions": [
+    "meta_flow/execution_control/provider/activation-receipt-v9.json"
+  ],
+  "qualified_source_manifest": [
+    {
+      "bytes": 37881,
+      "ref": "meta_flow/evolution.py",
+      "sha256": "ff8dde3fc42767ada355b950afd9e30004398b9ea6510ca577b9f3ca8288d249"
+    },
+    {
+      "bytes": 10735,
+      "ref": "meta_flow/evolution_cli.py",
+      "sha256": "6f98877f63c6a09ce18478b5593e955833a84e02b4d754374d2fe89a161a5b5d"
+    },
+    {
+      "bytes": 35411,
+      "ref": "meta_flow/execution_control/admission.py",
+      "sha256": "3c0a5e443c3d993004aedce0c35977469bb328308253e237266bf831cafa9337"
+    },
+    {
+      "bytes": 20965,
+      "ref": "meta_flow/execution_control/consumer_scan.py",
+      "sha256": "5ccd7c70c8fbebc2ff59c767e445783efa90873bf49d7fcc89c7a43b5d2f3b47"
+    },
+    {
+      "bytes": 23269,
+      "ref": "meta_flow/execution_control/contract.py",
+      "sha256": "7b02c642f9256723762bced9e636b9b31d838b6f1f226d76b3872095839300a9"
+    },
+    {
+      "bytes": 57271,
+      "ref": "meta_flow/execution_control/migration.py",
+      "sha256": "c534f90e00ae6ba1d5ec0227b4ed421d81dbb36a380e5d575c8dbac333c7249e"
+    },
+    {
+      "bytes": 27754,
+      "ref": "meta_flow/execution_control/repair_admission.py",
+      "sha256": "d6bccbba3b235ce8848ede3799000affe96ed8a5ab059e8b0f1d26d362b32d4a"
+    },
+    {
+      "bytes": 17906,
+      "ref": "meta_flow/execution_control/runtime_context.py",
+      "sha256": "5006348ff6c302f338c2808d064d09b052bbc326c110be701e0581b1aa550d9a"
+    },
+    {
+      "bytes": 6174,
+      "ref": "meta_flow/work/assurance.py",
+      "sha256": "495cb1f1489f99a2932472e3f08a742ed800661028495dcbfd5bf6c1cbdd4189"
+    },
+    {
+      "bytes": 45843,
+      "ref": "meta_flow/work/cli.py",
+      "sha256": "cc6b801d6d2a1d7fbac8779d29dd37817726eaa26446c22ec44abb72f9e5e758"
+    },
+    {
+      "bytes": 84284,
+      "ref": "meta_flow/work/store.py",
+      "sha256": "8dd37eb4dc93dccd61f1286f8cced97ae274b5855134a857b86746abd22dcbb8"
+    },
+    {
+      "bytes": 21107,
+      "ref": "meta_flow/work/usage.py",
+      "sha256": "40e2c66338ec65bc4ae734a3f8da72f5b9bb8dfedb3c20ab8572325c1e3c812f"
+    },
+    {
+      "bytes": 19007,
+      "ref": "meta_flow/work/usage_admission.py",
+      "sha256": "1208a5288371a80f4ed992f96dc3d7c90daa5acac25834eb5986c862f26a5f16"
+    }
+  ],
+  "qualified_source_set_digest": "128d6a33129a4643b81356893e162ce1a27ed575a8245378a08aa64b844b14ad",
+  "receipt_digest": "36039e91a2dce6cc8fa6391ac546654bb317af27979426738e07aa6ac039078d",
+  "schema_version": 1
+}

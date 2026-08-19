@@ -1,0 +1,168 @@
+{
+  "kind": "ProviderReleaseQualificationEvidenceV1",
+  "layers": {
+    "candidate_closure": {
+      "command": {
+        "commands": [
+          "uv run --frozen --no-sync --python 3.11 ruff check meta_flow/execution_control/migration.py tests/test_execution_control_migration.py tests/test_detector_qualification.py",
+          "uv lock --check",
+          "git diff --check",
+          "uv run --frozen --no-sync --python 3.11 meta-flow check detector-qualification --project-root .",
+          "uv run --frozen --no-sync --python 3.11 python scripts/check_delivery_guardrails.py"
+        ]
+      },
+      "profile": {
+        "name": "provider-activation-receipt-v9-closure-0.6.1-v1",
+        "scope": [
+          "activation receipt v9 locator, closed schema and migration contract lint",
+          "detector full-baseline and incremental hard gate bound to the pre-materialization source OID",
+          "delivery guardrail zero-finding closure",
+          "lockfile and tracked source whitespace integrity"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_closure",
+        "package_version": "0.6.1",
+        "provider_source_set_digest": "128d6a33129a4643b81356893e162ce1a27ed575a8245378a08aa64b844b14ad",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "detector_ambiguous_writer_call_count": 0,
+        "detector_incremental_writer_call_count": 0,
+        "detector_unresolved_unallowlisted_count": 0,
+        "delivery_guardrail_findings": 0,
+        "exit_code": 0,
+        "summary": "Ruff, lock, diff, exact detector baseline and delivery guardrail passed"
+      }
+    },
+    "candidate_compatibility": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "tests/test_provider_artifact_receipt.py",
+          "tests/test_provider_installer_identity.py",
+          "tests/test_provider_runtime_identity.py",
+          "tests/test_vnext_work_usage.py",
+          "tests/test_cli_lifecycle.py"
+        ]
+      },
+      "profile": {
+        "name": "provider-activation-artifact-usage-runtime-compatibility-0.6.1-v1",
+        "scope": [
+          "provider artifact receipt source and payload bindings",
+          "installer and runtime provider identity compatibility",
+          "clarification and routine-stage usage admission",
+          "public lifecycle CLI compatibility"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_compatibility",
+        "package_version": "0.6.1",
+        "provider_source_set_digest": "128d6a33129a4643b81356893e162ce1a27ed575a8245378a08aa64b844b14ad",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "summary": "234 passed, 2 legacy digest-policy warnings in 3.18s"
+      }
+    },
+    "candidate_full": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "--deselect",
+          "tests/test_execution_control_migration.py::test_packaged_receipt_rotation_preserves_v1_through_v8_and_selects_v9"
+        ]
+      },
+      "profile": {
+        "name": "provider-activation-receipt-v9-pre-materialization-full-0.6.1-v1",
+        "scope": [
+          "complete repository regression before the create-only v9 leaf exists",
+          "exactly one necessarily post-create packaged-current assertion is deselected",
+          "no detector, receipt schema, compatibility or other product failure may be deselected"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_full",
+        "package_version": "0.6.1",
+        "provider_source_set_digest": "128d6a33129a4643b81356893e162ce1a27ed575a8245378a08aa64b844b14ad",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "deselected": 1,
+        "exit_code": 0,
+        "subtests_passed": 725,
+        "summary": "2768 passed, 1 named post-materialization assertion deselected, 3 warnings in 606.07s"
+      }
+    },
+    "candidate_targeted": {
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "tests/test_execution_control_migration.py",
+          "tests/test_observation_storage.py",
+          "--deselect",
+          "tests/test_execution_control_migration.py::test_packaged_receipt_rotation_preserves_v1_through_v8_and_selects_v9"
+        ]
+      },
+      "profile": {
+        "name": "provider-activation-receipt-v9-targeted-0.6.1-v1",
+        "scope": [
+          "v1-v8 immutable receipt history and v9 fixed-locator rotation",
+          "closed schema and exact qualified source manifest",
+          "fresh plan, native authority, create-only capability and replay protection",
+          "atomic observation persistence lock and CAS regression"
+        ]
+      },
+      "receipt": {
+        "decision": "PASS",
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "layer": "candidate_targeted",
+        "package_version": "0.6.1",
+        "provider_source_set_digest": "128d6a33129a4643b81356893e162ce1a27ed575a8245378a08aa64b844b14ad",
+        "schema_version": 1
+      },
+      "result": {
+        "decision": "PASS",
+        "deselected": 1,
+        "exit_code": 0,
+        "summary": "34 passed, 1 named post-materialization assertion deselected in 1.55s"
+      }
+    }
+  },
+  "package_name": "meta-flow",
+  "package_version": "0.6.1",
+  "pre_materialization_release_oid": "21f77467798c63535e323d4009741ac3df47329b",
+  "qualified_at": "2026-08-19T07:10:00Z",
+  "schema_version": 1
+}
