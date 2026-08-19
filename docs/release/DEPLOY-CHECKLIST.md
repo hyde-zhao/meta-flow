@@ -42,7 +42,7 @@ release_decision: NOT_READY
 |---|---|
 | 版本三真相 | `pyproject.toml`、`uv.lock`、`meta_flow.__version__` 全为 0.6.1 |
 | 构建 | `uv build` 只生成一个 wheel 与一个 sdist；输出放在忽略的本地 build 目录 |
-| receipt bundle | `ProviderArtifactReceiptV1-0.6.1.json` 与 `.digest-policy.json` 原子生成且摘要匹配 |
+| receipt bundle | `ProviderArtifactReceiptV1.json` 与 `ProviderArtifactReceiptV1.digest-policy.json` 原子生成且摘要匹配 |
 | canary | clean-home 安装 wheel，校验 sdist、receipt、sidecar、版本与 lifecycle harness |
 | published assets | 远端发布获批后才核验；当前不适用 |
 

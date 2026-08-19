@@ -88,3 +88,13 @@ def test_readme_download_and_environment_examples_match_asset_set() -> None:
     assert '"$META_FLOW_RECEIPT_PATH"' in systemd_section
     assert '> "$META_FLOW_ENVIRONMENT_DIR/50-meta-flow.conf"' in systemd_section
     assert "META_FLOW_PROVIDER_RECEIPT=$META_FLOW_RELEASE_DIR" not in systemd_section
+
+
+def test_deploy_checklist_uses_canonical_receipt_bundle_names() -> None:
+    checklist = (ROOT / "docs/release/DEPLOY-CHECKLIST.md").read_text(encoding="utf-8")
+    asset_set = artifact.build_provider_release_asset_set("0.6.1")
+
+    assert f"`{asset_set.receipt_filename}`" in checklist
+    assert f"`{asset_set.sidecar_filename}`" in checklist
+    assert "ProviderArtifactReceiptV1-0.6.1.json" not in checklist
+    assert "ProviderArtifactReceiptV1-0.6.1.digest-policy.json" not in checklist
