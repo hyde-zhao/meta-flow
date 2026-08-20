@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from meta_flow.execution_control.migration import current_execution_control_policy
-from meta_flow.work.model import Work
+from meta_flow.work.model import ValidationReuseDecisionV2, Work
 from meta_flow.work.validation_fingerprint import VALIDATION_LAYERS
 from meta_flow.work.validation_planner import ValidationExecutionPlan
 
@@ -59,6 +59,18 @@ class ValidationPlan:
             "layer_decisions": self.layer_decisions.copy(),
             "invalidated_layers": list(self.invalidated_layers),
         }
+
+
+def render_validation_provider_decision(
+    decision: ValidationReuseDecisionV2,
+) -> dict[str, object]:
+    """只呈现 provider 的 typed decision，不在 assurance 复制复用规则。"""
+
+    return {
+        "decision": decision.decision,
+        "reason_codes": list(decision.reason_codes),
+        "provider_identity_digest": decision.provider_identity_digest,
+    }
 
 
 def _with_execution_control_assurance(plan: ReviewPlan | ValidationPlan):

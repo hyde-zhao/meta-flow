@@ -1,11 +1,11 @@
 ---
 status: confirmed
-version: "1.2"
+version: "1.3"
 confirmed_by: "user"
-confirmed_at: "2026-08-18T08:02:17Z"
-source_change: "CR-071 + CR-072"
+confirmed_at: "2026-08-19T14:05:17Z"
+source_change: "CR-071 + CR-072 + CR-073"
 formal_cp2_status: approved
-formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
+formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 ---
 
 # CR-071 MVP Scope
@@ -88,5 +88,11 @@ formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROV
 ## MVP 成功判定
 
 - 六个 In Scope 能力均有正向、负向/边界场景和产品 Story。
-- P0/P1 产品需求缺口为 0，CP2 人工批准仍为独立门。
+- P0/P1 产品需求缺口为 0；CR-073 CP2 已于 2026-08-19 批准，后续仍受 CP3/CP4/CP5 与独立运行授权约束。
 - 后续 targeted、compatibility、full、contract、migration、projection、fail-closed、recovery 验证全部可由 TEST-MATRIX 回链。
+
+## CR-073 推荐 MVP（CP2 已确认）
+
+In：C0.5 诚实历史对账；init preflight/typed contract/system namespace/additive amend；validation truth/orphan failure recovery；六轮→J1/J2/J3 矩阵；受授权前 source-candidate replay 准备。
+
+Out：伪造 CR-071 PASS、未授权 quant-lab、installed-artifact replay、P7 STATE-CONTRACT/pause-resume/cost hard-gate、过程 Story/代码。

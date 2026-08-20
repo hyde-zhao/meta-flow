@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,10 @@ from meta_flow.work.handoff import (
     resume_precheck,
     write_handoff,
 )
-from meta_flow.work.init_transaction import inspect_work_init_transactions
+from meta_flow.work.init_transaction import (
+    build_execution_contract_admission_validator,
+    inspect_work_init_transactions,
+)
 from meta_flow.work.lifecycle import update_work_status
 from meta_flow.work.lifecycle_transaction import (
     WorkCloseAuthorizationV1,
@@ -30,7 +34,16 @@ from meta_flow.work.lifecycle_transaction import (
     plan_work_close,
     recover_work_close_transaction,
 )
-from meta_flow.work.model import build_work, load_work
+from meta_flow.work.model import (
+    G1ScopeDeltaV1,
+    GovernanceProviderIdentityV1,
+    build_work,
+    load_work,
+)
+from meta_flow.work.preflight import render_preflight_result, run_lifecycle_preflight
+from meta_flow.work.production_validation import (
+    build_governance_provider_admission_validator,
+)
 from meta_flow.work.publication_close import (
     WorkPublicationCloseAuthorizationV1,
     apply_work_publication_close,
@@ -41,6 +54,13 @@ from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import HIGH_RISK_FIELDS, RiskFacts, classify_work
 from meta_flow.work.route_profile import RouteProfile, evaluate_route_profile
 from meta_flow.work.scope import WorkScope, check_scope
+from meta_flow.work.scope_amend import (
+    apply_g1_scope_amend,
+    inspect_g1_scope_amend,
+    load_g1_scope_amend_authorization,
+    plan_g1_scope_amend,
+    recover_g1_scope_amend,
+)
 from meta_flow.work.store import (
     WorkInitApplyError,
     apply_legacy_partial_work_init_recovery,
@@ -66,6 +86,10 @@ PUBLIC_OPERATION_DECLARATIONS = (
     ("work.publication-close", ("meta-flow", "work", "publication-close")),
     ("work.init-inspect", ("meta-flow", "work", "init-inspect")),
     ("work.init-recover", ("meta-flow", "work", "init-recover")),
+    ("work.init-preflight", ("meta-flow", "work", "init-preflight")),
+    ("work.scope-amend", ("meta-flow", "work", "scope-amend")),
+    ("work.scope-amend-inspect", ("meta-flow", "work", "scope-amend-inspect")),
+    ("work.scope-amend-recover", ("meta-flow", "work", "scope-amend-recover")),
     ("work.usage-plan", ("meta-flow", "work", "usage-plan")),
     ("work.usage-add", ("meta-flow", "work", "usage-add")),
 )
@@ -212,6 +236,180 @@ def _resolve_roots(project_root: Path) -> tuple[Path, Path]:
 def _head_oid(root: Path) -> str:
     result = run_git(["rev-parse", "--verify", "HEAD"], cwd=root)
     return result.stdout.strip() if result.ok else ""
+
+
+def _load_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label} path must be a regular file")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return payload
+
+
+def init_preflight_main(argv: list[str] | None = None) -> int:
+    """模拟 Work 成功/失败/no-op，并组合 execution/provider validators；永远零写。"""
+
+    parser = argparse.ArgumentParser(prog="meta-flow work init-preflight")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--input", type=Path, required=True)
+    parsed = parser.parse_args(argv or [])
+    try:
+        payload = _load_json_object(parsed.input, label="preflight input")
+        allowed = {
+            "schema_version",
+            "candidate",
+            "context",
+            "execution_contract",
+            "provider_identity",
+        }
+        if set(payload) - allowed or payload.get("schema_version") != 1:
+            raise ValueError("PREFLIGHT_INPUT_FIELDS_INVALID")
+        candidate = payload.get("candidate")
+        context = payload.get("context")
+        if not isinstance(candidate, Mapping) or not isinstance(context, Mapping):
+            raise ValueError("PREFLIGHT_INPUT_CANDIDATE_CONTEXT_INVALID")
+        work_id = str(candidate.get("work_id") or "")
+        validators: list[tuple[str, object]] = []
+        execution = payload.get("execution_contract")
+        if execution is not None:
+            if not isinstance(execution, Mapping) or set(execution) != {"ref", "unit"}:
+                raise ValueError("PREFLIGHT_EXECUTION_CONTRACT_FIELDS_INVALID")
+            unit_payload = execution["unit"]
+            if not isinstance(unit_payload, Mapping):
+                raise ValueError("PREFLIGHT_EXECUTION_UNIT_INVALID")
+            unit = ExecutionUnitV1.from_mapping(unit_payload, work_id=work_id)
+            validators.append(
+                build_execution_contract_admission_validator(
+                    parsed.project_root.resolve(),
+                    ref=execution["ref"],
+                    unit=unit,
+                )
+            )
+        provider = payload.get("provider_identity")
+        if provider is not None:
+            if not isinstance(provider, Mapping) or set(provider) != {
+                "observed",
+                "expected",
+            }:
+                raise ValueError("PREFLIGHT_PROVIDER_FIELDS_INVALID")
+            observed_payload = provider["observed"]
+            expected_payload = provider["expected"]
+            if not isinstance(observed_payload, Mapping) or not isinstance(
+                expected_payload, Mapping
+            ):
+                raise ValueError("PREFLIGHT_PROVIDER_IDENTITY_INVALID")
+            validators.append(
+                build_governance_provider_admission_validator(
+                    GovernanceProviderIdentityV1.from_mapping(observed_payload),
+                    GovernanceProviderIdentityV1.from_mapping(expected_payload),
+                )
+            )
+        report = run_lifecycle_preflight(candidate, context, validators=validators)
+        rendered = render_preflight_result(report)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(rendered, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if rendered["decision"] in {"READY", "NO_CHANGE"} else 1
+
+
+def scope_amend_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work scope-amend")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--work-id", required=True)
+    parser.add_argument("--delta", type=Path, required=True)
+    parser.add_argument("--authorization", type=Path, required=True)
+    parser.add_argument("--expected-plan-digest", default="")
+    parser.add_argument("--apply", action="store_true")
+    parsed = parser.parse_args(argv or [])
+    try:
+        release_root, process_root = _resolve_roots(parsed.project_root)
+        delta = G1ScopeDeltaV1.from_mapping(_load_json_object(parsed.delta, label="scope delta"))
+        authorization = load_g1_scope_amend_authorization(parsed.authorization)
+        release_oid = _head_oid(release_root)
+        process_oid = _head_oid(process_root)
+        plan = plan_g1_scope_amend(
+            release_root,
+            work_id=parsed.work_id,
+            delta=delta,
+            authorization=authorization,
+            release_oid=release_oid,
+            process_oid=process_oid,
+        )
+        if not parsed.apply:
+            payload = plan.as_dict()
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if plan.decision in {"READY", "NO_CHANGE"} else 1
+        if not parsed.expected_plan_digest:
+            raise ValueError("scope-amend --apply requires --expected-plan-digest")
+        payload = apply_g1_scope_amend(
+            plan,
+            expected_plan_digest=parsed.expected_plan_digest,
+            current_authorization=authorization,
+            release_oid=release_oid,
+            process_oid=process_oid,
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if payload["decision"] in {"PASS", "NO_CHANGE"} else 1
+
+
+def scope_amend_inspect_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work scope-amend-inspect")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--work-id", default="")
+    parsed = parser.parse_args(argv or [])
+    try:
+        _release_root, process_root = _resolve_roots(parsed.project_root)
+        payload = inspect_g1_scope_amend(process_root, work_id=parsed.work_id)
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, indent=2))
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if payload["decision"] == "PASS" else 1
+
+
+def scope_amend_recover_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work scope-amend-recover")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--transaction-id", required=True)
+    parser.add_argument("--expected-plan-digest", required=True)
+    parser.add_argument("--authorization", type=Path, required=True)
+    parsed = parser.parse_args(argv or [])
+    try:
+        release_root, process_root = _resolve_roots(parsed.project_root)
+        authorization = load_g1_scope_amend_authorization(parsed.authorization)
+        if authorization.release_oid != _head_oid(release_root) or (
+            authorization.process_oid != _head_oid(process_root)
+        ):
+            raise ValueError("G1_SCOPE_AMEND_RECOVERY_OID_MISMATCH")
+        payload = recover_g1_scope_amend(
+            process_root,
+            transaction_id=parsed.transaction_id,
+            expected_plan_digest=parsed.expected_plan_digest,
+            release_oid=authorization.release_oid,
+            process_oid=authorization.process_oid,
+        )
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, indent=2))
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if payload["decision"] == "RECOVERED" else 1
 
 
 def init_main(argv: list[str] | None = None) -> int:
@@ -374,14 +572,10 @@ def transition_main(command: str, argv: list[str] | None = None) -> int:
                 return 0 if plan.ready else 1
             if parsed.authorization is None:
                 raise ValueError("Work close --apply requires --authorization")
-            authorization_payload = json.loads(
-                parsed.authorization.read_text(encoding="utf-8")
-            )
+            authorization_payload = json.loads(parsed.authorization.read_text(encoding="utf-8"))
             if not isinstance(authorization_payload, dict):
                 raise ValueError("Work close authorization must be a JSON object")
-            authorization = WorkCloseAuthorizationV1.from_mapping(
-                authorization_payload
-            )
+            authorization = WorkCloseAuthorizationV1.from_mapping(authorization_payload)
             receipt = apply_work_close(process_root, plan, authorization)
             payload = {
                 **receipt.as_dict(),
@@ -476,9 +670,7 @@ def publication_close_main(argv: list[str] | None = None) -> int:
         authorization_payload = json.loads(authorization_path.read_text(encoding="utf-8"))
         if not isinstance(authorization_payload, dict):
             raise ValueError("Work publication-close authorization must be a JSON object")
-        authorization = WorkPublicationCloseAuthorizationV1.from_mapping(
-            authorization_payload
-        )
+        authorization = WorkPublicationCloseAuthorizationV1.from_mapping(authorization_payload)
         receipt = apply_work_publication_close(
             parsed.project_root,
             plan,
@@ -625,7 +817,11 @@ def handoff_main(argv: list[str] | None = None) -> int:
         return 1
     print(
         json.dumps(
-            {"decision": "PASS", "handoff_ref": path.relative_to(process_root).as_posix(), **handoff.as_dict()},
+            {
+                "decision": "PASS",
+                "handoff_ref": path.relative_to(process_root).as_posix(),
+                **handoff.as_dict(),
+            },
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -797,11 +993,7 @@ def init_inspect_main(argv: list[str] | None = None) -> int:
     payload = {
         "schema_version": 1,
         "kind": "WorkInitInspectionV1",
-        "decision": (
-            "RECOVERY_REQUIRED"
-            if recovery_plan.ready
-            else transactions["decision"]
-        ),
+        "decision": ("RECOVERY_REQUIRED" if recovery_plan.ready else transactions["decision"]),
         "work_id": parsed.work_id,
         "transactions": transactions,
         "legacy_recovery_plan": recovery_plan.as_dict(),
@@ -996,8 +1188,12 @@ def main(argv: list[str] | None = None) -> int:
             "Commands:\n"
             "  classify  Explain Work/CR and G0/G1/G2 routing.\n"
             "  init      Preview or create one Work envelope.\n"
+            "  init-preflight Simulate success/failure/no-op and semantic contracts with zero writes.\n"
             "  init-inspect Inspect Work-init transactions and exact legacy partial recovery.\n"
             "  init-recover Apply one plan-digest-bound legacy partial exact rollback.\n"
+            "  scope-amend Plan/apply one typed paused/blocked G0/G1 additive scope successor.\n"
+            "  scope-amend-inspect Inspect native G1 scope-amend transactions.\n"
+            "  scope-amend-recover Recover one non-terminal G1 scope-amend transaction.\n"
             "  start     Move a planned Work to active.\n"
             "  pause     Pause an active Work.\n"
             "  resume    Resume a paused Work.\n"
@@ -1022,10 +1218,18 @@ def main(argv: list[str] | None = None) -> int:
         return classify_main(forwarded)
     if command == "init":
         return init_main(forwarded)
+    if command == "init-preflight":
+        return init_preflight_main(forwarded)
     if command == "init-inspect":
         return init_inspect_main(forwarded)
     if command == "init-recover":
         return init_recover_main(forwarded)
+    if command == "scope-amend":
+        return scope_amend_main(forwarded)
+    if command == "scope-amend-inspect":
+        return scope_amend_inspect_main(forwarded)
+    if command == "scope-amend-recover":
+        return scope_amend_recover_main(forwarded)
     if command in {"start", "pause", "resume", "block", "close"}:
         return transition_main(command, forwarded)
     if command == "publication-close":
@@ -1055,5 +1259,5 @@ def main(argv: list[str] | None = None) -> int:
     if command == "check":
         return check_main(forwarded)
     raise SystemExit(
-        f"未知 work 命令: {command}. 目前支持: classify, init, init-inspect, init-recover, start, pause, resume, block, close, publication-close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
+        f"未知 work 命令: {command}. 目前支持: classify, init, init-preflight, init-inspect, init-recover, scope-amend, scope-amend-inspect, scope-amend-recover, start, pause, resume, block, close, publication-close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
     )

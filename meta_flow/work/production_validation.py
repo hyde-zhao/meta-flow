@@ -35,13 +35,43 @@ from meta_flow.work.directory_envelope import (
     match_write_envelope,
 )
 from meta_flow.work.git_inventory import InventoryCandidate, classify_candidate
+from meta_flow.work.model import GovernanceProviderIdentityV1, admit_governance_provider
 from meta_flow.work.validation_kernel import (
+    AdmissionItemV2,
     DecisionStatus,
     NormalizedDecisionGraphV1,
     ValidationSnapshotV1,
     capture_validation_snapshot,
     evaluate_work,
 )
+
+
+def build_governance_provider_admission_validator(
+    observed: GovernanceProviderIdentityV1,
+    expected: GovernanceProviderIdentityV1,
+) -> tuple[str, object]:
+    """将 provider identity 作为 S01 V2 graph 的薄 validator 注入。"""
+
+    def validator(_simulations: object) -> tuple[AdmissionItemV2, ...]:
+        admission = admit_governance_provider(observed, expected)
+        if admission.decision == "READY":
+            return (
+                AdmissionItemV2(
+                    "governance-provider",
+                    "GOVERNANCE_PROVIDER_READY",
+                    DecisionStatus.PASS,
+                ),
+            )
+        return tuple(
+            AdmissionItemV2(
+                "governance-provider",
+                code,
+                DecisionStatus.BLOCKED,
+            )
+            for code in admission.reason_codes
+        )
+
+    return "governance-provider", validator
 
 
 @dataclass(frozen=True)
@@ -52,6 +82,7 @@ class ProductionValidationV1:
     validation_policy_digest: str
     envelope_digest: str
     envelope_decisions: tuple[EnvelopeDecisionV1, ...]
+    provider_identity_digest: str = ""
 
     @property
     def passed(self) -> bool:
@@ -73,6 +104,7 @@ class ProductionValidationV1:
             "validation_policy_digest": self.validation_policy_digest,
             "envelope_digest": self.envelope_digest,
             "envelope_codes": [item.reason_code.value for item in self.envelope_decisions],
+            "provider_identity_digest": self.provider_identity_digest,
             "mutation_count": 0,
         }
 
@@ -99,8 +131,22 @@ def validate_production_write_plan(
     gate_status: str = "PASS",
     dependency_receipt_status: str = "PASS",
     execution_context_status: str = "READY",
+    governance_provider: GovernanceProviderIdentityV1 | None = None,
+    expected_governance_provider: GovernanceProviderIdentityV1 | None = None,
 ) -> ProductionValidationV1:
     """Validate one exact write set and return the only authoritative graph."""
+
+    if (governance_provider is None) != (expected_governance_provider is None):
+        raise ValueError("provider identity requires observed and expected values")
+    provider_identity_digest = ""
+    if governance_provider is not None and expected_governance_provider is not None:
+        admission = admit_governance_provider(
+            governance_provider,
+            expected_governance_provider,
+        )
+        if admission.decision != "READY":
+            raise ValueError("GOVERNANCE_PROVIDER_BLOCKED:" + ",".join(admission.reason_codes))
+        provider_identity_digest = governance_provider.identity_digest
 
     refs = tuple(sorted(set(write_refs)))
     if refs != write_refs:
@@ -234,6 +280,7 @@ def validate_production_write_plan(
         validation_policy_digest,
         envelope_digest,
         envelope_decisions,
+        provider_identity_digest,
     )
 
 

@@ -18,8 +18,11 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from meta_flow.execution_control.contract import canonical_digest
+from meta_flow.execution_control.contract import ExecutionUnitV1, canonical_digest
+from meta_flow.project.process_route_adapter import resolve_typed_repository_ref
 from meta_flow.state.projection_transaction import atomic_remove_regular_file
+from meta_flow.work.model import SuccessorContractV1, TypedRepositoryRefV2
+from meta_flow.work.validation_kernel import AdmissionItemV2, DecisionStatus
 
 TRANSACTION_ROOT_REL = Path(".meta-flow-runtime/work-init/transactions")
 TERMINAL_STATES = frozenset({"COMMITTED", "RECOVERED"})
@@ -27,6 +30,125 @@ TRANSACTION_STATES = frozenset({"PREPARED", "APPLYING", "PARTIAL", *TERMINAL_STA
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MISSING = "missing"
+
+
+class ExecutionContractAdmissionError(ValueError):
+    """init mutation 前的稳定合同拒绝，不泄露物理路径或 payload。"""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True)
+class ExecutionContractAdmissionV1:
+    contract: SuccessorContractV1
+    typed_ref: TypedRepositoryRefV2
+    file_sha256: str
+    mutation_count: int = 0
+
+
+def _typed_contract_ref(
+    value: TypedRepositoryRefV2 | Mapping[str, Any] | str,
+) -> TypedRepositoryRefV2:
+    if isinstance(value, TypedRepositoryRefV2):
+        return value
+    try:
+        if isinstance(value, Mapping):
+            return TypedRepositoryRefV2.from_mapping(value)
+        return TypedRepositoryRefV2.from_legacy_ref(value)
+    except (TypeError, ValueError) as exc:
+        raise ExecutionContractAdmissionError("EXECUTION_CONTRACT_REF_INVALID") from exc
+
+
+def load_and_validate_execution_contract(
+    project_root: Path,
+    *,
+    ref: TypedRepositoryRefV2 | Mapping[str, Any] | str,
+    unit: ExecutionUnitV1,
+    transaction_identity: Mapping[str, Any] | None = None,
+) -> ExecutionContractAdmissionV1:
+    """一次打开合同并校验 ref/digest/revision/root/slice/unit，全程零写。"""
+
+    typed_ref = _typed_contract_ref(ref)
+    try:
+        path = resolve_typed_repository_ref(project_root, typed_ref)
+    except (OSError, ValueError) as exc:
+        raise ExecutionContractAdmissionError("EXECUTION_CONTRACT_REF_UNRESOLVED") from exc
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ExecutionContractAdmissionError("EXECUTION_CONTRACT_UNREADABLE") from exc
+    if not isinstance(payload, Mapping):
+        raise ExecutionContractAdmissionError("EXECUTION_CONTRACT_NOT_OBJECT")
+    try:
+        contract = SuccessorContractV1.from_mapping(payload)
+    except (TypeError, ValueError) as exc:
+        code = getattr(exc, "args", ("EXECUTION_CONTRACT_INVALID",))[0]
+        stable = code if isinstance(code, str) and code.startswith("EXECUTION_CONTRACT_") else "EXECUTION_CONTRACT_INVALID"
+        raise ExecutionContractAdmissionError(stable) from exc
+    expected = {
+        "contract_revision": unit.revision,
+        "root_concept": unit.root_concept,
+        "slice_id": unit.slice_id,
+        "unit_id": unit.unit_id,
+    }
+    observed = contract.semantic_payload
+    mismatches = sorted(key for key in expected if observed[key] != expected[key])
+    if mismatches:
+        raise ExecutionContractAdmissionError(
+            "EXECUTION_CONTRACT_TUPLE_MISMATCH:" + ",".join(mismatches)
+        )
+    if contract.payload_digest != unit.contract_digest:
+        raise ExecutionContractAdmissionError("EXECUTION_CONTRACT_CALLER_DIGEST_MISMATCH")
+    if transaction_identity is not None:
+        if set(transaction_identity) != set(expected) or any(
+            transaction_identity[key] != expected[key] for key in expected
+        ):
+            raise ExecutionContractAdmissionError("EXECUTION_CONTRACT_TRANSACTION_TUPLE_MISMATCH")
+    return ExecutionContractAdmissionV1(
+        contract=contract,
+        typed_ref=typed_ref,
+        file_sha256=sha256(raw).hexdigest(),
+        mutation_count=0,
+    )
+
+
+def build_execution_contract_admission_validator(
+    project_root: Path,
+    *,
+    ref: TypedRepositoryRefV2 | Mapping[str, Any] | str,
+    unit: ExecutionUnitV1,
+    transaction_identity: Mapping[str, Any] | None = None,
+) -> tuple[str, object]:
+    """把合同 loader 作为 S01 `AdmissionDecisionV2` 的单一注入 validator。"""
+
+    def validator(_simulations: object) -> tuple[AdmissionItemV2, ...]:
+        try:
+            load_and_validate_execution_contract(
+                project_root,
+                ref=ref,
+                unit=unit,
+                transaction_identity=transaction_identity,
+            )
+        except ExecutionContractAdmissionError as exc:
+            return (
+                AdmissionItemV2(
+                    "execution-contract",
+                    exc.code,
+                    DecisionStatus.BLOCKED,
+                ),
+            )
+        return (
+            AdmissionItemV2(
+                "execution-contract",
+                "EXECUTION_CONTRACT_READY",
+                DecisionStatus.PASS,
+            ),
+        )
+
+    return "execution-contract", validator
 
 
 def _now() -> str:

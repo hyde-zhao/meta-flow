@@ -556,6 +556,78 @@
       }
     },
     {
+      "operation": "work.init-preflight",
+      "entry": ["meta-flow", "work", "init-preflight"],
+      "input_version": "WorkLifecycleCandidateV1+WorkLifecycleContextV1",
+      "output_version": "AdmissionDecisionV2",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.work.preflight.run_lifecycle_preflight",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.scope-amend",
+      "entry": ["meta-flow", "work", "scope-amend"],
+      "input_version": "G1ScopeDeltaV1+(G1ScopeAmendAuthorizationV1|G2CurrentCRScopeAmendAuthorizationV2)",
+      "output_version": "G1ScopeAmendPlanV1|G2CurrentCRScopeAmendPlanV2+ScopeAmendReceiptV2",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.work.scope_amend.plan_g1_scope_amend",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.scope-amend-inspect",
+      "entry": ["meta-flow", "work", "scope-amend-inspect"],
+      "input_version": "WorkIdV1",
+      "output_version": "G1ScopeAmendInspectionV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.work.scope_amend.inspect_g1_scope_amend",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.scope-amend-recover",
+      "entry": ["meta-flow", "work", "scope-amend-recover"],
+      "input_version": "(G1ScopeAmendAuthorizationV1|G2CurrentCRScopeAmendAuthorizationV2)+WorkInitTransactionV1",
+      "output_version": "WorkInitTransactionReceiptV1",
+      "mutation_mode": "recovery-only",
+      "authorization_mode": "existing-consumed-authorization",
+      "projector": "meta_flow.work.scope_amend.recover_g1_scope_amend",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "work.usage-add",
       "entry": ["meta-flow", "work", "usage-add"],
       "input_version": "UsageEventV1+UsageAdmissionPlanV1",

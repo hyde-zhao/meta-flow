@@ -14,6 +14,7 @@ from typing import Any
 
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.validation.policy_v2 import ValidationPolicyDecisionV2
 
 
 def _sha256(value: bytes) -> str:
@@ -137,6 +138,44 @@ def _validate_baseline(baseline: Mapping[str, Any]) -> list[str]:
     if baseline.get("profile_fingerprint") != canonical_digest(profile):
         blockers.append("PROFILE_FINGERPRINT_INVALID")
     return blockers
+
+
+def check_full_regression_reuse(
+    decision: ValidationPolicyDecisionV2,
+    *,
+    full_layer_default_for_profile: bool,
+    planner_action: str,
+) -> dict[str, Any]:
+    """薄 checker：只验证/解释 concrete policy decision，不复制复用规则。"""
+
+    if planner_action not in {"REUSE", "RUN", "BLOCKED"}:
+        raise ValueError("FULL_REUSE_PLANNER_ACTION_INVALID")
+    notes = set(decision.machine_notes)
+    expected_default = (
+        "FULL_LAYER_DEFAULT_FOR_PROFILE:"
+        + ("true" if full_layer_default_for_profile else "false")
+    )
+    blockers: list[str] = []
+    if expected_default not in notes:
+        blockers.append("FULL_LAYER_DEFAULT_NOTE_MISSING")
+    if f"PLANNER_ACTION:{planner_action}" not in notes:
+        blockers.append("PLANNER_ACTION_NOTE_MISSING")
+    if decision.action != planner_action:
+        blockers.append("POLICY_PLANNER_ACTION_MISMATCH")
+    return {
+        "schema_version": 2,
+        "kind": "FullRegressionReuseCheckV2",
+        "decision": "FAIL" if blockers else "PASS",
+        "policy_action": decision.action,
+        "planner_action": planner_action,
+        "full_layer_default_for_profile": full_layer_default_for_profile,
+        "semantic_note": (
+            "profile field describes a default; planner_action is the runtime fact"
+        ),
+        "reason_codes": list(decision.reason_codes),
+        "blockers": sorted(blockers),
+        "mutation_count": 0,
+    }
 
 
 def _post_full_impact_paths(
@@ -328,6 +367,12 @@ def assess_full_regression_reuse(
         "uncovered_paths": uncovered,
         "blockers": sorted(set(blockers)),
         "full_rerun_count": 0 if decision == "REUSE_ALLOWED" else 1,
+        "full_layer_default_for_profile": True,
+        "planner_action": "REUSE" if decision == "REUSE_ALLOWED" else "RUN",
+        "semantic_note": (
+            "full_layer_default_for_profile describes a profile default; "
+            "planner_action is the runtime fact"
+        ),
         "mutation_count": 0,
     }
     result["decision_digest"] = canonical_digest(result)

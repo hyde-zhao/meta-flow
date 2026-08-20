@@ -1,8 +1,8 @@
 ---
 status: confirmed
-version: "1.2"
+version: "1.3"
 confirmed_by: "user"
-confirmed_at: "2026-08-18T08:02:17Z"
+confirmed_at: "2026-08-19T14:05:17Z"
 engagement_mode: meta-self-dev
 scenario_subject_type: implementation-carrier
 scenario_subject_id: "meta-flow"
@@ -13,9 +13,9 @@ delivery_routing:
   mode: meta-flow-delivery
   output_root: "meta-flow/"
   source: meta-self-dev
-total_use_cases: 12
+total_use_cases: 18
 formal_cp2_status: approved
-formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
+formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 ---
 
 # CR-071 使用场景基线
@@ -27,6 +27,7 @@ formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROV
 | 1.0 | 2026-08-15 | meta-pm | 为 MF-1～MF-6 建立初始场景基线 | 按 CR-071 文档处理决策新增；正式 CP2 确认待定 |
 | 1.1 | 2026-08-15 | meta-pm | 吸收 CP2 changes_requested 六项增量 | 保留 6 个 UC；formal CP2 仍 pending |
 | 1.2 | 2026-08-18 | meta-pm | 增量建立 CR-072 单一 0.6.1 Release Package 场景族 | 保留 CR-071 全部 UC/映射；新增 UC-PLAN-COMPILER～UC-PUBLISHED-ASSET-CONSUMER；CP2 已批准 |
+| 1.3 | 2026-08-19 | meta-pm | 增量建立 CR-073 admission-safety 场景族 | 保留 CR-071/072 历史；新增 6 UC；CP2 已批准 |
 
 ## 用户画像（Personas）
 
@@ -341,3 +342,21 @@ formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROV
 | 1.0 | 产品基线 | 不存在 | `draft` | CR-071 要求新增产品基线；CP2 人工批准尚未发生 |
 | 1.1 | CP2 review delta | V1 将 BL-001 延后，且缺少五项量化/恢复约束 | 在原 6 UC 上补齐 MF-2 硬前置、shared-core、v1 迁移、semantic-equivalence、单次 reprojection 和 CP4 inventory 追踪 | 响应 formal CP2 `changes_requested`；ID 与 formal gate 状态不变 |
 | 1.2 | CR-072 Package 基线 | CR-071 的 6 UC / 18 REQ / 18 SCN / 12 Story 保持可追溯 | 追加 6 UC、12 REQ、12 SCN 和 12 产品 outcome Story；建立 Work A/B 单一 0.6.1 release lineage | CR-071 历史批准不重开；CR-072 于 2026-08-18 经 CP2 批准 |
+
+## CR-073 增量场景（CP2 已确认）
+
+| UC | 用户结果 | 关键边界 |
+|---|---|---|
+| UC-HISTORICAL-REFRAME | 区分可证明历史事实与未知历史，不伪造 CR-071 PASS | historical-reframe 只追加审计 binding；原始历史保留 |
+| UC-WORK-INIT-PREFLIGHT | 写入前看到 contract/index/tuple/transaction 风险 | success/failure 双路径 zero-write；不得固化物理路径 workaround |
+| UC-WORK-SCOPE-AMEND | paused/blocked Work 可追加合法 scope 并失效旧证据 | 只增不删、typed authorization |
+| UC-FAILURE-RECOVERY | FAIL/observation 失败不再投影为健康 | orphan failure 必须 warning/block |
+| UC-VALIDATION-TRUTH | 只复用环境与 manifest 未漂移的 PASS receipt | identity 漂移即 RUN 受影响层 |
+| UC-VICTIM-REPLAY | 真实受害者证明六轮事故不重演 | source-candidate 需独立授权；installed-artifact 是下一发布硬门 |
+
+| SGA | 推荐处理 | 状态 |
+|---|---|---|
+| SGA-073-01 historical reframe | 仅 `audited-known-historical-fact`，禁止补写 PASS | approved-2026-08-19 |
+| SGA-073-02 source candidate | fixture 仅 provider contract；外部 replay 为 CP8 前必要项 | approved-2026-08-19 |
+| SGA-073-03 installed artifact | 留作下一发布硬门，避免未授权安装/发布扩张 | approved-2026-08-19 |
+| SGA-073-04 P7 边界 | STATE-CONTRACT、pause/resume、hard-gate 留 P7 | approved-2026-08-19 |

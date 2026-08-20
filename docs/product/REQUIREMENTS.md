@@ -1,11 +1,11 @@
 ---
 status: confirmed
-version: "1.2"
+version: "1.3"
 confirmed: true
 confirmed_by: "user"
-confirmed_at: "2026-08-18T08:02:17Z"
+confirmed_at: "2026-08-19T14:05:17Z"
 ready_for_design: true
-source_change: "CR-071 + CR-072"
+source_change: "CR-071 + CR-072 + CR-073"
 source_use_cases:
   - UC-WORK-PREFLIGHT
   - UC-SCOPE-AMENDMENT
@@ -19,10 +19,16 @@ source_use_cases:
   - UC-SEMVER-DECISION
   - UC-RELEASE-ORDER
   - UC-PUBLISHED-ASSET-CONSUMER
-total_requirements: 30
+  - UC-HISTORICAL-REFRAME
+  - UC-WORK-INIT-PREFLIGHT
+  - UC-WORK-SCOPE-AMEND
+  - UC-FAILURE-RECOVERY
+  - UC-VALIDATION-TRUTH
+  - UC-VICTIM-REPLAY
+total_requirements: 40
 blocking_open_questions: 0
 formal_cp2_status: approved
-formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
+formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 ---
 
 # CR-071 结构化需求
@@ -148,7 +154,7 @@ formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROV
 - [ ] Claude Code（本轮产品基线不新增平台特有行为）
 - [ ] OpenClaw（本轮产品基线不新增平台特有行为）
 
-## 待人工决策
+## 人工决策记录
 
 | Decision ID | 类型 | 状态 | 说明 |
 |---|---|---|---|
@@ -158,3 +164,20 @@ formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROV
 | CP2-DQ-02-072 | compatibility | approved-2026-08-18 | 冻结不可复用的 typed 0.6.1 bootstrap；breaking change 仍必须 BLOCKED |
 | CP2-DQ-03-072 | admission | approved-2026-08-18 | 接受 P5-0.6.1-release-convergence admission 建议，后续由长期治理 owner 更新 Roadmap/Phase |
 | CP2-DQ-04-072 | sequencing | approved-2026-08-18 | 接受先 measure-only，再在 Work A 后实施 Work B 主体并最终一次 qualification/release 的顺序 |
+| CP2-DQ-073-01 | scope | approved-2026-08-19 | 冻结 C0.5、一个 CR/两个 Work/七能力槽、六轮到三旅程矩阵及受害者验收边界 |
+| CP2-DQ-073-02 | runtime_authorization | approved-2026-08-19 | 只冻结外部回放授权硬门，不授予 quant-lab、安装、发布或 Git 权限 |
+
+## CR-073 增量需求（CP2 已确认）
+
+| ID | 优先级 | 验收条件（Given/When/Then） | 来源 |
+|---|---|---|---|
+| REQ-073-01 | P0 | Given 历史证据不足 When historical-reframe Then 只追加 audit binding/`audited-known-historical-fact`，不伪造 CP6/CP7 PASS | UC-HISTORICAL-REFRAME |
+| REQ-073-02 | P0 | Given Work init When preflight Then success/failure lifecycle、index、tuple、manifest、typed refs 在 mutation=0 前诊断 | UC-WORK-INIT-PREFLIGHT |
+| REQ-073-03 | P0 | Given paused/blocked G1 Work When additive amend Then 只增 scope、重新授权并失效受影响 evidence | UC-WORK-SCOPE-AMEND |
+| REQ-073-04 | P0 | Given FAIL receipt/observation 缺失 When projection Then warning/block，不能 continue_active_work 假健康 | UC-FAILURE-RECOVERY |
+| REQ-073-05 | P0 | Given reuse candidate When identity 任一漂移 Then RUN 受影响层；仅完整 PASS identity 可复用 | UC-VALIDATION-TRUTH |
+| REQ-073-06 | P0 | Given 六轮事故 When 验收 Then 每轮映射 J1/J2/J3 且 R3 人工项有归属 | UC-VICTIM-REPLAY |
+| REQ-073-07 | P0 | Given 无独立 typed external authorization When source-candidate replay Then 不读/不执行/不写外部项目并保留 BLOCKED | UC-VICTIM-REPLAY |
+| REQ-073-08 | P1 | Given 下一发布 When consumer acceptance Then installed-artifact replay 是硬门；本 CR 不自动获得安装/发布授权 | UC-VICTIM-REPLAY |
+| REQ-073-09 | P1 | Given 进入设计 When 计数 Then 预算为 1 CR/2 Work/7 capability slots，CP2 前不拆过程 Story | CR-073 budget |
+| REQ-073-10 | P1 | Given P7 缺口 When 建立 P6 基线 Then STATE-CONTRACT、pause/resume、cost hard-gate 只作 P7 handoff | P7 plan |

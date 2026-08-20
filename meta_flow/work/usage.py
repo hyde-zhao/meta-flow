@@ -327,7 +327,9 @@ def _append_usage_event_unlocked(
         changed_path_inventory=ledger.changed_path_inventory,
         cost_closure=ledger.cost_closure,
     )
-    _write_ledger_atomic(usage_path(process_root, work), updated)
+    path = usage_path(process_root, work)
+    _authorize_usage_system_write(work.work_id, work.usage_ref, path)
+    _write_ledger_atomic(path, updated)
     terminal = (
         "RECORDED"
         if admission.allowed and decision.allowed
@@ -601,5 +603,21 @@ def write_usage_evidence(
         cost_closure=cost_closure,
     )
     path = usage_path(process_root, work)
+    _authorize_usage_system_write(work.work_id, work.usage_ref, path)
     _write_ledger_atomic(path, updated)
     return path
+
+
+def _authorize_usage_system_write(work_id: str, logical_ref: str, path: Path) -> None:
+    from meta_flow.work.scope import authorize_system_write, classify_system_artifact
+
+    classified = classify_system_artifact(work_id, "work.usage.write", logical_ref)
+    if classified.namespace is None:
+        raise ValueError(classified.reason_code)
+    admitted = authorize_system_write(
+        classified.namespace,
+        logical_ref,
+        target_is_symlink=path.is_symlink(),
+    )
+    if not admitted.allowed:
+        raise ValueError(admitted.reason_code)

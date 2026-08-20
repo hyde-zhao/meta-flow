@@ -172,7 +172,7 @@ def test_packaged_receipt_rotation_preserves_v1_through_v8_and_selects_v9() -> N
     assert load_provider_activation_receipt().status == "CURRENT"
 
     current_payload = json.loads(current.read_text(encoding="utf-8"))
-    assert current_payload["package_version"] == "0.6.1"
+    assert current_payload["package_version"] == PACKAGE_VERSION
     assert current_payload["qualified_source_exclusions"] == [FIXED_RECEIPT_REF]
     assert current_payload["generator_identity"] == GENERATOR_IDENTITY
 
@@ -180,7 +180,9 @@ def test_packaged_receipt_rotation_preserves_v1_through_v8_and_selects_v9() -> N
         qualification_evidence_path.read_text(encoding="utf-8")
     )
     assert qualification_evidence["package_name"] == PACKAGE_NAME
-    assert qualification_evidence["package_version"] == PACKAGE_VERSION
+    # revision 9 的 provider evidence 源于已发布 0.6.1 资格档案；
+    # 当前包版本由 receipt 自身的 PACKAGE_VERSION 独立表达。
+    assert qualification_evidence["package_version"] == "0.6.1"
     for layer_name, layer_payload in qualification_evidence["layers"].items():
         for evidence_part in ("profile", "command", "result", "receipt"):
             assert current_payload["evidence_digests"][

@@ -1,11 +1,11 @@
 ---
 status: confirmed
-version: "1.2"
-source_change: "CR-071 + CR-072"
+version: "1.3"
+source_change: "CR-071 + CR-072 + CR-073"
 confirmed_by: "user"
-confirmed_at: "2026-08-18T08:02:17Z"
+confirmed_at: "2026-08-19T14:05:17Z"
 formal_cp2_status: approved
-formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
+formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 ---
 
 # CR-071 Backlog
@@ -26,6 +26,8 @@ formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROV
 | BL-072-01 | deferred | UC-SEMVER-DECISION / DEF-072-01 | 将不可复用 0.6.1 bootstrap 通用化 | deferred | 0.6.1 token 是一次性兼容边界，通用化会允许绕过真实分类 | 新 CR、独立 SemVer 兼容评审和 CP2 决策 |
 | BL-072-02 | follow-up | UC-PROCESS-COST | 调整 measure-only→hard-gate 的具体阈值 | candidate | 需先取得可审计 baseline；当前只冻结转换规则，不预设数值 | baseline 完整、阈值来源与 owner 经后续 gate 确认 |
 | BL-072-03 | follow-up | UC-PUBLISHED-ASSET-CONSUMER | 扩展 clean-home canary 到额外平台/外部消费者 | deferred | 本轮只定义发布资产消费者合同，未获真实安装/外部授权 | 独立平台/安装/外部项目 authorization 与风险审查 |
+| BL-073-01 | deferred | UC-VICTIM-REPLAY | installed-artifact victim replay | deferred | 必须绑定下一发布和安装/发布授权，不能由 source-candidate 代替 | 下一 release CP2/CP8 + typed authorization |
+| BL-073-02 | handoff | P7 plan | STATE-CONTRACT、Phase pause/resume、成本 hard-gate | planned-phase-boundary | P7 planned，P6 只记录真实 blocked reason/cohort | P6 terminal 后 P7 admission |
 
 ## 台账边界
 

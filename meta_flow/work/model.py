@@ -8,8 +8,13 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
+from meta_flow.contracts.typed_ref import (
+    RepositoryRole,
+    TypedRefObjectKind,
+    TypedRefV2,
+)
 from meta_flow.execution_control.contract import ExecutionUnitV1
 from meta_flow.project.model import is_safe_ref
 from meta_flow.project.read_contract import ReadContextProtocol
@@ -73,6 +78,389 @@ _REASON_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,127}$")
 _GATE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SCOPE_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _OWNED_LEAF_RE = re.compile(r"^[A-Za-z0-9.][A-Za-z0-9._/-]*$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_OID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+
+@dataclass(frozen=True)
+class TypedRepositoryRefV2:
+    """仓库角色与 logical path 的 closed V2 表达。"""
+
+    schema_version: int
+    repo_role: RepositoryRole
+    logical_path: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 2:
+            raise ValueError("TYPED_REPOSITORY_REF_SCHEMA_INVALID")
+        # 复用 canonical typed-ref owner，避免第二套路径规则。
+        TypedRefV2(2, self.repo_role, TypedRefObjectKind.OTHER, self.logical_path)
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> TypedRepositoryRefV2:
+        if set(payload) != {"schema_version", "repo_role", "logical_path"}:
+            raise ValueError("TYPED_REPOSITORY_REF_FIELDS_INVALID")
+        try:
+            role = RepositoryRole(payload["repo_role"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("TYPED_REPOSITORY_REF_ROLE_INVALID") from exc
+        return cls(int(payload["schema_version"]), role, str(payload["logical_path"]))
+
+    @classmethod
+    def from_legacy_ref(cls, value: str) -> TypedRepositoryRefV2:
+        if not isinstance(value, str) or not value.startswith("process/"):
+            raise ValueError("AMBIGUOUS_LEGACY_REPOSITORY_REF")
+        return cls(2, RepositoryRole.PROCESS, value)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "repo_role": self.repo_role.value,
+            "logical_path": self.logical_path,
+        }
+
+
+@dataclass(frozen=True)
+class SuccessorContractV1:
+    """execution unit 的 semantic payload；transport wrapper 不进入摘要。"""
+
+    contract_revision: int
+    root_concept: str
+    slice_id: str
+    unit_id: str
+    payload_digest: str
+
+    def __post_init__(self) -> None:
+        if type(self.contract_revision) is not int or self.contract_revision < 1:
+            raise ValueError("EXECUTION_CONTRACT_REVISION_INVALID")
+        for field, value in (
+            ("root_concept", self.root_concept),
+            ("slice_id", self.slice_id),
+            ("unit_id", self.unit_id),
+        ):
+            if not _ID_RE.fullmatch(value):
+                raise ValueError(f"EXECUTION_CONTRACT_{field.upper()}_INVALID")
+        if not _SHA256_RE.fullmatch(self.payload_digest):
+            raise ValueError("EXECUTION_CONTRACT_DIGEST_INVALID")
+        if self.payload_digest != self.semantic_digest:
+            raise ValueError("EXECUTION_CONTRACT_DIGEST_MISMATCH")
+
+    @property
+    def semantic_payload(self) -> dict[str, object]:
+        return {
+            "contract_revision": self.contract_revision,
+            "root_concept": self.root_concept,
+            "slice_id": self.slice_id,
+            "unit_id": self.unit_id,
+        }
+
+    @property
+    def semantic_digest(self) -> str:
+        rendered = json.dumps(
+            self.semantic_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        contract_revision: int,
+        root_concept: str,
+        slice_id: str,
+        unit_id: str,
+    ) -> SuccessorContractV1:
+        payload = {
+            "contract_revision": contract_revision,
+            "root_concept": root_concept,
+            "slice_id": slice_id,
+            "unit_id": unit_id,
+        }
+        rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return cls(
+            contract_revision,
+            root_concept,
+            slice_id,
+            unit_id,
+            hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        )
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> SuccessorContractV1:
+        if set(payload) != {"schema_version", "kind", "payload", "payload_digest"}:
+            raise ValueError("EXECUTION_CONTRACT_WRAPPER_FIELDS_INVALID")
+        if payload.get("schema_version") != 1 or payload.get("kind") != "SuccessorContractV1":
+            raise ValueError("EXECUTION_CONTRACT_WRAPPER_INVALID")
+        semantic = payload.get("payload")
+        if not isinstance(semantic, Mapping) or set(semantic) != {
+            "contract_revision",
+            "root_concept",
+            "slice_id",
+            "unit_id",
+        }:
+            raise ValueError("EXECUTION_CONTRACT_PAYLOAD_FIELDS_INVALID")
+        return cls(
+            int(semantic["contract_revision"]),
+            str(semantic["root_concept"]),
+            str(semantic["slice_id"]),
+            str(semantic["unit_id"]),
+            str(payload["payload_digest"]),
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "kind": "SuccessorContractV1",
+            "payload": self.semantic_payload,
+            "payload_digest": self.payload_digest,
+        }
+
+
+@dataclass(frozen=True)
+class GovernanceProviderIdentityV1:
+    package_name: str
+    package_version: str
+    source_kind: str
+    release_oid: str
+    process_oid: str
+    route_digest: str
+
+    def __post_init__(self) -> None:
+        if not self.package_name or not self.package_version:
+            raise ValueError("GOVERNANCE_PROVIDER_PACKAGE_INVALID")
+        if self.source_kind not in {"candidate", "installed", "global-unknown"}:
+            raise ValueError("GOVERNANCE_PROVIDER_SOURCE_KIND_INVALID")
+        if not _OID_RE.fullmatch(self.release_oid) or not _OID_RE.fullmatch(self.process_oid):
+            raise ValueError("GOVERNANCE_PROVIDER_OID_INVALID")
+        if not _SHA256_RE.fullmatch(self.route_digest):
+            raise ValueError("GOVERNANCE_PROVIDER_ROUTE_DIGEST_INVALID")
+
+    @property
+    def identity_digest(self) -> str:
+        rendered = json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "package_name": self.package_name,
+            "package_version": self.package_version,
+            "source_kind": self.source_kind,
+            "release_oid": self.release_oid,
+            "process_oid": self.process_oid,
+            "route_digest": self.route_digest,
+        }
+
+    @classmethod
+    def from_mapping(
+        cls, payload: Mapping[str, Any]
+    ) -> GovernanceProviderIdentityV1:
+        expected = {
+            "package_name",
+            "package_version",
+            "source_kind",
+            "release_oid",
+            "process_oid",
+            "route_digest",
+        }
+        if set(payload) != expected:
+            raise ValueError("GOVERNANCE_PROVIDER_FIELDS_INVALID")
+        return cls(**{key: str(payload[key]) for key in expected})
+
+
+@dataclass(frozen=True)
+class ProviderAdmissionV1:
+    decision: str
+    reason_codes: tuple[str, ...]
+    observed_identity_digest: str
+    expected_identity_digest: str
+    mutation_count: int = 0
+
+
+def admit_governance_provider(
+    observed: GovernanceProviderIdentityV1,
+    expected: GovernanceProviderIdentityV1,
+) -> ProviderAdmissionV1:
+    reasons: list[str] = []
+    if observed.source_kind == "global-unknown":
+        reasons.append("GLOBAL_PROVIDER_UNKNOWN")
+    if observed.package_name != expected.package_name:
+        reasons.append("PROVIDER_PACKAGE_MISMATCH")
+    if observed.package_version != expected.package_version:
+        reasons.append("PROVIDER_VERSION_MISMATCH")
+    if observed.release_oid != expected.release_oid:
+        reasons.append("PROVIDER_RELEASE_OID_MISMATCH")
+    if observed.process_oid != expected.process_oid:
+        reasons.append("PROVIDER_PROCESS_OID_MISMATCH")
+    if observed.route_digest != expected.route_digest:
+        reasons.append("PROVIDER_ROUTE_DIGEST_MISMATCH")
+    return ProviderAdmissionV1(
+        "BLOCKED" if reasons else "READY",
+        tuple(sorted(set(reasons))),
+        observed.identity_digest,
+        expected.identity_digest,
+        mutation_count=0,
+    )
+
+
+@dataclass(frozen=True)
+class ValidationReuseRequestV2:
+    schema_version: int
+    layer: str
+    receipt_fingerprint_digest: str
+    current_fingerprint_digest: str
+    receipt_profile_digest: str
+    current_profile_digest: str
+    receipt_command_identity: str
+    current_command_identity: str
+    receipt_environment: tuple[tuple[str, str], ...]
+    current_environment: tuple[tuple[str, str], ...]
+    receipt_source_manifest_digest: str
+    current_source_manifest_digest: str
+    receipt_provider_identity_digest: str
+    current_provider_identity_digest: str
+    receipt_decision: str
+    partial_mutation: bool
+
+
+@dataclass(frozen=True)
+class ValidationReuseDecisionV2:
+    decision: str
+    reason_codes: tuple[str, ...]
+    provider_identity_digest: str
+
+    def __post_init__(self) -> None:
+        if self.decision not in {"REUSE", "RUN", "BLOCKED"}:
+            raise ValueError("VALIDATION_PROVIDER_DECISION_INVALID")
+        if tuple(sorted(set(self.reason_codes))) != self.reason_codes:
+            raise ValueError("VALIDATION_PROVIDER_REASON_CODES_INVALID")
+        if not _SHA256_RE.fullmatch(self.provider_identity_digest):
+            raise ValueError("VALIDATION_PROVIDER_IDENTITY_DIGEST_INVALID")
+
+
+class ValidationPolicyProvider(Protocol):
+    def evaluate_reuse(self, request: ValidationReuseRequestV2) -> ValidationReuseDecisionV2: ...
+
+
+@dataclass(frozen=True)
+class G1ScopeDeltaV1:
+    schema_version: int
+    add_reads: tuple[str, ...] = ()
+    add_writes: tuple[str, ...] = ()
+    add_checks: tuple[str, ...] = ()
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1 or not (
+            self.add_reads or self.add_writes or self.add_checks
+        ):
+            raise ValueError("G1_SCOPE_DELTA_INVALID")
+        for values in (self.add_reads, self.add_writes):
+            if tuple(sorted(set(values))) != values:
+                raise ValueError("G1_SCOPE_DELTA_INVALID")
+            for value in values:
+                prefix = value[:-3] if value.endswith("/**") else value
+                if (
+                    not prefix
+                    or prefix.startswith("/")
+                    or "\\" in prefix
+                    or any(part in {"", ".", ".."} for part in prefix.split("/"))
+                    or any(marker in prefix for marker in ("*", "?", "["))
+                ):
+                    raise ValueError("G1_SCOPE_DELTA_INVALID")
+        if tuple(sorted(set(self.add_checks))) != self.add_checks or any(
+            not _GATE_RE.fullmatch(value) for value in self.add_checks
+        ):
+            raise ValueError("G1_SCOPE_DELTA_INVALID")
+        if not self.reason.strip():
+            raise ValueError("G1_SCOPE_DELTA_REASON_REQUIRED")
+
+    @property
+    def digest(self) -> str:
+        rendered = json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "add_reads": list(self.add_reads),
+            "add_writes": list(self.add_writes),
+            "add_checks": list(self.add_checks),
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> G1ScopeDeltaV1:
+        expected = {
+            "schema_version",
+            "add_reads",
+            "add_writes",
+            "add_checks",
+            "reason",
+        }
+        if set(payload) != expected or any(
+            not isinstance(payload[key], list)
+            for key in ("add_reads", "add_writes", "add_checks")
+        ):
+            raise ValueError("G1_SCOPE_DELTA_FIELDS_INVALID")
+        return cls(
+            int(payload["schema_version"]),
+            tuple(str(value) for value in payload["add_reads"]),
+            tuple(str(value) for value in payload["add_writes"]),
+            tuple(str(value) for value in payload["add_checks"]),
+            str(payload["reason"]),
+        )
+
+
+@dataclass(frozen=True)
+class WorkScopeRevisionV2:
+    schema_version: int
+    revision_id: str
+    work_id: str
+    predecessor_work_digest: str
+    predecessor_scope_digest: str
+    successor_scope_digest: str
+    delta_digest: str
+    authorization_digest: str
+    plan_digest: str
+    invalidated_refs: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != 2
+            or not _ID_RE.fullmatch(self.revision_id)
+            or not _ID_RE.fullmatch(self.work_id)
+            or any(
+                not _SHA256_RE.fullmatch(value)
+                for value in (
+                    self.predecessor_work_digest,
+                    self.predecessor_scope_digest,
+                    self.successor_scope_digest,
+                    self.delta_digest,
+                    self.authorization_digest,
+                    self.plan_digest,
+                )
+            )
+            or tuple(sorted(set(self.invalidated_refs))) != self.invalidated_refs
+        ):
+            raise ValueError("G1_SCOPE_REVISION_INVALID")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "kind": "WorkScopeRevisionV2",
+            "revision_id": self.revision_id,
+            "work_id": self.work_id,
+            "predecessor_work_digest": self.predecessor_work_digest,
+            "predecessor_scope_digest": self.predecessor_scope_digest,
+            "successor_scope_digest": self.successor_scope_digest,
+            "delta_digest": self.delta_digest,
+            "authorization_digest": self.authorization_digest,
+            "plan_digest": self.plan_digest,
+            "invalidated_refs": list(self.invalidated_refs),
+        }
 
 
 def _is_safe_owned_leaf(value: str) -> bool:

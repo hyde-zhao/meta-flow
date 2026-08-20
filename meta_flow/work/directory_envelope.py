@@ -13,6 +13,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from meta_flow.work.model import TypedRepositoryRefV2
+
 
 class MatcherOp(StrEnum):
     EXACT_DIR = "EXACT_DIR"
@@ -380,3 +382,38 @@ def select_fallback(envelope: DirectoryWriteEnvelopeV1, corpus_receipt: Mapping[
     if complete and isinstance(false_admits, int) and false_admits == 0:
         return envelope
     return replace(envelope, fallback_mode=True)
+
+
+@dataclass(frozen=True)
+class SuccessorReferenceSetV2:
+    refs: tuple[TypedRepositoryRefV2, ...]
+    digest: str
+
+
+def normalize_successor_repository_refs(
+    values: Sequence[TypedRepositoryRefV2 | Mapping[str, object] | str],
+) -> SuccessorReferenceSetV2:
+    """read-old/write-new：唯一可判定的 legacy ref 转 V2，歧义直接拒绝。"""
+
+    refs: list[TypedRepositoryRefV2] = []
+    for value in values:
+        if isinstance(value, TypedRepositoryRefV2):
+            ref = value
+        elif isinstance(value, Mapping):
+            ref = TypedRepositoryRefV2.from_mapping(value)
+        else:
+            ref = TypedRepositoryRefV2.from_legacy_ref(value)
+        refs.append(ref)
+    ordered = tuple(sorted(refs, key=lambda ref: (ref.repo_role.value, ref.logical_path)))
+    identities = tuple((ref.repo_role.value, ref.logical_path) for ref in ordered)
+    if len(set(identities)) != len(identities):
+        raise ValueError("DUPLICATE_SUCCESSOR_REPOSITORY_REF")
+    rendered = json.dumps(
+        [ref.as_dict() for ref in ordered],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return SuccessorReferenceSetV2(
+        refs=ordered,
+        digest=hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+    )

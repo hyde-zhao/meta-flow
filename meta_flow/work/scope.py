@@ -5,10 +5,126 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 
 _CHECK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_WORK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_RECEIPT_LEAF_RE = re.compile(
+    r"^[a-z][a-z0-9_-]{0,31}-[0-9a-f]{20}\.receipt\.json$"
+)
+
+
+class SystemArtifactKindV1(StrEnum):
+    RECEIPT = "receipt"
+    USAGE = "usage"
+    FAILURE = "failure"
+    BLOCKER = "blocker"
+    HANDOFF = "handoff"
+
+
+_SYSTEM_WRITER_REGISTRY = {
+    "work.validation-receipt.write": SystemArtifactKindV1.RECEIPT,
+    "work.usage.write": SystemArtifactKindV1.USAGE,
+    "work.failure-evidence.write": SystemArtifactKindV1.FAILURE,
+    "work.blocker.write": SystemArtifactKindV1.BLOCKER,
+    "work.handoff.write": SystemArtifactKindV1.HANDOFF,
+}
+
+
+@dataclass(frozen=True)
+class SystemEvidenceNamespaceV1:
+    work_id: str
+    artifact_kind: SystemArtifactKindV1
+    operation: str
+    prefix: str
+
+
+@dataclass(frozen=True)
+class SystemNamespaceDecisionV1:
+    decision: str
+    reason_code: str
+    namespace: SystemEvidenceNamespaceV1 | None = None
+    mutation_count: int = 0
+
+    @property
+    def allowed(self) -> bool:
+        return self.decision == "ALLOW"
+
+
+def _namespace_prefix(work_id: str, kind: SystemArtifactKindV1) -> str:
+    root = f"works/{work_id}"
+    return (
+        f"{root}/evidence/validation/"
+        if kind is SystemArtifactKindV1.RECEIPT
+        else f"{root}/"
+    )
+
+
+def _system_leaf_matches(
+    work_id: str,
+    kind: SystemArtifactKindV1,
+    ref: str,
+) -> bool:
+    root = f"works/{work_id}"
+    exact = {
+        SystemArtifactKindV1.USAGE: f"{root}/USAGE.json",
+        SystemArtifactKindV1.FAILURE: f"{root}/FAILURE-EVIDENCE.json",
+        SystemArtifactKindV1.BLOCKER: f"{root}/BLOCKER.json",
+        SystemArtifactKindV1.HANDOFF: f"{root}/HANDOFF.yaml",
+    }
+    if kind is SystemArtifactKindV1.RECEIPT:
+        prefix = f"{root}/evidence/validation/"
+        return ref.startswith(prefix) and _RECEIPT_LEAF_RE.fullmatch(ref[len(prefix) :]) is not None
+    return ref == exact[kind]
+
+
+def classify_system_artifact(
+    work: object,
+    operation: str,
+    ref: str,
+) -> SystemNamespaceDecisionV1:
+    """只为注册 writer + kind + Work-local leaf 授予系统命名空间。"""
+
+    work_id = getattr(work, "work_id", work)
+    if not isinstance(work_id, str) or not _WORK_ID_RE.fullmatch(work_id):
+        return SystemNamespaceDecisionV1("BLOCKED", "SYSTEM_WORK_ID_INVALID")
+    kind = _SYSTEM_WRITER_REGISTRY.get(operation)
+    if kind is None:
+        return SystemNamespaceDecisionV1("BLOCKED", "SYSTEM_WRITER_UNREGISTERED")
+    try:
+        normalized = _normalize_requested_path(ref)
+    except ValueError:
+        return SystemNamespaceDecisionV1("BLOCKED", "SYSTEM_REF_UNSAFE")
+    if not _system_leaf_matches(work_id, kind, normalized):
+        return SystemNamespaceDecisionV1("BLOCKED", "SYSTEM_NAMESPACE_BOUNDARY_VIOLATION")
+    namespace = SystemEvidenceNamespaceV1(
+        work_id,
+        kind,
+        operation,
+        _namespace_prefix(work_id, kind),
+    )
+    return SystemNamespaceDecisionV1("ALLOW", "SYSTEM_NAMESPACE_ADMITTED", namespace)
+
+
+def authorize_system_write(
+    namespace: SystemEvidenceNamespaceV1,
+    target: str,
+    *,
+    target_is_symlink: bool = False,
+) -> SystemNamespaceDecisionV1:
+    if target_is_symlink:
+        return SystemNamespaceDecisionV1("BLOCKED", "SYSTEM_TARGET_SYMLINK")
+    decision = classify_system_artifact(namespace.work_id, namespace.operation, target)
+    if (
+        not decision.allowed
+        or decision.namespace is None
+        or decision.namespace.artifact_kind is not namespace.artifact_kind
+        or decision.namespace.prefix != namespace.prefix
+    ):
+        return SystemNamespaceDecisionV1("BLOCKED", "SYSTEM_NAMESPACE_BINDING_MISMATCH")
+    return decision
 
 
 def _validate_path_pattern(pattern: str) -> None:

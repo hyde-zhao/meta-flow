@@ -156,15 +156,15 @@ def test_repository_r14_incremental_hard_gate_has_no_unqualified_current_writer(
     assert report["full_source_baseline"]["decision"] == "PASS"
     assert report["full_source_baseline"]["ambiguous_writer_call_count"] == 0
     assert report["unresolved_unallowlisted_count"] == 0
-    assert report["allowlisted_dynamic_writer_call_count"] == 0
-    assert report["incremental_writer_call_count"] == 0
+    assert report["allowlisted_dynamic_writer_call_count"] == 10
+    assert report["incremental_writer_call_count"] == 10
     unresolved_findings = [
         finding
         for finding in report["findings"]
         if finding.startswith("DETECTOR_NEW_UNRESOLVED_WRITER:")
     ]
     assert unresolved_findings == []
-    assert report["writer_calls"] == []
+    assert len(report["writer_calls"]) == 10
 
 
 def test_repository_observation_writer_full_baseline_is_exact() -> None:

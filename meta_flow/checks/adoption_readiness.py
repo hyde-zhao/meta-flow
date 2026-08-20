@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from meta_flow.design import product_governance
 from meta_flow.project.process_route_adapter import (
@@ -15,6 +21,319 @@ from meta_flow.project.process_route_adapter import (
 )
 from meta_flow.state import current
 from meta_flow.workspace.routing import ProcessRouteHealth, inspect_legacy_consumer_route
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_OID_RE = re.compile(r"^[0-9a-f]{40,64}$")
+
+
+def _canonical_digest(payload: object) -> str:
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _utc_datetime(value: str, *, field_name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be one ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field_name} must include timezone")
+    return parsed.astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class VictimReplayRequestV1:
+    target_project_id: str
+    target_project_ref_digest: str
+    candidate_provider_identity_digest: str
+    release_oid: str
+    process_oid: str
+    commands: tuple[str, ...]
+    evidence_target_ref: str
+
+    def __post_init__(self) -> None:
+        if not self.target_project_id or not self.commands:
+            raise ValueError("victim replay request identity and commands are required")
+        for field_name in (
+            "target_project_ref_digest",
+            "candidate_provider_identity_digest",
+        ):
+            if not _SHA256_RE.fullmatch(getattr(self, field_name)):
+                raise ValueError(f"{field_name} must be one lowercase SHA-256 digest")
+        for field_name in ("release_oid", "process_oid"):
+            if not _OID_RE.fullmatch(getattr(self, field_name)):
+                raise ValueError(f"{field_name} must be one lowercase Git OID")
+        if any(not item.strip() or "\n" in item or "\r" in item for item in self.commands):
+            raise ValueError("victim replay commands must be bounded single-line strings")
+        if (
+            not self.evidence_target_ref.startswith("process/")
+            or ".." in Path(self.evidence_target_ref).parts
+        ):
+            raise ValueError("evidence_target_ref must be one safe process/... ref")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "target_project_id": self.target_project_id,
+            "target_project_ref_digest": self.target_project_ref_digest,
+            "candidate_provider_identity_digest": self.candidate_provider_identity_digest,
+            "release_oid": self.release_oid,
+            "process_oid": self.process_oid,
+            "commands": list(self.commands),
+            "evidence_target_ref": self.evidence_target_ref,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class VictimReplayAuthorizationV1:
+    schema_version: int
+    authorization_id: str
+    authorization_kind: str
+    operation: str
+    target_project_id: str
+    target_project_ref_digest: str
+    candidate_provider_identity_digest: str
+    release_oid: str
+    process_oid: str
+    commands: tuple[str, ...]
+    evidence_target_ref: str
+    issued_at: str
+    expires_at: str
+    single_use: bool
+    consumed: bool
+
+    FIELDS = frozenset(
+        {
+            "schema_version",
+            "authorization_id",
+            "authorization_kind",
+            "operation",
+            "target_project_id",
+            "target_project_ref_digest",
+            "candidate_provider_identity_digest",
+            "release_oid",
+            "process_oid",
+            "commands",
+            "evidence_target_ref",
+            "issued_at",
+            "expires_at",
+            "single_use",
+            "consumed",
+        }
+    )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1:
+            raise ValueError("victim replay authorization schema_version must be 1")
+        if self.authorization_kind != "typed-external-operation":
+            raise ValueError("victim replay authorization kind is invalid")
+        if self.operation != "source-candidate-victim-replay":
+            raise ValueError("victim replay authorization operation is invalid")
+        if not self.authorization_id:
+            raise ValueError("victim replay authorization_id is required")
+        if type(self.single_use) is not bool or type(self.consumed) is not bool:
+            raise ValueError("victim replay authorization usage fields must be boolean")
+        _utc_datetime(self.issued_at, field_name="issued_at")
+        _utc_datetime(self.expires_at, field_name="expires_at")
+        VictimReplayRequestV1(
+            target_project_id=self.target_project_id,
+            target_project_ref_digest=self.target_project_ref_digest,
+            candidate_provider_identity_digest=self.candidate_provider_identity_digest,
+            release_oid=self.release_oid,
+            process_oid=self.process_oid,
+            commands=self.commands,
+            evidence_target_ref=self.evidence_target_ref,
+        )
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> VictimReplayAuthorizationV1:
+        if set(payload) != cls.FIELDS:
+            raise ValueError("victim replay authorization fields mismatch")
+        commands = payload.get("commands")
+        if not isinstance(commands, list) or not all(isinstance(item, str) for item in commands):
+            raise ValueError("victim replay authorization commands must be a list of strings")
+        return cls(
+            schema_version=payload["schema_version"],
+            authorization_id=payload["authorization_id"],
+            authorization_kind=payload["authorization_kind"],
+            operation=payload["operation"],
+            target_project_id=payload["target_project_id"],
+            target_project_ref_digest=payload["target_project_ref_digest"],
+            candidate_provider_identity_digest=payload[
+                "candidate_provider_identity_digest"
+            ],
+            release_oid=payload["release_oid"],
+            process_oid=payload["process_oid"],
+            commands=tuple(commands),
+            evidence_target_ref=payload["evidence_target_ref"],
+            issued_at=payload["issued_at"],
+            expires_at=payload["expires_at"],
+            single_use=payload["single_use"],
+            consumed=payload["consumed"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class VictimReplayProviderFactV1:
+    provider_mode: str
+    provider_identity_digest: str
+
+    def __post_init__(self) -> None:
+        if self.provider_mode != "source-candidate":
+            raise ValueError("victim replay provider must be source-candidate")
+        if not _SHA256_RE.fullmatch(self.provider_identity_digest):
+            raise ValueError("provider_identity_digest must be one lowercase SHA-256 digest")
+
+
+@dataclass(frozen=True, slots=True)
+class VictimReplayPlanV1:
+    decision: str
+    finding_codes: tuple[str, ...]
+    authorization_id: str
+    request_digest: str
+    target_read_count: int = 0
+    target_run_count: int = 0
+    target_write_count: int = 0
+    mutation_count: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "VictimReplayPlanV1",
+            "decision": self.decision,
+            "finding_codes": list(self.finding_codes),
+            "authorization_id": self.authorization_id,
+            "request_digest": self.request_digest,
+            "target_read_count": self.target_read_count,
+            "target_run_count": self.target_run_count,
+            "target_write_count": self.target_write_count,
+            "mutation_count": self.mutation_count,
+        }
+
+
+class VictimAcceptanceClaimV1(StrEnum):
+    PROVIDER_FIXTURE = "provider_fixture"
+    SOURCE_CANDIDATE = "source_candidate"
+    INSTALLED_ARTIFACT = "installed_artifact"
+
+
+@dataclass(frozen=True, slots=True)
+class InstalledArtifactGateV1:
+    decision: str
+    finding_codes: tuple[str, ...]
+    required_claim: str = VictimAcceptanceClaimV1.INSTALLED_ARTIFACT.value
+
+
+def plan_victim_replay(
+    request: VictimReplayRequestV1,
+    authorization: VictimReplayAuthorizationV1 | Mapping[str, Any] | None,
+    provider: VictimReplayProviderFactV1,
+    *,
+    now: datetime,
+) -> VictimReplayPlanV1:
+    """只生成 source-candidate replay plan；任何分支都不触碰目标项目。"""
+
+    request_digest = _canonical_digest(request.as_dict())
+    if authorization is None:
+        return VictimReplayPlanV1(
+            "BLOCKED", ("EXTERNAL_AUTHORIZATION_REQUIRED",), "", request_digest
+        )
+    try:
+        auth = (
+            authorization
+            if isinstance(authorization, VictimReplayAuthorizationV1)
+            else VictimReplayAuthorizationV1.from_mapping(authorization)
+        )
+    except (TypeError, ValueError):
+        return VictimReplayPlanV1(
+            "BLOCKED", ("EXTERNAL_AUTHORIZATION_INVALID",), "", request_digest
+        )
+    findings: set[str] = set()
+    current = now.astimezone(UTC)
+    if current > _utc_datetime(auth.expires_at, field_name="expires_at"):
+        findings.add("EXTERNAL_AUTHORIZATION_EXPIRED")
+    if not auth.single_use or auth.consumed:
+        findings.add("EXTERNAL_AUTHORIZATION_NOT_FRESH_SINGLE_USE")
+    expected = request.as_dict()
+    authorized = {
+        "target_project_id": auth.target_project_id,
+        "target_project_ref_digest": auth.target_project_ref_digest,
+        "candidate_provider_identity_digest": auth.candidate_provider_identity_digest,
+        "release_oid": auth.release_oid,
+        "process_oid": auth.process_oid,
+        "commands": list(auth.commands),
+        "evidence_target_ref": auth.evidence_target_ref,
+    }
+    if authorized != expected:
+        findings.add("EXTERNAL_AUTHORIZATION_REQUEST_MISMATCH")
+    if provider.provider_identity_digest != request.candidate_provider_identity_digest:
+        findings.add("CANDIDATE_PROVIDER_IDENTITY_MISMATCH")
+    return VictimReplayPlanV1(
+        "READY" if not findings else "BLOCKED",
+        tuple(sorted(findings)),
+        auth.authorization_id,
+        request_digest,
+    )
+
+
+def classify_acceptance_claim(evidence: Mapping[str, Any]) -> VictimAcceptanceClaimV1:
+    """按实际证据能力分类，调用方声明不能把 fixture 向上冒充。"""
+
+    expected = {
+        "evidence_kind",
+        "provider_identity_digest",
+        "external_replay_receipt_digest",
+        "artifact_digest",
+        "installation_receipt_digest",
+    }
+    if set(evidence) != expected:
+        raise ValueError("victim acceptance evidence fields mismatch")
+    provider = str(evidence.get("provider_identity_digest") or "")
+    replay = str(evidence.get("external_replay_receipt_digest") or "")
+    artifact = str(evidence.get("artifact_digest") or "")
+    installation = str(evidence.get("installation_receipt_digest") or "")
+    if not _SHA256_RE.fullmatch(provider):
+        raise ValueError("victim acceptance provider identity is invalid")
+    kind = str(evidence.get("evidence_kind") or "")
+    if kind == "provider_fixture" and not replay and not artifact and not installation:
+        return VictimAcceptanceClaimV1.PROVIDER_FIXTURE
+    if (
+        kind == "source_candidate_replay"
+        and _SHA256_RE.fullmatch(replay)
+        and not artifact
+        and not installation
+    ):
+        return VictimAcceptanceClaimV1.SOURCE_CANDIDATE
+    if (
+        kind == "installed_artifact_replay"
+        and all(_SHA256_RE.fullmatch(item) for item in (replay, artifact, installation))
+    ):
+        return VictimAcceptanceClaimV1.INSTALLED_ARTIFACT
+    raise ValueError("victim acceptance evidence cannot support the claimed level")
+
+
+def check_installed_artifact_gate(
+    claims: Sequence[VictimAcceptanceClaimV1],
+    *,
+    current_change_id: str,
+) -> InstalledArtifactGateV1:
+    """CR-073 固定 deferred；下一发布必须提供 installed-artifact claim。"""
+
+    if current_change_id == "CR-073":
+        return InstalledArtifactGateV1(
+            "DEFERRED",
+            ("INSTALLED_ARTIFACT_GATE_DEFERRED_TO_NEXT_RELEASE",),
+        )
+    if VictimAcceptanceClaimV1.INSTALLED_ARTIFACT in set(claims):
+        return InstalledArtifactGateV1("READY", ())
+    return InstalledArtifactGateV1(
+        "BLOCKED",
+        ("INSTALLED_ARTIFACT_VICTIM_ACCEPTANCE_REQUIRED",),
+    )
 
 
 @dataclass(frozen=True)

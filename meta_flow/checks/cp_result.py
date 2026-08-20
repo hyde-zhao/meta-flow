@@ -47,6 +47,85 @@ FACT_DIFF_DECISION_IMPACTS = {"READY", "READY_WITH_RISK", "NOT_READY", "NO_IMPAC
 SEVERITIES = {"BLOCKER", "HIGH", "MEDIUM", "LOW", "INFO"}
 CHECKPOINT_RE = re.compile(r"^CP[0-8]$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+PROJECTABLE_TRANSITION_STOP_REASONS = (
+    outcome.PASS_COMPATIBLE_INTERRUPT_REASONS
+    | frozenset({"blocked", "needs_rework", "needs_design_clarification"})
+)
+TRANSITION_EXPECTED_KINDS = frozenset(
+    {"required_human_gate", "delivered", "no_remaining_required_gate", "failure"}
+)
+
+
+@dataclass(frozen=True)
+class TransitionStopV1:
+    """由 canonical CP result 显式声明的有界状态停止合同。"""
+
+    reason: str
+    expected_kind: str
+    evidence_refs: tuple[str, ...]
+    message: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "reason": self.reason,
+            "expected_kind": self.expected_kind,
+            "evidence_refs": list(self.evidence_refs),
+            "message": self.message,
+        }
+
+
+def parse_transition_stop(value: object, *, decision: str) -> TransitionStopV1 | None:
+    """校验 optional ``transition_stop``；未知或不兼容字段一律拒绝。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("transition_stop must be an object")
+    required = {"schema_version", "reason", "expected_kind", "evidence_refs", "message"}
+    if set(value) != required:
+        raise ValueError("transition_stop fields must equal the closed V1 field set")
+    if value.get("schema_version") != 1:
+        raise ValueError("transition_stop.schema_version must be 1")
+    reason = str(value.get("reason") or "").strip()
+    expected_kind = str(value.get("expected_kind") or "").strip()
+    if expected_kind not in TRANSITION_EXPECTED_KINDS:
+        raise ValueError(f"transition_stop.expected_kind is invalid: {expected_kind or '-'}")
+    compatible = outcome.transition_stop_reasons(str(decision or ""), expected_kind)
+    if reason not in compatible:
+        raise ValueError(
+            "transition_stop.reason is incompatible with decision/expected_kind: "
+            f"{reason or '-'}"
+        )
+    if reason not in PROJECTABLE_TRANSITION_STOP_REASONS:
+        raise ValueError(f"transition_stop.reason is not a projectable interruption: {reason}")
+    raw_refs = value.get("evidence_refs")
+    if not isinstance(raw_refs, list) or not raw_refs:
+        raise ValueError("transition_stop.evidence_refs must be a non-empty list")
+    evidence_refs: list[str] = []
+    for index, item in enumerate(raw_refs, 1):
+        ref = str(item or "").strip()
+        path_ref = ref.split("#", 1)[0]
+        path = Path(path_ref)
+        if (
+            not ref
+            or not path_ref.startswith("process/")
+            or path.is_absolute()
+            or ".." in path.parts
+        ):
+            raise ValueError(f"transition_stop.evidence_refs[{index}] is unsafe")
+        evidence_refs.append(ref)
+    if len(set(evidence_refs)) != len(evidence_refs):
+        raise ValueError("transition_stop.evidence_refs must be unique")
+    message = str(value.get("message") or "").strip()
+    if not message or len(message.encode("utf-8")) > 160:
+        raise ValueError("transition_stop.message must be 1..160 UTF-8 bytes")
+    return TransitionStopV1(
+        reason=reason,
+        expected_kind=expected_kind,
+        evidence_refs=tuple(evidence_refs),
+        message=message,
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -1087,6 +1166,13 @@ def validate_cp_result(
     decision = str(result.get("decision") or "")
     if decision not in allowed_decisions(checkpoint):
         errors.append(f"invalid decision for {checkpoint or 'checkpoint'}: {decision or '-'}")
+    try:
+        parse_transition_stop(
+            result.get("transition_stop"),
+            decision=decision,
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
     for key in ("items", "blockers", "waivers"):
         if key not in result:
             errors.append(f"missing required field: {key}")

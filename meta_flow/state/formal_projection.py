@@ -12,6 +12,14 @@ from typing import Any
 from meta_flow.project.model import is_safe_ref
 from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.project.scale import load_yaml_object
+from meta_flow.state.failure_observation import (
+    FailureObservationFactV1,
+    FailureReceiptFactV1,
+    FailureTruthStatusV1,
+    correlate_failure_truth,
+    correlation_from_mapping,
+    project_safe_next_action,
+)
 from meta_flow.workflow.cr_model import parse_frontmatter
 
 PROJECT_REF = "process/PROJECT.yaml"
@@ -335,6 +343,159 @@ def _active_cr_ids(
     return active, sources
 
 
+def _active_failure_truth(
+    project_root: Path,
+    process_root: Path | None,
+    active_work_ids: list[str],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """只读取 active Work 的 canonical failure evidence 与唯一 observation ledger。"""
+
+    from meta_flow.execution_control.failure import load_frozen_failure_evidence
+    from meta_flow.state.event_ledger import load_events, project_execution_control_ledger
+
+    receipts: list[FailureReceiptFactV1] = []
+    sources: list[dict[str, str]] = []
+    for work_id in sorted(active_work_ids):
+        logical_ref = f"process/works/{work_id}/FAILURE-EVIDENCE.json"
+        path = _resolve(project_root, logical_ref, process_root)
+        if not path.exists():
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"current failure evidence is not regular: {logical_ref}")
+        evidence = load_frozen_failure_evidence(path)
+        decision = evidence.result_items[0].status
+        receipts.append(
+            FailureReceiptFactV1(
+                work_id=work_id,
+                evidence_ref=logical_ref,
+                evidence_digest=evidence.payload_digest,
+                check_result_digest=evidence.check_result_digest,
+                decision=decision,
+            )
+        )
+        sources.append({"ref": logical_ref, "digest": sha256(path.read_bytes()).hexdigest()})
+
+    if not receipts:
+        return correlate_failure_truth((), ()).as_dict(), sources
+
+    ledger_ref = "process/state/EXECUTION-CONTROL-LEDGER.ndjson"
+    ledger_path = _resolve(project_root, ledger_ref, process_root)
+    observations: list[FailureObservationFactV1] = []
+    if ledger_path.exists():
+        if ledger_path.is_symlink() or not ledger_path.is_file():
+            raise ValueError("execution-control ledger is not regular")
+        events, load_errors = load_events(ledger_path)
+        projection = project_execution_control_ledger(events)
+        if load_errors or projection.decision != "PASS":
+            raise ValueError("execution-control ledger is invalid")
+        sources.append({"ref": ledger_ref, "digest": sha256(ledger_path.read_bytes()).hexdigest()})
+        for raw in events:
+            if str(raw.get("event_type") or "") != "finding_observation":
+                continue
+            observations.append(
+                FailureObservationFactV1(
+                    observation_ref=str(raw.get("event_id") or ""),
+                    evidence_ref=str(raw.get("evidence_ref") or ""),
+                    check_result_digest=str(raw.get("check_result_digest") or ""),
+                    registration_status="recorded",
+                )
+            )
+    else:
+        sources.append({"ref": ledger_ref, "digest": "missing"})
+    return correlate_failure_truth(receipts, observations).as_dict(), sources
+
+
+def _active_cp7_transition_stop(
+    project_root: Path,
+    process_root: Path | None,
+    active_cr_ids: list[str],
+) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
+    """只消费唯一 active CR 的 canonical CR-level CP7 current head。"""
+
+    if len(active_cr_ids) != 1:
+        return None, []
+    from meta_flow.state import checkpoint_projection
+
+    root = project_root.resolve()
+
+    def resolver(_root: Path, logical_ref: str) -> Path:
+        return _resolve(root, logical_ref, process_root)
+
+    ledger_ref = checkpoint_projection.CHECKPOINT_LEDGER_REF
+    ledger_path = resolver(root, ledger_ref)
+    sources = [
+        {
+            "ref": ledger_ref,
+            "digest": sha256(ledger_path.read_bytes()).hexdigest()
+            if ledger_path.is_file() and not ledger_path.is_symlink()
+            else "missing",
+        }
+    ]
+    projection = checkpoint_projection.load_checkpoint_projection(
+        root,
+        cr_id=active_cr_ids[0],
+        checkpoint="CP7",
+        resolver=resolver,
+    )
+    if projection.findings:
+        return {
+            "status": "invalid",
+            "checkpoint": "CP7",
+            "reason": "blocked",
+            "finding_codes": sorted({item.code for item in projection.findings}),
+            "message": "Canonical CP7 projection is invalid.",
+        }, sources
+    transition_heads = [
+        item
+        for item in projection.heads
+        if item.checkpoint == "CP7" and item.result.get("transition_stop") is not None
+    ]
+    if not transition_heads:
+        return None, sources
+    if len(transition_heads) != 1:
+        return {
+            "status": "invalid",
+            "checkpoint": "CP7",
+            "reason": "blocked",
+            "finding_codes": ["TRANSITION_STOP_CURRENT_HEAD_NOT_UNIQUE"],
+            "message": "Canonical CP7 transition-stop current head is not unique.",
+        }, sources
+    head = transition_heads[0]
+    result_path = resolver(root, head.result_ref)
+    if result_path.is_symlink() or not result_path.is_file():
+        return {
+            "status": "invalid",
+            "checkpoint": "CP7",
+            "reason": "blocked",
+            "finding_codes": ["TRANSITION_STOP_RESULT_NOT_REGULAR"],
+            "message": "Canonical CP7 transition-stop result is unavailable.",
+        }, sources
+    sources.append({"ref": head.result_ref, "digest": sha256(result_path.read_bytes()).hexdigest()})
+    from meta_flow.checks.cp_result import parse_transition_stop
+
+    try:
+        stop = parse_transition_stop(head.result.get("transition_stop"), decision=head.decision)
+    except ValueError:
+        return {
+            "status": "invalid",
+            "checkpoint": "CP7",
+            "result_ref": head.result_ref,
+            "decision": head.decision,
+            "reason": "blocked",
+            "finding_codes": ["TRANSITION_STOP_CONTRACT_INVALID"],
+            "message": "Canonical CP7 transition-stop contract is invalid.",
+        }, sources
+    if stop is None:
+        return None, sources
+    return {
+        "status": "valid",
+        "checkpoint": "CP7",
+        "result_ref": head.result_ref,
+        "decision": head.decision,
+        **stop.as_dict(),
+    }, sources
+
+
 def build_formal_truth_snapshot(
     project_root: Path,
     *,
@@ -414,6 +575,18 @@ def build_formal_truth_snapshot(
         include_work(work_ref, owner="PROJECT")
     active_crs, cr_sources = _active_cr_ids(root, process_root)
     sources.extend(cr_sources)
+    transition_stop, transition_sources = _active_cp7_transition_stop(
+        root,
+        process_root,
+        active_crs,
+    )
+    sources.extend(transition_sources)
+    failure_truth, failure_sources = _active_failure_truth(
+        root,
+        process_root,
+        active_works,
+    )
+    sources.extend(failure_sources)
     source_digest = _canonical_digest(sources)
     return {
         "schema_version": 1,
@@ -423,6 +596,8 @@ def build_formal_truth_snapshot(
         "active_phase_ids": sorted(active_phases),
         "active_work_ids": sorted(active_works),
         "active_cr_ids": active_crs,
+        "transition_stop": transition_stop,
+        "failure_truth": failure_truth,
         "source_refs": [item["ref"] for item in sources],
         "source_digest": source_digest,
     }
@@ -502,6 +677,33 @@ def derive_formal_truth_patch(
             "text": f"Review pending human gate {pending_gate}.",
             "stop_reason": "required_human_gate",
         }
+    transition_stop = snapshot.get("transition_stop")
+    transition_stop = transition_stop if isinstance(transition_stop, Mapping) else {}
+    transition_status = str(transition_stop.get("status") or "")
+    transition_reason = str(transition_stop.get("reason") or "")
+    transition_applies = (
+        not formal_conflict
+        and len(active_crs) == 1
+        and not pending_gate
+        and transition_status in {"valid", "invalid"}
+    )
+    transition_blocked = transition_applies and (
+        transition_status == "invalid"
+        or transition_reason in _EXPLICIT_FAILURE_STOP_REASONS
+    )
+    if transition_applies:
+        next_action = {
+            "type": "blocked" if transition_blocked else "await_user",
+            "text": str(transition_stop.get("message") or "Formal transition stop requires review."),
+            "stop_reason": transition_reason or "blocked",
+        }
+    failure_truth = correlation_from_mapping(snapshot.get("failure_truth"))
+    failure_blocked = failure_truth.status is not FailureTruthStatusV1.HEALTHY
+    if failure_blocked:
+        next_action = project_safe_next_action(
+            failure_truth.status,
+            finding_codes=failure_truth.finding_codes,
+        )
     merged_refs = list(
         dict.fromkeys(
             [
@@ -513,7 +715,7 @@ def derive_formal_truth_patch(
     return {
         "current_phase": current_phase,
         "active_change": active_change,
-        "blocked": formal_conflict or explicit_failure_stop,
+        "blocked": formal_conflict or explicit_failure_stop or transition_blocked or failure_blocked,
         "next_action": next_action,
         "formal_truth_projection": snapshot,
         "source_refs": merged_refs[:24],

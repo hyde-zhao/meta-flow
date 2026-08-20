@@ -102,3 +102,14 @@ def command_identity(argv: Iterable[str]) -> str:
     if not command or not all(isinstance(item, str) and item for item in command):
         raise ValueError("command identity requires non-empty argv entries")
     return _digest({"schema_version": 1, "argv": list(command)})
+
+
+def source_manifest_digest(fingerprint: ValidationFingerprint) -> str:
+    """为 validation provider 投影稳定 manifest；不读取额外文件。"""
+
+    return _digest(
+        {
+            "schema_version": 1,
+            "sources": [source.as_dict() for source in fingerprint.sources],
+        }
+    )

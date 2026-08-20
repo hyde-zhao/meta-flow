@@ -1,31 +1,22 @@
 ---
-status: frozen_candidate
-version: "0.6.1"
+status: release_candidate
+version: "0.6.2"
 release_artifact_profile: full
 release_decision: NOT_READY
 ---
 
-# Meta Flow 0.6.1 Rollback
+# Meta Flow 0.6.2 Rollback
 
 ## 回滚边界
 
-回滚目标是已发布的 0.6.0。程序包回退不得删除或改写 0.6.1 已产生的 append-only ledger、receipt、Story/Work/CR 历史或 release-order evidence。当前仅形成本地候选，未授权远端发布或外部 consumer mutation。
+已发布回滚目标为 0.6.1。回滚不得删除或改写 0.6.2 的 append-only ledger、receipt、Story/Work/CR 历史或 release-order evidence。
 
-## 触发条件与动作
+| Trigger | 动作 | 验证 |
+|---|---|---|
+| qualification/build/canary 失败 | 停止当前 lineage，保留失败证据，不重做已计数动作 | state 未越过失败步骤 |
+| source freeze 后源码漂移 | 失效 lineage；旧 qualification/canary 不可复用 | successor fingerprint 明确阻断旧证据 |
+| breaking/unknown compatibility | 阻断 0.6.2，回设计/版本决策 | compatibility gate BLOCKED |
+| 本地候选未发布 | 保留候选与证据，不破坏 Git 历史 | 远端无 v0.6.2 事实 |
+| 发布后出现回归 | 在独立授权下回退到 0.6.1 | 0.6.1 installed artifact READY |
 
-| Trigger | 条件 | 动作 | 验证 |
-|---|---|---|---|
-| RB-072-01 | qualification/build/canary 任一失败 | 停止发布序列；保留失败 evidence，不重做已计数动作 | release-order state 未越过失败步骤 |
-| RB-072-02 | source freeze 后源码漂移 | 候选失效；不得复用 qualification 或 full receipt | 新 fingerprint 明确阻断旧 evidence |
-| RB-072-03 | 发现 breaking/unknown compatibility | 阻断 0.6.1；调整设计或重新进入版本决策 | SemVer decision 为 BLOCKED |
-| RB-072-04 | 本地候选未发布 | 不做 Git 历史破坏；保留提交并等待新指令 | 远端无 0.6.1 发布事实 |
-| RB-072-05 | 未来发布后出现回归 | 由独立授权执行 0.6.0 安装/发布回滚 | 0.6.0 runtime READY，过程真相只追加不改写 |
-
-## 安全规则
-
-- 不使用 `git reset --hard`、强推、删除 tag 或手工删除 ledger/receipt。
-- 非终态 native transaction 必须用同版本 inspect/recover 收敛。
-- 0.6.1 新 CLI/schema 的消费者在回退前先确认未依赖新写入格式。
-- 回滚计划不授权任何外部安装、数据写或远端操作。
-
-动态候选 OID、artifact digest 与失败位置以 `process/release/RELEASE-CONTEXT.yaml` 为准。
+禁止 `git reset --hard`、强推、删除 tag 或手工删除 ledger/receipt。非终态 native transaction 必须用同版本 inspect/recover 收敛。

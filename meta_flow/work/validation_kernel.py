@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
 
 class RuleDomainV1(StrEnum):
@@ -21,6 +23,14 @@ class DecisionStatus(StrEnum):
     PASS = "PASS"
     BLOCKED = "BLOCKED"
     FAIL = "FAIL"
+
+
+class AdmissionDispositionV2(StrEnum):
+    """V2 预检的公共终态；它描述计划，不授予任何写权限。"""
+
+    READY = "READY"
+    BLOCKED = "BLOCKED"
+    NO_CHANGE = "NO_CHANGE"
 
 
 PRECEDENCE = tuple(RuleDomainV1)
@@ -96,6 +106,43 @@ class ShadowParityReceiptV1:
     graph_parity: bool
     cutover_eligible: bool
     authoritative_decision_path_count: int = 1
+
+
+@dataclass(frozen=True)
+class AdmissionItemV2:
+    """V2 准入图中的确定性单项。"""
+
+    owner: str
+    code: str
+    decision: DecisionStatus
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class AdmissionDecisionV2:
+    """成功、失败和 no-op 模拟汇合后的唯一只读决策。"""
+
+    decision: AdmissionDispositionV2
+    items: tuple[AdmissionItemV2, ...]
+    lifecycle_digest: str
+    graph_digest: str
+    authoritative_decision_path_count: int = 1
+    duplicate_rule_owner_count: int = 0
+    mutation_count: int = 0
+
+
+class LifecycleSimulationLike(Protocol):
+    path: object
+    terminal_disposition: str
+    conflicts: tuple[str, ...]
+
+    def as_digest_input(self) -> Mapping[str, object]: ...
+
+
+AdmissionValidatorV2 = Callable[
+    [tuple[LifecycleSimulationLike, ...]],
+    Iterable[AdmissionItemV2],
+]
 
 
 def capture_validation_snapshot(operation: str, context: dict[str, object]) -> ValidationSnapshotV1:
@@ -258,6 +305,120 @@ def compare_shadow_graph(authoritative: NormalizedDecisionGraphV1, shadow: Norma
 
 def decision_from_graph(graph: NormalizedDecisionGraphV1) -> ValidationDecisionV1:
     return ValidationDecisionV1(graph.graph_digest, graph.decision, mutation_count=0)
+
+
+def build_admission_decision_v2(
+    simulations: Iterable[LifecycleSimulationLike],
+    validators: Iterable[tuple[str, AdmissionValidatorV2]] = (),
+) -> AdmissionDecisionV2:
+    """聚合一次完整 lifecycle 模拟；validator 只能返回事实，不能写入。"""
+
+    ordered = tuple(sorted(simulations, key=lambda value: str(value.path)))
+    path_names = tuple(str(getattr(value.path, "value", value.path)) for value in ordered)
+    required_paths = ("failure", "no_op", "success")
+    lifecycle_payload = [value.as_digest_input() for value in ordered]
+    lifecycle_digest = _digest(lifecycle_payload)
+    items: list[AdmissionItemV2] = []
+    if path_names != required_paths:
+        items.append(
+            AdmissionItemV2(
+                "lifecycle-simulator",
+                "LIFECYCLE_PATH_SET_INCOMPLETE",
+                DecisionStatus.BLOCKED,
+                ",".join(path_names),
+            )
+        )
+    for simulation in ordered:
+        for conflict in sorted(set(simulation.conflicts)):
+            items.append(
+                AdmissionItemV2(
+                    "lifecycle-simulator",
+                    conflict,
+                    DecisionStatus.BLOCKED,
+                    str(getattr(simulation.path, "value", simulation.path)),
+                )
+            )
+
+    validator_entries = tuple(validators)
+    owners = tuple(owner for owner, _validator in validator_entries)
+    duplicate_owner_count = len(owners) - len(set(owners))
+    if any(not owner or owner.strip() != owner for owner in owners):
+        items.append(
+            AdmissionItemV2(
+                "validation-kernel",
+                "VALIDATOR_OWNER_INVALID",
+                DecisionStatus.FAIL,
+            )
+        )
+    for owner, validator in validator_entries:
+        produced = tuple(validator(ordered))
+        for item in produced:
+            if not isinstance(item, AdmissionItemV2) or item.owner != owner:
+                items.append(
+                    AdmissionItemV2(
+                        "validation-kernel",
+                        "VALIDATOR_OUTPUT_INVALID",
+                        DecisionStatus.FAIL,
+                        owner,
+                    )
+                )
+                break
+            items.append(item)
+    if duplicate_owner_count:
+        items.append(
+            AdmissionItemV2(
+                "validation-kernel",
+                "DUPLICATE_RULE_OWNER",
+                DecisionStatus.FAIL,
+                ",".join(sorted(owner for owner in set(owners) if owners.count(owner) > 1)),
+            )
+        )
+
+    canonical_items = tuple(
+        sorted(items, key=lambda item: (item.owner, item.code, item.decision.value, item.detail))
+    )
+    blocked = duplicate_owner_count > 0 or any(
+        item.decision in {DecisionStatus.BLOCKED, DecisionStatus.FAIL}
+        for item in canonical_items
+    )
+    no_change = (
+        not blocked
+        and len(ordered) == 3
+        and all(
+            simulation.terminal_disposition in {"NO_CHANGE", "NOT_APPLICABLE"}
+            for simulation in ordered
+        )
+        and any(simulation.terminal_disposition == "NO_CHANGE" for simulation in ordered)
+    )
+    decision = (
+        AdmissionDispositionV2.BLOCKED
+        if blocked
+        else AdmissionDispositionV2.NO_CHANGE
+        if no_change
+        else AdmissionDispositionV2.READY
+    )
+    graph_digest = _digest(
+        {
+            "schema_version": 2,
+            "lifecycle_digest": lifecycle_digest,
+            "items": [
+                (item.owner, item.code, item.decision.value, item.detail)
+                for item in canonical_items
+            ],
+            "decision": decision.value,
+            "authority": 1,
+            "duplicate_rule_owner_count": duplicate_owner_count,
+        }
+    )
+    return AdmissionDecisionV2(
+        decision=decision,
+        items=canonical_items,
+        lifecycle_digest=lifecycle_digest,
+        graph_digest=graph_digest,
+        authoritative_decision_path_count=1,
+        duplicate_rule_owner_count=duplicate_owner_count,
+        mutation_count=0,
+    )
 
 
 def _digest(value: object) -> str:

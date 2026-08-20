@@ -1,12 +1,12 @@
 ---
 status: confirmed
-version: "1.2"
+version: "1.3"
 source_scenarios: "docs/product/SCENARIOS.yaml"
-source_change: "CR-071 + CR-072"
+source_change: "CR-071 + CR-072 + CR-073"
 formal_cp2_status: approved
 confirmed_by: "user"
-confirmed_at: "2026-08-18T08:02:17Z"
-formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
+confirmed_at: "2026-08-19T14:05:17Z"
+formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 ---
 
 # CR-071 Test Matrix
@@ -120,3 +120,15 @@ formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROV
 - 本矩阵中的 `planned` 仍不声明测试已经实现或运行；CR-072 行已按 1.3 回填为 `covered`。
 - CP2 approve 只冻结产品范围和推荐合同，不授权真实运行、外部写入、发布或安装。
 - targeted → compatibility → full 的执行证据必须在后续分层验证阶段产生。
+
+## CR-073 增量追踪（CP2 已确认）
+
+| 场景 | REQ | 旅程 | 类型 | 当前状态 | 验证入口 / 边界 |
+|---|---|---|---|---|---|
+| SCN-073-01/02 | REQ-073-01 | J1 | 正向/负向 | planned | historical-reframe audit；不得改写历史 PASS |
+| SCN-073-03/04 | REQ-073-02 | J1 | precheck/边界 | planned | zero-write lifecycle/index/tuple/manifest |
+| SCN-073-05/06 | REQ-073-03/04 | J2 | 正向/失败恢复 | planned | additive amend + orphan failure projection |
+| SCN-073-07/08 | REQ-073-05 | J3 | 正向/负向 | planned | identity reuse + drift invalidation |
+| SCN-073-09/10 | REQ-073-06 | J1/J2 | 多对多覆盖 | planned | 六轮事故无漏行；R3 人工项显式归属 |
+| SCN-073-11 | REQ-073-07 | J3 | 权限 | blocked-until-authorized | source-candidate 外部 typed authorization |
+| SCN-073-12 | REQ-073-08 | J3 | 发布后受害者 | deferred | installed-artifact replay = 下一发布硬门 |

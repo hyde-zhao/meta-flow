@@ -21,7 +21,7 @@
   },
   "generator_identity": "meta_flow.execution_control.migration:build_provider_activation_receipt:v9",
   "package_name": "meta-flow",
-  "package_version": "0.6.1",
+  "package_version": "0.6.2",
   "policy_revision": 1,
   "qualified_source_exclusions": [
     "meta_flow/execution_control/provider/activation-receipt-v9.json"
@@ -55,7 +55,7 @@
     {
       "bytes": 57271,
       "ref": "meta_flow/execution_control/migration.py",
-      "sha256": "c534f90e00ae6ba1d5ec0227b4ed421d81dbb36a380e5d575c8dbac333c7249e"
+      "sha256": "5678a2c8275ddcef547ceb8455b32ac1483eaa3482fa42feb890d64aa86e7b4f"
     },
     {
       "bytes": 27754,
@@ -68,14 +68,14 @@
       "sha256": "5006348ff6c302f338c2808d064d09b052bbc326c110be701e0581b1aa550d9a"
     },
     {
-      "bytes": 6174,
+      "bytes": 6581,
       "ref": "meta_flow/work/assurance.py",
-      "sha256": "495cb1f1489f99a2932472e3f08a742ed800661028495dcbfd5bf6c1cbdd4189"
+      "sha256": "f96d5077581edcc2210d20f8aee721556a067d54044aec9f8e2ca1f985d57a02"
     },
     {
-      "bytes": 45843,
+      "bytes": 55488,
       "ref": "meta_flow/work/cli.py",
-      "sha256": "cc6b801d6d2a1d7fbac8779d29dd37817726eaa26446c22ec44abb72f9e5e758"
+      "sha256": "25b215bdb5359c9972f4d13b439ce50ffede5f3c0f3b0d1d731484aa5626b24a"
     },
     {
       "bytes": 84284,
@@ -83,9 +83,9 @@
       "sha256": "8dd37eb4dc93dccd61f1286f8cced97ae274b5855134a857b86746abd22dcbb8"
     },
     {
-      "bytes": 21107,
+      "bytes": 21826,
       "ref": "meta_flow/work/usage.py",
-      "sha256": "40e2c66338ec65bc4ae734a3f8da72f5b9bb8dfedb3c20ab8572325c1e3c812f"
+      "sha256": "687d22531da84b23b40397225f3f630e09a65d82f9b20f86218a4735166165fb"
     },
     {
       "bytes": 19007,
@@ -93,7 +93,7 @@
       "sha256": "1208a5288371a80f4ed992f96dc3d7c90daa5acac25834eb5986c862f26a5f16"
     }
   ],
-  "qualified_source_set_digest": "128d6a33129a4643b81356893e162ce1a27ed575a8245378a08aa64b844b14ad",
-  "receipt_digest": "36039e91a2dce6cc8fa6391ac546654bb317af27979426738e07aa6ac039078d",
+  "qualified_source_set_digest": "d74cf854080bbfa6ef3ff45113c46e6bcf8eb87c6bd38f8c5554473bd2e6b42a",
+  "receipt_digest": "c1bab6a2a1cdb8e97c37174e71636bf4d95fe8245dc47b48d0b1275e9867c5d7",
   "schema_version": 1
 }

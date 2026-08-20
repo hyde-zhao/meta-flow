@@ -18,6 +18,7 @@ from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import ProcessRouteError, _resolve_runtime_ref
 from meta_flow.project.read_contract import ReadContextProtocol, ReadContractError
 from meta_flow.state.event_ledger import load_events
+from meta_flow.state.failure_observation import GateHeadFactV1
 
 PUBLIC_OPERATION_DECLARATIONS = (
     ("cp.projection", ("meta-flow", "cp", "projection")),
@@ -197,6 +198,26 @@ class CheckpointProjectionV1:
             ]
         payload["projection_digest"] = canonical_digest(payload)
         return payload
+
+
+def project_gate_head_fact(
+    projection: CheckpointProjectionV1,
+    *,
+    expected_gate: str,
+    projected_gate: str,
+    subject_id: str = "",
+) -> GateHeadFactV1:
+    """由唯一 checkpoint current-head 构造 gate 关联事实。"""
+
+    normalized = _checkpoint(expected_gate)
+    head = projection.head(normalized, subject_id=subject_id)
+    return GateHeadFactV1(
+        expected_gate=normalized,
+        projected_gate=_checkpoint(projected_gate),
+        result_ref=head.result_ref if head is not None else "",
+        decision=head.decision if head is not None else "",
+        current=not projection.findings and head is not None,
+    )
 
 
 def _finding(

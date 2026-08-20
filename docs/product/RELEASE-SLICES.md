@@ -1,11 +1,11 @@
 ---
 status: confirmed
-version: "1.2"
-source_change: "CR-071 + CR-072"
+version: "1.3"
+source_change: "CR-071 + CR-072 + CR-073"
 formal_cp2_status: approved
 confirmed_by: "user"
-confirmed_at: "2026-08-18T08:02:17Z"
-formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
+confirmed_at: "2026-08-19T14:05:17Z"
+formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 ---
 
 # CR-071 Release Slices
@@ -45,3 +45,8 @@ formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROV
 - CP4 必须分解 `meta_flow/workflow/cr_cli.py`、`meta_flow/workflow/cr_index.py`、`meta_flow/work/model.py`、`meta_flow/state/formal_projection.py`，并盘点对应四个测试文件；这不是当前实现/验证声明。
 - 本文件的“Release Slice”只表示产品价值切片，不授权 commit、publish、release、真实安装或生产写。
 - `RS-072-01` 是唯一可发布切片；Wave-1～3 是内部实施/验证顺序，绝不构成 `0.6.1-stabilization`、`0.7.0` 或中间 receipt/sidecar。
+
+| RS-073-01 | P6 admission safety（非发布切片） | consumer 主体实施前消除 Work 死锁、假健康与历史事实污染 | 7 capability slots（非过程 Story） | CR-073 CP2→CP3→CP5；外部 replay 独立授权 | SCN-073-01～12；J1/J2/J3 | 未授权 replay、历史 PASS 伪造、P7 漂移 |
+| RS-073-02 | 0.6.2 单一 Release Cutover | 交付已通过 CP7 与 quant-lab source-candidate 回放的 admission/validation 可靠性能力 | 复用 S00–S06，不新增 Story/Work | RS-073-01 PASS；typed 0.6.2 selection；本地 cutover authorization | targeted/受影响回归；qualification×1；build×1；isolated installed-artifact canary×1；CP8 | 机器正常建议为 0.7.0；0.6.2 选择须显式披露且不可复用 |
+
+`RS-073-02` 是 2026-08-20 用户明确发布与 `0.6.2` 版本指令形成的 delivery-only amendment。它不伪造 SemVer 机器分类，不复用 0.6.1 bootstrap，也不自动授权 Git 或远端 publication。

@@ -16,11 +16,14 @@ from meta_flow.execution_control.runtime_context import (
 )
 from meta_flow.project.process_route import require_process_route
 from meta_flow.project.scale import dump_yaml
+from meta_flow.state.event_ledger import validate_exact_checkpoint_approval_binding
 from meta_flow.work.init_transaction import (
     apply_work_init_transaction_targets,
     begin_work_init_transaction,
     build_transaction_target,
     commit_work_init_transaction,
+    inspect_work_init_transactions,
+    recover_work_init_transaction,
     rollback_work_init_transaction,
 )
 from meta_flow.work.lifecycle_transaction import (
@@ -32,12 +35,14 @@ from meta_flow.work.lifecycle_transaction import (
     release_shared_projection_writer_lock,
 )
 from meta_flow.work.model import (
+    G1ScopeDeltaV1,
     PredecessorInventoryReceiptV1,
     ScopeAmendPlanV1,
     ScopeDeltaV1,
     Work,
     WorkRevisionV2,
     WorkRevisionV3,
+    WorkScopeRevisionV2,
     apply_scope_amend,
     load_work,
     plan_scope_amend,
@@ -51,6 +56,7 @@ from meta_flow.workflow.cr_index import (
     load_terminal_predecessor_inventory,
     rebuild_scope_amend_index,
 )
+from meta_flow.workspace.git_sync import run_git
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -86,10 +92,7 @@ class ScopeAmendAuthorizationV1:
             or not _DIGEST_RE.fullmatch(self.predecessor_revision_bytes_digest)
             or tuple(sorted(set(self.authorized_leaves))) != self.authorized_leaves
             or any(
-                not item
-                or item.startswith("/")
-                or "\\" in item
-                or ".." in Path(item).parts
+                not item or item.startswith("/") or "\\" in item or ".." in Path(item).parts
                 for item in self.authorized_leaves
             )
             or not self.effective_at
@@ -178,10 +181,7 @@ class ScopeAmendAuthorizationV2:
             or not _DIGEST_RE.fullmatch(self.predecessor_revision_bytes_digest)
             or tuple(sorted(set(self.authorized_leaves))) != self.authorized_leaves
             or any(
-                not item
-                or item.startswith("/")
-                or "\\" in item
-                or ".." in Path(item).parts
+                not item or item.startswith("/") or "\\" in item or ".." in Path(item).parts
                 for item in self.authorized_leaves
             )
             or not self.effective_at
@@ -327,8 +327,7 @@ def admit_scope_amend_predecessor(
                 item.get("inventory_digest")
                 for item in predecessor_receipts
                 if item.get("cr_id") == authorization.cr_id
-                and item.get("predecessor_revision_id")
-                == authorization.predecessor_revision_id
+                and item.get("predecessor_revision_id") == authorization.predecessor_revision_id
             ),
             "",
         )
@@ -380,11 +379,7 @@ def plan_scope_amend_from_release_root(
 
     current_scope = tuple(
         sorted(
-            set(
-                work.scope.allowed_reads
-                + work.scope.allowed_writes
-                + work.scope.required_checks
-            )
+            set(work.scope.allowed_reads + work.scope.allowed_writes + work.scope.required_checks)
         )
     )
     result_scope = _result_work_scope(work.scope, delta)
@@ -431,12 +426,9 @@ def plan_scope_amend_from_release_root(
             }
         )
     )
-    revision_ref = (
-        f"works/{work.work_id}/revisions/{authorization.successor_revision_id}.json"
-    )
+    revision_ref = f"works/{work.work_id}/revisions/{authorization.successor_revision_id}.json"
     receipt_ref = (
-        f"works/{work.work_id}/scope-amendments/"
-        f"{authorization.successor_revision_id}.receipt.json"
+        f"works/{work.work_id}/scope-amendments/{authorization.successor_revision_id}.receipt.json"
     )
     write_refs = tuple(sorted((work.work_ref, revision_ref, receipt_ref)))
     target_preimages = tuple(
@@ -484,10 +476,7 @@ def plan_scope_amend_from_release_root(
                 "authorization_digest": authorization.digest,
                 "validation_graph_digest": validation.graph.graph_digest,
                 **{f"preimage:{ref}": digest for ref, digest in target_preimages},
-                **{
-                    f"projection_preimage:{ref}": digest
-                    for ref, digest in projection_preimages
-                },
+                **{f"projection_preimage:{ref}": digest for ref, digest in projection_preimages},
                 **(
                     {
                         "predecessor_objective_digest": canonical_digest(
@@ -599,9 +588,10 @@ def apply_scope_amend_transaction(
             "reason_code": "PLAN_DIGEST_MISMATCH",
             "mutation_count": 0,
         }
-    writer_id = "scope-amend-" + sha256(
-        plan.authorization.authorization_id.encode("utf-8")
-    ).hexdigest()[:32]
+    writer_id = (
+        "scope-amend-"
+        + sha256(plan.authorization.authorization_id.encode("utf-8")).hexdigest()[:32]
+    )
     try:
         shared_lock = acquire_shared_projection_writer_lock(
             plan.process_root,
@@ -709,12 +699,8 @@ def apply_scope_amend_transaction(
         "plan_digest": fresh.plan_digest,
         "transaction_id": transaction.transaction_id,
         "transaction_state": "COMMITTED",
-        "revision_ref": next(
-            ref for ref in applied_refs if "/revisions/" in ref
-        ),
-        "receipt_ref": next(
-            ref for ref in applied_refs if "/scope-amendments/" in ref
-        ),
+        "revision_ref": next(ref for ref in applied_refs if "/revisions/" in ref),
+        "receipt_ref": next(ref for ref in applied_refs if "/scope-amendments/" in ref),
         "work_ref": fresh.work.work_ref,
         "invalidated_refs": list(fresh.core_plan.invalidated_refs),
         "derived_index": fresh.receipt_payload["derived_index"],
@@ -776,21 +762,752 @@ def _result_work_scope(current: WorkScope, delta: ScopeDeltaV1) -> WorkScope:
 
 
 def _json_bytes(payload: dict[str, object]) -> bytes:
-    return (
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
 
 
 def _bytes_digest(value: bytes) -> str:
     return sha256(value).hexdigest()
 
 
+@dataclass(frozen=True)
+class G1ScopeAmendAuthorizationV1:
+    schema_version: int
+    operation: str
+    authorization_id: str
+    work_id: str
+    successor_revision_id: str
+    release_oid: str
+    process_oid: str
+    release_dirty_digest: str
+    process_dirty_digest: str
+    work_preimage_digest: str
+    delta_digest: str
+    issued_at: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != 1
+            or self.operation != "work.scope-amend.g1"
+            or not all(
+                _ID_RE.fullmatch(value)
+                for value in (
+                    self.authorization_id,
+                    self.work_id,
+                    self.successor_revision_id,
+                )
+            )
+            or not re.fullmatch(r"[0-9a-f]{40}", self.release_oid)
+            or not re.fullmatch(r"[0-9a-f]{40}", self.process_oid)
+            or not _DIGEST_RE.fullmatch(self.release_dirty_digest)
+            or not _DIGEST_RE.fullmatch(self.process_dirty_digest)
+            or not _DIGEST_RE.fullmatch(self.work_preimage_digest)
+            or not _DIGEST_RE.fullmatch(self.delta_digest)
+            or not self.issued_at
+        ):
+            raise ValueError("G1_SCOPE_AMEND_AUTHORIZATION_INVALID")
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.as_dict())
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "operation": self.operation,
+            "authorization_id": self.authorization_id,
+            "work_id": self.work_id,
+            "successor_revision_id": self.successor_revision_id,
+            "release_oid": self.release_oid,
+            "process_oid": self.process_oid,
+            "release_dirty_digest": self.release_dirty_digest,
+            "process_dirty_digest": self.process_dirty_digest,
+            "work_preimage_digest": self.work_preimage_digest,
+            "delta_digest": self.delta_digest,
+            "issued_at": self.issued_at,
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: dict[str, Any]) -> G1ScopeAmendAuthorizationV1:
+        expected = {
+            "schema_version",
+            "operation",
+            "authorization_id",
+            "work_id",
+            "successor_revision_id",
+            "release_oid",
+            "process_oid",
+            "release_dirty_digest",
+            "process_dirty_digest",
+            "work_preimage_digest",
+            "delta_digest",
+            "issued_at",
+        }
+        if set(payload) != expected:
+            raise ValueError("G1_SCOPE_AMEND_AUTHORIZATION_FIELDS_INVALID")
+        return cls(**payload)
+
+
+@dataclass(frozen=True)
+class G2CurrentCRScopeAmendAuthorizationV2:
+    """为 G2 当前 CR Work 冻结一次 add-only successor 授权。"""
+
+    schema_version: int
+    operation: str
+    authorization_id: str
+    cr_id: str
+    work_id: str
+    successor_revision_id: str
+    release_oid: str
+    process_oid: str
+    release_dirty_digest: str
+    process_dirty_digest: str
+    work_preimage_digest: str
+    predecessor_scope_digest: str
+    delta_digest: str
+    authorized_add_writes: tuple[str, ...]
+    invalidation_refs: tuple[str, ...]
+    checkpoint_ref: str
+    checkpoint_digest: str
+    approval_event_id: str
+    approval_event_digest: str
+    approval_decision_id: str
+    issued_at: str
+
+    def __post_init__(self) -> None:
+        ids = (
+            self.authorization_id,
+            self.cr_id,
+            self.work_id,
+            self.successor_revision_id,
+            self.approval_event_id,
+            self.approval_decision_id,
+        )
+        if (
+            self.schema_version != 2
+            or self.operation != "work.scope-amend.current-cr.g2"
+            or not all(_ID_RE.fullmatch(value) for value in ids)
+            or not re.fullmatch(r"[0-9a-f]{40}", self.release_oid)
+            or not re.fullmatch(r"[0-9a-f]{40}", self.process_oid)
+            or any(
+                not _DIGEST_RE.fullmatch(value)
+                for value in (
+                    self.release_dirty_digest,
+                    self.process_dirty_digest,
+                    self.work_preimage_digest,
+                    self.predecessor_scope_digest,
+                    self.delta_digest,
+                    self.checkpoint_digest,
+                    self.approval_event_digest,
+                )
+            )
+            or not self.authorized_add_writes
+            or tuple(sorted(set(self.authorized_add_writes)))
+            != self.authorized_add_writes
+            or not self.invalidation_refs
+            or tuple(sorted(set(self.invalidation_refs))) != self.invalidation_refs
+            or any(
+                not value
+                or value.startswith("/")
+                or "\\" in value
+                or any(part in {"", ".", ".."} for part in value.split("/"))
+                or any(marker in value for marker in ("*", "?", "["))
+                for value in self.authorized_add_writes
+            )
+            or any(
+                not value
+                or value.startswith("/")
+                or "\\" in value
+                or any(part in {"", ".", ".."} for part in value.split("/"))
+                for value in self.invalidation_refs
+            )
+            or not self.checkpoint_ref.startswith("process/checkpoints/")
+            or self.checkpoint_ref.startswith("/")
+            or "\\" in self.checkpoint_ref
+            or ".." in Path(self.checkpoint_ref).parts
+            or not self.issued_at
+        ):
+            raise ValueError("G2_CURRENT_CR_SCOPE_AMEND_AUTHORIZATION_INVALID")
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(self.as_dict())
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "operation": self.operation,
+            "authorization_id": self.authorization_id,
+            "cr_id": self.cr_id,
+            "work_id": self.work_id,
+            "successor_revision_id": self.successor_revision_id,
+            "release_oid": self.release_oid,
+            "process_oid": self.process_oid,
+            "release_dirty_digest": self.release_dirty_digest,
+            "process_dirty_digest": self.process_dirty_digest,
+            "work_preimage_digest": self.work_preimage_digest,
+            "predecessor_scope_digest": self.predecessor_scope_digest,
+            "delta_digest": self.delta_digest,
+            "authorized_add_writes": list(self.authorized_add_writes),
+            "invalidation_refs": list(self.invalidation_refs),
+            "checkpoint_ref": self.checkpoint_ref,
+            "checkpoint_digest": self.checkpoint_digest,
+            "approval_event_id": self.approval_event_id,
+            "approval_event_digest": self.approval_event_digest,
+            "approval_decision_id": self.approval_decision_id,
+            "issued_at": self.issued_at,
+        }
+
+    @classmethod
+    def from_mapping(
+        cls,
+        payload: dict[str, Any],
+    ) -> G2CurrentCRScopeAmendAuthorizationV2:
+        expected = {
+            "schema_version",
+            "operation",
+            "authorization_id",
+            "cr_id",
+            "work_id",
+            "successor_revision_id",
+            "release_oid",
+            "process_oid",
+            "release_dirty_digest",
+            "process_dirty_digest",
+            "work_preimage_digest",
+            "predecessor_scope_digest",
+            "delta_digest",
+            "authorized_add_writes",
+            "invalidation_refs",
+            "checkpoint_ref",
+            "checkpoint_digest",
+            "approval_event_id",
+            "approval_event_digest",
+            "approval_decision_id",
+            "issued_at",
+        }
+        if (
+            set(payload) != expected
+            or not isinstance(payload["authorized_add_writes"], list)
+            or not isinstance(payload["invalidation_refs"], list)
+        ):
+            raise ValueError("G2_CURRENT_CR_SCOPE_AMEND_AUTHORIZATION_FIELDS_INVALID")
+        values = dict(payload)
+        values["authorized_add_writes"] = tuple(payload["authorized_add_writes"])
+        values["invalidation_refs"] = tuple(payload["invalidation_refs"])
+        return cls(**values)
+
+
+CurrentScopeAmendAuthorization = (
+    G1ScopeAmendAuthorizationV1 | G2CurrentCRScopeAmendAuthorizationV2
+)
+
+
+@dataclass(frozen=True)
+class G1ScopeAmendPlanV1:
+    decision: str
+    release_root: Path
+    process_root: Path
+    work: Work
+    delta: G1ScopeDeltaV1
+    authorization: CurrentScopeAmendAuthorization
+    result_scope: WorkScope
+    invalidated_refs: tuple[str, ...]
+    target_preimages: tuple[tuple[str, str], ...]
+    plan_digest: str
+    blockers: tuple[str, ...] = ()
+    mutation_count: int = 0
+
+    def as_dict(self) -> dict[str, object]:
+        is_g2_current = isinstance(
+            self.authorization,
+            G2CurrentCRScopeAmendAuthorizationV2,
+        )
+        return {
+            "schema_version": 2 if is_g2_current else 1,
+            "kind": (
+                "G2CurrentCRScopeAmendPlanV2"
+                if is_g2_current
+                else "G1ScopeAmendPlanV1"
+            ),
+            "profile": "g2-current-cr" if is_g2_current else "g1-work",
+            "decision": self.decision,
+            "work_id": self.work.work_id,
+            "delta_digest": self.delta.digest,
+            "authorization_digest": self.authorization.digest,
+            "predecessor_scope_digest": self.work.scope.digest,
+            "successor_scope_digest": self.result_scope.digest,
+            "invalidated_refs": list(self.invalidated_refs),
+            "target_preimages": dict(self.target_preimages),
+            "plan_digest": self.plan_digest,
+            "blockers": list(self.blockers),
+            "mutation_count": self.mutation_count,
+        }
+
+
+def load_current_scope_amend_authorization(
+    path: Path,
+) -> CurrentScopeAmendAuthorization:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("CURRENT_SCOPE_AMEND_AUTHORIZATION_PATH_INVALID")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("CURRENT_SCOPE_AMEND_AUTHORIZATION_NOT_OBJECT")
+    if payload.get("schema_version") == 1:
+        return G1ScopeAmendAuthorizationV1.from_mapping(payload)
+    if (
+        payload.get("schema_version") == 2
+        and payload.get("operation") == "work.scope-amend.current-cr.g2"
+    ):
+        return G2CurrentCRScopeAmendAuthorizationV2.from_mapping(payload)
+    raise ValueError("CURRENT_SCOPE_AMEND_AUTHORIZATION_VERSION_INVALID")
+
+
+def load_g1_scope_amend_authorization(
+    path: Path,
+) -> CurrentScopeAmendAuthorization:
+    """向后兼容的 loader 名称；V2 通过 operation 显式隔离。"""
+
+    return load_current_scope_amend_authorization(path)
+
+
+def _result_g1_scope(current: WorkScope, delta: G1ScopeDeltaV1) -> WorkScope:
+    return WorkScope(
+        current.version,
+        tuple(sorted(set(current.allowed_reads) | set(delta.add_reads))),
+        tuple(sorted(set(current.allowed_writes) | set(delta.add_writes))),
+        tuple(sorted(set(current.required_checks) | set(delta.add_checks))),
+    )
+
+
+def _git_snapshot(root: Path) -> tuple[str, str]:
+    head = run_git(["rev-parse", "--verify", "HEAD"], cwd=root)
+    status = run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=root)
+    oid = head.stdout.strip() if head.ok else ""
+    if not re.fullmatch(r"[0-9a-f]{40}", oid) or not status.ok:
+        raise ValueError("G1_SCOPE_AMEND_GIT_SNAPSHOT_UNAVAILABLE")
+    return oid, canonical_digest({"status_lines": status.stdout.splitlines()})
+
+
+def _g2_current_cr_approval_blockers(
+    process_root: Path,
+    authorization: G2CurrentCRScopeAmendAuthorizationV2,
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    checkpoint_path = process_root / authorization.checkpoint_ref.removeprefix(
+        "process/"
+    )
+    if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
+        blockers.append("G2_CURRENT_CR_SCOPE_AMEND_CHECKPOINT_MISSING")
+    elif sha256(checkpoint_path.read_bytes()).hexdigest() != authorization.checkpoint_digest:
+        blockers.append("G2_CURRENT_CR_SCOPE_AMEND_CHECKPOINT_DIGEST_MISMATCH")
+
+    approval_findings = validate_exact_checkpoint_approval_binding(
+        process_root,
+        event_id=authorization.approval_event_id,
+        event_digest=authorization.approval_event_digest,
+        cr_id=authorization.cr_id,
+        work_id=authorization.work_id,
+        checkpoint_ref=authorization.checkpoint_ref,
+        checkpoint_digest=authorization.checkpoint_digest,
+        decision_id=authorization.approval_decision_id,
+    )
+    if approval_findings:
+        blockers.append("G2_CURRENT_CR_SCOPE_AMEND_APPROVAL_BINDING_INVALID")
+    return tuple(sorted(set(blockers)))
+
+
+def _g1_target_refs(
+    work_id: str,
+    authorization_id: str,
+    successor_revision_id: str,
+) -> tuple[str, ...]:
+    root = f"works/{work_id}"
+    return (
+        f"{root}/WORK.yaml",
+        f"{root}/revisions/{successor_revision_id}.json",
+        f"{root}/evidence/scope-amend/{authorization_id}.invalidation.json",
+        f"{root}/evidence/scope-amend/{authorization_id}.receipt.json",
+    )
+
+
+def plan_g1_scope_amend(
+    release_root: Path,
+    *,
+    work_id: str,
+    delta: G1ScopeDeltaV1,
+    authorization: CurrentScopeAmendAuthorization,
+    release_oid: str,
+    process_oid: str,
+) -> G1ScopeAmendPlanV1:
+    """为 G1 Work 或显式批准的 G2 current CR 构造零写 successor 计划。"""
+
+    root = release_root.resolve()
+    route = require_process_route(root)
+    process_root = route.process_root.resolve()
+    work = load_work(process_root, work_id)
+    work_path = process_root / work.work_ref
+    work_preimage = sha256(work_path.read_bytes()).hexdigest()
+    actual_release_oid, actual_release_dirty = _git_snapshot(root)
+    actual_process_oid, actual_process_dirty = _git_snapshot(process_root)
+    blockers: list[str] = []
+    is_g2_current = isinstance(
+        authorization,
+        G2CurrentCRScopeAmendAuthorizationV2,
+    )
+    prefix = "G2_CURRENT_CR_SCOPE_AMEND" if is_g2_current else "G1_SCOPE_AMEND"
+    if is_g2_current:
+        if work.kind != "cr":
+            blockers.append("G2_CURRENT_CR_SCOPE_AMEND_WORK_KIND_INVALID")
+        if work.risk_profile != "G2":
+            blockers.append("G2_CURRENT_CR_SCOPE_AMEND_RISK_INVALID")
+        if work.status not in {"planned", "blocked"}:
+            blockers.append("G2_CURRENT_CR_SCOPE_AMEND_STATUS_INVALID")
+        if delta.add_reads or delta.add_checks:
+            blockers.append("G2_CURRENT_CR_SCOPE_AMEND_DELTA_PROFILE_INVALID")
+        if delta.add_writes != authorization.authorized_add_writes:
+            blockers.append("G2_CURRENT_CR_SCOPE_AMEND_AUTHORIZED_WRITES_MISMATCH")
+        if authorization.predecessor_scope_digest != work.scope.digest:
+            blockers.append("G2_CURRENT_CR_SCOPE_AMEND_PREDECESSOR_SCOPE_MISMATCH")
+        blockers.extend(_g2_current_cr_approval_blockers(process_root, authorization))
+    else:
+        if work.kind != "work":
+            blockers.append("G1_SCOPE_AMEND_WORK_KIND_INVALID")
+        if work.risk_profile not in {"G0", "G1"}:
+            blockers.append("G1_SCOPE_AMEND_RISK_INVALID")
+        if work.status not in {"paused", "blocked"}:
+            blockers.append("G1_SCOPE_AMEND_STATUS_INVALID")
+    if authorization.work_id != work_id:
+        blockers.append(f"{prefix}_AUTH_WORK_MISMATCH")
+    if (
+        authorization.release_oid != release_oid
+        or authorization.process_oid != process_oid
+        or actual_release_oid != release_oid
+        or actual_process_oid != process_oid
+    ):
+        blockers.append(f"{prefix}_OID_MISMATCH")
+    if (
+        authorization.release_dirty_digest != actual_release_dirty
+        or authorization.process_dirty_digest != actual_process_dirty
+    ):
+        blockers.append(f"{prefix}_DIRTY_SET_MISMATCH")
+    if authorization.work_preimage_digest != work_preimage:
+        blockers.append(f"{prefix}_WORK_PREIMAGE_MISMATCH")
+    if authorization.delta_digest != delta.digest:
+        blockers.append(f"{prefix}_DELTA_MISMATCH")
+    result_scope = _result_g1_scope(work.scope, delta)
+    if blockers:
+        decision = "BLOCKED"
+    elif result_scope.digest == work.scope.digest:
+        decision = "NO_CHANGE"
+    else:
+        decision = "READY"
+    native_invalidated_refs = tuple(
+        sorted(
+            {
+                *(filter(None, (work.result_ref,))),
+                f"works/{work_id}/evidence/validation/**",
+                f"works/{work_id}/AUTHORIZATION.json",
+                f"works/{work_id}/HANDOFF.yaml",
+            }
+        )
+    )
+    invalidated_refs = (
+        authorization.invalidation_refs
+        if is_g2_current
+        else native_invalidated_refs
+    )
+    if is_g2_current and not set(native_invalidated_refs).issubset(
+        invalidated_refs
+    ):
+        blockers.append("G2_CURRENT_CR_SCOPE_AMEND_INVALIDATION_INCOMPLETE")
+        decision = "BLOCKED"
+    target_refs = _g1_target_refs(
+        work_id,
+        authorization.authorization_id,
+        authorization.successor_revision_id,
+    )
+    target_preimages = tuple(
+        (ref, target_preimage_digest(process_root / ref)) for ref in target_refs
+    )
+    if any(
+        preimage != canonical_digest({"kind": "missing"})
+        for ref, preimage in target_preimages
+        if ref != f"works/{work_id}/WORK.yaml"
+    ):
+        blockers.append(f"{prefix}_AUTHORIZATION_CONSUMED")
+        decision = "BLOCKED"
+    identity = {
+        "profile": "g2-current-cr" if is_g2_current else "g1-work",
+        "work_id": work_id,
+        "delta_digest": delta.digest,
+        "authorization_digest": authorization.digest,
+        "release_oid": release_oid,
+        "process_oid": process_oid,
+        "release_dirty_digest": actual_release_dirty,
+        "process_dirty_digest": actual_process_dirty,
+        "work_preimage_digest": work_preimage,
+        "predecessor_scope_digest": work.scope.digest,
+        "successor_scope_digest": result_scope.digest,
+        "invalidated_refs": invalidated_refs,
+        "target_preimages": target_preimages,
+        "decision": decision,
+        "blockers": tuple(sorted(set(blockers))),
+    }
+    return G1ScopeAmendPlanV1(
+        decision,
+        root,
+        process_root,
+        work,
+        delta,
+        authorization,
+        result_scope,
+        invalidated_refs,
+        target_preimages,
+        canonical_digest(identity),
+        tuple(sorted(set(blockers))),
+        0,
+    )
+
+
+def apply_g1_scope_amend(
+    plan: G1ScopeAmendPlanV1,
+    *,
+    expected_plan_digest: str,
+    current_authorization: CurrentScopeAmendAuthorization,
+    release_oid: str,
+    process_oid: str,
+) -> dict[str, object]:
+    if plan.decision != "READY":
+        return {"decision": plan.decision, "blockers": list(plan.blockers), "mutation_count": 0}
+    if expected_plan_digest != plan.plan_digest:
+        return {"decision": "BLOCKED", "reason_code": "PLAN_DIGEST_MISMATCH", "mutation_count": 0}
+    if current_authorization.digest != plan.authorization.digest:
+        return {"decision": "BLOCKED", "reason_code": "AUTHORIZATION_DRIFT", "mutation_count": 0}
+    fresh = plan_g1_scope_amend(
+        plan.release_root,
+        work_id=plan.work.work_id,
+        delta=plan.delta,
+        authorization=current_authorization,
+        release_oid=release_oid,
+        process_oid=process_oid,
+    )
+    if fresh.plan_digest != plan.plan_digest or fresh.target_preimages != plan.target_preimages:
+        return {"decision": "BLOCKED", "reason_code": "REPLAN_REQUIRED", "mutation_count": 0}
+    revision = WorkScopeRevisionV2(
+        2,
+        current_authorization.successor_revision_id,
+        plan.work.work_id,
+        current_authorization.work_preimage_digest,
+        plan.work.scope.digest,
+        plan.result_scope.digest,
+        plan.delta.digest,
+        current_authorization.digest,
+        plan.plan_digest,
+        plan.invalidated_refs,
+    )
+    is_g2_current = isinstance(
+        current_authorization,
+        G2CurrentCRScopeAmendAuthorizationV2,
+    )
+    updated_work = replace(
+        plan.work,
+        scope=plan.result_scope,
+        **({"updated_at": current_authorization.issued_at} if is_g2_current else {}),
+    )
+    receipt = {
+        "schema_version": 2,
+        "kind": (
+            "G2CurrentCRScopeAmendReceiptV2"
+            if is_g2_current
+            else "ScopeAmendReceiptV2"
+        ),
+        "profile": "g2-current-cr" if is_g2_current else "g1-work",
+        "authorization_id": current_authorization.authorization_id,
+        "authorization_digest": current_authorization.digest,
+        "work_id": plan.work.work_id,
+        "revision_id": revision.revision_id,
+        "plan_digest": plan.plan_digest,
+        "release_oid": release_oid,
+        "process_oid": process_oid,
+        "predecessor_work_digest": current_authorization.work_preimage_digest,
+        "successor_scope_digest": plan.result_scope.digest,
+        "invalidation_digest": canonical_digest(list(plan.invalidated_refs)),
+    }
+    if is_g2_current:
+        receipt.update(
+            {
+                "cr_id": current_authorization.cr_id,
+                "predecessor_scope_digest": current_authorization.predecessor_scope_digest,
+                "checkpoint_ref": current_authorization.checkpoint_ref,
+                "checkpoint_digest": current_authorization.checkpoint_digest,
+                "approval_event_id": current_authorization.approval_event_id,
+                "approval_event_digest": current_authorization.approval_event_digest,
+                "approval_decision_id": current_authorization.approval_decision_id,
+                "invalidated_refs": list(plan.invalidated_refs),
+            }
+        )
+    invalidation = {
+        "schema_version": 1,
+        "kind": "ScopeAmendInvalidationV1",
+        "work_id": plan.work.work_id,
+        "revision_id": revision.revision_id,
+        "stale_refs": list(plan.invalidated_refs),
+        "reason": (
+            "G2_CURRENT_CR_SCOPE_SUCCESSOR"
+            if is_g2_current
+            else "G1_SCOPE_SUCCESSOR"
+        ),
+    }
+    refs = _g1_target_refs(
+        plan.work.work_id,
+        current_authorization.authorization_id,
+        current_authorization.successor_revision_id,
+    )
+    postimages = (
+        (refs[0], (dump_yaml(updated_work.as_dict()) + "\n").encode("utf-8")),
+        (refs[1], _json_bytes(revision.as_dict())),
+        (refs[2], _json_bytes(invalidation)),
+        (refs[3], _json_bytes(receipt)),
+    )
+    writer_id = (
+        "scope-amend-"
+        + sha256(current_authorization.authorization_id.encode("utf-8")).hexdigest()[:32]
+    )
+    shared_lock = None
+    if is_g2_current:
+        try:
+            shared_lock = acquire_shared_projection_writer_lock(
+                plan.process_root,
+                writer_id,
+            )
+        except (OSError, ValueError):
+            return {
+                "decision": "BLOCKED",
+                "reason_code": "G2_CURRENT_CR_SCOPE_AMEND_SHARED_LOCK_UNAVAILABLE",
+                "mutation_count": 0,
+            }
+    transaction_id = ""
+    domain_applied = False
+    refreshed_refs: tuple[str, ...] = ()
+    try:
+        if is_g2_current:
+            assert_work_close_shared_projection_lineage(plan.process_root)
+        targets = tuple(
+            build_transaction_target(plan.process_root, ref=ref, after_bytes=value)
+            for ref, value in postimages
+        )
+        transaction_id = begin_work_init_transaction(
+            plan.process_root,
+            operation="work.scope-amend",
+            work_id=plan.work.work_id,
+            plan_digest=plan.plan_digest,
+            release_oid=release_oid,
+            process_oid=process_oid,
+            targets=targets,
+        )
+        applied_refs = apply_work_init_transaction_targets(plan.process_root, transaction_id)
+        domain_applied = True
+        if is_g2_current:
+            refreshed_refs = refresh_state_projection_if_initialized(plan.process_root)
+            _validate_scope_amend_postimage(plan)  # type: ignore[arg-type]
+        transaction = commit_work_init_transaction(
+            plan.process_root,
+            transaction_id,
+            successor_id=revision.revision_id,
+        )
+    except Exception as exc:
+        if not transaction_id:
+            return {
+                "decision": "BLOCKED",
+                "reason_code": "TRANSACTION_NOT_STARTED",
+                "mutation_count": 0,
+            }
+        recovery = rollback_work_init_transaction(
+            plan.process_root,
+            transaction_id,
+            failure=str(exc),
+        )
+        if domain_applied and is_g2_current:
+            try:
+                refresh_state_projection_if_initialized(plan.process_root)
+            except Exception as recovery_exc:
+                raise ValueError(
+                    "G2 current CR scope amendment State recovery failed"
+                ) from recovery_exc
+        return {
+            "decision": "PARTIAL" if recovery.recovery_required else "RECOVERED",
+            "transaction_id": transaction_id,
+            "reason_codes": list(recovery.reason_codes),
+            "mutation_count": 0,
+        }
+    finally:
+        if shared_lock is not None:
+            release_shared_projection_writer_lock(shared_lock, writer_id)
+    return {
+        "decision": "PASS",
+        "transaction_id": transaction.transaction_id,
+        "transaction_state": "COMMITTED",
+        "revision_ref": refs[1],
+        "receipt_ref": refs[3],
+        "invalidated_refs": list(plan.invalidated_refs),
+        "domain_mutation_count": len(applied_refs),
+        "coordination_mutation_count": len(refreshed_refs),
+        "mutation_count": len(applied_refs) + len(refreshed_refs),
+    }
+
+
+def inspect_g1_scope_amend(process_root: Path, *, work_id: str = "") -> dict[str, Any]:
+    inspection = inspect_work_init_transactions(process_root, work_id=work_id)
+    transactions = [
+        item for item in inspection["transactions"] if item["operation"] == "work.scope-amend"
+    ]
+    unresolved = [item for item in transactions if item["state"] not in {"COMMITTED", "RECOVERED"}]
+    return {
+        "schema_version": 1,
+        "kind": "G1ScopeAmendInspectionV1",
+        "decision": "BLOCKED" if unresolved else "PASS",
+        "transactions": transactions,
+        "unresolved_count": len(unresolved),
+        "mutation_count": 0,
+    }
+
+
+def recover_g1_scope_amend(
+    process_root: Path,
+    *,
+    transaction_id: str,
+    expected_plan_digest: str,
+    release_oid: str,
+    process_oid: str,
+) -> dict[str, object]:
+    receipt = recover_work_init_transaction(
+        process_root,
+        transaction_id,
+        expected_plan_digest=expected_plan_digest,
+        release_oid=release_oid,
+        process_oid=process_oid,
+    )
+    return receipt.as_dict()
+
+
 __all__ = [
     "ScopeAmendAuthorizationV2",
     "ScopeAmendAuthorizationV1",
     "ScopeAmendTransactionPlanV1",
+    "G1ScopeAmendAuthorizationV1",
+    "G2CurrentCRScopeAmendAuthorizationV2",
+    "CurrentScopeAmendAuthorization",
+    "G1ScopeAmendPlanV1",
     "admit_scope_amend_predecessor",
     "apply_scope_amend_transaction",
     "load_scope_amend_authorization",
+    "load_g1_scope_amend_authorization",
+    "load_current_scope_amend_authorization",
+    "plan_g1_scope_amend",
+    "apply_g1_scope_amend",
+    "inspect_g1_scope_amend",
+    "recover_g1_scope_amend",
     "plan_scope_amend_from_release_root",
 ]

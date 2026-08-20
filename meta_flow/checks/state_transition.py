@@ -24,6 +24,11 @@ from meta_flow.project.process_route import _resolve_runtime_ref
 from meta_flow.semantics import outcome
 from meta_flow.state import event_ledger
 from meta_flow.state.checkpoint_projection import CheckpointProjectionV1
+from meta_flow.state.failure_observation import (
+    GateHeadFactV1,
+    correlate_failure_truth,
+    evaluate_projection_safety,
+)
 
 PASS_LIKE_DECISIONS = outcome.PASS_LIKE_VERIFICATION_DECISIONS
 FAILURE_DECISIONS = outcome.FAILURE_VERIFICATION_DECISIONS
@@ -1191,8 +1196,18 @@ def _state_matches_expected_stop(
             return errors
         if _has_valid_stop_reason(state, expected, decision=decision):
             return errors
+        correlation = correlate_failure_truth(
+            (),
+            (),
+            GateHeadFactV1(
+                expected_gate=expected_gate,
+                projected_gate=pending_gate,
+            ),
+        )
+        finding = evaluate_projection_safety(correlation)[0]
         errors.append(
-            f"post-transition must advance to pending_gate={expected_gate} or record a valid stop_reason; "
+            f"{finding.code}: post-transition must advance to pending_gate={expected_gate} "
+            "or record a valid stop_reason; "
             f"got pending_gate={pending_gate or '-'} next_action.type={action_type or '-'}"
         )
         return errors

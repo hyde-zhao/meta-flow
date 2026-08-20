@@ -2029,6 +2029,7 @@ def plan_formal_truth_refresh(project_root: Path) -> dict[str, Any]:
         semantic_input={
             "operation": "state.projection-refresh",
             "formal_truth_source_digest": snapshot["source_digest"],
+            "failure_truth": snapshot.get("failure_truth"),
             "gate_convergence": gate_convergence,
             "candidate": semantic_candidate,
             "replace_paths": sorted(FORMAL_TRUTH_REPLACE_PATHS),
@@ -2868,6 +2869,16 @@ def check_current_state(
                     formal_target.append(
                         f"formal_truth_field_stale: {field} does not match the current formal truth"
                     )
+            failure_truth = formal_snapshot.get("failure_truth")
+            if (
+                isinstance(failure_truth, dict)
+                and failure_truth.get("status") != "healthy"
+            ):
+                codes = ",".join(failure_truth.get("finding_codes") or []) or "unknown"
+                formal_target.append(
+                    "formal_failure_truth_nonhealthy: "
+                    f"status={failure_truth.get('status')} finding_codes={codes}"
+                )
     legacy_long_keys = (set(state) & SLIM_ARCHIVE_KEYS) - CURRENT_ALLOWED_KEYS
     if legacy_long_keys or (set(state) - CURRENT_ALLOWED_KEYS - {"schema_version"}):
         warnings.append(

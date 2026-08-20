@@ -139,7 +139,24 @@ def write_handoff(process_root: Path, handoff: WorkHandoff) -> Path:
         next_step=handoff.next_step,
         evidence_refs=handoff.evidence_refs,
     )
+    from meta_flow.work.scope import authorize_system_write, classify_system_artifact
+
+    logical_ref = f"works/{handoff.work_id}/HANDOFF.yaml"
+    classified = classify_system_artifact(
+        handoff.work_id,
+        "work.handoff.write",
+        logical_ref,
+    )
+    if classified.namespace is None:
+        raise ValueError(classified.reason_code)
     path = handoff_path(process_root, handoff.work_id)
+    admitted = authorize_system_write(
+        classified.namespace,
+        logical_ref,
+        target_is_symlink=path.is_symlink(),
+    )
+    if not admitted.allowed:
+        raise ValueError(admitted.reason_code)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     if temporary.exists() or temporary.is_symlink():

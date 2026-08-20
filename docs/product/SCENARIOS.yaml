@@ -1,14 +1,14 @@
 status: confirmed
-version: "1.2"
-source_revision: "CR-071@cp2-revision-2 + CR-072@0.6.1-package-approved"
+version: "1.3"
+source_revision: "CR-071@cp2-revision-2 + CR-072@0.6.1-package-approved + CR-073@cp2-approved"
 source_requirements:
   - docs/product/REQUIREMENTS.md
 source_use_cases:
   - docs/product/USE-CASES.md
 formal_cp2_status: approved
 confirmed_by: "user"
-confirmed_at: "2026-08-18T08:02:17Z"
-formal_cp2_approval_ref: "process/state/GATE-LEDGER.ndjson#GATE-CR072-CP2-APPROVED-20260818-V1"
+confirmed_at: "2026-08-19T14:05:17Z"
+formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 revision_history:
   - version: "1.0"
     date: "2026-08-15"
@@ -19,6 +19,9 @@ revision_history:
   - version: "1.2"
     date: "2026-08-18"
     summary: "Added CR-072 0.6.1 package/compiler/closure/cost/SemVer/release/consumer scenarios; CR-071 IDs retained"
+  - version: "1.3"
+    date: "2026-08-19"
+    summary: "Added 12 confirmed CR-073 admission-safety scenarios and six-round journey coverage; CR-071/072 history retained"
 scenarios:
   - id: SCN-MF1-01
     title: "合法 Work 初始化执行全生命周期零写预检"
@@ -560,21 +563,42 @@ scenarios:
     evidence_type: automated
     automation_status: planned
     gap_reason: ""
+  - {id: SCN-073-01, title: "历史证据按诚实 reframe 追加审计 binding", type: positive, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-073-01], use_cases: [UC-HISTORICAL-REFRAME], stories: [S00]}, trigger: "审计已关闭 CR-071 且发现交付声明与历史证据不一致", context: "C0.5 historical reframe", preconditions: ["原始历史 bytes 可只读"], steps: [{action: "生成 historical-reframe", expected: "保留原始记录并追加 audited-known-historical-fact"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-02, title: "缺失历史证据不能被补写成 PASS", type: negative, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-01], use_cases: [UC-HISTORICAL-REFRAME], stories: [S00]}, trigger: "reframe 无法找到足以证明旧 CP6/CP7 的证据", context: "C0.5 historical reframe", preconditions: ["历史记录存在缺口"], steps: [{action: "请求收敛旧账", expected: "只记录未知/已审计事实，不伪造 PASS"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-03, title: "init preflight 同时模拟成功与失败生命周期", type: precheck, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-073-02], use_cases: [UC-WORK-INIT-PREFLIGHT], stories: [S01, S02]}, trigger: "提交候选 Work init 参数", context: "zero-write admission", preconditions: ["候选合同与 scope 可读"], steps: [{action: "执行 preflight", expected: "在 mutation=0 时返回成功/失败/no-op 的完整读写诊断"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-04, title: "contract/index/tuple/manifest 或 provider 漂移在写前阻断", type: boundary, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-02], use_cases: [UC-WORK-INIT-PREFLIGHT], stories: [S01, S02]}, trigger: "execution contract revision、typed ref、digest 或 provider identity 不一致", context: "zero-write admission", preconditions: ["至少一个语义字段漂移"], steps: [{action: "执行 preflight", expected: "返回确定性 conflict 且 mutation=0"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-05, title: "G1 additive amendment 安全扩展 scope", type: positive, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-073-03], use_cases: [UC-WORK-SCOPE-AMEND], stories: [S03]}, trigger: "paused/blocked G1 Work 缺少合法读写范围", context: "append-only scope successor", preconditions: ["独立 typed authorization 有效"], steps: [{action: "应用只增不删 amendment", expected: "生成 successor 并失效受影响 receipt/authorization"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-06, title: "orphan FAIL 降级投影并显式恢复", type: negative, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-04], use_cases: [UC-FAILURE-RECOVERY], stories: [S05]}, trigger: "存在 FAIL receipt 但 observation 或 pending gate 投影缺失", context: "formal state projection", preconditions: ["FAIL receipt 可被原生 reader 发现"], steps: [{action: "渲染 current state", expected: "warning/block 而不是 continue_active_work；补证后 native reprojection 收敛"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-07, title: "完整语义 identity 复用 PASS receipt", type: positive, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-073-05], use_cases: [UC-VALIDATION-TRUTH], stories: [S04]}, trigger: "候选 receipt 与当前 layer/source/profile/command/environment/manifest 完全等价", context: "ValidationPolicyV2", preconditions: ["outcome=PASS 且无 partial mutation"], steps: [{action: "规划验证层", expected: "只对完整等价 identity 返回 REUSE"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-08, title: "环境或 manifest 漂移只重跑受影响层", type: negative, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-05], use_cases: [UC-VALIDATION-TRUTH], stories: [S04]}, trigger: "environment/source manifest/provider 或 outcome 任一安全维度漂移", context: "ValidationPolicyV2", preconditions: ["存在历史 receipt"], steps: [{action: "规划验证层", expected: "受影响层降级为 RUN，FAIL/partial 永不复用"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-09, title: "R1/R1-recovery/R2-admission 完整映射 J1/J2", type: coverage, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-06], use_cases: [UC-VICTIM-REPLAY], stories: [S06]}, trigger: "构建六轮事故覆盖矩阵", context: "provider-side journey fixtures", preconditions: ["六轮事故清单冻结"], steps: [{action: "检查前三组事故映射", expected: "每轮至少有旅程、场景、fixture 和 owner"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-10, title: "R2-failure/W1/R3 完整映射 J2/J3", type: coverage, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-06], use_cases: [UC-VICTIM-REPLAY], stories: [S06]}, trigger: "构建六轮事故覆盖矩阵", context: "provider-side journey fixtures", preconditions: ["R3 人工检查项已列出 owner"], steps: [{action: "检查后三组事故映射", expected: "R2-failure/W1/R3 均有回归入口且 R3 人工项不悬空"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
+  - {id: SCN-073-11, title: "无外部授权时 source-candidate replay 零外部动作", type: permission, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-07], use_cases: [UC-VICTIM-REPLAY], stories: [S06]}, trigger: "请求 quant-lab source-candidate replay 但无独立 typed authorization", context: "victim acceptance authorization boundary", preconditions: ["provider fixture 已完成"], steps: [{action: "执行授权预检", expected: "BLOCKED/not-executed，不读、不运行、不写外部项目"}], evidence_type: automated, automation_status: planned, gap_reason: "真实回放等待独立 typed external authorization"}
+  - {id: SCN-073-12, title: "installed-artifact victim replay 保留为下一发布硬门", type: external-failure, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-08], use_cases: [UC-VICTIM-REPLAY], stories: [S06]}, trigger: "本 CR 尝试把 source-candidate fixture 当作安装制品验收", context: "next-release acceptance boundary", preconditions: ["尚无安装/发布授权或已发布候选制品"], steps: [{action: "评估验收声明", expected: "当前 CR 只记录 deferred hard gate，不声称 installed-artifact PASS"}], evidence_type: manual, automation_status: planned, gap_reason: "下一发布需独立安装/发布授权与已构建制品"}
 coverage_summary:
-  total: 30
+  total: 42
   by_type:
-    positive: 11
-    negative: 11
-    boundary: 4
-    permission: 2
+    positive: 14
+    negative: 14
+    boundary: 5
+    permission: 3
     empty-data: 0
-    external-failure: 1
-    precheck: 1
-  high_priority: 30
+    external-failure: 2
+    precheck: 2
+    coverage: 2
+  high_priority: 42
   high_priority_positive_and_negative_covered: true
-  requirement_refs_total: 30
-  requirement_refs_covered: 30
-  use_case_refs_total: 12
-  use_case_refs_covered: 12
+  requirement_refs_total: 40
+  requirement_refs_covered: 40
+  use_case_refs_total: 18
+  use_case_refs_covered: 18
   gaps: []
   review_deltas_covered: [REV-01, REV-02, REV-03, REV-04, REV-05, REV-06]
+  cr073_confirmed_cp2:
+    journey_matrix:
+      R1: [J1]
+      R1_recovery: [J1, J2]
+      R2_admission: [J1, J2]
+      R2_failure: [J2]
+      W1: [J3]
+      R3: [J1, J2, J3]

@@ -1885,6 +1885,53 @@ def project_gate_approvals(
     return tuple(projections)
 
 
+def validate_exact_checkpoint_approval_binding(
+    process_root: Path,
+    *,
+    event_id: str,
+    event_digest: str,
+    cr_id: str,
+    work_id: str,
+    checkpoint_ref: str,
+    checkpoint_digest: str,
+    decision_id: str,
+) -> tuple[str, ...]:
+    """由 gate 语义 owner 校验一次精确、typed 的 checkpoint 批准绑定。"""
+
+    gate_rel = KNOWN_LEDGER_RELS["gate"]
+    ledger = process_root / Path(*gate_rel.parts[1:])
+    events, errors = load_events(ledger)
+    if errors:
+        return ("GATE_APPROVAL_LEDGER_INVALID",)
+    clean_events = tuple(_clean_event(event) for event in events)
+    matches = tuple(
+        event for event in clean_events if str(event.get("event_id") or "") == event_id
+    )
+    if len(matches) != 1:
+        return ("GATE_APPROVAL_EVENT_NOT_UNIQUE",)
+    event = matches[0]
+    projections = project_gate_approvals([event])
+    work_ids = event.get("work_ids")
+    decision_ids = event.get("decision_ids")
+    valid = (
+        len(projections) == 1
+        and projections[0].passage
+        and projections[0].approval_kind
+        == GateApprovalKindV1.CHECKPOINT_PASSAGE.value
+        and projections[0].cr_id == cr_id
+        and projections[0].work_id == work_id
+        and canonical_digest(event) == event_digest
+        and event.get("risk_acceptance") is False
+        and event.get("checkpoint_ref") == checkpoint_ref
+        and event.get("approved_checkpoint_digest") == checkpoint_digest
+        and isinstance(work_ids, list)
+        and work_id in work_ids
+        and isinstance(decision_ids, list)
+        and decision_id in decision_ids
+    )
+    return () if valid else ("GATE_APPROVAL_BINDING_INVALID",)
+
+
 def build_gate_approval_kind_migration_plan(
     events: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
     *,

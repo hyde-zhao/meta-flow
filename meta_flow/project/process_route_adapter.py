@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+from meta_flow.contracts.typed_ref import RepositoryRole
 from meta_flow.project.process_route import (
     IndependentProcessRoute,
     ProcessRouteError,
     require_process_route,
 )
 from meta_flow.semantics.route import RouteConsumerClass, route_consumer_policy
+from meta_flow.work.model import TypedRepositoryRefV2
 
 _CONSUMER_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 _EXPECTED_MODE = "sibling-binding"
@@ -154,9 +156,39 @@ def resolve_configured_consumer_route(
     return resolve_consumer_route(root, consumer_id=consumer_id)
 
 
+def resolve_typed_repository_ref(
+    project_root: Path,
+    ref: TypedRepositoryRefV2,
+) -> Path:
+    """只按 repo role + logical path 解析 regular file，不猜 sibling 或前缀。"""
+
+    root = project_root.resolve(strict=True)
+    if ref.repo_role is RepositoryRole.PROCESS:
+        route = require_process_route(root)
+        suffix = Path(*ref.logical_path.split("/")[1:])
+        raw_target = route.process_root / suffix
+        boundary = route.process_root.resolve(strict=True)
+    else:
+        raw_target = root / ref.logical_path
+        boundary = root
+    if raw_target.is_symlink():
+        raise RouteConsumerError("typed_ref_symlink", "typed repository ref must target a regular file")
+    try:
+        target = raw_target.resolve(strict=True)
+    except OSError as exc:
+        raise RouteConsumerError("typed_ref_missing", "typed repository ref target is missing", cause=exc) from exc
+    if not target.is_relative_to(boundary) or not target.is_file():
+        raise RouteConsumerError(
+            "typed_ref_not_regular",
+            "typed repository ref must resolve to one contained regular file",
+        )
+    return target
+
+
 __all__ = [
     "RouteConsumerError",
     "RouteConsumerView",
     "resolve_configured_consumer_route",
     "resolve_consumer_route",
+    "resolve_typed_repository_ref",
 ]

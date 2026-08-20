@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from meta_flow.evidence.receipt_equivalence import PlannerReuseEvidenceV1
+from meta_flow.work.model import ValidationPolicyProvider, ValidationReuseRequestV2
 from meta_flow.work.validation_fingerprint import VALIDATION_LAYERS
 from meta_flow.work.validation_kernel import DecisionStatus, NormalizedDecisionGraphV1
-from meta_flow.work.validation_receipt import ValidationReceipt
+from meta_flow.work.validation_receipt import ValidationReceipt, ValidationReceiptV2
 
 _HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -48,10 +49,12 @@ def build_validation_execution_plan(
     *,
     fingerprints: Mapping[str, str],
     command_identities: Mapping[str, str],
-    receipts: tuple[ValidationReceipt, ...] = (),
+    receipts: tuple[ValidationReceipt | ValidationReceiptV2, ...] = (),
     layers: tuple[str, ...] = VALIDATION_LAYERS,
     reuse_evidence: Mapping[str, PlannerReuseEvidenceV1] | None = None,
     authority_graph: NormalizedDecisionGraphV1 | None = None,
+    policy_provider: ValidationPolicyProvider | None = None,
+    provider_requests: Mapping[str, ValidationReuseRequestV2] | None = None,
 ) -> ValidationExecutionPlan:
     if not layers or any(layer not in VALIDATION_LAYERS for layer in layers):
         raise ValueError("validation layers must be a non-empty supported subset")
@@ -71,6 +74,11 @@ def build_validation_execution_plan(
         for key, value in evidence_by_receipt.items()
     ):
         raise ValueError("reuse evidence must be keyed by receipt SHA-256")
+    requests = dict(provider_requests or {})
+    if policy_provider is not None and set(requests) != set(layers):
+        raise ValueError("provider_requests must exactly cover validation layers")
+    if policy_provider is None and requests:
+        raise ValueError("provider_requests require one validation policy provider")
 
     steps: list[ValidationStep] = []
     errors: list[str] = []
@@ -95,6 +103,45 @@ def build_validation_execution_plan(
             continue
         if passes:
             receipt = passes[0]
+            if policy_provider is not None:
+                request = requests[layer]
+                decision = policy_provider.evaluate_reuse(request)
+                if decision.provider_identity_digest != request.current_provider_identity_digest:
+                    errors.append(f"{layer} provider identity response mismatch")
+                    steps.append(ValidationStep(layer, "BLOCKED", "provider identity response mismatch"))
+                    execution_scheduled = True
+                    continue
+                if decision.decision == "REUSE":
+                    steps.append(
+                        ValidationStep(
+                            layer,
+                            "REUSED_UNCHANGED",
+                            "validation policy provider authorized semantic reuse",
+                            receipt.receipt_digest,
+                        )
+                    )
+                    continue
+                if decision.decision == "BLOCKED":
+                    errors.extend(f"{layer}:{code}" for code in decision.reason_codes)
+                    steps.append(
+                        ValidationStep(
+                            layer,
+                            "BLOCKED",
+                            "validation policy provider blocked reuse evaluation",
+                        )
+                    )
+                    execution_scheduled = True
+                    continue
+                steps.append(
+                    ValidationStep(
+                        layer,
+                        "RUN",
+                        "validation policy provider requires fresh execution",
+                    )
+                )
+                next_layer = layer
+                execution_scheduled = True
+                continue
             evidence = evidence_by_receipt.get(receipt.receipt_digest)
             if _reuse_authorized(receipt, evidence, authority_graph):
                 steps.append(
