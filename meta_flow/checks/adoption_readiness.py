@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from meta_flow.design import product_governance
@@ -163,9 +164,7 @@ class VictimReplayAuthorizationV1:
             operation=payload["operation"],
             target_project_id=payload["target_project_id"],
             target_project_ref_digest=payload["target_project_ref_digest"],
-            candidate_provider_identity_digest=payload[
-                "candidate_provider_identity_digest"
-            ],
+            candidate_provider_identity_digest=payload["candidate_provider_identity_digest"],
             release_oid=payload["release_oid"],
             process_oid=payload["process_oid"],
             commands=tuple(commands),
@@ -308,9 +307,8 @@ def classify_acceptance_claim(evidence: Mapping[str, Any]) -> VictimAcceptanceCl
         and not installation
     ):
         return VictimAcceptanceClaimV1.SOURCE_CANDIDATE
-    if (
-        kind == "installed_artifact_replay"
-        and all(_SHA256_RE.fullmatch(item) for item in (replay, artifact, installation))
+    if kind == "installed_artifact_replay" and all(
+        _SHA256_RE.fullmatch(item) for item in (replay, artifact, installation)
     ):
         return VictimAcceptanceClaimV1.INSTALLED_ARTIFACT
     raise ValueError("victim acceptance evidence cannot support the claimed level")
@@ -353,7 +351,9 @@ def _rel(root: Path, path: Path) -> str:
         return path.as_posix()
 
 
-def _item_status(errors: list[str], warnings: list[str] | None = None, *, warning_status: str = "WARN") -> str:
+def _item_status(
+    errors: list[str], warnings: list[str] | None = None, *, warning_status: str = "WARN"
+) -> str:
     if errors:
         return "FAIL"
     if warnings:
@@ -410,9 +410,7 @@ def _state_item(
     *,
     binding_aware: bool = False,
 ) -> ReadinessItem:
-    errors, warnings = current.check_current_state(
-        root, process_root=process_root
-    )
+    errors, warnings = current.check_current_state(root, process_root=process_root)
     return ReadinessItem(
         item_id="state-v2",
         status=_item_status(errors, warnings),
@@ -432,7 +430,37 @@ def _state_item(
     )
 
 
-def _cr_tracking_item(root: Path, process_root: Path | None) -> ReadinessItem:
+def _cr_tracking_item(
+    root: Path,
+    process_root: Path | None,
+    *,
+    authoritative_report: Any | None = None,
+    authoritative_required: bool = False,
+) -> ReadinessItem:
+    if authoritative_report is not None:
+        errors = list(authoritative_report.errors)
+        warnings = list(authoritative_report.warnings)
+        return ReadinessItem(
+            item_id="cr-tracking",
+            status="FAIL" if errors else ("WARN" if warnings else "PASS"),
+            evidence=list(authoritative_report.evidence_refs),
+            impact="Authoritative formal CR partition and lifecycle report controls adoption.",
+            next_action="Resolve the exact authoritative cr check findings; do not downgrade them locally.",
+            messages=[
+                f"partition_snapshot_digest={authoritative_report.partition_snapshot_digest}",
+                *warnings,
+                *errors,
+            ],
+        )
+    if authoritative_required:
+        return ReadinessItem(
+            item_id="cr-tracking",
+            status="FAIL",
+            evidence=["process/PROJECT.yaml"],
+            impact="Authoritative formal CR lifecycle child report is mandatory.",
+            next_action="Repair the authoritative CR report producer; do not run a local fallback.",
+            messages=["AUTHORITATIVE_CR_CHILD_REPORT_MISSING"],
+        )
     routed_root = process_root or (root / "process")
     index = routed_root / "changes" / "CR-INDEX.json"
     legacy_index = routed_root / "changes" / "CR-INDEX.yaml"
@@ -451,18 +479,25 @@ def _cr_tracking_item(root: Path, process_root: Path | None) -> ReadinessItem:
             projection_errors = validate_index_payload(data)
             if projection_errors:
                 status = "FAIL"
-                messages.extend(f"CR-INDEX.json projection error: {error}" for error in projection_errors)
+                messages.extend(
+                    f"CR-INDEX.json projection error: {error}" for error in projection_errors
+                )
         blocked = [
             str(item.get("id") or item.get("cr_id") or "")
             for item in data.get("items", [])
             if isinstance(item, dict)
-            and str(item.get("lifecycle_status") or item.get("status") or "").strip().lower() == "blocked"
+            and str(item.get("lifecycle_status") or item.get("status") or "").strip().lower()
+            == "blocked"
         ]
         if blocked and status != "FAIL":
             status = "WARN"
-            messages.append("blocked CRs are present in CR-INDEX.json; resolve or explicitly carry them before adoption.")
+            messages.append(
+                "blocked CRs are present in CR-INDEX.json; resolve or explicitly carry them before adoption."
+            )
         if legacy_index.is_file():
-            messages.append("legacy CR-INDEX.yaml is present; CR-INDEX.json is canonical and YAML is read-only legacy fallback.")
+            messages.append(
+                "legacy CR-INDEX.yaml is present; CR-INDEX.json is canonical and YAML is read-only legacy fallback."
+            )
             if status == "PASS":
                 status = "WARN"
         return ReadinessItem(
@@ -583,9 +618,15 @@ def _quality_item(root: Path, process_root: Path | None) -> ReadinessItem:
     eval_errors, eval_warnings = quality_governance.validate_eval_matrix(
         root, process_root=process_root
     )
-    missing_only = [*model_errors, *eval_errors] and all("policy missing:" in error for error in [*model_errors, *eval_errors])
+    missing_only = [*model_errors, *eval_errors] and all(
+        "policy missing:" in error for error in [*model_errors, *eval_errors]
+    )
     errors = [] if missing_only else [*model_errors, *eval_errors]
-    warnings = [*model_warnings, *eval_warnings, *([*model_errors, *eval_errors] if missing_only else [])]
+    warnings = [
+        *model_warnings,
+        *eval_warnings,
+        *([*model_errors, *eval_errors] if missing_only else []),
+    ]
     return ReadinessItem(
         item_id="quality-governance",
         status=_item_status(errors, warnings),
@@ -631,6 +672,8 @@ def _human_gate_item(
     process_root: Path | None,
     *,
     binding_aware: bool = False,
+    partition_report: Any | None = None,
+    authoritative_required: bool = False,
 ) -> ReadinessItem:
     required_dirs = [Path("process/checks"), Path("process/checkpoints"), Path("process/context")]
     routed_root = process_root or (root / "process")
@@ -639,10 +682,18 @@ def _human_gate_item(
         for rel in required_dirs
         if not (routed_root / rel.relative_to("process")).is_dir()
     ]
-    gate_required, route_errors, route_messages = _human_gate_requirement(
-        root,
-        routed_root,
-    )
+    if authoritative_required and partition_report is None:
+        gate_required, route_errors, route_messages = (
+            False,
+            ["AUTHORITATIVE_FORMAL_CR_PARTITION_REPORT_MISSING"],
+            [],
+        )
+    else:
+        gate_required, route_errors, route_messages = _human_gate_requirement(
+            root,
+            routed_root,
+            partition_report=partition_report,
+        )
     if route_errors:
         status = "FAIL"
     elif missing and gate_required:
@@ -713,11 +764,21 @@ def _read_json_object(path: Path, *, subject: str) -> dict[str, object]:
 def _human_gate_requirement(
     project_root: Path,
     process_root: Path,
+    *,
+    partition_report: Any | None = None,
 ) -> tuple[bool, list[str], list[str]]:
     """从 bounded State/CR/route truth 判定当前是否需要人工门基础设施。"""
 
     errors: list[str] = []
     messages: list[str] = []
+    if partition_report is not None:
+        if partition_report.decision != "PASS":
+            return (
+                False,
+                ["formal CR partition is BLOCKED: " + ",".join(partition_report.reason_codes)],
+                messages,
+            )
+        messages.append(f"partition_snapshot_digest={partition_report.snapshot_digest}")
     state_path = process_root / "state/STATE.current.json"
     index_path = process_root / "changes/CR-INDEX.json"
     state: dict[str, object] = {}
@@ -741,13 +802,16 @@ def _human_gate_requirement(
 
         index_errors = validate_index_payload(index)
         if index_errors:
-            return False, [f"CR-INDEX.json projection error: {item}" for item in index_errors], messages
+            return (
+                False,
+                [f"CR-INDEX.json projection error: {item}" for item in index_errors],
+                messages,
+            )
         active_items = [
             item
             for item in index.get("items", [])
             if isinstance(item, dict)
-            and str(item.get("lifecycle_status") or "").strip().lower()
-            in {"active", "blocked"}
+            and str(item.get("lifecycle_status") or "").strip().lower() in {"active", "blocked"}
         ]
 
     active_change = str(state.get("active_change") or "").strip()
@@ -756,14 +820,22 @@ def _human_gate_requirement(
         return False, ["active formal CR exists while STATE.current.json is missing"], messages
     if len(active_items) > 1:
         identities = ", ".join(str(item.get("id") or "") for item in active_items)
-        return False, [f"multiple active/blocked formal CRs make the current route ambiguous: {identities}"], messages
+        return (
+            False,
+            [f"multiple active/blocked formal CRs make the current route ambiguous: {identities}"],
+            messages,
+        )
     indexed_change = str(active_items[0].get("id") or "") if active_items else ""
     if active_change != indexed_change:
         if active_change or indexed_change:
-            return False, [
-                "STATE.active_change and CR-INDEX active/blocked formal truth differ: "
-                f"{active_change or '-'} != {indexed_change or '-'}"
-            ], messages
+            return (
+                False,
+                [
+                    "STATE.active_change and CR-INDEX active/blocked formal truth differ: "
+                    f"{active_change or '-'} != {indexed_change or '-'}"
+                ],
+                messages,
+            )
     if pending_gate:
         messages.append(f"pending_gate={pending_gate}")
         return True, errors, messages
@@ -772,6 +844,14 @@ def _human_gate_requirement(
         return False, errors, messages
 
     active = active_items[0]
+    if partition_report is not None and str(active.get("formal_cr_path") or "") not in set(
+        partition_report.native_formal_cr_refs
+    ):
+        return (
+            False,
+            ["active CR formal_cr_path is absent from the authoritative native partition"],
+            messages,
+        )
     try:
         cr_path = _safe_process_ref(
             process_root,
@@ -795,7 +875,11 @@ def _human_gate_requirement(
         return False, ["active CR route plan decision is BLOCKED"], messages
     applicability = route.get("checkpoint_applicability")
     if not isinstance(applicability, dict):
-        return False, ["active CR route plan checkpoint_applicability is missing or invalid"], messages
+        return (
+            False,
+            ["active CR route plan checkpoint_applicability is missing or invalid"],
+            messages,
+        )
     required = any(
         isinstance(item, dict)
         and bool(item.get("applies"))
@@ -835,10 +919,40 @@ def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
             workspace_item = _binding_workspace_item(root, route)
             process_root = route.process_root
             binding_aware = True
+    lifecycle_report = None
+    partition_report = None
+    if process_root is not None and binding_aware:
+        try:
+            from meta_flow.workflow.cr_analysis import build_cr_lifecycle_check_report
+            from meta_flow.workflow.legacy_evidence_registry import (
+                load_formal_cr_partition,
+            )
+
+            _registry, snapshot, partition_report = load_formal_cr_partition(
+                root,
+                consumer_id="adoption-readiness",
+            )
+            lifecycle_report = build_cr_lifecycle_check_report(
+                root,
+                partition_snapshot=snapshot,
+                partition_report=partition_report,
+            )
+        except (OSError, ValueError) as exc:
+            lifecycle_report = SimpleNamespace(
+                errors=(f"authoritative CR report unavailable: {exc}",),
+                warnings=(),
+                evidence_refs=("process/PROJECT.yaml",),
+                partition_snapshot_digest="",
+            )
     return [
         workspace_item,
         _state_item(root, process_root, binding_aware=binding_aware),
-        _cr_tracking_item(root, process_root),
+        _cr_tracking_item(
+            root,
+            process_root,
+            authoritative_report=lifecycle_report,
+            authoritative_required=binding_aware,
+        ),
         _legacy_registry_item(
             root,
             process_root,
@@ -847,7 +961,13 @@ def collect_adoption_readiness(project_root: Path) -> list[ReadinessItem]:
         _identity_item(root),
         _quality_item(root, process_root),
         _workflow_item(root, process_root, binding_aware=binding_aware),
-        _human_gate_item(root, process_root, binding_aware=binding_aware),
+        _human_gate_item(
+            root,
+            process_root,
+            binding_aware=binding_aware,
+            partition_report=partition_report,
+            authoritative_required=binding_aware,
+        ),
     ]
 
 
@@ -858,7 +978,9 @@ def run_adoption_doctor(project_root: Path) -> int:
     has_warn = any(item.status == "WARN" for item in items)
     print("Adoption Readiness Doctor: " + ("FAIL" if has_fail else "WARN" if has_warn else "OK"))
     print(f"project_root: {root}")
-    print("authorization_boundary: no credentials, no runtime, no SaaS, no production write, no trading, CR-033 deferred")
+    print(
+        "authorization_boundary: no credentials, no runtime, no SaaS, no production write, no trading, CR-033 deferred"
+    )
     for item in items:
         print(f"\n[{item.status}] {item.item_id}")
         print(f"impact: {item.impact}")

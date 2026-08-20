@@ -30,6 +30,15 @@ _MANIFEST_OPTIONAL_FIELDS = {
     "lineage",
     "operation",
     "publication_binding",
+    "coordinator_plan_digest",
+    "operation_admission_digest",
+    "mutation_plan_digest",
+    "current_projection_plan_digest",
+    "current_projection_transaction_id",
+    "handoff_plan_digest",
+    "handoff_transaction_id",
+    "handoff_route_policy_digest",
+    "handoff_desired_digest",
 }
 _PUBLICATION_BINDING_FIELDS = {
     "schema_version",
@@ -92,6 +101,33 @@ def _validated_manifest(path: Path) -> dict[str, object]:
         )
     operation = str(payload.get("operation") or "work.close")
     publication_binding = payload.get("publication_binding")
+    coordinator_fields = (
+        str(payload.get("coordinator_plan_digest") or ""),
+        str(payload.get("operation_admission_digest") or ""),
+        str(payload.get("mutation_plan_digest") or ""),
+        str(payload.get("current_projection_plan_digest") or ""),
+        str(payload.get("current_projection_transaction_id") or ""),
+        str(payload.get("handoff_plan_digest") or ""),
+        str(payload.get("handoff_transaction_id") or ""),
+        str(payload.get("handoff_route_policy_digest") or ""),
+        str(payload.get("handoff_desired_digest") or ""),
+    )
+    if operation == "work.status-transition":
+        if (
+            not all(coordinator_fields)
+            or not _DIGEST_RE.fullmatch(coordinator_fields[0])
+            or not _DIGEST_RE.fullmatch(coordinator_fields[1])
+            or not _DIGEST_RE.fullmatch(coordinator_fields[2])
+            or not _DIGEST_RE.fullmatch(coordinator_fields[3])
+            or not re.fullmatch(r"[0-9a-f]{32}", coordinator_fields[4])
+            or not _DIGEST_RE.fullmatch(coordinator_fields[5])
+            or not re.fullmatch(r"[0-9a-f]{32}", coordinator_fields[6])
+            or not _DIGEST_RE.fullmatch(coordinator_fields[7])
+            or not _DIGEST_RE.fullmatch(coordinator_fields[8])
+        ):
+            raise ValueError("generation lineage status coordinator binding is invalid")
+    elif any(coordinator_fields):
+        raise ValueError("generation lineage non-status manifest has coordinator binding")
     if operation == "work.publication-close":
         if (
             not isinstance(publication_binding, Mapping)
@@ -101,7 +137,9 @@ def _validated_manifest(path: Path) -> dict[str, object]:
             or publication_binding.get("work_id") != work_id
         ):
             raise ValueError("generation lineage publication binding is invalid")
-    elif operation != "work.close" or publication_binding is not None:
+    elif (
+        operation not in {"work.close", "work.status-transition"} or publication_binding is not None
+    ):
         raise ValueError("generation lineage work close operation is invalid")
     raw_targets = payload.get("targets")
     lineage = payload.get("lineage", {})
@@ -188,14 +226,8 @@ def committed_generation_heads(
         raise ValueError("generation lineage transaction root is unsafe")
     if not root.is_dir():
         return {}
-    manifests = [
-        _validated_manifest(path)
-        for path in sorted(root.glob("*/manifest.json"))
-    ]
-    by_id = {
-        str(manifest["authorization_id"]): manifest
-        for manifest in manifests
-    }
+    manifests = [_validated_manifest(path) for path in sorted(root.glob("*/manifest.json"))]
+    by_id = {str(manifest["authorization_id"]): manifest for manifest in manifests}
     for manifest in manifests:
         for ref, predecessor in dict(manifest["lineage"]).items():
             previous = by_id.get(predecessor)
@@ -204,9 +236,7 @@ def committed_generation_heads(
                 or previous["state"] != "COMMITTED"
                 or not any(target["ref"] == ref for target in previous["targets"])
             ):
-                raise ValueError(
-                    f"generation lineage predecessor is invalid: {ref}:{predecessor}"
-                )
+                raise ValueError(f"generation lineage predecessor is invalid: {ref}:{predecessor}")
 
     heads: dict[str, dict[str, str]] = {}
     for ref in refs:
@@ -239,8 +269,7 @@ def committed_generation_heads(
                 manifest
                 for manifest in legacy
                 if any(
-                    target["ref"] == ref
-                    and target["after_digest"] == current_digests[ref]
+                    target["ref"] == ref and target["after_digest"] == current_digests[ref]
                     for target in manifest["targets"]
                 )
             ]
@@ -251,27 +280,24 @@ def committed_generation_heads(
                 # 中，并以该等价集中排序最大的成员作为代表 tail；后继 receipt 仍
                 # 锚定这个可重算的代表，历史成员不会被删除或改写。
                 explicit_legacy_tails = {
-                    str(max(matching_legacy, key=lambda item: (
-                        str(item["updated_at"]),
-                        str(item["created_at"]),
-                        str(item["authorization_id"]),
-                    ))["authorization_id"])
+                    str(
+                        max(
+                            matching_legacy,
+                            key=lambda item: (
+                                str(item["updated_at"]),
+                                str(item["created_at"]),
+                                str(item["authorization_id"]),
+                            ),
+                        )["authorization_id"]
+                    )
                 }
         if explicit_legacy_tails:
             tail_id = next(iter(explicit_legacy_tails))
             legacy = [
-                manifest
-                for manifest in legacy
-                if str(manifest["authorization_id"]) != tail_id
-            ] + [
-                manifest
-                for manifest in legacy
-                if str(manifest["authorization_id"]) == tail_id
-            ]
+                manifest for manifest in legacy if str(manifest["authorization_id"]) != tail_id
+            ] + [manifest for manifest in legacy if str(manifest["authorization_id"]) == tail_id]
         for previous, successor in zip(legacy, legacy[1:], strict=False):
-            successors[str(previous["authorization_id"])] = str(
-                successor["authorization_id"]
-            )
+            successors[str(previous["authorization_id"])] = str(successor["authorization_id"])
         for manifest in candidates:
             predecessor = dict(manifest["lineage"]).get(ref)
             if predecessor is None:
@@ -279,9 +305,7 @@ def committed_generation_heads(
             successor = str(manifest["authorization_id"])
             existing = successors.get(predecessor)
             if existing is not None and existing != successor:
-                raise ValueError(
-                    f"generation lineage has multiple successors: {ref}:{predecessor}"
-                )
+                raise ValueError(f"generation lineage has multiple successors: {ref}:{predecessor}")
             successors[predecessor] = successor
         head_candidates = [
             manifest

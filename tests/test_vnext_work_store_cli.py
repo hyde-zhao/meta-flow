@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,7 @@ from meta_flow.project.onboarding_contract import (
     OnboardingAuthorization,
 )
 from meta_flow.project.query import main as project_query_main
+from meta_flow.work import cli as work_cli_module
 from meta_flow.work.budget import G1_BUDGET, BudgetLimit
 from meta_flow.work.cli import (
     check_main,
@@ -62,6 +64,10 @@ from meta_flow.work.lifecycle_transaction import (
 from meta_flow.work.lifecycle_transaction import (
     WorkCloseAuthorizationV1,
     plan_work_close,
+)
+from meta_flow.work.status_transition import (
+    WorkStatusTransitionAuthorizationV2,
+    plan_work_status_transition,
 )
 from meta_flow.work.model import build_work, load_work, write_work_create_only
 from meta_flow.work.read_context import OperationReadContext
@@ -172,9 +178,7 @@ def make_work(process: Path, work_id: str = "W-001"):
             allowed_writes=("README.md",),
             required_checks=("pytest-docs",),
         ),
-        classification=classify_work(
-            RiskFacts(change_kind="documentation", touched_path_count=1)
-        ),
+        classification=classify_work(RiskFacts(change_kind="documentation", touched_path_count=1)),
         release_base_oid="a" * 40,
         process_base_oid="",
     )
@@ -193,6 +197,64 @@ def typed_work(work):
             contract_ref=work.request_ref,
             contract_digest="c" * 64,
         ),
+    )
+
+
+def apply_status_transition_alias(
+    tmp_path: Path,
+    release: Path,
+    process: Path,
+    command: str,
+    *,
+    work_id: str = "W-001",
+) -> int:
+    """以同一个 helper 执行 alias 的 plan-bound typed apply。"""
+
+    target_status = {
+        "start": "active",
+        "pause": "paused",
+        "resume": "active",
+        "block": "blocked",
+    }[command]
+    current = load_work(process, work_id)
+    handoff = work_cli_module._status_transition_handoff(
+        release,
+        process,
+        work_id=work_id,
+        expected_status=current.status,
+        new_status=target_status,
+    )
+    plan = plan_work_status_transition(
+        process,
+        work_id,
+        expected_status=current.status,
+        new_status=target_status,
+        handoff=handoff,
+    )
+    authorization = WorkStatusTransitionAuthorizationV2(
+        authorization_id=f"compat-{command}-{plan.plan_digest[:24]}",
+        work_id=work_id,
+        plan_digest=plan.plan_digest,
+        parent_plan_digest=plan.parent_plan.plan_digest,
+        target_refs=plan.target_refs,
+        expires_at=(datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+    )
+    authorization_path = tmp_path / f"{authorization.authorization_id}.json"
+    authorization_path.write_text(
+        json.dumps(authorization.as_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return transition_main(
+        command,
+        [
+            "--project-root",
+            str(release),
+            "--work-id",
+            work_id,
+            "--apply",
+            "--authorization-file",
+            str(authorization_path),
+        ],
     )
 
 
@@ -278,15 +340,19 @@ def prepare_repair_authorization(
         "single_use": True,
     }
     payload.update(overrides or {})
-    if overrides and any(
-        field in overrides
-        for field in (
-            "predecessor_scope_digest",
-            "predecessor_blocker_category",
-            "predecessor_blocker_code",
-            "predecessor_blocker_digest",
+    if (
+        overrides
+        and any(
+            field in overrides
+            for field in (
+                "predecessor_scope_digest",
+                "predecessor_blocker_category",
+                "predecessor_blocker_code",
+                "predecessor_blocker_digest",
+            )
         )
-    ) and "predecessor_blocker_fingerprint" not in overrides:
+        and "predecessor_blocker_fingerprint" not in overrides
+    ):
         payload["predecessor_blocker_fingerprint"] = repair_blocker_fingerprint(
             predecessor_work_id=str(payload["predecessor_work_id"]),
             predecessor_status=str(payload["predecessor_status"]),
@@ -318,9 +384,7 @@ def blocked_repair_fixture(tmp_path: Path):
     )
     predecessor = load_work(process, predecessor.work_id)
     candidate = execution_work(process, "W-REPAIR", role="repair")
-    authorization = prepare_repair_authorization(
-        tmp_path, release, process, predecessor, candidate
-    )
+    authorization = prepare_repair_authorization(tmp_path, release, process, predecessor, candidate)
     return release, process, predecessor, candidate, authorization
 
 
@@ -431,9 +495,7 @@ def test_work_init_dry_run_then_apply_indexes_project(tmp_path: Path) -> None:
 def test_repair_work_requires_typed_authorization_and_keeps_global_policy_closed(
     tmp_path: Path,
 ) -> None:
-    release, _process, _predecessor, candidate, _authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, _process, _predecessor, candidate, _authorization = blocked_repair_fixture(tmp_path)
 
     plan = plan_work_init_from_release_root(release, candidate)
 
@@ -448,9 +510,7 @@ def test_repair_work_requires_typed_authorization_and_keeps_global_policy_closed
 def test_typed_repair_authorization_creates_and_starts_one_native_repair_work(
     tmp_path: Path,
 ) -> None:
-    release, process, predecessor, candidate, authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, process, predecessor, candidate, authorization = blocked_repair_fixture(tmp_path)
     predecessor_bytes = (process / predecessor.work_ref).read_bytes()
 
     plan = plan_work_init_from_release_root(
@@ -474,9 +534,7 @@ def test_typed_repair_authorization_creates_and_starts_one_native_repair_work(
     assert receipt.transaction_state == "COMMITTED"
     assert started.status == "active"
     assert (process / predecessor.work_ref).read_bytes() == predecessor_bytes
-    claim = repair_authorization_claim_path(
-        process, plan.repair_admission_binding.authorization_id
-    )
+    claim = repair_authorization_claim_path(process, plan.repair_admission_binding.authorization_id)
     assert json.loads(claim.read_text(encoding="utf-8"))["state"] == "CONSUMED"
     durable_binding = process / repair_admission_binding_ref(candidate.work_id)
     assert json.loads(durable_binding.read_text(encoding="utf-8")) == (
@@ -484,9 +542,7 @@ def test_typed_repair_authorization_creates_and_starts_one_native_repair_work(
     )
     with pytest.raises(ValueError, match="already consumed"):
         claim_repair_authorization(process, plan.repair_admission_binding)
-    idempotent = plan_work_init_from_release_root(
-        release, load_work(process, candidate.work_id)
-    )
+    idempotent = plan_work_init_from_release_root(release, load_work(process, candidate.work_id))
     assert not idempotent.blocked
     assert idempotent.compatibility_decision == "NOOP_TYPED_CURRENT"
     followup = execution_work(
@@ -504,9 +560,7 @@ def test_repair_claim_failure_never_unlinks_a_replaced_foreign_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    release, process, _predecessor, candidate, authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, process, _predecessor, candidate, authorization = blocked_repair_fixture(tmp_path)
     plan = plan_work_init_from_release_root(
         release,
         candidate,
@@ -538,9 +592,7 @@ def test_existing_repair_requires_its_portable_durable_binding(
     tmp_path: Path,
     binding_state: str,
 ) -> None:
-    release, process, _predecessor, candidate, authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, process, _predecessor, candidate, authorization = blocked_repair_fixture(tmp_path)
     plan = plan_work_init_from_release_root(
         release,
         candidate,
@@ -574,9 +626,7 @@ def test_repair_work_cli_consumes_the_same_canonical_authorization(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    release, process, _predecessor, candidate, authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, process, _predecessor, candidate, authorization = blocked_repair_fixture(tmp_path)
     args = [
         "--project-root",
         str(release),
@@ -643,9 +693,7 @@ def test_repair_authorization_rejects_active_predecessor_but_not_other_slice(
     )
     predecessor = load_work(process, predecessor.work_id)
     candidate = execution_work(process, "W-REPAIR", role="repair")
-    authorization = prepare_repair_authorization(
-        tmp_path, release, process, predecessor, candidate
-    )
+    authorization = prepare_repair_authorization(tmp_path, release, process, predecessor, candidate)
 
     active_plan = plan_work_init_from_release_root(
         release, candidate, repair_authorization_path=authorization
@@ -693,9 +741,7 @@ def test_repair_authorization_rejects_active_predecessor_but_not_other_slice(
 def test_repair_authorization_blocks_another_active_writer_in_the_same_slice(
     tmp_path: Path,
 ) -> None:
-    release, process, predecessor, candidate, _authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, process, predecessor, candidate, _authorization = blocked_repair_fixture(tmp_path)
     other = replace(
         execution_work(process, "W-SAME-SLICE", role="primary"),
         status="active",
@@ -707,17 +753,13 @@ def test_repair_authorization_blocks_another_active_writer_in_the_same_slice(
         replace(project, active_work_refs=(*project.active_work_refs, other.work_ref)),
         expected_project_id=project.project_id,
     )
-    authorization = prepare_repair_authorization(
-        tmp_path, release, process, predecessor, candidate
-    )
+    authorization = prepare_repair_authorization(tmp_path, release, process, predecessor, candidate)
 
     plan = plan_work_init_from_release_root(
         release, candidate, repair_authorization_path=authorization
     )
 
-    assert "CONCURRENT_WRITE_BUDGET_EXCEEDED" in {
-        conflict.code for conflict in plan.conflicts
-    }
+    assert "CONCURRENT_WRITE_BUDGET_EXCEEDED" in {conflict.code for conflict in plan.conflicts}
 
 
 @pytest.mark.parametrize(
@@ -746,9 +788,7 @@ def test_repair_authorization_fails_closed_on_bound_fact_drift(
     overrides: dict[str, object],
     expected: str,
 ) -> None:
-    release, process, predecessor, candidate, _authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, process, predecessor, candidate, _authorization = blocked_repair_fixture(tmp_path)
     authorization = prepare_repair_authorization(
         tmp_path,
         release,
@@ -770,9 +810,7 @@ def test_repair_authorization_fails_closed_on_bound_fact_drift(
 def test_repair_apply_revalidates_predecessor_under_lock_before_domain_mutation(
     tmp_path: Path,
 ) -> None:
-    release, process, predecessor, candidate, authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, process, predecessor, candidate, authorization = blocked_repair_fixture(tmp_path)
     plan = plan_work_init_from_release_root(
         release, candidate, repair_authorization_path=authorization
     )
@@ -798,9 +836,7 @@ def test_repair_apply_revalidates_predecessor_under_lock_before_domain_mutation(
 def test_repair_authorization_blocks_when_blocker_evidence_bytes_drift(
     tmp_path: Path,
 ) -> None:
-    release, process, predecessor, candidate, authorization = (
-        blocked_repair_fixture(tmp_path)
-    )
+    release, process, predecessor, candidate, authorization = blocked_repair_fixture(tmp_path)
     blocker = process / f"works/{predecessor.work_id}/BLOCKER.json"
     blocker.write_bytes(blocker.read_bytes() + b"\n")
 
@@ -809,9 +845,7 @@ def test_repair_authorization_blocks_when_blocker_evidence_bytes_drift(
     )
 
     assert plan.blocked
-    assert "REPAIR_PREDECESSOR_BLOCKER_DRIFT" in {
-        conflict.code for conflict in plan.conflicts
-    }
+    assert "REPAIR_PREDECESSOR_BLOCKER_DRIFT" in {conflict.code for conflict in plan.conflicts}
     assert not (process / candidate.work_ref).exists()
 
 
@@ -974,9 +1008,7 @@ def test_work_plan_blocks_missing_or_out_of_scope_request(tmp_path: Path) -> Non
         objective="x",
         request_ref="works/W-001/REQUEST.md",
         scope=WorkScope(1, ("README.md",), ("README.md",), ()),
-        classification=classify_work(
-            RiskFacts(change_kind="documentation", touched_path_count=1)
-        ),
+        classification=classify_work(RiskFacts(change_kind="documentation", touched_path_count=1)),
         release_base_oid="a" * 40,
         process_base_oid="",
     )
@@ -997,9 +1029,7 @@ def test_scope_declaration_cannot_exceed_profile_budget(tmp_path: Path) -> None:
         objective="x",
         request_ref=request_ref,
         scope=WorkScope(1, reads, (), ()),
-        classification=classify_work(
-            RiskFacts(change_kind="documentation", touched_path_count=1)
-        ),
+        classification=classify_work(RiskFacts(change_kind="documentation", touched_path_count=1)),
         release_base_oid="a" * 40,
         process_base_oid="",
     )
@@ -1033,7 +1063,9 @@ def test_work_classify_cli_reports_explainable_decision(capsys: pytest.CaptureFi
     assert payload["cannot_silently_downgrade"] is True
 
 
-def test_work_cli_end_to_end_and_top_level_dispatch(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_work_cli_end_to_end_and_top_level_dispatch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     release, process = init_project(tmp_path)
     request_ref = make_request(process)
     common = [
@@ -1093,9 +1125,7 @@ def test_work_cli_end_to_end_and_top_level_dispatch(tmp_path: Path, capsys: pyte
     assert apply_code == 0
     assert apply_payload["receipt"]["decision"] == "PASS"
 
-    status_code = status_main(
-        ["--project-root", str(release), "--work-id", "W-001"]
-    )
+    status_code = status_main(["--project-root", str(release), "--work-id", "W-001"])
     status_payload = json.loads(capsys.readouterr().out)
     assert status_code == 0
     assert status_payload["default_objects_read"] == 1
@@ -1165,15 +1195,11 @@ def test_legacy_cp_route_requires_g2_formal_cr_gate_evidence_and_scope(tmp_path:
     work = typed_work(work)
 
     missing_ref = plan_work_init_from_release_root(release, work)
-    missing_file = plan_work_init_from_release_root(
-        release, work, human_design_gate_ref=gate_ref
-    )
+    missing_file = plan_work_init_from_release_root(release, work, human_design_gate_ref=gate_ref)
     gate_path = process / gate_ref
     gate_path.parent.mkdir(parents=True)
     gate_path.write_text("approved: true\n", encoding="utf-8")
-    ready = plan_work_init_from_release_root(
-        release, work, human_design_gate_ref=gate_ref
-    )
+    ready = plan_work_init_from_release_root(release, work, human_design_gate_ref=gate_ref)
 
     assert "route_profile_blocked" in {item.code for item in missing_ref.conflicts}
     assert "human_design_gate_missing" in {item.code for item in missing_file.conflicts}
@@ -1266,9 +1292,7 @@ def test_sibling_binding_g1_cli_admits_exact_verification_stage_unit(
 
     plan_exit = usage_plan_main(arguments)
     plan = json.loads(capsys.readouterr().out)
-    add_exit = usage_add_main(
-        [*arguments, "--admission-digest", plan["plan_digest"]]
-    )
+    add_exit = usage_add_main([*arguments, "--admission-digest", plan["plan_digest"]])
     receipt = json.loads(capsys.readouterr().out)
 
     assert not (release / "process").exists()
@@ -1289,9 +1313,7 @@ def test_usage_add_cli_rejects_stale_admission_digest_without_mutation(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     release, process = init_project(tmp_path)
-    apply_work_init(
-        plan_work_init_from_release_root(release, typed_work(make_work(process)))
-    )
+    apply_work_init(plan_work_init_from_release_root(release, typed_work(make_work(process))))
     stale_arguments = [
         "--project-root",
         str(release),
@@ -1320,26 +1342,26 @@ def test_usage_add_cli_rejects_stale_admission_digest_without_mutation(
     ]
     assert usage_plan_main(concurrent_arguments) == 0
     concurrent_plan = json.loads(capsys.readouterr().out)
-    assert usage_add_main(
-        [
-            *concurrent_arguments,
-            "--admission-digest",
-            concurrent_plan["plan_digest"],
-        ]
-    ) == 0
+    assert (
+        usage_add_main(
+            [
+                *concurrent_arguments,
+                "--admission-digest",
+                concurrent_plan["plan_digest"],
+            ]
+        )
+        == 0
+    )
     capsys.readouterr()
 
-    exit_code = usage_add_main(
-        [*stale_arguments, "--admission-digest", stale_plan["plan_digest"]]
-    )
+    exit_code = usage_add_main([*stale_arguments, "--admission-digest", stale_plan["plan_digest"]])
     blocked = json.loads(capsys.readouterr().out)
 
     assert exit_code == 1
     assert blocked["decision"] == "BLOCKED"
     assert "digest drifted" in blocked["error"]
     assert [
-        event.event_id
-        for event in load_usage(process, load_work(process, "W-001")).events
+        event.event_id for event in load_usage(process, load_work(process, "W-001")).events
     ] == ["concurrent-event"]
 
 
@@ -1351,19 +1373,16 @@ def test_work_start_pause_resume_and_close_minimally_updates_project(
     work = typed_work(make_work(process))
     apply_work_init(plan_work_init_from_release_root(release, work))
 
-    assert transition_main(
-        "start", ["--project-root", str(release), "--work-id", "W-001"]
-    ) == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "active"
-    assert transition_main(
-        "pause", ["--project-root", str(release), "--work-id", "W-001"]
-    ) == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "paused"
-    assert (process / "works" / "W-001" / "HANDOFF.yaml").is_file()
-    assert transition_main(
-        "resume", ["--project-root", str(release), "--work-id", "W-001"]
-    ) == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "active"
+    assert apply_status_transition_alias(tmp_path, release, process, "start") == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "PASS"
+    assert load_work(process, "W-001").status == "active"
+    assert apply_status_transition_alias(tmp_path, release, process, "pause") == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "PASS"
+    assert load_work(process, "W-001").status == "paused"
+    assert not (process / "works" / "W-001" / "HANDOFF.yaml").exists()
+    assert apply_status_transition_alias(tmp_path, release, process, "resume") == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "PASS"
+    assert load_work(process, "W-001").status == "active"
 
     result_ref = "works/W-001/RESULT.json"
     (process / result_ref).write_text(
@@ -1393,20 +1412,23 @@ def test_work_start_pause_resume_and_close_minimally_updates_project(
         + "\n",
         encoding="utf-8",
     )
-    assert transition_main(
-        "close",
-        [
-            "--project-root",
-            str(release),
-            "--work-id",
-            "W-001",
-            "--result-ref",
-            result_ref,
-            "--apply",
-            "--authorization",
-            str(authorization_path),
-        ],
-    ) == 0
+    assert (
+        transition_main(
+            "close",
+            [
+                "--project-root",
+                str(release),
+                "--work-id",
+                "W-001",
+                "--result-ref",
+                result_ref,
+                "--apply",
+                "--authorization",
+                str(authorization_path),
+            ],
+        )
+        == 0
+    )
     assert json.loads(capsys.readouterr().out)["status"] == "completed"
     assert load_work(process, "W-001").result_ref == result_ref
     assert load_project(process).active_work_refs == ()
@@ -1480,11 +1502,20 @@ def test_resume_blocks_after_release_oid_drift(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     release, process = init_project(tmp_path)
-    work = typed_work(make_work(process))
+    base_work = typed_work(make_work(process))
+    work = replace(
+        base_work,
+        risk_profile="G2",
+        risk_reason_codes=("ARCHITECTURE_BOUNDARY",),
+        route_profile=replace(
+            base_work.route_profile,
+            dispatch_mode="functional-agent",
+        ),
+    )
     apply_work_init(plan_work_init_from_release_root(release, work))
-    transition_main("start", ["--project-root", str(release), "--work-id", "W-001"])
+    assert apply_status_transition_alias(tmp_path, release, process, "start") == 0
     capsys.readouterr()
-    transition_main("pause", ["--project-root", str(release), "--work-id", "W-001"])
+    assert apply_status_transition_alias(tmp_path, release, process, "pause") == 0
     capsys.readouterr()
     (release / "drift.txt").write_text("drift\n", encoding="utf-8")
     git(release, "add", "drift.txt")
@@ -1499,14 +1530,101 @@ def test_resume_blocks_after_release_oid_drift(
         "drift",
     )
 
-    code = transition_main(
-        "resume", ["--project-root", str(release), "--work-id", "W-001"]
-    )
+    code = transition_main("resume", ["--project-root", str(release), "--work-id", "W-001"])
     payload = json.loads(capsys.readouterr().out)
 
     assert code == 1
     assert "release_oid_mismatch" in payload["error"]
     assert load_work(process, "W-001").status == "paused"
+
+
+def test_g2_handoff_child_failure_recovers_parent_and_current_child(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process = init_project(tmp_path)
+    base_work = typed_work(make_work(process))
+    work = replace(
+        base_work,
+        risk_profile="G2",
+        risk_reason_codes=("ARCHITECTURE_BOUNDARY",),
+        route_profile=replace(
+            base_work.route_profile,
+            dispatch_mode="functional-agent",
+        ),
+    )
+    apply_work_init(plan_work_init_from_release_root(release, work))
+    assert apply_status_transition_alias(tmp_path, release, process, "start") == 0
+    capsys.readouterr()
+    from meta_flow.work import transaction_child
+
+    original_replace = transaction_child._replace_bytes
+
+    def fail_handoff_write(path: Path, content: bytes) -> None:
+        if path.name == "HANDOFF.yaml":
+            raise OSError("handoff fault")
+        original_replace(path, content)
+
+    monkeypatch.setattr(transaction_child, "_replace_bytes", fail_handoff_write)
+
+    code = apply_status_transition_alias(tmp_path, release, process, "pause")
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 1
+    assert payload["decision"] == "RECOVERED"
+    assert "HANDOFF_CHILD_APPLY_FAILED" in payload["reason_codes"]
+    assert payload["child_decision"] == "NO_CHANGE"
+    assert payload["handoff_decision"] == "RECOVERED"
+    assert load_work(process, "W-001").status == "active"
+    assert not (process / "works/W-001/HANDOFF.yaml").exists()
+
+
+def test_g2_handoff_child_recovery_failure_is_partial(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, process = init_project(tmp_path)
+    base_work = typed_work(make_work(process))
+    work = replace(
+        base_work,
+        risk_profile="G2",
+        risk_reason_codes=("ARCHITECTURE_BOUNDARY",),
+        route_profile=replace(
+            base_work.route_profile,
+            dispatch_mode="functional-agent",
+        ),
+    )
+    apply_work_init(plan_work_init_from_release_root(release, work))
+    assert apply_status_transition_alias(tmp_path, release, process, "start") == 0
+    capsys.readouterr()
+    from meta_flow.work import transaction_child
+
+    original_replace = transaction_child._replace_bytes
+
+    def fail_handoff_write(path: Path, content: bytes) -> None:
+        if path.name == "HANDOFF.yaml":
+            raise OSError("handoff fault")
+        original_replace(path, content)
+
+    monkeypatch.setattr(transaction_child, "_replace_bytes", fail_handoff_write)
+    monkeypatch.setattr(
+        transaction_child,
+        "_restore_handoff",
+        lambda *_args, **_kwargs: ["HANDOFF_CHILD_RECOVERY_FAILED"],
+    )
+
+    code = apply_status_transition_alias(tmp_path, release, process, "pause")
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 1
+    assert payload["decision"] == "PARTIAL"
+    assert payload["recovery_required"] is True
+    assert "WORK_STATUS_TRANSITION_RECOVERY_REQUIRED" in payload["reason_codes"]
+    assert payload["child_decision"] == "NO_CHANGE"
+    assert payload["handoff_decision"] == "PARTIAL"
+    assert load_work(process, "W-001").status == "active"
 
 
 def test_review_and_validation_cli_are_work_scoped(
@@ -1522,9 +1640,7 @@ def test_review_and_validation_cli_are_work_scoped(
     work = typed_work(make_work(process))
     apply_work_init(plan_work_init_from_release_root(release, work))
 
-    assert review_plan_main(
-        ["--project-root", str(release), "--work-id", "W-001"]
-    ) == 0
+    assert review_plan_main(["--project-root", str(release), "--work-id", "W-001"]) == 0
     review = json.loads(capsys.readouterr().out)
     assert review["review_mode"] == "self-check"
     assert review["max_independent_reviews"] == 0
@@ -1532,16 +1648,19 @@ def test_review_and_validation_cli_are_work_scoped(
     assert review["provider_receipt_status"] == "MISSING"
     assert review["provider_readiness"] == "UNAVAILABLE_PENDING_CP7_CP8"
 
-    assert validation_plan_main(
-        [
-            "--project-root",
-            str(release),
-            "--work-id",
-            "W-001",
-            "--check-risk",
-            "pytest-docs=覆盖文档行为",
-        ]
-    ) == 0
+    assert (
+        validation_plan_main(
+            [
+                "--project-root",
+                str(release),
+                "--work-id",
+                "W-001",
+                "--check-risk",
+                "pytest-docs=覆盖文档行为",
+            ]
+        )
+        == 0
+    )
     validation = json.loads(capsys.readouterr().out)
     assert validation["decision"] == "READY"
     assert validation["check_ids"] == ["pytest-docs"]
@@ -1561,12 +1680,10 @@ def test_close_fails_without_result_and_keeps_work_active(
     release, process = init_project(tmp_path)
     work = typed_work(make_work(process))
     apply_work_init(plan_work_init_from_release_root(release, work))
-    transition_main("start", ["--project-root", str(release), "--work-id", "W-001"])
+    assert apply_status_transition_alias(tmp_path, release, process, "start") == 0
     capsys.readouterr()
 
-    code = transition_main(
-        "close", ["--project-root", str(release), "--work-id", "W-001"]
-    )
+    code = transition_main("close", ["--project-root", str(release), "--work-id", "W-001"])
     payload = json.loads(capsys.readouterr().out)
 
     assert code == 1

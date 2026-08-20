@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from meta_flow.project.process_route import ProcessRouteError
 from meta_flow.project.scale import dump_yaml
 from meta_flow.workflow import cr_index, cr_records
 from meta_flow.workflow.legacy_evidence_registry import (
@@ -19,6 +21,7 @@ from meta_flow.workflow.legacy_evidence_registry import (
     inspect_registered_legacy_evidence,
     list_registered_follow_ups,
     load_declared_legacy_evidence_registry,
+    load_formal_cr_partition,
     query_declared_legacy_evidence,
     registered_legacy_cr_ids,
     validate_legacy_evidence_registry,
@@ -171,6 +174,79 @@ def test_registry_is_exact_bound_and_fails_closed_before_compatibility(
             consumer_id="other-consumer",
         )
     assert consumer.value.code == "legacy_evidence_consumer_mismatch"
+
+
+def test_native_like_legacy_frontmatter_maps_to_closed_pass_with_risk(
+    tmp_path: Path,
+) -> None:
+    release, process = _binding_fixture(tmp_path)
+    registration = _registration(process)
+    evidence = process / registration.evidence_logical_ref.removeprefix("process/")
+    evidence.write_bytes(
+        b"---\nlifecycle_status: closed\nreadiness_status: READY_WITH_RISK\n---\n"
+        b"\n# CR-174 immutable legacy evidence\n"
+    )
+    registration = replace(
+        registration,
+        evidence_sha256=sha256(evidence.read_bytes()).hexdigest(),
+    )
+
+    view = inspect_registered_legacy_evidence(
+        release,
+        registration=registration,
+        consumer_id="provider-acceptance",
+    )
+
+    assert view.legacy_lifecycle == "closed"
+    assert view.legacy_decision == "PASS_WITH_RISK"
+
+
+def test_quoted_native_like_legacy_frontmatter_is_normalized(tmp_path: Path) -> None:
+    release, process = _binding_fixture(tmp_path)
+    registration = _registration(process)
+    evidence = process / registration.evidence_logical_ref.removeprefix("process/")
+    evidence.write_bytes(
+        b'---\nlifecycle_status: "closed"\nreadiness_status: "READY_WITH_RISK"\n---\n'
+        b"\n# CR-053/054/055-compatible immutable legacy evidence\n"
+    )
+    registration = replace(
+        registration,
+        evidence_sha256=sha256(evidence.read_bytes()).hexdigest(),
+    )
+
+    view = inspect_registered_legacy_evidence(
+        release,
+        registration=registration,
+        consumer_id="provider-acceptance",
+    )
+
+    assert (view.legacy_lifecycle, view.legacy_decision) == (
+        "closed",
+        "PASS_WITH_RISK",
+    )
+
+
+def test_mixed_legacy_outcome_shapes_fail_closed(tmp_path: Path) -> None:
+    release, process = _binding_fixture(tmp_path)
+    registration = _registration(process)
+    evidence = process / registration.evidence_logical_ref.removeprefix("process/")
+    evidence.write_bytes(
+        b"---\nlifecycle_status: closed\nreadiness_status: READY_WITH_RISK\n"
+        b"status: closed\ndecision: PASS_WITH_RISK\n---\n"
+    )
+    registration = replace(
+        registration,
+        evidence_sha256=sha256(evidence.read_bytes()).hexdigest(),
+    )
+
+    with pytest.raises(LegacyEvidenceError) as ambiguous:
+        inspect_registered_legacy_evidence(
+            release,
+            registration=registration,
+            consumer_id="provider-acceptance",
+        )
+
+    assert ambiguous.value.code == "legacy_evidence_parse_failed"
 
 
 def test_registry_continuity_rejects_same_ref_digest_drift() -> None:
@@ -427,6 +503,43 @@ def test_declared_consumer_registry_partitions_formal_discovery_and_exact_query(
     unregistered.write_text("# not native\nstatus: closed\n", encoding="utf-8")
     with pytest.raises(ValueError, match="non-native formal CR contamination"):
         cr_index.build_index(release, excluded_legacy_paths=excluded)
+
+
+def test_formal_partition_uses_the_declared_sibling_binding(tmp_path: Path) -> None:
+    release, process = _binding_fixture(tmp_path)
+
+    registry, snapshot, report = load_formal_cr_partition(
+        release,
+        consumer_id="formal-cr-partition-test",
+    )
+
+    assert registry.registry_logical_ref == ""
+    assert snapshot.native_formal_cr_refs == ()
+    assert report.decision == "PASS"
+    assert report.evidence_refs == ()
+    assert process.resolve() != (release / "process").resolve(strict=False)
+
+
+def test_formal_partition_rejects_release_local_process_without_binding(
+    tmp_path: Path,
+) -> None:
+    release = tmp_path / "consumer"
+    release.mkdir()
+    _git_init(release)
+    direct_process = release / "process"
+    direct_process.mkdir()
+    (direct_process / "PROJECT.yaml").write_text(
+        "schema_version: 1\nproject_id: consumer\nname: Consumer\nstatus: active\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProcessRouteError) as blocked:
+        load_formal_cr_partition(
+            release,
+            consumer_id="formal-cr-partition-test",
+        )
+
+    assert blocked.value.error_code == "route_not_initialized"
 
 
 def test_legacy_registry_has_no_formal_index_or_lifecycle_dependency() -> None:

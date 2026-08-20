@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import os
+import secrets
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,18 +22,24 @@ from meta_flow.execution_control.failure import (
     plan_finding_observation,
 )
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
-from meta_flow.project.scale import dump_yaml
 from meta_flow.state.event_ledger import (
     append_execution_control_event,
     execution_control_ledger_preimage,
     load_events,
     project_execution_control_ledger,
 )
-from meta_flow.work.model import Work, load_work, with_status, work_path
+from meta_flow.work.model import Work, load_work, with_status
 
 ALLOWED_TRANSITIONS = {
     "planned": {"active", "cancelled"},
-    "active": {"paused", "blocked", "ready_for_review", "ready_for_verification", "completed", "cancelled"},
+    "active": {
+        "paused",
+        "blocked",
+        "ready_for_review",
+        "ready_for_verification",
+        "completed",
+        "cancelled",
+    },
     "paused": {"active", "blocked", "cancelled"},
     "blocked": {"active", "cancelled"},
     "ready_for_review": {"active", "ready_for_verification", "cancelled"},
@@ -60,76 +67,39 @@ def update_work_status(
     new_status: str,
     result_ref: str = "",
 ) -> Work:
-    from meta_flow.work.lifecycle_transaction import (
-        acquire_shared_projection_writer_lock,
-        assert_work_close_shared_projection_lineage,
-        refresh_state_projection_if_initialized,
-        release_shared_projection_writer_lock,
+    from meta_flow.work.status_transition import (
+        WorkStatusTransitionAuthorizationV2,
+        apply_work_status_transition,
+        plan_work_status_transition,
     )
 
     root = process_root.resolve()
-    writer_id = "work-status-" + hashlib.sha256(
-        f"{work_id}:{expected_status}:{new_status}:{result_ref}".encode()
-    ).hexdigest()[:32]
-    shared_lock = acquire_shared_projection_writer_lock(root, writer_id)
-    successor_id = ""
-    try:
-        assert_work_close_shared_projection_lineage(root)
-        current = load_work(root, work_id)
-        if current.status != expected_status:
-            raise ValueError(
-                f"Work status changed: expected {expected_status}, current {current.status}"
-            )
-        updated = transition_work(current, new_status, result_ref=result_ref)
-        path = work_path(root, work_id)
-        original = path.read_bytes()
-        before_digest = hashlib.sha256(original).hexdigest()
-        temporary = path.with_name(f".{path.name}.tmp")
-        if temporary.exists() or temporary.is_symlink():
-            raise FileExistsError(f"temporary Work path already exists: {temporary}")
-        try:
-            temporary.write_text(dump_yaml(updated.as_dict()) + "\n", encoding="utf-8")
-            os.replace(temporary, path)
-            try:
-                from meta_flow.work.lifecycle_transaction import (
-                    discard_shared_projection_successor,
-                    record_shared_projection_successor,
-                )
-
-                successor_id = record_shared_projection_successor(
-                    root,
-                    operation="work.status-transition",
-                    writer_id=writer_id,
-                    before_digests={f"works/{work_id}/WORK.yaml": before_digest},
-                    allowed_refs=(f"works/{work_id}/WORK.yaml",),
-                )
-                refresh_state_projection_if_initialized(root)
-            except Exception as refresh_exc:
-                if successor_id:
-                    discard_shared_projection_successor(
-                        root,
-                        successor_id=successor_id,
-                        operation="work.status-transition",
-                        writer_id=writer_id,
-                    )
-                rollback = path.with_name(f".{path.name}.rollback.tmp")
-                if rollback.exists() or rollback.is_symlink():
-                    raise RuntimeError(
-                        f"Work status rollback path already exists: {rollback}"
-                    ) from refresh_exc
-                try:
-                    rollback.write_bytes(original)
-                    os.replace(rollback, path)
-                finally:
-                    if rollback.exists() or rollback.is_symlink():
-                        rollback.unlink()
-                raise
-        finally:
-            if temporary.exists() or temporary.is_symlink():
-                temporary.unlink()
-        return load_work(root, work_id)
-    finally:
-        release_shared_projection_writer_lock(shared_lock, writer_id)
+    plan = plan_work_status_transition(
+        root,
+        work_id,
+        expected_status=expected_status,
+        new_status=new_status,
+        result_ref=result_ref,
+    )
+    if not plan.ready:
+        raise ValueError("; ".join(plan.parent_plan.blockers))
+    authorization = WorkStatusTransitionAuthorizationV2(
+        # 授权是单次消费对象。相同 plan 在一次 RECOVERED 后重试时，
+        # 不能复用上一份已经消费的 authorization_id。
+        authorization_id=(f"work-status-{plan.plan_digest[:20]}-{secrets.token_hex(6)}"),
+        work_id=work_id,
+        plan_digest=plan.plan_digest,
+        parent_plan_digest=plan.parent_plan.plan_digest,
+        target_refs=plan.target_refs,
+        expires_at=(datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+    )
+    receipt = apply_work_status_transition(root, plan, authorization)
+    if receipt.decision != "PASS":
+        raise RuntimeError(
+            "work status transition did not commit: "
+            f"{receipt.decision}; recovery_required={receipt.recovery_required}"
+        )
+    return load_work(root, work_id)
 
 
 def _execution_control_ledger_path(project_root: Path) -> Path:
@@ -139,9 +109,7 @@ def _execution_control_ledger_path(project_root: Path) -> Path:
 
 
 def _bound_process_root(project_root: Path) -> Path:
-    return _resolve_runtime_ref(
-        project_root.resolve(), "process/.meta-flow-process.yaml"
-    ).parent
+    return _resolve_runtime_ref(project_root.resolve(), "process/.meta-flow-process.yaml").parent
 
 
 def plan_execution_failure(

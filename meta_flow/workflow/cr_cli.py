@@ -9,6 +9,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from meta_flow.execution_control.exact_file_transaction import ExactFileAuthorizationV1
 from meta_flow.work.model import ScopeAmendPlanV1, ScopeDeltaV1, apply_scope_amend
 from meta_flow.work.scope_amend import (
     ScopeAmendAuthorizationV2,
@@ -18,6 +19,7 @@ from meta_flow.work.scope_amend import (
     plan_scope_amend_from_release_root,
 )
 from meta_flow.workflow.cr_analysis import (
+    build_cr_lifecycle_check_report,
     build_impact_report,
     collect_check_errors,
     collect_check_warnings,
@@ -30,8 +32,11 @@ from meta_flow.workflow.cr_analysis import (
 from meta_flow.workflow.cr_index import (
     _canonical_digest,
     _dirty_path_digest,
-    bootstrap_cr,
+    apply_bootstrap_cr,
+    inspect_bootstrap_transactions,
+    plan_bootstrap_cr,
     plan_index,
+    recover_bootstrap_transaction,
     write_index,
 )
 from meta_flow.workflow.cr_model import CLOSED_GATE_STATUS, CR_ID_RE
@@ -57,6 +62,9 @@ from meta_flow.workflow.cr_termination import (
 )
 
 PUBLIC_OPERATION_DECLARATIONS = (
+    ("cr.bootstrap", ("meta-flow", "cr", "bootstrap")),
+    ("cr.bootstrap-inspect", ("meta-flow", "cr", "bootstrap-inspect")),
+    ("cr.bootstrap-recover", ("meta-flow", "cr", "bootstrap-recover")),
     ("cr.terminate", ("meta-flow", "cr", "terminate")),
     ("cr.status-sync", ("meta-flow", "cr", "status-sync")),
     ("cr.close", ("meta-flow", "cr", "close")),
@@ -68,10 +76,16 @@ PUBLIC_OPERATION_DECLARATIONS = (
 
 def render_scope_amend_plan(plan: ScopeAmendPlanV1) -> dict[str, object]:
     """CLI adapter: render the already-authoritative, zero-write plan only."""
-    return {"decision": "READY", "plan_digest": plan.plan_digest, "mutation_count": plan.mutation_count}
+    return {
+        "decision": "READY",
+        "plan_digest": plan.plan_digest,
+        "mutation_count": plan.mutation_count,
+    }
 
 
-def render_scope_amend_apply(plan: ScopeAmendPlanV1, fresh_snapshot_digest: str) -> dict[str, object]:
+def render_scope_amend_apply(
+    plan: ScopeAmendPlanV1, fresh_snapshot_digest: str
+) -> dict[str, object]:
     """CLI adapter does not decide scope legality or mutate revisions/indexes."""
     return apply_scope_amend(plan, fresh_snapshot_digest=fresh_snapshot_digest)
 
@@ -105,9 +119,7 @@ def scope_amend_main(
                     "scope amendment replacement objective does not match authorization"
                 )
         elif parsed.replace_objective is not None:
-            raise ValueError(
-                "scope amendment V1 authorization cannot replace objective"
-            )
+            raise ValueError("scope amendment V1 authorization cannot replace objective")
         receipts = _load_scope_amend_receipts(parsed.predecessor_receipt)
         admit_scope_amend_predecessor(authorization, receipts)
         delta = ScopeDeltaV1(
@@ -254,9 +266,13 @@ def aggregate_main(
     store_root = parsed.store_root
     if store_root is not None and not store_root.is_absolute():
         store_root = project_root / store_root
-    store = None if parsed.dry_run else FileAggregateStore(
-        project_root=project_root,
-        store_root=store_root,
+    store = (
+        None
+        if parsed.dry_run
+        else FileAggregateStore(
+            project_root=project_root,
+            store_root=store_root,
+        )
     )
     factory = projector_factory or AggregateCompletionProjector
     projector = (
@@ -298,6 +314,8 @@ def _print_cr_help() -> None:
         "usage: meta-flow cr <command> [options]\n\n"
         "Commands:\n"
         "  bootstrap  Create an active bootstrap CR plus summary, index, ledger, CP0 result, and context.\n"
+        "  bootstrap-inspect Inspect bootstrap exact-file transactions.\n"
+        "  bootstrap-recover Recover one interrupted bootstrap exact-file transaction.\n"
         "  index      Preview a pure CR-INDEX projection; --apply writes it and --rebuild acknowledges corrupt bytes.\n"
         "  summary    Generate process/changes/summaries/<CR>.summary.json.\n"
         "  brief      Print a goal-oriented CR brief from summary/frontmatter.\n"
@@ -321,7 +339,10 @@ def _print_cr_help() -> None:
         "  public-operations-check Validate the public operation registry and console discovery.\n"
         "  conflicts  Compare active/proposed/blocked CR conflict keys from CR-INDEX.json.\n\n"
         "Examples:\n"
-        '  meta-flow cr bootstrap --id CR-001 --title "target adoption bootstrap" --scope "Initialize Meta Flow adoption readiness." --project-root .\n'
+        '  meta-flow cr bootstrap --id CR-001 --title "target adoption bootstrap" --scope "Initialize Meta Flow adoption readiness." --effective-at <timestamp> --project-root .\n'
+        "  meta-flow cr bootstrap --id CR-001 --title <title> --scope <scope> --effective-at <preview timestamp> --authorization-file authorization.json --apply --project-root .\n"
+        "  meta-flow cr bootstrap-inspect --project-root .\n"
+        "  meta-flow cr bootstrap-recover --transaction-id <authorization-id> --project-root .\n"
         "  meta-flow cr index --project-root .\n"
         "  meta-flow cr index --project-root . --apply --expected-process-oid <oid>\n"
         "  meta-flow cr summary --id CR-101 --project-root .\n"
@@ -357,10 +378,10 @@ def _build_cr_command_parser(command: str) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--gate-status",
-        default="cp2_pending",
+        default="not_started",
         help="Gate status; status-sync --status closed uses and requires cp8_closed.",
     )
-    parser.add_argument("--readiness", default="READY")
+    parser.add_argument("--readiness", default="not_ready")
     parser.add_argument("--status", default="")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--rebuild", action="store_true")
@@ -400,7 +421,9 @@ def _dispatch_cr_projection_command(
     if command == "bootstrap":
         if not parsed.cr_id:
             raise SystemExit("--id is required and must use CR-xxx naming")
-        paths = dependencies["bootstrap_cr"](
+        if parsed.apply and not parsed.effective_at:
+            raise SystemExit("bootstrap --apply requires the preview effective_at")
+        plan = dependencies["plan_bootstrap_cr"](
             project_root,
             cr_id=parsed.cr_id,
             title=parsed.title,
@@ -408,10 +431,40 @@ def _dispatch_cr_projection_command(
             gate_status=parsed.gate_status,
             readiness=parsed.readiness,
             rebuild_corrupt=parsed.rebuild,
+            effective_at=parsed.effective_at,
         )
-        for key, path in paths.items():
-            print(f"{key}: {path}")
-        return 0
+        if not parsed.apply:
+            print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if parsed.authorization_file is None:
+            raise SystemExit("bootstrap --apply requires --authorization-file")
+        authorization_path = parsed.authorization_file.resolve()
+        if authorization_path.is_symlink() or not authorization_path.is_file():
+            raise SystemExit("bootstrap authorization file must be one regular file")
+        authorization_payload = json.loads(authorization_path.read_text(encoding="utf-8"))
+        if not isinstance(authorization_payload, dict):
+            raise SystemExit("bootstrap authorization payload must be one object")
+        authorization = ExactFileAuthorizationV1.from_mapping(authorization_payload)
+        result = dependencies["apply_bootstrap_cr"](project_root, plan, authorization)
+        printable = {
+            **result,
+            "paths": {key: str(path) for key, path in result.get("paths", {}).items()},
+        }
+        print(json.dumps(printable, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if result["decision"] == "PASS" else 2
+    if command == "bootstrap-inspect":
+        result = dependencies["inspect_bootstrap_transactions"](project_root)
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if result["decision"] == "PASS" else 2
+    if command == "bootstrap-recover":
+        if not parsed.transaction_id:
+            raise SystemExit("bootstrap-recover requires --transaction-id")
+        result = dependencies["recover_bootstrap_transaction"](
+            project_root,
+            parsed.transaction_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if result["decision"] in {"RECOVERED", "NO_CHANGE"} else 2
     if command == "index":
         plan = dependencies["plan_index"](project_root, rebuild_corrupt=parsed.rebuild)
         printable = {key: value for key, value in plan.items() if key != "expected"}
@@ -687,8 +740,14 @@ def _dispatch_cr_diagnostic_command(
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if command == "check":
-        errors = dependencies["collect_check_errors"](project_root)
-        warnings = dependencies["collect_check_warnings"](project_root)
+        report_builder = dependencies.get("build_cr_lifecycle_check_report")
+        if report_builder is None:
+            errors = dependencies["collect_check_errors"](project_root)
+            warnings = dependencies["collect_check_warnings"](project_root)
+        else:
+            report = report_builder(project_root)
+            errors = list(report.errors)
+            warnings = list(report.warnings)
         print("CR Lifecycle Check: " + ("FAIL" if errors else "OK"))
         for warning in warnings:
             print(f"- WARN: {warning}")
@@ -733,9 +792,7 @@ def _dispatch_cr_diagnostic_command(
                 scope=parsed.scope if "--scope" in args else "",
             )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-        return 2 if result["decision"] == "INVALID" else int(
-            result["decision"] == "CONFLICT"
-        )
+        return 2 if result["decision"] == "INVALID" else int(result["decision"] == "CONFLICT")
     if has_candidate_fields:
         result = {
             "decision": "INVALID",
@@ -757,6 +814,44 @@ def _dispatch_cr_diagnostic_command(
     return 1 if conflicts else 0
 
 
+CR_CLI_DEFAULT_DEPENDENCIES = {
+    "AggregateCompletionProjector": AggregateCompletionProjector,
+    "apply_bootstrap_cr": apply_bootstrap_cr,
+    "apply_cr_termination": apply_cr_termination,
+    "apply_status_sync": apply_status_sync,
+    "build_impact_report": build_impact_report,
+    "build_cr_lifecycle_check_report": build_cr_lifecycle_check_report,
+    "close_cr": None,
+    "collect_check_errors": collect_check_errors,
+    "collect_check_warnings": collect_check_warnings,
+    "conflict_report": conflict_report,
+    "discover_formal_crs": discover_formal_crs,
+    "inspect_bootstrap_transactions": inspect_bootstrap_transactions,
+    "plan_index": plan_index,
+    "inspect_status_sync_transactions": inspect_status_sync_transactions,
+    "load_status_sync_authorization": load_status_sync_authorization,
+    "load_termination_authorization": load_termination_authorization,
+    "plan_cr_termination": plan_cr_termination,
+    "plan_bootstrap_cr": plan_bootstrap_cr,
+    "plan_status_sync": plan_status_sync,
+    "proposed_conflict_report": proposed_conflict_report,
+    "recover_status_sync_transaction": partial(
+        recover_status_sync_transaction,
+        canonical_digest=_canonical_digest,
+        dirty_path_digest=_dirty_path_digest,
+    ),
+    "recover_bootstrap_transaction": recover_bootstrap_transaction,
+    "rel": _rel,
+    "render_cr_brief": render_cr_brief,
+    "render_goal_brief": render_goal_brief,
+    "summary_from_cr_file": summary_from_cr_file,
+    "sync_cr_status": None,
+    "write_impact_report": write_impact_report,
+    "write_index": write_index,
+    "write_summary": write_summary,
+}
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -767,28 +862,7 @@ def main(
         _print_cr_help()
         return 0
     command = args[0]
-    dependencies = dispatch_dependencies or {
-        "AggregateCompletionProjector": AggregateCompletionProjector,
-        "apply_cr_termination": apply_cr_termination, "apply_status_sync": apply_status_sync,
-        "bootstrap_cr": bootstrap_cr, "build_impact_report": build_impact_report,
-        "close_cr": None, "collect_check_errors": collect_check_errors,
-        "collect_check_warnings": collect_check_warnings, "conflict_report": conflict_report,
-        "discover_formal_crs": discover_formal_crs, "plan_index": plan_index,
-        "inspect_status_sync_transactions": inspect_status_sync_transactions,
-        "load_status_sync_authorization": load_status_sync_authorization,
-        "load_termination_authorization": load_termination_authorization,
-        "plan_cr_termination": plan_cr_termination, "plan_status_sync": plan_status_sync,
-        "proposed_conflict_report": proposed_conflict_report,
-        "recover_status_sync_transaction": partial(
-            recover_status_sync_transaction,
-            canonical_digest=_canonical_digest,
-            dirty_path_digest=_dirty_path_digest,
-        ),
-        "rel": _rel, "render_cr_brief": render_cr_brief,
-        "render_goal_brief": render_goal_brief, "summary_from_cr_file": summary_from_cr_file,
-        "sync_cr_status": None, "write_impact_report": write_impact_report,
-        "write_index": write_index, "write_summary": write_summary,
-    }
+    dependencies = dispatch_dependencies or CR_CLI_DEFAULT_DEPENDENCIES
     if command == "aggregate":
         return aggregate_main(
             args[1:],
@@ -798,19 +872,21 @@ def main(
         return scope_amend_main(args[1:])
     if command == "public-operations-check":
         from meta_flow.policies import public_operations
-
         return public_operations.main(args[1:])
     if command in {"branch-open", "branch-publish", "branch-merge", "branch-finish"}:
         from meta_flow.workflow.git_branch_lifecycle import branch_main
-
         return branch_main(command, args[1:])
     parsed = _build_cr_command_parser(command).parse_args(args[1:])
     project_root = parsed.project_root.resolve()
     dispatches = (
         lambda: _dispatch_cr_projection_command(command, parsed, project_root, dependencies),
-        lambda: _dispatch_cr_close_or_termination_command(command, parsed, project_root, dependencies),
+        lambda: _dispatch_cr_close_or_termination_command(
+            command, parsed, project_root, dependencies
+        ),
         lambda: _dispatch_cr_status_sync_command(command, args, parsed, project_root, dependencies),
-        lambda: _dispatch_cr_status_sync_recovery_command(command, parsed, project_root, dependencies),
+        lambda: _dispatch_cr_status_sync_recovery_command(
+            command, parsed, project_root, dependencies
+        ),
         lambda: _dispatch_cr_diagnostic_command(command, args, parsed, project_root, dependencies),
     )
     for dispatch in dispatches:
@@ -818,7 +894,8 @@ def main(
         if result is not None:
             return result
     raise SystemExit(
-        f"未知 cr 命令: {command}. 目前支持: bootstrap, index, summary, brief, goal-brief, impact-report, "
+        f"未知 cr 命令: {command}. 目前支持: bootstrap, bootstrap-inspect, bootstrap-recover, "
+        "index, summary, brief, goal-brief, impact-report, "
         "terminate, status-sync, status-sync-inspect, status-sync-resume, status-sync-rollback, status-sync-abandon, "
         "aggregate, scope-amend, branch-open, branch-publish, branch-merge, branch-finish, close, check, "
         "query, public-operations-check, conflicts"

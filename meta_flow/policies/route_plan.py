@@ -53,6 +53,21 @@ PROFILE_UPGRADE_TARGETS = {
 C0_RETIRED_GATE_LEDGER_REF = "process/state/GATE-LEDGER.ndjson"
 
 
+def _resolve_process_cli_path(project_root: Path, value: Path, *, argument: str) -> Path:
+    """把 route CLI 的文件参数锚定到 process root，拒绝 cwd/越界语义。"""
+
+    if value.is_absolute() or ".." in value.parts:
+        raise SystemExit(f"{argument} must be one safe process logical ref or relative path")
+    raw = value.as_posix().lstrip("./")
+    if not raw or raw == ".":
+        raise SystemExit(f"{argument} must not be empty")
+    logical_ref = raw if raw.startswith("process/") else f"process/{raw}"
+    try:
+        return _resolve_runtime_ref(project_root.resolve(), logical_ref)
+    except ProcessRouteError as exc:
+        raise SystemExit(f"{argument} cannot resolve through the project process route: {exc}") from exc
+
+
 def _as_bool(value: Any, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -753,6 +768,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--impact-surface", nargs="*", default=[])
     parser.add_argument("--authz-policy-refs", nargs="*", default=[])
     parsed = parser.parse_args(args[1:])
+    parsed.project_root = parsed.project_root.resolve()
+    if parsed.from_cr is not None:
+        parsed.from_cr = _resolve_process_cli_path(
+            parsed.project_root, parsed.from_cr, argument="--from-cr"
+        )
+    if parsed.output is not None:
+        parsed.output = _resolve_process_cli_path(
+            parsed.project_root, parsed.output, argument="--output"
+        )
     profiles_data = gate_profiles.load_gate_profiles(parsed.project_root)
     if command == "check":
         if not parsed.from_cr:

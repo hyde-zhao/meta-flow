@@ -149,9 +149,7 @@ def discover_public_operation_declarations(
         except (SyntaxError, UnicodeError) as exc:
             raise ValueError(f"public operation declaration source invalid: {relative}") from exc
         literals = [
-            literal
-            for node in tree.body
-            if (literal := _declaration_literal(node)) is not None
+            literal for node in tree.body if (literal := _declaration_literal(node)) is not None
         ]
         if len(literals) > 1:
             raise ValueError(f"duplicate declaration blocks in {relative}")
@@ -416,7 +414,9 @@ def load_public_operation_registry(
     return contracts
 
 
-def _load_governed_cli_entries(project_root: Path) -> tuple[tuple[tuple[str, ...], ...], dict[str, Any]]:
+def _load_governed_cli_entries(
+    project_root: Path,
+) -> tuple[tuple[tuple[str, ...], ...], dict[str, Any]]:
     """从独立 concept-owner truth 中读取必须受公共契约覆盖的 CLI。"""
 
     root = project_root.resolve()
@@ -468,6 +468,7 @@ def validate_public_operations(
     read_context: ReadContextProtocol | None = None,
     declaration_root: Path | None = None,
     governed_cli_entries: tuple[tuple[str, ...], ...] | None = None,
+    governed_mutation_entries: tuple[tuple[str, ...], ...] | None = None,
 ) -> dict[str, Any]:
     """Compare registry truth with package-wide owner declarations and console help."""
 
@@ -566,6 +567,85 @@ def validate_public_operations(
             "governed CLI routes lack public contracts: "
             + ", ".join(" ".join(entry) for entry in missing_governed_contracts)
         )
+    if governed_mutation_entries is not None:
+        mutation_entries = tuple(sorted(governed_mutation_entries))
+        legacy_uncontracted_entries: tuple[tuple[str, ...], ...] = ()
+        legacy_uncontracted_policies: dict[tuple[str, ...], str] = {}
+        legacy_uncontracted_reasons: dict[tuple[str, ...], str] = {}
+        mutation_receipt = {
+            "status": "INJECTED",
+            "source_ref": "injected-mutation-route-contract",
+            "entry_count": len(mutation_entries),
+        }
+    elif declaration_root is not None:
+        mutation_entries = ()
+        legacy_uncontracted_entries = ()
+        legacy_uncontracted_policies = {}
+        legacy_uncontracted_reasons = {}
+        mutation_receipt = {
+            "status": "NOT_EVALUATED_CUSTOM_DECLARATION_ROOT",
+            "source_ref": "meta_flow.cli.PUBLIC_MUTATION_ROUTES",
+            "entry_count": 0,
+        }
+    else:
+        from meta_flow.cli import (
+            LEGACY_UNCONTRACTED_CLI_ROUTE_POLICIES,
+            LEGACY_UNCONTRACTED_CLI_ROUTE_REASONS,
+            PROVIDER_MUTATION_ADMISSION_POLICIES,
+            PUBLIC_MUTATION_ROUTES,
+        )
+
+        mutation_entries = tuple(sorted(PUBLIC_MUTATION_ROUTES))
+        legacy_uncontracted_policies = {
+            ("meta-flow", *route): policy
+            for route, policy in LEGACY_UNCONTRACTED_CLI_ROUTE_POLICIES.items()
+        }
+        legacy_uncontracted_reasons = {
+            ("meta-flow", *route): reason
+            for route, reason in LEGACY_UNCONTRACTED_CLI_ROUTE_REASONS.items()
+        }
+        legacy_uncontracted_entries = tuple(sorted(legacy_uncontracted_policies))
+        expected_admission_entries = {
+            ("meta-flow", *route) for route in PROVIDER_MUTATION_ADMISSION_POLICIES
+        }
+        observed_admission_entries = set(mutation_entries) | set(legacy_uncontracted_entries)
+        if expected_admission_entries != observed_admission_entries:
+            errors.append("provider mutation admission inventory is not fully classified")
+        mutation_receipt = {
+            "status": "PASS",
+            "source_ref": "meta_flow.cli.PUBLIC_MUTATION_ROUTES",
+            "entry_count": len(mutation_entries),
+        }
+    mutation_entry_set = set(mutation_entries)
+    registered_mutation_entries = {
+        contract.entry for contract in contracts if contract.mutation_mode != "zero-write"
+    }
+    missing_mutation_declarations = sorted(mutation_entry_set - declared_entries)
+    missing_mutation_contracts = sorted(mutation_entry_set - registered_entries)
+    mutation_routes_registered_zero_write = sorted(
+        mutation_entry_set & (registered_entries - registered_mutation_entries)
+    )
+    unknown_registered_mutation_routes = sorted(registered_mutation_entries - mutation_entry_set)
+    if missing_mutation_declarations:
+        errors.append(
+            "mutation routes lack owner declarations: "
+            + ", ".join(" ".join(entry) for entry in missing_mutation_declarations)
+        )
+    if missing_mutation_contracts:
+        errors.append(
+            "mutation routes lack public contracts: "
+            + ", ".join(" ".join(entry) for entry in missing_mutation_contracts)
+        )
+    if mutation_routes_registered_zero_write:
+        errors.append(
+            "mutation routes are incorrectly registered zero-write: "
+            + ", ".join(" ".join(entry) for entry in mutation_routes_registered_zero_write)
+        )
+    if unknown_registered_mutation_routes:
+        errors.append(
+            "registered mutation routes lack independent route truth: "
+            + ", ".join(" ".join(entry) for entry in unknown_registered_mutation_routes)
+        )
     if check_console:
         console = Path(sys.executable).with_name("meta-flow")
         if not console.is_file():
@@ -618,10 +698,42 @@ def validate_public_operations(
         "discovery": discovery,
         "governed_cli_reverse_coverage": {
             **governed_receipt,
-            "missing_declaration_entries": [
-                list(entry) for entry in missing_governed_declarations
-            ],
+            "missing_declaration_entries": [list(entry) for entry in missing_governed_declarations],
             "missing_contract_entries": [list(entry) for entry in missing_governed_contracts],
+        },
+        "governed_mutation_reverse_coverage": {
+            **mutation_receipt,
+            "scope": "contracted-public-mutation-routes",
+            "provider_admission_route_count": (
+                len(mutation_entries) + len(legacy_uncontracted_entries)
+            ),
+            "legacy_uncontracted_cli_baseline": {
+                "classification": "LEGACY_UNCONTRACTED_CLI_BASELINE",
+                "entry_count": len(legacy_uncontracted_entries),
+                "risk_code": "PUBLIC_CLI_MUTATION_WITHOUT_V3_OPERATION_CONTRACT",
+                "owner": "meta_flow.cli",
+                "follow_up": "PUBLIC_OPERATION_CONTRACT_MIGRATION_BACKLOG",
+                "scope_note": (
+                    "Historical callable CLI mutation routes remain provider-admission "
+                    "guarded but are outside CR-074 S04 contract-expansion scope."
+                ),
+                "entries": [
+                    {
+                        "entry": list(entry),
+                        "admission_mode": legacy_uncontracted_policies[entry],
+                        "reason_code": legacy_uncontracted_reasons[entry],
+                    }
+                    for entry in legacy_uncontracted_entries
+                ],
+            },
+            "missing_declaration_entries": [list(entry) for entry in missing_mutation_declarations],
+            "missing_contract_entries": [list(entry) for entry in missing_mutation_contracts],
+            "registered_zero_write_entries": [
+                list(entry) for entry in mutation_routes_registered_zero_write
+            ],
+            "unknown_registered_mutation_entries": [
+                list(entry) for entry in unknown_registered_mutation_routes
+            ],
         },
         "errors": errors,
     }

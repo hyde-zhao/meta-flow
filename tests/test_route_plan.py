@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -416,7 +417,15 @@ product_baseline_refresh_required: false
             output = StringIO()
             with redirect_stdout(output):
                 exit_code = route_plan.main(
-                    ["plan", "--from-cr", str(cr_path), "--output", str(artifact), "--project-root", str(root)]
+                    [
+                        "plan",
+                        "--from-cr",
+                        "process/changes/CR-156.md",
+                        "--output",
+                        "process/checks/CP0-CR156.route-plan.json",
+                        "--project-root",
+                        str(root),
+                    ]
                 )
 
             self.assertEqual(0, exit_code)
@@ -425,6 +434,67 @@ product_baseline_refresh_required: false
             self.assertEqual(["CP0", "CP2", "CP8"], checkpoints(payload))
             self.assertEqual("N/A", payload["checkpoint_applicability"]["CP6"]["decision"])
             self.assertIn("wrote:", output.getvalue())
+
+    def test_route_plan_relative_refs_are_process_root_stable_across_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cr_path = root / "process/changes/CR-157.md"
+            cr_path.parent.mkdir(parents=True)
+            cr_path.write_text(
+                "---\ncr_id: CR-157\ncr_type: process\n"
+                "gate_profile: process-lite\n"
+                "cr_trait_uses_existing_evidence_only: true\n"
+                "cr_trait_existing_evidence_refs: process/evidence/CR157.json\n"
+                "---\n",
+                encoding="utf-8",
+            )
+            cwd_a = root / "a"
+            cwd_b = root / "b"
+            cwd_a.mkdir()
+            cwd_b.mkdir()
+            original_cwd = Path.cwd()
+            try:
+                for cwd, output_ref in (
+                    (cwd_a, "checks/CP0-CR157-a.route-plan.json"),
+                    (cwd_b, "process/checks/CP0-CR157-b.route-plan.json"),
+                ):
+                    os.chdir(cwd)
+                    self.assertEqual(
+                        0,
+                        route_plan.main(
+                            [
+                                "plan",
+                                "--from-cr",
+                                "changes/CR-157.md",
+                                "--output",
+                                output_ref,
+                                "--project-root",
+                                str(root),
+                            ]
+                        ),
+                    )
+            finally:
+                os.chdir(original_cwd)
+
+            first = root / "process/checks/CP0-CR157-a.route-plan.json"
+            second = root / "process/checks/CP0-CR157-b.route-plan.json"
+            self.assertEqual(
+                json.loads(first.read_text(encoding="utf-8")),
+                json.loads(second.read_text(encoding="utf-8")),
+            )
+            self.assertFalse((cwd_a / "checks").exists())
+            self.assertFalse((cwd_b / "process").exists())
+
+            with self.assertRaisesRegex(SystemExit, "safe process logical ref"):
+                route_plan.main(
+                    [
+                        "plan",
+                        "--from-cr",
+                        str(cr_path),
+                        "--project-root",
+                        str(root),
+                    ]
+                )
 
     def test_route_plan_check_from_cr_validates_matching_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

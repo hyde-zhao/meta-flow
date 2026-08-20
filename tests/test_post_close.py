@@ -49,7 +49,10 @@ release_repo:
   relative_path: release
 """,
     )
-    _write(process / "PROJECT.yaml", "schema_version: 1\nproject_id: fixture\nname: Fixture\nstatus: active\n")
+    _write(
+        process / "PROJECT.yaml",
+        "schema_version: 1\nproject_id: fixture\nname: Fixture\nstatus: active\n",
+    )
     _write(
         root / "process/changes/CR-101.md",
         """---
@@ -59,6 +62,8 @@ cr_id: CR-101
 lifecycle_status: closed
 readiness_status: READY_WITH_RISK
 gate_status: cp8_closed
+gate_profile: standard-code
+impact_capability_refs: [cap-one]
 ---
 
 ## Checkpoint Index
@@ -86,7 +91,10 @@ gate_status: cp8_closed
     )
     _write(
         root / "process/changes/CR-INDEX.json",
-        json.dumps({"items": [{"id": "CR-101", "impact_capability_resolution": capability_resolution}]}) + "\n",
+        json.dumps(
+            {"items": [{"id": "CR-101", "impact_capability_resolution": capability_resolution}]}
+        )
+        + "\n",
     )
     _write(
         root / "process/docs/design/FEATURE-REGISTRY.yaml",
@@ -145,7 +153,17 @@ gate_status: cp8_closed
     )
     _write(root / "process/checks/CP8-FAILED.result.json", '{"decision":"BLOCKED"}\n')
     _write(root / "process/checkpoints/CP8-FINAL.md", "---\nstatus: approved\n---\n")
-    _write(root / "process/phases/P5/PHASE.yaml", "status: completed\n")
+    _write(
+        root / "process/phases/P5/PHASE.yaml",
+        """schema_version: 1
+project_id: fixture
+phase_id: P5
+objective: fixture closure
+status: completed
+work_refs: [works/WA/WORK.yaml]
+result_refs: []
+""",
+    )
     _write(root / "process/works/WA/WORK.yaml", "status: completed\n")
     _write(root / "process/issues/ISSUE-001.md", "---\nstatus: resolved\n---\n")
     _write(
@@ -211,6 +229,67 @@ def test_post_close_passes_complete_reconciliation(tmp_path: Path) -> None:
     assert result["mutation_count"] == 0
 
 
+def test_post_close_accepts_closed_cr_in_truthfully_active_phase(tmp_path: Path) -> None:
+    release = _fixture(tmp_path)
+    project_path = tmp_path / "process/PROJECT.yaml"
+    project_path.write_text(
+        project_path.read_text(encoding="utf-8")
+        + "active_phase_ref: phases/P5/PHASE.yaml\n",
+        encoding="utf-8",
+    )
+    phase_path = tmp_path / "process/phases/P5/PHASE.yaml"
+    phase_path.write_text(
+        phase_path.read_text(encoding="utf-8").replace(
+            "status: completed", "status: active"
+        ),
+        encoding="utf-8",
+    )
+
+    result = post_close.check_post_close(release, "CR-101")
+
+    assert result["decision"] == "PASS"
+    assert result["post_close_profile"]["allowed_phase_statuses"] == [
+        "active",
+        "completed",
+    ]
+
+
+def test_post_close_rejects_active_phase_without_project_binding(tmp_path: Path) -> None:
+    release = _fixture(tmp_path)
+    phase_path = tmp_path / "process/phases/P5/PHASE.yaml"
+    phase_path.write_text(
+        phase_path.read_text(encoding="utf-8").replace(
+            "status: completed", "status: active"
+        ),
+        encoding="utf-8",
+    )
+
+    result = post_close.check_post_close(release, "CR-101")
+
+    assert result["decision"] == "BLOCKED"
+    assert {item["code"] for item in result["findings"]} == {
+        "POST_CLOSE_ACTIVE_PHASE_BINDING_MISMATCH"
+    }
+
+
+def test_post_close_rejects_non_active_non_completed_phase(tmp_path: Path) -> None:
+    release = _fixture(tmp_path)
+    phase_path = tmp_path / "process/phases/P5/PHASE.yaml"
+    phase_path.write_text(
+        phase_path.read_text(encoding="utf-8").replace(
+            "status: completed", "status: planned"
+        ),
+        encoding="utf-8",
+    )
+
+    result = post_close.check_post_close(release, "CR-101")
+
+    assert result["decision"] == "BLOCKED"
+    assert "POST_CLOSE_PHASE_STATUS_INVALID" in {
+        item["code"] for item in result["findings"]
+    }
+
+
 def test_post_close_rejects_stale_final_cp8_binding(tmp_path: Path) -> None:
     release = _fixture(tmp_path)
     cr_path = tmp_path / "process/changes/CR-101.md"
@@ -225,6 +304,43 @@ def test_post_close_rejects_stale_final_cp8_binding(tmp_path: Path) -> None:
     result = post_close.check_post_close(release, "CR-101")
 
     assert result["decision"] == "BLOCKED"
-    assert {item["code"] for item in result["findings"]} == {
-        "POST_CLOSE_CP8_CURRENT_BINDING_STALE"
+    assert {item["code"] for item in result["findings"]} == {"POST_CLOSE_CP8_CURRENT_BINDING_STALE"}
+
+
+def test_post_close_reports_typed_unresolved_capability_without_creating_issue(
+    tmp_path: Path,
+) -> None:
+    release = _fixture(tmp_path)
+    cr_path = tmp_path / "process/changes/CR-101.md"
+    cr_path.write_text(
+        cr_path.read_text(encoding="utf-8").replace("[cap-one]", "[cap-missing]"),
+        encoding="utf-8",
+    )
+    context_path = tmp_path / "process/release/RELEASE-CONTEXT.yaml"
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["closure_reconciliation"]["required_capability_refs"] = ["cap-missing"]
+    context_path.write_text(json.dumps(context) + "\n", encoding="utf-8")
+    issue_inventory_before = sorted((tmp_path / "process/issues").glob("*"))
+
+    result = post_close.check_post_close(release, "CR-101")
+
+    assert result["decision"] == "BLOCKED"
+    assert result["capability_resolution"]["decision"] == "UNRESOLVED"
+    assert result["capability_resolution"]["unresolved_aliases"] == ["cap-missing"]
+    assert "POST_CLOSE_CAPABILITY_UNRESOLVED" in {
+        finding["code"] for finding in result["findings"]
+    }
+    assert sorted((tmp_path / "process/issues").glob("*")) == issue_inventory_before
+
+
+def test_post_close_rejects_ghost_active_change(tmp_path: Path) -> None:
+    release = _fixture(tmp_path)
+    state_path = tmp_path / "process/state/STATE.current.json"
+    state_path.write_text(json.dumps({"active_change": "CR-101"}) + "\n", encoding="utf-8")
+
+    result = post_close.check_post_close(release, "CR-101")
+
+    assert result["decision"] == "BLOCKED"
+    assert "POST_CLOSE_ACTIVE_CHANGE_STALE" in {
+        finding["code"] for finding in result["findings"]
     }

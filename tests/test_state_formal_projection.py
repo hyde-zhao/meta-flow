@@ -6,8 +6,35 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cr_lifecycle_test_support import LifecycleFixtureCollaborators, init_binding_project
 
+from meta_flow.project.onboarding import (
+    ProjectInitRequest,
+    apply_project_init,
+    plan_project_init,
+)
+from meta_flow.project.onboarding_contract import (
+    AUTHORIZATION_KIND,
+    AUTHORIZATION_SOURCE,
+    OnboardingAuthorization,
+)
+from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.state import current, formal_projection
+from meta_flow.work.scope import WorkScope
+
+_FIXTURE_COLLABORATORS = LifecycleFixtureCollaborators(
+    project_init_request=ProjectInitRequest,
+    plan_project_init=plan_project_init,
+    apply_project_init=apply_project_init,
+    onboarding_authorization=OnboardingAuthorization,
+    authorization_source=AUTHORIZATION_SOURCE,
+    authorization_kind=AUTHORIZATION_KIND,
+    resolve_runtime_ref=_resolve_runtime_ref,
+    dump_yaml=dump_yaml,
+    load_yaml_object=load_yaml_object,
+    work_scope=WorkScope,
+)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -15,18 +42,23 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _formal_fixture(root: Path) -> None:
+def _formal_fixture(root: Path) -> tuple[Path, Path]:
+    release, process = init_binding_project(
+        root,
+        collaborators=_FIXTURE_COLLABORATORS,
+    )
     _write_json(
-        root / "process/PROJECT.yaml",
+        process / "PROJECT.yaml",
         {
             "schema_version": 1,
             "project_id": "fixture",
+            "name": "Fixture Project",
             "status": "active",
             "roadmap_ref": "ROADMAP.yaml",
         },
     )
     _write_json(
-        root / "process/ROADMAP.yaml",
+        process / "ROADMAP.yaml",
         {
             "schema_version": 1,
             "project_id": "fixture",
@@ -35,7 +67,7 @@ def _formal_fixture(root: Path) -> None:
         },
     )
     _write_json(
-        root / "process/phases/P1/PHASE.yaml",
+        process / "phases/P1/PHASE.yaml",
         {
             "schema_version": 1,
             "project_id": "fixture",
@@ -45,17 +77,38 @@ def _formal_fixture(root: Path) -> None:
             "result_refs": [],
         },
     )
-    (root / "process/changes").mkdir(parents=True, exist_ok=True)
-    current.write_current_state(root, current.default_current_state(root, project_id="fixture"))
-    current.render_state_file(root, force=True)
+    (process / "changes").mkdir(parents=True, exist_ok=True)
+    current.write_current_state(
+        release,
+        current.default_current_state(release, project_id="fixture"),
+    )
+    current.render_state_file(release, force=True)
+    return release, process
+
+
+def _native_cr_text(cr_id: str, *, closed: bool = False) -> str:
+    lifecycle = "closed" if closed else "active"
+    readiness = "READY" if closed else "NOT_READY"
+    gate = "cp8_closed" if closed else "cp2_pending"
+    return (
+        "---\n"
+        "schema_version: 1\n"
+        "kind: cr\n"
+        f"cr_id: {cr_id}\n"
+        f"lifecycle_status: {lifecycle}\n"
+        f"readiness_status: {readiness}\n"
+        f"gate_status: {gate}\n"
+        "gate_profile: standard-code\n"
+        "---\n"
+    )
 
 
 def test_enforce_rejects_state_that_is_internally_consistent_but_formally_stale(
     tmp_path: Path,
 ) -> None:
-    _formal_fixture(tmp_path)
+    project_root, _process_root = _formal_fixture(tmp_path)
 
-    errors, _warnings = current.check_current_state(tmp_path, mode="enforce")
+    errors, _warnings = current.check_current_state(project_root, mode="enforce")
 
     assert any("formal_truth_projection_stale" in error for error in errors)
     assert any("formal_truth_field_stale: current_phase" in error for error in errors)
@@ -65,14 +118,14 @@ def test_enforce_rejects_state_that_is_internally_consistent_but_formally_stale(
 def test_projection_refresh_is_zero_write_then_transactionally_converges(
     tmp_path: Path,
 ) -> None:
-    _formal_fixture(tmp_path)
+    project_root, process_root = _formal_fixture(tmp_path)
     before = {
         path.relative_to(tmp_path).as_posix(): path.read_bytes()
         for path in tmp_path.rglob("*")
         if path.is_file()
     }
 
-    plan = current.plan_formal_truth_refresh(tmp_path)
+    plan = current.plan_formal_truth_refresh(project_root)
 
     after_plan = {
         path.relative_to(tmp_path).as_posix(): path.read_bytes()
@@ -84,27 +137,27 @@ def test_projection_refresh_is_zero_write_then_transactionally_converges(
     assert plan["mutation_count"] == 0
     assert plan["planned_mutation_count"] == 3
 
-    state = current.refresh_formal_truth_projection(tmp_path)
-    errors, warnings = current.check_current_state(tmp_path, mode="enforce")
+    state = current.refresh_formal_truth_projection(project_root)
+    errors, warnings = current.check_current_state(project_root, mode="enforce")
 
     assert errors == []
     assert warnings == []
     assert state["current_phase"] == "P1"
     assert state["next_action"]["type"] == "continue_active_phase"
-    projected = json.loads((tmp_path / "process/current/CURRENT.json").read_text(encoding="utf-8"))
+    projected = json.loads((process_root / "current/CURRENT.json").read_text(encoding="utf-8"))
     assert projected["phase"] == "P1"
     assert projected["updated_at"] == state["updated_at"]
-    assert "Phase: P1" in (tmp_path / "process/STATE.md").read_text(encoding="utf-8")
+    assert "Phase: P1" in (process_root / "STATE.md").read_text(encoding="utf-8")
 
 
 def test_formal_snapshot_includes_direct_project_work(tmp_path: Path) -> None:
-    _formal_fixture(tmp_path)
-    project_path = tmp_path / "process/PROJECT.yaml"
+    project_root, process_root = _formal_fixture(tmp_path)
+    project_path = process_root / "PROJECT.yaml"
     project = json.loads(project_path.read_text(encoding="utf-8"))
     project["active_work_refs"] = ["works/W-DIRECT/WORK.yaml"]
     _write_json(project_path, project)
     _write_json(
-        tmp_path / "process/works/W-DIRECT/WORK.yaml",
+        process_root / "works/W-DIRECT/WORK.yaml",
         {
             "schema_version": 1,
             "work_id": "W-DIRECT",
@@ -113,21 +166,21 @@ def test_formal_snapshot_includes_direct_project_work(tmp_path: Path) -> None:
         },
     )
 
-    snapshot = formal_projection.build_formal_truth_snapshot(tmp_path)
+    snapshot = formal_projection.build_formal_truth_snapshot(project_root)
 
     assert snapshot["active_work_ids"] == ["W-DIRECT"]
     assert "process/works/W-DIRECT/WORK.yaml" in snapshot["source_refs"]
 
 
 def test_formal_snapshot_rejects_unsafe_direct_project_work_ref(tmp_path: Path) -> None:
-    _formal_fixture(tmp_path)
-    project_path = tmp_path / "process/PROJECT.yaml"
+    project_root, process_root = _formal_fixture(tmp_path)
+    project_path = process_root / "PROJECT.yaml"
     project = json.loads(project_path.read_text(encoding="utf-8"))
     project["active_work_refs"] = ["works/../outside/WORK.yaml"]
     _write_json(project_path, project)
 
-    with pytest.raises(ValueError, match="PROJECT work_ref is unsafe"):
-        formal_projection.build_formal_truth_snapshot(tmp_path)
+    with pytest.raises(ValueError, match="active_work_refs must be safe paths under works/"):
+        formal_projection.build_formal_truth_snapshot(project_root)
 
 
 def test_typed_formal_root_replacement_removes_stale_keys_but_normal_merge_preserves(
@@ -169,9 +222,9 @@ def test_typed_formal_root_replacement_removes_stale_keys_but_normal_merge_prese
 
 
 def test_formal_refresh_exactly_replaces_stale_phase_collection(tmp_path: Path) -> None:
-    _formal_fixture(tmp_path)
+    project_root, _process_root = _formal_fixture(tmp_path)
     current.update_current_state(
-        tmp_path,
+        project_root,
         {
             "formal_truth_projection": {
                 "schema_version": 1,
@@ -189,7 +242,7 @@ def test_formal_refresh_exactly_replaces_stale_phase_collection(tmp_path: Path) 
         mode="enforce",
     )
 
-    refreshed = current.refresh_formal_truth_projection(tmp_path)
+    refreshed = current.refresh_formal_truth_projection(project_root)
 
     assert refreshed["formal_truth_projection"]["phase_statuses"] == {"P1": "active"}
     assert "P0" not in refreshed["formal_truth_projection"]["phase_statuses"]
@@ -213,7 +266,7 @@ def _cost_report(*, decision: str = "PASS", soft_risks: list[str] | None = None)
 def test_process_cost_health_projection_is_closed_zero_write_and_preimage_bound(
     tmp_path: Path,
 ) -> None:
-    _formal_fixture(tmp_path)
+    project_root, _process_root = _formal_fixture(tmp_path)
     report = _cost_report(decision="PASS_WITH_RISK", soft_risks=["RATIO_HIGH"])
     report_ref = "process/works/CR-072-WB-GOVERNANCE-001/evidence/cost.json"
     summary = current.build_process_cost_health_summary(report_ref, report)
@@ -232,13 +285,13 @@ def test_process_cost_health_projection_is_closed_zero_write_and_preimage_bound(
     }
     empty_preimage = hashlib.sha256(b"").hexdigest()
     plan = current.plan_cost_health_projection(
-        tmp_path,
+        project_root,
         report,
         report_ref=report_ref,
         expected_preimage=empty_preimage,
     )
     blocked = current.plan_cost_health_projection(
-        tmp_path,
+        project_root,
         report,
         report_ref=report_ref,
         expected_preimage="f" * 64,
@@ -268,13 +321,13 @@ def test_process_cost_health_summary_rejects_detail_or_digest_drift(tmp_path: Pa
 def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
     tmp_path: Path,
 ) -> None:
-    _formal_fixture(tmp_path)
+    project_root, process_root = _formal_fixture(tmp_path)
     checkpoint_ref = "process/checkpoints/CP2-BASELINE.md"
-    checkpoint_path = tmp_path / checkpoint_ref
+    checkpoint_path = process_root / checkpoint_ref.removeprefix("process/")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text("# CP2\n", encoding="utf-8")
     current.update_current_state(
-        tmp_path,
+        project_root,
         {
             "pending_gate": "CP2",
             "pending_checklist_path": checkpoint_ref,
@@ -290,8 +343,8 @@ def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
         mode="enforce",
     )
 
-    refreshed = current.refresh_formal_truth_projection(tmp_path)
-    errors, warnings = current.check_current_state(tmp_path, mode="enforce")
+    refreshed = current.refresh_formal_truth_projection(project_root)
+    errors, warnings = current.check_current_state(project_root, mode="enforce")
 
     assert errors == []
     assert warnings == []
@@ -308,15 +361,12 @@ def test_projection_refresh_preserves_pending_human_gate_stop_semantics(
 def test_projection_refresh_preserves_single_active_cr_failure_stop(
     tmp_path: Path,
 ) -> None:
-    _formal_fixture(tmp_path)
-    formal_ref = tmp_path / "process/changes/CR-072.md"
-    formal_ref.write_text(
-        "---\nkind: cr\ncr_id: CR-072\nlifecycle_status: active\nstatus: active\n---\n",
-        encoding="utf-8",
-    )
-    current.refresh_formal_truth_projection(tmp_path)
+    project_root, process_root = _formal_fixture(tmp_path)
+    formal_ref = process_root / "changes/CR-072.md"
+    formal_ref.write_text(_native_cr_text("CR-072"), encoding="utf-8")
+    current.refresh_formal_truth_projection(project_root)
     current.update_current_state(
-        tmp_path,
+        project_root,
         {
             "blocked": True,
             "next_action": {
@@ -331,8 +381,8 @@ def test_projection_refresh_preserves_single_active_cr_failure_stop(
         mode="enforce",
     )
 
-    refreshed = current.refresh_formal_truth_projection(tmp_path)
-    errors, warnings = current.check_current_state(tmp_path, mode="enforce")
+    refreshed = current.refresh_formal_truth_projection(project_root)
+    errors, warnings = current.check_current_state(project_root, mode="enforce")
 
     assert errors == []
     assert warnings == []
@@ -348,15 +398,12 @@ def test_projection_refresh_preserves_single_active_cr_failure_stop(
 def test_projection_refresh_clears_failure_stop_after_formal_cr_closes(
     tmp_path: Path,
 ) -> None:
-    _formal_fixture(tmp_path)
-    formal_ref = tmp_path / "process/changes/CR-072.md"
-    formal_ref.write_text(
-        "---\nkind: cr\ncr_id: CR-072\nlifecycle_status: active\nstatus: active\n---\n",
-        encoding="utf-8",
-    )
-    current.refresh_formal_truth_projection(tmp_path)
+    project_root, process_root = _formal_fixture(tmp_path)
+    formal_ref = process_root / "changes/CR-072.md"
+    formal_ref.write_text(_native_cr_text("CR-072"), encoding="utf-8")
+    current.refresh_formal_truth_projection(project_root)
     current.update_current_state(
-        tmp_path,
+        project_root,
         {
             "blocked": True,
             "next_action": {
@@ -370,12 +417,9 @@ def test_projection_refresh_clears_failure_stop_after_formal_cr_closes(
         reason="install an explicit single-CR failure stop",
         mode="enforce",
     )
-    formal_ref.write_text(
-        "---\nkind: cr\ncr_id: CR-072\nlifecycle_status: closed\nstatus: closed\n---\n",
-        encoding="utf-8",
-    )
+    formal_ref.write_text(_native_cr_text("CR-072", closed=True), encoding="utf-8")
 
-    refreshed = current.refresh_formal_truth_projection(tmp_path)
+    refreshed = current.refresh_formal_truth_projection(project_root)
 
     assert refreshed["active_change"] is None
     assert refreshed["blocked"] is False
@@ -385,9 +429,9 @@ def test_projection_refresh_clears_failure_stop_after_formal_cr_closes(
 def test_projection_refresh_converges_pending_gate_bound_to_current_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _formal_fixture(tmp_path)
+    project_root, process_root = _formal_fixture(tmp_path)
     current.update_current_state(
-        tmp_path,
+        project_root,
         {
             "active_change": "CR-072",
             "pending_gate": "CP5",
@@ -412,7 +456,7 @@ def test_projection_refresh_converges_pending_gate_bound_to_current_head(
         result_ref=head.result_ref,
         event_id="GATE-CP5-APPROVED",
     )
-    gate_path = tmp_path / "process/state/GATE-LEDGER.ndjson"
+    gate_path = process_root / "state/GATE-LEDGER.ndjson"
     gate_path.parent.mkdir(parents=True, exist_ok=True)
     gate_path.write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(
@@ -426,10 +470,10 @@ def test_projection_refresh_converges_pending_gate_bound_to_current_head(
     )
 
     _patch, gate_convergence = current._derive_approved_pending_gate_patch(
-        tmp_path, current.load_current_state(tmp_path)
+        project_root, current.load_current_state(project_root)
     )
-    plan = current.plan_formal_truth_refresh(tmp_path)
-    refreshed = current.refresh_formal_truth_projection(tmp_path)
+    plan = current.plan_formal_truth_refresh(project_root)
+    refreshed = current.refresh_formal_truth_projection(project_root)
 
     assert gate_convergence["decision"] == "CONVERGE"
     assert plan["decision"] == "READY"
@@ -441,9 +485,9 @@ def test_projection_refresh_converges_pending_gate_bound_to_current_head(
 def test_projection_refresh_keeps_pending_gate_when_approval_targets_old_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _formal_fixture(tmp_path)
+    project_root, process_root = _formal_fixture(tmp_path)
     current.update_current_state(
-        tmp_path,
+        project_root,
         {
             "active_change": "CR-072",
             "pending_gate": "CP5",
@@ -465,7 +509,7 @@ def test_projection_refresh_keeps_pending_gate_when_approval_targets_old_head(
         result_ref="process/checks/CP5-old.result.json",
         event_id="GATE-CP5-OLD-APPROVED",
     )
-    gate_path = tmp_path / "process/state/GATE-LEDGER.ndjson"
+    gate_path = process_root / "state/GATE-LEDGER.ndjson"
     gate_path.parent.mkdir(parents=True, exist_ok=True)
     gate_path.write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(
@@ -478,27 +522,25 @@ def test_projection_refresh_keeps_pending_gate_when_approval_targets_old_head(
         event_ledger, "project_gate_approvals", lambda events: [old_approval]
     )
 
-    refreshed = current.refresh_formal_truth_projection(tmp_path)
+    refreshed = current.refresh_formal_truth_projection(project_root)
 
     assert refreshed["pending_gate"] == "CP5"
 
 
 def test_formal_cr_truth_overrides_stale_active_ledger_event(tmp_path: Path) -> None:
-    _formal_fixture(tmp_path)
+    project_root, process_root = _formal_fixture(tmp_path)
     formal_ref = "process/changes/CR-064-closed.md"
-    ledger_path = tmp_path / "process/state/CR-LEDGER.ndjson"
+    ledger_path = process_root / "state/CR-LEDGER.ndjson"
     ledger_path.write_text(
         json.dumps({"id": "CR-064", "status": "active", "full_ref": formal_ref})
         + "\n",
         encoding="utf-8",
     )
-    (tmp_path / formal_ref).parent.mkdir(parents=True, exist_ok=True)
-    (tmp_path / formal_ref).write_text(
-        "---\nkind: cr\ncr_id: CR-064\nlifecycle_status: closed\nstatus: closed\n---\n",
-        encoding="utf-8",
-    )
+    formal_path = process_root / formal_ref.removeprefix("process/")
+    formal_path.parent.mkdir(parents=True, exist_ok=True)
+    formal_path.write_text(_native_cr_text("CR-064", closed=True), encoding="utf-8")
 
-    state = current.refresh_formal_truth_projection(tmp_path)
+    state = current.refresh_formal_truth_projection(project_root)
 
     assert state["active_change"] is None
     assert state["formal_truth_projection"]["active_cr_ids"] == []
@@ -506,24 +548,25 @@ def test_formal_cr_truth_overrides_stale_active_ledger_event(tmp_path: Path) -> 
 
 
 def test_formal_cr_identity_mismatch_fails_closed(tmp_path: Path) -> None:
-    _formal_fixture(tmp_path)
+    project_root, process_root = _formal_fixture(tmp_path)
     formal_ref = "process/changes/CR-064-closed.md"
-    ledger_path = tmp_path / "process/state/CR-LEDGER.ndjson"
+    ledger_path = process_root / "state/CR-LEDGER.ndjson"
     ledger_path.write_text(
         json.dumps({"id": "CR-064", "status": "active", "full_ref": formal_ref})
         + "\n",
         encoding="utf-8",
     )
-    (tmp_path / formal_ref).parent.mkdir(parents=True, exist_ok=True)
-    (tmp_path / formal_ref).write_text(
+    formal_path = process_root / formal_ref.removeprefix("process/")
+    formal_path.parent.mkdir(parents=True, exist_ok=True)
+    formal_path.write_text(
         "---\nkind: cr\ncr_id: CR-OTHER\nlifecycle_status: closed\n---\n",
         encoding="utf-8",
     )
 
     try:
-        current.plan_formal_truth_refresh(tmp_path)
+        current.plan_formal_truth_refresh(project_root)
     except ValueError as exc:
-        assert "truth missing" in str(exc)
+        assert "UNREGISTERED_NON_NATIVE_CR" in str(exc)
     else:
         raise AssertionError("mismatched formal CR identity must fail closed")
 

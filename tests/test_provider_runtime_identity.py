@@ -374,7 +374,7 @@ def test_external_consumer_mutation_is_blocked_for_dirty_editable_provider(
     with pytest.raises(SystemExit) as raised:
         cli._guard_provider_mutation(
             "project",
-            ["phase-transition", "--apply", "--project-root", str(tmp_path)],
+            ["phase-transition", "apply", "--project-root", str(tmp_path)],
         )
     assert raised.value.code == 2
     payload = json.loads(capsys.readouterr().err)
@@ -391,7 +391,7 @@ def test_development_override_is_non_release_and_read_only_plan_is_ungated(
 
     cli._guard_provider_mutation(
         "project",
-        ["phase-transition", "--apply", "--project-root", str(tmp_path)],
+        ["phase-transition", "apply", "--project-root", str(tmp_path)],
     )
     cli._guard_provider_mutation(
         "project",
@@ -409,7 +409,7 @@ def test_invalid_provider_mode_fails_without_entering_domain_operation(
     with pytest.raises(SystemExit) as raised:
         cli._guard_provider_mutation(
             "project",
-            ["phase-transition", "--apply", "--project-root", str(tmp_path)],
+            ["phase-transition", "apply", "--project-root", str(tmp_path)],
         )
     assert raised.value.code == 2
     payload = json.loads(capsys.readouterr().err)
@@ -417,9 +417,10 @@ def test_invalid_provider_mode_fails_without_entering_domain_operation(
 
 
 def test_provider_mutation_classifier_covers_apply_append_and_direct_status() -> None:
-    assert cli._is_provider_mutation("project", ["phase-metadata", "--apply"])
+    assert cli._is_provider_mutation("project", ["phase-metadata", "apply"])
     assert cli._is_provider_mutation("event", ["append", "--ledger", "events.ndjson"])
-    assert cli._is_provider_mutation("work", ["start", "--work-id", "W-1"])
+    assert not cli._is_provider_mutation("work", ["start", "--work-id", "W-1"])
+    assert cli._is_provider_mutation("work", ["start", "--work-id", "W-1", "--apply"])
     assert cli._is_provider_mutation("work", ["usage-add", "--work-id", "W-1"])
     assert cli._is_provider_mutation("context", ["build", "--project-root", "."])
     assert cli._is_provider_mutation("cp", ["ledger-append", "--project-root", "."])

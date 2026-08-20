@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -47,11 +48,79 @@ from meta_flow.workflow.cr_records import (
     discover_formal_crs,
     record_from_cr_file,
 )
+from meta_flow.workflow.legacy_evidence_registry import (
+    FormalCRDiscoverySnapshotV1,
+    FormalCRPartitionReportV1,
+    load_formal_cr_partition,
+)
 
 
-def collect_check_errors(project_root: Path) -> list[str]:
+@dataclass(frozen=True)
+class CrLifecycleCheckReportV1:
+    """公开 `cr check` 的单次、可关联 typed 报告。"""
+
+    partition_snapshot_digest: str
+    decision: str
+    reason_codes: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    errors: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "CrLifecycleCheckReportV1",
+            "partition_snapshot_digest": self.partition_snapshot_digest,
+            "decision": self.decision,
+            "reason_codes": list(self.reason_codes),
+            "evidence_refs": list(self.evidence_refs),
+            "errors": list(self.errors),
+            "warnings": list(self.warnings),
+        }
+
+
+def _native_cr_paths_from_partition(
+    project_root: Path,
+    report: FormalCRPartitionReportV1,
+) -> dict[str, Path]:
+    crs: dict[str, Path] = {}
+    for logical_ref in report.native_formal_cr_refs:
+        path = _resolve_runtime_ref(project_root, logical_ref)
+        fields = parse_frontmatter(path.read_text(encoding="utf-8"))
+        cr_id = str(fields.get("cr_id") or "")
+        if not CR_ID_RE.fullmatch(cr_id):
+            raise ValueError(f"partition native ref has invalid CR identity: {logical_ref}")
+        if cr_id in crs:
+            raise ValueError(f"partition contains duplicate native CR ID: {cr_id}")
+        crs[cr_id] = path
+    return crs
+
+
+def _partition_block_errors(report: FormalCRPartitionReportV1) -> list[str]:
+    if report.decision == "PASS":
+        return []
+    evidence = ",".join(report.evidence_refs) or "none"
+    return [
+        "formal CR partition BLOCKED: " + ",".join(report.reason_codes) + f" evidence={evidence}"
+    ]
+
+
+def collect_check_errors(
+    project_root: Path,
+    *,
+    partition_snapshot: FormalCRDiscoverySnapshotV1 | None = None,
+    partition_report: FormalCRPartitionReportV1 | None = None,
+) -> list[str]:
     project_root = project_root.resolve()
     errors: list[str] = []
+    if partition_snapshot is None or partition_report is None:
+        _registry, partition_snapshot, partition_report = load_formal_cr_partition(
+            project_root,
+            consumer_id="cr-lifecycle-check",
+        )
+    errors.extend(_partition_block_errors(partition_report))
+    if errors:
+        return errors
     try:
         events = load_ledger_events(project_root)
     except ValueError as exc:
@@ -62,21 +131,18 @@ def collect_check_errors(project_root: Path) -> list[str]:
         index = {}
         errors.append(str(exc))
     try:
-        expected_index = build_index(project_root)
+        expected_index = build_index(
+            project_root,
+            discovery_snapshot=partition_snapshot,
+        )
     except ValueError as exc:
         expected_index = {}
         errors.append(str(exc))
     if index:
         errors.extend(validate_index_payload(index))
-        if expected_index and index.get("semantic_digest") != expected_index.get(
-            "semantic_digest"
-        ):
+        if expected_index and index.get("semantic_digest") != expected_index.get("semantic_digest"):
             errors.append("CR-INDEX stale projection differs from formal truth rebuild digest")
-    items = {
-        item.get("id"): item
-        for item in index.get("items", [])
-        if isinstance(item, dict)
-    }
+    items = {item.get("id"): item for item in index.get("items", []) if isinstance(item, dict)}
     current_path = _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
     current_state: dict[str, Any] = {}
     if current_path.is_file():
@@ -119,7 +185,10 @@ def collect_check_errors(project_root: Path) -> list[str]:
         cr_type = item.get("cr_type")
         if cr_type and cr_type not in ALLOWED_CR_TYPES:
             errors.append(f"CR index item {item_id}: invalid cr_type {cr_type}")
-    for cr_id, path in discover_formal_crs(project_root).items():
+    for cr_id, path in _native_cr_paths_from_partition(
+        project_root,
+        partition_report,
+    ).items():
         text = path.read_text(encoding="utf-8")
         frontmatter_fields = parse_frontmatter(text)
         record = record_from_cr_file(project_root, path)
@@ -155,16 +224,29 @@ def collect_check_errors(project_root: Path) -> list[str]:
                     )
                 )
             except (json.JSONDecodeError, OSError, ValueError) as exc:
-                errors.append(
-                    f"{record.summary_ref} {cr_id} summary semantic check failed: {exc}"
-                )
+                errors.append(f"{record.summary_ref} {cr_id} summary semantic check failed: {exc}")
     return errors
 
 
-def collect_check_warnings(project_root: Path) -> list[str]:
+def collect_check_warnings(
+    project_root: Path,
+    *,
+    partition_snapshot: FormalCRDiscoverySnapshotV1 | None = None,
+    partition_report: FormalCRPartitionReportV1 | None = None,
+) -> list[str]:
     project_root = project_root.resolve()
     warnings: list[str] = []
-    for cr_id, path in discover_formal_crs(project_root).items():
+    if partition_snapshot is None or partition_report is None:
+        _registry, partition_snapshot, partition_report = load_formal_cr_partition(
+            project_root,
+            consumer_id="cr-lifecycle-check",
+        )
+    if partition_report.decision != "PASS":
+        return []
+    for cr_id, path in _native_cr_paths_from_partition(
+        project_root,
+        partition_report,
+    ).items():
         frontmatter_fields = parse_frontmatter(path.read_text(encoding="utf-8"))
         record = record_from_cr_file(project_root, path)
         has_route_contract = bool(frontmatter_fields.get("route_plan_ref")) or any(
@@ -184,9 +266,7 @@ def collect_check_warnings(project_root: Path) -> list[str]:
                 f"governance_cr={finding.get('governance_cr')} overlap={overlap} "
                 f"decision={finding.get('decision')}"
             )
-        for finding in collect_archive_isolation_findings(
-            record, project_root=project_root
-        ):
+        for finding in collect_archive_isolation_findings(record, project_root=project_root):
             refs = ", ".join(finding.get("archive_refs") or [])
             warnings.append(
                 f"{cr_id} archive isolation {finding.get('code')}: "
@@ -195,15 +275,51 @@ def collect_check_warnings(project_root: Path) -> list[str]:
     return warnings
 
 
+def build_cr_lifecycle_check_report(
+    project_root: Path,
+    *,
+    partition_snapshot: FormalCRDiscoverySnapshotV1 | None = None,
+    partition_report: FormalCRPartitionReportV1 | None = None,
+) -> CrLifecycleCheckReportV1:
+    """加载一次 partition，再同时生成 errors/warnings。"""
+
+    if partition_snapshot is None or partition_report is None:
+        _registry, partition_snapshot, partition_report = load_formal_cr_partition(
+            project_root.resolve(),
+            consumer_id="cr-lifecycle-check",
+        )
+    errors = collect_check_errors(
+        project_root,
+        partition_snapshot=partition_snapshot,
+        partition_report=partition_report,
+    )
+    warnings = collect_check_warnings(
+        project_root,
+        partition_snapshot=partition_snapshot,
+        partition_report=partition_report,
+    )
+    reason_codes = (
+        partition_report.reason_codes
+        if partition_report.decision != "PASS"
+        else (("CR_LIFECYCLE_CHECK_FAILED",) if errors else ("CR_LIFECYCLE_CHECK_PASS",))
+    )
+    return CrLifecycleCheckReportV1(
+        partition_snapshot_digest=partition_report.snapshot_digest,
+        decision="BLOCKED" if errors else "PASS",
+        reason_codes=reason_codes,
+        evidence_refs=partition_report.evidence_refs,
+        errors=tuple(errors),
+        warnings=tuple(warnings),
+    )
+
+
 def _conflict_surface(item: dict[str, Any]) -> set[str]:
     values: list[str] = []
     values.extend(str(value) for value in item.get("impact_surface") or [] if str(value))
     for field in IMPACT_SPLIT_FIELDS:
         values.extend(str(value) for value in item.get(field) or [] if str(value))
     values.extend(
-        str(value)
-        for value in item.get("impact_capability_normalized") or []
-        if str(value)
+        str(value) for value in item.get("impact_capability_normalized") or [] if str(value)
     )
     return set(values)
 
@@ -275,21 +391,13 @@ def proposed_conflict_report(
             "warnings": [],
         }
 
-    normalized_keys = sorted(
-        set(value.strip() for value in conflict_keys if value.strip())
-    )
-    normalized_surface = sorted(
-        set(value.strip() for value in impact_surface if value.strip())
-    )
+    normalized_keys = sorted(set(value.strip() for value in conflict_keys if value.strip()))
+    normalized_surface = sorted(set(value.strip() for value in impact_surface if value.strip()))
     normalized_fields = {
-        field: sorted(
-            set(value.strip() for value in impact_fields.get(field, []) if value.strip())
-        )
+        field: sorted(set(value.strip() for value in impact_fields.get(field, []) if value.strip()))
         for field in IMPACT_SPLIT_FIELDS
     }
-    if not normalized_keys and not normalized_surface and not any(
-        normalized_fields.values()
-    ):
+    if not normalized_keys and not normalized_surface and not any(normalized_fields.values()):
         return {
             "decision": "INVALID",
             "code": "CR_CONFLICT_PROPOSED_INPUT_REQUIRED",
@@ -313,24 +421,16 @@ def proposed_conflict_report(
         "conflict_keys": normalized_keys,
         "impact_surface": normalized_surface,
         **normalized_fields,
-        "impact_capability_normalized": _normalized_capability_refs(
-            capability_resolution
-        ),
+        "impact_capability_normalized": _normalized_capability_refs(capability_resolution),
     }
     candidate_keys = set(candidate["conflict_keys"])
     candidate_surface = _conflict_surface(candidate)
     conflicts: list[dict[str, Any]] = []
-    for item in sorted(
-        items, key=lambda value: _cr_numeric_sort_key(str(value.get("id") or ""))
-    ):
+    for item in sorted(items, key=lambda value: _cr_numeric_sort_key(str(value.get("id") or ""))):
         if item.get("status") not in OPEN_DEPENDENCY_STATUSES:
             continue
-        key_overlap = sorted(
-            candidate_keys.intersection(item.get("conflict_keys") or [])
-        )
-        surface_overlap = sorted(
-            candidate_surface.intersection(_conflict_surface(item))
-        )
+        key_overlap = sorted(candidate_keys.intersection(item.get("conflict_keys") or []))
+        surface_overlap = sorted(candidate_surface.intersection(_conflict_surface(item)))
         if key_overlap or surface_overlap:
             conflicts.append(
                 {
@@ -391,13 +491,9 @@ def build_impact_report(project_root: Path, *, mode: str = "enforce") -> dict[st
                 "uncategorized_legacy": uncategorized_legacy,
                 "effective_split_fields": effective,
                 "impact_capability_resolution": capability_resolution,
-                "impact_capability_normalized": _normalized_capability_refs(
-                    capability_resolution
-                ),
+                "impact_capability_normalized": _normalized_capability_refs(capability_resolution),
                 "blockers": blockers,
-                "followup_candidates": _impact_followup_candidates(
-                    cr_id, uncategorized_legacy
-                ),
+                "followup_candidates": _impact_followup_candidates(cr_id, uncategorized_legacy),
             }
         )
     return {
@@ -428,8 +524,7 @@ def write_impact_report(path: Path, report: dict[str, Any]) -> Path:
 
 def _load_summary(project_root: Path, cr_id: str) -> dict[str, Any]:
     path = (
-        _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix())
-        / f"{cr_id}.summary.json"
+        _resolve_runtime_ref(project_root, CR_SUMMARY_ROOT_REL.as_posix()) / f"{cr_id}.summary.json"
     )
     if not path.is_file():
         crs = discover_formal_crs(project_root)
@@ -451,11 +546,7 @@ def render_cr_brief(project_root: Path, cr_id: str, *, mode: str = "audit") -> s
     capability_refs = (
         _effective_impact_fields(record, project_root=root)["impact_capability_refs"]
         if record is not None
-        else [
-            str(item)
-            for item in summary.get("impact_capability_refs") or []
-            if str(item)
-        ]
+        else [str(item) for item in summary.get("impact_capability_refs") or [] if str(item)]
     )
     capability_resolution = _resolve_capability_refs(root, capability_refs, mode=mode)
     capability_normalized = _normalized_capability_refs(capability_resolution)

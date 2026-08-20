@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import json
 import os
+import secrets
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +25,14 @@ from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.state.formal_projection import FORMAL_TRUTH_REPLACE_PATHS
 
 PUBLIC_OPERATION_DECLARATIONS = (
+    (
+        "state.projection-inspect",
+        ("meta-flow", "state", "projection-inspect"),
+    ),
+    (
+        "state.projection-recover",
+        ("meta-flow", "state", "projection-recover"),
+    ),
     (
         "state.projection-correct",
         ("meta-flow", "state", "projection-correct"),
@@ -45,6 +55,7 @@ CURRENT_ALIAS_NAMES = (
 )
 CURRENT_ALIAS_GITIGNORE_BEGIN = "# meta-flow:managed-current-aliases:begin"
 CURRENT_ALIAS_GITIGNORE_END = "# meta-flow:managed-current-aliases:end"
+CURRENT_PROJECTION_RUNTIME_REL = Path(".meta-flow-runtime/current-projection")
 STATE_MD_REL = Path("process/STATE.md")
 STATE_HISTORY_REL = Path("process/state/HISTORY.md")
 WORKFLOW_HEALTH_REL = Path("process/state/WORKFLOW-HEALTH.json")
@@ -696,9 +707,7 @@ def _reject_bootstrap_with_existing_projection_manifest(project_root: Path) -> N
     from meta_flow.state.projection_transaction import MANIFEST_REL
 
     manifest_path = project_root.resolve() / MANIFEST_REL
-    if manifest_path.is_symlink() or (
-        manifest_path.exists() and not manifest_path.is_file()
-    ):
+    if manifest_path.is_symlink() or (manifest_path.exists() and not manifest_path.is_file()):
         raise ValueError("state projection transaction manifest is unsafe")
     if manifest_path.is_file():
         raise ValueError(
@@ -1050,29 +1059,32 @@ def _apply_core_state_projection(
         entry["updated_at"] = existing_entry.get("updated_at")
     from meta_flow.state.projection_transaction import apply_state_projection_transaction
 
-    apply_state_projection_transaction(
-        project_root,
-        {
-            STATE_CURRENT_REL.as_posix(): render_current_state_candidate(state).encode("utf-8"),
-            STATE_MD_REL.as_posix(): render_state_markdown(state).encode("utf-8"),
-            STATE_CURRENT_ENTRY_REL.as_posix(): (
-                json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-            ).encode("utf-8"),
-        },
-    )
-    _ensure_current_alias_gitignore(current_dir)
-    pointer_refs = {
-        "state": entry["state_ref"],
-        "cr-index": entry.get("cr_index_ref"),
-        "change": entry.get("change_ref"),
-        "context": entry.get("context_ref"),
-        "checkpoint": entry.get("checkpoint_ref"),
-        "story": entry.get("story_packet_ref"),
-        "release": entry.get("release_context_ref"),
-        "handoff": entry.get("handoff_ref"),
+    core_targets = {
+        STATE_CURRENT_REL.as_posix(): render_current_state_candidate(state).encode("utf-8"),
+        STATE_MD_REL.as_posix(): render_state_markdown(state).encode("utf-8"),
+        STATE_CURRENT_ENTRY_REL.as_posix(): (
+            json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8"),
     }
-    for name in CURRENT_ALIAS_NAMES:
-        _write_pointer(current_dir, project_root, name, pointer_refs[name])
+    alias_plan = plan_current_projection_targets(
+        project_root,
+        current_entry=entry,
+        future_existing_refs=tuple(core_targets),
+    )
+    alias_result = apply_current_projection_targets(project_root, alias_plan)
+    if alias_result["decision"] not in {"PASS", "NO_CHANGE"}:
+        raise CurrentProjectionPartialError(alias_result)
+    try:
+        apply_state_projection_transaction(project_root, core_targets)
+    except Exception as core_error:
+        if alias_result["decision"] == "PASS":
+            recovery = recover_current_projection_targets(
+                project_root,
+                alias_result["transaction_id"],
+            )
+            if recovery["decision"] != "RECOVERED":
+                raise CurrentProjectionPartialError(recovery) from core_error
+        raise
     return entry
 
 
@@ -1141,8 +1153,7 @@ def _state_status(state: dict[str, Any]) -> str:
     next_action = state.get("next_action")
     if (
         isinstance(next_action, dict)
-        and str(next_action.get("stop_reason") or "").strip().lower()
-        in AUTHORIZATION_STOP_REASONS
+        and str(next_action.get("stop_reason") or "").strip().lower() in AUTHORIZATION_STOP_REASONS
     ):
         return "awaiting_authorization"
     if state.get("active_change") or state.get("active_story"):
@@ -1452,7 +1463,10 @@ def _render_current_alias_gitignore(existing: str) -> str:
     has_end = CURRENT_ALIAS_GITIGNORE_END in existing
     if has_begin != has_end:
         raise ValueError("current alias managed block 不完整")
-    if existing.count(CURRENT_ALIAS_GITIGNORE_BEGIN) > 1 or existing.count(CURRENT_ALIAS_GITIGNORE_END) > 1:
+    if (
+        existing.count(CURRENT_ALIAS_GITIGNORE_BEGIN) > 1
+        or existing.count(CURRENT_ALIAS_GITIGNORE_END) > 1
+    ):
         raise ValueError("current alias managed block 重复")
 
     block = _current_alias_gitignore_block()
@@ -1497,9 +1511,7 @@ def _preflight_current_alias_gitignore(current_dir: Path) -> None:
     """在核心投影事务前验证 alias 配置，保证失败时领域 mutation 为零。"""
 
     gitignore_path = current_dir.parent / ".gitignore"
-    if gitignore_path.is_symlink() or (
-        gitignore_path.exists() and not gitignore_path.is_file()
-    ):
+    if gitignore_path.is_symlink() or (gitignore_path.exists() and not gitignore_path.is_file()):
         raise FileExistsError(f"{gitignore_path} 不是可安全更新的常规文件")
     existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.is_file() else ""
     try:
@@ -1624,6 +1636,766 @@ def _current_entry_refresh_plan(
     return planned_targets, target_refs, semantic_input
 
 
+@dataclass(frozen=True)
+class CurrentProjectionTargetV2:
+    """CURRENT alias child transaction 的精确文件系统 image。"""
+
+    ref: str
+    before_kind: str
+    before_value: bytes | str | None
+    after_kind: str
+    after_value: bytes | str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ref": self.ref,
+            "before": _projection_image_dict(self.before_kind, self.before_value),
+            "after": _projection_image_dict(self.after_kind, self.after_value),
+        }
+
+
+@dataclass(frozen=True)
+class CurrentProjectionPlanV2:
+    targets: tuple[CurrentProjectionTargetV2, ...]
+    plan_digest: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 2,
+            "kind": "CurrentProjectionPlanV2",
+            "decision": "READY" if self.targets else "NO_CHANGE",
+            "targets": [target.as_dict() for target in self.targets],
+            "plan_digest": self.plan_digest,
+            "mutation_count": 0,
+        }
+
+
+class CurrentProjectionPartialError(RuntimeError):
+    """alias child 无法完整恢复；调用方必须停止并 inspect/recover。"""
+
+    def __init__(self, report: dict[str, Any]) -> None:
+        self.report = report
+        super().__init__(
+            "current projection transaction requires recovery: "
+            + str(report.get("transaction_id") or "unknown")
+        )
+
+
+def _projection_image_dict(kind: str, value: bytes | str | None) -> dict[str, Any]:
+    if kind == "regular":
+        if not isinstance(value, bytes):
+            raise ValueError("regular projection image requires bytes")
+        encoded: str | None = base64.b64encode(value).decode("ascii")
+    elif kind == "symlink":
+        if not isinstance(value, str) or not value:
+            raise ValueError("symlink projection image requires one target")
+        encoded = value
+    elif kind == "missing":
+        if value is not None:
+            raise ValueError("missing projection image must not carry a value")
+        encoded = None
+    else:
+        raise ValueError(f"unsupported projection image kind: {kind}")
+    digest = hashlib.sha256(
+        json.dumps(
+            {"kind": kind, "value": encoded},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {"kind": kind, "value": encoded, "digest": digest}
+
+
+def _projection_image_from_dict(payload: dict[str, Any]) -> tuple[str, bytes | str | None]:
+    if set(payload) != {"kind", "value", "digest"}:
+        raise ValueError("current projection image fields mismatch")
+    kind = str(payload["kind"])
+    raw = payload["value"]
+    if kind == "regular":
+        try:
+            value: bytes | str | None = base64.b64decode(str(raw), validate=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("current projection regular bytes are invalid") from exc
+    elif kind == "symlink":
+        value = str(raw)
+    elif kind == "missing" and raw is None:
+        value = None
+    else:
+        raise ValueError("current projection image kind/value mismatch")
+    if _projection_image_dict(kind, value)["digest"] != payload["digest"]:
+        raise ValueError("current projection image digest mismatch")
+    return kind, value
+
+
+def _read_projection_image(path: Path) -> tuple[str, bytes | str | None]:
+    if path.is_symlink():
+        return "symlink", os.readlink(path)
+    if not path.exists():
+        return "missing", None
+    if not path.is_file():
+        raise ValueError(f"current projection target is not a regular file/symlink: {path}")
+    return "regular", path.read_bytes()
+
+
+def _write_projection_image(
+    path: Path,
+    kind: str,
+    value: bytes | str | None,
+) -> None:
+    if path.exists() and not (path.is_file() or path.is_symlink()):
+        raise ValueError(f"current projection target is unsafe: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "missing":
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+        return
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.current-projection.tmp")
+    if temporary.exists() or temporary.is_symlink():
+        raise FileExistsError(f"current projection temporary path exists: {temporary}")
+    try:
+        if kind == "regular" and isinstance(value, bytes):
+            temporary.write_bytes(value)
+        elif kind == "symlink" and isinstance(value, str):
+            temporary.symlink_to(value)
+        else:
+            raise ValueError("current projection target image is invalid")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists() or temporary.is_symlink():
+            temporary.unlink()
+
+
+def plan_current_projection_targets(
+    project_root: Path,
+    *,
+    current_entry: dict[str, Any] | None = None,
+    future_existing_refs: tuple[str, ...] = (),
+) -> CurrentProjectionPlanV2:
+    """为 .gitignore、*.ref 与 alias symlink 生成 exact child target set。"""
+
+    root = project_root.resolve()
+    entry = dict(current_entry or build_current_entry(root))
+    current_dir = _resolve_runtime_ref(root, STATE_CURRENT_DIR_REL.as_posix())
+    gitignore_path = current_dir.parent / ".gitignore"
+    gitignore_kind, gitignore_value = _read_projection_image(gitignore_path)
+    if gitignore_kind not in {"missing", "regular"}:
+        raise ValueError("process/.gitignore is not a regular file")
+    existing_gitignore = (
+        gitignore_value.decode("utf-8") if isinstance(gitignore_value, bytes) else ""
+    )
+    desired: dict[str, tuple[str, bytes | str | None]] = {
+        "process/.gitignore": (
+            "regular",
+            _render_current_alias_gitignore(existing_gitignore).encode("utf-8"),
+        )
+    }
+    future_refs = set(future_existing_refs)
+    pointer_refs = {
+        "state": entry["state_ref"],
+        "cr-index": entry.get("cr_index_ref"),
+        "change": entry.get("change_ref"),
+        "context": entry.get("context_ref"),
+        "checkpoint": entry.get("checkpoint_ref"),
+        "story": entry.get("story_packet_ref"),
+        "release": entry.get("release_context_ref"),
+        "handoff": entry.get("handoff_ref"),
+    }
+    for name in CURRENT_ALIAS_NAMES:
+        rel_ref = pointer_refs[name]
+        ref = (STATE_CURRENT_DIR_REL / f"{name}.ref").as_posix()
+        alias = (STATE_CURRENT_DIR_REL / name).as_posix()
+        if rel_ref:
+            desired[ref] = ("regular", (str(rel_ref) + "\n").encode("utf-8"))
+            target = _resolve_runtime_path(root, str(rel_ref))
+            desired[alias] = (
+                ("symlink", os.path.relpath(target, start=current_dir))
+                if target.exists() or str(rel_ref) in future_refs
+                else ("missing", None)
+            )
+        else:
+            desired[ref] = ("missing", None)
+            desired[alias] = ("missing", None)
+
+    targets: list[CurrentProjectionTargetV2] = []
+    for ref, (after_kind, after_value) in sorted(desired.items()):
+        path = _projection_target_path(root, ref)
+        before_kind, before_value = _read_projection_image(path)
+        if _projection_image_dict(before_kind, before_value) == _projection_image_dict(
+            after_kind, after_value
+        ):
+            continue
+        targets.append(
+            CurrentProjectionTargetV2(
+                ref,
+                before_kind,
+                before_value,
+                after_kind,
+                after_value,
+            )
+        )
+    fields = {
+        "schema_version": 2,
+        "kind": "CurrentProjectionPlanV2",
+        "targets": [target.as_dict() for target in targets],
+    }
+    digest = hashlib.sha256(
+        json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return CurrentProjectionPlanV2(tuple(targets), digest)
+
+
+def _current_projection_manifest_path(project_root: Path, transaction_id: str) -> Path:
+    if not transaction_id or any(char not in "0123456789abcdef" for char in transaction_id):
+        raise ValueError("current projection transaction_id is invalid")
+    return project_root.resolve() / CURRENT_PROJECTION_RUNTIME_REL / f"{transaction_id}.json"
+
+
+def current_projection_transaction_id(
+    plan: CurrentProjectionPlanV2,
+    *,
+    parent_plan_digest: str,
+    authorization_id: str,
+) -> str:
+    """由 parent authorization 与两层 plan 生成稳定 child identity。"""
+
+    if (
+        len(parent_plan_digest) != 64
+        or any(char not in "0123456789abcdef" for char in parent_plan_digest)
+        or not authorization_id
+        or Path(authorization_id).name != authorization_id
+        or "/" in authorization_id
+        or "\\" in authorization_id
+    ):
+        raise ValueError("current projection parent identity is invalid")
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "CurrentProjectionTransactionIdentityV2",
+                "authorization_id": authorization_id,
+                "parent_plan_digest": parent_plan_digest,
+                "current_projection_plan_digest": plan.plan_digest,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:32]
+
+
+def validate_current_projection_plan(
+    project_root: Path,
+    plan: CurrentProjectionPlanV2,
+    *,
+    verify_preimages: bool,
+) -> None:
+    """重算 child plan 全部字段；可选在 apply admission 校验所有 preimage。"""
+
+    refs: list[str] = []
+    for target in plan.targets:
+        if target.ref in refs:
+            raise ValueError("current projection plan target is duplicated")
+        _projection_target_path(project_root, target.ref)
+        # as_dict 会重算 before/after image digest，并拒绝形状不合法的 image。
+        target.as_dict()
+        refs.append(target.ref)
+        if verify_preimages:
+            current = _projection_image_dict(
+                *_read_projection_image(_projection_target_path(project_root, target.ref))
+            )
+            if current != _projection_image_dict(target.before_kind, target.before_value):
+                raise ValueError(f"current projection preimage drift: {target.ref}")
+    fields = {
+        "schema_version": 2,
+        "kind": "CurrentProjectionPlanV2",
+        "targets": [target.as_dict() for target in plan.targets],
+    }
+    expected = hashlib.sha256(
+        json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if plan.plan_digest != expected:
+        raise ValueError("current projection plan digest mismatch")
+
+
+def _write_current_projection_manifest(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        temporary.write_text(rendered, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists() or temporary.is_symlink():
+            temporary.unlink()
+
+
+def _validate_current_projection_manifest(
+    payload: dict[str, Any],
+    *,
+    expected_transaction_id: str,
+) -> None:
+    required = {
+        "schema_version",
+        "kind",
+        "transaction_id",
+        "plan_digest",
+        "parent_plan_digest",
+        "authorization_id",
+        "created_at",
+        "updated_at",
+        "state",
+        "attempted_refs",
+        "applied_refs",
+        "targets",
+    }
+    optional = {"failure", "recovery_failures"}
+    if not required <= set(payload) or set(payload) - required - optional:
+        raise ValueError("current projection manifest fields mismatch")
+    if (
+        payload.get("schema_version") != 2
+        or payload.get("kind") != "CurrentProjectionTransactionV2"
+        or payload.get("transaction_id") != expected_transaction_id
+        or len(expected_transaction_id) != 32
+        or any(char not in "0123456789abcdef" for char in expected_transaction_id)
+    ):
+        raise ValueError("current projection manifest identity is invalid")
+    if payload.get("state") not in {"PREPARED", "APPLYING", "COMMITTED", "RECOVERED", "PARTIAL"}:
+        raise ValueError("current projection manifest state is invalid")
+    raw_targets = payload.get("targets")
+    attempted = payload.get("attempted_refs")
+    applied = payload.get("applied_refs")
+    if (
+        not isinstance(raw_targets, list)
+        or not raw_targets
+        or len(raw_targets) > 17
+        or not isinstance(attempted, list)
+        or not isinstance(applied, list)
+    ):
+        raise ValueError("current projection manifest accounting is invalid")
+    refs: list[str] = []
+    for raw in raw_targets:
+        if not isinstance(raw, dict) or set(raw) != {"ref", "before", "after"}:
+            raise ValueError("current projection manifest target fields mismatch")
+        ref = str(raw.get("ref") or "")
+        _projection_image_from_dict(raw["before"])
+        _projection_image_from_dict(raw["after"])
+        refs.append(ref)
+    if len(refs) != len(set(refs)):
+        raise ValueError("current projection manifest target set is duplicated")
+    if (
+        any(not isinstance(ref, str) for ref in attempted + applied)
+        or len(attempted) != len(set(attempted))
+        or len(applied) != len(set(applied))
+        or attempted != refs[: len(attempted)]
+        or applied != attempted[: len(applied)]
+    ):
+        raise ValueError("current projection manifest target accounting is invalid")
+    fields = {
+        "schema_version": 2,
+        "kind": "CurrentProjectionPlanV2",
+        "targets": raw_targets,
+    }
+    expected_plan_digest = hashlib.sha256(
+        json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if payload.get("plan_digest") != expected_plan_digest:
+        raise ValueError("current projection manifest plan digest mismatch")
+    parent_digest = str(payload.get("parent_plan_digest") or "")
+    authorization_id = str(payload.get("authorization_id") or "")
+    if bool(parent_digest) != bool(authorization_id):
+        raise ValueError("current projection parent binding is incomplete")
+    if parent_digest:
+        plan = CurrentProjectionPlanV2(
+            tuple(
+                CurrentProjectionTargetV2(
+                    str(raw["ref"]),
+                    *_projection_image_from_dict(raw["before"]),
+                    *_projection_image_from_dict(raw["after"]),
+                )
+                for raw in raw_targets
+            ),
+            str(payload["plan_digest"]),
+        )
+        if (
+            len(parent_digest) != 64
+            or any(char not in "0123456789abcdef" for char in parent_digest)
+            or Path(authorization_id).name != authorization_id
+            or "/" in authorization_id
+            or "\\" in authorization_id
+            or current_projection_transaction_id(
+                plan,
+                parent_plan_digest=parent_digest,
+                authorization_id=authorization_id,
+            )
+            != expected_transaction_id
+        ):
+            raise ValueError("current projection parent binding is invalid")
+
+
+def _projection_target_path(project_root: Path, ref: str) -> Path:
+    if ref != "process/.gitignore" and not ref.startswith("process/current/"):
+        raise ValueError(f"current projection target is outside fixed namespace: {ref}")
+    # 不能用 ref 自身做 resolve：alias 已存在时会跟随 symlink 到业务目标，
+    # 随后的 replace 会误改业务文件并可能制造自环。这里只解析 process 根，
+    # 最后一段始终按 lexical target 处理。
+    process_root = _resolve_runtime_ref(
+        project_root.resolve(), "process/.meta-flow-process.yaml"
+    ).parent
+    return process_root.joinpath(*Path(ref).parts[1:])
+
+
+def _restore_current_projection_targets(
+    project_root: Path,
+    manifest: dict[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    # attempted 在实际 replace 前持久化；即使进程在 replace 成功后、
+    # applied_refs 记账前中断，也必须检查并恢复该目标。
+    attempted = set(str(ref) for ref in manifest.get("attempted_refs", []))
+    for raw_target in reversed(manifest["targets"]):
+        ref = str(raw_target["ref"])
+        if ref not in attempted:
+            continue
+        path = _projection_target_path(project_root, ref)
+        try:
+            after_kind, after_value = _projection_image_from_dict(raw_target["after"])
+            current_kind, current_value = _read_projection_image(path)
+            current_image = _projection_image_dict(current_kind, current_value)
+            if current_image not in (
+                _projection_image_dict(after_kind, after_value),
+                raw_target["before"],
+            ):
+                raise ValueError("target no longer matches transaction generations")
+            before_kind, before_value = _projection_image_from_dict(raw_target["before"])
+            _write_projection_image(path, before_kind, before_value)
+        except (OSError, ValueError) as exc:
+            failures.append(f"{ref}:{exc}")
+    return failures
+
+
+def _bound_work_status_parent(
+    project_root: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """加载 alias child 绑定的 Work status parent，不重新解释其业务内容。"""
+
+    authorization_id = str(manifest.get("authorization_id") or "")
+    parent_plan_digest = str(manifest.get("parent_plan_digest") or "")
+    if not authorization_id and not parent_plan_digest:
+        return None
+    if (
+        not authorization_id
+        or not parent_plan_digest
+        or Path(authorization_id).name != authorization_id
+        or "/" in authorization_id
+        or "\\" in authorization_id
+    ):
+        raise ValueError("current projection parent binding is invalid")
+    process_root = _resolve_runtime_ref(
+        project_root.resolve(), "process/.meta-flow-process.yaml"
+    ).parent
+    path = (
+        process_root
+        / ".meta-flow-runtime/work-close/transactions"
+        / authorization_id
+        / "manifest.json"
+    )
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError("current projection parent manifest path is unsafe")
+    if not path.is_file():
+        return {"state": "MISSING"}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    from meta_flow.work.lifecycle_transaction import _validate_manifest
+
+    if (
+        not isinstance(payload, dict)
+        or payload.get("kind") != "work-close-transaction-v1"
+        or payload.get("operation") != "work.status-transition"
+        or payload.get("authorization_id") != authorization_id
+        or payload.get("plan_digest") != parent_plan_digest
+    ):
+        raise ValueError("current projection parent manifest binding mismatch")
+    _validate_manifest(payload, expected_authorization_id=authorization_id)
+    return payload
+
+
+def apply_current_projection_targets(
+    project_root: Path,
+    plan: CurrentProjectionPlanV2,
+    *,
+    parent_plan_digest: str = "",
+    authorization_id: str = "",
+) -> dict[str, Any]:
+    """应用 alias child；失败先精确回滚，回滚失败才返回 PARTIAL。"""
+
+    validate_current_projection_plan(project_root, plan, verify_preimages=True)
+    if not plan.targets:
+        return {
+            "schema_version": 2,
+            "kind": "CurrentProjectionReceiptV2",
+            "decision": "NO_CHANGE",
+            "transaction_id": "",
+            "plan_digest": plan.plan_digest,
+            "mutation_count": 0,
+            "applied_refs": [],
+        }
+    transaction_id = (
+        current_projection_transaction_id(
+            plan,
+            parent_plan_digest=parent_plan_digest,
+            authorization_id=authorization_id,
+        )
+        if parent_plan_digest or authorization_id
+        else hashlib.sha256((plan.plan_digest + secrets.token_hex(16)).encode("utf-8")).hexdigest()[
+            :32
+        ]
+    )
+    path = _current_projection_manifest_path(project_root, transaction_id)
+    if path.exists() or path.is_symlink():
+        raise ValueError("current projection transaction already exists")
+    now = datetime.now(UTC).isoformat()
+    manifest = {
+        "schema_version": 2,
+        "kind": "CurrentProjectionTransactionV2",
+        "transaction_id": transaction_id,
+        "plan_digest": plan.plan_digest,
+        "parent_plan_digest": parent_plan_digest,
+        "authorization_id": authorization_id,
+        "created_at": now,
+        "updated_at": now,
+        "state": "PREPARED",
+        "attempted_refs": [],
+        "applied_refs": [],
+        "targets": [target.as_dict() for target in plan.targets],
+    }
+    _validate_current_projection_manifest(
+        manifest,
+        expected_transaction_id=transaction_id,
+    )
+    _write_current_projection_manifest(path, manifest)
+    try:
+        manifest["state"] = "APPLYING"
+        manifest["updated_at"] = datetime.now(UTC).isoformat()
+        _write_current_projection_manifest(path, manifest)
+        for target in plan.targets:
+            target_path = _projection_target_path(project_root, target.ref)
+            if _projection_image_dict(*_read_projection_image(target_path)) != (
+                _projection_image_dict(target.before_kind, target.before_value)
+            ):
+                raise ValueError(f"current projection preimage drift: {target.ref}")
+            manifest["attempted_refs"].append(target.ref)
+            manifest["updated_at"] = datetime.now(UTC).isoformat()
+            _write_current_projection_manifest(path, manifest)
+            _write_projection_image(target_path, target.after_kind, target.after_value)
+            manifest["applied_refs"].append(target.ref)
+            manifest["updated_at"] = datetime.now(UTC).isoformat()
+            _write_current_projection_manifest(path, manifest)
+        manifest["state"] = "COMMITTED"
+        manifest["updated_at"] = datetime.now(UTC).isoformat()
+        _write_current_projection_manifest(path, manifest)
+        return {
+            "schema_version": 2,
+            "kind": "CurrentProjectionReceiptV2",
+            "decision": "PASS",
+            "transaction_id": transaction_id,
+            "plan_digest": plan.plan_digest,
+            "mutation_count": len(plan.targets),
+            "applied_refs": list(manifest["applied_refs"]),
+        }
+    except Exception as exc:
+        failures = _restore_current_projection_targets(project_root, manifest)
+        manifest["state"] = "PARTIAL" if failures else "RECOVERED"
+        manifest["failure"] = str(exc)
+        manifest["recovery_failures"] = failures
+        manifest["updated_at"] = datetime.now(UTC).isoformat()
+        _write_current_projection_manifest(path, manifest)
+        return {
+            "schema_version": 2,
+            "kind": "CurrentProjectionReceiptV2",
+            "decision": manifest["state"],
+            "transaction_id": transaction_id,
+            "plan_digest": plan.plan_digest,
+            "mutation_count": len(manifest["applied_refs"]),
+            "applied_refs": list(manifest["applied_refs"]),
+            "recovery_required": bool(failures),
+            "reason_codes": ["CURRENT_PROJECTION_APPLY_FAILED"],
+        }
+
+
+def recover_current_projection_targets(
+    project_root: Path,
+    transaction_id: str,
+) -> dict[str, Any]:
+    path = _current_projection_manifest_path(project_root, transaction_id)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("current projection transaction manifest is missing")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("current projection transaction manifest is invalid")
+    _validate_current_projection_manifest(
+        manifest,
+        expected_transaction_id=transaction_id,
+    )
+    if manifest.get("state") == "RECOVERED":
+        return {
+            "decision": "RECOVERED",
+            "transaction_id": transaction_id,
+            "mutation_count": 0,
+        }
+    parent = _bound_work_status_parent(project_root, manifest)
+    parent_state = "" if parent is None else str(parent.get("state") or "")
+    if parent_state == "COMMITTED":
+        raise ValueError("committed current projection child belongs to a committed parent")
+    if parent_state in {"PREPARED", "APPLYING", "PARTIAL"}:
+        raise ValueError("current projection parent requires recovery before child rollback")
+    failures = _restore_current_projection_targets(project_root, manifest)
+    manifest["state"] = "PARTIAL" if failures else "RECOVERED"
+    manifest["recovery_failures"] = failures
+    manifest["updated_at"] = datetime.now(UTC).isoformat()
+    _write_current_projection_manifest(path, manifest)
+    return {
+        "schema_version": 2,
+        "kind": "CurrentProjectionRecoveryReceiptV2",
+        "decision": manifest["state"],
+        "transaction_id": transaction_id,
+        "mutation_count": len(manifest.get("applied_refs", [])),
+        "recovery_required": bool(failures),
+        "reason_codes": ["CURRENT_PROJECTION_RECOVERY_FAILED"] if failures else [],
+    }
+
+
+def _load_current_projection_manifests(project_root: Path) -> list[dict[str, Any]]:
+    root = project_root.resolve()
+    runtime = root / CURRENT_PROJECTION_RUNTIME_REL
+    if runtime.is_symlink() or (runtime.exists() and not runtime.is_dir()):
+        raise ValueError("current projection runtime is unsafe")
+    manifests: list[dict[str, Any]] = []
+    if not runtime.is_dir():
+        return manifests
+    for path in sorted(runtime.glob("*.json")):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("current projection manifest path is unsafe")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("current projection manifest payload is invalid")
+        _validate_current_projection_manifest(payload, expected_transaction_id=path.stem)
+        manifests.append(payload)
+    return manifests
+
+
+def current_projection_transaction_for_parent(
+    project_root: Path,
+    *,
+    authorization_id: str,
+    parent_plan_digest: str,
+) -> dict[str, Any] | None:
+    """按 parent identity 查找唯一 child；重复绑定 fail-closed。"""
+
+    matched = [
+        payload
+        for payload in _load_current_projection_manifests(project_root)
+        if payload["authorization_id"] == authorization_id
+        and payload["parent_plan_digest"] == parent_plan_digest
+    ]
+    if len(matched) > 1:
+        raise ValueError("current projection parent owns duplicate child transactions")
+    return matched[0] if matched else None
+
+
+def _image_reachable(
+    start_digest: str,
+    current_digest: str,
+    edges: dict[str, set[str]],
+) -> bool:
+    pending = [start_digest]
+    seen: set[str] = set()
+    while pending:
+        candidate = pending.pop()
+        if candidate == current_digest:
+            return True
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        pending.extend(edges.get(candidate, ()))
+    return False
+
+
+def inspect_current_projection_transactions(project_root: Path) -> dict[str, Any]:
+    """检查 alias child，并以 per-ref generation head 接纳合法 supersession。"""
+
+    root = project_root.resolve()
+    findings: list[str] = []
+    transactions: list[dict[str, Any]] = []
+    try:
+        manifests = _load_current_projection_manifests(root)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        manifests = []
+        findings.append(f"CURRENT_PROJECTION_MANIFEST_INVALID:{exc}")
+    edges_by_ref: dict[str, dict[str, set[str]]] = {}
+    for payload in manifests:
+        if payload["state"] != "COMMITTED":
+            continue
+        for target in payload["targets"]:
+            edges_by_ref.setdefault(target["ref"], {}).setdefault(
+                target["before"]["digest"], set()
+            ).add(target["after"]["digest"])
+    for payload in manifests:
+        transaction_id = str(payload["transaction_id"])
+        state = str(payload["state"])
+        classification = state
+        if state not in {"COMMITTED", "RECOVERED"}:
+            findings.append(f"CURRENT_PROJECTION_UNRESOLVED:{transaction_id}:{state}")
+        parent: dict[str, Any] | None = None
+        try:
+            parent = _bound_work_status_parent(root, payload)
+            parent_state = "" if parent is None else str(parent.get("state") or "")
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parent_state = "INVALID"
+            findings.append(f"CURRENT_PROJECTION_PARENT_INVALID:{transaction_id}:{exc}")
+        if state == "COMMITTED" and parent is not None and parent_state != "COMMITTED":
+            findings.append(
+                f"CURRENT_PROJECTION_PARENT_NOT_COMMITTED:{transaction_id}:{parent_state}"
+            )
+        if state == "RECOVERED" and parent_state == "COMMITTED":
+            findings.append(f"CURRENT_PROJECTION_PARENT_CHILD_DIVERGED:{transaction_id}")
+        expected_slot = "after" if state == "COMMITTED" else "before"
+        superseded = False
+        for target in payload["targets"]:
+            ref = str(target["ref"])
+            expected = target[expected_slot]
+            current = _projection_image_dict(
+                *_read_projection_image(_projection_target_path(root, ref))
+            )
+            if current != expected:
+                if state in {"COMMITTED", "RECOVERED"} and _image_reachable(
+                    str(expected["digest"]),
+                    str(current["digest"]),
+                    edges_by_ref.get(ref, {}),
+                ):
+                    superseded = True
+                    continue
+                findings.append(f"CURRENT_PROJECTION_GENERATION_DRIFT:{transaction_id}:{ref}")
+        if superseded and state in {"COMMITTED", "RECOVERED"}:
+            classification = "SUPERSEDED"
+        transactions.append(
+            {
+                "transaction_id": transaction_id,
+                "state": state,
+                "classification": classification,
+                "parent_plan_digest": str(payload["parent_plan_digest"]),
+                "authorization_id": str(payload["authorization_id"]),
+                "parent_state": parent_state,
+            }
+        )
+    return {
+        "schema_version": 2,
+        "kind": "CurrentProjectionInspectionV2",
+        "decision": "BLOCKED" if findings else "PASS",
+        "transactions": transactions,
+        "findings": findings,
+    }
+
+
 def plan_current_entry_refresh(project_root: Path) -> dict[str, Any]:
     """Plan ``state current-refresh`` from read-only observations."""
 
@@ -1637,9 +2409,7 @@ def plan_current_entry_refresh(project_root: Path) -> dict[str, Any]:
         ),
     ]
     try:
-        planned_targets, target_refs, semantic_input = _current_entry_refresh_plan(
-            project_root
-        )
+        planned_targets, target_refs, semantic_input = _current_entry_refresh_plan(project_root)
     except FileNotFoundError:
         return _state_dry_run_blocked_payload(
             operation="state.current-refresh",
@@ -1737,9 +2507,7 @@ def load_workflow_health(
     return payload
 
 
-def build_process_cost_health_summary(
-    report_ref: str, report: dict[str, Any]
-) -> dict[str, Any]:
+def build_process_cost_health_summary(report_ref: str, report: dict[str, Any]) -> dict[str, Any]:
     """只投影成本报告的 ref/digest/mode/decision/soft-risk count。"""
 
     if not _is_relative_state_ref(report_ref) or not report_ref.startswith("process/"):
@@ -2083,9 +2851,7 @@ def _derive_approved_pending_gate_patch(
             checkpoint=pending_gate,
         )
         head = projection.head(pending_gate)
-        gate_path = _resolve_runtime_ref(
-            project_root, "process/state/GATE-LEDGER.ndjson"
-        )
+        gate_path = _resolve_runtime_ref(project_root, "process/state/GATE-LEDGER.ndjson")
         gate_events, load_errors = event_ledger.load_events(gate_path)
         approvals = [
             item
@@ -2116,11 +2882,7 @@ def _derive_approved_pending_gate_patch(
     source_refs = list(
         dict.fromkeys(
             [
-                *(
-                    item
-                    for item in state.get("source_refs", [])
-                    if isinstance(item, str)
-                ),
+                *(item for item in state.get("source_refs", []) if isinstance(item, str)),
                 "process/state/GATE-LEDGER.ndjson",
                 head.result_ref,
             ]
@@ -2169,9 +2931,13 @@ def build_current_state_candidate(
         raise FileNotFoundError(f"STATE.current.json missing: {path}")
     patch_findings = validate_current_patch(patch, mode=mode)
     _raise_on_error(patch_findings, subject="current-state patch", actor=actor, reason=reason)
-    base = dict(base_state) if base_state is not None else load_current_state(
-        project_root,
-        read_context=read_context,
+    base = (
+        dict(base_state)
+        if base_state is not None
+        else load_current_state(
+            project_root,
+            read_context=read_context,
+        )
     )
     candidate = merge_current_state(base, patch, replace_paths=replace_paths)
     candidate_findings = validate_current_state_payload(candidate, mode=mode)
@@ -2870,10 +3636,7 @@ def check_current_state(
                         f"formal_truth_field_stale: {field} does not match the current formal truth"
                     )
             failure_truth = formal_snapshot.get("failure_truth")
-            if (
-                isinstance(failure_truth, dict)
-                and failure_truth.get("status") != "healthy"
-            ):
+            if isinstance(failure_truth, dict) and failure_truth.get("status") != "healthy":
                 codes = ",".join(failure_truth.get("finding_codes") or []) or "unknown"
                 formal_target.append(
                     "formal_failure_truth_nonhealthy: "
@@ -3080,9 +3843,7 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "decision": "PASS",
                     "operation": "state.projection-refresh",
-                    "formal_truth_source_digest": state["formal_truth_projection"][
-                        "source_digest"
-                    ],
+                    "formal_truth_source_digest": state["formal_truth_projection"]["source_digest"],
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -3117,12 +3878,8 @@ def main(argv: list[str] | None = None) -> int:
         if parsed.authorization is None:
             raise SystemExit("projection-correct --apply requires --authorization")
         try:
-            authorization_payload = json.loads(
-                parsed.authorization.read_text(encoding="utf-8")
-            )
-            authorization = ProjectionCorrectAuthorizationV2.from_mapping(
-                authorization_payload
-            )
+            authorization_payload = json.loads(parsed.authorization.read_text(encoding="utf-8"))
+            authorization = ProjectionCorrectAuthorizationV2.from_mapping(authorization_payload)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             raise SystemExit(f"projection-correct authorization is invalid: {exc}") from exc
         receipt = correct_state_projection_transaction(project_root, authorization)

@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from meta_flow.checks import cr_tracking, state_transition
-from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.execution_control.operation_admission import (
+    MutationPlanV2,
+    OperationAdmissionV1,
+)
+from meta_flow.project.process_route import IndependentProcessRoute, _resolve_runtime_ref
 from meta_flow.project.read_contract import ReadContextProtocol, ReadContractError
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import checkpoint_projection, current, event_ledger
@@ -48,11 +54,18 @@ from meta_flow.workflow.cr_records import (
     _load_json_object,
     _process_root,
     _rel,
-    discover_formal_crs,
 )
 from meta_flow.workflow.cr_status_transaction import (
     _apply_status_sync_transaction,
     _status_sync_facts,
+)
+from meta_flow.workflow.legacy_evidence_registry import (
+    FormalCRDiscoverySnapshotV1,
+    LegacyRegistrySnapshotV1,
+    build_partition_report,
+    discover_formal_cr_snapshot,
+    load_legacy_registry_snapshot,
+    snapshot_excluded_legacy_paths,
 )
 
 STATUS_SYNC_AUTHORIZATION_FIELDS = {
@@ -76,6 +89,27 @@ STATUS_SYNC_AUTHORIZATION_FIELDS = {
 STATUS_SYNC_AUTHORIZATION_SOURCE = "typed-user-confirmation"
 STATUS_SYNC_AUTHORIZATION_KIND = "cr-status-sync"
 STATUS_SYNC_OPERATION = "cr.status-sync"
+STATUS_SYNC_OPERATION_MAX_OBJECTS = 128
+
+
+def _formal_crs_from_snapshot(
+    project_root: Path,
+    snapshot: FormalCRDiscoverySnapshotV1,
+    *,
+    resolver: Any = _resolve_runtime_ref,
+) -> dict[str, Path]:
+    """从冻结 snapshot 还原 native CR 映射；不得触发目录扫描。"""
+
+    formal_crs: dict[str, Path] = {}
+    for logical_ref in snapshot.native_formal_cr_refs:
+        match = re.match(r"^(CR-\d+)(?:-|\.)", Path(logical_ref).name)
+        if match is None:
+            raise ValueError(f"snapshot native ref has no canonical CR identity: {logical_ref}")
+        cr_id = match.group(1)
+        if cr_id in formal_crs:
+            raise ValueError(f"snapshot contains duplicate native CR id: {cr_id}")
+        formal_crs[cr_id] = resolver(project_root, logical_ref)
+    return formal_crs
 
 
 @dataclass(frozen=True)
@@ -147,6 +181,32 @@ class StatusSyncPlan:
     targets: tuple[StatusSyncTarget, ...]
     reason: str = ""
     effective_at: str = ""
+    admission: OperationAdmissionV1 | None = None
+
+    @property
+    def mutation_plan(self) -> MutationPlanV2:
+        return MutationPlanV2(
+            operation=STATUS_SYNC_OPERATION,
+            decision=self.decision,
+            admission_digest=self.admission.admission_digest if self.admission else "",
+            operation_digest=_canonical_digest(
+                {
+                    "operation": STATUS_SYNC_OPERATION,
+                    "cr_id": self.cr_id,
+                    "work_id": self.work_id,
+                    "desired_transition": self.desired_transition,
+                    "effective_at": self.effective_at,
+                }
+            ),
+            target_preimages=tuple(
+                (target.ref, target.before_digest)
+                for target in sorted(self.targets, key=lambda item: item.ref)
+            ),
+            target_afterimages=tuple(
+                (target.ref, target.after_digest)
+                for target in sorted(self.targets, key=lambda item: item.ref)
+            ),
+        )
 
     def _digest_payload(self) -> dict[str, Any]:
         return {
@@ -161,6 +221,8 @@ class StatusSyncPlan:
             "scope_digest": self.scope_digest,
             "targets": [target.as_dict() for target in self.targets],
             "reason": self.reason,
+            "admission": self.admission.as_dict() if self.admission else None,
+            "mutation_plan": self.mutation_plan.as_dict(),
         }
 
     @property
@@ -184,7 +246,150 @@ class StatusSyncPlan:
             "mutation_count": 0,
             "plan_digest": self.plan_digest,
             "reason": self.reason,
+            "admission": self.admission.as_dict() if self.admission else None,
+            "admission_digest": (self.admission.admission_digest if self.admission else ""),
+            "mutation_plan": self.mutation_plan.as_dict(),
         }
+
+
+def _provider_identity_digest() -> str:
+    source_digest = sha256(Path(__file__).read_bytes()).hexdigest()
+    return _canonical_digest(
+        {
+            "provider": "meta-flow.cr-status-sync",
+            "source_digest": source_digest,
+        }
+    )
+
+
+def _load_formal_cr_partition(
+    project_root: Path,
+    *,
+    process_root: Path,
+    read_context: ReadContextProtocol,
+) -> tuple[FormalCRDiscoverySnapshotV1, frozenset[Path]]:
+    project_path = process_root / "PROJECT.yaml"
+    object_overrides: dict[str, tuple[dict[str, Any], bytes]] = {}
+    if project_path.is_file():
+        project = read_context.read_yaml_object(
+            "process/PROJECT.yaml",
+            loader=load_yaml_object,
+        )
+        project_raw = read_context.read_bytes("process/PROJECT.yaml")
+        object_overrides["process/PROJECT.yaml"] = (project, project_raw)
+    else:
+        project = {"project_id": "legacy-direct-fixture"}
+    route = IndependentProcessRoute(
+        project_root=project_root.resolve(),
+        process_root=process_root.resolve(),
+        project_id=str(project.get("project_id") or ""),
+        layout_version="operation-context-v1",
+        route_mode="frozen-operation-context",
+        source="OperationReadContext",
+    )
+    if project_path.is_file():
+        registry_ref = str(project.get("legacy_evidence_registry_ref") or "")
+        if registry_ref:
+            registry_ref = (
+                registry_ref if registry_ref.startswith("process/") else f"process/{registry_ref}"
+            )
+            registry_payload = read_context.read_yaml_object(
+                registry_ref,
+                loader=load_yaml_object,
+            )
+            object_overrides[registry_ref] = (
+                registry_payload,
+                read_context.read_bytes(registry_ref),
+            )
+        registry = load_legacy_registry_snapshot(
+            project_root,
+            consumer_id="cr-status-sync",
+            object_overrides=object_overrides,
+            route_override=route,
+        )
+    else:
+        empty_ids_digest = _canonical_digest(
+            {
+                "schema_version": 1,
+                "domain": "formal-cr-registered-legacy-ids-v1",
+                "payload": [],
+            }
+        )
+        empty_paths_digest = _canonical_digest(
+            {
+                "schema_version": 1,
+                "domain": "formal-cr-excluded-legacy-paths-v1",
+                "payload": [],
+            }
+        )
+        registry = LegacyRegistrySnapshotV1(
+            registry_logical_ref="",
+            registry_payload_digest=sha256(b"").hexdigest(),
+            entries=(),
+            registered_legacy_ids_digest=empty_ids_digest,
+            excluded_paths_digest=empty_paths_digest,
+        )
+    snapshot = discover_formal_cr_snapshot(
+        project_root,
+        registry,
+        route_override=route,
+        read_context=read_context,
+    )
+    return snapshot, snapshot_excluded_legacy_paths(
+        project_root,
+        snapshot,
+        route_override=route,
+    )
+
+
+def _snapshot_facts(
+    facts: dict[str, str],
+    snapshot: FormalCRDiscoverySnapshotV1,
+) -> dict[str, str]:
+    return {
+        **facts,
+        "legacy_registry_ref": snapshot.registry_logical_ref,
+        "legacy_registry_payload_digest": snapshot.registry_payload_digest,
+        "registered_legacy_ids_digest": snapshot.registered_legacy_ids_digest,
+        "excluded_legacy_paths_digest": snapshot.excluded_paths_digest,
+        "formal_cr_process_tree_manifest_digest": snapshot.process_tree_manifest_digest,
+        "formal_cr_discovery_snapshot_digest": snapshot.snapshot_digest,
+    }
+
+
+def _operation_admission(
+    project_root: Path,
+    *,
+    snapshot: FormalCRDiscoverySnapshotV1,
+    facts: dict[str, str],
+    scope_digest: str,
+    work_id: str,
+    read_context: ReadContextProtocol,
+) -> OperationAdmissionV1:
+    route_profile_digest = _canonical_digest("no-work-route")
+    if work_id:
+        route_profile_digest = _canonical_digest(
+            load_work(
+                read_context.repository_root,
+                work_id,
+                read_context=read_context,
+            ).route_profile.as_dict()
+        )
+    return OperationAdmissionV1(
+        snapshot_digest=snapshot.snapshot_digest,
+        release_oid=facts.get("release_head_oid", ""),
+        process_oid=facts.get("process_head_oid", ""),
+        provider_identity_digest=_provider_identity_digest(),
+        route_profile_digest=route_profile_digest,
+        work_scope_digest=scope_digest,
+        authorization_identity_digest=_canonical_digest(
+            {
+                "authorization_source": STATUS_SYNC_AUTHORIZATION_SOURCE,
+                "authorization_kind": STATUS_SYNC_AUTHORIZATION_KIND,
+                "single_use": True,
+            }
+        ),
+    )
 
 
 def _target(
@@ -324,7 +529,7 @@ def plan_status_sync(
         operation_id=f"cr.status-sync.plan:{cr_id}",
         operation_kind="plan",
         allowed_reads=("process/**", "works/**"),
-        max_objects=128,
+        max_objects=STATUS_SYNC_OPERATION_MAX_OBJECTS,
     )
     context.assert_operation("plan")
 
@@ -343,6 +548,13 @@ def plan_status_sync(
         cr_tracking.normalize_lifecycle_status(status) == "closed"
         and cr_tracking.normalize_gate_status(gate_status) == DIRECT_CLOSED_GATE_STATUS
     )
+    if (
+        cr_tracking.normalize_lifecycle_status(status) == "closed"
+        and gate_status
+        and cr_tracking.normalize_gate_status(gate_status)
+        not in {CLOSED_GATE_STATUS, DIRECT_CLOSED_GATE_STATUS}
+    ):
+        raise ValueError(f"status=closed requires gate_status={CLOSED_GATE_STATUS}")
     try:
         facts, scope_digest = _status_sync_facts(
             project_root,
@@ -421,10 +633,57 @@ def plan_status_sync(
                     timestamp,
                 )
             )
-    crs = discover_formal_crs(
+    try:
+        discovery_snapshot, excluded_legacy_paths = _load_formal_cr_partition(
+            project_root,
+            process_root=context.repository_root,
+            read_context=context,
+        )
+    except (OSError, ValueError) as exc:
+        return finish(
+            StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                f"formal CR partition is unavailable: {exc}; mutation=0",
+                timestamp,
+            )
+        )
+    facts = _snapshot_facts(facts, discovery_snapshot)
+    admission = _operation_admission(
         project_root,
-        _resolve_runtime_ref_fn=resolve_from_context,
-        _rel_fn=rel_from_context,
+        snapshot=discovery_snapshot,
+        facts=facts,
+        scope_digest=scope_digest,
+        work_id=work_id,
+        read_context=context,
+    )
+    partition_report = build_partition_report(discovery_snapshot)
+    if partition_report.decision != "PASS":
+        return finish(
+            StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "formal CR partition blocked: "
+                + ",".join(partition_report.reason_codes)
+                + "; mutation=0",
+                timestamp,
+                admission,
+            )
+        )
+    crs = _formal_crs_from_snapshot(
+        project_root,
+        discovery_snapshot,
+        resolver=resolve_from_context,
     )
     if cr_id not in crs:
         raise FileNotFoundError(f"未找到正式 CR: {cr_id}")
@@ -476,6 +735,8 @@ def plan_status_sync(
                 read_context=context,
                 resolve_runtime_ref_fn=resolve_from_context,
                 rel_fn=rel_from_context,
+                excluded_legacy_paths=excluded_legacy_paths,
+                discovery_snapshot=discovery_snapshot,
             )
         except ValueError as exc:
             return finish(
@@ -614,6 +875,8 @@ def plan_status_sync(
         read_context=context,
         resolve_runtime_ref_fn=resolve_from_context,
         rel_fn=rel_from_context,
+        excluded_legacy_paths=excluded_legacy_paths,
+        discovery_snapshot=discovery_snapshot,
     )
     expected_index["generated_at"] = timestamp
     index_after = json.dumps(expected_index, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -919,6 +1182,7 @@ def plan_status_sync(
                 (),
                 "status tuple and native projections are already synchronized",
                 timestamp,
+                admission,
             )
         )
     return finish(
@@ -931,6 +1195,7 @@ def plan_status_sync(
             scope_digest,
             tuple(sorted(targets, key=lambda item: item.order)),
             effective_at=timestamp,
+            admission=admission,
         )
     )
 
@@ -1045,12 +1310,19 @@ def apply_status_sync(
         allowed_reads=tuple(
             dict.fromkeys(
                 (
+                    "process/PROJECT.yaml",
+                    "process/phases/**",
+                    "process/governance/**",
+                    "process/changes/**",
+                    "process/works/**",
                     f"works/{plan.work_id}/WORK.yaml",
                     *(target.ref for target in plan.targets),
                 )
             )
         ),
-        max_objects=max(1, len(plan.targets) + 1),
+        # apply 必须重建与 plan 相同的全 formal-partition 快照；对象数取决于
+        # 项目中 native/legacy CR 数量，而不是本次 mutation target 数量。
+        max_objects=STATUS_SYNC_OPERATION_MAX_OBJECTS,
         scope_digest=plan.scope_digest,
         authorization_digest=authorization.plan_digest,
     )
@@ -1067,6 +1339,29 @@ def apply_status_sync(
             dirty_path_digest=_dirty_path_digest,
             read_context=context,
         )
+        observed_snapshot, _excluded_legacy_paths = _load_formal_cr_partition(
+            project_root,
+            process_root=context.repository_root,
+            read_context=context,
+        )
+        observed_report = build_partition_report(observed_snapshot)
+        if observed_report.decision != "PASS":
+            context.close()
+            return {
+                "status": "BLOCKED",
+                "reason": "formal CR partition drifted to BLOCKED: "
+                + ",".join(observed_report.reason_codes),
+                "mutation_count": 0,
+            }
+        observed_facts = _snapshot_facts(observed_facts, observed_snapshot)
+        observed_admission = _operation_admission(
+            project_root,
+            snapshot=observed_snapshot,
+            facts=observed_facts,
+            scope_digest=observed_scope,
+            work_id=plan.work_id,
+            read_context=context,
+        )
     except ReadContractError as exc:
         context.close()
         return {
@@ -1074,17 +1369,13 @@ def apply_status_sync(
             "reason": f"{exc.error_code}: {exc}",
             "mutation_count": 0,
         }
-    if observed_facts != plan.expected_facts or observed_scope != plan.scope_digest:
+    except (OSError, ValueError) as exc:
         context.close()
         return {
             "status": "BLOCKED",
-            "reason": "expected facts or scope digest drifted",
+            "reason": f"formal CR admission could not be rebuilt: {exc}",
             "mutation_count": 0,
         }
-    transaction_root = _transaction_root(
-        project_root,
-        process_root=context.repository_root,
-    )
     try:
         for target in plan.targets:
             observed_text = context.read_text(target.ref) if target.path.is_file() else ""
@@ -1102,7 +1393,98 @@ def apply_status_sync(
             "reason": f"{exc.error_code}: {exc}",
             "mutation_count": 0,
         }
+    if plan.admission is None:
+        context.close()
+        return {
+            "status": "BLOCKED",
+            "reason": "status-sync plan lacks OperationAdmissionV1; build a fresh plan",
+            "mutation_count": 0,
+        }
+    if observed_admission != plan.admission:
+        context.close()
+        return {
+            "status": "BLOCKED",
+            "reason": "status-sync OperationAdmissionV1 drifted",
+            "mutation_count": 0,
+        }
+    if observed_facts != plan.expected_facts or observed_scope != plan.scope_digest:
+        context.close()
+        return {
+            "status": "BLOCKED",
+            "reason": "expected facts or scope digest drifted",
+            "mutation_count": 0,
+        }
+    transaction_root = _transaction_root(
+        project_root,
+        process_root=context.repository_root,
+    )
     context.close()
+
+    def validate_admission_under_writer_lock() -> str:
+        """在授权 claim 和首笔写入前重新冻结所有非 target admission。"""
+
+        locked_context = OperationReadContext(
+            _process_root(project_root),
+            operation_id=f"cr.status-sync.locked-admission:{plan.cr_id}",
+            operation_kind="apply",
+            allowed_reads=tuple(
+                dict.fromkeys(
+                    (
+                        "process/PROJECT.yaml",
+                        "process/phases/**",
+                        "process/governance/**",
+                        "process/changes/**",
+                        "process/works/**",
+                        f"works/{plan.work_id}/WORK.yaml",
+                    )
+                )
+            ),
+            max_objects=STATUS_SYNC_OPERATION_MAX_OBJECTS,
+            scope_digest=plan.scope_digest,
+            authorization_digest=authorization.plan_digest,
+        )
+        try:
+            locked_context.assert_operation("apply")
+            locked_context.assert_snapshot(
+                scope_digest=plan.scope_digest,
+                authorization_digest=authorization.plan_digest,
+            )
+            locked_facts, locked_scope = _status_sync_facts(
+                project_root,
+                work_id=plan.work_id,
+                canonical_digest=_canonical_digest,
+                dirty_path_digest=_dirty_path_digest,
+                read_context=locked_context,
+            )
+            locked_snapshot, _locked_exclusions = _load_formal_cr_partition(
+                project_root,
+                process_root=locked_context.repository_root,
+                read_context=locked_context,
+            )
+            locked_report = build_partition_report(locked_snapshot)
+            if locked_report.decision != "PASS":
+                return "lock-bound formal CR partition is BLOCKED: " + ",".join(
+                    locked_report.reason_codes
+                )
+            locked_facts = _snapshot_facts(locked_facts, locked_snapshot)
+            locked_admission = _operation_admission(
+                project_root,
+                snapshot=locked_snapshot,
+                facts=locked_facts,
+                scope_digest=locked_scope,
+                work_id=plan.work_id,
+                read_context=locked_context,
+            )
+            if locked_admission != plan.admission:
+                return "status-sync lock-bound OperationAdmissionV1 drifted"
+            if locked_facts != plan.expected_facts or locked_scope != plan.scope_digest:
+                return "status-sync lock-bound facts or scope digest drifted"
+            return ""
+        except (OSError, ReadContractError, ValueError) as exc:
+            return f"status-sync lock-bound admission could not be rebuilt: {exc}"
+        finally:
+            locked_context.close()
+
     validated = {
         "plan": {
             "cr_id": plan.cr_id,
@@ -1112,6 +1494,7 @@ def apply_status_sync(
             "expected_facts": dict(plan.expected_facts),
             "scope_digest": plan.scope_digest,
             "plan_digest": plan.plan_digest,
+            "mutation_plan": plan.mutation_plan.as_dict(),
             "targets": [
                 {
                     "order": target.order,
@@ -1137,6 +1520,7 @@ def apply_status_sync(
         fail_recovery=_fail_recovery,
         fault=_fault,
         transaction_root=transaction_root,
+        lock_bound_admission_validator=validate_admission_under_writer_lock,
     )
 
 
@@ -1179,8 +1563,22 @@ def sync_cr_status(
     )
     if result["status"] not in {"PASS", "NO_CHANGE"}:
         raise RuntimeError(f"status-sync {result['status']}: {result.get('reason', '')}")
+    final_context = OperationReadContext(
+        _process_root(project_root),
+        operation_id=f"cr.status-sync.final:{cr_id}",
+        operation_kind="check",
+        allowed_reads=("process/**", "works/**"),
+        max_objects=STATUS_SYNC_OPERATION_MAX_OBJECTS,
+    )
+    final_snapshot, _excluded_legacy_paths = _load_formal_cr_partition(
+        project_root,
+        process_root=final_context.repository_root,
+        read_context=final_context,
+    )
+    final_context.close()
+    formal_crs = _formal_crs_from_snapshot(project_root, final_snapshot)
     if result["status"] == "NO_CHANGE":
-        cr_path = discover_formal_crs(project_root)[cr_id]
+        cr_path = formal_crs[cr_id]
         return {
             "cr": cr_path,
             "summary": _resolve_runtime_ref(
@@ -1196,7 +1594,7 @@ def sync_cr_status(
         }
     by_ref = result["paths"]
     return {
-        "cr": by_ref[_rel(project_root, discover_formal_crs(project_root)[cr_id])],
+        "cr": by_ref[_rel(project_root, formal_crs[cr_id])],
         "summary": by_ref[(CR_SUMMARY_ROOT_REL / f"{cr_id}.summary.json").as_posix()],
         "evidence_index": by_ref[(CR_ARCHIVE_ROOT_REL / cr_id / "evidence-index.json").as_posix()],
         "index": by_ref[CR_INDEX_REL.as_posix()],

@@ -111,9 +111,15 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
             "STATUS_SYNC_AUTHORIZATION_SOURCE",
             "STATUS_SYNC_AUTHORIZATION_KIND",
             "STATUS_SYNC_OPERATION",
+            "STATUS_SYNC_OPERATION_MAX_OBJECTS",
+            "_formal_crs_from_snapshot",
             "StatusSyncTarget",
             "StatusSyncAuthorization",
             "StatusSyncPlan",
+            "_provider_identity_digest",
+            "_load_formal_cr_partition",
+            "_snapshot_facts",
+            "_operation_admission",
             "_target",
             "_json_semantically_matches",
             "_ledger_contains_status_sync_transition",
@@ -171,6 +177,27 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
             self.assertEqual("status_sync", events[-1]["event"])
             self.assertIsNone(state["active_change"])
             self.assertEqual("delivered", state["next_action"]["stop_reason"])
+
+    def test_apply_read_budget_covers_the_frozen_formal_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, _process, _cr_path, _scope = write_termination_fixture(Path(directory))
+            for number in range(102, 118):
+                write_cr(release, f"CR-{number}")
+            plan = cr_status_sync.plan_status_sync(
+                release,
+                "CR-101",
+                status="closed",
+                readiness="READY_WITH_RISK",
+                gate_status="cp8_closed",
+                work_id="WORK-101",
+                rebuild_corrupt_index=True,
+                effective_at="2026-07-27T02:00:00+00:00",
+            )
+
+            result = _apply_ready(release, plan)
+
+            self.assertEqual("PASS", result["status"])
+            self.assertGreater(result["mutation_count"], 0)
 
     def test_plan_projects_body_and_canonical_checkpoint_without_duplicate_truth_target(
         self,
@@ -439,12 +466,16 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
                 allowed_reads=tuple(
                     dict.fromkeys(
                         (
+                            "process/PROJECT.yaml",
+                            "process/phases/**",
+                            "process/changes/**",
+                            "process/works/**",
                             "works/WORK-101/WORK.yaml",
                             *(target.ref for target in plan.targets),
                         )
                     )
                 ),
-                max_objects=len(plan.targets) + 1,
+                max_objects=len(plan.targets) + 8,
                 scope_digest=plan.scope_digest,
                 authorization_digest=authorization.plan_digest,
                 metrics=apply_metrics,
@@ -512,7 +543,15 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
             }
             self.assertEqual("READY", plan.decision)
             self.assertEqual(1, route_health.call_count)
-            self.assertEqual({path: 1 for path in observed}, observed)
+            self.assertEqual(
+                {
+                    release / ".meta-flow" / "workspace.yaml": 1,
+                    process / "PROJECT.yaml": 2,
+                    process / ".meta-flow-process.yaml": 1,
+                    cr_path: 1,
+                },
+                observed,
+            )
 
     def test_apply_resolves_binding_route_once_and_reuses_frozen_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -564,8 +603,17 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
                 )
             }
             self.assertEqual("PASS", result["status"])
-            self.assertEqual(1, route_health.call_count)
-            self.assertEqual({path: 1 for path in observed}, observed)
+            # apply 在外层比较后，必须在 writer lock 内重新解析一次独立 route/read
+            # snapshot，防止 admission 与首笔写入之间发生 TOCTOU。
+            self.assertEqual(2, route_health.call_count)
+            self.assertEqual(
+                {
+                    release / ".meta-flow" / "workspace.yaml": 2,
+                    process / "PROJECT.yaml": 4,
+                    process / ".meta-flow-process.yaml": 2,
+                },
+                observed,
+            )
 
     def test_apply_blocks_plan_context_reuse_and_target_preimage_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

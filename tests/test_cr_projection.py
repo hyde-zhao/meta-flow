@@ -160,6 +160,47 @@ def test_checkpoint_result_projection_rejects_duplicate_or_incomplete_heads(
         cr_projection._checkpoint_result_projection(tmp_path, "CR-069")
 
 
+def test_checkpoint_result_projection_includes_typed_passage_approvals(
+    tmp_path: Path,
+) -> None:
+    gate_ledger = tmp_path / "process/state/GATE-LEDGER.ndjson"
+    gate_ledger.parent.mkdir(parents=True)
+    gate_ledger.write_text(
+        json.dumps(
+            {
+                "event_id": "GATE-CR069-CP3-APPROVED",
+                "event_type": "human_gate_approval",
+                "gate": "GATE-CR069-CP3",
+                "status": "approved",
+                "decision": "approve",
+                "cr_id": "CR-069",
+                "work_id": "W-069",
+                "approval_kind_version": 1,
+                "approval_kind": "checkpoint_passage",
+                "checkpoint": "CP3",
+                "result_ref": "process/checks/CP3-CR069.result.json",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    projection = Mock(findings=(), heads=())
+
+    with patch.object(
+        cr_projection.checkpoint_projection,
+        "load_checkpoint_projection",
+        return_value=projection,
+    ):
+        rows = cr_projection._checkpoint_result_projection(tmp_path, "CR-069")
+
+    assert rows == {
+        "CP3": cr_projection.CheckpointIndexRowV1(
+            "CP3", "APPROVED", "process/checks/CP3-CR069.result.json"
+        )
+    }
+
+
 def test_checkpoint_index_renderer_updates_inserts_orders_and_is_idempotent() -> None:
     text = (
         "# CR-069\n\n## Checkpoint Index\n\n"
@@ -201,6 +242,38 @@ def test_checkpoint_index_renderer_updates_inserts_orders_and_is_idempotent() ->
         checkpoint_results=rows,
     ) == rendered
     assert "## Next\n\nkeep\n" in rendered
+
+
+def test_checkpoint_index_renderer_creates_the_canonical_section_when_missing() -> None:
+    text = "# CR-069\n\nminimal bootstrap body\n"
+    rows = {
+        "CP2": cr_projection.CheckpointIndexRowV1(
+            "CP2", "APPROVED", "process/checks/CP2.result.json"
+        ),
+        "CP5": cr_projection.CheckpointIndexRowV1(
+            "CP5", "APPROVED", "process/checks/CP5.result.json"
+        ),
+    }
+
+    rendered = cr_projection.render_status_body_projection(
+        text,
+        lifecycle_status="active",
+        readiness_status="NOT_READY",
+        gate_status="cp8_pending",
+        checkpoint_results=rows,
+    )
+
+    assert rendered.count("## Checkpoint Index") == 1
+    assert "| CP2 | APPROVED | `process/checks/CP2.result.json` |" in rendered
+    assert "| CP5 | APPROVED | `process/checks/CP5.result.json` |" in rendered
+    assert "| CP8 | pending | — |" in rendered
+    assert cr_projection.render_status_body_projection(
+        rendered,
+        lifecycle_status="active",
+        readiness_status="NOT_READY",
+        gate_status="cp8_pending",
+        checkpoint_results=rows,
+    ) == rendered
 
 
 def test_checkpoint_index_renderer_supports_two_columns_and_preserves_extra_columns() -> None:
@@ -381,10 +454,8 @@ def test_checkpoint_index_renderer_fails_closed_on_malformed_tables(
     assert text.encode("utf-8") == before
 
 
-def test_checkpoint_index_renderer_rejects_duplicate_section_and_keeps_absent_optional() -> None:
+def test_checkpoint_index_renderer_rejects_duplicate_section() -> None:
     row = cr_projection.CheckpointIndexRowV1("CP0", "PASS", "result.json")
-    absent = "# CR\n\nno checkpoint section\n"
-    assert cr_projection._render_checkpoint_index_rows(absent, {"CP0": row}) == absent
     duplicate = (
         "## Checkpoint Index\n| Checkpoint | Status |\n|---|---|\n"
         "## Checkpoint Index\n| Checkpoint | Status |\n|---|---|\n"
@@ -527,6 +598,63 @@ def test_summary_rejects_invalid_latest_typed_gate_approval(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="gate decision owner approval is invalid"):
         cr_projection.summary_from_cr_file(tmp_path, cr_path)
+
+
+def test_summary_non_passage_approval_resolves_its_launch_without_reopening_passage(
+    tmp_path: Path,
+) -> None:
+    cr_path = _write_cr(tmp_path)
+    gate_ledger = tmp_path / "process/state/GATE-LEDGER.ndjson"
+    gate_ledger.parent.mkdir(parents=True)
+    events = (
+        {
+            "event_id": "GATE-CR101-CP5-APPROVED",
+            "event_type": "human_gate_approval",
+            "gate": "GATE-CR101-CP5",
+            "status": "approved",
+            "decision": "approve",
+            "cr_id": "CR-101",
+            "work_id": "W-101",
+            "approval_kind_version": 1,
+            "approval_kind": "checkpoint_passage",
+            "checkpoint": "CP5",
+            "result_ref": "process/checks/CP5-CR-101.result.json",
+        },
+        {
+            "event_id": "GATE-CR101-RECOVERY-LAUNCHED",
+            "event_type": "human_gate_launched",
+            "gate": "GATE-CR101-RECOVERY",
+            "status": "pending_user_decision",
+            "decision": "pending_user_decision",
+            "cr_id": "CR-101",
+            "work_id": "W-101",
+            "checkpoint": "CP7",
+        },
+        {
+            "event_id": "GATE-CR101-RECOVERY-APPROVED",
+            "event_type": "human_gate_approval",
+            "gate": "GATE-CR101-RECOVERY",
+            "status": "approved",
+            "decision": "approve",
+            "cr_id": "CR-101",
+            "work_id": "W-101",
+            "checkpoint": "CP7",
+            "approval_kind_version": 1,
+            "approval_kind": "recovery_authorization",
+            "recovery_ordinal": 1,
+            "authorized_actions": ["state.projection-correct"],
+            "decision_ref": "process/checkpoints/CR101-RECOVERY.md",
+        },
+    )
+    gate_ledger.write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = cr_projection.summary_from_cr_file(tmp_path, cr_path)
+
+    assert summary["decision_status"] == "approved"
+    assert cr_projection.validate_summary_semantics(tmp_path, "CR-101", summary) == []
 
 
 @pytest.mark.parametrize(
@@ -851,6 +979,7 @@ def test_native_cr_status_projection_requires_four_source_convergence(tmp_path: 
         "ledger_event_id": "CR-101-CLOSED",
         "decision": "PASS",
         "findings": [],
+        "partition_snapshot_digest": "",
         "kind": "NativeCRStatusProjectionV1",
         "schema_version": 1,
     }

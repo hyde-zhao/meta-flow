@@ -26,21 +26,25 @@ class CRCliContractTests(unittest.TestCase):
         cr_path = root / "process" / "changes" / "CR-101.md"
         return {
             "AggregateCompletionProjector": Mock,
+            "apply_bootstrap_cr": Mock(return_value={"decision": "PASS", "paths": {}}),
             "apply_cr_termination": Mock(return_value={"status": "PASS"}),
             "apply_status_sync": Mock(return_value={"status": "PASS"}),
-            "bootstrap_cr": Mock(return_value={"cr": cr_path}),
             "build_impact_report": Mock(return_value={"summary": {}}),
             "close_cr": Mock(return_value={"cr": cr_path}),
             "collect_check_errors": Mock(return_value=[]),
             "collect_check_warnings": Mock(return_value=[]),
             "conflict_report": Mock(return_value=([], [])),
             "discover_formal_crs": Mock(return_value={"CR-101": cr_path}),
+            "inspect_bootstrap_transactions": Mock(
+                return_value={"decision": "PASS", "transactions": []}
+            ),
             "inspect_status_sync_transactions": Mock(
                 return_value={"decision": "PASS", "transaction_count": 0}
             ),
             "load_status_sync_authorization": Mock(return_value=object()),
             "load_termination_authorization": Mock(return_value=object()),
             "plan_cr_termination": Mock(return_value=plan),
+            "plan_bootstrap_cr": Mock(return_value=plan),
             "plan_index": Mock(
                 return_value={
                     "decision": "READY",
@@ -61,6 +65,9 @@ class CRCliContractTests(unittest.TestCase):
             ),
             "recover_status_sync_transaction": Mock(
                 return_value={"status": "RECOVERED", "mutation_count": 0}
+            ),
+            "recover_bootstrap_transaction": Mock(
+                return_value={"decision": "RECOVERED", "mutation_count": 0}
             ),
             "rel": Mock(return_value="process/changes/CR-INDEX.json"),
             "render_cr_brief": Mock(return_value="# CR-101\n"),
@@ -263,14 +270,15 @@ class CRCliContractTests(unittest.TestCase):
                     ),
                 )
 
-            dependencies["bootstrap_cr"].assert_called_once_with(
+            dependencies["plan_bootstrap_cr"].assert_called_once_with(
                 root.resolve(),
                 cr_id="CR-101",
                 title="Meta Flow adoption bootstrap",
                 scope="Bootstrap Meta Flow adoption readiness for this target project.",
-                gate_status="cp2_pending",
-                readiness="READY",
+                gate_status="not_started",
+                readiness="not_ready",
                 rebuild_corrupt=True,
+                effective_at="",
             )
 
     def test_help_unknown_and_invalid_paths_keep_exit_mapping(self) -> None:

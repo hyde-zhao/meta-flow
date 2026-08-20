@@ -1,0 +1,363 @@
+{
+  "kind": "ProviderReleaseQualificationEvidenceV1",
+  "schema_version": 1,
+  "package_name": "meta-flow",
+  "package_version": "0.6.3",
+  "qualified_at": "2026-08-20T14:47:36Z",
+  "pre_materialization_release_oid": "e1bea23be6376ad902f24896efde68384ee7570a",
+  "process_oid": "8147e528dbef009c479af56248d1b9291e6377ef",
+  "overall_decision": "PASS_WITH_BASELINE_LIMITATION",
+  "qualification_scope": {
+    "schema_version": 1,
+    "project_id": "meta-flow",
+    "cr_id": "CR-074",
+    "story_id": "STORY-CR074-S05",
+    "receipt_revision": 10,
+    "cp7_event_id": "CP7-CR074-AGGREGATE-RESULT-V2",
+    "release_oid": "e1bea23be6376ad902f24896efde68384ee7570a",
+    "process_oid": "8147e528dbef009c479af56248d1b9291e6377ef",
+    "fixed_receipt_ref": "meta_flow/execution_control/provider/activation-receipt-v10.json",
+    "owned_refs": [
+      "docs/release/PROVIDER-QUALIFICATION-0.6.3.json",
+      "process/release/CR-074-PROVIDER-RECEIPT-V10-DISPATCH.json",
+      "process/release/CR-074-PROVIDER-RECEIPT-V10-SCANNER.receipt.json",
+      "process/release/CR-074-PROVIDER-RECEIPT-V10-FINAL-MANIFEST.receipt.json"
+    ],
+    "provider_source_set_digest": "0f5e67f64ce922cbcc9ebdba8b7924845c33b88ed39fa535264303c72041bcaa",
+    "scanner_source_set_digest": "5624391ea32e41fbb92642f78b6707171266b09077383b5029e8d8bea7f8731f",
+    "detector_changed_source_manifest_digest": "b80a3760fad04da6d96aa6dd64413455b33a9796f3052e88b29c6744fd560ec4",
+    "candidate_changed_manifest_digest": "291311c3903a30ec19a889c6644b246959044eeb10f9f7701d387cf8b24efcf5",
+    "scope_digest": "5ed17f21e458dc86c63f532ce066696258384f2c148516b7fdbbc0c5cd0eb3d0"
+  },
+  "fingerprint_policy": {
+    "candidate_changed_manifest_basis": "release worktree immediately before the four owned evidence outputs were created",
+    "excluded_evidence_refs": [
+      "docs/release/PROVIDER-QUALIFICATION-0.6.3.json",
+      "process/release/CR-074-PROVIDER-RECEIPT-V10-DISPATCH.json",
+      "process/release/CR-074-PROVIDER-RECEIPT-V10-SCANNER.receipt.json",
+      "process/release/CR-074-PROVIDER-RECEIPT-V10-FINAL-MANIFEST.receipt.json"
+    ]
+  },
+  "layers": {
+    "candidate_targeted": {
+      "profile": {
+        "name": "cr074-v10-authority-scanner-targeted-0.6.3-v1",
+        "scope": [
+          "CR-074 formal-truth and atomic lifecycle fixtures under tests/cr074",
+          "activation receipt v10 rotation, closed authority schema and create-only security paths",
+          "package-owned consumer scanner determinism, classification and negative security edges"
+        ],
+        "excluded": [
+          "tests/test_execution_control_migration.py::test_packaged_v10_receipt_is_current_after_materialization"
+        ],
+        "exclusion_reason": "The assertion requires the separately authorized create-only v10 materialization; activation-receipt-v10.json is intentionally absent."
+      },
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--frozen",
+          "--no-sync",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "tests/cr074",
+          "tests/test_execution_control_migration.py",
+          "tests/test_execution_control_consumer_scan.py",
+          "--deselect",
+          "tests/test_execution_control_migration.py::test_packaged_v10_receipt_is_current_after_materialization"
+        ],
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTEST_ADDOPTS": "-p no:cacheprovider"
+        }
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "passed": 114,
+        "deselected": 1,
+        "duration_seconds": "170.82",
+        "summary": "114 passed; the one named post-materialization packaged-current assertion was not executed."
+      },
+      "receipt": {
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "schema_version": 1,
+        "layer": "candidate_targeted",
+        "decision": "PASS",
+        "package_version": "0.6.3",
+        "provider_source_set_digest": "0f5e67f64ce922cbcc9ebdba8b7924845c33b88ed39fa535264303c72041bcaa"
+      }
+    },
+    "candidate_compatibility": {
+      "profile": {
+        "name": "cr074-affected-provider-compatibility-0.6.3-v1",
+        "strategy": "initial-affected-set-plus-exact-failure-subset-rerun",
+        "scope": [
+          "CR analysis, lifecycle, projection, status-sync and formal-state compatibility",
+          "provider artifact, installer and runtime identity compatibility",
+          "public operation, route plan, Work store and Work lifecycle compatibility"
+        ],
+        "reuse_rule": "The 562 initially passing nodes and 75 passing subtests are reused because the repairs were test-fixture-only; the exact 22 failed nodes were rerun on the final fixture bytes. The complete affected set was not rerun."
+      },
+      "command": {
+        "initial_argv": [
+          "uv", "run", "--frozen", "--no-sync", "--python", "3.11", "pytest", "-q",
+          "tests/test_adoption_readiness.py",
+          "tests/test_cr072_release_asset_completeness.py",
+          "tests/test_cr_analysis.py",
+          "tests/test_cr_cli.py",
+          "tests/test_cr_index.py",
+          "tests/test_cr_lifecycle.py",
+          "tests/test_cr_projection.py",
+          "tests/test_cr_status_sync.py",
+          "tests/test_legacy_evidence_registry.py",
+          "tests/test_post_close.py",
+          "tests/test_provider_runtime_identity.py",
+          "tests/test_public_operation_contracts.py",
+          "tests/test_route_plan.py",
+          "tests/test_state_formal_projection.py",
+          "tests/test_vnext_work_store_cli.py",
+          "tests/test_work_lifecycle_transaction.py",
+          "tests/test_provider_artifact_receipt.py",
+          "tests/test_provider_installer_identity.py",
+          "tests/test_vnext_work_usage.py",
+          "tests/test_cli_lifecycle.py"
+        ],
+        "rerun_failed_node_ids": [
+          "tests/test_cr_analysis.py::CRAnalysisTests::test_collect_check_errors_rejects_invalid_index_cr_type",
+          "tests/test_cr_analysis.py::CRAnalysisTests::test_collect_check_warnings_reports_open_governance_overlap",
+          "tests/test_cr_analysis.py::CRAnalysisTests::test_conflict_reports_cover_indexed_and_proposed_zero_write_paths",
+          "tests/test_cr_analysis.py::CRAnalysisTests::test_cr_check_rejects_release_follow_up_without_summary_disposition",
+          "tests/test_cr_analysis.py::CRAnalysisTests::test_proposed_conflict_rejects_invalid_and_existing_ids",
+          "tests/test_cr_analysis.py::CRAnalysisTests::test_render_cr_and_goal_briefs_preserve_goal_and_impact_golden",
+          "tests/test_cr_lifecycle.py::CRLifecycleFacadeSeamTests::test_projection_injects_current_resolver_rel_and_internal_index_loader",
+          "tests/test_provider_runtime_identity.py::test_external_consumer_mutation_is_blocked_for_dirty_editable_provider",
+          "tests/test_provider_runtime_identity.py::test_invalid_provider_mode_fails_without_entering_domain_operation",
+          "tests/test_public_operation_contracts.py::PublicOperationContractTests::test_four_real_console_l3_journeys_and_failure_injections",
+          "tests/test_state_formal_projection.py::test_enforce_rejects_state_that_is_internally_consistent_but_formally_stale",
+          "tests/test_state_formal_projection.py::test_projection_refresh_is_zero_write_then_transactionally_converges",
+          "tests/test_state_formal_projection.py::test_formal_snapshot_includes_direct_project_work",
+          "tests/test_state_formal_projection.py::test_formal_snapshot_rejects_unsafe_direct_project_work_ref",
+          "tests/test_state_formal_projection.py::test_formal_refresh_exactly_replaces_stale_phase_collection",
+          "tests/test_state_formal_projection.py::test_projection_refresh_preserves_pending_human_gate_stop_semantics",
+          "tests/test_state_formal_projection.py::test_projection_refresh_preserves_single_active_cr_failure_stop",
+          "tests/test_state_formal_projection.py::test_projection_refresh_clears_failure_stop_after_formal_cr_closes",
+          "tests/test_state_formal_projection.py::test_projection_refresh_converges_pending_gate_bound_to_current_head",
+          "tests/test_state_formal_projection.py::test_projection_refresh_keeps_pending_gate_when_approval_targets_old_head",
+          "tests/test_state_formal_projection.py::test_formal_cr_truth_overrides_stale_active_ledger_event",
+          "tests/test_state_formal_projection.py::test_formal_cr_identity_mismatch_fails_closed"
+        ],
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTEST_ADDOPTS": "-p no:cacheprovider"
+        },
+        "full_affected_set_rerun": false
+      },
+      "result": {
+        "decision": "PASS",
+        "initial_run": {
+          "exit_code": 1,
+          "passed": 562,
+          "failed": 22,
+          "subtests_passed": 75,
+          "warnings": 2,
+          "duration_seconds": "293.97"
+        },
+        "repair_scope": "test-fixture-only; production route and provider fail-closed behavior were not relaxed",
+        "failed_subset_rerun": {
+          "exit_code": 0,
+          "passed": 22,
+          "failed": 0,
+          "duration_seconds": "74.04"
+        },
+        "reused_initial_passed": 562,
+        "effective_covered_nodes": 584,
+        "full_affected_set_rerun": false,
+        "summary": "Composite evidence: 562 initial PASS plus 75 passing subtests remained current; all original 22 failures passed on final fixture bytes."
+      },
+      "receipt": {
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "schema_version": 1,
+        "layer": "candidate_compatibility",
+        "decision": "PASS",
+        "package_version": "0.6.3",
+        "provider_source_set_digest": "0f5e67f64ce922cbcc9ebdba8b7924845c33b88ed39fa535264303c72041bcaa",
+        "composite_evidence": true
+      }
+    },
+    "candidate_full": {
+      "profile": {
+        "name": "published-0.6.2-full-baseline-impact-currentness-0.6.3-v1",
+        "scope": [
+          "reuse the immutable full evidence embedded in the published 0.6.2 activation receipt v9",
+          "bind the 0.6.3 changed-source, provider-source, scanner and detector fingerprints",
+          "require current targeted, affected compatibility and structural closure evidence"
+        ],
+        "limitation": "No 0.6.3 full suite was executed. The 0.6.2 full result is historical baseline evidence, not an exact-current-source full PASS."
+      },
+      "command": {
+        "status": "NOT_RUN",
+        "reason_code": "USER_NO_FULL_POLICY",
+        "full_suite_executed": false,
+        "prohibited_for_this_candidate": true
+      },
+      "result": {
+        "decision": "PASS_WITH_BASELINE_LIMITATION",
+        "full_suite_executed": false,
+        "baseline": {
+          "package_version": "0.6.2",
+          "release_oid": "e1bea23be6376ad902f24896efde68384ee7570a",
+          "receipt_ref": "meta_flow/execution_control/provider/activation-receipt-v9.json",
+          "receipt_sha256": "f4088eb9db6eb4ec5382a3027ce1e543047bec5a66d8650c90d4e3ab9d0c3656",
+          "receipt_digest": "c1bab6a2a1cdb8e97c37174e71636bf4d95fe8245dc47b48d0b1275e9867c5d7",
+          "provider_source_set_digest": "d74cf854080bbfa6ef3ff45113c46e6bcf8eb87c6bd38f8c5554473bd2e6b42a",
+          "full_evidence_digests": {
+            "candidate_full.profile": "db58dafa65a97fa1180f11161eeb4ad5889484cfd18319ec8b7855789613b1d0",
+            "candidate_full.command": "79ecdd639441996c7a9fef571dd6ff00c1f53d4a07a5a0b12b3f07c0d1b7b14e",
+            "candidate_full.result": "c2f4578c5b15e4daa65b18c3914d997dbba098fd738fefe27219e77619db91a4",
+            "candidate_full.receipt": "21d8aec7992beb98360c391da64b41c805e4a602768036c0f23888d9c1c316a4"
+          }
+        },
+        "currentness": {
+          "candidate_base_matches_published_release_oid": true,
+          "exact_provider_source_fingerprint_match": false,
+          "candidate_provider_source_set_digest": "0f5e67f64ce922cbcc9ebdba8b7924845c33b88ed39fa535264303c72041bcaa",
+          "candidate_changed_manifest_count": 66,
+          "candidate_changed_manifest_digest": "291311c3903a30ec19a889c6644b246959044eeb10f9f7701d387cf8b24efcf5",
+          "detector_changed_file_count": 54,
+          "detector_changed_source_manifest_digest": "b80a3760fad04da6d96aa6dd64413455b33a9796f3052e88b29c6744fd560ec4",
+          "scanner_source_set_digest": "5624391ea32e41fbb92642f78b6707171266b09077383b5029e8d8bea7f8731f",
+          "impact_coverage": "PASS",
+          "impact_coverage_evidence": [
+            "candidate_targeted=114 PASS",
+            "candidate_compatibility=composite 562 reused PASS + exact 22 rerun PASS + 75 subtests PASS",
+            "consumer scanner=READY with eight zero counters",
+            "detector qualification=PASS with full writer baseline and incremental hard gate",
+            "delivery guardrail=OK"
+          ]
+        },
+        "summary": "Published 0.6.2 full evidence is reused only as a historical baseline; current fingerprints and bounded impact coverage support PASS_WITH_BASELINE_LIMITATION without running full."
+      },
+      "receipt": {
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "schema_version": 1,
+        "layer": "candidate_full",
+        "decision": "PASS_WITH_BASELINE_LIMITATION",
+        "package_version": "0.6.3",
+        "provider_source_set_digest": "0f5e67f64ce922cbcc9ebdba8b7924845c33b88ed39fa535264303c72041bcaa",
+        "baseline_receipt_digest": "c1bab6a2a1cdb8e97c37174e71636bf4d95fe8245dc47b48d0b1275e9867c5d7",
+        "full_command_status": "NOT_RUN"
+      }
+    },
+    "candidate_closure": {
+      "profile": {
+        "name": "cr074-v10-static-closure-0.6.3-v1",
+        "scope": [
+          "0.6.3 package, module and v10 fixed-locator version surface",
+          "execution-control consumer scanner static census",
+          "full writer baseline plus changed-source detector qualification",
+          "delivery guardrail, scoped Ruff, lockfile and diff integrity"
+        ]
+      },
+      "command": {
+        "version_surface": {
+          "argv_prefix": [
+            "uv", "run", "--frozen", "--no-sync", "--python", "3.11", "python", "-c"
+          ],
+          "assertions": [
+            "pyproject.project.version == meta_flow.__version__ == migration.PACKAGE_VERSION == 0.6.3",
+            "migration.FIXED_RECEIPT_REF == meta_flow/execution_control/provider/activation-receipt-v10.json",
+            "migration.GENERATOR_IDENTITY ends with :v10",
+            "activation-receipt-v10.json does not exist before materialization"
+          ],
+          "environment": {
+            "PYTHONDONTWRITEBYTECODE": "1"
+          }
+        },
+        "consumer_scanner": {
+          "argv_prefix": [
+            "uv", "run", "--frozen", "--no-sync", "--python", "3.11", "python", "-c"
+          ],
+          "callable_ref": "meta_flow.execution_control.consumer_scan.scan_execution_control_consumers",
+          "release_root": ".",
+          "output_projection": [
+            "decision", "reason_codes", "counts", "exit_counters", "scanner/source/subject/edge/classification/result digests", "mutation_count"
+          ],
+          "environment": {
+            "PYTHONDONTWRITEBYTECODE": "1"
+          }
+        },
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 uv run --frozen --no-sync --python 3.11 meta-flow check detector-qualification --project-root .",
+          "PYTHONDONTWRITEBYTECODE=1 uv run --frozen --no-sync --python 3.11 python scripts/check_delivery_guardrails.py",
+          "PYTHONDONTWRITEBYTECODE=1 uv run --frozen --no-sync --python 3.11 ruff check meta_flow/execution_control/migration.py meta_flow/execution_control/consumer_scan.py tests/test_execution_control_migration.py tests/test_execution_control_consumer_scan.py tests/cr074 tests/test_cr_analysis.py tests/test_cr_lifecycle.py tests/test_provider_runtime_identity.py tests/test_public_operation_contracts.py tests/test_state_formal_projection.py",
+          "uv lock --check",
+          "git diff --check"
+        ]
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "version_surface": {
+          "package_version": "0.6.3",
+          "fixed_receipt_revision": 10,
+          "materialized": false
+        },
+        "consumer_scanner": {
+          "decision": "READY",
+          "source_count": 372,
+          "subject_count": 102,
+          "edge_count": 195,
+          "classification_count": 26,
+          "result_digest": "87950a00c15d1533d43b1126db6a3e9cc05595df2b21fa5d6861210c383be9f2",
+          "exit_counters": {
+            "syntax_error_count": 0,
+            "unclassified_consumer_count": 0,
+            "unclassified_legacy_writer_call_count": 0,
+            "unfingerprinted_scanned_or_excluded_path_count": 0,
+            "unresolved_exclusion_count": 0,
+            "unresolved_path_count": 0,
+            "security_call_edge_count": 0,
+            "explicit_dispatch_error_count": 0
+          }
+        },
+        "detector": {
+          "decision": "PASS",
+          "source_file_count": 207,
+          "scanned_byte_count": 5201732,
+          "writer_call_count": 430,
+          "classified_writer_call_count": 430,
+          "ambiguous_writer_call_count": 0,
+          "incremental_writer_call_count": 75,
+          "unresolved_unallowlisted_count": 0,
+          "report_digest": "f3f6a88355862f39256911bbd29e696b53ef1743733176f1590c9f69c6362878"
+        },
+        "delivery_guardrail": "OK",
+        "ruff": "PASS",
+        "lock_check": "PASS",
+        "diff_check": "PASS",
+        "summary": "Version identity, scanner, detector, delivery guardrail, scoped Ruff, lock and diff integrity all passed."
+      },
+      "receipt": {
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "schema_version": 1,
+        "layer": "candidate_closure",
+        "decision": "PASS",
+        "package_version": "0.6.3",
+        "provider_source_set_digest": "0f5e67f64ce922cbcc9ebdba8b7924845c33b88ed39fa535264303c72041bcaa"
+      }
+    }
+  },
+  "not_authorized": [
+    "activation receipt v10 materialization",
+    "materialization authorization creation",
+    "full test suite",
+    "build or installed-artifact canary",
+    "Git commit, push, tag or remote release",
+    "registry publication",
+    "quant-lab access",
+    "credential access"
+  ]
+}

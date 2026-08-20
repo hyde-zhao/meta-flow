@@ -18,15 +18,15 @@ from meta_flow.work.decision_bundle import validate_bundle
 from meta_flow.work.git_inventory import InventoryCandidate, build_inventory
 from meta_flow.work.handoff import (
     build_handoff,
+    decide_handoff_policy,
     load_handoff,
     resume_precheck,
-    write_handoff,
 )
 from meta_flow.work.init_transaction import (
     build_execution_contract_admission_validator,
     inspect_work_init_transactions,
 )
-from meta_flow.work.lifecycle import update_work_status
+from meta_flow.work.lifecycle import transition_work
 from meta_flow.work.lifecycle_transaction import (
     WorkCloseAuthorizationV1,
     apply_work_close,
@@ -61,6 +61,13 @@ from meta_flow.work.scope_amend import (
     plan_g1_scope_amend,
     recover_g1_scope_amend,
 )
+from meta_flow.work.status_transition import (
+    WorkStatusTransitionAuthorizationV2,
+    apply_work_status_transition,
+    inspect_work_status_transitions,
+    plan_work_status_transition,
+    recover_work_status_transition,
+)
 from meta_flow.work.store import (
     WorkInitApplyError,
     apply_legacy_partial_work_init_recovery,
@@ -90,6 +97,19 @@ PUBLIC_OPERATION_DECLARATIONS = (
     ("work.scope-amend", ("meta-flow", "work", "scope-amend")),
     ("work.scope-amend-inspect", ("meta-flow", "work", "scope-amend-inspect")),
     ("work.scope-amend-recover", ("meta-flow", "work", "scope-amend-recover")),
+    ("work.status-transition", ("meta-flow", "work", "status-transition")),
+    (
+        "work.status-transition-inspect",
+        ("meta-flow", "work", "status-transition-inspect"),
+    ),
+    (
+        "work.status-transition-recover",
+        ("meta-flow", "work", "status-transition-recover"),
+    ),
+    ("work.start", ("meta-flow", "work", "start")),
+    ("work.pause", ("meta-flow", "work", "pause")),
+    ("work.resume", ("meta-flow", "work", "resume")),
+    ("work.block", ("meta-flow", "work", "block")),
     ("work.usage-plan", ("meta-flow", "work", "usage-plan")),
     ("work.usage-add", ("meta-flow", "work", "usage-add")),
 )
@@ -538,105 +558,248 @@ def check_main(argv: list[str] | None = None) -> int:
     return _status_main("check", argv)
 
 
-def transition_main(command: str, argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog=f"meta-flow work {command}")
+_STATUS_TRANSITION_ALIASES = {
+    "start": ("planned", "active"),
+    "pause": ("active", "paused"),
+    "resume": ("paused", "active"),
+    "block": ("active", "blocked"),
+}
+
+
+def _status_transition_handoff(
+    release_root: Path,
+    process_root: Path,
+    *,
+    work_id: str,
+    expected_status: str,
+    new_status: str,
+):
+    current = load_work(process_root, work_id)
+    if current.status != expected_status:
+        raise ValueError(
+            f"Work status changed: expected {expected_status}, current {current.status}"
+        )
+    updated = transition_work(current, new_status)
+    policy = decide_handoff_policy(updated, new_status)
+    if not policy.required:
+        return None
+    return build_handoff(
+        updated,
+        release_oid=_head_oid(release_root),
+        process_oid=_head_oid(process_root),
+        completed=(),
+        remaining=("继续当前 Work",),
+        blockers=("等待解除阻塞",) if new_status == "blocked" else (),
+        next_step="恢复前先核对 release/process OID 与 scope digest",
+        evidence_refs=(updated.request_ref,),
+    )
+
+
+def _resume_status_transition_precheck(
+    release_root: Path,
+    process_root: Path,
+    *,
+    work_id: str,
+    expected_status: str,
+    new_status: str,
+) -> None:
+    if expected_status != "paused" or new_status != "active":
+        return
+    current = load_work(process_root, work_id)
+    policy = decide_handoff_policy(current, current.status)
+    if not policy.required:
+        return
+    handoff = load_handoff(process_root, work_id)
+    precheck = resume_precheck(
+        current,
+        handoff,
+        actual_release_oid=_head_oid(release_root),
+        actual_process_oid=_head_oid(process_root),
+    )
+    if precheck.decision != "READY":
+        raise ValueError("resume precheck failed: " + ",".join(precheck.reasons))
+
+
+def status_transition_main(
+    argv: list[str] | None = None,
+    *,
+    alias_command: str | None = None,
+) -> int:
+    if alias_command is not None and alias_command not in _STATUS_TRANSITION_ALIASES:
+        raise ValueError(f"unknown status-transition alias: {alias_command}")
+    parser = argparse.ArgumentParser(prog=f"meta-flow work {alias_command or 'status-transition'}")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--work-id", required=True)
-    defaults = {
-        "start": ("planned", "active"),
-        "pause": ("active", "paused"),
-        "resume": ("paused", "active"),
-        "block": ("active", "blocked"),
-    }
-    if command == "close":
-        parser.add_argument("--expected-status", default="active")
-        parser.add_argument("--outcome", choices=["completed", "cancelled"], default="completed")
-        parser.add_argument("--result-ref", default="")
-        parser.add_argument("--apply", action="store_true")
-        parser.add_argument("--authorization", type=Path)
+    if alias_command is None:
+        parser.add_argument("--expected-status", required=True)
+        parser.add_argument(
+            "--new-status",
+            required=True,
+            choices=("active", "paused", "blocked"),
+        )
     else:
-        parser.add_argument("--expected-status", default=defaults[command][0])
+        expected, new_status = _STATUS_TRANSITION_ALIASES[alias_command]
+        parser.add_argument("--expected-status", default=expected)
+        parser.set_defaults(new_status=new_status)
+    parser.add_argument("--result-ref", default="")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--authorization-file", type=Path)
     parsed = parser.parse_args(argv or [])
     try:
         release_root, process_root = _resolve_roots(parsed.project_root)
-        if command == "close":
-            plan = plan_work_close(
-                process_root,
-                parsed.work_id,
-                expected_status=parsed.expected_status,
-                outcome=parsed.outcome,
-                result_ref=parsed.result_ref,
+        _resume_status_transition_precheck(
+            release_root,
+            process_root,
+            work_id=parsed.work_id,
+            expected_status=parsed.expected_status,
+            new_status=parsed.new_status,
+        )
+        handoff = _status_transition_handoff(
+            release_root,
+            process_root,
+            work_id=parsed.work_id,
+            expected_status=parsed.expected_status,
+            new_status=parsed.new_status,
+        )
+        plan = plan_work_status_transition(
+            process_root,
+            parsed.work_id,
+            expected_status=parsed.expected_status,
+            new_status=parsed.new_status,
+            result_ref=parsed.result_ref,
+            handoff=handoff,
+        )
+        if not parsed.apply:
+            print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if plan.ready else 1
+        if parsed.authorization_file is None:
+            raise ValueError("status-transition --apply requires --authorization-file")
+        authorization_payload = json.loads(parsed.authorization_file.read_text(encoding="utf-8"))
+        if not isinstance(authorization_payload, dict):
+            raise ValueError("status-transition authorization must be a JSON object")
+        authorization = WorkStatusTransitionAuthorizationV2.from_mapping(authorization_payload)
+        receipt = apply_work_status_transition(process_root, plan, authorization)
+        payload = {
+            **receipt.as_dict(),
+            "status": (
+                load_work(process_root, parsed.work_id).status if receipt.decision == "PASS" else ""
+            ),
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if receipt.decision == "PASS" else 1
+    except (OSError, ValueError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0},
+                ensure_ascii=False,
+                indent=2,
             )
-            if not parsed.apply:
-                print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
-                return 0 if plan.ready else 1
-            if parsed.authorization is None:
-                raise ValueError("Work close --apply requires --authorization")
-            authorization_payload = json.loads(parsed.authorization.read_text(encoding="utf-8"))
-            if not isinstance(authorization_payload, dict):
-                raise ValueError("Work close authorization must be a JSON object")
-            authorization = WorkCloseAuthorizationV1.from_mapping(authorization_payload)
-            receipt = apply_work_close(process_root, plan, authorization)
-            payload = {
-                **receipt.as_dict(),
-                "status": (
-                    load_work(process_root, parsed.work_id).status
-                    if receipt.decision == "PASS"
-                    else ""
-                ),
-            }
-            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-            return 0 if receipt.decision == "PASS" else 1
-        elif command == "resume":
-            current = load_work(process_root, parsed.work_id)
-            handoff = load_handoff(process_root, parsed.work_id)
-            precheck = resume_precheck(
-                current,
-                handoff,
-                actual_release_oid=_head_oid(release_root),
-                actual_process_oid=_head_oid(process_root),
+        )
+        return 1
+
+
+def status_transition_inspect_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work status-transition-inspect")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parsed = parser.parse_args(argv or [])
+    try:
+        _release_root, process_root = _resolve_roots(parsed.project_root)
+        report = inspect_work_status_transitions(process_root)
+    except (OSError, ValueError) as exc:
+        report = {
+            "schema_version": 2,
+            "kind": "WorkStatusTransitionInspectionV2",
+            "decision": "BLOCKED",
+            "errors": [str(exc)],
+            "mutation_count": 0,
+        }
+    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if report["decision"] == "PASS" else 1
+
+
+def status_transition_recover_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="meta-flow work status-transition-recover")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--authorization-id", required=True)
+    parser.add_argument("--apply", action="store_true")
+    parsed = parser.parse_args(argv or [])
+    if not parsed.apply:
+        print(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "kind": "WorkStatusTransitionRecoveryAdmissionV2",
+                    "decision": "BLOCKED",
+                    "reason_codes": ["RECOVERY_APPLY_REQUIRED"],
+                    "mutation_count": 0,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
             )
-            if precheck.decision != "READY":
-                raise ValueError("resume precheck failed: " + ",".join(precheck.reasons))
-            updated = update_work_status(
-                process_root,
-                parsed.work_id,
-                expected_status=parsed.expected_status,
-                new_status=defaults[command][1],
-            )
-        else:
-            updated = update_work_status(
-                process_root,
-                parsed.work_id,
-                expected_status=parsed.expected_status,
-                new_status=defaults[command][1],
-            )
-            if command in {"pause", "block"}:
-                write_handoff(
-                    process_root,
-                    build_handoff(
-                        updated,
-                        release_oid=_head_oid(release_root),
-                        process_oid=_head_oid(process_root),
-                        completed=(),
-                        remaining=("继续当前 Work",),
-                        blockers=("等待解除阻塞",) if command == "block" else (),
-                        next_step="恢复前先核对 release/process OID 与 scope digest",
-                        evidence_refs=(updated.request_ref,),
-                    ),
-                )
+        )
+        return 1
+    try:
+        _release_root, process_root = _resolve_roots(parsed.project_root)
+        receipt = recover_work_status_transition(
+            process_root,
+            parsed.authorization_id,
+        )
+        payload = receipt.as_dict()
+    except (OSError, ValueError) as exc:
+        payload = {
+            "schema_version": 2,
+            "kind": "WorkStatusTransitionRecoveryReceiptV2",
+            "decision": "BLOCKED",
+            "error": str(exc),
+            "mutation_count": 0,
+        }
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if payload["decision"] in {"RECOVERED", "NO_CHANGE"} else 1
+
+
+def transition_main(command: str, argv: list[str] | None = None) -> int:
+    if command != "close":
+        return status_transition_main(argv, alias_command=command)
+    parser = argparse.ArgumentParser(prog="meta-flow work close")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--work-id", required=True)
+    parser.add_argument("--expected-status", default="active")
+    parser.add_argument("--outcome", choices=["completed", "cancelled"], default="completed")
+    parser.add_argument("--result-ref", default="")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--authorization", type=Path)
+    parsed = parser.parse_args(argv or [])
+    try:
+        _release_root, process_root = _resolve_roots(parsed.project_root)
+        plan = plan_work_close(
+            process_root,
+            parsed.work_id,
+            expected_status=parsed.expected_status,
+            outcome=parsed.outcome,
+            result_ref=parsed.result_ref,
+        )
+        if not parsed.apply:
+            print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if plan.ready else 1
+        if parsed.authorization is None:
+            raise ValueError("Work close --apply requires --authorization")
+        authorization_payload = json.loads(parsed.authorization.read_text(encoding="utf-8"))
+        if not isinstance(authorization_payload, dict):
+            raise ValueError("Work close authorization must be a JSON object")
+        authorization = WorkCloseAuthorizationV1.from_mapping(authorization_payload)
+        receipt = apply_work_close(process_root, plan, authorization)
+        payload = {
+            **receipt.as_dict(),
+            "status": (
+                load_work(process_root, parsed.work_id).status if receipt.decision == "PASS" else ""
+            ),
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if receipt.decision == "PASS" else 1
     except (OSError, ValueError) as exc:
         print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
         return 1
-    print(
-        json.dumps(
-            {"decision": "PASS", "work_id": updated.work_id, "status": updated.status},
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-    )
-    return 0
 
 
 def publication_close_main(argv: list[str] | None = None) -> int:
@@ -798,36 +961,23 @@ def handoff_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--blocker", action="append", default=[])
     parser.add_argument("--next-step", required=True)
     parser.add_argument("--evidence-ref", action="append", default=[])
-    parsed = parser.parse_args(argv or [])
-    try:
-        release_root, process_root = _resolve_roots(parsed.project_root)
-        handoff = build_handoff(
-            load_work(process_root, parsed.work_id),
-            release_oid=_head_oid(release_root),
-            process_oid=_head_oid(process_root),
-            completed=tuple(parsed.completed),
-            remaining=tuple(parsed.remaining),
-            blockers=tuple(parsed.blocker),
-            next_step=parsed.next_step,
-            evidence_refs=tuple(parsed.evidence_ref),
-        )
-        path = write_handoff(process_root, handoff)
-    except (OSError, ValueError) as exc:
-        print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
-        return 1
+    parser.parse_args(argv or [])
     print(
         json.dumps(
             {
-                "decision": "PASS",
-                "handoff_ref": path.relative_to(process_root).as_posix(),
-                **handoff.as_dict(),
+                "schema_version": 1,
+                "kind": "WorkHandoffDirectMutationBlockedV1",
+                "decision": "BLOCKED",
+                "reason_codes": ["HANDOFF_DIRECT_MUTATION_DISABLED"],
+                "next_action": "use work status-transition plan/apply",
+                "mutation_count": 0,
             },
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
         )
     )
-    return 0
+    return 1
 
 
 def resume_check_main(argv: list[str] | None = None) -> int:
@@ -1194,10 +1344,13 @@ def main(argv: list[str] | None = None) -> int:
             "  scope-amend Plan/apply one typed paused/blocked G0/G1 additive scope successor.\n"
             "  scope-amend-inspect Inspect native G1 scope-amend transactions.\n"
             "  scope-amend-recover Recover one non-terminal G1 scope-amend transaction.\n"
-            "  start     Move a planned Work to active.\n"
-            "  pause     Pause an active Work.\n"
-            "  resume    Resume a paused Work.\n"
-            "  block     Mark an active Work blocked.\n"
+            "  status-transition Zero-write plan or typed apply one atomic Work status transition.\n"
+            "  status-transition-inspect Inspect parent and child transition manifests.\n"
+            "  status-transition-recover Recover one consumed transition authorization.\n"
+            "  start     Safe status-transition alias: planned to active.\n"
+            "  pause     Safe status-transition alias: active to paused.\n"
+            "  resume    Safe status-transition alias: paused to active.\n"
+            "  block     Safe status-transition alias: active to blocked.\n"
             "  close     Atomically close Work/Project/Phase and refresh active governance baseline.\n"
             "  publication-close Close a paused Work after exact authorized publication OID changes.\n"
             "  close-inspect Inspect Work close manifests, locks and lineage head generations.\n"
@@ -1206,7 +1359,7 @@ def main(argv: list[str] | None = None) -> int:
             "  usage-add Record one scoped usage event bound to a fresh admission digest.\n"
             "  review-plan Build a risk-proportional review plan for this Work.\n"
             "  validation-plan Map every declared check to a concrete risk.\n"
-            "  handoff    Persist one bounded paused/blocked Work handoff.\n"
+            "  handoff    Disabled direct writer; HANDOFF is owned by status-transition.\n"
             "  resume-check Verify release/process OIDs and scope before resuming.\n"
             "  decision-bundle-check Validate one revision-aware Decision Bundle envelope.\n"
             "  git-inventory Classify candidate paths from Git index facts into eight classes.\n"
@@ -1230,6 +1383,12 @@ def main(argv: list[str] | None = None) -> int:
         return scope_amend_inspect_main(forwarded)
     if command == "scope-amend-recover":
         return scope_amend_recover_main(forwarded)
+    if command == "status-transition":
+        return status_transition_main(forwarded)
+    if command == "status-transition-inspect":
+        return status_transition_inspect_main(forwarded)
+    if command == "status-transition-recover":
+        return status_transition_recover_main(forwarded)
     if command in {"start", "pause", "resume", "block", "close"}:
         return transition_main(command, forwarded)
     if command == "publication-close":
@@ -1259,5 +1418,5 @@ def main(argv: list[str] | None = None) -> int:
     if command == "check":
         return check_main(forwarded)
     raise SystemExit(
-        f"未知 work 命令: {command}. 目前支持: classify, init, init-preflight, init-inspect, init-recover, scope-amend, scope-amend-inspect, scope-amend-recover, start, pause, resume, block, close, publication-close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
+        f"未知 work 命令: {command}. 目前支持: classify, init, init-preflight, init-inspect, init-recover, scope-amend, scope-amend-inspect, scope-amend-recover, status-transition, status-transition-inspect, status-transition-recover, start, pause, resume, block, close, publication-close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
     )

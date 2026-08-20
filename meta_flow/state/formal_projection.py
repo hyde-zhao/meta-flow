@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.model import is_safe_ref
-from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.process_route import IndependentProcessRoute, _resolve_runtime_ref
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state.failure_observation import (
     FailureObservationFactV1,
@@ -293,37 +293,40 @@ def _source_receipt(
 def _active_cr_ids(
     project_root: Path,
     process_root: Path | None,
+    *,
+    discovery_snapshot: Any,
 ) -> tuple[list[str], list[dict[str, str]]]:
     path = _resolve(project_root, CR_LEDGER_REF, process_root)
-    if path.is_symlink() or not path.is_file():
-        return [], [{"ref": CR_LEDGER_REF, "digest": "missing"}]
     latest: dict[str, str] = {}
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"formal CR ledger is invalid at line {line_no}") from exc
-        if not isinstance(row, dict):
-            raise ValueError(f"formal CR ledger row {line_no} must be an object")
-        cr_id = str(row.get("id") or row.get("cr_id") or "")
-        status = str(row.get("status") or row.get("lifecycle_status") or "").lower()
-        if cr_id:
-            latest[cr_id] = status
-    sources = [{"ref": CR_LEDGER_REF, "digest": sha256(path.read_bytes()).hexdigest()}]
-    changes_root = path.parent.parent / "changes"
-    if changes_root.is_symlink() or not changes_root.is_dir():
-        raise ValueError("formal CR truth root missing or not a regular directory")
+    if path.is_symlink():
+        raise ValueError("formal CR ledger must not be a symlink")
+    if path.is_file():
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"formal CR ledger is invalid at line {line_no}") from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"formal CR ledger row {line_no} must be an object")
+            cr_id = str(row.get("id") or row.get("cr_id") or "")
+            status = str(row.get("status") or row.get("lifecycle_status") or "").lower()
+            if cr_id:
+                latest[cr_id] = status
+        sources = [{"ref": CR_LEDGER_REF, "digest": sha256(path.read_bytes()).hexdigest()}]
+    else:
+        # ledger 缺失不能让正式 CR 文件从 State truth 中消失；文件 partition
+        # 仍是 lifecycle 的 canonical truth，ledger 只是附加审计来源。
+        sources = [{"ref": CR_LEDGER_REF, "digest": "missing"}]
     discovered: set[str] = set()
-    for formal_path in sorted(changes_root.glob("CR-*.md")):
+    for logical_ref in discovery_snapshot.native_formal_cr_refs:
+        formal_path = _resolve(project_root, logical_ref, process_root)
         if formal_path.is_symlink() or not formal_path.is_file():
-            raise ValueError(f"formal CR truth is not regular: {formal_path.name}")
+            raise ValueError(f"formal CR truth is not regular: {logical_ref}")
         fields = parse_frontmatter(formal_path.read_text(encoding="utf-8"))
-        if fields.get("kind") != "cr":
-            continue
         cr_id = str(fields.get("cr_id") or "")
-        formal_ref = "process/changes/" + formal_path.name
+        formal_ref = logical_ref
         if not cr_id or cr_id in discovered:
             raise ValueError(f"formal CR truth identity missing or duplicate: {formal_ref}")
         discovered.add(cr_id)
@@ -334,7 +337,9 @@ def _active_cr_ids(
             raise ValueError(f"formal CR truth status missing: {formal_ref}")
         latest[cr_id] = formal_status
         sources.append({"ref": formal_ref, "digest": sha256(formal_path.read_bytes()).hexdigest()})
-    missing_formal = sorted(set(latest) - discovered)
+    missing_formal = sorted(
+        set(latest) - discovered - set(discovery_snapshot.registered_legacy_ids)
+    )
     if missing_formal:
         raise ValueError(
             "formal CR truth missing for ledger identities: " + ", ".join(missing_formal)
@@ -505,6 +510,28 @@ def build_formal_truth_snapshot(
     """只沿 PROJECT→ROADMAP→declared Phase/Work 构建有界 formal truth。"""
 
     root = project_root.resolve()
+    from meta_flow.workflow.legacy_evidence_registry import load_formal_cr_partition
+
+    route_override = None
+    if process_root is not None:
+        route_override = IndependentProcessRoute(
+            project_root=root,
+            process_root=process_root.resolve(),
+            project_id=root.name,
+            layout_version="formal-projection-v1",
+            route_mode="projection-bound",
+            source="build_formal_truth_snapshot",
+        )
+    _registry, discovery_snapshot, partition_report = load_formal_cr_partition(
+        root,
+        consumer_id="state-formal-projection",
+        object_overrides=object_overrides,
+        route_override=route_override,
+    )
+    if partition_report.decision != "PASS":
+        raise ValueError(
+            "formal CR partition blocked: " + ",".join(partition_report.reason_codes)
+        )
     project = _load_object(root, PROJECT_REF, process_root, object_overrides)
     roadmap_ref = str(project.get("roadmap_ref") or "")
     if not roadmap_ref or roadmap_ref.startswith("/") or ".." in Path(roadmap_ref).parts:
@@ -573,7 +600,11 @@ def build_formal_truth_snapshot(
         raise ValueError("PROJECT active_work_refs must be a list")
     for work_ref in project_work_refs:
         include_work(work_ref, owner="PROJECT")
-    active_crs, cr_sources = _active_cr_ids(root, process_root)
+    active_crs, cr_sources = _active_cr_ids(
+        root,
+        process_root,
+        discovery_snapshot=discovery_snapshot,
+    )
     sources.extend(cr_sources)
     transition_stop, transition_sources = _active_cp7_transition_stop(
         root,
@@ -596,6 +627,7 @@ def build_formal_truth_snapshot(
         "active_phase_ids": sorted(active_phases),
         "active_work_ids": sorted(active_works),
         "active_cr_ids": active_crs,
+        "partition_snapshot_digest": discovery_snapshot.snapshot_digest,
         "transition_stop": transition_stop,
         "failure_truth": failure_truth,
         "source_refs": [item["ref"] for item in sources],

@@ -1,11 +1,13 @@
-"""只读、精确绑定的 legacy closed evidence sidecar provider。
+"""只读、精确绑定的 legacy evidence 与 formal CR 分区 owner。
 
-本模块刻意不接入 formal CR、index、lifecycle 或 CLI。调用方必须显式提供
-registration；模块不会发现、持久化或修改任何 registry / evidence。
+本模块只负责加载项目声明的 registry、构造不可变发现快照并解释分区结果。
+它不写 registry/evidence，也不决定任何 lifecycle mutation；下游 consumer 必须
+消费同一份快照，不能各自重新发现或重新解释 legacy 边界。
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -13,14 +15,18 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Final
 
-from meta_flow.project.process_route import ProcessRouteError, require_process_route
+from meta_flow.policies.gate_profiles import default_gate_profiles
+from meta_flow.project.process_route import (
+    ProcessRouteError,
+    require_process_route,
+)
 from meta_flow.project.scale import load_yaml_object
+from meta_flow.semantics.cr_status import validate_native_status_tuple
+from meta_flow.workflow.cr_model import parse_frontmatter
 
 SUPPORTED_SCHEMA_VERSION: Final = 1
 EVIDENCE_KIND: Final = "legacy_closed_cr_evidence"
-ALLOWED_OPERATIONS: Final = frozenset(
-    {"inspect_evidence", "list_follow_ups", "get_follow_up"}
-)
+ALLOWED_OPERATIONS: Final = frozenset({"inspect_evidence", "list_follow_ups", "get_follow_up"})
 SUPPORTED_LEGACY_OUTCOMES: Final = frozenset(
     {
         ("closed", "PASS_WITH_RISK"),
@@ -29,9 +35,16 @@ SUPPORTED_LEGACY_OUTCOMES: Final = frozenset(
 )
 _SHA256_RE: Final = re.compile(r"[0-9a-f]{64}\Z")
 _SAFE_ID_RE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
-_OUTCOME_FIELD_RE: Final = re.compile(r"(?mi)^\s*(?P<key>status|lifecycle|decision|outcome)\s*:\s*(?P<value>[^#\r\n]+?)\s*$")
-_FIELD_RE: Final = re.compile(r"(?m)^\s*(?P<key>id|status|relationship)\s*:\s*(?P<value>[^#\r\n]+?)\s*$")
-_FOLLOW_UP_ID_RE: Final = re.compile(r"(?m)^\s*(?:-\s*)?id\s*:\s*(?P<id>[A-Za-z0-9][A-Za-z0-9._:-]*)\s*$")
+_OUTCOME_FIELD_RE: Final = re.compile(
+    r"(?mi)^\s*(?P<key>status|lifecycle|decision|outcome|lifecycle_status|readiness_status)"
+    r"\s*:\s*(?P<value>[^#\r\n]+?)\s*$"
+)
+_FIELD_RE: Final = re.compile(
+    r"(?m)^\s*(?P<key>id|status|relationship)\s*:\s*(?P<value>[^#\r\n]+?)\s*$"
+)
+_FOLLOW_UP_ID_RE: Final = re.compile(
+    r"(?m)^\s*(?:-\s*)?id\s*:\s*(?P<id>[A-Za-z0-9][A-Za-z0-9._:-]*)\s*$"
+)
 
 
 class LegacyEvidenceError(ValueError):
@@ -116,6 +129,120 @@ class DeclaredLegacyEvidenceRegistry:
     declaration_phase_ref: str = ""
 
 
+@dataclass(frozen=True)
+class LegacyRegistryEntryV1:
+    """一个 canonical CR ID 到 exact legacy evidence ref 的冻结映射。"""
+
+    cr_id: str
+    evidence_logical_ref: str
+    evidence_sha256: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "cr_id": self.cr_id,
+            "evidence_logical_ref": self.evidence_logical_ref,
+            "evidence_sha256": self.evidence_sha256,
+        }
+
+
+@dataclass(frozen=True)
+class LegacyRegistrySnapshotV1:
+    """不含物理路径的 registry identity；可安全绑定到 operation plan。"""
+
+    registry_logical_ref: str
+    registry_payload_digest: str
+    entries: tuple[LegacyRegistryEntryV1, ...]
+    registered_legacy_ids_digest: str
+    excluded_paths_digest: str
+
+    @property
+    def registered_legacy_ids(self) -> tuple[str, ...]:
+        return tuple(entry.cr_id for entry in self.entries)
+
+    @property
+    def excluded_legacy_refs(self) -> tuple[str, ...]:
+        return tuple(entry.evidence_logical_ref for entry in self.entries)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "LegacyRegistrySnapshotV1",
+            "registry_logical_ref": self.registry_logical_ref,
+            "registry_payload_digest": self.registry_payload_digest,
+            "entries": [entry.as_dict() for entry in self.entries],
+            "registered_legacy_ids": list(self.registered_legacy_ids),
+            "registered_legacy_ids_digest": self.registered_legacy_ids_digest,
+            "excluded_legacy_refs": list(self.excluded_legacy_refs),
+            "excluded_paths_digest": self.excluded_paths_digest,
+        }
+
+
+@dataclass(frozen=True)
+class FormalCRDiscoverySnapshotV1:
+    """一次有界扫描得到的 native/legacy/contamination 唯一分区。"""
+
+    registry_logical_ref: str
+    registry_payload_digest: str
+    registered_legacy_ids: tuple[str, ...]
+    registered_legacy_ids_digest: str
+    excluded_legacy_refs: tuple[str, ...]
+    excluded_paths_digest: str
+    process_tree_manifest_digest: str
+    native_formal_cr_refs: tuple[str, ...]
+    registered_legacy_refs: tuple[str, ...]
+    unregistered_contamination_refs: tuple[str, ...]
+    overlap_conflicts: tuple[str, ...]
+    snapshot_digest: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "FormalCRDiscoverySnapshotV1",
+            "registry_logical_ref": self.registry_logical_ref,
+            "registry_payload_digest": self.registry_payload_digest,
+            "registered_legacy_ids": list(self.registered_legacy_ids),
+            "registered_legacy_ids_digest": self.registered_legacy_ids_digest,
+            "excluded_legacy_refs": list(self.excluded_legacy_refs),
+            "excluded_paths_digest": self.excluded_paths_digest,
+            "process_tree_manifest_digest": self.process_tree_manifest_digest,
+            "native_formal_cr_refs": list(self.native_formal_cr_refs),
+            "registered_legacy_refs": list(self.registered_legacy_refs),
+            "unregistered_contamination_refs": list(self.unregistered_contamination_refs),
+            "overlap_conflicts": list(self.overlap_conflicts),
+            "snapshot_digest": self.snapshot_digest,
+        }
+
+
+@dataclass(frozen=True)
+class FormalCRPartitionReportV1:
+    """只解释一份 snapshot 的 typed report；绝不重新扫描。"""
+
+    decision: str
+    snapshot_digest: str
+    native_formal_cr_refs: tuple[str, ...]
+    registered_legacy_ids: tuple[str, ...]
+    registered_legacy_refs: tuple[str, ...]
+    unregistered_contamination_refs: tuple[str, ...]
+    overlap_conflicts: tuple[str, ...]
+    reason_codes: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "FormalCRPartitionReportV1",
+            "decision": self.decision,
+            "snapshot_digest": self.snapshot_digest,
+            "native_formal_cr_refs": list(self.native_formal_cr_refs),
+            "registered_legacy_ids": list(self.registered_legacy_ids),
+            "registered_legacy_refs": list(self.registered_legacy_refs),
+            "unregistered_contamination_refs": list(self.unregistered_contamination_refs),
+            "overlap_conflicts": list(self.overlap_conflicts),
+            "reason_codes": list(self.reason_codes),
+            "evidence_refs": list(self.evidence_refs),
+        }
+
+
 ObjectOverrides = Mapping[str, tuple[Mapping[str, Any], bytes]]
 
 
@@ -135,9 +262,7 @@ def _registry_refs_from_phase(phase: Mapping[str, Any]) -> tuple[str, ...]:
     result_refs = phase.get("result_refs")
     if result_refs is None:
         return ()
-    if not isinstance(result_refs, list) or not all(
-        isinstance(item, str) for item in result_refs
-    ):
+    if not isinstance(result_refs, list) or not all(isinstance(item, str) for item in result_refs):
         raise LegacyEvidenceError(
             "legacy_registry_invalid", "Phase result_refs must be a string list"
         )
@@ -185,6 +310,7 @@ def load_declared_legacy_evidence_registry(
     consumer_id: str,
     phase_ref: str | None = None,
     object_overrides: ObjectOverrides | None = None,
+    route_override: Any | None = None,
 ) -> DeclaredLegacyEvidenceRegistry:
     """加载 Project 持久声明或兼容 Phase 声明的 legacy registry。
 
@@ -197,7 +323,7 @@ def load_declared_legacy_evidence_registry(
     if not isinstance(consumer_id, str) or not _SAFE_ID_RE.fullmatch(consumer_id):
         raise LegacyEvidenceError("legacy_registry_invalid", "consumer_id is invalid")
     try:
-        route = require_process_route(project_root)
+        route = route_override or require_process_route(project_root)
         project, _project_raw = _load_declared_object(
             route,
             "process/PROJECT.yaml",
@@ -302,6 +428,314 @@ def registered_legacy_cr_ids(
     return tuple(sorted(ids, key=lambda item: (int(item.split("-", 1)[1]), item)))
 
 
+def _partition_digest(domain: str, payload: Any) -> str:
+    encoded = json.dumps(
+        {
+            "schema_version": 1,
+            "domain": domain,
+            "payload": payload,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _cr_id_from_ref(logical_ref: str) -> str:
+    match = re.search(r"CR-\d+", Path(logical_ref).name)
+    return match.group(0) if match is not None else ""
+
+
+def load_legacy_registry_snapshot(
+    project_root: Path,
+    *,
+    consumer_id: str = "formal-cr-discovery",
+    registry_ref: str = "",
+    phase_ref: str | None = None,
+    object_overrides: ObjectOverrides | None = None,
+    route_override: Any | None = None,
+) -> LegacyRegistrySnapshotV1:
+    """加载一次 project-declared registry 并冻结 exact ID/path identity。
+
+    ``registry_ref`` 只用于要求调用方声明与 PROJECT 真相精确相等，不能用来
+    覆盖或旁路 PROJECT。这样 CLI/consumer 无法各自选择不同 registry。
+    """
+
+    bundle = load_declared_legacy_evidence_registry(
+        project_root,
+        consumer_id=consumer_id,
+        phase_ref=phase_ref,
+        object_overrides=object_overrides,
+        route_override=route_override,
+    )
+    expected_ref = _normalize_declared_ref(registry_ref)
+    if expected_ref and expected_ref != bundle.registry_logical_ref:
+        raise LegacyEvidenceError(
+            "legacy_registry_ref_mismatch",
+            "requested registry ref does not match the project-declared registry",
+            details={
+                "requested_registry_ref": expected_ref,
+                "declared_registry_ref": bundle.registry_logical_ref,
+            },
+        )
+    entries: list[LegacyRegistryEntryV1] = []
+    ids: set[str] = set()
+    refs: set[str] = set()
+    for registration in bundle.registrations:
+        cr_id = _cr_id_from_ref(registration.evidence_logical_ref)
+        if not cr_id:
+            raise LegacyEvidenceError(
+                "legacy_registry_invalid",
+                "registered legacy evidence ref has no canonical CR ID",
+            )
+        if cr_id in ids or registration.evidence_logical_ref in refs:
+            raise LegacyEvidenceError(
+                "legacy_registry_conflict",
+                "legacy registry maps one CR ID or exact path more than once",
+                details={
+                    "cr_id": cr_id,
+                    "evidence_logical_ref": registration.evidence_logical_ref,
+                },
+            )
+        ids.add(cr_id)
+        refs.add(registration.evidence_logical_ref)
+        entries.append(
+            LegacyRegistryEntryV1(
+                cr_id=cr_id,
+                evidence_logical_ref=registration.evidence_logical_ref,
+                evidence_sha256=registration.evidence_sha256,
+            )
+        )
+    entries.sort(key=lambda item: (int(item.cr_id.split("-", 1)[1]), item.evidence_logical_ref))
+    id_values = [entry.cr_id for entry in entries]
+    ref_values = sorted(entry.evidence_logical_ref for entry in entries)
+    return LegacyRegistrySnapshotV1(
+        registry_logical_ref=bundle.registry_logical_ref,
+        registry_payload_digest=bundle.registry_sha256 or sha256(b"").hexdigest(),
+        entries=tuple(entries),
+        registered_legacy_ids_digest=_partition_digest(
+            "formal-cr-registered-legacy-ids-v1", id_values
+        ),
+        excluded_paths_digest=_partition_digest("formal-cr-excluded-legacy-paths-v1", ref_values),
+    )
+
+
+def discover_formal_cr_snapshot(
+    project_root: Path,
+    registry: LegacyRegistrySnapshotV1,
+    *,
+    route_override: Any | None = None,
+    read_context: Any | None = None,
+) -> FormalCRDiscoverySnapshotV1:
+    """扫描 formal CR 输入一次，并保留所有未登记 contamination。"""
+
+    route = route_override or require_process_route(project_root)
+    change_root = route.resolve_ref("process/changes")
+    registered_by_ref = {entry.evidence_logical_ref: entry for entry in registry.entries}
+    registered_by_id = {entry.cr_id: entry for entry in registry.entries}
+    native_refs: list[str] = []
+    native_ids: dict[str, str] = {}
+    legacy_refs: list[str] = []
+    contamination_refs: list[str] = []
+    conflicts: list[str] = []
+    manifest: list[dict[str, str]] = []
+
+    candidates = sorted(change_root.glob("CR-*.md")) if change_root.is_dir() else []
+    for path in candidates:
+        if "FOLLOW-UP" in path.name:
+            continue
+        logical_ref = route.format_ref(path)
+        raw = path.read_bytes() if read_context is None else read_context.read_bytes(logical_ref)
+        manifest.append({"logical_ref": logical_ref, "payload_digest": sha256(raw).hexdigest()})
+        fields = parse_frontmatter(raw.decode("utf-8"))
+        filename_cr_id = _cr_id_from_ref(logical_ref)
+        declared_cr_id = str(fields.get("cr_id") or "")
+        gate_profile = str(fields.get("gate_profile") or "")
+        tuple_errors = validate_native_status_tuple(
+            str(fields.get("lifecycle_status") or ""),
+            str(fields.get("readiness_status") or ""),
+            str(fields.get("gate_status") or ""),
+        )
+        is_native = (
+            str(fields.get("schema_version") or "") == "1"
+            and str(fields.get("kind") or "") == "cr"
+            and bool(filename_cr_id)
+            and declared_cr_id == filename_cr_id
+            and gate_profile in default_gate_profiles().get("profiles", {})
+            and not tuple_errors
+        )
+        registered_entry = registered_by_ref.get(logical_ref)
+        if registered_entry is not None:
+            legacy_refs.append(logical_ref)
+            if is_native:
+                conflicts.append(f"registered_path_is_native:{logical_ref}")
+            if filename_cr_id != registered_entry.cr_id:
+                conflicts.append(
+                    f"registered_path_id_mismatch:{registered_entry.cr_id}:{logical_ref}"
+                )
+            continue
+        if not is_native:
+            contamination_refs.append(logical_ref)
+            continue
+        if filename_cr_id in native_ids:
+            conflicts.append(
+                f"duplicate_native_cr_id:{filename_cr_id}:{native_ids[filename_cr_id]}:{logical_ref}"
+            )
+        native_ids[filename_cr_id] = logical_ref
+        native_refs.append(logical_ref)
+
+    for cr_id, native_ref in native_ids.items():
+        registered_entry = registered_by_id.get(cr_id)
+        if registered_entry is not None:
+            conflicts.append(
+                "native_legacy_id_overlap:"
+                f"{cr_id}:{native_ref}:{registered_entry.evidence_logical_ref}"
+            )
+    missing_registered_refs = sorted(set(registered_by_ref) - set(legacy_refs))
+    if missing_registered_refs:
+        conflicts.extend(
+            f"registered_path_missing_from_formal_tree:{ref}" for ref in missing_registered_refs
+        )
+
+    native_refs_tuple = tuple(sorted(native_refs))
+    legacy_refs_tuple = tuple(sorted(legacy_refs))
+    contamination_tuple = tuple(sorted(contamination_refs))
+    conflicts_tuple = tuple(sorted(set(conflicts)))
+    manifest_digest = _partition_digest("formal-cr-process-tree-manifest-v1", manifest)
+    payload = {
+        "registry_logical_ref": registry.registry_logical_ref,
+        "registry_payload_digest": registry.registry_payload_digest,
+        "registered_legacy_ids": list(registry.registered_legacy_ids),
+        "registered_legacy_ids_digest": registry.registered_legacy_ids_digest,
+        "excluded_legacy_refs": list(registry.excluded_legacy_refs),
+        "excluded_paths_digest": registry.excluded_paths_digest,
+        "process_tree_manifest_digest": manifest_digest,
+        "native_formal_cr_refs": list(native_refs_tuple),
+        "registered_legacy_refs": list(legacy_refs_tuple),
+        "unregistered_contamination_refs": list(contamination_tuple),
+        "overlap_conflicts": list(conflicts_tuple),
+    }
+    return FormalCRDiscoverySnapshotV1(
+        registry_logical_ref=registry.registry_logical_ref,
+        registry_payload_digest=registry.registry_payload_digest,
+        registered_legacy_ids=registry.registered_legacy_ids,
+        registered_legacy_ids_digest=registry.registered_legacy_ids_digest,
+        excluded_legacy_refs=registry.excluded_legacy_refs,
+        excluded_paths_digest=registry.excluded_paths_digest,
+        process_tree_manifest_digest=manifest_digest,
+        native_formal_cr_refs=native_refs_tuple,
+        registered_legacy_refs=legacy_refs_tuple,
+        unregistered_contamination_refs=contamination_tuple,
+        overlap_conflicts=conflicts_tuple,
+        snapshot_digest=_partition_digest("formal-cr-discovery-snapshot-v1", payload),
+    )
+
+
+def build_partition_report(
+    snapshot: FormalCRDiscoverySnapshotV1,
+) -> FormalCRPartitionReportV1:
+    """解释 snapshot；此函数故意不接收 filesystem/project root。"""
+
+    reasons: list[str] = []
+    if snapshot.unregistered_contamination_refs:
+        reasons.append("UNREGISTERED_NON_NATIVE_CR")
+    if snapshot.overlap_conflicts:
+        reasons.append("LEGACY_NATIVE_OVERLAP_OR_CONFLICT")
+    if not reasons:
+        reasons.append("FORMAL_CR_PARTITION_CONSISTENT")
+    evidence = tuple(
+        sorted(
+            {
+                ref
+                for ref in (
+                    snapshot.registry_logical_ref,
+                    *snapshot.native_formal_cr_refs,
+                    *snapshot.registered_legacy_refs,
+                    *snapshot.unregistered_contamination_refs,
+                )
+                if ref
+            }
+        )
+    )
+    return FormalCRPartitionReportV1(
+        decision=(
+            "BLOCKED"
+            if snapshot.unregistered_contamination_refs or snapshot.overlap_conflicts
+            else "PASS"
+        ),
+        snapshot_digest=snapshot.snapshot_digest,
+        native_formal_cr_refs=snapshot.native_formal_cr_refs,
+        registered_legacy_ids=snapshot.registered_legacy_ids,
+        registered_legacy_refs=snapshot.registered_legacy_refs,
+        unregistered_contamination_refs=snapshot.unregistered_contamination_refs,
+        overlap_conflicts=snapshot.overlap_conflicts,
+        reason_codes=tuple(reasons),
+        evidence_refs=evidence,
+    )
+
+
+def load_formal_cr_partition(
+    project_root: Path,
+    *,
+    consumer_id: str,
+    registry_ref: str = "",
+    phase_ref: str | None = None,
+    object_overrides: ObjectOverrides | None = None,
+    route_override: Any | None = None,
+    read_context: Any | None = None,
+) -> tuple[
+    LegacyRegistrySnapshotV1,
+    FormalCRDiscoverySnapshotV1,
+    FormalCRPartitionReportV1,
+]:
+    """一次加载、一次扫描，返回所有 authoritative consumer 的共享输入。"""
+
+    project_root = project_root.resolve()
+    effective_route = route_override or require_process_route(project_root)
+    project_path = effective_route.resolve_ref("process/PROJECT.yaml")
+    if project_path.is_file():
+        registry = load_legacy_registry_snapshot(
+            project_root,
+            consumer_id=consumer_id,
+            registry_ref=registry_ref,
+            phase_ref=phase_ref,
+            object_overrides=object_overrides,
+            route_override=effective_route,
+        )
+    else:
+        registry = LegacyRegistrySnapshotV1(
+            registry_logical_ref="",
+            registry_payload_digest=sha256(b"").hexdigest(),
+            entries=(),
+            registered_legacy_ids_digest=_partition_digest(
+                "formal-cr-registered-legacy-ids-v1", []
+            ),
+            excluded_paths_digest=_partition_digest("formal-cr-excluded-legacy-paths-v1", []),
+        )
+    snapshot = discover_formal_cr_snapshot(
+        project_root,
+        registry,
+        route_override=effective_route,
+        read_context=read_context,
+    )
+    return registry, snapshot, build_partition_report(snapshot)
+
+
+def snapshot_excluded_legacy_paths(
+    project_root: Path,
+    snapshot: FormalCRDiscoverySnapshotV1,
+    *,
+    route_override: Any | None = None,
+) -> frozenset[Path]:
+    """在 consumer 边界把 canonical refs 转回当前 route 的 exact paths。"""
+
+    route = route_override or require_process_route(project_root)
+    return frozenset(
+        route.resolve_ref(logical_ref).resolve() for logical_ref in snapshot.excluded_legacy_refs
+    )
+
+
 def validate_legacy_evidence_registry_continuity(
     source: DeclaredLegacyEvidenceRegistry,
     target: DeclaredLegacyEvidenceRegistry,
@@ -317,9 +751,7 @@ def validate_legacy_evidence_registry_continuity(
         for registration in target.registrations
     }
     lost_refs = sorted(
-        ref
-        for ref, contract in source_contracts.items()
-        if target_contracts.get(ref) != contract
+        ref for ref, contract in source_contracts.items() if target_contracts.get(ref) != contract
     )
     if (
         source.registry_logical_ref
@@ -512,9 +944,7 @@ def _registrations_from_consumer_spec(
             )
         evidence_digest = str(body.get("sha256") or "")
         follow_up_digest = str(follow_up.get("sha256") or "")
-        if not _SHA256_RE.fullmatch(evidence_digest) or not _SHA256_RE.fullmatch(
-            follow_up_digest
-        ):
+        if not _SHA256_RE.fullmatch(evidence_digest) or not _SHA256_RE.fullmatch(follow_up_digest):
             raise LegacyEvidenceError(
                 "legacy_registry_invalid", "legacy evidence digests must be lowercase SHA-256"
             )
@@ -525,9 +955,10 @@ def _registrations_from_consumer_spec(
             follow_up_raw = follow_up_path.read_bytes()
         except (OSError, ProcessRouteError) as exc:
             raise LegacyEvidenceError("legacy_evidence_route_unavailable", str(exc)) from exc
-        if sha256(evidence_raw).hexdigest() != evidence_digest or sha256(
-            follow_up_raw
-        ).hexdigest() != follow_up_digest:
+        if (
+            sha256(evidence_raw).hexdigest() != evidence_digest
+            or sha256(follow_up_raw).hexdigest() != follow_up_digest
+        ):
             raise LegacyEvidenceError(
                 "legacy_evidence_digest_mismatch",
                 "declared legacy evidence does not match the registry digest",
@@ -619,14 +1050,12 @@ def inspect_registered_legacy_evidence(
         )
     if sha256(follow_up_raw).hexdigest() != registration.follow_up_sha256:
         raise LegacyEvidenceError(
-            "legacy_evidence_digest_mismatch", "follow-up raw bytes do not match registration digest"
+            "legacy_evidence_digest_mismatch",
+            "follow-up raw bytes do not match registration digest",
         )
 
     lifecycle, decision = _parse_legacy_outcome(evidence_raw)
-    if (
-        lifecycle != registration.expected_lifecycle
-        or decision != registration.expected_decision
-    ):
+    if lifecycle != registration.expected_lifecycle or decision != registration.expected_decision:
         raise LegacyEvidenceError(
             "legacy_evidence_outcome_mismatch", "legacy outcome does not match registration"
         )
@@ -688,7 +1117,9 @@ def _validate_registration(registration: LegacyEvidenceRegistration) -> None:
     if not isinstance(registration, LegacyEvidenceRegistration):
         raise LegacyEvidenceError("legacy_registry_invalid", "registration has an unsupported type")
     if registration.schema_version != SUPPORTED_SCHEMA_VERSION:
-        raise LegacyEvidenceError("legacy_registry_invalid", "unsupported registration schema_version")
+        raise LegacyEvidenceError(
+            "legacy_registry_invalid", "unsupported registration schema_version"
+        )
     if (
         isinstance(registration.expected_follow_up_count, bool)
         or not isinstance(registration.expected_follow_up_count, int)
@@ -696,12 +1127,20 @@ def _validate_registration(registration: LegacyEvidenceRegistration) -> None:
         or not isinstance(registration.expected_follow_up_statuses, tuple)
         or not isinstance(registration.allowed_operations, frozenset)
     ):
-        raise LegacyEvidenceError("legacy_registry_invalid", "registration immutable field types are invalid")
+        raise LegacyEvidenceError(
+            "legacy_registry_invalid", "registration immutable field types are invalid"
+        )
     if not all(
         isinstance(value, str) and _SAFE_ID_RE.fullmatch(value)
-        for value in (registration.registration_id, registration.project_id, registration.consumer_id)
+        for value in (
+            registration.registration_id,
+            registration.project_id,
+            registration.consumer_id,
+        )
     ):
-        raise LegacyEvidenceError("legacy_registry_invalid", "registration identity fields are invalid")
+        raise LegacyEvidenceError(
+            "legacy_registry_invalid", "registration identity fields are invalid"
+        )
     if registration.evidence_kind != EVIDENCE_KIND:
         raise LegacyEvidenceError("legacy_registry_invalid", "unsupported evidence_kind")
     _validate_logical_ref(registration.evidence_logical_ref)
@@ -709,7 +1148,9 @@ def _validate_registration(registration: LegacyEvidenceRegistration) -> None:
     if not _SHA256_RE.fullmatch(registration.evidence_sha256) or not _SHA256_RE.fullmatch(
         registration.follow_up_sha256
     ):
-        raise LegacyEvidenceError("legacy_registry_invalid", "SHA-256 digests must be lowercase hex")
+        raise LegacyEvidenceError(
+            "legacy_registry_invalid", "SHA-256 digests must be lowercase hex"
+        )
     if (
         registration.expected_lifecycle,
         registration.expected_decision,
@@ -718,10 +1159,12 @@ def _validate_registration(registration: LegacyEvidenceRegistration) -> None:
     if (
         registration.expected_follow_up_count < 0
         or registration.expected_follow_up_count != len(registration.expected_follow_up_ids)
-        or registration.expected_follow_up_count
-        != len(registration.expected_follow_up_statuses)
+        or registration.expected_follow_up_count != len(registration.expected_follow_up_statuses)
         or len(set(registration.expected_follow_up_ids)) != len(registration.expected_follow_up_ids)
-        or not all(isinstance(item, str) and _SAFE_ID_RE.fullmatch(item) for item in registration.expected_follow_up_ids)
+        or not all(
+            isinstance(item, str) and _SAFE_ID_RE.fullmatch(item)
+            for item in registration.expected_follow_up_ids
+        )
         or tuple(item_id for item_id, _status in registration.expected_follow_up_statuses)
         != registration.expected_follow_up_ids
         or not all(
@@ -729,9 +1172,17 @@ def _validate_registration(registration: LegacyEvidenceRegistration) -> None:
             for _item_id, status in registration.expected_follow_up_statuses
         )
     ):
-        raise LegacyEvidenceError("legacy_registry_invalid", "follow-up count and IDs are not exact")
-    if not registration.allowed_operations or not all(isinstance(item, str) for item in registration.allowed_operations) or not registration.allowed_operations <= ALLOWED_OPERATIONS:
-        raise LegacyEvidenceError("legacy_registry_invalid", "registration operation allowlist is invalid")
+        raise LegacyEvidenceError(
+            "legacy_registry_invalid", "follow-up count and IDs are not exact"
+        )
+    if (
+        not registration.allowed_operations
+        or not all(isinstance(item, str) for item in registration.allowed_operations)
+        or not registration.allowed_operations <= ALLOWED_OPERATIONS
+    ):
+        raise LegacyEvidenceError(
+            "legacy_registry_invalid", "registration operation allowlist is invalid"
+        )
 
 
 def _validate_logical_ref(logical_ref: str) -> None:
@@ -743,12 +1194,16 @@ def _validate_logical_ref(logical_ref: str) -> None:
         or any(character in logical_ref for character in ("\\", "*", "?", "[", "]", ":", "\x00"))
         or logical_ref.startswith("/")
     ):
-        raise LegacyEvidenceError("legacy_evidence_ref_invalid", "logical ref must be canonical process/<relative>")
+        raise LegacyEvidenceError(
+            "legacy_evidence_ref_invalid", "logical ref must be canonical process/<relative>"
+        )
 
 
 def _require_operation(registration: LegacyEvidenceRegistration, operation: str) -> None:
     if operation not in registration.allowed_operations:
-        raise LegacyEvidenceError("legacy_evidence_operation_denied", f"operation denied: {operation}")
+        raise LegacyEvidenceError(
+            "legacy_evidence_operation_denied", f"operation denied: {operation}"
+        )
 
 
 def _parse_legacy_outcome(raw: bytes) -> tuple[str, str]:
@@ -756,6 +1211,48 @@ def _parse_legacy_outcome(raw: bytes) -> tuple[str, str]:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise LegacyEvidenceError("legacy_evidence_parse_failed", "evidence is not UTF-8") from exc
+    frontmatter_match = re.match(r"\A---\r?\n(?P<body>.*?)\r?\n---(?:\r?\n|\Z)", text, re.DOTALL)
+    frontmatter_fields: dict[str, list[str]] = {}
+    if frontmatter_match is not None:
+        for match in _OUTCOME_FIELD_RE.finditer(frontmatter_match.group("body")):
+            frontmatter_fields.setdefault(match.group("key"), []).append(
+                match.group("value").strip()
+            )
+    native_lifecycle_values = frontmatter_fields.get("lifecycle_status", [])
+    native_readiness_values = frontmatter_fields.get("readiness_status", [])
+    frontmatter_legacy_values = (
+        frontmatter_fields.get("status", [])
+        + frontmatter_fields.get("lifecycle", [])
+        + frontmatter_fields.get("decision", [])
+        + frontmatter_fields.get("outcome", [])
+    )
+    has_native_shape = bool(native_lifecycle_values or native_readiness_values)
+
+    # 历史 CR-053/054/055 使用 native-like frontmatter，但它们仍只是已登记的
+    # immutable legacy evidence。两种形态混用会产生两个 outcome owner，必须拒绝。
+    if frontmatter_legacy_values and has_native_shape:
+        raise LegacyEvidenceError(
+            "legacy_evidence_parse_failed",
+            "legacy outcome mixes status/decision with lifecycle_status/readiness_status",
+        )
+    if has_native_shape:
+        if len(native_lifecycle_values) != 1 or len(native_readiness_values) != 1:
+            raise LegacyEvidenceError(
+                "legacy_evidence_parse_failed",
+                "legacy lifecycle_status/readiness_status outcome is not unambiguous",
+            )
+        normalized_frontmatter = parse_frontmatter(text)
+        lifecycle = str(normalized_frontmatter.get("lifecycle_status") or "")
+        readiness = str(normalized_frontmatter.get("readiness_status") or "")
+        if (lifecycle, readiness) != ("closed", "READY_WITH_RISK"):
+            raise LegacyEvidenceError(
+                "legacy_evidence_parse_failed",
+                "legacy native-like outcome is not closed/READY_WITH_RISK",
+            )
+        return lifecycle, "PASS_WITH_RISK"
+
+    # 旧式 status/decision 证据可能没有 frontmatter，继续保留历史全文扫描行为；
+    # native-like 字段则只在 frontmatter 中生效，正文示例不能冒充 outcome。
     fields: dict[str, list[str]] = {}
     for match in _OUTCOME_FIELD_RE.finditer(text):
         fields.setdefault(match.group("key"), []).append(match.group("value").strip())
@@ -765,7 +1262,8 @@ def _parse_legacy_outcome(raw: bytes) -> tuple[str, str]:
         return "closed-pass-with-risk", "PASS_WITH_RISK"
     if len(lifecycle_values) != 1 or len(decision_values) != 1:
         raise LegacyEvidenceError(
-            "legacy_evidence_parse_failed", "legacy closed/PASS_WITH_RISK outcome is not unambiguous"
+            "legacy_evidence_parse_failed",
+            "legacy closed/PASS_WITH_RISK outcome is not unambiguous",
         )
     return lifecycle_values[0], decision_values[0]
 
@@ -774,7 +1272,9 @@ def _parse_follow_ups(raw: bytes, source_logical_ref: str) -> tuple[LegacyFollow
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise LegacyEvidenceError("legacy_follow_up_query_failed", "follow-up source is not UTF-8") from exc
+        raise LegacyEvidenceError(
+            "legacy_follow_up_query_failed", "follow-up source is not UTF-8"
+        ) from exc
     id_matches = tuple(_FOLLOW_UP_ID_RE.finditer(text))
     if not id_matches:
         raise LegacyEvidenceError("legacy_follow_up_query_failed", "no stable follow-up IDs found")
@@ -782,7 +1282,9 @@ def _parse_follow_ups(raw: bytes, source_logical_ref: str) -> tuple[LegacyFollow
     for index, match in enumerate(id_matches):
         block_end = id_matches[index + 1].start() if index + 1 < len(id_matches) else len(text)
         block = text[match.start() : block_end]
-        fields = {item.group("key"): item.group("value").strip() for item in _FIELD_RE.finditer(block)}
+        fields = {
+            item.group("key"): item.group("value").strip() for item in _FIELD_RE.finditer(block)
+        }
         follow_up_id = match.group("id")
         if fields.get("id", follow_up_id) != follow_up_id or not fields.get("status"):
             raise LegacyEvidenceError(
@@ -823,7 +1325,9 @@ def _validate_verified_view(verified: LegacyEvidenceView) -> None:
         verified.source_kind != "registered_legacy_evidence"
         or verified.compatibility_kind != "registered_legacy_closed_evidence"
     ):
-        raise LegacyEvidenceError("legacy_follow_up_query_failed", "view is not a verified legacy view")
+        raise LegacyEvidenceError(
+            "legacy_follow_up_query_failed", "view is not a verified legacy view"
+        )
 
 
 __all__ = [

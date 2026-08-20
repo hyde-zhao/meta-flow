@@ -18,7 +18,7 @@ from typing import Any
 
 from meta_flow.execution_control.contract import ContainerBudgetV1, canonical_digest
 
-FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v9.json"
+FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v10.json"
 LEGACY_RECEIPT_REFS = (
     "meta_flow/execution_control/provider/activation-receipt-v1.json",
     "meta_flow/execution_control/provider/activation-receipt-v2.json",
@@ -28,14 +28,15 @@ LEGACY_RECEIPT_REFS = (
     "meta_flow/execution_control/provider/activation-receipt-v6.json",
     "meta_flow/execution_control/provider/activation-receipt-v7.json",
     "meta_flow/execution_control/provider/activation-receipt-v8.json",
+    "meta_flow/execution_control/provider/activation-receipt-v9.json",
 )
 PACKAGE_NAME = "meta-flow"
-PACKAGE_VERSION = "0.6.2"
+PACKAGE_VERSION = "0.6.3"
 POLICY_REVISION = 1
 COHORT_REVISION = 1
 CONTEXT_REVISION = 1
 GENERATOR_IDENTITY = (
-    "meta_flow.execution_control.migration:build_provider_activation_receipt:v9"
+    "meta_flow.execution_control.migration:build_provider_activation_receipt:v10"
 )
 _SELF_EXCLUSION = FIXED_RECEIPT_REF
 _SOURCE_OWNERS = frozenset(
@@ -73,7 +74,7 @@ _FIELDS = frozenset(
 def _receipt_path() -> Path:
     return Path(
         resources.files("meta_flow.execution_control").joinpath(
-            "provider/activation-receipt-v9.json"
+            "provider/activation-receipt-v10.json"
         )
     )
 
@@ -423,11 +424,75 @@ def _perform_receipt_create_only(
     )
 
 
-MATERIALIZATION_AUTHORIZATION_REF = (
-    "checks/CR-069-S5-MATERIALIZATION-AUTHORIZATION-CURRENT.json"
+@dataclass(frozen=True, slots=True)
+class _NativeAuthorityDescriptorV1:
+    """单个 activation revision 的闭合 native-authority 身份。"""
+
+    revision: int
+    cp7_revision: int
+    project_id: str
+    cr_id: str
+    story_id: str
+    contract_id: str
+    dispatch_contract_id: str
+    scanner_contract_id: str
+    final_manifest_contract_id: str
+    checkpoint_event_id: str
+    checkpoint_event_type: str
+    authorization_ref: str
+    context_ref: str
+    evidence_ref: str
+    return_ref: str
+    cp7_result_ref: str
+    checkpoint_ledger_ref: str
+
+
+_NATIVE_AUTHORITY_V10 = _NativeAuthorityDescriptorV1(
+    revision=10,
+    cp7_revision=2,
+    project_id="meta-flow",
+    cr_id="CR-074",
+    story_id="STORY-CR074-S05",
+    contract_id="CR074-PROVIDER-ACTIVATION-RECEIPT-V10-MATERIALIZATION",
+    dispatch_contract_id="CR074-PROVIDER-ACTIVATION-RECEIPT-V10-DISPATCH",
+    scanner_contract_id=(
+        "CR074-PROVIDER-ACTIVATION-RECEIPT-V10-SCANNER-QUALIFICATION-RECEIPT"
+    ),
+    final_manifest_contract_id=(
+        "CR074-PROVIDER-ACTIVATION-RECEIPT-V10-FINAL-CONSUMER-MANIFEST-RECEIPT"
+    ),
+    checkpoint_event_id="CP7-CR074-AGGREGATE-RESULT-V2",
+    checkpoint_event_type="checkpoint_result",
+    authorization_ref=(
+        "process/release/"
+        "CR-074-PROVIDER-RECEIPT-MATERIALIZATION-AUTHORIZATION-0.6.3.json"
+    ),
+    context_ref=(
+        "process/context/stories/STORY-CR074-S05.CP7.REV2.verify-packet.json"
+    ),
+    evidence_ref="process/evidence/STORY-CR074-S05.CP7.REV2.index.json",
+    return_ref="process/returns/STORY-CR074-S05.CP7.REV2.return.json",
+    cp7_result_ref=(
+        "process/checks/CP7-STORY-CR074-S05-AGGREGATE-REV2.result.json"
+    ),
+    checkpoint_ledger_ref="process/state/CHECKPOINT-LEDGER.ndjson",
 )
-REVISION_9_FREEZE_PAYLOAD_DIGEST = (
-    "acb49951388d83249acd5474db32fe33a1568943785ba38500333bdddb74a084"
+MATERIALIZATION_AUTHORIZATION_REF = _NATIVE_AUTHORITY_V10.authorization_ref
+_FREEZE_PAYLOAD_FIELDS = frozenset(
+    {
+        "schema_version",
+        "package_name",
+        "package_version",
+        "receipt_revision",
+        "policy_revision",
+        "cohort_revision",
+        "context_revision",
+        "target_ref",
+        "generator_identity",
+        "qualified_source_exclusions",
+        "qualified_source_owner_refs",
+        "provider_evidence_digests",
+    }
 )
 _MATERIALIZATION_AUTHORIZATION_FIELDS = frozenset(
     {
@@ -443,8 +508,12 @@ _MATERIALIZATION_AUTHORIZATION_FIELDS = frozenset(
         "release_oid",
         "process_oid",
         "scope_digest",
+        "freeze_payload",
         "freeze_payload_digest",
         "cp7_event_id",
+        "context_ref",
+        "context_sha256",
+        "context_digest",
         "cp7_result_ref",
         "cp7_result_sha256",
         "cp7_result_digest",
@@ -494,6 +563,7 @@ class NativeMaterializationAuthorityV1:
     scope_digest: str
     freeze_payload_digest: str
     cp7_event_id: str
+    context_digest: str
     cp7_result_digest: str
     checkpoint_event_digest: str
     return_digest: str
@@ -513,6 +583,7 @@ class NativeMaterializationAuthorityV1:
                 "process_oid": self.process_oid,
                 "freeze_payload_digest": self.freeze_payload_digest,
                 "cp7_event_id": self.cp7_event_id,
+                "context_digest": self.context_digest,
                 "cp7_result_digest": self.cp7_result_digest,
                 "checkpoint_event_digest": self.checkpoint_event_digest,
                 "return_digest": self.return_digest,
@@ -567,15 +638,17 @@ def _require_oid(value: object, error_code: str) -> str:
 
 
 def _validate_common_authority_fields(
-    payload: Mapping[str, Any], contract_id: str
+    payload: Mapping[str, Any],
+    contract_id: str,
+    descriptor: _NativeAuthorityDescriptorV1 = _NATIVE_AUTHORITY_V10,
 ) -> tuple[str, str, str, str]:
     if (
         payload["schema_version"] != 1
         or payload["contract_id"] != contract_id
-        or payload["project_id"] != "meta-flow"
-        or payload["cr_id"] != "CR-069"
-        or payload["story_id"] != "STORY-CR069-F1-S5"
-        or payload["revision"] != 9
+        or payload["project_id"] != descriptor.project_id
+        or payload["cr_id"] != descriptor.cr_id
+        or payload["story_id"] != descriptor.story_id
+        or payload["revision"] != descriptor.revision
     ):
         raise ValueError("MATERIALIZATION_NATIVE_IDENTITY_INVALID")
     release_oid = _require_oid(payload["release_oid"], "MATERIALIZATION_NATIVE_OID_INVALID")
@@ -584,9 +657,35 @@ def _validate_common_authority_fields(
         payload["scope_digest"], "MATERIALIZATION_NATIVE_SCOPE_INVALID"
     )
     event_id = payload["cp7_event_id"]
-    if not isinstance(event_id, str) or not event_id:
+    if event_id != descriptor.checkpoint_event_id:
         raise ValueError("MATERIALIZATION_NATIVE_EVENT_INVALID")
     return release_oid, process_oid, scope_digest, event_id
+
+
+def _validate_freeze_payload(
+    value: object,
+    provider_evidence_digests: object,
+    descriptor: _NativeAuthorityDescriptorV1,
+) -> tuple[Mapping[str, Any], str]:
+    payload = _closed_payload(
+        value, _FREEZE_PAYLOAD_FIELDS, "MATERIALIZATION_FREEZE_PAYLOAD_FIELDS_MISMATCH"
+    )
+    if (
+        payload["schema_version"] != 1
+        or payload["package_name"] != PACKAGE_NAME
+        or payload["package_version"] != PACKAGE_VERSION
+        or payload["receipt_revision"] != descriptor.revision
+        or payload["policy_revision"] != POLICY_REVISION
+        or payload["cohort_revision"] != COHORT_REVISION
+        or payload["context_revision"] != CONTEXT_REVISION
+        or payload["target_ref"] != FIXED_RECEIPT_REF
+        or payload["generator_identity"] != GENERATOR_IDENTITY
+        or payload["qualified_source_exclusions"] != [FIXED_RECEIPT_REF]
+        or payload["qualified_source_owner_refs"] != sorted(_SOURCE_OWNERS)
+        or payload["provider_evidence_digests"] != provider_evidence_digests
+    ):
+        raise ValueError("MATERIALIZATION_FREEZE_PAYLOAD_IDENTITY_INVALID")
+    return payload, canonical_digest(payload)
 
 
 def _require_payload_digest(
@@ -664,77 +763,6 @@ _FINAL_MANIFEST_FIELDS = _COMMON_AUTHORITY_FIELDS | frozenset(
         "receipt_digest",
     }
 )
-_EVIDENCE_FIELDS = _COMMON_AUTHORITY_FIELDS | frozenset(
-    {
-        "decision",
-        "dispatch_ref",
-        "dispatch_sha256",
-        "dispatch_digest",
-        "scanner_receipt_ref",
-        "scanner_receipt_sha256",
-        "scanner_receipt_digest",
-        "final_manifest_receipt_ref",
-        "final_manifest_receipt_sha256",
-        "final_manifest_receipt_digest",
-        "provider_evidence_digests",
-        "evidence_digest",
-    }
-)
-_RETURN_FIELDS = _COMMON_AUTHORITY_FIELDS | frozenset(
-    {
-        "checkpoint",
-        "decision",
-        "evidence_ref",
-        "evidence_sha256",
-        "evidence_digest",
-        "dispatch_ref",
-        "dispatch_sha256",
-        "dispatch_digest",
-        "scanner_receipt_ref",
-        "scanner_receipt_sha256",
-        "scanner_receipt_digest",
-        "final_manifest_receipt_ref",
-        "final_manifest_receipt_sha256",
-        "final_manifest_receipt_digest",
-        "return_digest",
-    }
-)
-_CP7_RESULT_FIELDS = _COMMON_AUTHORITY_FIELDS | frozenset(
-    {
-        "checkpoint",
-        "decision",
-        "return_ref",
-        "return_sha256",
-        "return_digest",
-        "evidence_ref",
-        "evidence_sha256",
-        "evidence_digest",
-        "dispatch_ref",
-        "dispatch_sha256",
-        "dispatch_digest",
-        "scanner_receipt_ref",
-        "scanner_receipt_sha256",
-        "scanner_receipt_digest",
-        "final_manifest_receipt_ref",
-        "final_manifest_receipt_sha256",
-        "final_manifest_receipt_digest",
-        "result_digest",
-    }
-)
-_LEDGER_EVENT_FIELDS = _COMMON_AUTHORITY_FIELDS | frozenset(
-    {
-        "event_id",
-        "event_type",
-        "checkpoint",
-        "decision",
-        "result_ref",
-        "cp7_result_ref",
-        "cp7_result_sha256",
-        "cp7_result_digest",
-        "previous_event_digest",
-        "event_digest",
-    }
-)
 _STATIC_SCANNER_COUNTERS = frozenset(
     {
         "syntax_error_count",
@@ -766,9 +794,13 @@ def _require_ref_link(
         raise ValueError("MATERIALIZATION_NATIVE_REF_BINDING_INVALID")
 
 
-def _validate_dispatch(path: Path) -> tuple[Mapping[str, Any], tuple[str, str, str, str], str]:
+def _validate_dispatch(
+    path: Path, descriptor: _NativeAuthorityDescriptorV1
+) -> tuple[Mapping[str, Any], tuple[str, str, str, str], str]:
     payload = _load_closed_json(path, _DISPATCH_FIELDS, "MATERIALIZATION_DISPATCH_FIELDS_MISMATCH")
-    binding = _validate_common_authority_fields(payload, "CR069-S5-META-QA-CRITICAL-DISPATCH-V1")
+    binding = _validate_common_authority_fields(
+        payload, descriptor.dispatch_contract_id, descriptor
+    )
     if (
         payload["decision"] != "COMPLETED"
         or payload["tool_name"] != "spawn_agent"
@@ -787,26 +819,106 @@ def _validate_zero_counters(value: object, fields: frozenset[str], error_code: s
         raise ValueError(error_code)
 
 
-def _load_native_materialization_authority(process_root: Path) -> NativeMaterializationAuthorityV1:
-    """加载并闭合验证 revision 9 native CP7 authority chain。"""
+def _load_native_json(
+    path: Path, required_fields: frozenset[str], error_code: str
+) -> Mapping[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or not required_fields.issubset(payload):
+        raise ValueError(error_code)
+    return payload
 
+
+_CONTEXT_REQUIRED_FIELDS = frozenset(
+    {
+        "schema_version",
+        "packet_type",
+        "project_id",
+        "cr_id",
+        "story_id",
+        "stage",
+        "revision",
+        "expected_return_packet",
+    }
+)
+_NATIVE_EVIDENCE_REQUIRED_FIELDS = frozenset(
+    {"schema_version", "stage", "revision", "cr_id", "story_id", "return_ref"}
+)
+_NATIVE_RETURN_REQUIRED_FIELDS = frozenset(
+    {
+        "schema_version",
+        "packet_type",
+        "stage",
+        "revision",
+        "cr_id",
+        "story_id",
+        "status",
+        "boundary_check",
+    }
+)
+_NATIVE_CP7_RESULT_REQUIRED_FIELDS = frozenset(
+    {
+        "schema_version",
+        "checkpoint",
+        "event_id",
+        "revision",
+        "cr_id",
+        "story_id",
+        "context_ref",
+        "return_packet_ref",
+        "evidence_ref",
+        "decision",
+        "blockers",
+        "check_harness_errors",
+    }
+)
+_NATIVE_LEDGER_FIELDS = frozenset(
+    {
+        "checked_at",
+        "checker_provenance",
+        "checkpoint",
+        "event_id",
+        "event_type",
+        "revision",
+        "cr_id",
+        "story_id",
+        "context_ref",
+        "result_ref",
+        "evidence_ref",
+        "decision",
+        "dispatch_refs",
+        "summary_ref",
+        "supersedes_event_id",
+        "supersedes_ref",
+    }
+)
+
+
+def _load_native_materialization_authority(process_root: Path) -> NativeMaterializationAuthorityV1:
+    """加载并闭合验证 activation revision 10 的 native CP7 authority chain。"""
+
+    descriptor = _NATIVE_AUTHORITY_V10
     payload = _load_closed_json(
-        process_root / MATERIALIZATION_AUTHORIZATION_REF,
+        process_root / _safe_process_ref(descriptor.authorization_ref),
         _MATERIALIZATION_AUTHORIZATION_FIELDS,
         "MATERIALIZATION_AUTHORITY_FIELDS_MISMATCH",
     )
     binding = _validate_common_authority_fields(
-        payload, "CR069-S5-MATERIALIZATION-AUTHORITY-V1"
+        payload, descriptor.contract_id, descriptor
     )
     if (
         payload["decision"] != "APPROVED"
         or payload["operation"] != "provider-receipt-create-only"
         or payload["target_ref"] != FIXED_RECEIPT_REF
-        or payload["freeze_payload_digest"] != REVISION_9_FREEZE_PAYLOAD_DIGEST
     ):
         raise ValueError("MATERIALIZATION_AUTHORITY_IDENTITY_INVALID")
+    _, freeze_payload_digest = _validate_freeze_payload(
+        payload["freeze_payload"], payload["provider_evidence_digests"], descriptor
+    )
+    if payload["freeze_payload_digest"] != freeze_payload_digest:
+        raise ValueError("MATERIALIZATION_FREEZE_PAYLOAD_DIGEST_DRIFT")
 
     raw_links = {
+        "context": (payload["context_ref"], payload["context_sha256"]),
         "cp7_result": (payload["cp7_result_ref"], payload["cp7_result_sha256"]),
         "checkpoint_ledger": (
             payload["checkpoint_ledger_ref"],
@@ -824,11 +936,20 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
             payload["final_manifest_receipt_sha256"],
         ),
     }
+    fixed_refs = {
+        "context": descriptor.context_ref,
+        "cp7_result": descriptor.cp7_result_ref,
+        "checkpoint_ledger": descriptor.checkpoint_ledger_ref,
+        "return": descriptor.return_ref,
+        "evidence": descriptor.evidence_ref,
+    }
     refs: dict[str, str] = {}
     paths: dict[str, Path] = {}
     raw_digests: dict[str, str] = {}
     for name, (raw_ref, raw_digest) in raw_links.items():
         ref = _safe_process_ref(raw_ref)
+        if name in fixed_refs and ref != _safe_process_ref(fixed_refs[name]):
+            raise ValueError("MATERIALIZATION_AUTHORITY_FIXED_REF_INVALID")
         digest = _require_sha256(
             raw_digest, "MATERIALIZATION_AUTHORITY_REF_DIGEST_INVALID"
         )
@@ -837,7 +958,9 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
             raise ValueError("MATERIALIZATION_AUTHORITY_REF_DRIFT")
         refs[name], paths[name], raw_digests[name] = ref, path, digest
 
-    _, dispatch_binding, dispatch_digest = _validate_dispatch(paths["dispatch"])
+    _, dispatch_binding, dispatch_digest = _validate_dispatch(
+        paths["dispatch"], descriptor
+    )
     _require_same_binding(binding, dispatch_binding)
 
     scanner = _load_closed_json(
@@ -848,7 +971,7 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
     _require_same_binding(
         binding,
         _validate_common_authority_fields(
-            scanner, "CR069-S5-SCANNER-QUALIFICATION-RECEIPT-V1"
+            scanner, descriptor.scanner_contract_id, descriptor
         ),
     )
     _require_ref_link(scanner, "dispatch", refs["dispatch"], raw_digests["dispatch"])
@@ -901,7 +1024,7 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
     _require_same_binding(
         binding,
         _validate_common_authority_fields(
-            final_manifest, "CR069-S5-FINAL-CONSUMER-MANIFEST-RECEIPT-V1"
+            final_manifest, descriptor.final_manifest_contract_id, descriptor
         ),
     )
     _require_ref_link(final_manifest, "dispatch", refs["dispatch"], raw_digests["dispatch"])
@@ -936,81 +1059,84 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
         "MATERIALIZATION_FINAL_MANIFEST_DIGEST_DRIFT",
     )
 
-    evidence_payload = _load_closed_json(
-        paths["evidence"], _EVIDENCE_FIELDS, "MATERIALIZATION_EVIDENCE_FIELDS_MISMATCH"
+    context_payload = _load_native_json(
+        paths["context"],
+        _CONTEXT_REQUIRED_FIELDS,
+        "MATERIALIZATION_CONTEXT_FIELDS_MISMATCH",
     )
-    _require_same_binding(
-        binding,
-        _validate_common_authority_fields(
-            evidence_payload, "CR069-S5-CP7-EVIDENCE-INDEX-V1"
-        ),
-    )
-    for prefix in ("dispatch", "scanner_receipt", "final_manifest_receipt"):
-        _require_ref_link(evidence_payload, prefix, refs[prefix], raw_digests[prefix])
     if (
-        evidence_payload["decision"] != "PASS"
-        or evidence_payload["dispatch_digest"] != dispatch_digest
-        or evidence_payload["scanner_receipt_digest"] != scanner_receipt_digest
-        or evidence_payload["final_manifest_receipt_digest"] != final_manifest_digest
-        or evidence_payload["provider_evidence_digests"] != validation_receipts
+        context_payload["schema_version"] != 3
+        or context_payload["packet_type"] != "story_verify_packet"
+        or context_payload["project_id"] != descriptor.project_id
+        or context_payload["cr_id"] != descriptor.cr_id
+        or context_payload["story_id"] != descriptor.story_id
+        or context_payload["stage"] != "CP7"
+        or context_payload["revision"] != descriptor.cp7_revision
+        or _safe_process_ref(context_payload["expected_return_packet"])
+        != refs["return"]
+    ):
+        raise ValueError("MATERIALIZATION_CONTEXT_BINDING_INVALID")
+    context_digest = canonical_digest(context_payload)
+
+    evidence_payload = _load_native_json(
+        paths["evidence"],
+        _NATIVE_EVIDENCE_REQUIRED_FIELDS,
+        "MATERIALIZATION_EVIDENCE_FIELDS_MISMATCH",
+    )
+    if (
+        evidence_payload["schema_version"] != 1
+        or evidence_payload["stage"] != "CP7"
+        or evidence_payload["revision"] != descriptor.cp7_revision
+        or evidence_payload["cr_id"] != descriptor.cr_id
+        or evidence_payload["story_id"] != descriptor.story_id
+        or _safe_process_ref(evidence_payload["return_ref"]) != refs["return"]
     ):
         raise ValueError("MATERIALIZATION_EVIDENCE_BINDING_INVALID")
-    evidence_digest = _require_payload_digest(
-        evidence_payload, "evidence_digest", "MATERIALIZATION_EVIDENCE_DIGEST_DRIFT"
-    )
+    evidence_digest = canonical_digest(evidence_payload)
 
-    return_payload = _load_closed_json(
-        paths["return"], _RETURN_FIELDS, "MATERIALIZATION_RETURN_FIELDS_MISMATCH"
+    return_payload = _load_native_json(
+        paths["return"],
+        _NATIVE_RETURN_REQUIRED_FIELDS,
+        "MATERIALIZATION_RETURN_FIELDS_MISMATCH",
     )
-    _require_same_binding(
-        binding,
-        _validate_common_authority_fields(return_payload, "CR069-S5-CP7-RETURN-V1"),
-    )
-    for prefix in ("evidence", "dispatch", "scanner_receipt", "final_manifest_receipt"):
-        _require_ref_link(return_payload, prefix, refs[prefix], raw_digests[prefix])
+    boundary = return_payload["boundary_check"]
     if (
-        return_payload["checkpoint"] != "CP7"
-        or return_payload["decision"] != "PASS"
-        or return_payload["evidence_digest"] != evidence_digest
-        or return_payload["dispatch_digest"] != dispatch_digest
-        or return_payload["scanner_receipt_digest"] != scanner_receipt_digest
-        or return_payload["final_manifest_receipt_digest"] != final_manifest_digest
+        return_payload["schema_version"] != 1
+        or return_payload["packet_type"] != "story_return_packet"
+        or return_payload["stage"] != "CP7"
+        or return_payload["revision"] != descriptor.cp7_revision
+        or return_payload["cr_id"] != descriptor.cr_id
+        or return_payload["story_id"] != descriptor.story_id
+        or return_payload["status"] != "verified_with_risk"
+        or not isinstance(boundary, Mapping)
+        or boundary.get("allowed_paths_only") is not True
+        or boundary.get("release_source_mutation_count") != 0
+        or boundary.get("git_mutation_count") != 0
+        or boundary.get("checkpoint_ledger_append_count") != 1
     ):
         raise ValueError("MATERIALIZATION_RETURN_BINDING_INVALID")
-    return_digest = _require_payload_digest(
-        return_payload, "return_digest", "MATERIALIZATION_RETURN_DIGEST_DRIFT"
-    )
+    return_digest = canonical_digest(return_payload)
 
-    cp7_result = _load_closed_json(
+    cp7_result = _load_native_json(
         paths["cp7_result"],
-        _CP7_RESULT_FIELDS,
+        _NATIVE_CP7_RESULT_REQUIRED_FIELDS,
         "MATERIALIZATION_CP7_RESULT_FIELDS_MISMATCH",
     )
-    _require_same_binding(
-        binding,
-        _validate_common_authority_fields(cp7_result, "CR069-S5-CP7-RESULT-V1"),
-    )
-    for prefix in (
-        "return",
-        "evidence",
-        "dispatch",
-        "scanner_receipt",
-        "final_manifest_receipt",
-    ):
-        _require_ref_link(cp7_result, prefix, refs[prefix], raw_digests[prefix])
     if (
         cp7_result["checkpoint"] != "CP7"
-        or cp7_result["decision"] != "PASS"
-        or cp7_result["return_digest"] != return_digest
-        or cp7_result["evidence_digest"] != evidence_digest
-        or cp7_result["dispatch_digest"] != dispatch_digest
-        or cp7_result["scanner_receipt_digest"] != scanner_receipt_digest
-        or cp7_result["final_manifest_receipt_digest"] != final_manifest_digest
+        or cp7_result["event_id"] != descriptor.checkpoint_event_id
+        or cp7_result["revision"] != descriptor.cp7_revision
+        or cp7_result["cr_id"] != descriptor.cr_id
+        or cp7_result["story_id"] != descriptor.story_id
+        or cp7_result["decision"] != "PASS_WITH_RISK"
+        or cp7_result["blockers"] != []
+        or cp7_result["check_harness_errors"] != []
+        or _safe_process_ref(cp7_result["context_ref"]) != refs["context"]
+        or _safe_process_ref(cp7_result["return_packet_ref"]) != refs["return"]
+        or _safe_process_ref(cp7_result["evidence_ref"]) != refs["evidence"]
     ):
         raise ValueError("MATERIALIZATION_CP7_RESULT_NOT_CURRENT_PASS")
-    cp7_result_digest = _require_payload_digest(
-        cp7_result, "result_digest", "MATERIALIZATION_CP7_RESULT_DIGEST_DRIFT"
-    )
+    cp7_result_digest = canonical_digest(cp7_result)
 
     ledger_lines = tuple(
         line
@@ -1024,42 +1150,27 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
         event
         for event in ledger_events
         if isinstance(event, Mapping)
-        and event.get("project_id") == "meta-flow"
-        and event.get("cr_id") == "CR-069"
-        and event.get("story_id") == "STORY-CR069-F1-S5"
-        and event.get("revision") == 9
+        and event.get("cr_id") == descriptor.cr_id
+        and event.get("story_id") == descriptor.story_id
         and event.get("checkpoint") == "CP7"
     )
     if not candidate_events:
         raise ValueError("MATERIALIZATION_CHECKPOINT_LEDGER_HEAD_INVALID")
     head = _closed_payload(
         candidate_events[-1],
-        _LEDGER_EVENT_FIELDS,
+        _NATIVE_LEDGER_FIELDS,
         "MATERIALIZATION_CHECKPOINT_LEDGER_EVENT_FIELDS_MISMATCH",
     )
-    _require_same_binding(
-        binding,
-        _validate_common_authority_fields(
-            head, "CR069-S5-CHECKPOINT-LEDGER-EVENT-V1"
-        ),
-    )
-    previous_event_digest = head["previous_event_digest"]
-    if previous_event_digest != "":
-        _require_sha256(
-            previous_event_digest, "MATERIALIZATION_CHECKPOINT_LEDGER_CHAIN_INVALID"
-        )
-    head_digest = _require_payload_digest(
-        head, "event_digest", "MATERIALIZATION_CHECKPOINT_LEDGER_CHAIN_INVALID"
-    )
-    _require_ref_link(head, "cp7_result", refs["cp7_result"], raw_digests["cp7_result"])
+    head_digest = canonical_digest(head)
     if (
-        head["event_id"] != head["cp7_event_id"]
-        or head["event_type"] != "cr069_s5_candidate_authority"
+        head["event_id"] != descriptor.checkpoint_event_id
+        or head["event_type"] != descriptor.checkpoint_event_type
+        or head["revision"] != descriptor.cp7_revision
         or head["checkpoint"] != "CP7"
-        or head["decision"] != "PASS"
+        or head["decision"] != "PASS_WITH_RISK"
+        or _safe_process_ref(head["context_ref"]) != refs["context"]
         or _safe_process_ref(head["result_ref"]) != refs["cp7_result"]
-        or head["cp7_result_digest"] != cp7_result_digest
-        or head["cp7_event_id"] != binding[3]
+        or _safe_process_ref(head["evidence_ref"]) != refs["evidence"]
     ):
         raise ValueError("MATERIALIZATION_CHECKPOINT_LEDGER_HEAD_INVALID")
 
@@ -1074,6 +1185,7 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
         raise ValueError("MATERIALIZATION_PROVIDER_EVIDENCE_BINDING_INVALID")
     if (
         payload["cp7_result_digest"] != cp7_result_digest
+        or payload["context_digest"] != context_digest
         or payload["checkpoint_event_digest"] != head_digest
         or payload["return_digest"] != return_digest
         or payload["evidence_digest"] != evidence_digest
@@ -1090,6 +1202,7 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
             "cp7_event_id": binding[3],
             "raw_preimages": raw_digests,
             "typed_digests": {
+                "context": context_digest,
                 "dispatch": dispatch_digest,
                 "scanner_receipt": scanner_receipt_digest,
                 "final_manifest_receipt": final_manifest_digest,
@@ -1104,15 +1217,16 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
         raise ValueError("MATERIALIZATION_AUTHORITY_NATIVE_CHAIN_DRIFT")
     expected_authorization_digest = canonical_digest(
         {
-            "contract_id": "CR069-S5-MATERIALIZATION-AUTHORITY-V1",
+            "contract_id": descriptor.contract_id,
             "operation": "provider-receipt-create-only",
             "target_ref": FIXED_RECEIPT_REF,
-            "cr_id": "CR-069",
-            "story_id": "STORY-CR069-F1-S5",
-            "revision": 9,
+            "cr_id": descriptor.cr_id,
+            "story_id": descriptor.story_id,
+            "revision": descriptor.revision,
             "release_oid": binding[0],
             "process_oid": binding[1],
             "scope_digest": binding[2],
+            "freeze_payload_digest": freeze_payload_digest,
             "native_chain_digest": native_chain_digest,
         }
     )
@@ -1125,6 +1239,7 @@ def _load_native_materialization_authority(process_root: Path) -> NativeMaterial
         scope_digest=binding[2],
         freeze_payload_digest=payload["freeze_payload_digest"],
         cp7_event_id=binding[3],
+        context_digest=context_digest,
         cp7_result_digest=cp7_result_digest,
         checkpoint_event_digest=head_digest,
         return_digest=return_digest,

@@ -103,9 +103,7 @@ def _replace_bytes(path: Path, value: bytes) -> None:
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise ValueError(f"state projection target is not a regular file: {path}")
     _ensure_plain_directory(path.parent)
-    temporary = path.with_name(
-        f".{path.name}.{secrets.token_hex(8)}.state-projection.tmp"
-    )
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.state-projection.tmp")
     try:
         with temporary.open("xb") as handle:
             handle.write(value)
@@ -363,9 +361,7 @@ def _load_manifest(project_root: Path) -> tuple[Path, dict[str, Any] | None]:
         raise ValueError("state projection transaction accounting is invalid")
     lineage = _decode_lineage(payload.get("lineage", {}))
     if payload["state"] in TERMINAL_STATES:
-        expected_field = (
-            "after_digest" if payload["state"] == "COMMITTED" else "before_digest"
-        )
+        expected_field = "after_digest" if payload["state"] == "COMMITTED" else "before_digest"
         for raw in targets:
             ref = str(raw["ref"])
             entry = lineage.get(ref)
@@ -375,9 +371,7 @@ def _load_manifest(project_root: Path) -> tuple[Path, dict[str, Any] | None]:
                 and expected_digest != "missing"
                 and entry["current_digest"] != expected_digest
             ):
-                raise ValueError(
-                    "state projection transaction lineage generation mismatch"
-                )
+                raise ValueError("state projection transaction lineage generation mismatch")
     return path, payload
 
 
@@ -428,9 +422,7 @@ def _work_close_generation_heads(project_root: Path) -> dict[str, dict[str, str]
         route.process_root / ".meta-flow-runtime/work-close/transactions",
         refs=refs,
         current_digests={
-            ref.removeprefix("process/"): _digest(
-                _read_target(_resolve_runtime_ref(root, ref))
-            )
+            ref.removeprefix("process/"): _digest(_read_target(_resolve_runtime_ref(root, ref)))
             for ref in ALLOWED_TARGET_REFS
         },
     )
@@ -446,8 +438,7 @@ def _build_lineage(
     _manifest_path, previous = _load_manifest(root)
     close_heads = _work_close_generation_heads(root)
     current_by_ref = {
-        ref: _digest(_read_target(_resolve_runtime_ref(root, ref)))
-        for ref in ALLOWED_TARGET_REFS
+        ref: _digest(_read_target(_resolve_runtime_ref(root, ref))) for ref in ALLOWED_TARGET_REFS
     }
     previous_lineage = _effective_lineage(
         previous,
@@ -455,8 +446,7 @@ def _build_lineage(
         current_by_ref=current_by_ref,
     )
     planned_after = {
-        ref: _digest(after)
-        for ref, _before, after in (_decode_target(raw) for raw in planned)
+        ref: _digest(after) for ref, _before, after in (_decode_target(raw) for raw in planned)
     }
     lineage: dict[str, dict[str, str]] = {}
     for ref in sorted(ALLOWED_TARGET_REFS):
@@ -478,9 +468,7 @@ def _build_lineage(
         ):
             pass
         else:
-            raise ValueError(
-                f"state projection has no authorized Work-close predecessor: {ref}"
-            )
+            raise ValueError(f"state projection has no authorized Work-close predecessor: {ref}")
         lineage[ref] = {
             "anchor_close_authorization_id": anchor_id,
             "anchor_close_digest": anchor_digest,
@@ -575,12 +563,18 @@ def inspect_state_projection_transaction(
         return {
             "decision": "BLOCKED",
             "state": "INVALID",
+            "classification": "CORRUPTED",
             "findings": ["state projection lock bypass inputs are mutually exclusive"],
         }
     try:
         _path, payload = _load_manifest(project_root)
     except (OSError, ValueError) as exc:
-        return {"decision": "BLOCKED", "state": "INVALID", "findings": [str(exc)]}
+        return {
+            "decision": "BLOCKED",
+            "state": "INVALID",
+            "classification": "CORRUPTED",
+            "findings": [str(exc)],
+        }
     findings: list[str] = []
     if _lock_handle is not None:
         try:
@@ -600,6 +594,7 @@ def inspect_state_projection_transaction(
         return {
             "decision": "BLOCKED" if findings else "PASS",
             "state": "NONE",
+            "classification": "COMMITTED_CURRENT" if not findings else "CORRUPTED",
             "findings": findings,
         }
     expected_after = payload["state"] == "COMMITTED"
@@ -619,6 +614,7 @@ def inspect_state_projection_transaction(
         close_heads=work_close_heads,
         current_by_ref=current_by_ref,
     )
+    superseded_refs: set[str] = set()
     for ref in sorted(ALLOWED_TARGET_REFS):
         close_ref = ref.removeprefix("process/")
         head = work_close_heads.get(close_ref)
@@ -645,6 +641,8 @@ def inspect_state_projection_transaction(
         superseded_by_work_close = bool(
             work_close_head and work_close_head["after_digest"] == current_digest
         )
+        if superseded_by_work_close and current_digest != _digest(expected):
+            superseded_refs.add(ref)
         state_successor = bool(
             lineage.get(ref) and lineage[ref]["current_digest"] == current_digest
         )
@@ -657,9 +655,25 @@ def inspect_state_projection_transaction(
             findings.append(f"TERMINAL_GENERATION_DRIFT:{ref}")
     if payload["state"] not in TERMINAL_STATES:
         findings.append(f"UNRESOLVED_STATE_PROJECTION_TRANSACTION:{payload['state']}")
+    repair_findings = [
+        finding
+        for finding in findings
+        if finding.startswith(("TERMINAL_GENERATION_DRIFT:", "STATE_PROJECTION_LINEAGE_UNBOUND:"))
+    ]
+    if payload["state"] not in TERMINAL_STATES:
+        classification = "PARTIAL"
+    elif payload["state"] == "RECOVERED" or superseded_refs:
+        classification = "SUPERSEDED"
+    elif findings and len(repair_findings) == len(findings):
+        classification = "COMMITTED_STALE_REPAIRABLE"
+    elif findings:
+        classification = "CORRUPTED"
+    else:
+        classification = "COMMITTED_CURRENT"
     return {
         "decision": "BLOCKED" if findings else "PASS",
         "state": payload["state"],
+        "classification": classification,
         "transaction_id": payload["transaction_id"],
         "findings": findings,
     }
@@ -689,8 +703,7 @@ def state_projection_successor_head_digests(
         entry = lineage.get(ref)
         if (
             entry is not None
-            and entry["anchor_close_authorization_id"]
-            == str(head.get("authorization_id") or "")
+            and entry["anchor_close_authorization_id"] == str(head.get("authorization_id") or "")
             and entry["anchor_close_digest"] == str(head.get("after_digest") or "")
         ):
             result[close_ref] = entry["current_digest"]
@@ -887,9 +900,7 @@ def _decode_correction(raw: object) -> dict[str, Any]:
         if raw.get("authorization_schema_version") != 2:
             raise ValueError("state projection correction authorization version is invalid")
         decoded["authorization_schema_version"] = 2
-        decoded["writer_provenance"] = _decode_writer_provenance(
-            raw.get("writer_provenance")
-        )
+        decoded["writer_provenance"] = _decode_writer_provenance(raw.get("writer_provenance"))
     return decoded
 
 
@@ -939,7 +950,9 @@ class ProjectionCorrectAuthorizationV1:
         try:
             expiry = datetime.fromisoformat(str(payload["expires_at"]).replace("Z", "+00:00"))
         except ValueError as exc:
-            raise ValueError("state projection correction authorization expires_at is invalid") from exc
+            raise ValueError(
+                "state projection correction authorization expires_at is invalid"
+            ) from exc
         if expiry.tzinfo is None or expiry.astimezone(UTC) <= datetime.now(UTC):
             raise ValueError("state projection correction authorization is expired")
         return cls(
@@ -1040,10 +1053,15 @@ def plan_state_projection_correction(
         for finding in inspection["findings"]
         if finding.startswith("TERMINAL_GENERATION_DRIFT:")
     )
+    drift_ref_set = set(drift_refs)
     blockers = [
         finding
         for finding in inspection["findings"]
         if not finding.startswith("TERMINAL_GENERATION_DRIFT:")
+        and not (
+            finding.startswith("STATE_PROJECTION_LINEAGE_UNBOUND:")
+            and finding.split(":", 1)[1] in drift_ref_set
+        )
     ]
     if payload["state"] != "COMMITTED":
         blockers.append(f"correction supports COMMITTED drift only: {payload['state']}")
@@ -1055,7 +1073,8 @@ def plan_state_projection_correction(
     return {
         "decision": "READY" if drift_refs and not blockers else "BLOCKED",
         "kind": "StateProjectionCorrectionPlanV1",
-        "blockers": blockers or (["no terminal generation drift to correct"] if not drift_refs else []),
+        "blockers": blockers
+        or (["no terminal generation drift to correct"] if not drift_refs else []),
         "transaction_id": payload["transaction_id"],
         "drift_refs": drift_refs,
         "preimage_digests": preimage_digests,
@@ -1078,9 +1097,7 @@ def correct_state_projection_transaction(
         raise ValueError("state projection correction apply requires V2 authorization")
     root = project_root.resolve()
     receipt_dir = root / CORRECTION_ROOT_REL
-    if receipt_dir.is_symlink() or (
-        receipt_dir.exists() and not receipt_dir.is_dir()
-    ):
+    if receipt_dir.is_symlink() or (receipt_dir.exists() and not receipt_dir.is_dir()):
         raise ValueError("state projection correction receipt directory is unsafe")
     receipt_path = receipt_dir / f"{authorization.authorization_id}.json"
     if receipt_path.is_symlink() or receipt_path.exists():
@@ -1115,9 +1132,7 @@ def correct_state_projection_transaction(
             "correction_of": old_payload["transaction_id"],
             "authorization_id": authorization.authorization_id,
             "old_manifest_digest": authorization.old_manifest_digest,
-            "writer_provenance_digest": _canonical_digest(
-                authorization.writer_provenance
-            ),
+            "writer_provenance_digest": _canonical_digest(authorization.writer_provenance),
         }
     )[:32]
     _ensure_runtime_root(root)
@@ -1132,6 +1147,9 @@ def correct_state_projection_transaction(
         locked_plan = plan_state_projection_correction(root, ignore_lock=True)
         if (
             locked_plan["decision"] != "READY"
+            or locked_plan["transaction_id"] != authorization.corrected_transaction_id
+            or locked_plan["drift_refs"] != list(authorization.drift_refs)
+            or locked_plan["preimage_digests"] != authorization.preimage_digests
             or locked_plan["old_manifest_digest"] != authorization.old_manifest_digest
         ):
             raise ValueError("state projection correction target drifted while acquiring lock")
@@ -1254,9 +1272,7 @@ def apply_state_projection_transaction(
         {"ref": item["ref"], "before": item["before_digest"], "after": item["after_digest"]}
         for item in planned
     ]
-    transaction_id = _canonical_digest(
-        {"targets": plan_identity, "lineage": lineage}
-    )[:32]
+    transaction_id = _canonical_digest({"targets": plan_identity, "lineage": lineage})[:32]
     _ensure_runtime_root(root)
     manifest_path = root / MANIFEST_REL
     lock_path = root / LOCK_REL
@@ -1292,9 +1308,10 @@ def apply_state_projection_transaction(
             for item in locked_planned
         ]
         locked_lineage = _build_lineage(root, locked_planned)
-        if _canonical_digest(
-            {"targets": locked_identity, "lineage": locked_lineage}
-        )[:32] != transaction_id:
+        if (
+            _canonical_digest({"targets": locked_identity, "lineage": locked_lineage})[:32]
+            != transaction_id
+        ):
             raise ValueError("state projection target preimage drifted while acquiring writer lock")
         _write_manifest(manifest_path, payload)
         payload["state"] = "APPLYING"

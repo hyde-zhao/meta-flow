@@ -92,6 +92,18 @@ _FIXED_CLASSIFICATIONS = {
     ),
     "meta_flow/work/assurance.py": ("write-owned-assurance", "STORY-CR069-F1-S5"),
     "meta_flow/work/cli.py": ("write-owned-adapter", "STORY-CR069-F1-S5"),
+    # production_validation 只读取 canonical preimage 摘要并构造 admission graph；
+    # 模块自身不拥有 writer，不能与事务 writer 混为一类。
+    "meta_flow/work/production_validation.py": (
+        "canonical-context-read-only-validator",
+        "STORY-CR074-S05",
+    ),
+    # scope_amend 读取 canonical execution context，同时拥有 add-only、可恢复的
+    # scope amendment transaction writer；该分类不授予 materialization security 边。
+    "meta_flow/work/scope_amend.py": (
+        "canonical-context-reader-transaction-writer",
+        "STORY-CR074-S05",
+    ),
     "meta_flow/work/store.py": ("canonical-writer-owner", "STORY-CR069-F1-S5"),
     "tests/test_cr066_read_behavior.py": ("write-owned-fixture", "STORY-CR069-F1-S5"),
     "tests/test_execution_control_consumer_scan.py": (

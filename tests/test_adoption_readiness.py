@@ -32,7 +32,9 @@ def init_git(root: Path) -> None:
     )
 
 
-def bootstrap_capability(project_root: Path, artifact_root: Path, authorization_id: str) -> _LegacyRouteAuthorization:
+def bootstrap_capability(
+    project_root: Path, artifact_root: Path, authorization_id: str
+) -> _LegacyRouteAuthorization:
     plan = legacy_workspace_plan(
         "workspace bootstrap", project_root, artifact_root, "target-project"
     )
@@ -318,7 +320,9 @@ class AdoptionReadinessTests(unittest.TestCase):
 
             package_item = next(item for item in items if item.item_id == "package-identity")
             self.assertEqual("FAIL", package_item.status)
-            self.assertTrue(any("PACKAGE-IDENTITY missing" in message for message in package_item.messages))
+            self.assertTrue(
+                any("PACKAGE-IDENTITY missing" in message for message in package_item.messages)
+            )
             self.assertEqual(1, adoption_readiness.run_adoption_doctor(project_root))
 
     def test_legacy_adoption_doctor_does_not_enable_ordinary_quality_writes(self) -> None:
@@ -332,14 +336,10 @@ class AdoptionReadinessTests(unittest.TestCase):
                 project_root,
                 artifact_root,
                 "target-project",
-                capability=bootstrap_capability(
-                    project_root, artifact_root, "adoption-003"
-                ),
+                capability=bootstrap_capability(project_root, artifact_root, "adoption-003"),
             )
 
-            with self.assertRaisesRegex(
-                ValueError, "vNext project is not initialized"
-            ):
+            with self.assertRaisesRegex(ValueError, "vNext project is not initialized"):
                 quality_governance.write_default_quality_policies(project_root)
 
 

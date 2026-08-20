@@ -1,7 +1,7 @@
 ---
 status: confirmed
-version: "1.3"
-source_change: "CR-071 + CR-072 + CR-073"
+version: "1.4"
+source_change: "CR-071 + CR-072 + CR-073 + CR-074"
 formal_cp2_status: approved
 confirmed_by: "user"
 confirmed_at: "2026-08-19T14:05:17Z"
@@ -16,7 +16,9 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 |---|---|---|
 | 1.0 | 2026-08-15 | 建立 RS-01～RS-03 产品价值切片 |
 | 1.1 | 2026-08-15 | 吸收 CP2 revision 2 的 enabling prerequisite、量化门槛和恢复出口 |
-| 1.2 | 2026-08-18 | CR-072 仅保留一个 0.6.1 外部发布；内部 Wave 不构成 release slice | 保留 CR-071 RS-01～03；不生成中间版本 |
+| 1.2 | 2026-08-18 | CR-072 仅保留一个 0.6.1 外部发布；内部 Wave 不构成 release slice；保留 CR-071 RS-01～03，不生成中间版本 |
+| 1.3 | 2026-08-20 | 增量登记 CR-073 admission safety 与 0.6.2 单一 release cutover；保留旧切片 |
+| 1.4 | 2026-08-20 | 增量登记 CR-074 / 0.6.3 Formal Truth 与 Atomic Lifecycle 单一 release cutover；quant-lab acceptance 延后到发布后独立执行 |
 
 ## 切片列表
 
@@ -48,5 +50,8 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 
 | RS-073-01 | P6 admission safety（非发布切片） | consumer 主体实施前消除 Work 死锁、假健康与历史事实污染 | 7 capability slots（非过程 Story） | CR-073 CP2→CP3→CP5；外部 replay 独立授权 | SCN-073-01～12；J1/J2/J3 | 未授权 replay、历史 PASS 伪造、P7 漂移 |
 | RS-073-02 | 0.6.2 单一 Release Cutover | 交付已通过 CP7 与 quant-lab source-candidate 回放的 admission/validation 可靠性能力 | 复用 S00–S06，不新增 Story/Work | RS-073-01 PASS；typed 0.6.2 selection；本地 cutover authorization | targeted/受影响回归；qualification×1；build×1；isolated installed-artifact canary×1；CP8 | 机器正常建议为 0.7.0；0.6.2 选择须显式披露且不可复用 |
+| RS-074-01 | 0.6.3 Formal Truth & Atomic Lifecycle Release Cutover | 已登记 legacy evidence 与 native CR 在所有 authoritative consumer 中得到同一分区结论；Work/State/CURRENT/HANDOFF 状态变化可零写计划、typed apply、inspect/recover | STORY-CR074-S01～S05；CR-074 Work A / Work B；不新增第三个 Work 或中间版本 | CR-074 CP7 REV2 `PASS_WITH_RISK`；一次性 0.6.3 selection；v10 activation receipt create-only materialization；双仓本地 commit/source freeze 授权 | 既有 targeted/compatibility/structural currentness；历史 full baseline 的 fingerprint 复用证明且不重跑 full；qualification×1；build+artifact bundle×1；isolated canary×1；CP8×1 | 正常 SemVer 建议为 0.7.0；0.6.3 selection 不可复用；`R-074-WB-STRUCTURE`、scope/authz `NEEDS_REVIEW`、72 legacy routes 必须在 CP8 可见 |
 
 `RS-073-02` 是 2026-08-20 用户明确发布与 `0.6.2` 版本指令形成的 delivery-only amendment。它不伪造 SemVer 机器分类，不复用 0.6.1 bootstrap，也不自动授权 Git 或远端 publication。
+
+`RS-074-01` 是 2026-08-20 用户明确选择 `0.6.3` 形成的唯一 CR-074 release slice。其发布顺序为：版本真相 → provider 四层证据（full 仅复用并证明 currentness）→ v10 source receipt create-only materialization → 双仓本地提交/source freeze → frozen fingerprint → source qualification×1 → wheel/sdist 与 artifact receipt/sidecar×1 → isolated installed canary×1 → CP8×1 → 独立远端 publication 授权。v10 source receipt 与 build 后 artifact bundle 是两个不同的 materialization，必须分别计数；quant-lab acceptance 仅在 0.6.3 发布后以独立授权和证据执行，不是本切片发布阻断项。

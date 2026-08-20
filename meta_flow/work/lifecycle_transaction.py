@@ -1,5 +1,4 @@
 """Work 关闭的可恢复多对象事务。
-
 本模块只拥有 Work close 的 plan/authorization/apply/recovery。CR status-sync 与
 CR termination 保留各自既有 owner；统一检查入口只聚合它们的事务状态，不接管
 其领域语义。
@@ -17,19 +16,23 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Protocol, TextIO
-
-try:  # pragma: no cover - Windows 分支由平台验证覆盖
-    import fcntl
-except ImportError:  # pragma: no cover
-    fcntl = None  # type: ignore[assignment]
-
-try:  # pragma: no cover - POSIX 分支由常规测试覆盖
-    import msvcrt
-except ImportError:  # pragma: no cover
-    msvcrt = None  # type: ignore[assignment]
+from typing import Any, ClassVar, Protocol
 
 from meta_flow.execution_control.contract import canonical_digest
+from meta_flow.execution_control.exact_file_transaction import (
+    SHARED_WRITER_LOCK_REL as SHARED_WRITER_LOCK_REL,
+)
+from meta_flow.execution_control.exact_file_transaction import (
+    SharedProjectionWriterLock,
+    acquire_shared_projection_writer_lock,
+    release_shared_projection_writer_lock,
+    validate_shared_projection_writer_lock,
+)
+from meta_flow.execution_control.operation_admission import (
+    OperationAdmissionV1,
+    provider_source_identity_digest,
+    repository_head_oid,
+)
 from meta_flow.project.governance import load_phase
 from meta_flow.project.governance_projection import (
     GOVERNANCE_PROJECTION_REL,
@@ -50,9 +53,9 @@ from meta_flow.work.model import load_work, with_status
 TRANSACTION_SCHEMA_VERSION = 1
 AUTHORIZATION_KIND = "work-close-authorization-v1"
 TRANSACTION_ROOT_REL = Path(".meta-flow-runtime/work-close/transactions")
+HANDOFF_TRANSACTION_ROOT_REL = Path(".meta-flow-runtime/work-handoff")
 SUCCESSOR_ROOT_REL = Path(".meta-flow-runtime/work-close/successors")
 LOCK_REL = Path(".meta-flow-runtime/work-close/writer.lock")
-SHARED_WRITER_LOCK_REL = Path(".meta-flow-runtime/shared-projection/writer.lock")
 TERMINAL_TRANSACTION_STATES = {"COMMITTED", "RECOVERED"}
 TRANSACTION_STATES = {"PREPARED", "APPLYING", "PARTIAL", *TERMINAL_TRANSACTION_STATES}
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -75,6 +78,15 @@ _MANIFEST_OPTIONAL_FIELDS = {
     "lineage",
     "operation",
     "publication_binding",
+    "coordinator_plan_digest",
+    "operation_admission_digest",
+    "mutation_plan_digest",
+    "current_projection_plan_digest",
+    "current_projection_transaction_id",
+    "handoff_plan_digest",
+    "handoff_transaction_id",
+    "handoff_route_policy_digest",
+    "handoff_desired_digest",
 }
 _TARGET_FIELDS = {
     "ref",
@@ -110,17 +122,13 @@ SHARED_SUCCESSOR_OPERATIONS = frozenset(
         "work.status-transition",
         "project.phase-transition",
         "project.phase-metadata",
+        "shared-projection.repair",
     }
 )
 PHASE_METADATA_MANIFEST_REL = Path(".meta-flow-runtime/phase-metadata/transaction.json")
-
-
-@dataclass
-class SharedProjectionWriterLock:
-    """共享 Project/Phase/baseline writer 的进程级 advisory lock capability。"""
-
-    path: Path
-    stream: TextIO
+EMPTY_CURRENT_PROJECTION_PLAN_DIGEST = canonical_digest(
+    {"schema_version": 2, "kind": "CurrentProjectionPlanV2", "targets": []}
+)
 
 
 def _digest_bytes(value: bytes) -> str:
@@ -214,9 +222,7 @@ def refresh_state_projection_if_initialized(process_root: Path) -> tuple[str, ..
     before = {ref: (root / ref).read_bytes() for ref in STATE_PROJECTION_REFS}
     release_root = _release_root_from_process(root)
     state_current.refresh_formal_truth_projection(release_root)
-    return tuple(
-        ref for ref in STATE_PROJECTION_REFS if (root / ref).read_bytes() != before[ref]
-    )
+    return tuple(ref for ref in STATE_PROJECTION_REFS if (root / ref).read_bytes() != before[ref])
 
 
 def _now() -> str:
@@ -300,10 +306,7 @@ class WorkPublicationBindingV1:
         }
         if set(payload) != expected:
             raise ValueError("publication binding fields mismatch")
-        if (
-            payload.get("schema_version") != 1
-            or payload.get("kind") != "WorkPublicationBindingV1"
-        ):
+        if payload.get("schema_version") != 1 or payload.get("kind") != "WorkPublicationBindingV1":
             raise ValueError("publication binding kind/version mismatch")
         work_id = _safe_authorization_id(str(payload.get("work_id") or ""))
         result_ref = str(payload.get("result_ref") or "")
@@ -326,8 +329,7 @@ class WorkPublicationBindingV1:
                 raise ValueError(f"publication binding {key} fields mismatch")
             normalized = tuple((role, str(value[role])) for role in ("release", "process"))
             if any(
-                not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", oid)
-                for _role, oid in normalized
+                not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", oid) for _role, oid in normalized
             ):
                 raise ValueError(f"publication binding {key} OID is invalid")
             oid_sets.append(normalized)
@@ -467,6 +469,255 @@ class WorkCloseReceiptV1:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SharedProjectionRepairTargetV1:
+    ref: str
+    anchor_close_authorization_id: str
+    predecessor_successor_id: str
+    predecessor_digest: str
+    current_digest: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "ref": self.ref,
+            "anchor_close_authorization_id": self.anchor_close_authorization_id,
+            "predecessor_successor_id": self.predecessor_successor_id,
+            "predecessor_digest": self.predecessor_digest,
+            "current_digest": self.current_digest,
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> SharedProjectionRepairTargetV1:
+        if set(payload) != {
+            "ref",
+            "anchor_close_authorization_id",
+            "predecessor_successor_id",
+            "predecessor_digest",
+            "current_digest",
+        }:
+            raise ValueError("shared projection repair target fields mismatch")
+        target = cls(
+            str(payload.get("ref") or ""),
+            str(payload.get("anchor_close_authorization_id") or ""),
+            str(payload.get("predecessor_successor_id") or ""),
+            str(payload.get("predecessor_digest") or ""),
+            str(payload.get("current_digest") or ""),
+        )
+        parts = Path(target.ref).parts
+        if (
+            not _is_shared_projection_ref(target.ref)
+            or target.ref in STATE_PROJECTION_REFS
+            or not _safe_authorization_id(target.anchor_close_authorization_id)
+            or (
+                target.predecessor_successor_id
+                and not _safe_authorization_id(target.predecessor_successor_id)
+            )
+            or not _DIGEST_RE.fullmatch(target.predecessor_digest)
+            or not _DIGEST_RE.fullmatch(target.current_digest)
+            or target.predecessor_digest == target.current_digest
+            or target.ref.startswith("works/")
+            or (len(parts) == 3 and parts[0] == "works")
+        ):
+            raise ValueError("shared projection repair target is invalid")
+        return target
+
+
+@dataclass(frozen=True, slots=True)
+class SharedProjectionRepairPlanV1:
+    classification: str
+    targets: tuple[SharedProjectionRepairTargetV1, ...]
+    blockers: tuple[str, ...]
+    admission: OperationAdmissionV1
+    plan_digest: str
+
+    @property
+    def ready(self) -> bool:
+        return self.classification == "COMMITTED_STALE_REPAIRABLE" and not self.blockers
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "SharedProjectionRepairPlanV1",
+            "decision": "READY" if self.ready else "BLOCKED",
+            "classification": self.classification,
+            "targets": [target.as_dict() for target in self.targets],
+            "blockers": list(self.blockers),
+            "admission": self.admission.as_dict(),
+            "admission_digest": self.admission.admission_digest,
+            "plan_digest": self.plan_digest,
+            "mutation_count": 0,
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> SharedProjectionRepairPlanV1:
+        if (
+            set(payload)
+            != {
+                "schema_version",
+                "kind",
+                "decision",
+                "classification",
+                "targets",
+                "blockers",
+                "admission",
+                "admission_digest",
+                "plan_digest",
+                "mutation_count",
+            }
+            or payload.get("schema_version") != 1
+            or payload.get("kind") != "SharedProjectionRepairPlanV1"
+        ):
+            raise ValueError("shared projection repair plan fields mismatch")
+        raw_targets = payload.get("targets")
+        blockers = payload.get("blockers")
+        if (
+            not isinstance(raw_targets, list)
+            or not isinstance(blockers, list)
+            or any(not isinstance(item, str) for item in blockers)
+        ):
+            raise ValueError("shared projection repair plan collections are invalid")
+        targets = tuple(SharedProjectionRepairTargetV1.from_mapping(item) for item in raw_targets)
+        raw_admission = payload.get("admission")
+        if not isinstance(raw_admission, Mapping) or set(raw_admission) != {
+            "schema_version",
+            "snapshot_digest",
+            "release_oid",
+            "process_oid",
+            "provider_identity_digest",
+            "route_profile_digest",
+            "work_scope_digest",
+            "authorization_identity_digest",
+        }:
+            raise ValueError("shared projection repair admission fields mismatch")
+        admission = OperationAdmissionV1(
+            snapshot_digest=str(raw_admission.get("snapshot_digest") or ""),
+            release_oid=str(raw_admission.get("release_oid") or ""),
+            process_oid=str(raw_admission.get("process_oid") or ""),
+            provider_identity_digest=str(raw_admission.get("provider_identity_digest") or ""),
+            route_profile_digest=str(raw_admission.get("route_profile_digest") or ""),
+            work_scope_digest=str(raw_admission.get("work_scope_digest") or ""),
+            authorization_identity_digest=str(
+                raw_admission.get("authorization_identity_digest") or ""
+            ),
+        )
+        classification = str(payload.get("classification") or "")
+        if classification not in {
+            "COMMITTED_CURRENT",
+            "COMMITTED_STALE_REPAIRABLE",
+            "SUPERSEDED",
+            "PARTIAL",
+            "CORRUPTED",
+        }:
+            raise ValueError("shared projection repair classification is invalid")
+        fields = {
+            "schema_version": 1,
+            "kind": "SharedProjectionRepairPlanV1",
+            "classification": classification,
+            "targets": [target.as_dict() for target in targets],
+            "blockers": blockers,
+            "admission": admission.as_dict(),
+            "admission_digest": admission.admission_digest,
+        }
+        plan_digest = str(payload.get("plan_digest") or "")
+        plan = cls(classification, targets, tuple(blockers), admission, plan_digest)
+        if (
+            canonical_digest(fields) != plan_digest
+            or payload.get("admission_digest") != admission.admission_digest
+            or payload.get("decision") != ("READY" if plan.ready else "BLOCKED")
+            or payload.get("mutation_count") != 0
+        ):
+            raise ValueError("shared projection repair plan integrity mismatch")
+        return plan
+
+
+@dataclass(frozen=True, slots=True)
+class SharedProjectionRepairAuthorizationV1:
+    schema_version: ClassVar[int] = 1
+    kind: ClassVar[str] = "SharedProjectionRepairAuthorizationV1"
+    authorization_id: str
+    plan_digest: str
+    target_refs: tuple[str, ...]
+    expires_at: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "kind": self.kind,
+            "authorization_id": self.authorization_id,
+            "plan_digest": self.plan_digest,
+            "target_refs": list(self.target_refs),
+            "expires_at": self.expires_at,
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> SharedProjectionRepairAuthorizationV1:
+        if (
+            set(payload)
+            != {
+                "schema_version",
+                "kind",
+                "authorization_id",
+                "plan_digest",
+                "target_refs",
+                "expires_at",
+            }
+            or payload.get("schema_version") != 1
+            or payload.get("kind") != cls.kind
+        ):
+            raise ValueError("shared projection repair authorization fields mismatch")
+        refs = payload.get("target_refs")
+        if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
+            raise ValueError("shared projection repair authorization targets are invalid")
+        return cls(
+            str(payload.get("authorization_id") or ""),
+            str(payload.get("plan_digest") or ""),
+            tuple(refs),
+            str(payload.get("expires_at") or ""),
+        )
+
+    def validate_for(self, plan: SharedProjectionRepairPlanV1) -> None:
+        _safe_authorization_id(self.authorization_id)
+        if (
+            not plan.ready
+            or self.plan_digest != plan.plan_digest
+            or self.target_refs != tuple(target.ref for target in plan.targets)
+            or not _DIGEST_RE.fullmatch(self.plan_digest)
+        ):
+            raise ValueError("shared projection repair authorization binding mismatch")
+        try:
+            expiry = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                "shared projection repair authorization expires_at is invalid"
+            ) from exc
+        if expiry.tzinfo is None or expiry.astimezone(UTC) <= datetime.now(UTC):
+            raise ValueError("shared projection repair authorization is expired")
+
+
+@dataclass(frozen=True, slots=True)
+class SharedProjectionRepairReceiptV1:
+    decision: str
+    authorization_id: str
+    plan_digest: str
+    successor_id: str
+    target_refs: tuple[str, ...]
+    mutation_count: int
+    post_classification: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "SharedProjectionRepairReceiptV1",
+            "decision": self.decision,
+            "authorization_id": self.authorization_id,
+            "plan_digest": self.plan_digest,
+            "successor_id": self.successor_id,
+            "target_refs": list(self.target_refs),
+            "mutation_count": self.mutation_count,
+            "post_classification": self.post_classification,
+        }
+
+
 def _validate_result(process_root: Path, work_id: str, outcome: str, result_ref: str) -> None:
     if outcome not in {"completed", "cancelled"}:
         raise ValueError("outcome must be completed or cancelled")
@@ -516,11 +767,7 @@ def plan_work_close(
         if already_closed:
             closed = current
         elif _publication_binding is not None:
-            if (
-                expected_status != "paused"
-                or current.status != "paused"
-                or outcome != "completed"
-            ):
+            if expected_status != "paused" or current.status != "paused" or outcome != "completed":
                 raise ValueError("publication-close requires paused -> completed")
             if (
                 _publication_binding.work_id != current.work_id
@@ -581,9 +828,7 @@ def plan_work_close(
                 updated_phase.as_dict(),
                 _render(updated_phase.as_dict()),
             )
-        candidates.extend(
-            build_state_projection_candidates(root, object_overrides=overrides)
-        )
+        candidates.extend(build_state_projection_candidates(root, object_overrides=overrides))
 
         for ref, after in candidates:
             path = root / ref
@@ -717,101 +962,19 @@ def _release_lock(path: Path, authorization_id: str) -> None:
     path.unlink()
 
 
-def acquire_shared_projection_writer_lock(
-    process_root: Path,
-    writer_id: str,
-) -> SharedProjectionWriterLock:
-    """供修改 Project/Phase 的 native writer 共用同一 lineage 排他锁。"""
-
-    _safe_authorization_id(writer_id)
-    root = process_root.resolve()
-    lock_path = root / SHARED_WRITER_LOCK_REL
-    current = root
-    for part in SHARED_WRITER_LOCK_REL.parent.parts:
-        current = current / part
-        if current.is_symlink() or (current.exists() and not current.is_dir()):
-            raise ValueError("shared projection writer lock path is unsafe")
-        current.mkdir(exist_ok=True)
-    if lock_path.is_symlink() or (lock_path.exists() and not lock_path.is_file()):
-        raise ValueError("shared projection writer lock path is unsafe")
-    stream: TextIO | None = None
-    try:
-        stream = lock_path.open("a+", encoding="utf-8")
-        if fcntl is not None:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        elif msvcrt is not None:  # pragma: no cover - Windows only
-            stream.seek(0, os.SEEK_END)
-            if stream.tell() == 0:
-                stream.write("\0")
-                stream.flush()
-                os.fsync(stream.fileno())
-            stream.seek(0)
-            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-        else:  # pragma: no cover
-            raise RuntimeError("no supported shared projection lock implementation")
-        path_stat = lock_path.stat()
-        handle_stat = os.fstat(stream.fileno())
-        if (path_stat.st_dev, path_stat.st_ino) != (handle_stat.st_dev, handle_stat.st_ino):
-            raise ValueError("shared projection writer lock identity drifted")
-        return SharedProjectionWriterLock(lock_path, stream)
-    except (BlockingIOError, OSError) as exc:
-        if stream is not None:
-            stream.close()
-        raise ValueError("shared projection writer lock is already held") from exc
-    except Exception:
-        if stream is not None:
-            stream.close()
-        raise
-
-
-def release_shared_projection_writer_lock(
-    handle: SharedProjectionWriterLock,
-    writer_id: str,
-) -> None:
-    """释放共享投影 writer 锁，并校验 capability 身份未漂移。"""
-
-    _safe_authorization_id(writer_id)
-    validate_shared_projection_writer_lock(handle)
-    try:
-        if fcntl is not None:
-            fcntl.flock(handle.stream.fileno(), fcntl.LOCK_UN)
-        elif msvcrt is not None:  # pragma: no cover - Windows only
-            handle.stream.seek(0)
-            msvcrt.locking(handle.stream.fileno(), msvcrt.LK_UNLCK, 1)
-    finally:
-        handle.stream.close()
-
-
-def validate_shared_projection_writer_lock(
-    handle: SharedProjectionWriterLock,
-    *,
-    expected_path: Path | None = None,
-) -> None:
-    """验证共享 writer 的活跃 advisory-lock capability，不释放锁。"""
-
-    if expected_path is not None and handle.path.absolute() != expected_path.absolute():
-        raise ValueError("shared projection writer lock path differs from the expected lock")
-    if handle.stream.closed or handle.path.is_symlink() or not handle.path.is_file():
-        raise ValueError("shared projection writer lock ownership is unsafe")
-    try:
-        path_stat = handle.path.stat()
-        handle_stat = os.fstat(handle.stream.fileno())
-    except OSError as exc:
-        raise ValueError("shared projection writer lock ownership is unsafe") from exc
-    if (path_stat.st_dev, path_stat.st_ino) != (handle_stat.st_dev, handle_stat.st_ino):
-        raise ValueError("shared projection writer lock identity drifted")
-
-
 def _is_shared_projection_ref(ref: str) -> bool:
     parts = Path(ref).parts
-    return ref in {
-        "PROJECT.yaml",
-        GOVERNANCE_PROJECTION_REL.as_posix(),
-        *STATE_PROJECTION_REFS,
-    } or (
-        len(parts) == 3 and parts[0] == "phases" and bool(parts[1]) and parts[2] == "PHASE.yaml"
-    ) or (
-        len(parts) == 3 and parts[0] == "works" and bool(parts[1]) and parts[2] == "WORK.yaml"
+    return (
+        ref
+        in {
+            "PROJECT.yaml",
+            GOVERNANCE_PROJECTION_REL.as_posix(),
+            *STATE_PROJECTION_REFS,
+        }
+        or (
+            len(parts) == 3 and parts[0] == "phases" and bool(parts[1]) and parts[2] == "PHASE.yaml"
+        )
+        or (len(parts) == 3 and parts[0] == "works" and bool(parts[1]) and parts[2] == "WORK.yaml")
     )
 
 
@@ -834,7 +997,9 @@ def _load_shared_successor_receipts(root: Path) -> list[dict[str, Any]]:
         if path.is_symlink() or not path.is_file():
             raise ValueError("shared projection successor receipt path is unsafe")
         payload = json.loads(path.read_text(encoding="utf-8"))
-        identity_fields = set(payload) & _SUCCESSOR_IDENTITY_FIELDS if isinstance(payload, Mapping) else set()
+        identity_fields = (
+            set(payload) & _SUCCESSOR_IDENTITY_FIELDS if isinstance(payload, Mapping) else set()
+        )
         if (
             not isinstance(payload, Mapping)
             or set(payload) - _SUCCESSOR_IDENTITY_FIELDS != _SUCCESSOR_FIELDS
@@ -862,9 +1027,7 @@ def _load_shared_successor_receipts(root: Path) -> list[dict[str, Any]]:
             if not isinstance(raw, Mapping) or set(raw) != _SUCCESSOR_TARGET_FIELDS:
                 raise ValueError("shared projection successor target fields mismatch")
             ref = str(raw.get("ref") or "")
-            anchor = _safe_authorization_id(
-                str(raw.get("anchor_close_authorization_id") or "")
-            )
+            anchor = _safe_authorization_id(str(raw.get("anchor_close_authorization_id") or ""))
             predecessor = str(raw.get("predecessor_successor_id") or "")
             if predecessor:
                 predecessor = _safe_authorization_id(predecessor)
@@ -1101,6 +1264,44 @@ def _attach_before_bytes(root: Path, manifest: dict[str, Any]) -> None:
         target["before_bytes_b64"] = base64.b64encode(current).decode("ascii")
 
 
+def _status_handoff_transaction_id(
+    *,
+    authorization_id: str,
+    parent_plan_digest: str,
+    handoff_plan_digest: str,
+    route_policy_digest: str,
+    desired_digest: str,
+) -> str:
+    """parent 与 HANDOFF child 共用的稳定 transaction identity。"""
+
+    _safe_authorization_id(authorization_id)
+    if any(
+        not _DIGEST_RE.fullmatch(value)
+        for value in (
+            parent_plan_digest,
+            handoff_plan_digest,
+            route_policy_digest,
+            desired_digest,
+        )
+    ):
+        raise ValueError("status handoff transaction identity fields are invalid")
+    return sha256(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "HandoffTransitionTransactionIdentityV1",
+                "authorization_id": authorization_id,
+                "parent_plan_digest": parent_plan_digest,
+                "handoff_plan_digest": handoff_plan_digest,
+                "route_policy_digest": route_policy_digest,
+                "desired_digest": desired_digest,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:32]
+
+
 def _validate_manifest(
     manifest: Mapping[str, Any],
     *,
@@ -1115,7 +1316,11 @@ def _validate_manifest(
     ):
         raise ValueError("work close manifest kind/version mismatch")
     operation = str(manifest.get("operation") or "work.close")
-    if operation not in {"work.close", "work.publication-close"}:
+    if operation not in {
+        "work.close",
+        "work.publication-close",
+        "work.status-transition",
+    }:
         raise ValueError("work close manifest operation is invalid")
     publication_binding = manifest.get("publication_binding")
     if operation == "work.publication-close":
@@ -1123,12 +1328,70 @@ def _validate_manifest(
             raise ValueError("publication-close manifest binding is missing")
         WorkPublicationBindingV1.from_mapping(publication_binding)
     elif publication_binding is not None:
-        raise ValueError("standard work close manifest must not contain publication binding")
+        raise ValueError("non-publication manifest must not contain publication binding")
+    coordinator_digest = str(manifest.get("coordinator_plan_digest") or "")
+    operation_admission_digest = str(manifest.get("operation_admission_digest") or "")
+    mutation_plan_digest = str(manifest.get("mutation_plan_digest") or "")
+    child_plan_digest = str(manifest.get("current_projection_plan_digest") or "")
+    child_transaction_id = str(manifest.get("current_projection_transaction_id") or "")
+    handoff_plan_digest = str(manifest.get("handoff_plan_digest") or "")
+    handoff_transaction_id = str(manifest.get("handoff_transaction_id") or "")
+    handoff_policy_digest = str(manifest.get("handoff_route_policy_digest") or "")
+    handoff_desired_digest = str(manifest.get("handoff_desired_digest") or "")
     authorization_id = _safe_authorization_id(str(manifest.get("authorization_id") or ""))
+    parent_plan_digest = str(manifest.get("plan_digest") or "")
+    if operation == "work.status-transition":
+        expected_current_transaction_id = sha256(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "kind": "CurrentProjectionTransactionIdentityV2",
+                    "authorization_id": authorization_id,
+                    "parent_plan_digest": parent_plan_digest,
+                    "current_projection_plan_digest": child_plan_digest,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:32]
+        expected_handoff_transaction_id = _status_handoff_transaction_id(
+            authorization_id=authorization_id,
+            parent_plan_digest=parent_plan_digest,
+            handoff_plan_digest=handoff_plan_digest,
+            route_policy_digest=handoff_policy_digest,
+            desired_digest=handoff_desired_digest,
+        )
+        if (
+            not _DIGEST_RE.fullmatch(coordinator_digest)
+            or not _DIGEST_RE.fullmatch(operation_admission_digest)
+            or not _DIGEST_RE.fullmatch(mutation_plan_digest)
+            or not _DIGEST_RE.fullmatch(parent_plan_digest)
+            or not _DIGEST_RE.fullmatch(child_plan_digest)
+            or child_transaction_id != expected_current_transaction_id
+            or not _DIGEST_RE.fullmatch(handoff_plan_digest)
+            or handoff_transaction_id != expected_handoff_transaction_id
+            or not _DIGEST_RE.fullmatch(handoff_policy_digest)
+            or not _DIGEST_RE.fullmatch(handoff_desired_digest)
+        ):
+            raise ValueError("status transition coordinator binding is invalid")
+    elif any(
+        (
+            coordinator_digest,
+            operation_admission_digest,
+            mutation_plan_digest,
+            child_plan_digest,
+            child_transaction_id,
+            handoff_plan_digest,
+            handoff_transaction_id,
+            handoff_policy_digest,
+            handoff_desired_digest,
+        )
+    ):
+        raise ValueError("non-status manifest must not contain coordinator binding")
     if authorization_id != expected_authorization_id:
         raise ValueError("work close manifest authorization identity mismatch")
     work_id = _safe_authorization_id(str(manifest.get("work_id") or ""))
-    if not _DIGEST_RE.fullmatch(str(manifest.get("plan_digest") or "")):
+    if not _DIGEST_RE.fullmatch(parent_plan_digest):
         raise ValueError("work close manifest plan digest is invalid")
     if manifest.get("state") not in TRANSACTION_STATES:
         raise ValueError("work close manifest state is invalid")
@@ -1247,9 +1510,7 @@ def _lineage_generation_errors(
         errors.append("Phase metadata transaction manifest is unsafe")
     elif phase_metadata_manifest.is_file():
         try:
-            phase_metadata_payload = json.loads(
-                phase_metadata_manifest.read_text(encoding="utf-8")
-            )
+            phase_metadata_payload = json.loads(phase_metadata_manifest.read_text(encoding="utf-8"))
             if (
                 not isinstance(phase_metadata_payload, Mapping)
                 or phase_metadata_payload.get("kind") != "PhaseMetadataTransactionV1"
@@ -1263,7 +1524,7 @@ def _lineage_generation_errors(
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         successor_receipts = []
         errors.append(str(exc))
-    state_projection_current = False
+    state_projection_current_refs: set[str] | None = None
     by_id = {str(manifest["authorization_id"]): manifest for manifest in manifests}
     target_refs = {str(target["ref"]) for manifest in manifests for target in manifest["targets"]}
     current_by_ref: dict[str, str] = {}
@@ -1325,22 +1586,50 @@ def _lineage_generation_errors(
             continue
         if current_digest != expected_digest:
             if ref in STATE_PROJECTION_REFS:
-                if not state_projection_current:
+                if state_projection_current_refs is None:
                     try:
                         from meta_flow.state.projection_transaction import (
                             inspect_state_projection_transaction,
                         )
 
-                        state_projection_current = (
-                            inspect_state_projection_transaction(
-                                _release_root_from_process(root),
-                                _lock_handle=state_lock_handle,
-                            )["decision"]
-                            == "PASS"
+                        inspection = inspect_state_projection_transaction(
+                            _release_root_from_process(root),
+                            _lock_handle=state_lock_handle,
+                        )
+                        ref_findings = {
+                            finding.rsplit(":", 1)[1]
+                            for finding in inspection.get("findings", [])
+                            if isinstance(finding, str)
+                            and finding.startswith(
+                                (
+                                    "TERMINAL_GENERATION_DRIFT:",
+                                    "STATE_PROJECTION_LINEAGE_UNBOUND:",
+                                )
+                            )
+                        }
+                        global_findings = [
+                            finding
+                            for finding in inspection.get("findings", [])
+                            if not isinstance(finding, str)
+                            or not finding.startswith(
+                                (
+                                    "TERMINAL_GENERATION_DRIFT:",
+                                    "STATE_PROJECTION_LINEAGE_UNBOUND:",
+                                )
+                            )
+                        ]
+                        state_projection_current_refs = (
+                            set()
+                            if global_findings
+                            else {
+                                candidate
+                                for candidate in STATE_PROJECTION_REFS
+                                if "process/" + candidate not in ref_findings
+                            }
                         )
                     except (OSError, ValueError):
-                        state_projection_current = False
-                if state_projection_current:
+                        state_projection_current_refs = set()
+                if ref in state_projection_current_refs:
                     continue
             errors.append(
                 f"work close terminal generation mismatch: {ref}:{expected_manifest['state']}"
@@ -1409,9 +1698,7 @@ def plan_shared_projection_successor_preflight(
         raise ValueError("shared projection successor writer identity was already consumed")
     allowed = set(allowed_refs)
     relevant_refs = tuple(
-        ref
-        for ref in sorted(before_digests)
-        if _is_shared_projection_ref(ref) and ref in allowed
+        ref for ref in sorted(before_digests) if _is_shared_projection_ref(ref) and ref in allowed
     )
     close_heads = committed_generation_heads(
         root / TRANSACTION_ROOT_REL,
@@ -1465,8 +1752,7 @@ def record_shared_projection_successor(
     relevant_refs = tuple(
         ref
         for ref in sorted(before_digests)
-        if _is_shared_projection_ref(ref)
-        and ref in set(allowed_refs)
+        if _is_shared_projection_ref(ref) and ref in set(allowed_refs)
     )
     close_heads = committed_generation_heads(
         root / TRANSACTION_ROOT_REL,
@@ -1491,8 +1777,7 @@ def record_shared_projection_successor(
         receipt_refs = {target["ref"] for target in receipt["targets"]}
         if receipt_refs != expected_refs or any(
             before_digests.get(target["ref"]) != target["before_digest"]
-            or _digest_bytes((root / target["ref"]).read_bytes())
-            != target["after_digest"]
+            or _digest_bytes((root / target["ref"]).read_bytes()) != target["after_digest"]
             for target in receipt["targets"]
         ):
             raise ValueError("shared projection successor retry target mismatch")
@@ -1538,22 +1823,24 @@ def record_shared_projection_successor(
         )
     if not target_records:
         return ""
-    successor_id = operation.replace(".", "-") + "-" + sha256(
-        json.dumps(
-            {
-                "operation": operation,
-                "writer_id": writer_id,
-                "targets": target_records,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()[:32]
+    successor_id = (
+        operation.replace(".", "-")
+        + "-"
+        + sha256(
+            json.dumps(
+                {
+                    "operation": operation,
+                    "writer_id": writer_id,
+                    "targets": target_records,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:32]
+    )
     successor_root = root / SUCCESSOR_ROOT_REL
     _require_runtime_chain(root, create=True)
-    if successor_root.is_symlink() or (
-        successor_root.exists() and not successor_root.is_dir()
-    ):
+    if successor_root.is_symlink() or (successor_root.exists() and not successor_root.is_dir()):
         raise ValueError("shared projection successor root is unsafe")
     successor_root.mkdir(exist_ok=True)
     path = successor_root / f"{successor_id}.json"
@@ -1572,6 +1859,318 @@ def record_shared_projection_successor(
     return successor_id
 
 
+def _shared_projection_repair_admission(
+    root: Path,
+    *,
+    classification: str,
+    targets: tuple[SharedProjectionRepairTargetV1, ...],
+    blockers: tuple[str, ...],
+) -> OperationAdmissionV1:
+    """冻结 repair 的仓库、route、provider 与 inspect snapshot 身份。"""
+
+    route_path = root / ".meta-flow-process.yaml"
+    if route_path.is_symlink() or not route_path.is_file():
+        raise ValueError("shared projection repair route binding is unavailable")
+    return OperationAdmissionV1(
+        snapshot_digest=canonical_digest(
+            {
+                "schema_version": 1,
+                "kind": "SharedProjectionRepairSnapshotV1",
+                "classification": classification,
+                "targets": [target.as_dict() for target in targets],
+                "blockers": list(blockers),
+            }
+        ),
+        release_oid=repository_head_oid(_release_root_from_process(root)),
+        process_oid=repository_head_oid(root),
+        provider_identity_digest=provider_source_identity_digest(
+            Path(__file__),
+            Path(__file__).parents[1] / "execution_control/exact_file_transaction.py",
+            Path(__file__).parents[1] / "execution_control/operation_admission.py",
+        ),
+        route_profile_digest=_digest_bytes(route_path.read_bytes()),
+        work_scope_digest=canonical_digest(
+            {
+                "schema_version": 1,
+                "kind": "WorkScopeNotApplicableV1",
+                "operation": "shared-projection.repair",
+            }
+        ),
+        authorization_identity_digest=canonical_digest(
+            {
+                "schema_version": 1,
+                "kind": "SharedProjectionRepairAuthorizationV1",
+                "source": "typed-user-confirmation",
+                "single_use": True,
+            }
+        ),
+    )
+
+
+def plan_shared_projection_repair(process_root: Path) -> SharedProjectionRepairPlanV1:
+    """只读检查 PROJECT/Phase/governance lineage，并生成唯一可修复计划。"""
+
+    root = process_root.resolve()
+    blockers: list[str] = []
+    classification = "COMMITTED_CURRENT"
+    manifests: list[dict[str, Any]] = []
+    transaction_root = root / TRANSACTION_ROOT_REL
+    try:
+        if transaction_root.is_symlink() or (
+            transaction_root.exists() and not transaction_root.is_dir()
+        ):
+            raise ValueError("work close transaction root is unsafe")
+        if transaction_root.is_dir():
+            for path in sorted(transaction_root.glob("*/manifest.json")):
+                if path.parent.is_symlink() or path.is_symlink() or not path.is_file():
+                    raise ValueError("work close transaction path is unsafe")
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("work close transaction payload is invalid")
+                _validate_manifest(payload, expected_authorization_id=path.parent.name)
+                manifests.append(payload)
+        unresolved = [
+            str(payload["authorization_id"])
+            for payload in manifests
+            if payload["state"] not in TERMINAL_TRANSACTION_STATES
+        ]
+        if unresolved:
+            classification = "PARTIAL"
+            blockers.extend(f"unresolved transaction: {item}" for item in unresolved)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        classification = "CORRUPTED"
+        blockers.append(str(exc))
+
+    targets: list[SharedProjectionRepairTargetV1] = []
+    if not blockers:
+        repairable_refs = tuple(
+            sorted(
+                {
+                    str(target["ref"])
+                    for payload in manifests
+                    if payload["state"] == "COMMITTED"
+                    for target in payload["targets"]
+                    if str(target["ref"]) in {"PROJECT.yaml", GOVERNANCE_PROJECTION_REL.as_posix()}
+                    or (
+                        len(Path(str(target["ref"])).parts) == 3
+                        and Path(str(target["ref"])).parts[0] == "phases"
+                        and Path(str(target["ref"])).parts[2] == "PHASE.yaml"
+                    )
+                }
+            )
+        )
+        try:
+            current_digests: dict[str, str] = {}
+            for ref in repairable_refs:
+                path = root / ref
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError(f"shared projection repair target is unsafe: {ref}")
+                current_digests[ref] = _digest_bytes(path.read_bytes())
+            heads = committed_generation_heads(
+                transaction_root,
+                refs=repairable_refs,
+                current_digests=current_digests,
+            )
+            receipts = _load_shared_successor_receipts(root)
+            for ref in repairable_refs:
+                head = heads.get(ref)
+                if head is None:
+                    continue
+                predecessor_id, predecessor_digest = _shared_successor_head(
+                    receipts,
+                    ref=ref,
+                    close_authorization_id=head["authorization_id"],
+                    close_digest=head["after_digest"],
+                )
+                current_digest = current_digests[ref]
+                if current_digest == predecessor_digest:
+                    continue
+                targets.append(
+                    SharedProjectionRepairTargetV1(
+                        ref,
+                        head["authorization_id"],
+                        predecessor_id,
+                        predecessor_digest,
+                        current_digest,
+                    )
+                )
+            if targets:
+                classification = "COMMITTED_STALE_REPAIRABLE"
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            classification = "CORRUPTED"
+            blockers.append(str(exc))
+            targets = []
+    normalized_targets = tuple(targets)
+    normalized_blockers = tuple(blockers)
+    try:
+        admission = _shared_projection_repair_admission(
+            root,
+            classification=classification,
+            targets=normalized_targets,
+            blockers=normalized_blockers,
+        )
+    except (OSError, ValueError) as exc:
+        classification = "CORRUPTED"
+        blockers.append(str(exc))
+        normalized_targets = ()
+        normalized_blockers = tuple(blockers)
+        unavailable = canonical_digest(
+            {
+                "schema_version": 1,
+                "kind": "SharedProjectionRepairAdmissionUnavailableV1",
+                "blockers": blockers,
+            }
+        )
+        admission = OperationAdmissionV1(
+            unavailable,
+            "",
+            "",
+            unavailable,
+            unavailable,
+            unavailable,
+            unavailable,
+        )
+    fields = {
+        "schema_version": 1,
+        "kind": "SharedProjectionRepairPlanV1",
+        "classification": classification,
+        "targets": [target.as_dict() for target in normalized_targets],
+        "blockers": list(normalized_blockers),
+        "admission": admission.as_dict(),
+        "admission_digest": admission.admission_digest,
+    }
+    return SharedProjectionRepairPlanV1(
+        classification,
+        normalized_targets,
+        normalized_blockers,
+        admission,
+        canonical_digest(fields),
+    )
+
+
+def inspect_shared_projection_repair(
+    process_root: Path,
+    *,
+    expected_plan_digest: str = "",
+) -> dict[str, Any]:
+    """inspect-derived five-state 入口；本操作严格零写。"""
+
+    plan = plan_shared_projection_repair(process_root)
+    classification = plan.classification
+    if (
+        expected_plan_digest
+        and expected_plan_digest != plan.plan_digest
+        and classification not in {"PARTIAL", "CORRUPTED"}
+    ):
+        classification = "SUPERSEDED"
+    return {
+        "schema_version": 1,
+        "kind": "SharedProjectionRepairInspectionV1",
+        "decision": "PASS" if classification == "COMMITTED_CURRENT" else "BLOCKED",
+        "classification": classification,
+        "repair_plan": plan.as_dict(),
+        "mutation_count": 0,
+    }
+
+
+def apply_shared_projection_repair(
+    process_root: Path,
+    plan: SharedProjectionRepairPlanV1,
+    authorization: SharedProjectionRepairAuthorizationV1,
+) -> SharedProjectionRepairReceiptV1:
+    """仅追加 successor receipt；formal PROJECT/Phase/governance bytes 零修改。"""
+
+    root = process_root.resolve()
+    authorization.validate_for(plan)
+    writer_id = "shared-repair-" + sha256(authorization.authorization_id.encode()).hexdigest()[:32]
+    _safe_authorization_id(writer_id)
+    shared_lock = acquire_shared_projection_writer_lock(root, writer_id)
+    try:
+        if any(
+            receipt["operation"] == "shared-projection.repair" and receipt["writer_id"] == writer_id
+            for receipt in _load_shared_successor_receipts(root)
+        ):
+            raise ValueError("shared projection repair authorization was already consumed")
+        admission = inspect_shared_projection_repair(
+            root,
+            expected_plan_digest=plan.plan_digest,
+        )
+        if admission["classification"] == "SUPERSEDED":
+            return SharedProjectionRepairReceiptV1(
+                "BLOCKED",
+                authorization.authorization_id,
+                plan.plan_digest,
+                "",
+                tuple(target.ref for target in plan.targets),
+                0,
+                "SUPERSEDED",
+            )
+        fresh = plan_shared_projection_repair(root)
+        if fresh.as_dict() != plan.as_dict():
+            return SharedProjectionRepairReceiptV1(
+                "BLOCKED",
+                authorization.authorization_id,
+                plan.plan_digest,
+                "",
+                tuple(target.ref for target in plan.targets),
+                0,
+                "SUPERSEDED",
+            )
+        before_digests = {target.ref: target.predecessor_digest for target in plan.targets}
+        preflight = tuple(
+            (
+                target.ref,
+                target.anchor_close_authorization_id,
+                target.predecessor_successor_id,
+                target.predecessor_digest,
+            )
+            for target in plan.targets
+        )
+        successor_id = record_shared_projection_successor(
+            root,
+            operation="shared-projection.repair",
+            writer_id=writer_id,
+            before_digests=before_digests,
+            allowed_refs=tuple(target.ref for target in plan.targets),
+            expected_preflight=preflight,
+        )
+        # successor receipt 已原子落盘后，post-inspect 故障不能再冒充零写异常。
+        # 返回 typed PARTIAL，后续只读 inspect 可从 receipt 恢复真实 CURRENT。
+        try:
+            post = plan_shared_projection_repair(root)
+        except Exception:  # noqa: BLE001 - 写后任何检查故障都必须保留 mutation accounting
+            return SharedProjectionRepairReceiptV1(
+                "PARTIAL",
+                authorization.authorization_id,
+                plan.plan_digest,
+                successor_id,
+                tuple(target.ref for target in plan.targets),
+                1 if successor_id else 0,
+                "CORRUPTED",
+            )
+        if post.classification != "COMMITTED_CURRENT":
+            return SharedProjectionRepairReceiptV1(
+                "PARTIAL",
+                authorization.authorization_id,
+                plan.plan_digest,
+                successor_id,
+                tuple(target.ref for target in plan.targets),
+                1 if successor_id else 0,
+                post.classification,
+            )
+        return SharedProjectionRepairReceiptV1(
+            "PASS",
+            authorization.authorization_id,
+            plan.plan_digest,
+            successor_id,
+            tuple(target.ref for target in plan.targets),
+            1 if successor_id else 0,
+            post.classification,
+        )
+    finally:
+        release_shared_projection_writer_lock(shared_lock, writer_id)
+
+
 def discard_shared_projection_successor(
     process_root: Path,
     *,
@@ -1587,9 +2186,7 @@ def discard_shared_projection_successor(
     if operation not in SHARED_SUCCESSOR_OPERATIONS:
         raise ValueError("shared projection successor operation is unsupported")
     successor_root = root / SUCCESSOR_ROOT_REL
-    if successor_root.is_symlink() or (
-        successor_root.exists() and not successor_root.is_dir()
-    ):
+    if successor_root.is_symlink() or (successor_root.exists() and not successor_root.is_dir()):
         raise ValueError("shared projection successor root is unsafe")
     path = successor_root / f"{safe_successor_id}.json"
     if not path.exists() and not path.is_symlink():
@@ -1661,9 +2258,9 @@ def apply_work_close(
     if manifest_path.exists() or manifest_path.is_symlink():
         raise ValueError("work close authorization_id was already consumed")
     _require_runtime_chain(root, create=True)
-    shared_writer_id = "work-close-" + sha256(
-        authorization.authorization_id.encode()
-    ).hexdigest()[:32]
+    shared_writer_id = (
+        "work-close-" + sha256(authorization.authorization_id.encode()).hexdigest()[:32]
+    )
     shared_lock = acquire_shared_projection_writer_lock(
         root,
         shared_writer_id,
@@ -1680,9 +2277,7 @@ def apply_work_close(
 
             state_lock = acquire_transaction_lock(
                 state_projection_lock_path(_release_root_from_process(root)),
-                sha256(
-                    f"work-close:{authorization.authorization_id}".encode()
-                ).hexdigest()[:32],
+                sha256(f"work-close:{authorization.authorization_id}".encode()).hexdigest()[:32],
             )
         _require_runtime_chain(root, authorization.authorization_id, create=True)
         manifest = _manifest(root, plan, authorization)
@@ -1850,6 +2445,10 @@ def recover_work_close_transaction(
         raise ValueError("work close transaction manifest is missing")
     manifest = json.loads(path.read_text(encoding="utf-8"))
     _validate_manifest(manifest, expected_authorization_id=authorization_id)
+    if manifest.get("operation") == "work.status-transition":
+        raise ValueError(
+            "work.status-transition recovery requires the dedicated status-transition owner"
+        )
     state = str(manifest.get("state") or "")
     if state in TERMINAL_TRANSACTION_STATES:
         generation_errors = _lineage_generation_errors(
@@ -1874,8 +2473,7 @@ def recover_work_close_transaction(
     try:
         lock = _acquire_lock(root, authorization_id)
         if any(
-            str(target.get("ref") or "") in STATE_PROJECTION_REFS
-            for target in manifest["targets"]
+            str(target.get("ref") or "") in STATE_PROJECTION_REFS for target in manifest["targets"]
         ):
             from meta_flow.state.projection_transaction import (
                 acquire_transaction_lock,
@@ -1923,6 +2521,10 @@ def recover_work_close_transaction(
 __all__ = [
     "AUTHORIZATION_KIND",
     "SharedProjectionWriterLock",
+    "SharedProjectionRepairAuthorizationV1",
+    "SharedProjectionRepairPlanV1",
+    "SharedProjectionRepairReceiptV1",
+    "SharedProjectionRepairTargetV1",
     "WorkCloseAuthorizationV1",
     "WorkCloseAuthorizationProtocol",
     "WorkClosePlanV1",
@@ -1930,11 +2532,14 @@ __all__ = [
     "WorkPublicationBindingV1",
     "acquire_shared_projection_writer_lock",
     "apply_work_close",
+    "apply_shared_projection_repair",
     "assert_work_close_shared_projection_lineage",
     "build_state_projection_candidates",
     "discard_shared_projection_successor",
     "inspect_work_close_transactions",
+    "inspect_shared_projection_repair",
     "plan_work_close",
+    "plan_shared_projection_repair",
     "plan_shared_projection_successor_preflight",
     "refresh_state_projection_if_initialized",
     "record_work_init_shared_projection_successor",

@@ -106,6 +106,51 @@ class FormalCR:
     native: bool = False
 
 
+@dataclass(frozen=True)
+class CrTrackingReportV1:
+    partition_snapshot_digest: str
+    decision: str
+    reason_codes: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    native_cr_ids: tuple[str, ...]
+    registered_legacy_ids: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "kind": "CrTrackingReportV1",
+            "partition_snapshot_digest": self.partition_snapshot_digest,
+            "decision": self.decision,
+            "reason_codes": list(self.reason_codes),
+            "evidence_refs": list(self.evidence_refs),
+            "native_cr_ids": list(self.native_cr_ids),
+            "registered_legacy_ids": list(self.registered_legacy_ids),
+        }
+
+
+def build_cr_tracking_report(partition_report: Any) -> CrTrackingReportV1:
+    """把共享 partition 纯映射为 tracking 子报告，不执行 discovery。"""
+
+    native_ids = tuple(
+        sorted(
+            {
+                match.group(0)
+                for ref in partition_report.native_formal_cr_refs
+                if (match := CR_ID_RE.search(Path(ref).name)) is not None
+            },
+            key=lambda item: (int(item.split("-", 1)[1]), item),
+        )
+    )
+    return CrTrackingReportV1(
+        partition_snapshot_digest=partition_report.snapshot_digest,
+        decision=partition_report.decision,
+        reason_codes=tuple(partition_report.reason_codes),
+        evidence_refs=tuple(partition_report.evidence_refs),
+        native_cr_ids=native_ids,
+        registered_legacy_ids=tuple(partition_report.registered_legacy_ids),
+    )
+
+
 @dataclass
 class FollowUpRow:
     item_id: str
@@ -256,8 +301,7 @@ def build_protected_object_manifest(
     evidence_root = _resolve_runtime_ref(root, "process/evidence")
     if evidence_root.is_dir():
         candidate_refs.update(
-            format_runtime_ref(root, path)
-            for path in evidence_root.glob("ST-EI-*.index.json")
+            format_runtime_ref(root, path) for path in evidence_root.glob("ST-EI-*.index.json")
         )
 
     objects: list[dict[str, Any]] = []
@@ -507,38 +551,45 @@ def discover_formal_crs(
             continue
         if path.resolve() in excluded_legacy_paths:
             continue
-        text = read_text(path)
-        fields = parse_frontmatter(text)
-        cr_id = fields.get("cr_id") or (
-            CR_ID_RE.search(path.name).group(0) if CR_ID_RE.search(path.name) else ""
-        )
+        formal = _formal_cr_from_path(path)
+        cr_id = formal.cr_id
         if not cr_id:
             continue
         if cr_id in crs:
             raise ValueError(f"duplicate formal CR id {cr_id}: {crs[cr_id].path}, {path}")
-        crs[cr_id] = FormalCR(
-            cr_id=cr_id,
-            status=normalize_status(fields.get("status", "")),
-            cr_kind=normalize_kind(fields.get("cr_kind", "")),
-            lifecycle_status=normalize_lifecycle_status(
-                fields.get("lifecycle_status", ""),
-                fallback_status=fields.get("status", ""),
-            ),
-            readiness_status=normalize_readiness_status(fields.get("readiness_status", "")),
-            gate_status=normalize_gate_status(fields.get("gate_status", "")),
-            gate_profile=strip_scalar(fields.get("gate_profile", "")).lower(),
-            path=path,
-            source=fields.get("source", ""),
-            parent_cr=fields.get("parent_cr", ""),
-            source_follow_up_id=strip_scalar(fields.get("source_follow_up_id", "")),
-            historical_baseline_status=strip_scalar(fields.get("historical_baseline_status", "")),
-            reframed_by=strip_scalar(fields.get("reframed_by", "")),
-            native=(
-                strip_scalar(fields.get("schema_version", "")) == "1"
-                and strip_scalar(fields.get("kind", "")) == "cr"
-            ),
-        )
+        crs[cr_id] = formal
     return crs
+
+
+def _formal_cr_from_path(path: Path) -> FormalCR:
+    """解析一个已经由 authoritative partition 选中的 exact native ref。"""
+
+    fields = parse_frontmatter(read_text(path))
+    cr_id = fields.get("cr_id") or (
+        CR_ID_RE.search(path.name).group(0) if CR_ID_RE.search(path.name) else ""
+    )
+    return FormalCR(
+        cr_id=cr_id,
+        status=normalize_status(fields.get("status", "")),
+        cr_kind=normalize_kind(fields.get("cr_kind", "")),
+        lifecycle_status=normalize_lifecycle_status(
+            fields.get("lifecycle_status", ""),
+            fallback_status=fields.get("status", ""),
+        ),
+        readiness_status=normalize_readiness_status(fields.get("readiness_status", "")),
+        gate_status=normalize_gate_status(fields.get("gate_status", "")),
+        gate_profile=strip_scalar(fields.get("gate_profile", "")).lower(),
+        path=path,
+        source=fields.get("source", ""),
+        parent_cr=fields.get("parent_cr", ""),
+        source_follow_up_id=strip_scalar(fields.get("source_follow_up_id", "")),
+        historical_baseline_status=strip_scalar(fields.get("historical_baseline_status", "")),
+        reframed_by=strip_scalar(fields.get("reframed_by", "")),
+        native=(
+            strip_scalar(fields.get("schema_version", "")) == "1"
+            and strip_scalar(fields.get("kind", "")) == "cr"
+        ),
+    )
 
 
 def parse_follow_up_rows(path: Path) -> list[FollowUpRow]:
@@ -793,6 +844,7 @@ def validate_formal_cr_truth_snapshot(
     excluded_legacy_paths: frozenset[Path],
     registered_legacy_ids: tuple[str, ...] = (),
     state_snapshot: Mapping[str, Any] | None = None,
+    discovery_snapshot: Any | None = None,
 ) -> dict[str, Any]:
     """纯读取验证 formal-only CR index、legacy 分区与 State active_change。"""
 
@@ -804,19 +856,16 @@ def validate_formal_cr_truth_snapshot(
         expected = cr_index.build_index(
             project_root,
             excluded_legacy_paths=excluded_legacy_paths,
+            discovery_snapshot=discovery_snapshot,
         )
     except (OSError, ValueError) as exc:
         errors.append(f"formal CR truth cannot build native index: {exc}")
     native_ids = tuple(
-        str(item.get("id") or "")
-        for item in expected.get("items", [])
-        if isinstance(item, Mapping)
+        str(item.get("id") or "") for item in expected.get("items", []) if isinstance(item, Mapping)
     )
     overlap = sorted(set(native_ids) & set(registered_legacy_ids))
     if overlap:
-        errors.append(
-            "legacy evidence and native formal CR truth overlap: " + ", ".join(overlap)
-        )
+        errors.append("legacy evidence and native formal CR truth overlap: " + ", ".join(overlap))
     expected_digest = str(expected.get("semantic_digest") or "")
     if expected_digest:
         errors.extend(
@@ -828,8 +877,7 @@ def validate_formal_cr_truth_snapshot(
     active_change = str((state_snapshot or {}).get("active_change") or "")
     if active_change and active_change not in native_ids:
         errors.append(
-            "STATE.current.active_change is absent from native formal CR truth: "
-            + active_change
+            "STATE.current.active_change is absent from native formal CR truth: " + active_change
         )
     return {
         "decision": "BLOCKED" if errors else "PASS",
@@ -980,10 +1028,7 @@ def validate_native_evidence_projection(project_root: Path, formal: FormalCR) ->
             for approval in event_ledger.project_gate_approvals(gate_events):
                 if approval.cr_id != formal.cr_id:
                     continue
-                if (
-                    "GATE_APPROVAL_LEGACY_BINDING_INVALID"
-                    in approval.finding_codes
-                ):
+                if "GATE_APPROVAL_LEGACY_BINDING_INVALID" in approval.finding_codes:
                     source = next(
                         (
                             event
@@ -1602,32 +1647,46 @@ def main(argv: list[str] | None = None) -> int:
     index_path = change_root / "CR-INDEX.json"
     from meta_flow.workflow.legacy_evidence_registry import (
         LegacyEvidenceError,
-        load_declared_legacy_evidence_registry,
+        load_formal_cr_partition,
     )
 
     try:
-        legacy_bundle = load_declared_legacy_evidence_registry(
+        _registry, discovery_snapshot, partition_report = load_formal_cr_partition(
             project_root,
             consumer_id="cr-tracking",
         )
     except LegacyEvidenceError as exc:
         print(f"BLOCKED: {exc.code}: {exc}", file=sys.stderr)
         return 2
-    formal_crs = discover_formal_crs(
-        change_root,
-        excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
+    tracking_report = build_cr_tracking_report(partition_report)
+    if tracking_report.decision != "PASS":
+        print(
+            "BLOCKED: " + ",".join(tracking_report.reason_codes),
+            file=sys.stderr,
+        )
+        return 2
+    excluded_legacy_paths = frozenset(
+        route.resolve_ref(ref).resolve() for ref in discovery_snapshot.excluded_legacy_refs
     )
+    formal_crs: dict[str, Path] = {}
+    for logical_ref in discovery_snapshot.native_formal_cr_refs:
+        path = route.resolve_ref(logical_ref)
+        match = re.match(r"^(CR-\d+)(?:-|\.)", path.name)
+        if match is None:
+            print(
+                f"BLOCKED: snapshot native ref has no canonical CR identity: {logical_ref}",
+                file=sys.stderr,
+            )
+            return 2
+        formal_crs[match.group(1)] = _formal_cr_from_path(path)
     follow_up_rows = discover_follow_up_rows(project_root, args.tracking)
-    registered_legacy_ids = tuple(
-        match.group(0)
-        for registration in legacy_bundle.registrations
-        if (match := CR_ID_RE.search(registration.evidence_logical_ref)) is not None
-    )
+    registered_legacy_ids = tracking_report.registered_legacy_ids
     formal_truth_check = validate_formal_cr_truth_snapshot(
         project_root,
         process_root=route.process_root,
-        excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
+        excluded_legacy_paths=excluded_legacy_paths,
         registered_legacy_ids=registered_legacy_ids,
+        discovery_snapshot=discovery_snapshot,
     )
     projection_errors = list(formal_truth_check["errors"])
     from meta_flow.workflow import cr_lifecycle
@@ -1660,7 +1719,8 @@ def main(argv: list[str] | None = None) -> int:
                 projector=lambda cr_id: cr_lifecycle.project_native_cr_status(
                     project_root,
                     cr_id=cr_id,
-                    excluded_legacy_paths=frozenset(legacy_bundle.evidence_paths),
+                    excluded_legacy_paths=excluded_legacy_paths,
+                    partition_report=partition_report,
                 ),
             )
         )

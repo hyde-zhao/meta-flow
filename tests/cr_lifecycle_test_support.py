@@ -112,7 +112,7 @@ title: "{cr_id} title"
 lifecycle_status: "{status}"
 readiness_status: "NOT_READY"
 gate_status: "cp8_pending"
-gate_profile: "standard"
+gate_profile: "standard-code"
 conflict_keys: [{conflict_keys}]
 impact_surface: [{impact_surface}]
 authz_policy_refs: [NO_CREDENTIAL_READ]

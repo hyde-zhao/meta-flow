@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from cr_lifecycle_test_support import LifecycleFixtureCollaborators
+from cr_lifecycle_test_support import init_binding_project as _init_binding_project
 from cr_lifecycle_test_support import write_cr as _write_cr
 
 from meta_flow.project.onboarding import (
@@ -47,6 +48,10 @@ _FIXTURE_COLLABORATORS = LifecycleFixtureCollaborators(
     work_scope=WorkScope,
 )
 write_cr = partial(_write_cr, collaborators=_FIXTURE_COLLABORATORS)
+init_binding_project = partial(
+    _init_binding_project,
+    collaborators=_FIXTURE_COLLABORATORS,
+)
 
 
 class CRLifecycleFacadeSeamTests(unittest.TestCase):
@@ -60,6 +65,7 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
         "STATUS_SYNC_OPERATION",
         "StatusSyncAuthorization",
         "StatusSyncPlan",
+        "BootstrapCRPlanV1",
         "TERMINATION_AUTHORIZATION_KIND",
         "TERMINATION_AUTHORIZATION_SOURCE",
         "TERMINATION_OPERATION",
@@ -71,22 +77,26 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
         "_status_sync_writer_lock_path",
         "_update_current_active_change",
         "append_ledger_event",
+        "apply_bootstrap_cr",
         "apply_cr_termination",
         "apply_status_sync",
-        "bootstrap_cr",
         "build_impact_report",
+        "build_cr_lifecycle_check_report",
         "build_index",
         "collect_check_errors",
         "current",
+        "inspect_bootstrap_transactions",
         "inspect_status_sync_transactions",
         "load_ledger_events",
         "load_status_sync_authorization",
         "main",
         "parse_frontmatter",
+        "plan_bootstrap_cr",
         "plan_cr_termination",
         "plan_index",
         "plan_status_sync",
         "project_native_cr_status",
+        "recover_bootstrap_transaction",
         "recover_status_sync_transaction",
         "render_cr_brief",
         "render_goal_brief",
@@ -99,6 +109,7 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
 
     _public_union = (
         "AggregateCompletionProjector",
+        "BootstrapCRPlanV1",
         "CR_INDEX_REL",
         "CR_SUMMARY_ROOT_REL",
         "STATUS_SYNC_AUTHORIZATION_KIND",
@@ -112,23 +123,27 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
         "TerminationAuthorization",
         "TerminationPlan",
         "append_ledger_event",
+        "apply_bootstrap_cr",
         "apply_cr_termination",
         "apply_status_sync",
-        "bootstrap_cr",
         "build_impact_report",
+        "build_cr_lifecycle_check_report",
         "build_index",
         "collect_check_errors",
         "close_cr",
         "discover_formal_crs",
+        "inspect_bootstrap_transactions",
         "inspect_status_sync_transactions",
         "load_ledger_events",
         "load_status_sync_authorization",
         "main",
         "parse_frontmatter",
+        "plan_bootstrap_cr",
         "plan_cr_termination",
         "plan_index",
         "plan_status_sync",
         "project_native_cr_status",
+        "recover_bootstrap_transaction",
         "recover_status_sync_transaction",
         "render_cr_brief",
         "render_goal_brief",
@@ -178,9 +193,7 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
         source = Path(cr_lifecycle.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         members = {
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+            node.name for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
         }
         self.assertEqual(
             {
@@ -202,15 +215,14 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
             620,
         )
         main_node = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "main"
+            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"
         )
         self.assertFalse(any(isinstance(node, ast.If) for node in ast.walk(main_node)))
 
     def test_analysis_public_surface_is_direct_owner_reexport(self) -> None:
         surfaces = (
             "collect_check_errors",
+            "build_cr_lifecycle_check_report",
             "build_impact_report",
             "render_cr_brief",
             "render_goal_brief",
@@ -246,12 +258,12 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
                         inspect.signature(facade_value),
                     )
 
-    def test_42_attributes_and_explicit_export_contract_are_complete(self) -> None:
+    def test_attributes_and_explicit_export_contract_are_complete(self) -> None:
         public_or_private = set(cr_lifecycle.__all__) | set(
             cr_lifecycle._PRIVATE_COMPATIBILITY_AVAILABILITY
         )
         self.assertEqual(self._public_union, cr_lifecycle.__all__)
-        self.assertEqual(42, len(self._direct_attributes))
+        self.assertEqual(len(self._direct_attributes), len(set(self._direct_attributes)))
         self.assertEqual(
             set(self._direct_attributes),
             public_or_private & set(self._direct_attributes),
@@ -280,11 +292,7 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
                 "action",
                 "typed_authorized",
             ),
-            tuple(
-                inspect.signature(
-                    cr_lifecycle.recover_status_sync_transaction
-                ).parameters
-            ),
+            tuple(inspect.signature(cr_lifecycle.recover_status_sync_transaction).parameters),
         )
 
     def test_five_patch_surfaces_are_post_import_patchable(self) -> None:
@@ -363,15 +371,16 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
 
     def test_projection_injects_current_resolver_rel_and_internal_index_loader(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root, _process = init_binding_project(Path(directory))
             index = self._write_converged_projection_fixture(root)
             logical_refs: list[str] = []
             formal_ref = "process/changes/CR-101.md"
+            formal_path = _resolve_runtime_ref(root, formal_ref)
 
             def resolve(project_root: Path, logical_ref: str) -> Path:
                 self.assertEqual(root, project_root)
                 logical_refs.append(logical_ref)
-                return root / logical_ref
+                return _resolve_runtime_ref(root, logical_ref)
 
             with (
                 patch.object(
@@ -408,7 +417,7 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
                 },
                 set(logical_refs),
             )
-            rel.assert_called_once_with(root, root / "process" / "changes" / "CR-101.md")
+            rel.assert_called_once_with(root, formal_path)
             loader.assert_called_once_with(root, resolve_runtime_ref_fn=resolver)
             leaf_resolver.assert_not_called()
             leaf_rel.assert_not_called()
@@ -476,9 +485,7 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
                     for nested in ast.walk(default)
                     if isinstance(nested, ast.Name)
                 }
-                self.assertFalse(
-                    default_names & cr_lifecycle._CALL_TIME_COMPATIBILITY_SURFACES
-                )
+                self.assertFalse(default_names & cr_lifecycle._CALL_TIME_COMPATIBILITY_SURFACES)
 
 
 if __name__ == "__main__":

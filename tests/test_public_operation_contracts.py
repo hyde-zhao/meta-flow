@@ -25,18 +25,28 @@ CONSOLE = Path(sys.executable).with_name("meta-flow")
 
 
 def build_public_revalidation_authorization(
-    *, attempt_id: str = "attempt-public-61e9",
+    *,
+    attempt_id: str = "attempt-public-61e9",
     release_oid: str = "b" * 40,
     process_oid: str = "c" * 40,
     scope_digest: str = "d" * 64,
     downstream_set: list[dict] | None = None,
 ) -> dict:
-    frozen_downstream_set = downstream_set or [{
-        "producer": "I01", "receipt_digest": "a" * 64, "attempt_id": attempt_id,
-    }]
+    frozen_downstream_set = downstream_set or [
+        {
+            "producer": "I01",
+            "receipt_digest": "a" * 64,
+            "attempt_id": attempt_id,
+        }
+    ]
     return build_cp6_revalidation_receipt(
-        kind="authorization", cr_id="CR-X", story_id="STORY-X", work_id="W-X",
-        attempt_id=attempt_id, release_oid=release_oid, process_oid=process_oid,
+        kind="authorization",
+        cr_id="CR-X",
+        story_id="STORY-X",
+        work_id="W-X",
+        attempt_id=attempt_id,
+        release_oid=release_oid,
+        process_oid=process_oid,
         scope_digest=scope_digest,
         payload={
             "previous_cp6_ref": "process/checks/previous.json",
@@ -73,9 +83,7 @@ def test_p02_bootstrap_public_authority_grammar_is_generic_and_closed() -> None:
 
     registry = public_operations.load_public_operation_registry(PROJECT_ROOT)
     contract = next(
-        item
-        for item in registry
-        if item.operation == "story.issue-revalidation-authority"
+        item for item in registry if item.operation == "story.issue-revalidation-authority"
     )
     assert contract.entry == (
         "meta-flow",
@@ -259,12 +267,15 @@ def init_public_revalidation_project(
     )
     _write_process_json(process, authorization_ref, authorization)
     selector_ref = f"{namespace}/CURRENT-DOWNSTREAM-SELECTIONS.json"
-    selector_entries = [{
-        "producer": entry["producer"],
-        "consumer": "W2",
-        "current_ref": "process/receipts/downstream.json",
-        "superseded_by": "",
-    } for entry in authorization["payload"]["downstream_set"]]
+    selector_entries = [
+        {
+            "producer": entry["producer"],
+            "consumer": "W2",
+            "current_ref": "process/receipts/downstream.json",
+            "superseded_by": "",
+        }
+        for entry in authorization["payload"]["downstream_set"]
+    ]
     _write_process_json(
         process,
         selector_ref,
@@ -278,10 +289,7 @@ def init_public_revalidation_project(
     admission_policy_payload = {
         "schema_version": 1,
         "consumers": {
-            "W2": [
-                entry["producer"]
-                for entry in authorization["payload"]["downstream_set"]
-            ],
+            "W2": [entry["producer"] for entry in authorization["payload"]["downstream_set"]],
         },
     }
     admission_policy = {
@@ -369,11 +377,23 @@ def init_public_apply_operation(root: Path) -> dict[str, object]:
     )
     plan_stdout = StringIO()
     with redirect_stdout(plan_stdout):
-        plan_exit = story_evidence.main([
-            "revalidate-cp6", "--action", "plan", "--output", "json",
-            "--authorization", authorization_ref, "--target", target_ref,
-            "--context", plan_context_ref, "--project-root", str(release),
-        ])
+        plan_exit = story_evidence.main(
+            [
+                "revalidate-cp6",
+                "--action",
+                "plan",
+                "--output",
+                "json",
+                "--authorization",
+                authorization_ref,
+                "--target",
+                target_ref,
+                "--context",
+                plan_context_ref,
+                "--project-root",
+                str(release),
+            ]
+        )
     assert plan_exit == 0
     plan_result = json.loads(plan_stdout.getvalue())
     plan_ref = "process/contexts/r13-plan-result.json"
@@ -416,28 +436,30 @@ def init_public_completion_operation(
         "story_id": "STORY-X",
         "attempt_id": attempt_id,
     }
-    downstream_bytes = (
-        json.dumps(downstream_payload, sort_keys=True) + "\n"
-    ).encode()
+    downstream_bytes = (json.dumps(downstream_payload, sort_keys=True) + "\n").encode()
     release, process, authorization, authorization_ref, _target_ref, _policy_ref = (
         init_public_revalidation_project(
             root,
             attempt_id=attempt_id,
-            downstream_set=[{
-                "producer": "I01",
-                "receipt_digest": hashlib.sha256(downstream_bytes).hexdigest(),
-                "attempt_id": attempt_id,
-            }],
+            downstream_set=[
+                {
+                    "producer": "I01",
+                    "receipt_digest": hashlib.sha256(downstream_bytes).hexdigest(),
+                    "attempt_id": attempt_id,
+                }
+            ],
         )
     )
     packet = {
         "schema_version": 3,
         "lld_policy": "full-lld",
-        "read_if_needed": [{
-            "path": "process/stories/STORY-X-LLD.md",
-            "trigger": "full_lld_required_by_policy",
-            "consumer_requirement": "required",
-        }],
+        "read_if_needed": [
+            {
+                "path": "process/stories/STORY-X-LLD.md",
+                "trigger": "full_lld_required_by_policy",
+                "consumer_requirement": "required",
+            }
+        ],
     }
     selected = ["process/stories/STORY-X-LLD.md"]
     event = {
@@ -461,19 +483,20 @@ def init_public_completion_operation(
     event_path = process / event_ref.removeprefix("process/")
     event_path.parent.mkdir(parents=True, exist_ok=True)
     event_path.write_bytes(event_bytes)
-    required = {key: "f" * 64 for key in (
-        "packet_digest",
-        "read_log_digest",
-        "return_digest",
-        "evidence_digest",
-        "result_digest",
-        "checkpoint_digest",
-        "plan_digest",
-        "downstream_set_digest",
-    )}
-    required["downstream_set_digest"] = authorization["payload"][
-        "downstream_set_digest"
-    ]
+    required = {
+        key: "f" * 64
+        for key in (
+            "packet_digest",
+            "read_log_digest",
+            "return_digest",
+            "evidence_digest",
+            "result_digest",
+            "checkpoint_digest",
+            "plan_digest",
+            "downstream_set_digest",
+        )
+    }
+    required["downstream_set_digest"] = authorization["payload"]["downstream_set_digest"]
     event_digest = hashlib.sha256(event_bytes).hexdigest()
     preflight = story_evidence.validate_cp6_revalidation_preflight(
         authorization,
@@ -514,12 +537,8 @@ def init_public_completion_operation(
                 "projection_ref": projection_ref,
                 "consumer": "W2",
                 "receipt_refs": [downstream_ref],
-                "admission_plan_ref": (
-                    f"{namespace}/DOWNSTREAM-ADMISSION-PLAN.json"
-                ),
-                "current_selections_ref": (
-                    f"{namespace}/CURRENT-DOWNSTREAM-SELECTIONS.json"
-                ),
+                "admission_plan_ref": (f"{namespace}/DOWNSTREAM-ADMISSION-PLAN.json"),
+                "current_selections_ref": (f"{namespace}/CURRENT-DOWNSTREAM-SELECTIONS.json"),
             },
         },
     )
@@ -531,21 +550,22 @@ def init_public_completion_operation(
         "context_ref": completion_context_ref,
         "target_ref": f"{namespace}/receipts/completion.json",
         "admission_plan_ref": f"{namespace}/DOWNSTREAM-ADMISSION-PLAN.json",
-        "current_selections_ref": (
-            f"{namespace}/CURRENT-DOWNSTREAM-SELECTIONS.json"
-        ),
+        "current_selections_ref": (f"{namespace}/CURRENT-DOWNSTREAM-SELECTIONS.json"),
     }
 
 
 def resolved_authorization(payload: dict) -> dict:
     return {
-        "status": "READY", "mutation_count": 0, "payload": payload,
+        "status": "READY",
+        "mutation_count": 0,
+        "payload": payload,
     }
 
 
 def current_observation(*, target_exists: bool = False) -> dict:
     return {
-        "status": "CURRENT", "mutation_count": 0,
+        "status": "CURRENT",
+        "mutation_count": 0,
         "observation": {"target_exists": target_exists},
     }
 
@@ -556,6 +576,7 @@ def applied_result() -> dict:
 
 def verified_payload(payload: dict) -> dict:
     return {"status": "VERIFIED", "mutation_count": 0, "payload": payload}
+
 
 # A3 mapping: TC23 validates generic child plan/apply/replay/inspect/recover
 # contract; COMP04 checks public operation discovery/help without cli.py edits.
@@ -593,18 +614,25 @@ A3_TEST_MAPPING = {
     "P02-COMP-07": "test_story_evidence::StoryEvidenceTests::test_public_story_evidence_commands_resolve_sibling_binding",
 }
 
+
 def semantic_case(identifier: str, positive: str, negative: str) -> dict[str, str]:
     return {
-        "id": identifier, "node": A3_TEST_MAPPING[identifier],
-        "positive": positive, "negative": negative,
+        "id": identifier,
+        "node": A3_TEST_MAPPING[identifier],
+        "positive": positive,
+        "negative": negative,
     }
 
 
 # 显式 registry 让 pytest 收集唯一 param-id；每个 ID 绑定真实 node 与具体正/负断言，
 # 不再从 ID 字符串自动生成伪语义 metadata。
 A3_SEMANTIC_CASES = (
-    semantic_case("P02-TC-01", "closed authorization accepted", "escape ref/digest mismatch blocked"),
-    semantic_case("P02-TC-02", "CP6 PASS admits satisfied story", "unsatisfied dependency unchanged"),
+    semantic_case(
+        "P02-TC-01", "closed authorization accepted", "escape ref/digest mismatch blocked"
+    ),
+    semantic_case(
+        "P02-TC-02", "CP6 PASS admits satisfied story", "unsatisfied dependency unchanged"
+    ),
     semantic_case("P02-TC-03", "open gate projects", "closed gate blocked"),
     semantic_case("P02-TC-04", "receipt prefix projects", "bare phase mapping blocked"),
     semantic_case("P02-TC-05", "monotonic prefix completes", "skip/duplicate blocked"),
@@ -615,18 +643,36 @@ A3_SEMANTIC_CASES = (
     semantic_case("P02-TC-10", "current receipt set matches", "policy/current drift writer zero"),
     semantic_case("P02-TC-11", "one canonical P01 event ready", "zero/multiple/fabricated blocked"),
     semantic_case("P02-TC-12", "required route and target read once", "route failure reads zero"),
-    semantic_case("P02-TC-13", "required digest and lineage match", "missing/digest/lineage blocked"),
+    semantic_case(
+        "P02-TC-13", "required digest and lineage match", "missing/digest/lineage blocked"
+    ),
     semantic_case("P02-TC-14", "optional NA forbidden skip IO", "unexpected resolver IO fails"),
-    semantic_case("P02-TC-15", "eight-item spine ready", "missing/ref/digest/lineage/order blocked"),
+    semantic_case(
+        "P02-TC-15", "eight-item spine ready", "missing/ref/digest/lineage/order blocked"
+    ),
     semantic_case("P02-TC-16", "same receipt chain ready", "inner cross-lineage link blocked"),
-    semantic_case("P02-TC-17", "production create-once applies once", "race/fault/postcheck partial typed"),
+    semantic_case(
+        "P02-TC-17", "production create-once applies once", "race/fault/postcheck partial typed"
+    ),
     semantic_case("P02-TC-18", "runtime attempt recovers once", "cross chain/conflict blocked"),
-    semantic_case("P02-TC-19", "I01 policy current receipt ready", "wrong producer/current/policy blocked"),
-    semantic_case("P02-TC-20", "R01 policy current receipt ready", "wrong producer/current/policy blocked"),
-    semantic_case("P02-TC-21", "C01 policy current receipt ready", "wrong producer/current/policy blocked"),
-    semantic_case("P02-TC-22", "W2 ordered current set ready", "missing/extra/order/superseded blocked"),
-    semantic_case("P02-TC-23", "six real CLI actions dispatch", "service failure/invalid action propagated"),
-    semantic_case("P02-TC-24", "four receipt kinds closed", "major/kind/OID/SHA/ref/enum/fields blocked"),
+    semantic_case(
+        "P02-TC-19", "I01 policy current receipt ready", "wrong producer/current/policy blocked"
+    ),
+    semantic_case(
+        "P02-TC-20", "R01 policy current receipt ready", "wrong producer/current/policy blocked"
+    ),
+    semantic_case(
+        "P02-TC-21", "C01 policy current receipt ready", "wrong producer/current/policy blocked"
+    ),
+    semantic_case(
+        "P02-TC-22", "W2 ordered current set ready", "missing/extra/order/superseded blocked"
+    ),
+    semantic_case(
+        "P02-TC-23", "six real CLI actions dispatch", "service failure/invalid action propagated"
+    ),
+    semantic_case(
+        "P02-TC-24", "four receipt kinds closed", "major/kind/OID/SHA/ref/enum/fields blocked"
+    ),
     semantic_case("P02-COMP-01", "FrozenCp6Evidence V1 accepted", "unknown version blocked"),
     semantic_case("P02-COMP-02", "native CP6 admission preserved", "formal status unchanged"),
     semantic_case("P02-COMP-03", "public projection apply/replay", "stale plan blocked"),
@@ -638,8 +684,13 @@ A3_SEMANTIC_CASES = (
 
 
 @pytest.mark.parametrize("case", A3_SEMANTIC_CASES, ids=[case["id"] for case in A3_SEMANTIC_CASES])
-def test_a3_mapping_integrity_has_exact_keys_and_concrete_existing_nodes(case: dict[str, str]) -> None:
-    expected = {*(f"P02-TC-{index:02d}" for index in range(1, 25)), *(f"P02-COMP-{index:02d}" for index in range(1, 8))}
+def test_a3_mapping_integrity_has_exact_keys_and_concrete_existing_nodes(
+    case: dict[str, str],
+) -> None:
+    expected = {
+        *(f"P02-TC-{index:02d}" for index in range(1, 25)),
+        *(f"P02-COMP-{index:02d}" for index in range(1, 8)),
+    }
     assert {entry["id"] for entry in A3_SEMANTIC_CASES} == expected
     assert case["node"] == A3_TEST_MAPPING[case["id"]]
     assert case["positive"] and case["negative"] and case["positive"] != case["negative"]
@@ -685,10 +736,15 @@ def test_public_operation_registry_reuses_release_snapshot() -> None:
     assert metrics.summary()["totals"]["cache_hits"] == 1
 
 
-def test_story_revalidation_public_child_operation_remains_available_without_cli_owner_change() -> None:
+def test_story_revalidation_public_child_operation_remains_available_without_cli_owner_change() -> (
+    None
+):
     stream = subprocess.run(
-        [str(CONSOLE), "story", "--help"], cwd=PROJECT_ROOT, check=False,
-        capture_output=True, text=True,
+        [str(CONSOLE), "story", "--help"],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
     )
     assert stream.returncode == 0
     assert "project-cp6" in stream.stdout
@@ -696,11 +752,17 @@ def test_story_revalidation_public_child_operation_remains_available_without_cli
     assert callable(story_evidence.plan_cp6_revalidation)
 
 
-def test_a3_tc23_public_child_operation_has_plan_apply_replay_inspect_recover_completion_contract() -> None:
+def test_a3_tc23_public_child_operation_has_plan_apply_replay_inspect_recover_completion_contract() -> (
+    None
+):
     actions = ("plan", "apply", "replay", "inspect", "recover", "completion")
     statuses = {
-        "plan": "READY", "apply": "APPLIED", "replay": "NO_CHANGE",
-        "inspect": "READY", "recover": "RECOVERED", "completion": "COMPLETE",
+        "plan": "READY",
+        "apply": "APPLIED",
+        "replay": "NO_CHANGE",
+        "inspect": "READY",
+        "recover": "RECOVERED",
+        "completion": "COMPLETE",
     }
     traces = {
         "plan": ["resolve", "observe"],
@@ -747,17 +809,30 @@ def test_a3_tc23_public_child_operation_has_plan_apply_replay_inspect_recover_co
                     return {"decision": "READY", "phase": "COMPLETE", "complete": True}
 
                 services = {
-                    "resolve": resolve, "observe_current": observe_current,
+                    "resolve": resolve,
+                    "observe_current": observe_current,
                     "create_once_writer": create_once_writer,
-                    "postcheck_reader": postcheck_reader, "projector": projector,
+                    "postcheck_reader": postcheck_reader,
+                    "projector": projector,
                 }
                 stdout = StringIO()
                 with redirect_stdout(stdout):
-                    exit_code = story_evidence.main([
-                        "revalidate-cp6", "--action", action, "--output", output_format,
-                        "--authorization", str(authorization), "--target", str(target),
-                        "--project-root", str(root),
-                    ], services=services)
+                    exit_code = story_evidence.main(
+                        [
+                            "revalidate-cp6",
+                            "--action",
+                            action,
+                            "--output",
+                            output_format,
+                            "--authorization",
+                            str(authorization),
+                            "--target",
+                            str(target),
+                            "--project-root",
+                            str(root),
+                        ],
+                        services=services,
+                    )
                 assert exit_code == 0
                 assert calls == traces[action]
                 if action in {"apply", "recover", "completion"}:
@@ -766,13 +841,17 @@ def test_a3_tc23_public_child_operation_has_plan_apply_replay_inspect_recover_co
                     output = json.loads(stdout.getvalue())
                     assert output["action"] == action
                     assert output["status"] == statuses[action]
-                    assert output["mutation_count"] == (1 if action in {"apply", "recover", "completion"} else 0)
+                    assert output["mutation_count"] == (
+                        1 if action in {"apply", "recover", "completion"} else 0
+                    )
                     assert output["postcondition"] == "VERIFIED"
                 else:
                     output = stdout.getvalue()
                     for fragment in (
-                        f"action={action}", f"status={statuses[action]}",
-                        "decision=PASS", "postcondition=VERIFIED",
+                        f"action={action}",
+                        f"status={statuses[action]}",
+                        "decision=PASS",
+                        "postcondition=VERIFIED",
                     ):
                         assert fragment in output
 
@@ -781,10 +860,23 @@ def test_a3_tc23_public_child_operation_has_plan_apply_replay_inspect_recover_co
             assert story_evidence.main(["revalidate-cp6", "--help"], services={}) == 0
         for action in actions:
             assert action in help_output.getvalue()
-        assert story_evidence.main([
-            "revalidate-cp6", "--action", "invalid", "--authorization", str(authorization),
-            "--target", str(root / "invalid.json"), "--project-root", str(root),
-        ], services={}) == 2
+        assert (
+            story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "invalid",
+                    "--authorization",
+                    str(authorization),
+                    "--target",
+                    str(root / "invalid.json"),
+                    "--project-root",
+                    str(root),
+                ],
+                services={},
+            )
+            == 2
+        )
 
 
 def test_a003_pgr3_f006_public_dispatcher_requires_real_action_execution() -> None:
@@ -813,22 +905,22 @@ def test_a003_pgr3_f006_public_dispatcher_requires_real_action_execution() -> No
                         path = Path(args[0])
                         path.write_text("{}\n", encoding="utf-8")
                     return result
+
                 return invoke
 
             services = {
                 "resolve": service("resolve", resolved_authorization(authorization_payload)),
                 "observe_current": service("observe", current_observation()),
                 "create_once_writer": service("write", applied_result()),
-                "postcheck_reader": service(
-                    "postcheck", verified_payload(authorization_payload)
-                ),
+                "postcheck_reader": service("postcheck", verified_payload(authorization_payload)),
                 "projector": service(
                     "project", {"decision": "READY", "phase": "COMPLETE", "complete": True}
                 ),
             }
             result = story_evidence.run_cp6_revalidation_operation(
                 request={
-                    "action": action, "output": "json",
+                    "action": action,
+                    "output": "json",
                     "authorization": authorization_payload,
                     "target": target,
                 },
@@ -836,19 +928,50 @@ def test_a003_pgr3_f006_public_dispatcher_requires_real_action_execution() -> No
             )
             assert calls == expected
             assert result["action"] == action
-            assert result["status"] == {
-                "plan": "READY", "apply": "APPLIED", "replay": "NO_CHANGE",
-                "inspect": "READY", "recover": "RECOVERED", "completion": "COMPLETE",
-            }[action]
-            assert result["mutation_count"] == (1 if action in {"apply", "recover", "completion"} else 0)
+            assert (
+                result["status"]
+                == {
+                    "plan": "READY",
+                    "apply": "APPLIED",
+                    "replay": "NO_CHANGE",
+                    "inspect": "READY",
+                    "recover": "RECOVERED",
+                    "completion": "COMPLETE",
+                }[action]
+            )
+            assert result["mutation_count"] == (
+                1 if action in {"apply", "recover", "completion"} else 0
+            )
 
         failure_profiles = {
-            "plan": {"BLOCKED": ("observe", ["resolve", "observe"], 0), "PARTIAL": ("observe", ["resolve", "observe"], 0)},
-            "apply": {"BLOCKED": ("observe", ["resolve", "observe"], 0), "PARTIAL": ("postcheck", ["resolve", "observe", "write", "postcheck"], 1)},
-            "replay": {"BLOCKED": ("postcheck", ["resolve", "observe", "postcheck"], 0), "PARTIAL": ("postcheck", ["resolve", "observe", "postcheck"], 0)},
-            "inspect": {"BLOCKED": ("postcheck", ["resolve", "postcheck"], 0), "PARTIAL": ("postcheck", ["resolve", "postcheck"], 0)},
-            "recover": {"BLOCKED": ("observe", ["resolve", "observe"], 0), "PARTIAL": ("postcheck", ["resolve", "observe", "write", "postcheck"], 1)},
-            "completion": {"BLOCKED": ("project", ["resolve", "observe", "project"], 0), "PARTIAL": ("postcheck", ["resolve", "observe", "project", "write", "postcheck"], 1)},
+            "plan": {
+                "BLOCKED": ("observe", ["resolve", "observe"], 0),
+                "PARTIAL": ("observe", ["resolve", "observe"], 0),
+            },
+            "apply": {
+                "BLOCKED": ("observe", ["resolve", "observe"], 0),
+                "PARTIAL": ("postcheck", ["resolve", "observe", "write", "postcheck"], 1),
+            },
+            "replay": {
+                "BLOCKED": ("postcheck", ["resolve", "observe", "postcheck"], 0),
+                "PARTIAL": ("postcheck", ["resolve", "observe", "postcheck"], 0),
+            },
+            "inspect": {
+                "BLOCKED": ("postcheck", ["resolve", "postcheck"], 0),
+                "PARTIAL": ("postcheck", ["resolve", "postcheck"], 0),
+            },
+            "recover": {
+                "BLOCKED": ("observe", ["resolve", "observe"], 0),
+                "PARTIAL": ("postcheck", ["resolve", "observe", "write", "postcheck"], 1),
+            },
+            "completion": {
+                "BLOCKED": ("project", ["resolve", "observe", "project"], 0),
+                "PARTIAL": (
+                    "postcheck",
+                    ["resolve", "observe", "project", "write", "postcheck"],
+                    1,
+                ),
+            },
         }
         authorization_path = root / "q.json"
         authorization_path.write_text(
@@ -884,11 +1007,14 @@ def test_a003_pgr3_f006_public_dispatcher_requires_real_action_execution() -> No
                             if name == "write":
                                 Path(args[0]).write_text("{}\n", encoding="utf-8")
                             return normal
+
                         return invoke
 
                     def formal_truth_writer(*_args, trace=calls, **_kwargs):
                         trace.append("formal-write")
-                        raise AssertionError("formal truth writer must not run in child revalidation")
+                        raise AssertionError(
+                            "formal truth writer must not run in child revalidation"
+                        )
 
                     services = {
                         "resolve": service(
@@ -907,22 +1033,39 @@ def test_a003_pgr3_f006_public_dispatcher_requires_real_action_execution() -> No
                     }
                     stdout = StringIO()
                     with redirect_stdout(stdout):
-                        exit_code = story_evidence.main([
-                            "revalidate-cp6", "--action", action, "--output", output_format,
-                            "--authorization", str(authorization_path), "--target", str(target),
-                            "--project-root", str(root),
-                        ], services=services)
+                        exit_code = story_evidence.main(
+                            [
+                                "revalidate-cp6",
+                                "--action",
+                                action,
+                                "--output",
+                                output_format,
+                                "--authorization",
+                                str(authorization_path),
+                                "--target",
+                                str(target),
+                                "--project-root",
+                                str(root),
+                            ],
+                            services=services,
+                        )
                     assert exit_code == 2
                     assert calls == expected_trace
                     if output_format == "json":
                         output = json.loads(stdout.getvalue())
-                        assert (output["action"], output["decision"], output["status"]) == (action, decision, decision)
+                        assert (output["action"], output["decision"], output["status"]) == (
+                            action,
+                            decision,
+                            decision,
+                        )
                         assert output["mutation_count"] == mutation_count
                     else:
                         output = stdout.getvalue()
                         for fragment in (
-                            f"action={action}", f"decision={decision}",
-                            f"status={decision}", f"mutation_count={mutation_count}",
+                            f"action={action}",
+                            f"decision={decision}",
+                            f"status={decision}",
+                            f"mutation_count={mutation_count}",
                         ):
                             assert fragment in output
 
@@ -948,12 +1091,15 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
                 services=services,
             )
             assert (blocked["decision"], blocked["mutation_count"], blocked["exit_code"]) == (
-                "BLOCKED", 0, 2,
+                "BLOCKED",
+                0,
+                2,
             )
 
         malformed_resolve = story_evidence.run_cp6_revalidation_operation(
             request={
-                "action": "plan", "authorization": authorization_payload,
+                "action": "plan",
+                "authorization": authorization_payload,
                 "target": root / "malformed.json",
             },
             services={
@@ -962,22 +1108,24 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
             },
         )
         assert (malformed_resolve["decision"], malformed_resolve["mutation_count"]) == (
-            "BLOCKED", 0,
+            "BLOCKED",
+            0,
         )
 
         incomplete_target = root / "u-incomplete.json"
         incomplete = story_evidence.run_cp6_revalidation_operation(
             request={
-                "action": "completion", "authorization": authorization_payload,
+                "action": "completion",
+                "authorization": authorization_payload,
                 "target": incomplete_target,
             },
             services={
-                "resolve": lambda *_args, **_kwargs: resolved_authorization(
-                    authorization_payload
-                ),
+                "resolve": lambda *_args, **_kwargs: resolved_authorization(authorization_payload),
                 "observe_current": lambda *_args, **_kwargs: current_observation(),
                 "projector": lambda *_args, **_kwargs: {
-                    "decision": "READY", "phase": "PROJECTED", "complete": False,
+                    "decision": "READY",
+                    "phase": "PROJECTED",
+                    "complete": False,
                 },
                 "create_once_writer": lambda *_args, **_kwargs: pytest.fail(
                     "writer called for incomplete projector"
@@ -998,13 +1146,12 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
 
         partial = story_evidence.run_cp6_revalidation_operation(
             request={
-                "action": "apply", "authorization": authorization_payload,
+                "action": "apply",
+                "authorization": authorization_payload,
                 "target": mutated_target,
             },
             services={
-                "resolve": lambda *_args, **_kwargs: resolved_authorization(
-                    authorization_payload
-                ),
+                "resolve": lambda *_args, **_kwargs: resolved_authorization(authorization_payload),
                 "observe_current": lambda *_args, **_kwargs: current_observation(),
                 "create_once_writer": corrupt_then_raise,
                 "postcheck_reader": lambda *_args, **_kwargs: pytest.fail(
@@ -1014,7 +1161,9 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
             },
         )
         assert (partial["decision"], partial["mutation_count"], partial["exit_code"]) == (
-            "PARTIAL", 1, 2,
+            "PARTIAL",
+            1,
+            2,
         )
         assert mutated_target.read_bytes() == b"corrupt"
 
@@ -1030,7 +1179,8 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
             calls = []
             blocked = story_evidence.run_cp6_revalidation_operation(
                 request={
-                    "action": "plan", "authorization": authorization_payload,
+                    "action": "plan",
+                    "authorization": authorization_payload,
                     "target": root / "typed-invalid.json",
                 },
                 services={
@@ -1041,7 +1191,9 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
                 },
             )
             assert (blocked["decision"], blocked["mutation_count"], calls) == (
-                "BLOCKED", 0, [],
+                "BLOCKED",
+                0,
+                [],
             )
 
         writer_target = root / "typed-writer.json"
@@ -1052,13 +1204,12 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
 
         writer_conflict = story_evidence.run_cp6_revalidation_operation(
             request={
-                "action": "apply", "authorization": authorization_payload,
+                "action": "apply",
+                "authorization": authorization_payload,
                 "target": writer_target,
             },
             services={
-                "resolve": lambda *_args, **_kwargs: resolved_authorization(
-                    authorization_payload
-                ),
+                "resolve": lambda *_args, **_kwargs: resolved_authorization(authorization_payload),
                 "observe_current": lambda *_args, **_kwargs: current_observation(),
                 "create_once_writer": conflicting_writer,
                 "postcheck_reader": lambda *_args, **_kwargs: pytest.fail(
@@ -1067,7 +1218,8 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
             },
         )
         assert (writer_conflict["decision"], writer_conflict["mutation_count"]) == (
-            "PARTIAL", 1,
+            "PARTIAL",
+            1,
         )
 
         string_count_target = root / "typed-string-count.json"
@@ -1078,13 +1230,12 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
 
         string_count = story_evidence.run_cp6_revalidation_operation(
             request={
-                "action": "apply", "authorization": authorization_payload,
+                "action": "apply",
+                "authorization": authorization_payload,
                 "target": string_count_target,
             },
             services={
-                "resolve": lambda *_args, **_kwargs: resolved_authorization(
-                    authorization_payload
-                ),
+                "resolve": lambda *_args, **_kwargs: resolved_authorization(authorization_payload),
                 "observe_current": lambda *_args, **_kwargs: current_observation(),
                 "create_once_writer": string_count_writer,
                 "postcheck_reader": lambda *_args, **_kwargs: pytest.fail(
@@ -1093,7 +1244,8 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
             },
         )
         assert (string_count["decision"], string_count["mutation_count"]) == (
-            "PARTIAL", 1,
+            "PARTIAL",
+            1,
         )
 
         authorization = root / "u-authorization.json"
@@ -1101,11 +1253,21 @@ def test_a003_r7_dispatcher_and_default_main_fail_closed_on_untyped_or_invalid_i
         default_target = root / "u-default.json"
         output = StringIO()
         with redirect_stdout(output):
-            exit_code = story_evidence.main([
-                "revalidate-cp6", "--action", "apply", "--output", "json",
-                "--authorization", str(authorization), "--target", str(default_target),
-                "--project-root", str(root),
-            ])
+            exit_code = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "apply",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    str(authorization),
+                    "--target",
+                    str(default_target),
+                    "--project-root",
+                    str(root),
+                ]
+            )
         assert exit_code == 2
         assert json.loads(output.getvalue())["decision"] == "BLOCKED"
         assert not default_target.exists()
@@ -1117,7 +1279,9 @@ def test_a003_r8_default_cli_executes_real_plan_apply_replay_and_inspect() -> No
             init_public_revalidation_project(Path(directory))
         )
         target_observation = {
-            "logical_ref": target_ref, "exists": False, "preimage_digest": "",
+            "logical_ref": target_ref,
+            "exists": False,
+            "preimage_digest": "",
         }
         plan_context_ref = "process/contexts/plan.json"
         _write_process_json(
@@ -1131,15 +1295,29 @@ def test_a003_r8_default_cli_executes_real_plan_apply_replay_and_inspect() -> No
         )
         plan_stdout = StringIO()
         with redirect_stdout(plan_stdout):
-            plan_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "plan", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", plan_context_ref, "--project-root", str(release),
-            ])
+            plan_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "plan",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    plan_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         assert plan_exit == 0
         plan_result = json.loads(plan_stdout.getvalue())
         assert (plan_result["decision"], plan_result["status"], plan_result["mutation_count"]) == (
-            "PASS", "READY", 0,
+            "PASS",
+            "READY",
+            0,
         )
         assert plan_result["plan"]["target_observation"] == target_observation
 
@@ -1151,14 +1329,28 @@ def test_a003_r8_default_cli_executes_real_plan_apply_replay_and_inspect() -> No
         _write_process_json(process, authorization_ref, stale_authorization)
         stale_stdout = StringIO()
         with redirect_stdout(stale_stdout):
-            stale_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "plan", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", plan_context_ref, "--project-root", str(release),
-            ])
+            stale_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "plan",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    plan_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         stale_result = json.loads(stale_stdout.getvalue())
         assert (stale_exit, stale_result["decision"], stale_result["mutation_count"]) == (
-            2, "BLOCKED", 0,
+            2,
+            "BLOCKED",
+            0,
         )
         _write_process_json(process, authorization_ref, authorization)
 
@@ -1189,11 +1381,23 @@ def test_a003_r8_default_cli_executes_real_plan_apply_replay_and_inspect() -> No
         )
         alternate_stdout = StringIO()
         with redirect_stdout(alternate_stdout):
-            alternate_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "plan", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", alternate_context_ref, "--project-root", str(release),
-            ])
+            alternate_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "plan",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    alternate_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         alternate_result = json.loads(alternate_stdout.getvalue())
         assert (
             alternate_exit,
@@ -1232,14 +1436,28 @@ def test_a003_r8_default_cli_executes_real_plan_apply_replay_and_inspect() -> No
         )
         drift_stdout = StringIO()
         with redirect_stdout(drift_stdout):
-            drift_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "apply", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", apply_context_ref, "--project-root", str(release),
-            ])
+            drift_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "apply",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    apply_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         drift_result = json.loads(drift_stdout.getvalue())
         assert (drift_exit, drift_result["decision"], drift_result["mutation_count"]) == (
-            2, "BLOCKED", 0,
+            2,
+            "BLOCKED",
+            0,
         )
         target_path = process / target_ref.removeprefix("process/")
         assert not target_path.exists()
@@ -1247,39 +1465,81 @@ def test_a003_r8_default_cli_executes_real_plan_apply_replay_and_inspect() -> No
 
         apply_stdout = StringIO()
         with redirect_stdout(apply_stdout):
-            apply_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "apply", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", apply_context_ref, "--project-root", str(release),
-            ])
+            apply_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "apply",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    apply_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         assert apply_exit == 0
         apply_result = json.loads(apply_stdout.getvalue())
-        assert (apply_result["decision"], apply_result["status"], apply_result["mutation_count"]) == (
-            "PASS", "APPLIED", 1,
+        assert (
+            apply_result["decision"],
+            apply_result["status"],
+            apply_result["mutation_count"],
+        ) == (
+            "PASS",
+            "APPLIED",
+            1,
         )
         assert json.loads(target_path.read_text(encoding="utf-8")) == authorization
 
         for action, expected_status in (("replay", "NO_CHANGE"), ("inspect", "READY")):
             stdout = StringIO()
             with redirect_stdout(stdout):
-                exit_code = story_evidence.main([
-                    "revalidate-cp6", "--action", action, "--output", "json",
-                    "--authorization", authorization_ref, "--target", target_ref,
-                    "--project-root", str(release),
-                ])
+                exit_code = story_evidence.main(
+                    [
+                        "revalidate-cp6",
+                        "--action",
+                        action,
+                        "--output",
+                        "json",
+                        "--authorization",
+                        authorization_ref,
+                        "--target",
+                        target_ref,
+                        "--project-root",
+                        str(release),
+                    ]
+                )
             result = json.loads(stdout.getvalue())
             assert exit_code == 0
             assert (result["decision"], result["status"], result["mutation_count"]) == (
-                "PASS", expected_status, 0,
+                "PASS",
+                expected_status,
+                0,
             )
 
         human_stdout = StringIO()
         with redirect_stdout(human_stdout):
-            human_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "plan", "--output", "human",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", plan_context_ref, "--project-root", str(release),
-            ])
+            human_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "plan",
+                    "--output",
+                    "human",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    plan_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         assert human_exit == 0
         for fragment in ("action=plan", "status=READY", "decision=PASS", "mutation_count=0"):
             assert fragment in human_stdout.getvalue()
@@ -1304,11 +1564,23 @@ def test_a003_r12_apply_detects_policy_drift_inside_writer_boundary(
         )
         plan_stdout = StringIO()
         with redirect_stdout(plan_stdout):
-            plan_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "plan", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", plan_context_ref, "--project-root", str(release),
-            ])
+            plan_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "plan",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    plan_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         assert plan_exit == 0
         plan_result = json.loads(plan_stdout.getvalue())
         plan_ref = "process/contexts/r12-plan-result.json"
@@ -1348,15 +1620,29 @@ def test_a003_r12_apply_detects_policy_drift_inside_writer_boundary(
         monkeypatch.setattr(story_evidence, "_create_once_json", race_writer)
         apply_stdout = StringIO()
         with redirect_stdout(apply_stdout):
-            apply_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "apply", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", apply_context_ref, "--project-root", str(release),
-            ])
+            apply_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "apply",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    apply_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         apply_result = json.loads(apply_stdout.getvalue())
         target_path = process / target_ref.removeprefix("process/")
         assert (apply_exit, apply_result["decision"], apply_result["mutation_count"]) == (
-            2, "PARTIAL", 1,
+            2,
+            "PARTIAL",
+            1,
         )
         assert target_path.exists()
 
@@ -1395,13 +1681,23 @@ def test_a003_r12_completion_blocks_admission_drift_before_writer(
         )
         completion_stdout = StringIO()
         with redirect_stdout(completion_stdout):
-            completion_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "completion", "--output", "json",
-                "--authorization", str(fixture["authorization_ref"]),
-                "--target", str(fixture["target_ref"]),
-                "--context", str(fixture["context_ref"]),
-                "--project-root", str(fixture["release"]),
-            ])
+            completion_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "completion",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    str(fixture["authorization_ref"]),
+                    "--target",
+                    str(fixture["target_ref"]),
+                    "--context",
+                    str(fixture["context_ref"]),
+                    "--project-root",
+                    str(fixture["release"]),
+                ]
+            )
         completion_result = json.loads(completion_stdout.getvalue())
         target_path = process / str(fixture["target_ref"]).removeprefix("process/")
         assert (
@@ -1424,12 +1720,14 @@ def test_a003_r12_completion_detects_selector_drift_inside_writer_boundary(
         original_writer = story_evidence._create_once_json
 
         def race_writer(path: Path, payload: dict) -> dict:
-            superseded = [{
-                "producer": "I01",
-                "consumer": "W2",
-                "current_ref": "process/receipts/downstream.json",
-                "superseded_by": "process/receipts/downstream-v2.json",
-            }]
+            superseded = [
+                {
+                    "producer": "I01",
+                    "consumer": "W2",
+                    "current_ref": "process/receipts/downstream.json",
+                    "superseded_by": "process/receipts/downstream-v2.json",
+                }
+            ]
             _write_process_json(
                 process,
                 selector_ref,
@@ -1444,13 +1742,23 @@ def test_a003_r12_completion_detects_selector_drift_inside_writer_boundary(
         monkeypatch.setattr(story_evidence, "_create_once_json", race_writer)
         completion_stdout = StringIO()
         with redirect_stdout(completion_stdout):
-            completion_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "completion", "--output", "json",
-                "--authorization", str(fixture["authorization_ref"]),
-                "--target", str(fixture["target_ref"]),
-                "--context", str(fixture["context_ref"]),
-                "--project-root", str(fixture["release"]),
-            ])
+            completion_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "completion",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    str(fixture["authorization_ref"]),
+                    "--target",
+                    str(fixture["target_ref"]),
+                    "--context",
+                    str(fixture["context_ref"]),
+                    "--project-root",
+                    str(fixture["release"]),
+                ]
+            )
         completion_result = json.loads(completion_stdout.getvalue())
         target_path = process / str(fixture["target_ref"]).removeprefix("process/")
         assert (
@@ -1486,9 +1794,7 @@ def test_a003_r13_apply_detects_policy_drift_inside_target_postcheck(
                         "schema_version": 1,
                         "consumers": rebound_consumers,
                         "policy_digest": canonical_digest(rebound_consumers),
-                        "current_receipts": authorization["payload"][
-                            "downstream_set"
-                        ],
+                        "current_receipts": authorization["payload"]["downstream_set"],
                     },
                 )
             return payload
@@ -1496,16 +1802,28 @@ def test_a003_r13_apply_detects_policy_drift_inside_target_postcheck(
         monkeypatch.setattr(story_evidence, "_read_json", race_reader)
         apply_stdout = StringIO()
         with redirect_stdout(apply_stdout):
-            apply_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "apply", "--output", "json",
-                "--authorization", str(fixture["authorization_ref"]),
-                "--target", str(fixture["target_ref"]),
-                "--context", str(fixture["context_ref"]),
-                "--project-root", str(fixture["release"]),
-            ])
+            apply_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "apply",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    str(fixture["authorization_ref"]),
+                    "--target",
+                    str(fixture["target_ref"]),
+                    "--context",
+                    str(fixture["context_ref"]),
+                    "--project-root",
+                    str(fixture["release"]),
+                ]
+            )
         apply_result = json.loads(apply_stdout.getvalue())
         assert (apply_exit, apply_result["decision"], apply_result["mutation_count"]) == (
-            2, "PARTIAL", 1,
+            2,
+            "PARTIAL",
+            1,
         )
         assert target_path.exists()
 
@@ -1525,12 +1843,14 @@ def test_a003_r13_completion_detects_selector_drift_inside_target_postcheck(
         def race_reader(path: Path) -> dict:
             payload = original_reader(path)
             if path == target_path:
-                superseded = [{
-                    "producer": "I01",
-                    "consumer": "W2",
-                    "current_ref": "process/receipts/downstream.json",
-                    "superseded_by": "process/receipts/downstream-v2.json",
-                }]
+                superseded = [
+                    {
+                        "producer": "I01",
+                        "consumer": "W2",
+                        "current_ref": "process/receipts/downstream.json",
+                        "superseded_by": "process/receipts/downstream-v2.json",
+                    }
+                ]
                 _write_process_json(
                     process,
                     selector_ref,
@@ -1545,13 +1865,23 @@ def test_a003_r13_completion_detects_selector_drift_inside_target_postcheck(
         monkeypatch.setattr(story_evidence, "_read_json", race_reader)
         completion_stdout = StringIO()
         with redirect_stdout(completion_stdout):
-            completion_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "completion", "--output", "json",
-                "--authorization", str(fixture["authorization_ref"]),
-                "--target", str(fixture["target_ref"]),
-                "--context", str(fixture["context_ref"]),
-                "--project-root", str(fixture["release"]),
-            ])
+            completion_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "completion",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    str(fixture["authorization_ref"]),
+                    "--target",
+                    str(fixture["target_ref"]),
+                    "--context",
+                    str(fixture["context_ref"]),
+                    "--project-root",
+                    str(fixture["release"]),
+                ]
+            )
         completion_result = json.loads(completion_stdout.getvalue())
         assert (
             completion_exit,
@@ -1639,9 +1969,7 @@ def test_a003_r10_default_plan_rejects_self_consistent_noncurrent_source() -> No
         root = Path(directory)
         authorization = build_public_revalidation_authorization()
         authorization_ref = "process/receipts/input-authorization.json"
-        target_ref = (
-            "process/works/W-X/revalidation/attempt-public-61e9/authorization.json"
-        )
+        target_ref = "process/works/W-X/revalidation/attempt-public-61e9/authorization.json"
         context_ref = "process/contexts/plan.json"
         for logical_ref, payload in (
             (authorization_ref, authorization),
@@ -1712,10 +2040,10 @@ def test_a003_r10_default_apply_rejects_reserved_formal_truth_target() -> None:
         )
         for invalid_target_ref in invalid_targets:
             before = (
-                process / invalid_target_ref.removeprefix("process/")
-            ).read_bytes() if (
-                process / invalid_target_ref.removeprefix("process/")
-            ).is_file() else None
+                (process / invalid_target_ref.removeprefix("process/")).read_bytes()
+                if (process / invalid_target_ref.removeprefix("process/")).is_file()
+                else None
+            )
             stdout = StringIO()
             with redirect_stdout(stdout):
                 exit_code = story_evidence.main(
@@ -1788,11 +2116,23 @@ def test_a003_r11_rejects_live_but_owner_unauthorized_attempt() -> None:
         )
         plan_stdout = StringIO()
         with redirect_stdout(plan_stdout):
-            plan_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "plan", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", plan_context_ref, "--project-root", str(release),
-            ])
+            plan_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "plan",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    plan_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         plan_result = json.loads(plan_stdout.getvalue())
         if plan_exit == 0:
             plan_ref = "process/contexts/attacker-plan-result.json"
@@ -1813,20 +2153,36 @@ def test_a003_r11_rejects_live_but_owner_unauthorized_attempt() -> None:
             )
             apply_stdout = StringIO()
             with redirect_stdout(apply_stdout):
-                apply_exit = story_evidence.main([
-                    "revalidate-cp6", "--action", "apply", "--output", "json",
-                    "--authorization", authorization_ref, "--target", target_ref,
-                    "--context", apply_context_ref, "--project-root", str(release),
-                ])
+                apply_exit = story_evidence.main(
+                    [
+                        "revalidate-cp6",
+                        "--action",
+                        "apply",
+                        "--output",
+                        "json",
+                        "--authorization",
+                        authorization_ref,
+                        "--target",
+                        target_ref,
+                        "--context",
+                        apply_context_ref,
+                        "--project-root",
+                        str(release),
+                    ]
+                )
             apply_result = json.loads(apply_stdout.getvalue())
         else:
             apply_exit = 2
             apply_result = {"decision": "BLOCKED", "mutation_count": 0}
         assert (plan_exit, plan_result["decision"], plan_result["mutation_count"]) == (
-            2, "BLOCKED", 0,
+            2,
+            "BLOCKED",
+            0,
         )
         assert (apply_exit, apply_result["decision"], apply_result["mutation_count"]) == (
-            2, "BLOCKED", 0,
+            2,
+            "BLOCKED",
+            0,
         )
         assert not (process / target_ref.removeprefix("process/")).exists()
 
@@ -1871,12 +2227,14 @@ def test_a003_r11_owner_authority_rejects_self_rebound_canonical_input(
             )
         else:
             selector_ref = f"{namespace}/CURRENT-DOWNSTREAM-SELECTIONS.json"
-            rebound = [{
-                "producer": "I01",
-                "consumer": "W2",
-                "current_ref": "process/receipts/attacker-selected.json",
-                "superseded_by": "",
-            }]
+            rebound = [
+                {
+                    "producer": "I01",
+                    "consumer": "W2",
+                    "current_ref": "process/receipts/attacker-selected.json",
+                    "superseded_by": "",
+                }
+            ]
             _write_process_json(
                 process,
                 selector_ref,
@@ -1898,14 +2256,28 @@ def test_a003_r11_owner_authority_rejects_self_rebound_canonical_input(
         )
         stdout = StringIO()
         with redirect_stdout(stdout):
-            exit_code = story_evidence.main([
-                "revalidate-cp6", "--action", "plan", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", context_ref, "--project-root", str(release),
-            ])
+            exit_code = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "plan",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         result = json.loads(stdout.getvalue())
         assert (exit_code, result["decision"], result["mutation_count"]) == (
-            2, "BLOCKED", 0,
+            2,
+            "BLOCKED",
+            0,
         )
 
 
@@ -1942,14 +2314,28 @@ def test_a003_r11_owner_authority_rejects_authorization_lineage_bytes_drift(
         )
         stdout = StringIO()
         with redirect_stdout(stdout):
-            exit_code = story_evidence.main([
-                "revalidate-cp6", "--action", "plan", "--output", "json",
-                "--authorization", authorization_ref, "--target", target_ref,
-                "--context", context_ref, "--project-root", str(release),
-            ])
+            exit_code = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "plan",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    target_ref,
+                    "--context",
+                    context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         result = json.loads(stdout.getvalue())
         assert (exit_code, result["decision"], result["mutation_count"]) == (
-            2, "BLOCKED", 0,
+            2,
+            "BLOCKED",
+            0,
         )
 
 
@@ -1963,28 +2349,30 @@ def test_a003_r9_default_cli_executes_real_completion_and_recover() -> None:
             "story_id": "STORY-X",
             "attempt_id": attempt_id,
         }
-        downstream_bytes = (
-            json.dumps(downstream_payload, sort_keys=True) + "\n"
-        ).encode()
+        downstream_bytes = (json.dumps(downstream_payload, sort_keys=True) + "\n").encode()
         release, process, authorization, authorization_ref, _target_ref, _policy_ref = (
             init_public_revalidation_project(
                 Path(directory),
                 attempt_id=attempt_id,
-                downstream_set=[{
-                    "producer": "I01",
-                    "receipt_digest": hashlib.sha256(downstream_bytes).hexdigest(),
-                    "attempt_id": attempt_id,
-                }],
+                downstream_set=[
+                    {
+                        "producer": "I01",
+                        "receipt_digest": hashlib.sha256(downstream_bytes).hexdigest(),
+                        "attempt_id": attempt_id,
+                    }
+                ],
             )
         )
         packet = {
             "schema_version": 3,
             "lld_policy": "full-lld",
-            "read_if_needed": [{
-                "path": "process/stories/STORY-X-LLD.md",
-                "trigger": "full_lld_required_by_policy",
-                "consumer_requirement": "required",
-            }],
+            "read_if_needed": [
+                {
+                    "path": "process/stories/STORY-X-LLD.md",
+                    "trigger": "full_lld_required_by_policy",
+                    "consumer_requirement": "required",
+                }
+            ],
         }
         selected = ["process/stories/STORY-X-LLD.md"]
         event = {
@@ -2008,10 +2396,19 @@ def test_a003_r9_default_cli_executes_real_completion_and_recover() -> None:
         event_path = process / event_ref.removeprefix("process/")
         event_path.parent.mkdir(parents=True, exist_ok=True)
         event_path.write_bytes(event_bytes)
-        required = {key: "f" * 64 for key in (
-            "packet_digest", "read_log_digest", "return_digest", "evidence_digest",
-            "result_digest", "checkpoint_digest", "plan_digest", "downstream_set_digest",
-        )}
+        required = {
+            key: "f" * 64
+            for key in (
+                "packet_digest",
+                "read_log_digest",
+                "return_digest",
+                "evidence_digest",
+                "result_digest",
+                "checkpoint_digest",
+                "plan_digest",
+                "downstream_set_digest",
+            )
+        }
         required["downstream_set_digest"] = authorization["payload"]["downstream_set_digest"]
         event_digest = hashlib.sha256(event_bytes).hexdigest()
         preflight = story_evidence.validate_cp6_revalidation_preflight(
@@ -2061,17 +2458,17 @@ def test_a003_r9_default_cli_executes_real_completion_and_recover() -> None:
             **plan_payload,
             "plan_digest": canonical_digest(plan_payload),
         }
-        namespace = (
-            f"process/works/W-X/revalidation/{authorization['attempt_id']}"
-        )
+        namespace = f"process/works/W-X/revalidation/{authorization['attempt_id']}"
         admission_plan_ref = f"{namespace}/DOWNSTREAM-ADMISSION-PLAN.json"
         _write_process_json(process, admission_plan_ref, plan_observation)
-        selections = [{
-            "producer": producer,
-            "consumer": consumer,
-            "current_ref": downstream_ref,
-            "superseded_by": "",
-        }]
+        selections = [
+            {
+                "producer": producer,
+                "consumer": consumer,
+                "current_ref": downstream_ref,
+                "superseded_by": "",
+            }
+        ]
         current_selections_ref = f"{namespace}/CURRENT-DOWNSTREAM-SELECTIONS.json"
         _write_process_json(
             process,
@@ -2103,24 +2500,39 @@ def test_a003_r9_default_cli_executes_real_completion_and_recover() -> None:
         completion_target = f"{namespace}/receipts/completion.json"
         completion_stdout = StringIO()
         with redirect_stdout(completion_stdout):
-            completion_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "completion", "--output", "json",
-                "--authorization", authorization_ref, "--target", completion_target,
-                "--context", completion_context_ref, "--project-root", str(release),
-            ])
+            completion_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "completion",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    completion_target,
+                    "--context",
+                    completion_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         completion_result = json.loads(completion_stdout.getvalue())
         assert completion_exit == 0
         assert (
-            completion_result["decision"], completion_result["status"],
+            completion_result["decision"],
+            completion_result["status"],
             completion_result["mutation_count"],
         ) == ("PASS", "COMPLETE", 1)
         completion_path = process / completion_target.removeprefix("process/")
         assert json.loads(completion_path.read_text(encoding="utf-8"))["kind"] == "completion"
 
-        superseded = [{
-            **selections[0],
-            "superseded_by": "process/receipts/downstream-v2.json",
-        }]
+        superseded = [
+            {
+                **selections[0],
+                "superseded_by": "process/receipts/downstream-v2.json",
+            }
+        ]
         _write_process_json(
             process,
             current_selections_ref,
@@ -2133,11 +2545,23 @@ def test_a003_r9_default_cli_executes_real_completion_and_recover() -> None:
         before_superseded_check = completion_path.read_bytes()
         superseded_stdout = StringIO()
         with redirect_stdout(superseded_stdout):
-            superseded_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "completion", "--output", "json",
-                "--authorization", authorization_ref, "--target", completion_target,
-                "--context", completion_context_ref, "--project-root", str(release),
-            ])
+            superseded_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "completion",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    completion_target,
+                    "--context",
+                    completion_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         superseded_result = json.loads(superseded_stdout.getvalue())
         assert (
             superseded_exit,
@@ -2171,15 +2595,28 @@ def test_a003_r9_default_cli_executes_real_completion_and_recover() -> None:
         recovery_target = completion_target
         recovery_stdout = StringIO()
         with redirect_stdout(recovery_stdout):
-            recovery_exit = story_evidence.main([
-                "revalidate-cp6", "--action", "recover", "--output", "json",
-                "--authorization", authorization_ref, "--target", recovery_target,
-                "--context", recovery_context_ref, "--project-root", str(release),
-            ])
+            recovery_exit = story_evidence.main(
+                [
+                    "revalidate-cp6",
+                    "--action",
+                    "recover",
+                    "--output",
+                    "json",
+                    "--authorization",
+                    authorization_ref,
+                    "--target",
+                    recovery_target,
+                    "--context",
+                    recovery_context_ref,
+                    "--project-root",
+                    str(release),
+                ]
+            )
         recovery_result = json.loads(recovery_stdout.getvalue())
         assert recovery_exit == 0
         assert (
-            recovery_result["decision"], recovery_result["status"],
+            recovery_result["decision"],
+            recovery_result["status"],
             recovery_result["mutation_count"],
         ) == ("PASS", "NO_CHANGE", 0)
 
@@ -2268,6 +2705,9 @@ def write_cp6_projection_fixture(root: Path) -> None:
 
 class PublicOperationContractTests(unittest.TestCase):
     def test_registry_matches_inventory_and_all_six_l3_journeys(self) -> None:
+        from meta_flow.cli import PUBLIC_MUTATION_ROUTES
+
+        contracts = public_operations.load_public_operation_registry(PROJECT_ROOT)
         result = public_operations.validate_public_operations(
             PROJECT_ROOT,
             check_console=True,
@@ -2276,13 +2716,13 @@ class PublicOperationContractTests(unittest.TestCase):
         self.assertEqual("PASS", result["decision"], result["errors"])
         self.assertEqual(3, result["schema_version"])
         self.assertEqual("PublicOperationRegistryCheckV3", result["kind"])
-        self.assertEqual(45, result["documented_operation_count"])
+        self.assertEqual(len(contracts), result["documented_operation_count"])
         self.assertEqual([], result["undocumented_public_operations"])
         self.assertEqual([], result["unknown_registry_operations"])
         self.assertEqual(6, result["l3_journey_count"])
         self.assertTrue(all(item["discovered"] for item in result["console_results"]))
         self.assertEqual("package-source-declarations-v1", result["discovery"]["mode"])
-        self.assertEqual(45, result["discovery"]["discovered_operation_count"])
+        self.assertEqual(len(contracts), result["discovery"]["discovered_operation_count"])
         self.assertEqual("PASS", result["governed_cli_reverse_coverage"]["status"])
         self.assertEqual(1, result["governed_cli_reverse_coverage"]["entry_count"])
         self.assertEqual(
@@ -2293,6 +2733,48 @@ class PublicOperationContractTests(unittest.TestCase):
             [],
             result["governed_cli_reverse_coverage"]["missing_contract_entries"],
         )
+        mutation_coverage = result["governed_mutation_reverse_coverage"]
+        self.assertEqual("PASS", mutation_coverage["status"])
+        self.assertEqual("contracted-public-mutation-routes", mutation_coverage["scope"])
+        self.assertEqual(len(PUBLIC_MUTATION_ROUTES), mutation_coverage["entry_count"])
+        baseline = mutation_coverage["legacy_uncontracted_cli_baseline"]
+        self.assertEqual("LEGACY_UNCONTRACTED_CLI_BASELINE", baseline["classification"])
+        self.assertEqual(
+            mutation_coverage["entry_count"] + baseline["entry_count"],
+            mutation_coverage["provider_admission_route_count"],
+        )
+        self.assertGreaterEqual(baseline["entry_count"], 37)
+        self.assertEqual("meta_flow.cli", baseline["owner"])
+        self.assertEqual(
+            "PUBLIC_OPERATION_CONTRACT_MIGRATION_BACKLOG",
+            baseline["follow_up"],
+        )
+        baseline_entries = {tuple(item["entry"]) for item in baseline["entries"]}
+        self.assertFalse(
+            {
+                ("meta-flow", "work", command)
+                for command in (
+                    "status-transition",
+                    "status-transition-recover",
+                    "start",
+                    "pause",
+                    "resume",
+                    "block",
+                )
+            }
+            & baseline_entries
+        )
+        self.assertFalse(
+            {
+                ("meta-flow", "cr", "bootstrap"),
+                ("meta-flow", "cr", "bootstrap-recover"),
+            }
+            & baseline_entries
+        )
+        self.assertEqual([], mutation_coverage["missing_declaration_entries"])
+        self.assertEqual([], mutation_coverage["missing_contract_entries"])
+        self.assertEqual([], mutation_coverage["registered_zero_write_entries"])
+        self.assertEqual([], mutation_coverage["unknown_registered_mutation_entries"])
         self.assertGreater(result["discovery"]["scanned_file_count"], 100)
         self.assertTrue(
             all(
@@ -2301,6 +2783,143 @@ class PublicOperationContractTests(unittest.TestCase):
             )
         )
         self.assertFalse(hasattr(public_operations, "PUBLIC_OPERATION_ENTRIES"))
+
+    def test_mutation_reverse_coverage_rejects_missing_owner_declaration(self) -> None:
+        from meta_flow.cli import PUBLIC_MUTATION_ROUTES
+
+        missing = ("meta-flow", "work", "missing-mutation")
+        result = public_operations.validate_public_operations(
+            PROJECT_ROOT,
+            check_console=False,
+            governed_mutation_entries=(*PUBLIC_MUTATION_ROUTES, missing),
+        )
+
+        self.assertEqual("FAIL", result["decision"])
+        coverage = result["governed_mutation_reverse_coverage"]
+        self.assertEqual([list(missing)], coverage["missing_declaration_entries"])
+        self.assertEqual([list(missing)], coverage["missing_contract_entries"])
+
+    def test_public_mutation_route_truth_drives_provider_admission(self) -> None:
+        from meta_flow import cli as provider_cli
+
+        public_routes = set(provider_cli.PUBLIC_MUTATION_ROUTE_POLICIES)
+        legacy_routes = set(provider_cli.LEGACY_UNCONTRACTED_CLI_ROUTE_POLICIES)
+        self.assertFalse(public_routes & legacy_routes)
+        self.assertEqual(
+            public_routes | legacy_routes,
+            set(provider_cli.PROVIDER_MUTATION_ADMISSION_POLICIES),
+        )
+        self.assertFalse(public_routes & provider_cli._DIRECT_MUTATION_ENTRIES)
+        self.assertFalse(public_routes & set(provider_cli._ACTION_MUTATION_ENTRIES))
+        self.assertEqual(set(), provider_cli._DIRECT_MUTATION_COMMANDS)
+
+        for route, policy in provider_cli.PROVIDER_MUTATION_ADMISSION_POLICIES.items():
+            command, subcommand = route
+            base = [subcommand]
+            if policy == "always":
+                mutation_args, preview_args = base, None
+            elif policy == "unless-dry-run":
+                mutation_args, preview_args = base, [*base, "--dry-run"]
+            elif policy == "apply-flag":
+                mutation_args, preview_args = [*base, "--apply"], base
+            elif policy == "output-flag":
+                mutation_args, preview_args = [*base, "--output", "result.json"], base
+            elif policy == "positional-apply":
+                mutation_args, preview_args = [*base, "apply"], [*base, "plan"]
+            elif policy == "positional-apply-recover":
+                mutation_args, preview_args = [*base, "apply"], [*base, "inspect"]
+            elif policy == "work-init-recover-action":
+                mutation_args = [*base, "--action", "rollback"]
+                preview_args = [*base, "--action", "inspect"]
+            elif policy == "write-default-flag":
+                mutation_args, preview_args = [*base, "--write-default"], base
+            elif policy == "revalidation-action":
+                mutation_args = [*base, "--action", "apply"]
+                preview_args = [*base, "--action", "inspect"]
+            elif policy == "mode-not-dry-run":
+                mutation_args = [*base, "--mode", "manual-handoff"]
+                preview_args = [*base, "--mode", "dry-run"]
+            elif policy == "out-or-json-out":
+                mutation_args, preview_args = [*base, "--out", "result"], base
+            elif policy == "eval-flag":
+                mutation_args, preview_args = [*base, "--eval", "fixture"], base
+            elif policy == "second-positional-close":
+                mutation_args, preview_args = [*base, "close"], [*base, "list"]
+            else:  # pragma: no cover - policy table is closed above
+                self.fail(f"unknown mutation route policy: {policy}")
+            self.assertTrue(
+                provider_cli._is_provider_mutation(command, mutation_args),
+                (route, policy),
+            )
+            if preview_args is not None:
+                self.assertFalse(
+                    provider_cli._is_provider_mutation(command, preview_args),
+                    (route, policy),
+                )
+
+        self.assertEqual(
+            {
+                ("meta-flow", *route)
+                for route in provider_cli.PUBLIC_MUTATION_ROUTE_POLICIES
+            },
+            set(provider_cli.PUBLIC_MUTATION_ROUTES),
+        )
+        for route, policy in provider_cli.PUBLIC_OPERATION_ADMISSION_POLICIES.items():
+            if policy == "never":
+                command, subcommand = route
+                self.assertFalse(
+                    provider_cli._is_provider_mutation(
+                        command,
+                        [subcommand, "--apply", "--write-default"],
+                    ),
+                    route,
+                )
+
+    def test_state_projection_recovery_contract_is_manifest_bounded(self) -> None:
+        contracts = {
+            contract.operation: contract
+            for contract in public_operations.load_public_operation_registry(PROJECT_ROOT)
+        }
+
+        recovery = contracts["state.projection-recover"]
+        self.assertEqual("recovery-only", recovery.mutation_mode)
+        self.assertEqual("none", recovery.authorization_mode)
+        self.assertEqual(
+            "StateProjectionTransactionV1|V2(existing-manifest-only)",
+            recovery.input_version,
+        )
+        self.assertEqual(
+            "meta_flow.state.projection_transaction.recover_state_projection_transaction",
+            recovery.projector,
+        )
+
+    def test_cr_bootstrap_public_contracts_are_typed_and_manifest_bounded(self) -> None:
+        contracts = {
+            contract.operation: contract
+            for contract in public_operations.load_public_operation_registry(PROJECT_ROOT)
+        }
+
+        bootstrap = contracts["cr.bootstrap"]
+        self.assertEqual("dry-run-typed-apply", bootstrap.mutation_mode)
+        self.assertEqual("typed-user-confirmation", bootstrap.authorization_mode)
+        self.assertEqual(
+            "BootstrapCRPlanV1+ExactFileAuthorizationV1",
+            bootstrap.input_version,
+        )
+        self.assertEqual(
+            "meta_flow.workflow.cr_index.plan_bootstrap_cr",
+            bootstrap.projector,
+        )
+        inspection = contracts["cr.bootstrap-inspect"]
+        self.assertEqual("zero-write", inspection.mutation_mode)
+        self.assertEqual("none", inspection.authorization_mode)
+        recovery = contracts["cr.bootstrap-recover"]
+        self.assertEqual("recovery-only", recovery.mutation_mode)
+        self.assertEqual("existing-consumed-authorization", recovery.authorization_mode)
+        self.assertEqual(
+            "ExistingConsumedExactFileTransactionV1",
+            recovery.input_version,
+        )
 
     def test_package_declaration_discovery_is_open_world_without_checker_edits(self) -> None:
         source = json.loads(
@@ -2332,7 +2951,7 @@ class PublicOperationContractTests(unittest.TestCase):
             package.mkdir(parents=True)
             (package / "future_owner.py").write_text(
                 "PUBLIC_OPERATION_DECLARATIONS = "
-                "((\"future.operation\", (\"meta-flow\", \"future\", \"operation\")),)\n",
+                '(("future.operation", ("meta-flow", "future", "operation")),)\n',
                 encoding="utf-8",
             )
 
@@ -2357,7 +2976,7 @@ class PublicOperationContractTests(unittest.TestCase):
             owner = package / "owner.py"
             owner.write_text(
                 "PUBLIC_OPERATION_DECLARATIONS = "
-                "((\"future.operation\", (\"meta-flow\", \"future\")),)\n",
+                '(("future.operation", ("meta-flow", "future")),)\n',
                 encoding="utf-8",
             )
             duplicate = package / "duplicate.py"
@@ -2366,8 +2985,7 @@ class PublicOperationContractTests(unittest.TestCase):
                 public_operations.discover_public_operation_declarations(package)
 
             duplicate.write_text(
-                "PUBLIC_OPERATION_DECLARATIONS = "
-                "((\"future.second\", (\"meta-flow\", \"future\")),)\n",
+                'PUBLIC_OPERATION_DECLARATIONS = (("future.second", ("meta-flow", "future")),)\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "duplicate public operation declaration entry"):
@@ -2402,8 +3020,7 @@ class PublicOperationContractTests(unittest.TestCase):
             package = root / "meta_flow"
             package.mkdir()
             (package / "owner.py").write_text(
-                "PUBLIC_OPERATION_DECLARATIONS = "
-                "((\"known.operation\", (\"meta-flow\", \"known\")),)\n",
+                'PUBLIC_OPERATION_DECLARATIONS = (("known.operation", ("meta-flow", "known")),)\n',
                 encoding="utf-8",
             )
             source["operations"] = [
@@ -2441,7 +3058,7 @@ class PublicOperationContractTests(unittest.TestCase):
             package.mkdir()
             (package / "owner.py").write_text(
                 "PUBLIC_OPERATION_DECLARATIONS = "
-                "((\"future.operation\", (\"meta-flow\", \"future\")),)\n",
+                '(("future.operation", ("meta-flow", "future")),)\n',
                 encoding="utf-8",
             )
             original_files = public_operations.MAX_DECLARATION_SOURCE_FILES
@@ -2686,6 +3303,7 @@ title: "public close dry-run"
 lifecycle_status: "active"
 readiness_status: "NOT_READY"
 gate_status: "cp8_pending"
+gate_profile: "standard-code"
 ---
 
 ## 变更描述

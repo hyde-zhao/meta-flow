@@ -114,6 +114,57 @@ def test_scanner_owns_discovery_and_emits_closed_deterministic_census(
     assert first.result_digest and first.scanner_contract_digest
 
 
+def test_scanner_classifies_canonical_context_reader_and_transaction_writer(
+    tmp_path: Path,
+) -> None:
+    _fixture(tmp_path)
+    _write(
+        tmp_path,
+        "meta_flow/work/production_validation.py",
+        "from meta_flow.execution_control.runtime_context import target_preimage_digest\n\n"
+        "def validate(path):\n"
+        "    return target_preimage_digest(path)\n",
+    )
+    _write(
+        tmp_path,
+        "meta_flow/work/scope_amend.py",
+        "from meta_flow.execution_control.runtime_context import (\n"
+        "    build_execution_control_context,\n"
+        "    target_preimage_digest,\n"
+        ")\n\n"
+        "def plan(root, path):\n"
+        "    return build_execution_control_context(root), target_preimage_digest(path)\n",
+    )
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(tmp_path),
+            "add",
+            "--",
+            "meta_flow/work/production_validation.py",
+            "meta_flow/work/scope_amend.py",
+        ),
+        check=True,
+    )
+
+    result = scan_execution_control_consumers(tmp_path)
+    classifications = {
+        item.ref: (item.classification, item.owner) for item in result.classifications
+    }
+
+    assert result.decision == "READY"
+    assert classifications["meta_flow/work/production_validation.py"] == (
+        "canonical-context-read-only-validator",
+        "STORY-CR074-S05",
+    )
+    assert classifications["meta_flow/work/scope_amend.py"] == (
+        "canonical-context-reader-transaction-writer",
+        "STORY-CR074-S05",
+    )
+    assert all(value == 0 for _, value in result.exit_counters)
+
+
 def test_scanner_fails_closed_for_untracked_source_syntax_and_unclassified_consumer(
     tmp_path: Path,
 ) -> None:
@@ -146,6 +197,9 @@ def test_scanner_fails_closed_for_untracked_source_syntax_and_unclassified_consu
     assert blocked.decision == "BLOCKED"
     assert blocked.reason_codes == ("SCANNER_UNCLASSIFIED_CONSUMER",)
     assert dict(blocked.exit_counters)["unclassified_consumer_count"] == 1
+    assert "meta_flow/unknown.py" not in {
+        item.ref for item in blocked.classifications
+    }
 
 
 def test_scanner_source_fingerprint_changes_when_tracked_bytes_drift(tmp_path: Path) -> None:

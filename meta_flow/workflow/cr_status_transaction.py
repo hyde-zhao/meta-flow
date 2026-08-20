@@ -135,6 +135,7 @@ def _apply_status_sync_transaction(
     fail_recovery: bool = False,
     fault: str = "",
     transaction_root: Path | None = None,
+    lock_bound_admission_validator: Any | None = None,
 ) -> dict[str, Any]:
     """Apply validated mapping/path/scalar inputs without importing public status types."""
     project_root = project_root.resolve()
@@ -182,6 +183,22 @@ def _apply_status_sync_transaction(
             "reason": "status-sync writer lock exists",
             "mutation_count": 0,
         }
+    if lock_bound_admission_validator is not None:
+        try:
+            admission_error = str(lock_bound_admission_validator() or "")
+        except (OSError, ValueError) as exc:
+            admission_error = f"lock-bound admission could not be rebuilt: {exc}"
+        if admission_error:
+            _release_status_sync_writer_lock(
+                project_root,
+                lock_owner,
+                transaction_root=transaction_root,
+            )
+            return {
+                "status": "BLOCKED",
+                "reason": admission_error,
+                "mutation_count": 0,
+            }
     drifted_targets = [
         target.ref
         for target in plan.targets
@@ -236,6 +253,7 @@ def _apply_status_sync_transaction(
         "cr_id": plan.cr_id,
         "command": "status-sync",
         "plan_digest": plan.plan_digest,
+        "mutation_plan_digest": str(plan.mutation_plan.get("plan_digest") or ""),
         "authorization_id": authorization.authorization_id,
         "desired_transition": plan.desired_transition,
         "effective_at": plan.effective_at,

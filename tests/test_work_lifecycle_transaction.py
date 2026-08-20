@@ -60,6 +60,7 @@ from meta_flow.work.lifecycle_transaction import (
 from meta_flow.work.model import build_work, load_work, write_work_create_only
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.scope import WorkScope
+from meta_flow.work.status_transition import plan_work_status_transition
 from meta_flow.work.store import (
     WorkInitApplyError,
     apply_work_init,
@@ -335,17 +336,22 @@ def _close_cancelled_phase_work(
 def _convert_two_closes_to_duplicate_legacy_generation(process: Path) -> None:
     transaction_root = process / ".meta-flow-runtime/work-close/transactions"
     manifests = []
-    for path in sorted(transaction_root.glob("close-w-*/manifest.json")):
+    for path in sorted(transaction_root.glob("*/manifest.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("operation") == "work.status-transition":
+            # 该夹具模拟升级前的 legacy close 历史。旧 provider 不会产生
+            # status-transition transaction；保留它会制造并不存在的混合代际。
+            path.unlink()
+            continue
+        if payload.get("operation") != "work.close":
+            continue
         payload.pop("lineage", None)
         path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
         manifests.append(payload)
     assert len(manifests) == 2
     for ref in ("PROJECT.yaml", "phases/P1/PHASE.yaml"):
         digests = {
-            next(target for target in item["targets"] if target["ref"] == ref)[
-                "after_digest"
-            ]
+            next(target for target in item["targets"] if target["ref"] == ref)["after_digest"]
             for item in manifests
         }
         assert len(digests) == 1
@@ -419,8 +425,7 @@ def test_direct_project_work_close_atomically_refreshes_initialized_state(
     )
     result_ref = "works/W-001/RESULT.json"
     (process / result_ref).write_text(
-        json.dumps({"schema_version": 1, "work_id": "W-001", "decision": "PASS"})
-        + "\n",
+        json.dumps({"schema_version": 1, "work_id": "W-001", "decision": "PASS"}) + "\n",
         encoding="utf-8",
     )
     _enable_state_projection(release, process)
@@ -495,8 +500,7 @@ def test_stale_or_retargeted_authorization_blocks_before_writer(tmp_path: Path) 
     assert (process / "works/W-001/WORK.yaml").read_bytes() == work_before
     assert not (process / ".meta-flow-runtime/work-close/writer.lock").exists()
     assert not (
-        process
-        / ".meta-flow-runtime/work-close/transactions/close-retargeted/manifest.json"
+        process / ".meta-flow-runtime/work-close/transactions/close-retargeted/manifest.json"
     ).exists()
 
 
@@ -898,13 +902,11 @@ def test_forged_state_successor_lineage_cannot_authorize_next_close(
     _close_prepared_phase_work(process, "W-001", first_result)
     second_result = _prepare_phase_work(release, process, phase, "W-002")
     state_current.refresh_formal_truth_projection(release)
-    manifest_path = (
-        release / ".meta-flow-runtime/state-projection/transaction.json"
-    )
+    manifest_path = release / ".meta-flow-runtime/state-projection/transaction.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["lineage"]["process/state/STATE.current.json"][
-        "anchor_close_authorization_id"
-    ] = "forged-close"
+    manifest["lineage"]["process/state/STATE.current.json"]["anchor_close_authorization_id"] = (
+        "forged-close"
+    )
     manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
 
     plan = plan_work_close(
@@ -930,9 +932,7 @@ def test_legacy_state_manifest_is_migrated_to_explicit_close_lineage(
     _close_prepared_phase_work(process, "W-001", first_result)
     second_result = _prepare_phase_work(release, process, phase, "W-002")
     state_current.refresh_formal_truth_projection(release)
-    manifest_path = (
-        release / ".meta-flow-runtime/state-projection/transaction.json"
-    )
+    manifest_path = release / ".meta-flow-runtime/state-projection/transaction.json"
     legacy_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     legacy_manifest.pop("lineage")
     manifest_path.write_text(json.dumps(legacy_manifest) + "\n", encoding="utf-8")
@@ -974,9 +974,7 @@ def test_work_init_blocks_when_latest_close_generation_was_externally_modified(
     plan = plan_work_init_from_release_root(release, work)
 
     assert plan.blocked
-    assert "WORK_INIT_LINEAGE_PREFLIGHT_BLOCKED" in {
-        conflict.code for conflict in plan.conflicts
-    }
+    assert "WORK_INIT_LINEAGE_PREFLIGHT_BLOCKED" in {conflict.code for conflict in plan.conflicts}
     with pytest.raises(ValueError, match="preimage drift"):
         apply_work_init(plan)
     assert not (process / work.work_ref).exists()
@@ -1052,12 +1050,7 @@ def test_legacy_partial_work_init_recovery_restores_exact_preimage(
     ]
     assert all((process / ref).read_bytes() == value for ref, value in partial_bytes.items())
 
-    assert (
-        init_inspect_main(
-            ["--project-root", str(release), "--work-id", work.work_id]
-        )
-        == 0
-    )
+    assert init_inspect_main(["--project-root", str(release), "--work-id", work.work_id]) == 0
     inspection = json.loads(capsys.readouterr().out)
     assert inspection["decision"] == "RECOVERY_REQUIRED"
     assert inspection["legacy_recovery_plan"]["plan_digest"] == plan.plan_digest
@@ -1190,9 +1183,10 @@ def test_work_init_governance_postimage_failure_rolls_back_domain_and_state(
     assert errors == []
     assert warnings == []
     assert state_current.validate_current_projection(release) == []
-    assert state_current.load_current_state(release)["formal_truth_projection"][
-        "active_work_ids"
-    ] == []
+    assert (
+        state_current.load_current_state(release)["formal_truth_projection"]["active_work_ids"]
+        == []
+    )
 
 
 def test_work_init_successor_failure_rolls_back_domain_and_state_exactly(
@@ -1243,7 +1237,7 @@ def test_work_init_successor_failure_rolls_back_domain_and_state_exactly(
     release_shared_projection_writer_lock(lock, "post-recovery-probe")
 
 
-def test_work_status_rolls_back_when_state_projection_refresh_fails(
+def test_work_status_rolls_back_when_parent_transaction_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1254,14 +1248,20 @@ def test_work_status_rolls_back_when_state_projection_refresh_fails(
     work_path = process / work.work_ref
     before = work_path.read_bytes()
 
-    def fail_refresh(_process_root: Path) -> tuple[str, ...]:
-        raise OSError("injected State projection refresh failure")
+    from meta_flow.work import lifecycle_transaction
 
-    monkeypatch.setattr(
-        "meta_flow.work.lifecycle_transaction.refresh_state_projection_if_initialized",
-        fail_refresh,
-    )
-    with pytest.raises(OSError, match="injected State projection refresh failure"):
+    original_replace = lifecycle_transaction._replace_bytes
+    calls = 0
+
+    def fail_second_target(path: Path, content: bytes) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected parent transaction failure")
+        original_replace(path, content)
+
+    monkeypatch.setattr(lifecycle_transaction, "_replace_bytes", fail_second_target)
+    with pytest.raises(RuntimeError, match="RECOVERED"):
         update_work_status(
             process,
             "W-001",
@@ -1291,6 +1291,52 @@ def test_completed_work_archive_is_an_authorized_close_successor(
 
     assert load_work(process, "W-001").status == "archived"
     assert inspect_work_close_transactions(process)["decision"] == "PASS"
+
+
+def test_status_transition_fresh_replan_ignores_only_owned_state_lock(
+    tmp_path: Path,
+) -> None:
+    release, process, phase = _governance_fixture(tmp_path)
+    _enable_state_projection(release, process)
+    first_result = _prepare_phase_work(release, process, phase, "W-001")
+    state_current.refresh_formal_truth_projection(release)
+    _close_prepared_phase_work(process, "W-001", first_result)
+
+    work = make_work(process, "W-002", phase.phase_ref)
+    apply_work_init(plan_work_init_from_release_root(release, work))
+    state_current.refresh_formal_truth_projection(release)
+    plan = plan_work_status_transition(
+        process,
+        "W-002",
+        expected_status="planned",
+        new_status="active",
+    )
+    assert plan.ready, plan.parent_plan.blockers
+
+    foreign_lock = acquire_transaction_lock(
+        state_projection_lock_path(release),
+        "foreign-state-writer-lock",
+    )
+    try:
+        locked_plan = plan_work_status_transition(
+            process,
+            "W-002",
+            expected_status="planned",
+            new_status="active",
+        )
+        assert not locked_plan.ready
+        assert "state/STATE.current.json" in "; ".join(locked_plan.parent_plan.blockers)
+        assert load_work(process, "W-002").status == "planned"
+    finally:
+        release_transaction_lock(foreign_lock)
+
+    update_work_status(
+        process,
+        "W-002",
+        expected_status="planned",
+        new_status="active",
+    )
+    assert load_work(process, "W-002").status == "active"
 
 
 def test_work_close_blocks_before_domain_write_when_state_writer_lock_is_held(
@@ -1323,8 +1369,7 @@ def test_work_close_blocks_before_domain_write_when_state_writer_lock_is_held(
 
     assert {ref: (process / ref).read_bytes() for ref in before} == before
     assert not (
-        process
-        / ".meta-flow-runtime/work-close/transactions/close-state-lock-held/manifest.json"
+        process / ".meta-flow-runtime/work-close/transactions/close-state-lock-held/manifest.json"
     ).exists()
 
 
@@ -1391,9 +1436,7 @@ def test_broken_lineage_predecessor_is_blocked_even_when_head_bytes_match(
     release, process, phase = _governance_fixture(tmp_path)
     _close_phase_work(release, process, phase, "W-001")
     _close_phase_work(release, process, phase, "W-002")
-    manifest_path = (
-        process / ".meta-flow-runtime/work-close/transactions/close-w-002/manifest.json"
-    )
+    manifest_path = process / ".meta-flow-runtime/work-close/transactions/close-w-002/manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["lineage"][phase.phase_ref] = "missing-predecessor"
     manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
@@ -1413,9 +1456,7 @@ def test_lineage_fork_is_blocked_even_when_one_successor_matches_current_bytes(
     release, process, phase = _governance_fixture(tmp_path)
     for work_id in ("W-001", "W-002", "W-003"):
         _close_phase_work(release, process, phase, work_id)
-    manifest_path = (
-        process / ".meta-flow-runtime/work-close/transactions/close-w-003/manifest.json"
-    )
+    manifest_path = process / ".meta-flow-runtime/work-close/transactions/close-w-003/manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["lineage"][phase.phase_ref] = "close-w-001"
     manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")

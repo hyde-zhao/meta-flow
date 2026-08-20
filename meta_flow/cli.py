@@ -24,61 +24,196 @@ from meta_flow.workspace.routing import (
 
 LEGACY_STATE_CURRENT_REL = Path("process/state/STATE.current.json")
 LEGACY_STATE_REL = Path("process/STATE.md")
-_DIRECT_MUTATION_ENTRIES = {
-    ("capability", "init"),
-    ("concept", "init"),
-    ("context", "build"),
-    ("context", "build-story-packet"),
-    ("context", "read-log"),
-    ("cp", "applicability-build"),
-    ("cp", "ledger-append"),
-    ("cp", "render-summary"),
-    ("cp", "successor-apply"),
-    ("cp", "successor-recover"),
-    ("cr", "aggregate"),
-    ("cr", "branch-finish"),
-    ("cr", "branch-merge"),
-    ("cr", "branch-open"),
-    ("cr", "branch-publish"),
-    ("cr", "bootstrap"),
-    ("cr", "summary"),
-    ("event", "closure-apply"),
-    ("event", "correction-apply"),
-    ("event", "dispatch-not-required"),
-    ("event", "append"),
-    ("event", "inline-fallback"),
-    ("feature", "build"),
-    ("governance", "init"),
-    ("governance", "truth-map-render"),
-    ("identity", "init"),
-    ("module", "init"),
-    ("quality", "init"),
-    ("state", "current-refresh"),
-    ("state", "health-update"),
-    ("state", "history-render"),
-    ("state", "init"),
-    ("state", "migrate-v2"),
-    ("state", "render"),
-    ("state", "compact"),
-    ("story", "evidence-index"),
-    ("story", "issue-revalidation-authority"),
-    ("story", "verify-packet"),
-    ("validation", "run"),
-    ("work", "block"),
-    ("work", "handoff"),
-    ("work", "close-recover"),
-    ("work", "pause"),
-    ("work", "resume"),
-    ("work", "start"),
-    ("work", "usage-add"),
-    ("workspace", "push"),
+_LEGACY_DIRECT_MUTATION_ROUTES = frozenset(
+    {
+        ("capability", "init"),
+        ("concept", "init"),
+        ("context", "build"),
+        ("context", "build-story-packet"),
+        ("cp", "applicability-build"),
+        ("cp", "ledger-append"),
+        ("cp", "render-summary"),
+        ("cp", "successor-apply"),
+        ("cp", "successor-recover"),
+        ("cr", "aggregate"),
+        ("cr", "branch-finish"),
+        ("cr", "branch-merge"),
+        ("cr", "branch-open"),
+        ("cr", "branch-publish"),
+        ("cr", "summary"),
+        ("event", "closure-apply"),
+        ("event", "correction-apply"),
+        ("event", "dispatch-not-required"),
+        ("event", "inline-fallback"),
+        ("feature", "build"),
+        ("governance", "init"),
+        ("governance", "truth-map-render"),
+        ("identity", "init"),
+        ("module", "init"),
+        ("quality", "init"),
+        ("state", "current-refresh"),
+        ("state", "health-update"),
+        ("state", "history-render"),
+        ("state", "init"),
+        ("state", "migrate-v2"),
+        ("state", "render"),
+        ("state", "compact"),
+        ("story", "evidence-index"),
+        ("story", "verify-packet"),
+        ("validation", "run"),
+        ("workspace", "push"),
+    }
+)
+
+_LEGACY_WRITE_DEFAULT_ROUTES = frozenset(
+    {
+        ("failure", "policy-check"),
+        ("gate", "check"),
+        ("gate", "plan"),
+        ("policy", "check"),
+        ("policy", "expand"),
+        ("policy", "list"),
+        ("waiver", "policy-check"),
+    }
+)
+
+# 独立于 owner declaration/registry 的公共 mutation admission 真相。
+# key 是真实 dispatch route，value 是 provider 判定 mutation 的模式；checker
+# 反向消费由本表派生的 route 集，避免“漏 declaration 即不可见”。
+PUBLIC_OPERATION_ADMISSION_POLICIES = {
+    ("check", "detector-qualification"): "never",
+    ("check", "governance-ownership"): "never",
+    ("check", "human-gate"): "never",
+    ("check", "post-close"): "never",
+    ("check", "reference-lifecycle"): "never",
+    ("check", "terminal-lineage"): "never",
+    ("cp", "projection"): "never",
+    ("cr", "bootstrap-inspect"): "never",
+    ("cr", "conflicts"): "never",
+    ("cr", "public-operations-check"): "never",
+    ("cr", "query"): "never",
+    ("package", "closure-build"): "never",
+    ("package", "compile"): "never",
+    ("package", "cost-report"): "never",
+    ("package", "release-check"): "never",
+    ("package", "semver-decide"): "never",
+    ("route", "c0-cutover-apply"): "never",
+    ("route", "c0-cutover-plan"): "never",
+    ("state", "projection-inspect"): "never",
+    ("work", "close-inspect"): "never",
+    ("work", "init-inspect"): "never",
+    ("work", "init-preflight"): "never",
+    ("work", "scope-amend-inspect"): "never",
+    ("work", "status-transition-inspect"): "never",
+    ("work", "usage-plan"): "never",
+    ("ask-user", "human-gate"): "output-flag",
+    ("context", "read-log"): "unless-dry-run",
+    ("cr", "bootstrap"): "apply-flag",
+    ("cr", "bootstrap-recover"): "always",
+    ("cr", "close"): "apply-flag",
+    ("cr", "scope-amend"): "apply-flag",
+    ("cr", "status-sync"): "apply-flag",
+    ("cr", "terminate"): "apply-flag",
+    ("event", "append"): "unless-dry-run",
+    ("governance", "baseline-refresh"): "apply-flag",
+    ("package", "release-advance"): "apply-flag",
+    ("project", "phase-metadata"): "positional-apply-recover",
+    ("project", "phase-transition"): "positional-apply-recover",
+    ("repository", "commit"): "apply-flag",
+    ("repository", "push"): "apply-flag",
+    ("state", "projection-correct"): "apply-flag",
+    ("state", "projection-recover"): "apply-flag",
+    ("story", "issue-revalidation-authority"): "positional-apply",
+    ("story", "project-cp6"): "apply-flag",
+    ("work", "block"): "apply-flag",
+    ("work", "close"): "apply-flag",
+    ("work", "close-recover"): "always",
+    ("work", "init-recover"): "apply-flag",
+    ("work", "pause"): "apply-flag",
+    ("work", "publication-close"): "apply-flag",
+    ("work", "resume"): "apply-flag",
+    ("work", "scope-amend"): "apply-flag",
+    ("work", "scope-amend-recover"): "always",
+    ("work", "start"): "apply-flag",
+    ("work", "status-transition"): "apply-flag",
+    ("work", "status-transition-recover"): "apply-flag",
+    ("work", "usage-add"): "always",
 }
-_DIRECT_MUTATION_COMMANDS = {"ask-user"}
+
+PUBLIC_MUTATION_ROUTE_POLICIES = {
+    route: policy
+    for route, policy in PUBLIC_OPERATION_ADMISSION_POLICIES.items()
+    if policy != "never"
+}
+
+_LEGACY_SPECIAL_MUTATION_POLICIES = {
+    ("cr", "impact-report"): "output-flag",
+    ("cr", "status-sync-abandon"): "always",
+    ("cr", "status-sync-resume"): "always",
+    ("cr", "status-sync-rollback"): "always",
+    ("eval", "backlog"): "second-positional-close",
+    ("eval", "feedback"): "always",
+    ("eval", "install-check"): "eval-flag",
+    ("eval", "mutate"): "always",
+    ("eval", "release-check"): "out-or-json-out",
+    ("eval", "run"): "always",
+    ("eval", "runtime-run"): "mode-not-dry-run",
+    ("eval", "suite-health"): "out-or-json-out",
+    ("route", "plan"): "output-flag",
+    ("story", "revalidate-cp6"): "revalidation-action",
+}
+
+_LEGACY_APPLY_MUTATION_ROUTES = frozenset(
+    {
+        ("evolution", "decision"),
+        ("evolution", "package"),
+        ("evolution", "result"),
+        ("evolution", "start"),
+        ("ledger", "compact"),
+        ("project", "adopt"),
+        ("project", "init"),
+        ("project", "recover"),
+        ("project", "scaffold"),
+        ("retrospective", "build"),
+        ("retrospective", "confirm-facts"),
+        ("state", "projection-refresh"),
+        ("work", "init"),
+        ("workspace", "bootstrap"),
+        ("workspace", "link"),
+    }
+)
+
+LEGACY_UNCONTRACTED_CLI_ROUTE_POLICIES = {
+    **{route: "unless-dry-run" for route in _LEGACY_DIRECT_MUTATION_ROUTES},
+    **{route: "write-default-flag" for route in _LEGACY_WRITE_DEFAULT_ROUTES},
+    **_LEGACY_SPECIAL_MUTATION_POLICIES,
+    **{route: "apply-flag" for route in _LEGACY_APPLY_MUTATION_ROUTES},
+}
+LEGACY_UNCONTRACTED_CLI_ROUTE_REASONS = {
+    route: (
+        "LEGACY_DIRECT_MUTATION_ROUTE"
+        if route in _LEGACY_DIRECT_MUTATION_ROUTES
+        else "LEGACY_WRITE_DEFAULT_MUTATION_ROUTE"
+        if route in _LEGACY_WRITE_DEFAULT_ROUTES
+        else "LEGACY_SPECIAL_MUTATION_ROUTE"
+        if route in _LEGACY_SPECIAL_MUTATION_POLICIES
+        else "LEGACY_APPLY_GATED_MUTATION_ROUTE"
+    )
+    for route in LEGACY_UNCONTRACTED_CLI_ROUTE_POLICIES
+}
+PROVIDER_MUTATION_ADMISSION_POLICIES = {
+    **PUBLIC_MUTATION_ROUTE_POLICIES,
+    **LEGACY_UNCONTRACTED_CLI_ROUTE_POLICIES,
+}
+
+# 兼容已有定向测试；这些值都由统一 admission truth 派生，不再是并行真相。
+_DIRECT_MUTATION_ENTRIES = set(_LEGACY_DIRECT_MUTATION_ROUTES)
+_DIRECT_MUTATION_COMMANDS: set[str] = set()
 _DIRECT_MUTATION_FLAGS = {"--write-default"}
-_ACTION_MUTATION_ENTRIES = {
-    ("project", "phase-metadata"): {"apply", "recover"},
-    ("project", "phase-transition"): {"apply", "recover"},
-}
+_ACTION_MUTATION_ENTRIES: dict[tuple[str, str], set[str]] = {}
+PUBLIC_MUTATION_ROUTES = tuple(
+    ("meta-flow", *route) for route in sorted(PUBLIC_MUTATION_ROUTE_POLICIES)
+)
 
 
 def _candidate_roots() -> list[Path]:
@@ -142,55 +277,40 @@ def _provider_target_root(args: list[str]) -> Path:
 
 def _is_provider_mutation(command: str, args: list[str]) -> bool:
     invocation = (command, *(item for item in args if not item.startswith("-")))
-    if command in _DIRECT_MUTATION_COMMANDS:
-        return "--output" in args
-    if any(item in _DIRECT_MUTATION_FLAGS for item in args):
+    route = invocation[:2]
+    public_policy = PUBLIC_OPERATION_ADMISSION_POLICIES.get(route)
+    if public_policy == "never":
+        return False
+    policy = public_policy or LEGACY_UNCONTRACTED_CLI_ROUTE_POLICIES.get(route)
+    if policy == "always":
         return True
-    if invocation[:2] in _DIRECT_MUTATION_ENTRIES:
+    if policy == "unless-dry-run":
         return "--dry-run" not in args
-    action_mutations = _ACTION_MUTATION_ENTRIES.get(invocation[:2])
-    if (
-        action_mutations is not None
-        and len(invocation) > 2
-        and invocation[2] in action_mutations
-    ):
-        return True
-    if invocation[:2] in {
-        ("cr", "status-sync-resume"),
-        ("cr", "status-sync-rollback"),
-        ("cr", "status-sync-abandon"),
-    }:
-        return True
-    if invocation[:2] == ("cr", "impact-report"):
+    if policy == "apply-flag":
+        return "--apply" in args
+    if policy == "output-flag":
         return "--output" in args
-    if invocation[:2] == ("route", "plan"):
-        return "--output" in args
-    if invocation[:2] == ("story", "revalidate-cp6"):
+    if policy == "positional-apply":
+        return len(invocation) > 2 and invocation[2] == "apply"
+    if policy == "positional-apply-recover":
+        return len(invocation) > 2 and invocation[2] in {"apply", "recover"}
+    if policy == "write-default-flag":
+        return "--write-default" in args
+    if policy == "revalidation-action":
         return (_argument_value(args, "--action") or "") in {
             "apply",
             "completion",
             "recover",
             "replay",
         }
-    if command == "eval" and args:
-        eval_command = args[0]
-        if eval_command in {"mutate", "run"}:
-            return True
-        if eval_command == "runtime-run":
-            return (_argument_value(args, "--mode") or "manual-handoff") != "dry-run"
-        if eval_command in {"release-check", "suite-health"}:
-            return "--out" in args or "--json-out" in args
-        if eval_command == "install-check":
-            return "--eval" in args
-        if eval_command == "feedback":
-            return True
-        if eval_command == "backlog":
-            return len(args) > 1 and args[1] == "close"
-    if "--apply" in args:
-        return True
-    if invocation[:2] == ("work", "init-recover"):
-        action = _argument_value(args, "--action") or "inspect"
-        return action != "inspect"
+    if policy == "mode-not-dry-run":
+        return (_argument_value(args, "--mode") or "manual-handoff") != "dry-run"
+    if policy == "out-or-json-out":
+        return "--out" in args or "--json-out" in args
+    if policy == "eval-flag":
+        return "--eval" in args
+    if policy == "second-positional-close":
+        return len(invocation) > 2 and invocation[2] == "close"
     return False
 
 
@@ -299,7 +419,9 @@ def _state_summary() -> dict[str, str]:
 
         state = load_current_state(root)
         next_action = state.get("next_action") or {}
-        next_action_text = next_action.get("text", "") if isinstance(next_action, dict) else str(next_action)
+        next_action_text = (
+            next_action.get("text", "") if isinstance(next_action, dict) else str(next_action)
+        )
         return {
             "state_path": str(current_path),
             "workflow_mode": str(state.get("workflow_mode") or "standard"),
@@ -324,7 +446,8 @@ def _state_summary() -> dict[str, str]:
         "next_action": _scalar_value(fm, "next_action"),
         "pending_gate": _scalar_value(fm, "pending_gate", nested=True),
         "pending_checklist_path": _scalar_value(fm, "pending_checklist_path", nested=True),
-        "subagent_auto_dispatch": _scalar_value(fm, "subagent_auto_dispatch", nested=True) or "enabled",
+        "subagent_auto_dispatch": _scalar_value(fm, "subagent_auto_dispatch", nested=True)
+        or "enabled",
     }
 
 
@@ -353,7 +476,9 @@ def _print_next() -> None:
         path = summary["pending_checklist_path"] or "process/checkpoints/CP*.md"
         print(f"等待用户确认 {summary['pending_gate']}。")
         print(f"checklist 路径: {path}")
-        print("下一步准确提示词: 请只回复以下三个 exact 选项之一: approve / 修改: <具体修改点> / reject")
+        print(
+            "下一步准确提示词: 请只回复以下三个 exact 选项之一: approve / 修改: <具体修改点> / reject"
+        )
         return
     if summary["next_action"]:
         print(f"下一步准确提示词: 执行下一步: {summary['next_action']}")
@@ -421,7 +546,9 @@ def _run_workspace_doctor() -> int:
     if state_path.is_file():
         summary = _state_summary()
         if summary["subagent_auto_dispatch"] not in {"enabled", "disabled"}:
-            warnings.append("orchestrator_session.subagent_auto_dispatch 建议为 enabled 或 disabled")
+            warnings.append(
+                "orchestrator_session.subagent_auto_dispatch 建议为 enabled 或 disabled"
+            )
         if summary["workflow_mode"] not in {"standard", "fast-lane"}:
             warnings.append("workflow_mode 建议为 standard 或 fast-lane")
 
@@ -519,8 +646,23 @@ def _run_doctor(args: list[str]) -> None:
         parsed, _unknown = parser.parse_known_args(forwarded)
         quality_status = quality_governance.run_quality_doctor(parsed.project_root)
         workflow_status = quality_governance.run_workflow_doctor(parsed.project_root)
-        raise SystemExit(1 if any((workspace_status, tokens_status, context_status, artifacts_status, quality_status, workflow_status)) else 0)
-    raise SystemExit(f"未知 doctor 命令: {command}. 目前支持: all, workspace, tokens, context, artifacts, quality, workflow, adoption")
+        raise SystemExit(
+            1
+            if any(
+                (
+                    workspace_status,
+                    tokens_status,
+                    context_status,
+                    artifacts_status,
+                    quality_status,
+                    workflow_status,
+                )
+            )
+            else 0
+        )
+    raise SystemExit(
+        f"未知 doctor 命令: {command}. 目前支持: all, workspace, tokens, context, artifacts, quality, workflow, adoption"
+    )
 
 
 def _print_help() -> None:
@@ -580,7 +722,7 @@ def _print_help() -> None:
         "  meta-flow context build --stage CP6 --profile standard-code --cr CR-101 --project-root .\n"
         "  meta-flow context check --context process/context/CP6-CR101.context.json --project-root .\n"
         "  meta-flow context sufficiency-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json\n"
-        "  meta-flow context read-log --path process/STATE.md --reason human_audit --reason-evidence-json '{\"authorization_ref\":\"process/checkpoints/AUDIT.md\"}' --stage CP6 --agent meta-dev --context-ref process/context/CP6.context.json --project-root .\n"
+        '  meta-flow context read-log --path process/STATE.md --reason human_audit --reason-evidence-json \'{"authorization_ref":"process/checkpoints/AUDIT.md"}\' --stage CP6 --agent meta-dev --context-ref process/context/CP6.context.json --project-root .\n'
         "  meta-flow context read-log-check --project-root .\n"
         "  meta-flow cr aggregate --id CR-051 --operation-id operation-001 --attempt 1 --source-handle source.json --artifact-handle artifact.json --dry-run --project-root .\n"
         "  meta-flow doctor context --project-root .\n"
@@ -620,7 +762,7 @@ def _print_help() -> None:
         "  meta-flow workspace git-status --project-root .\n"
         "  meta-flow workspace push --project-root .\n"
         "  meta-flow doctor adoption --project-root .\n"
-        "  meta-flow cr bootstrap --id CR-001 --title \"project adoption bootstrap\" --scope \"Initialize Meta Flow adoption readiness.\" --project-root .\n"
+        '  meta-flow cr bootstrap --id CR-001 --title "project adoption bootstrap" --scope "Initialize Meta Flow adoption readiness." --project-root .\n'
         "  meta-flow cr brief --id CR-001 --project-root .\n"
         "  meta-flow cr goal-brief --goal-ref GOAL-001 --project-root .\n"
         "  meta-flow eval validate --eval evals/fixtures/generated-workflow-basic/WORKFLOW-EVAL.yaml\n"
@@ -635,9 +777,7 @@ def _run_installer(command: str, args: list[str]) -> None:
     )
 
     explicit_provider_mode = os.environ.get("META_FLOW_PROVIDER_MODE", "").strip()
-    provider_mode = explicit_provider_mode or (
-        "development" if "--dry-run" in args else "release"
-    )
+    provider_mode = explicit_provider_mode or ("development" if "--dry-run" in args else "release")
     if provider_mode not in {"development", "release"}:
         _raise_provider_admission_blocked(
             operation=f"assets.{command}",
@@ -693,7 +833,9 @@ def _reinstall_uninstall_args(args: list[str]) -> list[str]:
     parsed, _unknown = parser.parse_known_args(args)
     platform = parsed.platform_arg or parsed.platform_option
     if not platform:
-        raise SystemExit("reinstall requires a target platform, for example `meta-flow reinstall codex`.")
+        raise SystemExit(
+            "reinstall requires a target platform, for example `meta-flow reinstall codex`."
+        )
     uninstall_args = [platform]
     if parsed.scope:
         uninstall_args.extend(["--scope", parsed.scope])
@@ -1137,7 +1279,9 @@ def _run_workspace(args: list[str]) -> None:
         for line in health.format_lines():
             print(line)
         if health.status == "state_missing":
-            print("- NEXT: initialize process/STATE.md from the state-router template before running workflow commands.")
+            print(
+                "- NEXT: initialize process/STATE.md from the state-router template before running workflow commands."
+            )
             raise SystemExit(0)
         raise SystemExit(1 if health.blocking else 0)
     if command == "bootstrap":
@@ -1182,7 +1326,9 @@ def _run_workspace(args: list[str]) -> None:
             raise SystemExit(2) from exc
         for line in health.format_lines():
             print(line)
-        print("- NEXT: run meta-flow doctor adoption --project-root . before starting a target-project CR.")
+        print(
+            "- NEXT: run meta-flow doctor adoption --project-root . before starting a target-project CR."
+        )
         raise SystemExit(1 if health.blocking else 0)
     if command == "git-status":
         import argparse
@@ -1229,14 +1375,24 @@ def _run_workspace(args: list[str]) -> None:
                 allow_dirty=parsed.allow_dirty,
             )
             if parsed.authorization is None:
-                print(json.dumps({"plan": plan, "error": "push requires --authorization"}, ensure_ascii=False, sort_keys=True))
+                print(
+                    json.dumps(
+                        {"plan": plan, "error": "push requires --authorization"},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
                 raise SystemExit(2)
             from meta_flow.workspace.legacy_route_adapter import load_legacy_authorization
 
             try:
                 capability = load_legacy_authorization(parsed.authorization)
             except (OSError, ValueError) as exc:
-                print(json.dumps({"plan": plan, "error": str(exc)}, ensure_ascii=False, sort_keys=True))
+                print(
+                    json.dumps(
+                        {"plan": plan, "error": str(exc)}, ensure_ascii=False, sort_keys=True
+                    )
+                )
                 raise SystemExit(2) from exc
         try:
             status, lines = push_workspace(
@@ -1253,7 +1409,9 @@ def _run_workspace(args: list[str]) -> None:
         for line in lines:
             print(line)
         raise SystemExit(status)
-    raise SystemExit(f"未知 workspace 命令: {command}. 目前支持: check, link, bootstrap, git-status, push")
+    raise SystemExit(
+        f"未知 workspace 命令: {command}. 目前支持: check, link, bootstrap, git-status, push"
+    )
 
 
 def _run_eval(args: list[str]) -> None:
@@ -1688,5 +1846,7 @@ def main() -> None:
             )
         )
         raise SystemExit(1) from None
+
+
 if __name__ == "__main__":
     main()

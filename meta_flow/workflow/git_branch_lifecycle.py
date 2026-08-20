@@ -545,7 +545,6 @@ def execute_open(
     plan: BranchOperationPlan,
     *,
     runner: GitRunner = _default_runner,
-    bootstrap_callback: Callable[[], None] | None = None,
 ) -> BranchOperationAttempt:
     started = _now()
     if plan.dry_run:
@@ -647,22 +646,6 @@ def execute_open(
                 )
                 return _attempt(plan, outcomes, started)
         prepared.append(snapshot)
-    if bootstrap_callback is not None:
-        try:
-            bootstrap_callback()
-        except Exception as exc:  # callback is an existing writer boundary
-            outcomes.append(
-                RepoOutcome(
-                    repository="workspace",
-                    terminal="FAILED",
-                    mutation=True,
-                    executed_steps=("bootstrap",),
-                    error_code="bootstrap_failed",
-                    error_summary=str(exc)[:500],
-                    resume_route="inspect-bootstrap-output-and-local-branches",
-                )
-            )
-            return _attempt(plan, outcomes, started)
     for snapshot in prepared:
         root = Path(snapshot.root)
         result = runner(["push", "-u", snapshot.remote, plan.branch], root)
@@ -1336,28 +1319,18 @@ def branch_main(command: str, argv: list[str]) -> int:
         raise LifecycleError("output_required", "actual branch lifecycle operations require --output")
     if operation == "open":
         plan = plan_open(intent, snapshots, authorization)
-        bootstrap_callback: Callable[[], None] | None = None
         if not parsed.dry_run:
-            from meta_flow.workflow.cr_lifecycle import bootstrap_cr, discover_formal_crs
+            from meta_flow.workflow.cr_lifecycle import discover_formal_crs
 
             formal_crs = discover_formal_crs(parsed.project_root.resolve())
             if parsed.cr_id not in formal_crs:
-                if not parsed.title or not parsed.scope:
-                    raise LifecycleError(
-                        "bootstrap_input_missing",
-                        "new CR branch-open requires --title and --scope for the existing bootstrap writer",
-                    )
+                raise LifecycleError(
+                    "typed_bootstrap_required",
+                    "CR is missing; run typed `meta-flow cr bootstrap` preview/apply before branch-open",
+                )
 
-                def bootstrap_callback() -> None:
-                    bootstrap_cr(
-                        parsed.project_root.resolve(),
-                        cr_id=parsed.cr_id,
-                        title=parsed.title,
-                        scope=parsed.scope,
-                    )
-
-        result: BranchOperationPlan | BranchOperationAttempt = plan if parsed.dry_run else execute_open(
-            plan, bootstrap_callback=bootstrap_callback
+        result: BranchOperationPlan | BranchOperationAttempt = (
+            plan if parsed.dry_run else execute_open(plan)
         )
     elif operation == "publish":
         plan = plan_publish(intent, snapshots, authorization)

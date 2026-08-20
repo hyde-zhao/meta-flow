@@ -8,6 +8,7 @@ from functools import partial
 from pathlib import Path
 
 from cr_lifecycle_test_support import LifecycleFixtureCollaborators
+from cr_lifecycle_test_support import init_binding_project as _init_binding_project
 from cr_lifecycle_test_support import write_cr as _write_cr
 
 from meta_flow.project.onboarding import (
@@ -38,6 +39,10 @@ _FIXTURE_COLLABORATORS = LifecycleFixtureCollaborators(
     work_scope=WorkScope,
 )
 write_cr = partial(_write_cr, collaborators=_FIXTURE_COLLABORATORS)
+init_binding_project = partial(
+    _init_binding_project,
+    collaborators=_FIXTURE_COLLABORATORS,
+)
 
 
 def write_feature_registry(root: Path) -> Path:
@@ -105,11 +110,10 @@ def write_capability_registry(root: Path, *, status: str = "active") -> Path:
 
 
 def write_impact_rules(root: Path, rules: list[dict[str, str | bool]]) -> Path:
-    path = root / "process" / "project" / "IMPACT-SURFACE-RULES.yaml"
+    path = _resolve_runtime_ref(root, "process/project/IMPACT-SURFACE-RULES.yaml")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"schema_version": 1, "rules": rules}, ensure_ascii=False, indent=2)
-        + "\n",
+        json.dumps({"schema_version": 1, "rules": rules}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return path
@@ -118,7 +122,7 @@ def write_impact_rules(root: Path, rules: list[dict[str, str | bool]]) -> Path:
 class CRAnalysisTests(unittest.TestCase):
     def test_cr_check_rejects_release_follow_up_without_summary_disposition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root, _process = init_binding_project(Path(directory))
             write_feature_registry(root)
             write_capability_registry(root)
             cr_path = write_cr(root, "CR-101")
@@ -158,8 +162,12 @@ class CRAnalysisTests(unittest.TestCase):
         tree = ast.parse(source)
         self.assertEqual(
             {
+                "CrLifecycleCheckReportV1",
+                "_native_cr_paths_from_partition",
+                "_partition_block_errors",
                 "collect_check_errors",
                 "collect_check_warnings",
+                "build_cr_lifecycle_check_report",
                 "_conflict_surface",
                 "conflict_report",
                 "proposed_conflict_report",
@@ -169,16 +177,10 @@ class CRAnalysisTests(unittest.TestCase):
                 "render_cr_brief",
                 "render_goal_brief",
             },
-            {
-                node.name
-                for node in tree.body
-                if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-            },
+            {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))},
         )
         direct_modules = {
-            node.module
-            for node in tree.body
-            if isinstance(node, ast.ImportFrom) and node.module
+            node.module for node in tree.body if isinstance(node, ast.ImportFrom) and node.module
         }
         self.assertTrue(
             {
@@ -192,10 +194,10 @@ class CRAnalysisTests(unittest.TestCase):
 
     def test_collect_check_errors_rejects_invalid_index_cr_type(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root, process = init_binding_project(Path(directory))
             write_cr(root, "CR-101")
             cr_index.write_index(root)
-            index_path = root / "process" / "changes" / "CR-INDEX.json"
+            index_path = process / "changes" / "CR-INDEX.json"
             index = json.loads(index_path.read_text(encoding="utf-8"))
             index["items"][0]["cr_type"] = "requirement-change"
             index_path.write_text(
@@ -209,7 +211,7 @@ class CRAnalysisTests(unittest.TestCase):
 
     def test_collect_check_warnings_reports_open_governance_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root, _process = init_binding_project(Path(directory))
             write_cr(
                 root,
                 "CR-200",
@@ -237,7 +239,7 @@ class CRAnalysisTests(unittest.TestCase):
 
     def test_conflict_reports_cover_indexed_and_proposed_zero_write_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root, process = init_binding_project(Path(directory))
             write_cr(
                 root,
                 "CR-101",
@@ -251,9 +253,9 @@ class CRAnalysisTests(unittest.TestCase):
                 impact_surface="quant_lab/research",
             )
             cr_index.write_index(root)
-            index_path = root / "process" / "changes" / "CR-INDEX.json"
+            index_path = process / "changes" / "CR-INDEX.json"
             frozen_index = index_path.read_bytes()
-            frozen_paths = sorted(path.relative_to(root) for path in root.rglob("*"))
+            frozen_paths = sorted(path.relative_to(process) for path in process.rglob("*"))
 
             conflicts, warnings = cr_analysis.conflict_report(root, "CR-102")
             proposed = cr_analysis.proposed_conflict_report(
@@ -271,12 +273,12 @@ class CRAnalysisTests(unittest.TestCase):
             self.assertEqual(frozen_index, index_path.read_bytes())
             self.assertEqual(
                 frozen_paths,
-                sorted(path.relative_to(root) for path in root.rglob("*")),
+                sorted(path.relative_to(process) for path in process.rglob("*")),
             )
 
     def test_proposed_conflict_rejects_invalid_and_existing_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root, _process = init_binding_project(Path(directory))
             write_cr(root, "CR-101", conflict_keys="data_contract")
             cr_index.write_index(root)
 
@@ -356,7 +358,7 @@ class CRAnalysisTests(unittest.TestCase):
 
     def test_render_cr_and_goal_briefs_preserve_goal_and_impact_golden(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root, _process = init_binding_project(Path(directory))
             write_feature_registry(root)
             write_capability_registry(root)
             cr_path = write_cr(
@@ -406,9 +408,7 @@ class CRAnalysisTests(unittest.TestCase):
                 root,
                 "CR-201",
                 impact_surface='"MOD-meta_flow/project/rules.py"',
-                extra_frontmatter=(
-                    'impact_capability_refs: ["CAP-PG-REGISTRY-REFS"]'
-                ),
+                extra_frontmatter=('impact_capability_refs: ["CAP-PG-REGISTRY-REFS"]'),
             )
             cr_projection.write_summary(
                 root,
