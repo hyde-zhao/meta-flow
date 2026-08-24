@@ -357,6 +357,7 @@ class WorkClosePlanV1:
     blockers: tuple[str, ...]
     plan_digest: str
     publication_binding: WorkPublicationBindingV1 | None = None
+    usage_terminal_decision: dict[str, Any] | None = None
 
     @property
     def ready(self) -> bool:
@@ -781,9 +782,22 @@ def plan_work_close(
     root = process_root.resolve()
     blockers: list[str] = []
     targets: list[WorkCloseTargetV1] = []
+    usage_terminal_decision: dict[str, Any] | None = None
     try:
         _validate_result(root, work_id, outcome, result_ref)
         current = load_work(root, work_id)
+        # S05（MF-BUG-06）：usage terminal policy 进入 close admission。
+        from meta_flow.work.usage import UsageTerminalPolicyV1, summarize_usage_terminal
+
+        usage_terminal_decision = UsageTerminalPolicyV1().evaluate(
+            work=current,
+            ledger_summary=summarize_usage_terminal(root, current),
+        )
+        if outcome == "completed" and usage_terminal_decision["decision"] == "BLOCK_CLOSE":
+            raise ValueError(
+                "usage terminal blocks close: "
+                + ",".join(usage_terminal_decision["reason_codes"])
+            )
         already_closed = current.status == outcome and (
             outcome == "cancelled" or current.result_ref == result_ref
         )

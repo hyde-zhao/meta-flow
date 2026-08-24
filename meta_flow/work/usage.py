@@ -621,3 +621,64 @@ def _authorize_usage_system_write(work_id: str, logical_ref: str, path: Path) ->
     )
     if not admitted.allowed:
         raise ValueError(admitted.reason_code)
+
+
+# ---- STORY-CR075-S05：usage terminal policy 进入 close admission ----
+
+
+@dataclass(frozen=True)
+class UsageTerminalPolicyV1:
+    """usage terminal 决定 Work 是否可以合法 close（MF-BUG-06）。
+
+    非法 terminal（hard stop / 超治理限额未处理 / usage_ref 缺失）必须
+    阻止 close：fail closed，不抛 traceback。
+    """
+
+    schema_version: int = 1
+
+    def evaluate(
+        self,
+        *,
+        work: Any,
+        ledger_summary: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        reasons: list[str] = []
+        if not getattr(work, "usage_ref", ""):
+            reasons.append("USAGE_REF_MISSING")
+        blocked_reasons = [
+            str(reason)
+            for reason in ledger_summary.get("blocked_reasons", ())
+            if str(reason) == "USAGE_HARD_STOP_100_PERCENT"
+            or str(reason).startswith("USAGE_GOVERNANCE_LIMIT_EXCEEDED:")
+        ]
+        if blocked_reasons:
+            reasons.extend(sorted(set(blocked_reasons)))
+        if getattr(work, "status", "") != "paused" and reasons:
+            # 非 paused 的阻断必须先走恢复/修订，不允许以 close 逃避。
+            reasons.append("ILLEGAL_TERMINAL_ESCAPE")
+        return {
+            "schema_version": self.schema_version,
+            "kind": "UsageTerminalDecisionV1",
+            "decision": "BLOCK_CLOSE" if reasons else "ALLOW_CLOSE",
+            "reason_codes": sorted(set(reasons)),
+            "mutation_count": 0,
+        }
+
+
+def summarize_usage_terminal(process_root: Path, work: Any) -> dict[str, Any]:
+    """汇总 usage ledger 的 terminal 面（缺 ledger 时为空汇总，不阻断读取）。"""
+
+    usage_file = process_root / str(getattr(work, "usage_ref", "") or "works/MISSING/USAGE.json")
+    blocked: list[str] = []
+    events: int = 0
+    if usage_file.is_file() and not usage_file.is_symlink():
+        try:
+            ledger = load_usage(process_root, work)
+            events = len(ledger.events)
+            summary = summarize_usage(ledger)
+            percent = int(getattr(summary, "percent_used", 0) or 0)
+            if percent >= 100:
+                blocked.append("USAGE_HARD_STOP_100_PERCENT")
+        except (ValueError, OSError):
+            blocked.append("USAGE_LEDGER_UNREADABLE")
+    return {"events": events, "blocked_reasons": sorted(set(blocked))}

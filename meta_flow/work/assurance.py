@@ -36,7 +36,7 @@ class ValidationPlan:
     risk_mapping: dict[str, str]
     max_check_groups: int
     independent_qa_required: bool
-    full_regression_allowed: bool
+    validation_scope_required: bool
     decision: str
     errors: tuple[str, ...]
     route_mode: str
@@ -49,9 +49,24 @@ class ValidationPlan:
     provider_readiness: str = "UNAVAILABLE_PENDING_CP7_CP8"
     invalidated_layers: tuple[str, ...] = ("provider-qualified-readiness",)
 
+    @property
+    def full_regression_allowed(self) -> bool:
+        """MF-BUG-07：旧名读兼容（一个版本周期后删除）。"""
+
+        import warnings
+
+        warnings.warn(
+            "full_regression_allowed is deprecated; use validation_scope_required",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.validation_scope_required
+
     def as_dict(self) -> dict[str, Any]:
         return {
             **self.__dict__,
+            # 双名并存一个版本周期：旧消费方继续可读。
+            "full_regression_allowed": self.validation_scope_required,
             "check_ids": list(self.check_ids),
             "risk_mapping": self.risk_mapping.copy(),
             "errors": list(self.errors),
@@ -172,7 +187,7 @@ def build_validation_plan(
         risk_mapping=mapping,
         max_check_groups=work.budget.check_groups,
         independent_qa_required=independent,
-        full_regression_allowed=work.risk_profile == "G2",
+        validation_scope_required=work.risk_profile == "G2",
         decision="BLOCKED" if errors else "READY",
         errors=tuple(errors),
         route_mode=work.route_profile.mode,

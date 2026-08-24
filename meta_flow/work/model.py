@@ -65,6 +65,9 @@ WORK_ALLOWED_KEYS = {
     "base_oids",
     "result_ref",
     "updated_at",
+    # S03：可选依赖/取代声明（历史 Work 无此字段兼容为空）。
+    "depends_on",
+    "supersedes",
 }
 WORK_REQUIRED_KEYS = WORK_ALLOWED_KEYS - {
     "phase_ref",
@@ -72,6 +75,8 @@ WORK_REQUIRED_KEYS = WORK_ALLOWED_KEYS - {
     "route_profile",
     "execution_unit",
     "updated_at",
+    "depends_on",
+    "supersedes",
 }
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _REASON_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,127}$")

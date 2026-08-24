@@ -1357,7 +1357,7 @@ def main(argv: list[str] | None = None) -> int:
             "Commands:\n"
             "  classify  Explain Work/CR and G0/G1/G2 routing.\n"
             "  init      Preview or create one Work envelope.\n"
-            "  init-preflight Simulate success/failure/no-op and semantic contracts with zero writes.\n"            "  lifecycle-preflight Zero-write dry-run across init/fail/recover/close/publish journeys.\n"
+            "  init-preflight Simulate success/failure/no-op and semantic contracts with zero writes.\n"            "  lifecycle-preflight Zero-write dry-run across init/fail/recover/close/publish journeys.\n"            "  dependency-query Resolve dependency closure or sole legal successor (read-only).\n"
             "  init-inspect Inspect Work-init transactions and exact legacy partial recovery.\n"
             "  init-recover Apply one plan-digest-bound legacy partial exact rollback.\n"
             "  scope-amend Plan/apply one typed paused/blocked G0/G1 additive scope successor.\n"
@@ -1394,6 +1394,10 @@ def main(argv: list[str] | None = None) -> int:
         return init_preflight_main(forwarded)
     if command == "lifecycle-preflight":
         return lifecycle_preflight_main(forwarded)
+    if command == "dependency-query":
+        from meta_flow.work.dependency import dependency_query_main
+
+        return dependency_query_main(forwarded)
     if command == "init-inspect":
         return init_inspect_main(forwarded)
     if command == "init-recover":
