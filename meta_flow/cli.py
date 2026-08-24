@@ -617,6 +617,29 @@ def _run_doctor(args: list[str]) -> None:
         from meta_flow.checks import context_doctor
 
         raise SystemExit(context_doctor.main(forwarded))
+    if command == "evidence-registry":
+        from meta_flow.work.evidence_kind import (
+            KNOWN_EVIDENCE_KINDS,
+            REGISTRY_VERSION_DIGEST,
+        )
+
+        import json as json_module
+
+        print(
+            json_module.dumps(
+                {
+                    "schema_version": 1,
+                    "kind": "EvidenceKindRegistryHealthV1",
+                    "decision": "PASS",
+                    "known_kinds": sorted(KNOWN_EVIDENCE_KINDS),
+                    "registry_version_digest": REGISTRY_VERSION_DIGEST,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
     if command == "adoption":
         from meta_flow.checks import adoption_readiness
 

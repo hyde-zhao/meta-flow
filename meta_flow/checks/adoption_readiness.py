@@ -21,6 +21,7 @@ from meta_flow.project.process_route_adapter import (
     resolve_configured_consumer_route,
 )
 from meta_flow.state import current
+from meta_flow.work.evidence_kind import ACCEPTANCE_EVIDENCE_KINDS
 from meta_flow.workspace.routing import ProcessRouteHealth, inspect_legacy_consumer_route
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -298,6 +299,8 @@ def classify_acceptance_claim(evidence: Mapping[str, Any]) -> VictimAcceptanceCl
     if not _SHA256_RE.fullmatch(provider):
         raise ValueError("victim acceptance provider identity is invalid")
     kind = str(evidence.get("evidence_kind") or "")
+    if kind not in ACCEPTANCE_EVIDENCE_KINDS:
+        raise ValueError("victim acceptance evidence kind is not in the registry")
     if kind == "provider_fixture" and not replay and not artifact and not installation:
         return VictimAcceptanceClaimV1.PROVIDER_FIXTURE
     if (

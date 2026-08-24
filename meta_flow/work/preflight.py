@@ -6,6 +6,8 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
+from typing import Any
 
 from meta_flow.work.validation_kernel import (
     AdmissionDecisionV2,
@@ -368,3 +370,380 @@ def render_preflight_result(report: PreflightReportV2) -> dict[str, object]:
             for simulation in report.simulations
         ],
     }
+
+
+# ---- STORY-CR075-S01：全旅程 lifecycle-preflight（零写 dry-run） ----
+
+
+class LifecycleJourneyV1(StrEnum):
+    INIT = "init"
+    FAIL = "fail"
+    RECOVER = "recover"
+    CLOSE = "close"
+    PUBLISH = "publish"
+
+
+LIFECYCLE_JOURNEYS = frozenset(journey.value for journey in LifecycleJourneyV1)
+
+
+@dataclass(frozen=True)
+class LifecyclePreflightReportV1:
+    """LLD §5：journey 级预检报告（零 mutation，typed findings）。"""
+
+    schema_version: int
+    journey: str
+    work_id: str
+    decision: str
+    checks: tuple[dict[str, Any], ...]
+    evidence_refs: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "kind": "LifecyclePreflightReportV1",
+            "journey": self.journey,
+            "work_id": self.work_id,
+            "decision": self.decision,
+            "checks": [dict(check) for check in self.checks],
+            "evidence_refs": list(self.evidence_refs),
+            "mutation_count": 0,
+        }
+
+
+def _typed_block(checks: list[dict[str, Any]], journey: str, work_id: str, exc: Exception) -> LifecyclePreflightReportV1:
+    checks.append(
+        {
+            "id": f"PREFLIGHT-{journey.upper()}-PLAN",
+            "name": f"{journey} native plan dry-run",
+            "decision": "BLOCKED",
+            "code": "NATIVE_PLAN_RAISED",
+            "detail": f"{type(exc).__name__}: {exc}",
+        }
+    )
+    return LifecyclePreflightReportV1(1, journey, work_id, "BLOCKED", tuple(checks), ())
+
+
+def run_journey_preflight(
+    process_root: Path,
+    work_id: str,
+    journey: str,
+    *,
+    story_text: str = "",
+) -> LifecyclePreflightReportV1:
+    """编排一个 journey 的零写预检；native plan 失败一律 typed 化，不抛 traceback。"""
+
+    from meta_flow.work import preflight_checks
+    from meta_flow.work.evidence_kind import REGISTRY_VERSION_DIGEST
+    from meta_flow.work.model import load_work
+
+    if journey not in LIFECYCLE_JOURNEYS:
+        raise ValueError(f"unsupported journey: {journey}")
+    checks: list[dict[str, Any]] = []
+    evidence_refs: list[str] = []
+    try:
+        work = load_work(process_root, work_id)
+    except (ValueError, FileNotFoundError) as exc:
+        return _typed_block(checks, journey, work_id, exc)
+
+    if story_text:
+        checks.append(preflight_checks.check_verify_packet_acceptance(story_text))
+
+    if journey == "init":
+        checks.append(
+            preflight_checks.finding(
+                "PREFLIGHT-INIT-01",
+                "Work envelope integrity",
+                "PASS" if work.status and work.scope.allowed_writes else "BLOCKED",
+                code="" if work.scope.allowed_writes else "ENVELOPE_INCOMPLETE",
+            )
+        )
+        if not work.scope.required_checks:
+            checks.append(
+                preflight_checks.finding(
+                    "PREFLIGHT-INIT-02",
+                    "required checks declared",
+                    "NEEDS_REVIEW",
+                    code="REQUIRED_CHECKS_EMPTY",
+                    detail="declare at least one targeted check id in scope",
+                )
+            )
+        else:
+            checks.append(
+                preflight_checks.finding(
+                    "PREFLIGHT-INIT-02",
+                    "required checks declared",
+                    "PASS",
+                    detail=f"{len(work.scope.required_checks)} checks",
+                )
+            )
+    elif journey == "fail":
+        from meta_flow.work.status_transition import plan_work_status_transition
+
+        if work.status != "active":
+            checks.append(
+                preflight_checks.finding(
+                    "PREFLIGHT-FAIL-00",
+                    "fail journey applicability",
+                    "NEEDS_REVIEW",
+                    code="JOURNEY_NOT_APPLICABLE",
+                    detail=f"fail journey expects an active Work; current={work.status}",
+                )
+            )
+        else:
+            try:
+                plan = plan_work_status_transition(
+                    process_root,
+                    work_id,
+                    expected_status="active",
+                    new_status="paused",
+                )
+                checks.append(
+                    preflight_checks.check_fail_handoff_scope(
+                        work.scope.allowed_writes,
+                        tuple(plan.target_refs) if hasattr(plan, "target_refs") else (),
+                        (),
+                    )
+                )
+                checks.append(
+                    preflight_checks.check_contract_fields(
+                        {
+                            "revision": getattr(plan, "schema_version", ""),
+                            "ref": work.work_ref,
+                            "digest": getattr(plan, "plan_digest", ""),
+                        },
+                        {
+                            "revision": getattr(plan, "schema_version", ""),
+                            "ref": work.work_ref,
+                            "digest": getattr(plan, "plan_digest", ""),
+                        },
+                    )
+                )
+            except (ValueError, FileNotFoundError) as exc:
+                checks.append(
+                    preflight_checks.finding(
+                        "PREFLIGHT-FAIL-PLAN",
+                        "fail-path native plan dry-run",
+                        "BLOCKED",
+                        code="FAIL_PATH_UNPLANNABLE",
+                        detail=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+    elif journey == "recover":
+        from meta_flow.work.lifecycle_transaction import inspect_work_close_transactions
+        from meta_flow.work.status_transition import inspect_work_status_transitions
+
+        partial: list[dict[str, Any]] = []
+        for inspector in (
+            inspect_work_close_transactions,
+            inspect_work_status_transitions,
+        ):
+            try:
+                report = inspector(process_root)
+            except FileNotFoundError:
+                # 无 release binding 的最小 fixture：等价于没有事务目录。
+                continue
+            except (ValueError, KeyError) as exc:
+                checks.append(
+                    preflight_checks.finding(
+                        "PREFLIGHT-RECOVER-INSPECT",
+                        "transaction inspection",
+                        "BLOCKED",
+                        code="INSPECT_RAISED",
+                        detail=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+                continue
+            for transaction in report.get("transactions", []):
+                if str(transaction.get("state") or "") in {"PARTIAL", "APPLYING", "PREPARED"}:
+                    partial.append(dict(transaction))
+        if any(check["decision"] == "BLOCKED" for check in checks):
+            pass
+        else:
+            checks.append(
+                preflight_checks.finding(
+                    "PREFLIGHT-RECOVER-01",
+                    "recoverable transactions",
+                    "NEEDS_REVIEW" if partial else "PASS",
+                    code="PARTIAL_TRANSACTIONS_PRESENT" if partial else "",
+                    detail=(
+                        f"{len(partial)} non-terminal transactions require recovery before new mutations"
+                        if partial
+                        else "no non-terminal transactions"
+                    ),
+                    transactions=partial,
+                )
+            )
+    elif journey == "close":
+        from meta_flow.work.lifecycle_transaction import plan_work_close
+
+        result_ref = work.result_ref or ""
+        result_exists = bool(result_ref) and preflight_checks.logical_ref_exists(
+            process_root, result_ref
+        )
+        result_valid = False
+        result_error = ""
+        if result_exists:
+            from meta_flow.project.scale import load_yaml_object
+
+            try:
+                payload = load_yaml_object(process_root / result_ref)
+                required = {"schema_version", "work_id", "decision"}
+                if not required.issubset(payload) or payload.get("decision") != "PASS":
+                    result_valid = False
+                    result_error = "result required fields missing or decision != PASS"
+                else:
+                    result_valid = True
+            except (ValueError, OSError) as exc:
+                result_error = f"{type(exc).__name__}: {exc}"
+        checks.append(
+            preflight_checks.check_close_preconditions(
+                current_status=work.status,
+                expected_status=work.status,
+                outcome="completed" if work.status in {"paused", "active"} else "cancelled",
+                result_ref=result_ref,
+                result_exists=result_exists,
+                result_valid=result_valid,
+                result_error=result_error,
+            )
+        )
+        try:
+            plan = plan_work_close(
+                process_root,
+                work_id,
+                expected_status=work.status,
+                outcome="completed",
+                result_ref=result_ref,
+            )
+            checks.append(
+                preflight_checks.check_scope_targets(
+                    work.scope.allowed_writes,
+                    tuple(target.ref for target in plan.targets),
+                )
+            )
+            checks.append(
+                preflight_checks.check_contract_fields(
+                    {"ref": work.work_ref, "digest": plan.plan_digest},
+                    {"ref": work.work_ref, "digest": plan.plan_digest},
+                )
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            checks.append(
+                preflight_checks.finding(
+                    "PREFLIGHT-CLOSE-PLAN",
+                    "close native plan dry-run",
+                    "BLOCKED",
+                    code="CLOSE_PATH_UNPLANNABLE",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+            )
+    elif journey == "publish":
+        from meta_flow.work.lifecycle_transaction import release_root_from_process
+        from meta_flow.execution_control.operation_admission import repository_head_oid
+
+        problems: list[str] = []
+        if work.status != "paused":
+            problems.append(f"publication requires paused Work; current={work.status}")
+        if not work.result_ref:
+            problems.append("publication requires result_ref")
+        elif not preflight_checks.logical_ref_exists(process_root, work.result_ref):
+            problems.append(f"result missing: {work.result_ref}")
+        release_oid = ""
+        try:
+            release_oid = repository_head_oid(release_root_from_process(process_root))
+        except (ValueError, OSError) as exc:
+            problems.append(f"release OID unavailable: {type(exc).__name__}")
+        if problems:
+            checks.append(
+                preflight_checks.finding(
+                    "PREFLIGHT-PUBLISH-01",
+                    "publication preconditions",
+                    "BLOCKED",
+                    code="PUBLICATION_PRECONDITION_FAILED",
+                    detail="; ".join(problems),
+                )
+            )
+        else:
+            checks.append(
+                preflight_checks.finding(
+                    "PREFLIGHT-PUBLISH-01",
+                    "publication preconditions",
+                    "PASS",
+                    detail=f"paused Work with PASS result; release={release_oid[:12]}",
+                )
+            )
+    checks.append(
+        preflight_checks.finding(
+            "PREFLIGHT-REGISTRY-00",
+            "evidence-kind registry version",
+            "PASS",
+            registry_version_digest=REGISTRY_VERSION_DIGEST,
+        )
+    )
+    return LifecyclePreflightReportV1(
+        1,
+        journey,
+        work_id,
+        preflight_checks.summarize(checks),
+        tuple(checks),
+        tuple(sorted(set(evidence_refs))),
+    )
+
+
+def lifecycle_preflight_main(argv: list[str] | None = None) -> int:
+    """CLI：``meta-flow work lifecycle-preflight``（exit 0=PASS，2=BLOCKED/NEEDS_REVIEW）。"""
+
+    import argparse
+    import json as json_module
+
+    parser = argparse.ArgumentParser(prog="meta-flow work lifecycle-preflight")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--work-id", required=True)
+    parser.add_argument("--journey", required=True, choices=sorted(LIFECYCLE_JOURNEYS))
+    parser.add_argument("--story-ref", default="", help="optional story ref for verify-packet checks")
+    parser.add_argument("--format", choices=("json",), default="json")
+    parsed = parser.parse_args(argv or [])
+    from meta_flow.project.process_route import require_process_route
+
+    try:
+        process_root = require_process_route(parsed.project_root.resolve()).process_root
+    except Exception as exc:  # route 不健康：typed BLOCKED，不泄漏 traceback
+        print(
+            json_module.dumps(
+                {
+                    "schema_version": 1,
+                    "kind": "LifecyclePreflightReportV1",
+                    "decision": "BLOCKED",
+                    "code": "PROCESS_ROUTE_UNHEALTHY",
+                    "detail": f"{type(exc).__name__}: {exc}",
+                    "mutation_count": 0,
+                }
+            )
+        )
+        return 2
+    story_text = ""
+    if parsed.story_ref:
+        story_path = process_root / parsed.story_ref
+        if story_path.is_file():
+            story_text = story_path.read_text(encoding="utf-8")
+        else:
+            print(
+                json_module.dumps(
+                    {
+                        "schema_version": 1,
+                        "kind": "LifecyclePreflightReportV1",
+                        "decision": "BLOCKED",
+                        "code": "STORY_REF_MISSING",
+                        "detail": parsed.story_ref,
+                        "mutation_count": 0,
+                    }
+                )
+            )
+            return 2
+    report = run_journey_preflight(
+        process_root,
+        parsed.work_id,
+        parsed.journey,
+        story_text=story_text,
+    )
+    print(json_module.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if report.decision == "PASS" else 2

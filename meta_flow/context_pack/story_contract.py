@@ -503,6 +503,24 @@ def _section_summary(text: str, heading: str) -> str:
     return ""
 
 
+_ACCEPTANCE_HEADING_ALIASES: tuple[str, ...] = (
+    "## 5. acceptance_criteria",
+    "## 量化验收",
+    "## 验收标准",
+    "## acceptance",
+)
+
+
+def _acceptance_section_items(text: str) -> list[str]:
+    """CHE-074-CP7：acceptance 标题多形态兼容抽取（编号项或项目符号）。"""
+
+    for heading in _ACCEPTANCE_HEADING_ALIASES:
+        items = _section_list_items(text=text, heading=heading)
+        if items:
+            return items
+    return []
+
+
 def _section_bullets(text: str, heading: str) -> list[str]:
     return [
         line.strip()[2:].strip()
@@ -579,7 +597,7 @@ def _normalize_story_card_v1(story: dict[str, Any], story_text: str) -> dict[str
         "acceptance_criteria": _strict_string_list(
             story.get("acceptance_criteria"), field="acceptance_criteria"
         ),
-        "legacy_heading": _section_bullets(story_text, "## 量化验收"),
+        "legacy_heading": _acceptance_section_items(story_text),
     }
     for source, values in legacy_acceptance_sources.items():
         if values and values != canonical_acceptance:
@@ -742,7 +760,7 @@ def _projected_story_contract(
     if not projected.get("forbidden_write_paths"):
         projected["forbidden_write_paths"] = _as_list(ownership.get("forbidden"))
     if not projected.get("acceptance"):
-        projected["acceptance"] = _section_bullets(story_text, "## 量化验收")
+        projected["acceptance"] = _acceptance_section_items(story_text)
     if not projected.get("verification_plan"):
         output_files = _as_list(plan_story.get("output_files"))
         tests = [path for path in output_files if path.startswith("tests/")]

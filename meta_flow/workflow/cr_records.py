@@ -463,11 +463,15 @@ def collect_scope_authz_findings(
             }
         )
     if required_from_evidence["unknown"]:
+        from meta_flow.work.evidence_kind import evaluate_required_evidence
+
+        registry_evaluations = evaluate_required_evidence(required_from_evidence["unknown"])
         needs_review.append(
             {
                 "level": "L3",
                 "code": "unknown_required_evidence_kind",
                 "required_evidence": required_from_evidence["unknown"],
+                "registry_evaluations": registry_evaluations,
                 "decision": "NEEDS_REVIEW",
             }
         )
