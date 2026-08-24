@@ -1730,6 +1730,10 @@ def _dispatch_main() -> None:
     if command == "next":
         _print_next()
         return
+    if command == "phase-baseline":
+        from meta_flow.validation.baseline import baseline_main
+
+        raise SystemExit(baseline_main(args[1:]))
     if command == "validation-plan":
         from meta_flow.validation.cli import validation_plan_main
 
