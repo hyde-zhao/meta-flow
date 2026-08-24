@@ -132,3 +132,16 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 | SCN-073-09/10 | REQ-073-06 | J1/J2 | 多对多覆盖 | planned | 六轮事故无漏行；R3 人工项显式归属 |
 | SCN-073-11 | REQ-073-07 | J3 | 权限 | blocked-until-authorized | source-candidate 外部 typed authorization |
 | SCN-073-12 | REQ-073-08 | J3 | 发布后受害者 | deferred | installed-artifact replay = 下一发布硬门 |
+
+## CR-075 增量追踪（CP2 已确认；CP6/CP7 回链）
+
+| 场景 | REQ | Story | 类型 | 当前状态 | 验证入口 |
+|---|---|---|---|---|---|
+| SCN-075-01 | REQ-075-P0 | STORY-CR075-P0 | 结构/兼容债 | verified-by-tests | tests/cr075/test_primitives.py + test_git_exclusion.py + test_status_sync_divergence.py + test_compat_fixes.py（17P） |
+| SCN-075-02 | REQ-075-S01 | STORY-CR075-S01 | 旅程/注册 | verified-by-tests | tests/cr075/test_preflight.py（20P；R1-1/R2-1/R2-2 重放） |
+| SCN-075-03 | REQ-075-S02 | STORY-CR075-S02 | 修订/失效 | verified-by-tests | tests/cr075/test_scope_amend_v2.py（8P；失效引擎交集最小化） |
+| SCN-075-04 | REQ-075-S03 | STORY-CR075-S03 | DAG/supersession | verified-by-tests | tests/cr075/test_dependency.py（12P；含阻断负向） |
+| SCN-075-05 | REQ-075-S04 | STORY-CR075-S04 | CLI/归属 | verified-by-tests | tests/cr075/test_validation_cli.py（11P；含跨 Story 失效联动） |
+| SCN-075-06 | REQ-075-S05 | STORY-CR075-S05 | admission/deprecation | verified-by-tests | tests/cr075/test_usage_terminal.py（9P；真实 plan_work_close 负向） |
+| SCN-075-07 | REQ-075-S06 | STORY-CR075-S06 | baseline lifecycle | verified-by-tests | tests/cr075/test_phase_baseline.py（16P；typed invalidate + 覆盖/越界负向） |
+| SCN-075-08 | REQ-075-AGGREGATE | 七 Story | 兼容集回归 | verified-by-tests | targeted cr075 93P + 兼容集 549P（批A 307/批B 242） |
