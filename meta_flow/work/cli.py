@@ -352,6 +352,20 @@ def scope_amend_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--authorization", type=Path, required=True)
     parser.add_argument("--expected-plan-digest", default="")
     parser.add_argument("--apply", action="store_true")
+    # S02：失效引擎默认开启（LLD §6）；--no-invalidate-receipts 仅抑制 apply 后置
+    # 标记写入，plan 的失效清单始终输出。
+    invalidate = parser.add_mutually_exclusive_group()
+    invalidate.add_argument(
+        "--invalidate-receipts",
+        dest="invalidate_receipts",
+        action="store_true",
+        default=True,
+    )
+    invalidate.add_argument(
+        "--no-invalidate-receipts",
+        dest="invalidate_receipts",
+        action="store_false",
+    )
     parsed = parser.parse_args(argv or [])
     try:
         release_root, process_root = _resolve_roots(parsed.project_root)
@@ -379,6 +393,7 @@ def scope_amend_main(argv: list[str] | None = None) -> int:
             current_authorization=authorization,
             release_oid=release_oid,
             process_oid=process_oid,
+            invalidate_receipts=parsed.invalidate_receipts,
         )
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         print(

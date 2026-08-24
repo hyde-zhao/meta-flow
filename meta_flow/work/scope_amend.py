@@ -746,8 +746,8 @@ def _validate_scope_amend_postimage(plan: ScopeAmendTransactionPlanV1) -> None:
 
 
 def _result_work_scope(current: WorkScope, delta: ScopeDeltaV1) -> WorkScope:
-    return WorkScope(
-        current.version,
+    result = WorkScope(
+        current.version + 1,
         tuple(
             sorted(
                 set(current.allowed_reads)
@@ -759,6 +759,82 @@ def _result_work_scope(current: WorkScope, delta: ScopeDeltaV1) -> WorkScope:
         tuple(sorted(set(current.allowed_writes) | set(delta.add_owned_leaves))),
         current.required_checks,
     )
+    _assert_additive_only(current, result)
+    return result
+
+
+def plan_receipt_invalidation(
+    process_root: Path,
+    work_id: str,
+    delta: G1ScopeDeltaV1,
+) -> tuple[dict[str, object], ...]:
+    """S02 失效引擎：receipt 的 path 与新增 scope 无交集则保留，有交集标失效。
+
+    输入为 works/<work_id>/validation-receipts/*.json（不存在则清单为空）；
+    判定依据 LLD §8：按 path 交集最小化失效面，避免粒度过粗浪费重验。
+    """
+
+    receipts_root = process_root / "works" / work_id / "validation-receipts"
+    if not receipts_root.is_dir():
+        return ()
+    added = sorted(
+        {*delta.add_reads, *delta.add_writes, *delta.add_checks}
+    )
+    entries: list[dict[str, object]] = []
+    for path in sorted(receipts_root.glob("*.json")):
+        if path.is_symlink() or not path.is_file():
+            entries.append(
+                {
+                    "receipt_ref": f"works/{work_id}/validation-receipts/{path.name}",
+                    "decision": "invalidated",
+                    "reason": "INVALIDATED_BY_SCOPE_VERSION_RECEIPT_UNREADABLE",
+                }
+            )
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            entries.append(
+                {
+                    "receipt_ref": f"works/{work_id}/validation-receipts/{path.name}",
+                    "decision": "invalidated",
+                    "reason": "INVALIDATED_BY_SCOPE_VERSION_RECEIPT_UNREADABLE",
+                }
+            )
+            continue
+        touched = {
+            str(item)
+            for item in (
+                payload.get("paths")
+                or payload.get("targets")
+                or payload.get("target_refs")
+                or ()
+            )
+            if isinstance(item, str)
+        }
+        intersected = sorted(
+            added_path
+            for added_path in added
+            if any(
+                touched_path == added_path
+                or touched_path.startswith(added_path.rstrip("*") )
+                or added_path.startswith(touched_path + "/")
+                for touched_path in touched
+            )
+        )
+        entries.append(
+            {
+                "receipt_ref": f"works/{work_id}/validation-receipts/{path.name}",
+                "decision": "invalidated" if intersected else "retained",
+                "reason": (
+                    "INVALIDATED_BY_SCOPE_VERSION"
+                    if intersected
+                    else "NO_SCOPE_INTERSECTION"
+                ),
+                **({"intersected_paths": intersected} if intersected else {}),
+            }
+        )
+    return tuple(entries)
 
 
 def _json_bytes(payload: dict[str, object]) -> bytes:
@@ -1018,6 +1094,7 @@ class G1ScopeAmendPlanV1:
     plan_digest: str
     blockers: tuple[str, ...] = ()
     mutation_count: int = 0
+    receipt_invalidation: tuple[dict[str, object], ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         is_g2_current = isinstance(
@@ -1043,6 +1120,7 @@ class G1ScopeAmendPlanV1:
             "plan_digest": self.plan_digest,
             "blockers": list(self.blockers),
             "mutation_count": self.mutation_count,
+            "receipt_invalidation": [dict(item) for item in self.receipt_invalidation],
         }
 
 
@@ -1072,13 +1150,24 @@ def load_g1_scope_amend_authorization(
     return load_current_scope_amend_authorization(path)
 
 
+def _assert_additive_only(current: WorkScope, result: WorkScope) -> None:
+    """S02：amendment 只增不改不删（STORY-CR075-S02 additive-only 契约）。"""
+
+    for field in ("allowed_reads", "allowed_writes", "required_checks"):
+        if not set(getattr(current, field)).issubset(set(getattr(result, field))):
+            raise ValueError(f"SCOPE_AMEND_NON_ADDITIVE:{field}")
+
+
 def _result_g1_scope(current: WorkScope, delta: G1ScopeDeltaV1) -> WorkScope:
-    return WorkScope(
-        current.version,
+    # S02：scope_version 单调递增（append-only 修订链）。
+    result = WorkScope(
+        current.version + 1,
         tuple(sorted(set(current.allowed_reads) | set(delta.add_reads))),
         tuple(sorted(set(current.allowed_writes) | set(delta.add_writes))),
         tuple(sorted(set(current.required_checks) | set(delta.add_checks))),
     )
+    _assert_additive_only(current, result)
+    return result
 
 
 def _git_snapshot(root: Path) -> tuple[str, str]:
@@ -1268,6 +1357,7 @@ def plan_g1_scope_amend(
         canonical_digest(identity),
         tuple(sorted(set(blockers))),
         0,
+        plan_receipt_invalidation(process_root, work_id, delta),
     )
 
 
@@ -1278,6 +1368,7 @@ def apply_g1_scope_amend(
     current_authorization: CurrentScopeAmendAuthorization,
     release_oid: str,
     process_oid: str,
+    invalidate_receipts: bool = True,
 ) -> dict[str, object]:
     if plan.decision != "READY":
         return {"decision": plan.decision, "blockers": list(plan.blockers), "mutation_count": 0}
@@ -1445,6 +1536,9 @@ def apply_g1_scope_amend(
     finally:
         if shared_lock is not None:
             release_shared_projection_writer_lock(shared_lock, writer_id)
+    invalidated_marks = (
+        _mark_invalidated_receipts(plan) if invalidate_receipts else plan.receipt_invalidation
+    )
     return {
         "decision": "PASS",
         "transaction_id": transaction.transaction_id,
@@ -1452,10 +1546,44 @@ def apply_g1_scope_amend(
         "revision_ref": refs[1],
         "receipt_ref": refs[3],
         "invalidated_refs": list(plan.invalidated_refs),
+        "receipt_invalidation": [dict(item) for item in invalidated_marks],
         "domain_mutation_count": len(applied_refs),
         "coordination_mutation_count": len(refreshed_refs),
         "mutation_count": len(applied_refs) + len(refreshed_refs),
     }
+
+
+def _mark_invalidated_receipts(plan: G1ScopeAmendPlanV1) -> tuple[dict[str, object], ...]:
+    """S02：事务 COMMITTED 后对失效 receipt 写标记（幂等，失败不回滚事务）。
+
+    标记字段为 ``invalidated_by_scope_version`` + ``invalidation_reason``；
+    retained 项不写。标记失败以 entry 的 reason 记录，不中断 apply 结果。
+    """
+
+    marks: list[dict[str, object]] = []
+    for entry in plan.receipt_invalidation:
+        if entry.get("decision") != "invalidated":
+            marks.append(dict(entry))
+            continue
+        receipt_path = plan.process_root / str(entry.get("receipt_ref") or "")
+        try:
+            payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("not an object")
+            payload["invalidated_by_scope_version"] = plan.result_scope.version
+            payload["invalidation_reason"] = str(
+                entry.get("reason") or "INVALIDATED_BY_SCOPE_VERSION"
+            )
+            receipt_path.write_bytes(_json_bytes(payload))
+            marked = dict(entry)
+            marked["mark_applied"] = True
+            marks.append(marked)
+        except (OSError, ValueError) as exc:
+            marked = dict(entry)
+            marked["mark_applied"] = False
+            marked["mark_error"] = f"{type(exc).__name__}: {exc}"
+            marks.append(marked)
+    return tuple(marks)
 
 
 def inspect_g1_scope_amend(process_root: Path, *, work_id: str = "") -> dict[str, Any]:
