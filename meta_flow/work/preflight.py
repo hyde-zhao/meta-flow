@@ -637,8 +637,8 @@ def run_journey_preflight(
                 )
             )
     elif journey == "publish":
-        from meta_flow.work.lifecycle_transaction import release_root_from_process
         from meta_flow.execution_control.operation_admission import repository_head_oid
+        from meta_flow.work.lifecycle_transaction import release_root_from_process
 
         problems: list[str] = []
         if work.status != "paused":

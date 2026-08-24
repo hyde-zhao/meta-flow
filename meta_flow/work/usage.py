@@ -6,7 +6,7 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -645,14 +645,13 @@ class UsageTerminalPolicyV1:
         reasons: list[str] = []
         if not getattr(work, "usage_ref", ""):
             reasons.append("USAGE_REF_MISSING")
-        blocked_reasons = [
-            str(reason)
-            for reason in ledger_summary.get("blocked_reasons", ())
-            if str(reason) == "USAGE_HARD_STOP_100_PERCENT"
-            or str(reason).startswith("USAGE_GOVERNANCE_LIMIT_EXCEEDED:")
-        ]
+        blocked_reasons = sorted(
+            {str(reason) for reason in ledger_summary.get("blocked_reasons", ()) if str(reason)}
+        )
         if blocked_reasons:
-            reasons.extend(sorted(set(blocked_reasons)))
+            # S05 整改：ledger 侧全部 fail-closed 信号（缺 ledger/不可读/hard
+            # stop/治理限额）一律阻断 close，不在 policy 层再筛一遍白名单。
+            reasons.extend(blocked_reasons)
         if getattr(work, "status", "") != "paused" and reasons:
             # 非 paused 的阻断必须先走恢复/修订，不允许以 close 逃避。
             reasons.append("ILLEGAL_TERMINAL_ESCAPE")
@@ -668,10 +667,21 @@ class UsageTerminalPolicyV1:
 def summarize_usage_terminal(process_root: Path, work: Any) -> dict[str, Any]:
     """汇总 usage ledger 的 terminal 面（缺 ledger 时为空汇总，不阻断读取）。"""
 
-    usage_file = process_root / str(getattr(work, "usage_ref", "") or "works/MISSING/USAGE.json")
+    usage_ref = str(getattr(work, "usage_ref", "") or "")
+    usage_file = process_root / (usage_ref or "works/MISSING/USAGE.json")
     blocked: list[str] = []
     events: int = 0
-    if usage_file.is_file() and not usage_file.is_symlink():
+    if not usage_ref:
+        blocked.append("USAGE_REF_MISSING")
+    elif usage_file.is_symlink():
+        # symlink 占用 = 结构损坏，fail closed。
+        blocked.append("USAGE_LEDGER_UNREADABLE")
+    elif not usage_file.is_file():
+        # S05 整改裁决：ledger 不存在 = 从未记账的合法初始态（真实治理仓
+        # 63 Work 中 39 个无 USAGE.json），视为零事件，不阻断；损坏（存在
+        # 但不可读/symlink）才 fail closed。
+        pass
+    else:
         try:
             ledger = load_usage(process_root, work)
             events = len(ledger.events)

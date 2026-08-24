@@ -242,7 +242,7 @@ def test_r2_2_plannable_failover_passes() -> None:
 def test_cli_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from meta_flow.work.preflight import lifecycle_preflight_main
 
-    process = _process_fixture(tmp_path)
+    _process_fixture(tmp_path)
     # 健康 route fixture 不存在：CLI 需要 sibling-binding；直接调用 main 会
     # 走 route 解析失败 → exit 2。此处验证 typed 输出与退出码契约。
     code = lifecycle_preflight_main(
@@ -256,7 +256,6 @@ def test_cli_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> N
 
 
 def test_cli_happy_path_exit_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    from types import SimpleNamespace
 
     from meta_flow.work import preflight as preflight_module
 

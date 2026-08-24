@@ -241,7 +241,7 @@ def _publication_fixture(
         encoding="utf-8",
     )
     (process / f"works/{work_id}/USAGE.json").write_text(
-        json.dumps({"schema_version": 1, "events": []}) + "\n",
+        json.dumps({"schema_version": 1, "work_id": work_id, "events": []}) + "\n",
         encoding="utf-8",
     )
     paused = update_work_status(
@@ -484,7 +484,8 @@ def _add_prior_work_publication(
     owner_dir = process / "works" / work_id
     (owner_dir / "REQUEST.md").write_text("# prior Work\n", encoding="utf-8")
     (owner_dir / "USAGE.json").write_text(
-        json.dumps({"schema_version": 1, "events": []}) + "\n", encoding="utf-8"
+        json.dumps({"schema_version": 1, "work_id": work_id, "events": []}) + "\n",
+        encoding="utf-8",
     )
     (owner_dir / "RESULT.json").write_text(
         json.dumps(

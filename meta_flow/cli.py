@@ -100,6 +100,9 @@ PUBLIC_OPERATION_ADMISSION_POLICIES = {
     ("route", "c0-cutover-apply"): "never",
     ("route", "c0-cutover-plan"): "never",
     ("state", "projection-inspect"): "never",
+    ("phase-baseline", "check"): "never",
+    ("phase-baseline", "inspect"): "never",
+    ("phase-baseline", "plan"): "never",
     ("work", "close-inspect"): "never",
     ("work", "init-inspect"): "never",
     ("work", "init-preflight"): "never",
@@ -117,6 +120,8 @@ PUBLIC_OPERATION_ADMISSION_POLICIES = {
     ("event", "append"): "unless-dry-run",
     ("governance", "baseline-refresh"): "apply-flag",
     ("package", "release-advance"): "apply-flag",
+    ("phase-baseline", "apply"): "apply-flag",
+    ("phase-baseline", "invalidate"): "apply-flag",
     ("project", "phase-metadata"): "positional-apply-recover",
     ("project", "phase-transition"): "positional-apply-recover",
     ("repository", "commit"): "apply-flag",
@@ -618,12 +623,12 @@ def _run_doctor(args: list[str]) -> None:
 
         raise SystemExit(context_doctor.main(forwarded))
     if command == "evidence-registry":
+        import json as json_module
+
         from meta_flow.work.evidence_kind import (
             KNOWN_EVIDENCE_KINDS,
             REGISTRY_VERSION_DIGEST,
         )
-
-        import json as json_module
 
         print(
             json_module.dumps(

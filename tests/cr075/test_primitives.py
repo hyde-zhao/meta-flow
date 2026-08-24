@@ -22,9 +22,10 @@ P0_OWNER_MODULES = [
     "meta_flow.state.projection_transaction",
     "meta_flow.execution_control.exact_file_transaction",
 ]
-# P0 纯结构搬迁后的自然行数上限（HLD §2.1-rev1）。
+# 行数上限：HLD §2.1-rev2（DQ-075-C7-01 门禁反馈整改决策；rev1 值 +
+# A-P0-05 整改增量 2 行）。
 LINE_BUDGETS_REV1 = {
-    "meta_flow/work/lifecycle_transaction.py": 2553,
+    "meta_flow/work/lifecycle_transaction.py": 2555,
     "meta_flow/work/status_transition.py": 1393,
     "meta_flow/work/transaction_child.py": 437,
     "meta_flow/state/current.py": 4000,

@@ -21,6 +21,12 @@ from meta_flow.validation.policy_v2 import evaluate_validation_reuse_request_v2
 
 SCHEMA_VERSION = 2
 
+# 公共 operation owner declaration（S06 整改：mutation 命令须有声明与契约）。
+PUBLIC_OPERATION_DECLARATIONS = (
+    ("phase-baseline.apply", ("meta-flow", "phase-baseline", "apply")),
+    ("phase-baseline.invalidate", ("meta-flow", "phase-baseline", "invalidate")),
+)
+
 _EXISTING_DRIFT_CODES = {
     "SOURCE_FINGERPRINT_DRIFT",
     "PROFILE_DRIFT",
@@ -44,6 +50,8 @@ def _classify(action: str, reasons: tuple[str, ...], *, has_receipt: bool) -> st
         return "NEW_REGRESSION"
     if action == "REUSE":
         return "REUSABLE"
+    if "RECEIPT_INVALIDATED_BY_SCOPE_VERSION" in reasons:
+        return "INVALIDATED_BY_SCOPE_VERSION"
     if _V1_MISSING_CODE in reasons:
         return "UNATTRIBUTABLE"
     reason_set = set(reasons)
@@ -91,6 +99,10 @@ def build_reuse_plan(
                 for field in _SECURE_FIELDS
                 if not str(payload.get(field) or "").strip()
             ]
+            # S02+S04 联合回修：scope amendment 已失效的 receipt 强制 RUN，
+            # 不得 REUSE（invalidated_by_scope_version / invalidation_reason）。
+            invalidated_by = payload.get("invalidated_by_scope_version")
+            invalidation_reason = str(payload.get("invalidation_reason") or "")
             request = SimpleNamespace(
                 receipt_decision=str(payload.get("decision") or ""),
                 partial_mutation=bool(payload.get("partial_mutation")),
@@ -111,6 +123,14 @@ def build_reuse_plan(
             )
             action, reasons = evaluate_validation_reuse_request_v2(request)
             reason_list = list(reasons)
+            if invalidated_by is not None or invalidation_reason:
+                action = "RUN"
+                reason_list = sorted(
+                    {
+                        *reason_list,
+                        "RECEIPT_INVALIDATED_BY_SCOPE_VERSION",
+                    }
+                )
             if missing:
                 # V1 receipt 缺安全字段：强制 RUN，不伪造 REUSE。
                 action = "RUN"
@@ -138,11 +158,13 @@ def build_reuse_plan(
     summary: dict[str, int] = {}
     for item in receipts:
         summary[item["attribution"]] = summary.get(item["attribution"], 0) + 1
+    run_count = sum(1 for item in receipts if item["action"] == "RUN")
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": "ValidationReusePlanV2",
         "work_id": work_id,
-        "decision": "PASS",
+        "decision": "RUN_REQUIRED" if run_count else "PASS",
+        "run_count": run_count,
         "receipts": receipts,
         "summary": dict(sorted(summary.items())),
         "mutation_count": 0,
@@ -214,4 +236,4 @@ def validation_plan_main(argv: list[str] | None = None) -> int:
         declared_checks=declared,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0
+    return 0 if payload.get("decision") == "PASS" else 2

@@ -65,15 +65,15 @@ from meta_flow.work.lifecycle_transaction import (
     WorkCloseAuthorizationV1,
     plan_work_close,
 )
-from meta_flow.work.status_transition import (
-    WorkStatusTransitionAuthorizationV2,
-    plan_work_status_transition,
-)
 from meta_flow.work.model import build_work, load_work, write_work_create_only
 from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.risk import RiskFacts, classify_work
 from meta_flow.work.route_profile import RouteProfile
 from meta_flow.work.scope import WorkScope
+from meta_flow.work.status_transition import (
+    WorkStatusTransitionAuthorizationV2,
+    plan_work_status_transition,
+)
 from meta_flow.work.store import (
     WorkInitApplyError,
     apply_work_init,

@@ -10,9 +10,10 @@ legal；≥2 typed BLOCKED（不允许双后继分叉真相）。
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from meta_flow.project.scale import load_yaml_object
 
@@ -31,6 +32,7 @@ class DependencyGraphV1:
     supersessions: Mapping[str, tuple[str, ...]]  # work_id -> supersedes ids
     statuses: Mapping[str, str]
     sources: Mapping[str, str]
+    malformed: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -42,7 +44,15 @@ class DependencyGraphV1:
                 key: list(value) for key, value in sorted(self.supersessions.items())
             },
             "statuses": dict(sorted(self.statuses.items())),
+            "malformed": list(self.malformed),
         }
+
+    def assert_healthy(self, work_id: str) -> str | None:
+        """查询前置：graph 存在损坏记录时返回阻断 reason code。"""
+
+        if self.malformed:
+            return "DEPENDENCY_GRAPH_MALFORMED"
+        return None
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,8 @@ def build_dependency_graph(process_root: Path) -> DependencyGraphV1:
     supersessions: dict[str, tuple[str, ...]] = {}
     statuses: dict[str, str] = {}
     sources: dict[str, str] = {}
+    malformed: list[str] = []
+    malformed_ids: set[str] = set()
     if not works_root.is_dir():
         return DependencyGraphV1((), {}, {}, {}, {})
     for work_dir in sorted(works_root.iterdir()):
@@ -81,12 +93,21 @@ def build_dependency_graph(process_root: Path) -> DependencyGraphV1:
             continue
         try:
             payload = load_yaml_object(work_path)
-        except (ValueError, OSError):
-            # 无法解析的 envelope 不进入 DAG；查询它时以 UNKNOWN_WORK 阻断。
+        except (ValueError, OSError) as exc:
+            # S03 整改：损坏 envelope 显式记录（查询经 graph.malformed 阻断）。
+            malformed.append(
+                f"WORK_YAML_UNREADABLE:{work_dir.name}:{type(exc).__name__}"
+            )
+            malformed_ids.add(work_dir.name)
             continue
         work_id = str(payload.get("work_id") or "")
         if not work_id:
             continue
+        if work_id in statuses:
+            # S03 整改：重复 work_id 是真相分叉，必须显式记录并由查询阻断。
+            malformed.append(f"DUPLICATE_WORK_ID:{work_id}")
+            continue
+        malformed_ids.discard(work_id)
         nodes.append(work_id)
         edges[work_id] = tuple(
             sorted({str(item) for item in (payload.get("depends_on") or ()) if str(item)})
@@ -97,7 +118,12 @@ def build_dependency_graph(process_root: Path) -> DependencyGraphV1:
         statuses[work_id] = str(payload.get("status") or "")
         sources[work_id] = f"works/{work_dir.name}/WORK.yaml"
     return DependencyGraphV1(
-        tuple(sorted(nodes)), edges, supersessions, statuses, sources
+        tuple(sorted(nodes)),
+        edges,
+        supersessions,
+        statuses,
+        sources,
+        tuple(sorted(set(malformed))),
     )
 
 
@@ -130,6 +156,17 @@ def detect_cycle(graph: DependencyGraphV1) -> list[str]:
 def resolve_closure(graph: DependencyGraphV1, work_id: str) -> dict[str, Any]:
     """传递闭包查询（含自身）；未知 Work/环 typed BLOCKED。"""
 
+    unhealthy = graph.assert_healthy(work_id)
+    if unhealthy:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "DependencyClosureV1",
+            "work_id": work_id,
+            "decision": "BLOCKED",
+            "reason_codes": [unhealthy],
+            "malformed": list(graph.malformed),
+            "mutation_count": 0,
+        }
     if work_id not in graph.edges:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -137,6 +174,25 @@ def resolve_closure(graph: DependencyGraphV1, work_id: str) -> dict[str, Any]:
             "work_id": work_id,
             "decision": "BLOCKED",
             "reason_codes": [BLOCKED_UNKNOWN_WORK],
+            "mutation_count": 0,
+        }
+    unknown_dependencies = sorted(
+        {
+            reference
+            for references in (*graph.edges.values(), *graph.supersessions.values())
+            for reference in references
+            if reference not in graph.edges
+        }
+    )
+    if unknown_dependencies:
+        # S03 整改：依赖指向未知 Work 时 typed BLOCKED（不静默吞掉悬边）。
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "DependencyClosureV1",
+            "work_id": work_id,
+            "decision": "BLOCKED",
+            "reason_codes": ["UNKNOWN_DEPENDENCY"],
+            "unknown_dependencies": unknown_dependencies,
             "mutation_count": 0,
         }
     cycles = detect_cycle(graph)
@@ -186,6 +242,28 @@ def resolve_sole_successor(
             "cancelled_work_id": cancelled_work_id,
             "decision": "BLOCKED",
             "reason_codes": [BLOCKED_UNKNOWN_WORK],
+            "mutation_count": 0,
+        }
+    if graph.malformed:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "SupersessionQueryV1",
+            "cancelled_work_id": cancelled_work_id,
+            "decision": "BLOCKED",
+            "reason_codes": ["DEPENDENCY_GRAPH_MALFORMED"],
+            "malformed": list(graph.malformed),
+            "mutation_count": 0,
+        }
+    current_status = str(graph.statuses.get(cancelled_work_id) or "")
+    if current_status != "cancelled":
+        # S03 整改：supersession 只对 cancelled predecessor 有定义。
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "SupersessionQueryV1",
+            "cancelled_work_id": cancelled_work_id,
+            "decision": "BLOCKED",
+            "reason_codes": ["PREDECESSOR_NOT_CANCELLED"],
+            "predecessor_status": current_status,
             "mutation_count": 0,
         }
     declared = tuple(

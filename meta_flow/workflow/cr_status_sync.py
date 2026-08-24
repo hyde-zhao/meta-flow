@@ -120,6 +120,9 @@ class StatusSyncTarget:
     truth_or_derived: str
     before: str | None
     after: str
+    # ADR-075-3（A-P0-05 整改）：system 命名空间 target 由治理自有写入路径
+    # 承载，不消耗业务 Work scope；business target 受 scope 约束不变。
+    namespace: str = "business"
 
     @property
     def before_digest(self) -> str:
@@ -400,6 +403,7 @@ def _target(
     truth_or_derived: str,
     *,
     read_context: ReadContextProtocol | None = None,
+    namespace: str = "business",
 ) -> StatusSyncTarget:
     ref = (
         _rel(project_root, path)
@@ -420,6 +424,7 @@ def _target(
         truth_or_derived=truth_or_derived,
         before=before,
         after=after,
+        namespace=namespace,
     )
 
 
@@ -908,6 +913,7 @@ def plan_status_sync(
             cr_after,
             "truth",
             read_context=context,
+            namespace="system",
         ),
     ]
     state_path = resolve_from_context(project_root, STATE_CURRENT_REL.as_posix())
@@ -962,6 +968,7 @@ def plan_status_sync(
                     state_after,
                     "truth",
                     read_context=context,
+                    namespace="system",
                 )
             )
     if target_gate == "implementation_in_progress":
@@ -1095,6 +1102,7 @@ def plan_status_sync(
                 development_plan_after,
                 "truth",
                 read_context=context,
+                namespace="system",
             )
         )
     targets = [
@@ -1138,6 +1146,7 @@ def plan_status_sync(
                 summary_after,
                 "derived",
                 read_context=context,
+                namespace="system",
             ),
         ),
         (
@@ -1149,6 +1158,7 @@ def plan_status_sync(
                 evidence_after,
                 "derived",
                 read_context=context,
+                namespace="system",
             ),
         ),
         (
@@ -1160,6 +1170,7 @@ def plan_status_sync(
                 ledger_after,
                 "derived",
                 read_context=context,
+                namespace="system",
             ),
         ),
         (
@@ -1171,6 +1182,7 @@ def plan_status_sync(
                 index_after,
                 "derived",
                 read_context=context,
+                namespace="system",
             ),
         ),
     ]
@@ -1184,7 +1196,8 @@ def plan_status_sync(
         denied = [
             target.ref
             for target in targets
-            if not check_scope(
+            if target.namespace != "system"
+            and not check_scope(
                 work.scope,
                 "write",
                 target.ref.removeprefix("process/"),
@@ -1251,8 +1264,16 @@ def validate_status_sync_authorization(
 ) -> None:
     if plan.decision != "READY":
         raise ValueError("status-sync authorization requires one READY plan")
-    if not plan.work_id or not plan.scope_digest:
-        raise ValueError("status-sync typed apply requires work_id and scope digest")
+    system_only = bool(plan.targets) and all(
+        getattr(target, "namespace", "business") == "system" for target in plan.targets
+    )
+    if (not plan.work_id or not plan.scope_digest) and not system_only:
+        # ADR-075-3（A-P0-05 整改）：system-only plan 由治理自有写入路径
+        # 承载，typed apply 不要求业务 Work 绑定。
+        raise ValueError(
+            "status-sync typed apply requires work_id and scope digest "
+            "(or a system-only target plan)"
+        )
     if authorization.schema_version != 1:
         raise ValueError("status-sync authorization schema_version must be 1")
     if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization.authorization_id):

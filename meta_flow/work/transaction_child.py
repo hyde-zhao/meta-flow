@@ -8,9 +8,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from meta_flow.execution_control.primitives import digest_bytes, now_utc
 from meta_flow.state import current as state_current
 from meta_flow.work import handoff as work_handoff
-from meta_flow.execution_control.primitives import digest_bytes, now_utc
 from meta_flow.work.lifecycle_transaction import (
     status_handoff_transaction_id,
     validate_work_close_manifest,

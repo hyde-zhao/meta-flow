@@ -13,7 +13,6 @@ import pytest
 
 from meta_flow.execution_control.exact_file_transaction import (
     ExactFileAuthorizationV1,
-    ExactFilePlanV1,
     ExactFileTargetV1,
     apply_exact_file_plan,
     build_exact_file_plan,

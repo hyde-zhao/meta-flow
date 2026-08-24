@@ -4,7 +4,11 @@
   "operations": [
     {
       "operation": "check.post-close",
-      "entry": ["meta-flow", "check", "post-close"],
+      "entry": [
+        "meta-flow",
+        "check",
+        "post-close"
+      ],
       "input_version": "PostCloseReconciliationQueryV1",
       "output_version": "PostCloseReconciliationCheckV1",
       "mutation_mode": "zero-write",
@@ -14,7 +18,9 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--release-context"],
+        "logical_process_arguments": [
+          "--release-context"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -22,7 +28,11 @@
     },
     {
       "operation": "cp.projection",
-      "entry": ["meta-flow", "cp", "projection"],
+      "entry": [
+        "meta-flow",
+        "cp",
+        "projection"
+      ],
       "input_version": "CheckpointProjectionQueryV1",
       "output_version": "CheckpointProjectionV1",
       "mutation_mode": "zero-write",
@@ -40,7 +50,11 @@
     },
     {
       "operation": "package.cost-report",
-      "entry": ["meta-flow", "package", "cost-report"],
+      "entry": [
+        "meta-flow",
+        "package",
+        "cost-report"
+      ],
       "input_version": "ProcessCostQueryV1",
       "output_version": "ProcessCostReportV1",
       "mutation_mode": "zero-write",
@@ -58,7 +72,11 @@
     },
     {
       "operation": "package.compile",
-      "entry": ["meta-flow", "package", "compile"],
+      "entry": [
+        "meta-flow",
+        "package",
+        "compile"
+      ],
       "input_version": "PackagePlanInputV1",
       "output_version": "PackagePlanIRV1",
       "mutation_mode": "zero-write",
@@ -76,7 +94,11 @@
     },
     {
       "operation": "package.closure-build",
-      "entry": ["meta-flow", "package", "closure-build"],
+      "entry": [
+        "meta-flow",
+        "package",
+        "closure-build"
+      ],
       "input_version": "ClosureRequestV1",
       "output_version": "ClosureResultV1",
       "mutation_mode": "zero-write",
@@ -94,7 +116,11 @@
     },
     {
       "operation": "package.semver-decide",
-      "entry": ["meta-flow", "package", "semver-decide"],
+      "entry": [
+        "meta-flow",
+        "package",
+        "semver-decide"
+      ],
       "input_version": "SemVerDecisionInputV1",
       "output_version": "SemVerDecisionV1",
       "mutation_mode": "zero-write",
@@ -112,7 +138,11 @@
     },
     {
       "operation": "package.release-check",
-      "entry": ["meta-flow", "package", "release-check"],
+      "entry": [
+        "meta-flow",
+        "package",
+        "release-check"
+      ],
       "input_version": "ReleaseEventV1",
       "output_version": "ReleaseCheckResultV1",
       "mutation_mode": "zero-write",
@@ -122,7 +152,11 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--state", "--candidate-event", "--evidence"],
+        "logical_process_arguments": [
+          "--state",
+          "--candidate-event",
+          "--evidence"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -130,7 +164,11 @@
     },
     {
       "operation": "package.release-advance",
-      "entry": ["meta-flow", "package", "release-advance"],
+      "entry": [
+        "meta-flow",
+        "package",
+        "release-advance"
+      ],
       "input_version": "ReleaseAdvanceInputV1",
       "output_version": "AggregateReleaseTransitionReceiptV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -156,7 +194,11 @@
     },
     {
       "operation": "route.c0-cutover-plan",
-      "entry": ["meta-flow", "route", "c0-cutover-plan"],
+      "entry": [
+        "meta-flow",
+        "route",
+        "c0-cutover-plan"
+      ],
       "input_version": "C0ResultV1",
       "output_version": "C0CutoverPlanV2",
       "mutation_mode": "zero-write",
@@ -166,7 +208,9 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--story-result"],
+        "logical_process_arguments": [
+          "--story-result"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -174,7 +218,11 @@
     },
     {
       "operation": "route.c0-cutover-apply",
-      "entry": ["meta-flow", "route", "c0-cutover-apply"],
+      "entry": [
+        "meta-flow",
+        "route",
+        "c0-cutover-apply"
+      ],
       "input_version": "C0CutoverPlanV2",
       "output_version": "C0CutoverReceiptV2",
       "mutation_mode": "zero-write",
@@ -184,7 +232,9 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--story-result"],
+        "logical_process_arguments": [
+          "--story-result"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -192,7 +242,11 @@
     },
     {
       "operation": "event.append",
-      "entry": ["meta-flow", "event", "append"],
+      "entry": [
+        "meta-flow",
+        "event",
+        "append"
+      ],
       "input_version": "EventLedgerAppendV1",
       "output_version": "EventLedgerAppendResultV1",
       "mutation_mode": "append-only-prevalidated",
@@ -202,7 +256,9 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--ledger"],
+        "logical_process_arguments": [
+          "--ledger"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -210,7 +266,11 @@
     },
     {
       "operation": "story.project-cp6",
-      "entry": ["meta-flow", "story", "project-cp6"],
+      "entry": [
+        "meta-flow",
+        "story",
+        "project-cp6"
+      ],
       "input_version": "CheckpointResultV1",
       "output_version": "Cp6StoryProjectionPlanV1",
       "mutation_mode": "dry-run-digest-apply",
@@ -220,7 +280,9 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--result"],
+        "logical_process_arguments": [
+          "--result"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -228,7 +290,11 @@
     },
     {
       "operation": "story.issue-revalidation-authority",
-      "entry": ["meta-flow", "story", "issue-revalidation-authority"],
+      "entry": [
+        "meta-flow",
+        "story",
+        "issue-revalidation-authority"
+      ],
       "input_version": "Cp6RevalidationAuthorityIssueInputV1",
       "output_version": "Cp6RevalidationAuthorityPairV2",
       "mutation_mode": "dry-run-digest-apply",
@@ -251,7 +317,11 @@
     },
     {
       "operation": "context.read-log",
-      "entry": ["meta-flow", "context", "read-log"],
+      "entry": [
+        "meta-flow",
+        "context",
+        "read-log"
+      ],
       "input_version": "ReadExpansionEventV1",
       "output_version": "ReadExpansionAppendResultV1",
       "mutation_mode": "append-only-prevalidated",
@@ -261,7 +331,10 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--path", "--context-ref"],
+        "logical_process_arguments": [
+          "--path",
+          "--context-ref"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -269,7 +342,11 @@
     },
     {
       "operation": "cr.bootstrap",
-      "entry": ["meta-flow", "cr", "bootstrap"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "bootstrap"
+      ],
       "input_version": "BootstrapCRPlanV1+ExactFileAuthorizationV1",
       "output_version": "ExactFileTransactionReceiptV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -287,7 +364,11 @@
     },
     {
       "operation": "cr.bootstrap-inspect",
-      "entry": ["meta-flow", "cr", "bootstrap-inspect"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "bootstrap-inspect"
+      ],
       "input_version": "ExistingExactFileTransactionV1",
       "output_version": "ExactFileTransactionInspectionV1",
       "mutation_mode": "zero-write",
@@ -305,7 +386,11 @@
     },
     {
       "operation": "cr.bootstrap-recover",
-      "entry": ["meta-flow", "cr", "bootstrap-recover"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "bootstrap-recover"
+      ],
       "input_version": "ExistingConsumedExactFileTransactionV1",
       "output_version": "ExactFileRecoveryReceiptV1",
       "mutation_mode": "recovery-only",
@@ -323,7 +408,11 @@
     },
     {
       "operation": "cr.terminate",
-      "entry": ["meta-flow", "cr", "terminate"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "terminate"
+      ],
       "input_version": "TerminationPlanV1",
       "output_version": "TerminationResultV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -341,7 +430,11 @@
     },
     {
       "operation": "cr.status-sync",
-      "entry": ["meta-flow", "cr", "status-sync"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "status-sync"
+      ],
       "input_version": "StatusSyncPlanV1",
       "output_version": "StatusSyncResultV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -359,7 +452,11 @@
     },
     {
       "operation": "cr.scope-amend",
-      "entry": ["meta-flow", "cr", "scope-amend"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "scope-amend"
+      ],
       "input_version": "ScopeAmendAuthorizationV2 (V1 read-compatible)",
       "output_version": "ScopeAmendTransactionPlanV1",
       "mutation_mode": "dry-run-digest-apply",
@@ -377,7 +474,11 @@
     },
     {
       "operation": "cr.close",
-      "entry": ["meta-flow", "cr", "close"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "close"
+      ],
       "input_version": "StatusSyncPlanV1",
       "output_version": "StatusSyncResultV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -395,7 +496,11 @@
     },
     {
       "operation": "cr.query",
-      "entry": ["meta-flow", "cr", "query"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "query"
+      ],
       "input_version": "DeclaredLegacyEvidenceQueryV1",
       "output_version": "ImmutableLegacyEvidenceViewV1",
       "mutation_mode": "zero-write",
@@ -413,7 +518,12 @@
     },
     {
       "operation": "cr.conflicts.proposed",
-      "entry": ["meta-flow", "cr", "conflicts", "--proposed"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "conflicts",
+        "--proposed"
+      ],
       "input_version": "ProposedConflictPreviewV1",
       "output_version": "ProposedConflictPreviewResultV1",
       "mutation_mode": "zero-write",
@@ -431,7 +541,11 @@
     },
     {
       "operation": "public-operations.check",
-      "entry": ["meta-flow", "cr", "public-operations-check"],
+      "entry": [
+        "meta-flow",
+        "cr",
+        "public-operations-check"
+      ],
       "input_version": "PublicOperationContractRegistryV2",
       "output_version": "PublicOperationRegistryCheckV3",
       "mutation_mode": "zero-write",
@@ -449,7 +563,11 @@
     },
     {
       "operation": "repository.commit",
-      "entry": ["meta-flow", "repository", "commit"],
+      "entry": [
+        "meta-flow",
+        "repository",
+        "commit"
+      ],
       "input_version": "PublicationContextV1",
       "output_version": "CommitPlanV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -459,7 +577,10 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--publication-evidence-ref", "--publication-context-ref"],
+        "logical_process_arguments": [
+          "--publication-evidence-ref",
+          "--publication-context-ref"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -467,7 +588,11 @@
     },
     {
       "operation": "repository.push",
-      "entry": ["meta-flow", "repository", "push"],
+      "entry": [
+        "meta-flow",
+        "repository",
+        "push"
+      ],
       "input_version": "PublicationContextV1",
       "output_version": "PushPlanV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -477,7 +602,10 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--publication-evidence-ref", "--publication-context-ref"],
+        "logical_process_arguments": [
+          "--publication-evidence-ref",
+          "--publication-context-ref"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -485,7 +613,11 @@
     },
     {
       "operation": "work.status-transition",
-      "entry": ["meta-flow", "work", "status-transition"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "status-transition"
+      ],
       "input_version": "WorkStatusTransitionPlanV2+WorkStatusTransitionAuthorizationV2",
       "output_version": "WorkStatusTransitionReceiptV2",
       "mutation_mode": "dry-run-typed-apply",
@@ -503,7 +635,11 @@
     },
     {
       "operation": "work.status-transition-inspect",
-      "entry": ["meta-flow", "work", "status-transition-inspect"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "status-transition-inspect"
+      ],
       "input_version": "WorkStatusTransitionTransactionV2",
       "output_version": "WorkStatusTransitionInspectionV2",
       "mutation_mode": "zero-write",
@@ -521,7 +657,11 @@
     },
     {
       "operation": "work.status-transition-recover",
-      "entry": ["meta-flow", "work", "status-transition-recover"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "status-transition-recover"
+      ],
       "input_version": "ConsumedWorkStatusTransitionAuthorizationV2+WorkStatusTransitionTransactionV2",
       "output_version": "WorkStatusTransitionReceiptV2",
       "mutation_mode": "recovery-only",
@@ -539,7 +679,11 @@
     },
     {
       "operation": "work.start",
-      "entry": ["meta-flow", "work", "start"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "start"
+      ],
       "input_version": "WorkStatusTransitionPlanV2+WorkStatusTransitionAuthorizationV2",
       "output_version": "WorkStatusTransitionReceiptV2",
       "mutation_mode": "dry-run-typed-apply",
@@ -557,7 +701,11 @@
     },
     {
       "operation": "work.pause",
-      "entry": ["meta-flow", "work", "pause"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "pause"
+      ],
       "input_version": "WorkStatusTransitionPlanV2+WorkStatusTransitionAuthorizationV2",
       "output_version": "WorkStatusTransitionReceiptV2",
       "mutation_mode": "dry-run-typed-apply",
@@ -575,7 +723,11 @@
     },
     {
       "operation": "work.resume",
-      "entry": ["meta-flow", "work", "resume"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "resume"
+      ],
       "input_version": "WorkStatusTransitionPlanV2+WorkStatusTransitionAuthorizationV2",
       "output_version": "WorkStatusTransitionReceiptV2",
       "mutation_mode": "dry-run-typed-apply",
@@ -593,7 +745,11 @@
     },
     {
       "operation": "work.block",
-      "entry": ["meta-flow", "work", "block"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "block"
+      ],
       "input_version": "WorkStatusTransitionPlanV2+WorkStatusTransitionAuthorizationV2",
       "output_version": "WorkStatusTransitionReceiptV2",
       "mutation_mode": "dry-run-typed-apply",
@@ -611,7 +767,11 @@
     },
     {
       "operation": "work.close",
-      "entry": ["meta-flow", "work", "close"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "close"
+      ],
       "input_version": "WorkClosePlanV1+WorkCloseAuthorizationV1",
       "output_version": "WorkCloseReceiptV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -629,7 +789,11 @@
     },
     {
       "operation": "work.publication-close",
-      "entry": ["meta-flow", "work", "publication-close"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "publication-close"
+      ],
       "input_version": "WorkPublicationReceiptV1|WorkPublicationReceiptV2+WorkPublicationCloseAuthorizationV1",
       "output_version": "WorkCloseReceiptV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -639,7 +803,10 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--result-ref", "--publication-receipt-ref"],
+        "logical_process_arguments": [
+          "--result-ref",
+          "--publication-receipt-ref"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -647,7 +814,11 @@
     },
     {
       "operation": "work.usage-plan",
-      "entry": ["meta-flow", "work", "usage-plan"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "usage-plan"
+      ],
       "input_version": "UsageEventV1",
       "output_version": "UsageAdmissionPlanV1",
       "mutation_mode": "zero-write",
@@ -665,7 +836,11 @@
     },
     {
       "operation": "work.close-inspect",
-      "entry": ["meta-flow", "work", "close-inspect"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "close-inspect"
+      ],
       "input_version": "WorkCloseTransactionManifestV1",
       "output_version": "WorkCloseTransactionInspectionV1",
       "mutation_mode": "zero-write",
@@ -683,7 +858,11 @@
     },
     {
       "operation": "work.close-recover",
-      "entry": ["meta-flow", "work", "close-recover"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "close-recover"
+      ],
       "input_version": "ConsumedWorkCloseAuthorizationV1+WorkCloseTransactionManifestV1",
       "output_version": "WorkCloseReceiptV1",
       "mutation_mode": "recovery-only",
@@ -701,7 +880,11 @@
     },
     {
       "operation": "work.init-inspect",
-      "entry": ["meta-flow", "work", "init-inspect"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "init-inspect"
+      ],
       "input_version": "WorkIdV1",
       "output_version": "WorkInitInspectionV1",
       "mutation_mode": "zero-write",
@@ -719,7 +902,11 @@
     },
     {
       "operation": "work.init-recover",
-      "entry": ["meta-flow", "work", "init-recover"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "init-recover"
+      ],
       "input_version": "LegacyWorkInitRecoveryPlanV1",
       "output_version": "LegacyWorkInitRecoveryReceiptV1",
       "mutation_mode": "recovery-only",
@@ -737,7 +924,11 @@
     },
     {
       "operation": "work.init-preflight",
-      "entry": ["meta-flow", "work", "init-preflight"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "init-preflight"
+      ],
       "input_version": "WorkLifecycleCandidateV1+WorkLifecycleContextV1",
       "output_version": "AdmissionDecisionV2",
       "mutation_mode": "zero-write",
@@ -755,7 +946,11 @@
     },
     {
       "operation": "work.scope-amend",
-      "entry": ["meta-flow", "work", "scope-amend"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "scope-amend"
+      ],
       "input_version": "G1ScopeDeltaV1+(G1ScopeAmendAuthorizationV1|G2CurrentCRScopeAmendAuthorizationV2)",
       "output_version": "G1ScopeAmendPlanV1|G2CurrentCRScopeAmendPlanV2+ScopeAmendReceiptV2",
       "mutation_mode": "dry-run-typed-apply",
@@ -773,7 +968,11 @@
     },
     {
       "operation": "work.scope-amend-inspect",
-      "entry": ["meta-flow", "work", "scope-amend-inspect"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "scope-amend-inspect"
+      ],
       "input_version": "WorkIdV1",
       "output_version": "G1ScopeAmendInspectionV1",
       "mutation_mode": "zero-write",
@@ -791,7 +990,11 @@
     },
     {
       "operation": "work.scope-amend-recover",
-      "entry": ["meta-flow", "work", "scope-amend-recover"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "scope-amend-recover"
+      ],
       "input_version": "(G1ScopeAmendAuthorizationV1|G2CurrentCRScopeAmendAuthorizationV2)+WorkInitTransactionV1",
       "output_version": "WorkInitTransactionReceiptV1",
       "mutation_mode": "recovery-only",
@@ -809,7 +1012,11 @@
     },
     {
       "operation": "work.usage-add",
-      "entry": ["meta-flow", "work", "usage-add"],
+      "entry": [
+        "meta-flow",
+        "work",
+        "usage-add"
+      ],
       "input_version": "UsageEventV1+UsageAdmissionPlanV1",
       "output_version": "UsageAppendResultV1",
       "mutation_mode": "dry-run-digest-apply",
@@ -827,7 +1034,11 @@
     },
     {
       "operation": "governance.baseline-refresh",
-      "entry": ["meta-flow", "governance", "baseline-refresh"],
+      "entry": [
+        "meta-flow",
+        "governance",
+        "baseline-refresh"
+      ],
       "input_version": "GovernanceBaselineRefreshPlanV1+ImmutableCommitRolesV1",
       "output_version": "GovernanceBaselineRefreshReceiptV1",
       "mutation_mode": "dry-run-digest-apply",
@@ -845,7 +1056,11 @@
     },
     {
       "operation": "governance-ownership.check",
-      "entry": ["meta-flow", "check", "governance-ownership"],
+      "entry": [
+        "meta-flow",
+        "check",
+        "governance-ownership"
+      ],
       "input_version": "GovernanceConceptOwnersV2+GovernanceSourceOfTruthMapV2",
       "output_version": "GovernanceOwnershipCheckV1",
       "mutation_mode": "zero-write",
@@ -863,7 +1078,11 @@
     },
     {
       "operation": "project.phase-metadata",
-      "entry": ["meta-flow", "project", "phase-metadata"],
+      "entry": [
+        "meta-flow",
+        "project",
+        "phase-metadata"
+      ],
       "input_version": "PhaseMetadataPlanV1+PhaseMetadataAuthorizationV1",
       "output_version": "PhaseMetadataReceiptV1",
       "mutation_mode": "dry-run-typed-apply",
@@ -873,7 +1092,10 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--phase-ref", "--append-result-ref"],
+        "logical_process_arguments": [
+          "--phase-ref",
+          "--append-result-ref"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -881,7 +1103,11 @@
     },
     {
       "operation": "project.phase-transition",
-      "entry": ["meta-flow", "project", "phase-transition"],
+      "entry": [
+        "meta-flow",
+        "project",
+        "phase-transition"
+      ],
       "input_version": "PhaseTransitionPlanV1+ImmutableCommitRolesV1",
       "output_version": "PhaseTransitionReceiptV1",
       "mutation_mode": "dry-run-digest-apply",
@@ -891,7 +1117,11 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--from-phase-ref", "--to-phase-ref", "--closure-evidence-ref"],
+        "logical_process_arguments": [
+          "--from-phase-ref",
+          "--to-phase-ref",
+          "--closure-evidence-ref"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -899,7 +1129,11 @@
     },
     {
       "operation": "terminal-lineage.check",
-      "entry": ["meta-flow", "check", "terminal-lineage"],
+      "entry": [
+        "meta-flow",
+        "check",
+        "terminal-lineage"
+      ],
       "input_version": "TerminalLineageDispositionsV1",
       "output_version": "TerminalLineageReportV1",
       "mutation_mode": "zero-write",
@@ -917,7 +1151,11 @@
     },
     {
       "operation": "reference-lifecycle.check",
-      "entry": ["meta-flow", "check", "reference-lifecycle"],
+      "entry": [
+        "meta-flow",
+        "check",
+        "reference-lifecycle"
+      ],
       "input_version": "ReferenceLifecycleCandidatesV1",
       "output_version": "ReferenceLifecycleReportV1",
       "mutation_mode": "zero-write",
@@ -935,7 +1173,11 @@
     },
     {
       "operation": "detector-qualification.check",
-      "entry": ["meta-flow", "check", "detector-qualification"],
+      "entry": [
+        "meta-flow",
+        "check",
+        "detector-qualification"
+      ],
       "input_version": "DetectorQualifiedBaselineV2",
       "output_version": "DetectorQualificationReportV2",
       "mutation_mode": "zero-write",
@@ -953,7 +1195,11 @@
     },
     {
       "operation": "human-gate.ask-user",
-      "entry": ["meta-flow", "ask-user", "human-gate"],
+      "entry": [
+        "meta-flow",
+        "ask-user",
+        "human-gate"
+      ],
       "input_version": "HumanGateRefV1",
       "output_version": "HumanGateLaunchMessageV1",
       "mutation_mode": "explicit-output-file",
@@ -963,7 +1209,11 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--checkpoint", "--launch-message-file", "--output"],
+        "logical_process_arguments": [
+          "--checkpoint",
+          "--launch-message-file",
+          "--output"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0
@@ -971,7 +1221,11 @@
     },
     {
       "operation": "state.projection-inspect",
-      "entry": ["meta-flow", "state", "projection-inspect"],
+      "entry": [
+        "meta-flow",
+        "state",
+        "projection-inspect"
+      ],
       "input_version": "StateProjectionTransactionV2",
       "output_version": "StateProjectionInspectionV2",
       "mutation_mode": "zero-write",
@@ -989,7 +1243,11 @@
     },
     {
       "operation": "state.projection-recover",
-      "entry": ["meta-flow", "state", "projection-recover"],
+      "entry": [
+        "meta-flow",
+        "state",
+        "projection-recover"
+      ],
       "input_version": "StateProjectionTransactionV1|V2(existing-manifest-only)",
       "output_version": "StateProjectionRecoveryReceiptV2",
       "mutation_mode": "recovery-only",
@@ -1007,7 +1265,11 @@
     },
     {
       "operation": "state.projection-correct",
-      "entry": ["meta-flow", "state", "projection-correct"],
+      "entry": [
+        "meta-flow",
+        "state",
+        "projection-correct"
+      ],
       "input_version": "StateProjectionCorrectionPlanV1+ProjectionCorrectAuthorizationV2",
       "output_version": "StateProjectionCorrectionReceiptV2",
       "mutation_mode": "dry-run-typed-apply",
@@ -1024,8 +1286,60 @@
       }
     },
     {
+      "operation": "phase-baseline.apply",
+      "entry": [
+        "meta-flow",
+        "phase-baseline",
+        "apply"
+      ],
+      "input_version": "PhaseBaselinePlanV1+ExactFileAuthorizationV1",
+      "output_version": "ExactFileTransactionReceiptV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.validation.baseline.apply_baseline",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [
+          "--phase-ref"
+        ],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "phase-baseline.invalidate",
+      "entry": [
+        "meta-flow",
+        "phase-baseline",
+        "invalidate"
+      ],
+      "input_version": "PhaseBaselineInvalidationRequestV1",
+      "output_version": "PhaseBaselineInvalidationPlanV1+ExactFileTransactionReceiptV1",
+      "mutation_mode": "dry-run-typed-apply",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.validation.baseline.invalidate_baseline",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [
+          "--phase-ref"
+        ],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "human-gate.check",
-      "entry": ["meta-flow", "check", "human-gate"],
+      "entry": [
+        "meta-flow",
+        "check",
+        "human-gate"
+      ],
       "input_version": "HumanGateRefV1",
       "output_version": "HumanGateValidationResultV1",
       "mutation_mode": "zero-write",
@@ -1035,7 +1349,11 @@
       "path_contract": {
         "binding_mode": "required",
         "project_root_argument": "--project-root",
-        "logical_process_arguments": ["--checkpoint", "--launch-message-file", "--decision-bundle"],
+        "logical_process_arguments": [
+          "--checkpoint",
+          "--launch-message-file",
+          "--decision-bundle"
+        ],
         "resolved_path_visibility": "internal-only",
         "persisted_process_ref_mode": "logical-only",
         "absolute_process_path_limit": 0

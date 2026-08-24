@@ -129,3 +129,79 @@ def test_no_declared_successor_is_needs_review(tmp_path: Path) -> None:
 
     assert result["decision"] == "NEEDS_REVIEW"
     assert result["reason_codes"] == ["NO_DECLARED_SUCCESSOR"]
+
+
+# ---- S03 整改：负向阻断 ----
+
+
+def test_unknown_dependency_is_typed_blocked(tmp_path: Path) -> None:
+    process = tmp_path
+    _work(process, "W-1", depends_on=["W-GHOST"])
+    graph = build_dependency_graph(process)
+
+    result = resolve_closure(graph, "W-1")
+
+    assert result["decision"] == "BLOCKED"
+    assert result["reason_codes"] == ["UNKNOWN_DEPENDENCY"]
+    assert result["unknown_dependencies"] == ["W-GHOST"]
+
+
+def test_non_cancelled_predecessor_supersession_is_blocked(tmp_path: Path) -> None:
+    process = tmp_path
+    _work(process, "W-OLD", status="active")
+    _work(process, "W-NEW", supersedes=["W-OLD"])
+    graph = build_dependency_graph(process)
+
+    result = resolve_sole_successor(graph, "W-OLD")
+
+    assert result["decision"] == "BLOCKED"
+    assert result["reason_codes"] == ["PREDECESSOR_NOT_CANCELLED"]
+    assert result["predecessor_status"] == "active"
+
+
+def test_supersedes_unknown_predecessor_is_blocked(tmp_path: Path) -> None:
+    process = tmp_path
+    _work(process, "W-OLD", status="cancelled")
+    _work(process, "W-NEW", supersedes=["W-GHOST"])
+    graph = build_dependency_graph(process)
+
+    # supersedes 指向未知 predecessor：closure 侧以 UNKNOWN_DEPENDENCY 阻断悬边。
+    closure = resolve_closure(graph, "W-NEW")
+    assert closure["decision"] == "BLOCKED"
+    assert closure["reason_codes"] == ["UNKNOWN_DEPENDENCY"]
+
+
+def test_duplicate_work_id_malforms_graph(tmp_path: Path) -> None:
+    process = tmp_path
+    _work(process, "W-DUP")
+    # 第二个目录承载同一 work_id。
+    dup_dir = process / "works" / "W-DUP-SECOND"
+    dup_dir.mkdir(parents=True)
+    (dup_dir / "WORK.yaml").write_text(
+        _WORK_TEMPLATE.format(
+            work_id="W-DUP", status="active", depends_on=[], supersedes=[]
+        ),
+        encoding="utf-8",
+    )
+    graph = build_dependency_graph(process)
+
+    result = resolve_closure(graph, "W-DUP")
+
+    assert result["decision"] == "BLOCKED"
+    assert result["reason_codes"] == ["DEPENDENCY_GRAPH_MALFORMED"]
+    assert any(item.startswith("DUPLICATE_WORK_ID:") for item in graph.malformed)
+
+
+def test_broken_work_yaml_malforms_graph(tmp_path: Path) -> None:
+    process = tmp_path
+    _work(process, "W-OK")
+    broken_dir = process / "works" / "W-BROKEN"
+    broken_dir.mkdir(parents=True)
+    (broken_dir / "WORK.yaml").write_text("{ not: yaml: at: all", encoding="utf-8")
+    graph = build_dependency_graph(process)
+
+    result = resolve_closure(graph, "W-OK")
+
+    assert result["decision"] == "BLOCKED"
+    assert result["reason_codes"] == ["DEPENDENCY_GRAPH_MALFORMED"]
+    assert any(item.startswith("WORK_YAML_UNREADABLE:") for item in graph.malformed)

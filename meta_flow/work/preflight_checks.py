@@ -9,9 +9,10 @@ close/publication 前置与 verify-packet（CHE-074-CP7）执行前检查。
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 ACCEPTANCE_HEADINGS: tuple[str, ...] = (
     "## 5. acceptance_criteria",

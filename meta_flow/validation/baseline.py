@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -102,16 +102,29 @@ def plan_baseline(
     )
     if not normalized:
         return _blocked("BASELINE_ENTRIES_EMPTY")
+    # 路径安全：phase_ref 拒绝绝对路径/越界段/symlink 占用。
+    candidate = Path(phase_ref)
+    if candidate.is_absolute() or any(
+        part in {"", ".", ".."} for part in candidate.parts
+    ):
+        return _blocked("PHASE_REF_UNSAFE")
     phase_path = process_root / phase_ref
-    if not phase_path.is_file():
+    if phase_path.is_symlink() or not phase_path.is_file():
         return _blocked("PHASE_FILE_MISSING")
     scope_digest = canonical_digest(
         {"phase_ref": phase_ref, "entries": [dict(entry) for entry in normalized]}
     )
+    existing = load_baseline(process_root, phase_ref)
+    # 5e 整改：valid baseline 不可原位覆盖；只有已失效基线才允许 rebaseline
+    # （version+1）。历史保留模型：单一 BASELINE.json 承载当前代，失效代以
+    # version 单调递增 + invalidated_at/reasons append 记录，不可回退重写。
+    if existing and not existing.get("invalidated_at"):
+        return _blocked("BASELINE_ALREADY_ACTIVE")
+    next_version = (int(existing.get("version") or 0) + 1) if existing else 1
     payload = PhaseGreenBaselineV1(
         SCHEMA_VERSION,
         phase_ref,
-        1,
+        next_version,
         scope_digest,
         dict(sorted(fingerprint.items())),
         normalized,
@@ -119,12 +132,6 @@ def plan_baseline(
     after_bytes = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
         "utf-8"
     )
-    existing = load_baseline(process_root, phase_ref)
-    if existing and existing.get("invalidated_at"):
-        payload["version"] = int(existing.get("version") or 0) + 1
-        after_bytes = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
-            "utf-8"
-        )
     ref = baseline_ref(phase_ref)
     before = (process_root / ref).read_bytes() if (process_root / ref).is_file() else b""
     import hashlib
@@ -169,7 +176,6 @@ def apply_baseline(
     exact_payload = dict(plan_payload.get("exact_plan") or {})
     targets = []
     import base64
-    import hashlib
 
     for item in exact_payload.get("targets", []):
         targets.append(
@@ -232,40 +238,45 @@ def check_baseline(
     reason_set = set(reasons)
     green = {str(entry.get("check_id") or "") for entry in baseline.get("entries") or []}
     failing = {str(item) for item in failing_checks if str(item)}
-    attribution: dict[str, list[str]] = {
-        "NEW_REGRESSION": sorted(failing - green),
-        "EXISTING_SOURCE_DRIFT": sorted(failing & green) if reason_set & _EXISTING_DRIFT_CODES else [],
-        "ENVIRONMENT_DRIFT": sorted(failing & green)
-        if reason_set & _ENVIRONMENT_DRIFT_CODES and not (reason_set & _EXISTING_DRIFT_CODES)
-        else [],
-        "PROVIDER_DRIFT": sorted(failing & green)
-        if reason_set & _PROVIDER_DRIFT_CODES
-        and not (reason_set & (_EXISTING_DRIFT_CODES | _ENVIRONMENT_DRIFT_CODES))
-        else [],
-        "UNATTRIBUTABLE": sorted(failing & green)
-        if not reason_set and failing & green
-        else [],
-    }
+    regression = sorted(failing & green)
+    # 5c 整改：归属矩阵--
+    #   baseline 外失败 -> NEW_REGRESSION；
+    #   绿转失败 + 源/manifest/profile 漂移 -> EXISTING_SOURCE_DRIFT；
+    #   绿转失败 + 仅环境漂移 -> ENVIRONMENT_DRIFT；
+    #   绿转失败 + provider 漂移（无源/环境漂移）-> PROVIDER_DRIFT；
+    #   绿转失败且无任何 fingerprint 漂移可解释 -> UNATTRIBUTABLE。
+    attribution: dict[str, list[str]] = {"NEW_REGRESSION": sorted(failing - green)}
+    if regression:
+        if reason_set & _EXISTING_DRIFT_CODES:
+            attribution["EXISTING_SOURCE_DRIFT"] = regression
+        elif reason_set & _ENVIRONMENT_DRIFT_CODES:
+            attribution["ENVIRONMENT_DRIFT"] = regression
+        elif reason_set & _PROVIDER_DRIFT_CODES:
+            attribution["PROVIDER_DRIFT"] = regression
+        else:
+            attribution["UNATTRIBUTABLE"] = regression
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": "PhaseBaselineCheckV1",
-        "decision": "PASS",
+        # 5d 整改：存在 failing 不得无条件 PASS。
+        "decision": "FAILINGS_PRESENT" if failing else "PASS",
         "phase_ref": phase_ref,
         "baseline_version": int(baseline.get("version") or 0),
         "drift_reason_codes": sorted(reason_set),
+        "failing_count": len(failing),
         "attribution": {key: value for key, value in attribution.items() if value},
         "mutation_count": 0,
     }
 
 
-def invalidate_baseline(
+def plan_invalidation(
     process_root: Path,
     *,
     phase_ref: str,
     reasons: list[str],
     at: str,
 ) -> dict[str, Any]:
-    """漂移失效（幂等 append：version+1 带 invalidated 标记）。"""
+    """5a 整改：失效走 typed plan（零写；apply 需 exact-file authorization）。"""
 
     baseline = load_baseline(process_root, phase_ref)
     if baseline is None:
@@ -273,8 +284,8 @@ def invalidate_baseline(
     if baseline.get("invalidated_at"):
         return {
             "schema_version": SCHEMA_VERSION,
-            "kind": "PhaseBaselineInvalidationV1",
-            "decision": "PASS",
+            "kind": "PhaseBaselineInvalidationPlanV1",
+            "decision": "NO_CHANGE",
             "idempotent": True,
             "version": int(baseline.get("version") or 0),
             "mutation_count": 0,
@@ -284,20 +295,73 @@ def invalidate_baseline(
     payload["invalidated_at"] = at
     payload["invalidation_reasons"] = sorted(set(str(item) for item in reasons))
     ref = baseline_ref(phase_ref)
-    path = process_root / ref
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    import hashlib
+
+    before = (process_root / ref).read_bytes()
+    after_bytes = (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    target = ExactFileTargetV1(
+        ref,
+        True,
+        hashlib.sha256(before).hexdigest(),
+        after_bytes,
+        hashlib.sha256(after_bytes).hexdigest(),
+        namespace="system",
+    )
+    exact_plan = build_exact_file_plan(
+        "phase-baseline.invalidate",
+        (target,),
+        semantic_binding_digest=canonical_digest(
+            {"phase_ref": phase_ref, "invalidated_at": at, "reasons": sorted(set(reasons))}
+        ),
     )
     return {
         "schema_version": SCHEMA_VERSION,
-        "kind": "PhaseBaselineInvalidationV1",
-        "decision": "PASS",
-        "idempotent": False,
-        "version": payload["version"],
+        "kind": "PhaseBaselineInvalidationPlanV1",
+        "decision": "READY",
+        "phase_ref": phase_ref,
         "baseline_ref": ref,
-        "mutation_count": 1,
+        "next_version": payload["version"],
+        "invalidation_reasons": sorted(set(str(item) for item in reasons)),
+        "exact_plan": exact_plan.as_dict(),
+        "exact_plan_digest": exact_plan.plan_digest,
+        "mutation_count": 0,
     }
+
+
+def apply_invalidation(
+    process_root: Path,
+    *,
+    plan_payload: dict[str, Any],
+    authorization: ExactFileAuthorizationV1,
+) -> dict[str, Any]:
+    """typed apply：与 baseline apply 同一 exact-file 事务内核（可恢复）。"""
+
+    import base64
+
+    exact_payload = dict(plan_payload.get("exact_plan") or {})
+    targets = []
+    for item in exact_payload.get("targets", []):
+        targets.append(
+            ExactFileTargetV1(
+                str(item["ref"]),
+                bool(item["before_exists"]),
+                str(item["before_digest"]),
+                base64.b64decode(str(item["after_bytes_b64"]), validate=True),
+                str(item["after_digest"]),
+                namespace=str(item.get("namespace") or "system"),
+            )
+        )
+    exact_plan = build_exact_file_plan(
+        "phase-baseline.invalidate",
+        tuple(targets),
+        semantic_binding_digest=str(exact_payload.get("semantic_binding_digest") or ""),
+    )
+    if exact_plan.plan_digest != plan_payload.get("exact_plan_digest"):
+        return _blocked("PLAN_DIGEST_MISMATCH")
+    authorization.validate_for(exact_plan)
+    return apply_exact_file_plan(process_root, exact_plan, authorization)
 
 
 def inspect_baseline(process_root: Path, *, phase_ref: str) -> dict[str, Any]:
@@ -384,12 +448,24 @@ def baseline_main(argv: list[str] | None = None) -> int:
                 failing_checks=list(_load_json(parsed.failing_checks).get("failing", [])),
             )
         elif parsed.command == "invalidate":
-            payload = invalidate_baseline(
-                process_root,
-                phase_ref=parsed.phase_ref,
-                reasons=[item for item in parsed.reasons.split(",") if item],
-                at=parsed.at,
-            )
+            if parsed.plan is not None and parsed.authorization is not None:
+                plan_payload = _load_json(parsed.plan)
+                authorization = ExactFileAuthorizationV1.from_mapping(
+                    _load_json(parsed.authorization)
+                )
+                payload = apply_invalidation(
+                    process_root, plan_payload=plan_payload, authorization=authorization
+                )
+            elif parsed.plan is None and parsed.authorization is None:
+                # 零写 plan 阶段：产出 typed 失效计划（apply 需重新带 --plan/--authorization）。
+                payload = plan_invalidation(
+                    process_root,
+                    phase_ref=parsed.phase_ref,
+                    reasons=[item for item in parsed.reasons.split(",") if item],
+                    at=parsed.at,
+                )
+            else:
+                payload = _blocked("INVALIDATION_REQUIRES_PLAN_AND_AUTHORIZATION")
         else:
             payload = inspect_baseline(process_root, phase_ref=parsed.phase_ref)
     except (ValueError, KeyError, OSError, json.JSONDecodeError) as exc:
@@ -401,4 +477,4 @@ def baseline_main(argv: list[str] | None = None) -> int:
         return 2
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     decision = str(payload.get("decision") or "")
-    return 0 if decision in {"PASS", "READY"} else 2
+    return 0 if decision in {"PASS", "READY", "NO_CHANGE"} else 2

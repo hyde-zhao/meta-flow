@@ -7,15 +7,11 @@ repair 指引呈现（mutation=0），不得向 CLI 泄漏 traceback。
 from __future__ import annotations
 
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 from cr_lifecycle_test_support import (
     LifecycleFixtureCollaborators,
-)
-from cr_lifecycle_test_support import (
-    write_cr as _write_cr,
 )
 from cr_lifecycle_test_support import (
     write_termination_fixture as _write_termination_fixture,
@@ -30,7 +26,6 @@ from meta_flow.project.onboarding_contract import (
 from meta_flow.project.process_route import resolve_runtime_ref
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.state import current
-from meta_flow.work.read_context import OperationReadContext
 from meta_flow.work.scope import WorkScope
 from meta_flow.workflow import cr_status_sync
 

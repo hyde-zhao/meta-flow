@@ -13,7 +13,8 @@ known-kind 集合的三个来源保持各自 owner 不变，本模块只做聚�
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from meta_flow.execution_control.contract import canonical_digest
 from meta_flow.policies.authz import (

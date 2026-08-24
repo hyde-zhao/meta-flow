@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 from pathlib import Path
 
@@ -14,8 +12,8 @@ from meta_flow.validation.baseline import (
     apply_baseline,
     check_baseline,
     inspect_baseline,
-    invalidate_baseline,
     plan_baseline,
+    plan_invalidation,
 )
 
 _FINGERPRINT = {
@@ -132,22 +130,40 @@ def test_check_provider_drift_attribution(tmp_path: Path) -> None:
     assert result["attribution"]["PROVIDER_DRIFT"] == ["CHECK-A"]
 
 
-def test_invalidate_is_idempotent_and_appends_version(tmp_path: Path) -> None:
+def _invalidate_typed(process: Path, phase_ref: str, *, at: str, suffix: str = "R1") -> dict:
+    from meta_flow.validation.baseline import apply_invalidation, plan_invalidation
+
+    plan = plan_invalidation(
+        process, phase_ref=phase_ref, reasons=["SOURCE_FINGERPRINT_DRIFT"], at=at
+    )
+    assert plan["decision"] == "READY", plan
+    authorization = ExactFileAuthorizationV1(
+        f"AUTH-CR075-S06-INVL-{suffix}",
+        "phase-baseline.invalidate",
+        plan["exact_plan_digest"],
+        tuple(item["ref"] for item in plan["exact_plan"]["targets"]),
+        "2999-01-01T00:00:00Z",
+    )
+    return apply_invalidation(process, plan_payload=plan, authorization=authorization)
+
+
+def test_typed_invalidate_appends_version_then_rebaseline_blocked(tmp_path: Path) -> None:
     process = tmp_path
     phase_ref = _phase(process)
     _apply_fresh(process, phase_ref)
 
-    first = invalidate_baseline(
-        process, phase_ref=phase_ref, reasons=["SOURCE_FINGERPRINT_DRIFT"], at="2026-08-24T00:00:00Z"
-    )
-    second = invalidate_baseline(
+    first = _invalidate_typed(process, phase_ref, at="2026-08-24T00:00:00Z")
+    assert first["decision"] == "PASS"
+    payload = json.loads((process / "phases" / "P6-TEST" / "BASELINE.json").read_text(encoding="utf-8"))
+    assert payload["version"] == 2
+    assert payload["invalidated_at"] == "2026-08-24T00:00:00Z"
+
+    # 二次失效：NO_CHANGE（幂等，零 mutation）。
+    second_plan = plan_invalidation(
         process, phase_ref=phase_ref, reasons=["SOURCE_FINGERPRINT_DRIFT"], at="2026-08-24T01:00:00Z"
     )
-
-    assert first["idempotent"] is False and first["version"] == 2
-    assert second["idempotent"] is True and second["mutation_count"] == 0
-    payload = json.loads((process / "phases" / "P6-TEST" / "BASELINE.json").read_text(encoding="utf-8"))
-    assert payload["invalidated_at"] == "2026-08-24T00:00:00Z"
+    assert second_plan["decision"] == "NO_CHANGE"
+    assert second_plan["idempotent"] is True
 
     # 失效后的 check 转 NEEDS_REVIEW。
     check = check_baseline(
@@ -155,6 +171,12 @@ def test_invalidate_is_idempotent_and_appends_version(tmp_path: Path) -> None:
     )
     assert check["decision"] == "NEEDS_REVIEW"
     assert check["reason_codes"] == ["BASELINE_INVALIDATED"]
+
+    # 失效后允许 rebaseline（version+1）。
+    rebaseline = plan_baseline(
+        process, phase_ref=phase_ref, entries=_ENTRIES, fingerprint=_FINGERPRINT
+    )
+    assert rebaseline["decision"] == "READY"
 
 
 def test_inspect_is_zero_mutation(tmp_path: Path) -> None:
@@ -177,3 +199,134 @@ def test_missing_baseline_is_typed_blocked(tmp_path: Path) -> None:
     )
     assert result["decision"] == "BLOCKED"
     assert result["reason_codes"] == ["BASELINE_MISSING"]
+
+
+# ---- S06 整改：负向与语义修正 ----
+
+
+def test_valid_baseline_cannot_be_rebaselined_in_place(tmp_path: Path) -> None:
+    process = tmp_path
+    phase_ref = _phase(process)
+    _apply_fresh(process, phase_ref)
+
+    again = plan_baseline(
+        process, phase_ref=phase_ref, entries=_ENTRIES, fingerprint=_FINGERPRINT
+    )
+
+    assert again["decision"] == "BLOCKED"
+    assert again["reason_codes"] == ["BASELINE_ALREADY_ACTIVE"]
+
+
+def test_failing_checks_present_is_not_pass(tmp_path: Path) -> None:
+    process = tmp_path
+    phase_ref = _phase(process)
+    _apply_fresh(process, phase_ref)
+
+    result = check_baseline(
+        process,
+        phase_ref=phase_ref,
+        current_fingerprint=dict(_FINGERPRINT),
+        failing_checks=["CHECK-A"],
+    )
+
+    assert result["decision"] == "FAILINGS_PRESENT"
+    assert result["failing_count"] == 1
+
+
+def test_green_turned_failing_without_drift_is_unattributable(tmp_path: Path) -> None:
+    process = tmp_path
+    phase_ref = _phase(process)
+    _apply_fresh(process, phase_ref)
+
+    result = check_baseline(
+        process,
+        phase_ref=phase_ref,
+        current_fingerprint=dict(_FINGERPRINT),
+        failing_checks=["CHECK-A"],
+    )
+
+    assert result["attribution"]["UNATTRIBUTABLE"] == ["CHECK-A"]
+
+
+def test_invalidate_apply_without_authorization_is_typed_blocked(tmp_path: Path) -> None:
+    process = tmp_path
+    phase_ref = _phase(process)
+    _apply_fresh(process, phase_ref)
+
+    import contextlib
+
+    from meta_flow.validation.baseline import baseline_main
+
+    with contextlib.redirect_stdout(__import__("io").StringIO()) as buffer:
+        code = baseline_main(
+            ["--project-root", str(process), "invalidate", "--phase-ref", phase_ref,
+             "--plan", "/nonexistent-plan.json", "--authorization", "/nonexistent-auth.json"]
+        )
+    payload = json.loads(buffer.getvalue())
+    assert code == 2
+    assert payload["decision"] == "BLOCKED"
+
+
+def test_invalidate_apply_plan_drift_is_blocked(tmp_path: Path) -> None:
+    from meta_flow.validation.baseline import apply_invalidation, plan_invalidation
+
+    process = tmp_path
+    phase_ref = _phase(process)
+    _apply_fresh(process, phase_ref)
+    plan = plan_invalidation(
+        process, phase_ref=phase_ref, reasons=["SOURCE_FINGERPRINT_DRIFT"], at="2026-08-24T00:00:00Z"
+    )
+    plan["exact_plan_digest"] = "0" * 64  # 漂移
+
+    authorization = ExactFileAuthorizationV1(
+        "AUTH-CR075-S06-INVL-DRIFT",
+        "phase-baseline.invalidate",
+        "0" * 64,
+        ("phases/P6-TEST/BASELINE.json",),
+        "2999-01-01T00:00:00Z",
+    )
+    result = apply_invalidation(process, plan_payload=plan, authorization=authorization)
+    assert result["decision"] == "BLOCKED"
+    assert result["reason_codes"] == ["PLAN_DIGEST_MISMATCH"]
+
+
+def test_apply_with_missing_authorization_fails_closed(tmp_path: Path) -> None:
+    """apply 的 typed authorization 缺失（CLI 无 --authorization）-> BLOCKED。"""
+
+    import contextlib
+
+    from meta_flow.validation.baseline import baseline_main
+
+    process = tmp_path
+    phase_ref = _phase(process)
+    with contextlib.redirect_stdout(__import__("io").StringIO()) as buffer:
+        code = baseline_main(
+            ["--project-root", str(process), "apply", "--phase-ref", phase_ref,
+             "--plan", "/nonexistent.json", "--authorization", "/nonexistent-auth.json"]
+        )
+    payload = json.loads(buffer.getvalue())
+    assert code == 2
+    assert payload["decision"] == "BLOCKED"
+
+
+def test_unsafe_phase_ref_is_blocked(tmp_path: Path) -> None:
+    for bad_ref in ("../escape/PHASE.yaml", "/abs/PHASE.yaml", "a/../b/PHASE.yaml"):
+        result = plan_baseline(
+            tmp_path, phase_ref=bad_ref, entries=_ENTRIES, fingerprint=_FINGERPRINT
+        )
+        assert result["reason_codes"] == ["PHASE_REF_UNSAFE"], bad_ref
+
+
+def test_symlink_phase_file_is_blocked(tmp_path: Path) -> None:
+    import os
+
+    real = tmp_path / "real-PHASE.yaml"
+    real.write_text("schema_version: 1\n", encoding="utf-8")
+    phase_dir = tmp_path / "phases" / "P6-LINK"
+    phase_dir.mkdir(parents=True)
+    os.symlink(real, phase_dir / "PHASE.yaml")
+
+    result = plan_baseline(
+        tmp_path, phase_ref="phases/P6-LINK/PHASE.yaml", entries=_ENTRIES, fingerprint=_FINGERPRINT
+    )
+    assert result["reason_codes"] == ["PHASE_FILE_MISSING"]

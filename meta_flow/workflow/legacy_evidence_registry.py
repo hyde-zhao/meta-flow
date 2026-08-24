@@ -22,10 +22,10 @@ from meta_flow.project.process_route import (
 )
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.semantics.cr_status import validate_native_status_tuple
+from meta_flow.work.evidence_kind import LEGACY_CLOSED_CR_EVIDENCE_KIND
 from meta_flow.workflow.cr_model import parse_frontmatter
 
 SUPPORTED_SCHEMA_VERSION: Final = 1
-from meta_flow.work.evidence_kind import LEGACY_CLOSED_CR_EVIDENCE_KIND
 
 EVIDENCE_KIND: Final = LEGACY_CLOSED_CR_EVIDENCE_KIND
 ALLOWED_OPERATIONS: Final = frozenset({"inspect_evidence", "list_follow_ups", "get_follow_up"})

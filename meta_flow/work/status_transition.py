@@ -19,10 +19,6 @@ from meta_flow.execution_control.operation_admission import (
     provider_source_identity_digest,
     repository_head_oid,
 )
-from meta_flow.state import current as state_current
-from meta_flow.work import handoff as work_handoff
-from meta_flow.work import transaction_child
-from meta_flow.work.lifecycle import transition_work
 from meta_flow.execution_control.primitives import (
     DIGEST_RE,
     acquire_shared_projection_writer_lock,
@@ -33,6 +29,10 @@ from meta_flow.execution_control.primitives import (
     render_yaml_bytes,
     safe_authorization_id,
 )
+from meta_flow.state import current as state_current
+from meta_flow.work import handoff as work_handoff
+from meta_flow.work import transaction_child
+from meta_flow.work.lifecycle import transition_work
 from meta_flow.work.lifecycle_transaction import (
     CURRENT_REF,
     STATE_PROJECTION_REFS,

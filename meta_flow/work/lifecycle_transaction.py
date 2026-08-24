@@ -7,9 +7,9 @@ CR termination 保留各自既有 owner；统一检查入口只聚合它们的�
 from __future__ import annotations
 
 import base64
-import warnings
 import json
 import re
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -18,8 +18,13 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
 from meta_flow.execution_control.contract import canonical_digest
+from meta_flow.execution_control.operation_admission import (
+    OperationAdmissionV1,
+    provider_source_identity_digest,
+    repository_head_oid,
+)
 from meta_flow.execution_control.primitives import (
-    SHARED_WRITER_LOCK_REL as SHARED_WRITER_LOCK_REL,
+    DIGEST_RE,
     SharedProjectionWriterLock,
     acquire_shared_projection_writer_lock,
     acquire_writer_lock,
@@ -32,17 +37,14 @@ from meta_flow.execution_control.primitives import (
     release_shared_projection_writer_lock,
     release_writer_lock,
     render_yaml_bytes,
+    replace_bytes,
     safe_authorization_id,
     validate_shared_projection_writer_lock,
     write_atomic,
     write_json_atomic,
-    replace_bytes,
-    DIGEST_RE,
 )
-from meta_flow.execution_control.operation_admission import (
-    OperationAdmissionV1,
-    provider_source_identity_digest,
-    repository_head_oid,
+from meta_flow.execution_control.primitives import (
+    SHARED_WRITER_LOCK_REL as SHARED_WRITER_LOCK_REL,
 )
 from meta_flow.project.governance import load_phase
 from meta_flow.project.governance_projection import (

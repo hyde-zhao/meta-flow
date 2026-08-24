@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,20 +12,32 @@ from typing import Any
 
 from meta_flow.execution_control.primitives import (
     DIGEST_RE as DIGEST_RE,
+)
+from meta_flow.execution_control.primitives import (
     SHARED_WRITER_LOCK_REL as SHARED_WRITER_LOCK_REL,
+)
+from meta_flow.execution_control.primitives import (
     SharedProjectionWriterLock as SharedProjectionWriterLock,
+)
+from meta_flow.execution_control.primitives import (
     acquire_shared_projection_writer_lock as acquire_shared_projection_writer_lock,
+)
+from meta_flow.execution_control.primitives import (
     digest_bytes,
     fsync_directory,
     now_utc,
-    release_shared_projection_writer_lock as release_shared_projection_writer_lock,
+    replace_bytes,
     safe_authorization_id,
     safe_path,
-    validate_shared_projection_writer_lock as validate_shared_projection_writer_lock,
     validate_shared_projection_writer_lock_path,
     write_atomic,
     write_json_atomic,
-    replace_bytes,
+)
+from meta_flow.execution_control.primitives import (
+    release_shared_projection_writer_lock as release_shared_projection_writer_lock,
+)
+from meta_flow.execution_control.primitives import (
+    validate_shared_projection_writer_lock as validate_shared_projection_writer_lock,
 )
 
 EXACT_FILE_TRANSACTION_ROOT_REL = Path(".meta-flow-runtime/exact-file")
