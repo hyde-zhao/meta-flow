@@ -5,197 +5,47 @@ from __future__ import annotations
 import base64
 import json
 import os
-import re
-import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from hashlib import sha256
-from pathlib import Path
-from typing import Any, TextIO
+from pathlib import Path, PurePosixPath
+from typing import Any
 
-try:  # pragma: no cover - Windows 分支由平台验证覆盖
-    import fcntl
-except ImportError:  # pragma: no cover
-    fcntl = None  # type: ignore[assignment]
-
-try:  # pragma: no cover - POSIX 分支由常规测试覆盖
-    import msvcrt
-except ImportError:  # pragma: no cover
-    msvcrt = None  # type: ignore[assignment]
+from meta_flow.execution_control.primitives import (
+    DIGEST_RE as DIGEST_RE,
+    SHARED_WRITER_LOCK_REL as SHARED_WRITER_LOCK_REL,
+    SharedProjectionWriterLock as SharedProjectionWriterLock,
+    acquire_shared_projection_writer_lock as acquire_shared_projection_writer_lock,
+    digest_bytes,
+    fsync_directory,
+    now_utc,
+    release_shared_projection_writer_lock as release_shared_projection_writer_lock,
+    safe_authorization_id,
+    safe_path,
+    validate_shared_projection_writer_lock as validate_shared_projection_writer_lock,
+    validate_shared_projection_writer_lock_path,
+    write_atomic,
+    write_json_atomic,
+    replace_bytes,
+)
 
 EXACT_FILE_TRANSACTION_ROOT_REL = Path(".meta-flow-runtime/exact-file")
-# 使用 tracked process-route binding 作为稳定锁 inode。正式投影（含 PROJECT）会
-# atomic replace，不能拿会被事务替换的 target 当锁；runtime lock 又会在 fresh
-# admission 失败时制造未记账 mutation。
-SHARED_WRITER_LOCK_REL = Path(".meta-flow-process.yaml")
-_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+# ADR-075-3 草稿接口：target 命名空间。business（默认）受业务 Work scope 约束；
+# system 为治理自有 target（status-sync 消费逻辑归 CR-075 S02，P0 只落 schema 面）。
+TARGET_NAMESPACES = frozenset({"system", "business"})
 
+# 兼容 thin alias：旧私有名保留一个版本周期后删除（内部调用点未逐一改写）。
+_DIGEST_RE = DIGEST_RE
+_digest_bytes = digest_bytes
+_now = now_utc
+_safe_authorization_id = safe_authorization_id
+_fsync_directory = fsync_directory
+_write_atomic = write_atomic
+_safe_path = safe_path
+_write_json_atomic = write_json_atomic
+_replace_bytes = replace_bytes
+_validate_shared_projection_writer_lock_path = validate_shared_projection_writer_lock_path
 
-@dataclass
-class SharedProjectionWriterLock:
-    """共享正式投影 writer 的进程级 advisory-lock capability。"""
-
-    path: Path
-    stream: TextIO
-
-
-def _digest_bytes(value: bytes) -> str:
-    return sha256(value).hexdigest()
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="microseconds")
-
-
-def _safe_authorization_id(value: str) -> str:
-    if (
-        not value
-        or len(value) > 128
-        or any(
-            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-            for character in value
-        )
-    ):
-        raise ValueError("authorization_id is invalid")
-    return value
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _write_atomic(path: Path, content: bytes) -> None:
-    if path.is_symlink() or (path.exists() and not path.is_file()):
-        raise ValueError(f"exact-file target is unsafe: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
-    try:
-        with temporary.open("xb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        if temporary.exists() or temporary.is_symlink():
-            temporary.unlink()
-
-
-def _safe_path(root: Path, relative: Path, *, create_parent: bool) -> Path:
-    """逐级拒绝 symlink/非目录父级，防止 exact writer 越出冻结 root。"""
-
-    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
-        raise ValueError("exact-file relative path is unsafe")
-    current = root
-    for part in relative.parent.parts:
-        current = current / part
-        if current.is_symlink() or (current.exists() and not current.is_dir()):
-            raise ValueError(f"exact-file parent path is unsafe: {relative.as_posix()}")
-        if create_parent and not current.exists():
-            current.mkdir()
-    target = root / relative
-    if target.is_symlink() or (target.exists() and not target.is_file()):
-        raise ValueError(f"exact-file target is unsafe: {relative.as_posix()}")
-    return target
-
-
-def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    _write_atomic(
-        path,
-        (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
-            "utf-8"
-        ),
-    )
-
-
-def _replace_bytes(path: Path, content: bytes) -> None:
-    _write_atomic(path, content)
-
-
-def acquire_shared_projection_writer_lock(
-    process_root: Path,
-    writer_id: str,
-) -> SharedProjectionWriterLock:
-    """获取所有正式投影 writer 共用的 advisory lock。"""
-
-    _safe_authorization_id(writer_id)
-    root = process_root.resolve()
-    _validate_shared_projection_writer_lock_path(root)
-    lock_path = root / SHARED_WRITER_LOCK_REL
-    stream: TextIO | None = None
-    try:
-        # 锁文件必须由 project routing 预先建立；这里禁止任何 mkdir/create。
-        stream = lock_path.open("r+", encoding="utf-8")
-        if fcntl is not None:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        elif msvcrt is not None:  # pragma: no cover - Windows only
-            stream.seek(0, os.SEEK_END)
-            if stream.tell() == 0:
-                raise ValueError("shared projection writer lock anchor is empty")
-            stream.seek(0)
-            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-        else:  # pragma: no cover
-            raise RuntimeError("no supported shared projection lock implementation")
-        path_stat = lock_path.stat()
-        handle_stat = os.fstat(stream.fileno())
-        if (path_stat.st_dev, path_stat.st_ino) != (handle_stat.st_dev, handle_stat.st_ino):
-            raise ValueError("shared projection writer lock identity drifted")
-        return SharedProjectionWriterLock(lock_path, stream)
-    except (BlockingIOError, OSError) as exc:
-        if stream is not None:
-            stream.close()
-        raise ValueError("shared projection writer lock is already held") from exc
-    except Exception:
-        if stream is not None:
-            stream.close()
-        raise
-
-
-def _validate_shared_projection_writer_lock_path(root: Path) -> None:
-    """只读检查共享锁路径；admission 阶段不得顺便创建 runtime。"""
-
-    lock_path = root / SHARED_WRITER_LOCK_REL
-    if lock_path.is_symlink() or not lock_path.is_file():
-        raise ValueError("shared projection writer lock path is unsafe")
-
-
-def validate_shared_projection_writer_lock(
-    handle: SharedProjectionWriterLock,
-    *,
-    expected_path: Path | None = None,
-) -> None:
-    if expected_path is not None and handle.path.absolute() != expected_path.absolute():
-        raise ValueError("shared projection writer lock path differs from the expected lock")
-    if handle.stream.closed or handle.path.is_symlink() or not handle.path.is_file():
-        raise ValueError("shared projection writer lock ownership is unsafe")
-    try:
-        path_stat = handle.path.stat()
-        handle_stat = os.fstat(handle.stream.fileno())
-    except OSError as exc:
-        raise ValueError("shared projection writer lock ownership is unsafe") from exc
-    if (path_stat.st_dev, path_stat.st_ino) != (handle_stat.st_dev, handle_stat.st_ino):
-        raise ValueError("shared projection writer lock identity drifted")
-
-
-def release_shared_projection_writer_lock(
-    handle: SharedProjectionWriterLock,
-    writer_id: str,
-) -> None:
-    _safe_authorization_id(writer_id)
-    validate_shared_projection_writer_lock(handle)
-    try:
-        if fcntl is not None:
-            fcntl.flock(handle.stream.fileno(), fcntl.LOCK_UN)
-        elif msvcrt is not None:  # pragma: no cover - Windows only
-            handle.stream.seek(0)
-            msvcrt.locking(handle.stream.fileno(), msvcrt.LK_UNLCK, 1)
-    finally:
-        handle.stream.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,27 +55,36 @@ class ExactFileTargetV1:
     before_digest: str
     after_bytes: bytes
     after_digest: str
+    namespace: str = "business"
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "ref": self.ref,
             "before_exists": self.before_exists,
             "before_digest": self.before_digest,
             "after_bytes_b64": base64.b64encode(self.after_bytes).decode("ascii"),
             "after_digest": self.after_digest,
         }
+        # digest 兼容：默认 business 不序列化，既有 plan digest 零漂移（A-P0-03）。
+        if self.namespace != "business":
+            payload["namespace"] = self.namespace
+        return payload
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ExactFileTargetV1:
-        expected = {
+        base_fields = {
             "ref",
             "before_exists",
             "before_digest",
             "after_bytes_b64",
             "after_digest",
         }
-        if set(payload) != expected or not isinstance(payload.get("before_exists"), bool):
+        extra = set(payload) - base_fields
+        if extra > {"namespace"} or not isinstance(payload.get("before_exists"), bool):
             raise ValueError("exact-file target fields mismatch")
+        namespace = str(payload.get("namespace") or "business")
+        if namespace not in TARGET_NAMESPACES:
+            raise ValueError("exact-file target namespace is invalid")
         try:
             after = base64.b64decode(str(payload["after_bytes_b64"]), validate=True)
         except (TypeError, ValueError) as exc:
@@ -236,6 +95,7 @@ class ExactFileTargetV1:
             str(payload["before_digest"]),
             after,
             str(payload["after_digest"]),
+            namespace,
         )
         _validate_exact_target(target)
         return target
@@ -392,6 +252,7 @@ def _validate_exact_target(target: ExactFileTargetV1) -> None:
         or not _DIGEST_RE.fullmatch(target.before_digest)
         or not _DIGEST_RE.fullmatch(target.after_digest)
         or _digest_bytes(target.after_bytes) != target.after_digest
+        or target.namespace not in TARGET_NAMESPACES
     ):
         raise ValueError("exact-file target is invalid")
 
@@ -585,6 +446,15 @@ def apply_exact_file_plan(
                 authorization,
                 "EXACT_FILE_AUTHORIZATION_ALREADY_CONSUMED",
             )
+        for target in plan.targets:
+            # MF-BUG-16 第三层：apply 对 .git 命名空间 target 永久 deny，
+            # 与 plan 收集层独立设防（typed BLOCKED，mutation=0）。
+            if ".git" in PurePosixPath(target.ref).parts:
+                return _blocked_exact_receipt(
+                    plan,
+                    authorization,
+                    "EXACT_FILE_GIT_NAMESPACE_FORBIDDEN",
+                )
         for target in plan.targets:
             _exact_preimage(root, target)
         _validate_shared_projection_writer_lock_path(root)

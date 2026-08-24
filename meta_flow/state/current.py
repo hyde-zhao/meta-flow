@@ -17,9 +17,9 @@ from typing import Any
 
 from meta_flow.checks.token_budget import DEFAULT_BUDGETS, format_bytes, load_budgets
 from meta_flow.project.process_route import (
-    _resolve_injected_process_ref,
-    _resolve_runtime_path,
-    _resolve_runtime_ref,
+    resolve_injected_process_ref,
+    resolve_runtime_path,
+    resolve_runtime_ref,
 )
 from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.state.formal_projection import FORMAL_TRUTH_REPLACE_PATHS
@@ -686,15 +686,15 @@ def _deep_merge_current_state(base: dict[str, Any], patch: dict[str, Any]) -> di
 
 
 def current_state_path(project_root: Path) -> Path:
-    return _resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
+    return resolve_runtime_ref(project_root, STATE_CURRENT_REL.as_posix())
 
 
 def current_entry_path(project_root: Path) -> Path:
-    return _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
+    return resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
 
 
 def state_md_path(project_root: Path) -> Path:
-    return _resolve_runtime_ref(project_root, STATE_MD_REL.as_posix())
+    return resolve_runtime_ref(project_root, STATE_MD_REL.as_posix())
 
 
 def _reject_bootstrap_with_existing_projection_manifest(project_root: Path) -> None:
@@ -742,7 +742,7 @@ def default_current_state(project_root: Path, *, project_id: str | None = None) 
 
 def ensure_base_ledgers(project_root: Path) -> None:
     for ledger_rel in BASE_LEDGER_RELS:
-        ledger_path = _resolve_runtime_ref(project_root, ledger_rel.as_posix())
+        ledger_path = resolve_runtime_ref(project_root, ledger_rel.as_posix())
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         ledger_path.touch(exist_ok=True)
 
@@ -829,7 +829,7 @@ def plan_init_current_state(
     ]
     planned_targets: list[str] = []
     for logical_ref in target_refs:
-        path = _resolve_runtime_ref(root, logical_ref)
+        path = resolve_runtime_ref(root, logical_ref)
         if path.is_symlink() or (path.exists() and not path.is_file()):
             raise FileExistsError(f"state init target is not a regular file: {logical_ref}")
         if logical_ref == STATE_CURRENT_REL.as_posix():
@@ -999,7 +999,7 @@ def plan_migrate_legacy_state(
         raise FileExistsError(f"{state_path} 已存在；如需覆盖请使用 --force")
     planned_targets.append(STATE_CURRENT_REL.as_posix())
     for logical_ref in (item.as_posix() for item in BASE_LEDGER_RELS):
-        path = _resolve_runtime_ref(root, logical_ref)
+        path = resolve_runtime_ref(root, logical_ref)
         if path.is_symlink() or (path.exists() and not path.is_file()):
             raise FileExistsError(f"state migrate-v2 target is not a regular file: {logical_ref}")
         if not path.is_file():
@@ -1047,8 +1047,8 @@ def _apply_core_state_projection(
     project_root = project_root.resolve()
     validate_current_state_for_write(state)
     entry = build_current_entry(project_root, state_snapshot=state)
-    current_path = _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
-    current_dir = _resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
+    current_path = resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
+    current_dir = resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
     _preflight_current_alias_gitignore(current_dir)
     existing_entry = _read_json(current_path) if current_path.is_file() else {}
     existing_semantic = dict(existing_entry)
@@ -1105,7 +1105,7 @@ def load_current_state(
 
 
 def _existing_rel(project_root: Path, rel_path: Path) -> str | None:
-    path = _resolve_runtime_path(project_root, rel_path)
+    path = resolve_runtime_path(project_root, rel_path)
     return rel_path.as_posix() if path.is_file() else None
 
 
@@ -1117,7 +1117,7 @@ def _available_cr_index_refs(project_root: Path) -> list[str]:
             continue
         from meta_flow.workflow.cr_lifecycle import validate_index_payload
 
-        path = _resolve_runtime_path(project_root, rel_path)
+        path = resolve_runtime_path(project_root, rel_path)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -1129,7 +1129,7 @@ def _available_cr_index_refs(project_root: Path) -> list[str]:
 
 def _latest_matching_ref(project_root: Path, pattern: str) -> str | None:
     if pattern.startswith("process/"):
-        process_root = _resolve_runtime_ref(project_root, "process/PROJECT.yaml").parent
+        process_root = resolve_runtime_ref(project_root, "process/PROJECT.yaml").parent
         candidates = [
             path for path in process_root.glob(pattern.removeprefix("process/")) if path.is_file()
         ]
@@ -1167,7 +1167,7 @@ def _is_existing_ref(project_root: Path, rel_path: str) -> bool:
     path = Path(rel_path)
     if path.is_absolute() or ".." in path.parts:
         return False
-    return _resolve_runtime_path(project_root, path).is_file()
+    return resolve_runtime_path(project_root, path).is_file()
 
 
 def _record_stale_ref(
@@ -1530,7 +1530,7 @@ def _write_pointer(current_dir: Path, project_root: Path, name: str, rel_ref: st
         ref_path.write_text(rendered_ref, encoding="utf-8")
     link_path = current_dir / name
     try:
-        target = _resolve_runtime_path(project_root, rel_ref)
+        target = resolve_runtime_path(project_root, rel_ref)
         if target.exists():
             relative_target = os.path.relpath(target, start=current_dir)
             if link_path.is_symlink() and os.readlink(link_path) == relative_target:
@@ -1565,7 +1565,7 @@ def _pointer_planned_targets(
     rendered_ref = rel_ref + "\n"
     if not ref_path.is_file() or ref_path.read_text(encoding="utf-8") != rendered_ref:
         planned.append(ref_logical)
-    target = _resolve_runtime_path(project_root, rel_ref)
+    target = resolve_runtime_path(project_root, rel_ref)
     if target.exists():
         relative_target = os.path.relpath(target, start=current_dir)
         if not link_path.is_symlink() or os.readlink(link_path) != relative_target:
@@ -1584,8 +1584,8 @@ def _current_entry_refresh_plan(
     entry = build_current_entry(root)
     candidate_semantic = dict(entry)
     candidate_semantic.pop("updated_at", None)
-    current_dir = _resolve_runtime_ref(root, STATE_CURRENT_DIR_REL.as_posix())
-    path = _resolve_runtime_ref(root, STATE_CURRENT_ENTRY_REL.as_posix())
+    current_dir = resolve_runtime_ref(root, STATE_CURRENT_DIR_REL.as_posix())
+    path = resolve_runtime_ref(root, STATE_CURRENT_ENTRY_REL.as_posix())
     gitignore_path = current_dir.parent / ".gitignore"
     if gitignore_path.is_symlink() or (gitignore_path.exists() and not gitignore_path.is_file()):
         raise FileExistsError("process/.gitignore is not a regular file")
@@ -1776,7 +1776,7 @@ def plan_current_projection_targets(
 
     root = project_root.resolve()
     entry = dict(current_entry or build_current_entry(root))
-    current_dir = _resolve_runtime_ref(root, STATE_CURRENT_DIR_REL.as_posix())
+    current_dir = resolve_runtime_ref(root, STATE_CURRENT_DIR_REL.as_posix())
     gitignore_path = current_dir.parent / ".gitignore"
     gitignore_kind, gitignore_value = _read_projection_image(gitignore_path)
     if gitignore_kind not in {"missing", "regular"}:
@@ -1807,7 +1807,7 @@ def plan_current_projection_targets(
         alias = (STATE_CURRENT_DIR_REL / name).as_posix()
         if rel_ref:
             desired[ref] = ("regular", (str(rel_ref) + "\n").encode("utf-8"))
-            target = _resolve_runtime_path(root, str(rel_ref))
+            target = resolve_runtime_path(root, str(rel_ref))
             desired[alias] = (
                 ("symlink", os.path.relpath(target, start=current_dir))
                 if target.exists() or str(rel_ref) in future_refs
@@ -2038,7 +2038,7 @@ def _projection_target_path(project_root: Path, ref: str) -> Path:
     # 不能用 ref 自身做 resolve：alias 已存在时会跟随 symlink 到业务目标，
     # 随后的 replace 会误改业务文件并可能制造自环。这里只解析 process 根，
     # 最后一段始终按 lexical target 处理。
-    process_root = _resolve_runtime_ref(
+    process_root = resolve_runtime_ref(
         project_root.resolve(), "process/.meta-flow-process.yaml"
     ).parent
     return process_root.joinpath(*Path(ref).parts[1:])
@@ -2091,7 +2091,7 @@ def _bound_work_status_parent(
         or "\\" in authorization_id
     ):
         raise ValueError("current projection parent binding is invalid")
-    process_root = _resolve_runtime_ref(
+    process_root = resolve_runtime_ref(
         project_root.resolve(), "process/.meta-flow-process.yaml"
     ).parent
     path = (
@@ -2105,7 +2105,7 @@ def _bound_work_status_parent(
     if not path.is_file():
         return {"state": "MISSING"}
     payload = json.loads(path.read_text(encoding="utf-8"))
-    from meta_flow.work.lifecycle_transaction import _validate_manifest
+    from meta_flow.work.lifecycle_transaction import validate_work_close_manifest
 
     if (
         not isinstance(payload, dict)
@@ -2115,7 +2115,7 @@ def _bound_work_status_parent(
         or payload.get("plan_digest") != parent_plan_digest
     ):
         raise ValueError("current projection parent manifest binding mismatch")
-    _validate_manifest(payload, expected_authorization_id=authorization_id)
+    validate_work_close_manifest(payload, expected_authorization_id=authorization_id)
     return payload
 
 
@@ -2441,8 +2441,8 @@ def refresh_current_entry(
         read_context=read_context,
         state_snapshot=state_snapshot,
     )
-    path = _resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
-    current_dir = _resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
+    path = resolve_runtime_ref(project_root, STATE_CURRENT_ENTRY_REL.as_posix())
+    current_dir = resolve_runtime_ref(project_root, STATE_CURRENT_DIR_REL.as_posix())
     _preflight_current_alias_gitignore(current_dir)
     existing = _read_json(path) if path.is_file() else {}
     existing_semantic = dict(existing)
@@ -2483,7 +2483,7 @@ def load_workflow_health(
     read_context: ReadContextProtocol | None = None,
 ) -> dict[str, Any]:
     path = (
-        _resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
+        resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
         if read_context is None
         else read_context.resolve_path(WORKFLOW_HEALTH_REL.as_posix())
     )
@@ -2566,7 +2566,7 @@ def plan_cost_health_projection(
     """构造 fresh-preimage-bound 的零写 cost-health projection plan。"""
 
     root = project_root.resolve()
-    path = _resolve_runtime_ref(root, WORKFLOW_HEALTH_REL.as_posix())
+    path = resolve_runtime_ref(root, WORKFLOW_HEALTH_REL.as_posix())
     raw = path.read_bytes() if path.is_file() and not path.is_symlink() else b""
     observed_preimage = hashlib.sha256(raw).hexdigest()
     base = load_workflow_health(root)
@@ -2635,7 +2635,7 @@ def _build_workflow_health_update(
         phase_counters[phase] = counters
     for key, delta in increments.items():
         counters[key] = int(counters.get(key) or 0) + int(delta)
-    path = _resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
+    path = resolve_runtime_ref(project_root, WORKFLOW_HEALTH_REL.as_posix())
     after_semantic = copy.deepcopy(payload)
     after_semantic.pop("updated_at", None)
     return payload, path, not (path.is_file() and before_semantic == after_semantic)
@@ -2851,7 +2851,7 @@ def _derive_approved_pending_gate_patch(
             checkpoint=pending_gate,
         )
         head = projection.head(pending_gate)
-        gate_path = _resolve_runtime_ref(project_root, "process/state/GATE-LEDGER.ndjson")
+        gate_path = resolve_runtime_ref(project_root, "process/state/GATE-LEDGER.ndjson")
         gate_events, load_errors = event_ledger.load_events(gate_path)
         approvals = [
             item
@@ -2969,7 +2969,7 @@ def project_aggregate_completion(
         raise StateValidationError("aggregate projection identity fields must be non-empty")
     if not _is_relative_state_ref(aggregate_ref):
         raise StateValidationError("aggregate_ref must be a safe project-relative state ref")
-    aggregate_path = _resolve_runtime_path(project_root, aggregate_ref)
+    aggregate_path = resolve_runtime_path(project_root, aggregate_ref)
     try:
         aggregate_path.relative_to(project_root)
     except ValueError as exc:
@@ -3449,9 +3449,9 @@ def _load_ndjson(path: Path) -> list[dict[str, Any]]:
 
 def render_history_markdown(project_root: Path) -> str:
     project_root = project_root.resolve()
-    cr_events = _load_ndjson(_resolve_runtime_ref(project_root, "process/state/CR-LEDGER.ndjson"))
+    cr_events = _load_ndjson(resolve_runtime_ref(project_root, "process/state/CR-LEDGER.ndjson"))
     checkpoint_events = _load_ndjson(
-        _resolve_runtime_ref(project_root, "process/state/CHECKPOINT-LEDGER.ndjson")
+        resolve_runtime_ref(project_root, "process/state/CHECKPOINT-LEDGER.ndjson")
     )
     lines = [
         "# Meta Flow State History",
@@ -3516,7 +3516,7 @@ def plan_history_render(project_root: Path, *, force: bool = False) -> dict[str,
     root = project_root.resolve()
     rendered = render_history_markdown(root)
     logical_ref = STATE_HISTORY_REL.as_posix()
-    path = _resolve_runtime_ref(root, logical_ref)
+    path = resolve_runtime_ref(root, logical_ref)
     planned_targets = _plan_text_projection(
         path,
         logical_ref=logical_ref,
@@ -3540,7 +3540,7 @@ def plan_history_render(project_root: Path, *, force: bool = False) -> dict[str,
 
 def render_history_file(project_root: Path, *, force: bool = False) -> Path:
     project_root = project_root.resolve()
-    path = _resolve_runtime_ref(project_root, STATE_HISTORY_REL.as_posix())
+    path = resolve_runtime_ref(project_root, STATE_HISTORY_REL.as_posix())
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise FileExistsError(
             f"state history-render target is not a regular file: {STATE_HISTORY_REL}"
@@ -3572,16 +3572,16 @@ def check_current_state(
 
     def read_ref(logical_ref: str) -> Path:
         if injected_root is not None:
-            return _resolve_injected_process_ref(injected_root, logical_ref)
-        return _resolve_runtime_ref(project_root, logical_ref)
+            return resolve_injected_process_ref(injected_root, logical_ref)
+        return resolve_runtime_ref(project_root, logical_ref)
 
     def read_path(value: str | Path) -> Path:
         candidate = Path(value)
         if injected_root is not None and not candidate.is_absolute():
             logical = candidate.as_posix()
             if logical.startswith("process/"):
-                return _resolve_injected_process_ref(injected_root, logical)
-        return _resolve_runtime_path(project_root, candidate)
+                return resolve_injected_process_ref(injected_root, logical)
+        return resolve_runtime_path(project_root, candidate)
 
     budgets = load_budgets(project_root, process_root=injected_root)
     state_path = read_ref(STATE_CURRENT_REL.as_posix())

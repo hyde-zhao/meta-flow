@@ -982,6 +982,10 @@ def plan_bootstrap_cr(
             if staged_path.is_symlink():
                 continue
             relative = staged_path.relative_to(staged_process)
+            if ".git" in relative.parts:
+                # MF-BUG-16 双层设防第二层：staging 路由 Git init 产生的 .git/**
+                # 绝不进入 bootstrap exact plan（第一层为 copy ignore）。
+                continue
             source_path = process_root / relative
             if relative.as_posix() == ".meta-flow-process.yaml":
                 continue

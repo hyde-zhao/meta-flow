@@ -801,18 +801,38 @@ def plan_status_sync(
     if "status" in fields:
         updates["status"] = target_status
     cr_after = render_frontmatter_fields(before_text, updates)
-    cr_after = render_status_body_projection(
-        cr_after,
-        lifecycle_status=target_status,
-        readiness_status=target_readiness,
-        gate_status=target_gate,
-        checkpoint_results=_checkpoint_result_projection(
-            project_root,
-            cr_id,
-            resolver=resolve_from_context,
-            read_context=context,
-        ),
-    )
+    try:
+        cr_after = render_status_body_projection(
+            cr_after,
+            lifecycle_status=target_status,
+            readiness_status=target_readiness,
+            gate_status=target_gate,
+            checkpoint_results=_checkpoint_result_projection(
+                project_root,
+                cr_id,
+                resolver=resolve_from_context,
+                read_context=context,
+            ),
+        )
+    except ValueError as exc:
+        # MF-BUG-13：checkpoint result/passage approval ref 不一致等投影分歧
+        # 必须以 typed BLOCKED + repair 指引呈现，不得向 CLI 泄漏 traceback。
+        return finish(
+            StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "CHECKPOINT_PROJECTION_DIVERGENT: "
+                + str(exc)
+                + "; repair=run `meta-flow cr status-sync --inspect` then reconcile "
+                "CHECKPOINT-LEDGER/result files before retry; mutation=0",
+                timestamp,
+            )
+        )
     summary = summary_from_cr_file(
         project_root,
         cr_path,
@@ -945,13 +965,33 @@ def plan_status_sync(
                 )
             )
     if target_gate == "implementation_in_progress":
-        cp5_projection = checkpoint_projection.load_checkpoint_projection(
-            project_root,
-            cr_id=cr_id,
-            checkpoint="CP5",
-            resolver=resolve_from_context,
-            read_context=context,
-        )
+        try:
+            cp5_projection = checkpoint_projection.load_checkpoint_projection(
+                project_root,
+                cr_id=cr_id,
+                checkpoint="CP5",
+                resolver=resolve_from_context,
+                read_context=context,
+            )
+        except ValueError as exc:
+            # MF-BUG-13：历史 checkpoint projection divergence 必须以 typed
+            # BLOCKED + repair 指引呈现，不得向 CLI 泄漏 traceback。
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    "CHECKPOINT_PROJECTION_DIVERGENT: "
+                    + str(exc)
+                    + "; repair=run `meta-flow cr status-sync --inspect` then reconcile "
+                    "CHECKPOINT-LEDGER/result files before retry; mutation=0",
+                    timestamp,
+                )
+            )
         if cp5_projection.findings or cp5_projection.head("CP5") is None:
             reason = (
                 "; ".join(

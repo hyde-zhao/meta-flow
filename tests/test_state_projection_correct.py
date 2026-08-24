@@ -368,6 +368,15 @@ def test_product_code_has_no_known_low_level_state_projection_writer_callers() -
         # Work close 是持有 shared projection lock 的 typed transaction owner；
         # 这里的同名 helper 只写入已绑定 preimage 的事务 target。
         Path("work/lifecycle_transaction.py"): {"_replace_bytes"},
+        # exact-file 事务（CR-074 起）与其原语 facade（CR-075 P0 起）同为只写
+        # 已绑定 preimage 的事务 target 的 typed transaction owner/kernel。
+        # 注：0.6.3 基线上 exact_file_transaction 的 recover 调用已使本守卫失败
+        # （pre-existing，非 CR-075 回归），P0 收敛时补正白名单并留证。
+        Path("execution_control/exact_file_transaction.py"): {"_replace_bytes"},
+        # status-transition 聚合事务与 CURRENT/HANDOFF child adapter 同为
+        # preimage-bound typed transaction writer（经 parent writer 动态分发）。
+        Path("work/status_transition.py"): {"_replace_bytes"},
+        Path("work/transaction_child.py"): {"_replace_bytes"},
     }
     forbidden = {
         "_apply_core_state_projection",

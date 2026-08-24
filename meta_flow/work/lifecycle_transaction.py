@@ -7,10 +7,9 @@ CR termination 保留各自既有 owner；统一检查入口只聚合它们的�
 from __future__ import annotations
 
 import base64
+import warnings
 import json
-import os
 import re
-import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -19,14 +18,26 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
 from meta_flow.execution_control.contract import canonical_digest
-from meta_flow.execution_control.exact_file_transaction import (
+from meta_flow.execution_control.primitives import (
     SHARED_WRITER_LOCK_REL as SHARED_WRITER_LOCK_REL,
-)
-from meta_flow.execution_control.exact_file_transaction import (
     SharedProjectionWriterLock,
     acquire_shared_projection_writer_lock,
+    acquire_writer_lock,
+    digest_bytes,
+    ensure_runtime_chain,
+    fsync_directory,
+    manifest_path,
+    now_utc,
+    plan_digest,
     release_shared_projection_writer_lock,
+    release_writer_lock,
+    render_yaml_bytes,
+    safe_authorization_id,
     validate_shared_projection_writer_lock,
+    write_atomic,
+    write_json_atomic,
+    replace_bytes,
+    DIGEST_RE,
 )
 from meta_flow.execution_control.operation_admission import (
     OperationAdmissionV1,
@@ -40,7 +51,7 @@ from meta_flow.project.governance_projection import (
     render_governance_projection,
 )
 from meta_flow.project.model import is_safe_ref, load_project
-from meta_flow.project.scale import dump_yaml, load_yaml_object
+from meta_flow.project.scale import load_yaml_object
 from meta_flow.semantics.generation_lineage import committed_generation_heads
 from meta_flow.state import current as state_current
 from meta_flow.state.formal_projection import (
@@ -58,7 +69,6 @@ SUCCESSOR_ROOT_REL = Path(".meta-flow-runtime/work-close/successors")
 LOCK_REL = Path(".meta-flow-runtime/work-close/writer.lock")
 TERMINAL_TRANSACTION_STATES = {"COMMITTED", "RECOVERED"}
 TRANSACTION_STATES = {"PREPARED", "APPLYING", "PARTIAL", *TERMINAL_TRANSACTION_STATES}
-_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _MANIFEST_FIELDS = {
     "schema_version",
     "kind",
@@ -130,16 +140,20 @@ EMPTY_CURRENT_PROJECTION_PLAN_DIGEST = canonical_digest(
     {"schema_version": 2, "kind": "CurrentProjectionPlanV2", "targets": []}
 )
 
+# P0 原语收敛兼容层：旧私有名保留一个版本周期后删除（fault-injection seam 不变）。
+_DIGEST_RE = DIGEST_RE
+_digest_bytes = digest_bytes
+_render = render_yaml_bytes
+_now = now_utc
+_safe_authorization_id = safe_authorization_id
+_plan_digest = plan_digest
+_fsync_directory = fsync_directory
+_write_atomic = write_atomic
+_write_json_atomic = write_json_atomic
+_replace_bytes = replace_bytes
 
-def _digest_bytes(value: bytes) -> str:
-    return sha256(value).hexdigest()
 
-
-def _render(payload: Mapping[str, Any]) -> bytes:
-    return (dump_yaml(dict(payload)) + "\n").encode("utf-8")
-
-
-def _release_root_from_process(root: Path) -> Path:
+def release_root_from_process(root: Path) -> Path:
     metadata = load_yaml_object(root / ".meta-flow-process.yaml")
     release = metadata.get("release_repo")
     if not isinstance(release, Mapping):
@@ -223,23 +237,6 @@ def refresh_state_projection_if_initialized(process_root: Path) -> tuple[str, ..
     release_root = _release_root_from_process(root)
     state_current.refresh_formal_truth_projection(release_root)
     return tuple(ref for ref in STATE_PROJECTION_REFS if (root / ref).read_bytes() != before[ref])
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="microseconds")
-
-
-def _safe_authorization_id(value: str) -> str:
-    if (
-        not value
-        or len(value) > 128
-        or any(
-            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-            for character in value
-        )
-    ):
-        raise ValueError("authorization_id is invalid")
-    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -718,6 +715,31 @@ class SharedProjectionRepairReceiptV1:
         }
 
 
+def _canonical_result_ref(result_ref: str) -> str:
+    """MF-BUG-14：result_ref 统一消费 canonical ``process/...`` logical ref。
+
+    过程仓相对路径（如 ``works/X/RESULT.yaml``）保留为显式 legacy 形态并发出
+    DeprecationWarning；绝对路径、越界与 ``..`` 段一律拒绝。
+    """
+
+    if not result_ref:
+        raise ValueError("completed Work requires result_ref")
+    if result_ref.startswith("process/"):
+        inner = result_ref[len("process/") :]
+        if not is_safe_ref(inner):
+            raise ValueError(f"Work result_ref escapes process root: {result_ref}")
+        return inner
+    if is_safe_ref(result_ref):
+        warnings.warn(
+            "result_ref as process-relative path is legacy; "
+            "use the canonical process/... logical ref",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return result_ref
+    raise ValueError(f"Work result_ref is not a safe logical ref: {result_ref}")
+
+
 def _validate_result(process_root: Path, work_id: str, outcome: str, result_ref: str) -> None:
     if outcome not in {"completed", "cancelled"}:
         raise ValueError("outcome must be completed or cancelled")
@@ -725,23 +747,21 @@ def _validate_result(process_root: Path, work_id: str, outcome: str, result_ref:
         if result_ref:
             raise ValueError("cancelled Work must not add result_ref")
         return
-    if not result_ref or not is_safe_ref(result_ref):
-        raise ValueError("completed Work requires result_ref")
-    path = process_root.resolve() / result_ref
+    canonical = _canonical_result_ref(result_ref)
+    path = process_root.resolve() / canonical
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"Work result is missing or not regular: {result_ref}")
     payload = load_yaml_object(path)
+    # MF-BUG-11：接受闭合超集 schema——必填字段（schema_version/work_id/decision）
+    # 缺失或不匹配仍 fail closed；实现证据新增字段（如 summary、evidence_ref）容忍。
+    required = {"schema_version", "work_id", "decision"}
     if (
-        set(payload) != {"schema_version", "work_id", "decision"}
+        not required.issubset(payload)
         or payload.get("schema_version") != 1
         or payload.get("work_id") != work_id
         or payload.get("decision") != "PASS"
     ):
         raise ValueError("completed Work requires one exact matching PASS result")
-
-
-def _plan_digest(plan_fields: Mapping[str, Any]) -> str:
-    return canonical_digest(dict(plan_fields))
 
 
 def plan_work_close(
@@ -755,6 +775,9 @@ def plan_work_close(
 ) -> WorkClosePlanV1:
     """只读生成 Work/Project/Phase 的完整关闭候选。"""
 
+    # MF-BUG-14：canonical 与 legacy 两种输入形态在此收敛为同一内部形态，
+    # 保证 plan/digest/WORK.yaml 语义与既有消费方完全一致。
+    result_ref = _canonical_result_ref(result_ref) if outcome == "completed" else result_ref
     root = process_root.resolve()
     blockers: list[str] = []
     targets: list[WorkCloseTargetV1] = []
@@ -883,11 +906,11 @@ def _transaction_dir(root: Path, authorization_id: str) -> Path:
     return root / TRANSACTION_ROOT_REL / _safe_authorization_id(authorization_id)
 
 
-def _manifest_path(root: Path, authorization_id: str) -> Path:
-    return _transaction_dir(root, authorization_id) / "manifest.json"
+def work_close_manifest_path(root: Path, authorization_id: str) -> Path:
+    return manifest_path(root, authorization_id, transaction_root_rel=TRANSACTION_ROOT_REL)
 
 
-def _require_runtime_chain(
+def require_work_close_runtime_chain(
     root: Path,
     authorization_id: str | None = None,
     *,
@@ -895,71 +918,21 @@ def _require_runtime_chain(
 ) -> None:
     parts = [Path(".meta-flow-runtime"), Path("work-close")]
     if authorization_id is not None:
-        parts.extend([Path("transactions"), Path(_safe_authorization_id(authorization_id))])
-    current = root.resolve()
-    for part in parts:
-        current = current / part
-        if current.exists() or current.is_symlink():
-            if current.is_symlink() or not current.is_dir():
-                raise ValueError(f"work close runtime path is not a plain directory: {current}")
-        elif create:
-            current.mkdir()
-        else:
-            raise ValueError("work close transaction runtime path is missing")
+        parts.extend([Path("transactions"), Path(safe_authorization_id(authorization_id))])
+    ensure_runtime_chain(root, parts, create=create)
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _write_atomic(path: Path, content: bytes) -> None:
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
-    try:
-        with temporary.open("xb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        if temporary.exists() or temporary.is_symlink():
-            temporary.unlink()
-
-
-def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    content = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
-        "utf-8"
+def acquire_work_close_writer_lock(root: Path, authorization_id: str) -> Path:
+    return acquire_writer_lock(
+        root,
+        authorization_id,
+        lock_rel=LOCK_REL,
+        runtime_parts=(Path(".meta-flow-runtime"), Path("work-close")),
     )
-    _write_atomic(path, content)
 
 
-def _replace_bytes(path: Path, content: bytes) -> None:
-    _write_atomic(path, content)
-
-
-def _acquire_lock(root: Path, authorization_id: str) -> Path:
-    _require_runtime_chain(root, create=True)
-    path = root / LOCK_REL
-    try:
-        with path.open("x", encoding="utf-8") as stream:
-            stream.write(authorization_id + "\n")
-    except FileExistsError as exc:
-        raise ValueError("work close writer lock is already held") from exc
-    return path
-
-
-def _release_lock(path: Path, authorization_id: str) -> None:
-    if (
-        path.is_symlink()
-        or not path.is_file()
-        or path.read_text(encoding="utf-8").strip() != authorization_id
-    ):
-        raise ValueError("work close writer lock ownership changed")
-    path.unlink()
+def release_work_close_writer_lock(path: Path, authorization_id: str) -> None:
+    release_writer_lock(path, authorization_id)
 
 
 def _is_shared_projection_ref(ref: str) -> bool:
@@ -1156,7 +1129,7 @@ def _load_terminal_manifests(root: Path) -> list[dict[str, Any]]:
     return manifests
 
 
-def _lineage_for_targets(
+def lineage_for_targets(
     root: Path,
     targets: tuple[WorkCloseTargetV1, ...],
     *,
@@ -1215,7 +1188,7 @@ def _lineage_for_targets(
     return lineage
 
 
-def _manifest(
+def build_work_close_manifest(
     root: Path,
     plan: WorkClosePlanV1,
     authorization: WorkCloseAuthorizationProtocol,
@@ -1255,7 +1228,7 @@ def _manifest(
     }
 
 
-def _attach_before_bytes(root: Path, manifest: dict[str, Any]) -> None:
+def attach_before_bytes(root: Path, manifest: dict[str, Any]) -> None:
     for target in manifest["targets"]:
         path = root / target["ref"]
         current = path.read_bytes()
@@ -1264,7 +1237,7 @@ def _attach_before_bytes(root: Path, manifest: dict[str, Any]) -> None:
         target["before_bytes_b64"] = base64.b64encode(current).decode("ascii")
 
 
-def _status_handoff_transaction_id(
+def status_handoff_transaction_id(
     *,
     authorization_id: str,
     parent_plan_digest: str,
@@ -1302,7 +1275,7 @@ def _status_handoff_transaction_id(
     ).hexdigest()[:32]
 
 
-def _validate_manifest(
+def validate_work_close_manifest(
     manifest: Mapping[str, Any],
     *,
     expected_authorization_id: str,
@@ -1469,7 +1442,7 @@ def _validate_manifest(
         raise ValueError("work close manifest applied_refs exceed attempted_refs")
 
 
-def _rollback(root: Path, manifest: dict[str, Any]) -> tuple[bool, list[str]]:
+def rollback_work_close_transaction(root: Path, manifest: dict[str, Any]) -> tuple[bool, list[str]]:
     failed: list[str] = []
     for target in reversed(manifest["targets"]):
         ref = target["ref"]
@@ -1487,7 +1460,7 @@ def _rollback(root: Path, manifest: dict[str, Any]) -> tuple[bool, list[str]]:
     return not failed, failed
 
 
-def _lineage_generation_errors(
+def lineage_generation_errors(
     root: Path,
     manifests: list[Mapping[str, Any]],
     *,
@@ -2549,3 +2522,18 @@ __all__ = [
     "shared_projection_successor_for_writer",
     "validate_shared_projection_writer_lock",
 ]
+
+
+# P0 领域函数公开化兼容层：旧私有名保留一个版本周期后删除。
+_validate_manifest = validate_work_close_manifest
+_manifest = build_work_close_manifest
+_attach_before_bytes = attach_before_bytes
+_lineage_for_targets = lineage_for_targets
+_lineage_generation_errors = lineage_generation_errors
+_release_root_from_process = release_root_from_process
+_status_handoff_transaction_id = status_handoff_transaction_id
+_rollback = rollback_work_close_transaction
+_manifest_path = work_close_manifest_path
+_require_runtime_chain = require_work_close_runtime_chain
+_acquire_lock = acquire_work_close_writer_lock
+_release_lock = release_work_close_writer_lock

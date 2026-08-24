@@ -10,12 +10,11 @@ from typing import Any
 
 from meta_flow.state import current as state_current
 from meta_flow.work import handoff as work_handoff
+from meta_flow.execution_control.primitives import digest_bytes, now_utc
 from meta_flow.work.lifecycle_transaction import (
-    _digest_bytes,
-    _manifest_path,
-    _now,
-    _status_handoff_transaction_id,
-    _validate_manifest,
+    status_handoff_transaction_id,
+    validate_work_close_manifest,
+    work_close_manifest_path,
 )
 
 HANDOFF_TRANSACTION_ROOT_REL = Path(".meta-flow-runtime/work-handoff")
@@ -91,7 +90,7 @@ def handoff_transaction_id(
     parent_plan_digest: str,
     authorization_id: str,
 ) -> str:
-    return _status_handoff_transaction_id(
+    return status_handoff_transaction_id(
         authorization_id=authorization_id,
         parent_plan_digest=parent_plan_digest,
         handoff_plan_digest=plan.plan_digest,
@@ -165,7 +164,7 @@ def _validate_handoff_manifest(
         before_bytes = base64.b64decode(str(payload["before_bytes_b64"]), validate=True)
     except (TypeError, ValueError) as exc:
         raise ValueError("handoff transaction before bytes are invalid") from exc
-    if (bool(before_bytes) or plan.before_exists) and _digest_bytes(
+    if (bool(before_bytes) or plan.before_exists) and digest_bytes(
         before_bytes
     ) != plan.before_digest:
         raise ValueError("handoff transaction before bytes/digest mismatch")
@@ -183,7 +182,7 @@ def _restore_handoff(root: Path, manifest: dict[str, Any]) -> list[str]:
         if path.is_symlink() or (path.exists() and not path.is_file()):
             raise ValueError("HANDOFF_TARGET_UNSAFE")
         current = path.read_bytes() if path.is_file() else b""
-        if _digest_bytes(current) not in {plan.before_digest, plan.desired_digest}:
+        if digest_bytes(current) not in {plan.before_digest, plan.desired_digest}:
             raise ValueError("HANDOFF_GENERATION_DRIFT")
         if plan.before_exists:
             _replace_bytes(
@@ -221,7 +220,7 @@ def apply_handoff(
     runtime.mkdir(parents=True, exist_ok=True)
     target = work_handoff.handoff_path(root, plan.work_id)
     before = target.read_bytes() if target.is_file() else b""
-    now = _now()
+    now = now_utc()
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "kind": "HandoffTransitionTransactionV1",
@@ -243,14 +242,14 @@ def apply_handoff(
     try:
         manifest["state"] = "APPLYING"
         manifest["attempted"] = True
-        manifest["updated_at"] = _now()
+        manifest["updated_at"] = now_utc()
         _write_json_atomic(manifest_path, manifest)
         _replace_bytes(target, plan.desired_bytes)
         manifest["applied"] = True
-        manifest["updated_at"] = _now()
+        manifest["updated_at"] = now_utc()
         _write_json_atomic(manifest_path, manifest)
         manifest["state"] = "COMMITTED"
-        manifest["updated_at"] = _now()
+        manifest["updated_at"] = now_utc()
         _write_json_atomic(manifest_path, manifest)
         return {
             "decision": "PASS",
@@ -262,7 +261,7 @@ def apply_handoff(
         manifest["state"] = "PARTIAL" if failures else "RECOVERED"
         manifest["failure"] = str(exc)
         manifest["recovery_failures"] = failures
-        manifest["updated_at"] = _now()
+        manifest["updated_at"] = now_utc()
         _write_json_atomic(manifest_path, manifest)
         return {
             "decision": manifest["state"],
@@ -315,13 +314,13 @@ def recover_handoff(root: Path, transaction_id: str) -> dict[str, Any]:
     if not isinstance(manifest, dict):
         raise ValueError("handoff child manifest is invalid")
     _validate_handoff_manifest(manifest, expected_transaction_id=transaction_id)
-    parent_path = _manifest_path(root, str(manifest["authorization_id"]))
+    parent_path = work_close_manifest_path(root, str(manifest["authorization_id"]))
     if parent_path.is_symlink() or not parent_path.is_file():
         raise ValueError("handoff child parent manifest is missing")
     parent = json.loads(parent_path.read_text(encoding="utf-8"))
     if not isinstance(parent, dict):
         raise ValueError("handoff child parent manifest is invalid")
-    _validate_manifest(parent, expected_authorization_id=str(manifest["authorization_id"]))
+    validate_work_close_manifest(parent, expected_authorization_id=str(manifest["authorization_id"]))
     if parent["plan_digest"] != manifest["parent_plan_digest"]:
         raise ValueError("handoff child parent binding mismatch")
     if parent["state"] == "COMMITTED":
@@ -333,7 +332,7 @@ def recover_handoff(root: Path, transaction_id: str) -> dict[str, Any]:
     failures = _restore_handoff(root, manifest)
     manifest["state"] = "PARTIAL" if failures else "RECOVERED"
     manifest["recovery_failures"] = failures
-    manifest["updated_at"] = _now()
+    manifest["updated_at"] = now_utc()
     _write_json_atomic(path, manifest)
     return {
         "decision": manifest["state"],
@@ -375,11 +374,11 @@ def inspect_handoff(root: Path) -> dict[str, Any]:
         plan = work_handoff.HandoffTransitionPlanV1.from_mapping(dict(payload["plan"]))
         parent_state = "INVALID"
         try:
-            parent_path = _manifest_path(root, str(payload["authorization_id"]))
+            parent_path = work_close_manifest_path(root, str(payload["authorization_id"]))
             parent = json.loads(parent_path.read_text(encoding="utf-8"))
             if not isinstance(parent, dict):
                 raise ValueError("parent payload is invalid")
-            _validate_manifest(parent, expected_authorization_id=str(payload["authorization_id"]))
+            validate_work_close_manifest(parent, expected_authorization_id=str(payload["authorization_id"]))
             if parent["plan_digest"] != payload["parent_plan_digest"]:
                 raise ValueError("parent plan binding mismatch")
             parent_state = str(parent["state"])
@@ -395,9 +394,9 @@ def inspect_handoff(root: Path) -> dict[str, Any]:
         current = path.read_bytes() if path.is_file() and not path.is_symlink() else b""
         expected = plan.desired_digest if state == "COMMITTED" else plan.before_digest
         classification = state
-        if _digest_bytes(current) != expected:
+        if digest_bytes(current) != expected:
             if state in {"COMMITTED", "RECOVERED"} and _digest_reachable(
-                expected, _digest_bytes(current), edges
+                expected, digest_bytes(current), edges
             ):
                 classification = "SUPERSEDED"
             else:

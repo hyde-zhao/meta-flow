@@ -47,7 +47,7 @@ class IndependentProcessRoute:
     def resolve_ref(self, logical_ref: str) -> Path:
         """把 ``process/<relative>`` 映射到过程仓，拒绝歧义和路径逃逸。"""
 
-        return _resolve_injected_process_ref(self.process_root, logical_ref)
+        return resolve_injected_process_ref(self.process_root, logical_ref)
 
     def format_ref(self, path: Path) -> str:
         """把 release/process 物理路径格式化为唯一 canonical 引用。"""
@@ -104,7 +104,7 @@ def _validate_logical_ref(logical_ref: str) -> PurePosixPath:
     return ref
 
 
-def _resolve_injected_process_ref(process_root: Path, logical_ref: str) -> Path:
+def resolve_injected_process_ref(process_root: Path, logical_ref: str) -> Path:
     """在调用方已验证过程根后映射 logical ref，不执行 route discovery。"""
 
     ref = _validate_logical_ref(logical_ref)
@@ -233,11 +233,11 @@ def format_runtime_ref(project_root: Path, path: Path) -> str:
             )
         return PurePosixPath(release_relative.as_posix()).as_posix()
 
-    process_marker = _resolve_runtime_ref(root, "process/.meta-flow-process.yaml")
+    process_marker = resolve_runtime_ref(root, "process/.meta-flow-process.yaml")
     return _format_injected_runtime_ref(root, process_marker.parent, resolved)
 
 
-def _resolve_runtime_ref(project_root: Path, logical_ref: str) -> Path:
+def resolve_runtime_ref(project_root: Path, logical_ref: str) -> Path:
     """为非 Git 单元 fixture 保留低层路径；真实仓库始终要求 vNext binding。"""
 
     root = project_root.resolve()
@@ -269,7 +269,7 @@ def _resolve_runtime_ref(project_root: Path, logical_ref: str) -> Path:
     return candidate
 
 
-def _resolve_runtime_path(project_root: Path, path: str | Path) -> Path:
+def resolve_runtime_path(project_root: Path, path: str | Path) -> Path:
     """解析可能是 process logical ref 的低层路径参数。"""
 
     candidate = Path(path)
@@ -277,7 +277,7 @@ def _resolve_runtime_path(project_root: Path, path: str | Path) -> Path:
         return candidate.resolve(strict=False)
     logical = candidate.as_posix()
     if logical.startswith("process/"):
-        return _resolve_runtime_ref(project_root, logical)
+        return resolve_runtime_ref(project_root, logical)
     return (project_root.resolve() / candidate).resolve(strict=False)
 
 
@@ -321,3 +321,9 @@ __all__ = [
     "resolve_process_ref",
     "resolve_ref_main",
 ]
+
+
+# 兼容 thin alias：旧私有名保留一个版本周期后删除（存量消费者渐次迁移）。
+_resolve_injected_process_ref = resolve_injected_process_ref
+_resolve_runtime_ref = resolve_runtime_ref
+_resolve_runtime_path = resolve_runtime_path

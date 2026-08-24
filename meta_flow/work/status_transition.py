@@ -23,8 +23,17 @@ from meta_flow.state import current as state_current
 from meta_flow.work import handoff as work_handoff
 from meta_flow.work import transaction_child
 from meta_flow.work.lifecycle import transition_work
+from meta_flow.execution_control.primitives import (
+    DIGEST_RE,
+    acquire_shared_projection_writer_lock,
+    digest_bytes,
+    now_utc,
+    plan_digest,
+    release_shared_projection_writer_lock,
+    render_yaml_bytes,
+    safe_authorization_id,
+)
 from meta_flow.work.lifecycle_transaction import (
-    _DIGEST_RE,
     CURRENT_REF,
     STATE_PROJECTION_REFS,
     TERMINAL_TRANSACTION_STATES,
@@ -32,25 +41,18 @@ from meta_flow.work.lifecycle_transaction import (
     TRANSACTION_SCHEMA_VERSION,
     WorkClosePlanV1,
     WorkCloseTargetV1,
-    _acquire_lock,
-    _attach_before_bytes,
-    _digest_bytes,
-    _lineage_for_targets,
-    _lineage_generation_errors,
-    _manifest,
-    _manifest_path,
-    _now,
-    _plan_digest,
-    _release_lock,
-    _release_root_from_process,
-    _render,
-    _require_runtime_chain,
-    _safe_authorization_id,
-    _validate_manifest,
-    acquire_shared_projection_writer_lock,
+    acquire_work_close_writer_lock,
+    attach_before_bytes,
     build_state_projection_candidates,
+    build_work_close_manifest,
     inspect_work_close_transactions,
-    release_shared_projection_writer_lock,
+    lineage_for_targets,
+    lineage_generation_errors,
+    release_root_from_process,
+    release_work_close_writer_lock,
+    require_work_close_runtime_chain,
+    validate_work_close_manifest,
+    work_close_manifest_path,
 )
 from meta_flow.work.model import load_work
 from meta_flow.work.scope import check_scope
@@ -179,7 +181,7 @@ class WorkStatusTransitionAuthorizationV2:
         }
 
     def validate_for(self, plan: WorkClosePlanV1) -> None:
-        _safe_authorization_id(self.authorization_id)
+        safe_authorization_id(self.authorization_id)
         if plan.operation != "work.status-transition":
             raise ValueError("status transition authorization operation mismatch")
         if self.work_id != plan.work_id or self.parent_plan_digest != plan.plan_digest:
@@ -187,8 +189,8 @@ class WorkStatusTransitionAuthorizationV2:
         if tuple(target.ref for target in plan.targets) != self.target_refs[: len(plan.targets)]:
             raise ValueError("status transition authorization parent targets mismatch")
         if (
-            not _DIGEST_RE.fullmatch(self.plan_digest)
-            or not _DIGEST_RE.fullmatch(self.parent_plan_digest)
+            not DIGEST_RE.fullmatch(self.plan_digest)
+            or not DIGEST_RE.fullmatch(self.parent_plan_digest)
             or len(self.target_refs) != len(set(self.target_refs))
         ):
             raise ValueError("status transition authorization identity is invalid")
@@ -293,7 +295,7 @@ def _capture_status_admission(
     result_ref: str,
     target_refs: tuple[str, ...],
 ) -> OperationAdmissionV1:
-    release_root = _release_root_from_process(root)
+    release_root = release_root_from_process(root)
     inventory_digest, namespace_digest = _status_writer_inventory(work, target_refs)
     return OperationAdmissionV1(
         snapshot_digest=canonical_digest(
@@ -385,7 +387,7 @@ def plan_work_status_transition(
                 validate_transaction_lock,
             )
 
-            expected_lock_path = state_projection_lock_path(_release_root_from_process(root))
+            expected_lock_path = state_projection_lock_path(release_root_from_process(root))
             validate_transaction_lock(
                 _state_lock_handle,
                 expected_path=expected_lock_path,
@@ -412,7 +414,7 @@ def plan_work_status_transition(
             transition=new_status,
             handoff=handoff,
         )
-        work_bytes = _render(updated.as_dict())
+        work_bytes = render_yaml_bytes(updated.as_dict())
         candidates: list[tuple[str, bytes]] = [(updated.work_ref, work_bytes)]
         candidates.extend(
             build_state_projection_candidates(
@@ -429,8 +431,8 @@ def plan_work_status_transition(
                 targets.append(
                     WorkCloseTargetV1(
                         ref,
-                        _digest_bytes(before),
-                        _digest_bytes(after),
+                        digest_bytes(before),
+                        digest_bytes(after),
                         after,
                     )
                 )
@@ -441,7 +443,7 @@ def plan_work_status_transition(
         if current_candidate is not None:
             entry = json.loads(current_candidate.decode("utf-8"))
             alias_plan = state_current.plan_current_projection_targets(
-                _release_root_from_process(root),
+                release_root_from_process(root),
                 current_entry=entry,
                 future_existing_refs=tuple(
                     "process/" + ref for ref, _after in candidates if ref in STATE_PROJECTION_REFS
@@ -453,7 +455,7 @@ def plan_work_status_transition(
     lineage: dict[str, str] = {}
     if not blockers:
         try:
-            lineage = _lineage_for_targets(
+            lineage = lineage_for_targets(
                 root,
                 tuple(targets),
                 # 只供 apply 在已验证自身 state lock capability 后做 fresh
@@ -520,7 +522,7 @@ def plan_work_status_transition(
         targets=tuple(targets),
         lineage=tuple(sorted(lineage.items())),
         blockers=tuple(blockers),
-        plan_digest=_plan_digest(parent_fields),
+        plan_digest=plan_digest(parent_fields),
     )
     preimages, afterimages = _status_mutation_images(
         parent_plan.targets,
@@ -577,9 +579,9 @@ def _validate_work_status_transition_plan(
 
     parent = plan.parent_plan
     if any(
-        not _DIGEST_RE.fullmatch(target.before_digest)
-        or not _DIGEST_RE.fullmatch(target.after_digest)
-        or _digest_bytes(target.after_bytes) != target.after_digest
+        not DIGEST_RE.fullmatch(target.before_digest)
+        or not DIGEST_RE.fullmatch(target.after_digest)
+        or digest_bytes(target.after_bytes) != target.after_digest
         for target in parent.targets
     ):
         raise ValueError("status transition parent plan integrity mismatch")
@@ -595,7 +597,7 @@ def _validate_work_status_transition_plan(
         "blockers": list(parent.blockers),
         "publication_binding": None,
     }
-    if parent.operation != "work.status-transition" or parent.plan_digest != _plan_digest(
+    if parent.operation != "work.status-transition" or parent.plan_digest != plan_digest(
         parent_fields
     ):
         raise ValueError("status transition parent plan integrity mismatch")
@@ -619,7 +621,7 @@ def _validate_work_status_transition_plan(
         or any(char not in "0123456789abcdef" for char in admission.release_oid)
         or any(char not in "0123456789abcdef" for char in admission.process_oid)
         or any(
-            not _DIGEST_RE.fullmatch(value)
+            not DIGEST_RE.fullmatch(value)
             for value in (
                 admission.snapshot_digest,
                 admission.provider_identity_digest,
@@ -736,8 +738,8 @@ def _recover_child_exception(
     manifest["state"] = "RECOVERED"
     manifest["failure"] = str(failure)
     manifest["recovery_failures"] = list(failures)
-    manifest["updated_at"] = _now()
-    _write_json_atomic(_manifest_path(root, authorization.authorization_id), manifest)
+    manifest["updated_at"] = now_utc()
+    _write_json_atomic(work_close_manifest_path(root, authorization.authorization_id), manifest)
 
     handoff_decision = str(handoff_child.get("decision", "NO_CHANGE"))
     current_decision = str(current_child.get("decision", "NO_CHANGE"))
@@ -773,8 +775,8 @@ def _recover_child_exception(
     if not recovered:
         manifest["state"] = "PARTIAL"
         manifest["recovery_failures"] = failures
-        manifest["updated_at"] = _now()
-        _write_json_atomic(_manifest_path(root, authorization.authorization_id), manifest)
+        manifest["updated_at"] = now_utc()
+        _write_json_atomic(work_close_manifest_path(root, authorization.authorization_id), manifest)
     return WorkStatusTransitionReceiptV2(
         decision="RECOVERED" if recovered else "PARTIAL",
         authorization_id=authorization.authorization_id,
@@ -801,7 +803,7 @@ def apply_work_status_transition(
     """在同一锁窗口内，以 durable parent 协调 alias child 与领域 parent。"""
 
     root = process_root.resolve()
-    release_root = _release_root_from_process(root)
+    release_root = release_root_from_process(root)
     if not plan.ready:
         raise ValueError("blocked status transition plan cannot be applied")
     _validate_work_status_transition_plan(root, release_root, plan, verify_child_preimages=False)
@@ -813,7 +815,7 @@ def apply_work_status_transition(
         or authorization.target_refs != plan.target_refs
     ):
         raise ValueError("status transition authorization does not bind exact plan")
-    manifest_path = _manifest_path(root, authorization.authorization_id)
+    manifest_path = work_close_manifest_path(root, authorization.authorization_id)
     if manifest_path.exists() or manifest_path.is_symlink():
         raise ValueError("work close authorization_id was already consumed")
 
@@ -833,7 +835,7 @@ def apply_work_status_transition(
     }
     manifest: dict[str, Any] | None = None
     try:
-        work_lock = _acquire_lock(root, authorization.authorization_id)
+        work_lock = acquire_work_close_writer_lock(root, authorization.authorization_id)
         from meta_flow.state.projection_transaction import (
             acquire_transaction_lock,
             state_projection_lock_path,
@@ -872,9 +874,9 @@ def apply_work_status_transition(
                 authorization,
                 f"WORK_STATUS_FRESH_ADMISSION_FAILED:{exc}",
             )
-        _require_runtime_chain(root, authorization.authorization_id, create=True)
-        manifest = _manifest(root, plan.parent_plan, authorization)
-        _attach_before_bytes(root, manifest)
+        require_work_close_runtime_chain(root, authorization.authorization_id, create=True)
+        manifest = build_work_close_manifest(root, plan.parent_plan, authorization)
+        attach_before_bytes(root, manifest)
         child_transaction_id = transaction_child.current_transaction_id(
             plan.current_projection_plan,
             parent_plan_digest=plan.parent_plan.plan_digest,
@@ -898,7 +900,7 @@ def apply_work_status_transition(
                 "handoff_desired_digest": plan.handoff_plan.desired_digest,
             }
         )
-        _validate_manifest(manifest, expected_authorization_id=authorization.authorization_id)
+        validate_work_close_manifest(manifest, expected_authorization_id=authorization.authorization_id)
         # 先持久化 coordinator identity；从此 authorization 已 single-use consumed。
         _write_json_atomic(manifest_path, manifest)
 
@@ -925,7 +927,7 @@ def apply_work_status_transition(
             manifest["state"] = "PARTIAL" if child["decision"] == "PARTIAL" else "RECOVERED"
             manifest["failure"] = "current projection child apply failed"
             manifest["recovery_failures"] = list(child.get("reason_codes", ()))
-            manifest["updated_at"] = _now()
+            manifest["updated_at"] = now_utc()
             _write_json_atomic(manifest_path, manifest)
             return WorkStatusTransitionReceiptV2(
                 decision=str(manifest["state"]),
@@ -965,7 +967,7 @@ def apply_work_status_transition(
             manifest["state"] = "RECOVERED"
             manifest["failure"] = "handoff child apply failed"
             manifest["recovery_failures"] = list(handoff_child.get("reason_codes", ()))
-            manifest["updated_at"] = _now()
+            manifest["updated_at"] = now_utc()
             _write_json_atomic(manifest_path, manifest)
             child_decision = str(child["decision"])
             if child_decision == "PASS":
@@ -1001,23 +1003,23 @@ def apply_work_status_transition(
         applied: list[str] = []
         try:
             manifest["state"] = "APPLYING"
-            manifest["updated_at"] = _now()
+            manifest["updated_at"] = now_utc()
             _write_json_atomic(manifest_path, manifest)
             for target in manifest["targets"]:
                 path = root / target["ref"]
-                if _digest_bytes(path.read_bytes()) != target["before_digest"]:
+                if digest_bytes(path.read_bytes()) != target["before_digest"]:
                     raise ValueError(f"work close target preimage drift: {target['ref']}")
                 attempted.append(target["ref"])
                 manifest["attempted_refs"] = list(attempted)
-                manifest["updated_at"] = _now()
+                manifest["updated_at"] = now_utc()
                 _write_json_atomic(manifest_path, manifest)
                 _replace_bytes(path, base64.b64decode(target["after_bytes_b64"]))
                 applied.append(target["ref"])
                 manifest["applied_refs"] = list(applied)
-                manifest["updated_at"] = _now()
+                manifest["updated_at"] = now_utc()
                 _write_json_atomic(manifest_path, manifest)
             manifest["state"] = "COMMITTED"
-            manifest["updated_at"] = _now()
+            manifest["updated_at"] = now_utc()
             _write_json_atomic(manifest_path, manifest)
             return WorkStatusTransitionReceiptV2(
                 decision="PASS",
@@ -1044,7 +1046,7 @@ def apply_work_status_transition(
             manifest["state"] = "RECOVERED" if parent_recovered else "PARTIAL"
             manifest["failure"] = str(exc)
             manifest["recovery_failures"] = failures
-            manifest["updated_at"] = _now()
+            manifest["updated_at"] = now_utc()
             _write_json_atomic(manifest_path, manifest)
             child_decision = str(child["decision"])
             handoff_decision = str(handoff_child["decision"])
@@ -1096,7 +1098,7 @@ def apply_work_status_transition(
         finally:
             try:
                 if work_lock is not None:
-                    _release_lock(work_lock, authorization.authorization_id)
+                    release_work_close_writer_lock(work_lock, authorization.authorization_id)
             finally:
                 release_shared_projection_writer_lock(shared_lock, writer_id)
 
@@ -1121,14 +1123,14 @@ def _assert_work_transaction_admission_current(
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("work transaction manifest payload is invalid")
-            _validate_manifest(payload, expected_authorization_id=path.parent.name)
+            validate_work_close_manifest(payload, expected_authorization_id=path.parent.name)
             if payload["state"] not in TERMINAL_TRANSACTION_STATES:
                 raise ValueError(
                     "unresolved work transaction blocks admission: "
                     + str(payload["authorization_id"])
                 )
             terminal.append(payload)
-    lineage_errors = _lineage_generation_errors(
+    lineage_errors = lineage_generation_errors(
         root,
         terminal,
         state_lock_handle=state_lock_handle,
@@ -1141,7 +1143,7 @@ def inspect_work_status_transitions(process_root: Path) -> dict[str, Any]:
     """单一库入口聚合 parent coordinator 与全部 child inspection。"""
 
     root = process_root.resolve()
-    release_root = _release_root_from_process(root)
+    release_root = release_root_from_process(root)
     parent_report = inspect_work_close_transactions(root)
     child_report = transaction_child.inspect_current(release_root)
     handoff_report = transaction_child.inspect_handoff(root)
@@ -1154,7 +1156,7 @@ def inspect_work_status_transitions(process_root: Path) -> dict[str, Any]:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("status transition manifest payload is invalid")
-                _validate_manifest(payload, expected_authorization_id=path.parent.name)
+                validate_work_close_manifest(payload, expected_authorization_id=path.parent.name)
                 if payload.get("operation") != "work.status-transition":
                     continue
                 child = transaction_child.current_for_parent(
@@ -1246,14 +1248,14 @@ def recover_work_status_transition(
     """按 parent 后 child 顺序恢复被中断的 status-transition coordinator。"""
 
     root = process_root.resolve()
-    release_root = _release_root_from_process(root)
-    path = _manifest_path(root, authorization_id)
+    release_root = release_root_from_process(root)
+    path = work_close_manifest_path(root, authorization_id)
     if path.is_symlink() or not path.is_file():
         raise ValueError("status transition coordinator manifest is missing")
     initial = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(initial, dict):
         raise ValueError("status transition coordinator manifest is invalid")
-    _validate_manifest(initial, expected_authorization_id=authorization_id)
+    validate_work_close_manifest(initial, expected_authorization_id=authorization_id)
     if initial.get("operation") != "work.status-transition":
         raise ValueError("transaction is not a status transition coordinator")
 
@@ -1262,7 +1264,7 @@ def recover_work_status_transition(
     work_lock: Path | None = None
     state_lock = None
     try:
-        work_lock = _acquire_lock(root, authorization_id)
+        work_lock = acquire_work_close_writer_lock(root, authorization_id)
         from meta_flow.state.projection_transaction import (
             acquire_transaction_lock,
             state_projection_lock_path,
@@ -1275,7 +1277,7 @@ def recover_work_status_transition(
         manifest = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError("status transition coordinator manifest is invalid")
-        _validate_manifest(manifest, expected_authorization_id=authorization_id)
+        validate_work_close_manifest(manifest, expected_authorization_id=authorization_id)
         parent_state = str(manifest["state"])
         if parent_state == "COMMITTED":
             child = transaction_child.current_for_parent(
@@ -1315,7 +1317,7 @@ def recover_work_status_transition(
 
         parent_recovered, failures = _rollback(root, manifest)
         manifest["state"] = "RECOVERED" if parent_recovered else "PARTIAL"
-        manifest["updated_at"] = _now()
+        manifest["updated_at"] = now_utc()
         manifest["recovery_failures"] = failures
         _write_json_atomic(path, manifest)
         child = transaction_child.current_for_parent(
@@ -1386,6 +1388,6 @@ def recover_work_status_transition(
         finally:
             try:
                 if work_lock is not None:
-                    _release_lock(work_lock, authorization_id)
+                    release_work_close_writer_lock(work_lock, authorization_id)
             finally:
                 release_shared_projection_writer_lock(shared_lock, writer_id)

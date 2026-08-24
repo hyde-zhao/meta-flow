@@ -24,7 +24,7 @@ try:  # pragma: no cover - POSIX 分支由常规测试覆盖
 except ImportError:  # pragma: no cover
     msvcrt = None  # type: ignore[assignment]
 
-from meta_flow.project.process_route import _resolve_runtime_ref
+from meta_flow.project.process_route import resolve_runtime_ref
 
 TRANSACTION_ROOT_REL = Path(".meta-flow-runtime/state-projection")
 MANIFEST_REL = TRANSACTION_ROOT_REL / "transaction.json"
@@ -422,7 +422,7 @@ def _work_close_generation_heads(project_root: Path) -> dict[str, dict[str, str]
         route.process_root / ".meta-flow-runtime/work-close/transactions",
         refs=refs,
         current_digests={
-            ref.removeprefix("process/"): _digest(_read_target(_resolve_runtime_ref(root, ref)))
+            ref.removeprefix("process/"): _digest(_read_target(resolve_runtime_ref(root, ref)))
             for ref in ALLOWED_TARGET_REFS
         },
     )
@@ -438,7 +438,7 @@ def _build_lineage(
     _manifest_path, previous = _load_manifest(root)
     close_heads = _work_close_generation_heads(root)
     current_by_ref = {
-        ref: _digest(_read_target(_resolve_runtime_ref(root, ref))) for ref in ALLOWED_TARGET_REFS
+        ref: _digest(_read_target(resolve_runtime_ref(root, ref))) for ref in ALLOWED_TARGET_REFS
     }
     previous_lineage = _effective_lineage(
         previous,
@@ -524,7 +524,7 @@ def _restore_targets(project_root: Path, payload: dict[str, Any]) -> list[str]:
     for ref, before, after in reversed(decoded):
         if ref not in attempted:
             continue
-        path = _resolve_runtime_ref(project_root, ref)
+        path = resolve_runtime_ref(project_root, ref)
         try:
             current = _read_target(path)
             if _digest(current) == _digest(before):
@@ -606,7 +606,7 @@ def inspect_state_projection_transaction(
             # 无 vNext binding 的独立单元 fixture 没有跨 writer lineage。
             work_close_heads = {}
     current_by_ref = {
-        ref: _digest(_read_target(_resolve_runtime_ref(project_root, ref)))
+        ref: _digest(_read_target(resolve_runtime_ref(project_root, ref)))
         for ref in ALLOWED_TARGET_REFS
     }
     lineage = _effective_lineage(
@@ -633,7 +633,7 @@ def inspect_state_projection_transaction(
             findings.append(f"STATE_PROJECTION_LINEAGE_UNBOUND:{ref}")
     for raw in payload["targets"]:
         ref, before, after = _decode_target(raw)
-        current = _read_target(_resolve_runtime_ref(project_root, ref))
+        current = _read_target(resolve_runtime_ref(project_root, ref))
         expected = after if expected_after else before
         current_digest = _digest(current)
         work_close_ref = ref.removeprefix("process/")
@@ -1066,7 +1066,7 @@ def plan_state_projection_correction(
     if payload["state"] != "COMMITTED":
         blockers.append(f"correction supports COMMITTED drift only: {payload['state']}")
     preimage_digests = {
-        ref: _digest(_read_target(_resolve_runtime_ref(root, ref)))
+        ref: _digest(_read_target(resolve_runtime_ref(root, ref)))
         for ref in ALLOWED_TARGET_REFS
         if ref in drift_refs
     }
@@ -1112,7 +1112,7 @@ def correct_state_projection_transaction(
     if plan["old_manifest_digest"] != authorization.old_manifest_digest:
         raise ValueError("state projection correction old manifest digest mismatch")
     for ref, expected_digest in authorization.preimage_digests.items():
-        current = _digest(_read_target(_resolve_runtime_ref(root, ref)))
+        current = _digest(_read_target(resolve_runtime_ref(root, ref)))
         if current != expected_digest:
             raise ValueError(f"state projection correction preimage drifted: {ref}")
 
@@ -1125,7 +1125,7 @@ def correct_state_projection_transaction(
     planned: list[dict[str, Any]] = []
     for ref in sorted(ALLOWED_TARGET_REFS):
         before = old_expected_after.get(ref)
-        after = _read_target(_resolve_runtime_ref(root, ref))
+        after = _read_target(resolve_runtime_ref(root, ref))
         planned.append(_target_record(ref, before, after))
     transaction_id = _canonical_digest(
         {
@@ -1260,7 +1260,7 @@ def apply_state_projection_transaction(
         raise ValueError("unresolved state projection transaction requires recovery")
     planned: list[dict[str, Any]] = []
     for ref in sorted(targets):
-        path = _resolve_runtime_ref(root, ref)
+        path = resolve_runtime_ref(root, ref)
         before = _read_target(path)
         after = bytes(targets[ref])
         if before != after:
@@ -1299,7 +1299,7 @@ def apply_state_projection_transaction(
             raise ValueError("unresolved state projection transaction requires recovery")
         locked_planned: list[dict[str, Any]] = []
         for ref in sorted(targets):
-            before = _read_target(_resolve_runtime_ref(root, ref))
+            before = _read_target(resolve_runtime_ref(root, ref))
             after = bytes(targets[ref])
             if before != after:
                 locked_planned.append(_target_record(ref, before, after))
@@ -1322,7 +1322,7 @@ def apply_state_projection_transaction(
             payload["attempted_refs"].append(ref)
             payload["updated_at"] = _now()
             _write_manifest(manifest_path, payload)
-            _replace_bytes(_resolve_runtime_ref(root, ref), after)
+            _replace_bytes(resolve_runtime_ref(root, ref), after)
             payload["applied_refs"].append(ref)
             payload["updated_at"] = _now()
             _write_manifest(manifest_path, payload)
@@ -1356,7 +1356,7 @@ def apply_state_projection_transaction(
 def replace_state_history_projection(project_root: Path, value: bytes) -> Path:
     """原子刷新固定的单文件 HISTORY 投影，不扩大三对象事务 target 集。"""
 
-    path = _resolve_runtime_ref(project_root.resolve(), "process/state/HISTORY.md")
+    path = resolve_runtime_ref(project_root.resolve(), "process/state/HISTORY.md")
     _replace_bytes(path, value)
     return path
 
@@ -1372,7 +1372,7 @@ def write_state_slim_archive(
 
     if not re.fullmatch(r"\d{8}-\d{6}Z\d{4}", timestamp):
         raise ValueError("state slim archive timestamp is invalid")
-    archive_root = _resolve_runtime_ref(
+    archive_root = resolve_runtime_ref(
         project_root.resolve(),
         "process/archive/state",
     )
