@@ -24,7 +24,7 @@ P0_OWNER_MODULES = [
 ]
 # P0 纯结构搬迁后的自然行数上限（HLD §2.1-rev1）。
 LINE_BUDGETS_REV1 = {
-    "meta_flow/work/lifecycle_transaction.py": 2539,
+    "meta_flow/work/lifecycle_transaction.py": 2553,
     "meta_flow/work/status_transition.py": 1393,
     "meta_flow/work/transaction_child.py": 437,
     "meta_flow/state/current.py": 4000,

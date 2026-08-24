@@ -1730,6 +1730,10 @@ def _dispatch_main() -> None:
     if command == "next":
         _print_next()
         return
+    if command == "validation-plan":
+        from meta_flow.validation.cli import validation_plan_main
+
+        raise SystemExit(validation_plan_main(args[1:]))
     if command == "doctor":
         _run_doctor(args[1:])
         return
