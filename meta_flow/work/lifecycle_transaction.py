@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -61,7 +60,7 @@ from meta_flow.state.formal_projection import (
     derive_formal_truth_patch,
 )
 from meta_flow.work.lifecycle import transition_work
-from meta_flow.work.model import load_work, with_status
+from meta_flow.work.model import canonical_result_ref, load_work, with_status
 
 TRANSACTION_SCHEMA_VERSION = 1
 AUTHORIZATION_KIND = "work-close-authorization-v1"
@@ -718,31 +717,6 @@ class SharedProjectionRepairReceiptV1:
         }
 
 
-def _canonical_result_ref(result_ref: str) -> str:
-    """MF-BUG-14：result_ref 统一消费 canonical ``process/...`` logical ref。
-
-    过程仓相对路径（如 ``works/X/RESULT.yaml``）保留为显式 legacy 形态并发出
-    DeprecationWarning；绝对路径、越界与 ``..`` 段一律拒绝。
-    """
-
-    if not result_ref:
-        raise ValueError("completed Work requires result_ref")
-    if result_ref.startswith("process/"):
-        inner = result_ref[len("process/") :]
-        if not is_safe_ref(inner):
-            raise ValueError(f"Work result_ref escapes process root: {result_ref}")
-        return inner
-    if is_safe_ref(result_ref):
-        warnings.warn(
-            "result_ref as process-relative path is legacy; "
-            "use the canonical process/... logical ref",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return result_ref
-    raise ValueError(f"Work result_ref is not a safe logical ref: {result_ref}")
-
-
 def _validate_result(process_root: Path, work_id: str, outcome: str, result_ref: str) -> None:
     if outcome not in {"completed", "cancelled"}:
         raise ValueError("outcome must be completed or cancelled")
@@ -789,17 +763,11 @@ def plan_work_close(
         _validate_result(root, work_id, outcome, result_ref)
         current = load_work(root, work_id)
         # S05（MF-BUG-06）：usage terminal policy 进入 close admission。
-        from meta_flow.work.usage import UsageTerminalPolicyV1, summarize_usage_terminal
+        from meta_flow.work.usage import assert_usage_terminal_allows_close
 
-        usage_terminal_decision = UsageTerminalPolicyV1().evaluate(
-            work=current,
-            ledger_summary=summarize_usage_terminal(root, current),
+        usage_terminal_decision = assert_usage_terminal_allows_close(
+            root, current, outcome=outcome
         )
-        if outcome == "completed" and usage_terminal_decision["decision"] == "BLOCK_CLOSE":
-            raise ValueError(
-                "usage terminal blocks close: "
-                + ",".join(usage_terminal_decision["reason_codes"])
-            )
         already_closed = current.status == outcome and (
             outcome == "cancelled" or current.result_ref == result_ref
         )
@@ -913,6 +881,7 @@ def plan_work_close(
         targets=tuple(targets),
         lineage=tuple(sorted(lineage.items())),
         blockers=tuple(blockers),
+        usage_terminal_decision=usage_terminal_decision,
         plan_digest=_plan_digest(fields),
         publication_binding=_publication_binding,
     )
@@ -2553,3 +2522,6 @@ _manifest_path = work_close_manifest_path
 _require_runtime_chain = require_work_close_runtime_chain
 _acquire_lock = acquire_work_close_writer_lock
 _release_lock = release_work_close_writer_lock
+# MF-BUG-14：canonical_result_ref 迁回 Work 模型语义归属（V3 行数整改）；
+# 旧私有名保留一个版本周期后删除。
+_canonical_result_ref = canonical_result_ref

@@ -22,11 +22,12 @@ P0_OWNER_MODULES = [
     "meta_flow.state.projection_transaction",
     "meta_flow.execution_control.exact_file_transaction",
 ]
-# 行数上限：HLD §2.1-rev2（DQ-075-C7-01 门禁反馈整改决策；rev1 值 +
-# A-P0-05 整改增量 2 行）。
+# 行数上限：HLD §2.1-rev3（DQ-075-R4-01，2026-08-25 用户批准）：
+# lifecycle ≤2527（rev1 2508 + 属主搬移后残差 19 = P0 兼容 alias 块 11 行
+# + namespace/整改 guards 约 8 行）；其余四模块维持 rev1。rev2 已废止。
 LINE_BUDGETS_REV1 = {
-    "meta_flow/work/lifecycle_transaction.py": 2555,
-    "meta_flow/work/status_transition.py": 1393,
+    "meta_flow/work/lifecycle_transaction.py": 2527,
+    "meta_flow/work/status_transition.py": 1391,
     "meta_flow/work/transaction_child.py": 437,
     "meta_flow/state/current.py": 4000,
     "meta_flow/work/handoff.py": 667,

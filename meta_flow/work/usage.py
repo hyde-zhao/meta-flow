@@ -692,3 +692,23 @@ def summarize_usage_terminal(process_root: Path, work: Any) -> dict[str, Any]:
         except (ValueError, OSError):
             blocked.append("USAGE_LEDGER_UNREADABLE")
     return {"events": events, "blocked_reasons": sorted(set(blocked))}
+
+
+def assert_usage_terminal_allows_close(
+    process_root: Path, work: Any, *, outcome: str
+) -> dict[str, Any]:
+    """S05（MF-BUG-06）：close admission 消费的 usage terminal 评估。
+
+    评估结果原样返回给调用方冻结进 plan；completed 且 decision=BLOCK_CLOSE
+    时 fail closed（typed ValueError，不抛 traceback）。
+    """
+
+    decision = UsageTerminalPolicyV1().evaluate(
+        work=work,
+        ledger_summary=summarize_usage_terminal(process_root, work),
+    )
+    if outcome == "completed" and decision["decision"] == "BLOCK_CLOSE":
+        raise ValueError(
+            "usage terminal blocks close: " + ",".join(decision["reason_codes"])
+        )
+    return decision

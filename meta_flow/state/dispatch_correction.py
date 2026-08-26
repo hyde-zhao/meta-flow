@@ -51,23 +51,64 @@ def _process_oid(project_root: Path) -> str:
     return value
 
 
+# CR-075 V4 整改项 3：结构补齐路径只允许追认 dispatch_id / canonical_role，
+# 且与既有 terminal_result 路径互斥，防止覆盖改写 append-only 历史。
+STRUCTURE_CORRECTION_FIELD_KEYS = frozenset({"dispatch_id", "canonical_role"})
+
+
+def _normalize_structure_fields(
+    structure_fields: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """校验并规范化结构补齐字段；``None`` 或空输入按未提供处理。"""
+
+    if structure_fields is None:
+        return {}
+    keys = {str(key) for key in structure_fields}
+    if not keys or not keys <= STRUCTURE_CORRECTION_FIELD_KEYS:
+        raise ValueError("STRUCTURE_FIELDS_MUST_BE_NONEMPTY_SUBSET_OF_DISPATCH_ID_CANONICAL_ROLE")
+    normalized: dict[str, str] = {}
+    for key in sorted(keys):
+        value = structure_fields[key]
+        if not isinstance(value, str):
+            raise ValueError("STRUCTURE_FIELD_VALUE_MUST_BE_STR")
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("STRUCTURE_FIELD_VALUE_REQUIRED")
+        normalized[key] = stripped
+    return normalized
+
+
 def build_dispatch_correction(
     source: Mapping[str, Any],
     *,
-    terminal_result: str,
     reason: str,
     evidence_refs: tuple[str, ...],
     created_at: str,
+    terminal_result: str = "",
+    structure_fields: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     source_payload = _clean(source)
     source_digest = canonical_digest(source_payload)
+    normalized_structure = _normalize_structure_fields(structure_fields)
+    if normalized_structure and terminal_result.strip():
+        raise ValueError("DISPATCH_CORRECTION_FIELDS_EXCLUSIVE")
+    if not normalized_structure and not terminal_result.strip():
+        raise ValueError("TERMINAL_RESULT_OR_STRUCTURE_FIELDS_REQUIRED")
     identity = {
         "corrects_event_id": str(source_payload.get("event_id") or ""),
         "original_event_digest": source_digest,
         "dispatch_id": str(source_payload.get("dispatch_id") or ""),
         "attempt_id": str(source_payload.get("attempt_id") or ""),
-        "terminal_result": terminal_result,
     }
+    if normalized_structure:
+        # 结构补齐路径：以 correction_fields 的 canonical digest 参与 event_id，
+        # 保证不同补齐字段集合产生互不相同的确定性 event_id。
+        identity["correction_fields_digest"] = canonical_digest(normalized_structure)
+        correction_fields: dict[str, Any] = dict(normalized_structure)
+    else:
+        # terminal_result 路径的 identity 构造保持逐字节不变（硬性回归约束）。
+        identity["terminal_result"] = terminal_result
+        correction_fields = {"terminal_result": terminal_result}
     return {
         "schema_version": 1,
         "event_id": f"DISPATCH-CORRECTION-{canonical_digest(identity)[:32]}",
@@ -76,7 +117,7 @@ def build_dispatch_correction(
         "attempt_id": identity["attempt_id"],
         "corrects_event_id": identity["corrects_event_id"],
         "original_event_digest": source_digest,
-        "correction_fields": {"terminal_result": terminal_result},
+        "correction_fields": correction_fields,
         "reason": reason,
         "evidence_refs": list(evidence_refs),
         "created_at": created_at,
@@ -130,17 +171,26 @@ def plan_dispatch_corrections(
     project_root: Path,
     *,
     source_event_ids: tuple[str, ...],
-    terminal_result: str,
     reason: str,
     evidence_refs: tuple[str, ...],
     process_oid: str | None = None,
     created_at: str | None = None,
+    terminal_result: str = "",
+    structure_fields: Mapping[str, str] | None = None,
 ) -> DispatchCorrectionPlanV1:
     root = project_root.resolve()
     blockers: list[str] = []
     if not source_event_ids or len(set(source_event_ids)) != len(source_event_ids):
         blockers.append("SOURCE_EVENT_IDS_MUST_BE_NONEMPTY_UNIQUE")
-    if not terminal_result.strip():
+    # 结构补齐路径与 terminal_result 路径互斥；无效结构字段在 plan 层转 blocker。
+    try:
+        normalized_structure = _normalize_structure_fields(structure_fields)
+    except ValueError as exc:
+        blockers.append(str(exc))
+        normalized_structure = {}
+    if normalized_structure and terminal_result.strip():
+        blockers.append("DISPATCH_CORRECTION_FIELDS_EXCLUSIVE")
+    if not normalized_structure and not terminal_result.strip():
         blockers.append("TERMINAL_RESULT_REQUIRED")
     if not reason.strip():
         blockers.append("REASON_REQUIRED")
@@ -164,13 +214,18 @@ def plan_dispatch_corrections(
         if source is None:
             blockers.append(f"SOURCE_EVENT_NOT_FOUND:{source_id}")
             continue
-        correction = build_dispatch_correction(
-            source,
-            terminal_result=terminal_result,
-            reason=reason,
-            evidence_refs=evidence_refs,
-            created_at=timestamp,
-        )
+        try:
+            correction = build_dispatch_correction(
+                source,
+                terminal_result=terminal_result,
+                structure_fields=normalized_structure or None,
+                reason=reason,
+                evidence_refs=evidence_refs,
+                created_at=timestamp,
+            )
+        except ValueError as exc:
+            blockers.append(f"CORRECTION_BUILD_INVALID:{exc}")
+            continue
         current = existing.get(source_id)
         if current is not None:
             if current.get("correction_fields") != correction.get("correction_fields"):
@@ -806,6 +861,7 @@ __all__ = [
     "CorrectionTransactionSnapshotV1",
     "CORRECTION_TRANSACTION_LEDGER_REF",
     "DispatchCorrectionPlanV1",
+    "STRUCTURE_CORRECTION_FIELD_KEYS",
     "apply_correction_transaction",
     "apply_typed_corrections",
     "apply_dispatch_corrections",

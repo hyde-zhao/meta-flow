@@ -120,8 +120,8 @@ PUBLIC_OPERATION_ADMISSION_POLICIES = {
     ("event", "append"): "unless-dry-run",
     ("governance", "baseline-refresh"): "apply-flag",
     ("package", "release-advance"): "apply-flag",
-    ("phase-baseline", "apply"): "apply-flag",
-    ("phase-baseline", "invalidate"): "apply-flag",
+    ("phase-baseline", "apply"): "typed-authorization-flag",
+    ("phase-baseline", "invalidate"): "typed-authorization-flag",
     ("project", "phase-metadata"): "positional-apply-recover",
     ("project", "phase-transition"): "positional-apply-recover",
     ("repository", "commit"): "apply-flag",
@@ -293,6 +293,11 @@ def _is_provider_mutation(command: str, args: list[str]) -> bool:
         return "--dry-run" not in args
     if policy == "apply-flag":
         return "--apply" in args
+    if policy == "typed-authorization-flag":
+        # CR-075 V3 整改：phase-baseline 的真实 argv 用 --plan/--authorization
+        # 两段式（无 --apply 标志）；mutation 判定必须绑定 --authorization
+        # 的存在，否则真实 apply/invalidate argv 会绕过 provider admission。
+        return "--authorization" in args
     if policy == "output-flag":
         return "--output" in args
     if policy == "positional-apply":

@@ -22,6 +22,16 @@ from meta_flow.workflow.cr_projection import (
 )
 from meta_flow.workflow.cr_records import _git_fact, _process_root, _resolve_runtime_ref
 
+# ADR-075-3（A-P0-05 V3 整改）：无 Work 的 system-only plan 使用确定性
+# system scope digest 取代空串——空串过不了授权的 64-hex 格式校验，
+# 真实 plan -> typed authorization -> apply 链路因此断裂。该 digest 只由
+# 命名空间声明推导（无时间/随机输入），plan 与 apply 重验两侧一致。
+SYSTEM_NAMESPACE_SCOPE_CLAIM = {
+    "schema_version": 1,
+    "namespace": "system",
+    "operation": "cr.status-sync",
+}
+
 
 def _status_sync_facts(
     project_root: Path,
@@ -39,13 +49,14 @@ def _status_sync_facts(
     )
     common = _git_fact(process_root, "rev-parse", "--git-common-dir")
     common_identity = canonical_digest(common or "non-git-fixture")
-    scope_digest = ""
     if work_id:
         scope_digest = load_work(
             process_root,
             work_id,
             read_context=read_context,
         ).scope.digest
+    else:
+        scope_digest = canonical_digest(dict(SYSTEM_NAMESPACE_SCOPE_CLAIM))
     return (
         {
             "release_head_oid": _git_fact(release_root, "rev-parse", "--verify", "HEAD"),

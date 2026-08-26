@@ -56,6 +56,7 @@ from meta_flow.workflow.cr_records import (
     _rel,
 )
 from meta_flow.workflow.cr_status_transaction import (
+    SYSTEM_NAMESPACE_SCOPE_CLAIM,
     _apply_status_sync_transaction,
     _status_sync_facts,
 )
@@ -133,10 +134,13 @@ class StatusSyncTarget:
         return _canonical_digest(self.after)
 
     def as_dict(self) -> dict[str, Any]:
+        # namespace 必须进入序列化：plan digest、authorization targets 与
+        # apply 重验全部消费 as_dict，漏字段即漏绑定（A-P0-05 V3 整改）。
         return {
             "order": self.order,
             "ref": self.ref,
             "truth_or_derived": self.truth_or_derived,
+            "namespace": self.namespace,
             "before_exists": self.before is not None,
             "before_digest": self.before_digest,
             "after_digest": self.after_digest,
@@ -405,6 +409,8 @@ def _target(
     read_context: ReadContextProtocol | None = None,
     namespace: str = "business",
 ) -> StatusSyncTarget:
+    if namespace not in {"system", "business"}:
+        raise ValueError(f"status-sync target namespace is invalid: {namespace}")
     ref = (
         _rel(project_root, path)
         if read_context is None
@@ -1274,6 +1280,22 @@ def validate_status_sync_authorization(
             "status-sync typed apply requires work_id and scope digest "
             "(or a system-only target plan)"
         )
+    if not plan.work_id:
+        # A-P0-05 V3 整改：无 Work 的 plan 必须 system-only，且 scope 是
+        # 确定性 system 命名空间声明 digest（当前全部治理 target 均为
+        # system namespace，带 Work 的 plan 仍以业务 scope digest 绑定）。
+        if not system_only:
+            raise ValueError("workless status-sync plan must be system-only")
+        if plan.scope_digest != _canonical_digest(dict(SYSTEM_NAMESPACE_SCOPE_CLAIM)):
+            raise ValueError(
+                "system-only plan must carry the deterministic system namespace scope digest"
+            )
+        if authorization.scope_digest != plan.scope_digest:
+            # 授权侧 scope 篡改同样以精确原因拒绝（先于通用元组比较）。
+            raise ValueError(
+                "system-only authorization scope digest does not match the "
+                "deterministic system namespace claim"
+            )
     if authorization.schema_version != 1:
         raise ValueError("status-sync authorization schema_version must be 1")
     if not SAFE_AUTHORIZATION_ID_RE.fullmatch(authorization.authorization_id):
@@ -1376,7 +1398,9 @@ def apply_status_sync(
                     "process/governance/**",
                     "process/changes/**",
                     "process/works/**",
-                    f"works/{plan.work_id}/WORK.yaml",
+                    # A-P0-05 V3：无 Work 的 system-only plan 不读取业务
+                    # WORK.yaml；空 work_id 会拼出非法的 works//WORK.yaml。
+                    *((f"works/{plan.work_id}/WORK.yaml",) if plan.work_id else ()),
                     *(target.ref for target in plan.targets),
                 )
             )
@@ -1496,7 +1520,8 @@ def apply_status_sync(
                         "process/governance/**",
                         "process/changes/**",
                         "process/works/**",
-                        f"works/{plan.work_id}/WORK.yaml",
+                        # A-P0-05 V3：同 apply 上下文，空 work_id 不拼业务 ref。
+                        *((f"works/{plan.work_id}/WORK.yaml",) if plan.work_id else ()),
                     )
                 )
             ),
@@ -1562,6 +1587,7 @@ def apply_status_sync(
                     "ref": target.ref,
                     "path": target.path,
                     "truth_or_derived": target.truth_or_derived,
+                    "namespace": target.namespace,
                     "before": target.before,
                     "before_digest": target.before_digest,
                     "after": target.after,

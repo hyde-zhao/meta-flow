@@ -1089,6 +1089,58 @@ def dispatch_correction_index(
             continue
         fields = correction.get("correction_fields")
         evidence_refs = correction.get("evidence_refs")
+        if (
+            isinstance(fields, dict)
+            and fields
+            and set(fields) <= {"dispatch_id", "canonical_role"}
+        ):
+            # 结构补齐分支：面向 legacy schema 行（如 agent_dispatch）追认缺失的
+            # dispatch_id / canonical_role；只允许补当前缺失字段，禁止覆盖改写。
+            if any(
+                not isinstance(fields[key], str) or not str(fields[key]).strip()
+                for key in fields
+            ):
+                errors.append(f"dispatch correction structure field invalid: {target_id}")
+                continue
+            overlapped = sorted(str(key) for key in fields if source.get(key))
+            for field in overlapped:
+                errors.append(f"dispatch correction source already has {field}: {target_id}")
+            if overlapped:
+                continue
+            if str(correction.get("dispatch_id") or "") != str(source.get("dispatch_id") or "") or (
+                str(correction.get("attempt_id") or "")
+                != str(source.get("attempt_id") or "")
+            ):
+                errors.append(f"dispatch correction identity mismatch: {target_id}")
+                continue
+            expected_digest = canonical_digest(_clean_event(source))
+            if str(correction.get("original_event_digest") or "") != expected_digest:
+                errors.append(f"dispatch correction original_event_digest mismatch: {target_id}")
+                continue
+            if (
+                not isinstance(evidence_refs, list)
+                or not evidence_refs
+                or any(
+                    not isinstance(ref, str) or not ref.startswith("process/")
+                    for ref in evidence_refs
+                )
+            ):
+                errors.append(f"dispatch correction evidence_refs invalid: {target_id}")
+                continue
+            normalized_structure = {str(key): str(fields[key]).strip() for key in fields}
+            identity = {
+                "corrects_event_id": target_id,
+                "original_event_digest": expected_digest,
+                "dispatch_id": str(source.get("dispatch_id") or ""),
+                "attempt_id": str(source.get("attempt_id") or ""),
+                "correction_fields_digest": canonical_digest(normalized_structure),
+            }
+            expected_event_id = f"DISPATCH-CORRECTION-{canonical_digest(identity)[:32]}"
+            if str(correction.get("event_id") or "") != expected_event_id:
+                errors.append(f"dispatch correction event_id mismatch: {target_id}")
+                continue
+            valid[target_id] = correction
+            continue
         if not isinstance(fields, dict) or set(fields) != {"terminal_result"}:
             errors.append(f"dispatch correction fields invalid: {target_id}")
             continue
@@ -2242,9 +2294,23 @@ def validate_event_ledger(
     required = LEDGER_REQUIRED_FIELDS.get(ledger_type, ("event_type",))
     correction_index: dict[str, dict[str, Any]] = {}
     closure_index: dict[str, dict[str, Any]] = {}
+    # 结构补齐 correction 与 source 逐字段对齐：source 缺失的 dispatch_id /
+    # attempt_id 在 correction 行上同样为空，行级 required 检查需按镜像豁免。
+    correction_by_own_event_id: dict[str, dict[str, Any]] = {}
+    correction_sources: dict[str, dict[str, Any]] = {}
     if ledger_type == "dispatch":
         correction_index, correction_errors = dispatch_correction_index(events)
         errors.extend(correction_errors)
+        correction_by_own_event_id = {
+            str(correction.get("event_id") or ""): correction
+            for correction in correction_index.values()
+        }
+        correction_sources = {
+            str(event.get("event_id") or ""): event
+            for event in events
+            if event.get("event_type") != "dispatch_correction"
+            and str(event.get("event_id") or "")
+        }
         closure_index, closure_errors = dispatch_closure_index(
             events,
             process_root=path.parent.parent,
@@ -2272,10 +2338,36 @@ def validate_event_ledger(
             )
         else:
             fields = required
+        row_event_id = str(event.get("event_id") or "")
         for field in fields:
-            if not event.get(field):
+            if event.get(field):
+                continue
+            covering_event_id = ""
+            if ledger_type == "dispatch":
+                if event.get("event_type") == "dispatch_correction":
+                    # 结构补齐 correction 只镜像 source 的 identity 字段；source
+                    # 缺失的 dispatch_id/attempt_id 在 correction 行同样为空。
+                    mirror = correction_by_own_event_id.get(row_event_id)
+                    if mirror is not None and field in {"dispatch_id", "attempt_id"}:
+                        mirrored_source = correction_sources.get(
+                            str(mirror.get("corrects_event_id") or "")
+                        )
+                        if mirrored_source is not None and not mirrored_source.get(field):
+                            covering_event_id = str(mirror.get("event_id") or "")
+                else:
+                    covering = correction_index.get(row_event_id)
+                    if covering is not None and field in dict(
+                        covering.get("correction_fields") or {}
+                    ):
+                        covering_event_id = str(covering.get("event_id") or "")
+            if covering_event_id:
+                warnings.append(
+                    f"line {line_no}: missing {field} is covered by dispatch correction "
+                    f"{covering_event_id}"
+                )
+            else:
                 errors.append(f"line {line_no}: missing required field: {field}")
-        event_id = str(event.get("event_id") or "")
+        event_id = row_event_id
         if event_id:
             if event_id in seen_event_ids:
                 errors.append(f"line {line_no}: duplicate event_id: {event_id}")
@@ -2399,6 +2491,7 @@ def _print_event_help() -> None:
         "Commands:\n"
         "  append  Append one JSON event to an NDJSON ledger.\n"
         "  correction-plan  Build a zero-write DispatchCorrectionV1 batch plan.\n"
+        "                   Supports structure-field backfill (--dispatch-id-to-set / --canonical-role-to-set).\n"
         "  correction-apply Apply an exact OID/preimage-bound correction batch.\n"
         "  closure-plan     Build a zero-write disposition-bound dispatch closure plan.\n"
         "  closure-apply    Apply an exact OID/preimage-bound dispatch closure batch.\n"
@@ -2434,7 +2527,17 @@ def main(argv: list[str] | None = None) -> int:
         parser = argparse.ArgumentParser(prog=f"meta-flow event {command}")
         parser.add_argument("--project-root", type=Path, default=Path.cwd())
         parser.add_argument("--source-event-id", action="append", required=True)
-        parser.add_argument("--terminal-result", required=True)
+        parser.add_argument("--terminal-result", default="")
+        parser.add_argument(
+            "--dispatch-id-to-set",
+            default="",
+            help="结构补齐路径：为 legacy 行追认 dispatch_id（与 --terminal-result 互斥）",
+        )
+        parser.add_argument(
+            "--canonical-role-to-set",
+            default="",
+            help="结构补齐路径：为 legacy 行追认 canonical_role（与 --terminal-result 互斥）",
+        )
         parser.add_argument("--reason", required=True)
         parser.add_argument("--evidence-ref", action="append", required=True)
         parser.add_argument("--created-at")
@@ -2442,11 +2545,17 @@ def main(argv: list[str] | None = None) -> int:
             parser.add_argument("--expected-plan-digest", required=True)
             parser.add_argument("--expected-process-oid", required=True)
         parsed = parser.parse_args(args[1:])
+        structure_fields: dict[str, str] = {}
+        if parsed.dispatch_id_to_set:
+            structure_fields["dispatch_id"] = parsed.dispatch_id_to_set
+        if parsed.canonical_role_to_set:
+            structure_fields["canonical_role"] = parsed.canonical_role_to_set
         try:
             plan = dispatch_correction.plan_dispatch_corrections(
                 parsed.project_root,
                 source_event_ids=tuple(parsed.source_event_id),
                 terminal_result=parsed.terminal_result,
+                structure_fields=structure_fields or None,
                 reason=parsed.reason,
                 evidence_refs=tuple(parsed.evidence_ref),
                 created_at=parsed.created_at,

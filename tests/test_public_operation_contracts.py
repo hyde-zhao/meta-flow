@@ -2822,6 +2822,11 @@ class PublicOperationContractTests(unittest.TestCase):
                 mutation_args, preview_args = base, [*base, "--dry-run"]
             elif policy == "apply-flag":
                 mutation_args, preview_args = [*base, "--apply"], base
+            elif policy == "typed-authorization-flag":
+                mutation_args, preview_args = (
+                    [*base, "--plan", "plan.json", "--authorization", "auth.json"],
+                    base,
+                )
             elif policy == "output-flag":
                 mutation_args, preview_args = [*base, "--output", "result.json"], base
             elif policy == "positional-apply":

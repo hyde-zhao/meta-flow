@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1292,6 +1293,31 @@ def write_work_create_only(process_root: Path, work: Work) -> Path:
     with path.open("x", encoding="utf-8") as stream:
         stream.write(dump_yaml(work.as_dict()) + "\n")
     return path
+
+
+def canonical_result_ref(result_ref: str) -> str:
+    """MF-BUG-14：result_ref 统一消费 canonical ``process/...`` logical ref。
+
+    过程仓相对路径（如 ``works/X/RESULT.yaml``）保留为显式 legacy 形态并发出
+    DeprecationWarning；绝对路径、越界与 ``..`` 段一律拒绝。
+    """
+
+    if not result_ref:
+        raise ValueError("completed Work requires result_ref")
+    if result_ref.startswith("process/"):
+        inner = result_ref[len("process/") :]
+        if not is_safe_ref(inner):
+            raise ValueError(f"Work result_ref escapes process root: {result_ref}")
+        return inner
+    if is_safe_ref(result_ref):
+        warnings.warn(
+            "result_ref as process-relative path is legacy; "
+            "use the canonical process/... logical ref",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return result_ref
+    raise ValueError(f"Work result_ref is not a safe logical ref: {result_ref}")
 
 
 def with_status(work: Work, status: str, *, result_ref: str = "") -> Work:

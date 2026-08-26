@@ -133,7 +133,8 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 | SCN-073-11 | REQ-073-07 | J3 | 权限 | blocked-until-authorized | source-candidate 外部 typed authorization |
 | SCN-073-12 | REQ-073-08 | J3 | 发布后受害者 | deferred | installed-artifact replay = 下一发布硬门 |
 
-## CR-075 增量追踪（CP2 已确认；CP6/CP7 回链）
+## CR-075 增量追踪（canonical 场景见 docs/product/SCENARIOS.yaml v1.4 SCN-075-01..08；
+2026-08-24 CP7 门禁反馈第 8 项授权补录，CP2 回溯确认随 CP7 approve 一并生效）
 
 | 场景 | REQ | Story | 类型 | 当前状态 | 验证入口 |
 |---|---|---|---|---|---|
@@ -143,5 +144,5 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 | SCN-075-04 | REQ-075-S03 | STORY-CR075-S03 | DAG/supersession | verified-by-tests | tests/cr075/test_dependency.py（12P；含阻断负向） |
 | SCN-075-05 | REQ-075-S04 | STORY-CR075-S04 | CLI/归属 | verified-by-tests | tests/cr075/test_validation_cli.py（11P；含跨 Story 失效联动） |
 | SCN-075-06 | REQ-075-S05 | STORY-CR075-S05 | admission/deprecation | verified-by-tests | tests/cr075/test_usage_terminal.py（9P；真实 plan_work_close 负向） |
-| SCN-075-07 | REQ-075-S06 | STORY-CR075-S06 | baseline lifecycle | verified-by-tests | tests/cr075/test_phase_baseline.py（16P；typed invalidate + 覆盖/越界负向） |
-| SCN-075-08 | REQ-075-AGGREGATE | 七 Story | 兼容集回归 | verified-by-tests | targeted cr075 93P + 兼容集 549P（批A 307/批B 242） |
+| SCN-075-07 | REQ-075-S06 | STORY-CR075-S06 | baseline lifecycle | verified-by-tests | tests/cr075/test_phase_baseline.py（21P；V3 归属矩阵+typed invalidate）+ test_phase_baseline_admission.py（6P）+ test_phase_baseline_loader_integrity.py（63P；V4 missing/malformed fail-closed 负向 24P + V5 身份绑定/occupied 四态/writer-reader 自洽/inspect 入口负向 25P + V6 组件级负向 14P：祖先 symlink/越界段、scope_digest 重算绑定篡改、空/重复 entries、fingerprint 六维缺维、PLAN_TARGET_INVALID、读取 OSError typed BLOCKED） |
+| SCN-075-08 | REQ-075-AGGREGATE | 七 Story | 兼容集回归 | verified-by-tests | cr075 全套 183P；targeted 层 `tests/cr075 + test_cr_status_sync + test_public_operation_contracts` 269P；affected 兼容按变更面分两集：V6 变更面八文件（validation_policy_v2/phase_baseline/phase_baseline_admission/phase_baseline_loader_integrity/validation_cli/failure_routing_waiver/validation_task_binding/validation_task_runner）实测 143P + 14 subtests 零失败，V5 lifecycle 八文件（cr_status_transaction/cr_status_sync/work_lifecycle_transaction/state_projection_transaction/scope_amend_integration/work_publication_close/vnext_work_store_cli 等）176P + 6 subtests 沿 V5 receipt 有效；full 层残留统一归属：11 个 pre-P0 存量 + 1 个 CR-075 S01 回归（story_context legacy_heading 冲突漏检，已修复、复跑全绿）+ 1 个 CR-075 source drift（activation receipt 0.6.3 materialization 滞后于 CR-075 对 work/assurance.py、work/cli.py、work/usage.py 的修改，receipt 实测 STALE/PROVIDER_RECEIPT_SOURCE_DRIFT，转 CP8 release-candidate 前置重新 materialize，需独立 typed authorization） |

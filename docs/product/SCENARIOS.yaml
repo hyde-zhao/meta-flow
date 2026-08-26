@@ -22,6 +22,9 @@ revision_history:
   - version: "1.3"
     date: "2026-08-19"
     summary: "Added 12 confirmed CR-073 admission-safety scenarios and six-round journey coverage; CR-071/072 history retained"
+  - version: "1.4"
+    date: "2026-08-24"
+    summary: "Added 8 CR-075 P6-Stage3 scenarios (SCN-075-01..08) per CP7 gate feedback item 8; CP2 retroactive confirmation pending CP7 approve"
 scenarios:
   - id: SCN-MF1-01
     title: "合法 Work 初始化执行全生命周期零写预检"
@@ -575,21 +578,30 @@ scenarios:
   - {id: SCN-073-10, title: "R2-failure/W1/R3 完整映射 J2/J3", type: coverage, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-06], use_cases: [UC-VICTIM-REPLAY], stories: [S06]}, trigger: "构建六轮事故覆盖矩阵", context: "provider-side journey fixtures", preconditions: ["R3 人工检查项已列出 owner"], steps: [{action: "检查后三组事故映射", expected: "R2-failure/W1/R3 均有回归入口且 R3 人工项不悬空"}], evidence_type: automated, automation_status: planned, gap_reason: ""}
   - {id: SCN-073-11, title: "无外部授权时 source-candidate replay 零外部动作", type: permission, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-07], use_cases: [UC-VICTIM-REPLAY], stories: [S06]}, trigger: "请求 quant-lab source-candidate replay 但无独立 typed authorization", context: "victim acceptance authorization boundary", preconditions: ["provider fixture 已完成"], steps: [{action: "执行授权预检", expected: "BLOCKED/not-executed，不读、不运行、不写外部项目"}], evidence_type: automated, automation_status: planned, gap_reason: "真实回放等待独立 typed external authorization"}
   - {id: SCN-073-12, title: "installed-artifact victim replay 保留为下一发布硬门", type: external-failure, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-073-08], use_cases: [UC-VICTIM-REPLAY], stories: [S06]}, trigger: "本 CR 尝试把 source-candidate fixture 当作安装制品验收", context: "next-release acceptance boundary", preconditions: ["尚无安装/发布授权或已发布候选制品"], steps: [{action: "评估验收声明", expected: "当前 CR 只记录 deferred hard gate，不声称 installed-artifact PASS"}], evidence_type: manual, automation_status: planned, gap_reason: "下一发布需独立安装/发布授权与已构建制品"}
+  - {id: SCN-075-01, title: "P0 primitive facade 收敛与兼容债零回归", type: positive, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-075-P0], use_cases: [UC-FULL-REGRESSION-SEMANTICS], stories: [STORY-CR075-P0]}, trigger: "在 0.6.3 provider 基线上执行 primitive 收敛", context: "跨 owner 私有导入与重复实现并存", preconditions: ["HLD §2.1-rev3 行数警戒线已批准"], steps: [{action: "运行 cr075 P0 目标测试与兼容集", expected: "facade 唯一实现、import 不变量成立、兼容 alias 保留、五模块行数不超 rev3/rev1 警戒线"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验；CP7 完成前不标 verified-by-tests（2026-08-24 门禁反馈第 8 项）"}
+  - {id: SCN-075-02, title: "Work init 零写预检全旅程诊断", type: positive, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-075-S01], use_cases: [UC-WORK-INIT-PREFLIGHT], stories: [STORY-CR075-S01]}, trigger: "维护者发起 Work 初始化或变更前预检", context: "route/OID/scope/budget 待验证", preconditions: ["只读预检已授权"], steps: [{action: "调用 preflight 并核对诊断项", expected: "lifecycle/注册/tuple/manifest/typed-ref 诊断在 mutation=0 前完成，journey 映射 J1"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验；CP7 完成前不标 verified-by-tests"}
+  - {id: SCN-075-03, title: "handoff-free scope amend 失效联动最小集", type: boundary, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-075-S02], use_cases: [UC-WORK-SCOPE-AMEND], stories: [STORY-CR075-S02]}, trigger: "paused/blocked G1 Work 申请增量修订", context: "既有 evidence 与新增 scope 并存", preconditions: ["修订走 typed plan/apply"], steps: [{action: "执行增量修订并观察失效集合", expected: "只增 scope、重新授权、受影响 evidence 失效且交集最小化"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验；CP7 完成前不标 verified-by-tests"}
+  - {id: SCN-075-04, title: "依赖 DAG supersession 闭环与环阻断", type: boundary, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-075-S03], use_cases: [UC-TYPED-REFS], stories: [STORY-CR075-S03]}, trigger: "Work 声明依赖被取代", context: "依赖图存在既有边", preconditions: ["依赖登记走 typed ref"], steps: [{action: "提交 supersession 并构造环/悬空负向", expected: "闭环登记成功；环与悬空依赖 fail closed 阻断"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验（含阻断负向）；CP7 完成前不标 verified-by-tests"}
+  - {id: SCN-075-05, title: "ValidationPolicyV2 分层验证 receipt 指纹绑定", type: positive, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-075-S04], use_cases: [UC-VALIDATION-REUSE], stories: [STORY-CR075-S04]}, trigger: "CLI 执行分层验证并请求 receipt 复用", context: "源码或环境可能漂移", preconditions: ["receipt 绑定 fingerprint 集"], steps: [{action: "先绿后漂移再请求复用", expected: "PASS receipt 绑定 source/profile fingerprint、命令身份、环境摘要与 result digest；任一漂移即拒绝复用并 RUN 受影响层"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验（含跨 Story 失效联动）；CP7 完成前不标 verified-by-tests"}
+  - {id: SCN-075-06, title: "usage terminal 非法时 close fail closed", type: negative, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-075-S05], use_cases: [UC-VALIDATION-REUSE], stories: [STORY-CR075-S05]}, trigger: "非法 terminal 的 Work 请求 close", context: "hard stop/超治理限额未处理/usage_ref 缺失", preconditions: ["close admission 消费 usage terminal policy"], steps: [{action: "以真实 plan_work_close 提交非法 terminal", expected: "BLOCK_CLOSE 抛 typed 阻断不落 partial 写；合法 legacy 形态仅 DeprecationWarning"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验；CP7 完成前不标 verified-by-tests"}
+  - {id: SCN-075-07, title: "Phase 绿基线生命周期与五类归属", type: boundary, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-075-S06], use_cases: [UC-FULL-REGRESSION-SEMANTICS], stories: [STORY-CR075-S06]}, trigger: "Phase 绿集建立后发生失效或失败对照", context: "baseline bytes append-only", preconditions: ["typed plan/apply 与 exact-file authorization"], steps: [{action: "建立基线后失效、rebaseline 并对照失败集", expected: "修订 version+1 且 history 只增不改；绿转红无漂移=NEW_REGRESSION、基线外失败=UNATTRIBUTABLE、公共 mutation admission 判定真实 argv"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验（V3 整改矩阵重写后）；CP7 完成前不标 verified-by-tests"}
+  - {id: SCN-075-08, title: "七 Story 兼容集分层回归零新增回归", type: coverage, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-075-AGGREGATE], use_cases: [UC-FULL-REGRESSION-SEMANTICS], stories: [STORY-CR075-P0, STORY-CR075-S01, STORY-CR075-S02, STORY-CR075-S03, STORY-CR075-S04, STORY-CR075-S05, STORY-CR075-S06]}, trigger: "七 Story 全部交付后执行 CP7 聚合验证", context: "targeted→compatibility→full 分层", preconditions: ["CP7 门禁整改项全部通过"], steps: [{action: "按层执行验证并对照 CR-075 变更窗口内外失败集", expected: "变更窗口内零回归；窗口外存量失败（0.6.3 时代测试债）单列不掩盖"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已执行；CP7 完成前不标 verified-by-tests，阶段结论按 PASS_WITH_RISK 语义申报残留"}
+
 coverage_summary:
-  total: 42
+  total: 50
   by_type:
-    positive: 14
-    negative: 14
-    boundary: 5
+    positive: 17
+    negative: 15
+    boundary: 8
     permission: 3
     empty-data: 0
     external-failure: 2
     precheck: 2
-    coverage: 2
-  high_priority: 42
+    coverage: 3
+  high_priority: 50
   high_priority_positive_and_negative_covered: true
-  requirement_refs_total: 40
-  requirement_refs_covered: 40
+  requirement_refs_total: 48
+  requirement_refs_covered: 48
   use_case_refs_total: 18
   use_case_refs_covered: 18
   gaps: []

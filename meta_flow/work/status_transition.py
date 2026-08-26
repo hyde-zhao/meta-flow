@@ -188,8 +188,7 @@ class WorkStatusTransitionAuthorizationV2:
             raise ValueError("status transition authorization parent binding mismatch")
         if tuple(target.ref for target in plan.targets) != self.target_refs[: len(plan.targets)]:
             raise ValueError("status transition authorization parent targets mismatch")
-        if (
-            not DIGEST_RE.fullmatch(self.plan_digest)
+        if (not DIGEST_RE.fullmatch(self.plan_digest)
             or not DIGEST_RE.fullmatch(self.parent_plan_digest)
             or len(self.target_refs) != len(set(self.target_refs))
         ):
@@ -392,8 +391,7 @@ def plan_work_status_transition(
                 _state_lock_handle,
                 expected_path=expected_lock_path,
             )
-            if (
-                transaction_lock_identity(expected_lock_path)
+            if (transaction_lock_identity(expected_lock_path)
                 != _state_lock_handle.transaction_id
             ):
                 raise ValueError("state projection writer lock capability identity drifted")

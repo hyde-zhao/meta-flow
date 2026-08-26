@@ -181,3 +181,16 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 | REQ-073-08 | P1 | Given 下一发布 When consumer acceptance Then installed-artifact replay 是硬门；本 CR 不自动获得安装/发布授权 | UC-VICTIM-REPLAY |
 | REQ-073-09 | P1 | Given 进入设计 When 计数 Then 预算为 1 CR/2 Work/7 capability slots，CP2 前不拆过程 Story | CR-073 budget |
 | REQ-073-10 | P1 | Given P7 缺口 When 建立 P6 基线 Then STATE-CONTRACT、pause/resume、cost hard-gate 只作 P7 handoff | P7 plan |
+
+## CR-075 增量需求（P6 Stage 3；2026-08-24 CP7 门禁反馈第 8 项授权补录，CP2 回溯确认随 CP7 approve 一并生效）
+
+| ID | 优先级 | 验收条件（Given/When/Then） | 来源 |
+|---|---|---|---|
+| REQ-075-P0 | P0 | Given 0.6.3 provider 基线 When transaction primitive 收敛 Then facade 唯一实现、跨 owner 私有导入清零、兼容 alias 保留一个版本周期、行数不超 HLD §2.1-rev3 警戒线 | CR-075 P0 |
+| REQ-075-S01 | P0 | Given Work init/alteration When preflight Then lifecycle/registry/tuple/manifest/typed-ref 诊断在 mutation=0 前完成且 journey 映射 J1 | CR-075 Work A |
+| REQ-075-S02 | P0 | Given paused/blocked G1 Work When handoff-free scope amend Then 只增 scope、重新授权、失效联动最小集 | CR-075 Work A |
+| REQ-075-S03 | P0 | Given 依赖 DAG When dependency supersession Then 闭环登记且环/悬空阻断 fail closed | CR-075 Work A |
+| REQ-075-S04 | P0 | Given ValidationPolicyV2 When CLI 执行 Then 分层验证 receipt 绑定 source/profile fingerprint、命令身份、环境摘要与 result digest；fingerprint 漂移不复用 | CR-075 Work B |
+| REQ-075-S05 | P0 | Given Work close When usage terminal 非法（hard stop/超限未处理/usage_ref 缺失）Then BLOCK_CLOSE fail closed；合法 legacy 形态只 deprecate 不阻断 | CR-075 Work B |
+| REQ-075-S06 | P0 | Given Phase 绿集 When baseline lifecycle Then typed plan/apply、append-only 修订历史、五类归属矩阵（绿转红无漂移=NEW_REGRESSION；基线外=UNATTRIBUTABLE） | CR-075 Work B |
+| REQ-075-AGGREGATE | P0 | Given 七 Story 交付 When 兼容集回归 Then targeted→compatibility→full 分层全绿（存量窗口外失败单列），CR-075 变更窗口内零回归 | CR-075 CP7 |

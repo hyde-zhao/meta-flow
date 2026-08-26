@@ -521,6 +521,19 @@ def _acceptance_section_items(text: str) -> list[str]:
     return []
 
 
+def _legacy_acceptance_heading_items(text: str) -> dict[str, list[str]]:
+    """CR-075 V5：canonical 存在时逐个 legacy synonym 提取，供冲突检查消费。
+
+    不得复用 _acceptance_section_items 的"首个非空即返回"语义：canonical 排在
+    alias 首位，复用会让 legacy heading 永远读不到，冲突检查形同虚设（S01 回归）。
+    """
+
+    return {
+        heading: _section_list_items(text=text, heading=heading)
+        for heading in _ACCEPTANCE_HEADING_ALIASES[1:]
+    }
+
+
 def _section_bullets(text: str, heading: str) -> list[str]:
     return [
         line.strip()[2:].strip()
@@ -592,13 +605,16 @@ def _normalize_story_card_v1(story: dict[str, Any], story_text: str) -> dict[str
     canonical_acceptance = _section_list_items(text=story_text, heading="## 5. acceptance_criteria")
     if not canonical_acceptance:
         raise ValueError("canonical Story acceptance_criteria must contain at least one list item")
-    legacy_acceptance_sources = {
+    legacy_acceptance_sources: dict[str, list[str]] = {
         "acceptance": _strict_string_list(story.get("acceptance"), field="acceptance"),
         "acceptance_criteria": _strict_string_list(
             story.get("acceptance_criteria"), field="acceptance_criteria"
         ),
-        "legacy_heading": _acceptance_section_items(story_text),
     }
+    # CR-075 V5：legacy heading 逐 alias 检查，canonical 与任一 legacy synonym 并存且不等即冲突。
+    for heading, items in _legacy_acceptance_heading_items(story_text).items():
+        source = f"legacy_heading[{heading}]"
+        legacy_acceptance_sources[source] = items
     for source, values in legacy_acceptance_sources.items():
         if values and values != canonical_acceptance:
             raise ValueError(f"canonical and legacy Story acceptance conflict: {source}")
