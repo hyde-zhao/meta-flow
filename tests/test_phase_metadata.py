@@ -133,6 +133,8 @@ def _close(process: Path, work_id: str, result_ref: str) -> None:
 
 def _fixture(
     tmp_path: Path,
+    *,
+    legacy_registry: bool = False,
 ) -> tuple[
     Path,
     Path,
@@ -270,6 +272,72 @@ updated_at: 2026-08-01T00:00:00Z
         process / result_ref,
         json.dumps({"schema_version": 1, "work_id": owner_id, "decision": "PASS"}) + "\n",
     )
+    if legacy_registry:
+        # formal CR partition 要求 CR-174 在 Phase metadata 事务规划前已被声明
+        # registry 注册（否则 partition 以 UNREGISTERED_NON_NATIVE_CR 先行阻断）；
+        # 且事务 manifest 要求目标 Phase 文件本身被变更，因此 registry 只能由
+        # PROJECT 预先持有 owner，事务再把它声明进 active Phase 的 result_refs。
+        legacy_evidence_ref = "changes/CR-174-legacy.md"
+        legacy_follow_up_ref = "works/CR-174/FOLLOW-UPS.yaml"
+        registry_ref = "governance/CONSUMER-ACCEPTANCE-SPEC.yaml"
+        _write(process / legacy_evidence_ref, "# CR-174\nstatus: closed-pass-with-risk\n")
+        _write(
+            process / legacy_follow_up_ref,
+            "- id: FU-CR174-001\n  status: deferred_required\n"
+            "- id: FU-CR174-002\n  status: deferred\n"
+            "- id: FU-CR174-003\n  status: deferred\n",
+        )
+        _write(
+            process / registry_ref,
+            dump_yaml(
+                {
+                    "schema_version": 1,
+                    "project_id": "demo",
+                    "spec_id": "demo-consumer-acceptance-v1",
+                    "spec_status": "ready-for-provider-delivery",
+                    "immutable_consumer_inputs": [
+                        {
+                            "id": "CR174-BODY",
+                            "ref": legacy_evidence_ref,
+                            "sha256": sha256(
+                                (process / legacy_evidence_ref).read_bytes()
+                            ).hexdigest(),
+                        },
+                        {
+                            "id": "CR174-FOLLOW-UPS",
+                            "ref": legacy_follow_up_ref,
+                            "sha256": sha256(
+                                (process / legacy_follow_up_ref).read_bytes()
+                            ).hexdigest(),
+                        },
+                    ],
+                    "fixture_contract": [
+                        {
+                            "id": "FOLLOW-UPS-IMMUTABLE",
+                            "source": "CR174-FOLLOW-UPS",
+                            "expected": {
+                                "FU-CR174-001": "deferred_required",
+                                "FU-CR174-002": "deferred",
+                                "FU-CR174-003": "deferred",
+                            },
+                        }
+                    ],
+                }
+            )
+            + "\n",
+        )
+        project_path = process / "PROJECT.yaml"
+        _write(
+            project_path,
+            dump_yaml(
+                replace(
+                    load_project(process),
+                    legacy_evidence_registry_ref=registry_ref,
+                ).as_dict()
+            )
+            + "\n",
+        )
+        state_current.refresh_formal_truth_projection(release)
     _close(process, owner_id, result_ref)
     _write(
         process / f"works/{owner_id}/UNOWNED.json",
@@ -401,52 +469,11 @@ def test_active_phase_accepts_closed_work_evidence_and_keeps_all_projections_cur
 def test_phase_metadata_natively_adopts_project_level_legacy_registry(
     tmp_path: Path,
 ) -> None:
-    release, process, _evidence_ref, controller_id, _roles = _fixture(tmp_path)
-    evidence_ref = "changes/CR-174-legacy.md"
-    follow_up_ref = "works/CR-174/FOLLOW-UPS.yaml"
+    release, process, _evidence_ref, controller_id, _roles = _fixture(
+        tmp_path,
+        legacy_registry=True,
+    )
     registry_ref = "governance/CONSUMER-ACCEPTANCE-SPEC.yaml"
-    _write(process / evidence_ref, "# CR-174\nstatus: closed-pass-with-risk\n")
-    _write(
-        process / follow_up_ref,
-        "- id: FU-CR174-001\n  status: deferred_required\n"
-        "- id: FU-CR174-002\n  status: deferred\n"
-        "- id: FU-CR174-003\n  status: deferred\n",
-    )
-    _write(
-        process / registry_ref,
-        dump_yaml(
-            {
-                "schema_version": 1,
-                "project_id": "demo",
-                "spec_id": "demo-consumer-acceptance-v1",
-                "spec_status": "ready-for-provider-delivery",
-                "immutable_consumer_inputs": [
-                    {
-                        "id": "CR174-BODY",
-                        "ref": evidence_ref,
-                        "sha256": sha256((process / evidence_ref).read_bytes()).hexdigest(),
-                    },
-                    {
-                        "id": "CR174-FOLLOW-UPS",
-                        "ref": follow_up_ref,
-                        "sha256": sha256((process / follow_up_ref).read_bytes()).hexdigest(),
-                    },
-                ],
-                "fixture_contract": [
-                    {
-                        "id": "FOLLOW-UPS-IMMUTABLE",
-                        "source": "CR174-FOLLOW-UPS",
-                        "expected": {
-                            "FU-CR174-001": "deferred_required",
-                            "FU-CR174-002": "deferred",
-                            "FU-CR174-003": "deferred",
-                        },
-                    }
-                ],
-            }
-        )
-        + "\n",
-    )
     plan = _plan(
         release,
         process,
@@ -455,8 +482,9 @@ def test_phase_metadata_natively_adopts_project_level_legacy_registry(
     )
 
     assert plan.decision == "READY", plan.errors
+    # registry owner 已由 fixture 预置在 PROJECT（partition 注册前置），本事务把它
+    # 声明进 active Phase：变更集为 P1 + 治理投影 + 3 个 State 投影。
     assert set(plan.targets) == {
-        "process/PROJECT.yaml",
         "process/phases/P1/PHASE.yaml",
         "process/governance/GOVERNANCE-BASELINE.json",
         "process/state/STATE.current.json",
@@ -466,7 +494,7 @@ def test_phase_metadata_natively_adopts_project_level_legacy_registry(
     receipt = phase_metadata.apply_phase_metadata_update(plan, _authorization(plan))
 
     assert receipt["decision"] == "PASS"
-    assert receipt["mutation_count"] == 6
+    assert receipt["mutation_count"] == 5
     assert load_project(process).legacy_evidence_registry_ref == registry_ref
     assert registry_ref in load_phase(process, "phases/P1/PHASE.yaml").result_refs
     bundle = load_declared_legacy_evidence_registry(

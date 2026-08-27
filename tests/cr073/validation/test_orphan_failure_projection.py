@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from hashlib import sha256
 from pathlib import Path
 
@@ -50,11 +52,54 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _formal_fixture(root: Path) -> None:
+    # formal projection 消费方要求健康 vNext 路由；用 sibling 过程仓 + relative-symlink
+    # 保持测试体继续直写 root/process/... 物理路径。
+    process = root.parent / f"{root.name}-process"
+    process.mkdir()
+    for repo in (root, process):
+        subprocess.run(
+            ["git", "-C", str(repo), "init", "-b", "main"],
+            check=True,
+            capture_output=True,
+        )
+    _write_json(
+        root / ".meta-flow/workspace.yaml",
+        {
+            "schema_version": 1,
+            "layout_version": "independent-process-repo-v1",
+            "workflow_model": "vnext",
+            "project_id": "fixture",
+            "repo_role": "release",
+            "route_mode": "relative-symlink",
+            "process_link": "process",
+            "process_repo": {
+                "anchor": "workspace_parent",
+                "relative_path": process.name,
+            },
+        },
+    )
+    _write_json(
+        process / ".meta-flow-process.yaml",
+        {
+            "schema_version": 1,
+            "layout_version": "independent-process-repo-v1",
+            "workflow_model": "vnext",
+            "project_id": "fixture",
+            "repo_role": "process",
+            "route_mode": "relative-symlink",
+            "release_repo": {
+                "anchor": "workspace_parent",
+                "relative_path": root.name,
+            },
+        },
+    )
+    os.symlink(f"../{process.name}", root / "process")
     _write_json(
         root / "process/PROJECT.yaml",
         {
             "schema_version": 1,
             "project_id": "fixture",
+            "name": "fixture",
             "status": "active",
             "roadmap_ref": "ROADMAP.yaml",
             "active_work_refs": ["works/W-1/WORK.yaml"],
@@ -309,7 +354,16 @@ def test_canonical_cp7_transition_stop_projects_authorization_without_raw_state_
 ) -> None:
     _formal_fixture(tmp_path)
     (tmp_path / "process/changes/CR-073.md").write_text(
-        "---\nkind: cr\ncr_id: CR-073\nlifecycle_status: active\nstatus: active\n---\n",
+        "---\n"
+        "schema_version: 1\n"
+        "kind: cr\n"
+        "cr_id: CR-073\n"
+        "gate_profile: micro\n"
+        "lifecycle_status: active\n"
+        "readiness_status: not_ready\n"
+        "gate_status: cp7_pending\n"
+        "status: active\n"
+        "---\n",
         encoding="utf-8",
     )
     result_ref = "process/checks/CP7-CR-073-AGGREGATE-R2.result.json"

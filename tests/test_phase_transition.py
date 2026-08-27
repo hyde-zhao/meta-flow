@@ -435,10 +435,13 @@ def test_phase_transition_blocks_registry_loss_before_any_mutation(
     plan = _plan(release, process, roles)
 
     assert plan.decision == "BLOCKED"
-    assert plan.error_code == "legacy_evidence_registry_continuity_lost"
+    # 防御顺序适配：后继 Phase 丢失 registry 声明后，CR-174-legacy.md 先在 post-state
+    # formal CR partition 以未注册 non-native CR 暴露（partition 防御先于 registry
+    # continuity 检查），因此可达错误码是 preflight 的 UNREGISTERED_NON_NATIVE_CR。
+    assert plan.error_code == "phase_transition_preflight_blocked"
+    assert "UNREGISTERED_NON_NATIVE_CR" in "; ".join(plan.errors)
     assert plan.as_dict()["mutation_count"] == 0
     assert plan.targets == {}
-    assert "CR-174" in "; ".join(plan.errors)
     assert before == {path: path.read_bytes() for path in process.rglob("*") if path.is_file()}
 
 
@@ -508,8 +511,10 @@ def test_phase_transition_blocks_incomplete_successor_registry(
     plan = _plan(release, process, roles)
 
     assert plan.decision == "BLOCKED"
-    assert plan.error_code == "legacy_evidence_registry_continuity_lost"
-    assert "CR-174" in "; ".join(plan.errors)
+    # 防御顺序适配：同上，后继 registry 未完整继承注册时，丢失的 CR-174 证据先以
+    # 未注册 non-native CR 在 formal CR partition 被挡下，registry continuity 不可达。
+    assert plan.error_code == "phase_transition_preflight_blocked"
+    assert "UNREGISTERED_NON_NATIVE_CR" in "; ".join(plan.errors)
     assert plan.as_dict()["mutation_count"] == 0
 
 

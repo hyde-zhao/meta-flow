@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 
 from meta_flow.checks import cr_tracking
@@ -12,6 +14,61 @@ from meta_flow.workflow import cr_lifecycle
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def _vnext_route(root: Path) -> None:
+    # formal CR partition 消费方要求健康 vNext 路由；sibling 过程仓 + relative-symlink
+    # 保持本文件继续直写 root/process/... 物理路径。
+    process = root.parent / f"{root.name}-process"
+    process.mkdir()
+    for repo in (root, process):
+        subprocess.run(
+            ["git", "-C", str(repo), "init", "-b", "main"],
+            check=True,
+            capture_output=True,
+        )
+    _write(
+        root / ".meta-flow" / "workspace.yaml",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "layout_version": "independent-process-repo-v1",
+                "workflow_model": "vnext",
+                "project_id": "demo",
+                "repo_role": "release",
+                "route_mode": "relative-symlink",
+                "process_link": "process",
+                "process_repo": {
+                    "anchor": "workspace_parent",
+                    "relative_path": process.name,
+                },
+            }
+        )
+        + "\n",
+    )
+    _write(
+        process / ".meta-flow-process.yaml",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "layout_version": "independent-process-repo-v1",
+                "workflow_model": "vnext",
+                "project_id": "demo",
+                "repo_role": "process",
+                "route_mode": "relative-symlink",
+                "release_repo": {
+                    "anchor": "workspace_parent",
+                    "relative_path": root.name,
+                },
+            }
+        )
+        + "\n",
+    )
+    _write(
+        process / "PROJECT.yaml",
+        "schema_version: 1\nproject_id: demo\nname: demo\nstatus: active\n",
+    )
+    os.symlink(f"../{process.name}", root / "process")
 
 
 def _formal_cr(root: Path, cr_id: str, *, lifecycle: str = "active", status: str = "active") -> None:
@@ -26,7 +83,7 @@ cr_kind: "requirement-change"
 lifecycle_status: "{lifecycle}"
 readiness_status: "NOT_READY"
 gate_status: "implementation_in_progress"
-gate_profile: "standard"
+gate_profile: "standard-code"
 status: "{status}"
 ---
 ''',
@@ -142,6 +199,7 @@ def test_cr_index_semantic_digest_drift_is_not_accepted_as_projection_truth(tmp_
 
 
 def test_self_consistent_stale_index_is_blocked_against_formal_truth(tmp_path: Path) -> None:
+    _vnext_route(tmp_path)
     _formal_cr(tmp_path, "CR-053")
     expected = cr_lifecycle.build_index(tmp_path)
     stale = json.loads(json.dumps(expected))

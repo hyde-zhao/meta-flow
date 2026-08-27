@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,54 @@ from meta_flow.work.route_profile import (
 from meta_flow.work.scope import WorkScope, exact_scope_difference
 
 RELEASE_OID = "a" * 40
+
+
+def _process_route(root: Path) -> None:
+    # update_work_status 现要求 process 侧身份文件、sibling release 仓与双侧已提交 HEAD。
+    release = root.parent / f"{root.name}-release"
+    release.mkdir()
+    for repo in (root, release):
+        subprocess.run(
+            ["git", "-C", str(repo), "init", "-b", "main"],
+            check=True,
+            capture_output=True,
+        )
+        (repo / ".gitkeep").write_text("", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "-c",
+                "user.name=Meta Flow Test",
+                "-c",
+                "user.email=meta-flow@example.invalid",
+                "commit",
+                "-m",
+                "fixture baseline",
+            ],
+            check=True,
+            capture_output=True,
+        )
+    (root / ".meta-flow-process.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "layout_version": "independent-process-repo-v1",
+                "workflow_model": "vnext",
+                "project_id": "demo",
+                "repo_role": "process",
+                "route_mode": "sibling-binding",
+                "release_repo": {
+                    "anchor": "workspace_parent",
+                    "relative_path": release.name,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_scope_delta_is_add_only_and_apply_requires_fresh_snapshot() -> None:
@@ -324,6 +374,7 @@ def test_completed_transition_requires_result_ref() -> None:
 
 
 def test_atomic_status_update_requires_expected_status(tmp_path: Path) -> None:
+    _process_route(tmp_path)
     write_work_create_only(tmp_path, make_work())
 
     active = update_work_status(
@@ -345,6 +396,7 @@ def test_atomic_status_update_requires_expected_status(tmp_path: Path) -> None:
 
 
 def test_cancelled_work_can_archive_without_result(tmp_path: Path) -> None:
+    _process_route(tmp_path)
     write_work_create_only(tmp_path, make_work())
     update_work_status(
         tmp_path,
