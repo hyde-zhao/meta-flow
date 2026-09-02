@@ -128,6 +128,24 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 
 ## 使用场景列表
 
+### UC-GOVERNANCE-PROFILE-SELECTION：治理风险档的选择、归一与升级失效
+
+| 字段 | 内容 |
+|---|---|
+| **使用角色** | P-01、P-02 |
+| **触发条件** | 发起人或 Host 对一个候选变更做 Work/CR 治理风险档分类，或用户在分类结果上表达设计保障偏好 |
+| **输入** | RiskFacts（变更种类/路径数/可逆性/多模块/多步等）、用户表述（如「做完整 LLD」「按原 G2 完整流程」「每 Story 详细设计」「G3」）、既有 CR/Work 持久 profile（含 schema version） |
+| **处理逻辑** | Given 变更事实与用户表述，When 执行 classify，Then：G0/G1 判定与预算不变；高风险事实命中默认落 V2 G2（scope-goal-note 保障路径）；用户明确要求完整 LLD/原 G2 完整流程/G3 时由 Host 归一为 typed `requested_profile=G3 + selection_source=user-explicit + authorization_ref`（Agent/config 不得伪造 user-explicit）；G2 运行中命中 credential/security/production-write/不可逆迁移/公共 schema/事务并发等触发且 scope-goal-note 不足时返回 `G3_CONSENT_REQUIRED` 并 BLOCKED，仅用户明确批准后升级；迟到升级按冻结的 invalidation 规则失效旧证据；G3→G2 一律拒绝 |
+| **输出/结果** | 四级分类决策 + 原因码；typed selection record；consent-required 阻断或升级生效；历史 V1 G2 对象保持 legacy 完整保障语义、bytes 零改写 |
+| **前置条件** | profile schema version 合同已冻结；分类器与门配置可用 |
+| **排除情况** | 不适用于 CR-076 publication operation 的 `RiskGrade.G0/G1/G2`（operation 级三档，独立命名空间）；不做 Story 级混合 profile |
+
+**处理流程（文字描述）：**
+1. 采集事实并运行 classify（默认路由）。
+2. 识别用户显式设计保障要求并归一为 typed selection。
+3. 命中 consent-required 触发时阻断并等待用户批准。
+4. 记录 selection/升级来源与失效边界，绑定 route plan 与后续证据链。
+
 ### UC-WORK-PREFLIGHT：在 apply 前模拟完整 Work 生命周期
 
 | 字段 | 内容 |

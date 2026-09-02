@@ -162,3 +162,22 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 | SCN-076-09 | REQ-076-S05 | STORY-CR076-S05（milestone C） | 聚合验收 | planned | provider clean-home canary vs consumer victim replay 职责差异；聚合 release acceptance 拒绝 canary-only/fixture-only/源码-only 替代证据 |
 | SCN-076-10 | REQ-076-S05 | STORY-CR076-S04 + STORY-CR076-S05 | 发布漂移 | planned | publication 失败/partial upload/重复 publication/旧 lineage 失效；remote asset digest == consumer 已验收 digest；未获发布授权则保持 awaiting-publication/BLOCKED，不关闭 CR/P6 |
 | SCN-076-11 | REQ-076-AGGREGATE | Host close slice | P6 收口 | planned | active CR/Work 归零、stale refs 归零、存续 follow-up owner 交接 P7/P8/P9、terminal result 挂载、P7 active-phase native 切换；前置=publication 授权已执行 |
+
+## CR-077 增量追踪（用户 2026-09-02 预裁决四要点落轴；canonical 条目见 docs/product/SCENARIOS.yaml v1.7 SCN-077-01..14 与 docs/product/REQUIREMENTS.md「CR-077 增量需求」节；确认随 CP2-CR-077 V2 approve 生效；CP2 revision 2 按评审 R1-R10 扩冻：SCN-077-01/02 改绑 UC-GOVERNANCE-PROFILE-SELECTION，新增 09..14 六场景（历史兼容/选择来源/迟到升级/命名空间隔离/consent-required/lite 路由））
+
+| 场景 | 需求 | Story | 维度 | 状态 | 覆盖要点 |
+|---|---|---|---|---|---|
+| SCN-077-01 | REQ-077-S01 | STORY-CR077-S01 | 分级回归 | planned | G0/G1 判定逐字节不变回归；高风险 14 字段→G2；requested_profile=G3→G3；默认→G2 |
+| SCN-077-02 | REQ-077-S01 | STORY-CR077-S01 | 升降级 | planned | G0<G1<G2<G3 升级生效；降级一律 DOWNGRADE_REJECTED；unknown→blocked |
+| SCN-077-03 | REQ-077-S02 | STORY-CR077-S02 | 预算/门同构 | planned | G2≡G3 预算、GATE-SCOPE+GATE-DESIGN 双门、无预算 blocked 语义一致 |
+| SCN-077-04 | REQ-077-S02 | STORY-CR077-S02 | 评审/失败路由 | planned | ReviewPlan 同构；PROFILE_RECOVERY_MAX 均 2；quality_governance (True,2) |
+| SCN-077-05 | REQ-077-S03 | STORY-CR077-S03 | 证据契约 | planned | scope-goal-note 四要素（范围/目标/验收边界/文件影响）；缺任一 fail closed |
+| SCN-077-06 | REQ-077-S03 | STORY-CR077-S03 | CP4/CP5 分支 | planned | G2 宽（scope-goal-note 通过、full-lld 自愿加严不阻断）；G3 严（scope-goal-note 阻断）；错配 fail closed |
+| SCN-077-07 | REQ-077-S04 | STORY-CR077-S04 | 治理面零残留 | planned | CLAUDE.md/AGENTS.md/skills/README 旧口径清零；classify explain 四级；guardrail 断言 |
+| SCN-077-08 | REQ-077-AGGREGATE | Host CP7 slice | 聚合回归 | planned | 分层验证零新增失败；CR-076 G2 用例迁移后全绿；sandbox 演示新 G2 通道 |
+| SCN-077-09 | REQ-077-S01a | STORY-CR077-S01 | 历史兼容 | planned | V1/无版本 G2 读作 legacy（≡G3 完整保障）；bytes/投影/receipt 零改写；跨版本证据复用被拒 |
+| SCN-077-10 | REQ-077-S01 | STORY-CR077-S01 | 选择来源 | planned | 自然语言归一 typed selection（user-explicit + authorization_ref）；Agent/config 伪造被拒；selection 漂移失效旧 route plan |
+| SCN-077-11 | REQ-077-S01/S01b | STORY-CR077-S01 | 迟到升级 | planned | CP2/CP4/CP5 后 G2→G3 失效边界逐档断言；G3→G2 拒绝；自愿多写不改 profile |
+| SCN-077-12 | REQ-077-S04 | STORY-CR077-S04 | 命名空间隔离 | planned | GovernanceRiskProfile 四级 vs publication RiskGrade 三档互不扰；allowlist 防误报 |
+| SCN-077-13 | REQ-077-S01b | STORY-CR077-S01/S03 | consent-required | planned | 八类触发命中→G3_CONSENT_REQUIRED+BLOCKED；用户批准才升；CP6 禁止静默补设计 |
+| SCN-077-14 | REQ-077-S02b | STORY-CR077-S02 | lite 路由 | planned | CP2-lite reuse/N-A-with-reason；CP3-lite ArchitectureImpactNote + delta 恢复 standard；Feature DESIGN 不强制三件套 |
