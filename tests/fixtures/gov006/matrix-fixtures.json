@@ -23,6 +23,7 @@
       "planned",
       "authorized",
       "applying",
+      "activating",
       "applied",
       "rollback_pending",
       "rolled_back",

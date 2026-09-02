@@ -870,6 +870,7 @@ def _normalize_bootstrap_staging_time(
     result_paths: dict[str, Path],
     *,
     effective_at: str,
+    cr_id: str,
 ) -> None:
     """把 staging-only wall clock 收敛为 public plan 的冻结输入。"""
 
@@ -909,15 +910,19 @@ def _normalize_bootstrap_staging_time(
             encoding="utf-8",
         )
     ledger_path = result_paths["ledger"]
-    rows = [
-        normalize(json.loads(line))
-        for line in ledger_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    ledger_path.write_text(
-        "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
-    )
+    # FB2（MF-BUG-18）：归一化仅重戳当前 CR 新增行；既有行 bytes 零变化。
+    rows: list[str] = []
+    for line in ledger_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if isinstance(row, dict) and row.get("id") == cr_id:
+            rows.append(
+                json.dumps(normalize(row), ensure_ascii=False, sort_keys=True) + "\n"
+            )
+        else:
+            rows.append(line + "\n")
+    ledger_path.write_text("".join(rows), encoding="utf-8")
     from meta_flow.checks import cp_result
 
     cp0_payload = json.loads(result_paths["cp0_result"].read_text(encoding="utf-8"))
@@ -976,6 +981,7 @@ def plan_bootstrap_cr(
             staged_process,
             result_paths,
             effective_at=effective_at,
+            cr_id=cr_id,
         )
         targets: list[ExactFileTargetV1] = []
         for staged_path in sorted(path for path in staged_process.rglob("*") if path.is_file()):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.execution_control.contract import canonical_digest
+from meta_flow.ingestion.consumer_acceptance_schema import load_bundle_identity_schema
 from meta_flow.project.model import is_safe_ref
 from meta_flow.project.process_route import (
     require_process_route,
@@ -1180,18 +1182,211 @@ def apply_work_publication_close(
     return apply_work_close(route.process_root, fresh, authorization)
 
 
+# ---- CR-076 S05：release close guard（IF-8，零写复核 R5）与 envelope 适配（IF-9，R6）----
+
+CR076_GUARD_KIND = "ReleaseCloseGuardReportV1"
+INSTALLATION_RECEIPT_V1_KIND = "InstallationReceiptV1"
+PUBLICATION_RECEIPT_V1_KIND = "PublicationReceiptV1"
+CANDIDATE_INSTALL = "candidate-install"
+
+GUARD_INPUT_UNREADABLE = "GUARD-INPUT-UNREADABLE"
+GUARD_SCHEMA_INVALID = "GUARD-SCHEMA-INVALID"
+GUARD_ATTESTATION_PREDECESSOR_INVALID = "GUARD-ATTESTATION-PREDECESSOR-INVALID"
+GUARD_ATTESTATION_BINDING_MISMATCH = "GUARD-ATTESTATION-BINDING-MISMATCH"
+GUARD_PUBLICATION_NOT_SUCCEEDED = "GUARD-PUBLICATION-NOT-SUCCEEDED"
+GUARD_PREDECESSOR_BROKEN = "GUARD-PREDECESSOR-BROKEN"
+GUARD_DIGEST_SET_INCOMPLETE = "GUARD-DIGEST-SET-INCOMPLETE"
+GUARD_OBSERVATION_NOT_VERIFIED = "GUARD-OBSERVATION-NOT-VERIFIED"
+GUARD_FRESHNESS_EXCEEDED = "GUARD-FRESHNESS-EXCEEDED"
+GUARD_ASSET_COVERAGE_MISMATCH = "GUARD-ASSET-COVERAGE-MISMATCH"
+
+# observation accepted_assets 四键 → consumer result artifact.assets 键（build_receipt↔receipt）
+_GUARD_ASSET_KEYS = ("wheel", "sdist", "build_receipt", "sidecar")
+_RESULT_ASSET_KEYS = {"wheel": "wheel", "sdist": "sdist", "build_receipt": "receipt", "sidecar": "sidecar"}
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseCloseGuardReportV1:
+    """IF-8 输出：ready=False 时 blockers 为 typed reason codes（零写，R5）。"""
+
+    schema_version: int
+    kind: str
+    ready: bool
+    blockers: tuple[str, ...]
+    checks: tuple[tuple[str, bool], ...]
+    detail: tuple[str, ...]
+    attestation_digest: str
+    accepted_bundle_digest: str
+    observation_receipt_digest: str
+
+
+def _guard_read_yaml(project_root: Path, logical_ref: str) -> Mapping[str, Any]:
+    path, _ = _logical_process_path(project_root, logical_ref)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"guard object missing or not regular: {logical_ref}")
+    return load_yaml_object(path)
+
+
+def plan_cr076_release_close_guard(
+    project_root: Path,
+    *,
+    attestation_ref: str,
+    publication_receipts: tuple[Mapping[str, Any], ...],
+    observation_ref: str,
+    acceptance_result_ref: str,
+    installation_receipt: Mapping[str, Any],
+) -> ReleaseCloseGuardReportV1:
+    """IF-8：CR-076 close 前置全链零写复核；任一链断裂 → blockers（typed）。
+
+    LCQ-S05-03：schema const 仅锁 predecessor kind，candidate-install variant 复核在本
+    guard（增参 installation_receipt，偏离记 IMPLEMENTATION §8）；对象先经 bundle schema
+    校验（复用 IF-1），schema 失败即短路后续比对（唯一 code 语义）。
+    """
+    try:
+        schema = load_bundle_identity_schema(project_root)
+        attestation = _guard_read_yaml(project_root, attestation_ref)
+        observation = _guard_read_yaml(project_root, observation_ref)
+        result_path, _ = _logical_process_path(project_root, acceptance_result_ref)
+        if result_path.is_symlink() or not result_path.is_file():
+            raise ValueError(f"archived acceptance result missing: {acceptance_result_ref}")
+        result_bytes = result_path.read_bytes()
+        result_payload = json.loads(result_bytes.decode("utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return ReleaseCloseGuardReportV1(
+            1, CR076_GUARD_KIND, False, (GUARD_INPUT_UNREADABLE,), (), (str(exc),), "", "", ""
+        )
+    documents = (
+        ("attestation", attestation),
+        ("observation", observation),
+        *((f"publication[{index}]", receipt) for index, receipt in enumerate(publication_receipts)),
+        ("installation", installation_receipt),
+    )
+    schema_errors = [
+        f"{name}: {errors[0].message}"
+        for name, document in documents
+        if (errors := list(schema.validator.iter_errors(document)))
+    ]
+    if schema_errors:
+        return ReleaseCloseGuardReportV1(
+            1, CR076_GUARD_KIND, False, (GUARD_SCHEMA_INVALID,), (), tuple(schema_errors[:4]), "", "", ""
+        )
+    predecessor_ok = (
+        installation_receipt.get("kind") == INSTALLATION_RECEIPT_V1_KIND
+        and installation_receipt.get("install_variant") == CANDIDATE_INSTALL
+        and installation_receipt.get("receipt_digest") == attestation.get("predecessor_digest")
+    )
+    binding_ok = attestation.get("consumer_result_digest") == sha256(result_bytes).hexdigest()
+    receipts_ok = bool(publication_receipts) and all(
+        receipt.get("kind") == PUBLICATION_RECEIPT_V1_KIND and receipt.get("outcome") == "SUCCEEDED"
+        for receipt in publication_receipts
+    )
+    attestation_digest = str(attestation.get("attestation_digest") or "")
+    predecessor_binding_ok = observation.get("predecessor_digest") == attestation_digest and all(
+        receipt.get("predecessor_digest") == attestation_digest for receipt in publication_receipts
+    )
+    observed_rows = observation.get("publication_receipts") or []
+    observed_set = {
+        (row.get("target_kind"), row.get("target_identity"), row.get("receipt_digest"))
+        for row in observed_rows
+    }
+    passed_set = {
+        (
+            (receipt.get("target") or {}).get("target_kind"),
+            (receipt.get("target") or {}).get("target_identity"),
+            receipt.get("receipt_digest"),
+        )
+        for receipt in publication_receipts
+    }
+    accepted_assets = observation.get("accepted_assets") or {}
+    observed_assets = observation.get("observed_assets") or {}
+    verified_ok = observation.get("outcome") == "VERIFIED" and all(
+        accepted_assets.get(key) == observed_assets.get(key) for key in _GUARD_ASSET_KEYS
+    )
+    digest_set_ok = observed_set == passed_set and observed_rows
+    try:
+        observed_at = datetime.fromisoformat(str(observation.get("observed_at")).replace("Z", "+00:00"))
+        valid_until = datetime.fromisoformat(str(observation.get("valid_until")).replace("Z", "+00:00"))
+        now = datetime.now(UTC)
+        freshness_ok = (
+            observed_at.tzinfo is not None
+            and valid_until.tzinfo is not None
+            and observed_at.astimezone(UTC) <= now <= valid_until.astimezone(UTC)
+        )
+    except ValueError:
+        freshness_ok = False
+    result_assets = (result_payload.get("artifact") or {}).get("assets") or {}
+    coverage_ok = all(
+        str(accepted_assets.get(key) or "") == str(result_assets.get(_RESULT_ASSET_KEYS[key]) or "")
+        for key in _GUARD_ASSET_KEYS
+    )
+    outcomes = (
+        ("attestation_predecessor", predecessor_ok, GUARD_ATTESTATION_PREDECESSOR_INVALID),
+        ("attestation_binding", binding_ok, GUARD_ATTESTATION_BINDING_MISMATCH),
+        ("publication_receipts", receipts_ok, GUARD_PUBLICATION_NOT_SUCCEEDED),
+        ("predecessor_binding", predecessor_binding_ok, GUARD_PREDECESSOR_BROKEN),
+        ("digest_set_coverage", digest_set_ok, GUARD_DIGEST_SET_INCOMPLETE),
+        ("verified_observation", verified_ok, GUARD_OBSERVATION_NOT_VERIFIED),
+        ("freshness", freshness_ok, GUARD_FRESHNESS_EXCEEDED),
+        ("asset_coverage", coverage_ok, GUARD_ASSET_COVERAGE_MISMATCH),
+    )
+    ordered = tuple(sorted({code for _, passed, code in outcomes if not passed}))
+    return ReleaseCloseGuardReportV1(
+        1,
+        CR076_GUARD_KIND,
+        not ordered,
+        ordered,
+        tuple((name, passed) for name, passed, _ in outcomes),
+        tuple(f"{name} failed" for name, passed, _ in outcomes if not passed),
+        attestation_digest,
+        str(observation.get("accepted_bundle_digest") or ""),
+        str(observation.get("receipt_digest") or ""),
+    )
+
+
+def adapt_close_authorization_from_envelope(
+    envelope: Any, plan: WorkClosePlanV1
+) -> WorkPublicationCloseAuthorizationV1:
+    """IF-9（R6）：S02 authorization envelope → close 授权对象（窄协议，不 import S02）。"""
+    if getattr(envelope, "operation", None) != "work-publication-close":
+        raise ValueError("envelope operation is not work-publication-close")
+    payload = getattr(envelope, "payload", None)
+    if not isinstance(payload, Mapping):
+        raise ValueError("envelope payload is not a mapping")
+    authorization = WorkPublicationCloseAuthorizationV1.from_mapping(dict(payload))
+    authorization.validate_for(plan)
+    return authorization
+
+
+def load_close_authorization_mapping(payload: Mapping[str, Any]) -> WorkPublicationCloseAuthorizationV1:
+    """deprecated 旧直接 mapping 解析路径（R6 迁移）；正式入口=envelope 适配（IF-9）。"""
+    warnings.warn(
+        "direct mapping parsing for publication-close authorization is deprecated; "
+        "use adapt_close_authorization_from_envelope (CR-076 R6 envelope migration)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return WorkPublicationCloseAuthorizationV1.from_mapping(payload)
+
+
 __all__ = [
+    "CANDIDATE_INSTALL",
+    "INSTALLATION_RECEIPT_V1_KIND",
     "PUBLICATION_AUTHORIZATION_KIND",
     "PUBLICATION_RECEIPT_KIND",
     "PUBLICATION_RECEIPT_V2_KIND",
+    "PUBLICATION_RECEIPT_V1_KIND",
     "PublicationPathCoverageV2",
     "PublishedRepositoryV1",
     "PublishedRepositoryV2",
     "RecoveryWorkBindingV1",
+    "ReleaseCloseGuardReportV1",
     "WorkPublicationCloseAuthorizationV1",
     "WorkPublicationReceiptV1",
     "WorkPublicationReceiptV2",
+    "adapt_close_authorization_from_envelope",
     "apply_work_publication_close",
+    "load_close_authorization_mapping",
+    "plan_cr076_release_close_guard",
     "plan_work_publication_close",
     "publication_candidate_set_digest",
     "require_external_publication_authorization_path",

@@ -323,12 +323,14 @@ def _load_manifest(project_root: Path) -> tuple[Path, dict[str, Any] | None]:
         "targets",
     }
     if set(payload) - (
-        expected | {"failure", "recovery_failures", "lineage", "correction"}
+        expected | {"failure", "recovery_failures", "lineage", "correction", "lineage_rebind"}
     ) or not expected.issubset(payload):
         raise ValueError("state projection transaction manifest fields mismatch")
     has_correction = "correction" in payload
     if has_correction:
         _decode_correction(payload["correction"])
+    if "lineage_rebind" in payload:
+        _decode_lineage_rebind(payload["lineage_rebind"])
     manifest_identity = (payload["schema_version"], payload["kind"])
     allowed_identities = (
         {
@@ -869,6 +871,26 @@ def _decode_writer_provenance(raw: object) -> dict[str, Any]:
     }
 
 
+def _decode_lineage_rebind(raw: object) -> None:
+    """校验 successor manifest 携带的 lineage 重锚记录（R-04/R-06/R-08 证据）。"""
+
+    if not isinstance(raw, Mapping) or frozenset(raw) != {
+        "kind", "authorization_id", "supersedes_manifest_digest",
+        "writer_receipt_ref", "executed_at", "projection_files_mutated", "dq09_ruling",
+    }:
+        raise ValueError("state projection lineage rebind fields mismatch")
+    if (
+        raw.get("kind") != "state-projection-lineage-rebind"
+        or not _AUTHORIZATION_ID_RE.fullmatch(str(raw.get("authorization_id") or ""))
+        or not _DIGEST_RE.fullmatch(str(raw.get("supersedes_manifest_digest") or ""))
+        or not str(raw.get("writer_receipt_ref") or "").strip()
+        or not isinstance(raw.get("executed_at"), str)
+        or raw.get("projection_files_mutated") != 0
+        or raw.get("dq09_ruling") != "not_adjudicated"
+    ):
+        raise ValueError("state projection lineage rebind identity is invalid")
+
+
 def _decode_correction(raw: object) -> dict[str, Any]:
     """校验 drifted-terminal correction 的溯源对象；不改动三个投影文件本身。"""
 
@@ -1351,6 +1373,33 @@ def apply_state_projection_transaction(
     finally:
         if owned_lock:
             _release_lock(handle)
+
+
+def load_committed_projection_snapshot(project_root: Path) -> dict[str, Any]:
+    """CR-076 S02 FB3（方案 B）受控只读 adapter。
+
+    供 lineage_rebind 消费：COMMITTED manifest 快照 + effective lineage +
+    work-close heads + 投影文件当前 digest（R-02/R-05 digest 基线）。
+    只读，不做任何写入或状态变更；公共入口语义零变化（纯新增）。
+    """
+
+    root = project_root.resolve()
+    _path, payload = _load_manifest(root)
+    if payload is None or payload.get("state") not in TERMINAL_STATES:
+        raise ValueError("projection manifest is missing or not terminal")
+    close_heads = _work_close_generation_heads(root)
+    current_by_ref = {
+        ref: _digest(_read_target(resolve_runtime_ref(root, ref)))
+        for ref in ALLOWED_TARGET_REFS
+    }
+    return {
+        "manifest": payload,
+        "lineage": _effective_lineage(
+            payload, close_heads=close_heads, current_by_ref=current_by_ref
+        ),
+        "close_heads": close_heads,
+        "current_by_ref": current_by_ref,
+    }
 
 
 def replace_state_history_projection(project_root: Path, value: bytes) -> Path:

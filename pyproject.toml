@@ -9,6 +9,7 @@ description = "Meta Flow workflow asset installer and delivery package"
 readme = "delivery/README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "jsonschema>=4.26.0",
     "pyyaml>=6.0.2,<7",
 ]
 

@@ -316,6 +316,8 @@ class CRLifecycleFacadeSeamTests(unittest.TestCase):
     def test_main_consumes_current_post_import_close_and_sync_surfaces(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            # CR-076 S02 FA8：--authorization-file 走 regular-file 前置检查，必须物化
+            (root / "authorization.json").write_text("{}", encoding="utf-8")
             plan = Mock()
             authorization = object()
             patched_close = Mock(return_value={"status": "PASS", "mutation_count": 0})

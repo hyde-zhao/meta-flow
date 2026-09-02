@@ -112,6 +112,8 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
             "STATUS_SYNC_AUTHORIZATION_KIND",
             "STATUS_SYNC_OPERATION",
             "STATUS_SYNC_OPERATION_MAX_OBJECTS",
+            "PROJECTION_TARGET_REFS",  # CR-076 S02 FB1
+            "_apply_status_sync_composite",  # CR-076 S02 FB4 coordinator
             "_formal_crs_from_snapshot",
             "StatusSyncTarget",
             "StatusSyncAuthorization",

@@ -646,7 +646,8 @@ def test_cr_bootstrap_cli_preview_requires_typed_authorization_and_applies(
     assert preview["mutation_count"] == 0
     assert not (tmp_path / "process/changes/CR-001.md").exists()
 
-    with pytest.raises(SystemExit, match="requires --authorization-file"):
+    # CR-076 S02 FA8：bootstrap 授权面迁移 exactly-one 三参（文案变化，阻断语义不变）
+    with pytest.raises(SystemExit, match="requires exactly one of --authorization-file"):
         cr_cli.main([*base_args, "--apply"])
     assert not (tmp_path / "process/changes/CR-001.md").exists()
 

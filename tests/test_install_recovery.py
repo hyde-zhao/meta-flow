@@ -344,7 +344,7 @@ def test_journal_and_action_receipt_have_exact_schema() -> None:
 
     assert tuple(journal) == JOURNAL_FIELDS
     assert tuple(journal["action_receipts"][0]) == ACTION_RECEIPT_FIELDS
-    assert len(JOURNAL_STATES) == 10
+    assert len(JOURNAL_STATES) == 11
     assert len(RECOVERY_ACTIONS) == 4
 
 

@@ -59,6 +59,8 @@ INSTALLATION_ROLE_REGISTRY = {
     "meta_flow/installation/canonical.py": "canonical_contract",
     "meta_flow/installation/identity.py": "source_identity",
     "meta_flow/installation/artifact.py": "artifact_identity",
+    "meta_flow/release/bundle_identity.py": "bundle_identity",
+    "meta_flow/release/asset_discovery.py": "bundle_identity",
     "delivery/scripts/digest_policy.py": "canonical_digest_policy",
     "delivery/doc/SOURCE-DIGEST-GENERATED-MANIFEST.json": "canonical_digest_policy",
     "scripts/qualify_provider_artifact.py": "artifact_qualification",
@@ -68,6 +70,12 @@ INSTALLATION_ROLE_REGISTRY = {
     "tests/test_cr072_release_asset_completeness.py": "contract_test",
     "tests/test_cr072_provider_canary_contract.py": "contract_test",
     "tests/test_install_plan_contract.py": "contract_test",
+    "tests/cr076/test_bundle_identity_manifest.py": "contract_test",
+    "tests/cr076/test_bundle_asset_observation.py": "contract_test",
+    "tests/cr076/test_activation_journal.py": "contract_test",
+    "tests/cr076/test_activation_engine.py": "contract_test",
+    "tests/cr076/test_installation_receipt.py": "contract_test",
+    "tests/cr076/test_ownership_activation.py": "contract_test",
     "meta_flow/installation/manifest.py": "manifest_ownership",
     "meta_flow/installation/ownership.py": "manifest_ownership",
     "tests/test_install_manifest_v2.py": "contract_test",
@@ -3191,6 +3199,11 @@ def _infer_installation_role(relative: str, content: str) -> str:
         "delivery/doc/SOURCE-DIGEST-GENERATED-MANIFEST.json",
     }:
         return "canonical_digest_policy"
+    if relative in {
+        "meta_flow/release/bundle_identity.py",
+        "meta_flow/release/asset_discovery.py",
+    }:
+        return "bundle_identity"
     if relative == "meta_flow/installation/__init__.py":
         return "compatibility_facade"
     if relative in {

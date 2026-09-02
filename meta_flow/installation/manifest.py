@@ -166,6 +166,34 @@ def canonical_manifest_bytes(payload: object) -> bytes:
     return canonical_bytes(validate_manifest_v2(payload))
 
 
+INSTALLATION_IDENTITY_FIELDS = (
+    "installation_id",
+    "platform",
+    "scope",
+    "component_set",
+    "source_version",
+    "source_oid",
+    "target_digest",
+)
+
+
+def installation_identity_digest(payload: object) -> str:
+    """Installation 身份关键组的 canonical digest（CR-076 S03，S04 验收点口径）。
+
+    纯函数无 I/O：输入先过 ``validate_manifest_v2``，再对
+    ``source_identity`` + installation 关键组（INSTALLATION_IDENTITY_FIELDS）
+    求 canonical digest；同身份重建必然同值。
+    """
+
+    normalized = validate_manifest_v2(payload)
+    keyset: dict[str, Any] = {
+        field: normalized["installation"][field]
+        for field in INSTALLATION_IDENTITY_FIELDS
+    }
+    keyset["source_identity"] = normalized["source_identity"]
+    return canonical_digest(keyset)
+
+
 def scan_migration_candidate(payload: object | None, target_facts: Mapping[str, object]) -> dict[str, object]:
     """Classify v1/missing evidence without reading or mutating a target.
 
@@ -201,11 +229,13 @@ def scan_migration_candidate(payload: object | None, target_facts: Mapping[str, 
 __all__ = [
     "INTEGRITY_FIELDS",
     "INSTALLATION_FIELDS",
+    "INSTALLATION_IDENTITY_FIELDS",
     "MANIFEST_STATES",
     "MANIFEST_V2_FIELDS",
     "MANIFEST_V2_SCHEMA_VERSION",
     "MIGRATION_FIELDS",
     "canonical_manifest_bytes",
+    "installation_identity_digest",
     "scan_migration_candidate",
     "validate_manifest_v2",
 ]

@@ -40,6 +40,30 @@ _COMPONENT_EXPANSIONS = {
 }
 
 
+def require_full_oid(value: object, *, field_name: str = "oid") -> str:
+    """精确 40 hex git OID（拒绝短缩写）；release/installation 共同消费。"""
+
+    text = value if isinstance(value, str) else ""
+    if not _OID_RE.fullmatch(text):
+        raise InstallationContractError(
+            ContractErrorCode.NONCANONICAL_VALUE,
+            f"{field_name} must be an exact 40-hex git OID: {value!r}",
+        )
+    return text
+
+
+def require_full_digest(value: object, *, field_name: str = "digest") -> str:
+    """精确 64 hex sha256 digest；release/installation 共同消费。"""
+
+    text = value if isinstance(value, str) else ""
+    if not _DIGEST_RE.fullmatch(text):
+        raise InstallationContractError(
+            ContractErrorCode.NONCANONICAL_VALUE,
+            f"{field_name} must be an exact 64-hex digest: {value!r}",
+        )
+    return text
+
+
 def normalize_component(selector: str | Iterable[str]) -> tuple[str, ...]:
     """把 component selector 规范化为有序、唯一的实际 component_set。
 
@@ -631,6 +655,8 @@ __all__ = [
     "evaluate_provider_runtime_admission",
     "PROVIDER_RUNTIME_IDENTITY_KIND",
     "PROVIDER_RUNTIME_IDENTITY_SCHEMA_VERSION",
+    "require_full_digest",
+    "require_full_oid",
     "resolve_source_identity",
     "source_identity_conflicts",
     "validate_source_identity",

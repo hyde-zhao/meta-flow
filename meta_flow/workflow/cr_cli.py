@@ -12,6 +12,7 @@ from typing import Any
 from meta_flow.execution_control.exact_file_transaction import ExactFileAuthorizationV1
 from meta_flow.work.model import ScopeAmendPlanV1, ScopeDeltaV1, apply_scope_amend
 from meta_flow.work.scope_amend import (
+    ScopeAmendAuthorization,
     ScopeAmendAuthorizationV2,
     admit_scope_amend_predecessor,
     apply_scope_amend_transaction,
@@ -74,6 +75,109 @@ PUBLIC_OPERATION_DECLARATIONS = (
 )
 
 
+def _register_governance_payloads() -> None:
+    """FA8（GAP-03）：治理命令授权的 envelope 适配注册。
+
+    DESIGN 七 kind 未覆盖 scope-amendment / cr-termination /
+    work-status-transition（MF-BUG-10 terminal 必需面）；经公开注册机制
+    补齐，字段集零改动（只做版本分派与反序列化透传）。
+    """
+    from meta_flow.execution_control.authorization import (
+        register_operation_payload,
+        registered_operation_kinds,
+    )
+
+    if "scope-amendment" in registered_operation_kinds():
+        return
+
+    def _adapt_scope_amend(payload: dict[str, Any]) -> Any:
+        from meta_flow.work.scope_amend import ScopeAmendAuthorizationV1, ScopeAmendAuthorizationV2
+
+        if payload.get("schema_version") == 1:
+            return ScopeAmendAuthorizationV1.from_mapping(payload)
+        if payload.get("schema_version") == 2:
+            return ScopeAmendAuthorizationV2.from_mapping(payload)
+        raise ValueError("scope amendment authorization version is invalid")
+
+    def _adapt_cr_termination(payload: dict[str, Any]) -> Any:
+        from meta_flow.workflow.cr_termination import TerminationAuthorization
+
+        return TerminationAuthorization.from_dict(payload)
+
+    def _adapt_work_status_transition(payload: dict[str, Any]) -> Any:
+        from meta_flow.work.status_transition import WorkStatusTransitionAuthorizationV2
+
+        return WorkStatusTransitionAuthorizationV2.from_mapping(payload)
+
+    register_operation_payload("scope-amendment", _adapt_scope_amend)
+    register_operation_payload("cr-termination", _adapt_cr_termination)
+    register_operation_payload("work-status-transition", _adapt_work_status_transition)
+
+
+def load_cli_authorization(
+    *,
+    file: Path | None,
+    ref: str | None,
+    authorization_id: str | None,
+    legacy_loader: Any,
+    expected_type: Any = None,
+    resolve_ref: Any = None,
+    issuance_lookup: Any = None,
+) -> tuple[Any, str]:
+    """FA8 exactly-one：三参恰一解析授权；失败 mutation=0。
+
+    envelope 文件经 resolver 按 kind 适配；旧格式文件经 legacy_loader
+    直读（deprecated 窗口，LCQ-01：equality 全绿后 CP8 前删除）。
+    """
+    _register_governance_payloads()
+    from meta_flow.execution_control.authorization import (
+        AuthorizationBlockedError,
+        AuthorizationResolver,
+        parse_operation_payload,
+    )
+
+    provided = [
+        name
+        for name, value in (
+            ("--authorization-file", file), ("--authorization-ref", ref),
+            ("--authorization-id", authorization_id),
+        )
+        if value
+    ]
+    if len(provided) != 1:
+        return None, (
+            "authorization source must be exactly one of --authorization-file / "
+            f"--authorization-ref / --authorization-id (got: {provided or ['none']})"
+        )
+    try:
+        if file is not None:
+            if file.is_symlink() or not file.is_file():
+                return None, "authorization file must be one regular file"
+            document = json.loads(file.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                raise ValueError("authorization document must be a JSON object")
+            if document.get("kind") == "authorization-envelope":
+                envelope = AuthorizationResolver().resolve(file=file)
+                authorization: Any = parse_operation_payload(envelope)
+            else:
+                authorization = legacy_loader(file)  # deprecated（LCQ-01）
+        else:
+            envelope = AuthorizationResolver(
+                ref_resolver=resolve_ref, issuance_lookup=issuance_lookup
+            ).resolve(ref=ref, authorization_id=authorization_id)
+            authorization = parse_operation_payload(envelope)
+        if expected_type is not None and not isinstance(authorization, expected_type):
+            return None, (
+                f"authorization kind mismatch: expected {getattr(expected_type, '__name__', expected_type)}, "
+                f"got {type(authorization).__name__}"
+            )
+        return authorization, ""
+    except AuthorizationBlockedError as exc:
+        return None, f"{exc.code}: {exc.detail}"
+    except (OSError, ValueError) as exc:
+        return None, str(exc)
+
+
 def render_scope_amend_plan(plan: ScopeAmendPlanV1) -> dict[str, object]:
     """CLI adapter: render the already-authoritative, zero-write plan only."""
     return {
@@ -100,7 +204,14 @@ def scope_amend_main(
 
     parser = argparse.ArgumentParser(prog="meta-flow cr scope-amend")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
-    parser.add_argument("--authorization-file", type=Path, required=True)
+    parser.add_argument(
+        "--authorization-file",
+        type=Path,
+        default=None,
+        help="typed authorization envelope file (legacy direct-read format is deprecated; removed before CP8)",
+    )
+    parser.add_argument("--authorization-ref", default=None)
+    parser.add_argument("--authorization-id", default=None)
     parser.add_argument("--predecessor-receipt", type=Path, required=True)
     parser.add_argument("--add-story", action="append", default=[])
     parser.add_argument("--add-owned-leaf", action="append", default=[])
@@ -112,7 +223,15 @@ def scope_amend_main(
     parser.add_argument("--expected-plan-digest", default="")
     parsed = parser.parse_args(list(argv or []))
     try:
-        authorization = load_scope_amend_authorization(parsed.authorization_file)
+        authorization, authorization_error = load_cli_authorization(
+            file=parsed.authorization_file,
+            ref=parsed.authorization_ref,
+            authorization_id=parsed.authorization_id,
+            legacy_loader=load_scope_amend_authorization,
+            expected_type=ScopeAmendAuthorization,
+        )
+        if authorization_error:
+            raise ValueError(authorization_error)
         if isinstance(authorization, ScopeAmendAuthorizationV2):
             if parsed.replace_objective != authorization.replacement_objective:
                 raise ValueError(
@@ -390,7 +509,14 @@ def _build_cr_command_parser(command: str) -> argparse.ArgumentParser:
     parser.add_argument("--effective-at", default="")
     parser.add_argument("--work-id", default="")
     parser.add_argument("--reason", default="")
-    parser.add_argument("--authorization-file", type=Path, default=None)
+    parser.add_argument(
+        "--authorization-file",
+        type=Path,
+        default=None,
+        help="typed authorization envelope file (legacy direct-read format is deprecated; removed before CP8)",
+    )
+    parser.add_argument("--authorization-ref", default=None)
+    parser.add_argument("--authorization-id", default=None)
     parser.add_argument("--historical-migration", action="store_true")
     parser.add_argument("--historical-gate-status", default="")
     parser.add_argument("--historical-lifecycle-status", default="")
@@ -436,15 +562,31 @@ def _dispatch_cr_projection_command(
         if not parsed.apply:
             print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
             return 0
-        if parsed.authorization_file is None:
-            raise SystemExit("bootstrap --apply requires --authorization-file")
-        authorization_path = parsed.authorization_file.resolve()
-        if authorization_path.is_symlink() or not authorization_path.is_file():
-            raise SystemExit("bootstrap authorization file must be one regular file")
-        authorization_payload = json.loads(authorization_path.read_text(encoding="utf-8"))
-        if not isinstance(authorization_payload, dict):
-            raise SystemExit("bootstrap authorization payload must be one object")
-        authorization = ExactFileAuthorizationV1.from_mapping(authorization_payload)
+        if (
+            parsed.authorization_file is None
+            and parsed.authorization_ref is None
+            and parsed.authorization_id is None
+        ):
+            raise SystemExit(
+                "bootstrap --apply requires exactly one of --authorization-file / "
+                "--authorization-ref / --authorization-id"
+            )
+
+        def _legacy_bootstrap_authorization(path: Path) -> ExactFileAuthorizationV1:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("bootstrap authorization payload must be one object")
+            return ExactFileAuthorizationV1.from_mapping(payload)
+
+        authorization, authorization_error = load_cli_authorization(
+            file=parsed.authorization_file,
+            ref=parsed.authorization_ref,
+            authorization_id=parsed.authorization_id,
+            legacy_loader=_legacy_bootstrap_authorization,
+            expected_type=ExactFileAuthorizationV1,
+        )
+        if authorization_error:
+            raise SystemExit(authorization_error)
         result = dependencies["apply_bootstrap_cr"](project_root, plan, authorization)
         printable = {
             **result,
@@ -562,13 +704,19 @@ def _dispatch_cr_close_or_termination_command(
 
     authorization = None
     authorization_error = ""
-    if parsed.authorization_file is None:
+    if (
+        parsed.authorization_file is None
+        and parsed.authorization_ref is None
+        and parsed.authorization_id is None
+    ):
         authorization_error = missing_message
     else:
-        try:
-            authorization = load_authorization(parsed.authorization_file)
-        except (OSError, ValueError) as exc:
-            authorization_error = str(exc)
+        authorization, authorization_error = load_cli_authorization(
+            file=parsed.authorization_file,
+            ref=parsed.authorization_ref,
+            authorization_id=parsed.authorization_id,
+            legacy_loader=load_authorization,
+        )
     if authorization_error:
         result = {
             "status": "BLOCKED",
@@ -631,15 +779,22 @@ def _dispatch_cr_status_sync_command(
         return 0 if plan.decision in {"READY", "NO_CHANGE"} else 1
     authorization = None
     authorization_error = ""
-    if parsed.authorization_file is None:
-        authorization_error = "status-sync apply requires --authorization-file"
+    if (
+        parsed.authorization_file is None
+        and parsed.authorization_ref is None
+        and parsed.authorization_id is None
+    ):
+        authorization_error = (
+            "status-sync apply requires exactly one of --authorization-file / "
+            "--authorization-ref / --authorization-id"
+        )
     else:
-        try:
-            authorization = dependencies["load_status_sync_authorization"](
-                parsed.authorization_file
-            )
-        except (OSError, ValueError) as exc:
-            authorization_error = str(exc)
+        authorization, authorization_error = load_cli_authorization(
+            file=parsed.authorization_file,
+            ref=parsed.authorization_ref,
+            authorization_id=parsed.authorization_id,
+            legacy_loader=dependencies["load_status_sync_authorization"],
+        )
     if authorization_error:
         result = {
             "status": "BLOCKED",

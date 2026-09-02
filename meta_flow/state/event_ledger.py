@@ -254,6 +254,24 @@ _LEGACY_GATE_APPROVAL_MANIFEST_V1 = {
 }
 _GATE_APPROVAL_CORRECTION_EVENT = "gate_approval_kind_correction"
 _GATE_APPROVAL_CUTOVER_EVENT = "gate_approval_kind_cutover"
+# CR-076 R1：typed 毒行（approval_kind_version=1 且 kind 越界）的追加式修正事件。
+# 与 _GATE_APPROVAL_CORRECTION_EVENT（legacy migration 专用）完全分离：
+# 不得触发 migration/cutover/correction_findings 任何路径。
+_TYPED_GATE_APPROVAL_CORRECTION_EVENT = "gate_approval_typed_correction"
+# typed correction 允许覆盖的补充字段白名单；身份与决策字段
+# （event_id/event_type/cr_id/work_id/decision/status）禁止被 correction 改写。
+_TYPED_GATE_CORRECTION_FIELDS = (
+    "approval_kind",
+    "scope_version",
+    "scope_digest",
+    "authorized_actions",
+    "decision_ref",
+    "checkpoint_ref",
+    "evidence_refs",
+    "evidence_digests",
+    "acknowledgement_decision",
+    "recovery_ordinal",
+)
 
 
 @dataclass(frozen=True)
@@ -1846,6 +1864,94 @@ def _legacy_gate_corrections(
     return by_original, ()
 
 
+def _discover_typed_gate_corrections(
+    events: tuple[Mapping[str, Any], ...],
+    approvals_by_id: dict[str, Mapping[str, Any]],
+) -> tuple[dict[str, list[Mapping[str, Any]]], dict[str, int]]:
+    """发现 typed correction 事件并按 target 分组；与 legacy migration 完全分离。
+
+    返回 (by_target, invalid_target_counts)：
+    - by_target：target 为合法 typed 行（human_gate_approval 且 approval_kind_version=1）
+      的 correction 列表，按 corrects_event_id 分组。
+    - invalid_target_counts：target 行存在于 approvals 但不是合法 typed 行
+      （approval_kind_version != 1）时，按 target event_id 计数；这些 correction
+      产生 GATE_APPROVAL_TYPED_CORRECTION_TARGET_UNKNOWN 并附加到该行投影。
+    - corrects_event_id 不指向任何 human_gate_approval 行的孤儿 correction 无承载投影，
+      不影响任何输出（防御边界，见 project_gate_approvals docstring）。
+    """
+
+    corrections = [
+        event
+        for event in events
+        if str(event.get("event_type") or "") == _TYPED_GATE_APPROVAL_CORRECTION_EVENT
+    ]
+    by_target: dict[str, list[Mapping[str, Any]]] = {}
+    invalid_target_counts: dict[str, int] = {}
+    for correction in corrections:
+        target_id = str(correction.get("corrects_event_id") or "")
+        target = approvals_by_id.get(target_id)
+        if (
+            not target_id
+            or target is None
+            or target.get("approval_kind_version") != GATE_APPROVAL_KIND_VERSION
+        ):
+            if target is not None:
+                invalid_target_counts[target_id] = (
+                    invalid_target_counts.get(target_id, 0) + 1
+                )
+            continue
+        by_target.setdefault(target_id, []).append(correction)
+    return by_target, invalid_target_counts
+
+
+def _typed_gate_correction_findings(
+    original: Mapping[str, Any],
+    correction: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """单条 typed correction 相对其 target 原行的安全校验（b/c/d/e）。
+
+    target 存在性（a）与重复（f）由调用方在分组阶段处理；
+    任一校验失败时原行维持原 findings，投影不修正。
+    """
+
+    findings: list[str] = []
+    if str(correction.get("original_event_digest") or "") != canonical_digest(
+        _clean_event(original)
+    ):
+        findings.append("GATE_APPROVAL_TYPED_CORRECTION_DIGEST_MISMATCH")
+    if str(correction.get("cr_id") or "") != str(original.get("cr_id") or "") or str(
+        correction.get("work_id") or ""
+    ) != str(original.get("work_id") or ""):
+        findings.append("GATE_APPROVAL_TYPED_CORRECTION_CROSSES_TARGET")
+    try:
+        correction_kind = GateApprovalKindV1(str(correction.get("approval_kind") or ""))
+    except ValueError:
+        correction_kind = None
+    if correction_kind is None:
+        findings.append("GATE_APPROVAL_TYPED_CORRECTION_KIND_UNKNOWN")
+    elif correction_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE:
+        # 安全边界：correction 禁止产出 passage（防伪造门禁推进）。
+        findings.append("GATE_APPROVAL_TYPED_CORRECTION_KIND_FORBIDDEN")
+    return tuple(sorted(set(findings)))
+
+
+def _merged_typed_gate_approval(
+    original: Mapping[str, Any],
+    correction: Mapping[str, Any],
+) -> dict[str, Any]:
+    """用 correction 的白名单补充字段覆盖原行，构造待重校验的 merged 事件。
+
+    仅 _TYPED_GATE_CORRECTION_FIELDS 内字段可被覆盖；
+    event_id/event_type/cr_id/work_id/decision/status 永远取原行。
+    """
+
+    merged = dict(_clean_event(original))
+    for field in _TYPED_GATE_CORRECTION_FIELDS:
+        if field in correction:
+            merged[field] = correction[field]
+    return merged
+
+
 def project_gate_approvals(
     events: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
 ) -> tuple[CanonicalGateApprovalProjectionV1, ...]:
@@ -1867,6 +1973,10 @@ def project_gate_approvals(
         in {_GATE_APPROVAL_CORRECTION_EVENT, _GATE_APPROVAL_CUTOVER_EVENT}
         for event in source
     )
+    approvals_by_id = {str(event.get("event_id") or ""): event for event in approvals}
+    typed_corrections, invalid_typed_targets = _discover_typed_gate_corrections(
+        source, approvals_by_id
+    )
     projections: list[CanonicalGateApprovalProjectionV1] = []
     for event in approvals:
         event_id = str(event.get("event_id") or "")
@@ -1876,6 +1986,52 @@ def project_gate_approvals(
                 approval_kind = GateApprovalKindV1(str(event.get("approval_kind") or ""))
             except ValueError:
                 approval_kind = None
+            if invalid_typed_targets.get(event_id):
+                findings = (
+                    *findings,
+                    "GATE_APPROVAL_TYPED_CORRECTION_TARGET_UNKNOWN",
+                )
+            if "GATE_APPROVAL_KIND_UNKNOWN" in findings:
+                # CR-076 R1：毒行（kind 越界）只允许经由 typed correction 修复；
+                # 合法行（含原本 passage）不被任何 correction 改写。
+                row_corrections = typed_corrections.get(event_id, [])
+                if len(row_corrections) > 1:
+                    findings = (*findings, "GATE_APPROVAL_TYPED_CORRECTION_DUPLICATE")
+                elif len(row_corrections) == 1:
+                    correction = row_corrections[0]
+                    correction_findings = _typed_gate_correction_findings(event, correction)
+                    if correction_findings:
+                        findings = (*findings, *correction_findings)
+                    else:
+                        merged = _merged_typed_gate_approval(event, correction)
+                        merged_findings = _typed_gate_approval_findings(merged)
+                        if merged_findings:
+                            findings = (
+                                "GATE_APPROVAL_TYPED_CORRECTION_INSUFFICIENT",
+                                *merged_findings,
+                            )
+                        else:
+                            merged_kind = GateApprovalKindV1(
+                                str(merged.get("approval_kind") or "")
+                            )
+                            projections.append(
+                                _gate_projection(
+                                    merged,
+                                    approval_kind=merged_kind,
+                                    checkpoint=(
+                                        str(merged.get("checkpoint") or "").upper()
+                                        if merged_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE
+                                        else ""
+                                    ),
+                                    result_ref=(
+                                        str(merged.get("result_ref") or "")
+                                        if merged_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE
+                                        else ""
+                                    ),
+                                    findings=(),
+                                )
+                            )
+                            continue
             checkpoint = (
                 str(event.get("checkpoint") or "").upper()
                 if approval_kind is GateApprovalKindV1.CHECKPOINT_PASSAGE
@@ -1899,6 +2055,9 @@ def project_gate_approvals(
         manifest_entry = _LEGACY_GATE_APPROVAL_MANIFEST_V1.get(event_id)
         if manifest_entry is None:
             findings = ["GATE_APPROVAL_LEGACY_UNKNOWN"]
+            if invalid_typed_targets.get(event_id):
+                # 非 typed-v1 行不可作为 typed correction 的 target。
+                findings.append("GATE_APPROVAL_TYPED_CORRECTION_TARGET_UNKNOWN")
             if (
                 str(event.get("decision") or "").lower() != "approve"
                 or str(event.get("status") or "").lower() != "approved"
@@ -1916,6 +2075,9 @@ def project_gate_approvals(
             continue
         approval_kind, checkpoint, result_ref = manifest_entry
         findings = list(correction_findings)
+        if invalid_typed_targets.get(event_id):
+            # 非 typed-v1 行不可作为 typed correction 的 target。
+            findings.append("GATE_APPROVAL_TYPED_CORRECTION_TARGET_UNKNOWN")
         if (
             str(event.get("decision") or "").lower() != "approve"
             or str(event.get("status") or "").lower() != "approved"

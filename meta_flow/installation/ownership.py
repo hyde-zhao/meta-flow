@@ -175,6 +175,34 @@ def can_remove_owned(
     )
 
 
+def assert_activatable(
+    entry: object,
+    current_digest: str | Mapping[str, str],
+) -> tuple[str, ...]:
+    """激活前置断言（S04）：目标就位且 state=active 才返回空 conflicts。
+
+    比对口径复用 :func:`can_remove_owned`（exact_file=installed_digest、
+    managed_block=block_digest、exact_leaf_set=逐 leaf 全量相等）；fail-closed，
+    不匹配即返回 typed conflict 字符串，不抛异常。
+    """
+
+    normalized = validate_ownership_entry(entry)
+    target_ref = normalized["target_ref"]
+    if normalized["state"] != "active":
+        return (f"OWNERSHIP-ACTIVATION-CONFLICT:{target_ref}:state={normalized['state']}",)
+    kind = normalized["ownership_type"]
+    if kind == "exact_file":
+        matched = isinstance(current_digest, str) and current_digest == normalized["installed_digest"]
+    elif kind == "managed_block":
+        matched = isinstance(current_digest, str) and current_digest == normalized["metadata"]["block_digest"]
+    else:
+        matched = isinstance(current_digest, Mapping) and all(
+            current_digest.get(leaf["leaf_ref"]) == leaf["installed_digest"]
+            for leaf in normalized["metadata"]["leaves"]
+        )
+    return () if matched else (f"OWNERSHIP-ACTIVATION-CONFLICT:{target_ref}:digest-mismatch",)
+
+
 __all__ = [
     "EXACT_FILE_METADATA_FIELDS",
     "EXACT_LEAF_SET_METADATA_FIELDS",
@@ -182,6 +210,7 @@ __all__ = [
     "MANAGED_BLOCK_METADATA_FIELDS",
     "OWNERSHIP_COMMON_FIELDS",
     "OWNERSHIP_TYPES",
+    "assert_activatable",
     "can_remove_owned",
     "validate_ownership_entry",
 ]

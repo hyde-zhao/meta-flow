@@ -97,6 +97,8 @@ class CRCliContractTests(unittest.TestCase):
             "render_scope_amend_apply",
             "scope_amend_main",
             "_load_scope_amend_receipts",
+            "_register_governance_payloads",  # CR-076 S02 GAP-03 治理 kind 注册
+            "load_cli_authorization",  # CR-076 S02 FA8 exactly-one 共享 helper
         }
         functions = {
             node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)

@@ -1,6 +1,6 @@
 status: confirmed
-version: "1.3"
-source_revision: "CR-071@cp2-revision-2 + CR-072@0.6.1-package-approved + CR-073@cp2-approved"
+version: "1.6"
+source_revision: "CR-071@cp2-revision-2 + CR-072@0.6.1-package-approved + CR-073@cp2-approved + CR-075@cp7-approved + CR-076@cp2-revision-4"
 source_requirements:
   - docs/product/REQUIREMENTS.md
 source_use_cases:
@@ -25,6 +25,12 @@ revision_history:
   - version: "1.4"
     date: "2026-08-24"
     summary: "Added 8 CR-075 P6-Stage3 scenarios (SCN-075-01..08) per CP7 gate feedback item 8; CP2 retroactive confirmation pending CP7 approve"
+  - version: "1.5"
+    date: "2026-08-27"
+    summary: "v1.4 confirmation effective with CR-075 CP7 approve (2026-08-26); added 10 CR-076 P6-closure scenarios (SCN-076-01..10) per CP2-CR-076 revision 3; confirmation pending CP2-CR-076 approve"
+  - version: "1.6"
+    date: "2026-08-27"
+    summary: "CP2-CR-076 revision 4: S05-A/B/C merged back to single STORY-CR076-S05 with milestone semantics; SCN-076-07 split into source-candidate replay (07) and installed-artifact replay (08) hard-gate scenarios, former 08/09/10 renumbered to 09/10/11; coverage_summary regenerated from actual per-type recount"
 scenarios:
   - id: SCN-MF1-01
     title: "合法 Work 初始化执行全生命周期零写预检"
@@ -586,22 +592,33 @@ scenarios:
   - {id: SCN-075-06, title: "usage terminal 非法时 close fail closed", type: negative, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-075-S05], use_cases: [UC-VALIDATION-REUSE], stories: [STORY-CR075-S05]}, trigger: "非法 terminal 的 Work 请求 close", context: "hard stop/超治理限额未处理/usage_ref 缺失", preconditions: ["close admission 消费 usage terminal policy"], steps: [{action: "以真实 plan_work_close 提交非法 terminal", expected: "BLOCK_CLOSE 抛 typed 阻断不落 partial 写；合法 legacy 形态仅 DeprecationWarning"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验；CP7 完成前不标 verified-by-tests"}
   - {id: SCN-075-07, title: "Phase 绿基线生命周期与五类归属", type: boundary, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-075-S06], use_cases: [UC-FULL-REGRESSION-SEMANTICS], stories: [STORY-CR075-S06]}, trigger: "Phase 绿集建立后发生失效或失败对照", context: "baseline bytes append-only", preconditions: ["typed plan/apply 与 exact-file authorization"], steps: [{action: "建立基线后失效、rebaseline 并对照失败集", expected: "修订 version+1 且 history 只增不改；绿转红无漂移=NEW_REGRESSION、基线外失败=UNATTRIBUTABLE、公共 mutation admission 判定真实 argv"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已通过 targeted 复验（V3 整改矩阵重写后）；CP7 完成前不标 verified-by-tests"}
   - {id: SCN-075-08, title: "七 Story 兼容集分层回归零新增回归", type: coverage, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-075-AGGREGATE], use_cases: [UC-FULL-REGRESSION-SEMANTICS], stories: [STORY-CR075-P0, STORY-CR075-S01, STORY-CR075-S02, STORY-CR075-S03, STORY-CR075-S04, STORY-CR075-S05, STORY-CR075-S06]}, trigger: "七 Story 全部交付后执行 CP7 聚合验证", context: "targeted→compatibility→full 分层", preconditions: ["CP7 门禁整改项全部通过"], steps: [{action: "按层执行验证并对照 CR-075 变更窗口内外失败集", expected: "变更窗口内零回归；窗口外存量失败（0.6.3 时代测试债）单列不掩盖"}], evidence_type: automated, automation_status: planned, gap_reason: "自动化已执行；CP7 完成前不标 verified-by-tests，阶段结论按 PASS_WITH_RISK 语义申报残留"}
+  - {id: SCN-076-01, title: "RiskReasonPolicyV1 分级与 G0/G1 不豁免发布授权", type: boundary, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-076-S01], use_cases: [UC-RELEASE-ORDER], stories: [STORY-CR076-S01]}, trigger: "release chain 操作提交风险原因供分类", context: "G0/G1/G2/unknown 四级策略", preconditions: ["风险原因文案可解析"], steps: [{action: "输入 ordinary/public/security/production/未知风险原因并评估授权结论", expected: "ordinary 不自动升级 G2；public/security/production fail closed；G0/G1 N/A CP8 不等于 N/A authorization"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 3 落轴 planned；自动化随 S01 CP6/CP7 交付"}
+  - {id: SCN-076-02, title: "授权输入负向全阻断（exactly-one/过期/复用/漂移）", type: permission, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-076-S02], use_cases: [UC-VICTIM-REPLAY], stories: [STORY-CR076-S02]}, trigger: "以 --authorization-file/ref/id 提交非法授权输入", context: "链上操作授权解析", preconditions: ["operation registry 与前驱 receipt 已定义"], steps: [{action: "构造 none/多选/错误 namespace/过期/复用/OID 漂移输入", expected: "全部确定性阻断且 mutation=0；不落入部分解析"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 3 落轴 planned；自动化随 S02 CP6/CP7 交付"}
+  - {id: SCN-076-03, title: "发布资产四重 identity 可追溯且不完整即阻断", type: boundary, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-076-S03], use_cases: [UC-PUBLISHED-ASSET-CONSUMER], stories: [STORY-CR076-S03]}, trigger: "从冻结 source OID 单次构建 wheel/sdist/receipt/sidecar", context: "content-addressed bundle", preconditions: ["source OID 已冻结"], steps: [{action: "构造缺失/重复/错误版本/损坏/checksum/sidecar mismatch 负向并核对四重链", expected: "source→accepted→published→installed identity 一致可追溯；任一不完整 fail closed"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 3 落轴 planned；自动化随 S03 CP6/CP7 交付"}
+  - {id: SCN-076-04, title: "clean-home 安装/升级/回滚/幂等/部分失败恢复有界", type: positive, priority: HIGH, persona: P-01, source_refs: {requirements: [REQ-076-S04], use_cases: [UC-PUBLISHED-ASSET-CONSUMER], stories: [STORY-CR076-S04]}, trigger: "consumer 环境安装 exact content-addressed artifact", context: "安装生命周期事务", preconditions: ["exact artifact bytes 可达"], steps: [{action: "执行安装/已有安装/升级/降级/回滚/重复安装/中断恢复", expected: "全部走一次 lifecycle transaction；rollback 恢复基线版本与状态/schema；重复安装幂等；partial 可恢复"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 3 落轴 planned；真实安装需独立授权，自动化先以隔离 home 验证"}
+  - {id: SCN-076-05, title: "权限/路径/缓存污染安装边界 fail closed", type: negative, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-076-S04], use_cases: [UC-PUBLISHED-ASSET-CONSUMER], stories: [STORY-CR076-S04]}, trigger: "user/project scope 越界、权限不足、symlink/outside path、缓存污染", context: "安装前置检查", preconditions: ["边界检查器已实现"], steps: [{action: "构造越界安装请求", expected: "确定性阻断并给出恢复入口；不暴露 traceback、不写部分状态"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 3 落轴 planned；自动化随 S04 CP6/CP7 交付"}
+  - {id: SCN-076-06, title: "ConsumerAcceptanceResultV1 导入前 schema/digest 校验 fail closed", type: precheck, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-076-S05], use_cases: [UC-VICTIM-REPLAY], stories: [STORY-CR076-S05]}, trigger: "consumer 回传结果进入 provider 侧导入", context: "三字段组（authorization/artifact/execution identity）；S05 milestone A：provider-side schema/ingestion/check", preconditions: ["schema 已定义（S05 milestone A）"], steps: [{action: "以合法与漂移结果分别导入", expected: "合法结果通过 schema/digest/OID/environment/command identity 校验；任一漂移即拒绝；自然语言回传不采信；导入本身作为受授权 mutation 记录 writer/scope"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 4 落轴 planned；schema CP3 定稿"}
+  - {id: SCN-076-07, title: "source-candidate replay 硬门：独立授权、identity 绑定与失效条件", type: permission, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-076-S05], use_cases: [UC-VICTIM-REPLAY], stories: [STORY-CR076-S05]}, trigger: "请求 consumer 执行 source-candidate replay（W3-W10 旅程）", context: "跨设备授权边界（authorization_inherited=false）；S05 milestone B-1：source-candidate replay；输入=冻结 source OID 的 source candidate；identity=source OID+tree digest+consumer project UID+quant-lab 双仓 OID+command identity+profile/environment fingerprint；失效=source OID 漂移、任一旅程失效、环境/命令漂移", preconditions: ["provider 侧合同与验收 schema 已交付；source OID 已冻结"], steps: [{action: "无独立 typed authorization 评估 replay 触发请求；有授权时执行 W3-W10 旅程（六轮×J1/J2/J3 明细，CR-073 先例 fixture-constructed journey 可作行证据）", expected: "无授权即 BLOCKED/not-executed，结论不得记 PASS/PASS_WITH_RISK/WAIVED；有授权时 PASS/BLOCKED-only；identity 任一漂移即旧 result 失效重跑；不阻断 provider 制品构建准备但阻断 S05 milestone B 验收"}], evidence_type: automated, automation_status: planned, gap_reason: "真实 replay 在 consumer 设备等待独立 typed authorization；时序=16 步顺序步骤 10（source-sync push 后、artifact 传输前）"}
+  - {id: SCN-076-08, title: "installed-artifact replay 硬门：独立授权、identity 绑定与失效条件", type: permission, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-076-S05], use_cases: [UC-VICTIM-REPLAY, UC-PUBLISHED-ASSET-CONSUMER], stories: [STORY-CR076-S05]}, trigger: "请求 consumer 执行 installed-artifact replay", context: "跨设备授权边界（authorization_inherited=false）；S05 milestone B-2：installed-artifact replay；输入=exact content-addressed bundle（wheel/sdist+receipt/sidecar 各自 SHA-256）；identity=release/process source OID、SemVer、wheel/sdist/receipt/sidecar digest、consumer project UID、quant-lab 双仓 OID、command identity、environment fingerprint；失效=重建、任何 digest 变化、OID/环境/命令漂移；源码 PASS、fixture PASS、provider clean-home canary 均不可替代", preconditions: ["S05 milestone B-1 source-candidate replay result 已回传；exact artifact bytes 已送达"], steps: [{action: "无独立 typed authorization 评估 replay 触发请求；有授权时在 consumer 设备安装 exact bundle 并回传 ConsumerAcceptanceResultV1", expected: "无授权即 BLOCKED/not-executed；有授权时 PASS/BLOCKED-only；identity 任一漂移即旧 result 失效进入新 lineage（重走 freeze→build→transport→replay）；禁止 consumer 本地重建/editable/checkout import"}], evidence_type: automated, automation_status: planned, gap_reason: "真实 replay 在 consumer 设备等待独立 typed authorization；时序=16 步顺序步骤 12（artifact transport 后）"}
+  - {id: SCN-076-09, title: "provider canary 与 consumer victim replay 职责分离并聚合", type: coverage, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-076-S05], use_cases: [UC-VICTIM-REPLAY, UC-PUBLISHED-ASSET-CONSUMER], stories: [STORY-CR076-S05]}, trigger: "S05 聚合 release acceptance", context: "canary 不可替代 victim replay；S05 milestone C：aggregate/release acceptance", preconditions: ["provider clean-home canary 与 consumer replay result 均已定义"], steps: [{action: "以 canary-only/fixture-only/源码-only 组合请求验收", expected: "聚合验收拒绝替代证据；只有 canonical consumer result 可推进 S05 milestone B/C"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 4 落轴 planned；聚合逻辑随 S05 milestone C 交付"}
+  - {id: SCN-076-10, title: "publication 失败/partial/重复与 lineage 失效及 digest 相等验证", type: external-failure, priority: HIGH, persona: P-03, source_refs: {requirements: [REQ-076-S05], use_cases: [UC-RELEASE-ORDER], stories: [STORY-CR076-S04, STORY-CR076-S05]}, trigger: "独立 publication authorization 后执行 tag/release/registry/upload", context: "发布链与验收 lineage", preconditions: ["CP8 已过；consumer 已验收 digest 已冻结"], steps: [{action: "构造发布失败/partial upload/重复发布并核对远端摘要", expected: "任一失效使旧 lineage 失效并保留证据；只有 remote asset digest == consumer 已验收 digest 才允许 P6 native close；未获发布授权则保持 awaiting-publication/BLOCKED，不关闭 CR/P6"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 4 落轴 planned；真实发布操作需独立授权，自动化验证判定逻辑"}
+  - {id: SCN-076-11, title: "P6 收口：active 归零、stale refs 归零、follow-up 交接与 native 切换", type: coverage, priority: HIGH, persona: P-02, source_refs: {requirements: [REQ-076-AGGREGATE], use_cases: [UC-FULL-REGRESSION-SEMANTICS], stories: []}, trigger: "S05/CP8/publication 全部完成后 Host closure slice 执行 P6 native close", context: "phase-level native operation（不占 Story/Work 槽位）", preconditions: ["两 replay 硬门 PASS；远端 digest 已验证相等；publication 授权已执行（未获发布授权则保持 awaiting-publication/BLOCKED，不关闭 CR/P6，不进入本场景）"], steps: [{action: "native close 两 Work 与 CR-076 并生成 terminal result 后执行 phase transition", expected: "active CR/Work=0、stale refs=0、存续 candidate 列 owner/目标 Phase/重访条件（P7/P8/P9）、P6 completed 由 native 派生不手工编辑"}], evidence_type: automated, automation_status: planned, gap_reason: "CP2 revision 4 落轴 planned；Host closure slice 无 Story 槽位，证据挂 P6 terminal result"}
 
 coverage_summary:
-  total: 50
+  total: 61
   by_type:
-    positive: 17
+    positive: 19
     negative: 15
-    boundary: 8
-    permission: 3
+    boundary: 10
+    permission: 6
     empty-data: 0
-    external-failure: 2
-    precheck: 2
-    coverage: 3
-  high_priority: 50
+    external-failure: 3
+    precheck: 3
+    coverage: 5
+  high_priority: 61
   high_priority_positive_and_negative_covered: true
-  requirement_refs_total: 48
-  requirement_refs_covered: 48
+  requirement_refs_total: 54
+  requirement_refs_covered: 54
   use_case_refs_total: 18
   use_case_refs_covered: 18
   gaps: []

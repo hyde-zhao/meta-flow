@@ -731,6 +731,7 @@ def _print_help() -> None:
         "  project    Scaffold and validate process/project governance state.\n"
         "  quality    Validate quality model and eval matrix policies.\n"
         "  repository Plan/apply one allowlisted commit or exact-OID fast-forward push.\n"
+        "  release    Import consumer acceptance results and run guarded P6 closure (CR-076).\n"
         "  retrospective Build and validate evidence-based project or phase retrospectives.\n"
         "  story      Validate Story return packets and evidence indexes.\n"
         "  validation Generate or execute profile-driven validation task evidence.\n"
@@ -1669,6 +1670,14 @@ def _run_work(args: list[str]) -> None:
     raise SystemExit(work_cli.main(args))
 
 
+def _run_release(args: list[str]) -> None:
+    """CR-076 S05 IF-13：release 组（consumer-acceptance-import / p6-closure）。"""
+
+    from meta_flow.release import cli as release_cli
+
+    raise SystemExit(release_cli.main(args))
+
+
 def _run_retrospective(args: list[str]) -> None:
     from meta_flow import retrospective_cli
 
@@ -1810,6 +1819,9 @@ def _dispatch_main() -> None:
         return
     if command == "work":
         _run_work(args[1:])
+        return
+    if command == "release":
+        _run_release(args[1:])
         return
     if command == "retrospective":
         _run_retrospective(args[1:])

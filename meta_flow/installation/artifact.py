@@ -319,6 +319,52 @@ def artifact_receipt_conflicts(
     return tuple(sorted(conflicts))
 
 
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def observe_bundle_asset_files(
+    wheel_path: Path,
+    sdist_path: Path,
+    receipt_path: Path,
+    sidecar_path: Path,
+    *,
+    expected_semver: str | None = None,
+) -> dict[str, str]:
+    """采集四发布资产的物理 sha256，并校验 wheel/sdist/semver 版本一致。
+
+    纯观测 helper（CR-076 S03）：流式单遍 digest、不消费授权、不修改文件；
+    ``_FIELDS`` 与既有 receipt 合同零改动。symlink / 非常规文件 fail-closed。
+    """
+
+    digests: dict[str, str] = {}
+    for name, raw in (
+        ("wheel", wheel_path),
+        ("sdist", sdist_path),
+        ("build_receipt", receipt_path),
+        ("sidecar", sidecar_path),
+    ):
+        resolved = Path(os.path.abspath(Path(raw).expanduser()))
+        if resolved.is_symlink() or not resolved.is_file():
+            raise ValueError(f"ASSET-UNSAFE: {name} must be one regular file: {raw}")
+        digests[name] = _file_sha256(resolved)
+    _, wheel_version = _wheel_version(Path(wheel_path))
+    sdist_version = Path(sdist_path).name.removesuffix(".tar.gz").rsplit("-", 1)[-1]
+    if wheel_version != sdist_version:
+        raise ValueError(
+            f"ASSET-VERSION-MISMATCH: wheel METADATA {wheel_version} != sdist {sdist_version}"
+        )
+    if expected_semver is not None and wheel_version != expected_semver:
+        raise ValueError(
+            f"ASSET-VERSION-MISMATCH: wheel METADATA {wheel_version} != semver {expected_semver}"
+        )
+    return digests
+
+
 __all__ = [
     "ARTIFACT_RECEIPT_KIND",
     "ARTIFACT_RECEIPT_SCHEMA_VERSION",
@@ -329,6 +375,7 @@ __all__ = [
     "build_provider_release_asset_set",
     "digest_policy_sidecar_required",
     "load_provider_artifact_receipt",
+    "observe_bundle_asset_files",
     "validate_provider_artifact_receipt",
     "sidecar_path_for_receipt",
 ]

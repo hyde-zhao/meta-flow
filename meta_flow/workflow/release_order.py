@@ -11,6 +11,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from meta_flow.release.publication_policy import (
+    PublicationTargetOutcome,
+    aggregate_publication_phase,
+    evaluate_operation_publication_admission,
+)
+from meta_flow.release.risk_policy import (
+    evaluate_risk_grade,
+    revalidate_risk_input,
+)
 from meta_flow.state.projection_transaction import (
     atomic_replace_bytes,
     ensure_transaction_directory,
@@ -590,9 +599,25 @@ def _diagnostic(code: str, message: str) -> ReleaseDiagnosticV1:
 
 
 def check_release_transition(
-    state: AggregateReleaseStateV1, event: ReleaseEventV1
+    state: AggregateReleaseStateV1,
+    event: ReleaseEventV1,
+    frozen_risk_admission: Mapping[str, Any] | None = None,
+    current_risk_reason_codes: Sequence[str] | None = None,
 ) -> ReleaseCheckResultV1:
     diagnostics: list[ReleaseDiagnosticV1] = []
+    # STORY-CR076-S01 调用点（T4）：apply 前重验（F3/F5）——codes 或 policy
+    # fingerprint 与 plan 冻结值不一致 → RISK_INPUT_CONFLICT、mutation=0、授权不消费。
+    if frozen_risk_admission is not None and current_risk_reason_codes is not None:
+        # admission dict 自带 policy_fingerprint / reason_codes / input_fingerprint 三键，
+        # revalidate 的 Mapping 分支只消费这三键（plan 冻结值直接可传）。
+        revalidation = revalidate_risk_input(frozen_risk_admission, current_risk_reason_codes)
+        if revalidation.decision != "PASS":
+            diagnostics.append(
+                _diagnostic(
+                    revalidation.blocker_code or "RISK_INPUT_CONFLICT",
+                    f"risk input revalidation failed: {list(revalidation.detail)}",
+                )
+            )
     existing = [item for item in state.event_records if item.event_id == event.event_id]
     if existing:
         decision = "NO_CHANGE" if len(existing) == 1 and existing[0].event_digest == event.event_digest else "BLOCKED"
@@ -765,6 +790,7 @@ class ReleaseAdvancePlanV1:
     plan_digest: str
     planned_mutation_count: int
     mutation_count: int = 0
+    risk_admission: Mapping[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -779,6 +805,7 @@ class ReleaseAdvancePlanV1:
             "plan_digest": self.plan_digest,
             "planned_mutation_count": self.planned_mutation_count,
             "mutation_count": self.mutation_count,
+            "risk_admission": dict(self.risk_admission) if self.risk_admission else None,
         }
 
 
@@ -786,9 +813,26 @@ def plan_release_advance(
     state: AggregateReleaseStateV1,
     event: ReleaseEventV1,
     snapshot: ReleaseSnapshotV1,
+    risk_reason_codes: Sequence[str] | None = None,
 ) -> ReleaseAdvancePlanV1:
     check = check_release_transition(state, event)
     diagnostics = list(check.diagnostics)
+    # STORY-CR076-S01 调用点（T3）：risk 分类前移 plan/admission；codes 未提供时
+    # 保持既有行为（回归零变化）。BLOCKED → plan 拒绝产出（mutation=0，typed findings）。
+    admission: Mapping[str, Any] | None = None
+    if risk_reason_codes is not None:
+        evaluation = evaluate_risk_grade(risk_reason_codes)
+        if evaluation.decision != "PASS":
+            diagnostics.append(
+                _diagnostic(
+                    evaluation.blocker_code or "RISK_CODE_UNKNOWN",
+                    f"risk classification blocked: codes={list(evaluation.reason_codes)}",
+                )
+            )
+        else:
+            admission = evaluate_operation_publication_admission(
+                event.event_id, evaluation
+            ).as_dict()
     if snapshot.journal_status != "clean":
         diagnostics.append(
             _diagnostic("RELEASE_JOURNAL_NOT_CLEAN", "PARTIAL or RECOVERED journal blocks advance")
@@ -816,6 +860,10 @@ def plan_release_advance(
         "diagnostics": [item.as_dict() for item in ordered],
         "planned_mutation_count": 3 if decision == "PASS" else 0,
     }
+    # admission 记录仅在整体 PASS 时绑定进 plan_digest（fingerprint 参与授权绑定，F4）。
+    frozen_admission = admission if decision == "PASS" else None
+    if frozen_admission is not None:
+        payload["risk_admission"] = dict(frozen_admission)
     return ReleaseAdvancePlanV1(
         decision=decision,
         before_state=state,
@@ -825,6 +873,7 @@ def plan_release_advance(
         diagnostics=ordered,
         plan_digest=canonical_digest(payload),
         planned_mutation_count=payload["planned_mutation_count"],
+        risk_admission=frozen_admission,
     )
 
 
@@ -1241,6 +1290,30 @@ def apply_release_advance(
     return replace(provisional, mutation_count=actual)
 
 
+def diagnose_publication_phase(
+    current_phase: str,
+    outcomes: Sequence[Mapping[str, Any]],
+    *,
+    verified: bool = False,
+) -> dict[str, Any]:
+    """publication 四态聚合诊断（T4 调用点：纯委托 publication_policy，状态机语义不变）。"""
+
+    parsed = tuple(
+        PublicationTargetOutcome(
+            target_kind=str(item.get("target_kind") or ""),
+            target_identity=str(item.get("target_identity") or ""),
+            outcome=str(item.get("outcome") or ""),
+            attempt_digest=str(item.get("attempt_digest") or ""),
+        )
+        for item in outcomes
+    )
+    result = aggregate_publication_phase(current_phase, parsed, verified=verified)
+    payload: dict[str, Any] = {"schema_version": 1, "mutation_count": 0}
+    payload.update(result.as_dict())
+    payload["kind"] = "PublicationPhaseDiagnosticV1"
+    return payload
+
+
 def inspect_release_journal(writer: ReleaseWriter, event_id: str) -> dict[str, Any]:
     records = writer.inspect(event_id)
     states = [str(item.get("journal_state") or "") for item in records]
@@ -1349,6 +1422,7 @@ __all__ = [
     "apply_release_advance",
     "build_initial_release_state",
     "check_release_transition",
+    "diagnose_publication_phase",
     "inspect_release_journal",
     "plan_release_advance",
     "recover_release_transition",

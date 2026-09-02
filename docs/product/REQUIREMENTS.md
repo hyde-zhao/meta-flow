@@ -194,3 +194,14 @@ formal_cp2_approval_ref: "CR073-CP2-USER-DECISION-20260819-V1"
 | REQ-075-S05 | P0 | Given Work close When usage terminal 非法（hard stop/超限未处理/usage_ref 缺失）Then BLOCK_CLOSE fail closed；合法 legacy 形态只 deprecate 不阻断 | CR-075 Work B |
 | REQ-075-S06 | P0 | Given Phase 绿集 When baseline lifecycle Then typed plan/apply、append-only 修订历史、五类归属矩阵（绿转红无漂移=NEW_REGRESSION；基线外=UNATTRIBUTABLE） | CR-075 Work B |
 | REQ-075-AGGREGATE | P0 | Given 七 Story 交付 When 兼容集回归 Then targeted→compatibility→full 分层全绿（存量窗口外失败单列），CR-075 变更窗口内零回归 | CR-075 CP7 |
+
+## CR-076 增量需求（P6 收口：Distribution, Publication & P6 Closure；2026-08-27 CP2-CR-076 revision 3 落轴，确认随 CP2 approve 生效）
+
+| ID | 优先级 | 验收条件（Given/When/Then） | 来源 |
+|---|---|---|---|
+| REQ-076-S01 | P0 | Given release chain 风险原因 When 分类 Then RiskReasonPolicyV1 输出 G0/G1/G2/unknown；ordinary 不自动升级 G2；public/security/production 变更 fail closed；G0/G1 N/A CP8 不等于 N/A authorization | CR-076 Work A S01 |
+| REQ-076-S02 | P0 | Given 链上操作 When 授权输入 Then --authorization-file/ref/id 恰一解析、前驱 receipt 校验、operation registry 匹配；exactly-one/none/多选/错误 namespace/过期/复用/OID 漂移全部负向阻断 | CR-076 Work A S02 |
+| REQ-076-S03 | P0 | Given 发布候选 When 资产构建 Then wheel/sdist/receipt/sidecar 单次 content-addressed 构建且各自 SHA-256 可追溯；source→accepted→published→installed 四重 identity 一致；缺失/重复/错版本/损坏/mismatch fail closed | CR-076 Work B S03 |
+| REQ-076-S04 | P0 | Given consumer 环境 When 安装/升级/回滚 Then clean-home 安装、升级、降级、回滚、重复安装幂等、部分失败恢复全部有界；user/project scope、权限不足、symlink/outside path、缓存污染 fail closed | CR-076 Work B S04 |
+| REQ-076-S05 | P0 | Given consumer 独立 replay When 回传结果 Then ConsumerAcceptanceResultV1 三字段组（authorization/artifact/execution identity）schema+digest 校验通过方可导入；漂移即失效；无 canonical result/源码 PASS/fixture PASS/provider canary 不可替代，只能 BLOCKED | CR-076 Work B S05 |
+| REQ-076-AGGREGATE | P0 | Given CR-076 交付与两个 replay 硬门（source-candidate、installed-artifact）When P6 收口 Then CP8 后独立 publication authorization 且远端 asset digest == consumer 已验收 digest；active CR/Work 归零、stale refs 归零、follow-up owner 交接 P7/P8/P9、native phase transition | CR-076 CP8/P6 close |

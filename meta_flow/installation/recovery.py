@@ -54,6 +54,7 @@ JOURNAL_STATES = (
     "planned",
     "authorized",
     "applying",
+    "activating",
     "applied",
     "rollback_pending",
     "rolled_back",
@@ -64,12 +65,14 @@ JOURNAL_STATES = (
 )
 ACTION_RECEIPT_STATES = ("planned", "applied", "verified", "compensated")
 RECOVERY_ACTIONS = ("inspect", "resume", "rollback", "abandon")
+ACTIVATION_ACTION_ID = "activation-1"
 ALLOWED_TRANSITIONS = {
     "planned": frozenset({"authorized", "blocked"}),
     "authorized": frozenset({"applying", "blocked"}),
     "applying": frozenset(
-        {"applied", "rollback_pending", "partial", "receipt_missing"}
+        {"activating", "applied", "rollback_pending", "partial", "receipt_missing"}
     ),
+    "activating": frozenset({"applied", "rollback_pending", "partial"}),
     "rollback_pending": frozenset({"rolled_back", "partial"}),
     "partial": frozenset({"planned", "rollback_pending", "abandoned"}),
     "blocked": frozenset({"planned", "rollback_pending"}),
@@ -433,6 +436,90 @@ def record_action_outcome(
     return validate_journal(updated)
 
 
+def record_activation_started(
+    journal: object,
+    *,
+    activation_preimage_digest: str,
+    timestamp: str,
+) -> dict[str, Any]:
+    """applying→activating 并落 activation receipt（S04）。
+
+    receipt 直接以 ``applied`` 态落盘（activation 无 executor 写盘动作，
+    ``planned`` 为瞬时态）：中断在 activating 时 receipt 已在 rollback
+    guard 的 ``{"applied", "verified"}` 遍历域内（R8 覆盖要求）。
+    """
+
+    normalized = validate_journal(journal)
+    if normalized["state"] != "applying":
+        raise RecoveryError(
+            ContractErrorCode.IDENTITY_CONFLICT,
+            "activation can only start while journal is applying",
+        )
+    _require_digest(activation_preimage_digest, field="activation_preimage_digest")
+    if any(
+        receipt["action_id"].startswith("activation-")
+        for receipt in normalized["action_receipts"]
+    ):
+        raise RecoveryError(
+            ContractErrorCode.IDENTITY_CONFLICT,
+            "activation receipt already exists",
+        )
+    updated = transition(normalized, "activating", timestamp=timestamp)
+    updated["action_receipts"].append(
+        {
+            "action_id": ACTIVATION_ACTION_ID,
+            "ordinal": len(updated["action_receipts"]) + 1,
+            "state": "applied",
+            "target_ref": f"activation/{updated['transaction_id']}",
+            "before_digest": activation_preimage_digest,
+            "after_digest": activation_preimage_digest,
+            "preimage_ref": f"activation-preimages/{updated['transaction_id']}",
+            "started_at": timestamp,
+            "completed_at": timestamp,
+            "error_code": "",
+        }
+    )
+    updated["updated_at"] = timestamp
+    return validate_journal(updated)
+
+
+def record_activation_verified(
+    journal: object,
+    *,
+    recomputed_digest: str,
+    timestamp: str,
+) -> dict[str, Any]:
+    """验收点：重算摘要 == activation before_digest 才 verified（S04）。"""
+
+    normalized = validate_journal(journal)
+    if normalized["state"] != "activating":
+        raise RecoveryError(
+            ContractErrorCode.IDENTITY_CONFLICT,
+            "activation verification requires activating journal",
+        )
+    _require_digest(recomputed_digest, field="recomputed_digest")
+    updated = deepcopy(normalized)
+    matching = [
+        receipt
+        for receipt in updated["action_receipts"]
+        if receipt["action_id"].startswith("activation-")
+    ]
+    if len(matching) != 1 or matching[0]["state"] != "applied":
+        raise RecoveryError(
+            ContractErrorCode.IDENTITY_CONFLICT,
+            "activation verification has no unique applied receipt",
+        )
+    if recomputed_digest != matching[0]["before_digest"]:
+        raise RecoveryError(
+            ContractErrorCode.IDENTITY_CONFLICT,
+            "ACTIVATION-PREIMAGE-DRIFT: recomputed digest differs from activation preimage",
+        )
+    matching[0]["state"] = "verified"
+    matching[0]["completed_at"] = timestamp
+    updated["updated_at"] = timestamp
+    return validate_journal(updated)
+
+
 def finalize_journal(
     journal: object,
     *,
@@ -680,6 +767,7 @@ def _journal_bytes(journal: Mapping[str, Any]) -> bytes:
 __all__ = [
     "ACTION_RECEIPT_FIELDS",
     "ACTION_RECEIPT_STATES",
+    "ACTIVATION_ACTION_ID",
     "ALLOWED_TRANSITIONS",
     "JOURNAL_FIELDS",
     "JOURNAL_SCHEMA_VERSION",
@@ -696,6 +784,8 @@ __all__ = [
     "journal_digest",
     "record_action_outcome",
     "record_action_started",
+    "record_activation_started",
+    "record_activation_verified",
     "recover",
     "transition",
     "validate_action_receipt",

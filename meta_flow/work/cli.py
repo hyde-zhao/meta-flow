@@ -662,7 +662,14 @@ def status_transition_main(
         parser.set_defaults(new_status=new_status)
     parser.add_argument("--result-ref", default="")
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--authorization-file", type=Path)
+    parser.add_argument(
+        "--authorization-file",
+        type=Path,
+        default=None,
+        help="typed authorization envelope file (legacy direct-read format is deprecated; removed before CP8)",
+    )
+    parser.add_argument("--authorization-ref", default=None)
+    parser.add_argument("--authorization-id", default=None)
     parsed = parser.parse_args(argv or [])
     try:
         release_root, process_root = _resolve_roots(parsed.project_root)
@@ -691,12 +698,33 @@ def status_transition_main(
         if not parsed.apply:
             print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
             return 0 if plan.ready else 1
-        if parsed.authorization_file is None:
-            raise ValueError("status-transition --apply requires --authorization-file")
-        authorization_payload = json.loads(parsed.authorization_file.read_text(encoding="utf-8"))
-        if not isinstance(authorization_payload, dict):
-            raise ValueError("status-transition authorization must be a JSON object")
-        authorization = WorkStatusTransitionAuthorizationV2.from_mapping(authorization_payload)
+        if (
+            parsed.authorization_file is None
+            and parsed.authorization_ref is None
+            and parsed.authorization_id is None
+        ):
+            raise ValueError(
+                "status-transition --apply requires exactly one of --authorization-file / "
+                "--authorization-ref / --authorization-id"
+            )
+
+        def _legacy_status_transition_authorization(path: Path) -> Any:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("status-transition authorization must be a JSON object")
+            return WorkStatusTransitionAuthorizationV2.from_mapping(payload)
+
+        from meta_flow.workflow.cr_cli import load_cli_authorization
+
+        authorization, authorization_error = load_cli_authorization(
+            file=parsed.authorization_file,
+            ref=parsed.authorization_ref,
+            authorization_id=parsed.authorization_id,
+            legacy_loader=_legacy_status_transition_authorization,
+            expected_type=WorkStatusTransitionAuthorizationV2,
+        )
+        if authorization_error:
+            raise ValueError(authorization_error)
         receipt = apply_work_status_transition(process_root, plan, authorization)
         payload = {
             **receipt.as_dict(),

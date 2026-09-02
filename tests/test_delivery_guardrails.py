@@ -39,8 +39,8 @@ def test_installation_registry_and_discovery_are_exactly_closed() -> None:
     report = build_report(ROOT)
 
     assert report["registry_version"] == "InstallationGuardrailRegistryV1"
-    assert len(report["registered"]) == 48
-    assert len(report["discovered"]) == 48
+    assert len(report["registered"]) == 56
+    assert len(report["discovered"]) == 56
     assert report["registered_only"] == []
     assert report["discovered_only"] == []
     assert report["role_mismatch"] == []

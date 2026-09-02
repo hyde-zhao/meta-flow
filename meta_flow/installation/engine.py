@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import re
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,7 +17,13 @@ from meta_flow.installation.contracts import (
     InstallationContractError,
     validate_plan,
 )
+from meta_flow.installation.identity import require_full_digest
+from meta_flow.installation.ownership import assert_activatable
 from meta_flow.installation.planner import CheckpointComparison, compare_checkpoints
+from meta_flow.release.bundle_identity import (
+    canonical_payload_digest,
+    validate_predecessor,
+)
 
 JournalWriter = Callable[[ClaimedAuthorization, str, Mapping[str, object]], None]
 CheckpointObserver = Callable[[], Mapping[str, object]]
@@ -380,6 +387,142 @@ def dispatch_authorized_actions(
     )
 
 
+INSTALL_RECEIPT_KIND = "InstallationReceiptV1"
+INSTALL_VARIANTS = ("candidate-install", "published-install")
+VARIANT_PREDECESSOR_KINDS = {
+    "candidate-install": "TransportReceiptV1",
+    "published-install": "PublishedVerifiedReceiptV1",
+}
+INSTALL_OUTCOMES = ("INSTALLED", "ACTIVATED", "ROLLED_BACK", "FAILED")
+INSTALL_RECEIPT_FIELDS = (
+    "schema_version", "kind", "receipt_digest", "predecessor_digest", "predecessor_kind",
+    "install_variant", "consumer_project_uid", "installed_at", "outcome", "reason_codes",
+)
+_VARIANT_BY_KIND = {kind: variant for variant, kind in VARIANT_PREDECESSOR_KINDS.items()}
+_INSTALL_TS_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$")
+_INSTALL_UID_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,256}$")
+_INSTALL_REASON_RE = re.compile(r"^[A-Z][A-Z0-9-]{1,95}$")
+
+
+def validate_installation_receipt(payload: object) -> dict[str, Any]:
+    """按冻结 schema rev3 校验 InstallationReceiptV1（variant 交叉锁定 + digest 自复核）。"""
+
+    receipt = dict(payload) if isinstance(payload, Mapping) else {}
+    variant = receipt.get("install_variant")
+    expected = VARIANT_PREDECESSOR_KINDS.get(variant if variant in INSTALL_VARIANTS else "")
+    codes = receipt.get("reason_codes") or ()
+    if (
+        set(receipt) - set(INSTALL_RECEIPT_FIELDS)
+        or [key for key in INSTALL_RECEIPT_FIELDS[:-1] if key not in receipt]
+        or receipt.get("schema_version") != 1
+        or receipt.get("kind") != INSTALL_RECEIPT_KIND
+        or receipt.get("outcome") not in INSTALL_OUTCOMES
+        or expected is None
+        or not isinstance(receipt.get("consumer_project_uid"), str)
+        or not _INSTALL_UID_RE.fullmatch(receipt["consumer_project_uid"])
+        or not isinstance(receipt.get("installed_at"), str)
+        or not _INSTALL_TS_RE.fullmatch(receipt["installed_at"])
+        or not isinstance(codes, (list, tuple))
+        or not all(isinstance(code, str) and _INSTALL_REASON_RE.fullmatch(code) for code in codes)
+        or len(codes) > 16
+        or (receipt.get("outcome") == "FAILED") != bool(codes)
+    ):
+        raise InstallationContractError(ContractErrorCode.NONCANONICAL_VALUE, "INSTALL-RECEIPT-INVALID: fields/enums/timestamps/reason_codes violate InstallationReceiptV1")
+    if receipt["predecessor_kind"] != expected:
+        raise InstallationContractError(ContractErrorCode.IDENTITY_CONFLICT, f"VARIANT-PREDECESSOR-MISMATCH: {variant} requires predecessor_kind {expected}")
+    require_full_digest(receipt["receipt_digest"], field_name="receipt_digest")
+    require_full_digest(receipt["predecessor_digest"], field_name="predecessor_digest")
+    receipt["reason_codes"] = sorted(set(codes))
+    if receipt["receipt_digest"] != canonical_payload_digest({key: value for key, value in receipt.items() if key != "receipt_digest"}):
+        raise InstallationContractError(ContractErrorCode.NONCANONICAL_VALUE, "INSTALL-RECEIPT-INVALID: receipt_digest does not match canonical payload")
+    return receipt
+
+
+def build_installation_receipt(
+    *, predecessor: Mapping[str, Any], consumer_project_uid: str, installed_at: str,
+    outcome: str, reason_codes: tuple[str, ...] = (), install_variant: str | None = None,
+) -> dict[str, Any]:
+    """构造 InstallationReceiptV1；install_variant 缺省由前驱 kind 反推并交叉锁定（S04）。"""
+
+    kind = predecessor.get("kind") if isinstance(predecessor, Mapping) else None
+    variant = install_variant or (_VARIANT_BY_KIND.get(kind) if isinstance(kind, str) else None)
+    if variant is None or VARIANT_PREDECESSOR_KINDS[variant] != kind:
+        raise InstallationContractError(ContractErrorCode.IDENTITY_CONFLICT, f"VARIANT-PREDECESSOR-MISMATCH: predecessor kind {kind!r} does not map to install variant {variant!r}")
+    receipt: dict[str, Any] = {
+        "schema_version": 1, "kind": INSTALL_RECEIPT_KIND, "receipt_digest": "",
+        "predecessor_digest": require_full_digest(predecessor.get("receipt_digest"), field_name="predecessor.receipt_digest"),
+        "predecessor_kind": kind, "install_variant": variant, "consumer_project_uid": consumer_project_uid,
+        "installed_at": installed_at, "outcome": outcome, "reason_codes": tuple(sorted(set(reason_codes))),
+    }
+    if variant == "candidate-install":
+        validate_predecessor(receipt, predecessor)  # S03 原语：kind+digest 指向双验
+    receipt["receipt_digest"] = canonical_payload_digest({key: value for key, value in receipt.items() if key != "receipt_digest"})
+    return validate_installation_receipt(receipt)
+
+
+def dispatch_lifecycle_activation(
+    *, journal: Mapping[str, Any], store: object, ownership_entries: Iterable[Mapping[str, Any]],
+    current_digests: Mapping[str, Any], predecessor: Mapping[str, Any], consumer_project_uid: str,
+    clock: TimestampProvider, terminal_receipt_ref: str, activation_observer: Callable[[], str] | None = None,
+) -> ExecutionReceipt:
+    """S04 activation 编排：assert→started→验收点→applied；失败按序 rollback_pending+FAILED；preimage=末位 applied receipt 的 after_digest（LLD §7.3）。"""
+
+    from meta_flow.installation.recovery import (
+        DurableJournalStore,
+        RecoveryError,
+        finalize_journal,
+        journal_digest,
+        record_activation_started,
+        record_activation_verified,
+        validate_journal,
+    )
+
+    if not isinstance(store, DurableJournalStore):
+        raise InstallationContractError(ContractErrorCode.NONCANONICAL_VALUE, "dispatch requires one DurableJournalStore")
+    working = validate_journal(journal)
+    if working["state"] != "applying":
+        raise InstallationContractError(ContractErrorCode.IDENTITY_CONFLICT, "lifecycle activation requires an applying journal")
+    expected = journal_digest(working)
+    conflicts = [
+        conflict for entry in ownership_entries for conflict in assert_activatable(
+            entry, current_digests if entry.get("ownership_type") == "exact_leaf_set" else current_digests.get(str(entry.get("target_ref")))
+        )
+    ]
+    if conflicts:
+        return _activation_failure(working, store, expected, predecessor, consumer_project_uid, clock, terminal_receipt_ref, "OWNERSHIP-ACTIVATION-CONFLICT")
+    preimage = next((r["after_digest"] for r in reversed(working["action_receipts"]) if r.get("state") == "applied"), "")
+    started = record_activation_started(working, activation_preimage_digest=preimage, timestamp=clock())
+    persisted = store.persist(started, expected_digest=expected)
+    recomputed = activation_observer() if activation_observer is not None else preimage
+    try:
+        verified = record_activation_verified(started, recomputed_digest=recomputed, timestamp=clock())
+    except RecoveryError:
+        return _activation_failure(started, store, persisted, predecessor, consumer_project_uid, clock, terminal_receipt_ref, "ACTIVATION-PREIMAGE-DRIFT")
+    persisted = store.persist(verified, expected_digest=persisted)
+    applied = finalize_journal(verified, terminal_state="applied", terminal_receipt_ref=terminal_receipt_ref, timestamp=clock())
+    store.persist(applied, expected_digest=persisted)
+    receipt = build_installation_receipt(predecessor=predecessor, consumer_project_uid=consumer_project_uid, installed_at=clock(), outcome="ACTIVATED")
+    return ExecutionReceipt(
+        transaction_id=applied["transaction_id"], authorization_id=applied["authorization_claim_ref"].rsplit("/", 1)[-1],
+        state="applied", terminal="applied", mutation_count=0, comparisons=(), outcome=receipt,
+    )
+
+
+def _activation_failure(
+    journal: Mapping[str, Any], store: object, expected_digest: str, predecessor: Mapping[str, Any],
+    consumer_project_uid: str, clock: TimestampProvider, terminal_receipt_ref: str, reason: str,
+) -> ExecutionReceipt:
+    from meta_flow.installation.recovery import transition
+
+    failed = transition(journal, "rollback_pending", timestamp=clock())
+    store.persist(failed, expected_digest=expected_digest)
+    receipt = build_installation_receipt(predecessor=predecessor, consumer_project_uid=consumer_project_uid, installed_at=clock(), outcome="FAILED", reason_codes=(reason,))
+    return ExecutionReceipt(
+        transaction_id=failed["transaction_id"], authorization_id=failed["authorization_claim_ref"].rsplit("/", 1)[-1],
+        state="partial", terminal="rollback_pending", mutation_count=0, comparisons=(), outcome=receipt,
+    )
+
+
 def _consumed_no_mutation(
     context: ClaimedAuthorization,
     comparisons: tuple[CheckpointComparison, ...],
@@ -453,6 +596,9 @@ def _journal_failure_state(
 __all__ = [
     "ExecutionOutcome",
     "ExecutionReceipt",
+    "build_installation_receipt",
     "dispatch_authorized",
     "dispatch_authorized_actions",
+    "dispatch_lifecycle_activation",
+    "validate_installation_receipt",
 ]

@@ -69,6 +69,15 @@ from meta_flow.workflow.legacy_evidence_registry import (
     snapshot_excluded_legacy_paths,
 )
 
+# FB1（MF-BUG-19）：status-sync 投影 targets 必经投影事务获得 lineage 绑定。
+PROJECTION_TARGET_REFS = frozenset(
+    {
+        "process/state/STATE.current.json",
+        "process/STATE.md",
+        "process/current/CURRENT.json",
+    }
+)
+
 STATUS_SYNC_AUTHORIZATION_FIELDS = {
     "schema_version",
     "authorization_id",
@@ -711,11 +720,39 @@ def plan_status_sync(
         if direct_close_requested:
             target_gate = DIRECT_CLOSED_GATE_STATUS
         elif gate_status and gate_status != CLOSED_GATE_STATUS:
-            raise ValueError(f"status=closed requires gate_status={CLOSED_GATE_STATUS}")
+            # 参数组合校验失败必须 typed BLOCKED（mutation=0），不得向 CLI 泄漏 traceback
+            return finish(
+                StatusSyncPlan(
+                    "BLOCKED",
+                    cr_id,
+                    work_id,
+                    {},
+                    facts,
+                    scope_digest,
+                    (),
+                    f"status=closed requires gate_status={CLOSED_GATE_STATUS}; mutation=0",
+                )
+            )
         else:
             target_gate = CLOSED_GATE_STATUS
     elif target_gate and target_gate not in cr_tracking.ALLOWED_GATE_STATUSES:
-        raise ValueError(f"invalid gate_status: {target_gate}")
+        # 非法 gate_status 枚举必须 typed BLOCKED（mutation=0），不得向 CLI 泄漏 traceback
+        return finish(
+            StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "invalid gate_status: "
+                + target_gate
+                + "; allowed="
+                + ",".join(sorted(cr_tracking.ALLOWED_GATE_STATUSES))
+                + "; mutation=0",
+            )
+        )
     native = (
         str(fields.get("schema_version") or "") == "1" and str(fields.get("kind") or "") == "cr"
     )
@@ -844,16 +881,36 @@ def plan_status_sync(
                 timestamp,
             )
         )
-    summary = summary_from_cr_file(
-        project_root,
-        cr_path,
-        status=target_status,
-        readiness=target_readiness,
-        gate_status=target_gate,
-        read_context=context,
-        text=before_text,
-        rel_fn=rel_from_context,
-    )
+    try:
+        summary = summary_from_cr_file(
+            project_root,
+            cr_path,
+            status=target_status,
+            readiness=target_readiness,
+            gate_status=target_gate,
+            read_context=context,
+            text=before_text,
+            rel_fn=rel_from_context,
+        )
+    except ValueError as exc:
+        # MF-BUG-13 同款语义：summary 投影（含 gate decision owner approval 校验）
+        # 分歧必须以 typed BLOCKED + repair 指引呈现，不得向 CLI 泄漏 traceback。
+        return finish(
+            StatusSyncPlan(
+                "BLOCKED",
+                cr_id,
+                work_id,
+                {},
+                facts,
+                scope_digest,
+                (),
+                "SUMMARY_PROJECTION_DIVERGENT: "
+                + str(exc)
+                + "; repair=run `meta-flow cr status-sync --inspect` then reconcile "
+                "GATE-LEDGER approval kinds before retry; mutation=0",
+                timestamp,
+            )
+        )
     summary["status"] = target_status
     summary["readiness"] = target_readiness
     summary["gate_status"] = target_gate
@@ -1598,8 +1655,13 @@ def apply_status_sync(
         },
         "authorization": dict(authorization.__dict__),
     }
-    return _apply_status_sync_transaction(
+    # FB4（O-S02-2）：父级 composite coordinator——投影 targets 走投影事务
+    # （successor 保留旧 digest → COMMITTED + lineage），非投影 targets 走
+    # exact-file 事务；prepare 全通过才确定性顺序提交（投影先、exact 后）。
+    return _apply_status_sync_composite(
         project_root,
+        plan,
+        authorization,
         validated,
         canonical_digest=_canonical_digest,
         index_ref=CR_INDEX_REL.as_posix(),
@@ -1609,6 +1671,126 @@ def apply_status_sync(
         transaction_root=transaction_root,
         lock_bound_admission_validator=validate_admission_under_writer_lock,
     )
+
+
+def _apply_status_sync_composite(
+    project_root: Path,
+    plan: StatusSyncPlan,
+    authorization: StatusSyncAuthorization,
+    validated: dict[str, Any],
+    *,
+    canonical_digest: Any,
+    index_ref: str,
+    fail_after_replace: int | None = None,
+    fail_recovery: bool = False,
+    fault: str = "",
+    transaction_root: Path | None = None,
+    lock_bound_admission_validator: Any | None = None,
+) -> dict[str, Any]:
+    """FB1/FB4：双通道 status-sync（MF-BUG-19 根解）。
+
+    投影 targets（STATE 三文件）经 apply_state_projection_transaction 获得
+    lineage 绑定；非投影 targets 走既有 exact-file 事务（fail-closed，LCQ-03）。
+    四态：写前失败=BLOCKED（mutation=0）；双通道全成=COMMITTED；exact 失败
+    且投影补偿完整=RECOVERED（如实记录已发生副作用）；补偿不全=PARTIAL。
+    """
+    from meta_flow.state.projection_transaction import (
+        apply_state_projection_transaction,
+        inspect_state_projection_transaction,
+    )
+
+    projection_targets = [
+        target for target in plan.targets if target.ref in PROJECTION_TARGET_REFS
+    ]
+    if not projection_targets:  # 纯 exact-file 计划：保持旧单通道路径
+        return _apply_status_sync_transaction(
+            project_root, validated, canonical_digest=canonical_digest, index_ref=index_ref,
+            fail_after_replace=fail_after_replace, fail_recovery=fail_recovery, fault=fault,
+            transaction_root=transaction_root,
+            lock_bound_admission_validator=lock_bound_admission_validator,
+        )
+    # prepare：投影事务环境必须可解析（无未决事务），否则写前阻断。
+    inspection = inspect_state_projection_transaction(project_root)
+    if inspection["decision"] != "PASS":
+        return {
+            "status": "BLOCKED",
+            "reason": "state projection transaction unresolved: " + str(inspection),
+            "mutation_count": 0,
+        }
+    drifted = [
+        target.ref
+        for target in projection_targets
+        if canonical_digest(target.path.read_text(encoding="utf-8") if target.path.is_file() else "")
+        != target.before_digest
+    ]
+    if drifted:
+        return {
+            "status": "BLOCKED",
+            "reason": "projection target preimage drifted: " + ", ".join(drifted),
+            "mutation_count": 0,
+        }
+    committed_projection = {
+        target.ref: target.after.encode("utf-8") for target in projection_targets
+    }
+    projection_result: dict[str, Any] = {}
+    try:
+        projection_result = apply_state_projection_transaction(
+            project_root, committed_projection
+        )
+    except ValueError as exc:
+        return {"status": "BLOCKED", "reason": f"projection channel failed: {exc}", "mutation_count": 0}
+    # exact 通道（非投影 targets；prepare/claim/recovery 均由既有事务承担）。
+    exact_validated = {
+        **validated,
+        "plan": {
+            **validated["plan"],
+            "targets": [
+                entry
+                for entry in validated["plan"]["targets"]
+                if entry["ref"] not in PROJECTION_TARGET_REFS
+            ],
+        },
+    }
+    exact_result = _apply_status_sync_transaction(
+        project_root, exact_validated, canonical_digest=canonical_digest, index_ref=index_ref,
+        fail_after_replace=fail_after_replace, fail_recovery=fail_recovery, fault=fault,
+        transaction_root=transaction_root,
+        lock_bound_admission_validator=lock_bound_admission_validator,
+    )
+    if exact_result.get("status") == "PASS":
+        return {
+            **exact_result,
+            "projection_decision": projection_result.get("decision"),
+            "composite_state": "COMMITTED",
+        }
+    if exact_result.get("mutation_count") == 0 and not exact_result.get("partial"):
+        # exact 写前失败：补偿投影通道，恢复投影文件 preimage。
+        compensation = {
+            target.ref: (target.before or "").encode("utf-8")
+            for target in projection_targets
+            if target.before is not None
+        }
+        compensated = True
+        if compensation:
+            try:
+                apply_state_projection_transaction(project_root, compensation)
+            except (OSError, ValueError):
+                compensated = False
+        state = "RECOVERED" if compensated else "PARTIAL"
+        return {
+            **exact_result,
+            "status": state,
+            "projection_decision": projection_result.get("decision"),
+            "composite_state": state,
+            "compensation_complete": compensated,
+        }
+    # exact 通道留下未决事务（recovery-required）：不自动继续，交 inspect/recover。
+    return {
+        **exact_result,
+        "projection_decision": projection_result.get("decision"),
+        "composite_state": "PARTIAL",
+        "compensation_complete": False,
+    }
 
 
 def sync_cr_status(
