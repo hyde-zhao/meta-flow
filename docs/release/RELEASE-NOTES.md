@@ -1,9 +1,9 @@
 ---
-status: release_candidate
+status: ready_for_publication
 version: "0.6.5"
 base_version: "0.6.3"
 release_artifact_profile: full
-release_decision: NOT_READY
+release_decision: READY_WITH_RISK
 ---
 
 # Meta Flow 0.6.5 发布说明
@@ -48,7 +48,7 @@ release_decision: NOT_READY
 
 - CR-077 专项矩阵：62 个用例，覆盖旧版兼容、默认 G2、显式 G3、scope-goal-note、架构/consent 分流、状态前沿和 publication 命名空间隔离。
 - 专项与兼容回归：172 passed，8 subtests passed。
-- 大范围功能回归：3588 passed，728 subtests passed；最终发布候选会在 v11 receipt 与 detector baseline 冻结后再执行一次全量确认。
+- 冻结后的最终无排除全量回归：3590 passed，728 subtests passed；另有 v11 receipt 与 detector 后置门联合验证 34 passed。
 - Ruff 与 `git diff --check` 通过。
 
 ## 已知边界

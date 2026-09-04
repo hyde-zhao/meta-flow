@@ -12,8 +12,8 @@ release_decision: NOT_READY
 - [x] 用户已批准 CR-077 功能 CP8，并独立授权真实发布 0.6.5。
 - [x] 版本选择固定为 0.6.5；明确跳过 0.6.4。
 - [x] G2/G3 专项、兼容回归、Ruff 与 diff check 通过。
-- [ ] activation receipt v11 已生成且 `CURRENT`；v1-v10 bytes 不变。
-- [ ] detector full baseline 与 frozen source OID 对齐，增量未解析 writer 为 0。
+- [x] activation receipt v11 已生成且 `CURRENT`；v1-v10 bytes 不变。
+- [x] detector full baseline 与 frozen source OID 对齐，增量未解析 writer 为 0。
 - [ ] release/process 两仓提交并推送，source OID 固定且工作树 clean。
 - [ ] `uv build` 只生成一个 wheel 和一个 sdist。
 - [ ] `ProviderArtifactReceiptV1.json` 与 `ProviderArtifactReceiptV1.digest-policy.json` 摘要闭合。

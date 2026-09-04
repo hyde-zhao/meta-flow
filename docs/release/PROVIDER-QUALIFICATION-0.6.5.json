@@ -1,0 +1,202 @@
+{
+  "kind": "ProviderReleaseQualificationEvidenceV1",
+  "schema_version": 1,
+  "package_name": "meta-flow",
+  "package_version": "0.6.5",
+  "qualified_at": "2026-09-04T01:29:19Z",
+  "qualified_source_oid": "fdb1bd7caa59a8f82cb6b69e039a9138c9a564a3",
+  "overall_decision": "PASS",
+  "qualification_scope": {
+    "cr_id": "CR-077",
+    "receipt_revision": 11,
+    "fixed_receipt_ref": "meta_flow/execution_control/provider/activation-receipt-v11.json",
+    "receipt_self_excluded": true,
+    "detector_baseline_sha256": "2e9f10c798f00904bd180248a00a6df129059bbd5f6eaceb3e8d870554bcc335"
+  },
+  "layers": {
+    "candidate_targeted": {
+      "profile": {
+        "name": "cr077-g2-g3-targeted-0.6.5-v1",
+        "scope": [
+          "GovernanceRiskProfile V2 G0/G1/G2/G3 classification",
+          "legacy V1 G2 effective-G3 compatibility",
+          "ScopeGoalNoteV1 and CP3-lite routing",
+          "consent-trigger fail-closed behavior",
+          "pending-gate frontier and publication namespace isolation"
+        ]
+      },
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "tests/cr077"
+        ],
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTEST_ADDOPTS": "-p no:cacheprovider"
+        }
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "passed": 62,
+        "duration_seconds": "0.86",
+        "summary": "62 passed"
+      },
+      "receipt": {
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "schema_version": 1,
+        "layer": "candidate_targeted",
+        "decision": "PASS",
+        "package_version": "0.6.5",
+        "source_oid": "fdb1bd7caa59a8f82cb6b69e039a9138c9a564a3"
+      }
+    },
+    "candidate_compatibility": {
+      "profile": {
+        "name": "cr077-affected-compatibility-0.6.5-v1",
+        "scope": [
+          "CR-077 targeted matrix",
+          "provider activation receipt v11 rotation",
+          "affected Work assurance, handoff, route, projection and delivery guardrails"
+        ]
+      },
+      "command": {
+        "strategy": "targeted-plus-affected-regression",
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTEST_ADDOPTS": "-p no:cacheprovider"
+        }
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "passed": 204,
+        "deselected": 1,
+        "subtests_passed": 8,
+        "summary": "204 passed, 1 post-materialization receipt assertion deselected, 8 subtests passed"
+      },
+      "receipt": {
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "schema_version": 1,
+        "layer": "candidate_compatibility",
+        "decision": "PASS",
+        "package_version": "0.6.5",
+        "source_oid": "fdb1bd7caa59a8f82cb6b69e039a9138c9a564a3"
+      }
+    },
+    "candidate_full": {
+      "profile": {
+        "name": "exact-source-full-regression-0.6.5-v1",
+        "scope": "all repository pytest tests except the post-materialization v11 receipt assertion and post-commit detector assertion",
+        "exclusions": [
+          "tests/test_execution_control_migration.py::test_packaged_v11_receipt_is_current_after_materialization",
+          "tests/test_detector_qualification.py::test_repository_r14_incremental_hard_gate_has_no_unqualified_current_writer"
+        ],
+        "exclusion_reason": "Both assertions require evidence generated only after the source OID is frozen; each is executed separately in candidate_closure."
+      },
+      "command": {
+        "argv": [
+          "uv",
+          "run",
+          "--python",
+          "3.11",
+          "pytest",
+          "-q",
+          "-k",
+          "not test_packaged_v11_receipt_is_current_after_materialization and not test_repository_r14_incremental_hard_gate_has_no_unqualified_current_writer",
+          "--maxfail=1"
+        ],
+        "environment": {
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTEST_ADDOPTS": "-p no:cacheprovider"
+        }
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "passed": 3588,
+        "deselected": 2,
+        "warnings": 283,
+        "subtests_passed": 728,
+        "duration_seconds": "1114.46",
+        "summary": "3588 passed, 2 deselected, 283 warnings, 728 subtests passed"
+      },
+      "receipt": {
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "schema_version": 1,
+        "layer": "candidate_full",
+        "decision": "PASS",
+        "package_version": "0.6.5",
+        "source_oid": "fdb1bd7caa59a8f82cb6b69e039a9138c9a564a3"
+      }
+    },
+    "candidate_closure": {
+      "profile": {
+        "name": "post-source-freeze-closure-0.6.5-v1",
+        "scope": [
+          "full writer baseline and zero-delta incremental detector",
+          "delivery guardrails",
+          "Ruff",
+          "lockfile and version surface",
+          "diff integrity"
+        ]
+      },
+      "command": {
+        "commands": [
+          "uv run --python 3.11 meta-flow check detector-qualification --project-root .",
+          "uv run --python 3.11 python scripts/check_delivery_guardrails.py",
+          "uv run --python 3.11 ruff check meta_flow tests scripts",
+          "uv lock --check",
+          "git diff --check"
+        ]
+      },
+      "result": {
+        "decision": "PASS",
+        "exit_code": 0,
+        "detector": {
+          "decision": "PASS",
+          "source_file_count": 230,
+          "writer_call_count": 446,
+          "classified_writer_call_count": 446,
+          "ambiguous_writer_call_count": 0,
+          "incremental_writer_call_count": 0,
+          "unresolved_unallowlisted_count": 0,
+          "report_digest": "588afa4bb979dd1ccee2cfec19968df1594971dec18e78abd057ec1e1858c65c"
+        },
+        "delivery_guardrail": "OK",
+        "ruff": "PASS",
+        "lock_check": "PASS",
+        "version_surface": "0.6.5/v11 PASS",
+        "diff_check": "PASS"
+      },
+      "receipt": {
+        "kind": "ProviderQualificationLayerReceiptV1",
+        "schema_version": 1,
+        "layer": "candidate_closure",
+        "decision": "PASS",
+        "package_version": "0.6.5",
+        "source_oid": "fdb1bd7caa59a8f82cb6b69e039a9138c9a564a3"
+      }
+    }
+  },
+  "final_revalidation": {
+    "decision": "PASS",
+    "command": "PYTHONDONTWRITEBYTECODE=1 PYTEST_ADDOPTS='-p no:cacheprovider' uv run --python 3.11 pytest -q --maxfail=1",
+    "passed": 3590,
+    "warnings": 283,
+    "subtests_passed": 728,
+    "duration_seconds": "1134.51",
+    "excluded": 0,
+    "summary": "3590 passed, 283 warnings, 728 subtests passed"
+  },
+  "known_limits": [
+    "The activation receipt is self-excluding and is materialized only after this qualification evidence is frozen.",
+    "Historical D0 unresolved-writer calibration is retained only as an immutable legacy measurement; the current full product inventory is clean.",
+    "Release 0.6.4 is intentionally skipped by explicit user version selection."
+  ]
+}
