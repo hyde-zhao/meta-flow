@@ -150,6 +150,32 @@ DELIVERY_ROUTING_TOKENS = ("production", "README", "docs", "交付")
 GUARDRAIL_CONDITION_TOKENS = ("仅当当前仓库存在", "外部 production 项目不得硬引用")
 BINDING_ALL_PROFILES_TOKEN = "vNext binding-only 适用于 G0/G1/G2"
 BINDING_LEGACY_SELECTION_TOKEN = "人工门显式选择"
+GOVERNANCE_PROFILE_CONTRACT_TOKEN = (
+    "GovernanceRiskProfile V2：G2=scope-goal-note；"
+    "G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。"
+)
+GOVERNANCE_PROFILE_MIRRORS = (
+    ".agents/skills/release-readiness/SKILL.md",
+    ".agents/skills/state-router/SKILL.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "delivery/README.md",
+    "delivery/doc/USER-MANUAL.md",
+    "delivery/rules/AGENT-SKILL-CONTRACT.md",
+    "delivery/rules/AGENTS.md",
+    "delivery/rules/DIRECTORY-CONTRACT.md",
+    "delivery/skills/release-readiness/SKILL.md",
+    "delivery/skills/state-router/SKILL.md",
+)
+PUBLICATION_GRADE_ALLOWLIST = frozenset(
+    {
+        "meta_flow/release/publication_policy.py",
+        "meta_flow/release/risk_policy.py",
+        "tests/cr076/test_publication_policy.py",
+        "tests/cr076/test_risk_policy.py",
+    }
+)
 PROCESS_ROUTE_CONTRACT_TOKENS = (
     "## vNext 过程引用契约",
     "meta-flow project resolve-ref",
@@ -3526,6 +3552,7 @@ def collect_errors() -> list[str]:
     errors.extend(collect_installation_architecture_errors())
     errors.extend(collect_digest_exclusion_policy_errors())
     errors.extend(collect_core_lifecycle_dogfood_errors())
+    errors.extend(collect_governance_profile_residue_errors())
 
     binding_profile_documents = {
         relative: (ROOT / relative).read_text(encoding="utf-8")
@@ -3641,6 +3668,47 @@ def collect_errors() -> list[str]:
             if token not in content:
                 errors.append(f"binding contract missing token: {relative} -> {token}")
 
+    return errors
+
+
+def collect_governance_profile_residue_errors(
+    root: Path = ROOT,
+    *,
+    extra_sources: dict[str, str] | None = None,
+) -> list[str]:
+    """检查 Work/CR 四级语义，同时隔离 publication 的三档命名空间。"""
+
+    overrides = extra_sources or {}
+    errors: list[str] = []
+    for relative in GOVERNANCE_PROFILE_MIRRORS:
+        path = root / relative
+        if relative in overrides:
+            content = overrides[relative]
+        elif path.is_file() and not path.is_symlink():
+            content = path.read_text(encoding="utf-8")
+        else:
+            errors.append(f"governance-profile-residue: missing mirror {relative}")
+            continue
+        if GOVERNANCE_PROFILE_CONTRACT_TOKEN not in content:
+            errors.append(
+                f"governance-profile-residue: {relative} missing V2 G2/G3 contract"
+            )
+        for line_number, line in enumerate(content.splitlines(), 1):
+            for clause in re.split(r"[；。]", line):
+                if re.search(
+                    r"(?<!原 )\bG2\s*(?:=|：|必须|需|采用|进入).*"
+                    r"(?:full-lld|完整(?:\s*LLD|设计|流程)|全量\s*HLD/LLD)",
+                    clause,
+                    re.IGNORECASE,
+                ):
+                    errors.append(
+                        "governance-profile-residue: "
+                        f"{relative}:{line_number} retains legacy G2 full-design semantics"
+                    )
+    for relative in PUBLICATION_GRADE_ALLOWLIST:
+        path = root / relative
+        if not path.is_file():
+            errors.append(f"governance-profile-residue: missing publication allowlist {relative}")
     return errors
 
 

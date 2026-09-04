@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -10,12 +11,13 @@ from typing import Any
 
 from meta_flow.execution_control.contract import CONTAINER_ROLES, ExecutionUnitV1
 from meta_flow.project.model import load_project
-from meta_flow.project.process_route import require_process_route
+from meta_flow.project.process_route import require_process_route, resolve_process_ref
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.work.assurance import build_review_plan, build_validation_plan
 from meta_flow.work.budget import BudgetLimit
 from meta_flow.work.decision_bundle import validate_bundle
 from meta_flow.work.git_inventory import InventoryCandidate, build_inventory
+from meta_flow.work.governance_profile import G3SelectionRecordV1
 from meta_flow.work.handoff import (
     build_handoff,
     decide_handoff_policy,
@@ -133,7 +135,12 @@ def _add_risk_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--high-risk", action="append", choices=sorted(_CLI_HIGH_RISK), default=[])
     parser.add_argument("--unknown-high-risk", action="append", default=[])
     parser.add_argument("--requested-cr", action="store_true")
-    parser.add_argument("--upgrade-to", choices=["G0", "G1", "G2"], default=None)
+    parser.add_argument("--upgrade-to", choices=["G0", "G1", "G2", "G3"], default=None)
+    parser.add_argument("--g3-selection", type=Path)
+    parser.add_argument("--selection-cr-id", default="")
+    parser.add_argument("--selection-source-oid", default="")
+    parser.add_argument("--selection-route-revision", type=int, default=1)
+    parser.add_argument("--selection-authorization-digest", default="")
     parser.add_argument("--g2-reads", type=int, default=None)
     parser.add_argument("--g2-writes", type=int, default=None)
     parser.add_argument("--g2-check-groups", type=int, default=None)
@@ -234,16 +241,54 @@ def _g2_budget(parsed: argparse.Namespace) -> BudgetLimit | None:
     )
 
 
+def _g3_selection(parsed: argparse.Namespace) -> G3SelectionRecordV1 | None:
+    if parsed.g3_selection is None:
+        return None
+    return G3SelectionRecordV1.from_mapping(
+        _load_json_object(parsed.g3_selection, label="G3 selection")
+    )
+
+
+def _verified_selection_authorization_digest(
+    project_root: Path,
+    selection: G3SelectionRecordV1 | None,
+    supplied_digest: str,
+) -> str:
+    """从 selection 的 canonical ref 重算授权 bytes，拒绝调用方自报摘要。"""
+
+    if selection is None:
+        return ""
+    target = resolve_process_ref(project_root.resolve(), selection.authorization_ref)
+    if target.is_symlink() or not target.is_file():
+        raise ValueError("G3_SELECTION_AUTHORIZATION_NOT_REGULAR")
+    observed = hashlib.sha256(target.read_bytes()).hexdigest()
+    if supplied_digest and supplied_digest != observed:
+        raise ValueError("G3_SELECTION_AUTHORIZATION_DIGEST_MISMATCH")
+    return observed
+
+
 def classify_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meta-flow work classify")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
     _add_risk_arguments(parser)
     parsed = parser.parse_args(argv or [])
     try:
+        selection = _g3_selection(parsed)
         decision = classify_work(
             _risk_facts(parsed),
             requested_cr=parsed.requested_cr,
             requested_profile=parsed.upgrade_to,
             g2_budget=_g2_budget(parsed),
+            g3_selection=selection,
+            selection_cr_id=parsed.selection_cr_id,
+            selection_source_oid=parsed.selection_source_oid,
+            selection_route_revision=parsed.selection_route_revision,
+            selection_authorization_digest=_verified_selection_authorization_digest(
+                parsed.project_root,
+                selection,
+                parsed.selection_authorization_digest,
+            ),
+            selection_channel="host-injection",
         )
     except ValueError as exc:
         print(json.dumps({"decision": "BLOCKED", "error": str(exc)}, ensure_ascii=False, indent=2))
@@ -469,14 +514,43 @@ def init_main(argv: list[str] | None = None) -> int:
     _add_execution_unit_arguments(parser)
     parsed = parser.parse_args(argv or [])
     try:
+        selection = _g3_selection(parsed)
+        profile = _route_profile(parsed)
+        preliminary = None
+        if selection is None and parsed.upgrade_to != "G3":
+            preliminary = classify_work(
+                _risk_facts(parsed),
+                requested_cr=parsed.requested_cr,
+                requested_profile=parsed.upgrade_to,
+                g2_budget=_g2_budget(parsed),
+            )
+            preliminary_route = evaluate_route_profile(
+                profile,
+                risk_profile=preliminary.risk_profile,
+                work_kind=preliminary.container_kind,
+                human_design_gate_ref=parsed.human_design_gate_ref,
+            )
+            if preliminary_route.blocked:
+                raise ValueError("; ".join(preliminary_route.errors))
+        release_root, process_root = _resolve_roots(parsed.project_root)
         execution_unit = _execution_unit(parsed)
-        classification = classify_work(
+        selection_authorization_digest = _verified_selection_authorization_digest(
+            release_root,
+            selection,
+            parsed.selection_authorization_digest,
+        )
+        classification = preliminary or classify_work(
             _risk_facts(parsed),
             requested_cr=parsed.requested_cr,
             requested_profile=parsed.upgrade_to,
             g2_budget=_g2_budget(parsed),
+            g3_selection=selection,
+            selection_cr_id=parsed.work_id,
+            selection_source_oid=_head_oid(release_root),
+            selection_route_revision=parsed.selection_route_revision,
+            selection_authorization_digest=selection_authorization_digest,
+            selection_channel="host-injection",
         )
-        profile = _route_profile(parsed)
         route_decision = evaluate_route_profile(
             profile,
             risk_profile=classification.risk_profile,
@@ -485,7 +559,6 @@ def init_main(argv: list[str] | None = None) -> int:
         )
         if route_decision.blocked:
             raise ValueError("; ".join(route_decision.errors))
-        release_root, process_root = _resolve_roots(parsed.project_root)
         project = load_project(process_root)
         scope = WorkScope(
             version=parsed.scope_version,
@@ -1383,7 +1456,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "usage: meta-flow work <command> [options]\n\n"
             "Commands:\n"
-            "  classify  Explain Work/CR and G0/G1/G2 routing.\n"
+            "  classify  Explain Work/CR and governance G0/G1/G2/G3 routing.\n"
             "  init      Preview or create one Work envelope.\n"
             "  init-preflight Simulate success/failure/no-op and semantic contracts with zero writes.\n"            "  lifecycle-preflight Zero-write dry-run across init/fail/recover/close/publish journeys.\n"            "  dependency-query Resolve dependency closure or sole legal successor (read-only).\n"
             "  init-inspect Inspect Work-init transactions and exact legacy partial recovery.\n"

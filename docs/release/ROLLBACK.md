@@ -1,75 +1,31 @@
 ---
 status: release_candidate
-version: "0.6.3"
-base_version: "0.6.2"
-release_artifact_profile: full
-release_decision: NOT_READY
+version: "0.6.5"
+rollback_target: "0.6.3"
 ---
 
-# Meta Flow 0.6.3 Rollback
+# Meta Flow 0.6.5 Rollback
 
-## 回滚目标与原则
+## 回滚原则
 
-0.6.3 的发布后回滚目标固定为已发布 0.6.2。当前 0.6.3 尚未 qualification、build、canary、CP8 或发布，因此现在只有“停止候选 lineage”，不存在可声称已执行的远端回滚。
-
-回滚只切换可执行包和入口，不删除或改写 append-only ledger、authorization、transaction manifest、receipt、Work/Story/CR 历史、release evidence 或 quant-lab follow-up 记录。禁止使用 `git reset --hard`、强推、删除已发布 tag、手工改状态投影或手工清理 transaction 文件作为回滚方法。
+0.6.5 的可执行资产回滚目标是公开版本 0.6.3。0.6.4 不存在，不能作为回滚目标。回滚不删除或改写 Work、CR、authorization、receipt、transaction manifest 或 append-only evidence。
 
 ## 触发条件
 
-| Trigger | 决策 | 立即动作 |
-|---|---|---|
-| qualification、build、canary 或 CP8 失败 | 候选失败，尚未发布 | 停止当前 0.6.3 lineage，保留失败证据与计数，不重复已计数步骤 |
-| source freeze 后 OID、fingerprint、scope 或 preimage 漂移 | 旧 lineage 失效 | 阻断旧 qualification/canary 复用；重新计划，不补跑 full |
-| `R-074-WB-STRUCTURE` 或 scope/authz review 未被 CP8 接受 | `NOT_READY` | 不进入 publication；回到风险决策或当前切片修正 |
-| installed canary 出现 partition、lineage、transaction 或 HANDOFF 回归 | `NOT_READY` | 保留 exact artifact 与 canary 证据，停止发布 |
-| 0.6.3 发布后出现高严重度回归 | 需要真实回滚 | 在独立授权下切回官方 0.6.2 artifact，并启动问题分流 |
-| 仅 quant-lab post-release acceptance 失败 | 外部 follow-up 失败 | 不自动回滚 Meta Flow；按影响判定 ISSUE/CR 或风险接受，除非证明 0.6.3 通用能力回归 |
+- 安装后 provider identity 不是 READY/CURRENT；
+- V1 G2 被误读为轻量 G2；
+- 未经用户显式选择进入 G3；
+- pending gate 越过缺失阶段或旧 approval 被复用；
+- publication operation 三档命名空间受治理 G3 污染；
+- wheel、sdist、receipt、sidecar 或远端摘要漂移。
 
-## 发布前停止流程
+## 回滚步骤
 
-1. 停止 0.6.3 release sequence；不得继续 qualification、build、canary、CP8、tag 或 publication。
-2. 记录失败所在步骤、exact OID/fingerprint、artifact digest（若已生成）、mutation count 与 terminal decision。
-3. 对 `PARTIAL`、`RECOVERY_REQUIRED` 或非终态 transaction 使用同一候选版本的 inspect/recover；不得以再次 apply 覆盖原失败。
-4. 使该 lineage 的后续 receipt 失效，并为 successor candidate 生成新的 plan、authorization 与 fingerprint。
-5. 继续维持 0.6.2 为唯一已发布基线；没有远端 mutation 时不创建虚假的 rollback receipt。
+1. 停止新的 0.6.5 安装和发布动作，保留失败日志与资产摘要。
+2. 从 v0.6.3 GitHub Release 下载 exact wheel、receipt 与 sidecar 并校验摘要。
+3. 在新隔离环境安装 0.6.3；不要覆盖原环境后再猜测回滚结果。
+4. 将调用入口切换到已验证的 0.6.3 环境。
+5. 验证 `meta-flow version`、provider identity 和关键只读命令。
+6. 将失败分流为 0.6.5 修复；不得删除 v0.6.5 tag 或强推历史。
 
-## 发布后回滚流程
-
-真实回滚需要独立 typed authorization，并由 release operator 执行：
-
-1. 冻结新的 0.6.3 mutation，收集受影响命令、项目、transaction ID 与 installed artifact digest。
-2. 在仍可运行 0.6.3 时先检查 unresolved Work status-transition、CR status-sync、state projection 和 child transaction；对非终态记录按 0.6.3 的 inspect/recover 协议收敛。
-3. 从官方 0.6.2 release 获取 exact wheel、sdist、receipt 与 sidecar，校验发布时记录的 SHA-256；不得从工作树临时重建“等价 0.6.2”。
-4. 在隔离环境安装 exact 0.6.2 artifact，确认 public version 为 0.6.2 且 runtime identity 为 READY。
-5. 对受影响项目执行只读 route health、formal truth、CURRENT/state、未完成 transaction 与 public operation 检查；发现 0.6.3-only 非终态 manifest 时保持阻断，交回 0.6.3 recovery 工具处理。
-6. 仅在验证通过后切换消费者入口；保留 0.6.3 tag、release、artifact 与全部失败证据，不强推或删 tag。
-7. 创建独立 incident/ISSUE 或 CR 候选，记录是否需要修复版；`FEEDBACK.md` 本身不创建正式工单。
-
-## 回滚验证
-
-| 检查 | 放行条件 |
-|---|---|
-| 版本与 artifact | 使用官方 0.6.2 exact artifact；版本、receipt 与 sidecar 摘要匹配 |
-| Formal truth | native CR 与 registered legacy 分区无新增污染；0.6.3 产生的 evidence 仍可保留读取，不被 0.6.2 重写 |
-| State/CURRENT | 无手工 projection mutation；active phase/change/gate 与 canonical truth 一致 |
-| Transaction | 无 unresolved `PARTIAL` / `RECOVERY_REQUIRED`；同一 authorization 未被重复消费 |
-| Consumer | 受影响项目使用 0.6.2 时基础 read-only checks 通过；失败时继续隔离而不是带风险切换 |
-| 外部边界 | quant-lab follow-up、production、trading、SaaS 与凭据均未因回滚隐式执行 |
-
-## 数据与兼容性边界
-
-- 0.6.2 → 0.6.3 无数据库或消费者数据迁移，通常不需要数据回滚。
-- 0.6.3 新增的 transaction manifest、successor receipt、partition digest 与 HANDOFF child evidence 是治理历史，必须保留；0.6.2 不得尝试删除或反向改写。
-- 已提交的 0.6.3 状态变化不能仅靠降级包撤销。必须先由拥有该 mutation 的版本 inspect/recover，再决定是否需要新的 typed successor。
-- 72 条 legacy callable mutation routes 的合同化状态不会因二进制回滚改变；其 provider admission 与风险分类仍需独立核对。
-- quant-lab CR-175 acceptance 是发布后独立 follow-up，不属于 0.6.3 artifact 回滚对象。
-
-## 责任边界
-
-| 事项 | Owner |
-|---|---|
-| 候选停止、证据封存、release decision | Host Orchestrator / release owner |
-| exact artifact 安装与消费者切换 | 取得独立授权的 release operator |
-| transaction inspect/recover | 对应 native operation owner |
-| `R-074-WB-STRUCTURE` 后续 | P6 Transaction Primitive Convergence |
-| quant-lab acceptance 或失败分流 | 独立 quant-lab follow-up owner |
+已由 0.6.5 写出的 V2 G2/G3 对象不应交给不了解 V2 schema 的旧版本执行写操作；回滚后仅允许只读检查或显式兼容恢复。

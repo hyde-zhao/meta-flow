@@ -703,6 +703,8 @@ def build_evolution_start_plan(
         budget=package.budget,
         required_gates=("GATE-SCOPE", "GATE-DESIGN") if package.risk_profile == "G2" else (),
         blocked=False,
+        # EvolutionPackageV1 的 G2 保持历史完整设计语义。
+        risk_profile_schema_version=1,
     )
     work = build_work(
         work_id=package.work_id,

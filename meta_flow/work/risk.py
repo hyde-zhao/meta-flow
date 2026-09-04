@@ -1,13 +1,19 @@
-"""Work/CR 与 G0/G1/G2 的结构化、可解释分类。"""
+"""Work/CR 与 GovernanceRiskProfile G0/G1/G2/G3 的可解释分类。"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from meta_flow.work.budget import G0_BUDGET, G1_BUDGET, BudgetLimit
+from meta_flow.work.governance_profile import (
+    GOVERNANCE_PROFILE_SCHEMA_VERSION,
+    GOVERNANCE_RISK_PROFILES,
+    G3SelectionRecordV1,
+)
 
-RISK_PROFILES = {"G0", "G1", "G2"}
+RISK_PROFILES = set(GOVERNANCE_RISK_PROFILES)
 LOW_CHANGE_KINDS = {"documentation", "config", "mechanical"}
 HIGH_RISK_FIELDS = {
     "public_contract": "PUBLIC_CONTRACT",
@@ -51,6 +57,7 @@ class RiskFacts:
     protected_ref: bool = False
     tag: bool = False
     external_publication: bool = False
+    requested_lld: bool = False
     unknown_high_risk_facts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -71,9 +78,15 @@ class ClassificationDecision:
     required_gates: tuple[str, ...]
     blocked: bool
     cannot_silently_downgrade: bool = True
+    risk_profile_schema_version: int = 1
+    selection_source: str = "system-default"
+    selection_record_digest: str = ""
+    selection_authorization_digest: str = ""
+    selection_source_oid: str = ""
+    route_revision: int = 1
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "container_kind": self.container_kind,
             "risk_profile": self.risk_profile,
             "reason_codes": list(self.reason_codes),
@@ -82,10 +95,22 @@ class ClassificationDecision:
             "blocked": self.blocked,
             "cannot_silently_downgrade": self.cannot_silently_downgrade,
         }
+        if self.risk_profile_schema_version >= 2:
+            payload.update(
+                {
+                    "risk_profile_schema_version": self.risk_profile_schema_version,
+                    "selection_source": self.selection_source,
+                    "selection_record_digest": self.selection_record_digest,
+                    "selection_authorization_digest": self.selection_authorization_digest,
+                    "selection_source_oid": self.selection_source_oid,
+                    "route_revision": self.route_revision,
+                }
+            )
+        return payload
 
 
 def _profile_rank(value: str) -> int:
-    return {"G0": 0, "G1": 1, "G2": 2}[value]
+    return {"G0": 0, "G1": 1, "G2": 2, "G3": 3}[value]
 
 
 def classify_work(
@@ -94,9 +119,20 @@ def classify_work(
     requested_cr: bool = False,
     requested_profile: str | None = None,
     g2_budget: BudgetLimit | None = None,
+    g3_selection: G3SelectionRecordV1 | Mapping[str, Any] | None = None,
+    selection_cr_id: str = "",
+    selection_source_oid: str = "",
+    selection_route_revision: int = 1,
+    selection_authorization_digest: str = "",
+    selection_channel: str = "config",
 ) -> ClassificationDecision:
     if requested_profile is not None and requested_profile not in RISK_PROFILES:
-        raise ValueError("requested_profile must be G0, G1, or G2")
+        raise ValueError("requested_profile must be G0, G1, G2, or G3")
+    selection = (
+        G3SelectionRecordV1.from_mapping(g3_selection)
+        if isinstance(g3_selection, Mapping)
+        else g3_selection
+    )
     high_reasons = [
         code
         for field, code in HIGH_RISK_FIELDS.items()
@@ -142,8 +178,34 @@ def classify_work(
             container_kind = "cr"
             reasons.append("UNAUTHORIZED_REPOSITORY_PUSH_TARGET")
 
+    selection_errors: list[str] = []
+    g3_requested = requested_profile == "G3" or facts.requested_lld or selection is not None
+    if g3_requested:
+        container_kind = "cr"
+        if selection is None:
+            selection_errors.append("G3_SELECTION_REQUIRED")
+        elif not selection_cr_id or not selection_source_oid:
+            selection_errors.append("G3_SELECTION_BINDING_CONTEXT_REQUIRED")
+        else:
+            selection_errors.extend(
+                selection.binding_errors(
+                    cr_id=selection_cr_id,
+                    source_oid=selection_source_oid,
+                    route_revision=selection_route_revision,
+                    authorization_digest=selection_authorization_digest,
+                    selection_channel=selection_channel,
+                )
+            )
+
     final_profile = base_profile
-    if requested_profile is not None and _profile_rank(requested_profile) > _profile_rank(base_profile):
+    if g3_requested and not selection_errors:
+        final_profile = "G3"
+        reasons.append("USER_REQUESTED_FULL_LLD_G3")
+    elif g3_requested:
+        # 无可信选择时保持在高风险默认档并阻断，禁止把不可信 G3 请求当作 G2 PASS。
+        final_profile = "G2"
+        reasons.extend(selection_errors)
+    elif requested_profile is not None and _profile_rank(requested_profile) > _profile_rank(base_profile):
         final_profile = requested_profile
         reasons.append(f"USER_UPGRADED_TO_{requested_profile}")
     elif requested_profile is not None and _profile_rank(requested_profile) < _profile_rank(base_profile):
@@ -160,7 +222,7 @@ def classify_work(
     else:
         budget = g2_budget
         gates = ("GATE-SCOPE", "GATE-DESIGN")
-        blocked = bool(unknown_reasons) or budget is None
+        blocked = bool(unknown_reasons) or budget is None or bool(selection_errors)
         if unknown_reasons:
             reasons.append("HIGH_RISK_FACTS_REQUIRE_RESOLUTION")
         if budget is None:
@@ -173,4 +235,14 @@ def classify_work(
         budget=budget,
         required_gates=gates,
         blocked=blocked,
+        risk_profile_schema_version=(
+            GOVERNANCE_PROFILE_SCHEMA_VERSION if final_profile in {"G2", "G3"} else 1
+        ),
+        selection_source="user-explicit" if final_profile == "G3" else "system-default",
+        selection_record_digest=selection.digest if final_profile == "G3" and selection else "",
+        selection_authorization_digest=(
+            selection_authorization_digest if final_profile == "G3" else ""
+        ),
+        selection_source_oid=selection_source_oid if final_profile == "G3" else "",
+        route_revision=selection_route_revision,
     )

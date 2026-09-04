@@ -1249,7 +1249,7 @@ def plan_g1_scope_amend(
     if is_g2_current:
         if work.kind != "cr":
             blockers.append("G2_CURRENT_CR_SCOPE_AMEND_WORK_KIND_INVALID")
-        if work.risk_profile != "G2":
+        if work.effective_risk_profile not in {"G2", "G3"}:
             blockers.append("G2_CURRENT_CR_SCOPE_AMEND_RISK_INVALID")
         if work.status not in {"planned", "blocked"}:
             blockers.append("G2_CURRENT_CR_SCOPE_AMEND_STATUS_INVALID")

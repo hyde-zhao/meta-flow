@@ -26,6 +26,10 @@ from meta_flow.checks.frozen_cp6_evidence import (
     freeze_cp6_revalidation_receipt,
 )
 from meta_flow.context_pack import read_expansion, story_contract
+from meta_flow.design.lightweight_design import (
+    ScopeGoalNoteV1,
+    extract_scope_goal_note_from_story,
+)
 from meta_flow.project.onboarding_contract import canonical_digest
 from meta_flow.project.process_route import (
     _resolve_runtime_path,
@@ -311,6 +315,8 @@ def _infer_lld_evidence_type(path: Path, text: str, explicit: str = "") -> str:
     if value:
         return value
     lowered = text.lower()
+    if '"kind": "ScopeGoalNoteV1"' in text or "kind: ScopeGoalNoteV1" in text:
+        return "scope-goal-note"
     if "design_evidence_type: \"batch-lld\"" in lowered or "design_evidence_type: batch-lld" in lowered:
         return "batch-lld"
     if path.name.startswith("BATCH-"):
@@ -376,8 +382,31 @@ def validate_lld_structure(
     elif inferred == "waived":
         missing_tokens = [token for token in WAIVED_REQUIRED_TOKENS if token not in text]
         errors.extend(f"waived evidence missing required token: {token}" for token in missing_tokens)
+    elif inferred == "scope-goal-note":
+        try:
+            if path.suffix.lower() == ".md":
+                payload, note_text = extract_scope_goal_note_from_story(text)
+            else:
+                payload = (
+                    json.loads(text)
+                    if path.suffix.lower() == ".json"
+                    else load_yaml_object(path)
+                )
+                note_text = text
+            if not isinstance(payload, Mapping):
+                raise ValueError("SCOPE_GOAL_NOTE_OBJECT_REQUIRED")
+            ScopeGoalNoteV1.from_mapping(
+                payload,
+                raw_text=note_text,
+                effective_profile="G2",
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"scope-goal-note invalid: {exc}")
     else:
-        errors.append("unable to infer LLD evidence type; pass --evidence-type full-lld|batch-lld|technical-note|waived")
+        errors.append(
+            "unable to infer LLD evidence type; pass --evidence-type "
+            "full-lld|batch-lld|technical-note|scope-goal-note|waived"
+        )
 
     return errors, warnings
 
@@ -3422,7 +3451,7 @@ def _print_story_help() -> None:
         "  project-cp6     Project a recorded CP6 PASS into DEVELOPMENT-PLAN.\n"
         "  revalidate-cp6 Plan a strict immutable CP6 revalidation attempt.\n"
         "  issue-revalidation-authority Issue a frozen receipt plus private binding sidecar.\n"
-        "  lld-check       Validate full-lld, batch-lld, technical-note, or waived evidence structure.\n"
+        "  lld-check       Validate full-lld, batch-lld, technical-note, scope-goal-note, or waived evidence.\n"
         "  cp5-context-check Validate CP5 capsule-first context policy.\n\n"
         "Examples:\n"
         "  meta-flow story return-check --packet process/context/stories/STORY-CR123-S01.CP6.work-packet.json --return process/returns/STORY-CR123-S01.CP6.return.json --project-root .\n"

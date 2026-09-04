@@ -15,6 +15,10 @@ from typing import TYPE_CHECKING, Any
 from meta_flow.checks import state_transition
 from meta_flow.checks.token_budget import DEFAULT_READ_DENY_PATTERNS
 from meta_flow.context_pack import read_expansion
+from meta_flow.design.lightweight_design import (
+    evaluate_lightweight_design,
+    evaluate_story_design_policy,
+)
 from meta_flow.execution_control.contract import FINGERPRINT_KEYS, canonical_digest
 from meta_flow.policies import failure_routing
 from meta_flow.project.process_route import (
@@ -259,6 +263,114 @@ def _validate_cp7_alignment(result: dict[str, Any]) -> list[str]:
             )
     if missing_required_seen and str(result.get("decision") or "") != "BLOCKED":
         errors.append("CP7 decision must be BLOCKED when required evidence is missing")
+    return errors
+
+
+def _validate_story_design_reviews(
+    result: dict[str, Any], *, project_root: Path | None = None
+) -> list[str]:
+    """校验新 V2 G2/G3 在 CP4/CP5 的证据档位，不影响旧结果。"""
+
+    checkpoint = str(result.get("checkpoint") or result.get("checkpoint_id") or "")
+    if checkpoint not in {"CP4", "CP5"}:
+        return []
+    profile = result.get("governance_profile")
+    if profile is None and project_root is not None:
+        cr_id = str(result.get("cr_id") or "")
+        if cr_id:
+            try:
+                route_path = _resolve_runtime_path(
+                    project_root,
+                    f"process/checks/CP0-{cr_id}.route-plan.json",
+                )
+                if route_path.is_file() and not route_path.is_symlink():
+                    route_payload = load_cp_result(route_path)
+                    candidate = route_payload.get("governance_profile")
+                    if isinstance(candidate, Mapping):
+                        profile = candidate
+            except (OSError, ValueError):
+                return ["canonical governance profile route cannot be resolved"]
+    if profile is None:
+        return []
+    if not isinstance(profile, Mapping):
+        return ["governance_profile must be an object"]
+    risk_profile = str(profile.get("risk_profile") or "")
+    schema_version = profile.get("schema_version")
+    if schema_version != 2 or risk_profile not in {"G2", "G3"}:
+        return ["governance_profile must identify V2 G2 or G3"]
+    reviews = result.get("story_design_reviews")
+    if not isinstance(reviews, list) or not reviews:
+        return ["V2 G2/G3 CP4/CP5 result requires story_design_reviews"]
+    errors: list[str] = []
+    seen: set[str] = set()
+    for index, review in enumerate(reviews, 1):
+        if not isinstance(review, Mapping):
+            errors.append(f"story_design_reviews[{index}] must be an object")
+            continue
+        allowed = {
+            "story_id",
+            "lld_policy",
+            "lightweight_decision",
+            "scope_goal_note",
+            "architecture_impact_note",
+            "mechanically_observed_impacts",
+            "mechanically_unknown_impacts",
+        }
+        if set(review) - allowed:
+            errors.append(f"story_design_reviews[{index}] contains unknown fields")
+            continue
+        story_id = str(review.get("story_id") or "")
+        if not story_id or story_id in seen:
+            errors.append(f"story_design_reviews[{index}] story_id is missing or duplicate")
+            continue
+        seen.add(story_id)
+        lightweight_decision = None
+        if risk_profile == "G2" and str(review.get("lld_policy") or "") == "scope-goal-note":
+            scope_note = review.get("scope_goal_note")
+            impact_note = review.get("architecture_impact_note")
+            if not isinstance(scope_note, Mapping) or not isinstance(impact_note, Mapping):
+                errors.append(
+                    f"{story_id} scope-goal-note review requires canonical note and architecture impact payloads"
+                )
+                continue
+            try:
+                lightweight_decision = evaluate_lightweight_design(
+                    scope_note,
+                    impact_note,
+                    mechanically_observed_impacts=tuple(
+                        str(item)
+                        for item in review.get("mechanically_observed_impacts") or []
+                    ),
+                    mechanically_unknown_impacts=tuple(
+                        str(item)
+                        for item in review.get("mechanically_unknown_impacts") or []
+                    ),
+                )
+            except (TypeError, ValueError) as exc:
+                errors.append(f"{story_id} lightweight evidence invalid: {exc}")
+                continue
+            if lightweight_decision.get("story_id") != story_id:
+                errors.append(f"{story_id} scope-goal-note story identity mismatch")
+                continue
+            result_cr_id = str(result.get("cr_id") or "")
+            if result_cr_id and lightweight_decision.get("cr_id") != result_cr_id:
+                errors.append(f"{story_id} architecture impact CR identity mismatch")
+                continue
+            declared = review.get("lightweight_decision")
+            if declared is not None and declared != lightweight_decision:
+                errors.append(f"{story_id} lightweight decision does not match recomputation")
+                continue
+        policy = evaluate_story_design_policy(
+            risk_profile=risk_profile,
+            risk_profile_schema_version=schema_version,
+            lld_policy=str(review.get("lld_policy") or ""),
+            lightweight_decision=lightweight_decision,
+        )
+        if policy["decision"] != "PASS":
+            errors.append(
+                f"{story_id} design evidence blocked: "
+                + ",".join(policy["reason_codes"])
+            )
     return errors
 
 
@@ -1222,6 +1334,10 @@ def validate_cp_result(
         errors.append("decision=WAIVED requires waivers")
     if checkpoint == "CP2":
         errors.extend(_validate_cp2_commitments(result))
+    if checkpoint in {"CP4", "CP5"}:
+        errors.extend(
+            _validate_story_design_reviews(result, project_root=project_root)
+        )
     if checkpoint == "CP7":
         errors.extend(_validate_cp7_alignment(result))
     if checkpoint == "CP8":

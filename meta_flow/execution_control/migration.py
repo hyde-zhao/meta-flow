@@ -18,7 +18,7 @@ from typing import Any
 
 from meta_flow.execution_control.contract import ContainerBudgetV1, canonical_digest
 
-FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v10.json"
+FIXED_RECEIPT_REF = "meta_flow/execution_control/provider/activation-receipt-v11.json"
 LEGACY_RECEIPT_REFS = (
     "meta_flow/execution_control/provider/activation-receipt-v1.json",
     "meta_flow/execution_control/provider/activation-receipt-v2.json",
@@ -29,14 +29,15 @@ LEGACY_RECEIPT_REFS = (
     "meta_flow/execution_control/provider/activation-receipt-v7.json",
     "meta_flow/execution_control/provider/activation-receipt-v8.json",
     "meta_flow/execution_control/provider/activation-receipt-v9.json",
+    "meta_flow/execution_control/provider/activation-receipt-v10.json",
 )
 PACKAGE_NAME = "meta-flow"
-PACKAGE_VERSION = "0.6.3"
+PACKAGE_VERSION = "0.6.5"
 POLICY_REVISION = 1
 COHORT_REVISION = 1
 CONTEXT_REVISION = 1
 GENERATOR_IDENTITY = (
-    "meta_flow.execution_control.migration:build_provider_activation_receipt:v10"
+    "meta_flow.execution_control.migration:build_provider_activation_receipt:v11"
 )
 _SELF_EXCLUSION = FIXED_RECEIPT_REF
 _SOURCE_OWNERS = frozenset(
@@ -74,7 +75,7 @@ _FIELDS = frozenset(
 def _receipt_path() -> Path:
     return Path(
         resources.files("meta_flow.execution_control").joinpath(
-            "provider/activation-receipt-v10.json"
+            "provider/activation-receipt-v11.json"
         )
     )
 
@@ -447,37 +448,37 @@ class _NativeAuthorityDescriptorV1:
     checkpoint_ledger_ref: str
 
 
-_NATIVE_AUTHORITY_V10 = _NativeAuthorityDescriptorV1(
-    revision=10,
-    cp7_revision=2,
+_NATIVE_AUTHORITY_V11 = _NativeAuthorityDescriptorV1(
+    revision=11,
+    cp7_revision=1,
     project_id="meta-flow",
-    cr_id="CR-074",
-    story_id="STORY-CR074-S05",
-    contract_id="CR074-PROVIDER-ACTIVATION-RECEIPT-V10-MATERIALIZATION",
-    dispatch_contract_id="CR074-PROVIDER-ACTIVATION-RECEIPT-V10-DISPATCH",
+    cr_id="CR-077",
+    story_id="STORY-CR077-S04",
+    contract_id="CR077-PROVIDER-ACTIVATION-RECEIPT-V11-MATERIALIZATION",
+    dispatch_contract_id="CR077-PROVIDER-ACTIVATION-RECEIPT-V11-DISPATCH",
     scanner_contract_id=(
-        "CR074-PROVIDER-ACTIVATION-RECEIPT-V10-SCANNER-QUALIFICATION-RECEIPT"
+        "CR077-PROVIDER-ACTIVATION-RECEIPT-V11-SCANNER-QUALIFICATION-RECEIPT"
     ),
     final_manifest_contract_id=(
-        "CR074-PROVIDER-ACTIVATION-RECEIPT-V10-FINAL-CONSUMER-MANIFEST-RECEIPT"
+        "CR077-PROVIDER-ACTIVATION-RECEIPT-V11-FINAL-CONSUMER-MANIFEST-RECEIPT"
     ),
-    checkpoint_event_id="CP7-CR074-AGGREGATE-RESULT-V2",
+    checkpoint_event_id="CP7-CR077-AGGREGATE-RESULT-V1",
     checkpoint_event_type="checkpoint_result",
     authorization_ref=(
         "process/release/"
-        "CR-074-PROVIDER-RECEIPT-MATERIALIZATION-AUTHORIZATION-0.6.3.json"
+        "CR-077-PROVIDER-RECEIPT-MATERIALIZATION-AUTHORIZATION-0.6.5.json"
     ),
     context_ref=(
-        "process/context/stories/STORY-CR074-S05.CP7.REV2.verify-packet.json"
+        "process/context/stories/STORY-CR077-S04.CP7.verify-packet.json"
     ),
-    evidence_ref="process/evidence/STORY-CR074-S05.CP7.REV2.index.json",
-    return_ref="process/returns/STORY-CR074-S05.CP7.REV2.return.json",
+    evidence_ref="process/evidence/STORY-CR077-S04.CP7.index.json",
+    return_ref="process/returns/STORY-CR077-S04.CP7.return.json",
     cp7_result_ref=(
-        "process/checks/CP7-STORY-CR074-S05-AGGREGATE-REV2.result.json"
+        "process/checks/CP7-STORY-CR077-S04-AGGREGATE.result.json"
     ),
     checkpoint_ledger_ref="process/state/CHECKPOINT-LEDGER.ndjson",
 )
-MATERIALIZATION_AUTHORIZATION_REF = _NATIVE_AUTHORITY_V10.authorization_ref
+MATERIALIZATION_AUTHORIZATION_REF = _NATIVE_AUTHORITY_V11.authorization_ref
 _FREEZE_PAYLOAD_FIELDS = frozenset(
     {
         "schema_version",
@@ -640,7 +641,7 @@ def _require_oid(value: object, error_code: str) -> str:
 def _validate_common_authority_fields(
     payload: Mapping[str, Any],
     contract_id: str,
-    descriptor: _NativeAuthorityDescriptorV1 = _NATIVE_AUTHORITY_V10,
+    descriptor: _NativeAuthorityDescriptorV1 = _NATIVE_AUTHORITY_V11,
 ) -> tuple[str, str, str, str]:
     if (
         payload["schema_version"] != 1
@@ -894,9 +895,9 @@ _NATIVE_LEDGER_FIELDS = frozenset(
 
 
 def _load_native_materialization_authority(process_root: Path) -> NativeMaterializationAuthorityV1:
-    """加载并闭合验证 activation revision 10 的 native CP7 authority chain。"""
+    """加载并闭合验证 activation revision 11 的 native CP7 authority chain。"""
 
-    descriptor = _NATIVE_AUTHORITY_V10
+    descriptor = _NATIVE_AUTHORITY_V11
     payload = _load_closed_json(
         process_root / _safe_process_ref(descriptor.authorization_ref),
         _MATERIALIZATION_AUTHORIZATION_FIELDS,

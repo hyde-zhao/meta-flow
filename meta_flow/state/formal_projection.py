@@ -20,6 +20,7 @@ from meta_flow.state.failure_observation import (
     correlation_from_mapping,
     project_safe_next_action,
 )
+from meta_flow.state.gate_frontier import derive_gate_frontier
 from meta_flow.workflow.cr_model import parse_frontmatter
 
 PROJECT_REF = "process/PROJECT.yaml"
@@ -501,6 +502,92 @@ def _active_cp7_transition_stop(
     }, sources
 
 
+def _active_gate_frontier(
+    project_root: Path,
+    process_root: Path | None,
+    active_cr_ids: list[str],
+) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
+    """按 route 顺序计算唯一 active CR 的执行前沿；异常时不猜 pending gate。"""
+
+    if len(active_cr_ids) != 1:
+        return None, []
+    from meta_flow.state import checkpoint_projection, event_ledger
+
+    root = project_root.resolve()
+    cr_id = active_cr_ids[0]
+
+    def resolver(_root: Path, logical_ref: str) -> Path:
+        return _resolve(root, logical_ref, process_root)
+
+    route_ref = f"process/checks/CP0-{cr_id}.route-plan.json"
+    try:
+        route = _load_object(root, route_ref, process_root, None)
+    except (OSError, ValueError):
+        return None, []
+    stages = route.get("stages")
+    if route.get("decision") != "PASS" or not isinstance(stages, list) or not stages:
+        return None, [_source_receipt(root, route_ref, process_root, None)]
+    sources = [_source_receipt(root, route_ref, process_root, None)]
+    heads: dict[str, dict[str, str]] = {}
+    for stage in stages:
+        if not isinstance(stage, Mapping):
+            return None, sources
+        checkpoint = str(stage.get("checkpoint") or "").upper()
+        try:
+            projection = checkpoint_projection.load_checkpoint_projection(
+                root,
+                cr_id=cr_id,
+                checkpoint=checkpoint,
+                resolver=resolver,
+            )
+        except (OSError, ValueError):
+            return None, sources
+        if projection.findings:
+            return None, sources
+        head = projection.head(checkpoint)
+        if head is not None:
+            heads[checkpoint] = {
+                "decision": head.decision,
+                "result_ref": head.result_ref,
+            }
+
+    gate_ref = "process/state/GATE-LEDGER.ndjson"
+    gate_path = resolver(root, gate_ref)
+    gate_events, gate_errors = event_ledger.load_events(gate_path)
+    if gate_errors:
+        return None, sources
+    sources.append(
+        {
+            "ref": gate_ref,
+            "digest": sha256(gate_path.read_bytes()).hexdigest()
+            if gate_path.is_file() and not gate_path.is_symlink()
+            else "missing",
+        }
+    )
+    approvals: dict[str, str] = {}
+    for approval in event_ledger.project_gate_approvals(gate_events):
+        if approval.cr_id != cr_id or not approval.passage:
+            continue
+        head = heads.get(approval.checkpoint)
+        if head is not None and approval.result_ref == head["result_ref"]:
+            approvals[approval.checkpoint] = approval.result_ref
+    launches: dict[str, dict[str, str]] = {}
+    for event in gate_events:
+        if (
+            str(event.get("event_type") or "") == "human_gate_launched"
+            and str(event.get("cr_id") or "") == cr_id
+        ):
+            checkpoint = str(event.get("checkpoint") or "").upper()
+            head = heads.get(checkpoint)
+            result_ref = str(event.get("result_ref") or "")
+            if head is not None and result_ref == head["result_ref"]:
+                launches[checkpoint] = {
+                    "result_ref": result_ref,
+                    "checkpoint_ref": str(event.get("checkpoint_ref") or ""),
+                }
+    return derive_gate_frontier(stages, heads, approvals, launches).as_dict(), sources
+
+
 def build_formal_truth_snapshot(
     project_root: Path,
     *,
@@ -612,6 +699,12 @@ def build_formal_truth_snapshot(
         active_crs,
     )
     sources.extend(transition_sources)
+    gate_frontier, gate_sources = _active_gate_frontier(
+        root,
+        process_root,
+        active_crs,
+    )
+    sources.extend(gate_sources)
     failure_truth, failure_sources = _active_failure_truth(
         root,
         process_root,
@@ -629,6 +722,7 @@ def build_formal_truth_snapshot(
         "active_cr_ids": active_crs,
         "partition_snapshot_digest": discovery_snapshot.snapshot_digest,
         "transition_stop": transition_stop,
+        "gate_frontier": gate_frontier,
         "failure_truth": failure_truth,
         "source_refs": [item["ref"] for item in sources],
         "source_digest": source_digest,
@@ -709,6 +803,23 @@ def derive_formal_truth_patch(
             "text": f"Review pending human gate {pending_gate}.",
             "stop_reason": "required_human_gate",
         }
+    gate_frontier = snapshot.get("gate_frontier")
+    gate_frontier = gate_frontier if isinstance(gate_frontier, Mapping) else {}
+    if (
+        not formal_conflict
+        and len(active_crs) == 1
+        and gate_frontier.get("status") == "AWAITING_HUMAN_GATE"
+    ):
+        pending_gate = str(gate_frontier.get("pending_gate") or "")
+        pending_checklist_path = str(
+            gate_frontier.get("pending_checklist_path") or ""
+        )
+        if pending_gate and pending_checklist_path:
+            next_action = {
+                "type": "human_gate",
+                "text": f"Review pending human gate {pending_gate}.",
+                "stop_reason": "required_human_gate",
+            }
     transition_stop = snapshot.get("transition_stop")
     transition_stop = transition_stop if isinstance(transition_stop, Mapping) else {}
     transition_status = str(transition_stop.get("status") or "")
@@ -749,6 +860,8 @@ def derive_formal_truth_patch(
         "active_change": active_change,
         "blocked": formal_conflict or explicit_failure_stop or transition_blocked or failure_blocked,
         "next_action": next_action,
+        "pending_gate": pending_gate or None,
+        "pending_checklist_path": pending_checklist_path or None,
         "formal_truth_projection": snapshot,
         "source_refs": merged_refs[:24],
     }

@@ -139,10 +139,11 @@ def evaluate_route_profile(
 ) -> RouteDecision:
     errors: list[str] = []
     if risk_profile in {"G0", "G1"} and profile.dispatch_mode != "direct":
+        # G0/G1 既有可观察错误文本保持稳定；G3 也是比 G2 更高的显式升级。
         errors.append("G0/G1 functional-agent dispatch requires an explicit G2 upgrade")
     if profile.legacy_cp_compatibility:
-        if risk_profile != "G2":
-            errors.append("legacy CP compatibility requires G2")
+        if risk_profile not in {"G2", "G3"}:
+            errors.append("legacy CP compatibility requires G2 or G3")
         if work_kind != "cr":
             errors.append("legacy CP compatibility requires a formal CR Work")
         if require_human_approval and (

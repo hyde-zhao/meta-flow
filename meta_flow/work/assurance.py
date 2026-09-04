@@ -1,4 +1,4 @@
-"""按 G0/G1/G2 生成足够而不过量的评审与验证计划。"""
+"""按治理 G0/G1/G2/G3 生成足够而不过量的评审与验证计划。"""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ class ReviewPlan:
     route_mode: str
     dispatch_mode: str
     stages: tuple[str, ...]
+    governance_profile_digest: str = ""
     execution_control_mode: str = "enforce-new"
     provider_receipt_status: str = "MISSING"
     provider_readiness: str = "UNAVAILABLE_PENDING_CP7_CP8"
@@ -44,6 +45,8 @@ class ValidationPlan:
     stages: tuple[str, ...]
     layer_decisions: dict[str, str]
     next_layer: str
+    # 保持历史直接构造调用兼容；由 build_validation_plan 生成时始终填入。
+    governance_profile_digest: str = ""
     execution_control_mode: str = "enforce-new"
     provider_receipt_status: str = "MISSING"
     provider_readiness: str = "UNAVAILABLE_PENDING_CP7_CP8"
@@ -111,7 +114,8 @@ def build_review_plan(
         if profile.legacy_cp_compatibility
         else ("clarification", "design", "implementation", "verification")
     )
-    if work.risk_profile == "G0":
+    effective_profile = work.effective_risk_profile
+    if effective_profile == "G0":
         return _with_execution_control_assurance(ReviewPlan(
             "G0",
             "self-check",
@@ -122,8 +126,9 @@ def build_review_plan(
             profile.mode,
             profile.dispatch_mode,
             stages,
+            governance_profile_digest=work.governance_profile_digest,
         ))
-    if work.risk_profile == "G1":
+    if effective_profile == "G1":
         return _with_execution_control_assurance(ReviewPlan(
             "G1",
             "work-scoped-lightweight",
@@ -134,11 +139,32 @@ def build_review_plan(
             profile.mode,
             profile.dispatch_mode,
             stages,
+            governance_profile_digest=work.governance_profile_digest,
+        ))
+    if effective_profile == "G2":
+        required = (
+            "scope_goal_note_refs",
+            "architecture_impact_note_refs",
+            "human_scope_gate_ref",
+            "independent_reviewer_ref",
+        )
+        missing = tuple(key for key in required if not evidence.get(key))
+        return _with_execution_control_assurance(ReviewPlan(
+            "G2",
+            "scope-goal-and-impact-review",
+            1,
+            required,
+            "BLOCKED" if missing else "READY",
+            missing,
+            profile.mode,
+            profile.dispatch_mode,
+            stages,
+            governance_profile_digest=work.governance_profile_digest,
         ))
     required = ("hld_ref", "adr_ref", "human_design_gate_ref", "independent_reviewer_ref")
     missing = tuple(key for key in required if not evidence.get(key))
     return _with_execution_control_assurance(ReviewPlan(
-        "G2",
+        "G3",
         "full-architecture-and-independent-review",
         1,
         required,
@@ -147,6 +173,7 @@ def build_review_plan(
         profile.mode,
         profile.dispatch_mode,
         stages,
+        governance_profile_digest=work.governance_profile_digest,
     ))
 
 
@@ -171,9 +198,10 @@ def build_validation_plan(
         marker in check_id.lower() for check_id in declared for marker in ("full-all", "global-all")
     ):
         errors.append("G0/G1 cannot request an unrelated global full check")
-    independent = work.risk_profile == "G2"
+    effective_profile = work.effective_risk_profile
+    independent = effective_profile in {"G2", "G3"}
     if independent and not independent_qa_ref:
-        errors.append("G2 requires independent QA evidence")
+        errors.append(f"{effective_profile} requires independent QA evidence")
     if execution_plan is not None and execution_plan.decision == "BLOCKED":
         errors.extend(execution_plan.errors)
     layer_decisions = (
@@ -182,12 +210,13 @@ def build_validation_plan(
         else {layer: "PLANNED" for layer in VALIDATION_LAYERS}
     )
     return _with_execution_control_assurance(ValidationPlan(
-        risk_profile=work.risk_profile,
+        risk_profile=effective_profile,
+        governance_profile_digest=work.governance_profile_digest,
         check_ids=declared,
         risk_mapping=mapping,
         max_check_groups=work.budget.check_groups,
         independent_qa_required=independent,
-        validation_scope_required=work.risk_profile == "G2",
+        validation_scope_required=effective_profile in {"G2", "G3"},
         decision="BLOCKED" if errors else "READY",
         errors=tuple(errors),
         route_mode=work.route_profile.mode,

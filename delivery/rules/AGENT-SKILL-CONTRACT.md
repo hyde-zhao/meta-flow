@@ -21,7 +21,7 @@
 
 1. 默认入口只读 `PROJECT.yaml`、当前 `WORK.yaml`、当前 `REQUEST.md` 和用户问题直接需要的 Phase/证据引用；总对象数、读写、检查和 token 不得超过 Work 的 G profile 与 scope。
 2. `allowed_reads` 是最大允许集合，不是必读集合；禁止为了“保险”读取完整 HLD、全部历史 CR/Story、完整测试报告、全量 diff 或 transcript。
-3. G0 不创建独立评审/CP/context pack；G1 最多一次 Work 范围轻量评审；只有 G2/正式 CR 或用户明确要求时才使用下方 CP0-CP8、Story packet、完整 HLD/ADR/独立 QA 契约。
+3. G0 不创建独立评审/CP/context pack；G1 最多一次 Work 范围轻量评审；G2/G3 或正式 CR 才使用下方 CP0-CP8 与独立 QA 契约。GovernanceRiskProfile V2：G2=scope-goal-note；G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。
 4. 输出优先写回当前 Work 目录的最小 REQUEST、WORK、USAGE、HANDOFF、RESULT 或 evidence ref；不得复制已有长证据正文。
 5. 每次读/写/检查前分别校验 risk、scope、budget。任一条件不满足时停止并返回重分类、缩小范围或拆 Work 建议；不得用剩余 token 绕过 scope，也不得用 scope 绕过风险门。
 6. 项目查询最多读取 5 个直接引用对象；跨项目汇总、全历史审计和敏感证据必须升级并批准。

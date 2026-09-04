@@ -49,24 +49,26 @@ def _status_sync_facts(
     )
     common = _git_fact(process_root, "rev-parse", "--git-common-dir")
     common_identity = canonical_digest(common or "non-git-fixture")
+    work = None
     if work_id:
-        scope_digest = load_work(
+        work = load_work(
             process_root,
             work_id,
             read_context=read_context,
-        ).scope.digest
+        )
+        scope_digest = work.scope.digest
     else:
         scope_digest = canonical_digest(dict(SYSTEM_NAMESPACE_SCOPE_CLAIM))
-    return (
-        {
+    facts = {
             "release_head_oid": _git_fact(release_root, "rev-parse", "--verify", "HEAD"),
             "process_head_oid": _git_fact(process_root, "rev-parse", "--verify", "HEAD"),
             "process_git_common_dir_identity": common_identity,
             "current_branch": _git_fact(process_root, "branch", "--show-current"),
             "dirty_path_digest": dirty_path_digest(process_root),
-        },
-        scope_digest,
-    )
+        }
+    if work is not None:
+        facts["governance_profile_digest"] = work.governance_profile_digest
+    return facts, scope_digest
 
 
 def _current_target_digest(target: Any, *, canonical_digest: Any) -> str:

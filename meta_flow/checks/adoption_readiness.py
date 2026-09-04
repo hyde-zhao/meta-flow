@@ -717,11 +717,11 @@ def _human_gate_item(
         )
     else:
         next_action = (
-            "No gate scaffold is required for the current G0/G1 route. When a formal G2 change "
+            "No gate scaffold is required for the current G0/G1 route. When a formal G2/G3 change "
             "starts, use meta-flow cr bootstrap and meta-flow context build, then validate with "
             "meta-flow check human-gate."
             if binding_aware
-            else "No gate scaffold is required until a formal G2 route starts."
+            else "No gate scaffold is required until a formal G2/G3 route starts."
         )
     return ReadinessItem(
         item_id="human-gate-readiness",

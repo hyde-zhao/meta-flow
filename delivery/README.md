@@ -12,7 +12,7 @@
 
 新项目默认采用每项目独立发布库与过程库。发布库 tracked 的 `.meta-flow/workspace.yaml` 与过程库 `.meta-flow-process.yaml` 组成双向 binding，默认 `route_mode=sibling-binding`，不创建 `process` 软链接。过程库只为当前项目维护最小 `PROJECT.yaml`、可选 Roadmap/Phase、`works/<id>/WORK.yaml`、复盘和进化记录；不同项目不共享 working tree、index、branch 或可写过程根。
 
-- 日常变化默认 Work，重大变化才正式 CR；G0/G1 不强制 CP0-CP8、八份产品基线或全量 Story/LLD。
+- 日常变化默认 Work，重大变化才正式 CR；G0/G1 不强制 CP0-CP8、八份产品基线或全量 Story/LLD。GovernanceRiskProfile V2：G2=scope-goal-note；G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。
 - G0 上限 `8/8/3/32k`，G1 上限 `20/24/8/96k`，G2 预算逐项批准；risk、deny-default scope、budget 必须同时通过。
 - `project/work/retrospective/evolution/repository` CLI 默认 dry-run；本地初始化要显式 `--apply`，进化启动与真实 commit/push 还需要对应 typed authorization。
 - 发布库和过程库独立 commit/push，部分成功真实披露，不用双 leg/aggregate，也不自动回滚成功一侧。

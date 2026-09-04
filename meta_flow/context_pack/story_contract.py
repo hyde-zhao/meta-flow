@@ -28,6 +28,10 @@ from meta_flow.context_pack.builder import (
     write_default_read_policy,
 )
 from meta_flow.design.feature_registry import FEATURE_REGISTRY_REL
+from meta_flow.design.lightweight_design import (
+    ScopeGoalNoteV1,
+    extract_scope_goal_note_from_story,
+)
 from meta_flow.design.module_boundaries import MODULE_BOUNDARIES_REL
 from meta_flow.design.product_governance import (
     CAPABILITY_STATUS_REL,
@@ -51,6 +55,10 @@ from meta_flow.state.current import (
     refresh_current_entry,
     validate_current_projection,
     validate_current_state_for_write,
+)
+from meta_flow.work.governance_profile import (
+    GovernanceProfileBindingV2,
+    effective_governance_profile,
 )
 from meta_flow.workflow.cr_lifecycle import CR_SUMMARY_ROOT_REL
 
@@ -711,6 +719,70 @@ def _selected_full_lld_ref(
     return ref
 
 
+def _selected_scope_goal_note_ref(
+    project_root: Path,
+    *,
+    raw_story: dict[str, Any],
+    story_id: str,
+    story_ref: str,
+) -> str | None:
+    """选择并校验唯一 scope-goal-note；优先 Story 内联，兼容独立对象。"""
+
+    raw_policy = raw_story.get("lld_policy")
+    required_level = (
+        raw_policy.get("required_level") if isinstance(raw_policy, dict) else raw_policy
+    )
+    if required_level != "scope-goal-note":
+        return None
+    gate = raw_story.get("lld_gate")
+    if not isinstance(gate, dict) or gate.get("required") is not True:
+        raise ValueError("SCOPE_GOAL_NOTE_GATE_MISSING")
+    if gate.get("design_evidence_type") not in {None, "scope-goal-note"}:
+        raise ValueError("LLD_GATE_POLICY_CONFLICT")
+    ref = gate.get("evidence_ref")
+    inline_payload = raw_story.get("scope_goal_note")
+    if isinstance(inline_payload, Mapping) and ref:
+        raise ValueError("SCOPE_GOAL_NOTE_MULTIPLE_TRUTHS")
+    if isinstance(inline_payload, Mapping):
+        payload = dict(inline_payload)
+        raw_text = json.dumps(payload, ensure_ascii=False, indent=2)
+        selected_ref = f"{story_ref}#范围与目标"
+    elif ref:
+        if (
+            not isinstance(ref, str)
+            or not ref.startswith("process/")
+            or ref.startswith("/")
+            or ".." in Path(ref).parts
+            or Path(ref).suffix.lower() not in {".json", ".yaml", ".yml"}
+        ):
+            raise ValueError("SCOPE_GOAL_NOTE_REF_UNSAFE")
+        target = _resolve_runtime_ref(project_root, ref)
+        if not target.is_file():
+            raise ValueError("SCOPE_GOAL_NOTE_TARGET_MISSING")
+        payload = load_yaml_object(target)
+        if not isinstance(payload, dict):
+            raise ValueError("SCOPE_GOAL_NOTE_OBJECT_REQUIRED")
+        raw_text = target.read_text(encoding="utf-8")
+        selected_ref = ref
+    else:
+        story_path = _resolve_runtime_ref(project_root, story_ref)
+        try:
+            payload, raw_text = extract_scope_goal_note_from_story(
+                story_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+        selected_ref = f"{story_ref}#范围与目标"
+    note = ScopeGoalNoteV1.from_mapping(
+        payload,
+        raw_text=raw_text,
+        effective_profile="G2",
+    )
+    if note.story_id != story_id:
+        raise ValueError("SCOPE_GOAL_NOTE_STORY_ID_MISMATCH")
+    return selected_ref
+
+
 def _development_plan_story(project_root: Path, story_id: str) -> dict[str, Any]:
     path = _resolve_runtime_ref(project_root, DEVELOPMENT_PLAN_REL.as_posix())
     if not path.is_file():
@@ -1064,6 +1136,12 @@ def build_story_packet(
         raw_story=raw_story,
         story_ref=story_rel,
     )
+    selected_scope_goal_note_ref = _selected_scope_goal_note_ref(
+        project_root,
+        raw_story=raw_story,
+        story_id=story_id,
+        story_ref=story_rel,
+    )
     if write_policy:
         write_default_read_policy(project_root)
     read_policy = load_read_policy(project_root)
@@ -1100,6 +1178,16 @@ def build_story_packet(
         )
     _append_unique(must_read, _read_entry(project_root, story_rel, required=True, reason="story_card"))
     _append_unique(must_read, _read_entry(project_root, READ_POLICY_REL.as_posix(), required=True, reason="read_policy"))
+    if selected_scope_goal_note_ref and "#" not in selected_scope_goal_note_ref:
+        _append_unique(
+            must_read,
+            _read_entry(
+                project_root,
+                selected_scope_goal_note_ref,
+                required=True,
+                reason="scope_goal_note",
+            ),
+        )
     if effective_cr_id:
         cr_summary = (CR_SUMMARY_ROOT_REL / f"{effective_cr_id}.summary.json").as_posix()
         _append_unique(allowed_reads, _read_entry(project_root, cr_summary, required=True, reason="cr_summary"))
@@ -1116,6 +1204,61 @@ def build_story_packet(
             _append_unique(allowed_reads, _read_entry(project_root, rel_path, required=False, reason=reason))
 
     lld_policy = str(story.get("lld_policy") or story.get("required_level") or "")
+    risk_profile = str(story.get("risk_profile") or "")
+    risk_profile_schema_version = int(story.get("risk_profile_schema_version") or 1)
+    governance_binding = None
+    if risk_profile_schema_version == 2 and risk_profile in {"G0", "G1", "G2", "G3"}:
+        route_binding: Mapping[str, Any] = {}
+        route_ref = f"process/checks/CP0-{effective_cr_id}.route-plan.json"
+        if effective_cr_id:
+            route_path = _resolve_runtime_ref(project_root, route_ref)
+            if route_path.is_file() and not route_path.is_symlink():
+                route_payload = load_yaml_object(route_path)
+                candidate = route_payload.get("governance_profile")
+                if isinstance(candidate, Mapping):
+                    route_binding = candidate
+                _append_unique(
+                    must_read,
+                    _read_entry(
+                        project_root,
+                        route_ref,
+                        required=True,
+                        reason="governance_profile_binding",
+                    ),
+                )
+        route_risk_profile = str(route_binding.get("risk_profile") or "")
+        if route_risk_profile and route_risk_profile != risk_profile:
+            raise ValueError("STORY_ROUTE_GOVERNANCE_PROFILE_MISMATCH")
+        governance_binding = GovernanceProfileBindingV2(
+            schema_version=2,
+            risk_profile=risk_profile,
+            effective_profile=effective_governance_profile(risk_profile, 2),
+            selection_source=str(
+                story.get("governance_selection_source")
+                or route_binding.get("selection_source")
+                or ("user-explicit" if risk_profile == "G3" else "system-default")
+            ),
+            selection_record_digest=str(
+                story.get("governance_selection_record_digest")
+                or route_binding.get("selection_record_digest")
+                or ""
+            ),
+            selection_authorization_digest=str(
+                story.get("governance_selection_authorization_digest")
+                or route_binding.get("selection_authorization_digest")
+                or ""
+            ),
+            selection_source_oid=str(
+                story.get("governance_selection_source_oid")
+                or route_binding.get("selection_source_oid")
+                or ""
+            ),
+            route_revision=int(
+                story.get("governance_route_revision")
+                or route_binding.get("route_revision")
+                or 1
+            ),
+        )
     if selected_lld_ref:
         read_if_needed.append(
             {
@@ -1191,7 +1334,13 @@ def build_story_packet(
         },
         "dependency_inputs": _as_list(story.get("dependency_inputs") or story.get("blocking_dependencies")),
         "lld_policy": lld_policy or None,
-        "risk_profile": str(story.get("risk_profile") or ""),
+        "design_evidence_ref": selected_scope_goal_note_ref or selected_lld_ref or None,
+        "risk_profile": risk_profile,
+        "risk_profile_schema_version": risk_profile_schema_version,
+        "governance_profile_binding": (
+            governance_binding.as_dict() if governance_binding else None
+        ),
+        "governance_profile_digest": governance_binding.digest if governance_binding else None,
         "must_read": must_read,
         "allowed_reads": allowed_reads,
         "read_if_needed": read_if_needed,
@@ -1587,6 +1736,19 @@ def validate_story_packet(packet_path: Path, *, project_root: Path | None = None
         errors.append("verification_plan must be non-empty")
     if not packet.get("lld_policy"):
         errors.append("lld_policy missing")
+    profile_version = packet.get("risk_profile_schema_version", 1)
+    if profile_version == 2:
+        try:
+            binding = packet.get("governance_profile_binding")
+            if not isinstance(binding, dict):
+                raise ValueError("governance_profile_binding missing")
+            observed = GovernanceProfileBindingV2(**binding)
+            if observed.risk_profile != str(packet.get("risk_profile") or ""):
+                raise ValueError("governance_profile_binding risk_profile mismatch")
+            if packet.get("governance_profile_digest") != observed.digest:
+                raise ValueError("governance_profile_digest mismatch")
+        except (TypeError, ValueError) as exc:
+            errors.append(f"governance profile binding invalid: {exc}")
     if not packet.get("feature_refs"):
         errors.append("feature_refs must be non-empty")
     if not packet.get("feature_design_refs"):

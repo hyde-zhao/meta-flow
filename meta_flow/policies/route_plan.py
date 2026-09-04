@@ -6,11 +6,14 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from meta_flow.design.lightweight_design import ArchitectureImpactNoteV1
 from meta_flow.policies import c0_cutover, gate_profiles
 from meta_flow.project.process_route import ProcessRouteError, _resolve_runtime_ref
+from meta_flow.work.governance_profile import effective_governance_profile
 
 PUBLIC_OPERATION_DECLARATIONS = (
     ("route.c0-cutover-plan", ("meta-flow", "route", "c0-cutover-plan")),
@@ -356,10 +359,19 @@ def derive_route_plan(
     cr_type: str,
     cr_trait: dict[str, Any] | None,
     gate_profile: str,
+    cr_id: str = "",
     product_baseline_refresh_required: bool = False,
     impact_surface: list[str] | None = None,
     authz_policy_refs: list[str] | None = None,
     profiles_data: dict[str, Any] | None = None,
+    governance_risk_profile: str = "",
+    governance_profile_schema_version: int = 1,
+    governance_selection_source: str = "system-default",
+    governance_selection_record_digest: str = "",
+    governance_selection_authorization_digest: str = "",
+    governance_selection_source_oid: str = "",
+    route_revision: int = 1,
+    architecture_impact_note: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Derive the actual CP route for a CR from profile defaults and CR facts."""
 
@@ -379,6 +391,37 @@ def derive_route_plan(
     warnings: list[str] = []
     blockers: list[str] = []
     profile_upgrade_required: list[dict[str, str]] = []
+    effective_profile = ""
+    if governance_risk_profile:
+        try:
+            effective_profile = effective_governance_profile(
+                governance_risk_profile,
+                governance_profile_schema_version,
+            )
+        except ValueError as exc:
+            blockers.append(str(exc))
+        if type(route_revision) is not int or route_revision < 1:
+            blockers.append("route_revision must be a positive integer")
+        if effective_profile == "G3":
+            if governance_selection_source != "user-explicit":
+                blockers.append("G3 route requires selection_source=user-explicit")
+            if not re.fullmatch(r"[0-9a-f]{64}", governance_selection_record_digest):
+                blockers.append("G3 route requires one bound selection record digest")
+            if not re.fullmatch(
+                r"[0-9a-f]{64}", governance_selection_authorization_digest
+            ):
+                blockers.append("G3 route requires one bound authorization digest")
+            if not re.fullmatch(
+                r"(?:[0-9a-f]{40}|[0-9a-f]{64})", governance_selection_source_oid
+            ):
+                blockers.append("G3 route requires one bound source OID")
+        elif (
+            governance_selection_source != "system-default"
+            or governance_selection_record_digest
+            or governance_selection_authorization_digest
+            or governance_selection_source_oid
+        ):
+            blockers.append("non-G3 route cannot carry a G3 selection binding")
 
     def require_profile_upgrade(checkpoint: str, reason: str, recommended_profile: str) -> None:
         finding = {
@@ -535,6 +578,43 @@ def derive_route_plan(
                     PROFILE_UPGRADE_TARGETS["implementation"],
                 )
 
+    # GovernanceRiskProfileV2 的设计深度覆盖。G2 与 G3 保持相同预算、实现和
+    # 验证强度，只在设计证据深度上分流。旧 V1 G2 已由 effective profile
+    # 映射为 G3，因此不会意外进入轻量路径。
+    if effective_profile == "G2" and not uses_existing:
+        cp2_stage = _stage("CP2", profile_stages, mode="lite", human_gate="required")
+        apply_stage(cp2_stage, "G2 scope and acceptance boundary confirmation")
+        impact_note: ArchitectureImpactNoteV1 | None = None
+        if isinstance(architecture_impact_note, Mapping):
+            try:
+                impact_note = ArchitectureImpactNoteV1.from_mapping(
+                    architecture_impact_note
+                )
+                if cr_id and impact_note.cr_id != cr_id:
+                    blockers.append("ARCHITECTURE_IMPACT_CR_ID_MISMATCH")
+            except ValueError as exc:
+                blockers.append(str(exc))
+        if impact_note is not None and impact_note.auto_clean_eligible:
+            cp3_stage = _stage("CP3", profile_stages, mode="lite", human_gate="none")
+            apply_stage(cp3_stage, "mechanically validated architecture impact is clean")
+        elif impact_note is not None:
+            cp3_stage = _stage("CP3", profile_stages, mode="standard", human_gate="required")
+            apply_stage(cp3_stage, "architecture impact delta requires standard human review")
+        else:
+            blockers.append(
+                "G2 ArchitectureImpactNoteV1 is missing or invalid; CP3 cannot auto-clean"
+            )
+            cp3_stage = _stage("CP3", profile_stages, mode="lite", human_gate="required")
+            apply_stage(cp3_stage, "architecture impact requires human resolution")
+        apply_stage(
+            _stage("CP4", profile_stages, mode="lite", human_gate="none"),
+            "G2 Story scope-goal-note planning",
+        )
+        apply_stage(
+            _stage("CP5", profile_stages, mode="lite", human_gate="required"),
+            "G2 Story scope and goal confirmation",
+        )
+
     for checkpoint in CHECKPOINTS:
         item = applicability[checkpoint]
         if item.get("applies") and item.get("decision") != "WAIVED":
@@ -546,7 +626,7 @@ def derive_route_plan(
                 }
             )
 
-    return {
+    result = {
         "schema_version": 1,
         "cr_type": cr_type,
         "gate_profile": gate_profile,
@@ -559,6 +639,21 @@ def derive_route_plan(
         "profile_upgrade_required": profile_upgrade_required,
         "decision": "BLOCKED" if blockers else "PASS",
     }
+    if governance_risk_profile:
+        result["governance_profile"] = {
+            "schema_version": governance_profile_schema_version,
+            "risk_profile": governance_risk_profile,
+            "effective_profile": effective_profile,
+            "selection_source": governance_selection_source,
+            "selection_record_digest": governance_selection_record_digest,
+            "selection_authorization_digest": governance_selection_authorization_digest,
+            "selection_source_oid": governance_selection_source_oid,
+            "route_revision": route_revision,
+        },
+        result["architecture_impact"] = (
+            impact_note.as_dict() if effective_profile == "G2" and impact_note else None
+        )
+    return result
 
 
 def derive_route_plan_from_mapping(
@@ -574,12 +669,35 @@ def derive_route_plan_from_mapping(
         cr_type=cr_type,
         cr_trait=cr_trait_from_mapping(mapping),
         gate_profile=gate_profile,
+        cr_id=_strip_scalar(mapping.get("cr_id") or mapping.get("id")),
         product_baseline_refresh_required=_as_bool(
             mapping.get("product_baseline_refresh_required")
         ),
         impact_surface=_as_list(mapping.get("impact_surface")),
         authz_policy_refs=_as_list(mapping.get("authz_policy_refs")),
         profiles_data=profiles_data,
+        governance_risk_profile=_strip_scalar(mapping.get("governance_risk_profile")),
+        governance_profile_schema_version=int(
+            mapping.get("governance_profile_schema_version") or 1
+        ),
+        governance_selection_source=_strip_scalar(
+            mapping.get("governance_selection_source") or "system-default"
+        ),
+        governance_selection_record_digest=_strip_scalar(
+            mapping.get("governance_selection_record_digest")
+        ),
+        governance_selection_authorization_digest=_strip_scalar(
+            mapping.get("governance_selection_authorization_digest")
+        ),
+        governance_selection_source_oid=_strip_scalar(
+            mapping.get("governance_selection_source_oid")
+        ),
+        route_revision=int(mapping.get("route_revision") or 1),
+        architecture_impact_note=(
+            mapping.get("architecture_impact_note")
+            if isinstance(mapping.get("architecture_impact_note"), Mapping)
+            else None
+        ),
     )
 
 
@@ -592,7 +710,7 @@ def write_route_plan(path: Path, plan: dict[str, Any]) -> Path:
 
 
 def _without_artifact_fields(plan: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         key: plan.get(key)
         for key in (
             "schema_version",
@@ -608,6 +726,10 @@ def _without_artifact_fields(plan: dict[str, Any]) -> dict[str, Any]:
             "decision",
         )
     }
+    for key in ("governance_profile", "architecture_impact"):
+        if key in plan:
+            payload[key] = plan[key]
+    return payload
 
 
 def _route_plan_ref(mapping: dict[str, Any]) -> str:

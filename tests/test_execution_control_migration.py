@@ -13,7 +13,7 @@ import pytest
 from meta_flow.execution_control.admission import execution_inventory_digest
 from meta_flow.execution_control.contract import ExecutionUnitV1, canonical_digest
 from meta_flow.execution_control.migration import (
-    _NATIVE_AUTHORITY_V10,
+    _NATIVE_AUTHORITY_V11,
     FIXED_RECEIPT_REF,
     GENERATOR_IDENTITY,
     LEGACY_RECEIPT_REFS,
@@ -124,7 +124,7 @@ def _freeze_payload() -> dict[str, object]:
         "schema_version": 1,
         "package_name": PACKAGE_NAME,
         "package_version": PACKAGE_VERSION,
-        "receipt_revision": 10,
+        "receipt_revision": 11,
         "policy_revision": 1,
         "cohort_revision": 1,
         "context_revision": 1,
@@ -136,7 +136,7 @@ def _freeze_payload() -> dict[str, object]:
     }
 
 
-def test_v10_rotation_preserves_v1_through_v9_bytes() -> None:
+def test_v11_rotation_preserves_v1_through_v10_bytes() -> None:
     release_root = Path(__file__).parents[1]
     package_root = release_root / "meta_flow"
     assert LEGACY_RECEIPT_REFS == (
@@ -149,6 +149,7 @@ def test_v10_rotation_preserves_v1_through_v9_bytes() -> None:
         "meta_flow/execution_control/provider/activation-receipt-v7.json",
         "meta_flow/execution_control/provider/activation-receipt-v8.json",
         "meta_flow/execution_control/provider/activation-receipt-v9.json",
+        "meta_flow/execution_control/provider/activation-receipt-v10.json",
     )
     legacy_v1 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[0]).parts[1:])
     legacy_v2 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[1]).parts[1:])
@@ -159,6 +160,7 @@ def test_v10_rotation_preserves_v1_through_v9_bytes() -> None:
     legacy_v7 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[6]).parts[1:])
     legacy_v8 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[7]).parts[1:])
     legacy_v9 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[8]).parts[1:])
+    legacy_v10 = package_root.joinpath(*PurePosixPath(LEGACY_RECEIPT_REFS[9]).parts[1:])
 
     assert hashlib.sha256(legacy_v1.read_bytes()).hexdigest() == (
         "37f1a9c7f3d28c8b4c0bacd2f6817c8cd900bdab71180321b437d335c0b1263a"
@@ -187,46 +189,49 @@ def test_v10_rotation_preserves_v1_through_v9_bytes() -> None:
     assert hashlib.sha256(legacy_v9.read_bytes()).hexdigest() == (
         "f4088eb9db6eb4ec5382a3027ce1e543047bec5a66d8650c90d4e3ab9d0c3656"
     )
+    assert hashlib.sha256(legacy_v10.read_bytes()).hexdigest() == (
+        "400a125b5a7900bbab90a7a43559fb48cbe97ad0a3c09deb2cbaa3f5e8fb3055"
+    )
 
 
-def test_v10_authority_descriptor_closes_cr074_rev2_source_chain() -> None:
-    descriptor = _NATIVE_AUTHORITY_V10
-    assert descriptor.revision == 10
-    assert descriptor.cp7_revision == 2
-    assert descriptor.cr_id == "CR-074"
-    assert descriptor.story_id == "STORY-CR074-S05"
+def test_v11_authority_descriptor_is_bound_to_cr077() -> None:
+    descriptor = _NATIVE_AUTHORITY_V11
+    assert descriptor.revision == 11
+    assert descriptor.cp7_revision == 1
+    assert descriptor.cr_id == "CR-077"
+    assert descriptor.story_id == "STORY-CR077-S04"
     assert descriptor.contract_id == (
-        "CR074-PROVIDER-ACTIVATION-RECEIPT-V10-MATERIALIZATION"
+        "CR077-PROVIDER-ACTIVATION-RECEIPT-V11-MATERIALIZATION"
     )
     assert MATERIALIZATION_AUTHORIZATION_REF == (
         "process/release/"
-        "CR-074-PROVIDER-RECEIPT-MATERIALIZATION-AUTHORIZATION-0.6.3.json"
+        "CR-077-PROVIDER-RECEIPT-MATERIALIZATION-AUTHORIZATION-0.6.5.json"
     )
     assert descriptor.context_ref == (
-        "process/context/stories/STORY-CR074-S05.CP7.REV2.verify-packet.json"
+        "process/context/stories/STORY-CR077-S04.CP7.verify-packet.json"
     )
     assert descriptor.evidence_ref == (
-        "process/evidence/STORY-CR074-S05.CP7.REV2.index.json"
+        "process/evidence/STORY-CR077-S04.CP7.index.json"
     )
     assert descriptor.return_ref == (
-        "process/returns/STORY-CR074-S05.CP7.REV2.return.json"
+        "process/returns/STORY-CR077-S04.CP7.return.json"
     )
     assert descriptor.cp7_result_ref == (
-        "process/checks/CP7-STORY-CR074-S05-AGGREGATE-REV2.result.json"
+        "process/checks/CP7-STORY-CR077-S04-AGGREGATE.result.json"
     )
-    assert descriptor.checkpoint_event_id == "CP7-CR074-AGGREGATE-RESULT-V2"
+    assert descriptor.checkpoint_event_id == "CP7-CR077-AGGREGATE-RESULT-V1"
     assert descriptor.checkpoint_event_type == "checkpoint_result"
 
 
-def test_packaged_v10_receipt_is_current_after_materialization() -> None:
+def test_packaged_v11_receipt_is_current_after_materialization() -> None:
     release_root = Path(__file__).parents[1]
     package_root = release_root / "meta_flow"
     qualification_evidence_path = (
-        release_root / "docs/release/PROVIDER-QUALIFICATION-0.6.3.json"
+        release_root / "docs/release/PROVIDER-QUALIFICATION-0.6.5.json"
     )
     current = _receipt_locator(package_root)
 
-    assert current.name == "activation-receipt-v10.json"
+    assert current.name == "activation-receipt-v11.json"
     assert load_provider_activation_receipt().status == "CURRENT"
 
     current_payload = json.loads(current.read_text(encoding="utf-8"))
@@ -408,7 +413,7 @@ def _write_native_authority(
     cp7_decision: str = "PASS_WITH_RISK",
     mutant: str = "",
 ) -> Path:
-    descriptor = _NATIVE_AUTHORITY_V10
+    descriptor = _NATIVE_AUTHORITY_V11
     event_id = descriptor.checkpoint_event_id
     refs = {
         "context": descriptor.context_ref.removeprefix("process/"),
@@ -416,12 +421,12 @@ def _write_native_authority(
         "checkpoint_ledger": descriptor.checkpoint_ledger_ref.removeprefix("process/"),
         "return": descriptor.return_ref.removeprefix("process/"),
         "evidence": descriptor.evidence_ref.removeprefix("process/"),
-        "dispatch": "release/CR-074-PROVIDER-RECEIPT-V10-DISPATCH.json",
+        "dispatch": "release/CR-077-PROVIDER-RECEIPT-V11-DISPATCH.json",
         "scanner_receipt": (
-            "release/CR-074-PROVIDER-RECEIPT-V10-SCANNER.receipt.json"
+            "release/CR-077-PROVIDER-RECEIPT-V11-SCANNER.receipt.json"
         ),
         "final_manifest_receipt": (
-            "release/CR-074-PROVIDER-RECEIPT-V10-FINAL-MANIFEST.receipt.json"
+            "release/CR-077-PROVIDER-RECEIPT-V11-FINAL-MANIFEST.receipt.json"
         ),
     }
     story_id = "STORY-OTHER" if mutant == "cross-unit" else descriptor.story_id
@@ -611,9 +616,9 @@ def _write_native_authority(
             if mutant != "wrong-result-ref"
             else "process/checks/OTHER.result.json"
         ),
-        "summary_ref": "process/reviews/CR-074/CP7-AGGREGATE/VERIFICATION-REPORT-REV2.md",
-        "supersedes_event_id": "CP7-CR074-AGGREGATE-RESULT-V1",
-        "supersedes_ref": "process/checks/CP7-STORY-CR074-S05-AGGREGATE.result.json",
+        "summary_ref": "process/reviews/CR-077/CP7-AGGREGATE/VERIFICATION-REPORT.md",
+        "supersedes_event_id": "",
+        "supersedes_ref": "",
     }
     ledger_path = process_root / refs["checkpoint_ledger"]
     append_event(ledger_path, ledger)
@@ -759,7 +764,7 @@ def test_native_source_runtime_digest_drift_is_blocked_before_writer(
 ) -> None:
     process_root = tmp_path / name
     authority_path = _write_native_authority(process_root)
-    ref = getattr(_NATIVE_AUTHORITY_V10, descriptor_ref).removeprefix("process/")
+    ref = getattr(_NATIVE_AUTHORITY_V11, descriptor_ref).removeprefix("process/")
     source_path = process_root / ref
     source = json.loads(source_path.read_text(encoding="utf-8"))
     source["neutral_drift"] = True
@@ -814,13 +819,13 @@ def test_native_authority_rejects_missing_and_minimal_current_receipt_before_wri
     )
     process_root = tmp_path / "minimal"
     authority_path = _write_native_authority(process_root)
-    dispatch = process_root / "release/CR-074-PROVIDER-RECEIPT-V10-DISPATCH.json"
+    dispatch = process_root / "release/CR-077-PROVIDER-RECEIPT-V11-DISPATCH.json"
     dispatch.unlink()
     with pytest.raises(ValueError, match="AUTHORITY_REF_DRIFT"):
         _load_native_materialization_authority(process_root)
 
     _write_native_authority(process_root)
-    scanner = process_root / "release/CR-074-PROVIDER-RECEIPT-V10-SCANNER.receipt.json"
+    scanner = process_root / "release/CR-077-PROVIDER-RECEIPT-V11-SCANNER.receipt.json"
     scanner.write_text('{"decision":"PASS","status":"current"}\n', encoding="utf-8")
     authority = json.loads(authority_path.read_text(encoding="utf-8"))
     authority["scanner_receipt_sha256"] = hashlib.sha256(scanner.read_bytes()).hexdigest()
@@ -830,7 +835,7 @@ def test_native_authority_rejects_missing_and_minimal_current_receipt_before_wri
     assert writes == []
 
 
-def test_missing_v10_authorization_blocks_plan_with_zero_mutation(
+def test_missing_v11_authorization_blocks_plan_with_zero_mutation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     release_root = tmp_path / "release"

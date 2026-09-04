@@ -72,24 +72,24 @@ def test_review_plan_is_proportional_for_g0_g1(
     assert plan.stages == ("clarification", "design", "implementation", "verification")
 
 
-def test_g2_review_requires_design_gate_and_independent_reviewer() -> None:
+def test_g2_review_requires_scope_goal_impact_gate_and_independent_reviewer() -> None:
     work = make_work(profile="G2")
 
-    blocked = build_review_plan(work, evidence_refs={"hld_ref": "docs/HLD.md"})
+    blocked = build_review_plan(work, evidence_refs={"scope_goal_note_refs": "notes.json"})
     ready = build_review_plan(
         work,
         evidence_refs={
-            "hld_ref": "docs/HLD.md",
-            "adr_ref": "docs/ADR.md",
-            "human_design_gate_ref": "gates/G2.yaml",
+            "scope_goal_note_refs": "notes.json",
+            "architecture_impact_note_refs": "impact.json",
+            "human_scope_gate_ref": "gates/G2.yaml",
             "independent_reviewer_ref": "reviews/G2.yaml",
         },
     )
 
     assert blocked.decision == "BLOCKED"
     assert set(blocked.missing_evidence) == {
-        "adr_ref",
-        "human_design_gate_ref",
+        "architecture_impact_note_refs",
+        "human_scope_gate_ref",
         "independent_reviewer_ref",
     }
     assert ready.decision == "READY"

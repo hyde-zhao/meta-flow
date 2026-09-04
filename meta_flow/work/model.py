@@ -21,6 +21,10 @@ from meta_flow.project.model import is_safe_ref
 from meta_flow.project.read_contract import ReadContextProtocol
 from meta_flow.project.scale import dump_yaml, load_yaml_object
 from meta_flow.work.budget import BudgetLimit
+from meta_flow.work.governance_profile import (
+    GovernanceProfileBindingV2,
+    effective_governance_profile,
+)
 from meta_flow.work.risk import RISK_PROFILES, ClassificationDecision
 from meta_flow.work.route_profile import (
     SAFE_ROUTE_PROFILE,
@@ -55,6 +59,12 @@ WORK_ALLOWED_KEYS = {
     "request_confirmed",
     "phase_ref",
     "risk_profile",
+    "risk_profile_schema_version",
+    "governance_selection_source",
+    "governance_selection_record_digest",
+    "governance_selection_authorization_digest",
+    "governance_selection_source_oid",
+    "governance_route_revision",
     "risk_reason_codes",
     "required_gates",
     "route_profile",
@@ -78,6 +88,13 @@ WORK_REQUIRED_KEYS = WORK_ALLOWED_KEYS - {
     "updated_at",
     "depends_on",
     "supersedes",
+    # 旧 Work 没有该字段，按 V1 读取；新建对象显式写 V2。
+    "risk_profile_schema_version",
+    "governance_selection_source",
+    "governance_selection_record_digest",
+    "governance_selection_authorization_digest",
+    "governance_selection_source_oid",
+    "governance_route_revision",
 }
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _REASON_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,127}$")
@@ -883,6 +900,12 @@ class Work:
     execution_unit: ExecutionUnitV1 | None = None
     result_ref: str = ""
     updated_at: str = ""
+    risk_profile_schema_version: int = 1
+    governance_selection_source: str = "system-default"
+    governance_selection_record_digest: str = ""
+    governance_selection_authorization_digest: str = ""
+    governance_selection_source_oid: str = ""
+    governance_route_revision: int = 1
 
     @property
     def directory_ref(self) -> str:
@@ -891,6 +914,51 @@ class Work:
     @property
     def work_ref(self) -> str:
         return f"{self.directory_ref}/WORK.yaml"
+
+    @property
+    def effective_risk_profile(self) -> str:
+        """返回运行时保障等级；旧 V1 G2 只读映射为完整设计 G3。"""
+
+        return effective_governance_profile(
+            self.risk_profile,
+            self.risk_profile_schema_version,
+        )
+
+    @property
+    def legacy_g2_effective_profile(self) -> str | None:
+        if self.risk_profile_schema_version == 1 and self.risk_profile == "G2":
+            return "G3"
+        return None
+
+    @property
+    def governance_profile_binding(self) -> GovernanceProfileBindingV2:
+        if self.risk_profile_schema_version != 2:
+            raise ValueError("legacy Work has no GovernanceProfileBindingV2")
+        return GovernanceProfileBindingV2(
+            schema_version=self.risk_profile_schema_version,
+            risk_profile=self.risk_profile,
+            effective_profile=self.effective_risk_profile,
+            selection_source=self.governance_selection_source,
+            selection_record_digest=self.governance_selection_record_digest,
+            selection_authorization_digest=self.governance_selection_authorization_digest,
+            selection_source_oid=self.governance_selection_source_oid,
+            route_revision=self.governance_route_revision,
+        )
+
+    @property
+    def governance_profile_digest(self) -> str:
+        """绑定验证复用；旧对象也有独立且稳定的 V1 namespace。"""
+
+        if self.risk_profile_schema_version == 2:
+            return self.governance_profile_binding.digest
+        payload = {
+            "schema_version": 1,
+            "risk_profile": self.risk_profile,
+            "effective_profile": self.effective_risk_profile,
+            "route_revision": self.governance_route_revision,
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -923,6 +991,16 @@ class Work:
             payload["result_ref"] = self.result_ref
         if self.updated_at:
             payload["updated_at"] = self.updated_at
+        # 旧对象保持 V1 bytes 语义；只有新 V2 对象显式持久化该字段。
+        if self.risk_profile_schema_version >= 2:
+            payload["risk_profile_schema_version"] = self.risk_profile_schema_version
+            payload["governance_selection_source"] = self.governance_selection_source
+            payload["governance_selection_record_digest"] = self.governance_selection_record_digest
+            payload["governance_selection_authorization_digest"] = (
+                self.governance_selection_authorization_digest
+            )
+            payload["governance_selection_source_oid"] = self.governance_selection_source_oid
+            payload["governance_route_revision"] = self.governance_route_revision
         return payload
 
 
@@ -1007,7 +1085,64 @@ def validate_work_payload(
 
     risk_profile = payload.get("risk_profile")
     if risk_profile not in RISK_PROFILES:
-        _finding(findings, "risk_profile", "risk_profile must be G0, G1, or G2", key="risk_profile")
+        _finding(
+            findings,
+            "risk_profile",
+            "risk_profile must be G0, G1, G2, or G3",
+            key="risk_profile",
+        )
+    profile_schema_version = payload.get("risk_profile_schema_version", 1)
+    if type(profile_schema_version) is not int or profile_schema_version not in {1, 2}:
+        _finding(
+            findings,
+            "risk_profile_schema_version",
+            "risk_profile_schema_version must be 1 or 2",
+            key="risk_profile_schema_version",
+        )
+    elif risk_profile in RISK_PROFILES:
+        try:
+            effective_governance_profile(str(risk_profile), profile_schema_version)
+        except ValueError as exc:
+            _finding(findings, "risk_profile", str(exc), key="risk_profile")
+        if profile_schema_version == 2:
+            try:
+                GovernanceProfileBindingV2(
+                    schema_version=profile_schema_version,
+                    risk_profile=str(risk_profile),
+                    effective_profile=effective_governance_profile(
+                        str(risk_profile), profile_schema_version
+                    ),
+                    selection_source=str(
+                        payload.get("governance_selection_source") or ""
+                    ),
+                    selection_record_digest=str(
+                        payload.get("governance_selection_record_digest") or ""
+                    ),
+                    selection_authorization_digest=str(
+                        payload.get("governance_selection_authorization_digest") or ""
+                    ),
+                    selection_source_oid=str(
+                        payload.get("governance_selection_source_oid") or ""
+                    ),
+                    route_revision=payload.get("governance_route_revision"),
+                )
+            except (TypeError, ValueError) as exc:
+                _finding(findings, "governance_profile_binding", str(exc))
+        elif any(
+            key in payload
+            for key in (
+                "governance_selection_source",
+                "governance_selection_record_digest",
+                "governance_selection_authorization_digest",
+                "governance_selection_source_oid",
+                "governance_route_revision",
+            )
+        ):
+            _finding(
+                findings,
+                "governance_profile_binding",
+                "V1 Work cannot carry GovernanceProfileBindingV2 fields",
+            )
     reasons = payload.get("risk_reason_codes")
     if (
         not isinstance(reasons, list)
@@ -1041,7 +1176,11 @@ def validate_work_payload(
     else:
         route_decision = evaluate_route_profile(
             route_profile,
-            risk_profile=str(risk_profile or ""),
+            risk_profile=(
+                effective_governance_profile(str(risk_profile), profile_schema_version)
+                if risk_profile in RISK_PROFILES and profile_schema_version in {1, 2}
+                else str(risk_profile or "")
+            ),
             work_kind=str(payload.get("kind") or ""),
             require_human_approval=False,
         )
@@ -1177,6 +1316,20 @@ def work_from_payload(payload: Mapping[str, Any]) -> Work:
         ),
         result_ref=str(payload.get("result_ref") or ""),
         updated_at=str(payload.get("updated_at") or ""),
+        risk_profile_schema_version=int(payload.get("risk_profile_schema_version", 1)),
+        governance_selection_source=str(
+            payload.get("governance_selection_source") or "system-default"
+        ),
+        governance_selection_record_digest=str(
+            payload.get("governance_selection_record_digest") or ""
+        ),
+        governance_selection_authorization_digest=str(
+            payload.get("governance_selection_authorization_digest") or ""
+        ),
+        governance_selection_source_oid=str(
+            payload.get("governance_selection_source_oid") or ""
+        ),
+        governance_route_revision=int(payload.get("governance_route_revision", 1)),
     )
 
 
@@ -1218,6 +1371,14 @@ def build_work(
         release_base_oid=release_base_oid,
         process_base_oid=process_base_oid,
         execution_unit=execution_unit,
+        risk_profile_schema_version=classification.risk_profile_schema_version,
+        governance_selection_source=classification.selection_source,
+        governance_selection_record_digest=classification.selection_record_digest,
+        governance_selection_authorization_digest=(
+            classification.selection_authorization_digest
+        ),
+        governance_selection_source_oid=classification.selection_source_oid,
+        governance_route_revision=classification.route_revision,
     )
     findings = validate_work_payload(work.as_dict())
     if findings:

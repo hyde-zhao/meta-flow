@@ -516,7 +516,7 @@ dispatch ledger 或 handoff `dispatch` 中每条记录必须使用以下字段�
 2. facts、scope、authz 或 revision 变化时，必须创建新的 Decision Bundle revision，只装配 delta、capsule ref 与 `read_expansion_log`，不得复用旧 approval。
 3. approval 回填后连续执行所有 `human_gate=none` 节点，直到 required gate、授权边界、失败或稳定 stop reason。native CR 状态必须通过一次 batch status-sync 投影 formal、正文状态表、Checkpoint Index、summary、ledger 与 formal-only index。
 4. 失败先分类为 `CHECK_HARNESS_ERROR`、`DETERMINISTIC_SCHEMA_REPAIR`、`REAL_CONTENT_FAILURE` 或 `PARTIAL_MUTATION`。G0 / G1 / G2 单检查恢复上限为 `1 / 2 / 2`；drift、真实内容失败、部分 mutation 和未知失败不得自动恢复。
-5. G0 / G1 只路由 affected-check targeted revalidation；G2 同一 finding 最多 2 次独立 re-QA，第 3 次路由 `NEEDS_DESIGN_CLARIFICATION`。
+5. G0 / G1 只路由 affected-check targeted revalidation；G2/G3 同一 finding 最多 2 次独立 re-QA，第 3 次路由 `NEEDS_DESIGN_CLARIFICATION`。GovernanceRiskProfile V2：G2=scope-goal-note；G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。
 
 ## 验收标准
 

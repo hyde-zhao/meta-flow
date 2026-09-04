@@ -155,7 +155,7 @@ Capsule 只保存摘要和路径引用，不保存长正文：
 
 ## CR-058 profile-aware 关闭与发布边界
 
-- G2 必须完成独立 QA、CP8 自动结果和人工门后，才允许 native close；G0 / G1 对不适用的独立 QA 或完整 CP8 控件必须写 profile-aware `N/A` 证据，不能伪造 PASS。
+- G2/G3 必须完成独立 QA、CP8 自动结果和人工门后，才允许 native close；G0 / G1 对不适用的独立 QA 或完整 CP8 控件必须写 profile-aware `N/A` 证据，不能伪造 PASS。GovernanceRiskProfile V2：G2=scope-goal-note；G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。
 - CP8 前必须读取 cost closure。只有 stage coverage=100%、token proxy 在上限内、去重 gate interaction 在上限内且 unknown leaf paths=0 时，才接受 `PASS_WITH_BASELINE_LIMITATION`；`FAIL` 直接输出 `NOT_READY`。
 - CR-057 的 `1,752,000` 是 `authorized_proxy_ceiling`，不是 actual token 基线；发布说明不得声称 actual-to-actual 降本。
 - `READY`、`READY_WITH_RISK`、CP8 approve、native close 和 repository cleanliness 都不授权 commit、push、publish、live、production write 或 credential access；真实动作必须有独立 typed authorization。

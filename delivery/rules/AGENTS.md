@@ -31,7 +31,7 @@ vNext 默认 `route_mode=sibling-binding`；`relative-symlink` 仅是显式 lega
 
 ## 3. Work、上下文与门禁
 
-- 默认建立 Work；公共契约、架构/安全边界、不可逆迁移、生产写、正式发布、强审计、风险接受或跨阶段重构才建 CR。G0/G1 不投射 legacy CP0-CP8；G2 按批准预算执行。
+- 默认建立 Work；公共契约、架构/安全边界、不可逆迁移、生产写、正式发布、强审计、风险接受或跨阶段重构才建 CR。G0/G1 不投射 legacy CP0-CP8；G2/G3 按批准预算执行。GovernanceRiskProfile V2：G2=scope-goal-note；G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。
 - deny-default scope 控制 reads/writes/checks；优先消费 Context Capsule：`process/context/` 的 work packet、`allowed_reads` 与 `must_read`。`process/STATE.md`、完整 CR、无关 Story、完整 LLD 与历史 transcript 默认不读；展开读取必须有 `full_doc_read_reason` 和 read expansion 证据。
 - 全阶段 Context Capsule、上下文预算、Workflow Health、Decision Brief 压缩均由原生上下文与检查模块维护。人工门由 Host Orchestrator 发起，使用 `process/checkpoints/`；用户回复 `approve` 只接受列明推荐方案，不授权禁止动作。
 - 产品输入在 `docs/product/SCENARIOS.yaml`、`docs/product/TEST-MATRIX.md`、`docs/product/MVP-SCOPE.md`；设计边界在 `docs/design/BLUEPRINT.md`、`docs/design/DOMAIN-MAP.md`、`docs/design/FEATURE-DESIGN-MATRIX.md`。不得以讨论稿、猜测或摘要替代它们。

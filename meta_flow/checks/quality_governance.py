@@ -101,7 +101,7 @@ def evaluate_quality_route(
     finding: Mapping[str, Any] | None = None,
     same_finding_rounds_completed: int = 0,
 ) -> QualityRouteDecision:
-    """按 route policy 判定 G2 independent QA 或 G0/G1 定向复验。"""
+    """按 route policy 判定 G2/G3 independent QA 或 G0/G1 定向复验。"""
 
     if same_finding_rounds_completed < 0:
         raise ValueError("same finding rounds must be non-negative")
@@ -117,6 +117,7 @@ def evaluate_quality_route(
         "G0": (False, 0),
         "G1": (False, 0),
         "G2": (True, 2),
+        "G3": (True, 2),
     }.get(risk_profile)
     fingerprint = finding_fingerprint(finding or {}) if finding else ""
     if expected is None or (independent_qa, reqa_max) != expected:

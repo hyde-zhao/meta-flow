@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from meta_flow.design.lightweight_design import CONSENT_TRIGGERS
 from meta_flow.project.process_route import _resolve_runtime_path, _resolve_runtime_ref
 
 FEATURE_REGISTRY_REL = Path("process/docs/design/FEATURE-REGISTRY.yaml")
@@ -42,7 +43,19 @@ ALLOWED_RISK_PROFILES = {
     "architecture-major",
     "runtime-high-risk",
 }
-ALLOWED_LLD_POLICIES = {"full-lld", "technical-note", "waived"}
+ALLOWED_LLD_POLICIES = {
+    "full-lld",
+    "batch-lld",
+    "technical-note",
+    "scope-goal-note",
+    "waived",
+}
+SUPPORTED_CONSENT_TRIGGERS = CONSENT_TRIGGERS
+ALLOWED_G2_FEATURE_DESIGN_POLICIES = {
+    "exact-baseline-ref",
+    "impact-note",
+    "n/a-with-reason",
+}
 ALLOWED_DESIGN_DOC_POLICIES = {"full-design", "compact-design", "technical-note", "registry-only", "waived"}
 TAXONOMY_REQUIRED_PROFILES = {"architecture-major", "product-redesign", "runtime-high-risk"}
 SENSITIVE_MARKERS = ("token", "secret", "password", "api_key", "apikey", "private_key", "credential", "cookie")
@@ -56,6 +69,8 @@ class StoryTrace:
     feature_design_refs: list[str]
     lld_policy: str
     risk_profile: str
+    risk_profile_schema_version: int = 1
+    feature_design_policy: str = ""
 
 
 @dataclass(frozen=True)
@@ -517,6 +532,8 @@ def story_trace_from_file(path: Path) -> StoryTrace:
         feature_design_refs=_as_list(data.get("feature_design_refs") or data.get("design_doc_refs")),
         lld_policy=str(data.get("lld_policy") or data.get("required_level") or ""),
         risk_profile=str(data.get("risk_profile") or ""),
+        risk_profile_schema_version=int(data.get("risk_profile_schema_version") or 1),
+        feature_design_policy=str(data.get("feature_design_policy") or ""),
     )
 
 
@@ -545,6 +562,18 @@ def trace_stories(project_root: Path, story_paths: list[Path] | None = None) -> 
             errors.append(f"{rel_path} missing lld_policy")
         elif trace.lld_policy not in ALLOWED_LLD_POLICIES:
             errors.append(f"{rel_path} invalid lld_policy: {trace.lld_policy}")
+        if trace.lld_policy == "scope-goal-note":
+            if trace.risk_profile != "G2" or trace.risk_profile_schema_version != 2:
+                errors.append(
+                    f"{rel_path} scope-goal-note requires GovernanceRiskProfile V2 G2"
+                )
+            if (
+                trace.feature_design_policy
+                and trace.feature_design_policy not in ALLOWED_G2_FEATURE_DESIGN_POLICIES
+            ):
+                errors.append(
+                    f"{rel_path} scope-goal-note has invalid feature_design_policy"
+                )
         effective_risks = {trace.risk_profile}
         effective_risks.update(str(features.get(feature_id, {}).get("risk_profile") or "") for feature_id in trace.feature_refs)
         if "runtime-high-risk" in effective_risks and trace.lld_policy != "full-lld":

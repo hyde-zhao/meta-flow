@@ -20,6 +20,10 @@ from meta_flow.project.model import is_safe_ref
 from meta_flow.project.process_route import ProcessRouteError, resolve_process_ref
 from meta_flow.project.scale import load_yaml_object
 from meta_flow.state import checkpoint_projection, event_ledger
+from meta_flow.work.governance_profile import (
+    GovernanceProfileBindingV2,
+    effective_governance_profile,
+)
 from meta_flow.workspace.git_sync import query_exact_remote_ref, run_git
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -156,16 +160,61 @@ def _load_publication_object(project_root: Path, logical_ref: str) -> dict[str, 
 
 def _profile_snapshot(work: dict[str, Any], work_ref: str) -> dict[str, Any]:
     scope = work.get("scope") or {}
-    return {
+    schema_version = int(work.get("risk_profile_schema_version") or 1)
+    risk_profile = str(work.get("risk_profile") or "")
+    snapshot = {
         "work_id": str(work.get("work_id") or ""),
         "work_ref": work_ref,
         "kind": str(work.get("kind") or ""),
-        "risk_profile": str(work.get("risk_profile") or ""),
+        "risk_profile": risk_profile,
         "risk_reason_codes": sorted(str(item) for item in work.get("risk_reason_codes") or []),
         "required_gates": sorted(str(item) for item in work.get("required_gates") or []),
         "scope_version": int(work.get("scope_version") or scope.get("version") or 0),
         "scope_digest": str(work.get("scope_digest") or scope.get("digest") or ""),
     }
+    if schema_version >= 2:
+        snapshot["risk_profile_schema_version"] = schema_version
+        snapshot["governance_selection_source"] = str(
+            work.get("governance_selection_source") or ""
+        )
+        snapshot["governance_selection_record_digest"] = str(
+            work.get("governance_selection_record_digest") or ""
+        )
+        snapshot["governance_selection_authorization_digest"] = str(
+            work.get("governance_selection_authorization_digest") or ""
+        )
+        snapshot["governance_selection_source_oid"] = str(
+            work.get("governance_selection_source_oid") or ""
+        )
+        snapshot["governance_route_revision"] = int(
+            work.get("governance_route_revision") or 0
+        )
+    return snapshot
+
+
+def _snapshot_effective_profile(snapshot: dict[str, Any]) -> str:
+    profile = effective_governance_profile(
+        str(snapshot.get("risk_profile") or ""),
+        int(snapshot.get("risk_profile_schema_version") or 1),
+    )
+    if int(snapshot.get("risk_profile_schema_version") or 1) == 2:
+        GovernanceProfileBindingV2(
+            schema_version=2,
+            risk_profile=str(snapshot.get("risk_profile") or ""),
+            effective_profile=profile,
+            selection_source=str(snapshot.get("governance_selection_source") or ""),
+            selection_record_digest=str(
+                snapshot.get("governance_selection_record_digest") or ""
+            ),
+            selection_authorization_digest=str(
+                snapshot.get("governance_selection_authorization_digest") or ""
+            ),
+            selection_source_oid=str(
+                snapshot.get("governance_selection_source_oid") or ""
+            ),
+            route_revision=int(snapshot.get("governance_route_revision") or 0),
+        )
+    return profile
 
 
 def evaluate_publication_eligibility(
@@ -199,8 +248,13 @@ def evaluate_publication_eligibility(
             "BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest
         )
     cp8 = (route.get("checkpoint_applicability") or {}).get("CP8") or {}
-    profile = snapshot["risk_profile"]
-    if profile == "G2":
+    try:
+        profile = _snapshot_effective_profile(snapshot)
+    except (TypeError, ValueError):
+        return PublicationEligibility(
+            "BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest
+        )
+    if profile in {"G2", "G3"}:
         if not (cp8.get("applies") is True and cp8.get("human_gate") == "required"):
             return PublicationEligibility(
                 "BLOCKED", "PROFILE_ROUTE_CONFLICT", "", profile_digest, route_digest
@@ -415,12 +469,12 @@ def build_publication_eligibility_plan(
     route_digest = _digest(route)
     if (
         snapshot["work_id"] != work_id
-        or snapshot["risk_profile"] != "G2"
+        or _snapshot_effective_profile(snapshot) not in {"G2", "G3"}
         or snapshot["kind"] != "cr"
         or not snapshot["scope_version"]
         or not snapshot["scope_digest"]
     ):
-        raise ValueError("publication context WORK profile is not canonical G2")
+        raise ValueError("publication context WORK profile is not canonical high-assurance CR")
     route_snapshot = route.get("work_profile_snapshot")
     route_profile_digest = str(route.get("work_profile_digest") or "")
     if (route_snapshot is None) != (not route_profile_digest):
@@ -639,7 +693,7 @@ def _evaluate_evidence(
         ):
             raise ValueError("publication evidence scope/profile/route digest mismatch")
         required_ref_keys = {"work", "route_plan", "target_policy"}
-        if snapshot["risk_profile"] == "G2":
+        if _snapshot_effective_profile(snapshot) in {"G2", "G3"}:
             required_ref_keys |= {
                 "formal_cr",
                 "cr_summary",
@@ -692,7 +746,7 @@ def _evaluate_evidence(
             route_plan_ref=route_plan_ref,
             work_ref=work_ref,
         )
-        if snapshot["risk_profile"] != "G2":
+        if _snapshot_effective_profile(snapshot) not in {"G2", "G3"}:
             return base
         if base.reason != "CP8_REQUIRED":
             return base

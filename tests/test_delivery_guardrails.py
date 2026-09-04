@@ -33,6 +33,9 @@ collect_delivery_runtime_contract_errors = GUARDRAIL[
 collect_core_lifecycle_dogfood_errors = GUARDRAIL[
     "collect_core_lifecycle_dogfood_errors"
 ]
+collect_governance_profile_residue_errors = GUARDRAIL[
+    "collect_governance_profile_residue_errors"
+]
 
 
 def test_installation_registry_and_discovery_are_exactly_closed() -> None:
@@ -212,6 +215,31 @@ def test_cr_guardrail_tokens_follow_real_owners_without_facade_backfill() -> Non
     assert GUARDRAIL["collect_requirement_intake_routing_errors"]() == []
     assert GUARDRAIL["collect_cr058_execution_closure_errors"]() == []
     assert GUARDRAIL["collect_retired_cr_facade_token_errors"]() == []
+
+
+def test_governance_profile_mirrors_use_v2_g2_g3_semantics() -> None:
+    assert collect_governance_profile_residue_errors() == []
+
+
+def test_governance_profile_residue_guardrail_detects_legacy_g2_claim() -> None:
+    relative = GUARDRAIL["GOVERNANCE_PROFILE_MIRRORS"][0]
+    token = GUARDRAIL["GOVERNANCE_PROFILE_CONTRACT_TOKEN"]
+    errors = collect_governance_profile_residue_errors(
+        extra_sources={relative: token + "\nG2 必须进入 full-lld 完整流程。\n"}
+    )
+    assert any(relative in error and "legacy G2" in error for error in errors)
+
+
+def test_publication_risk_grade_allowlist_remains_three_level() -> None:
+    from meta_flow.release.risk_policy import RiskGrade
+
+    assert [item.name for item in RiskGrade] == ["G0", "G1", "G2"]
+    assert GUARDRAIL["PUBLICATION_GRADE_ALLOWLIST"] == {
+        "meta_flow/release/publication_policy.py",
+        "meta_flow/release/risk_policy.py",
+        "tests/cr076/test_publication_policy.py",
+        "tests/cr076/test_risk_policy.py",
+    }
 
 
 def _write_mirror_fixture(root: Path, mirror_content: str) -> tuple[tuple[str, str], ...]:

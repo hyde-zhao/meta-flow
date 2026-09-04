@@ -293,7 +293,7 @@ note: 旧 CR/CP/Story/docs/ledger 保留在 legacy 仓；新工作从独立过�
 
 `source_oid` 必须来自本次 preflight 的 `git ls-remote`，不得依赖本地缓存；文件不得记录本机绝对路径、用户名或凭据。`project adopt` 只适用于其 source 契约明确支持的 Git 根和新格式快照，不能用于 legacy shared artifacts 子目录。
 
-日常工作以用户确认过的最小 `REQUEST.md` 和一个 `WORK.yaml` 为中心。系统解释 Work/CR 和 G0/G1/G2 判定；用户可主动升级，但高风险不得静默降级：
+日常工作以用户确认过的最小 `REQUEST.md` 和一个 `WORK.yaml` 为中心。系统解释 Work/CR 和 G0/G1/G2/G3 判定；用户可主动升级，但高风险不得静默降级。GovernanceRiskProfile V2：G2=scope-goal-note；G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。
 
 ```bash
 meta-flow work classify --change-kind documentation --touched-path-count 1

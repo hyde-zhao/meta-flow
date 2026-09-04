@@ -11,10 +11,10 @@ wheel，并绑定同一 Release 随附的 `ProviderArtifactReceiptV1.json`；不
 
 ### 1. 下载正式 Release 资产
 
-下面以当前版本 `0.6.3` 为例。升级时只需把 `META_FLOW_VERSION` 改为目标版本：
+下面以当前版本 `0.6.5` 为例。升级时只需把 `META_FLOW_VERSION` 改为目标版本：
 
 ```bash
-export META_FLOW_VERSION=0.6.3
+export META_FLOW_VERSION=0.6.5
 export META_FLOW_RELEASE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/meta-flow/releases/${META_FLOW_VERSION}"
 
 install -d -m 0755 "$META_FLOW_RELEASE_DIR"
@@ -33,9 +33,9 @@ gh release download "v${META_FLOW_VERSION}" \
 [GitHub Releases](https://github.com/hyde-zhao/meta-flow/releases) 手工下载相同的 wheel、
 sdist、receipt 和 digest-policy sidecar，并保存到同一个稳定目录。
 
-安装前应按 `v0.6.3` Release 页面公布的 SHA-256 校验四项资产；摘要在正式
+安装前应按 `v0.6.5` Release 页面公布的 SHA-256 校验四项资产；摘要在正式
 artifact 从 clean tagged source 构建并完成隔离 canary 后发布，不能用旧版本摘要替代。
-在最终构建前不填写 0.6.3 SHA placeholder。
+在最终构建前不填写 0.6.5 SHA placeholder。
 
 ```bash
 sha256sum \
@@ -137,7 +137,7 @@ systemctl --user import-environment META_FLOW_PROVIDER_RECEIPT
 Windows host 当前尚未列入正式 CLI artifact 资格声明；如仅需配置同名用户变量，可使用：
 
 ```powershell
-$ReceiptPath = "$env:LOCALAPPDATA\MetaFlow\releases\0.6.3\ProviderArtifactReceiptV1.json"
+$ReceiptPath = "$env:LOCALAPPDATA\MetaFlow\releases\0.6.5\ProviderArtifactReceiptV1.json"
 
 [Environment]::SetEnvironmentVariable(
     "META_FLOW_PROVIDER_RECEIPT",
@@ -295,7 +295,7 @@ typed authorization 是严格 JSON 对象，必须包含 `schema_version=1`、�
 
 `process/...` 在 vNext 中是逻辑引用。`resolve-ref` 成功时返回的绝对 `resolved_path` 只用于本次 I/O，不得写入治理文件或 Git；退出码 2 表示路由/ref 契约阻断，调用方必须停止，不得自行拼 sibling、去前缀、恢复软链接或回退 legacy。
 
-日常变化默认用 Work；公共契约、架构、安全权限、不可逆迁移、生产写、正式发布、强审计、风险接受和跨阶段重构才升级正式 CR/G2。G0/G1 只生成当前 Work 必要的 `REQUEST.md`、`WORK.yaml`、usage/handoff/result，不强制八份产品基线、全量 HLD/LLD 或 CP0-CP8。
+日常变化默认用 Work；公共契约、架构、安全权限、不可逆迁移、生产写、正式发布、强审计、风险接受和跨阶段重构才升级正式 CR/G2。G0/G1 只生成当前 Work 必要的 `REQUEST.md`、`WORK.yaml`、usage/handoff/result，不强制八份产品基线、全量 HLD/LLD 或 CP0-CP8。GovernanceRiskProfile V2：G2=scope-goal-note；G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。
 
 | 档位 | 上限 | 评审与验证 |
 |---|---|---|

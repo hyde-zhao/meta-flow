@@ -32,7 +32,7 @@ Both binding files must agree on schema, layout, project identity, route mode, a
 
 For `fresh-vnext-bootstrap` from a legacy shared-artifact subdirectory, create `legacy/LEGACY-SOURCE.yaml` only after successful local init apply and before the first process-repository commit. Schema version 1 records `project_id`, `migration_mode`, `source_repo_url`, `source_ref`, the exact `source_oid` frozen by `git ls-remote`, `source_subpath`, `source_mode=read-only`, `copied_history=false`, `deletion_authorized=false`, `history_rewrite_authorized=false`, `snapshot_date`, and a short note. It must not contain a device-local absolute path or credentials. This source shape is not eligible for the current `project adopt`; no bulk legacy copy or history rewrite is allowed.
 
-The directory groups below describe legacy/G2 extended evidence locations and remain valid when selected by risk. They are not mandatory empty scaffolds for a G0/G1 Work.
+The directory groups below describe legacy/G2/G3 extended evidence locations and remain valid when selected by risk. They are not mandatory empty scaffolds for a G0/G1 Work. GovernanceRiskProfile V2：G2=scope-goal-note；G3=原 G2 完整流程（等价 V1 G2）；只有用户显式选择 G3。
 
 ## Roots
 

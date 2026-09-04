@@ -85,12 +85,12 @@ def decide_handoff_policy(work: Work, transition: str) -> HandoffPolicyDecisionV
         reasons.append("ACTIVE_TRANSITION_HANDOFF_NOT_REQUIRED")
     elif transition not in {"paused", "blocked"}:
         reasons.append("LIFECYCLE_TRANSITION_HANDOFF_NOT_REQUIRED")
-    elif work.risk_profile == "G2":
+    elif work.effective_risk_profile in {"G2", "G3"}:
+        profile = "G2" if work.risk_profile == "G2" else "G3"
         if work.route_profile.dispatch_mode == "functional-agent":
-            reasons.append("G2_FUNCTIONAL_AGENT_HANDOFF_REQUIRED")
+            reasons.append(f"{profile}_FUNCTIONAL_AGENT_HANDOFF_REQUIRED")
         if work.route_profile.legacy_cp_compatibility:
-            reasons.append("G2_LEGACY_CP_HANDOFF_REQUIRED")
-
+            reasons.append(f"{profile}_LEGACY_CP_HANDOFF_REQUIRED")
     required = transition in {"paused", "blocked"} and bool(reasons)
     if not required:
         if transition in {"paused", "blocked"}:

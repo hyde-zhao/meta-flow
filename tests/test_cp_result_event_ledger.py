@@ -22,6 +22,7 @@ GATE_SEMANTIC_REGISTRY = {
     "meta_flow/checks/state_transition.py": "passage-consumer",
     "meta_flow/repository/publisher.py": "passage-consumer",
     "meta_flow/workflow/cr_projection.py": "passage-consumer",
+    "meta_flow/state/formal_projection.py": "passage-consumer",
     "meta_flow/work/usage.py": "count-only-exception",
     "meta_flow/checks/process_cost.py": "cost-metrics-consumer",
     "meta_flow/workflow/cr_status_sync.py": "transport-adapter",
@@ -1855,7 +1856,7 @@ class S01ProjectionContractTests(unittest.TestCase):
         )
         roles = tuple(GATE_SEMANTIC_REGISTRY.values())
         self.assertEqual(1, roles.count("producer-validator-projector-owner"))
-        self.assertEqual(4, roles.count("passage-consumer"))
+        self.assertEqual(5, roles.count("passage-consumer"))
         self.assertEqual(1, roles.count("count-only-exception"))
         self.assertEqual(1, roles.count("cost-metrics-consumer"))
 

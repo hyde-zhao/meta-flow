@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from meta_flow import __version__
 from meta_flow.installation import artifact
 
 ROOT = Path(__file__).parents[1]
@@ -68,9 +69,9 @@ def test_sidecar_requirement_has_one_version_boundary() -> None:
 def test_readme_download_and_environment_examples_match_asset_set() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     install_section = readme.split("### 2. 安装或升级 CLI provider", 1)[0]
-    asset_set = artifact.build_provider_release_asset_set("0.6.3")
+    asset_set = artifact.build_provider_release_asset_set(__version__)
 
-    assert "export META_FLOW_VERSION=0.6.3" in install_section
+    assert f"export META_FLOW_VERSION={__version__}" in install_section
     assert "0.5.3" not in install_section
     for leaf in (
         asset_set.wheel_filename,
@@ -78,8 +79,8 @@ def test_readme_download_and_environment_examples_match_asset_set() -> None:
         asset_set.receipt_filename,
         asset_set.sidecar_filename,
     ):
-        assert leaf.replace("0.6.3", "${META_FLOW_VERSION}") in install_section
-    assert "在最终构建前不填写 0.6.3 SHA placeholder" in install_section
+        assert leaf.replace(__version__, "${META_FLOW_VERSION}") in install_section
+    assert f"在最终构建前不填写 {__version__} SHA placeholder" in install_section
 
     systemd_section = readme.split("#### Linux systemd 用户服务变量", 1)[1].split(
         "#### Windows PowerShell 用户变量", 1

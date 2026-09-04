@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from meta_flow.project.read_contract import is_safe_read_ref
+from meta_flow.work.governance_profile import GovernanceProfileBindingV2
 
 VALIDATION_LAYERS = ("targeted", "compatibility", "full")
 SOURCE_ROLES = {"production", "test", "config", "lock"}
@@ -95,6 +96,12 @@ def build_validation_fingerprint(
         "profile_digest": profile_digest,
     }
     return ValidationFingerprint(1, layer, ordered, profile_digest, _digest(semantic))
+
+
+def governance_profile_digest(binding: GovernanceProfileBindingV2) -> str:
+    """生成验证复用的 profile namespace；G2/G3/路由修订不可交叉复用。"""
+
+    return binding.digest
 
 
 def command_identity(argv: Iterable[str]) -> str:
