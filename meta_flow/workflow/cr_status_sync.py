@@ -44,7 +44,9 @@ from meta_flow.workflow.cr_projection import (
     CR_ARCHIVE_ROOT_REL,
     CR_LEDGER_REL,
     STATE_CURRENT_REL,
+    _acquire_status_sync_writer_lock,
     _checkpoint_result_projection,
+    _release_status_sync_writer_lock,
     _transaction_root,
     render_status_body_projection,
     summary_from_cr_file,
@@ -371,6 +373,29 @@ def _snapshot_facts(
         "formal_cr_process_tree_manifest_digest": snapshot.process_tree_manifest_digest,
         "formal_cr_discovery_snapshot_digest": snapshot.snapshot_digest,
     }
+
+
+def _delivered_reentry_phase_id(
+    read_context: ReadContextProtocol,
+) -> str:
+    """Delivered 休息态再入 active 时恢复承载 Phase 标识。
+
+    0.6.5 的 close patch 把 current_phase 覆写为 "delivered"，而激活分支
+    此前不重置该字段：delivered 基态上的 activation candidate 会同时保留
+    active_change 与 current_phase="delivered"，违反 delivered_active_reference
+    校验（CR-078 激活阻断，2026-09-06 实测）。再入相位以
+    PROJECT.active_phase_ref 为唯一真相；项目真交付（无 active phase）时
+    显式失败。
+    """
+
+    project = read_context.read_yaml_object("process/PROJECT.yaml")
+    phase_ref = str(project.get("active_phase_ref") or "")
+    phase_id = Path(phase_ref).parent.name if phase_ref else ""
+    if not phase_id or not phase_ref.endswith("PHASE.yaml"):
+        raise ValueError(
+            "delivered re-entry requires PROJECT.active_phase_ref to point at an active phase"
+        )
+    return phase_id
 
 
 def _operation_admission(
@@ -1012,6 +1037,8 @@ def plan_status_sync(
                     },
                 }
             )
+            if str(state.get("current_phase") or "") == "delivered":
+                state_patch["current_phase"] = _delivered_reentry_phase_id(context)
         if len(state_patch) > 1:
             state_after = current.render_current_state_candidate(
                 current.build_current_state_candidate(
@@ -1729,6 +1756,37 @@ def _apply_status_sync_composite(
             "reason": "projection target preimage drifted: " + ", ".join(drifted),
             "mutation_count": 0,
         }
+    # CR-078（S4-1）：锁内 admission 校验必须先于投影子事务——投影写入会把
+    # clean 投影 ref 变 M，后置校验在干净工作区必然漂移（0.6.5 实测：CR-077
+    # 闭合三连 RECOVERED）。校验在 writer lock 下完成后释放；exact 通道保留
+    # 自身 target preimage 复查与既有 prepare/claim 约束。
+    if lock_bound_admission_validator is not None:
+        import uuid as _uuid
+
+        validation_lock = _acquire_status_sync_writer_lock(
+            project_root,
+            transaction_id="composite-admission-" + _uuid.uuid4().hex,
+            purpose="validate",
+            transaction_root=transaction_root,
+        )
+        if validation_lock is None:
+            return {
+                "status": "BLOCKED",
+                "reason": "status-sync writer lock exists",
+                "mutation_count": 0,
+            }
+        try:
+            admission_error = str(lock_bound_admission_validator() or "")
+        except (OSError, ValueError) as exc:
+            admission_error = f"status-sync lock-bound admission could not be rebuilt: {exc}"
+        finally:
+            _release_status_sync_writer_lock(
+                project_root,
+                validation_lock,
+                transaction_root=transaction_root,
+            )
+        if admission_error:
+            return {"status": "BLOCKED", "reason": admission_error, "mutation_count": 0}
     committed_projection = {
         target.ref: target.after.encode("utf-8") for target in projection_targets
     }
@@ -1755,7 +1813,9 @@ def _apply_status_sync_composite(
         project_root, exact_validated, canonical_digest=canonical_digest, index_ref=index_ref,
         fail_after_replace=fail_after_replace, fail_recovery=fail_recovery, fault=fault,
         transaction_root=transaction_root,
-        lock_bound_admission_validator=lock_bound_admission_validator,
+        # 校验已在投影子事务前完成（见上）；此处传入 None 避免对自身投影
+        # 写入的必然漂移误判。
+        lock_bound_admission_validator=None,
     )
     if exact_result.get("status") == "PASS":
         return {

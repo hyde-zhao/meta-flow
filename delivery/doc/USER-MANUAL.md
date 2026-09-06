@@ -1432,3 +1432,62 @@ summary、ledger 和 formal-only index；follow-up candidate 不会伪装成正�
 1. **提示找不到 `scripts/install.py`**：你在仓库根目录执行了 delivery-root 命令；改用 `delivery/scripts/install.py`
 2. **Skill 运行时脚本未找到**：检查目标 Skill 的私有脚本是否位于 `delivery/skills/<skill>/scripts/`
 3. **需要确认交付结构是否合规**：仅当当前仓库存在 `scripts/check_delivery_guardrails.py` 时，运行 `uv run --python 3.11 python scripts/check_delivery_guardrails.py`；如果是外部 production 项目且没有该脚本，外部 production 项目不得硬引用 meta-flow 源仓库路径，改按目标 README/docs 的测试、构建、安装 dry-run 或用户确认的验证命令执行。
+
+## 11. Scope 修订、共享投影 lineage 与授权模板（0.6.6+）
+
+### 11.1 scope-amend 的共享投影后继登记
+
+`work scope-amend` 重写 `works/<id>/WORK.yaml`（close 族共享投影 ref）。自 0.6.6 起：
+
+- **plan 期冻结 lineage 锚点**：preview 输出含 `lineage_preflight`（close head 与前驱链头 digest，进入 `plan_digest` 绑定）。无 close 历史的 Work 锚点为空 `()`（apply 不写 receipt）；**存量楔死仓**（WORK.yaml 已漂移且无授权后继）plan 直接 BLOCKED（`*_LINEAGE_PREFLIGHT_BLOCKED`），先走 11.2 修复。
+- **apply 后登记**：事务 COMMITTED 后、共享写锁内写 successor receipt（`.meta-flow-runtime/work-close/successors/work-scope-amend-<id>.json`，锚定上一 close 事务）。G1/G2/legacy CR 三条 lane 一致。PASS 输出 `shared_projection_successor_id`。
+- **record 失败 = PARTIAL**：`SCOPE_AMEND_SHARED_SUCCESSOR_RECORD_FAILED` + `transaction_state=COMMITTED` + `next_action` 指向 11.2 的 repair；最坏失败态与 0.6.5 存量楔死态同构。
+- **G1 lane 新守卫**：shared lock 与 lineage 断言双 lane 化（`G1_SCOPE_AMEND_SHARED_LOCK_UNAVAILABLE` / `SCOPE_AMEND_CLOSE_LINEAGE_BLOCKED`）。
+
+### 11.2 共享投影修复出口：`work shared-projection-repair`
+
+修复「close 族代际头之后 ref 被改写但无授权后继」的楔死仓（含 0.6.5 scope-amend 存量受害仓）：
+
+```bash
+# 1) 零写 plan/inspect：输出分类与 repair_plan
+meta-flow work shared-projection-repair --project-root <release-root>
+#    COMMITTED_CURRENT=健康（exit 0）；COMMITTED_STALE_REPAIRABLE=可修复；
+#    PARTIAL/CORRUPTED=需先恢复事务；SUPERSEDED=plan 已过期需重跑。
+
+# 2) 按 repair_plan 铸造 SharedProjectionRepairAuthorizationV1
+#    （authorization_id / plan_digest / target_refs 按 plan 顺序 / expires_at）
+
+# 3) apply（仅追加 successor receipt，幂等，单次消费）
+meta-flow work shared-projection-repair --project-root <release-root> --apply \
+  --expected-plan-digest <plan_digest> --authorization <auth.json>
+```
+
+修复后 `work close-inspect` 应 PASS，resume/status-transition/close 恢复可用。同授权重放被单次消费拒绝；mint 前再漂移得 SUPERSEDED 零 mutation。
+
+### 11.3 授权信封模板：`work authorization-template`
+
+从零写 plan/仓状态自动生成 typed authorization 模板（stdout，不写仓库）：
+
+```bash
+meta-flow work authorization-template --project-root <release-root> \
+  --operation work.scope-amend --work-id W-001 --delta delta.json
+# 支持：work.status-transition / work.scope-amend / work.close / work.shared-projection-repair
+```
+
+机械字段自动填充（digest / target_refs 按 plan 顺序 / G2 invalidation 超集 / delta 派生 authorized_add_writes）；人工字段以 `<fill:...>` 占位并在 `field_bindings` 标注来源。
+
+### 11.4 授权信封字段绑定规则（速查）
+
+- `plan_digest`：对应 plan preview 的 digest（status-transition 为 `current_projection_plan` 子计划 digest，即 preview 顶层）；**重跑 preview 后不得复用旧值**。
+- `parent_plan_digest`（status-transition）：父计划 `plan.plan_digest`。
+- `target_refs`：必须与 plan preview 的 targets **逐项同序**。
+- G2 `authorized_add_writes`：与 delta `add_writes` 逐项相等且**禁止任何通配符**（`*`/`?`/`[`；含尾部 `/**`）——显式 blocker `G2_CURRENT_CR_SCOPE_AMEND_WILDCARD_UNSUPPORTED`；G1 delta 允许尾 `/**` 声明，两者语义不同（声明 vs 授权）。
+- G2 `invalidation_refs`：必须为原生超集 `{result_ref, works/<id>/evidence/validation/**, works/<id>/AUTHORIZATION.json, works/<id>/HANDOFF.yaml}` 的有序去重超集。
+- 序列字段（`authorized_add_writes`/`invalidation_refs`）须**排序去重**且为字符串数组。
+
+### 11.5 其他 0.6.6 修复
+
+- `cr query --format json`；查询 ID 命中 native CR 时返回 `native_cr_requires_formal_truth_query` + `native_cr_view`（不再误报 legacy 未注册）。
+- `work resume-check` 缺 `HANDOFF.yaml` 时返回 typed `HANDOFF_NOT_INITIALIZED`（不再裸 FileNotFoundError）。
+- `work scope-amend-inspect` 输出 `lineage_states`（每 COMMITTED 事务的 WORK.yaml 锚定/对齐状态）。
+- **前向兼容**：0.6.6 写出的 `work.scope-amend` successor receipt 被 0.6.5 读取时 fail-closed——升级后不可降级。

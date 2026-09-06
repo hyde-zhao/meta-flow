@@ -130,6 +130,7 @@ STATE_PROJECTION_REFS = (STATE_CURRENT_REF, STATE_MD_REF, CURRENT_REF)
 SHARED_SUCCESSOR_OPERATIONS = frozenset(
     {
         "work.init",
+        "work.scope-amend",
         "work.status-transition",
         "project.phase-transition",
         "project.phase-metadata",
@@ -503,6 +504,9 @@ class SharedProjectionRepairTargetV1:
             str(payload.get("current_digest") or ""),
         )
         parts = Path(target.ref).parts
+        works_work_yaml = (
+            len(parts) == 3 and parts[0] == "works" and bool(parts[1]) and parts[2] == "WORK.yaml"
+        )
         if (
             not _is_shared_projection_ref(target.ref)
             or target.ref in STATE_PROJECTION_REFS
@@ -514,8 +518,7 @@ class SharedProjectionRepairTargetV1:
             or not _DIGEST_RE.fullmatch(target.predecessor_digest)
             or not _DIGEST_RE.fullmatch(target.current_digest)
             or target.predecessor_digest == target.current_digest
-            or target.ref.startswith("works/")
-            or (len(parts) == 3 and parts[0] == "works")
+            or (target.ref.startswith("works/") and not works_work_yaml)
         ):
             raise ValueError("shared projection repair target is invalid")
         return target
@@ -996,6 +999,14 @@ def _load_shared_successor_receipts(root: Path) -> list[dict[str, Any]]:
                     len(Path(ref).parts) == 3
                     and Path(ref).parts[0] == "works"
                     and Path(ref).name == "WORK.yaml"
+                )
+            elif operation == "work.scope-amend":
+                # CR-078：scope-amend 只允许锚定被其重写的 Work 共享投影 ref。
+                operation_ref_allowed = (
+                    len(Path(ref).parts) == 3
+                    and Path(ref).parts[0] == "works"
+                    and bool(Path(ref).parts[1])
+                    and Path(ref).parts[2] == "WORK.yaml"
                 )
             elif operation == "work.init":
                 operation_ref_allowed = ref not in {
@@ -1914,6 +1925,13 @@ def plan_shared_projection_repair(process_root: Path) -> SharedProjectionRepairP
                         and Path(str(target["ref"])).parts[0] == "phases"
                         and Path(str(target["ref"])).parts[2] == "PHASE.yaml"
                     )
+                    # CR-078：close 族锚定的 Work 共享投影 ref 同为可修复目标
+                    # （scope-amend 未登记后继导致的存量楔死修复出口）。
+                    or (
+                        len(Path(str(target["ref"])).parts) == 3
+                        and Path(str(target["ref"])).parts[0] == "works"
+                        and Path(str(target["ref"])).parts[2] == "WORK.yaml"
+                    )
                 }
             )
         )
@@ -2201,6 +2219,61 @@ def record_work_init_shared_projection_successor(
         ),
         expected_preflight=expected_preflight,
     )
+
+
+def shared_projection_successor_state(
+    process_root: Path,
+    *,
+    ref: str,
+) -> dict[str, Any]:
+    """只读返回单个共享投影 ref 的 close 锚点与 successor 链头对齐状态。
+
+    CR-078 诊断配套：scope-amend 后继登记是否闭合（anchored/aligned）、
+    close head 与 successor 链头 digest、当前文件 digest 一览。
+    """
+
+    root = process_root.resolve()
+    if not _is_shared_projection_ref(ref):
+        raise ValueError("shared projection successor ref is not a shared projection ref")
+    path = root / ref
+    current_digest = (
+        _digest_bytes(path.read_bytes()) if path.is_file() and not path.is_symlink() else ""
+    )
+    transaction_root = root / TRANSACTION_ROOT_REL
+    heads = committed_generation_heads(
+        transaction_root,
+        refs=(ref,),
+        current_digests={ref: current_digest} if current_digest else {},
+    )
+    head = heads.get(ref)
+    anchor_id = ""
+    anchor_after_digest = ""
+    successor_head_id = ""
+    successor_head_digest = ""
+    if head is not None:
+        anchor_id = str(head["authorization_id"])
+        anchor_after_digest = str(head["after_digest"])
+        receipts = _load_shared_successor_receipts(root)
+        successor_head_id, successor_head_digest = _shared_successor_head(
+            receipts,
+            ref=ref,
+            close_authorization_id=anchor_id,
+            close_digest=anchor_after_digest,
+        )
+    expected_digest = successor_head_digest or anchor_after_digest
+    return {
+        "schema_version": 1,
+        "kind": "SharedProjectionSuccessorStateV1",
+        "ref": ref,
+        "anchored": head is not None,
+        "anchor_close_authorization_id": anchor_id,
+        "anchor_after_digest": anchor_after_digest,
+        "successor_head_id": successor_head_id,
+        "successor_head_digest": successor_head_digest,
+        "current_digest": current_digest,
+        "aligned": bool(current_digest) and current_digest == expected_digest,
+        "mutation_count": 0,
+    }
 
 
 def apply_work_close(
@@ -2501,6 +2574,7 @@ __all__ = [
     "plan_shared_projection_successor_preflight",
     "refresh_state_projection_if_initialized",
     "record_work_init_shared_projection_successor",
+    "shared_projection_successor_state",
     "record_shared_projection_successor",
     "recover_work_close_transaction",
     "release_shared_projection_writer_lock",

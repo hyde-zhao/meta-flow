@@ -490,6 +490,8 @@ def _build_cr_command_parser(command: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=f"meta-flow cr {command}")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--id", dest="cr_id", default="")
+    # CR-078：输出格式显式化（当前仅 json；与全仓 CLI 输出约定对齐）。
+    parser.add_argument("--format", choices=["json"], default="json")
     parser.add_argument("--title", default="Meta Flow adoption bootstrap")
     parser.add_argument(
         "--scope",
@@ -861,6 +863,38 @@ def _dispatch_cr_status_sync_recovery_command(
     return 0 if result["status"] in {"PASS", "RECOVERED"} else 1
 
 
+def _query_native_cr_view(project_root: Path, cr_id: str) -> dict[str, Any] | None:
+    """CR-078：查询 ID 命中 CR-INDEX 投影时返回 native 视图摘要，否则 None。"""
+
+    try:
+        from meta_flow.workflow.cr_analysis import load_index
+
+        index = load_index(project_root)
+        item = next(
+            (
+                entry
+                for entry in index.get("items", [])
+                if isinstance(entry, dict) and str(entry.get("id") or "") == cr_id
+            ),
+            None,
+        )
+        if item is None:
+            return None
+        return {
+            key: item.get(key)
+            for key in (
+                "id",
+                "lifecycle_status",
+                "readiness",
+                "gate_status",
+                "full_ref",
+                "summary_ref",
+            )
+        }
+    except (OSError, ValueError):
+        return None
+
+
 def _dispatch_cr_diagnostic_command(
     command: str,
     args: list[str],
@@ -882,14 +916,36 @@ def _dispatch_cr_diagnostic_command(
                 query_id=parsed.cr_id,
             )
         except LegacyEvidenceError as exc:
-            result = {
-                "schema_version": 1,
-                "decision": "BLOCKED",
-                "error_code": exc.code,
-                "message": str(exc),
-                "query_id": parsed.cr_id,
-                "mutation_count": 0,
-            }
+            # CR-078：native formal truth 先行诊断——查询 ID 命中 CR-INDEX 投影时
+            # 给 typed 区分结果，不再误报 legacy_evidence_not_registered。
+            native_view = (
+                _query_native_cr_view(project_root, parsed.cr_id)
+                if exc.code == "legacy_evidence_not_registered"
+                else None
+            )
+            if native_view is not None:
+                result = {
+                    "schema_version": 1,
+                    "decision": "BLOCKED",
+                    "error_code": "native_cr_requires_formal_truth_query",
+                    "message": (
+                        "query id is a native formal CR; legacy evidence registry is "
+                        "not the owner — use 'meta-flow cr brief --id' or the "
+                        "CR-INDEX projection for native CR state"
+                    ),
+                    "query_id": parsed.cr_id,
+                    "native_cr_view": native_view,
+                    "mutation_count": 0,
+                }
+            else:
+                result = {
+                    "schema_version": 1,
+                    "decision": "BLOCKED",
+                    "error_code": exc.code,
+                    "message": str(exc),
+                    "query_id": parsed.cr_id,
+                    "mutation_count": 0,
+                }
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 2
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

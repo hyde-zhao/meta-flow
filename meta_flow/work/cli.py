@@ -30,9 +30,14 @@ from meta_flow.work.init_transaction import (
 )
 from meta_flow.work.lifecycle import transition_work
 from meta_flow.work.lifecycle_transaction import (
+    SharedProjectionRepairAuthorizationV1,
+    SharedProjectionRepairPlanV1,
     WorkCloseAuthorizationV1,
+    apply_shared_projection_repair,
     apply_work_close,
+    inspect_shared_projection_repair,
     inspect_work_close_transactions,
+    plan_shared_projection_repair,
     plan_work_close,
     recover_work_close_transaction,
 )
@@ -61,6 +66,7 @@ from meta_flow.work.risk import HIGH_RISK_FIELDS, RiskFacts, classify_work
 from meta_flow.work.route_profile import RouteProfile, evaluate_route_profile
 from meta_flow.work.scope import WorkScope, check_scope
 from meta_flow.work.scope_amend import (
+    _git_snapshot,
     apply_g1_scope_amend,
     inspect_g1_scope_amend,
     load_g1_scope_amend_authorization,
@@ -103,6 +109,14 @@ PUBLIC_OPERATION_DECLARATIONS = (
     ("work.scope-amend", ("meta-flow", "work", "scope-amend")),
     ("work.scope-amend-inspect", ("meta-flow", "work", "scope-amend-inspect")),
     ("work.scope-amend-recover", ("meta-flow", "work", "scope-amend-recover")),
+    (
+        "work.shared-projection-repair",
+        ("meta-flow", "work", "shared-projection-repair"),
+    ),
+    (
+        "work.authorization-template",
+        ("meta-flow", "work", "authorization-template"),
+    ),
     ("work.status-transition", ("meta-flow", "work", "status-transition")),
     (
         "work.status-transition-inspect",
@@ -451,6 +465,225 @@ def scope_amend_main(argv: list[str] | None = None) -> int:
         return 1
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if payload["decision"] in {"PASS", "NO_CHANGE"} else 1
+
+
+def authorization_template_main(argv: list[str] | None = None) -> int:
+    """CR-078：从零写 plan 自动生成 typed authorization 模板（只读，stdout）。
+
+    机械填充 plan 绑定字段（digest / target 顺序 / 超集）；人工字段以
+    ``<fill:...>`` 占位并在 field_bindings 标注取值来源。
+    """
+
+    parser = argparse.ArgumentParser(prog="meta-flow work authorization-template")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--operation",
+        required=True,
+        choices=(
+            "work.status-transition",
+            "work.scope-amend",
+            "work.close",
+            "work.shared-projection-repair",
+        ),
+    )
+    parser.add_argument("--work-id", default="")
+    parser.add_argument("--expected-status", default="")
+    parser.add_argument("--new-status", default="")
+    parser.add_argument("--outcome", default="completed", choices=("completed", "cancelled"))
+    parser.add_argument("--result-ref", default="")
+    parser.add_argument("--delta", type=Path)
+    parsed = parser.parse_args(argv or [])
+    try:
+        release_root, process_root = _resolve_roots(parsed.project_root)
+        release_oid = _head_oid(release_root)
+        process_oid = _head_oid(process_root)
+        template: dict[str, object]
+        if parsed.operation == "work.status-transition":
+            if not (parsed.work_id and parsed.expected_status and parsed.new_status):
+                raise ValueError(
+                    "authorization-template work.status-transition requires "
+                    "--work-id --expected-status --new-status"
+                )
+            handoff = _status_transition_handoff(
+                release_root,
+                process_root,
+                work_id=parsed.work_id,
+                expected_status=parsed.expected_status,
+                new_status=parsed.new_status,
+            )
+            plan = plan_work_status_transition(
+                process_root,
+                parsed.work_id,
+                expected_status=parsed.expected_status,
+                new_status=parsed.new_status,
+                result_ref=parsed.result_ref,
+                handoff=handoff,
+            )
+            child = getattr(plan, "current_projection_plan", None)
+            template = {
+                "schema_version": 2,
+                "kind": "WorkStatusTransitionAuthorizationV2",
+                "authorization_id": "<fill:unique-single-use-id>",
+                "work_id": parsed.work_id,
+                "plan_digest": child.plan_digest if child is not None else "",
+                "parent_plan_digest": plan.plan_digest,
+                "target_refs": [target.ref for target in plan.targets],
+                "expires_at": "<fill:ISO8601-with-timezone-future>",
+            }
+        elif parsed.operation == "work.close":
+            if not parsed.work_id:
+                raise ValueError("authorization-template work.close requires --work-id")
+            plan = plan_work_close(
+                process_root,
+                parsed.work_id,
+                expected_status=parsed.expected_status or "active",
+                outcome=parsed.outcome,
+                result_ref=parsed.result_ref,
+            )
+            template = {
+                "schema_version": 1,
+                "kind": "WorkCloseAuthorizationV1",
+                "authorization_id": "<fill:unique-single-use-id>",
+                "work_id": parsed.work_id,
+                "plan_digest": plan.plan_digest,
+                "target_refs": [target.ref for target in plan.targets],
+                "expires_at": "<fill:ISO8601-with-timezone-future>",
+            }
+        elif parsed.operation == "work.scope-amend":
+            if not (parsed.work_id and parsed.delta):
+                raise ValueError(
+                    "authorization-template work.scope-amend requires --work-id --delta"
+                )
+            delta = G1ScopeDeltaV1.from_mapping(
+                _load_json_object(parsed.delta, label="scope delta")
+            )
+            if any(marker in value for marker in ("*", "?", "[") for value in delta.add_writes):
+                raise ValueError(
+                    "G2_CURRENT_CR_SCOPE_AMEND_WILDCARD_UNSUPPORTED: "
+                    "G2 authorized_add_writes must enumerate exact refs"
+                )
+            # scope-amend 的 plan 校验授权信封本身，模板无法预跑 plan；
+            # 机械面直接从 delta + Work/仓状态推导（与 plan 同源公式）。
+            work = load_work(process_root, parsed.work_id)
+            work_path = process_root / work.work_ref
+            work_preimage = hashlib.sha256(work_path.read_bytes()).hexdigest()
+            _release_oid, release_dirty = _git_snapshot(release_root)
+            _process_oid, process_dirty = _git_snapshot(process_root)
+            invalidation_superset = sorted(
+                {
+                    *(filter(None, (work.result_ref,))),
+                    f"works/{parsed.work_id}/evidence/validation/**",
+                    f"works/{parsed.work_id}/AUTHORIZATION.json",
+                    f"works/{parsed.work_id}/HANDOFF.yaml",
+                }
+            )
+            template = {
+                "schema_version": 2,
+                "kind": "G2CurrentCRScopeAmendAuthorizationV2",
+                "authorization_id": "<fill:unique-single-use-id>",
+                "cr_id": "<fill:owning-cr-id>",
+                "work_id": parsed.work_id,
+                "successor_revision_id": "<fill:revision-id e.g. REV-...-V1>",
+                "release_oid": release_oid,
+                "process_oid": process_oid,
+                "release_dirty_digest": release_dirty,
+                "process_dirty_digest": process_dirty,
+                "work_preimage_digest": work_preimage,
+                "predecessor_scope_digest": work.scope.digest,
+                "delta_digest": delta.digest,
+                "authorized_add_writes": list(delta.add_writes),
+                "invalidation_refs": invalidation_superset,
+                "checkpoint_ref": "<fill:process/checkpoints/...>",
+                "checkpoint_digest": "<fill:sha256-of-checkpoint-file>",
+                "approval_event_id": "<fill:gate-ledger-event-id>",
+                "approval_event_digest": "<fill:from-gate-ledger-row>",
+                "approval_decision_id": "<fill:DQ-id>",
+                "issued_at": "<fill:ISO8601-with-timezone>",
+            }
+        else:
+            repair_plan = plan_shared_projection_repair(process_root)
+            template = {
+                "schema_version": 1,
+                "kind": "SharedProjectionRepairAuthorizationV1",
+                "authorization_id": "<fill:unique-single-use-id>",
+                "plan_digest": repair_plan.plan_digest,
+                "target_refs": [target.ref for target in repair_plan.targets],
+                "expires_at": "<fill:ISO8601-with-timezone-future>",
+            }
+        payload = {
+            "schema_version": 1,
+            "kind": "AuthorizationTemplateV1",
+            "operation": parsed.operation,
+            "decision": "PASS",
+            "template": template,
+            "field_bindings": {
+                "plan_digest": "机械绑定 plan preview；重跑对应 preview 后不得复用旧值",
+                "target_refs": "必须与 plan preview 的 targets 顺序逐项一致",
+                "authorized_add_writes": "必须与 delta.add_writes 逐项相等；G2 禁止任何通配符",
+                "invalidation_refs": "必须是 plan.invalidated_refs 超集（已按原生超集预填）",
+                "<fill:*>": "人工字段：按占位符标注来源填写",
+            },
+            "mutation_count": 0,
+        }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def shared_projection_repair_main(argv: list[str] | None = None) -> int:
+    """CR-078：共享投影 lineage 修复出口（plan/apply 分离，严格零写 inspect）。"""
+
+    parser = argparse.ArgumentParser(prog="meta-flow work shared-projection-repair")
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
+    parser.add_argument("--expected-plan-digest", default="")
+    parser.add_argument("--authorization", type=Path)
+    parser.add_argument("--apply", action="store_true")
+    parsed = parser.parse_args(argv or [])
+    try:
+        _release_root, process_root = _resolve_roots(parsed.project_root)
+        inspection = inspect_shared_projection_repair(
+            process_root,
+            expected_plan_digest=parsed.expected_plan_digest,
+        )
+        if not parsed.apply:
+            print(json.dumps(inspection, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if inspection["classification"] == "COMMITTED_CURRENT" else 1
+        if parsed.authorization is None:
+            raise ValueError(
+                "shared-projection-repair --apply requires --authorization"
+            )
+        if not parsed.expected_plan_digest:
+            raise ValueError(
+                "shared-projection-repair --apply requires --expected-plan-digest"
+            )
+        plan = SharedProjectionRepairPlanV1.from_mapping(inspection["repair_plan"])
+        authorization_payload = _load_json_object(
+            parsed.authorization, label="shared projection repair authorization"
+        )
+        authorization = SharedProjectionRepairAuthorizationV1.from_mapping(
+            authorization_payload
+        )
+        receipt = apply_shared_projection_repair(process_root, plan, authorization)
+        payload = receipt.as_dict()
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {"decision": "BLOCKED", "error": str(exc), "mutation_count": 0},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if payload["decision"] == "PASS" else 1
 
 
 def scope_amend_inspect_main(argv: list[str] | None = None) -> int:
@@ -1107,6 +1340,26 @@ def resume_check_main(argv: list[str] | None = None) -> int:
     parsed = parser.parse_args(argv or [])
     try:
         release_root, process_root = _resolve_roots(parsed.project_root)
+        handoff_path = process_root / "works" / parsed.work_id / "HANDOFF.yaml"
+        if not handoff_path.is_file():
+            # CR-078：缺 HANDOFF 给 typed 原因，替代裸 FileNotFoundError。
+            print(
+                json.dumps(
+                    {
+                        "decision": "BLOCKED",
+                        "reason_code": "HANDOFF_NOT_INITIALIZED",
+                        "work_id": parsed.work_id,
+                        "message": (
+                            "resume-check requires works/<id>/HANDOFF.yaml; the Work "
+                            "has no handoff record (route policy may not require one)"
+                        ),
+                        "mutation_count": 0,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
         decision = resume_precheck(
             load_work(process_root, parsed.work_id),
             load_handoff(process_root, parsed.work_id),
@@ -1463,6 +1716,8 @@ def main(argv: list[str] | None = None) -> int:
             "  init-recover Apply one plan-digest-bound legacy partial exact rollback.\n"
             "  scope-amend Plan/apply one typed paused/blocked G0/G1 additive scope successor.\n"
             "  scope-amend-inspect Inspect native G1 scope-amend transactions.\n"
+            "  shared-projection-repair Plan or apply a typed shared projection lineage repair.\n"
+            "  authorization-template Emit a typed authorization template from a zero-write plan.\n"
             "  scope-amend-recover Recover one non-terminal G1 scope-amend transaction.\n"
             "  status-transition Zero-write plan or typed apply one atomic Work status transition.\n"
             "  status-transition-inspect Inspect parent and child transition manifests.\n"
@@ -1507,6 +1762,10 @@ def main(argv: list[str] | None = None) -> int:
         return scope_amend_main(forwarded)
     if command == "scope-amend-inspect":
         return scope_amend_inspect_main(forwarded)
+    if command == "shared-projection-repair":
+        return shared_projection_repair_main(forwarded)
+    if command == "authorization-template":
+        return authorization_template_main(forwarded)
     if command == "scope-amend-recover":
         return scope_amend_recover_main(forwarded)
     if command == "status-transition":
@@ -1544,5 +1803,5 @@ def main(argv: list[str] | None = None) -> int:
     if command == "check":
         return check_main(forwarded)
     raise SystemExit(
-        f"未知 work 命令: {command}. 目前支持: classify, init, init-preflight, init-inspect, init-recover, scope-amend, scope-amend-inspect, scope-amend-recover, status-transition, status-transition-inspect, status-transition-recover, start, pause, resume, block, close, publication-close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
+        f"未知 work 命令: {command}. 目前支持: classify, init, init-preflight, init-inspect, init-recover, scope-amend, scope-amend-inspect, scope-amend-recover, shared-projection-repair, authorization-template, status-transition, status-transition-inspect, status-transition-recover, start, pause, resume, block, close, publication-close, close-inspect, close-recover, usage-plan, usage-add, review-plan, validation-plan, handoff, resume-check, decision-bundle-check, git-inventory, status, check"
     )

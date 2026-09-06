@@ -344,3 +344,39 @@ def test_post_close_rejects_ghost_active_change(tmp_path: Path) -> None:
     assert "POST_CLOSE_ACTIVE_CHANGE_STALE" in {
         finding["code"] for finding in result["findings"]
     }
+
+
+def test_post_close_accepts_lowercase_canonical_readiness(tmp_path: Path) -> None:
+    """CR-078 S4-2：frontmatter 为 canonical 小写时不得误报 tuple mismatch。"""
+
+    release = _fixture(tmp_path)
+    cr_path = release.parent / "process/changes/CR-101.md"
+    cr_path.write_text(
+        cr_path.read_text(encoding="utf-8").replace(
+            "readiness_status: READY_WITH_RISK", "readiness_status: ready_with_risk"
+        ),
+        encoding="utf-8",
+    )
+    result = post_close.check_post_close(release, "CR-101")
+    assert not any(
+        finding["code"] == "POST_CLOSE_CR_TUPLE_MISMATCH"
+        for finding in result["findings"]
+    )
+
+
+def test_post_close_supports_workless_release_cr_via_declared_policy(tmp_path: Path) -> None:
+    """CR-078 S4-3：work_binding_policy: not_required 豁免无 Work 的 release CR。"""
+
+    release = _fixture(tmp_path)
+    release_context_path = release.parent / "process/release/RELEASE-CONTEXT.yaml"
+    payload = json.loads(release_context_path.read_text(encoding="utf-8"))
+    payload["closure_reconciliation"]["work_binding_policy"] = "not_required"
+    payload["closure_reconciliation"]["native_close"]["work_refs"] = []
+    release_context_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+    )
+    result = post_close.check_post_close(release, "CR-101")
+    assert not any(
+        finding["code"] == "POST_CLOSE_WORK_BINDING_MISSING"
+        for finding in result["findings"]
+    )

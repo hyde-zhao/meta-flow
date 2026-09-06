@@ -1011,6 +1011,50 @@
       }
     },
     {
+      "operation": "work.shared-projection-repair",
+      "entry": [
+        "meta-flow",
+        "work",
+        "shared-projection-repair"
+      ],
+      "input_version": "SharedProjectionRepairInspectionV1+SharedProjectionRepairAuthorizationV1",
+      "output_version": "SharedProjectionRepairPlanV1+SharedProjectionRepairReceiptV1",
+      "mutation_mode": "append-only-prevalidated",
+      "authorization_mode": "typed-user-confirmation",
+      "projector": "meta_flow.work.lifecycle_transaction.plan_shared_projection_repair",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
+      "operation": "work.authorization-template",
+      "entry": [
+        "meta-flow",
+        "work",
+        "authorization-template"
+      ],
+      "input_version": "AuthorizationTemplateRequestV1",
+      "output_version": "AuthorizationTemplateV1",
+      "mutation_mode": "zero-write",
+      "authorization_mode": "none",
+      "projector": "meta_flow.work.cli.authorization_template_main",
+      "l3_journey": "L3-CR",
+      "path_contract": {
+        "binding_mode": "required",
+        "project_root_argument": "--project-root",
+        "logical_process_arguments": [],
+        "resolved_path_visibility": "internal-only",
+        "persisted_process_ref_mode": "logical-only",
+        "absolute_process_path_limit": 0
+      }
+    },
+    {
       "operation": "work.usage-add",
       "entry": [
         "meta-flow",

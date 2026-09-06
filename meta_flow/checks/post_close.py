@@ -261,7 +261,9 @@ def check_post_close(
         )
         if not (
             actual_tuple[0] == "closed"
-            and actual_tuple[1] in profile.allowed_readiness
+            # CR-078（S4-2）：frontmatter 为 canonical 小写，profile 常量为
+            # 大写——比较前归一化（0.6.5 此处对合法终态误报 mismatch）。
+            and actual_tuple[1].upper() in profile.allowed_readiness
             and actual_tuple[2] == "cp8_closed"
         ):
             _finding(
@@ -331,7 +333,13 @@ def check_post_close(
 
     work_refs = native_close.get("work_refs")
     work_refs = work_refs if isinstance(work_refs, list) else []
-    if not work_refs:
+    # CR-078（S4-3）：无 Work 的 release CR（Story 直排实施）可通过
+    # work_binding_policy: not_required 显式声明豁免；默认 required 保持
+    # 既有 CR 的强绑定语义。
+    work_binding_required = (
+        str(reconciliation.get("work_binding_policy") or "required") == "required"
+    )
+    if work_binding_required and not work_refs:
         _finding(
             findings,
             "POST_CLOSE_WORK_BINDING_MISSING",

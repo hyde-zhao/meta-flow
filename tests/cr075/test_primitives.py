@@ -25,8 +25,11 @@ P0_OWNER_MODULES = [
 # 行数上限：HLD §2.1-rev3（DQ-075-R4-01，2026-08-25 用户批准）：
 # lifecycle ≤2527（rev1 2508 + 属主搬移后残差 19 = P0 兼容 alias 块 11 行
 # + namespace/整改 guards 约 8 行）；其余四模块维持 rev1。rev2 已废止。
+# CR-078（2026-09-06，用户 CP2/CP5 批准范围）：lifecycle 上调至 2610
+# （+74 = scope-amend successor 白名单分支/ref 门禁分支 +74 行内的
+# repair works 放行 + shared_projection_successor_state 只读 helper）。
 LINE_BUDGETS_REV1 = {
-    "meta_flow/work/lifecycle_transaction.py": 2527,
+    "meta_flow/work/lifecycle_transaction.py": 2610,
     "meta_flow/work/status_transition.py": 1391,
     "meta_flow/work/transaction_child.py": 437,
     "meta_flow/state/current.py": 4000,

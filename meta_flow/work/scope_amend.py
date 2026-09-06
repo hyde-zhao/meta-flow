@@ -31,8 +31,11 @@ from meta_flow.work.lifecycle_transaction import (
     acquire_shared_projection_writer_lock,
     assert_work_close_shared_projection_lineage,
     build_state_projection_candidates,
+    plan_shared_projection_successor_preflight,
+    record_shared_projection_successor,
     refresh_state_projection_if_initialized,
     release_shared_projection_writer_lock,
+    shared_projection_successor_state,
 )
 from meta_flow.work.model import (
     G1ScopeDeltaV1,
@@ -606,6 +609,7 @@ def apply_scope_amend_transaction(
 
     transaction_id = ""
     domain_applied = False
+    shared_successor_id = ""
     fresh: ScopeAmendTransactionPlanV1 | None = None
     try:
         assert_work_close_shared_projection_lineage(plan.process_root)
@@ -665,6 +669,34 @@ def apply_scope_amend_transaction(
             transaction_id,
             successor_id=fresh.revision.revision_id,
         )
+        # CR-078：CR lane 同样重写 WORK.yaml（close 族共享投影 ref），
+        # commit 后锁内登记后继；失败态与存量楔死同构，由 repair 兜底。
+        try:
+            work_target = next(
+                target for target in targets if target.ref == fresh.work.work_ref
+            )
+            shared_successor_id = record_shared_projection_successor(
+                fresh.process_root,
+                operation="work.scope-amend",
+                writer_id=writer_id,
+                before_digests={fresh.work.work_ref: work_target.before_digest},
+                allowed_refs=(fresh.work.work_ref,),
+            )
+        except Exception as record_exc:
+            return {
+                "decision": "PARTIAL",
+                "reason_code": "SCOPE_AMEND_SHARED_SUCCESSOR_RECORD_FAILED",
+                "transaction_id": transaction_id,
+                "transaction_state": "COMMITTED",
+                "record_error": str(record_exc),
+                "next_action": (
+                    "run zero-write 'meta-flow work shared-projection-repair', mint "
+                    "SharedProjectionRepairAuthorizationV1 for its plan_digest, then --apply"
+                ),
+                "domain_mutation_count": len(applied_refs),
+                "coordination_mutation_count": len(refreshed_refs),
+                "mutation_count": len(applied_refs) + len(refreshed_refs),
+            }
     except Exception as exc:
         if not transaction_id or fresh is None:
             return {
@@ -702,11 +734,12 @@ def apply_scope_amend_transaction(
         "revision_ref": next(ref for ref in applied_refs if "/revisions/" in ref),
         "receipt_ref": next(ref for ref in applied_refs if "/scope-amendments/" in ref),
         "work_ref": fresh.work.work_ref,
+        "shared_projection_successor_id": shared_successor_id,
         "invalidated_refs": list(fresh.core_plan.invalidated_refs),
         "derived_index": fresh.receipt_payload["derived_index"],
         "domain_mutation_count": len(applied_refs),
-        "coordination_mutation_count": len(refreshed_refs),
-        "mutation_count": len(applied_refs) + len(refreshed_refs),
+        "coordination_mutation_count": len(refreshed_refs) + (1 if shared_successor_id else 0),
+        "mutation_count": len(applied_refs) + len(refreshed_refs) + (1 if shared_successor_id else 0),
     }
 
 
@@ -1095,6 +1128,7 @@ class G1ScopeAmendPlanV1:
     blockers: tuple[str, ...] = ()
     mutation_count: int = 0
     receipt_invalidation: tuple[dict[str, object], ...] = ()
+    lineage_preflight: tuple[tuple[str, str, str, str], ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         is_g2_current = isinstance(
@@ -1121,6 +1155,7 @@ class G1ScopeAmendPlanV1:
             "blockers": list(self.blockers),
             "mutation_count": self.mutation_count,
             "receipt_invalidation": [dict(item) for item in self.receipt_invalidation],
+            "lineage_preflight": [list(item) for item in self.lineage_preflight],
         }
 
 
@@ -1255,7 +1290,13 @@ def plan_g1_scope_amend(
             blockers.append("G2_CURRENT_CR_SCOPE_AMEND_STATUS_INVALID")
         if delta.add_reads or delta.add_checks:
             blockers.append("G2_CURRENT_CR_SCOPE_AMEND_DELTA_PROFILE_INVALID")
-        if delta.add_writes != authorization.authorized_add_writes:
+        if any(
+            marker in value for marker in ("*", "?", "[") for value in delta.add_writes
+        ):
+            # CR-078：G2 禁通配显式化（G1 delta 允许尾 /**，G2 授权信封
+            # 必须精确枚举——此前表现为费解的逐项 mismatch）。
+            blockers.append("G2_CURRENT_CR_SCOPE_AMEND_WILDCARD_UNSUPPORTED")
+        elif delta.add_writes != authorization.authorized_add_writes:
             blockers.append("G2_CURRENT_CR_SCOPE_AMEND_AUTHORIZED_WRITES_MISMATCH")
         if authorization.predecessor_scope_digest != work.scope.digest:
             blockers.append("G2_CURRENT_CR_SCOPE_AMEND_PREDECESSOR_SCOPE_MISMATCH")
@@ -1327,6 +1368,25 @@ def plan_g1_scope_amend(
     ):
         blockers.append(f"{prefix}_AUTHORIZATION_CONSUMED")
         decision = "BLOCKED"
+    # CR-078：plan 期冻结共享投影后继锚点（close head + 前驱链头）。
+    # 无 close head 时 preflight 返回 ()（apply 不写 receipt）；存量楔死
+    # （WORK.yaml 已漂移且无授权后继）在 plan 期即 BLOCKED 并引导 repair。
+    lineage_writer_id = (
+        "scope-amend-" + sha256(authorization.authorization_id.encode("utf-8")).hexdigest()[:32]
+    )
+    work_ref = f"works/{work_id}/WORK.yaml"
+    lineage_preflight: tuple[tuple[str, str, str, str], ...] = ()
+    try:
+        lineage_preflight = plan_shared_projection_successor_preflight(
+            process_root,
+            operation="work.scope-amend",
+            writer_id=lineage_writer_id,
+            before_digests={work_ref: work_preimage},
+            allowed_refs=(work_ref,),
+        )
+    except (OSError, ValueError):
+        blockers.append(f"{prefix}_LINEAGE_PREFLIGHT_BLOCKED")
+        decision = "BLOCKED"
     identity = {
         "profile": "g2-current-cr" if is_g2_current else "g1-work",
         "work_id": work_id,
@@ -1343,6 +1403,7 @@ def plan_g1_scope_amend(
         "target_preimages": target_preimages,
         "decision": decision,
         "blockers": tuple(sorted(set(blockers))),
+        "lineage_preflight": lineage_preflight,
     }
     return G1ScopeAmendPlanV1(
         decision,
@@ -1358,6 +1419,7 @@ def plan_g1_scope_amend(
         tuple(sorted(set(blockers))),
         0,
         plan_receipt_invalidation(process_root, work_id, delta),
+        lineage_preflight,
     )
 
 
@@ -1468,23 +1530,36 @@ def apply_g1_scope_amend(
     )
     shared_lock = None
     if is_g2_current:
-        try:
-            shared_lock = acquire_shared_projection_writer_lock(
-                plan.process_root,
-                writer_id,
-            )
-        except (OSError, ValueError):
-            return {
-                "decision": "BLOCKED",
-                "reason_code": "G2_CURRENT_CR_SCOPE_AMEND_SHARED_LOCK_UNAVAILABLE",
-                "mutation_count": 0,
-            }
+        shared_lock_reason_code = "G2_CURRENT_CR_SCOPE_AMEND_SHARED_LOCK_UNAVAILABLE"
+    else:
+        # CR-078：G1 lane 同样重写 WORK.yaml（close 族共享投影 ref），
+        # 锁与 lineage 防护双 lane 化。
+        shared_lock_reason_code = "G1_SCOPE_AMEND_SHARED_LOCK_UNAVAILABLE"
+    try:
+        shared_lock = acquire_shared_projection_writer_lock(
+            plan.process_root,
+            writer_id,
+        )
+    except (OSError, ValueError):
+        return {
+            "decision": "BLOCKED",
+            "reason_code": shared_lock_reason_code,
+            "mutation_count": 0,
+        }
     transaction_id = ""
     domain_applied = False
     refreshed_refs: tuple[str, ...] = ()
+    shared_successor_id = ""
     try:
-        if is_g2_current:
+        try:
             assert_work_close_shared_projection_lineage(plan.process_root)
+        except ValueError as lineage_exc:
+            return {
+                "decision": "BLOCKED",
+                "reason_code": "SCOPE_AMEND_CLOSE_LINEAGE_BLOCKED",
+                "blockers": [str(lineage_exc)],
+                "mutation_count": 0,
+            }
         targets = tuple(
             build_transaction_target(plan.process_root, ref=ref, after_bytes=value)
             for ref, value in postimages
@@ -1508,6 +1583,34 @@ def apply_g1_scope_amend(
             transaction_id,
             successor_id=revision.revision_id,
         )
+        # CR-078：commit 后、锁内登记共享投影合法后继。最坏失败态
+        # （COMMITTED + 缺 receipt）与 0.6.5 存量楔死态同构，由
+        # work shared-projection-repair 兜底；返回 PARTIAL 引导修复。
+        try:
+            shared_successor_id = record_shared_projection_successor(
+                plan.process_root,
+                operation="work.scope-amend",
+                writer_id=writer_id,
+                before_digests={refs[0]: targets[0].before_digest},
+                allowed_refs=(refs[0],),
+                expected_preflight=plan.lineage_preflight,
+            )
+        except Exception as record_exc:
+            return {
+                "decision": "PARTIAL",
+                "reason_codes": ["SCOPE_AMEND_SHARED_SUCCESSOR_RECORD_FAILED"],
+                "transaction_id": transaction_id,
+                "transaction_state": "COMMITTED",
+                "record_error": str(record_exc),
+                "next_action": (
+                    "run zero-write 'meta-flow work shared-projection-repair', mint "
+                    "SharedProjectionRepairAuthorizationV1 for its plan_digest, then --apply"
+                ),
+                "invalidated_refs": list(plan.invalidated_refs),
+                "domain_mutation_count": len(applied_refs),
+                "coordination_mutation_count": len(refreshed_refs),
+                "mutation_count": len(applied_refs) + len(refreshed_refs),
+            }
     except Exception as exc:
         if not transaction_id:
             return {
@@ -1545,11 +1648,12 @@ def apply_g1_scope_amend(
         "transaction_state": "COMMITTED",
         "revision_ref": refs[1],
         "receipt_ref": refs[3],
+        "shared_projection_successor_id": shared_successor_id,
         "invalidated_refs": list(plan.invalidated_refs),
         "receipt_invalidation": [dict(item) for item in invalidated_marks],
         "domain_mutation_count": len(applied_refs),
-        "coordination_mutation_count": len(refreshed_refs),
-        "mutation_count": len(applied_refs) + len(refreshed_refs),
+        "coordination_mutation_count": len(refreshed_refs) + (1 if shared_successor_id else 0),
+        "mutation_count": len(applied_refs) + len(refreshed_refs) + (1 if shared_successor_id else 0),
     }
 
 
@@ -1592,12 +1696,27 @@ def inspect_g1_scope_amend(process_root: Path, *, work_id: str = "") -> dict[str
         item for item in inspection["transactions"] if item["operation"] == "work.scope-amend"
     ]
     unresolved = [item for item in transactions if item["state"] not in {"COMMITTED", "RECOVERED"}]
+    # CR-078：为每个 COMMITTED 事务锚定的 WORK.yaml 追加 lineage 对齐诊断。
+    lineage_states: list[dict[str, Any]] = []
+    for item in transactions:
+        if item["state"] != "COMMITTED":
+            continue
+        ref = f"works/{item.get('work_id', '')}/WORK.yaml"
+        try:
+            lineage_states.append(
+                shared_projection_successor_state(process_root, ref=ref)
+            )
+        except (OSError, ValueError):
+            lineage_states.append(
+                {"ref": ref, "anchored": False, "aligned": False, "error": "LINEAGE_STATE_UNAVAILABLE"}
+            )
     return {
         "schema_version": 1,
         "kind": "G1ScopeAmendInspectionV1",
         "decision": "BLOCKED" if unresolved else "PASS",
         "transactions": transactions,
         "unresolved_count": len(unresolved),
+        "lineage_states": lineage_states,
         "mutation_count": 0,
     }
 

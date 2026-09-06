@@ -139,6 +139,8 @@ PUBLIC_OPERATION_ADMISSION_POLICIES = {
     ("work", "resume"): "apply-flag",
     ("work", "scope-amend"): "apply-flag",
     ("work", "scope-amend-recover"): "always",
+    ("work", "shared-projection-repair"): "apply-flag",
+    ("work", "authorization-template"): "never",
     ("work", "start"): "apply-flag",
     ("work", "status-transition"): "apply-flag",
     ("work", "status-transition-recover"): "apply-flag",

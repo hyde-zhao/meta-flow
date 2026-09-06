@@ -115,6 +115,7 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
             "PROJECTION_TARGET_REFS",  # CR-076 S02 FB1
             "_apply_status_sync_composite",  # CR-076 S02 FB4 coordinator
             "_formal_crs_from_snapshot",
+            "_delivered_reentry_phase_id",  # CR-078: delivered 休息态再入修复
             "StatusSyncTarget",
             "StatusSyncAuthorization",
             "StatusSyncPlan",
@@ -133,6 +134,106 @@ class CRStatusSyncOwnerTests(unittest.TestCase):
             "sync_cr_status",
         }
         self.assertEqual(expected, members)
+
+    def test_activation_after_close_reenters_phase_from_delivered_rest_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, _cr_path, _scope = write_termination_fixture(Path(directory))
+            current.write_current_state(release, current.default_current_state(release))
+            current.update_current_state(
+                release,
+                {
+                    "active_change": "CR-101",
+                    "current_phase": "P1-termination",
+                    "next_action": {"type": "await_user", "text": "review CP8"},
+                },
+            )
+            close_inputs = {
+                "status": "closed",
+                "readiness": "READY_WITH_RISK",
+                "gate_status": "cp8_closed",
+                "work_id": "WORK-101",
+                "effective_at": "2026-07-27T02:00:00+00:00",
+            }
+            close_plan = cr_status_sync.plan_status_sync(release, "CR-101", **close_inputs)
+            cr_status_sync.sync_cr_status(
+                release,
+                "CR-101",
+                **close_inputs,
+                expected_plan_digest=close_plan.plan_digest,
+                authorization=_authorization(close_plan),
+            )
+            state = current.load_current_state(release)
+            self.assertEqual("delivered", state["current_phase"])
+            self.assertIsNone(state["active_change"])
+
+            write_cr(release, "CR-102", status="candidate")
+            cr102_path = process / "changes" / "CR-102.md"
+            cr102_path.write_text(
+                cr102_path.read_text(encoding="utf-8").replace(
+                    'gate_status: "cp8_pending"', 'gate_status: "not_started"'
+                ),
+                encoding="utf-8",
+            )
+            activate_inputs = {
+                "status": "active",
+                "gate_status": "cp2_pending",
+                "effective_at": "2026-07-27T03:00:00+00:00",
+                "rebuild_corrupt_index": True,
+            }
+            plan = cr_status_sync.plan_status_sync(release, "CR-102", **activate_inputs)
+            self.assertEqual("READY", plan.decision)
+            result = cr_status_sync.apply_status_sync(
+                release,
+                plan,
+                authorization=_authorization(plan, authorization_id="AUTH-STATUS-SYNC-REENTRY-001"),
+                expected_plan_digest=plan.plan_digest,
+            )
+            self.assertEqual("PASS", result["status"])
+            state = current.load_current_state(release)
+            self.assertEqual("CR-102", state["active_change"])
+            self.assertEqual("P1-termination", state["current_phase"])
+
+    def test_close_succeeds_on_clean_projection_tree(self) -> None:
+        """CR-078 S4-1：投影 ref 干净时 close 不得因投影子事务自身写入误判漂移。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            release, process, _cr_path, _scope = write_termination_fixture(Path(directory))
+            current.write_current_state(release, current.default_current_state(release))
+            current.update_current_state(
+                release,
+                {
+                    "active_change": "CR-101",
+                    "current_phase": "P1-termination",
+                    "next_action": {"type": "await_user", "text": "review CP8"},
+                },
+            )
+            # 使投影 ref 在 git 视角为 clean（提交后不再改动）
+            import subprocess as _sp
+
+            _sp.run(["git", "add", "--all"], cwd=process, check=True, capture_output=True)
+            _sp.run(
+                ["git", "-c", "user.name=Meta Flow Test", "-c",
+                 "user.email=meta-flow@example.invalid", "commit", "-m", "clean tree"],
+                cwd=process, check=True, capture_output=True,
+            )
+            inputs = {
+                "status": "closed",
+                "readiness": "READY_WITH_RISK",
+                "gate_status": "cp8_closed",
+                "work_id": "WORK-101",
+                "effective_at": "2026-07-27T02:00:00+00:00",
+            }
+            plan = cr_status_sync.plan_status_sync(release, "CR-101", **inputs)
+            self.assertEqual("READY", plan.decision)
+            result = cr_status_sync.apply_status_sync(
+                release,
+                plan,
+                authorization=_authorization(
+                    plan, authorization_id="AUTH-STATUS-SYNC-CLEAN-CLOSE-001"
+                ),
+                expected_plan_digest=plan.plan_digest,
+            )
+            self.assertEqual("PASS", result["status"])
 
     def test_public_sync_projects_all_status_surfaces_and_current_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
