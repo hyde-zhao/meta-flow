@@ -32,7 +32,7 @@ LEGACY_RECEIPT_REFS = (
     "meta_flow/execution_control/provider/activation-receipt-v10.json",
 )
 PACKAGE_NAME = "meta-flow"
-PACKAGE_VERSION = "0.6.5"
+PACKAGE_VERSION = "0.6.6"
 POLICY_REVISION = 1
 COHORT_REVISION = 1
 CONTEXT_REVISION = 1

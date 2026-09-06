@@ -227,7 +227,7 @@ def test_packaged_v11_receipt_is_current_after_materialization() -> None:
     release_root = Path(__file__).parents[1]
     package_root = release_root / "meta_flow"
     qualification_evidence_path = (
-        release_root / "docs/release/PROVIDER-QUALIFICATION-0.6.5.json"
+        release_root / "docs/release/PROVIDER-QUALIFICATION-0.6.6.json"
     )
     current = _receipt_locator(package_root)
 

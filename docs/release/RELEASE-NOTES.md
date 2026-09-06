@@ -1,72 +1,57 @@
 ---
 status: ready_for_publication
-version: "0.6.5"
-base_version: "0.6.3"
+version: "0.6.6"
+base_version: "0.6.5"
 release_artifact_profile: full
 release_decision: READY_WITH_RISK
 ---
 
-# Meta Flow 0.6.5 发布说明
+# Meta Flow 0.6.6 发布说明
 
 ## 摘要
 
-0.6.5 将 CR-076 的分发/发布能力与 CR-077 的治理等级拆分合并为一个公开版本。治理风险等级升级为 V2：高风险变更默认进入轻量 G2；只有用户显式要求完整 LLD 时才进入 G3。历史 V1 G2 在读取时继续等价于完整 G3，不批量改写历史对象。
-
-用户明确选择 0.6.5；公开版本 0.6.4 被跳过，不存在 0.6.4 release 或兼容性基线。由于新增公共治理 profile、schema 和 CLI 行为，常规 SemVer 更适合 minor 版本；本次 0.6.5 是用户显式选择的非 precedent 风险接受，不应被后续发布自动复用。
+0.6.6 是 CR-078 的 P0 热修版本：修复 `work scope-amend` 重写 `works/*/WORK.yaml` 后不登记共享投影后继、导致该 Work 后续一切 close 族转换（resume / status-transition / close / close-inspect）永久 BLOCKED 的缺陷，并交付存量楔死仓库的原生修复出口。同时修复 consumer 报告的附录缺口与 0.6.5 治理工具自身的四个潜在缺陷。
 
 ## 用户可见变化
 
-- 新增 `GovernanceRiskProfile V2`：`G0/G1/G2/G3`。
-- 原 G2 完整设计路径迁移为 G3；V1 G2 兼容读取为 effective G3。
-- 新 G2 在 CP4/CP5 只要求每个 Story 的 `ScopeGoalNoteV1`，确认范围、目标、验收边界和文件影响。
-- 无架构变化的 G2 可使用 CP3-lite；存在架构影响时恢复 CP3 人工复核，但不会擅自升级 G3。
-- 公共契约、安全、凭据、生产写、不可逆迁移、跨设备授权和分布式事务等 consent trigger 会 fail closed，等待用户决定是否进入 G3。
-- G3 选择绑定 CR、source OID、route revision、选择记录与授权文件摘要；任一漂移都会使旧验证身份失效。
-- pending gate 由 route、当前 result head 和与该 head 精确绑定的 launch/approval 推导，旧审批不能批准新结果，也不能越过缺失的 CP6/CP7。
-- publication operation 的 `G0/G1/G2` 风险等级保持独立三档，不受治理 G3 命名空间影响。
-- 分发能力包含 release asset discovery、bundle identity、安装/升级/回滚、consumer acceptance 导入和 publication close 前摘要验证。
+- `work scope-amend`（G1 / G2 current CR / legacy CR 三条 lane）在 apply 后于共享写锁内登记 successor receipt；PASS 输出 `shared_projection_successor_id`。plan preview 新增 `lineage_preflight`（close 锚点冻结，进入 plan_digest）。
+- 新增 `meta-flow work shared-projection-repair`：零写 plan/inspect（COMMITTED_CURRENT / COMMITTED_STALE_REPAIRABLE / SUPERSEDED / PARTIAL / CORRUPTED 五态）+ typed apply（幂等、单次消费、绑定 inspect snapshot）；修复对象扩展到 `works/*/WORK.yaml`。
+- 新增 `meta-flow work authorization-template`：从零写 plan 自动生成 typed authorization 模板（机械字段填充 + `<fill:...>` 人工占位 + field_bindings 绑定说明）。
+- `cr query` 支持 `--format json`；查询 native CR 时返回 `native_cr_requires_formal_truth_query` + native 视图，不再误报 `legacy_evidence_not_registered`。
+- G2 `authorized_add_writes` 通配符（含尾部 `/**`）给出显式 blocker `G2_CURRENT_CR_SCOPE_AMEND_WILDCARD_UNSUPPORTED`；G1 delta 尾通配语义不变。
+- `work resume-check` 缺 HANDOFF.yaml 时返回 typed `HANDOFF_NOT_INITIALIZED`。
+- `work scope-amend-inspect` 输出 `lineage_states`（每个 COMMITTED 事务的 WORK.yaml 锚定/对齐状态）。
+- scope-amend 后继登记失败返回 PARTIAL（`SCOPE_AMEND_SHARED_SUCCESSOR_RECORD_FAILED`）并指向 repair 命令；最坏失败态与 0.6.5 存量楔死态同构。
 
-## Provider identity
+## 修复的 0.6.5 治理工具缺陷
 
-0.6.5 将固定 activation receipt 从 v10 轮换到 v11；v1-v10 bytes 保持不变。v11 绑定当前 execution-control source owners 和本候选验证摘要。缺少匹配的 native authority chain 时，运行时 materializer 保持 fail-closed，不能在其他 checkout 重新生成同一 receipt。
+- delivered 休息态无法激活新 CR（status-sync 激活 patch 不重置 current_phase）。
+- CR close 在投影 ref 干净的工作区必然失败（投影子事务先于锁内 admission 校验写入）。
+- `check post-close` 的 readiness 大小写常量与 canonical 小写不匹配导致终态误报。
+- post-close 不支持无 Work 的 release CR（新增 `work_binding_policy: not_required` 显式声明）。
 
 ## 兼容性与迁移
 
-- 无数据库、凭据或生产数据迁移。
-- V1 G2 不改写；读取时派生为 G3。
-- 新建对象显式写 `risk_profile_schema_version=2`。
-- 依赖旧“G2=完整 LLD”文本判断的外部自动化必须改为读取 schema version 和 effective profile。
-- G0/G1 序列化继续保持旧形状，避免无关消费者漂移。
-
-## 治理兼容面
-
-- **Governance Truth Map / Retention Policy**：本版本继续以 canonical truth map 与 retention policy 约束治理事实来源和默认上下文保留；`cr_type`、概念所有权及 `conflict_keys` 的既有语义不变。
-- **Context sufficiency / read expansion governance**：deny-default 读取仍通过 `READ-EXPANSION-LEDGER` 记录扩读原因；`output profile budgets` 继续限制交接摘要、检查点摘要和设计摘要的输出规模。
-- **Failure routing / waiver governance**：失败路由继续由 `FAILURE-ROUTING.json` 决定，豁免由 `WAIVER-POLICY.json` 约束；安全、授权、真实内容失败等不可豁免项目不会因 G2 轻量设计而降级为 PASS。
+- 无数据迁移；0.6.5 存量楔死仓库升级后执行 `work shared-projection-repair` 即可解锁。
+- **前向不兼容**：0.6.6 写出的 `work.scope-amend` successor receipt 被 0.6.5 读取时 fail-closed；升级后不支持降级。
+- close 族事务语义与家族不变量零变化（receipt 是既有「close 之间外部 writer」机制的扩展注册）。
 
 ## 验证摘要
 
-- CR-077 专项矩阵：62 个用例，覆盖旧版兼容、默认 G2、显式 G3、scope-goal-note、架构/consent 分流、状态前沿和 publication 命名空间隔离。
-- 专项与兼容回归：172 passed，8 subtests passed。
-- 冻结后的最终无排除全量回归：3590 passed，728 subtests passed；另有 v11 receipt 与 detector 后置门联合验证 34 passed。
-- Ruff 与 `git diff --check` 通过。
+- CR-078 targeted：45 passed（successor 全链 / repair CLI e2e / 附录 / delivered 再入 / clean-tree close）。
+- affected compatibility：288 passed，64 subtests passed。
+- 冻结候选全量（排除 2 个后置门）：3609 passed，2 deselected，729 subtests passed。
+- 冻结后最终无排除全量：见 qualification evidence `final_revalidation`。
+- closure：detector 446 writers 0 unresolved、delivery guardrails OK、Ruff、`uv lock --check`、`git diff --check` 全部 PASS。
 
 ## 已知边界
 
-- `host-injection` 是应用层可信边界，不是对本机恶意进程的密码学身份认证；具备过程仓写权限的恶意主体不在本版本威胁模型内。
-- 0.6.5 不上传 PyPI 或其他 package registry；官方资产以 GitHub Release 的 wheel、sdist、receipt 和 sidecar 为准。
+- 0.6.6 不上传 PyPI；官方资产以 GitHub Release 的 wheel、sdist、receipt 和 sidecar 为准。
+- authorization-template 的 scope-amend 分支不预跑 plan（该 plan 校验授权信封本体），机械面直接从 delta + Work/仓状态推导。
 
 ## 安装
 
-从 `v0.6.5` GitHub Release 下载并校验以下四项资产后安装 exact wheel：
-
-- `meta_flow-0.6.5-py3-none-any.whl`
-- `meta_flow-0.6.5.tar.gz`
-- `ProviderArtifactReceiptV1.json`
-- `ProviderArtifactReceiptV1.digest-policy.json`
-
-不得从 checkout 临时重建后冒充发布资产。
-
-## 回滚
-
-回滚目标为已发布的 0.6.3 exact assets。回滚只切换安装资产和 provider receipt，不删除历史对象、授权、receipt 或 append-only evidence。详见 `docs/release/ROLLBACK.md`。
+```bash
+uvx --from meta-flow==0.6.6 meta-flow --version
+# 或从 GitHub Release 安装 wheel
+```
