@@ -1,8 +1,8 @@
 ---
-status: release_candidate
+status: released_remote_verified
 version: "0.6.6"
 release_artifact_profile: full
-release_decision: NOT_READY
+release_decision: RELEASED
 ---
 
 # Meta Flow 0.6.6 Deploy Checklist
@@ -14,11 +14,11 @@ release_decision: NOT_READY
 - [x] G2/G3 专项、兼容回归、Ruff 与 diff check 通过。
 - [x] activation receipt v11 已生成且 `CURRENT`；v1-v10 bytes 不变。
 - [x] detector full baseline 与 frozen source OID 对齐，增量未解析 writer 为 0。
-- [ ] release/process 两仓提交并推送，source OID 固定且工作树 clean。
-- [ ] `uv build` 只生成一个 wheel 和一个 sdist。
-- [ ] `ProviderArtifactReceiptV1.json` 与 `ProviderArtifactReceiptV1.digest-policy.json` 摘要闭合。
-- [ ] clean-home/non-editable installed-artifact canary 通过，checkout import=false。
-- [ ] GitHub `v0.6.6` tag/release 指向 frozen source OID，四项远端资产摘要与已验收本地资产一致。
+- [x] release/process 两仓提交并推送，source OID 固定且工作树 clean。
+- [x] `uv build` 只生成一个 wheel 和一个 sdist。
+- [x] `ProviderArtifactReceiptV1.json` 与 `ProviderArtifactReceiptV1.digest-policy.json` 摘要闭合。
+- [x] clean-home/non-editable installed-artifact canary 通过，checkout import=false。
+- [x] GitHub `v0.6.6` tag/release 指向 frozen source OID，四项远端资产摘要与已验收本地资产一致。
 
 ## 版本真相
 
