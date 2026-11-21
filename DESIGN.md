@@ -167,7 +167,7 @@ workspace/                     # 容器目录，不必是 git 仓
 │   │   └── PROJECT-PLAN.md    # 过程、过程交付件、最终交付件能力
 │   ├── roadmap/ROADMAP.yaml
 │   ├── requirements/REQUIREMENTS.yaml
-│   ├── standards/             # 14 份规范
+│   ├── standards/             # 15 份规范
 │   ├── architecture/          # 架构图、ADR、端到端设计
 │   ├── specs/                 # 端到端规格、跨库接口/数据契约
 │   ├── tasks/R1/P3/T013.yaml
@@ -209,7 +209,7 @@ workspace/                     # 容器目录，不必是 git 仓
 - 项目元数据、模块/交付库注册表、当前路标与阶段。
 - 项目计划 `PROJECT-PLAN.md`：过程、过程交付件、最终交付件能力。
 - 路标、需求、变更单、追踪矩阵。
-- 14 份项目规范。
+- 15 份项目规范。
 - 系统架构图、ADR、端到端设计。
 - 端到端规格、跨交付库接口/数据契约。
 - 任务卡、验收记录、交接副本、事件 ledger。
@@ -288,6 +288,110 @@ mf task prompt 生成下一任务提示词
 | 发布说明/用户手册 | `deliveries/<id>/...` | worker/manager | P5 | 交付文档 |
 
 `mf init` 在 `contracts/templates/` 放入：`INIT-CHECKLIST.md`、`ROADMAP-PLAN.md`、`PHASE-PLAN.md`、`PHASE-REPORT.md`、`REQUIREMENT.md`、`SPEC.md`、`DESIGN.md`、`ADR.md`、`TASK.yaml`、`DEV-RECORD.md`、`VERIFICATION-RECORD.yaml`、`HANDOFF.md`、`CHG.md`、`REVIEW.md`。manager 可以项目化修改，worker 只读。
+
+### 3.7 读写范围与上下文控制
+
+目标：manager 能看到长期共享真相和当前版本工作集；worker 只看到 state 与任务相关文档；历史版本默认不读；热状态保持小。
+
+#### 3.7.1 文档分层
+
+| 层 | 内容 | 默认读取 | 写入 | 生命周期 |
+|---|---|---|---|---|
+| **A 长期共享真相** | PROJECT-PLAN、ROADMAP、REQUIREMENTS、ARCHITECTURE、SPECS、STANDARDS、KNOWLEDGE | manager 读索引 + 相关文档；worker 只读任务包片段 | manager；design 任务写 draft | 跨版本保留，用 status/roadmap/supersedes 标记 |
+| **B 当前版本工作集** | 当前 R 的阶段计划/报告、任务卡、开发记录、验证记录、交接、缺陷 | manager 默认；worker 任务相关 | manager/worker 按角色 | 版本关闭后归档 |
+| **C 冷历史** | `contracts/archive/R{n}/` | 默认不读；`mf archive` 显式查询 | 只读 | 归档 |
+| **D 热状态** | `contracts/state/current.json` | 每次会话读 | 仅 CLI | 派生，≤8KB |
+| **E 审计日志** | `contracts/state/ledger.ndjson`、`READ-LOG.ndjson` | `mf log` 按需 | 仅追加 | 永久 |
+
+#### 3.7.2 角色读写矩阵
+
+| 路径 | manager | worker | maintainer |
+|---|---|---|---|
+| `contracts/project/**`、`roadmap/**`、`requirements/**`、`architecture/**`、`specs/**`、`standards/**`、`knowledge/**` | 读写 | 只读任务包声明的片段 | 不读 |
+| `contracts/tasks/R{current}/**` | 读写 | 只读自己的任务 | 不读 |
+| `contracts/dev-records`、`verification`、`handoffs`、`bugs` 的当前 R | 读写 | 写自己的交付库副本，`mf` 固化 | 不读 |
+| `contracts/archive/**` | 默认不读；显式查询 | 禁止 | 不读 |
+| `contracts/state/current.json` | 读 | 读 worker 视图 | 读工作区摘要 |
+| `deliveries/<id>/src/**` | 禁止 | 读写 `allowed_paths` | 禁止 |
+| `deliveries/<id>/delivery.yaml`、证据 | 只读 | 写自己的 | 不读 |
+
+#### 3.7.3 任务包
+
+`mf task show --packet` 只输出：
+
+- 任务卡
+- `inputs` 声明的 REQ/SPEC/DESIGN/标准/知识片段
+- `allowed_paths` / `forbidden`
+- `must_read` / `may_read` / `do_not_read`
+- budget（默认 10 文件 / 64KB）
+- `packet_digest`
+
+不包含完整路标、完整需求、完整架构、归档或其他交付库。
+
+#### 3.7.4 热状态
+
+`contracts/state/current.json` 只存指针和计数，不存正文：
+
+```json
+{
+  "schema": 1,
+  "project_id": "demo",
+  "roadmap": "R1",
+  "phase": "P3",
+  "version": "1.0.0-alpha.3",
+  "counts": {"ready": 2, "in_progress": 3, "submitted": 1, "open_bugs": 2},
+  "active_tasks": ["R1-P3-T013"],
+  "next_action": {"type": "accept", "task": "R1-P3-T012"},
+  "updated_at": "...",
+  "state_digest": "..."
+}
+```
+
+- ≤8KB；修订历史只进 ledger；`HISTORY.md` 按需生成。
+- 缺失或过期时 `mf status` 从任务/路标/ledger 重建。
+- worker 视图按 delivery 过滤 `active_tasks`。
+
+#### 3.7.5 归档
+
+- `mf roadmap close R{n}` 把当前版本的 tasks/dev-records/verification/handoffs/bugs/phase plans/reports 移到 `contracts/archive/R{n}/`，生成 `INDEX.md`。
+- 长期共享文档不移动，只更新 `status`/`roadmap`/`supersedes`。
+- 活动文档不得引用归档；`mf doctor` 检查。
+- 读归档用 `mf archive show R{n} --reason <reason>`，写 READ-LOG。
+
+#### 3.7.6 读扩展
+
+默认只读 `must_read` / `may_read`；需要更多时：
+
+```bash
+mf context expand <path> --reason <reason>
+```
+
+允许的 reason：`packet_missing`、`field_conflict`、`schema_validation_failed`、`human_audit`、`summary_insufficient`。
+
+- 记录到 `READ-LOG.ndjson`：时间、角色、任务、路径、原因、字节数；不记录内容。
+- 归档、其他交付库、其他版本需要 manager 显式授权。
+- `mf doctor` 检查未授权读。
+
+#### 3.7.7 强制机制
+
+- **CLI**：`mf context`、`mf archive`、`mf status`；路径/预算校验。
+- **Hook**：SessionStart 注入角色 + 热状态 + 知识摘要；PreToolUse 拦截越界 Read/Write；PostToolUse 记录读扩展。
+- **Agent 提示**：read allowlist + “先 packet 后文档”。
+- **标准**：`CONTEXT.md`；策略：`contracts/policies/CONTEXT-POLICY.yaml`。
+
+#### 3.7.8 参考与取舍
+
+| 来源 | 借鉴 | 不照搬 |
+|---|---|---|
+| meta-flow v0 | `must_read` / `allowed_reads` / `do_not_read_by_default`、读扩展理由、5 对象限制 | context capsule/ledger/projection 全套 |
+| Claude Code | CLAUDE.md 层级、hooks、目录级作用域 | 无 |
+| Cursor rules | glob + 激活模式（always/auto/manual） | 无 |
+| GitHub Copilot instructions | `applyTo` glob | 无 |
+| Spec Kit | constitution 常读、feature specs 按需 | 单特性 |
+| OpenSpec | 当前 specs + changes / archive | 无角色 |
+| BMAD | story 文件自包含上下文 | 重流程 |
+| Agent OS | 三层上下文注入 | 无版本门禁 |
+| Anthropic context engineering | just-in-time retrieval、compaction、structured notes、sub-agents | 无 |
 
 ---
 
@@ -851,6 +955,7 @@ manager 不得把不满足条件的任务标记 ready；worker 发现缺失字�
 | 缺陷 | `mf bug add`、`mf bug list`、`mf bug show`、`mf bug update`、`mf bug close` |
 | 知识 | `mf knowledge add`、`mf knowledge list`、`mf knowledge show`、`mf knowledge render` |
 | 验证 | `mf verify record` |
+| 上下文 | `mf context`、`mf archive` |
 | 发布 | `mf release freeze` |
 | 维护 | `mf log`、`mf upgrade`、`mf agent update`、`mf worker install` |
 
@@ -874,6 +979,7 @@ manager 不得把不满足条件的任务标记 ready；worker 发现缺失字�
 | bug add/list/show/update/close | - | ✓ | 只读（本任务相关） |
 | knowledge add/list/show/render | - | ✓ | 只读（任务包注入） |
 | verify record | - | ✓ | ✓（本人任务） |
+| context / archive | 只读工作区摘要 | ✓ | 只读任务包；archive 禁止 |
 | release freeze | - | ✓ | - |
 | log | ✓ | ✓ | ✓（本人任务） |
 
@@ -965,7 +1071,7 @@ cp meta-flow/agents/meta-maintainer.md ~/.claude/agents/
 
 ## 10. 规范清单
 
-`contracts/standards/` 下 14 份，每份不超过 2 页：
+`contracts/standards/` 下 15 份，每份不超过 2 页：
 
 | 文件 | 内容 |
 |---|---|
@@ -975,6 +1081,7 @@ cp meta-flow/agents/meta-maintainer.md ~/.claude/agents/
 | `PHASE.md` | 五阶段目标、阶段计划/报告、过程交付件、用户门禁 |
 | `REQUIREMENTS.md` | REQ/CHG 字段、需求 DoR、优先级、追踪矩阵 |
 | `DESIGN.md` | 架构/设计/ADR/规格模板与质量 |
+| `CONTEXT.md` | 文档分层、角色读写矩阵、任务包、热状态、归档、读扩展 |
 | `TASK-CARD.md` | 任务字段、任务就绪标准、状态机、并行规则 |
 | `DEVELOPMENT.md` | 开发记录、worker 遵守、代码/测试、禁止越界 |
 | `VERIFICATION.md` | L1/L2/L3 分层验证、证据、追踪矩阵、回归 |
@@ -1001,7 +1108,7 @@ R0 交付物：
 1. 新仓骨架：`pyproject.toml`、`src/meta_flow/`（含 `templates.py`）、`tests/`、`agents/`。
 2. `mf` CLI 骨架：`init/status/role/doctor`。
 3. 三个角色定义：`meta-maintainer.md`、`meta-manager.md`、`meta-worker.md`。
-4. 工作区两仓初始化 + 角色路由三层 + PROJECT-PLAN 模板与校验 + BUG/KNOWLEDGE 目录 + templates/dev-records/phases。
+4. 工作区两仓初始化 + 角色路由三层 + PROJECT-PLAN 模板与校验 + BUG/KNOWLEDGE 目录 + CONTEXT-POLICY/current.json + templates/dev-records/phases。
 5. 玩具项目 E2E：R1 → P1–P5 → 任务卡 → 验收 → release freeze；包含缺陷记录与知识沉淀。
 6. CLI 状态机与 schema 测试。
 
@@ -1009,7 +1116,7 @@ R1 交付物：
 
 1. 完整五阶段、PROJECT-PLAN 规划（过程/过程交付件/最终交付件能力）与阶段报告。
 2. 并行 wave、租约、任务包、交接、证据固化。
-3. 14 份规范默认版。
+3. 15 份规范默认版。
 4. 真实项目试点。
 5. 安装/升级/worker 安装完整流程。
 6. 缺陷跟踪、知识沉淀、分层验证（L1/L2/L3）与追踪矩阵闭环。
@@ -1027,11 +1134,12 @@ R2 交付物：
 
 | 风险 | 缓解 |
 |---|---|
-| 新系统再次膨胀 | 命令预算 ≤40（核心约 30）；规范 ≤14 份；agent ≤250 行/个；不引入 CP/CR/ledger 全套 |
+| 新系统再次膨胀 | 命令预算 ≤45（核心约 35）；规范 ≤15 份；agent ≤250 行/个；不引入 CP/CR/ledger 全套 |
 | manager 验收瓶颈 | WIP 限制；`task graph` 显示 submitted 队列；设计/验证通过任务类型分派 |
 | worker 自证自洽 | 验收标准前置；证据绑定；manager 重跑；越界 diff 拒绝；独立 verify/review 任务 |
 | 状态并发冲突 | 每任务一文件；`current.json` 派生；lease；追加 ledger |
 | 两仓同步复杂 | `mf doctor` 校验；`delivery.yaml` 声明版本与契约；R0/R1 单 deliveries 仓 |
+| 上下文膨胀/越界读取 | 文档分层 A/B/C/D/E；task packet；archive 默认不读；state ≤8KB；读扩展写 READ-LOG |
 | 平台差异 | R1 只 Claude Code；R2 再支持 DSH/Codex；未测试不宣称对等 |
 | 设计工作量压垮 manager | `kind: design` 任务分派；R2 可选 `meta-designer` |
 | 强审计行业要求 | 核心保持轻量；R2 可选 `audit` profile |
@@ -1062,3 +1170,4 @@ R2 交付物：
 | 2026-11-21 | 保留 `mf verify record` | 阶段级/端到端证据可查询；发布门可强制 |
 | 2026-11-21 | 交付库版本按项目 `version_policy`；meta-flow 自身单一交付 | 通用规则不绑定 meta-flow 自身；R1 默认 same-major |
 | 2026-11-21 | manager 在 P1 生成 `PROJECT-PLAN.md` | 明确过程、过程交付件、最终交付件能力 |
+| 2026-11-21 | 读写控制：A/B/C/D/E 分层 + CONTEXT-POLICY + 8KB 热状态 | 控制上下文污染与 state 膨胀；参考 v0/Claude Code/Cursor/Spec Kit，不搬 v0 capsule/ledger |

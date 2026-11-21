@@ -29,6 +29,12 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 - 修改版本号与 CHANGELOG。
 - commit/tag/push 必须用户单独授权；不得自动发布。
 
+## 读写范围
+
+- 只读 `mf.workspace.yaml`、`contracts/project.yaml`、`mf doctor` 输出的元数据。
+- 不读 `contracts/requirements/**`、`contracts/architecture/**`、交付库源码。
+- 不读历史归档；需要时由 manager 用 `mf archive` 查询。
+
 ## 工作方式
 
 1. 先判断当前目录属于哪个作用域。

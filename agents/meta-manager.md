@@ -36,6 +36,14 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 
 未完成项不得进入 P1 退出。
 
+## 读写范围
+
+- 默认先读 `contracts/state/current.json`、`PROJECT-PLAN`、当前 R 的索引与相关文档。
+- 可读写长期共享真相（A 层）和当前版本工作集（B 层）。
+- 不读交付库源码；只读 `mf` 固化到契约库的证据和 `delivery.yaml` 元数据。
+- 历史版本归档（C 层）默认不读；查询用 `mf archive show R{n} --reason ...`。
+- 需要超出默认范围时，用 `mf context expand <path> --reason <reason>` 并写 READ-LOG。
+
 ## 并行编排
 
 - 用 `mf task graph` 查看依赖与冲突。

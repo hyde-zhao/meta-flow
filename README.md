@@ -9,10 +9,11 @@
 - `mf` CLI 骨架：`init`、`role`、`status`、`doctor`
 - 工作区两仓初始化：`contracts/` + `deliveries/`
 - 目录级角色推导：根目录 = maintainer，`contracts/` = manager，`deliveries/**` = worker
-- 14 份默认规范模板
+- 15 份默认规范模板
 - `contracts/templates/` 16 份制品模板：roadmap、phase plan/report、requirement、spec、design、ADR、task、dev record、verification、handoff、CHG、review
 - `PROJECT-PLAN` + `INIT-CHECKLIST` + 阶段计划/报告模板
 - 缺陷与知识骨架（`contracts/bugs/`、`contracts/knowledge/`）
+- 读写控制骨架：`CONTEXT-POLICY.yaml`、8KB 热状态 `current.json`、归档/索引
 - 分层验证规范：L1 实现、L2 设计、L3 需求
 - 三个角色定义：`agents/meta-maintainer.md`、`meta-manager.md`、`meta-worker.md`
 - 工作区结构、PROJECT-PLAN、模板与版本策略校验（`same-major` / `exact` / `independent`）

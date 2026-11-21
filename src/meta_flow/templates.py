@@ -49,9 +49,10 @@ CONTRACTS_CLAUDE = """# 契约库（项目管理者）
 - 与用户对接需求，维护 `REQ-*` / `CHG-*`。
 - 在 P1 生成 PROJECT-PLAN、版本计划、阶段计划、初始化清单与模板目录。
 - 维护路标、版本、阶段；组织 P1–P5。
-- 维护 14 份规范。
+- 维护 15 份规范。
 - 编排设计、任务卡、wave、验收；维护分层验证与追踪矩阵。
 - 维护系统架构、ADR、端到端规格与跨库契约。
+- 默认读 `state/current.json` 与当前版本相关文档；历史归档默认不读。
 
 ## 边界
 
@@ -84,6 +85,7 @@ DELIVERIES_CLAUDE = """# 交付库（执行者）
 - 只领取任务卡，不主动扩展范围。
 - 在任务卡 `allowed_paths` 内执行。
 - 任务卡缺目标、输入、交付物、验收、路径、依赖时 BLOCKED，不猜。
+- 只读 `state/current.json` 与任务包；不读完整契约、其他交付库、归档。
 - 完成自验、开发记录与交接文件，用 `mf task submit` 提交。
 
 ## 边界
@@ -207,6 +209,42 @@ P5 结束：`mf roadmap close` → 关闭报告 → 未完成项转 R2/backlog �
 ## 质量
 
 可实施、可测试、无未决冲突；高风险设计必须独立 `review` 任务。
+""",
+    "CONTEXT.md": """# CONTEXT — 读写范围与上下文控制规范
+
+## 文档分层
+
+- A 长期共享真相：project/roadmap/requirements/architecture/specs/standards/knowledge。
+- B 当前版本工作集：当前 R 的 tasks/dev-records/verification/handoffs/bugs/phase plans/reports。
+- C 冷历史：`contracts/archive/R{n}/`，默认不读。
+- D 热状态：`contracts/state/current.json`，≤8KB，只存指针/计数。
+- E 审计日志：`ledger.ndjson`、`READ-LOG.ndjson`，仅追加。
+
+## 角色读写
+
+- manager：读写 A/B；读 D；archive 默认不读，显式查询需 reason；不读交付库源码。
+- worker：只读 state 与任务包；写自己交付库 `allowed_paths`；禁止 archive、其他交付库、完整契约。
+- maintainer：只读工作区清单与 `project.yaml`；不读需求/架构/交付源码。
+
+## 任务包
+
+`mf task show --packet` 只含任务卡、inputs 片段、allowed_paths、must_read/may_read/do_not_read、budget、packet_digest。
+
+## 热状态
+
+`current.json` 只存指针/计数；修订历史进 ledger；`HISTORY.md` 按需生成；超 8KB 由 `mf doctor` 报错。
+
+## 归档
+
+版本关闭后 B 层移入 `archive/R{n}/`；长期共享文档原地保留，更新 status/roadmap/supersedes；活动文档不得引用归档。
+
+## 读扩展
+
+`mf context expand <path> --reason <packet_missing|field_conflict|schema_validation_failed|human_audit|summary_insufficient>`；写 READ-LOG。
+
+## 检查
+
+`mf doctor` 校验策略文件、state 大小、归档边界、未授权读。
 """,
     "REQUIREMENTS.md": """# REQUIREMENTS — 需求与变更规范
 
@@ -712,6 +750,68 @@ USER_MANUAL = """# 用户手册
 ## 功能说明
 
 ## 故障排查
+"""
+
+CONTEXT_POLICY = """schema: 1
+state:
+  path: contracts/state/current.json
+  max_bytes: 8192
+  ledger: contracts/state/ledger.ndjson
+  read_log: contracts/state/READ-LOG.ndjson
+archive:
+  root: contracts/archive
+  read_reason_required: true
+roles:
+  manager:
+    must_read: [contracts/state/current.json, contracts/project/PROJECT-PLAN.md]
+    may_read:
+      - contracts/roadmap/**
+      - contracts/requirements/**
+      - contracts/architecture/**
+      - contracts/specs/**
+      - contracts/tasks/**
+      - contracts/dev-records/**
+      - contracts/verification/**
+      - contracts/handoffs/**
+      - contracts/bugs/**
+      - contracts/knowledge/**
+    deny: [contracts/archive/**, deliveries/*/src/**]
+    budget: {files: 12, bytes: 131072}
+  worker:
+    must_read: [contracts/state/current.json]
+    may_read: [task-packet]
+    deny:
+      - contracts/archive/**
+      - contracts/roadmap/**
+      - contracts/requirements/**
+      - contracts/architecture/**
+    budget: {files: 10, bytes: 65536}
+  maintainer:
+    must_read: [mf.workspace.yaml, contracts/project.yaml]
+    deny: [contracts/requirements/**, contracts/architecture/**, deliveries/*/src/**]
+notes:
+  - worker 只能访问任务卡 allowed_paths 所在的交付库；其他交付库由 CLI 拒绝。
+  - archive 读取必须带 reason 并写 READ-LOG。
+"""
+
+ARCHIVE_README = """# 归档
+
+版本关闭后，当前版本的 tasks / dev-records / verification / handoffs / bugs /
+phase plans / reports 移入 `archive/R{n}/`，生成 `INDEX.md`。
+
+归档默认不读；查询用 `mf archive show R{n} --reason <reason>`。
+"""
+
+REQUIREMENTS_INDEX = """# 需求索引
+
+| ID | 标题 | 状态 | 路标 |
+|---|---|---|---|
+"""
+
+ARCHITECTURE_INDEX = """# 架构索引
+
+| ID | 标题 | 类型 | 状态 |
+|---|---|---|---|
 """
 
 ARTIFACT_TEMPLATES = {

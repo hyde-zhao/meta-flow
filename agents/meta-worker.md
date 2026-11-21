@@ -8,6 +8,13 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 
 你是任务的执行者。你只处理分配给自己的任务卡，不扩展范围，不直接与用户对话。
 
+## 读写范围
+
+- 只读 `contracts/state/current.json`（worker 视图）与 `mf task show --packet` 返回的任务包。
+- 只写任务卡 `allowed_paths`；不读完整契约库、其他交付库、历史归档。
+- 需要额外文档时，用 `mf context expand <path> --reason ...`；不要自行浏览。
+- 归档读取一律禁止，除非 manager 显式授权并记录 reason。
+
 ## 执行流程
 
 1. 读取任务包：`mf task show <task-id> --packet`。

@@ -46,6 +46,12 @@ def test_init_creates_layout(workspace):
     assert (workspace / "contracts" / "project" / "INIT-CHECKLIST.md").is_file()
     assert (workspace / "contracts" / "templates" / "SPEC.md").is_file()
     assert (workspace / "contracts" / "templates" / "TASK.yaml").is_file()
+    assert (workspace / "contracts" / "policies" / "CONTEXT-POLICY.yaml").is_file()
+    assert (workspace / "contracts" / "state" / "current.json").is_file()
+    assert (workspace / "contracts" / "state" / "READ-LOG.ndjson").is_file()
+    assert (workspace / "contracts" / "archive" / "README.md").is_file()
+    assert (workspace / "contracts" / "requirements" / "INDEX.md").is_file()
+    assert (workspace / "contracts" / "architecture" / "INDEX.md").is_file()
     assert (workspace / "contracts" / "dev-records").is_dir()
     assert (workspace / "contracts" / "roadmap" / "phases").is_dir()
     assert (workspace / "contracts" / "roadmap" / "ROADMAP.yaml").is_file()
@@ -57,7 +63,8 @@ def test_init_creates_layout(workspace):
     assert (workspace / "contracts" / "standards" / "PROJECT.md").is_file()
     assert (workspace / "contracts" / "standards" / "ROADMAP.md").is_file()
     assert (workspace / "contracts" / "standards" / "DESIGN.md").is_file()
-    assert len(templates.STANDARDS) == 14
+    assert (workspace / "contracts" / "standards" / "CONTEXT.md").is_file()
+    assert len(templates.STANDARDS) == 15
     assert (workspace / "contracts" / "bugs" / "_TEMPLATE.yaml").is_file()
     assert (workspace / "contracts" / "knowledge" / "KNOWLEDGE.yaml").is_file()
     assert (workspace / "deliveries" / "frontend" / "delivery.yaml").is_file()
@@ -121,6 +128,19 @@ def test_doctor_template_missing(workspace):
     (workspace / "contracts" / "templates" / "SPEC.md").unlink()
     errors = doctor(workspace)
     assert any("缺少模板" in error for error in errors)
+
+
+def test_doctor_state_too_large(workspace):
+    state_path = workspace / "contracts" / "state" / "current.json"
+    state_path.write_text("x" * 9000, encoding="utf-8")
+    errors = doctor(workspace)
+    assert any("超过 8KB" in error for error in errors)
+
+
+def test_doctor_context_policy_missing(workspace):
+    (workspace / "contracts" / "policies" / "CONTEXT-POLICY.yaml").unlink()
+    errors = doctor(workspace)
+    assert any("CONTEXT-POLICY.yaml" in error for error in errors)
 
 
 def test_doctor_version_policy_exact(workspace):

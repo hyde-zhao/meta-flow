@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +143,7 @@ def init_workspace(
         contracts / "requirements" / "changes",
         contracts / "standards",
         contracts / "templates",
+        contracts / "policies",
         contracts / "bugs",
         contracts / "knowledge",
         contracts / "architecture" / "drafts",
@@ -253,6 +256,34 @@ def init_workspace(
         "contracts/architecture/drafts/.gitkeep",
     ):
         _write(root / relative, "")
+
+    _write(contracts / "policies" / "CONTEXT-POLICY.yaml", templates.CONTEXT_POLICY)
+    _write(contracts / "archive" / "README.md", templates.ARCHIVE_README)
+    _write(contracts / "requirements" / "INDEX.md", templates.REQUIREMENTS_INDEX)
+    _write(contracts / "architecture" / "INDEX.md", templates.ARCHITECTURE_INDEX)
+    _write(contracts / "state" / "READ-LOG.ndjson", "")
+    _write(
+        contracts / "state" / "current.json",
+        json.dumps(
+            {
+                "schema": 1,
+                "project_id": project_id,
+                "roadmap": "R1",
+                "phase": "P1",
+                "version": "1.0.0-alpha.1",
+                "counts": {},
+                "active_tasks": [],
+                "next_action": {
+                    "type": "plan",
+                    "text": "完成 P1 计划与 INIT-CHECKLIST",
+                },
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+    )
     _write(contracts / "state" / "ledger.ndjson", "")
 
     for standard_name, content in templates.STANDARDS.items():
@@ -542,6 +573,34 @@ def doctor(root: Path) -> list[str]:
     for template_name in templates.ARTIFACT_TEMPLATES:
         if not (contracts / "templates" / template_name).is_file():
             errors.append(f"缺少模板: contracts/templates/{template_name}")
+
+    for relative in (
+        "contracts/policies/CONTEXT-POLICY.yaml",
+        "contracts/state/READ-LOG.ndjson",
+        "contracts/archive/README.md",
+        "contracts/requirements/INDEX.md",
+        "contracts/architecture/INDEX.md",
+    ):
+        if not (root / relative).is_file():
+            errors.append(f"缺少上下文控制文件: {relative}")
+
+    policy_path = contracts / "policies" / "CONTEXT-POLICY.yaml"
+    if policy_path.is_file():
+        try:
+            yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            errors.append(f"CONTEXT-POLICY.yaml 不是合法 YAML: {exc}")
+
+    state_path = contracts / "state" / "current.json"
+    if state_path.is_file():
+        try:
+            json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            errors.append(f"current.json 不是合法 JSON: {exc}")
+        if state_path.stat().st_size > 8192:
+            errors.append(
+                f"current.json 超过 8KB: {state_path.stat().st_size} bytes"
+            )
 
     deliveries = project.get("deliveries")
     if not isinstance(deliveries, list) or not deliveries:
