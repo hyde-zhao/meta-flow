@@ -31,6 +31,11 @@ def _as_dir(path: Path) -> Path:
     return path
 
 
+def _version_core(version: str) -> str:
+    """去掉 SemVer 的预发布/构建元数据，只保留 X.Y.Z。"""
+    return version.split("+", 1)[0].split("-", 1)[0]
+
+
 def slugify(name: str) -> str:
     """把项目名转换为稳定的 project_id。"""
     slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
@@ -130,6 +135,7 @@ def init_workspace(
     deliveries_root = root / "deliveries"
 
     for directory in (
+        contracts / "project",
         contracts / "roadmap",
         contracts / "requirements" / "changes",
         contracts / "standards",
@@ -180,6 +186,8 @@ def init_workspace(
             "roadmap": "R1",
             "phase": "P1",
             "version": "1.0.0-alpha.1",
+            "version_policy": "same-major",
+            "plan_ref": "project/PROJECT-PLAN.md",
             "deliveries": [
                 {
                     "id": delivery,
@@ -213,6 +221,7 @@ def init_workspace(
         contracts / "requirements" / "REQUIREMENTS.yaml",
         {"schema": 1, "requirements": []},
     )
+    _write(contracts / "project" / "PROJECT-PLAN.md", templates.PROJECT_PLAN)
     _write(contracts / "state" / "ledger.ndjson", "")
 
     for standard_name, content in templates.STANDARDS.items():
@@ -352,6 +361,8 @@ def build_status(root: Path, role: str | None = None) -> dict[str, Any]:
         "roadmap": active,
         "phase": project.get("phase"),
         "version": project.get("version"),
+        "version_policy": project.get("version_policy"),
+        "plan_ref": project.get("plan_ref"),
         "deliveries": project.get("deliveries") or [],
         "tasks": count_tasks(root),
     }
@@ -404,6 +415,14 @@ def doctor(root: Path) -> list[str]:
         errors.append("project.yaml 缺少 name")
     if not roadmap_id:
         errors.append("project.yaml 缺少 roadmap")
+
+    version_policy = project.get("version_policy", "same-major")
+    if version_policy not in {"same-major", "exact", "independent"}:
+        errors.append(f"project.yaml version_policy 非法: {version_policy}")
+
+    plan_ref = project.get("plan_ref", "project/PROJECT-PLAN.md")
+    if not (contracts / str(plan_ref)).is_file():
+        errors.append(f"缺少项目计划: contracts/{plan_ref}")
 
     roadmaps = roadmap_data.get("roadmaps")
     if not isinstance(roadmaps, list) or not roadmaps:
@@ -503,11 +522,23 @@ def doctor(root: Path) -> list[str]:
                 if delivery_data.get("roadmap") != roadmap_id:
                     errors.append(f"交付库 {delivery_id} 的 roadmap 与项目不一致")
                 delivery_version = str(delivery_data.get("version", ""))
-                delivery_major = delivery_version.split(".", 1)[0] if delivery_version else ""
-                if roadmap_match and delivery_major != roadmap_match.group(1):
-                    errors.append(
-                        f"交付库 {delivery_id} 的版本 {delivery_version} 与路标 {roadmap_id} 不一致"
+                project_version = str(project.get("version", ""))
+                if version_policy == "exact":
+                    if _version_core(delivery_version) != _version_core(project_version):
+                        errors.append(
+                            f"交付库 {delivery_id} 的版本 {delivery_version} "
+                            f"必须等于项目版本 {project_version}"
+                        )
+                elif version_policy == "same-major":
+                    delivery_major = (
+                        delivery_version.split(".", 1)[0] if delivery_version else ""
                     )
+                    if roadmap_match and delivery_major != roadmap_match.group(1):
+                        errors.append(
+                            f"交付库 {delivery_id} 的版本 {delivery_version} "
+                            f"与路标 {roadmap_id} 不一致"
+                        )
+                # independent：兼容范围由 R2 契约库检查；R0/R1 不做额外校验
                 contracts_refs = delivery_data.get("contracts") or []
                 if isinstance(contracts_refs, list):
                     for contract_id in contracts_refs:

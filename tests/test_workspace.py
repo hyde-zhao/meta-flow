@@ -41,6 +41,7 @@ def test_init_creates_layout(workspace):
     assert (workspace / "mf.workspace.yaml").is_file()
     assert (workspace / "CLAUDE.md").is_file()
     assert (workspace / "contracts" / "project.yaml").is_file()
+    assert (workspace / "contracts" / "project" / "PROJECT-PLAN.md").is_file()
     assert (workspace / "contracts" / "roadmap" / "ROADMAP.yaml").is_file()
     assert (workspace / "contracts" / "requirements" / "REQUIREMENTS.yaml").is_file()
     assert (workspace / "contracts" / "state" / "ledger.ndjson").is_file()
@@ -54,6 +55,8 @@ def test_init_creates_layout(workspace):
     assert [item["id"] for item in project["deliveries"]] == ["frontend", "backend"]
     assert project["roadmap"] == "R1"
     assert project["version"] == "1.0.0-alpha.1"
+    assert project["version_policy"] == "same-major"
+    assert project["plan_ref"] == "project/PROJECT-PLAN.md"
 
 
 def test_detect_role(workspace):
@@ -86,6 +89,41 @@ def test_doctor_version_mismatch(workspace):
     _write_yaml(path, data)
     errors = doctor(workspace)
     assert any("与路标 R1 不一致" in error for error in errors)
+
+
+def test_doctor_plan_missing(workspace):
+    (workspace / "contracts" / "project" / "PROJECT-PLAN.md").unlink()
+    errors = doctor(workspace)
+    assert any("缺少项目计划" in error for error in errors)
+
+
+def test_doctor_version_policy_exact(workspace):
+    project_path = workspace / "contracts" / "project.yaml"
+    project = _read_yaml(project_path)
+    project["version_policy"] = "exact"
+    project["version"] = "1.0.0"
+    _write_yaml(project_path, project)
+
+    delivery_path = workspace / "deliveries" / "frontend" / "delivery.yaml"
+    delivery = _read_yaml(delivery_path)
+    delivery["version"] = "1.0.1"
+    _write_yaml(delivery_path, delivery)
+
+    errors = doctor(workspace)
+    assert any("必须等于项目版本" in error for error in errors)
+
+    delivery["version"] = "1.0.0"
+    _write_yaml(delivery_path, delivery)
+    assert doctor(workspace) == []
+
+
+def test_doctor_version_policy_invalid(workspace):
+    project_path = workspace / "contracts" / "project.yaml"
+    project = _read_yaml(project_path)
+    project["version_policy"] = "whatever"
+    _write_yaml(project_path, project)
+    errors = doctor(workspace)
+    assert any("version_policy 非法" in error for error in errors)
 
 
 def test_doctor_contract_reference(workspace):

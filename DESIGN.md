@@ -149,6 +149,8 @@ workspace/                     # 容器目录，不必是 git 仓
 │   ├── AGENTS.md
 │   ├── .metaflow/role.yaml    # role: manager
 │   ├── project.yaml
+│   ├── project/
+│   │   └── PROJECT-PLAN.md    # 过程、过程交付件、最终交付件能力
 │   ├── roadmap/ROADMAP.yaml
 │   ├── requirements/REQUIREMENTS.yaml
 │   ├── standards/             # 9 份规范
@@ -184,11 +186,14 @@ workspace/                     # 容器目录，不必是 git 仓
 - 两仓给出清晰的 git/发布边界。
 - 如果 frontend/backend 将来需要独立发布节奏或不同团队权限，再拆成三个仓；R0/R1 不拆。
 
+说明：以上是 meta-flow **管理的项目**的工作区布局。meta-flow 自身只有一个交付物——`meta-flow` 工具包（CLI、agents、templates），不使用 `deliveries/`；其版本遵循工具 SemVer 与 R0/R1/R2 路标。
+
 ### 3.2 契约库职责
 
 契约库存放：
 
 - 项目元数据、模块/交付库注册表、当前路标与阶段。
+- 项目计划 `PROJECT-PLAN.md`：过程、过程交付件、最终交付件能力。
 - 路标、需求、变更单、追踪矩阵。
 - 9 份项目规范。
 - 系统架构图、ADR、端到端设计。
@@ -255,7 +260,7 @@ mf task prompt 生成下一任务提示词
 | 工具 | SemVer | `meta-flow` 自身：`v1.0.0`、`v1.1.0`、`v2.0.0` |
 | 路标 | `R{n}` | 规划单位：`R0`、`R1`、`R2`；可选年份前缀 `2026.R1` |
 | 项目交付 | SemVer | 项目版本 = 路标版本：`R1 → 1.x.y` |
-| 交付库 | SemVer | 每个 `delivery.yaml` 独立记录；R1 默认同 MAJOR、MINOR/PATCH 独立（待确认）；R2 允许完全独立 + 兼容范围 |
+| 交付库 | SemVer | 仅用于被管理项目；`project.yaml.version_policy` 决定 `same-major` / `exact` / `independent`；meta-flow 自身交付物是 CLI 包，版本 = 工具 SemVer |
 | 阶段预发布 | SemVer prerelease | `1.0.0-alpha.N`（P3）、`-beta.N`（P4）、`-rc.N`（P5） |
 | 任务 | 复合 ID | `R1-P3-T013` |
 | 需求 | 稳定 ID + 路标字段 | `REQ-0001`，`roadmap: R1` |
@@ -368,6 +373,31 @@ external_versions:
 3. `mf roadmap close R1`：核对 REQ 状态、生成 R1 关闭报告、未完成项转入 R2/backlog。
 4. `mf roadmap plan R2`：manager 起草下一路标目标/范围/进入退出条件，用户确认。
 5. `mf status` 显示新路标。
+
+### 5.5 项目过程与交付件规划
+
+manager 在 P1 必须与用户确认并写入 `contracts/project/PROJECT-PLAN.md`：
+
+1. 项目目标、成功指标、非目标。
+2. 最终交付件清单与能力：每个交付件“能做什么”、对应 REQ、验收方式。
+3. 交付库划分：职责、最终产物、版本策略。
+4. 过程计划：P1–P5 每阶段的目标、过程交付件、退出条件。
+5. 能力地图：能力 → REQ → 验收场景 → 交付件。
+6. 风险、假设、变更记录。
+
+门禁：
+
+- P1 退出前用户确认 PROJECT-PLAN。
+- 每个阶段退出时核对本阶段过程交付件。
+- P5 退出时逐项核对最终交付件能力；缺项必须返工或由用户显式接受。
+
+版本策略写在 `project.yaml.version_policy`：
+
+| 值 | 含义 |
+|---|---|
+| `same-major` | 交付库与项目同 MAJOR（R1 默认） |
+| `exact` | 交付库版本必须等于项目版本 |
+| `independent` | 交付库完全独立，需在契约库声明兼容范围（R2） |
 
 ---
 
@@ -757,13 +787,13 @@ R0 交付物：
 1. 新仓骨架：`pyproject.toml`、`src/meta_flow/`、`tests/`、`agents/`、`templates/`、`standards/`。
 2. `mf` CLI 骨架：`init/status/role/doctor`。
 3. 三个角色定义：`meta-maintainer.md`、`meta-manager.md`、`meta-worker.md`。
-4. 工作区两仓初始化 + 角色路由三层。
+4. 工作区两仓初始化 + 角色路由三层 + PROJECT-PLAN 模板与校验。
 5. 玩具项目 E2E：R1 → P1–P5 → 任务卡 → 验收 → release freeze。
 6. CLI 状态机与 schema 测试。
 
 R1 交付物：
 
-1. 完整五阶段与阶段报告。
+1. 完整五阶段、PROJECT-PLAN 规划（过程/过程交付件/最终交付件能力）与阶段报告。
 2. 并行 wave、租约、任务包、交接、证据固化。
 3. 9 份规范默认版。
 4. 真实项目试点。
@@ -795,12 +825,7 @@ R2 交付物：
 
 ## 13. 待决事项
 
-已解决：仓库命名/归档、平台支持节奏（R1 Claude；R2 DSH + Codex）、分发方式（Git 安装，不发布 PyPI）、License（MIT）。
-
-剩余：
-
-1. R1 交付库版本：采用“同 MAJOR、MINOR/PATCH 独立”（推荐），还是所有交付库版本完全一致。
-2. 是否保留 `mf verify record`：保留（推荐）或并入 `mf phase review` / `mf task submit`。
+无。仓库命名/归档、平台支持节奏（R1 Claude；R2 DSH + Codex）、分发方式（Git 安装，不发布 PyPI）、License（MIT）、`mf verify record`（保留）、交付库版本策略（按项目 `version_policy`）均已决定。
 
 ---
 
@@ -819,3 +844,6 @@ R2 交付物：
 | 2026-11-21 | R1 只支持 Claude Code；R2 支持 DSH + Codex | 先跑通核心，平台适配后置 |
 | 2026-11-21 | 不发布 PyPI；用户 Git 安装，维护者源码安装 | 降低分发复杂度；用户无需 clone |
 | 2026-11-21 | MIT License | 开源、宽松、简单 |
+| 2026-11-21 | 保留 `mf verify record` | 阶段级/端到端证据可查询；发布门可强制 |
+| 2026-11-21 | 交付库版本按项目 `version_policy`；meta-flow 自身单一交付 | 通用规则不绑定 meta-flow 自身；R1 默认 same-major |
+| 2026-11-21 | manager 在 P1 生成 `PROJECT-PLAN.md` | 明确过程、过程交付件、最终交付件能力 |
