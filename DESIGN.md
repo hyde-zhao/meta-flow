@@ -59,6 +59,20 @@ v1 不再是一个“工作流产物工厂”，而是一个 **AI 项目操作�
 6. **默认轻量，例外显式**：高风险、多交付库、外部合同才增加复杂度。
 7. **命令预算**：核心命令约 30 个，缺陷/知识/维护扩展不超过 10 个；每个命令必须有明确角色和门禁用途。
 
+### 1.5 参考与取舍
+
+| 来源 | 借鉴 | 不照搬 |
+|---|---|---|
+| GitHub Spec Kit | constitution、clarify、spec → plan → tasks | 单特性工作流；无项目路标/多交付库 |
+| OpenSpec | change delta + archive | 无角色、无项目层、无阶段门禁 |
+| BMAD | 任务卡/交接/验收、角色边界 | 多具名角色、重流程 |
+| Kiro | EARS 可测试验收、需求 ID、任务依赖 | IDE 绑定、单特性闭环 |
+| cc-sdd | 文件边界、独立 reviewer | 命令与 skill 堆叠 |
+| Agent OS | 分层上下文、standards 按需注入 | 无版本/发布门禁 |
+| meta-flow v0 | 证据链、门禁、追踪矩阵、验收独立性 | CP0–CP8、CR/ledger/projection、超长文档、自治理 |
+
+原则：只保留能直接降低交付风险、支撑验收或追踪的机制；不恢复 v0 的过程仪式。
+
 ---
 
 ## 2. 三角色
@@ -153,7 +167,7 @@ workspace/                     # 容器目录，不必是 git 仓
 │   │   └── PROJECT-PLAN.md    # 过程、过程交付件、最终交付件能力
 │   ├── roadmap/ROADMAP.yaml
 │   ├── requirements/REQUIREMENTS.yaml
-│   ├── standards/             # 11 份规范
+│   ├── standards/             # 14 份规范
 │   ├── architecture/          # 架构图、ADR、端到端设计
 │   ├── specs/                 # 端到端规格、跨库接口/数据契约
 │   ├── tasks/R1/P3/T013.yaml
@@ -195,7 +209,7 @@ workspace/                     # 容器目录，不必是 git 仓
 - 项目元数据、模块/交付库注册表、当前路标与阶段。
 - 项目计划 `PROJECT-PLAN.md`：过程、过程交付件、最终交付件能力。
 - 路标、需求、变更单、追踪矩阵。
-- 11 份项目规范。
+- 14 份项目规范。
 - 系统架构图、ADR、端到端设计。
 - 端到端规格、跨交付库接口/数据契约。
 - 任务卡、验收记录、交接副本、事件 ledger。
@@ -248,6 +262,32 @@ mf task prompt 生成下一任务提示词
 3. **路径守卫**：hook 拦截越界 Read/Write/Edit；`mf task submit` 校验 `git diff --name-only` 是否在 `allowed_paths` 内；越界拒绝。
 
 这三层比“多拆几个仓库”更有效地防止幻觉和上下文污染；仓库数量只解决 git/发布边界。
+
+### 3.6 项目制品清单
+
+| 制品 | 路径 | 所有者 | 创建时机 | 用途 |
+|---|---|---|---|---|
+| 项目计划 | `contracts/project/PROJECT-PLAN.md` | manager | init / P1 | 目标、最终交付件能力、过程、交付库 |
+| 初始化清单 | `contracts/project/INIT-CHECKLIST.md` | manager | init | 初始化逐项确认 |
+| 路标 | `contracts/roadmap/ROADMAP.yaml` | manager | init / P1 | R1/R2 目标、范围、进入退出 |
+| 版本计划表 | `contracts/roadmap/R{n}-PLAN.md` | manager | P1 | 里程碑、阶段、交付件、时间、风险 |
+| 阶段计划 | `contracts/roadmap/phases/R{n}-P{n}-PLAN.md` | manager | 每阶段进入 | 阶段目标、WBS、任务、验证计划 |
+| 阶段报告 | `contracts/roadmap/phases/R{n}-P{n}-REPORT.md` | manager | 每阶段退出 | 目标核对、验证结果、调整建议 |
+| 需求 | `contracts/requirements/REQUIREMENTS.yaml` | manager | P1 | REQ 基线 |
+| 变更 | `contracts/requirements/changes/CHG-*.md` | manager | 任意 | 基线后变更 |
+| 追踪矩阵 | `contracts/requirements/TRACE.md` | manager | 生成 | REQ→SPEC→TASK→DEV→VR→BUG→RELEASE |
+| 规格 | `contracts/specs/SPEC-*.md` | manager/design 任务 | P2 | 可验证规格 |
+| 设计 | `contracts/architecture/DESIGN-*.md`、`ADR-*.md` | manager/design 任务 | P2 | 架构、接口、数据、决策 |
+| 任务卡 | `contracts/tasks/R{n}/P{n}/T*.yaml` | manager | P3 | 可执行任务 |
+| 开发记录 | `contracts/dev-records/T*.md` | worker | P3 | 实现摘要、决策、测试、偏差 |
+| 验证记录 | `contracts/verification/VR-*.yaml` | manager/verifier | P3/P4 | 分层验证证据 |
+| 交接文档 | `contracts/handoffs/T*.md` | worker | P3 | 完成摘要、证据、未决问题 |
+| 缺陷 | `contracts/bugs/BUG-*.yaml` | manager | P3/P4 | 缺陷生命周期 |
+| 知识 | `contracts/knowledge/KNOWLEDGE.yaml` | manager | 任意 | 术语、行为、约定、偏好、复盘 |
+| 模板 | `contracts/templates/*` | manager | init | 全部制品的模板 |
+| 发布说明/用户手册 | `deliveries/<id>/...` | worker/manager | P5 | 交付文档 |
+
+`mf init` 在 `contracts/templates/` 放入：`INIT-CHECKLIST.md`、`ROADMAP-PLAN.md`、`PHASE-PLAN.md`、`PHASE-REPORT.md`、`REQUIREMENT.md`、`SPEC.md`、`DESIGN.md`、`ADR.md`、`TASK.yaml`、`DEV-RECORD.md`、`VERIFICATION-RECORD.yaml`、`HANDOFF.md`、`CHG.md`、`REVIEW.md`。manager 可以项目化修改，worker 只读。
 
 ---
 
@@ -399,6 +439,24 @@ manager 在 P1 必须与用户确认并写入 `contracts/project/PROJECT-PLAN.md
 | `exact` | 交付库版本必须等于项目版本 |
 | `independent` | 交付库完全独立，需在契约库声明兼容范围（R2） |
 
+### 5.6 项目初始化检查清单
+
+manager 在 init/P1 必须逐项完成并写入 `contracts/project/INIT-CHECKLIST.md`：
+
+1. 项目目标、范围、非目标、成功指标已确认。
+2. `PROJECT-PLAN.md` 已填写：最终交付件与能力、交付库、过程、能力地图。
+3. 交付库与 `version_policy` 已确认。
+4. `ROADMAP.yaml` R1 与 `R1-PLAN.md` 已确认：里程碑、阶段、交付件、时间、风险。
+5. 需求基线满足 DoR，并关联路标。
+6. P1–P5 阶段计划已生成，含过程交付件与退出条件。
+7. 验证计划已生成：L1/L2/L3 分层、证据、追踪矩阵。
+8. `contracts/templates/` 已就位；worker 只读。
+9. 任务就绪标准、验收规则、用户门禁已确认。
+10. 初始术语/偏好已记录到 `KNOWLEDGE.yaml`。
+11. 用户确认初始化结果；`mf doctor` 通过。
+
+未完成项不得进入 P1 退出。
+
 ---
 
 ## 6. 需求与追踪
@@ -421,12 +479,19 @@ trace:
   verification: [VR-0001]
 ```
 
+需求质量（DoR）：
+
+- 单一、明确、可验收；有来源、优先级、范围、非目标、依赖。
+- 验收标准可执行/可观察，禁止“优化”“更好”等不可判定词。
+- 每条需求关联路标、规格、任务、验证。
+- 不满足 DoR 不得进入 P1 基线。
+
 ### 6.2 追踪矩阵
 
 `mf req trace REQ-0001` 输出：
 
 ```text
-REQ-0001 → R1 → P1/P3 → SPEC-INIT-001 → T001 → VR-0001 → 1.0.0
+REQ-0001 → R1 → SPEC/DESIGN → TASK → DEV-RECORD → VR-L1/L2/L3 → BUG → RELEASE
 ```
 
 路标关闭时，`mf roadmap close` 检查每条 REQ 是否处于 `verified/released/deferred`，否则阻止关闭或要求显式降级。
@@ -719,6 +784,39 @@ contracts/knowledge/
 
 用户纠正是自然语言，hook 无法可靠识别语义；记录由 agent 指令 + CLI 完成，hook 只负责把已有知识注入会话。
 
+### 7.11 分层验证与追踪
+
+验证必须分层，三层都要，不能互相替代：
+
+| 层 | 验证对象 | 要回答的问题 | 主要证据 | 门禁 |
+|---|---|---|---|---|
+| **L1 实现验证** | worker 的实现 | 代码是否正确、健壮、符合开发规范？ | 单测、集成测试、lint、build、开发记录 | `task accept` |
+| **L2 设计验证** | 设计规格 | 实现是否符合 SPEC/DESIGN/接口/数据契约？ | 契约测试、schema 校验、接口测试、设计评审 | P3 退出 |
+| **L3 需求验证** | 原始需求 | 用户要的能力是否真的可用？ | 验收场景、E2E、UAT、演示 | P4/P5 退出 |
+
+- L1 通过不代表 L2/L3 通过；L3 通过也不能替代 L1/L2。
+- `mf verify record --layer implementation|design|requirement`。
+- 验证记录 `VR-*` 必须写 layer、scope、requirement_refs、design_refs、task_refs、method、result、evidence、bugs、verifier。
+- 追踪矩阵：`REQ → SPEC/DESIGN → TASK → DEV-RECORD → VR(L1/L2/L3) → BUG → RELEASE`。
+- `mf req trace` 显示三层验证状态；`mf doctor` 检查孤儿 REQ、未关联任务、缺失验证层。
+
+### 7.12 任务就绪标准（DoR）
+
+任务卡只有满足以下条件才能从 `draft` 进入 `ready`：
+
+1. 单一、明确的结果；一句话能说清“做什么、为什么、完成是什么样”。
+2. 输入已列出且存在：REQ、SPEC/DESIGN、标准、上下文。
+3. 交付物路径/格式明确。
+4. 验收项可执行/可判定，至少一项自动或 artifact 检查。
+5. `allowed_paths` / `forbidden` 明确。
+6. 依赖已 accepted 或不存在。
+7. 交付库有效；同一 wave 内无写路径冲突。
+8. 规模可在一次 worker 会话内完成；过大必须拆分。
+9. `risk` / `authorization` 已设置。
+10. 没有未决澄清问题。
+
+manager 不得把不满足条件的任务标记 ready；worker 发现缺失字段应 `BLOCKED` 并指出缺项，不得猜测执行。
+
 ---
 
 ## 8. 状态与 CLI
@@ -867,21 +965,24 @@ cp meta-flow/agents/meta-maintainer.md ~/.claude/agents/
 
 ## 10. 规范清单
 
-`contracts/standards/` 下 11 份，每份不超过 2 页：
+`contracts/standards/` 下 14 份，每份不超过 2 页：
 
 | 文件 | 内容 |
 |---|---|
 | `VERSION.md` | R ↔ SemVer 映射、预发布、补丁、外部映射、冻结规则 |
-| `REQUIREMENTS.md` | REQ/CHG 字段、优先级、追踪矩阵、基线变更 |
-| `PHASE.md` | 五阶段目标、进入/退出、报告模板、用户门禁 |
-| `TASK-CARD.md` | 任务卡字段、类型、状态机、并行规则 |
-| `ACCEPTANCE.md` | 验收方法、结论枚举、证据绑定、独立性、返工 |
-| `DEVELOPMENT.md` | 分支/提交、代码风格、测试要求、禁止越界 |
-| `VERIFICATION.md` | 任务自验、manager 验收、阶段验证、回归子集 |
+| `PROJECT.md` | 项目计划、初始化清单、最终交付件能力、P1 确认 |
+| `ROADMAP.md` | 路标、版本计划表、阶段计划、关闭与刷新 |
+| `PHASE.md` | 五阶段目标、阶段计划/报告、过程交付件、用户门禁 |
+| `REQUIREMENTS.md` | REQ/CHG 字段、需求 DoR、优先级、追踪矩阵 |
+| `DESIGN.md` | 架构/设计/ADR/规格模板与质量 |
+| `TASK-CARD.md` | 任务字段、任务就绪标准、状态机、并行规则 |
+| `DEVELOPMENT.md` | 开发记录、worker 遵守、代码/测试、禁止越界 |
+| `VERIFICATION.md` | L1/L2/L3 分层验证、证据、追踪矩阵、回归 |
+| `ACCEPTANCE.md` | DoD、验收方法、结论枚举、独立性、返工 |
+| `DELIVERY.md` | 发布说明/手册、发布清单、最终能力核对 |
 | `BUGS.md` | 缺陷对象、生命周期、验证/修复联动、发布门禁 |
 | `KNOWLEDGE.md` | 术语/行为/约定/偏好/复盘、记录时机、注入与总结 |
-| `DELIVERY.md` | 发布说明/用户手册结构、发布清单、跨库引用 |
-| `DOCUMENTATION.md` | 文档类型、命名、front matter、单一真相源 |
+| `DOCUMENTATION.md` | 制品目录、模板、命名、front matter、单一真相源 |
 
 规范由工具提供默认版本，`mf init` 复制到项目；项目可修改，`project.yaml` 记录规范版本。
 
@@ -897,10 +998,10 @@ cp meta-flow/agents/meta-maintainer.md ~/.claude/agents/
 
 R0 交付物：
 
-1. 新仓骨架：`pyproject.toml`、`src/meta_flow/`、`tests/`、`agents/`、`templates/`、`standards/`。
+1. 新仓骨架：`pyproject.toml`、`src/meta_flow/`（含 `templates.py`）、`tests/`、`agents/`。
 2. `mf` CLI 骨架：`init/status/role/doctor`。
 3. 三个角色定义：`meta-maintainer.md`、`meta-manager.md`、`meta-worker.md`。
-4. 工作区两仓初始化 + 角色路由三层 + PROJECT-PLAN 模板与校验 + BUG/KNOWLEDGE 目录。
+4. 工作区两仓初始化 + 角色路由三层 + PROJECT-PLAN 模板与校验 + BUG/KNOWLEDGE 目录 + templates/dev-records/phases。
 5. 玩具项目 E2E：R1 → P1–P5 → 任务卡 → 验收 → release freeze；包含缺陷记录与知识沉淀。
 6. CLI 状态机与 schema 测试。
 
@@ -908,10 +1009,10 @@ R1 交付物：
 
 1. 完整五阶段、PROJECT-PLAN 规划（过程/过程交付件/最终交付件能力）与阶段报告。
 2. 并行 wave、租约、任务包、交接、证据固化。
-3. 11 份规范默认版。
+3. 14 份规范默认版。
 4. 真实项目试点。
 5. 安装/升级/worker 安装完整流程。
-6. 缺陷跟踪、知识沉淀与纠正记录闭环。
+6. 缺陷跟踪、知识沉淀、分层验证（L1/L2/L3）与追踪矩阵闭环。
 
 R2 交付物：
 
@@ -926,7 +1027,7 @@ R2 交付物：
 
 | 风险 | 缓解 |
 |---|---|
-| 新系统再次膨胀 | 命令预算 ≤40（核心约 30）；规范 ≤11 份；agent ≤250 行/个；不引入 CP/CR/ledger 全套 |
+| 新系统再次膨胀 | 命令预算 ≤40（核心约 30）；规范 ≤14 份；agent ≤250 行/个；不引入 CP/CR/ledger 全套 |
 | manager 验收瓶颈 | WIP 限制；`task graph` 显示 submitted 队列；设计/验证通过任务类型分派 |
 | worker 自证自洽 | 验收标准前置；证据绑定；manager 重跑；越界 diff 拒绝；独立 verify/review 任务 |
 | 状态并发冲突 | 每任务一文件；`current.json` 派生；lease；追加 ledger |

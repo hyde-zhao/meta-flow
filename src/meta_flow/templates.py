@@ -47,9 +47,10 @@ CONTRACTS_CLAUDE = """# 契约库（项目管理者）
 ## 职责
 
 - 与用户对接需求，维护 `REQ-*` / `CHG-*`。
+- 在 P1 生成 PROJECT-PLAN、版本计划、阶段计划、初始化清单与模板目录。
 - 维护路标、版本、阶段；组织 P1–P5。
-- 维护 11 份规范。
-- 编排设计、任务卡、wave、验收。
+- 维护 14 份规范。
+- 编排设计、任务卡、wave、验收；维护分层验证与追踪矩阵。
 - 维护系统架构、ADR、端到端规格与跨库契约。
 
 ## 边界
@@ -82,7 +83,8 @@ DELIVERIES_CLAUDE = """# 交付库（执行者）
 
 - 只领取任务卡，不主动扩展范围。
 - 在任务卡 `allowed_paths` 内执行。
-- 完成自验，写交接文件，用 `mf task submit` 提交。
+- 任务卡缺目标、输入、交付物、验收、路径、依赖时 BLOCKED，不猜。
+- 完成自验、开发记录与交接文件，用 `mf task submit` 提交。
 
 ## 边界
 
@@ -102,7 +104,8 @@ DELIVERIES_AGENTS = """# 交付库（执行者）
 
 - 只处理分配给自己的任务卡；只写 `allowed_paths`。
 - 不读契约库全文，只读 `mf task show --packet` 返回的任务包。
-- 完成后写交接文件并提交，等待 manager 验收。
+- 先确认任务就绪；缺关键字段时 BLOCKED。
+- 完成实现、测试、开发记录和交接后提交，等待 manager 验收。
 - 常用命令：`mf task show`、`mf task start`、`mf task submit`。
 """
 
@@ -134,6 +137,77 @@ STANDARDS = {
 
 `mf release freeze` 校验路标编号与版本 MAJOR 一致。
 """,
+    "PROJECT.md": """# PROJECT — 项目计划与初始化规范
+
+## 初始化必须产出
+
+- `PROJECT-PLAN.md`：目标、成功指标、最终交付件与能力、交付库、过程计划、能力地图、风险。
+- `INIT-CHECKLIST.md`：初始化逐项确认。
+- `ROADMAP.yaml` + `R{n}-PLAN.md`。
+- 需求基线、P1–P5 阶段计划。
+- 验证计划：L1/L2/L3 分层、证据、追踪矩阵。
+- `contracts/templates/` 模板目录。
+
+## 初始化检查
+
+1. 目标、范围、非目标、成功指标确认。
+2. 交付库与 `version_policy` 确认。
+3. 路标与版本计划确认。
+4. 需求满足 DoR。
+5. 阶段计划与退出条件确认。
+6. 验证分层与证据要求确认。
+7. 任务就绪与验收规则确认。
+8. 术语/偏好记录到 KNOWLEDGE。
+9. 用户确认；`mf doctor` 通过。
+
+## 变更
+
+项目计划变更走 `CHG-*`；P1 后变更需用户确认。
+""",
+    "ROADMAP.md": """# ROADMAP — 路标与版本计划规范
+
+## 路标
+
+`R{n}` 拥有主版本 `n`。字段：目标、范围、非目标、进入/退出条件、版本目标、REQ、风险。
+
+## 版本计划表
+
+`R{n}-PLAN.md` 包含：
+
+- 版本目标与成功指标
+- 里程碑
+- P1–P5：目标、时间、负责人、过程交付件、退出条件
+- 交付库/工作流依赖
+- 风险与假设
+
+## 阶段计划
+
+每阶段进入前生成 `PHASE-PLAN`：目标、入口条件、WBS、任务/wave、过程交付件、验证计划、时间、风险、退出条件。
+
+## 关闭与刷新
+
+P5 结束：`mf roadmap close` → 关闭报告 → 未完成项转 R2/backlog → R2 计划 → 用户确认。
+""",
+    "DESIGN.md": """# DESIGN — 设计与规格规范
+
+## 规格 SPEC
+
+模板 `contracts/templates/SPEC.md`。必含：背景、范围/非目标、需求（EARS/Given-When-Then）、接口、数据、验收场景、非功能、依赖、开放问题、追踪。
+
+每条规格必须关联 REQ；规格是 L2 设计验证的对象。
+
+## 设计 DESIGN
+
+模板 `contracts/templates/DESIGN.md`。必含：上下文、模块、接口、数据、流程、异常、非功能、方案对比、风险、ADR、测试策略、迁移/回滚。
+
+## ADR
+
+模板 `contracts/templates/ADR.md`。决策、背景、备选、后果、状态。
+
+## 质量
+
+可实施、可测试、无未决冲突；高风险设计必须独立 `review` 任务。
+""",
     "REQUIREMENTS.md": """# REQUIREMENTS — 需求与变更规范
 
 ## REQ
@@ -149,12 +223,20 @@ roadmap: R1
 acceptance: [...]
 ```
 
+## 需求质量（DoR）
+
+- 单一、明确、可验收；有来源、优先级、范围、非目标、依赖。
+- 验收标准可执行/可观察；禁止“优化”“更好”等不可判定词。
+- 每条需求关联路标、规格、任务、验证。
+- 不满足 DoR 不得进入 P1 基线。
+- 模板：`contracts/templates/REQUIREMENT.md`。
+
 ## 追踪
 
 `mf req trace REQ-0001` 输出：
 
 ```text
-REQ-0001 → R1 → P1/P3 → SPEC-xxx → TASK-xxx → 验收记录 → 发布版本
+REQ-0001 → R1 → SPEC/DESIGN → TASK → DEV-RECORD → VR-L1/L2/L3 → BUG → RELEASE
 ```
 
 ## 变更
@@ -179,6 +261,10 @@ REQ-0001 → R1 → P1/P3 → SPEC-xxx → TASK-xxx → 验收记录 → 发布�
 
 P1 必须生成 `project/PROJECT-PLAN.md`：项目目标、最终交付件与能力、交付库、P1–P5 过程交付件、能力地图。P1 退出前用户确认；P5 逐项核对最终交付件能力。
 
+## 阶段计划
+
+每阶段进入前生成 `contracts/roadmap/phases/R{n}-P{n}-PLAN.md`：目标、入口、WBS、任务/wave、过程交付件、验证计划、时间、风险、退出条件。
+
 ## 用户门禁
 
 - 必须：路标规划、P1 退出、P4 退出、P5 退出。
@@ -187,7 +273,7 @@ P1 必须生成 `project/PROJECT-PLAN.md`：项目目标、最终交付件与能
 
 ## 阶段报告
 
-`mf phase review` 生成 `PHASE-REPORT`：目标核对、需求覆盖、证据、风险、下阶段调整建议、路标影响、用户确认记录。
+退出时生成 `contracts/roadmap/phases/R{n}-P{n}-REPORT.md`：目标核对、L1/L2/L3 验证结果、缺陷、知识、下一阶段调整建议、路标影响、用户确认记录。
 
 ## 路标刷新
 
@@ -207,6 +293,21 @@ P5 结束后：`mf roadmap close R{n}` → `mf roadmap plan R{n+1}`。
 - `deliverables`：交付物清单。
 - `acceptance`：验收项（见 ACCEPTANCE）。
 - `handoff`：是否要求交接文件。
+
+## 任务就绪标准（DoR）
+
+1. 单一、明确的结果。
+2. 输入已列出且存在。
+3. 交付物路径/格式明确。
+4. 验收项可执行/可判定。
+5. `allowed_paths` / `forbidden` 明确。
+6. 依赖已 accepted 或不存在。
+7. 交付库有效，wave 内无写冲突。
+8. 规模一次 worker 会话可完成；过大拆分。
+9. `risk` / `authorization` 已设置。
+10. 无未决澄清问题。
+
+不满足不得 `ready`；worker 可 `BLOCKED` 并指出缺项。模板：`contracts/templates/TASK.yaml`。
 
 ## 状态机
 
@@ -251,6 +352,11 @@ rejected → in_progress（返工）
 ## 独立性
 
 高风险任务必须有 `verify` 或 `review` 任务，由另一个 worker 执行。
+
+## Definition of Done
+
+- 任务 DoD：实现 + 测试 + 开发记录 + 交接 + L1 证据；fix 任务含根因/修复/回归；文档任务含内容标准。
+- 阶段 DoD：过程交付件齐全 + L1/L2（P3）/ L3（P4）+ 缺陷门禁 + 用户确认。
 """,
     "DEVELOPMENT.md": """# DEVELOPMENT — 开发规范
 
@@ -267,6 +373,19 @@ rejected → in_progress（返工）
 - 代码风格遵循交付库自身配置；没有配置时使用语言默认规范。
 - 不提交凭据、构建缓存、本机路径。
 
+## 开发记录
+
+每个任务写 `.metaflow/dev-records/<task>.md`：目标、设计引用、实现摘要、关键决策、变更文件、测试、偏差、限制、证据、handoff 引用。
+
+`mf task submit` 固化到 `contracts/dev-records/`；manager 作为 L1 证据审核。
+
+## worker 遵守
+
+- 读任务包、PROJECT-PLAN、相关 SPEC/DESIGN、TASK-CARD/DEVELOPMENT/VERIFICATION/ACCEPTANCE、KNOWLEDGE。
+- 只写 `allowed_paths`；不写契约库；不跨交付库。
+- 先确认任务就绪；不清晰则 `BLOCKED`。
+- 完成实现 + 测试 + 开发记录 + 交接再提交。
+
 ## 交接
 
 完成后写 `.metaflow/handoffs/<task-id>.md`：
@@ -274,18 +393,36 @@ rejected → in_progress（返工）
 1. 完成摘要
 2. 变更文件
 3. 验证结果（逐项对应 acceptance）
-4. 未决问题
-5. 下一步建议
-6. 证据索引
+4. 缺陷
+5. 纠正与经验
+6. 未决问题
+7. 下一步建议
+8. 证据索引
+9. fix 任务补充：根因、修复、回归证据
 """,
     "VERIFICATION.md": """# VERIFICATION — 验证规范
 
-## 层级
+## 分层验证
 
-1. **任务自验**：worker 运行任务卡自动项，提交证据。
-2. **manager 验收**：独立重跑自动项、抽查证据、判定结论。
-3. **阶段验证**：P4 端到端回归 + 用户试用。
-4. **发布验证**：P5 发布清单、版本冻结、证据归档。
+| 层 | 验证对象 | 要回答的问题 | 主要证据 | 门禁 |
+|---|---|---|---|---|
+| L1 实现 | worker 实现 | 代码是否正确、健壮、符合开发规范？ | 单测、集成、lint、build、开发记录 | task accept |
+| L2 设计 | 设计规格 | 实现是否符合 SPEC/DESIGN/接口/数据契约？ | 契约测试、schema、接口测试、设计评审 | P3 退出 |
+| L3 需求 | 原始需求 | 用户要的能力是否真的可用？ | 验收场景、E2E、UAT、演示 | P4/P5 退出 |
+
+三层都要，不能互相替代；L1 通过不代表 L2/L3 通过。
+
+## 验证记录
+
+`VR-*` 字段：layer、scope、requirement_refs、design_refs、task_refs、method、result、evidence、bugs、verifier、date。
+
+`mf verify record --layer implementation|design|requirement`。
+
+## 追踪矩阵
+
+`REQ → SPEC/DESIGN → TASK → DEV-RECORD → VR(L1/L2/L3) → BUG → RELEASE`。
+
+`mf req trace` 显示三层验证状态；`mf doctor` 检查孤儿 REQ、未关联任务、缺失验证层。
 
 ## 证据
 
@@ -417,6 +554,27 @@ manager 在 P1 的 PROJECT-PLAN 中登记每个最终交付件的能力、对应
 | 架构决策 | `ADR-0001` |
 | 任务 | `R1-P3-T001` |
 | 验证 | `VR-0001` |
+
+## 制品与模板
+
+| 制品 | 路径 | 模板 | 所有者 | 时机 |
+|---|---|---|---|---|
+| 项目计划 | `project/PROJECT-PLAN.md` | `PROJECT-PLAN.md` | manager | init/P1 |
+| 初始化清单 | `project/INIT-CHECKLIST.md` | `INIT-CHECKLIST.md` | manager | init |
+| 版本计划 | `roadmap/R{n}-PLAN.md` | `ROADMAP-PLAN.md` | manager | P1 |
+| 阶段计划 | `roadmap/phases/R{n}-P{n}-PLAN.md` | `PHASE-PLAN.md` | manager | 阶段进入 |
+| 阶段报告 | `roadmap/phases/R{n}-P{n}-REPORT.md` | `PHASE-REPORT.md` | manager | 阶段退出 |
+| 需求 | `requirements/REQUIREMENTS.yaml` | `REQUIREMENT.md` | manager | P1 |
+| 规格 | `specs/SPEC-*.md` | `SPEC.md` | manager/design | P2 |
+| 设计 | `architecture/DESIGN-*.md` | `DESIGN.md` | manager/design | P2 |
+| 架构决策 | `architecture/ADR-*.md` | `ADR.md` | manager/design | P2 |
+| 任务 | `tasks/.../T*.yaml` | `TASK.yaml` | manager | P3 |
+| 开发记录 | `dev-records/T*.md` | `DEV-RECORD.md` | worker | P3 |
+| 验证记录 | `verification/VR-*.yaml` | `VERIFICATION-RECORD.yaml` | manager/verifier | P3/P4 |
+| 交接 | `handoffs/T*.md` | `HANDOFF.md` | worker | P3 |
+| 缺陷 | `bugs/BUG-*.yaml` | `BUG.yaml` | manager | P3/P4 |
+| 变更 | `requirements/changes/CHG-*.md` | `CHG.md` | manager | 任意 |
+| 评审 | `reviews/REVIEW-*.md` | `REVIEW.md` | reviewer | 任意 |
 
 ## Front matter
 
@@ -555,3 +713,303 @@ USER_MANUAL = """# 用户手册
 
 ## 故障排查
 """
+
+ARTIFACT_TEMPLATES = {
+    "PROJECT-PLAN.md": PROJECT_PLAN,
+    "BUG.yaml": BUG_TEMPLATE,
+    "INIT-CHECKLIST.md": """# 项目初始化检查清单
+
+> 由 manager 在 init/P1 填写；全部确认后才能进入 P1 退出。
+
+- [ ] 项目目标、范围、非目标、成功指标已确认
+- [ ] PROJECT-PLAN 已填写
+- [ ] 交付库与 version_policy 已确认
+- [ ] ROADMAP R1 与 R1-PLAN 已确认
+- [ ] 需求基线满足 DoR
+- [ ] P1–P5 阶段计划已生成
+- [ ] 验证计划（L1/L2/L3）与追踪矩阵已生成
+- [ ] contracts/templates/ 已就位
+- [ ] 任务就绪标准与验收规则已确认
+- [ ] 初始术语/偏好已记录到 KNOWLEDGE
+- [ ] 用户确认；mf doctor 通过
+""",
+    "ROADMAP-PLAN.md": """# R{n} 版本计划
+
+## 版本目标与成功指标
+
+## 里程碑
+
+| 里程碑 | 目标 | 时间 | 交付件 |
+|---|---|---|---|
+| | | | |
+
+## 阶段计划
+
+| 阶段 | 目标 | 时间 | 负责人 | 过程交付件 | 退出条件 |
+|---|---|---|---|---|---|
+| P1 计划 | | | | | |
+| P2 设计 | | | | | |
+| P3 实施 | | | | | |
+| P4 试运行 | | | | | |
+| P5 发布 | | | | | |
+
+## 交付库与依赖
+
+## 风险与假设
+""",
+    "PHASE-PLAN.md": """# R{n}-P{n} 阶段计划
+
+## 阶段目标
+
+## 入口条件
+
+## 工作分解（WBS）
+
+| 工作项 | 交付库 | 负责人 | 依赖 | 交付件 |
+|---|---|---|---|---|
+| | | | | |
+
+## 任务与 wave
+
+## 验证计划（L1/L2/L3）
+
+## 时间与里程碑
+
+## 风险
+
+## 退出条件
+""",
+    "PHASE-REPORT.md": """# R{n}-P{n} 阶段报告
+
+## 阶段目标核对
+
+## 需求覆盖
+
+## L1/L2/L3 验证结果
+
+## 过程交付件与证据
+
+## 缺陷与未决问题
+
+## 用户纠正与知识沉淀
+
+## 下一阶段调整建议
+
+## 路标影响
+
+## 用户确认
+""",
+    "REQUIREMENT.md": """# REQ-0001 <标题>
+
+> source: user
+> priority: must
+> status: proposed
+> roadmap: R1
+
+## 背景与用户需求
+
+## 范围与非目标
+
+## 验收标准
+
+## 依赖与假设
+
+## 追踪
+
+- SPEC:
+- TASK:
+- VR:
+""",
+    "SPEC.md": """# SPEC-<域>-001 <标题>
+
+> status: draft
+> owner: manager
+> related_reqs: [REQ-0001]
+
+## 背景与范围
+
+## 非目标
+
+## 需求（可测试）
+
+## 接口与数据契约
+
+## 验收场景
+
+## 非功能要求
+
+## 依赖与开放问题
+
+## 追踪
+""",
+    "DESIGN.md": """# DESIGN-<域>-001 <标题>
+
+> status: draft
+> owner: manager
+> related_specs: [SPEC-001]
+
+## 上下文与目标
+
+## 模块划分
+
+## 接口与数据
+
+## 关键流程
+
+## 异常与边界
+
+## 非功能设计
+
+## 方案对比与决策
+
+## 风险
+
+## 测试策略
+
+## 迁移与回滚
+
+## ADR 链接
+""",
+    "ADR.md": """# ADR-0001 <标题>
+
+> status: proposed
+> date:
+
+## 背景
+
+## 决策
+
+## 备选方案
+
+## 后果
+
+## 关联
+""",
+    "TASK.yaml": """id: R1-P3-T001
+title: ...
+kind: implement            # implement|design|verify|document|review|fix
+delivery: app
+wave: W1
+depends_on: []
+status: draft             # draft|ready|in_progress|submitted|accepted|rejected|cancelled
+inputs:
+  requirements: [REQ-0001]
+  specs: [SPEC-001]
+  design: [DESIGN-001]
+  standards: [TASK-CARD, DEVELOPMENT, VERIFICATION, ACCEPTANCE]
+allowed_paths:
+  - src/**
+  - tests/**
+forbidden:
+  - contracts/**
+risk: medium
+authorization:
+  network: false
+  production_write: false
+  credentials: false
+deliverables:
+  - path: src/...
+  - path: tests/...
+acceptance:
+  - id: A1
+    method: automated
+    command: ...
+    expect: exit_code=0
+handoff: required
+dev_record: required
+""",
+    "DEV-RECORD.md": """# DEV-RECORD <task-id>
+
+## 目标
+
+## 设计引用
+
+## 实现摘要
+
+## 关键决策
+
+## 变更文件
+
+## 测试
+
+## 偏差与限制
+
+## 证据
+
+## 交接引用
+""",
+    "VERIFICATION-RECORD.yaml": """id: VR-0001
+layer: implementation      # implementation|design|requirement
+scope: ...
+requirement_refs: [REQ-0001]
+design_refs: [SPEC-001, DESIGN-001]
+task_refs: [R1-P3-T001]
+method: automated          # automated|artifact|demonstration|metric
+result: PASS               # PASS|PASS_WITH_RISK|FAIL|BLOCKED
+evidence: []
+bugs: []
+verifier: ...
+date: ...
+notes: ...
+""",
+    "HANDOFF.md": """# HANDOFF <task-id>
+
+## 完成摘要
+
+## 变更文件
+
+## 验证结果（逐项对应 acceptance）
+
+## 缺陷
+
+## 纠正与经验
+
+## 未决问题
+
+## 下一步建议
+
+## 证据索引
+
+## fix 任务补充
+
+### 根因
+
+### 修复
+
+### 回归证据
+""",
+    "CHG.md": """# CHG-0001 <标题>
+
+> status: proposed
+> approved_by:
+> date:
+
+## 原因
+
+## 影响范围
+
+## 受影响 REQ/SPEC/TASK
+
+## 决策
+
+## 实施与验证
+""",
+    "REVIEW.md": """# REVIEW-<task-id>
+
+> reviewer:
+> date:
+> scope:
+
+## 评审对象
+
+## 发现
+
+| ID | 严重级别 | 位置 | 问题 | 建议 |
+|---|---|---|---|---|
+| | | | | |
+
+## 结论
+
+## 证据
+""",
+}

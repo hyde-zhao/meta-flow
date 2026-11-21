@@ -137,15 +137,19 @@ def init_workspace(
     for directory in (
         contracts / "project",
         contracts / "roadmap",
+        contracts / "roadmap" / "phases",
         contracts / "requirements" / "changes",
         contracts / "standards",
+        contracts / "templates",
         contracts / "bugs",
         contracts / "knowledge",
         contracts / "architecture" / "drafts",
         contracts / "specs",
         contracts / "tasks",
+        contracts / "dev-records",
         contracts / "verification",
         contracts / "handoffs",
+        contracts / "reviews",
         contracts / "state",
         contracts / "archive",
         contracts / ".metaflow",
@@ -224,6 +228,31 @@ def init_workspace(
         {"schema": 1, "requirements": []},
     )
     _write(contracts / "project" / "PROJECT-PLAN.md", templates.PROJECT_PLAN)
+    _write(
+        contracts / "project" / "INIT-CHECKLIST.md",
+        templates.ARTIFACT_TEMPLATES["INIT-CHECKLIST.md"],
+    )
+    for template_name, content in templates.ARTIFACT_TEMPLATES.items():
+        _write(contracts / "templates" / template_name, content)
+    _write(
+        contracts / "templates" / "README.md",
+        "# 项目模板\n\n"
+        "本目录由 manager 在初始化时放入，worker 只读。\n"
+        "新增或修改模板属于契约库变更，需 manager 审核。\n",
+    )
+    for relative in (
+        "contracts/dev-records/.gitkeep",
+        "contracts/reviews/.gitkeep",
+        "contracts/roadmap/phases/.gitkeep",
+        "contracts/tasks/.gitkeep",
+        "contracts/verification/.gitkeep",
+        "contracts/handoffs/.gitkeep",
+        "contracts/specs/.gitkeep",
+        "contracts/archive/.gitkeep",
+        "contracts/requirements/changes/.gitkeep",
+        "contracts/architecture/drafts/.gitkeep",
+    ):
+        _write(root / relative, "")
     _write(contracts / "state" / "ledger.ndjson", "")
 
     for standard_name, content in templates.STANDARDS.items():
@@ -499,6 +528,20 @@ def doctor(root: Path) -> list[str]:
     ):
         if not (root / relative).is_file():
             errors.append(f"缺少缺陷/知识文件: {relative}")
+
+    for relative in (
+        "contracts/project/INIT-CHECKLIST.md",
+        "contracts/templates/README.md",
+        "contracts/dev-records",
+        "contracts/reviews",
+        "contracts/roadmap/phases",
+    ):
+        if not (root / relative).exists():
+            errors.append(f"缺少项目制品: {relative}")
+
+    for template_name in templates.ARTIFACT_TEMPLATES:
+        if not (contracts / "templates" / template_name).is_file():
+            errors.append(f"缺少模板: contracts/templates/{template_name}")
 
     deliveries = project.get("deliveries")
     if not isinstance(deliveries, list) or not deliveries:

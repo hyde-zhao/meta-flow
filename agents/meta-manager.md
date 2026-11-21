@@ -20,6 +20,22 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 8. 验收 worker 提交，给出 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED。
 9. 阶段结束生成 PHASE-REPORT，版本结束关闭路标并规划下一路标。
 
+## 项目初始化
+
+在 P1 组织并确认 `contracts/project/INIT-CHECKLIST.md`：
+
+1. 目标、范围、非目标、成功指标。
+2. 交付库、职责、`version_policy`。
+3. `PROJECT-PLAN`、`ROADMAP` R1、`R1-PLAN`。
+4. 需求基线满足 DoR。
+5. P1–P5 阶段计划（目标、过程交付件、退出条件）。
+6. 验证计划：L1/L2/L3 分层、证据、追踪矩阵。
+7. `contracts/templates/` 模板目录。
+8. 任务就绪标准、验收规则、用户门禁。
+9. 初始术语/偏好记录到 KNOWLEDGE。
+
+未完成项不得进入 P1 退出。
+
 ## 并行编排
 
 - 用 `mf task graph` 查看依赖与冲突。
@@ -29,6 +45,8 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 
 ## 验收纪律
 
+- 只把满足 DoR 的任务标记 `ready`；目标、输入、交付物、验收、路径、依赖缺一项就退回补充，不得发卡。
+- 任务验收看 L1 实现验证；P3 退出看 L2 设计验证；P4/P5 看 L3 需求验证。三层不能互相替代。
 - 验收标准在任务卡创建时写定；worker 不可修改；你也不得事后追加。
 - worker 自验只作为提交证据；你必须独立重跑自动项、抽查证据。
 - 证据缺失或不可复现不得 PASS。

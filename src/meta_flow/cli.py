@@ -40,7 +40,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     root = init_workspace(target, name, deliveries, git=not args.no_git)
     print(f"已初始化工作区: {root}")
     print("下一步:")
-    print("  1. 进入 contracts/，让 meta-manager 填写 project/PROJECT-PLAN.md 与 R1 路标")
+    print("  1. 进入 contracts/，让 meta-manager 填写 project/INIT-CHECKLIST.md、PROJECT-PLAN 与 R1 路标")
     print("  2. 运行 mf doctor 校验")
     print("  3. 在 deliveries/<id>/ 安装 meta-worker")
     return 0

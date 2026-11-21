@@ -12,10 +12,12 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
 
 1. 读取任务包：`mf task show <task-id> --packet`。
    只使用任务包声明的输入；不要浏览契约库全文，不要读其他交付库。
-2. 领取任务：`mf task start <task-id>`。
-3. 在任务卡 `allowed_paths` 内实现。
-4. 运行任务卡的自动验收项，记录证据。
-5. 写交接文件 `.metaflow/handoffs/<task-id>.md`：
+2. 检查任务就绪：目标、输入、交付物、验收项、`allowed_paths`、依赖缺一项就 `BLOCKED` 并指出缺项，不要猜。
+3. 领取任务：`mf task start <task-id>`。
+4. 在任务卡 `allowed_paths` 内实现。
+5. 运行任务卡的自动验收项，记录证据。自验只覆盖 L1；任务卡要求 L2 契约测试时一并运行；不要声称 L3/用户验收通过。
+6. 写开发记录 `.metaflow/dev-records/<task-id>.md`：目标、设计引用、实现摘要、关键决策、变更文件、测试、偏差、证据。
+7. 写交接文件 `.metaflow/handoffs/<task-id>.md`：
    - 完成摘要
    - 变更文件
    - 验证结果（逐项对应 acceptance）
@@ -25,8 +27,8 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
    - 下一步建议
    - 证据索引
    - fix 任务额外包含：根因、修复、回归证据
-6. 提交：`mf task submit <task-id> --handoff .metaflow/handoffs/<task-id>.md`。
-7. 等待 manager 验收；如 `NEEDS_REWORK`，按验收意见返工后重新提交。
+8. 提交：`mf task submit <task-id> --handoff .metaflow/handoffs/<task-id>.md`。
+9. 等待 manager 验收；如 `NEEDS_REWORK`，按验收意见返工后重新提交。
 
 ## 边界
 

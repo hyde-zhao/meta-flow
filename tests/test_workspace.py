@@ -7,6 +7,7 @@ import shutil
 import pytest
 import yaml
 
+from meta_flow import templates
 from meta_flow.workspace import (
     build_status,
     detect_role,
@@ -42,12 +43,21 @@ def test_init_creates_layout(workspace):
     assert (workspace / "CLAUDE.md").is_file()
     assert (workspace / "contracts" / "project.yaml").is_file()
     assert (workspace / "contracts" / "project" / "PROJECT-PLAN.md").is_file()
+    assert (workspace / "contracts" / "project" / "INIT-CHECKLIST.md").is_file()
+    assert (workspace / "contracts" / "templates" / "SPEC.md").is_file()
+    assert (workspace / "contracts" / "templates" / "TASK.yaml").is_file()
+    assert (workspace / "contracts" / "dev-records").is_dir()
+    assert (workspace / "contracts" / "roadmap" / "phases").is_dir()
     assert (workspace / "contracts" / "roadmap" / "ROADMAP.yaml").is_file()
     assert (workspace / "contracts" / "requirements" / "REQUIREMENTS.yaml").is_file()
     assert (workspace / "contracts" / "state" / "ledger.ndjson").is_file()
     assert (workspace / "contracts" / "standards" / "ACCEPTANCE.md").is_file()
     assert (workspace / "contracts" / "standards" / "BUGS.md").is_file()
     assert (workspace / "contracts" / "standards" / "KNOWLEDGE.md").is_file()
+    assert (workspace / "contracts" / "standards" / "PROJECT.md").is_file()
+    assert (workspace / "contracts" / "standards" / "ROADMAP.md").is_file()
+    assert (workspace / "contracts" / "standards" / "DESIGN.md").is_file()
+    assert len(templates.STANDARDS) == 14
     assert (workspace / "contracts" / "bugs" / "_TEMPLATE.yaml").is_file()
     assert (workspace / "contracts" / "knowledge" / "KNOWLEDGE.yaml").is_file()
     assert (workspace / "deliveries" / "frontend" / "delivery.yaml").is_file()
@@ -105,6 +115,12 @@ def test_doctor_knowledge_missing(workspace):
     (workspace / "contracts" / "knowledge" / "KNOWLEDGE.yaml").unlink()
     errors = doctor(workspace)
     assert any("KNOWLEDGE.yaml" in error for error in errors)
+
+
+def test_doctor_template_missing(workspace):
+    (workspace / "contracts" / "templates" / "SPEC.md").unlink()
+    errors = doctor(workspace)
+    assert any("缺少模板" in error for error in errors)
 
 
 def test_doctor_version_policy_exact(workspace):
