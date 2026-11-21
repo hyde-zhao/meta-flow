@@ -121,6 +121,16 @@ v1 不再是一个“工作流产物工厂”，而是一个 **AI 项目操作�
 6. 与现有架构/ADR 一致性。
 7. 迁移/回滚（如适用）。
 
+### 2.5 平台支持节奏
+
+| 平台 | R1 | R2 |
+|---|---|---|
+| Claude Code | ✓ | ✓ |
+| DeepSeek Harness (DSH) | - | ✓ |
+| Codex | - | ✓ |
+
+R1 只实现 Claude Code 适配；R2 增加 DSH 与 Codex。角色定义、任务卡、契约、CLI 保持平台无关；平台差异只放在安装器/路径适配层，避免把 Claude 特有行为写进核心。R1 的 `agents/*.md` 保持 Claude 可安装格式；R2 拆出 canonical 角色正文与平台 frontmatter。
+
 ---
 
 ## 3. 工作区与仓库
@@ -245,7 +255,7 @@ mf task prompt 生成下一任务提示词
 | 工具 | SemVer | `meta-flow` 自身：`v1.0.0`、`v1.1.0`、`v2.0.0` |
 | 路标 | `R{n}` | 规划单位：`R0`、`R1`、`R2`；可选年份前缀 `2026.R1` |
 | 项目交付 | SemVer | 项目版本 = 路标版本：`R1 → 1.x.y` |
-| 交付库 | SemVer | 每个 `delivery.yaml` 独立记录；R0/R1 与项目版本对齐，R2 允许独立 |
+| 交付库 | SemVer | 每个 `delivery.yaml` 独立记录；R1 默认同 MAJOR、MINOR/PATCH 独立（待确认）；R2 允许完全独立 + 兼容范围 |
 | 阶段预发布 | SemVer prerelease | `1.0.0-alpha.N`（P3）、`-beta.N`（P4）、`-rc.N`（P5） |
 | 任务 | 复合 ID | `R1-P3-T013` |
 | 需求 | 稳定 ID + 路标字段 | `REQ-0001`，`roadmap: R1` |
@@ -642,15 +652,29 @@ manager 验收通过后，用 `mf task ready` 找解锁任务，再用 `mf task 
 
 ## 9. 安装与升级
 
-### 9.1 全局安装
+### 9.1 安装方式
+
+用户从 GitHub 安装，不发布 PyPI：
 
 ```bash
-# 从 GitHub Release 安装（示例）
+# 用户：从 GitHub tag 安装；R0 尚无正式 tag，可先用 @main
 uv tool install git+https://github.com/hyde-zhao/meta-flow@v1.0.0
 mf --version
 ```
 
-v1 使用简化发布：GitHub Release + wheel/sdist + SHA256 校验；不移植 v0 的 provider receipt / qualification 全套机器。
+- 用户不需要 clone 源码；`uv tool install` 负责拉取、构建、安装 CLI。
+- 维护者从源码安装：
+
+```bash
+git clone https://github.com/hyde-zhao/meta-flow
+cd meta-flow
+uv sync
+uv run mf --version
+```
+
+- R0/R1 不发布 PyPI；R2 如确有需要再评估。
+- 正式版本使用 Git tag + GitHub Release；SHA256 校验在发布说明中提供。
+- 不移植 v0 的 provider receipt / qualification 全套机器。
 
 ### 9.2 默认安装 maintainer
 
@@ -725,7 +749,7 @@ cp meta-flow/agents/meta-maintainer.md ~/.claude/agents/
 | 路标 | 目标 | 进入条件 | 退出条件 | 非目标 |
 |---|---|---|---|---|
 | **R0 骨架**（0.x） | 可跑通的最小闭环 | 新仓建立 | 玩具项目完成 P1–P5；`mf doctor` 通过 | 多平台、迁移、并发 |
-| **R1 MVP**（1.x） | 真实项目可用 | R0 退出 | 1 个真实项目完成一个版本；10+ 任务卡验收；用户确认 | 多交付库并发、审计增强 |
+| **R1 MVP**（1.x） | 真实项目可用 | R0 退出 | 1 个真实项目完成一个版本；10+ 任务卡验收；用户确认 | 多交付库并发、审计增强、DSH/Codex 平台 |
 | **R2 规模化**（2.x） | 多模块/多交付库/多 worker | R1 退出 | 2 个项目、3 个模块、2 个交付库、3 个并发 worker | Web UI、SaaS、多租户 |
 
 R0 交付物：
@@ -750,7 +774,7 @@ R2 交付物：
 1. 多交付库独立版本与发布节奏。
 2. 多 worker 并发与冲突检测增强。
 3. 可选 `meta-designer`、可选 `audit` profile。
-4. Codex 平台对等验证。
+4. DSH（DeepSeek Harness）与 Codex 平台适配与对等验证。
 
 ---
 
@@ -763,7 +787,7 @@ R2 交付物：
 | worker 自证自洽 | 验收标准前置；证据绑定；manager 重跑；越界 diff 拒绝；独立 verify/review 任务 |
 | 状态并发冲突 | 每任务一文件；`current.json` 派生；lease；追加 ledger |
 | 两仓同步复杂 | `mf doctor` 校验；`delivery.yaml` 声明版本与契约；R0/R1 单 deliveries 仓 |
-| 平台差异 | 先 Claude Code，再 Codex；未测试不宣称对等 |
+| 平台差异 | R1 只 Claude Code；R2 再支持 DSH/Codex；未测试不宣称对等 |
 | 设计工作量压垮 manager | `kind: design` 任务分派；R2 可选 `meta-designer` |
 | 强审计行业要求 | 核心保持轻量；R2 可选 `audit` profile |
 
@@ -771,12 +795,12 @@ R2 交付物：
 
 ## 13. 待决事项
 
-1. GitHub 仓库创建/改名时机：旧仓 `meta-flow-v0` 归档，新仓 `meta-flow` 或 `meta-flow-v1`。
-2. 旧仓归档 tag 名称：建议 `archive/v1-final`；创建/推送需单独授权。
-3. R1 交付库版本：与项目版本对齐，还是允许独立版本。
-4. Codex 平台支持进入 R1 还是 R2。
-5. 是否发布到 PyPI，以及包名 `meta-flow` 的占用情况。
-6. 是否保留 `mf verify record`，或并入 `mf phase review`。
+已解决：仓库命名/归档、平台支持节奏（R1 Claude；R2 DSH + Codex）、分发方式（Git 安装，不发布 PyPI）、License（MIT）。
+
+剩余：
+
+1. R1 交付库版本：采用“同 MAJOR、MINOR/PATCH 独立”（推荐），还是所有交付库版本完全一致。
+2. 是否保留 `mf verify record`：保留（推荐）或并入 `mf phase review` / `mf task submit`。
 
 ---
 
@@ -791,3 +815,7 @@ R2 交付物：
 | 2026-11-21 | 目录级角色 + hook + CLI 强制 | 平台无原生按目录切 agent；三层等价实现 |
 | 2026-11-21 | 设计作为任务类型，不新增角色 | 保持三角色；设计是工作类型，不是权限边界 |
 | 2026-11-21 | 并行 wave + 任务包 + 交接固化 | worker 独立上下文；manager 不读交付源码 |
+| 2026-11-21 | 最终命名：新仓 `meta-flow`；旧仓 `meta-flow-v0` 归档 | 产品名与仓库一致；旧链接保留归档说明 |
+| 2026-11-21 | R1 只支持 Claude Code；R2 支持 DSH + Codex | 先跑通核心，平台适配后置 |
+| 2026-11-21 | 不发布 PyPI；用户 Git 安装，维护者源码安装 | 降低分发复杂度；用户无需 clone |
+| 2026-11-21 | MIT License | 开源、宽松、简单 |

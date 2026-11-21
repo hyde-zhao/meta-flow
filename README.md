@@ -15,7 +15,34 @@
 
 完整设计见 [DESIGN.md](DESIGN.md)。
 
-## 快速开始
+## 安装
+
+用户从 GitHub 安装，不发布 PyPI：
+
+```bash
+# R0 开发期先用 main；正式版本发布后改用 tag
+uv tool install git+https://github.com/hyde-zhao/meta-flow@main
+mf --version
+```
+
+用户不需要 clone 源码。维护者从源码安装：
+
+```bash
+git clone https://github.com/hyde-zhao/meta-flow
+cd meta-flow
+uv sync
+uv run mf --version
+```
+
+## 平台支持
+
+| 平台 | R1 | R2 |
+|---|---|---|
+| Claude Code | ✓ | ✓ |
+| DeepSeek Harness (DSH) | - | ✓ |
+| Codex | - | ✓ |
+
+## 本地开发快速开始
 
 ```bash
 uv sync
@@ -60,3 +87,7 @@ uv sync
 uv run pytest
 uv run ruff check src tests
 ```
+
+## License
+
+MIT。见 [LICENSE](LICENSE)。
