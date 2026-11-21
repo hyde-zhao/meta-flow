@@ -48,7 +48,7 @@ CONTRACTS_CLAUDE = """# 契约库（项目管理者）
 
 - 与用户对接需求，维护 `REQ-*` / `CHG-*`。
 - 维护路标、版本、阶段；组织 P1–P5。
-- 维护 9 份规范。
+- 维护 11 份规范。
 - 编排设计、任务卡、wave、验收。
 - 维护系统架构、ADR、端到端规格与跨库契约。
 
@@ -304,6 +304,67 @@ rejected → in_progress（返工）
 
 修复后只回归受影响层与任务卡声明的验收项，不重跑无关任务。
 """,
+    "BUGS.md": """# BUGS — 缺陷跟踪规范
+
+## 记录范围
+
+所有验证、试运行、用户反馈中发现的交付行为缺陷，必须记录为 `BUG-*`，存放 `contracts/bugs/`。
+
+## 字段
+
+- id、title、severity、status
+- found_in：phase / task / verification
+- delivery、related_reqs
+- environment、steps、expected、actual、evidence
+- fix_task、root_cause、changed_files、regression、resolution
+
+## 生命周期
+
+`open → triaged → in_progress → fixed → verifying → closed`；`closed → reopened`；`open/triaged → deferred/wontfix`（需理由和用户接受）。
+
+## 联动
+
+- `mf verify record --result FAIL` 必须关联 BUG。
+- 修复用 `kind: fix` 任务，`fixes: [BUG-*]`。
+- 交接必须含“根因 / 修复 / 回归证据”。
+- P4/P5 门禁：open blocker/critical 阻止退出/发布。
+- worker 在交接 `## 缺陷` 上报，manager 用 `mf bug add` 记录。
+
+## 严重级别
+
+blocker：无法继续；critical：核心功能不可用；major：主要功能受损；minor：轻微；trivial：文案/体验。
+""",
+    "KNOWLEDGE.md": """# KNOWLEDGE — 知识沉淀与纠正记录
+
+## 记录什么
+
+- `term`：术语纠正（错误用法 → 正确用法）
+- `behavior`：行为纠正（触发 → 正确行为）
+- `convention`：项目约定
+- `preference`：沟通/格式/决策偏好
+- `lesson`：阶段/版本复盘
+
+## 存放
+
+`contracts/knowledge/KNOWLEDGE.yaml`（真相）、`KNOWLEDGE.md`（渲染）、`LESSONS-R{n}.md`（版本复盘）。
+
+## 谁记录
+
+- manager 记录用户纠正。
+- worker 在交接 `## 纠正与经验` 上报，manager 审核后合并。
+- 条目必须有 source、日期、上下文。
+
+## 注入
+
+- manager 会话启动读取 KNOWLEDGE.md 摘要。
+- `mf task show --packet` 注入相关术语/约定。
+- SessionStart hook 打印最近纠正与开放 bug；hook 只注入，不做语义捕获。
+
+## 总结
+
+- `mf phase review` 增加“用户纠正与知识沉淀”章节。
+- `mf roadmap close` 生成 `LESSONS-R{n}.md`。
+""",
     "DELIVERY.md": """# DELIVERY — 交付规范
 
 ## 交付库
@@ -368,6 +429,57 @@ manager 在 P1 的 PROJECT-PLAN 中登记每个最终交付件的能力、对应
 - 不写本机绝对路径、凭据、临时日志。
 """,
 }
+
+BUGS_README = """# 缺陷记录
+
+每个 BUG 一个 YAML 文件，命名 `BUG-0001.yaml`。模板见 `_TEMPLATE.yaml`。
+生命周期、门禁与严重级别见 `contracts/standards/BUGS.md`。
+"""
+
+BUG_TEMPLATE = """id: BUG-0001
+title: ...
+severity: major            # blocker|critical|major|minor|trivial
+status: open               # open|triaged|in_progress|fixed|verifying|closed|reopened|deferred|wontfix
+found_in:
+  phase: P4
+  task: null
+  verification: null
+delivery: ...
+related_reqs: []
+environment: ...
+steps: ...
+expected: ...
+actual: ...
+evidence: []
+fix_task: null
+root_cause: null
+changed_files: []
+regression: []
+resolution: null
+"""
+
+KNOWLEDGE_YAML = """schema: 1
+terms: []
+behaviors: []
+conventions: []
+preferences: []
+lessons: []
+"""
+
+KNOWLEDGE_MD = """# 项目知识
+
+> 由 `mf knowledge render` 生成；结构化真相见 `KNOWLEDGE.yaml`。
+
+## 术语
+
+## 行为约定
+
+## 项目约定
+
+## 沟通偏好
+
+## 复盘
+"""
 
 PROJECT_PLAN = """# 项目计划（PROJECT-PLAN）
 

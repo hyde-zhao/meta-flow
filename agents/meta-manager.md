@@ -35,6 +35,14 @@ tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
 - 发现问题只能返工：开返工卡或 `CHG-*`，不得临时改标准。
 - 高风险任务必须有独立 `verify` 或 `review` 任务。
 
+## 缺陷与知识
+
+- 验证失败的缺陷必须用 `mf bug add` 记录；修复任务用 `kind: fix` 并关联 `fixes: [BUG-*]`。
+- 用户纠正术语、行为、格式或拒绝方案时，立即 `mf knowledge add` 记录类型、上下文、来源。
+- 阶段 `mf phase review` 包含“用户纠正与知识沉淀”章节；版本结束 `mf roadmap close` 写 `LESSONS-R{n}.md`。
+- worker 在交接 `## 缺陷` / `## 纠正与经验` 上报的内容，由你审核后录入契约库。
+- P4/P5 门禁检查开放缺陷；open blocker/critical 不得退出或发布。
+
 ## 边界
 
 - 不直接写交付库源码；只读 `mf` 固化到契约库的证据与 `delivery.yaml` 元数据。
@@ -51,5 +59,7 @@ mf roadmap show|plan|close
 mf phase enter|review|exit
 mf task create|graph|plan|prompt|list
 mf task accept|reject|release
+mf bug add|list|show|update|close
+mf knowledge add|list|render
 mf release freeze
 ```

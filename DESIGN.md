@@ -57,7 +57,7 @@ v1 不再是一个“工作流产物工厂”，而是一个 **AI 项目操作�
 4. **任务包自包含**：worker 用全新会话也能独立完成任务。
 5. **契约库是消息总线**：manager 与 worker 不直接互读对方仓库。
 6. **默认轻量，例外显式**：高风险、多交付库、外部合同才增加复杂度。
-7. **命令预算**：核心 CLI 不超过约 25 个命令；不堆功能。
+7. **命令预算**：核心命令约 30 个，缺陷/知识/维护扩展不超过 10 个；每个命令必须有明确角色和门禁用途。
 
 ---
 
@@ -153,7 +153,7 @@ workspace/                     # 容器目录，不必是 git 仓
 │   │   └── PROJECT-PLAN.md    # 过程、过程交付件、最终交付件能力
 │   ├── roadmap/ROADMAP.yaml
 │   ├── requirements/REQUIREMENTS.yaml
-│   ├── standards/             # 9 份规范
+│   ├── standards/             # 11 份规范
 │   ├── architecture/          # 架构图、ADR、端到端设计
 │   ├── specs/                 # 端到端规格、跨库接口/数据契约
 │   ├── tasks/R1/P3/T013.yaml
@@ -195,7 +195,7 @@ workspace/                     # 容器目录，不必是 git 仓
 - 项目元数据、模块/交付库注册表、当前路标与阶段。
 - 项目计划 `PROJECT-PLAN.md`：过程、过程交付件、最终交付件能力。
 - 路标、需求、变更单、追踪矩阵。
-- 9 份项目规范。
+- 11 份项目规范。
 - 系统架构图、ADR、端到端设计。
 - 端到端规格、跨交付库接口/数据契约。
 - 任务卡、验收记录、交接副本、事件 ledger。
@@ -612,6 +612,113 @@ worker 在交付库写 `.metaflow/handoffs/<task-id>.md`，`mf task submit` 固�
 
 manager 验收通过后，用 `mf task ready` 找解锁任务，再用 `mf task prompt` 生成下一条提示词。
 
+### 7.9 缺陷跟踪
+
+所有验证过程中发现的缺陷必须记录为 `BUG-*`，存放在 `contracts/bugs/`。缺陷是契约库的一等对象，不是任务卡里的备注。
+
+#### 对象
+
+```yaml
+id: BUG-0001
+title: 登录后状态未刷新
+severity: blocker|critical|major|minor|trivial
+status: open|triaged|in_progress|fixed|verifying|closed|reopened|deferred|wontfix
+found_in:
+  phase: P4
+  task: R1-P4-T003
+  verification: VR-0001
+delivery: frontend
+related_reqs: [REQ-0007]
+environment: ...
+steps: ...
+expected: ...
+actual: ...
+evidence: [...]
+fix_task: null
+root_cause: null
+changed_files: []
+regression: []
+resolution: null
+```
+
+#### 生命周期
+
+```text
+open → triaged → in_progress → fixed → verifying → closed
+closed → reopened
+open/triaged → deferred | wontfix（需理由和用户接受）
+```
+
+#### 与验证、任务联动
+
+- `mf verify record --result FAIL` 必须带 `--bug BUG-*` 或 `--create-bug`；否则拒绝。
+- `mf task reject` 若是交付行为缺陷，创建/关联 bug；只是未完成则写返工原因。
+- 修复使用 `kind: fix` 任务，`fixes: [BUG-0001]`。
+- fix 任务交接必须含 `## 根因`、`## 修复`、`## 回归证据`；`mf task submit` 校验。
+- `mf task accept` 将 bug 置 `fixed`；`mf verify record --result PASS` 将 bug 置 `closed`。
+- `mf phase exit P4` 检查 open blocker/critical；未关闭必须用户显式接受。
+- `mf release freeze` 列出 fixed bugs 与 known issues；open blocker/critical 阻止发布。
+
+#### CLI 与角色
+
+| 命令 | manager | worker |
+|---|---|---|
+| `mf bug add/list/show/update/close` | ✓ | 只读本任务相关 |
+| 交接 `## 缺陷` | 审核 | ✓ 上报 |
+
+worker 不直接写契约库；在交接文件 `## 缺陷` 上报，由 manager `mf bug add` 记录。
+
+#### 为什么不是 hook
+
+缺陷有状态、链接、门禁和审计需求；hook 无法可靠判定“这是缺陷”或保存生命周期。hook 适合提醒，真相由 CLI 管理。
+
+### 7.10 知识沉淀与纠正记录
+
+manager 和 worker 都需要在与用户/上游交互中提炼知识，减少重复纠正，形成项目级默契。
+
+#### 对象类型
+
+| 类型 | 记录什么 | 示例 |
+|---|---|---|
+| `term` | 术语纠正 | “交付库”统一叫“交付库（delivery library）” |
+| `behavior` | 行为纠正 | 用户说“先别写代码”时，先复述并确认 |
+| `convention` | 项目约定 | 所有任务卡先写验收标准 |
+| `preference` | 沟通/格式偏好 | 先给结论，再给理由 |
+| `lesson` | 阶段/版本复盘 | 设计任务必须先确认接口契约 |
+
+#### 存放
+
+```text
+contracts/knowledge/
+├── KNOWLEDGE.yaml       # 结构化真相
+├── KNOWLEDGE.md         # mf knowledge render 生成
+└── LESSONS-R1.md        # 版本结束复盘
+```
+
+#### 记录时机与角色
+
+- 用户纠正术语、行为、格式时，manager 立即 `mf knowledge add`。
+- 用户拒绝方案并说明原因时，记录为 `behavior` 或 `convention`。
+- 阶段结束 `mf phase review` 增加“用户纠正与知识沉淀”章节；版本结束 `mf roadmap close` 写 `LESSONS-R{n}.md`。
+- worker 不直接写契约库；在交接 `## 纠正与经验` 上报，manager 审核后合并。
+- 知识条目必须有 `source`（user/manager/worker）、日期、上下文。
+
+#### 读取与注入
+
+- manager 会话启动时读取 `KNOWLEDGE.md` 摘要。
+- `mf task show --packet` 注入与任务/交付库相关的术语和约定。
+- SessionStart hook 打印最近纠正、开放 bug 摘要；hook 只做注入，不做语义捕获。
+
+#### 总结提炼
+
+- `mf knowledge render` 生成人类可读版本。
+- `mf phase review` 的 PHASE-REPORT 包含“用户纠正与知识沉淀”章节。
+- `mf roadmap close` 生成 `LESSONS-R{n}.md`，作为下一路标输入。
+
+#### 为什么不是纯 hook
+
+用户纠正是自然语言，hook 无法可靠识别语义；记录由 agent 指令 + CLI 完成，hook 只负责把已有知识注入会话。
+
 ---
 
 ## 8. 状态与 CLI
@@ -643,6 +750,8 @@ manager 验收通过后，用 `mf task ready` 找解锁任务，再用 `mf task 
 | 需求 | `mf req add`、`mf req list`、`mf req trace` |
 | 交付库 | `mf delivery list`、`mf delivery show` |
 | 任务 | `mf task create`、`mf task list`、`mf task graph`、`mf task plan`、`mf task prompt`、`mf task show`、`mf task start`、`mf task submit`、`mf task accept`、`mf task reject`、`mf task release` |
+| 缺陷 | `mf bug add`、`mf bug list`、`mf bug show`、`mf bug update`、`mf bug close` |
+| 知识 | `mf knowledge add`、`mf knowledge list`、`mf knowledge show`、`mf knowledge render` |
 | 验证 | `mf verify record` |
 | 发布 | `mf release freeze` |
 | 维护 | `mf log`、`mf upgrade`、`mf agent update`、`mf worker install` |
@@ -664,6 +773,8 @@ manager 验收通过后，用 `mf task ready` 找解锁任务，再用 `mf task 
 | task create/plan/graph/prompt/accept/reject/release | - | ✓ | - |
 | task list/show | - | ✓（全部） | ✓（本库） |
 | task start/submit | - | - | ✓ |
+| bug add/list/show/update/close | - | ✓ | 只读（本任务相关） |
+| knowledge add/list/show/render | - | ✓ | 只读（任务包注入） |
 | verify record | - | ✓ | ✓（本人任务） |
 | release freeze | - | ✓ | - |
 | log | ✓ | ✓ | ✓（本人任务） |
@@ -756,7 +867,7 @@ cp meta-flow/agents/meta-maintainer.md ~/.claude/agents/
 
 ## 10. 规范清单
 
-`contracts/standards/` 下 9 份，每份不超过 2 页：
+`contracts/standards/` 下 11 份，每份不超过 2 页：
 
 | 文件 | 内容 |
 |---|---|
@@ -767,6 +878,8 @@ cp meta-flow/agents/meta-maintainer.md ~/.claude/agents/
 | `ACCEPTANCE.md` | 验收方法、结论枚举、证据绑定、独立性、返工 |
 | `DEVELOPMENT.md` | 分支/提交、代码风格、测试要求、禁止越界 |
 | `VERIFICATION.md` | 任务自验、manager 验收、阶段验证、回归子集 |
+| `BUGS.md` | 缺陷对象、生命周期、验证/修复联动、发布门禁 |
+| `KNOWLEDGE.md` | 术语/行为/约定/偏好/复盘、记录时机、注入与总结 |
 | `DELIVERY.md` | 发布说明/用户手册结构、发布清单、跨库引用 |
 | `DOCUMENTATION.md` | 文档类型、命名、front matter、单一真相源 |
 
@@ -787,17 +900,18 @@ R0 交付物：
 1. 新仓骨架：`pyproject.toml`、`src/meta_flow/`、`tests/`、`agents/`、`templates/`、`standards/`。
 2. `mf` CLI 骨架：`init/status/role/doctor`。
 3. 三个角色定义：`meta-maintainer.md`、`meta-manager.md`、`meta-worker.md`。
-4. 工作区两仓初始化 + 角色路由三层 + PROJECT-PLAN 模板与校验。
-5. 玩具项目 E2E：R1 → P1–P5 → 任务卡 → 验收 → release freeze。
+4. 工作区两仓初始化 + 角色路由三层 + PROJECT-PLAN 模板与校验 + BUG/KNOWLEDGE 目录。
+5. 玩具项目 E2E：R1 → P1–P5 → 任务卡 → 验收 → release freeze；包含缺陷记录与知识沉淀。
 6. CLI 状态机与 schema 测试。
 
 R1 交付物：
 
 1. 完整五阶段、PROJECT-PLAN 规划（过程/过程交付件/最终交付件能力）与阶段报告。
 2. 并行 wave、租约、任务包、交接、证据固化。
-3. 9 份规范默认版。
+3. 11 份规范默认版。
 4. 真实项目试点。
 5. 安装/升级/worker 安装完整流程。
+6. 缺陷跟踪、知识沉淀与纠正记录闭环。
 
 R2 交付物：
 
@@ -812,7 +926,7 @@ R2 交付物：
 
 | 风险 | 缓解 |
 |---|---|
-| 新系统再次膨胀 | 命令预算 ≤25 核心命令；规范 ≤9 份；agent ≤250 行/个；不引入 CP/CR/ledger 全套 |
+| 新系统再次膨胀 | 命令预算 ≤40（核心约 30）；规范 ≤11 份；agent ≤250 行/个；不引入 CP/CR/ledger 全套 |
 | manager 验收瓶颈 | WIP 限制；`task graph` 显示 submitted 队列；设计/验证通过任务类型分派 |
 | worker 自证自洽 | 验收标准前置；证据绑定；manager 重跑；越界 diff 拒绝；独立 verify/review 任务 |
 | 状态并发冲突 | 每任务一文件；`current.json` 派生；lease；追加 ledger |

@@ -46,6 +46,10 @@ def test_init_creates_layout(workspace):
     assert (workspace / "contracts" / "requirements" / "REQUIREMENTS.yaml").is_file()
     assert (workspace / "contracts" / "state" / "ledger.ndjson").is_file()
     assert (workspace / "contracts" / "standards" / "ACCEPTANCE.md").is_file()
+    assert (workspace / "contracts" / "standards" / "BUGS.md").is_file()
+    assert (workspace / "contracts" / "standards" / "KNOWLEDGE.md").is_file()
+    assert (workspace / "contracts" / "bugs" / "_TEMPLATE.yaml").is_file()
+    assert (workspace / "contracts" / "knowledge" / "KNOWLEDGE.yaml").is_file()
     assert (workspace / "deliveries" / "frontend" / "delivery.yaml").is_file()
     assert (workspace / "deliveries" / "backend" / "RELEASE-NOTES.md").is_file()
     assert (workspace / "deliveries" / "frontend" / "USER-MANUAL.md").is_file()
@@ -95,6 +99,12 @@ def test_doctor_plan_missing(workspace):
     (workspace / "contracts" / "project" / "PROJECT-PLAN.md").unlink()
     errors = doctor(workspace)
     assert any("缺少项目计划" in error for error in errors)
+
+
+def test_doctor_knowledge_missing(workspace):
+    (workspace / "contracts" / "knowledge" / "KNOWLEDGE.yaml").unlink()
+    errors = doctor(workspace)
+    assert any("KNOWLEDGE.yaml" in error for error in errors)
 
 
 def test_doctor_version_policy_exact(workspace):

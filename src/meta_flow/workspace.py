@@ -139,6 +139,8 @@ def init_workspace(
         contracts / "roadmap",
         contracts / "requirements" / "changes",
         contracts / "standards",
+        contracts / "bugs",
+        contracts / "knowledge",
         contracts / "architecture" / "drafts",
         contracts / "specs",
         contracts / "tasks",
@@ -226,6 +228,11 @@ def init_workspace(
 
     for standard_name, content in templates.STANDARDS.items():
         _write(contracts / "standards" / standard_name, content)
+
+    _write(contracts / "bugs" / "README.md", templates.BUGS_README)
+    _write(contracts / "bugs" / "_TEMPLATE.yaml", templates.BUG_TEMPLATE)
+    _write(contracts / "knowledge" / "KNOWLEDGE.yaml", templates.KNOWLEDGE_YAML)
+    _write(contracts / "knowledge" / "KNOWLEDGE.md", templates.KNOWLEDGE_MD)
 
     # 交付库集合
     _write(deliveries_root / "CLAUDE.md", templates.DELIVERIES_CLAUDE)
@@ -463,6 +470,13 @@ def doctor(root: Path) -> list[str]:
     if not (contracts / "state" / "ledger.ndjson").is_file():
         errors.append("缺少 contracts/state/ledger.ndjson")
 
+    knowledge_path = contracts / "knowledge" / "KNOWLEDGE.yaml"
+    if knowledge_path.is_file():
+        try:
+            yaml.safe_load(knowledge_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            errors.append(f"KNOWLEDGE.yaml 不是合法 YAML: {exc}")
+
     for relative in (
         "CLAUDE.md",
         "AGENTS.md",
@@ -476,6 +490,15 @@ def doctor(root: Path) -> list[str]:
     ):
         if not (root / relative).is_file():
             errors.append(f"缺少角色/清单文件: {relative}")
+
+    for relative in (
+        "contracts/bugs/README.md",
+        "contracts/bugs/_TEMPLATE.yaml",
+        "contracts/knowledge/KNOWLEDGE.yaml",
+        "contracts/knowledge/KNOWLEDGE.md",
+    ):
+        if not (root / relative).is_file():
+            errors.append(f"缺少缺陷/知识文件: {relative}")
 
     deliveries = project.get("deliveries")
     if not isinstance(deliveries, list) or not deliveries:

@@ -9,7 +9,7 @@
 - `mf` CLI 骨架：`init`、`role`、`status`、`doctor`
 - 工作区两仓初始化：`contracts/` + `deliveries/`
 - 目录级角色推导：根目录 = maintainer，`contracts/` = manager，`deliveries/**` = worker
-- 9 份默认规范模板
+- 11 份默认规范模板
 - `PROJECT-PLAN` 模板：过程、过程交付件、最终交付件能力
 - 三个角色定义：`agents/meta-maintainer.md`、`meta-manager.md`、`meta-worker.md`
 - 工作区结构、PROJECT-PLAN 与版本策略校验（`same-major` / `exact` / `independent`）
