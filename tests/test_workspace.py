@@ -1,0 +1,113 @@
+"""工作区核心逻辑测试。"""
+
+from __future__ import annotations
+
+import shutil
+
+import pytest
+import yaml
+
+from meta_flow.workspace import (
+    build_status,
+    detect_role,
+    doctor,
+    init_workspace,
+)
+
+
+def _read_yaml(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _write_yaml(path, data):
+    path.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+@pytest.fixture()
+def workspace(tmp_path):
+    root = init_workspace(
+        tmp_path / "ws",
+        "Demo App",
+        ["frontend", "backend"],
+        git=False,
+    )
+    return root
+
+
+def test_init_creates_layout(workspace):
+    assert (workspace / "mf.workspace.yaml").is_file()
+    assert (workspace / "CLAUDE.md").is_file()
+    assert (workspace / "contracts" / "project.yaml").is_file()
+    assert (workspace / "contracts" / "roadmap" / "ROADMAP.yaml").is_file()
+    assert (workspace / "contracts" / "requirements" / "REQUIREMENTS.yaml").is_file()
+    assert (workspace / "contracts" / "state" / "ledger.ndjson").is_file()
+    assert (workspace / "contracts" / "standards" / "ACCEPTANCE.md").is_file()
+    assert (workspace / "deliveries" / "frontend" / "delivery.yaml").is_file()
+    assert (workspace / "deliveries" / "backend" / "RELEASE-NOTES.md").is_file()
+    assert (workspace / "deliveries" / "frontend" / "USER-MANUAL.md").is_file()
+
+    project = _read_yaml(workspace / "contracts" / "project.yaml")
+    assert project["project_id"] == "demo-app"
+    assert [item["id"] for item in project["deliveries"]] == ["frontend", "backend"]
+    assert project["roadmap"] == "R1"
+    assert project["version"] == "1.0.0-alpha.1"
+
+
+def test_detect_role(workspace):
+    root = workspace.resolve()
+    assert detect_role(root) == ("maintainer", root)
+    assert detect_role(root / "contracts")[0] == "manager"
+    assert detect_role(root / "contracts" / "standards")[0] == "manager"
+    assert detect_role(root / "deliveries")[0] == "worker"
+    assert detect_role(root / "deliveries" / "frontend")[0] == "worker"
+
+
+def test_detect_role_unbound(tmp_path):
+    assert detect_role(tmp_path / "empty") == ("unbound", None)
+
+
+def test_doctor_ok(workspace):
+    assert doctor(workspace) == []
+
+
+def test_doctor_missing_delivery(workspace):
+    shutil.rmtree(workspace / "deliveries" / "frontend")
+    errors = doctor(workspace)
+    assert any("交付库目录不存在" in error for error in errors)
+
+
+def test_doctor_version_mismatch(workspace):
+    path = workspace / "deliveries" / "frontend" / "delivery.yaml"
+    data = _read_yaml(path)
+    data["version"] = "2.0.0"
+    _write_yaml(path, data)
+    errors = doctor(workspace)
+    assert any("与路标 R1 不一致" in error for error in errors)
+
+
+def test_doctor_contract_reference(workspace):
+    delivery_path = workspace / "deliveries" / "frontend" / "delivery.yaml"
+    data = _read_yaml(delivery_path)
+    data["contracts"] = ["SPEC-API-001"]
+    _write_yaml(delivery_path, data)
+
+    errors = doctor(workspace)
+    assert any("不存在的契约" in error for error in errors)
+
+    spec = workspace / "contracts" / "specs" / "SPEC-API-001.md"
+    spec.write_text("# API 契约\n", encoding="utf-8")
+    assert doctor(workspace) == []
+
+
+def test_status(workspace):
+    data = build_status(workspace, "manager")
+    assert data["project"]["name"] == "Demo App"
+    assert data["project"]["id"] == "demo-app"
+    assert data["role"] == "manager"
+    assert data["roadmap"]["id"] == "R1"
+    assert data["phase"] == "P1"
+    assert len(data["deliveries"]) == 2
+    assert data["tasks"] == {}

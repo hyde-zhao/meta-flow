@@ -4,11 +4,31 @@
 
 ## 状态
 
-v1 设计阶段。当前仓库是 Meta Flow v1 的新仓，旧的 v0.x 工作流实现将打 tag 归档。
+**R0 骨架进行中**（v0.1.0）。当前已具备：
 
-- 设计文档：[DESIGN.md](DESIGN.md)
-- CLI 名称：`mf`
-- 三个角色：`meta-maintainer`、`meta-manager`、`meta-worker`
+- `mf` CLI 骨架：`init`、`role`、`status`、`doctor`
+- 工作区两仓初始化：`contracts/` + `deliveries/`
+- 目录级角色推导：根目录 = maintainer，`contracts/` = manager，`deliveries/**` = worker
+- 9 份默认规范模板
+- 三个角色定义：`agents/meta-maintainer.md`、`meta-manager.md`、`meta-worker.md`
+- 工作区结构与版本映射校验
+
+完整设计见 [DESIGN.md](DESIGN.md)。
+
+## 快速开始
+
+```bash
+uv sync
+uv run mf --help
+
+# 初始化一个工作区
+uv run mf init --path /tmp/demo --name demo --delivery app --no-git
+
+# 查看角色与状态
+uv run mf role --path /tmp/demo/contracts
+uv run mf status --path /tmp/demo
+uv run mf doctor --path /tmp/demo
+```
 
 ## 核心模型
 
@@ -23,6 +43,20 @@ workspace/
 - manager 在契约库管理项目；worker 在交付库执行任务卡；maintainer 维护工作区和工具。
 - 版本双轨：路标 `R{n}` ↔ 项目版本 `n.x.y`，交付物使用 SemVer。
 
-## 下一步
+## 角色
 
-R0 骨架：CLI 骨架、三角色定义、两仓初始化、角色路由、玩具项目端到端闭环。
+| 角色 | 目录 | 职责 |
+|---|---|---|
+| `meta-maintainer` | 工作区根目录 / 工具源码仓 | 建仓、安装、跨仓健康、工具维护 |
+| `meta-manager` | `contracts/` | 需求、路标、五阶段、规范、任务卡、验收 |
+| `meta-worker` | `deliveries/**` | 执行任务包、自验、交接、提交 |
+
+设计工作使用 `kind: design` 任务，由 worker 执行，manager 验收；暂不新增角色。
+
+## 开发
+
+```bash
+uv sync
+uv run pytest
+uv run ruff check src tests
+```
