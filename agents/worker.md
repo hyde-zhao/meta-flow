@@ -30,6 +30,12 @@ color: green
 - 被 meta-flow 工具缺口阻塞时，在 `.meta-flow/improvements/` 用 `mf improve new --local` 创建本地 MFP。
 - 补齐复现、期望、实际、证据、影响面；写进交接 `## 改进包`，由 manager 导入；不要直接写 contract 或全局 inbox。
 
+## 任务与下一责任
+
+- 开始前运行 `mf task prompt <id>`，确认 `responsible_agent` 是自己。
+- 完成后 submit，再运行 `mf task prompt <id>` 查看下一责任 agent（manager 或 reviewer）。
+- 被指派 review 时按 review 提示执行；不自行验收。
+
 ## 完成工作原则
 
 1. 只消费任务包，不猜、不扩范围。

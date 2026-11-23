@@ -146,6 +146,35 @@ mf dev improve update MFP-0001 --status verified --version 0.1.2 --commit def456
 
 已实现的 MFP 记录为 `BUG/REQ/CHG` 并关闭；未实现的完整包进入源码 `improvements/open/`，由 meta-flow 源码会话实施。
 
+## 任务与评审
+
+```bash
+# manager 创建任务；中高风险会自动生成 review 任务
+mf task create --title "实现 X" --risk high --acceptance "命令 mf X 成功"
+
+# 查看下一步责任 agent（worker 或 manager）
+mf task prompt R1-P1-T001
+
+# worker 实现
+mf task show R1-P1-T001 --packet
+mf task start R1-P1-T001
+mf task submit R1-P1-T001 --handoff <bundle>/handoff.md
+
+# worker2 评审（review 任务）
+mf task show R1-P1-T002 --review-packet
+mf task start R1-P1-T002
+mf task submit R1-P1-T002
+
+# manager 验收
+mf task accept R1-P1-T002 --verdict PASS
+mf task accept R1-P1-T001 --verdict PASS
+```
+
+- 低风险：manager 先 review，再验收。
+- 中/高风险：worker2 独立 review，之后 manager 验收。
+- 评审不通过：`review-handoff.md` 列出必须整改项，manager 退回 worker1；返工后复审。
+- 每个任务状态都有 `next_owner`；`mf task prompt` 明确下一责任 agent。
+
 ## 卸载
 
 ```bash

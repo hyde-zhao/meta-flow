@@ -39,6 +39,18 @@ from .install import (
     uninstall_claude,
     upgrade_project,
 )
+from .task import (
+    TaskError,
+    accept_task,
+    create_task,
+    list_tasks,
+    load_task,
+    packet_text,
+    prompt_text,
+    reject_task,
+    start_task,
+    submit_task,
+)
 from .workspace import (
     INSTALL_REL,
     WorkspaceError,
@@ -422,6 +434,116 @@ def _cmd_dev_improve_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_task_create(args: argparse.Namespace) -> int:
+    from_data = None
+    if args.from_file:
+        raw = yaml.safe_load(Path(args.from_file).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise TaskError("--from 文件顶层必须是映射")
+        from_data = raw
+    acceptance = [
+        {"id": f"A{index}", "method": "artifact", "expect": text}
+        for index, text in enumerate(args.acceptance or [], start=1)
+    ]
+    result = create_task(
+        args.project_dir,
+        args.title or "",
+        kind=args.kind,
+        delivery=args.delivery,
+        risk=args.risk,
+        effort=args.effort,
+        review_mode=args.review_mode,
+        reviews=args.reviews,
+        review_scope=args.review_scope or [],
+        allowed_paths=args.allowed_path or [],
+        acceptance=acceptance or None,
+        with_review=not args.no_review,
+        from_data=from_data,
+    )
+    print(f"任务: {result['task']} ({result['status']}, risk={result['risk']})")
+    if result.get("review_task"):
+        print(f"评审任务: {result['review_task']}")
+    print(f"bundle: {result['bundle']}")
+    print(f"下一步: mf task prompt {result['task']}")
+    return 0
+
+
+def _cmd_task_list(args: argparse.Namespace) -> int:
+    items = list_tasks(args.project_dir, status=args.status)
+    if args.json:
+        _print_json(items)
+        return 0
+    if not items:
+        print("没有任务")
+        return 0
+    for item in items:
+        print(
+            "{id} {status} {kind} risk={risk} next={next_owner} {title}".format(
+                id=item.get("id"),
+                status=item.get("status"),
+                kind=item.get("kind"),
+                risk=(item.get("risk") or {}).get("level"),
+                next_owner=item.get("next_owner"),
+                title=item.get("title"),
+            )
+        )
+    return 0
+
+
+def _cmd_task_show(args: argparse.Namespace) -> int:
+    path, data = load_task(args.project_dir, args.task_id)
+    if args.packet:
+        print(packet_text(args.project_dir, args.task_id))
+        return 0
+    if args.review_packet:
+        print(packet_text(args.project_dir, args.task_id, review=True))
+        return 0
+    if args.json:
+        _print_json(data)
+    else:
+        print(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    return 0
+
+
+def _cmd_task_start(args: argparse.Namespace) -> int:
+    data = start_task(args.project_dir, args.task_id)
+    print(f"{data['id']} -> {data['status']} (next={data['next_owner']})")
+    return 0
+
+
+def _cmd_task_submit(args: argparse.Namespace) -> int:
+    data = submit_task(
+        args.project_dir,
+        args.task_id,
+        handoff=args.handoff,
+        dev_record=args.dev_record,
+    )
+    print(f"{data['id']} -> {data['status']} (next={data['next_owner']})")
+    return 0
+
+
+def _cmd_task_accept(args: argparse.Namespace) -> int:
+    data = accept_task(
+        args.project_dir,
+        args.task_id,
+        verdict=args.verdict,
+        note=args.note,
+    )
+    print(f"{data['id']} -> {data['status']} (verdict={args.verdict})")
+    return 0
+
+
+def _cmd_task_reject(args: argparse.Namespace) -> int:
+    data = reject_task(args.project_dir, args.task_id, args.reason)
+    print(f"{data['id']} -> {data['status']} (next={data['next_owner']})")
+    return 0
+
+
+def _cmd_task_prompt(args: argparse.Namespace) -> int:
+    print(prompt_text(args.project_dir, args.task_id), end="")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mf", description="Meta Flow — AI 项目操作系统")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -487,6 +609,76 @@ def build_parser() -> argparse.ArgumentParser:
     ws_status.add_argument("--project-dir", default=".")
     ws_status.add_argument("--json", action="store_true")
     ws_status.set_defaults(func=_cmd_workspace_status)
+
+    task_p = sub.add_parser("task", help="任务卡与评审任务")
+    task_sub = task_p.add_subparsers(dest="action", required=True)
+
+    task_create = task_sub.add_parser("create")
+    task_create.add_argument("--project-dir", default=".")
+    task_create.add_argument("--title")
+    task_create.add_argument("--from", dest="from_file")
+    task_create.add_argument(
+        "--kind", choices=["implement", "design", "verify", "document", "review", "fix"], default="implement"
+    )
+    task_create.add_argument("--delivery")
+    task_create.add_argument("--risk", choices=["low", "medium", "high", "critical"], default="medium")
+    task_create.add_argument("--effort", default="M")
+    task_create.add_argument("--review-mode", choices=["manager", "independent", "user"])
+    task_create.add_argument("--reviews", help="review 任务对应的实现/设计任务 ID")
+    task_create.add_argument("--review-scope", action="append")
+    task_create.add_argument("--allowed-path", action="append")
+    task_create.add_argument("--acceptance", action="append")
+    task_create.add_argument("--no-review", action="store_true", help="不自动创建 review 任务")
+    task_create.set_defaults(func=_cmd_task_create)
+
+    task_list = task_sub.add_parser("list")
+    task_list.add_argument("--project-dir", default=".")
+    task_list.add_argument("--status")
+    task_list.add_argument("--json", action="store_true")
+    task_list.set_defaults(func=_cmd_task_list)
+
+    task_show = task_sub.add_parser("show")
+    task_show.add_argument("task_id")
+    task_show.add_argument("--project-dir", default=".")
+    task_packet = task_show.add_mutually_exclusive_group()
+    task_packet.add_argument("--packet", action="store_true")
+    task_packet.add_argument("--review-packet", action="store_true")
+    task_show.add_argument("--json", action="store_true")
+    task_show.set_defaults(func=_cmd_task_show)
+
+    task_start = task_sub.add_parser("start")
+    task_start.add_argument("task_id")
+    task_start.add_argument("--project-dir", default=".")
+    task_start.set_defaults(func=_cmd_task_start)
+
+    task_submit = task_sub.add_parser("submit")
+    task_submit.add_argument("task_id")
+    task_submit.add_argument("--project-dir", default=".")
+    task_submit.add_argument("--handoff")
+    task_submit.add_argument("--dev-record")
+    task_submit.set_defaults(func=_cmd_task_submit)
+
+    task_accept = task_sub.add_parser("accept")
+    task_accept.add_argument("task_id")
+    task_accept.add_argument("--project-dir", default=".")
+    task_accept.add_argument(
+        "--verdict",
+        choices=["PASS", "PASS_WITH_RISK", "NEEDS_REWORK", "BLOCKED"],
+        default="PASS",
+    )
+    task_accept.add_argument("--note")
+    task_accept.set_defaults(func=_cmd_task_accept)
+
+    task_reject = task_sub.add_parser("reject")
+    task_reject.add_argument("task_id")
+    task_reject.add_argument("--project-dir", default=".")
+    task_reject.add_argument("--reason", required=True)
+    task_reject.set_defaults(func=_cmd_task_reject)
+
+    task_prompt = task_sub.add_parser("prompt")
+    task_prompt.add_argument("task_id")
+    task_prompt.add_argument("--project-dir", default=".")
+    task_prompt.set_defaults(func=_cmd_task_prompt)
 
     improve_p = sub.add_parser("improve", help="MFP 改进包")
     improve_sub = improve_p.add_subparsers(dest="action", required=True)
@@ -607,7 +799,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except (WorkspaceError, InstallError, GlobalStoreError, ImproveError) as exc:
+    except (WorkspaceError, InstallError, GlobalStoreError, ImproveError, TaskError) as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return getattr(exc, "code", 1)
 

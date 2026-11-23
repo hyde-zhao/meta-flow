@@ -938,12 +938,19 @@ color: blue
 - 不实现 meta-flow 源码；源码改进由 maintainer 承担。
 - worker 上报的本地 MFP 用 `mf improve import` 导入 contract，再审核/提交。
 
+## 任务与下一责任
+
+- 每个任务卡创建后运行 `mf task prompt <id>`，把 `responsible_agent` 和下一步提示交给对应 agent。
+- 中高风险自动生成 review 任务；worker1 submit 后推进 worker2 评审；评审 PASS 后你验收。
+- 任务结束后必须明确下一责任 agent（worker 或 manager），不得留空。
+
 ## 完成工作原则
 
 1. 结论先行，证据可复核。
 2. 不跳过用户门禁（路标、P1、P4、P5）。
 3. 不在验收后追加标准；返工开新卡或 `CHG-*`。
 4. 不把未记录的风险、缺陷、纠正留在对话里。
+5. 每个任务卡后运行 `mf task prompt`，明确下一责任 agent（worker 或 manager）。
 
 ## 边界
 
@@ -1023,6 +1030,12 @@ color: green
 - 被 meta-flow 工具缺口阻塞时，在 `.meta-flow/improvements/` 用 `mf improve new --local` 创建本地 MFP。
 - 补齐复现、期望、实际、证据、影响面；写进交接 `## 改进包`，由 manager 导入；不要直接写 contract 或全局 inbox。
 
+## 任务与下一责任
+
+- 开始前运行 `mf task prompt <id>`，确认 `responsible_agent` 是自己。
+- 完成后 submit，再运行 `mf task prompt <id>` 查看下一责任 agent（manager 或 reviewer）。
+- 被指派 review 时按 review 提示执行；不自行验收。
+
 ## 完成工作原则
 
 1. 只消费任务包，不猜、不扩范围。
@@ -1075,12 +1088,19 @@ mf doctor
 - 发现 meta-flow 工具缺口：在 `contract/improvements/` 创建 MFP，补全上下文和验收标准，`mf improve submit` 到全局 inbox。
 - 不实现 meta-flow 源码；由 maintainer 承担。
 
+## 任务与下一责任
+
+- 每个任务卡后运行 `mf task prompt <id>`，明确 `responsible_agent`。
+- 中高风险自动生成 review 任务；worker1 submit 后推进 worker2 评审；评审 PASS 后你验收。
+- 任务结束后必须明确下一责任 agent（worker 或 manager）。
+
 ## 完成工作原则
 
 1. 结论先行，证据可复核。
 2. 不跳过用户门禁（路标、P1、P4、P5）。
 3. 不在验收后追加标准；返工开新卡或 `CHG-*`。
 4. 不把未记录的风险、缺陷、纠正留在对话里。
+5. 每个任务卡后运行 `mf task prompt`，明确下一责任 agent（worker 或 manager）。
 
 ## 边界
 
@@ -1143,6 +1163,7 @@ WORKER_CLAUDE = """# Meta Flow 子项目（worker）
 3. 只写 `allowed_paths`；不碰契约、其他子项目、归档。
 4. 完成实现 + 测试 + 开发记录 + 交接再提交。
 5. 自验只覆盖 L1；不声称 L2/L3/用户验收通过。
+6. 每个任务开始/结束后运行 `mf task prompt`，确认下一责任 agent。
 
 ## 禁止
 

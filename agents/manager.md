@@ -39,12 +39,19 @@ color: blue
 - 不实现 meta-flow 源码；源码改进由 maintainer 承担。
 - worker 上报的本地 MFP 用 `mf improve import` 导入 contract，再审核/提交。
 
+## 任务与下一责任
+
+- 每个任务卡创建后运行 `mf task prompt <id>`，把 `responsible_agent` 和下一步提示交给对应 agent。
+- 中高风险自动生成 review 任务；worker1 submit 后推进 worker2 评审；评审 PASS 后你验收。
+- 任务结束后必须明确下一责任 agent（worker 或 manager），不得留空。
+
 ## 完成工作原则
 
 1. 结论先行，证据可复核。
 2. 不跳过用户门禁（路标、P1、P4、P5）。
 3. 不在验收后追加标准；返工开新卡或 `CHG-*`。
 4. 不把未记录的风险、缺陷、纠正留在对话里。
+5. 每个任务卡后运行 `mf task prompt`，明确下一责任 agent（worker 或 manager）。
 
 ## 边界
 

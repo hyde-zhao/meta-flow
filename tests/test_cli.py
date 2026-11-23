@@ -61,6 +61,39 @@ def test_cli_improve_smoke(tmp_path, monkeypatch, capsys):
     assert main(["improve", "validate", "--project-dir", str(project), "MFP-0001"]) == 1
 
 
+def test_cli_task_smoke(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    assert main(["install", "claude", "--project-dir", str(project), "--init-contract"]) == 0
+    assert (
+        main(
+            [
+                "task",
+                "create",
+                "--project-dir",
+                str(project),
+                "--title",
+                "文档修正",
+                "--risk",
+                "low",
+                "--acceptance",
+                "文档更新完成",
+            ]
+        )
+        == 0
+    )
+
+    capsys.readouterr()
+    assert main(["task", "list", "--project-dir", str(project), "--json"]) == 0
+    items = json.loads(capsys.readouterr().out)
+    assert items[0]["id"] == "R1-P1-T001"
+
+    assert main(["task", "show", "--project-dir", str(project), "R1-P1-T001", "--packet"]) == 0
+    assert "TASK PACKET" in capsys.readouterr().out
+    assert main(["task", "prompt", "--project-dir", str(project), "R1-P1-T001"]) == 0
+    assert "responsible_agent: worker" in capsys.readouterr().out
+
+
 def test_cli_install_status_uninstall(tmp_path, monkeypatch, capsys):
     _, project = _prepare(tmp_path, monkeypatch)
     assert main(["install", "claude", "--project-dir", str(project)]) == 0

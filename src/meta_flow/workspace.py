@@ -151,6 +151,40 @@ def _contract_path(root: Path, local: dict[str, Any]) -> Path:
     return (root / path).resolve() if not path.is_absolute() else path.resolve()
 
 
+def resolve_contract(project: str | Path) -> Path:
+    """从 workspace、contract 或已安装子项目解析 contract 根。"""
+    project_path = Path(project).expanduser().resolve()
+    local = project_path / LOCAL_WORKSPACE
+    if local.is_file():
+        return _contract_path(project_path, _load_yaml(local))
+    role = project_path / CONTRACT_ROLE
+    if role.is_file() and (project_path / "workspace").is_dir():
+        return project_path
+    install = project_path / INSTALL_REL
+    if install.is_file():
+        install_data = _load_yaml(install)
+        parent = install_data.get("workspace_root")
+        if parent:
+            parent_path = Path(str(parent)).expanduser().resolve()
+            parent_local = parent_path / LOCAL_WORKSPACE
+            if parent_local.is_file():
+                return _contract_path(parent_path, _load_yaml(parent_local))
+    raise WorkspaceError("当前目录不是 workspace、contract 或已安装子项目")
+
+
+def load_current_state(contract: str | Path) -> dict[str, Any]:
+    path = Path(contract) / "state" / "current.json"
+    if not path.is_file():
+        raise WorkspaceError(f"缺少 state/current.json: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WorkspaceError(f"{path} 不是合法 JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise WorkspaceError(f"{path} 顶层必须是对象")
+    return data
+
+
 def _git_info(path: Path) -> dict[str, Any]:
     if not (path / ".git").exists():
         return {"git": False}

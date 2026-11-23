@@ -1140,6 +1140,7 @@ review:
 | 工作区 | `mf workspace init`、`mf workspace add-project`、`mf workspace link`、`mf workspace sync`、`mf workspace status` |
 | 维护 | `mf dev clone`、`mf dev update`、`mf dev install`、`mf dev status`、`mf upgrade` |
 | 改进包 | `mf improve new/list/show/validate/submit/import`、`mf dev improve import/list/update` |
+| 任务 | `mf task create/list/show/start/submit/accept/reject/prompt`（`--packet` / `--review-packet`） |
 | 基础 | `mf role`、`mf status`、`mf doctor`（`--global`） |
 
 下一阶段（规划与执行）：
@@ -1149,7 +1150,6 @@ review:
 | 路标 | `mf roadmap show`、`mf roadmap plan`、`mf roadmap close` |
 | 阶段 | `mf phase enter`、`mf phase review`、`mf phase exit` |
 | 需求 | `mf req add`、`mf req list`、`mf req trace` |
-| 任务 | `mf task create`、`mf task list`、`mf task graph`、`mf task plan`、`mf task prompt`、`mf task show`、`mf task start`、`mf task submit`、`mf task accept`、`mf task reject`、`mf task release` |
 | 缺陷 | `mf bug add`、`mf bug list`、`mf bug show`、`mf bug update`、`mf bug close` |
 | 知识 | `mf knowledge add`、`mf knowledge list`、`mf knowledge show`、`mf knowledge render` |
 | 验证 | `mf verify record` |
@@ -1313,11 +1313,11 @@ mf dev install --yes    # 从本地源码更新全局 mf
 R0 交付物：
 
 1. 新仓骨架：`pyproject.toml`、`src/meta_flow/`（含 `templates.py`）、`tests/`、`agents/`。
-2. `mf` CLI：`bootstrap`、`install claude/worker`、`uninstall claude`、`workspace init/add-project/link/sync/status`、`dev clone/update/install/status`、`improve`、`dev improve`、`role/status/doctor`。
+2. `mf` CLI：`bootstrap`、`install claude/worker`、`uninstall claude`、`workspace init/add-project/link/sync/status`、`dev clone/update/install/status`、`improve`、`dev improve`、`task`、`role/status/doctor`。
 3. 三个短名角色定义：`manager.md`、`maintainer.md`、`worker.md`。
 4. 全局 `~/.meta-flow` 模板库；项目 `.meta-flow/install.yaml`；contract/子项目多仓布局；根 `CLAUDE.md` `@` 导入；README 软链/副本；doctor；contract `improvements/` 与全局 MFP inbox。
-5. 玩具项目 E2E：bootstrap → install → workspace init → add-project → MFP 创建/提交/导入 → doctor → uninstall。
-6. CLI 安装/工作区/卸载/MFP 测试。
+5. 玩具项目 E2E：bootstrap → install → workspace init → add-project → task/review/accept → MFP → doctor → uninstall。
+6. CLI 安装/工作区/卸载/MFP/任务状态机测试。
 
 > R0 当前完成安装、工作区与 MFP 层。规划/执行命令（`req/roadmap/phase/task/bug/knowledge/verify/release`）和 `kind: review` 任务类型是 R0 下一切片，完成后再进入 R1。
 
@@ -1388,3 +1388,4 @@ R2 交付物：
 | 2026-11-23 | R0 拆为安装/工作区层 + 规划执行层 | 先跑通安装闭环，再实现 req/roadmap/phase/task |
 | 2026-11-23 | MFP 改进包：manager/worker 记录，maintainer 导入源码并分类 | 工具缺口有完整上下文；已实现记 BUG/REQ/CHG，未实现进源码 open |
 | 2026-11-23 | 不新增常驻 reviewer 角色；用 `kind: review` 任务 + 可选 reviewer profile | manager 拥有评审门，评审者必须是未参与实现的另一个 worker |
+| 2026-11-23 | 任务状态机内置 `next_owner`，`mf task prompt` 明确下一责任 agent | worker 提交后转 manager 或 reviewer；评审通过转 manager；返工转 worker |
