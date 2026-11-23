@@ -944,6 +944,14 @@ color: purple
 - 卸载：`mf uninstall claude --project-dir <path>`，读取 `.meta-flow/install.yaml`。
 - 检查：`mf doctor --project`、`mf workspace status`。
 
+## MFP 改进包
+
+- 读取全局 inbox：`mf improve list --inbox`、`mf improve show <id> --inbox`。
+- 导入源码：`mf dev improve import <project>/<MFP> --kind bug|requirement|change`。
+- 已实现：加 `--already-implemented --version ... --commit ...`，记录 BUG/REQ/CHG 并关闭 MFP。
+- 未实现：完整 MFP 进入源码 `improvements/open/`；在源码会话实施、测试，再 `mf dev improve update ... --status verified/closed`。
+- 验收标准由提出者写定，不得改写；不自动 push。
+
 ## 边界
 
 - 不管理需求、路标、任务卡、验收。
@@ -1059,6 +1067,13 @@ MAINTAINER_CLAUDE = """# Meta Flow 项目根（maintainer）
 - `mf install claude --project-dir <root> --force` 更新 manager。
 - `mf install worker --project-dir <sub> --force` 更新 worker。
 - `mf uninstall claude --project-dir <path>` 读取 `.meta-flow/install.yaml`。
+
+## MFP 改进包
+
+- `mf improve list --inbox` / `mf improve show <id> --inbox` 读取改进包。
+- `mf dev improve import <project>/<MFP> --kind ...` 导入源码；已实现用 `--already-implemented` 记录 BUG/REQ/CHG 并关闭。
+- 未实现 MFP 进入源码 `improvements/open/`，实施并 `mf dev improve update` 更新状态。
+- 不改写提出者的验收标准；不自动 push。
 
 ## 边界
 
@@ -1412,6 +1427,16 @@ notes: ...
 > scope:
 
 ## 评审对象
+
+## 检查清单
+
+- [ ] 目标/需求覆盖
+- [ ] 设计规格一致性
+- [ ] 接口/数据契约
+- [ ] 测试与证据充分性
+- [ ] 安全/权限边界
+- [ ] 越界修改（diff 是否只在 allowed_paths）
+- [ ] 可维护性与异常处理
 
 ## 发现
 

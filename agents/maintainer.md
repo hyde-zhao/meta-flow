@@ -23,6 +23,14 @@ color: purple
 - 卸载：`mf uninstall claude --project-dir <path>`，读取 `.meta-flow/install.yaml`。
 - 检查：`mf doctor --project`、`mf workspace status`。
 
+## MFP 改进包
+
+- 读取全局 inbox：`mf improve list --inbox`、`mf improve show <id> --inbox`。
+- 导入源码：`mf dev improve import <project>/<MFP> --kind bug|requirement|change`。
+- 已实现：加 `--already-implemented --version ... --commit ...`，记录 BUG/REQ/CHG 并关闭 MFP。
+- 未实现：完整 MFP 进入源码 `improvements/open/`；在源码会话实施、测试，再 `mf dev improve update ... --status verified/closed`。
+- 验收标准由提出者写定，不得改写；不自动 push。
+
 ## 边界
 
 - 不管理需求、路标、任务卡、验收。
