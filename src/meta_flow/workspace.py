@@ -1,9 +1,12 @@
-"""工作区初始化、角色路由、状态汇总与 doctor 校验。"""
+"""工作区初始化、contract 仓、子项目、链接与校验。"""
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,10 +14,14 @@ from typing import Any
 
 import yaml
 
-from . import templates
+from . import global_store, templates
 
+LOCAL_META = Path(".meta-flow")
+INSTALL_REL = LOCAL_META / "install.yaml"
+LOCAL_WORKSPACE = LOCAL_META / "workspace.yaml"
+WORKSPACE_MANIFEST = "mf.workspace.yaml"
+CONTRACT_ROLE = LOCAL_META / "role.yaml"
 _ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
-_ROADMAP_RE = re.compile(r"^R(\d+)$")
 
 
 class WorkspaceError(Exception):
@@ -25,57 +32,8 @@ class WorkspaceError(Exception):
         self.code = code
 
 
-def _as_dir(path: Path) -> Path:
-    """文件路径取其父目录；目录路径原样返回。"""
-    path = path.expanduser()
-    if path.is_file():
-        return path.parent
-    return path
-
-
-def _version_core(version: str) -> str:
-    """去掉 SemVer 的预发布/构建元数据，只保留 X.Y.Z。"""
-    return version.split("+", 1)[0].split("-", 1)[0]
-
-
-def slugify(name: str) -> str:
-    """把项目名转换为稳定的 project_id。"""
-    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
-    return slug or "project"
-
-
-def find_workspace_root(start: Path) -> Path | None:
-    """从 start 向上查找包含 contracts/project.yaml 与 deliveries/ 的工作区。"""
-    current = _as_dir(start).resolve()
-    for candidate in (current, *current.parents):
-        if (candidate / "contracts" / "project.yaml").is_file() and (
-            candidate / "deliveries"
-        ).is_dir():
-            return candidate
-    return None
-
-
-def detect_role(start: Path) -> tuple[str, Path | None]:
-    """根据目录推导当前角色。
-
-    返回 (role, workspace_root)。未绑定工作区时 role 为 unbound。
-    """
-    root = find_workspace_root(start)
-    if root is None:
-        return "unbound", None
-
-    current = _as_dir(start).resolve()
-    try:
-        relative = current.relative_to(root)
-    except ValueError:
-        return "unbound", root
-
-    parts = relative.parts
-    if parts and parts[0] == "contracts":
-        return "manager", root
-    if parts and parts[0] == "deliveries":
-        return "worker", root
-    return "maintainer", root
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def _write(path: Path, content: str) -> None:
@@ -90,125 +48,326 @@ def _dump_yaml(path: Path, data: dict[str, Any]) -> None:
     )
 
 
-def _git_init(path: Path) -> None:
+def _load_yaml(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise WorkspaceError(f"缺少文件: {path}")
     try:
-        completed = subprocess.run(
-            ["git", "init", "-b", "main", str(path)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise WorkspaceError("未找到 git 命令；可改用 --no-git") from exc
-    if completed.returncode != 0:
-        raise WorkspaceError(f"git init 失败: {completed.stderr.strip()}")
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise WorkspaceError(f"{path} 不是合法 YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise WorkspaceError(f"{path} 顶层必须是映射")
+    return data
 
 
-def _validate_delivery_ids(deliveries: list[str]) -> None:
-    if not deliveries:
-        raise WorkspaceError("至少需要一个交付库；使用 --delivery 指定")
-    if len(set(deliveries)) != len(deliveries):
-        raise WorkspaceError("交付库 id 不能重复")
-    for delivery in deliveries:
-        if not _ID_RE.fullmatch(delivery):
-            raise WorkspaceError(f"交付库 id 必须是小写 kebab-case: {delivery}")
+def _digest_text(content: str) -> str:
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def init_workspace(
-    target: Path,
+def _digest_file(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def slugify(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    return slug or "project"
+
+
+def _as_dir(path: Path) -> Path:
+    path = path.expanduser()
+    return path.parent if path.is_file() else path
+
+
+def find_workspace_root(start: Path) -> Path | None:
+    current = _as_dir(start).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / LOCAL_WORKSPACE).is_file():
+            return candidate
+    return None
+
+
+def find_contract_root(start: Path) -> Path | None:
+    current = _as_dir(start).resolve()
+    for candidate in (current, *current.parents):
+        role = candidate / CONTRACT_ROLE
+        if role.is_file() and (candidate / "workspace").is_dir():
+            try:
+                data = yaml.safe_load(role.read_text(encoding="utf-8")) or {}
+            except yaml.YAMLError:
+                data = {}
+            if isinstance(data, dict) and data.get("role") == "manager":
+                return candidate
+    return None
+
+
+def find_subproject_root(start: Path) -> Path | None:
+    current = _as_dir(start).resolve()
+    for candidate in (current, *current.parents):
+        path = candidate / INSTALL_REL
+        if path.is_file():
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except yaml.YAMLError:
+                data = {}
+            if isinstance(data, dict) and data.get("role") == "worker":
+                return candidate
+    return None
+
+
+def detect_role(start: Path) -> tuple[str, Path | None]:
+    """根据目录推导角色。"""
+    current = _as_dir(start).resolve()
+    home = global_store.global_home()
+    if current == home or home in current.parents:
+        return "maintainer", home
+    contract = find_contract_root(current)
+    if contract is not None:
+        return "manager", contract
+    subproject = find_subproject_root(current)
+    if subproject is not None:
+        return "worker", subproject
+    workspace = find_workspace_root(current)
+    if workspace is not None:
+        return "manager", workspace
+    return "unbound", None
+
+
+def _load_local_workspace(root: Path) -> dict[str, Any]:
+    return _load_yaml(root / LOCAL_WORKSPACE)
+
+
+def _contract_path(root: Path, local: dict[str, Any]) -> Path:
+    raw = local.get("contract_dir")
+    if not raw:
+        raise WorkspaceError("workspace.yaml 缺少 contract_dir")
+    path = Path(str(raw)).expanduser()
+    return (root / path).resolve() if not path.is_absolute() else path.resolve()
+
+
+def _git_info(path: Path) -> dict[str, Any]:
+    if not (path / ".git").exists():
+        return {"git": False}
+    branch = subprocess.run(
+        ["git", "-C", str(path), "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    commit = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    dirty = subprocess.run(
+        ["git", "-C", str(path), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {
+        "git": True,
+        "branch": branch.stdout.strip() if branch.returncode == 0 else None,
+        "commit": commit.stdout.strip() if commit.returncode == 0 else None,
+        "dirty": bool(dirty.stdout.strip()) if dirty.returncode == 0 else None,
+    }
+
+
+def _git_init(path: Path) -> None:
+    if (path / ".git").exists():
+        return
+    result = subprocess.run(
+        ["git", "init", "-b", "main", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise WorkspaceError(f"git init 失败: {result.stderr.strip()}")
+
+
+def _git_remote_add(path: Path, remote: str | None) -> None:
+    if not remote:
+        return
+    existing = subprocess.run(
+        ["git", "-C", str(path), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if existing.returncode == 0:
+        if existing.stdout.strip() != remote:
+            raise WorkspaceError(
+                f"{path} 已有 origin={existing.stdout.strip()}；拒绝改为 {remote}"
+            )
+        return
+    result = subprocess.run(
+        ["git", "-C", str(path), "remote", "add", "origin", remote],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise WorkspaceError(f"git remote add 失败: {result.stderr.strip()}")
+
+
+def _copy_global_tree(subdir: str, target: Path) -> None:
+    source = global_store.global_home() / "templates" / subdir
+    target.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        for item in source.iterdir():
+            if item.is_file():
+                shutil.copyfile(item, target / item.name)
+        return
+    if subdir == "standards":
+        for name, content in templates.STANDARDS.items():
+            _write(target / name, content)
+    elif subdir == "artifacts":
+        for name, content in templates.ARTIFACT_TEMPLATES.items():
+            _write(target / name, content)
+
+
+def _managed_import_block(role: str, import_line: str) -> str:
+    return (
+        f"{templates.MANAGED_BLOCK_START.format(role=role)}\n"
+        f"{import_line}\n"
+        f"{templates.MANAGED_BLOCK_END.format(role=role)}\n"
+    )
+
+
+def _import_path(relative: str) -> str:
+    return "@" + relative.replace(" ", "\\ ")
+
+
+def _read_or(path: Path, fallback: str) -> str:
+    return path.read_text(encoding="utf-8") if path.is_file() else fallback
+
+
+def _write_contract_manifest(contract: Path, data: dict[str, Any]) -> None:
+    _dump_yaml(contract / "workspace" / WORKSPACE_MANIFEST, data)
+
+
+def _write_root_manifest(root: Path, contract: Path, data: dict[str, Any]) -> str:
+    canonical = contract / "workspace" / WORKSPACE_MANIFEST
+    content = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+    header = (
+        f"# generated by mf workspace sync from {canonical}\n"
+        f"# digest: {_digest_text(content)}\n"
+    )
+    _write(root / WORKSPACE_MANIFEST, header + content)
+    return _digest_text(content)
+
+
+def _link_readme(root: Path, contract: Path, mode: str) -> tuple[str, str]:
+    source = contract / "workspace" / "README.md"
+    target = root / "README.md"
+    if target.exists() or target.is_symlink():
+        target.unlink()
+    if mode == "auto":
+        mode = "symlink" if os.name != "nt" else "copy"
+    if mode == "symlink":
+        relative = os.path.relpath(source, root)
+        try:
+            target.symlink_to(relative)
+            return "symlink", relative
+        except OSError:
+            if mode == "auto":
+                mode = "copy"
+            else:
+                raise WorkspaceError(f"无法创建符号链接: {target}") from None
+    content = source.read_text(encoding="utf-8")
+    header = f"<!-- generated from {source}; do not edit -->\n"
+    _write(target, header + content)
+    return "copy", _digest_text(content)
+
+
+def _refresh_root_links(root: Path, contract: Path, local: dict[str, Any]) -> dict[str, Any]:
+    relative = os.path.relpath(contract / "workspace" / "CLAUDE.md", root)
+    import_line = _import_path(relative)
+    _write(root / "CLAUDE.md", _managed_import_block("manager", import_line))
+    readme_mode, readme_ref = _link_readme(
+        root, contract, str(local.get("readme_link_mode", "auto"))
+    )
+    manifest_digest = _write_root_manifest(
+        root, contract, _load_yaml(contract / "workspace" / WORKSPACE_MANIFEST)
+    )
+    return {
+        "claude_import": import_line,
+        "readme_link_mode": readme_mode,
+        "readme_ref": readme_ref,
+        "workspace_manifest_digest": manifest_digest,
+    }
+
+
+def workspace_init(
+    root: str | Path,
     name: str,
-    deliveries: list[str],
     *,
-    git: bool = True,
-) -> Path:
-    """在 target 下创建 contracts/ 与 deliveries/ 两个仓库骨架。"""
-    root = target.expanduser().resolve()
-    if root.exists() and not root.is_dir():
-        raise WorkspaceError(f"目标不是目录: {root}")
-    if (root / "contracts").exists() or (root / "deliveries").exists():
-        raise WorkspaceError(
-            f"目标已包含 contracts/ 或 deliveries/，拒绝覆盖: {root}"
-        )
+    contract_dir: str | Path | None = None,
+    contract_remote: str | None = None,
+    link_mode: str = "auto",
+    force: bool = False,
+) -> dict[str, Any]:
+    """在已安装 manager 的项目根创建 contract 仓与 workspace 元数据。"""
+    root = Path(root).expanduser().resolve()
+    install_manifest = root / INSTALL_REL
+    if not install_manifest.is_file():
+        raise WorkspaceError(f"缺少项目安装记录: {install_manifest}；先运行 mf install claude")
+    install_data = _load_yaml(install_manifest)
+    if install_data.get("role") != "manager":
+        raise WorkspaceError("当前项目不是 manager 安装")
 
-    _validate_delivery_ids(deliveries)
     project_id = slugify(name)
+    if contract_dir is None:
+        contract = root / f"{project_id}-contract"
+    else:
+        raw = Path(contract_dir).expanduser()
+        contract = (root / raw).resolve() if not raw.is_absolute() else raw.resolve()
+    if not contract.is_relative_to(root):
+        raise WorkspaceError("contract 目录必须在项目根目录下，才能使用 @ 导入")
+    if contract.exists():
+        raise WorkspaceError(f"contract 目录已存在: {contract}")
+    if link_mode not in {"auto", "symlink", "copy"}:
+        raise WorkspaceError("link_mode 只能是 auto|symlink|copy")
 
-    contracts = root / "contracts"
-    deliveries_root = root / "deliveries"
-
+    global_store.bootstrap()
     for directory in (
-        contracts / "project",
-        contracts / "roadmap",
-        contracts / "roadmap" / "phases",
-        contracts / "requirements" / "changes",
-        contracts / "standards",
-        contracts / "templates",
-        contracts / "policies",
-        contracts / "bugs",
-        contracts / "knowledge",
-        contracts / "architecture" / "drafts",
-        contracts / "specs",
-        contracts / "tasks",
-        contracts / "dev-records",
-        contracts / "verification",
-        contracts / "handoffs",
-        contracts / "reviews",
-        contracts / "state",
-        contracts / "archive",
-        contracts / ".metaflow",
-        deliveries_root / ".metaflow",
+        contract / "workspace",
+        contract / "project",
+        contract / "roadmap" / "phases",
+        contract / "requirements" / "changes",
+        contract / "architecture" / "drafts",
+        contract / "specs",
+        contract / "standards",
+        contract / "templates",
+        contract / "policies",
+        contract / "tasks",
+        contract / "dev-records",
+        contract / "verification",
+        contract / "handoffs",
+        contract / "reviews",
+        contract / "bugs",
+        contract / "knowledge",
+        contract / "state",
+        contract / "archive",
+        contract / LOCAL_META,
     ):
         directory.mkdir(parents=True, exist_ok=True)
 
-    # 根目录：工作区清单与 maintainer 角色文件
-    _dump_yaml(
-        root / "mf.workspace.yaml",
-        {
-            "schema": 1,
-            "workspace": name,
-            "contracts_repo": "contracts",
-            "deliveries_repo": "deliveries",
-            "roles": {
-                "root": "maintainer",
-                "contracts": "manager",
-                "deliveries": "worker",
-            },
-        },
-    )
-    _write(root / "CLAUDE.md", templates.ROOT_CLAUDE)
-    _write(root / "AGENTS.md", templates.ROOT_AGENTS)
-
-    # 契约库
-    _write(contracts / "CLAUDE.md", templates.CONTRACTS_CLAUDE)
-    _write(contracts / "AGENTS.md", templates.CONTRACTS_AGENTS)
+    _copy_global_tree("standards", contract / "standards")
+    _copy_global_tree("artifacts", contract / "templates")
     _write(
-        contracts / ".metaflow" / "role.yaml",
-        "role: manager\nworkspace_root: ..\n",
+        contract / "templates" / "README.md",
+        "# 项目模板\n\n本目录由 manager 维护，worker 只读。\n",
     )
-    _write(contracts / ".gitignore", "state/current.json\n.metaflow/*.lock\n")
-    _dump_yaml(
-        contracts / "project.yaml",
-        {
-            "schema": 1,
-            "project_id": project_id,
-            "name": name,
-            "roadmap": "R1",
-            "phase": "P1",
-            "version": "1.0.0-alpha.1",
-            "version_policy": "same-major",
-            "plan_ref": "project/PROJECT-PLAN.md",
-            "deliveries": [
-                {
-                    "id": delivery,
-                    "path": f"deliveries/{delivery}",
-                    "responsibility": f"{delivery} 交付库",
-                }
-                for delivery in deliveries
-            ],
-        },
+
+    _write(contract / "project" / "PROJECT-PLAN.md", templates.PROJECT_PLAN)
+    _write(
+        contract / "project" / "INIT-CHECKLIST.md",
+        templates.ARTIFACT_TEMPLATES["INIT-CHECKLIST.md"],
     )
     _dump_yaml(
-        contracts / "roadmap" / "ROADMAP.yaml",
+        contract / "roadmap" / "ROADMAP.yaml",
         {
             "schema": 1,
             "roadmaps": [
@@ -226,44 +385,93 @@ def init_workspace(
             ],
         },
     )
+    _write(
+        contract / "roadmap" / "R1-PLAN.md",
+        templates.ARTIFACT_TEMPLATES["ROADMAP-PLAN.md"].replace("R{n}", "R1"),
+    )
     _dump_yaml(
-        contracts / "requirements" / "REQUIREMENTS.yaml",
+        contract / "requirements" / "REQUIREMENTS.yaml",
         {"schema": 1, "requirements": []},
     )
-    _write(contracts / "project" / "PROJECT-PLAN.md", templates.PROJECT_PLAN)
-    _write(
-        contracts / "project" / "INIT-CHECKLIST.md",
-        templates.ARTIFACT_TEMPLATES["INIT-CHECKLIST.md"],
-    )
-    for template_name, content in templates.ARTIFACT_TEMPLATES.items():
-        _write(contracts / "templates" / template_name, content)
-    _write(
-        contracts / "templates" / "README.md",
-        "# 项目模板\n\n"
-        "本目录由 manager 在初始化时放入，worker 只读。\n"
-        "新增或修改模板属于契约库变更，需 manager 审核。\n",
-    )
+    _write(contract / "requirements" / "INDEX.md", templates.REQUIREMENTS_INDEX)
+    _write(contract / "architecture" / "INDEX.md", templates.ARCHITECTURE_INDEX)
+    _write(contract / "bugs" / "README.md", templates.BUGS_README)
+    _write(contract / "bugs" / "_TEMPLATE.yaml", templates.BUG_TEMPLATE)
+    _write(contract / "knowledge" / "KNOWLEDGE.yaml", templates.KNOWLEDGE_YAML)
+    _write(contract / "knowledge" / "KNOWLEDGE.md", templates.KNOWLEDGE_MD)
+    _write(contract / "policies" / "CONTEXT-POLICY.yaml", templates.CONTEXT_POLICY)
+    _write(contract / "state" / "ledger.ndjson", "")
+    _write(contract / "state" / "READ-LOG.ndjson", "")
+    _write(contract / "state" / "current.json", _initial_state(project_id))
+    _write(contract / "archive" / "README.md", templates.ARCHIVE_README)
+    _write(contract / ".gitignore", "state/current.json\n.meta-flow/*.lock\n")
+    _write(contract / CONTRACT_ROLE, "role: manager\nworkspace_root: ..\n")
     for relative in (
-        "contracts/dev-records/.gitkeep",
-        "contracts/reviews/.gitkeep",
-        "contracts/roadmap/phases/.gitkeep",
-        "contracts/tasks/.gitkeep",
-        "contracts/verification/.gitkeep",
-        "contracts/handoffs/.gitkeep",
-        "contracts/specs/.gitkeep",
-        "contracts/archive/.gitkeep",
-        "contracts/requirements/changes/.gitkeep",
-        "contracts/architecture/drafts/.gitkeep",
+        "requirements/changes/.gitkeep",
+        "architecture/drafts/.gitkeep",
+        "specs/.gitkeep",
+        "tasks/.gitkeep",
+        "dev-records/.gitkeep",
+        "verification/.gitkeep",
+        "handoffs/.gitkeep",
+        "reviews/.gitkeep",
+        "archive/.gitkeep",
+        "roadmap/phases/.gitkeep",
     ):
-        _write(root / relative, "")
+        _write(contract / relative, "")
 
-    _write(contracts / "policies" / "CONTEXT-POLICY.yaml", templates.CONTEXT_POLICY)
-    _write(contracts / "archive" / "README.md", templates.ARCHIVE_README)
-    _write(contracts / "requirements" / "INDEX.md", templates.REQUIREMENTS_INDEX)
-    _write(contracts / "architecture" / "INDEX.md", templates.ARCHITECTURE_INDEX)
-    _write(contracts / "state" / "READ-LOG.ndjson", "")
-    _write(
-        contracts / "state" / "current.json",
+    root_claude = _read_or(root / "CLAUDE.md", templates.MANAGER_CLAUDE)
+    root_readme = _read_or(root / "README.md", templates.PROJECT_README)
+    _write(contract / "workspace" / "CLAUDE.md", root_claude)
+    _write(contract / "workspace" / "README.md", root_readme)
+
+    workspace_data = {
+        "schema": 1,
+        "project": {
+            "name": name,
+            "id": project_id,
+            "contract_dir": str(contract.relative_to(root)),
+            "contract_remote": contract_remote,
+            "link_mode": link_mode,
+        },
+        "subprojects": [],
+        "template_version": global_store.load_manifest().get("template_version"),
+    }
+    _write_contract_manifest(contract, workspace_data)
+
+    local = {
+        "schema": 1,
+        "project_id": project_id,
+        "project_name": name,
+        "contract_dir": str(contract.relative_to(root)),
+        "contract_remote": contract_remote,
+        "readme_link_mode": link_mode,
+        "subprojects": [],
+        "installed_at": _now(),
+    }
+    _dump_yaml(root / LOCAL_WORKSPACE, local)
+    links = _refresh_root_links(root, contract, local)
+    local.update(links)
+    _dump_yaml(root / LOCAL_WORKSPACE, local)
+
+    install_data["contract_dir"] = str(contract.relative_to(root))
+    install_data["link_mode"] = links["readme_link_mode"]
+    install_data["updated_at"] = _now()
+    _dump_yaml(install_manifest, install_data)
+
+    _git_init(contract)
+    _git_remote_add(contract, contract_remote)
+    return {
+        "root": str(root),
+        "contract_dir": str(contract),
+        "project_id": project_id,
+        "claude_import": links["claude_import"],
+        "readme_link_mode": links["readme_link_mode"],
+    }
+
+
+def _initial_state(project_id: str) -> str:
+    return (
         json.dumps(
             {
                 "schema": 1,
@@ -277,401 +485,322 @@ def init_workspace(
                     "type": "plan",
                     "text": "完成 P1 计划与 INIT-CHECKLIST",
                 },
-                "updated_at": datetime.now(UTC).isoformat(),
+                "updated_at": _now(),
             },
             ensure_ascii=False,
             indent=2,
         )
-        + "\n",
-    )
-    _write(contracts / "state" / "ledger.ndjson", "")
-
-    for standard_name, content in templates.STANDARDS.items():
-        _write(contracts / "standards" / standard_name, content)
-
-    _write(contracts / "bugs" / "README.md", templates.BUGS_README)
-    _write(contracts / "bugs" / "_TEMPLATE.yaml", templates.BUG_TEMPLATE)
-    _write(contracts / "knowledge" / "KNOWLEDGE.yaml", templates.KNOWLEDGE_YAML)
-    _write(contracts / "knowledge" / "KNOWLEDGE.md", templates.KNOWLEDGE_MD)
-
-    # 交付库集合
-    _write(deliveries_root / "CLAUDE.md", templates.DELIVERIES_CLAUDE)
-    _write(deliveries_root / "AGENTS.md", templates.DELIVERIES_AGENTS)
-    _write(
-        deliveries_root / ".metaflow" / "role.yaml",
-        "role: worker\nworkspace_root: ..\n",
-    )
-    _write(
-        deliveries_root / ".gitignore",
-        ".metaflow/session-role.json\n.metaflow/*.lock\n",
+        + "\n"
     )
 
-    for delivery in deliveries:
-        delivery_root = deliveries_root / delivery
-        for directory in (
-            delivery_root / "src",
-            delivery_root / "tests",
-            delivery_root / "release",
-            delivery_root / ".metaflow",
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
-        _write(
-            delivery_root / "CLAUDE.md",
-            f"""# 交付库 {delivery}（执行者）
 
-你是 `meta-worker`，当前交付库是 `{delivery}`。
+def workspace_add_project(
+    root: str | Path,
+    name: str,
+    path: str | Path,
+    *,
+    remote: str | None = None,
+    delivery: str | None = None,
+) -> dict[str, Any]:
+    """创建子项目并安装 worker。"""
+    root = Path(root).expanduser().resolve()
+    local = _load_local_workspace(root)
+    contract = _contract_path(root, local)
+    project_id = slugify(name)
+    sub = (root / Path(path)).resolve() if not Path(path).is_absolute() else Path(path).resolve()
+    if not sub.is_relative_to(root) or sub == contract or contract in sub.parents:
+        raise WorkspaceError("子项目路径必须在项目根下，且不能是 contract 目录")
+    if sub.exists() and any(sub.iterdir()) and not (sub / INSTALL_REL).is_file():
+        raise WorkspaceError(f"子项目目录非空且未安装 worker: {sub}")
 
-- 只处理 `delivery: {delivery}` 的任务卡。
-- 只写任务卡 `allowed_paths`。
-- 不读契约库全文，只读 `mf task show --packet` 返回的任务包。
-- 完成后写 `.metaflow/handoffs/<task-id>.md` 并 `mf task submit`。
-- 不修改契约库、路标、需求、验收标准；不跨交付库。
-""",
+    from .install import install_worker
+
+    result = install_worker(
+        sub,
+        delivery or name,
+        workspace_root=root,
+        contract_dir=contract,
+        remote=remote,
+    )
+
+    entry = {
+        "id": project_id,
+        "path": str(sub.relative_to(root)),
+        "remote": remote,
+        "delivery": delivery or name,
+        "agent": "worker",
+    }
+    subprojects = [item for item in local.get("subprojects", []) if item.get("id") != project_id]
+    subprojects.append(entry)
+    local["subprojects"] = subprojects
+    _dump_yaml(root / LOCAL_WORKSPACE, local)
+
+    workspace_data = _load_yaml(contract / "workspace" / WORKSPACE_MANIFEST)
+    workspace_data["subprojects"] = subprojects
+    _write_contract_manifest(contract, workspace_data)
+    local["workspace_manifest_digest"] = _write_root_manifest(root, contract, workspace_data)
+    _dump_yaml(root / LOCAL_WORKSPACE, local)
+
+    return {"subproject": str(sub), "delivery": delivery or name, "install": result}
+
+
+def workspace_link(root: str | Path) -> dict[str, Any]:
+    """重建根目录 CLAUDE.md 导入、README 链接和 workspace 清单。"""
+    root = Path(root).expanduser().resolve()
+    local = _load_local_workspace(root)
+    contract = _contract_path(root, local)
+    links = _refresh_root_links(root, contract, local)
+    local.update(links)
+    local["linked_at"] = _now()
+    _dump_yaml(root / LOCAL_WORKSPACE, local)
+    return {"root": str(root), **links}
+
+
+def workspace_sync(
+    root: str | Path,
+    *,
+    check: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    """校验/刷新根目录生成文件。"""
+    root = Path(root).expanduser().resolve()
+    local = _load_local_workspace(root)
+    contract = _contract_path(root, local)
+    canonical = contract / "workspace" / WORKSPACE_MANIFEST
+    errors: list[str] = []
+
+    claude_path = root / "CLAUDE.md"
+    if not claude_path.is_file():
+        errors.append("缺少根 CLAUDE.md")
+    else:
+        text = claude_path.read_text(encoding="utf-8")
+        expected_import = _import_path(
+            os.path.relpath(contract / "workspace" / "CLAUDE.md", root)
         )
-        _dump_yaml(
-            delivery_root / ".metaflow" / "worker.yaml",
+        if expected_import not in text:
+            errors.append("根 CLAUDE.md 未指向 contract/workspace/CLAUDE.md")
+    if not (contract / "workspace" / "CLAUDE.md").is_file():
+        errors.append("缺少 contract/workspace/CLAUDE.md")
+
+    readme = root / "README.md"
+    if not readme.exists() and not readme.is_symlink():
+        errors.append("缺少根 README.md")
+    elif readme.is_symlink():
+        target = readme.resolve()
+        if target != (contract / "workspace" / "README.md").resolve():
+            errors.append("根 README 软链指向错误")
+    else:
+        canonical_readme = (contract / "workspace" / "README.md").read_text(encoding="utf-8")
+        current = readme.read_text(encoding="utf-8")
+        if current.endswith(canonical_readme):
+            pass
+        elif check:
+            errors.append("根 README 与 contract/workspace/README.md 不一致")
+        elif force:
+            mode, _ = _link_readme(root, contract, local.get("readme_link_mode", "auto"))
+            local["readme_link_mode"] = mode
+        else:
+            errors.append("根 README 与 canonical 不一致；使用 --force 或 --check")
+
+    root_manifest = root / WORKSPACE_MANIFEST
+    content = yaml.safe_dump(
+        _load_yaml(canonical), sort_keys=False, allow_unicode=True
+    )
+    if not root_manifest.is_file():
+        errors.append("缺少根 mf.workspace.yaml")
+    elif check:
+        current = root_manifest.read_text(encoding="utf-8")
+        if _digest_text(content) not in current:
+            errors.append("根 mf.workspace.yaml 与 canonical 不一致")
+    elif force:
+        local["workspace_manifest_digest"] = _write_root_manifest(
+            root, contract, _load_yaml(canonical)
+        )
+        _dump_yaml(root / LOCAL_WORKSPACE, local)
+    return {"root": str(root), "errors": errors, "ok": not errors}
+
+
+def workspace_status(root: str | Path) -> dict[str, Any]:
+    """返回 contract 与子项目的 git/版本状态。"""
+    root = Path(root).expanduser().resolve()
+    local = _load_local_workspace(root)
+    contract = _contract_path(root, local)
+    subprojects = []
+    for item in local.get("subprojects", []):
+        path = (root / str(item.get("path", ""))).resolve()
+        version = None
+        delivery_path = path / "delivery.yaml"
+        if delivery_path.is_file():
+            try:
+                delivery = yaml.safe_load(delivery_path.read_text(encoding="utf-8")) or {}
+                version = delivery.get("version") if isinstance(delivery, dict) else None
+            except yaml.YAMLError:
+                version = None
+        subprojects.append(
             {
-                "role": "worker",
-                "delivery": delivery,
-                "workspace_root": "../..",
-                "allowed_paths": ["src/**", "tests/**", "release/**"],
-            },
+                **item,
+                "absolute_path": str(path),
+                "version": version,
+                **_git_info(path),
+            }
         )
-        _dump_yaml(
-            delivery_root / "delivery.yaml",
-            {
-                "id": delivery,
-                "version": "1.0.0",
-                "roadmap": "R1",
-                "responsibility": f"{delivery} 交付库",
-                "contracts": [],
-                "artifacts": [],
-                "docs": {
-                    "release_notes": "RELEASE-NOTES.md",
-                    "user_manual": "USER-MANUAL.md",
-                },
-                "repo": ".",
-            },
-        )
-        _write(delivery_root / "RELEASE-NOTES.md", templates.RELEASE_NOTES)
-        _write(delivery_root / "USER-MANUAL.md", templates.USER_MANUAL)
-        _write(delivery_root / "src" / ".gitkeep", "")
-        _write(delivery_root / "tests" / ".gitkeep", "")
-        _write(delivery_root / "release" / ".gitkeep", "")
-
-    if git:
-        _git_init(contracts)
-        _git_init(deliveries_root)
-
-    return root
-
-
-def load_project(root: Path) -> dict[str, Any]:
-    """读取 contracts/project.yaml。"""
-    path = root / "contracts" / "project.yaml"
-    if not path.is_file():
-        raise WorkspaceError(f"缺少 {path}")
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise WorkspaceError(f"{path} 不是合法 YAML: {exc}") from exc
-    if not isinstance(data, dict):
-        raise WorkspaceError(f"{path} 顶层必须是映射")
-    return data
-
-
-def load_roadmap(root: Path) -> dict[str, Any]:
-    """读取 contracts/roadmap/ROADMAP.yaml。"""
-    path = root / "contracts" / "roadmap" / "ROADMAP.yaml"
-    if not path.is_file():
-        raise WorkspaceError(f"缺少 {path}")
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise WorkspaceError(f"{path} 不是合法 YAML: {exc}") from exc
-    if not isinstance(data, dict):
-        raise WorkspaceError(f"{path} 顶层必须是映射")
-    return data
-
-
-def count_tasks(root: Path) -> dict[str, int]:
-    """统计任务卡状态；无法解析的任务计入 invalid。"""
-    counts: dict[str, int] = {}
-    for path in sorted((root / "contracts" / "tasks").rglob("*.yaml")):
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except yaml.YAMLError:
-            counts["invalid"] = counts.get("invalid", 0) + 1
-            continue
-        status = data.get("status", "draft") if isinstance(data, dict) else "invalid"
-        counts[str(status)] = counts.get(str(status), 0) + 1
-    return counts
-
-
-def build_status(root: Path, role: str | None = None) -> dict[str, Any]:
-    """汇总当前工作区状态。"""
-    project = load_project(root)
-    roadmap_data = load_roadmap(root)
-    roadmaps = roadmap_data.get("roadmaps") or []
-    active_id = project.get("roadmap")
-    active = next(
-        (item for item in roadmaps if isinstance(item, dict) and item.get("id") == active_id),
-        None,
-    )
     return {
-        "workspace": str(root),
+        "root": str(root),
         "project": {
-            "id": project.get("project_id"),
-            "name": project.get("name"),
+            "id": local.get("project_id"),
+            "name": local.get("project_name"),
         },
-        "role": role or detect_role(root)[0],
-        "roadmap": active,
-        "phase": project.get("phase"),
-        "version": project.get("version"),
-        "version_policy": project.get("version_policy"),
-        "plan_ref": project.get("plan_ref"),
-        "deliveries": project.get("deliveries") or [],
-        "tasks": count_tasks(root),
+        "contract": {
+            "dir": str(contract),
+            "remote": local.get("contract_remote"),
+            **_git_info(contract),
+        },
+        "subprojects": subprojects,
+        "claude_import": local.get("claude_import"),
+        "readme_link_mode": local.get("readme_link_mode"),
     }
 
 
-def _contract_exists(contracts_root: Path, contract_id: str) -> bool:
-    """在 specs/ 与 architecture/ 中按文件名或内容查找契约 ID。"""
-    candidates = [
-        *(contracts_root / "specs").rglob("*"),
-        *(contracts_root / "architecture").rglob("*"),
-    ]
-    for path in candidates:
-        if not path.is_file() or path.suffix.lower() not in {".md", ".yaml", ".yml", ".json"}:
-            continue
-        if contract_id in path.name:
-            return True
-        try:
-            if contract_id in path.read_text(encoding="utf-8"):
-                return True
-        except OSError:
-            continue
-    return False
-
-
-def doctor(root: Path) -> list[str]:
-    """校验工作区结构与版本一致性，返回错误列表。"""
+def doctor_global() -> list[str]:
     errors: list[str] = []
-    contracts = root / "contracts"
-    deliveries_root = root / "deliveries"
+    home = global_store.global_home()
+    manifest = home / "manifest.yaml"
+    if not manifest.is_file():
+        errors.append("缺少 ~/.meta-flow/manifest.yaml")
+    else:
+        try:
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            errors.append(f"manifest.yaml 不是合法 YAML: {exc}")
+            data = {}
+        if not data.get("repo_url"):
+            errors.append("全局 manifest 缺少 repo_url")
+    for name in ("manager", "maintainer", "worker"):
+        if not (home / "agents" / f"{name}.md").is_file():
+            errors.append(f"缺少全局 agent: agents/{name}.md")
+    standards = home / "templates" / "standards"
+    if not standards.is_dir() or len(list(standards.glob("*.md"))) < len(templates.STANDARDS):
+        errors.append("全局 standards 模板不完整")
+    return errors
 
-    if not (contracts / "project.yaml").is_file():
-        errors.append("缺少 contracts/project.yaml")
-    if not deliveries_root.is_dir():
-        errors.append("缺少 deliveries/ 目录")
-    if errors:
-        return errors
 
+def doctor(root: str | Path) -> list[str]:
+    """校验项目、workspace、contract 与子项目安装。"""
+    root = Path(root).expanduser().resolve()
+    errors: list[str] = []
+    install_path = root / INSTALL_REL
+    if not install_path.is_file():
+        return [f"缺少项目安装记录: {install_path}"]
     try:
-        project = load_project(root)
-        roadmap_data = load_roadmap(root)
+        install_data = _load_yaml(install_path)
     except WorkspaceError as exc:
         return [str(exc)]
-
-    project_id = project.get("project_id")
-    project_name = project.get("name")
-    roadmap_id = project.get("roadmap")
-    if not project_id:
-        errors.append("project.yaml 缺少 project_id")
-    if not project_name:
-        errors.append("project.yaml 缺少 name")
-    if not roadmap_id:
-        errors.append("project.yaml 缺少 roadmap")
-
-    version_policy = project.get("version_policy", "same-major")
-    if version_policy not in {"same-major", "exact", "independent"}:
-        errors.append(f"project.yaml version_policy 非法: {version_policy}")
-
-    plan_ref = project.get("plan_ref", "project/PROJECT-PLAN.md")
-    if not (contracts / str(plan_ref)).is_file():
-        errors.append(f"缺少项目计划: contracts/{plan_ref}")
-
-    roadmaps = roadmap_data.get("roadmaps")
-    if not isinstance(roadmaps, list) or not roadmaps:
-        errors.append("ROADMAP.yaml 缺少非空 roadmaps 列表")
-        active = None
-    else:
-        active = next(
-            (item for item in roadmaps if isinstance(item, dict) and item.get("id") == roadmap_id),
-            None,
-        )
-        if active is None:
-            errors.append(f"ROADMAP.yaml 中找不到当前路标: {roadmap_id}")
-
-    roadmap_match = _ROADMAP_RE.fullmatch(str(roadmap_id or ""))
-    if active and roadmap_match:
-        roadmap_major = roadmap_match.group(1)
-        version_target = str(active.get("version_target", ""))
-        major = version_target.split(".", 1)[0] if version_target else ""
-        if major != roadmap_major:
-            errors.append(
-                f"路标 {roadmap_id} 与版本 {version_target} 的 MAJOR 不一致"
-            )
-
-    if not (contracts / "requirements" / "REQUIREMENTS.yaml").is_file():
-        errors.append("缺少 contracts/requirements/REQUIREMENTS.yaml")
+    if install_data.get("role") != "manager":
+        errors.append("根目录安装角色不是 manager")
+    for name in install_data.get("agents", ["manager"]):
+        if not (root / ".claude" / "agents" / f"{name}.md").is_file():
+            errors.append(f"缺少根 agent: .claude/agents/{name}.md")
+    settings_path = root / ".claude" / "settings.json"
+    if not settings_path.is_file():
+        errors.append("缺少 .claude/settings.json")
     else:
         try:
-            yaml.safe_load(
-                (contracts / "requirements" / "REQUIREMENTS.yaml").read_text(encoding="utf-8")
-            )
-        except yaml.YAMLError as exc:
-            errors.append(f"REQUIREMENTS.yaml 不是合法 YAML: {exc}")
-
-    for standard_name in templates.STANDARDS:
-        if not (contracts / "standards" / standard_name).is_file():
-            errors.append(f"缺少规范: contracts/standards/{standard_name}")
-
-    if not (contracts / "state" / "ledger.ndjson").is_file():
-        errors.append("缺少 contracts/state/ledger.ndjson")
-
-    knowledge_path = contracts / "knowledge" / "KNOWLEDGE.yaml"
-    if knowledge_path.is_file():
-        try:
-            yaml.safe_load(knowledge_path.read_text(encoding="utf-8"))
-        except yaml.YAMLError as exc:
-            errors.append(f"KNOWLEDGE.yaml 不是合法 YAML: {exc}")
-
-    for relative in (
-        "CLAUDE.md",
-        "AGENTS.md",
-        "mf.workspace.yaml",
-        "contracts/CLAUDE.md",
-        "contracts/AGENTS.md",
-        "contracts/.metaflow/role.yaml",
-        "deliveries/CLAUDE.md",
-        "deliveries/AGENTS.md",
-        "deliveries/.metaflow/role.yaml",
-    ):
-        if not (root / relative).is_file():
-            errors.append(f"缺少角色/清单文件: {relative}")
-
-    for relative in (
-        "contracts/bugs/README.md",
-        "contracts/bugs/_TEMPLATE.yaml",
-        "contracts/knowledge/KNOWLEDGE.yaml",
-        "contracts/knowledge/KNOWLEDGE.md",
-    ):
-        if not (root / relative).is_file():
-            errors.append(f"缺少缺陷/知识文件: {relative}")
-
-    for relative in (
-        "contracts/project/INIT-CHECKLIST.md",
-        "contracts/templates/README.md",
-        "contracts/dev-records",
-        "contracts/reviews",
-        "contracts/roadmap/phases",
-    ):
-        if not (root / relative).exists():
-            errors.append(f"缺少项目制品: {relative}")
-
-    for template_name in templates.ARTIFACT_TEMPLATES:
-        if not (contracts / "templates" / template_name).is_file():
-            errors.append(f"缺少模板: contracts/templates/{template_name}")
-
-    for relative in (
-        "contracts/policies/CONTEXT-POLICY.yaml",
-        "contracts/state/READ-LOG.ndjson",
-        "contracts/archive/README.md",
-        "contracts/requirements/INDEX.md",
-        "contracts/architecture/INDEX.md",
-    ):
-        if not (root / relative).is_file():
-            errors.append(f"缺少上下文控制文件: {relative}")
-
-    policy_path = contracts / "policies" / "CONTEXT-POLICY.yaml"
-    if policy_path.is_file():
-        try:
-            yaml.safe_load(policy_path.read_text(encoding="utf-8"))
-        except yaml.YAMLError as exc:
-            errors.append(f"CONTEXT-POLICY.yaml 不是合法 YAML: {exc}")
-
-    state_path = contracts / "state" / "current.json"
-    if state_path.is_file():
-        try:
-            json.loads(state_path.read_text(encoding="utf-8"))
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            errors.append(f"current.json 不是合法 JSON: {exc}")
-        if state_path.stat().st_size > 8192:
-            errors.append(
-                f"current.json 超过 8KB: {state_path.stat().st_size} bytes"
-            )
+            errors.append(f"settings.json 不是合法 JSON: {exc}")
+            settings = {}
+        if isinstance(settings, dict) and settings.get("agent") != "manager":
+            errors.append("根 settings.json 的 agent 不是 manager")
 
-    deliveries = project.get("deliveries")
-    if not isinstance(deliveries, list) or not deliveries:
-        errors.append("project.yaml 至少需要一个交付库")
+    if (root / "contracts").exists():
+        errors.append("根目录存在旧版 contracts/；请迁移或删除")
+    if (root / "deliveries").exists():
+        errors.append("根目录存在旧版 deliveries/；请迁移或删除")
+
+    local_path = root / LOCAL_WORKSPACE
+    if not local_path.is_file():
+        errors.append("缺少 .meta-flow/workspace.yaml；运行 mf workspace init")
         return errors
+    try:
+        local = _load_yaml(local_path)
+        contract = _contract_path(root, local)
+    except WorkspaceError as exc:
+        return errors + [str(exc)]
 
-    seen: set[str] = set()
-    for entry in deliveries:
-        if not isinstance(entry, dict):
-            errors.append("project.yaml 的 deliveries 条目必须是映射")
-            continue
-        delivery_id = entry.get("id")
-        raw_path = entry.get("path")
-        if not delivery_id or not raw_path:
-            errors.append("交付库条目缺少 id 或 path")
-            continue
-        if delivery_id in seen:
-            errors.append(f"交付库 id 重复: {delivery_id}")
-            continue
-        seen.add(delivery_id)
+    for relative in (
+        "workspace/CLAUDE.md",
+        "workspace/README.md",
+        "workspace/mf.workspace.yaml",
+        "project/PROJECT-PLAN.md",
+        "project/INIT-CHECKLIST.md",
+        "roadmap/ROADMAP.yaml",
+        "requirements/REQUIREMENTS.yaml",
+        "standards/CONTEXT.md",
+        "templates/README.md",
+        "policies/CONTEXT-POLICY.yaml",
+        "state/ledger.ndjson",
+        "state/READ-LOG.ndjson",
+        "archive/README.md",
+        "bugs/README.md",
+        "knowledge/KNOWLEDGE.yaml",
+    ):
+        if not (contract / relative).is_file():
+            errors.append(f"contract 缺少文件: {relative}")
+    state_path = contract / "state" / "current.json"
+    if not state_path.is_file():
+        errors.append("contract 缺少 state/current.json")
+    elif state_path.stat().st_size > 8192:
+        errors.append(f"contract state/current.json 超过 8KB: {state_path.stat().st_size} bytes")
 
-        delivery_path = (root / str(raw_path)).resolve()
-        if not delivery_path.is_relative_to(deliveries_root.resolve()):
-            errors.append(f"交付库路径必须位于 deliveries/: {raw_path}")
-            continue
-        if not delivery_path.is_dir():
-            errors.append(f"交付库目录不存在: {raw_path}")
-            continue
+    claude_path = root / "CLAUDE.md"
+    if not claude_path.is_file():
+        errors.append("缺少根 CLAUDE.md")
+    else:
+        text = claude_path.read_text(encoding="utf-8")
+        if "@" not in text or "workspace/CLAUDE.md" not in text:
+            errors.append("根 CLAUDE.md 不是 @ contract/workspace/CLAUDE.md 导入")
+    readme = root / "README.md"
+    if not readme.exists() and not readme.is_symlink():
+        errors.append("缺少根 README.md")
+    elif readme.is_symlink() and readme.resolve() != (contract / "workspace" / "README.md").resolve():
+        errors.append("根 README 软链指向错误")
+    root_manifest = root / WORKSPACE_MANIFEST
+    if not root_manifest.is_file():
+        errors.append("缺少根 mf.workspace.yaml")
 
-        for required in ("delivery.yaml", "RELEASE-NOTES.md", "USER-MANUAL.md"):
-            if not (delivery_path / required).is_file():
-                errors.append(f"交付库 {delivery_id} 缺少 {required}")
-
-        delivery_yaml = delivery_path / "delivery.yaml"
-        if delivery_yaml.is_file():
+    for item in local.get("subprojects", []):
+        path = (root / str(item.get("path", ""))).resolve()
+        if not path.is_relative_to(root) or path == contract or contract in path.parents:
+            errors.append(f"子项目路径非法: {item.get('path')}")
+            continue
+        if not path.is_dir():
+            errors.append(f"子项目目录不存在: {item.get('path')}")
+            continue
+        sub_install = path / INSTALL_REL
+        if not sub_install.is_file():
+            errors.append(f"子项目缺少安装记录: {path / INSTALL_REL}")
+            continue
+        try:
+            sub_data = _load_yaml(sub_install)
+        except WorkspaceError as exc:
+            errors.append(str(exc))
+            continue
+        if sub_data.get("role") != "worker":
+            errors.append(f"子项目 {item.get('id')} 安装角色不是 worker")
+        if not (path / ".claude" / "agents" / "worker.md").is_file():
+            errors.append(f"子项目 {item.get('id')} 缺少 worker agent")
+        sub_settings = path / ".claude" / "settings.json"
+        if not sub_settings.is_file():
+            errors.append(f"子项目 {item.get('id')} 缺少 settings.json")
+        else:
             try:
-                delivery_data = yaml.safe_load(delivery_yaml.read_text(encoding="utf-8")) or {}
-            except yaml.YAMLError as exc:
-                errors.append(f"{delivery_yaml} 不是合法 YAML: {exc}")
-                delivery_data = {}
-            if isinstance(delivery_data, dict):
-                if delivery_data.get("id") != delivery_id:
-                    errors.append(f"delivery.yaml 的 id 与注册表不一致: {delivery_id}")
-                if delivery_data.get("roadmap") != roadmap_id:
-                    errors.append(f"交付库 {delivery_id} 的 roadmap 与项目不一致")
-                delivery_version = str(delivery_data.get("version", ""))
-                project_version = str(project.get("version", ""))
-                if version_policy == "exact":
-                    if _version_core(delivery_version) != _version_core(project_version):
-                        errors.append(
-                            f"交付库 {delivery_id} 的版本 {delivery_version} "
-                            f"必须等于项目版本 {project_version}"
-                        )
-                elif version_policy == "same-major":
-                    delivery_major = (
-                        delivery_version.split(".", 1)[0] if delivery_version else ""
-                    )
-                    if roadmap_match and delivery_major != roadmap_match.group(1):
-                        errors.append(
-                            f"交付库 {delivery_id} 的版本 {delivery_version} "
-                            f"与路标 {roadmap_id} 不一致"
-                        )
-                # independent：兼容范围由 R2 契约库检查；R0/R1 不做额外校验
-                contracts_refs = delivery_data.get("contracts") or []
-                if isinstance(contracts_refs, list):
-                    for contract_id in contracts_refs:
-                        if isinstance(contract_id, str) and not _contract_exists(
-                            contracts, contract_id
-                        ):
-                            errors.append(
-                                f"交付库 {delivery_id} 引用了不存在的契约: {contract_id}"
-                            )
+                data = json.loads(sub_settings.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                errors.append(f"子项目 {item.get('id')} settings.json 非法")
+                data = {}
+            if isinstance(data, dict) and data.get("agent") != "worker":
+                errors.append(f"子项目 {item.get('id')} 默认 agent 不是 worker")
+        if not (path / "delivery.yaml").is_file():
+            errors.append(f"子项目 {item.get('id')} 缺少 delivery.yaml")
 
     return errors

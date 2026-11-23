@@ -1,89 +1,135 @@
 # Meta Flow
 
-> AI 项目操作系统：三个角色、契约库与交付库、规格驱动交付。
+> AI 项目操作系统：三个角色、契约库与多仓交付、规格驱动。
 
 ## 状态
 
-**R0 骨架进行中**（v0.1.0）。当前已具备：
+**v0.1.0 / R0.2 重构中**。当前安装与工作区流程：
 
-- `mf` CLI 骨架：`init`、`role`、`status`、`doctor`
-- 工作区两仓初始化：`contracts/` + `deliveries/`
-- 目录级角色推导：根目录 = maintainer，`contracts/` = manager，`deliveries/**` = worker
-- 15 份默认规范模板
-- `contracts/templates/` 16 份制品模板：roadmap、phase plan/report、requirement、spec、design、ADR、task、dev record、verification、handoff、CHG、review
-- `PROJECT-PLAN` + `INIT-CHECKLIST` + 阶段计划/报告模板
-- 缺陷与知识骨架（`contracts/bugs/`、`contracts/knowledge/`）
-- 读写控制骨架：`CONTEXT-POLICY.yaml`、8KB 热状态 `current.json`、归档/索引
-- 分层验证规范：L1 实现、L2 设计、L3 需求
-- 三个角色定义：`agents/meta-maintainer.md`、`meta-manager.md`、`meta-worker.md`
-- 工作区结构、PROJECT-PLAN、模板与版本策略校验（`same-major` / `exact` / `independent`）
-
-完整设计见 [DESIGN.md](DESIGN.md)。
+```text
+mf bootstrap
+mf install claude [--agent maintainer]
+mf install worker --project-dir <sub>
+mf workspace init/add-project/link/sync/status
+mf uninstall claude
+mf dev clone/update/install/status
+mf role/status/doctor
+```
 
 ## 安装
 
-用户从 GitHub 安装，不发布 PyPI：
+### 1. 全局模板库
 
 ```bash
-# R0 开发期先用 main；正式版本发布后改用 tag
-uv tool install git+https://github.com/hyde-zhao/meta-flow@main
-mf --version
+uv tool install git+ssh://git@github.com/hyde-zhao/meta-flow@main
+mf bootstrap
 ```
 
-用户不需要 clone 源码。维护者从源码安装：
-
-```bash
-git clone https://github.com/hyde-zhao/meta-flow
-cd meta-flow
-uv sync
-uv run mf --version
-```
-
-## 平台支持
-
-| 平台 | R1 | R2 |
-|---|---|---|
-| Claude Code | ✓ | ✓ |
-| DeepSeek Harness (DSH) | - | ✓ |
-| Codex | - | ✓ |
-
-## 本地开发快速开始
-
-```bash
-uv sync
-uv run mf --help
-
-# 初始化一个工作区
-uv run mf init --path /tmp/demo --name demo --delivery app --no-git
-
-# 查看角色与状态
-uv run mf role --path /tmp/demo/contracts
-uv run mf status --path /tmp/demo
-uv run mf doctor --path /tmp/demo
-```
-
-## 核心模型
+生成 `~/.meta-flow/`：
 
 ```text
-workspace/
-├── contracts/     # 契约库：规范、需求、路标、计划、状态、验证、架构与端到端契约
-└── deliveries/    # 交付库集合：源码、发布件、发布说明、用户手册
+~/.meta-flow/
+├── manifest.yaml      # tool/template 版本、repo_url、source_dir
+├── agents/            # manager / maintainer / worker
+└── templates/         # 15 份规范 + 16 份制品模板 + 根配置模板
 ```
 
-- 契约库是唯一公共真相源和跨库集成点。
-- 交付库是完整交付单元，交付库之间不直接引用。
-- manager 在契约库管理项目；worker 在交付库执行任务卡；maintainer 维护工作区和工具。
-- 版本双轨：路标 `R{n}` ↔ 项目版本 `n.x.y`，交付物使用 SemVer。
+### 2. 项目安装
 
-## 角色
+```bash
+cd <项目根>
+mf install claude                       # 只装 manager
+mf install claude --agent maintainer    # 装 maintainer + manager
+```
 
-| 角色 | 目录 | 职责 |
-|---|---|---|
-| `meta-maintainer` | 工作区根目录 / 工具源码仓 | 建仓、安装、跨仓健康、工具维护 |
-| `meta-manager` | `contracts/` | 需求、路标、五阶段、规范、任务卡、验收 |
-| `meta-worker` | `deliveries/**` | 执行任务包、自验、交接、提交 |
+写入：
 
-设计工作使用 `kind: design` 任务，由 worker 执行，manager 验收；暂不新增角色。
+```text
+<项目根>/
+├── CLAUDE.md
+├── README.md
+├── .claude/
+│   ├── agents/manager.md
+│   ├── agents/maintainer.md   # 可选
+│   └── settings.json          # {"agent":"manager"}
+└── .meta-flow/install.yaml
+```
+
+不创建 `contracts/` 或 `deliveries/`。
+
+### 3. manager 初始化工作区
+
+在项目根启动：
+
+```bash
+claude        # 默认 manager
+```
+
+manager 与用户确认项目名、contract 仓路径/远程、子项目后执行：
+
+```bash
+mf workspace init --name <项目名> --contract-dir <项目名>-contract [--contract-remote <url>]
+mf workspace add-project --name frontend --path frontend [--remote <url>]
+mf workspace link
+mf doctor
+```
+
+生成：
+
+```text
+<项目根>/
+├── CLAUDE.md                  # @<项目名>-contract/workspace/CLAUDE.md
+├── README.md                  # 软链或生成副本
+├── mf.workspace.yaml
+├── <项目名>-contract/          # git 仓库：契约库
+│   ├── workspace/{CLAUDE.md,README.md,mf.workspace.yaml}
+│   ├── project/ roadmap/ requirements/ architecture/ specs/
+│   ├── standards/ templates/ tasks/ dev-records/ verification/
+│   ├── handoffs/ reviews/ bugs/ knowledge/ policies/ state/ archive/
+│   └── .meta-flow/role.yaml
+└── frontend/                  # git 仓库：子项目
+    ├── CLAUDE.md
+    ├── .claude/agents/worker.md
+    ├── .claude/settings.json  # {"agent":"worker"}
+    ├── .meta-flow/install.yaml
+    ├── delivery.yaml
+    └── src/ tests/ release/
+```
+
+### 4. 启动角色
+
+```bash
+cd <项目根> && claude                 # manager
+claude --agent maintainer             # maintainer
+cd frontend && claude                 # worker（独立会话）
+```
+
+子项目必须单独启动 Claude Code，才能读取它自己的 `.claude/settings.json`。
+
+## 维护者
+
+`maintainer` 负责 meta-flow 自身与项目安装更新：
+
+```bash
+mf dev status
+mf dev clone            # 克隆到 ~/.meta-flow/source
+mf dev update           # git pull --ff-only
+mf dev install --yes    # 从本地源码更新全局 mf
+mf install claude --project-dir <root> --force
+mf install worker --project-dir <sub> --force
+mf uninstall claude --project-dir <path>
+```
+
+源码仓库地址记录在 `~/.meta-flow/manifest.yaml` 的 `repo_url`。commit 可用，push 必须用户显式授权。
+
+## 卸载
+
+```bash
+mf uninstall claude --project-dir <root>
+mf uninstall claude --project-dir <sub>
+```
+
+按 `.meta-flow/install.yaml` 记录删除管理的 agent、CLAUDE.md managed block、settings 中的 `agent` 字段和安装记录；默认保留 contract 仓与子项目源码。`--purge` 额外移除 workspace 元数据。
 
 ## 开发
 
