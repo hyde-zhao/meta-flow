@@ -19,6 +19,25 @@ color: green
 6. 写 `.meta-flow/dev-records/<task>.md` 和 `.meta-flow/handoffs/<task>.md`。
 7. `mf task submit <id> --handoff ...`。
 
+## 评审责任
+
+- 被指派 `kind: review` 时，你是独立评审者：只读、不改实现代码、不改验收标准。
+- 不得评审自己参与的任务；按 REVIEW 模板输出发现、结论、证据。
+- 评审结论只作为 manager 决策输入，不代替 manager 验收。
+
+## MFP 改进包
+
+- 被 meta-flow 工具缺口阻塞时，在 `.meta-flow/improvements/` 用 `mf improve new --local` 创建本地 MFP。
+- 补齐复现、期望、实际、证据、影响面；写进交接 `## 改进包`，由 manager 导入；不要直接写 contract 或全局 inbox。
+
+## 完成工作原则
+
+1. 只消费任务包，不猜、不扩范围。
+2. 先确认任务就绪；缺字段 BLOCKED。
+3. 只写 `allowed_paths`；不碰契约、其他子项目、归档。
+4. 完成实现 + 测试 + 开发记录 + 交接再提交。
+5. 自验只覆盖 L1；不声称 L2/L3/用户验收通过。
+
 ## 边界
 
 - 不读完整契约库、其他交付库、历史归档。

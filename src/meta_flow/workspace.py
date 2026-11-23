@@ -21,6 +21,13 @@ INSTALL_REL = LOCAL_META / "install.yaml"
 LOCAL_WORKSPACE = LOCAL_META / "workspace.yaml"
 WORKSPACE_MANIFEST = "mf.workspace.yaml"
 CONTRACT_ROLE = LOCAL_META / "role.yaml"
+_IMPROVEMENTS_README = (
+    "# MFP 改进包\n\n"
+    "存放针对 meta-flow 工具本身的改进包 `MFP-*.yaml`。\n"
+    "manager 创建并 `mf improve submit`；worker 在子项目创建本地 MFP，由 manager 导入。\n"
+    "规范见 `standards/IMPROVEMENTS.md`。\n"
+)
+_TEMPLATES_README = "# 项目模板\n\n本目录由 manager 维护，worker 只读。\n"
 _ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
@@ -211,20 +218,29 @@ def _git_remote_add(path: Path, remote: str | None) -> None:
         raise WorkspaceError(f"git remote add 失败: {result.stderr.strip()}")
 
 
-def _copy_global_tree(subdir: str, target: Path) -> None:
+def _copy_global_tree(subdir: str, target: Path, *, force: bool = True) -> None:
     source = global_store.global_home() / "templates" / subdir
     target.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
         for item in source.iterdir():
-            if item.is_file():
-                shutil.copyfile(item, target / item.name)
+            if item.is_file() and not item.name.endswith(".bak"):
+                destination = target / item.name
+                if destination.exists() and not force:
+                    continue
+                shutil.copyfile(item, destination)
         return
     if subdir == "standards":
         for name, content in templates.STANDARDS.items():
-            _write(target / name, content)
+            destination = target / name
+            if destination.exists() and not force:
+                continue
+            _write(destination, content)
     elif subdir == "artifacts":
         for name, content in templates.ARTIFACT_TEMPLATES.items():
-            _write(target / name, content)
+            destination = target / name
+            if destination.exists() and not force:
+                continue
+            _write(destination, content)
 
 
 def _managed_import_block(role: str, import_line: str) -> str:
@@ -348,6 +364,7 @@ def workspace_init(
         contract / "reviews",
         contract / "bugs",
         contract / "knowledge",
+        contract / "improvements",
         contract / "state",
         contract / "archive",
         contract / LOCAL_META,
@@ -358,7 +375,7 @@ def workspace_init(
     _copy_global_tree("artifacts", contract / "templates")
     _write(
         contract / "templates" / "README.md",
-        "# 项目模板\n\n本目录由 manager 维护，worker 只读。\n",
+        _TEMPLATES_README,
     )
 
     _write(contract / "project" / "PROJECT-PLAN.md", templates.PROJECT_PLAN)
@@ -399,12 +416,16 @@ def workspace_init(
     _write(contract / "bugs" / "_TEMPLATE.yaml", templates.BUG_TEMPLATE)
     _write(contract / "knowledge" / "KNOWLEDGE.yaml", templates.KNOWLEDGE_YAML)
     _write(contract / "knowledge" / "KNOWLEDGE.md", templates.KNOWLEDGE_MD)
+    _write(
+        contract / "improvements" / "README.md",
+        _IMPROVEMENTS_README,
+    )
     _write(contract / "policies" / "CONTEXT-POLICY.yaml", templates.CONTEXT_POLICY)
     _write(contract / "state" / "ledger.ndjson", "")
     _write(contract / "state" / "READ-LOG.ndjson", "")
     _write(contract / "state" / "current.json", _initial_state(project_id))
     _write(contract / "archive" / "README.md", templates.ARCHIVE_README)
-    _write(contract / ".gitignore", "state/current.json\n.meta-flow/*.lock\n")
+    _write(contract / ".gitignore", "state/current.json\n.meta-flow/*.lock\n*.bak\n")
     _write(contract / CONTRACT_ROLE, "role: manager\nworkspace_root: ..\n")
     for relative in (
         "requirements/changes/.gitkeep",
@@ -494,8 +515,25 @@ def _initial_state(project_id: str) -> str:
     )
 
 
-def workspace_add_project(
-    root: str | Path,
+def workspace_upgrade(root: str | Path, *, force: bool = False) -> dict[str, Any]:
+    """把全局 standards/templates 的新增内容同步到 contract 仓。"""
+    root = Path(root).expanduser().resolve()
+    local = _load_local_workspace(root)
+    contract = _contract_path(root, local)
+    _copy_global_tree("standards", contract / "standards", force=force)
+    _copy_global_tree("artifacts", contract / "templates", force=force)
+    improvements = contract / "improvements"
+    improvements.mkdir(parents=True, exist_ok=True)
+    readme = improvements / "README.md"
+    if not readme.exists() or force:
+        _write(readme, _IMPROVEMENTS_README)
+    templates_readme = contract / "templates" / "README.md"
+    if not templates_readme.exists() or force:
+        _write(templates_readme, _TEMPLATES_README)
+    return {"root": str(root), "contract_dir": str(contract), "force": force}
+
+
+def workspace_add_project(    root: str | Path,
     name: str,
     path: str | Path,
     *,
@@ -743,6 +781,7 @@ def doctor(root: str | Path) -> list[str]:
         "archive/README.md",
         "bugs/README.md",
         "knowledge/KNOWLEDGE.yaml",
+        "improvements/README.md",
     ):
         if not (contract / relative).is_file():
             errors.append(f"contract 缺少文件: {relative}")

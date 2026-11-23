@@ -47,6 +47,20 @@ def test_cli_bootstrap_install_workspace(tmp_path, monkeypatch, capsys):
     assert main(["role", "--path", str(project / "frontend")]) == 0
 
 
+def test_cli_improve_smoke(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    assert main(["install", "claude", "--project-dir", str(project), "--init-contract"]) == 0
+    assert main(["improve", "new", "--project-dir", str(project), "--title", "Add X"]) == 0
+
+    capsys.readouterr()
+    assert main(["improve", "list", "--project-dir", str(project), "--json"]) == 0
+    items = json.loads(capsys.readouterr().out)
+    assert items[0]["id"] == "MFP-0001"
+
+    assert main(["improve", "validate", "--project-dir", str(project), "MFP-0001"]) == 1
+
+
 def test_cli_install_status_uninstall(tmp_path, monkeypatch, capsys):
     _, project = _prepare(tmp_path, monkeypatch)
     assert main(["install", "claude", "--project-dir", str(project)]) == 0

@@ -203,7 +203,7 @@ R1 只实现 Claude Code 适配；R2 增加 DSH 与 Codex。角色定义、任�
 - 项目元数据、模块/交付库注册表、当前路标与阶段。
 - 项目计划 `PROJECT-PLAN.md`：过程、过程交付件、最终交付件能力。
 - 路标、需求、变更单、追踪矩阵。
-- 15 份项目规范。
+- 16 份项目规范。
 - 系统架构图、ADR、端到端设计。
 - 端到端规格、跨交付库接口/数据契约。
 - 任务卡、验收记录、交接副本、事件 ledger。
@@ -917,6 +917,51 @@ contracts/knowledge/
 
 manager 不得把不满足条件的任务标记 ready；worker 发现缺失字段应 `BLOCKED` 并指出缺项，不得猜测执行。
 
+### 7.13 MFP 改进包
+
+`MFP-0001` 是针对 meta-flow 工具本身的改进包，和业务项目 `REQ`/`TASK` 分开。
+
+| 角色 | 能做什么 |
+|---|---|
+| manager | 在 `contract/improvements/` 创建 MFP，补全上下文与验收标准，`mf improve submit` 到全局 inbox |
+| worker | 在 `.meta-flow/improvements/` 创建本地 MFP，写进交接；由 manager `mf improve import` |
+| maintainer | 读取 `~/.meta-flow/improvements/inbox/`，导入源码仓，分类为 bug/requirement/change，实施或记录 |
+
+必填上下文：`title`、`problem`、`context.reproduction`、`context.expected`、`context.actual`、`context.affected`、`context.evidence`、`acceptance`、`testing_plan`、`source`、`mf_version`、`privacy.sanitized=true`。不齐全只能停在 `draft`。
+
+生命周期：
+
+```text
+draft → submitted → triaged → accepted → implementing → implemented → verified → closed
+draft/submitted → rejected | deferred | duplicate
+```
+
+源码仓分类建议：
+
+- `BUG-*`：现有行为错误；
+- `REQ-*`：新增能力；
+- `CHG-*`：改变现有行为/模板兼容性。
+
+源码导入分两种情况：
+
+- **已实现**：记录对应 BUG/REQ/CHG，写版本、commit、测试证据，MFP 移入 `closed/`。
+- **未实现**：完整 MFP 复制到源码 `improvements/open/`，由 meta-flow 源码会话按 MFP 上下文和验收标准实施；完成后 `mf dev improve update` 置 `verified/closed`。
+
+命令：
+
+```bash
+mf improve new [--local] --title ...
+mf improve list [--local|--inbox]
+mf improve show <id> [--local|--inbox]
+mf improve validate <id>
+mf improve submit <id>
+mf improve import --from <path>
+mf dev improve import <project>/<MFP> [--kind bug|requirement|change] \
+  [--already-implemented --version --commit]
+mf dev improve list [--scope open|closed|records]
+mf dev improve update <MFP> --status verified --version ... --commit ... --note ...
+```
+
 ---
 
 ## 8. 状态与 CLI
@@ -946,6 +991,7 @@ manager 不得把不满足条件的任务标记 ready；worker 发现缺失字�
 | 安装/卸载 | `mf install claude`、`mf install worker`、`mf uninstall claude` |
 | 工作区 | `mf workspace init`、`mf workspace add-project`、`mf workspace link`、`mf workspace sync`、`mf workspace status` |
 | 维护 | `mf dev clone`、`mf dev update`、`mf dev install`、`mf dev status`、`mf upgrade` |
+| 改进包 | `mf improve new/list/show/validate/submit/import`、`mf dev improve import/list/update` |
 | 基础 | `mf role`、`mf status`、`mf doctor`（`--global`） |
 
 下一阶段（规划与执行）：
@@ -1014,7 +1060,7 @@ mf bootstrap
 ~/.meta-flow/
 ├── manifest.yaml      # tool/template 版本、repo_url、source_dir
 ├── agents/            # manager / maintainer / worker
-└── templates/         # 15 份规范 + 16 份制品模板 + 根配置模板
+└── templates/         # 16 份规范 + 17 份制品模板 + 根配置模板
 ```
 
 不发布 PyPI；用户不需要 clone 源码。正式版本使用 Git tag + GitHub Release。
@@ -1083,7 +1129,7 @@ mf dev install --yes    # 从本地源码更新全局 mf
 
 ## 10. 规范清单
 
-`contracts/standards/` 下 15 份，每份不超过 2 页：
+`contracts/standards/` 下 16 份，每份不超过 2 页：
 
 | 文件 | 内容 |
 |---|---|
@@ -1101,6 +1147,7 @@ mf dev install --yes    # 从本地源码更新全局 mf
 | `DELIVERY.md` | 发布说明/手册、发布清单、最终能力核对 |
 | `BUGS.md` | 缺陷对象、生命周期、验证/修复联动、发布门禁 |
 | `KNOWLEDGE.md` | 术语/行为/约定/偏好/复盘、记录时机、注入与总结 |
+| `IMPROVEMENTS.md` | MFP 改进包、分类、源码导入、验收 |
 | `DOCUMENTATION.md` | 制品目录、模板、命名、front matter、单一真相源 |
 
 规范由工具提供默认版本，`mf init` 复制到项目；项目可修改，`project.yaml` 记录规范版本。
@@ -1118,19 +1165,19 @@ mf dev install --yes    # 从本地源码更新全局 mf
 R0 交付物：
 
 1. 新仓骨架：`pyproject.toml`、`src/meta_flow/`（含 `templates.py`）、`tests/`、`agents/`。
-2. `mf` CLI：`bootstrap`、`install claude/worker`、`uninstall claude`、`workspace init/add-project/link/sync/status`、`dev clone/update/install/status`、`role/status/doctor`。
+2. `mf` CLI：`bootstrap`、`install claude/worker`、`uninstall claude`、`workspace init/add-project/link/sync/status`、`dev clone/update/install/status`、`improve`、`dev improve`、`role/status/doctor`。
 3. 三个短名角色定义：`manager.md`、`maintainer.md`、`worker.md`。
-4. 全局 `~/.meta-flow` 模板库；项目 `.meta-flow/install.yaml`；contract/子项目多仓布局；根 `CLAUDE.md` `@` 导入；README 软链/副本；doctor。
-5. 玩具项目 E2E：bootstrap → install → workspace init → add-project → doctor → uninstall。
-6. CLI 安装/工作区/卸载测试。
+4. 全局 `~/.meta-flow` 模板库；项目 `.meta-flow/install.yaml`；contract/子项目多仓布局；根 `CLAUDE.md` `@` 导入；README 软链/副本；doctor；contract `improvements/` 与全局 MFP inbox。
+5. 玩具项目 E2E：bootstrap → install → workspace init → add-project → MFP 创建/提交/导入 → doctor → uninstall。
+6. CLI 安装/工作区/卸载/MFP 测试。
 
-> R0 当前完成安装与工作区层。规划与执行命令（`req/roadmap/phase/task/bug/knowledge/verify/release`）是 R0 下一切片，完成后再进入 R1。
+> R0 当前完成安装、工作区与 MFP 层。规划/执行命令（`req/roadmap/phase/task/bug/knowledge/verify/release`）和 `kind: review` 任务类型是 R0 下一切片，完成后再进入 R1。
 
 R1 交付物：
 
 1. 完整五阶段、PROJECT-PLAN 规划（过程/过程交付件/最终交付件能力）与阶段报告。
 2. 并行 wave、租约、任务包、交接、证据固化。
-3. 15 份规范默认版。
+3. 16 份规范默认版。
 4. 真实项目试点。
 5. 多仓 workspace 的版本/发布聚合与升级流程。
 6. 缺陷跟踪、知识沉淀、分层验证（L1/L2/L3）与追踪矩阵闭环。
@@ -1148,7 +1195,7 @@ R2 交付物：
 
 | 风险 | 缓解 |
 |---|---|
-| 新系统再次膨胀 | 命令预算 ≤45（核心约 35）；规范 ≤15 份；agent ≤250 行/个；不引入 CP/CR/ledger 全套 |
+| 新系统再次膨胀 | 命令预算 ≤45（核心约 35）；规范 ≤16 份；agent ≤250 行/个；不引入 CP/CR/ledger 全套 |
 | manager 验收瓶颈 | WIP 限制；`task graph` 显示 submitted 队列；设计/验证通过任务类型分派 |
 | worker 自证自洽 | 验收标准前置；证据绑定；manager 重跑；越界 diff 拒绝；独立 verify/review 任务 |
 | 状态并发冲突 | 每任务一文件；`current.json` 派生；lease；追加 ledger |
@@ -1191,3 +1238,5 @@ R2 交付物：
 | 2026-11-23 | 每个项目/子项目写 `.meta-flow/install.yaml` | 支持 `mf uninstall claude` 按 digest 安全卸载 |
 | 2026-11-23 | maintainer 通过 `mf dev` 维护源码与全局工具 | 记录 repo_url/source_dir；commit 可用，push 需授权 |
 | 2026-11-23 | R0 拆为安装/工作区层 + 规划执行层 | 先跑通安装闭环，再实现 req/roadmap/phase/task |
+| 2026-11-23 | MFP 改进包：manager/worker 记录，maintainer 导入源码并分类 | 工具缺口有完整上下文；已实现记 BUG/REQ/CHG，未实现进源码 open |
+| 2026-11-23 | 不新增常驻 reviewer 角色；用 `kind: review` 任务 + 可选 reviewer profile | manager 拥有评审门，评审者必须是未参与实现的另一个 worker |

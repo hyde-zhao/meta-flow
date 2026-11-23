@@ -31,7 +31,7 @@ mf bootstrap
 ~/.meta-flow/
 ├── manifest.yaml      # tool/template 版本、repo_url、source_dir
 ├── agents/            # manager / maintainer / worker
-└── templates/         # 15 份规范 + 16 份制品模板 + 根配置模板
+└── templates/         # 16 份规范 + 17 份制品模板 + 根配置模板
 ```
 
 ### 2. 项目安装
@@ -121,6 +121,30 @@ mf uninstall claude --project-dir <path>
 ```
 
 源码仓库地址记录在 `~/.meta-flow/manifest.yaml` 的 `repo_url`。commit 可用，push 必须用户显式授权。
+
+## MFP 改进包
+
+manager 在 contract 仓创建工具改进包，提交到全局 inbox；worker 创建本地包，由 manager 导入；maintainer 读取并导入源码仓。
+
+```bash
+# manager
+mf improve new --title "补充 task 命令"
+# 填写上下文与验收标准后
+mf improve validate MFP-0001
+mf improve submit MFP-0001
+
+# worker
+mf improve new --local --title "worker 被工具缺口阻塞"
+
+# maintainer
+mf improve list --inbox
+mf dev improve import <project>/MFP-0001 --kind requirement
+mf dev improve import <project>/MFP-0001 --kind bug --already-implemented --version 0.1.1 --commit abc123
+mf dev improve list --scope open
+mf dev improve update MFP-0001 --status verified --version 0.1.2 --commit def456
+```
+
+已实现的 MFP 记录为 `BUG/REQ/CHG` 并关闭；未实现的完整包进入源码 `improvements/open/`，由 meta-flow 源码会话实施。
 
 ## 卸载
 

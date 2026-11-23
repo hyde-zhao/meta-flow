@@ -358,7 +358,14 @@ def install_worker(
         path = project / name
         if not path.exists():
             path.write_text(content, encoding="utf-8")
-    for directory in ("src", "tests", "release", ".meta-flow/dev-records", ".meta-flow/handoffs"):
+    for directory in (
+        "src",
+        "tests",
+        "release",
+        ".meta-flow/dev-records",
+        ".meta-flow/handoffs",
+        ".meta-flow/improvements",
+    ):
         (project / directory).mkdir(parents=True, exist_ok=True)
 
     manifest = {
@@ -488,6 +495,11 @@ def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str
     claude_path = project / CLAUDE_REL
     current = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""
     claude_path.write_text(_replace_managed_block(current, role, body), encoding="utf-8")
+
+    if role == "manager" and (project / ".meta-flow" / "workspace.yaml").is_file():
+        from .workspace import workspace_upgrade
+
+        workspace_upgrade(project, force=force)
 
     manifest["tool_version"] = __version__
     manifest["template_version"] = global_store.load_manifest().get("template_version")

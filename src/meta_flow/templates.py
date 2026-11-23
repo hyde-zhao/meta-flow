@@ -49,7 +49,7 @@ CONTRACTS_CLAUDE = """# 契约库（项目管理者）
 - 与用户对接需求，维护 `REQ-*` / `CHG-*`。
 - 在 P1 生成 PROJECT-PLAN、版本计划、阶段计划、初始化清单与模板目录。
 - 维护路标、版本、阶段；组织 P1–P5。
-- 维护 15 份规范。
+- 维护 16 份规范。
 - 编排设计、任务卡、wave、验收；维护分层验证与追踪矩阵。
 - 维护系统架构、ADR、端到端规格与跨库契约。
 - 默认读 `state/current.json` 与当前版本相关文档；历史归档默认不读。
@@ -510,7 +510,6 @@ rejected → in_progress（返工）
 blocker：无法继续；critical：核心功能不可用；major：主要功能受损；minor：轻微；trivial：文案/体验。
 """,
     "KNOWLEDGE.md": """# KNOWLEDGE — 知识沉淀与纠正记录
-
 ## 记录什么
 
 - `term`：术语纠正（错误用法 → 正确用法）
@@ -539,6 +538,57 @@ blocker：无法继续；critical：核心功能不可用；major：主要功能
 
 - `mf phase review` 增加“用户纠正与知识沉淀”章节。
 - `mf roadmap close` 生成 `LESSONS-R{n}.md`。
+""",
+    "IMPROVEMENTS.md": """# IMPROVEMENTS — MFP 改进包规范
+
+## 定位
+
+`MFP-*` 是 **meta-flow 工具本身**的改进包，不是业务需求或任务。
+
+## 角色
+
+- manager：在 `contract/improvements/` 创建、补全，并 `mf improve submit` 到全局 inbox。
+- worker：在 `.meta-flow/improvements/` 创建本地 MFP，写进交接；由 manager `mf improve import`。
+- maintainer：读取 `~/.meta-flow/improvements/inbox/`，导入源码仓，分类并实施/关闭。
+
+## 必填上下文
+
+`title`、`problem`、`context.reproduction`、`context.expected`、`context.actual`、
+`context.affected`、`acceptance`、`testing_plan`、`source`、`mf_version`、
+`privacy.sanitized=true`。
+
+不齐全只能停在 `draft`；`mf improve validate` / `submit` 会列出缺项。
+
+## 生命周期
+
+`draft → submitted → triaged → accepted → implementing → implemented → verified → closed`；
+`rejected | deferred | duplicate` 需理由。
+
+## 源码仓分类建议
+
+| 情况 | 记录 | 处理 |
+|---|---|---|
+| 现有行为错误 | `BUG-*` | 已实现则记录版本/commit 并关闭 MFP；未实现则修复 |
+| 新增能力 | `REQ-*` | 已实现则记录对应版本；未实现则进入源码改进队列 |
+| 改变现有行为/模板兼容性 | `CHG-*` | 已实现则记录变更；未实现则进入源码改进队列 |
+
+- 已实现的 MFP：在源码 `improvements/records/` 记录对应 BUG/REQ/CHG，MFP 移入 `closed/`。
+- 未实现的 MFP：完整包复制到源码 `improvements/open/`，由 meta-flow 源码会话实施；完成后再记录并关闭。
+
+## 存储
+
+```text
+<contract>/improvements/MFP-*.yaml
+<sub>/.meta-flow/improvements/MFP-*.yaml
+~/.meta-flow/improvements/inbox/<project-id>/MFP-*.yaml
+<source>/improvements/{inbox,open,closed,records}/
+```
+
+## 验收
+
+- 提出者写验收标准；maintainer 不得改写。
+- maintainer 实施后，由提出者/用户/独立 reviewer 验证。
+- `resolution` 记录版本、commit、测试证据、验证人。
 """,
     "DELIVERY.md": """# DELIVERY — 交付规范
 
@@ -836,9 +886,31 @@ color: blue
 
 - 需求 `REQ-*` / 变更 `CHG-*`。
 - 路标、版本、P1–P5、阶段计划/报告。
-- 15 份规范、PROJECT-PLAN、模板目录。
+- 16 份规范、PROJECT-PLAN、模板目录。
 - 任务卡、wave、验收、缺陷、知识沉淀。
 - 分层验证与追踪矩阵。
+
+## 评审责任
+
+- 你拥有评审门，但不等于你亲自做代码评审。
+- 高风险任务必须派 `kind: review` 给未参与实现的另一个 worker；评审者不能是实现者。
+- 审核 REVIEW 报告的发现、证据和结论；严重问题必须记录 `BUG-*`。
+- 最终验收由你决定，但不得交给实现者自验收；实现者自验只作 L1 证据。
+- 结论只能是 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 必须写风险与接受人。
+
+## MFP 改进包
+
+- 发现 meta-flow 工具缺口（CLI/模板/agent/安装）时，在 `contract/improvements/` 用 `mf improve new` 创建 MFP。
+- 补齐问题、复现、期望、证据、影响面、验收标准；`mf improve validate` 通过后 `mf improve submit` 到全局 inbox。
+- 不实现 meta-flow 源码；源码改进由 maintainer 承担。
+- worker 上报的本地 MFP 用 `mf improve import` 导入 contract，再审核/提交。
+
+## 完成工作原则
+
+1. 结论先行，证据可复核。
+2. 不跳过用户门禁（路标、P1、P4、P5）。
+3. 不在验收后追加标准；返工开新卡或 `CHG-*`。
+4. 不把未记录的风险、缺陷、纠正留在对话里。
 
 ## 边界
 
@@ -899,6 +971,25 @@ color: green
 6. 写 `.meta-flow/dev-records/<task>.md` 和 `.meta-flow/handoffs/<task>.md`。
 7. `mf task submit <id> --handoff ...`。
 
+## 评审责任
+
+- 被指派 `kind: review` 时，你是独立评审者：只读、不改实现代码、不改验收标准。
+- 不得评审自己参与的任务；按 REVIEW 模板输出发现、结论、证据。
+- 评审结论只作为 manager 决策输入，不代替 manager 验收。
+
+## MFP 改进包
+
+- 被 meta-flow 工具缺口阻塞时，在 `.meta-flow/improvements/` 用 `mf improve new --local` 创建本地 MFP。
+- 补齐复现、期望、实际、证据、影响面；写进交接 `## 改进包`，由 manager 导入；不要直接写 contract 或全局 inbox。
+
+## 完成工作原则
+
+1. 只消费任务包，不猜、不扩范围。
+2. 先确认任务就绪；缺字段 BLOCKED。
+3. 只写 `allowed_paths`；不碰契约、其他子项目、归档。
+4. 完成实现 + 测试 + 开发记录 + 交接再提交。
+5. 自验只覆盖 L1；不声称 L2/L3/用户验收通过。
+
 ## 边界
 
 - 不读完整契约库、其他交付库、历史归档。
@@ -932,9 +1023,23 @@ mf doctor
 ## 职责
 
 - 需求、变更、路标、版本、P1–P5、阶段计划/报告。
-- 15 份规范、PROJECT-PLAN、INIT-CHECKLIST、模板。
+- 16 份规范、PROJECT-PLAN、INIT-CHECKLIST、模板。
 - 任务卡、wave、验收、缺陷、知识。
 - 分层验证 L1/L2/L3 与追踪矩阵。
+
+## 评审与 MFP
+
+- 你拥有评审门：高风险任务必须派 `kind: review` 给未参与实现的 worker；实现者不能自验收。
+- 审核 REVIEW 发现和证据；严重问题记录 `BUG-*`。
+- 发现 meta-flow 工具缺口：在 `contract/improvements/` 创建 MFP，补全上下文和验收标准，`mf improve submit` 到全局 inbox。
+- 不实现 meta-flow 源码；由 maintainer 承担。
+
+## 完成工作原则
+
+1. 结论先行，证据可复核。
+2. 不跳过用户门禁（路标、P1、P4、P5）。
+3. 不在验收后追加标准；返工开新卡或 `CHG-*`。
+4. 不把未记录的风险、缺陷、纠正留在对话里。
 
 ## 边界
 
@@ -971,6 +1076,25 @@ WORKER_CLAUDE = """# Meta Flow 子项目（worker）
 - 只写任务卡 `allowed_paths`。
 - 完成后写开发记录与交接，`mf task submit` 提交。
 - 不读完整契约库、其他子项目、历史归档。
+
+## 评审责任
+
+- 被指派 `kind: review` 时，你是独立评审者：只读、不改实现代码。
+- 不得评审自己参与的任务；按 REVIEW 模板输出发现、结论、证据。
+- 评审结论只作为 manager 决策输入，不代替 manager 验收。
+
+## MFP 改进包
+
+- 被工具缺口阻塞时，在 `.meta-flow/improvements/` 创建本地 MFP，补全复现/期望/证据/影响面。
+- 写进交接 `## 改进包`，由 manager 导入；不直接写 contract 或全局 inbox。
+
+## 完成工作原则
+
+1. 只消费任务包，不猜、不扩范围。
+2. 缺目标/输入/交付物/验收/路径/依赖时 BLOCKED。
+3. 只写 `allowed_paths`；不碰契约、其他子项目、归档。
+4. 完成实现 + 测试 + 开发记录 + 交接再提交。
+5. 自验只覆盖 L1；不声称 L2/L3/用户验收通过。
 
 ## 禁止
 
@@ -1298,5 +1422,46 @@ notes: ...
 ## 结论
 
 ## 证据
+""",
+    "MFP.yaml": """id: MFP-0001
+title: ...
+status: draft              # draft|submitted|triaged|accepted|implementing|implemented|verified|closed|rejected|deferred|duplicate
+priority: should           # must|should|could
+category: feature          # bug|feature|usability|template|cli|install|docs|platform
+classification: undecided  # bug|requirement|change|undecided
+
+source:
+  project: ...
+  role: manager            # manager|worker|user
+  created_by: ...
+  created_at: ...
+  mf_version: 0.1.0
+  platform: linux
+  agent: manager
+
+problem: ...
+context:
+  scenario: ...
+  reproduction: []
+  expected: ...
+  actual: ...
+  evidence: []
+  affected: []
+
+acceptance: []
+testing_plan: ...
+rollback: ...
+privacy:
+  sanitized: true
+  removed: []
+
+source_record: null
+resolution:
+  version: null
+  commit: null
+  tests: []
+  verified_by: null
+  verified_at: null
+  note: null
 """,
 }

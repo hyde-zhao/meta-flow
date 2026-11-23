@@ -81,6 +81,7 @@ def bootstrap(repo_url: str | None = None, force: bool = False) -> Path:
     (home / "templates" / "standards").mkdir(parents=True, exist_ok=True)
     (home / "templates" / "artifacts").mkdir(parents=True, exist_ok=True)
     (home / "schemas").mkdir(parents=True, exist_ok=True)
+    (home / "improvements" / "inbox").mkdir(parents=True, exist_ok=True)
 
     (home / "VERSION").write_text(__version__ + "\n", encoding="utf-8")
 

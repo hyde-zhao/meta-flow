@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from . import __version__
 from .global_store import (
     GlobalStoreError,
@@ -16,6 +18,18 @@ from .global_store import (
     dev_install,
     dev_status,
     dev_update,
+)
+from .improve import (
+    ImproveError,
+    find_improvement,
+    import_improvement,
+    list_improvements,
+    new_improvement,
+    source_import,
+    source_list,
+    source_update,
+    submit_improvement,
+    validate_improvement,
 )
 from .install import (
     InstallError,
@@ -283,6 +297,131 @@ def _cmd_dev_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_mfp(path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ImproveError(f"{path} 顶层必须是映射")
+    return data
+
+
+def _cmd_improve_new(args: argparse.Namespace) -> int:
+    path = new_improvement(args.project_dir, args.title, local=args.local)
+    print(f"改进包: {path}")
+    return 0
+
+
+def _cmd_improve_list(args: argparse.Namespace) -> int:
+    scope = "inbox" if args.inbox else "local" if args.local else "contract"
+    items = list_improvements(args.project_dir, scope=scope, status=args.status)
+    if args.json:
+        _print_json(items)
+        return 0
+    if not items:
+        print("没有改进包")
+        return 0
+    for item in items:
+        print(
+            "{id} {status} {priority} {classification} {title}".format(
+                id=item.get("id"),
+                status=item.get("status"),
+                priority=item.get("priority"),
+                classification=item.get("classification"),
+                title=item.get("title"),
+            )
+        )
+    return 0
+
+
+def _cmd_improve_show(args: argparse.Namespace) -> int:
+    scope = "inbox" if args.inbox else "local" if args.local else "contract"
+    path = find_improvement(args.project_dir, args.mfp_id, scope=scope)
+    data = _load_mfp(path)
+    if args.json:
+        _print_json(data)
+    else:
+        print(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    return 0
+
+
+def _cmd_improve_validate(args: argparse.Namespace) -> int:
+    scope = "local" if args.local else "contract"
+    path = find_improvement(args.project_dir, args.mfp_id, scope=scope)
+    errors = validate_improvement(_load_mfp(path))
+    if args.json:
+        _print_json({"ok": not errors, "errors": errors})
+    elif errors:
+        print("MFP validate: FAIL")
+        for error in errors:
+            print(f"  - {error}")
+    else:
+        print("MFP validate: OK")
+    return 0 if not errors else 1
+
+
+def _cmd_improve_submit(args: argparse.Namespace) -> int:
+    path = submit_improvement(args.project_dir, args.mfp_id)
+    print(f"已提交到 inbox: {path}")
+    return 0
+
+
+def _cmd_improve_import(args: argparse.Namespace) -> int:
+    path = import_improvement(args.project_dir, args.source)
+    print(f"已导入 contract: {path}")
+    return 0
+
+
+def _cmd_dev_improve_import(args: argparse.Namespace) -> int:
+    result = source_import(
+        args.ref,
+        source=args.source,
+        kind=args.kind,
+        already_implemented=args.already_implemented,
+        version=args.version,
+        commit=args.commit,
+        note=args.note,
+    )
+    print(f"源码: {result['source']}")
+    print(f"MFP: {result['mfp']} → {result['destination']}")
+    print(f"classification: {result['classification']}")
+    if result.get("record"):
+        print(f"record: {result['record']}")
+    return 0
+
+
+def _cmd_dev_improve_list(args: argparse.Namespace) -> int:
+    data = source_list(source=args.source, scope=args.scope)
+    if args.json:
+        _print_json(data)
+        return 0
+    for section, items in data.items():
+        print(f"[{section}]")
+        if not items:
+            print("  (empty)")
+            continue
+        for item in items:
+            print(
+                "  {id} {status} {title}".format(
+                    id=item.get("id"),
+                    status=item.get("status"),
+                    title=item.get("title"),
+                )
+            )
+    return 0
+
+
+def _cmd_dev_improve_update(args: argparse.Namespace) -> int:
+    path = source_update(
+        args.mfp_id,
+        args.status,
+        source=args.source,
+        version=args.version,
+        commit=args.commit,
+        note=args.note,
+    )
+    print(f"已更新: {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mf", description="Meta Flow — AI 项目操作系统")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -349,6 +488,50 @@ def build_parser() -> argparse.ArgumentParser:
     ws_status.add_argument("--json", action="store_true")
     ws_status.set_defaults(func=_cmd_workspace_status)
 
+    improve_p = sub.add_parser("improve", help="MFP 改进包")
+    improve_sub = improve_p.add_subparsers(dest="action", required=True)
+
+    improve_new = improve_sub.add_parser("new")
+    improve_new.add_argument("--title", required=True)
+    improve_new.add_argument("--local", action="store_true", help="worker 本地草稿")
+    improve_new.add_argument("--project-dir", default=".")
+    improve_new.set_defaults(func=_cmd_improve_new)
+
+    improve_list = improve_sub.add_parser("list")
+    improve_scope = improve_list.add_mutually_exclusive_group()
+    improve_scope.add_argument("--local", action="store_true")
+    improve_scope.add_argument("--inbox", action="store_true")
+    improve_list.add_argument("--status")
+    improve_list.add_argument("--project-dir", default=".")
+    improve_list.add_argument("--json", action="store_true")
+    improve_list.set_defaults(func=_cmd_improve_list)
+
+    improve_show = improve_sub.add_parser("show")
+    improve_show.add_argument("mfp_id")
+    improve_show_scope = improve_show.add_mutually_exclusive_group()
+    improve_show_scope.add_argument("--local", action="store_true")
+    improve_show_scope.add_argument("--inbox", action="store_true")
+    improve_show.add_argument("--project-dir", default=".")
+    improve_show.add_argument("--json", action="store_true")
+    improve_show.set_defaults(func=_cmd_improve_show)
+
+    improve_validate = improve_sub.add_parser("validate")
+    improve_validate.add_argument("mfp_id")
+    improve_validate.add_argument("--local", action="store_true")
+    improve_validate.add_argument("--project-dir", default=".")
+    improve_validate.add_argument("--json", action="store_true")
+    improve_validate.set_defaults(func=_cmd_improve_validate)
+
+    improve_submit = improve_sub.add_parser("submit")
+    improve_submit.add_argument("mfp_id")
+    improve_submit.add_argument("--project-dir", default=".")
+    improve_submit.set_defaults(func=_cmd_improve_submit)
+
+    improve_import = improve_sub.add_parser("import")
+    improve_import.add_argument("--from", dest="source", required=True)
+    improve_import.add_argument("--project-dir", default=".")
+    improve_import.set_defaults(func=_cmd_improve_import)
+
     dev_p = sub.add_parser("dev", help="meta-flow 源码维护（maintainer）")
     dev_sub = dev_p.add_subparsers(dest="action", required=True)
     dev_clone_p = dev_sub.add_parser("clone")
@@ -366,6 +549,34 @@ def build_parser() -> argparse.ArgumentParser:
     dev_status_p.add_argument("--source")
     dev_status_p.add_argument("--json", action="store_true")
     dev_status_p.set_defaults(func=_cmd_dev_status)
+
+    dev_improve_p = dev_sub.add_parser("improve", help="把 MFP 导入 meta-flow 源码")
+    dev_improve_sub = dev_improve_p.add_subparsers(dest="improve_action", required=True)
+
+    di_import = dev_improve_sub.add_parser("import")
+    di_import.add_argument("ref", help="<project>/<MFP> 或唯一的 MFP id")
+    di_import.add_argument("--kind", choices=["bug", "requirement", "change", "undecided"])
+    di_import.add_argument("--already-implemented", action="store_true")
+    di_import.add_argument("--version")
+    di_import.add_argument("--commit")
+    di_import.add_argument("--note")
+    di_import.add_argument("--source")
+    di_import.set_defaults(func=_cmd_dev_improve_import)
+
+    di_list = dev_improve_sub.add_parser("list")
+    di_list.add_argument("--source")
+    di_list.add_argument("--scope", choices=["open", "closed", "records"], default="open")
+    di_list.add_argument("--json", action="store_true")
+    di_list.set_defaults(func=_cmd_dev_improve_list)
+
+    di_update = dev_improve_sub.add_parser("update")
+    di_update.add_argument("mfp_id")
+    di_update.add_argument("--status", required=True)
+    di_update.add_argument("--version")
+    di_update.add_argument("--commit")
+    di_update.add_argument("--note")
+    di_update.add_argument("--source")
+    di_update.set_defaults(func=_cmd_dev_improve_update)
 
     upgrade_p = sub.add_parser("upgrade", help="按全局模板更新项目安装")
     upgrade_p.add_argument("--project-dir", default=".")
@@ -396,7 +607,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except (WorkspaceError, InstallError, GlobalStoreError) as exc:
+    except (WorkspaceError, InstallError, GlobalStoreError, ImproveError) as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return getattr(exc, "code", 1)
 
