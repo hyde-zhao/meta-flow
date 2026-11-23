@@ -221,8 +221,13 @@ def close(
     if state.get("roadmap") == roadmap_id:
         phase = str(state.get("phase") or "")
         phase_status = str(state.get("phase_status") or "")
-        if phase != "P5" and phase_status != "done" and not force:
-            blockers.append(f"当前阶段 {phase}/{phase_status} 未完成 P5")
+        gate = state.get("last_phase_gate") or {}
+        if phase != "P5" or phase_status not in {"exited", "done"}:
+            blockers.append(f"当前阶段 {phase}/{phase_status} 未完成 P5 退出")
+        if gate.get("phase") != "P5" or gate.get("roadmap") != roadmap_id:
+            blockers.append("缺少 P5 阶段退出记录")
+        elif not gate.get("approved_by"):
+            blockers.append("P5 退出缺少用户批准记录")
         release = state.get("release") or {}
         if release.get("version") != item.get("version_target") and not force:
             blockers.append("还未冻结发布清单；先运行 mf release freeze")
@@ -327,7 +332,7 @@ def close(
         if isinstance(record, dict) and record.get("roadmap") == roadmap_id:
             snapshot = archive_dir / "verification" / path.name
             snapshot.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, snapshot)
+            shutil.move(str(path), str(snapshot))
     for path in sorted((contract / "bugs").glob("BUG-*.yaml")):
         try:
             record = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -336,7 +341,21 @@ def close(
         if isinstance(record, dict) and record.get("roadmap") == roadmap_id:
             snapshot = archive_dir / "bugs" / path.name
             snapshot.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, snapshot)
+            shutil.move(str(path), str(snapshot))
+    for path in sorted((contract / "release").glob("RELEASE-*.yaml")):
+        try:
+            record = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, OSError):
+            continue
+        if isinstance(record, dict) and (
+            record.get("roadmap") == roadmap_id
+            or str(record.get("project_version")) == str(target_version)
+        ):
+            snapshot = archive_dir / "release" / path.name
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(snapshot))
+    if state.get("release", {}).get("version") == target_version:
+        state["release"]["manifest"] = f"archive/{roadmap_id}/release/RELEASE-{target_version}.yaml"
     index_text = [
         f"# 归档索引 {roadmap_id}",
         "",
@@ -356,7 +375,6 @@ def close(
         item["close_note"] = note
     _save_roadmap(contract, data)
 
-    state = read_current(contract)
     if state.get("roadmap") == roadmap_id:
         if next_id:
             state.update({"roadmap": next_id, "phase": "P1", "phase_status": "active"})
@@ -419,20 +437,31 @@ def phase_enter(project: str | Path, phase: str) -> dict[str, Any]:
     state = read_current(contract)
     roadmap_id = str(state.get("roadmap") or "R1")
     current = str(state.get("phase") or "P1")
-    if phase not in PHASES:
-        raise RoadmapError("非法阶段")
-    if phase != current:
-        target_index = PHASES.index(phase)
-        current_index = PHASES.index(current) if current in PHASES else 0
-        if target_index < current_index:
-            raise RoadmapError(f"不能从 {current} 回退到 {phase}")
-        if target_index > current_index + 1:
-            raise RoadmapError(f"不能从 {current} 直接跳到 {phase}；先退出中间阶段")
+    status = str(state.get("phase_status") or "")
+    if phase == current:
+        if status != "active":
+            raise RoadmapError(f"当前阶段 {current} 状态为 {status}，不能重复进入")
+        plan_path = _write_phase_plan(contract, roadmap_id, phase)
+        return {"roadmap": roadmap_id, "phase": phase, "plan": str(plan_path), "status": "active"}
+    if current not in PHASES:
+        raise RoadmapError(f"当前阶段非法: {current}")
+    current_index = PHASES.index(current)
+    target_index = PHASES.index(phase)
+    if target_index != current_index + 1:
+        raise RoadmapError(f"只能进入下一阶段：当前 {current}，不能进入 {phase}")
+    if status != "exited":
+        raise RoadmapError(f"必须先执行 mf phase exit 完成 {current} 并记录门禁，才能进入 {phase}")
+    gate = state.get("last_phase_gate") or {}
+    if gate.get("phase") != current or gate.get("next_phase") != phase:
+        raise RoadmapError(f"缺少 {current} → {phase} 的阶段退出记录")
     plan_path = _write_phase_plan(contract, roadmap_id, phase)
     state.update({"roadmap": roadmap_id, "phase": phase, "phase_status": "active"})
     write_current(contract, state)
     refresh_current(contract)
-    ledger_append(contract, {"event": "phase.enter", "roadmap": roadmap_id, "phase": phase})
+    ledger_append(
+        contract,
+        {"event": "phase.enter", "roadmap": roadmap_id, "phase": phase, "from": current},
+    )
     return {"roadmap": roadmap_id, "phase": phase, "plan": str(plan_path), "status": "active"}
 
 
@@ -540,10 +569,36 @@ def phase_exit(
     phase = str(state.get("phase") or "P1")
     if phase not in PHASES:
         raise RoadmapError(f"当前阶段非法: {phase}")
+    if str(state.get("phase_status") or "") != "active":
+        raise RoadmapError(f"当前阶段 {phase} 不是 active，不能重复 exit")
     tasks = _phase_tasks(contract, roadmap_id, phase)
     unfinished = [task for task in tasks if task.get("status") not in {"accepted", "cancelled"}]
     if unfinished and not force:
         raise RoadmapError(f"{phase} 仍有 {len(unfinished)} 个任务未验收；先完成或 --force")
+    if phase == "P1" and not force:
+        reqs = [req for req in _all_requirements(contract) if req.get("roadmap") == roadmap_id]
+        if not reqs:
+            raise RoadmapError("P1 退出需要至少一条需求基线；先 mf req add")
+    if phase == "P2" and not force:
+        design_docs = [
+            path
+            for directory in (contract / "specs", contract / "architecture")
+            for path in directory.rglob("*.md")
+            if path.name != "INDEX.md" and "drafts" not in path.parts
+        ]
+        if not design_docs:
+            raise RoadmapError("P2 退出需要至少一份 SPEC/DESIGN/ADR；先完成设计文档")
+    if phase == "P4" and not force:
+        layered = []
+        for path in sorted((contract / "verification").glob("VR-*.yaml")):
+            record = _load_yaml(path)
+            if (
+                record.get("layer") in {"design", "requirement"}
+                and record.get("roadmap") in {None, roadmap_id}
+            ):
+                layered.append(record)
+        if not layered:
+            raise RoadmapError("P4 退出需要至少一条 L2/L3 验证记录；先 mf verify record")
     bugs = [
         bug
         for bug in _open_blocking_bugs(contract)
@@ -552,7 +607,7 @@ def phase_exit(
     ]
     if bugs and not force:
         raise RoadmapError(f"{phase} 仍有 {len(bugs)} 个 blocker/critical BUG；先关闭或 --force")
-    if phase in GATED_PHASES and not approved_by and not force:
+    if phase in GATED_PHASES and not approved_by:
         raise RoadmapError(f"{phase} 退出需要用户门禁：--approved-by <用户/记录>")
 
     report = phase_review(project)
@@ -585,13 +640,35 @@ def phase_exit(
         handoff_path.write_text("\n".join(handoff), encoding="utf-8")
 
     if next_phase:
-        _write_phase_plan(contract, roadmap_id, next_phase)
-        state.update({"phase": next_phase, "phase_status": "active"})
-    else:
-        state["phase_status"] = "done"
+        handoff = [
+            f"# HANDOFF {roadmap_id}-{phase} → {roadmap_id}-{next_phase}",
+            "",
+            f"> 时间: {_now()}",
+            f"> 用户门禁: {approved_by or '-'}",
+            f"> 说明: {note or '-'}",
+            "",
+            "## 已完成",
+            "",
+        ]
+        for task in tasks:
+            if task.get("status") == "accepted":
+                handoff.append(f"- {task.get('id')} {task.get('title')}")
+        handoff.extend(["", "## 必须带入下一阶段", ""])
+        for task in unfinished:
+            handoff.append(f"- 未完成任务: {task.get('id')} {task.get('title')}")
+        for bug in bugs:
+            handoff.append(f"- 未关闭 BUG: {bug.get('id')} {bug.get('title')}")
+        if not unfinished and not bugs:
+            handoff.append("(none)")
+        handoff.extend(["", "## 下一阶段", "", f"`roadmap/{roadmap_id}/phases/{next_phase}/PLAN.md`", ""])
+        handoff_path = _phase_dir(contract, roadmap_id, phase) / f"HANDOFF-TO-{next_phase}.md"
+        handoff_path.write_text("\n".join(handoff), encoding="utf-8")
+
+    state["phase_status"] = "exited"
     state["last_phase_gate"] = {
         "roadmap": roadmap_id,
         "phase": phase,
+        "next_phase": next_phase,
         "approved_by": approved_by,
         "note": note,
         "at": _now(),
@@ -600,7 +677,13 @@ def phase_exit(
     refresh_current(contract)
     ledger_append(
         contract,
-        {"event": "phase.exit", "roadmap": roadmap_id, "phase": phase, "next": next_phase, "approved_by": approved_by},
+        {
+            "event": "phase.exit",
+            "roadmap": roadmap_id,
+            "phase": phase,
+            "next": next_phase,
+            "approved_by": approved_by,
+        },
     )
     return {
         "roadmap": roadmap_id,

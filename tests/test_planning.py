@@ -41,7 +41,20 @@ def _acceptance():
 
 def _move_to_p5(contract):
     current = state.read_current(contract)
-    current.update({"phase": "P5", "phase_status": "active"})
+    current.update(
+        {
+            "phase": "P5",
+            "phase_status": "exited",
+            "last_phase_gate": {
+                "roadmap": current.get("roadmap", "R1"),
+                "phase": "P5",
+                "next_phase": None,
+                "approved_by": "user",
+                "note": "test gate",
+                "at": "2026-01-01T00:00:00+00:00",
+            },
+        }
+    )
     state.write_current(contract, current)
 
 
@@ -90,6 +103,12 @@ def test_roadmap_phase_close_and_archive(project_env):
     assert planned["created"] is True
     assert (contract / "roadmap" / "R2" / "PLAN.md").is_file()
 
+    with pytest.raises(roadmap.RoadmapError):
+        roadmap.phase_enter(root, "P2")
+
+    first = roadmap.phase_exit(root, approved_by="user", force=True)
+    assert first["phase"] == "P1"
+    assert state.read_current(contract)["phase_status"] == "exited"
     entered = roadmap.phase_enter(root, "P2")
     assert entered["phase"] == "P2"
     assert state.read_current(contract)["phase"] == "P2"
@@ -100,10 +119,18 @@ def test_roadmap_phase_close_and_archive(project_env):
     with pytest.raises(roadmap.RoadmapError):
         roadmap.phase_exit(root)
 
-    exited = roadmap.phase_exit(root, approved_by="user")
+    exited = roadmap.phase_exit(root, approved_by="user", force=True)
     assert exited["phase"] == "P2"
     assert exited["next"] == "P3"
     assert (contract / "roadmap" / "R1" / "phases" / "P2" / "HANDOFF-TO-P3.md").is_file()
+
+    roadmap.phase_enter(root, "P3")
+    roadmap.phase_exit(root)
+    roadmap.phase_enter(root, "P4")
+    roadmap.phase_exit(root, approved_by="user", force=True)
+    roadmap.phase_enter(root, "P5")
+    roadmap.phase_exit(root, approved_by="user")
+    assert state.read_current(contract)["phase_status"] == "exited"
 
     closed = roadmap.close(root, "R1", force=True)
     assert closed["next"] == "R2"
@@ -200,6 +227,11 @@ def test_verify_and_release_freeze(project_env):
     assert (contract / "archive" / "R1" / "CLOSE.md").is_file()
     assert (contract / "archive" / "R1" / "verification" / "VR-0001.yaml").is_file()
     assert (contract / "archive" / "R1" / "bugs" / "BUG-0001.yaml").is_file()
+    assert (contract / "archive" / "R1" / "release" / "RELEASE-1.0.0.yaml").is_file()
+    assert verify.show_release(root)["roadmap"] == "R1"
+    from meta_flow.workspace import doctor
+
+    assert doctor(root) == []
 
 
 def test_task_orchestration_and_leases(project_env):

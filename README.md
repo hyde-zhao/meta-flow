@@ -167,31 +167,36 @@ mf task create --title "实现 X" --risk high --acceptance "命令 mf X 成功"
 # 查看下一步责任 agent（worker 或 manager）
 mf task prompt R1-P1-T001
 
-# worker 实现
+# worker 实现（在子项目目录启动）
 mf task show R1-P1-T001 --packet
-mf task start R1-P1-T001
+mf task start R1-P1-T001 --owner worker-1
 mf task submit R1-P1-T001 --handoff <bundle>/handoff.md
 
-# worker2 评审（review 任务）
+# worker2 评审（review 任务，独立身份）
 mf task show R1-P1-T002 --review-packet
-mf task start R1-P1-T002
+mf task start R1-P1-T002 --owner reviewer-2
 mf task submit R1-P1-T002
 
-# manager 验收
+# manager 验收（在项目根启动）
 mf task accept R1-P1-T002 --verdict PASS
 mf task accept R1-P1-T001 --verdict PASS
+# critical 任务必须追加：
+# mf task accept <task> --verdict PASS --user-approved-by <用户/记录>
 ```
 
 - 低风险：manager 先 review，再验收。
-- 中/高风险：worker2 独立 review，之后 manager 验收。
+- 中/高风险：worker2 独立 review，之后 manager 验收；高风险不能降级为 manager 自审或 `--no-review`。
+- 评审结论从 `review-handoff.md` / `review.md` 读取；manager 不能用 `--verdict` 覆盖相反结论。
 - 评审不通过：`review-handoff.md` 列出必须整改项，manager 退回 worker1；返工后复审。
+- critical 任务必须记录用户验收 `--user-approved-by`。
 - 每个任务状态都有 `next_owner`；`mf task prompt` 明确下一责任 agent。
+- 角色守卫：manager 不能 `task start/submit`；worker 不能 `req/roadmap/phase/bug/verify/release/task accept`。
 
 ## 规划闭环
 
 ```bash
-# 需求基线与 DoR（标题、优先级、可验收标准）
-mf req add --title "用户登录" --priority must --acceptance "登录成功"
+# 需求基线与 DoR（标题、来源、优先级、可验收标准）
+mf req add --title "用户登录" --priority must --acceptance "登录成功" --non-goal "不做第三方登录"
 mf req list
 mf req show REQ-0001
 mf req update REQ-0001 --status verified
@@ -201,15 +206,21 @@ mf req trace                      # 生成 requirements/TRACE.md
 # 路标/版本
 mf roadmap show
 mf roadmap plan R2 --title "v2" --version-target 2.0.0 --goal "第二版"
-mf roadmap close R1               # 校验 REQ/任务/BUG；归档 archive/R1
 
-# 五阶段
+# 五阶段：exit 记录门禁，enter 推进；不能跳级
+mf phase exit --approved-by user  # P1 退出（用户确认）
 mf phase enter P2
 mf phase review                   # 生成阶段 REPORT.md
-mf phase exit --approved-by user  # P1/P2/P4/P5 需要用户门禁
+mf phase exit --approved-by user  # P2 退出；P3 不需要用户门禁
+mf phase enter P3
+# P3 exit -> enter P4 -> exit --approved-by user -> enter P5
+# P5 exit --approved-by user
+
+mf release freeze                 # 需要 P5 已退出且有用户批准记录
+mf roadmap close R1               # 需要 P5 退出 + 用户批准 + 已冻结
 ```
 
-`roadmap close` 生成关闭报告、下一版本交接、`LESSONS-R{n}.md`，并把任务、阶段计划/报告、VR、BUG 快照移入 `archive/R{n}/`。阶段退出生成 `HANDOFF-TO-P{n}.md`。
+`roadmap close` 生成关闭报告、下一版本交接、`LESSONS-R{n}.md`，并把任务、阶段计划/报告、VR、BUG、release 清单迁入 `archive/R{n}/`。阶段退出生成 `HANDOFF-TO-P{n}.md`。`--force` 只能绕过技术校验，不能绕过用户门禁。
 
 ## 质量闭环
 
@@ -224,9 +235,10 @@ mf bug add --title "登录报错" --severity major --requirement REQ-0001
 mf bug update BUG-0001 --status fixed --fix-task R1-P1-T001
 mf bug close BUG-0001 --verification "回归通过"
 
-# 知识
+# 知识（可限定交付库）
 mf knowledge add --kind term --text "契约库=项目公共规范和计划"
 mf knowledge add --kind lesson --text "先写验收再实现"
+mf knowledge add --kind convention --text "前端统一用 pnpm" --delivery frontend
 mf knowledge render
 
 # 版本冻结（不等于发布）
@@ -235,24 +247,27 @@ mf release show
 ```
 
 - `FAIL` 验证必须关联 `--bug`。
-- `PASS` 验证会关闭关联 BUG；`task accept` 会把 fix 任务关联 BUG 置为 `fixed`。
-- `release freeze` 检查需求、任务、blocker/critical BUG 和版本 MAJOR，写 `release/RELEASE-<version>.yaml`；`published: false`。
-- 知识条目会自动注入任务包，控制 worker 上下文。
+- `PASS` 验证把关联 BUG 置为 `verifying`，最终关闭仍由 manager 执行 `mf bug close`。
+- `task accept` 会把 fix 任务关联 BUG 置为 `fixed`；manager 验证后再关闭。
+- `release freeze` 检查 P5 用户门禁、需求、任务、blocker/critical BUG 和版本 MAJOR，写 `release/RELEASE-<version>.yaml`；`published: false`。
+- 知识条目会按交付库过滤后注入任务包。
 
 ## 控制闭环
 
 ```bash
-# 依赖、wave、写冲突与下一批
+# 依赖、wave、写冲突与下一批（manager）
 mf task graph
 mf task plan
 mf task next
 mf task summary
 
 # lease：start 写 2 小时租约；manager 回收
-mf task start R1-P1-T001
+# worker 在子项目运行：
+mf task start R1-P1-T001 --owner worker-1
+# manager 在项目根回收：
 mf task release R1-P1-T001 --force
 
-# 热区、读扩展与归档
+# 热区、读扩展与归档（manager）
 mf context show
 mf context expand requirements/REQ-0001.md --reason human_audit
 mf context log
@@ -265,11 +280,13 @@ mf log
 mf doctor
 ```
 
-- `state/current.json` 只存指针/计数，≤8KB；修订历史进 `ledger.ndjson`。
-- 任务 start 写 lease，防止同一任务被并发占用；`task release --force` 由 manager 回收。
-- `context expand` 和 `archive show` 必须带 reason，并写 `READ-LOG.ndjson`。
-- `task plan` 按 wave 分组并检查同一 wave 的 `allowed_paths` 冲突。
-- `mf doctor` 校验需求 DoR、追踪、任务/依赖、BUG、知识、VR、路标/阶段与 state 大小。
+- `state/current.json` 只存指针/计数，≤8KB；缺失或损坏时从 ROADMAP/tasks/ledger 重建；修订历史进 `ledger.ndjson`。
+- 任务 start 写 lease，并检查依赖、同 wave 写冲突和 `owner`；`task release --force` 由 manager 回收。
+- `task submit` 用 git diff + untracked 校验 `allowed_paths`/`forbidden`，越界拒绝。
+- `context expand` 和 `archive show` 必须带 reason；archive 只允许 manager，并写 `READ-LOG.ndjson`。
+- worker 只能通过 `task show --packet` 获取上下文；任务包声明 read policy、预算和 `packet_digest`。
+- `task plan` 按 wave 分组并检查同一 wave 的 `allowed_paths` 冲突；`task start` 会拒绝未满足依赖或冲突任务。
+- `mf doctor` 校验需求 DoR、追踪、任务/依赖、BUG、知识、VR、路标/阶段、策略文件和 state 大小。
 
 ## 卸载
 

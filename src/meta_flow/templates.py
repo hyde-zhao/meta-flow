@@ -826,55 +826,71 @@ USER_MANUAL = """# 用户手册
 
 CONTEXT_POLICY = """schema: 1
 state:
-  path: contracts/state/current.json
+  path: state/current.json
   max_bytes: 8192
-  ledger: contracts/state/ledger.ndjson
-  read_log: contracts/state/READ-LOG.ndjson
+  ledger: state/ledger.ndjson
+  read_log: state/READ-LOG.ndjson
 archive:
-  root: contracts/archive
+  root: archive
   read_reason_required: true
 work_areas:
-  version: contracts/roadmap/R{roadmap}
-  phase: contracts/roadmap/R{roadmap}/phases/P{phase}
-  task: contracts/roadmap/R{roadmap}/phases/P{phase}/tasks/{task}
-  archive: contracts/archive/R{roadmap}
+  version: roadmap/R{roadmap}
+  phase: roadmap/R{roadmap}/phases/P{phase}
+  task: roadmap/R{roadmap}/phases/P{phase}/tasks/{task}
+  archive: archive/R{roadmap}
   handoffs:
     phase: HANDOFF-TO-P{next_phase}.md
     version: HANDOFF-TO-R{next_roadmap}.md
 roles:
   manager:
     must_read:
-      - contracts/state/current.json
-      - contracts/project/PROJECT-PLAN.md
-      - contracts/roadmap/ROADMAP.yaml
-      - contracts/requirements/INDEX.md
-      - contracts/architecture/INDEX.md
-      - contracts/knowledge/KNOWLEDGE.md
+      - state/current.json
+      - project/PROJECT-PLAN.md
+      - roadmap/ROADMAP.yaml
+      - requirements/INDEX.md
+      - architecture/INDEX.md
+      - knowledge/KNOWLEDGE.md
+      - policies/CONTEXT-POLICY.yaml
     may_read:
-      - contracts/roadmap/current/**
-      - contracts/requirements/**
-      - contracts/architecture/**
-      - contracts/specs/**
-      - contracts/knowledge/**
-    deny: [contracts/archive/**, deliveries/*/src/**]
+      - roadmap/current/**
+      - requirements/**
+      - architecture/**
+      - specs/**
+      - knowledge/**
+      - verification/**
+      - bugs/**
+    deny:
+      - archive/**
     phase_scope: current
     budget: {files: 12, bytes: 131072}
   worker:
-    must_read: [contracts/state/current.json]
-    may_read: [task-packet, review-packet]
+    must_read: [task-packet, own-task-bundle]
+    may_read: [allowed-paths, review-scope]
     deny:
-      - contracts/archive/**
-      - contracts/roadmap/**
-      - contracts/requirements/**
-      - contracts/architecture/**
+      - archive/**
+      - requirements/**
+      - architecture/**
+      - specs/**
+      - roadmap/*/PLAN.md
+      - roadmap/*/phases/*/PLAN.md
+      - roadmap/*/phases/*/REPORT.md
+      - other-tasks/**
     packet_only: true
     budget: {files: 10, bytes: 65536}
   maintainer:
-    must_read: [mf.workspace.yaml, contracts/project.yaml]
-    deny: [contracts/requirements/**, contracts/architecture/**, deliveries/*/src/**]
+    must_read: [workspace/mf.workspace.yaml, workspace/CLAUDE.md]
+    deny:
+      - requirements/**
+      - architecture/**
+      - specs/**
+      - roadmap/**
+      - tasks/**
+      - delivery-source/**
 notes:
-  - worker 只能访问任务卡 allowed_paths 所在的交付库；其他交付库由 CLI 拒绝。
-  - archive 读取必须带 reason 并写 READ-LOG。
+  - worker 只访问任务卡 allowed_paths 所在的交付库；其他交付库由 CLI 拒绝。
+  - worker 可以写自己的任务 bundle（dev-record/handoff/evidence），但不能写其他任务或契约基线。
+  - archive 读取必须带 reason、由 manager 执行，并写 READ-LOG。
+  - 任务包默认预算：10 个输入文件、64KB；超出则拆分任务。
 """
 
 ARCHIVE_README = """# 归档

@@ -605,8 +605,12 @@ def workspace_upgrade(root: str | Path, *, force: bool = False) -> dict[str, Any
                 json.dumps(state_data, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-    if not (contract / "policies" / "CONTEXT-POLICY.yaml").is_file():
+    if not (contract / "policies" / "CONTEXT-POLICY.yaml").is_file() or force:
         _write(contract / "policies" / "CONTEXT-POLICY.yaml", templates.CONTEXT_POLICY)
+    else:
+        policy_path = contract / "policies" / "CONTEXT-POLICY.yaml"
+        if "contracts/" in policy_path.read_text(encoding="utf-8"):
+            _write(policy_path, templates.CONTEXT_POLICY)
     roadmap_data = _load_optional_yaml(contract / "roadmap" / "ROADMAP.yaml") or {}
     for item in roadmap_data.get("roadmaps") or []:
         roadmap_id = str(item.get("id") or "")
@@ -1044,7 +1048,9 @@ def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
                 errors.append(f"任务 {task_id} 引用不存在需求: {ref}")
 
     vr_refs: dict[str, int] = {}
-    for path in sorted((contract / "verification").glob("VR-*.yaml")):
+    vr_paths = list((contract / "verification").glob("VR-*.yaml"))
+    vr_paths.extend((contract / "archive").glob("*/verification/VR-*.yaml"))
+    for path in sorted(vr_paths):
         data = _load_optional_yaml(path)
         if data is None:
             errors.append(f"验证记录不是合法 YAML: {path.relative_to(contract)}")
@@ -1086,3 +1092,31 @@ def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
         for key in ("terms", "behaviors", "conventions", "preferences", "lessons"):
             if not isinstance(knowledge_data.get(key, []), list):
                 errors.append(f"KNOWLEDGE.yaml {key} 必须是列表")
+
+    policy_path = contract / "policies" / "CONTEXT-POLICY.yaml"
+    policy_data = _load_optional_yaml(policy_path)
+    if policy_data is None:
+        errors.append("policies/CONTEXT-POLICY.yaml 缺失或非法")
+    else:
+        text = policy_path.read_text(encoding="utf-8")
+        if "contracts/" in text:
+            errors.append("CONTEXT-POLICY.yaml 仍使用旧 contracts/ 路径")
+        state_policy = policy_data.get("state") or {}
+        if int(state_policy.get("max_bytes") or 0) > 8192:
+            errors.append("CONTEXT-POLICY.yaml state.max_bytes 超过 8192")
+        worker_deny = [str(item) for item in ((policy_data.get("roles") or {}).get("worker") or {}).get("deny") or []]
+        if not any("archive" in item for item in worker_deny):
+            errors.append("CONTEXT-POLICY.yaml worker 未禁止 archive")
+
+    for directory in (contract / "specs", contract / "architecture"):
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*.md"):
+            if "drafts" in path.parts or path.name == "INDEX.md":
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if re.search(r"archive/R\d+", text):
+                errors.append(f"活动文档引用归档: {path.relative_to(contract)}")

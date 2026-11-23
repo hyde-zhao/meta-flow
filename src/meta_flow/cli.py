@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,113 @@ from .workspace import (
 
 def _print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+GLOBAL_COMMANDS = {"bootstrap", "install", "uninstall", "dev", "upgrade", "role", "status", "doctor"}
+MANAGER_PROJECT_COMMANDS = {
+    "workspace",
+    "req",
+    "roadmap",
+    "phase",
+    "bug",
+    "knowledge",
+    "verify",
+    "release",
+    "context",
+    "archive",
+    "log",
+}
+ROLE_VALUES = {"manager", "worker", "maintainer"}
+
+
+def _effective_role(args: argparse.Namespace) -> tuple[str, Path | None]:
+    role, root = detect_role(Path.cwd())
+    if role != "unbound":
+        return role, root
+    env_role = os.environ.get("MF_ROLE")
+    if env_role in ROLE_VALUES:
+        return env_role, None
+    for attr in ("project_dir", "path"):
+        raw = getattr(args, attr, None)
+        if raw:
+            candidate_role, candidate_root = detect_role(Path(raw))
+            if candidate_role != "unbound":
+                return candidate_role, candidate_root
+    return "unbound", None
+
+
+def _enforce_role(args: argparse.Namespace) -> None:
+    command = str(getattr(args, "command", ""))
+    action = str(getattr(args, "action", "") or "")
+    role, _ = _effective_role(args)
+    if command in {"role", "status", "doctor", "bootstrap"}:
+        return
+    if command in {"install", "uninstall", "upgrade"}:
+        if role not in {"manager", "maintainer", "unbound"}:
+            raise WorkspaceError("worker 不能安装/卸载/升级项目", 3)
+        return
+    if command == "dev":
+        if role not in {"maintainer", "unbound"}:
+            raise WorkspaceError("dev 命令只允许 maintainer", 3)
+        return
+    if command == "workspace":
+        if role != "manager":
+            raise WorkspaceError("workspace 命令只允许 manager", 3)
+        return
+    if command == "task":
+        worker_actions = {"list", "show", "prompt"}
+        manager_actions = {"create", "accept", "reject", "release", "graph", "plan", "next", "summary"}
+        if action in {"start", "submit"}:
+            if role != "worker":
+                raise WorkspaceError(f"task {action} 只允许 worker", 3)
+            return
+        if action in worker_actions and role not in {"worker", "manager"}:
+            raise WorkspaceError(f"task {action} 只允许 worker/manager", 3)
+        if action in manager_actions and role != "manager":
+            raise WorkspaceError(f"task {action} 只允许 manager", 3)
+        if action not in worker_actions | manager_actions | {"start", "submit"}:
+            raise WorkspaceError(f"未知 task 动作: {action}", 3)
+        return
+    if command == "improve":
+        if role == "manager":
+            return
+        if role == "maintainer":
+            if action in {"list", "show"} and (args.inbox if hasattr(args, "inbox") else False):
+                return
+            raise WorkspaceError("maintainer 只能通过 dev improve 维护源码", 3)
+        if role == "worker":
+            if action in {"new", "list", "show", "validate"} and getattr(args, "local", False):
+                return
+            raise WorkspaceError("worker 只能使用 improve --local 创建/查看本地 MFP", 3)
+        raise WorkspaceError("无法确定角色；请在工作区根/子项目运行或设置 MF_ROLE", 3)
+    if command in MANAGER_PROJECT_COMMANDS:
+        if role != "manager":
+            raise WorkspaceError(f"{command} 命令只允许 manager", 3)
+        return
+    if role == "unbound":
+        raise WorkspaceError("无法确定角色；请在项目根/子项目运行或设置 MF_ROLE", 3)
+
+
+def _worker_delivery(role_root: Path | None) -> str | None:
+    if role_root is None:
+        return None
+    path = role_root / "delivery.yaml"
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return None
+    return str(data.get("id")) if isinstance(data, dict) and data.get("id") else None
+
+
+def _ensure_worker_scope(args: argparse.Namespace, task: dict[str, Any]) -> None:
+    role, root = _effective_role(args)
+    if role != "worker":
+        return
+    delivery = _worker_delivery(root)
+    if delivery and task.get("delivery") and task.get("delivery") != delivery:
+        raise WorkspaceError(f"worker 只能访问交付库 {delivery} 的任务", 3)
 
 
 def _print_doctor(errors: list[str], as_json: bool) -> int:
@@ -502,7 +610,9 @@ def _cmd_task_create(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_list(args: argparse.Namespace) -> int:
-    items = list_tasks(args.project_dir, status=args.status)
+    role, root = _effective_role(args)
+    delivery = _worker_delivery(root) if role == "worker" else None
+    items = list_tasks(args.project_dir, status=args.status, delivery=delivery)
     if args.json:
         _print_json(items)
         return 0
@@ -525,6 +635,7 @@ def _cmd_task_list(args: argparse.Namespace) -> int:
 
 def _cmd_task_show(args: argparse.Namespace) -> int:
     path, data = load_task(args.project_dir, args.task_id)
+    _ensure_worker_scope(args, data)
     if args.packet:
         print(packet_text(args.project_dir, args.task_id))
         return 0
@@ -539,17 +650,22 @@ def _cmd_task_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_start(args: argparse.Namespace) -> int:
-    data = start_task(args.project_dir, args.task_id)
+    _, current = load_task(args.project_dir, args.task_id)
+    _ensure_worker_scope(args, current)
+    data = start_task(args.project_dir, args.task_id, owner=args.owner)
     print(f"{data['id']} -> {data['status']} (next={data['next_owner']})")
     return 0
 
 
 def _cmd_task_submit(args: argparse.Namespace) -> int:
+    _, current = load_task(args.project_dir, args.task_id)
+    _ensure_worker_scope(args, current)
     data = submit_task(
         args.project_dir,
         args.task_id,
         handoff=args.handoff,
         dev_record=args.dev_record,
+        owner=args.owner,
     )
     print(f"{data['id']} -> {data['status']} (next={data['next_owner']})")
     return 0
@@ -561,6 +677,7 @@ def _cmd_task_accept(args: argparse.Namespace) -> int:
         args.task_id,
         verdict=args.verdict,
         note=args.note,
+        user_approved_by=args.user_approved_by,
     )
     print(f"{data['id']} -> {data['status']} (verdict={args.verdict})")
     return 0
@@ -573,6 +690,8 @@ def _cmd_task_reject(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_prompt(args: argparse.Namespace) -> int:
+    _, data = load_task(args.project_dir, args.task_id)
+    _ensure_worker_scope(args, data)
     print(prompt_text(args.project_dir, args.task_id), end="")
     return 0
 
@@ -694,6 +813,8 @@ def _cmd_req_add(args: argparse.Namespace) -> int:
         roadmap=args.roadmap,
         source=args.source,
         description=args.description or "",
+        non_goals=args.non_goal or [],
+        dependencies=args.dependency or [],
     )
     print(f"需求: {item['id']} ({item['status']}, {item['priority']})")
     print(f"文档: requirements/{item['id']}.md")
@@ -940,6 +1061,7 @@ def _cmd_knowledge_add(args: argparse.Namespace) -> int:
         args.text,
         context=args.context or "",
         source=args.source,
+        delivery=args.delivery,
     )
     print(f"知识: {item['id']} ({args.kind})")
     print("已刷新: knowledge/KNOWLEDGE.md")
@@ -1238,6 +1360,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_start = task_sub.add_parser("start")
     task_start.add_argument("task_id")
     task_start.add_argument("--project-dir", default=".")
+    task_start.add_argument("--owner", help="worker 身份；也可设置 MF_WORKER_ID")
     task_start.set_defaults(func=_cmd_task_start)
 
     task_submit = task_sub.add_parser("submit")
@@ -1245,6 +1368,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_submit.add_argument("--project-dir", default=".")
     task_submit.add_argument("--handoff")
     task_submit.add_argument("--dev-record")
+    task_submit.add_argument("--owner", help="worker 身份；也可设置 MF_WORKER_ID")
     task_submit.set_defaults(func=_cmd_task_submit)
 
     task_accept = task_sub.add_parser("accept")
@@ -1256,6 +1380,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="PASS",
     )
     task_accept.add_argument("--note")
+    task_accept.add_argument("--user-approved-by", help="critical 任务的用户验收记录")
     task_accept.set_defaults(func=_cmd_task_accept)
 
     task_reject = task_sub.add_parser("reject")
@@ -1307,6 +1432,8 @@ def build_parser() -> argparse.ArgumentParser:
     req_add.add_argument("--roadmap")
     req_add.add_argument("--source", default="user")
     req_add.add_argument("--description")
+    req_add.add_argument("--non-goal", action="append")
+    req_add.add_argument("--dependency", action="append")
     req_add.set_defaults(func=_cmd_req_add)
     req_list = req_sub.add_parser("list")
     req_list.add_argument("--project-dir", default=".")
@@ -1429,6 +1556,7 @@ def build_parser() -> argparse.ArgumentParser:
     knowledge_add.add_argument("--text", required=True)
     knowledge_add.add_argument("--context")
     knowledge_add.add_argument("--source", default="user")
+    knowledge_add.add_argument("--delivery", help="只注入指定交付库的任务包")
     knowledge_add.set_defaults(func=_cmd_knowledge_add)
     knowledge_list = knowledge_sub.add_parser("list")
     knowledge_list.add_argument("--project-dir", default=".")
@@ -1496,7 +1624,7 @@ def build_parser() -> argparse.ArgumentParser:
     context_expand.add_argument("path")
     context_expand.add_argument("--project-dir", default=".")
     context_expand.add_argument("--reason", choices=list(context.REASONS), required=True)
-    context_expand.add_argument("--actor", default="manager")
+    context_expand.add_argument("--actor", help="默认从当前目录/MF_ROLE 推导")
     context_expand.set_defaults(func=_cmd_context_expand)
     context_log = context_sub.add_parser("log")
     context_log.add_argument("--project-dir", default=".")
@@ -1518,7 +1646,7 @@ def build_parser() -> argparse.ArgumentParser:
     archive_show.add_argument("roadmap_id")
     archive_show.add_argument("--project-dir", default=".")
     archive_show.add_argument("--reason", choices=list(context.REASONS), required=True)
-    archive_show.add_argument("--actor", default="manager")
+    archive_show.add_argument("--actor", help="默认从当前目录/MF_ROLE 推导")
     archive_show.add_argument("--json", action="store_true")
     archive_show.set_defaults(func=_cmd_archive_show)
 
@@ -1646,7 +1774,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return int(args.func(args))
+        _enforce_role(args)
+        role, _ = _effective_role(args)
+        old_role = os.environ.get("MF_ROLE")
+        old_actor = os.environ.get("MF_ACTOR")
+        if role in ROLE_VALUES:
+            os.environ["MF_ROLE"] = role
+            os.environ.setdefault("MF_ACTOR", role)
+        try:
+            return int(args.func(args))
+        finally:
+            if old_role is None:
+                os.environ.pop("MF_ROLE", None)
+            else:
+                os.environ["MF_ROLE"] = old_role
+            if old_actor is None:
+                os.environ.pop("MF_ACTOR", None)
+            else:
+                os.environ["MF_ACTOR"] = old_actor
     except (
         WorkspaceError,
         InstallError,
@@ -1659,6 +1804,7 @@ def main(argv: list[str] | None = None) -> int:
         knowledge.KnowledgeError,
         verify.VerifyError,
         context.ContextError,
+        state.StateError,
     ) as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return getattr(exc, "code", 1)

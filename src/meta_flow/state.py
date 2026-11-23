@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,31 +12,93 @@ from typing import Any
 import yaml
 
 MAX_STATE_BYTES = 8192
+VALID_PHASES = ("P1", "P2", "P3", "P4", "P5")
+
+
+class StateError(Exception):
+    """派生状态无法安全重建或写入。"""
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _derive_current(contract: Path) -> dict[str, Any]:
+    """从 ROADMAP 与任务卡重建最小当前状态，避免静默回退到 R1/P1。"""
+    roadmap_data = _load_yaml(contract / "roadmap" / "ROADMAP.yaml")
+    roadmaps = [item for item in roadmap_data.get("roadmaps") or [] if isinstance(item, dict)]
+    active = next((item for item in roadmaps if item.get("status") == "active"), None)
+    selected = active or (roadmaps[-1] if roadmaps else None)
+    roadmap_id = str((selected or {}).get("id") or "R1")
+    tasks = []
+    for path in sorted((contract / "roadmap" / roadmap_id).glob("phases/*/tasks/T*/TASK.yaml")):
+        data = _load_yaml(path)
+        if data:
+            tasks.append(data)
+    phases = [str(task.get("phase")) for task in tasks if task.get("phase") in VALID_PHASES]
+    for path in sorted((contract / "roadmap" / roadmap_id).glob("phases/*/REPORT.md")):
+        if path.parent.name in VALID_PHASES:
+            phases.append(path.parent.name)
+    for path in sorted((contract / "roadmap" / roadmap_id).glob("phases/*/HANDOFF-TO-P*.md")):
+        match = path.name.rsplit("-", 1)[-1].removesuffix(".md")
+        if match in VALID_PHASES:
+            phases.append(match)
+    phase = max(phases, key=VALID_PHASES.index) if phases else "P1"
+    phase_status = "active"
+    if phase == "P5" and list((contract / "release").glob("RELEASE-*.yaml")):
+        phase_status = "exited"
+    return {
+        "schema": 1,
+        "roadmap": roadmap_id,
+        "phase": phase,
+        "phase_status": phase_status,
+    }
+
+
 def read_current(contract: Path) -> dict[str, Any]:
     path = contract / "state" / "current.json"
     if not path.is_file():
-        return {"schema": 1, "roadmap": "R1", "phase": "P1"}
+        return _derive_current(contract)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return {"schema": 1, "roadmap": "R1", "phase": "P1"}
-    return data if isinstance(data, dict) else {"schema": 1, "roadmap": "R1", "phase": "P1"}
+        return _derive_current(contract)
+    if not isinstance(data, dict):
+        return _derive_current(contract)
+    derived = _derive_current(contract)
+    roadmap_data = _load_yaml(contract / "roadmap" / "ROADMAP.yaml")
+    roadmap_ids = {str(item.get("id")) for item in roadmap_data.get("roadmaps") or []}
+    if not data.get("roadmap") or (roadmap_ids and data.get("roadmap") not in roadmap_ids):
+        data["roadmap"] = derived["roadmap"]
+    if data.get("phase") not in (*VALID_PHASES, "done", "closed"):
+        data["phase"] = derived["phase"]
+    if not data.get("phase_status"):
+        data["phase_status"] = "active"
+    return data
+
+
+def _source_digest(contract: Path, data: dict[str, Any]) -> str:
+    parts = [str(data.get("roadmap")), str(data.get("phase")), str(data.get("phase_status"))]
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        item = _load_yaml(path)
+        parts.append(f"{item.get('id')}:{item.get('status')}:{item.get('updated_at')}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
 def write_current(contract: Path, data: dict[str, Any]) -> dict[str, Any]:
     path = contract / "state" / "current.json"
     data["updated_at"] = _now()
+    data["source_digest"] = _source_digest(contract, data)
     text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     if len(text.encode("utf-8")) > MAX_STATE_BYTES:
         data["active_tasks"] = data.get("active_tasks", [])[:10]
-        data["counts"] = data.get("counts", {})
+        data["active_leases"] = data.get("active_leases", [])[:10]
+        data["ready_tasks"] = data.get("ready_tasks", [])[:20]
         text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    if len(text.encode("utf-8")) > MAX_STATE_BYTES:
+        raise StateError(
+            f"state/current.json 超过 {MAX_STATE_BYTES} 字节；请把明细移入任务卡/ledger"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return data
@@ -43,9 +107,12 @@ def write_current(contract: Path, data: dict[str, Any]) -> dict[str, Any]:
 def ledger_append(contract: Path, event: dict[str, Any]) -> None:
     path = contract / "state" / "ledger.ndjson"
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"ts": _now(), **event}
+    payload = dict(event)
+    actor = payload.pop("actor", None) or os.environ.get("MF_ACTOR") or "cli"
+    role = payload.pop("role", None) or os.environ.get("MF_ROLE") or "unknown"
+    record = {"ts": _now(), "actor": actor, "role": role, **payload}
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -109,8 +176,18 @@ def refresh_current(contract: Path) -> dict[str, Any]:
     data.update(summary)
     data["open_bugs"] = len(bugs)
     phase_status = str(data.get("phase_status") or "")
+    phase = str(data.get("phase") or "")
     if phase_status == "done":
         data["next_action"] = {"type": "release", "text": "冻结发布并关闭路标"}
+    elif phase_status == "exited":
+        if phase == "P5":
+            if data.get("release_status") == "frozen":
+                data["next_action"] = {"type": "close_roadmap", "roadmap": data.get("roadmap")}
+            else:
+                data["next_action"] = {"type": "release", "text": "冻结发布并关闭路标"}
+        else:
+            next_phase = {"P1": "P2", "P2": "P3", "P3": "P4", "P4": "P5"}.get(phase)
+            data["next_action"] = {"type": "enter_phase", "phase": next_phase}
     elif phase_status == "closed":
         data["next_action"] = {"type": "plan", "text": "规划下一路标"}
     elif summary["submitted_tasks"]:

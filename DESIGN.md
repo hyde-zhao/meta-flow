@@ -253,7 +253,7 @@ mf task prompt 生成下一任务提示词
 
 1. **角色会话隔离**：根目录、`contracts/`、`deliveries/` 三个入口，各自只有自己的角色指令和读写白名单。
 2. **任务上下文隔离**：`mf task show --packet` 只返回任务卡 + 声明的契约片段 + 允许路径；`mf task submit` 把证据摘要和交接固化进契约库。
-3. **路径守卫**：hook 拦截越界 Read/Write/Edit；`mf task submit` 校验 `git diff --name-only` 是否在 `allowed_paths` 内；越界拒绝。
+3. **路径守卫**：CLI 角色守卫拦截越权命令；`mf task submit` 用 git diff + 工作树快照校验 `allowed_paths`/`forbidden`，越界拒绝。PreToolUse hook 作为 R1 的第二层 Read/Write 拦截。
 
 这三层比“多拆几个仓库”更有效地防止幻觉和上下文污染；仓库数量只解决 git/发布边界。
 
@@ -526,7 +526,7 @@ external_versions:
 |---|---|---|
 | 路标规划（R） | 必须 | 用户确认目标、范围、非目标、版本目标 |
 | P1 退出 | 必须 | 用户确认端到端计划 |
-| P2 退出 | 高风险/架构变更必须 | 普通设计可由 manager 验收 |
+| P2 退出 | 必须 | 用户确认关键设计、接口与取舍 |
 | P3 退出 | 不需要用户逐卡 | manager 逐卡验收；阶段报告汇总 |
 | P4 退出 | 必须 | 用户试用验收 |
 | P5 退出 | 必须 | 用户批准发布 |
@@ -548,15 +548,15 @@ external_versions:
 7. 用户确认记录
 ```
 
-`mf phase review` 生成草案；manager 补充判断；用户确认后 `mf phase exit` 推进。
+`mf phase review` 生成草案；manager 补充判断；用户确认后 `mf phase exit` 记录门禁并把当前阶段置为 `exited`，再由 `mf phase enter` 推进到下一阶段。`--force` 只能绕过任务/缺陷/设计物等技术校验，不能绕过用户门禁。
 
 ### 5.4 路标刷新
 
 版本结束固定动作：
 
-1. `mf phase exit` 完成 P5。
-2. `mf release freeze` 写发布清单。
-3. `mf roadmap close R1`：核对 REQ 状态、生成 R1 关闭报告、未完成项转入 R2/backlog。
+1. `mf phase exit --approved-by <用户>` 完成 P5 退出（阶段置为 `exited`）。
+2. `mf release freeze` 校验 P5 门禁后写发布清单。
+3. `mf roadmap close R1`：校验 P5 退出/用户批准/发布冻结，核对 REQ 状态、生成 R1 关闭报告、未完成项转入 R2/backlog。
 4. `mf roadmap plan R2`：manager 起草下一路标目标/范围/进入退出条件，用户确认。
 5. `mf status` 显示新路标。
 
@@ -792,7 +792,7 @@ worker 在交付库写 `.metaflow/handoffs/<task-id>.md`，`mf task submit` 固�
 1. **验收标准前置**：任务卡创建时写定，worker 不可修改。
 2. **可判定**：每项必须有 method / command / expect / evidence；主观描述必须转成 artifact 或 demonstration。
 3. **独立性**：worker 自验只作为提交证据；manager 必须独立重跑自动项、抽查证据。
-4. **范围校验**：`mf task submit` 比对 `git diff --name-only` 与 `allowed_paths`，越界拒绝。
+4. **范围校验**：`mf task submit` 用 git diff + 工作树快照比对 `allowed_paths`/`forbidden`，越界拒绝。
 5. **证据绑定**：每条结果绑定证据文件 digest；证据缺失或不可复现不得 PASS。
 6. **结论枚举**：`PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED`；`PASS_WITH_RISK` 必须写风险、影响和接受人。
 7. **不可事后加项**：验收中发现问题只能返工并开新卡或 `CHG-*`，不得临时追加标准。
@@ -1044,6 +1044,8 @@ manager 在写任务卡时按五维评分（每维 1–3）：
 | `high` | worker2 独立 review 必须，之后 manager 验收 |
 | `critical` | worker2 独立 review + 用户验收 |
 
+`high`/`critical` 实现任务不能降级为 manager 自审或 `--no-review`；`critical` 验收必须带 `--user-approved-by`。`medium` 默认独立评审，manager 可显式改为 manager 评审。
+
 任务卡记录：
 
 ```yaml
@@ -1070,7 +1072,7 @@ review:
   - 不通过：写 `review.md`（NEEDS_REWORK）+ `review-handoff.md`，列出必须整改项（ID/文件/行/要求/验收方法），submit；manager 退回 worker1。
 - **返工任务**：只读原任务 bundle + `review.md`/`review-handoff.md`，按整改项修改，重新自验、更新开发记录和交接、submit；再次评审。
 
-评审者不能是实现者；manager 不把最终验收交给实现者；严重问题必须记录 `BUG-*`。
+评审者不能是实现者；manager 不把最终验收交给实现者；严重问题必须记录 `BUG-*`。`mf task accept` 从 `review-handoff.md`/`review.md` 读取 verdict，manager 不能用 CLI 参数覆盖相反结论。
 
 ### 7.16 Manager 与 Worker 的读取原则
 

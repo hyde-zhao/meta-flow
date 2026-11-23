@@ -96,16 +96,14 @@ def record_verification(
     path.write_text(yaml.safe_dump(item, sort_keys=False, allow_unicode=True), encoding="utf-8")
     for bug_id in bugs or []:
         try:
-            if result in {"PASS", "PASS_WITH_RISK"}:
-                current = bug.show_bug(project, bug_id)
-                if current.get("status") in {"open", "triaged", "in_progress", "reopened"}:
-                    bug.update_bug(project, bug_id, status="fixed")
-                bug.close_bug(
-                    project,
-                    bug_id,
-                    verification=f"{vr_id}: {scope}",
-                    resolution=f"验证记录 {vr_id} 通过",
-                )
+            current = bug.show_bug(project, bug_id)
+            if result in {"PASS", "PASS_WITH_RISK"} and current.get("status") in {
+                "open",
+                "triaged",
+                "in_progress",
+                "reopened",
+            }:
+                bug.update_bug(project, bug_id, status="verifying")
             elif result == "FAIL":
                 bug.update_bug(project, bug_id, status="reopened")
         except bug.BugError:
@@ -202,8 +200,13 @@ def release_freeze(
         raise VerifyError(f"路标 {roadmap_id} 与版本 {version} 的 MAJOR 不一致；用 --force 才能冻结")
     phase = str(state.get("phase") or "P1")
     phase_status = str(state.get("phase_status") or "")
-    if not force and phase != "P5" and phase_status != "done":
-        raise VerifyError(f"当前阶段 {phase}/{phase_status} 不能冻结发布；先完成 P5 或用 --force")
+    gate = state.get("last_phase_gate") or {}
+    if phase != "P5" or phase_status not in {"exited", "done"}:
+        raise VerifyError(f"当前阶段 {phase}/{phase_status} 未完成 P5 退出，不能冻结发布")
+    if gate.get("phase") != "P5" or gate.get("roadmap") != roadmap_id:
+        raise VerifyError("缺少 P5 阶段退出记录，不能冻结发布")
+    if not gate.get("approved_by"):
+        raise VerifyError("P5 退出缺少用户批准记录，不能冻结发布")
 
     requirements = _requirements(contract)
     scoped_reqs = [req for req in requirements if req.get("roadmap") == roadmap_id]
@@ -305,7 +308,11 @@ def show_release(project: str | Path, version: str | None = None) -> dict[str, A
         version = release.get("version")
     if not version:
         raise VerifyError("没有已冻结的发布版本；先运行 mf release freeze")
-    path = contract / "release" / f"RELEASE-{version}.yaml"
+    release = state.get("release") or {}
+    manifest_relative = release.get("manifest")
+    path = contract / str(manifest_relative) if manifest_relative else contract / "release" / f"RELEASE-{version}.yaml"
+    if not path.is_file():
+        path = contract / "release" / f"RELEASE-{version}.yaml"
     if not path.is_file():
         raise VerifyError(f"发布清单不存在: {path}")
     data = _load_yaml(path)

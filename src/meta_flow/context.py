@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 import yaml
 
 from .state import read_current
-from .workspace import resolve_contract
+from .workspace import detect_role, resolve_contract
 
 REASONS = (
     "packet_missing",
@@ -34,6 +35,18 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _actor(actor: str | None) -> tuple[str, str]:
+    if actor:
+        return actor, actor
+    env_role = os.environ.get("MF_ROLE")
+    if env_role in {"manager", "worker", "maintainer"}:
+        return env_role, env_role
+    role, _ = detect_role(Path.cwd())
+    if role == "unbound":
+        role = "manager"
+    return role, role
+
+
 def _log(contract: Path, event: dict[str, Any]) -> None:
     path = contract / "state" / "READ-LOG.ndjson"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -46,14 +59,20 @@ def expand(
     relative_path: str,
     *,
     reason: str,
-    actor: str = "manager",
+    actor: str | None = None,
 ) -> dict[str, Any]:
     contract = resolve_contract(project)
     if reason not in REASONS:
         raise ContextError(f"reason 只能是 {'|'.join(REASONS)}")
+    role, actor_id = _actor(actor)
     target = (contract / relative_path).resolve()
     if not target.is_relative_to(contract):
         raise ContextError("只能读取 contract 内文件")
+    relative = str(target.relative_to(contract))
+    if relative.startswith("archive/") and role != "manager":
+        raise ContextError("只有 manager 可以读取 archive；worker 请使用任务包")
+    if role == "worker" and "/tasks/" not in f"/{relative}":
+        raise ContextError("worker 通过 mf task show --packet 读取，不能直接 expand 契约")
     if not target.is_file():
         raise ContextError(f"文件不存在: {target}")
     size = target.stat().st_size
@@ -64,15 +83,16 @@ def expand(
         contract,
         {
             "event": "context.expand",
-            "actor": actor,
-            "path": str(target.relative_to(contract)),
+            "actor": actor_id,
+            "role": role,
+            "path": relative,
             "reason": reason,
             "bytes": size,
             "allowed": True,
         },
     )
     return {
-        "path": str(target.relative_to(contract)),
+        "path": relative,
         "reason": reason,
         "bytes": size,
         "text": text,
@@ -131,11 +151,14 @@ def archive_show(
     roadmap_id: str,
     *,
     reason: str,
-    actor: str = "manager",
+    actor: str | None = None,
 ) -> dict[str, Any]:
     contract = resolve_contract(project)
     if reason not in REASONS:
         raise ContextError(f"reason 只能是 {'|'.join(REASONS)}")
+    role, actor_id = _actor(actor)
+    if role != "manager":
+        raise ContextError("archive 只允许 manager 查询")
     directory = (contract / "archive" / roadmap_id).resolve()
     if not directory.is_dir() or not directory.is_relative_to(contract / "archive"):
         raise ContextError(f"归档不存在: {roadmap_id}")
@@ -145,15 +168,18 @@ def archive_show(
         for path in sorted(directory.rglob("*"))
         if path.is_file() and path.name != "INDEX.md"
     ]
+    total_bytes = sum(path.stat().st_size for path in directory.rglob("*") if path.is_file())
     text = index.read_text(encoding="utf-8") if index.is_file() else ""
     _log(
         contract,
         {
             "event": "archive.show",
-            "actor": actor,
+            "actor": actor_id,
+            "role": role,
             "path": str(directory.relative_to(contract)),
             "reason": reason,
             "files": len(files),
+            "bytes": total_bytes,
             "allowed": True,
         },
     )
@@ -162,6 +188,7 @@ def archive_show(
         "path": str(directory.relative_to(contract)),
         "reason": reason,
         "files": files,
+        "bytes": total_bytes,
         "index": text,
     }
 

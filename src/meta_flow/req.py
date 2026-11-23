@@ -84,6 +84,10 @@ def validate_dor(item: dict[str, Any]) -> list[str]:
     errors = []
     if not str(item.get("title") or "").strip():
         errors.append("缺少 title")
+    if not str(item.get("source") or "").strip():
+        errors.append("缺少来源 source")
+    if not str(item.get("roadmap") or "").strip():
+        errors.append("缺少所属路标 roadmap")
     if item.get("priority") not in PRIORITIES:
         errors.append(f"priority 必须是 {'|'.join(PRIORITIES)}")
     acceptance = item.get("acceptance") or []
@@ -92,6 +96,8 @@ def validate_dor(item: dict[str, Any]) -> list[str]:
     for index, criterion in enumerate(acceptance, start=1):
         if not isinstance(criterion, dict) or not str(criterion.get("expect") or "").strip():
             errors.append(f"验收标准 A{index} 缺少 expect")
+        elif criterion.get("method") not in {"automated", "artifact", "demonstration", "metric"}:
+            errors.append(f"验收标准 A{index} method 非法")
     if item.get("status") not in REQ_STATUSES:
         errors.append(f"status 必须是 {'|'.join(REQ_STATUSES)}")
     return errors
@@ -106,6 +112,8 @@ def add_requirement(
     roadmap: str | None = None,
     source: str = "user",
     description: str = "",
+    non_goals: list[str] | None = None,
+    dependencies: list[str] | None = None,
 ) -> dict[str, Any]:
     contract = resolve_contract(project)
     data = _load(contract)
@@ -128,8 +136,8 @@ def add_requirement(
             {"id": f"A{index}", "method": "artifact", "expect": text}
             for index, text in enumerate(acceptance or [], start=1)
         ],
-        "non_goals": [],
-        "dependencies": [],
+        "non_goals": non_goals or [],
+        "dependencies": dependencies or [],
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -262,7 +270,9 @@ def _scan_docs(directory: Path, req_id: str) -> list[str]:
 
 def trace_requirement(contract: Path, req_id: str) -> dict[str, Any]:
     tasks = []
-    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+    task_paths = list((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml"))
+    task_paths.extend((contract / "archive").glob("*/phases/*/tasks/T*/TASK.yaml"))
+    for path in sorted(task_paths):
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (yaml.YAMLError, OSError):
@@ -270,17 +280,23 @@ def trace_requirement(contract: Path, req_id: str) -> dict[str, Any]:
         refs = ((data or {}).get("inputs") or {}).get("requirements") or []
         if req_id in refs:
             tasks.append({"id": data.get("id"), "status": data.get("status"), "risk": (data.get("risk") or {}).get("level")})
+    verification = _scan_yaml_refs(contract / "verification", "requirement_refs", req_id)
+    bugs = _scan_yaml_refs(contract / "bugs", "related_reqs", req_id)
+    for archive in sorted((contract / "archive").glob("*/verification")):
+        verification.extend(_scan_yaml_refs(archive, "requirement_refs", req_id))
+    for archive in sorted((contract / "archive").glob("*/bugs")):
+        bugs.extend(_scan_yaml_refs(archive, "related_reqs", req_id))
     return {
         "specs": _scan_docs(contract / "specs", req_id),
         "designs": _scan_docs(contract / "architecture", req_id),
         "tasks": tasks,
         "verification": [
             {"id": item.get("id"), "result": item.get("result"), "layer": item.get("layer")}
-            for item in _scan_yaml_refs(contract / "verification", "requirement_refs", req_id)
+            for item in verification
         ],
         "bugs": [
             {"id": item.get("id"), "status": item.get("status"), "severity": item.get("severity")}
-            for item in _scan_yaml_refs(contract / "bugs", "related_reqs", req_id)
+            for item in bugs
         ],
     }
 

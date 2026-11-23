@@ -760,14 +760,14 @@
                 <ul class="ticks">
                   <li>项目目标、范围、交付件与成功指标</li>
                   <li>R1 路标、需求基线、DoR、初步追踪</li>
-                  <li>P1 计划完成，用户确认后进入设计</li>
+                  <li>P1 exit 记录用户门禁，再 enter P2</li>
                 </ul>
               </td>
               <td>
                 <ul class="ticks">
                   <li>SPEC、DESIGN、ADR、架构索引稳定</li>
                   <li>接口/数据契约与验证计划明确</li>
-                  <li>用户确认关键取舍后进入实施</li>
+                  <li>用户确认 exit 后，才能 enter P3</li>
                 </ul>
               </td>
               <td>
@@ -781,14 +781,14 @@
                 <ul class="ticks">
                   <li>真实场景试运行与 L2/L3 验证</li>
                   <li>BUG 修复、回归、已知问题显式化</li>
-                  <li>用户确认遗留问题可接受</li>
+                  <li>用户确认 exit 后，才能 enter P5</li>
                 </ul>
               </td>
               <td>
                 <ul class="ticks">
                   <li>发布清单、版本冻结、发布说明/手册</li>
-                  <li>关闭路标、复盘、归档、下一版交接</li>
-                  <li>用户批准后才允许发布</li>
+                  <li>P5 exit 用户批准；release freeze</li>
+                  <li>roadmap close、归档、下一版交接</li>
                 </ul>
               </td>
             </tr>
@@ -1193,19 +1193,19 @@
       <div class="rule-grid">
         <article class="rule-card">
           <h3>上下文边界</h3>
-          <p>worker 的上下文 = <code>task packet</code> + 自己的任务 bundle + <code>allowed_paths</code>。不是整个契约库，也不是别人的任务。</p>
+          <p>worker 的上下文 = <code>task packet</code> + 自己的任务 bundle + <code>allowed_paths</code>。不是整个契约库，也不是别人的任务；CLI 角色守卫拒绝越权命令，submit 用 diff + 快照校验路径。</p>
         </article>
         <article class="rule-card">
           <h3>评审独立性</h3>
-          <p>低风险由 manager review；中/高风险由 worker2 独立评审；critical 需要用户参与验收。实现者不得自行最终验收。</p>
+          <p>低风险由 manager review；中/高风险由 worker2 独立评审；critical 需要用户参与验收。high/critical 不能降级为 manager 自审；accept 读取 review 文件结论。</p>
         </article>
         <article class="rule-card">
           <h3>发布边界</h3>
-          <p><code>release freeze</code> 只生成冻结清单，<code>published: false</code>。冻结不等于发布；发布需要用户批准和显式授权。</p>
+          <p><code>release freeze</code> 需要 P5 已退出且用户批准；只生成冻结清单，<code>published: false</code>。冻结不等于发布；发布需要用户批准和显式授权。</p>
         </article>
         <article class="rule-card">
           <h3>状态可重建</h3>
-          <p><code>current.json</code> 是派生状态，任务卡是事实；ledger 追加不改写。状态缺失或过期时从任务、路标与 ledger 重建。</p>
+          <p><code>current.json</code> 是派生状态；缺失或损坏时从 ROADMAP、任务卡与 ledger 重建。state 超过 8KB 直接报错，不静默写回。</p>
         </article>
       </div>
     </section>

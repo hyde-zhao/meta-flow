@@ -80,6 +80,7 @@ def add_knowledge(
     *,
     context: str = "",
     source: str = "user",
+    delivery: str | None = None,
 ) -> dict[str, Any]:
     if kind not in KINDS:
         raise KnowledgeError(f"kind 只能是 {'|'.join(KINDS)}")
@@ -93,6 +94,7 @@ def add_knowledge(
         "text": text.strip(),
         "context": context,
         "source": source,
+        "delivery": delivery,
         "status": "active",
         "created_at": _now(),
         "updated_at": _now(),
@@ -148,8 +150,13 @@ def render(contract: Path) -> Path:
     return path
 
 
-def packet_lines(contract: Path, *, limit: int = 12) -> list[str]:
-    """给任务包注入少量项目知识，避免重复注入和超长上下文。"""
+def packet_lines(
+    contract: Path,
+    *,
+    limit: int = 12,
+    delivery: str | None = None,
+) -> list[str]:
+    """给任务包注入少量项目知识，按交付库过滤，避免无关上下文。"""
     try:
         data = _load(contract)
     except KnowledgeError:
@@ -158,6 +165,9 @@ def packet_lines(contract: Path, *, limit: int = 12) -> list[str]:
     for key in ("terms", "behaviors", "conventions", "preferences", "lessons"):
         for item in data.get(key) or []:
             if item.get("status", "active") != "active":
+                continue
+            scoped_delivery = item.get("delivery")
+            if scoped_delivery and delivery and str(scoped_delivery) != delivery:
                 continue
             lines.append(f"- [{item.get('id')}] {item.get('text')}")
             if len(lines) >= limit:
