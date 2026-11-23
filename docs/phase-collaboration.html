@@ -1,0 +1,1217 @@
+<title>Meta Flow 阶段协作图</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&display=swap">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f3f6f7;
+    --surface: #ffffff;
+    --surface-2: #e9eef0;
+    --surface-3: #dfe7e9;
+    --ink: #12272e;
+    --muted: #5d7178;
+    --line: #d3dee2;
+    --line-strong: #aabcc2;
+    --accent: #0f766e;
+    --accent-soft: #d9f2ee;
+    --manager: #1d4ed8;
+    --manager-bg: #e8efff;
+    --worker: #15803d;
+    --worker-bg: #e7f6eb;
+    --user: #a85a08;
+    --user-bg: #fff1d8;
+    --maintainer: #6d28d9;
+    --maintainer-bg: #f1eaff;
+    --danger: #b42318;
+    --grid: rgba(18, 39, 46, 0.055);
+    --font-display: "Space Grotesk", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-body: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-mono: "IBM Plex Mono", "Noto Sans SC", "PingFang SC", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0c1518;
+      --surface: #111f23;
+      --surface-2: #17292e;
+      --surface-3: #1d3339;
+      --ink: #e8f0f2;
+      --muted: #9db2b8;
+      --line: #294148;
+      --line-strong: #47636b;
+      --accent: #5eead4;
+      --accent-soft: #123d38;
+      --manager: #94b4ff;
+      --manager-bg: #182a4d;
+      --worker: #8fd6a4;
+      --worker-bg: #173526;
+      --user: #f1c274;
+      --user-bg: #3a2a12;
+      --maintainer: #c4a7ff;
+      --maintainer-bg: #2b2145;
+      --danger: #f29b94;
+      --grid: rgba(232, 240, 242, 0.05);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0c1518;
+    --surface: #111f23;
+    --surface-2: #17292e;
+    --surface-3: #1d3339;
+    --ink: #e8f0f2;
+    --muted: #9db2b8;
+    --line: #294148;
+    --line-strong: #47636b;
+    --accent: #5eead4;
+    --accent-soft: #123d38;
+    --manager: #94b4ff;
+    --manager-bg: #182a4d;
+    --worker: #8fd6a4;
+    --worker-bg: #173526;
+    --user: #f1c274;
+    --user-bg: #3a2a12;
+    --maintainer: #c4a7ff;
+    --maintainer-bg: #2b2145;
+    --danger: #f29b94;
+    --grid: rgba(232, 240, 242, 0.05);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    line-height: 1.65;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+
+  .shell {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding-block: clamp(1.5rem, 4vw, 3rem) 4rem;
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+  }
+
+  h1 {
+    font-size: clamp(2.6rem, 6vw, 5.2rem);
+    line-height: 0.98;
+    margin: 0.45rem 0 1rem;
+  }
+
+  h2 {
+    font-size: clamp(1.55rem, 3vw, 2.4rem);
+    line-height: 1.1;
+    margin: 0;
+  }
+
+  h3 {
+    font-size: 1rem;
+    line-height: 1.35;
+    margin: 0;
+  }
+
+  p { margin: 0; }
+
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .eyebrow::before {
+    content: "";
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+
+  .hero {
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid var(--line);
+    padding: 0.5rem 0 2rem;
+  }
+
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 0 -10% 0 40%;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent 88%);
+    pointer-events: none;
+  }
+
+  .hero > * { position: relative; }
+
+  .lede {
+    max-width: 68ch;
+    font-size: clamp(1rem, 1.5vw, 1.15rem);
+    color: var(--muted);
+  }
+
+  .role-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    margin-top: 1.35rem;
+  }
+
+  .role-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 999px;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .role-pill strong { color: var(--ink); font-weight: 600; }
+
+  .role-chip {
+    display: inline-grid;
+    place-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 0.32rem;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 500;
+    line-height: 1;
+    flex: 0 0 auto;
+  }
+
+  .role-chip.manager { background: var(--manager-bg); color: var(--manager); }
+  .role-chip.worker { background: var(--worker-bg); color: var(--worker); }
+  .role-chip.user { background: var(--user-bg); color: var(--user); }
+  .role-chip.maintainer { background: var(--maintainer-bg); color: var(--maintainer); }
+
+  .common-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.65rem;
+    margin-top: 1.5rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 0.6rem;
+    font-size: 0.76rem;
+    color: var(--muted);
+  }
+
+  .common-bar .label {
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .common-bar code,
+  .doc,
+  .mono {
+    font-family: var(--font-mono);
+  }
+
+  .common-bar code {
+    font-size: 0.7rem;
+    color: var(--ink);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 0.25rem;
+    padding: 0.1rem 0.35rem;
+  }
+
+  .section { margin-top: clamp(2.5rem, 5vw, 4.25rem); }
+
+  .section-head {
+    display: grid;
+    gap: 0.55rem;
+    margin-bottom: 1.1rem;
+  }
+
+  .kicker {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .section-head p {
+    max-width: 72ch;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .swim-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 0.85rem;
+    background: var(--surface);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .swim {
+    width: 100%;
+    min-width: 1220px;
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: fixed;
+    font-size: 0.78rem;
+  }
+
+  .swim col.c-label { width: 144px; }
+
+  .swim thead th {
+    position: relative;
+    vertical-align: top;
+    text-align: left;
+    padding: 0.85rem 0.8rem 0.9rem;
+    background: var(--surface-2);
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    font-weight: 500;
+  }
+
+  .swim thead th:last-child { border-right: 0; }
+
+  .swim thead th.corner {
+    position: sticky;
+    left: 0;
+    z-index: 5;
+    background: var(--surface-3);
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
+
+  .phase-head { border-top: 3px solid var(--accent); }
+
+  .phase-kicker {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.61rem;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 0.35rem;
+  }
+
+  .phase-head h3 {
+    font-size: 1.08rem;
+    margin-bottom: 0.15rem;
+  }
+
+  .phase-head h3 span {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-left: 0.28rem;
+  }
+
+  .phase-desc {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  .gate {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 0.55rem;
+    padding: 0.16rem 0.42rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+
+  .gate.user { color: var(--user); background: var(--user-bg); }
+  .gate.internal { color: var(--accent); background: var(--accent-soft); }
+
+  .swim tbody th {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 0.85rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+    font-weight: 600;
+    font-size: 0.75rem;
+  }
+
+  .swim tbody td {
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 0.8rem 0.8rem;
+    vertical-align: top;
+  }
+
+  .swim tbody td:last-child { border-right: 0; }
+  .swim tbody tr:last-child th,
+  .swim tbody tr:last-child td { border-bottom: 0; }
+
+  .row-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    line-height: 1.35;
+  }
+
+  .row-label small {
+    display: block;
+    font-weight: 400;
+    font-size: 0.62rem;
+    color: var(--muted);
+  }
+
+  .ticks,
+  .io {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .ticks li,
+  .io li {
+    position: relative;
+    padding-left: 0.7rem;
+  }
+
+  .ticks li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.62em;
+    width: 0.25rem;
+    height: 0.25rem;
+    border-radius: 50%;
+    background: var(--line-strong);
+  }
+
+  .io li { font-size: 0.73rem; color: var(--muted); }
+  .io .key {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    font-weight: 500;
+    display: inline-block;
+    min-width: 1.25rem;
+    color: var(--ink);
+  }
+
+  .io .key.m { color: var(--manager); }
+  .io .key.w { color: var(--worker); }
+  .io .key.u { color: var(--user); }
+
+  .doc-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  .doc {
+    display: inline-block;
+    font-size: 0.61rem;
+    line-height: 1.4;
+    color: var(--ink);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 0.25rem;
+    padding: 0.08rem 0.3rem;
+    overflow-wrap: anywhere;
+  }
+
+  .swim code {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    color: var(--ink);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 0.2rem;
+    padding: 0.02rem 0.2rem;
+  }
+
+  .bypass {
+    background: var(--maintainer-bg);
+  }
+
+  .bypass-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.55rem;
+    color: var(--ink);
+  }
+
+  .bypass-inner strong { color: var(--maintainer); }
+
+  .bypass-inner .doc {
+    background: color-mix(in srgb, var(--maintainer-bg) 65%, var(--surface));
+    border-color: color-mix(in srgb, var(--maintainer) 35%, var(--line));
+  }
+
+  .scroll-hint {
+    display: none;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    color: var(--muted);
+    margin-top: 0.45rem;
+  }
+
+  .diagram-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 0.85rem;
+    background: var(--surface);
+    padding: 0.6rem;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .zone-svg {
+    display: block;
+    width: 100%;
+    min-width: 760px;
+    height: auto;
+  }
+
+  .zone-svg text {
+    font-family: var(--font-body);
+  }
+
+  .zone-svg .svg-title {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 700;
+    fill: var(--ink);
+  }
+
+  .zone-svg .svg-sub {
+    font-size: 10.5px;
+    fill: var(--muted);
+  }
+
+  .zone-svg .svg-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    fill: var(--muted);
+  }
+
+  .zone-svg .box {
+    fill: var(--surface-2);
+    stroke: var(--line-strong);
+    stroke-width: 1.2;
+  }
+
+  .zone-svg .box-manager { fill: var(--manager-bg); stroke: var(--manager); }
+  .zone-svg .box-worker { fill: var(--worker-bg); stroke: var(--worker); }
+  .zone-svg .box-user { fill: var(--user-bg); stroke: var(--user); }
+  .zone-svg .box-contract { fill: var(--accent-soft); stroke: var(--accent); }
+  .zone-svg .box-archive { fill: var(--surface-2); stroke: var(--line-strong); stroke-dasharray: 5 4; }
+  .zone-svg .box-maintainer { fill: var(--maintainer-bg); stroke: var(--maintainer); stroke-dasharray: 5 4; }
+  .zone-svg .arrow { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .zone-svg .arrow-muted { stroke: var(--line-strong); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+  .zone-svg .arrow-maintainer { stroke: var(--maintainer); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+  .zone-svg marker path { fill: var(--accent); }
+  .zone-svg marker.m-muted path { fill: var(--line-strong); }
+  .zone-svg marker.m-maintainer path { fill: var(--maintainer); }
+
+  .diagram-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    margin-top: 0.55rem;
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--muted);
+  }
+
+  .diagram-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .diagram-legend i {
+    display: inline-block;
+    width: 1.3rem;
+    height: 0;
+    border-top: 1.5px solid var(--accent);
+  }
+  .diagram-legend i.dashed {
+    border-top-style: dashed;
+    border-top-color: var(--line-strong);
+  }
+  .diagram-legend i.dashed-purple {
+    border-top-style: dashed;
+    border-top-color: var(--maintainer);
+  }
+
+  .zone-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.6rem;
+    margin-top: 1rem;
+  }
+
+  .zone-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 0.45rem 0.45rem 0;
+    padding: 0.8rem 0.8rem 0.85rem;
+  }
+
+  .zone-card h3 {
+    font-size: 0.82rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .zone-card p {
+    font-size: 0.7rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .zone-key {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    margin-bottom: 0.2rem;
+  }
+
+  .rule-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .rule-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 0.6rem;
+    padding: 1rem 1.05rem;
+  }
+
+  .rule-card h3 {
+    font-size: 0.92rem;
+    margin-bottom: 0.3rem;
+  }
+
+  .rule-card p {
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
+  .rule-card code {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink);
+    background: var(--surface-2);
+    padding: 0.06rem 0.25rem;
+    border-radius: 0.2rem;
+  }
+
+  .footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  a { color: var(--accent); }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  @media (max-width: 980px) {
+    .zone-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  @media (max-width: 700px) {
+    .shell { padding-block: 1.25rem 3rem; }
+    .scroll-hint { display: block; }
+    .rule-grid { grid-template-columns: 1fr; }
+    .zone-grid { grid-template-columns: 1fr; }
+    .common-bar { align-items: flex-start; }
+    .swim { font-size: 0.74rem; }
+    .swim tbody td, .swim tbody th { padding: 0.7rem 0.65rem; }
+    .swim thead th { padding: 0.72rem 0.65rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { scroll-behavior: auto !important; transition: none !important; }
+  }
+</style>
+
+<div class="shell">
+  <header class="hero">
+    <p class="eyebrow">Meta Flow · delivery loop · R0</p>
+    <h1>五阶段协作图</h1>
+    <p class="lede">从计划到发布：每个阶段谁主笔、谁执行、留下什么证据，以及上下文边界在哪里。契约库是共享真相，任务包是 worker 的边界。</p>
+    <div class="role-legend" aria-label="角色图例">
+      <span class="role-pill"><span class="role-chip manager">M</span><strong>meta-manager</strong> 计划、契约、验收</span>
+      <span class="role-pill"><span class="role-chip worker">W</span><strong>meta-worker</strong> 实现、证据、评审</span>
+      <span class="role-pill"><span class="role-chip user">U</span><strong>用户</strong> 需求、反馈、门禁</span>
+      <span class="role-pill"><span class="role-chip maintainer">T</span><strong>meta-maintainer</strong> 旁路：只维护工具</span>
+    </div>
+    <div class="common-bar" aria-label="所有阶段共享的上下文">
+      <span class="label">所有阶段共享</span>
+      <code>state/current.json ≤ 8KB</code>
+      <code>ledger.ndjson</code>
+      <code>READ-LOG.ndjson</code>
+      <code>KNOWLEDGE.md</code>
+      <code>CONTEXT-POLICY.yaml</code>
+    </div>
+  </header>
+
+  <main>
+    <section class="section" aria-labelledby="swim-title">
+      <div class="section-head">
+        <p class="kicker">角色 × 阶段</p>
+        <h2 id="swim-title">谁在什么时候做什么</h2>
+        <p>蓝色是契约主笔，绿色是交付执行，琥珀色是用户门禁；维护者不在项目泳道里，只从 MFP 和改进路径介入。</p>
+      </div>
+
+      <div class="swim-wrap">
+        <table class="swim">
+          <colgroup>
+            <col class="c-label">
+            <col span="5">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="corner" scope="col">阶段 / 角色</th>
+              <th class="phase-head" scope="col">
+                <span class="phase-kicker">01 / PLAN</span>
+                <h3>计划 <span>P1</span></h3>
+                <span class="phase-desc">定义做什么，以及完成的边界</span>
+                <span class="gate user">用户确认</span>
+              </th>
+              <th class="phase-head" scope="col">
+                <span class="phase-kicker">02 / DESIGN</span>
+                <h3>设计 <span>P2</span></h3>
+                <span class="phase-desc">定义怎么做，接口和取舍先定</span>
+                <span class="gate user">用户确认</span>
+              </th>
+              <th class="phase-head" scope="col">
+                <span class="phase-kicker">03 / BUILD</span>
+                <h3>实施 <span>P3</span></h3>
+                <span class="phase-desc">做出来，并用自己的证据自证</span>
+                <span class="gate internal">内部验收</span>
+              </th>
+              <th class="phase-head" scope="col">
+                <span class="phase-kicker">04 / PILOT</span>
+                <h3>试运行 <span>P4</span></h3>
+                <span class="phase-desc">在真实场景验证，暴露未知问题</span>
+                <span class="gate user">用户确认</span>
+              </th>
+              <th class="phase-head" scope="col">
+                <span class="phase-kicker">05 / RELEASE</span>
+                <h3>发布 <span>P5</span></h3>
+                <span class="phase-desc">冻结、交付、归档，准备下一版</span>
+                <span class="gate user">用户批准</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">
+                <span class="row-label">阶段目标<small>与退出条件</small></span>
+              </th>
+              <td>
+                <ul class="ticks">
+                  <li>项目目标、范围、交付件与成功指标</li>
+                  <li>R1 路标、需求基线、DoR、初步追踪</li>
+                  <li>P1 计划完成，用户确认后进入设计</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>SPEC、DESIGN、ADR、架构索引稳定</li>
+                  <li>接口/数据契约与验证计划明确</li>
+                  <li>用户确认关键取舍后进入实施</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>任务卡按 wave 实施，L1 自验通过</li>
+                  <li>中高风险独立评审；manager 逐项验收</li>
+                  <li>默认无用户门禁；critical 例外</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>真实场景试运行与 L2/L3 验证</li>
+                  <li>BUG 修复、回归、已知问题显式化</li>
+                  <li>用户确认遗留问题可接受</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>发布清单、版本冻结、发布说明/手册</li>
+                  <li>关闭路标、复盘、归档、下一版交接</li>
+                  <li>用户批准后才允许发布</li>
+                </ul>
+              </td>
+            </tr>
+
+            <tr>
+              <th scope="row">
+                <span class="row-label"><span class="role-chip manager">M</span><span>meta-manager<small>契约主笔 · 验收</small></span></span>
+              </th>
+              <td>
+                <ul class="ticks">
+                  <li>与用户对齐目标、范围、交付能力</li>
+                  <li>写 PROJECT-PLAN、ROADMAP、R1 PLAN</li>
+                  <li>建需求基线、DoR、TRACE</li>
+                  <li>生成 P1 阶段计划与任务卡</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>写 SPEC / DESIGN / ADR / 架构索引</li>
+                  <li>定接口、数据契约、验证计划</li>
+                  <li>拆 design / verify 任务</li>
+                  <li>评审设计任务与变更</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>定任务卡、依赖、wave、写冲突</li>
+                  <li>低风险 review；中高风险派独立评审</li>
+                  <li>验收任务，更新 current / ledger</li>
+                  <li>记录 BUG 与 VR</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>组织试运行与端到端验证</li>
+                  <li>记录 BUG，分派 fix 任务</li>
+                  <li>跟踪回归与已知问题</li>
+                  <li>写阶段报告与 P5 交接</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li><code>release freeze</code>（冻结 ≠ 发布）</li>
+                  <li>写发布清单、发布说明、用户手册</li>
+                  <li>关闭 R、写 LESSONS、归档</li>
+                  <li>规划下一版本并交接</li>
+                </ul>
+              </td>
+            </tr>
+
+            <tr>
+              <th scope="row">
+                <span class="row-label"><span class="role-chip worker">W</span><span>meta-worker<small>实现 · 证据 · 评审</small></span></span>
+              </th>
+              <td>
+                <ul class="ticks">
+                  <li>可选：承接独立评审任务</li>
+                  <li>只读评审包与指定输入</li>
+                  <li>不改需求基线或路标</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>可选：design / verify 任务</li>
+                  <li>或独立评审 manager 的设计</li>
+                  <li>只读设计包与 review scope</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>读 task packet，只写 allowed_paths</li>
+                  <li>写 dev-record、handoff、evidence</li>
+                  <li>L1 自验；评审者只读 diff 与证据</li>
+                  <li>不自行验收</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>试运行支持与 fix 任务</li>
+                  <li>补回归证据，更新交接</li>
+                  <li>在 handoff 上报 BUG 线索</li>
+                  <li>BUG 关闭由 manager 确认</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>补齐最终修复与证据</li>
+                  <li>更新 handoff 和证据索引</li>
+                  <li>不决定发布</li>
+                  <li>等待冻结与用户批准</li>
+                </ul>
+              </td>
+            </tr>
+
+            <tr>
+              <th scope="row">
+                <span class="row-label"><span class="role-chip user">U</span><span>用户<small>需求 · 反馈 · 门禁</small></span></span>
+              </th>
+              <td>
+                <ul class="ticks">
+                  <li>提供需求、优先级、成功指标</li>
+                  <li>确认计划、范围与非目标</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>确认关键设计、取舍与验收口径</li>
+                  <li>对未决问题做决定</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>默认不介入</li>
+                  <li>critical 任务参与验收/决策</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>提供试运行反馈</li>
+                  <li>确认遗留问题是否可接受</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="ticks">
+                  <li>批准发布</li>
+                  <li>接受已知问题与回滚方案</li>
+                </ul>
+              </td>
+            </tr>
+
+            <tr>
+              <th scope="row">
+                <span class="row-label"><span class="role-chip maintainer">T</span><span>meta-maintainer<small>旁路角色</small></span></span>
+              </th>
+              <td class="bypass" colspan="5">
+                <div class="bypass-inner">
+                  <strong>不参与项目五阶段。</strong>
+                  <span>只在 MFP 改进包进入全局 inbox、需要更新 meta-flow 源码 / 全局模板 / 项目安装时介入；不写项目需求、设计、验收或交付源码。</span>
+                  <span class="doc">MFP inbox</span>
+                  <span class="doc">mf dev</span>
+                  <span class="doc">install / upgrade</span>
+                  <span class="doc">templates</span>
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <th scope="row">
+                <span class="row-label">产出文档<small>事实与证据</small></span>
+              </th>
+              <td>
+                <div class="doc-list">
+                  <span class="doc">PROJECT-PLAN.md</span>
+                  <span class="doc">INIT-CHECKLIST.md</span>
+                  <span class="doc">ROADMAP.yaml</span>
+                  <span class="doc">R1/PLAN.md</span>
+                  <span class="doc">REQUIREMENTS.yaml</span>
+                  <span class="doc">REQ-*.md</span>
+                  <span class="doc">TRACE.md</span>
+                  <span class="doc">P1 PLAN</span>
+                </div>
+              </td>
+              <td>
+                <div class="doc-list">
+                  <span class="doc">SPEC-*.md</span>
+                  <span class="doc">DESIGN-*.md</span>
+                  <span class="doc">ADR-*.md</span>
+                  <span class="doc">architecture/INDEX.md</span>
+                  <span class="doc">P2 PLAN</span>
+                  <span class="doc">验证计划</span>
+                  <span class="doc">design review</span>
+                </div>
+              </td>
+              <td>
+                <div class="doc-list">
+                  <span class="doc">TASK.yaml</span>
+                  <span class="doc">packet.md</span>
+                  <span class="doc">DEV-RECORD.md</span>
+                  <span class="doc">HANDOFF.md</span>
+                  <span class="doc">review.md</span>
+                  <span class="doc">review-handoff.md</span>
+                  <span class="doc">evidence/diff.patch</span>
+                  <span class="doc">VR-*.yaml L1</span>
+                  <span class="doc">BUG-*.yaml</span>
+                  <span class="doc">P3 REPORT</span>
+                </div>
+              </td>
+              <td>
+                <div class="doc-list">
+                  <span class="doc">P4 PLAN</span>
+                  <span class="doc">VR-*.yaml L2/L3</span>
+                  <span class="doc">BUG / fix records</span>
+                  <span class="doc">regression evidence</span>
+                  <span class="doc">known issues</span>
+                  <span class="doc">P4 REPORT</span>
+                  <span class="doc">HANDOFF-TO-P5.md</span>
+                </div>
+              </td>
+              <td>
+                <div class="doc-list">
+                  <span class="doc">RELEASE-&lt;version&gt;.yaml</span>
+                  <span class="doc">RELEASE-NOTES.md</span>
+                  <span class="doc">USER-MANUAL.md</span>
+                  <span class="doc">P5 REPORT</span>
+                  <span class="doc">CLOSE.md</span>
+                  <span class="doc">LESSONS-R1.md</span>
+                  <span class="doc">HANDOFF-TO-R2.md</span>
+                  <span class="doc">archive/R1/INDEX.md</span>
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <th scope="row">
+                <span class="row-label">读写边界<small>本阶段的硬约束</small></span>
+              </th>
+              <td>
+                <ul class="io">
+                  <li><span class="key m">M</span> 写 <code>requirements/</code> <code>roadmap/</code> <code>project/</code></li>
+                  <li><span class="key w">W</span> 只读评审包；不写契约基线</li>
+                  <li><span class="key u">U</span> 不直接写文件；决定经 manager 记录</li>
+                  <li>archive 默认不读</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="io">
+                  <li><span class="key m">M</span> 写 <code>architecture/</code> <code>specs/</code></li>
+                  <li><span class="key w">W</span> 只读 design packet / review scope</li>
+                  <li>交付库源码不动</li>
+                  <li>设计变更走评审与记录</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="io">
+                  <li><span class="key m">M</span> 写 <code>tasks/</code> <code>verification/</code> <code>bugs/</code></li>
+                  <li><span class="key w">W</span> 写 own bundle + <code>allowed_paths</code></li>
+                  <li>评审者只读 diff / 证据 / 交接</li>
+                  <li>禁止读其他任务、其他版本、归档</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="io">
+                  <li><span class="key m">M</span> 写 <code>bugs/</code> <code>verification/</code> 阶段报告</li>
+                  <li><span class="key w">W</span> 写 fix bundle + 交付库</li>
+                  <li><span class="key u">U</span> 反馈经 manager 记录</li>
+                  <li>BUG 关闭由 manager 确认</li>
+                </ul>
+              </td>
+              <td>
+                <ul class="io">
+                  <li><span class="key m">M</span> 写 <code>release/</code> <code>archive/</code></li>
+                  <li><span class="key w">W</span> 只补证据，不写发布结论</li>
+                  <li>archive 必须带 reason</li>
+                  <li>发布另需用户授权</li>
+                </ul>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="scroll-hint">横向滑动查看五个阶段 →</p>
+    </section>
+
+    <section class="section" aria-labelledby="boundary-title">
+      <div class="section-head">
+        <p class="kicker">read / write</p>
+        <h2 id="boundary-title">读写边界：契约库不是所有人的工作区</h2>
+        <p>manager 维护契约；worker 只拿到任务包和允许写的路径；用户通过门禁做决定；维护者在另一条旁路上处理工具改进。</p>
+      </div>
+
+      <div class="diagram-scroll">
+        <svg class="zone-svg" viewBox="0 0 1000 500" role="img" aria-label="读写边界示意：用户向 manager 提供需求与批准；manager 读写契约库；worker 通过任务包读取并只写自己的任务包和交付库允许路径；契约在版本关闭时归档；maintainer 通过 MFP 旁路维护工具。">
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+              <path d="M0,0 L8,4 L0,8 z"></path>
+            </marker>
+            <marker id="arrow-muted" class="m-muted" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+              <path d="M0,0 L8,4 L0,8 z"></path>
+            </marker>
+            <marker id="arrow-maintainer" class="m-maintainer" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+              <path d="M0,0 L8,4 L0,8 z"></path>
+            </marker>
+          </defs>
+
+          <!-- 用户 -->
+          <rect class="box box-user" x="16" y="46" width="150" height="84" rx="10"></rect>
+          <text class="svg-title" x="34" y="76">用户</text>
+          <text class="svg-sub" x="34" y="98">需求 / 反馈 / 门禁</text>
+          <text class="svg-sub" x="34" y="115">不直接改文件</text>
+
+          <!-- manager -->
+          <rect class="box box-manager" x="214" y="46" width="224" height="84" rx="10"></rect>
+          <text class="svg-title" x="232" y="76">meta-manager</text>
+          <text class="svg-sub" x="232" y="98">契约主笔 · 计划 · 验收</text>
+          <text class="svg-sub" x="232" y="115">读热区，写 A/B/D</text>
+
+          <!-- 契约库 -->
+          <rect class="box box-contract" x="214" y="196" width="224" height="150" rx="10"></rect>
+          <text class="svg-title" x="232" y="226">契约库 contract</text>
+          <text class="svg-sub" x="232" y="250">A 共享真相：project / roadmap</text>
+          <text class="svg-sub" x="232" y="267">requirements / architecture / specs</text>
+          <text class="svg-sub" x="232" y="288">B 当前版本：tasks / VR / bugs</text>
+          <text class="svg-sub" x="232" y="309">D 热状态：current.json ≤ 8KB</text>
+          <text class="svg-sub" x="232" y="330">E 审计：ledger / READ-LOG</text>
+
+          <!-- worker -->
+          <rect class="box box-worker" x="526" y="184" width="214" height="86" rx="10"></rect>
+          <text class="svg-title" x="544" y="214">meta-worker</text>
+          <text class="svg-sub" x="544" y="236">任务包只读</text>
+          <text class="svg-sub" x="544" y="253">写自己的 bundle</text>
+
+          <!-- 交付库 -->
+          <rect class="box" x="526" y="330" width="214" height="80" rx="10"></rect>
+          <text class="svg-title" x="544" y="360">交付库 delivery</text>
+          <text class="svg-sub" x="544" y="382">allowed_paths 内源码 / 测试</text>
+          <text class="svg-sub" x="544" y="399">manager 不直接读源码</text>
+
+          <!-- 归档 -->
+          <rect class="box box-archive" x="214" y="396" width="224" height="70" rx="10"></rect>
+          <text class="svg-title" x="232" y="424">archive/R{n}</text>
+          <text class="svg-sub" x="232" y="444">C 冷归档 · 仅 reason 可读</text>
+
+          <!-- maintainer -->
+          <rect class="box box-maintainer" x="810" y="46" width="170" height="130" rx="10"></rect>
+          <text class="svg-title" x="828" y="76">meta-maintainer</text>
+          <text class="svg-sub" x="828" y="98">旁路：meta-flow 源码</text>
+          <text class="svg-sub" x="828" y="115">全局模板 / schemas</text>
+          <text class="svg-sub" x="828" y="132">install / upgrade</text>
+          <text class="svg-sub" x="828" y="155">不改项目契约与交付</text>
+
+          <!-- MFP inbox -->
+          <rect class="box" x="810" y="236" width="170" height="86" rx="10"></rect>
+          <text class="svg-title" x="828" y="266">MFP inbox</text>
+          <text class="svg-sub" x="828" y="288">改进包进入点</text>
+          <text class="svg-sub" x="828" y="305">由 maintainer 导入</text>
+
+          <!-- 箭头：用户 -> manager -->
+          <line class="arrow" x1="166" y1="88" x2="214" y2="88" marker-end="url(#arrow)"></line>
+          <text class="svg-label" x="190" y="78" text-anchor="middle">需求 / 批准</text>
+
+          <!-- 箭头：manager <-> 契约 -->
+          <line class="arrow" x1="326" y1="130" x2="326" y2="196" marker-start="url(#arrow)" marker-end="url(#arrow)"></line>
+          <text class="svg-label" x="336" y="168">读写 A·B·D</text>
+
+          <!-- 箭头：契约 <-> worker -->
+          <line class="arrow" x1="438" y1="236" x2="526" y2="236" marker-start="url(#arrow)" marker-end="url(#arrow)"></line>
+          <text class="svg-label" x="482" y="226" text-anchor="middle">packet ⇄ bundle</text>
+
+          <!-- 箭头：worker -> 交付 -->
+          <line class="arrow" x1="633" y1="270" x2="633" y2="330" marker-end="url(#arrow)"></line>
+          <text class="svg-label" x="643" y="304">allowed_paths</text>
+
+          <!-- 箭头：契约 -> 归档 -->
+          <line class="arrow" x1="326" y1="346" x2="326" y2="396" marker-end="url(#arrow)"></line>
+          <text class="svg-label" x="336" y="375">close 归档</text>
+
+          <!-- 箭头：MFP -> maintainer -->
+          <line class="arrow-maintainer" x1="895" y1="236" x2="895" y2="176" marker-end="url(#arrow-maintainer)"></line>
+          <text class="svg-label" x="905" y="210">读取 / 导入</text>
+        </svg>
+      </div>
+      <div class="diagram-legend" aria-label="连线图例">
+        <span><i></i>正常读写路径</span>
+        <span><i class="dashed"></i>归档 / 受限路径</span>
+        <span><i class="dashed-purple"></i>maintainer 旁路</span>
+      </div>
+
+      <div class="zone-grid">
+        <article class="zone-card">
+          <span class="zone-key">A</span>
+          <h3>共享真相</h3>
+          <p>PROJECT-PLAN、ROADMAP、REQUIREMENTS、ARCHITECTURE、SPEC。manager 写；worker 只通过任务包读取。</p>
+        </article>
+        <article class="zone-card">
+          <span class="zone-key">B</span>
+          <h3>当前版本工作集</h3>
+          <p>当前阶段的 TASK、VR、BUG、RELEASE。manager 写；worker 只写自己的任务包与 allowed_paths。</p>
+        </article>
+        <article class="zone-card">
+          <span class="zone-key">C</span>
+          <h3>冷归档</h3>
+          <p>版本关闭后迁入 archive/R{n}。默认不读；查询必须带 reason，并写 READ-LOG。</p>
+        </article>
+        <article class="zone-card">
+          <span class="zone-key">D</span>
+          <h3>热状态</h3>
+          <p>current.json 只存指针、计数和下一动作，必须 ≤ 8KB；可从任务、路标和 ledger 重建。</p>
+        </article>
+        <article class="zone-card">
+          <span class="zone-key">E</span>
+          <h3>审计日志</h3>
+          <p>ledger 记录状态变迁；READ-LOG 只记谁、何时、读了什么、为什么、多少字节，不记内容。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="rules-title">
+      <div class="section-head">
+        <p class="kicker">operating rules</p>
+        <h2 id="rules-title">四条不能越过的线</h2>
+      </div>
+      <div class="rule-grid">
+        <article class="rule-card">
+          <h3>上下文边界</h3>
+          <p>worker 的上下文 = <code>task packet</code> + 自己的任务 bundle + <code>allowed_paths</code>。不是整个契约库，也不是别人的任务。</p>
+        </article>
+        <article class="rule-card">
+          <h3>评审独立性</h3>
+          <p>低风险由 manager review；中/高风险由 worker2 独立评审；critical 需要用户参与验收。实现者不得自行最终验收。</p>
+        </article>
+        <article class="rule-card">
+          <h3>发布边界</h3>
+          <p><code>release freeze</code> 只生成冻结清单，<code>published: false</code>。冻结不等于发布；发布需要用户批准和显式授权。</p>
+        </article>
+        <article class="rule-card">
+          <h3>状态可重建</h3>
+          <p><code>current.json</code> 是派生状态，任务卡是事实；ledger 追加不改写。状态缺失或过期时从任务、路标与 ledger 重建。</p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    依据 Meta Flow DESIGN.md 的读写控制、五阶段、任务卡与评审路由；图中命令对应 <span class="mono">mf req / roadmap / phase / task / bug / knowledge / verify / release / context / archive</span>。
+  </footer>
+</div>

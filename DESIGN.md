@@ -1313,22 +1313,22 @@ mf dev install --yes    # 从本地源码更新全局 mf
 R0 交付物：
 
 1. 新仓骨架：`pyproject.toml`、`src/meta_flow/`（含 `templates.py`）、`tests/`、`agents/`。
-2. `mf` CLI：`bootstrap`、`install claude/worker`、`uninstall claude`、`workspace init/add-project/link/sync/status`、`dev clone/update/install/status`、`improve`、`dev improve`、`task`、`role/status/doctor`。
+2. `mf` CLI：`bootstrap`、`install claude/worker`、`uninstall claude`、`workspace init/add-project/link/sync/status`、`dev clone/update/install/status`、`improve`、`dev improve`、`req`、`roadmap`、`phase`、`task`、`bug`、`knowledge`、`verify`、`release`、`context`、`archive`、`log`、`role/status/doctor`。
 3. 三个短名角色定义：`manager.md`、`maintainer.md`、`worker.md`。
 4. 全局 `~/.meta-flow` 模板库；项目 `.meta-flow/install.yaml`；contract/子项目多仓布局；根 `CLAUDE.md` `@` 导入；README 软链/副本；doctor；contract `improvements/` 与全局 MFP inbox。
-5. 玩具项目 E2E：bootstrap → install → workspace init → add-project → task/review/accept → MFP → doctor → uninstall。
-6. CLI 安装/工作区/卸载/MFP/任务状态机测试。
+5. 玩具项目 E2E：bootstrap → install → workspace init → add-project → req/roadmap/phase → task/review/accept → bug/verify/release → context/archive → MFP → doctor → uninstall。
+6. CLI 安装/工作区/卸载/MFP/任务状态机/需求/路标/阶段/缺陷/知识/验证/发布/上下文测试。
 
-> R0 当前完成安装、工作区与 MFP 层。规划/执行命令（`req/roadmap/phase/task/bug/knowledge/verify/release`）和 `kind: review` 任务类型是 R0 下一切片，完成后再进入 R1。
+> R0 已完成安装、工作区、MFP、规划闭环（req/roadmap/phase）、质量闭环（bug/knowledge/verify/release）与控制闭环（task graph/plan/lease、state/ledger、context/archive、doctor）。下一步进入 R1：真实项目试点、多交付库发布聚合与安装升级加固。
 
 R1 交付物：
 
-1. 完整五阶段、PROJECT-PLAN 规划（过程/过程交付件/最终交付件能力）与阶段报告。
-2. 并行 wave、租约、任务包、交接、证据固化。
-3. 16 份规范默认版。
-4. 真实项目试点。
-5. 多仓 workspace 的版本/发布聚合与升级流程。
-6. 缺陷跟踪、知识沉淀、分层验证（L1/L2/L3）与追踪矩阵闭环。
+1. 真实项目试点：1 个项目、1 个版本、10+ 任务卡验收、用户确认。
+2. 多交付库版本/发布聚合与交付库验收。
+3. 安装/升级/迁移加固：老工作区自动补齐新目录与模板。
+4. 工具文档、CHANGELOG、CI 与 Git tag/GitHub Release 打包。
+5. 阶段/版本门禁在真实项目中的可操作性验证。
+6. 缺陷、知识、分层验证与追踪矩阵的真实项目闭环。
 
 R2 交付物：
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import re
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import bug, knowledge
+from .state import ledger_append, refresh_current, task_summary
 from .workspace import load_current_state, resolve_contract
 
 TASK_ID_RE = re.compile(r"^(R\d+)-(P\d+)-T(\d{3})$")
@@ -34,6 +36,25 @@ class TaskError(Exception):
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _lease_expired(data: dict[str, Any]) -> bool:
+    lease = data.get("lease") or {}
+    raw = lease.get("expires_at")
+    if not raw:
+        return True
+    try:
+        return datetime.fromisoformat(str(raw)) <= datetime.now(UTC)
+    except ValueError:
+        return True
+
+
+def _new_lease() -> dict[str, Any]:
+    return {
+        "owner": "worker",
+        "started_at": _now(),
+        "expires_at": (datetime.now(UTC).replace(microsecond=0) + timedelta(hours=2)).isoformat(),
+    }
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -107,6 +128,10 @@ def _task_data(
         "roadmap": roadmap,
         "phase": phase,
         "delivery": delivery,
+        "wave": "W1",
+        "depends_on": [],
+        "fixes": [],
+        "lease": None,
         "effort": effort,
         "risk": {
             "level": risk,
@@ -152,6 +177,9 @@ def create_task(
     allowed_paths: list[str] | None = None,
     acceptance: list[Any] | None = None,
     inputs: dict[str, Any] | None = None,
+    wave: str = "W1",
+    depends_on: list[str] | None = None,
+    fixes: list[str] | None = None,
     with_review: bool = True,
     from_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -178,6 +206,9 @@ def create_task(
     inputs = inputs if inputs is not None else data.get("inputs") or {}
     allowed = allowed_paths if allowed_paths is not None else data.get("allowed_paths") or []
     effort = str(data.get("effort") or effort)
+    wave = str(data.get("wave") or wave or "W1")
+    depends_on = [str(item) for item in (data.get("depends_on") or depends_on or [])]
+    fixes = [str(item) for item in (data.get("fixes") or fixes or [])]
 
     tasks_dir = contract / "roadmap" / roadmap / "phases" / phase / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -208,6 +239,9 @@ def create_task(
     )
     if isinstance(data.get("risk"), dict):
         task["risk"].update(data["risk"])
+    task["wave"] = wave
+    task["depends_on"] = depends_on
+    task["fixes"] = fixes
 
     review_id = None
     if kind != "review" and with_review and mode in {"independent", "user"}:
@@ -241,10 +275,23 @@ def create_task(
             next_owner="manager",
         )
         review_task["depends_on"] = [task_id]
+        review_task["wave"] = wave
         _save(_task_path(contract, review_id), review_task)
         task["reviewed_by_task"] = review_id
 
     _save(_task_path(contract, task_id), task)
+    ledger_append(
+        contract,
+        {
+            "event": "task.create",
+            "task": task_id,
+            "review_task": review_id,
+            "status": status,
+            "wave": wave,
+            "risk": risk,
+        },
+    )
+    refresh_current(contract)
     return {
         "task": task_id,
         "review_task": review_id,
@@ -282,8 +329,12 @@ def load_task(project: str | Path, task_id: str) -> tuple[Path, dict[str, Any]]:
 
 def start_task(project: str | Path, task_id: str) -> dict[str, Any]:
     path, data = load_task(project, task_id)
-    if data.get("status") not in {"ready", "rejected"}:
-        raise TaskError(f"任务 {task_id} 当前状态 {data.get('status')} 不能 start")
+    status = data.get("status")
+    if status == "in_progress" and not _lease_expired(data):
+        lease = data.get("lease") or {}
+        raise TaskError(f"任务 {task_id} 已被占用（lease 到 {lease.get('expires_at')}）")
+    if status not in {"ready", "rejected", "in_progress"}:
+        raise TaskError(f"任务 {task_id} 当前状态 {status} 不能 start")
     if data.get("kind") == "review" and data.get("reviews"):
         _, target = load_task(project, str(data["reviews"]))
         if target.get("status") != "submitted":
@@ -291,7 +342,16 @@ def start_task(project: str | Path, task_id: str) -> dict[str, Any]:
     data["status"] = "in_progress"
     data["next_owner"] = "worker"
     data["started_at"] = _now()
+    lease = _new_lease()
+    lease["task"] = task_id
+    lease["wave"] = data.get("wave") or "W1"
+    data["lease"] = lease
     _save(path, data)
+    ledger_append(
+        resolve_contract(project),
+        {"event": "task.start", "task": task_id, "lease": data["lease"]["expires_at"]},
+    )
+    refresh_current(resolve_contract(project))
     return data
 
 
@@ -359,7 +419,13 @@ def submit_task(
         _save(review_path, review_task)
     else:
         data["next_owner"] = "manager"
+    data["lease"] = None
     _save(path, data)
+    ledger_append(
+        resolve_contract(project),
+        {"event": "task.submit", "task": task_id, "next_owner": data["next_owner"]},
+    )
+    refresh_current(resolve_contract(project))
     return data
 
 
@@ -388,6 +454,11 @@ def accept_task(
             target["review_verdict"] = verdict
             target["next_owner"] = "manager"
             _save(target_path, target)
+        ledger_append(
+            resolve_contract(project),
+            {"event": "task.accept", "task": task_id, "kind": "review", "verdict": verdict},
+        )
+        refresh_current(resolve_contract(project))
         return data
 
     review_id = data.get("reviewed_by_task")
@@ -404,6 +475,14 @@ def accept_task(
     data["acceptance_note"] = note
     data["acceptance_verdict"] = verdict
     _save(path, data)
+    contract = resolve_contract(project)
+    for bug_id in data.get("fixes") or []:
+        bug.mark_fixed(contract, str(bug_id), task_id)
+    ledger_append(
+        contract,
+        {"event": "task.accept", "task": task_id, "verdict": verdict, "fixes": data.get("fixes") or []},
+    )
+    refresh_current(contract)
     return data
 
 
@@ -416,6 +495,7 @@ def reject_task(project: str | Path, task_id: str, reason: str) -> dict[str, Any
     data["status"] = "rejected"
     data["next_owner"] = "worker"
     data["rejection_reason"] = reason
+    data["lease"] = None
     _save(path, data)
     review_id = data.get("reviewed_by_task")
     if review_id:
@@ -424,6 +504,186 @@ def reject_task(project: str | Path, task_id: str, reason: str) -> dict[str, Any
         review_task["next_owner"] = "worker"
         review_task["review_verdict"] = None
         _save(review_path, review_task)
+    ledger_append(
+        resolve_contract(project),
+        {"event": "task.reject", "task": task_id, "reason": reason},
+    )
+    refresh_current(resolve_contract(project))
+    return data
+
+
+def _find_task_data(contract: Path, task_id: str) -> dict[str, Any] | None:
+    path = _task_path(contract, task_id)
+    if not path.is_file():
+        return None
+    try:
+        return _load(path)
+    except TaskError:
+        return None
+
+
+def _deps_satisfied(contract: Path, task: dict[str, Any]) -> bool:
+    for dep in task.get("depends_on") or []:
+        other = _find_task_data(contract, str(dep))
+        if other is None:
+            return False
+        if task.get("kind") == "review" and str(dep) == str(task.get("reviews")):
+            if other.get("status") not in {"submitted", "accepted"}:
+                return False
+        elif other.get("status") != "accepted":
+            return False
+    return True
+
+
+def _dependency_cycles(tasks: list[dict[str, Any]]) -> list[str]:
+    """用 Kahn 拓扑排序找出依赖环或依赖环上的任务。"""
+    ids = {str(task.get("id")) for task in tasks}
+    deps = {
+        str(task.get("id")): [str(dep) for dep in task.get("depends_on") or [] if str(dep) in ids]
+        for task in tasks
+    }
+    reverse: dict[str, list[str]] = {task_id: [] for task_id in ids}
+    indegree = {task_id: len(values) for task_id, values in deps.items()}
+    for task_id, values in deps.items():
+        for dep in values:
+            reverse[dep].append(task_id)
+    queue = [task_id for task_id, count in indegree.items() if count == 0]
+    visited = []
+    while queue:
+        current = queue.pop()
+        visited.append(current)
+        for follower in reverse[current]:
+            indegree[follower] -= 1
+            if indegree[follower] == 0:
+                queue.append(follower)
+    return sorted(ids - set(visited))
+
+
+def graph(project: str | Path) -> dict[str, Any]:
+    tasks = list_tasks(project)
+    nodes = []
+    edges = []
+    known = {str(task.get("id")) for task in tasks}
+    for task in tasks:
+        task_id = str(task.get("id"))
+        nodes.append(
+            {
+                "id": task_id,
+                "status": task.get("status"),
+                "wave": task.get("wave") or "W1",
+                "kind": task.get("kind"),
+                "risk": (task.get("risk") or {}).get("level"),
+            }
+        )
+        for dep in task.get("depends_on") or []:
+            if str(dep) in known:
+                edges.append({"from": str(dep), "to": task_id, "type": "depends_on"})
+        if task.get("kind") == "review" and task.get("reviews"):
+            edges.append({"from": str(task["reviews"]), "to": task_id, "type": "review"})
+    return {"nodes": nodes, "edges": edges, "cycles": _dependency_cycles(tasks)}
+
+
+def _normalize_path(pattern: str) -> str:
+    return pattern.rstrip("*").rstrip("/")
+
+
+def _paths_conflict(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    for a in left.get("allowed_paths") or []:
+        for b in right.get("allowed_paths") or []:
+            na, nb = _normalize_path(str(a)), _normalize_path(str(b))
+            if na and nb and (na == nb or na.startswith(nb + "/") or nb.startswith(na + "/")):
+                return True
+    return False
+
+
+def plan_tasks(project: str | Path) -> dict[str, Any]:
+    contract = resolve_contract(project)
+    tasks = list_tasks(project)
+    cycles = _dependency_cycles(tasks)
+    if cycles:
+        raise TaskError("任务依赖存在环: " + ", ".join(cycles))
+    ready = []
+    blocked = []
+    for task in tasks:
+        if task.get("status") not in {"ready", "rejected"}:
+            continue
+        item = {
+            "id": task.get("id"),
+            "title": task.get("title"),
+            "wave": task.get("wave") or "W1",
+            "kind": task.get("kind"),
+            "risk": (task.get("risk") or {}).get("level"),
+            "depends_on": task.get("depends_on") or [],
+            "allowed_paths": task.get("allowed_paths") or [],
+        }
+        if _deps_satisfied(contract, task):
+            ready.append(item)
+        else:
+            blocked.append(item)
+    waves: dict[str, list[dict[str, Any]]] = {}
+    for item in ready:
+        waves.setdefault(str(item["wave"]), []).append(item)
+    conflicts = []
+    for wave, items in waves.items():
+        for index, left in enumerate(items):
+            for right in items[index + 1 :]:
+                if _paths_conflict(left, right):
+                    conflicts.append({"wave": wave, "a": left["id"], "b": right["id"]})
+    return {"ready": ready, "blocked": blocked, "waves": waves, "conflicts": conflicts}
+
+
+def next_tasks(project: str | Path, *, limit: int = 10) -> list[dict[str, Any]]:
+    contract = resolve_contract(project)
+    items = []
+    for task in list_tasks(project):
+        if task.get("status") not in {"ready", "rejected"}:
+            continue
+        if not _deps_satisfied(contract, task):
+            continue
+        items.append(
+            {
+                "id": task.get("id"),
+                "title": task.get("title"),
+                "wave": task.get("wave") or "W1",
+                "kind": task.get("kind"),
+                "risk": (task.get("risk") or {}).get("level"),
+                "next_owner": task.get("next_owner"),
+            }
+        )
+    items.sort(key=lambda item: (str(item["wave"]), str(item["id"])))
+    return items[:limit]
+
+
+def release_task(
+    project: str | Path,
+    task_id: str,
+    *,
+    reason: str = "lease 释放",
+    force: bool = False,
+) -> dict[str, Any]:
+    path, data = load_task(project, task_id)
+    if data.get("status") not in {"ready", "rejected", "in_progress"}:
+        raise TaskError(f"任务 {task_id} 当前状态 {data.get('status')} 不能 release")
+    if data.get("status") == "in_progress" and not _lease_expired(data) and not force:
+        raise TaskError(f"任务 {task_id} lease 未过期；manager 回收需 --force")
+    data["status"] = "ready"
+    data["next_owner"] = "worker"
+    data["lease"] = None
+    data["release_reason"] = reason
+    _save(path, data)
+    ledger_append(
+        resolve_contract(project),
+        {"event": "task.release", "task": task_id, "reason": reason},
+    )
+    refresh_current(resolve_contract(project))
+    return data
+
+
+def summary(project: str | Path) -> dict[str, Any]:
+    contract = resolve_contract(project)
+    data = task_summary(contract)
+    data["next"] = next_tasks(project, limit=5)
+    data["open_bugs"] = len(bug.open_blockers(project))
     return data
 
 
@@ -482,6 +742,14 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
         lines.append("(none)")
 
     lines.append("")
+    lines.append("## Project knowledge")
+    knowledge_lines = knowledge.packet_lines(contract)
+    if knowledge_lines:
+        lines.extend(knowledge_lines)
+    else:
+        lines.append("(none)")
+    lines.append("")
+
     lines.append("## Allowed paths")
     for item in data.get("allowed_paths") or []:
         lines.append(f"- {item}")

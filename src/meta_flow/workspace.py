@@ -396,6 +396,7 @@ def workspace_init(
         contract / "verification",
         contract / "handoffs",
         contract / "reviews",
+        contract / "release",
         contract / "bugs",
         contract / "knowledge",
         contract / "improvements",
@@ -437,9 +438,12 @@ def workspace_init(
         },
     )
     _write(
-        contract / "roadmap" / "R1-PLAN.md",
+        contract / "roadmap" / "R1" / "PLAN.md",
         templates.ARTIFACT_TEMPLATES["ROADMAP-PLAN.md"].replace("R{n}", "R1"),
     )
+    for phase in ("P1", "P2", "P3", "P4", "P5"):
+        phase_plan = templates.ARTIFACT_TEMPLATES["PHASE-PLAN.md"].replace("R{n}", "R1").replace("P{n}", phase)
+        _write(contract / "roadmap" / "R1" / "phases" / phase / "PLAN.md", phase_plan)
     _dump_yaml(
         contract / "requirements" / "REQUIREMENTS.yaml",
         {"schema": 1, "requirements": []},
@@ -470,6 +474,7 @@ def workspace_init(
         "verification/.gitkeep",
         "handoffs/.gitkeep",
         "reviews/.gitkeep",
+        "release/.gitkeep",
         "archive/.gitkeep",
         "roadmap/phases/.gitkeep",
     ):
@@ -533,6 +538,7 @@ def _initial_state(project_id: str) -> str:
                 "project_id": project_id,
                 "roadmap": "R1",
                 "phase": "P1",
+                "phase_status": "active",
                 "version": "1.0.0-alpha.1",
                 "counts": {},
                 "active_tasks": [],
@@ -564,6 +570,69 @@ def workspace_upgrade(root: str | Path, *, force: bool = False) -> dict[str, Any
     templates_readme = contract / "templates" / "README.md"
     if not templates_readme.exists() or force:
         _write(templates_readme, _TEMPLATES_README)
+    for directory in (
+        contract / "release",
+        contract / "requirements" / "changes",
+        contract / "bugs",
+        contract / "knowledge",
+        contract / "verification",
+        contract / "state",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    if not (contract / "requirements" / "REQUIREMENTS.yaml").is_file():
+        _dump_yaml(contract / "requirements" / "REQUIREMENTS.yaml", {"schema": 1, "requirements": []})
+    if not (contract / "requirements" / "INDEX.md").is_file():
+        _write(contract / "requirements" / "INDEX.md", templates.REQUIREMENTS_INDEX)
+    if not (contract / "bugs" / "README.md").is_file():
+        _write(contract / "bugs" / "README.md", templates.BUGS_README)
+    if not (contract / "bugs" / "_TEMPLATE.yaml").is_file():
+        _write(contract / "bugs" / "_TEMPLATE.yaml", templates.BUG_TEMPLATE)
+    if not (contract / "knowledge" / "KNOWLEDGE.yaml").is_file():
+        _write(contract / "knowledge" / "KNOWLEDGE.yaml", templates.KNOWLEDGE_YAML)
+    if not (contract / "knowledge" / "KNOWLEDGE.md").is_file():
+        _write(contract / "knowledge" / "KNOWLEDGE.md", templates.KNOWLEDGE_MD)
+    state_path = contract / "state" / "current.json"
+    if not state_path.is_file():
+        _write(state_path, _initial_state(str(local.get("project_id") or "project")))
+    else:
+        try:
+            state_data = json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            state_data = None
+        if isinstance(state_data, dict) and "phase_status" not in state_data:
+            state_data["phase_status"] = "active"
+            state_path.write_text(
+                json.dumps(state_data, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+    if not (contract / "policies" / "CONTEXT-POLICY.yaml").is_file():
+        _write(contract / "policies" / "CONTEXT-POLICY.yaml", templates.CONTEXT_POLICY)
+    roadmap_data = _load_optional_yaml(contract / "roadmap" / "ROADMAP.yaml") or {}
+    for item in roadmap_data.get("roadmaps") or []:
+        roadmap_id = str(item.get("id") or "")
+        if not re.fullmatch(r"R\d+", roadmap_id):
+            continue
+        roadmap_dir = contract / "roadmap" / roadmap_id
+        plan_path = roadmap_dir / "PLAN.md"
+        if not plan_path.is_file():
+            legacy = contract / "roadmap" / f"{roadmap_id}-PLAN.md"
+            if legacy.is_file():
+                plan_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(legacy, plan_path)
+            else:
+                _write(
+                    plan_path,
+                    templates.ARTIFACT_TEMPLATES["ROADMAP-PLAN.md"].replace("R{n}", roadmap_id),
+                )
+        for phase in ("P1", "P2", "P3", "P4", "P5"):
+            phase_plan = roadmap_dir / "phases" / phase / "PLAN.md"
+            if not phase_plan.is_file():
+                _write(
+                    phase_plan,
+                    templates.ARTIFACT_TEMPLATES["PHASE-PLAN.md"]
+                    .replace("R{n}", roadmap_id)
+                    .replace("P{n}", phase),
+                )
     return {"root": str(root), "contract_dir": str(contract), "force": force}
 
 
@@ -876,4 +945,144 @@ def doctor(root: str | Path) -> list[str]:
         if not (path / "delivery.yaml").is_file():
             errors.append(f"子项目 {item.get('id')} 缺少 delivery.yaml")
 
+    _doctor_planning_data(contract, errors)
     return errors
+
+
+def _load_optional_yaml(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
+    """校验需求、任务、缺陷、知识、验证与当前状态的一致性。"""
+    state_path = contract / "state" / "current.json"
+    state: dict[str, Any] = {}
+    if state_path.is_file():
+        try:
+            raw = json.loads(state_path.read_text(encoding="utf-8"))
+            state = raw if isinstance(raw, dict) else {}
+        except json.JSONDecodeError:
+            errors.append("state/current.json 不是合法 JSON")
+
+    roadmap_data = _load_optional_yaml(contract / "roadmap" / "ROADMAP.yaml")
+    roadmap_ids = []
+    if roadmap_data is None:
+        errors.append("roadmap/ROADMAP.yaml 缺失或非法")
+    else:
+        for item in roadmap_data.get("roadmaps") or []:
+            roadmap_id = str(item.get("id") or "")
+            roadmap_ids.append(roadmap_id)
+            if not re.fullmatch(r"R\d+", roadmap_id):
+                errors.append(f"路标 ID 非法: {roadmap_id}")
+            if item.get("status") not in {"planned", "active", "closed"}:
+                errors.append(f"路标 {roadmap_id} status 非法: {item.get('status')}")
+    current_roadmap = str(state.get("roadmap") or "")
+    if current_roadmap and current_roadmap not in roadmap_ids:
+        errors.append(f"current.json 指向不存在路标: {current_roadmap}")
+    if str(state.get("phase") or "") not in {"P1", "P2", "P3", "P4", "P5", "done"}:
+        errors.append(f"current.json phase 非法: {state.get('phase')}")
+
+    tasks: dict[str, dict[str, Any]] = {}
+    valid_status = {"draft", "ready", "in_progress", "submitted", "accepted", "rejected", "cancelled"}
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        data = _load_optional_yaml(path)
+        if data is None:
+            errors.append(f"任务卡不是合法 YAML: {path.relative_to(contract)}")
+            continue
+        task_id = str(data.get("id") or "")
+        if not task_id:
+            errors.append(f"任务卡缺少 id: {path.relative_to(contract)}")
+            continue
+        if task_id in tasks:
+            errors.append(f"任务 ID 重复: {task_id}")
+        tasks[task_id] = data
+        if data.get("status") not in valid_status:
+            errors.append(f"任务 {task_id} status 非法: {data.get('status')}")
+        if data.get("next_owner") not in {"worker", "manager"}:
+            errors.append(f"任务 {task_id} next_owner 非法: {data.get('next_owner')}")
+        if path.parent.name != task_id.rsplit("-", 1)[-1]:
+            errors.append(f"任务 {task_id} 与目录名不一致: {path.parent.name}")
+    for task_id, data in tasks.items():
+        for dep in data.get("depends_on") or []:
+            if str(dep) not in tasks:
+                errors.append(f"任务 {task_id} 依赖不存在任务: {dep}")
+
+    req_task_refs: dict[str, int] = {}
+    for task in tasks.values():
+        refs = ((task.get("inputs") or {}).get("requirements")) or []
+        for ref in refs:
+            req_task_refs[str(ref)] = req_task_refs.get(str(ref), 0) + 1
+
+    req_data = _load_optional_yaml(contract / "requirements" / "REQUIREMENTS.yaml")
+    req_ids: set[str] = set()
+    if req_data is None:
+        errors.append("requirements/REQUIREMENTS.yaml 缺失或非法")
+    else:
+        for item in req_data.get("requirements") or []:
+            req_id = str(item.get("id") or "")
+            if not re.fullmatch(r"REQ-\d{4}", req_id):
+                errors.append(f"需求 ID 非法: {req_id}")
+                continue
+            if req_id in req_ids:
+                errors.append(f"需求 ID 重复: {req_id}")
+            req_ids.add(req_id)
+            if not str(item.get("title") or "").strip():
+                errors.append(f"需求 {req_id} 缺少标题")
+            if not item.get("acceptance"):
+                errors.append(f"需求 {req_id} 缺少验收标准（DoR）")
+            if item.get("status") in {"in_roadmap", "in_progress", "implemented"} and not req_task_refs.get(req_id):
+                errors.append(f"需求 {req_id} 没有关联任务")
+    for task_id, task in tasks.items():
+        for ref in ((task.get("inputs") or {}).get("requirements")) or []:
+            if str(ref) not in req_ids:
+                errors.append(f"任务 {task_id} 引用不存在需求: {ref}")
+
+    vr_refs: dict[str, int] = {}
+    for path in sorted((contract / "verification").glob("VR-*.yaml")):
+        data = _load_optional_yaml(path)
+        if data is None:
+            errors.append(f"验证记录不是合法 YAML: {path.relative_to(contract)}")
+            continue
+        if data.get("layer") not in {"implementation", "design", "requirement"}:
+            errors.append(f"验证记录 {path.stem} layer 非法: {data.get('layer')}")
+        if data.get("result") not in {"PASS", "PASS_WITH_RISK", "FAIL", "BLOCKED"}:
+            errors.append(f"验证记录 {path.stem} result 非法: {data.get('result')}")
+        if data.get("result") == "FAIL" and not data.get("bugs"):
+            errors.append(f"验证记录 {path.stem} FAIL 但未关联 BUG")
+        for ref in data.get("requirement_refs") or []:
+            vr_refs[str(ref)] = vr_refs.get(str(ref), 0) + 1
+            if str(ref) not in req_ids:
+                errors.append(f"验证记录 {path.stem} 引用不存在需求: {ref}")
+
+    for req_id in req_ids:
+        req = next(
+            item
+            for item in (req_data or {}).get("requirements") or []
+            if item.get("id") == req_id
+        )
+        if req.get("status") == "verified" and not vr_refs.get(req_id):
+            errors.append(f"需求 {req_id} 已 verified 但没有验证记录")
+
+    for path in sorted((contract / "bugs").glob("BUG-*.yaml")):
+        data = _load_optional_yaml(path)
+        if data is None:
+            errors.append(f"缺陷不是合法 YAML: {path.relative_to(contract)}")
+            continue
+        if data.get("severity") not in {"blocker", "critical", "major", "minor", "trivial"}:
+            errors.append(f"缺陷 {path.stem} severity 非法: {data.get('severity')}")
+        if not data.get("status"):
+            errors.append(f"缺陷 {path.stem} 缺少 status")
+
+    knowledge_data = _load_optional_yaml(contract / "knowledge" / "KNOWLEDGE.yaml")
+    if knowledge_data is None:
+        errors.append("knowledge/KNOWLEDGE.yaml 缺失或非法")
+    else:
+        for key in ("terms", "behaviors", "conventions", "preferences", "lessons"):
+            if not isinstance(knowledge_data.get(key, []), list):
+                errors.append(f"KNOWLEDGE.yaml {key} 必须是列表")

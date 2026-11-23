@@ -1,0 +1,352 @@
+"""需求基线、DoR 与追踪矩阵。"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from .state import ledger_append
+from .workspace import resolve_contract
+
+REQ_PATH = "requirements/REQUIREMENTS.yaml"
+REQ_STATUSES = (
+    "proposed",
+    "accepted",
+    "in_roadmap",
+    "in_progress",
+    "designed",
+    "implemented",
+    "verified",
+    "released",
+    "deferred",
+    "rejected",
+)
+PRIORITIES = ("must", "should", "could", "wont")
+
+
+class ReqError(Exception):
+    """需求操作失败。"""
+
+    def __init__(self, message: str, code: int = 1) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _path(contract: Path) -> Path:
+    return contract / REQ_PATH
+
+
+def _load(contract: Path) -> dict[str, Any]:
+    path = _path(contract)
+    if not path.is_file():
+        return {"schema": 1, "requirements": []}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ReqError(f"{path} 不是合法 YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ReqError(f"{path} 顶层必须是映射")
+    data.setdefault("requirements", [])
+    return data
+
+
+def _save(contract: Path, data: dict[str, Any]) -> None:
+    path = _path(contract)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+
+def _next_id(items: list[dict[str, Any]]) -> str:
+    numbers = []
+    for item in items:
+        raw = str(item.get("id") or "")
+        if raw.startswith("REQ-") and raw[4:].isdigit():
+            numbers.append(int(raw[4:]))
+    return f"REQ-{max(numbers, default=0) + 1:04d}"
+
+
+def _find(contract: Path, req_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    data = _load(contract)
+    for item in data["requirements"]:
+        if item.get("id") == req_id:
+            return data, item
+    raise ReqError(f"需求不存在: {req_id}")
+
+
+def validate_dor(item: dict[str, Any]) -> list[str]:
+    errors = []
+    if not str(item.get("title") or "").strip():
+        errors.append("缺少 title")
+    if item.get("priority") not in PRIORITIES:
+        errors.append(f"priority 必须是 {'|'.join(PRIORITIES)}")
+    acceptance = item.get("acceptance") or []
+    if not isinstance(acceptance, list) or not acceptance:
+        errors.append("DoR 要求至少一条可验证验收标准")
+    for index, criterion in enumerate(acceptance, start=1):
+        if not isinstance(criterion, dict) or not str(criterion.get("expect") or "").strip():
+            errors.append(f"验收标准 A{index} 缺少 expect")
+    if item.get("status") not in REQ_STATUSES:
+        errors.append(f"status 必须是 {'|'.join(REQ_STATUSES)}")
+    return errors
+
+
+def add_requirement(
+    project: str | Path,
+    title: str,
+    *,
+    priority: str = "must",
+    acceptance: list[str] | None = None,
+    roadmap: str | None = None,
+    source: str = "user",
+    description: str = "",
+) -> dict[str, Any]:
+    contract = resolve_contract(project)
+    data = _load(contract)
+    req_id = _next_id(data["requirements"])
+    state_path = contract / "state" / "current.json"
+    try:
+        state = yaml.safe_load(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
+    except yaml.YAMLError:
+        state = {}
+    roadmap = roadmap or str((state or {}).get("roadmap") or "R1")
+    item = {
+        "id": req_id,
+        "title": title.strip(),
+        "source": source,
+        "priority": priority,
+        "status": "proposed",
+        "roadmap": roadmap,
+        "description": description,
+        "acceptance": [
+            {"id": f"A{index}", "method": "artifact", "expect": text}
+            for index, text in enumerate(acceptance or [], start=1)
+        ],
+        "non_goals": [],
+        "dependencies": [],
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    errors = validate_dor(item)
+    if errors:
+        raise ReqError("；".join(errors))
+    data["requirements"].append(item)
+    _save(contract, data)
+    _write_requirement_doc(contract, item)
+    refresh_index(contract)
+    ledger_append(contract, {"event": "req.add", "req": req_id, "title": title})
+    return item
+
+
+def _write_requirement_doc(contract: Path, item: dict[str, Any]) -> None:
+    path = contract / "requirements" / f"{item['id']}.md"
+    lines = [
+        f"# {item['id']} {item.get('title')}",
+        "",
+        f"> source: {item.get('source')}",
+        f"> priority: {item.get('priority')}",
+        f"> status: {item.get('status')}",
+        f"> roadmap: {item.get('roadmap')}",
+        "",
+        "## 背景与用户需求",
+        "",
+        str(item.get("description") or ""),
+        "",
+        "## 范围与非目标",
+        "",
+        "非目标：" + ("；".join(item.get("non_goals") or []) or "待补充"),
+        "",
+        "## 验收标准",
+        "",
+    ]
+    for criterion in item.get("acceptance") or []:
+        lines.append(f"- {criterion.get('id')}: {criterion.get('expect')}")
+    lines.extend(["", "## 追踪", "", "见 `requirements/TRACE.md`。", ""])
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def list_requirements(
+    project: str | Path,
+    *,
+    status: str | None = None,
+    roadmap: str | None = None,
+) -> list[dict[str, Any]]:
+    contract = resolve_contract(project)
+    items = _load(contract)["requirements"]
+    return [
+        item
+        for item in items
+        if (status is None or item.get("status") == status)
+        and (roadmap is None or item.get("roadmap") == roadmap)
+    ]
+
+
+def show_requirement(project: str | Path, req_id: str) -> dict[str, Any]:
+    contract = resolve_contract(project)
+    _, item = _find(contract, req_id)
+    result = dict(item)
+    result["trace"] = trace_requirement(contract, req_id)
+    return result
+
+
+def update_requirement(
+    project: str | Path,
+    req_id: str,
+    *,
+    status: str | None = None,
+    priority: str | None = None,
+    roadmap: str | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    contract = resolve_contract(project)
+    data, item = _find(contract, req_id)
+    if status is not None:
+        if status not in REQ_STATUSES:
+            raise ReqError(f"status 必须是 {'|'.join(REQ_STATUSES)}")
+        item["status"] = status
+    if priority is not None:
+        if priority not in PRIORITIES:
+            raise ReqError(f"priority 必须是 {'|'.join(PRIORITIES)}")
+        item["priority"] = priority
+    if roadmap is not None:
+        item["roadmap"] = roadmap
+    if title is not None:
+        item["title"] = title
+    item["updated_at"] = _now()
+    errors = validate_dor(item)
+    if errors:
+        raise ReqError("；".join(errors))
+    _save(contract, data)
+    _write_requirement_doc(contract, item)
+    refresh_index(contract)
+    ledger_append(contract, {"event": "req.update", "req": req_id, "status": item.get("status")})
+    return item
+
+
+def _scan_yaml_refs(directory: Path, key: str, req_id: str) -> list[dict[str, Any]]:
+    items = []
+    if not directory.is_dir():
+        return items
+    for path in sorted(directory.rglob("*.yaml")) + sorted(directory.rglob("*.yml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        refs = data.get(key) or []
+        if isinstance(refs, list) and req_id in refs:
+            items.append({"file": str(path.relative_to(directory.parent)), **data})
+    return items
+
+
+def _scan_docs(directory: Path, req_id: str) -> list[str]:
+    hits = []
+    if not directory.is_dir():
+        return hits
+    for path in sorted(directory.rglob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if req_id in text:
+            hits.append(str(path.relative_to(directory.parent)))
+    return hits
+
+
+def trace_requirement(contract: Path, req_id: str) -> dict[str, Any]:
+    tasks = []
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, OSError):
+            continue
+        refs = ((data or {}).get("inputs") or {}).get("requirements") or []
+        if req_id in refs:
+            tasks.append({"id": data.get("id"), "status": data.get("status"), "risk": (data.get("risk") or {}).get("level")})
+    return {
+        "specs": _scan_docs(contract / "specs", req_id),
+        "designs": _scan_docs(contract / "architecture", req_id),
+        "tasks": tasks,
+        "verification": [
+            {"id": item.get("id"), "result": item.get("result"), "layer": item.get("layer")}
+            for item in _scan_yaml_refs(contract / "verification", "requirement_refs", req_id)
+        ],
+        "bugs": [
+            {"id": item.get("id"), "status": item.get("status"), "severity": item.get("severity")}
+            for item in _scan_yaml_refs(contract / "bugs", "related_reqs", req_id)
+        ],
+    }
+
+
+def trace(project: str | Path, req_id: str | None = None) -> dict[str, Any]:
+    contract = resolve_contract(project)
+    if req_id:
+        _, item = _find(contract, req_id)
+        return {req_id: {"title": item.get("title"), **trace_requirement(contract, req_id)}}
+    result = {}
+    for item in _load(contract)["requirements"]:
+        rid = str(item.get("id"))
+        result[rid] = {"title": item.get("title"), **trace_requirement(contract, rid)}
+    write_trace_file(contract, result)
+    return result
+
+
+def write_trace_file(contract: Path, result: dict[str, Any]) -> Path:
+    lines = [
+        "# 追踪矩阵",
+        "",
+        "> 由 `mf req trace` 生成。",
+        "",
+        "| REQ | 标题 | SPEC | TASK | VR | BUG |",
+        "|---|---|---|---|---|---|",
+    ]
+    for req_id, entry in result.items():
+        lines.append(
+            "| {req} | {title} | {specs} | {tasks} | {vr} | {bugs} |".format(
+                req=req_id,
+                title=str(entry.get("title") or "").replace("|", "\\|"),
+                specs=", ".join(entry.get("specs") or []) or "-",
+                tasks=", ".join(f"{t['id']}({t.get('status')})" for t in entry.get("tasks") or []) or "-",
+                vr=", ".join(f"{v['id']}({v.get('result')})" for v in entry.get("verification") or []) or "-",
+                bugs=", ".join(f"{b['id']}({b.get('status')})" for b in entry.get("bugs") or []) or "-",
+            )
+        )
+    path = contract / "requirements" / "TRACE.md"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def refresh_index(contract: Path) -> Path:
+    data = _load(contract)
+    lines = [
+        "# 需求索引",
+        "",
+        "> 由 `mf req add/update` 生成；结构化真相见 `REQUIREMENTS.yaml`。",
+        "",
+        "| ID | 标题 | 优先级 | 状态 | 路标 |",
+        "|---|---|---|---|---|",
+    ]
+    for item in data["requirements"]:
+        lines.append(
+            f"| {item.get('id')} | {item.get('title')} | {item.get('priority')} | "
+            f"{item.get('status')} | {item.get('roadmap')} |"
+        )
+    path = contract / "requirements" / "INDEX.md"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def validate_all(project: str | Path) -> list[str]:
+    contract = resolve_contract(project)
+    errors = []
+    for item in _load(contract)["requirements"]:
+        for error in validate_dor(item):
+            errors.append(f"{item.get('id')}: {error}")
+    return errors

@@ -4,13 +4,25 @@
 
 ## 状态
 
-**v0.1.0 / R0.2 重构中**。当前安装与工作区流程：
+**v0.1.0 / R0 重构中**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
 
 ```text
 mf bootstrap
 mf install claude [--agent maintainer]
 mf install worker --project-dir <sub>
 mf workspace init/add-project/link/sync/status
+mf req add/list/show/update/trace/validate
+mf roadmap show/plan/close
+mf phase enter/review/exit
+mf task create/list/show/start/submit/accept/reject/prompt
+mf task graph/plan/next/release/summary
+mf bug add/list/show/update/close
+mf knowledge add/list/show/render
+mf verify record/list/show
+mf release freeze/show
+mf context show/expand/log/policy
+mf archive list/show
+mf status / mf log / mf doctor
 mf uninstall claude
 mf dev clone/update/install/status
 mf role/status/doctor
@@ -174,6 +186,90 @@ mf task accept R1-P1-T001 --verdict PASS
 - 中/高风险：worker2 独立 review，之后 manager 验收。
 - 评审不通过：`review-handoff.md` 列出必须整改项，manager 退回 worker1；返工后复审。
 - 每个任务状态都有 `next_owner`；`mf task prompt` 明确下一责任 agent。
+
+## 规划闭环
+
+```bash
+# 需求基线与 DoR（标题、优先级、可验收标准）
+mf req add --title "用户登录" --priority must --acceptance "登录成功"
+mf req list
+mf req show REQ-0001
+mf req update REQ-0001 --status verified
+mf req trace REQ-0001
+mf req trace                      # 生成 requirements/TRACE.md
+
+# 路标/版本
+mf roadmap show
+mf roadmap plan R2 --title "v2" --version-target 2.0.0 --goal "第二版"
+mf roadmap close R1               # 校验 REQ/任务/BUG；归档 archive/R1
+
+# 五阶段
+mf phase enter P2
+mf phase review                   # 生成阶段 REPORT.md
+mf phase exit --approved-by user  # P1/P2/P4/P5 需要用户门禁
+```
+
+`roadmap close` 生成关闭报告、下一版本交接、`LESSONS-R{n}.md`，并把任务、阶段计划/报告、VR、BUG 快照移入 `archive/R{n}/`。阶段退出生成 `HANDOFF-TO-P{n}.md`。
+
+## 质量闭环
+
+```bash
+# L1/L2/L3 验证
+mf verify record --layer implementation --scope "登录" --result PASS \
+  --task R1-P1-T001 --requirement REQ-0001
+mf verify list --layer implementation
+
+# 缺陷
+mf bug add --title "登录报错" --severity major --requirement REQ-0001
+mf bug update BUG-0001 --status fixed --fix-task R1-P1-T001
+mf bug close BUG-0001 --verification "回归通过"
+
+# 知识
+mf knowledge add --kind term --text "契约库=项目公共规范和计划"
+mf knowledge add --kind lesson --text "先写验收再实现"
+mf knowledge render
+
+# 版本冻结（不等于发布）
+mf release freeze
+mf release show
+```
+
+- `FAIL` 验证必须关联 `--bug`。
+- `PASS` 验证会关闭关联 BUG；`task accept` 会把 fix 任务关联 BUG 置为 `fixed`。
+- `release freeze` 检查需求、任务、blocker/critical BUG 和版本 MAJOR，写 `release/RELEASE-<version>.yaml`；`published: false`。
+- 知识条目会自动注入任务包，控制 worker 上下文。
+
+## 控制闭环
+
+```bash
+# 依赖、wave、写冲突与下一批
+mf task graph
+mf task plan
+mf task next
+mf task summary
+
+# lease：start 写 2 小时租约；manager 回收
+mf task start R1-P1-T001
+mf task release R1-P1-T001 --force
+
+# 热区、读扩展与归档
+mf context show
+mf context expand requirements/REQ-0001.md --reason human_audit
+mf context log
+mf archive list
+mf archive show R1 --reason human_audit
+
+# 状态、审计与自检
+mf status
+mf log
+mf doctor
+```
+
+- `state/current.json` 只存指针/计数，≤8KB；修订历史进 `ledger.ndjson`。
+- 任务 start 写 lease，防止同一任务被并发占用；`task release --force` 由 manager 回收。
+- `context expand` 和 `archive show` 必须带 reason，并写 `READ-LOG.ndjson`。
+- `task plan` 按 wave 分组并检查同一 wave 的 `allowed_paths` 冲突。
+- `mf doctor` 校验需求 DoR、追踪、任务/依赖、BUG、知识、VR、路标/阶段与 state 大小。
 
 ## 卸载
 
