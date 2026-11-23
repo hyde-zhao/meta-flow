@@ -31,7 +31,7 @@ mf bootstrap
 ~/.meta-flow/
 ├── manifest.yaml      # tool/template 版本、repo_url、source_dir
 ├── agents/            # manager / maintainer / worker
-└── templates/         # 16 份规范 + 17 份制品模板 + 根配置模板
+└── templates/         # 16 份规范 + 18 份制品模板 + 根配置模板
 ```
 
 ### 2. 项目安装

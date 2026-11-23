@@ -389,6 +389,52 @@ mf context expand <path> --reason <reason>
 | Agent OS | 三层上下文注入 | 无版本门禁 |
 | Anthropic context engineering | just-in-time retrieval、compaction、structured notes、sub-agents | 无 |
 
+### 3.8 版本、阶段、任务工作区
+
+contract 仓按“版本 → 阶段 → 任务”分层：
+
+```text
+contracts/
+├── state/{current.json,ledger.ndjson,READ-LOG.ndjson}
+├── project/{PROJECT-PLAN.md,INIT-CHECKLIST.md}
+├── roadmap/
+│   ├── ROADMAP.yaml
+│   └── R1/
+│       ├── PLAN.md
+│       ├── CLOSE.md
+│       ├── HANDOFF-TO-R2.md
+│       └── phases/
+│           ├── P1/{PLAN.md,REPORT.md,HANDOFF-TO-P2.md}
+│           ├── P2/{PLAN.md,REPORT.md,HANDOFF-TO-P3.md,tasks/}
+│           ├── P3/{PLAN.md,REPORT.md,HANDOFF-TO-P4.md,tasks/,verification/,reviews/,bugs/}
+│           ├── P4/{PLAN.md,REPORT.md,HANDOFF-TO-P5.md,tasks/,verification/,reviews/,bugs/}
+│           └── P5/{PLAN.md,REPORT.md,tasks/,verification/,reviews/,bugs/}
+├── requirements/{REQUIREMENTS.yaml,INDEX.md,changes/}
+├── architecture/{INDEX.md,DESIGN-*.md,ADR-*.md,drafts/}
+├── specs/
+├── standards/ templates/ knowledge/ policies/
+└── archive/R1/    # 版本关闭后从 roadmap/R1/ 移入
+```
+
+任务工作区：
+
+```text
+phases/P3/tasks/T001/
+├── TASK.yaml
+├── packet.md              # mf task show --packet
+├── evidence/
+├── dev-record.md          # worker1
+├── handoff.md             # worker1
+├── review.md              # worker2
+├── review-handoff.md      # worker2
+└── acceptance.md          # manager
+```
+
+- 任务 bundle 是跨角色唯一接口；worker 不读其他任务、阶段或版本。
+- 阶段退出写 `HANDOFF-TO-P{next}.md`；下一阶段默认只读该 handoff，不读上一阶段全过程。
+- 版本关闭把 `roadmap/R{n}/` 移入 `archive/R{n}/`；下一版本默认只读 `HANDOFF-TO-R{n+1}.md`。
+- 实现状态：任务/评审命令与 phase 工作区在 R0.4 落地；当前 contract 已有扁平 `tasks/`、`dev-records/` 等目录，R0.4 迁移到本结构。
+
 ---
 
 ## 4. 版本与路标
@@ -962,6 +1008,108 @@ mf dev improve list [--scope open|closed|records]
 mf dev improve update <MFP> --status verified --version ... --commit ... --note ...
 ```
 
+### 7.14 风险分级与评审路由
+
+manager 在写任务卡时按五维评分（每维 1–3）：
+
+| 维度 | 1 | 2 | 3 |
+|---|---|---|---|
+| 影响面/爆炸半径 | 单文件/局部 | 单模块/单交付 | 跨交付/公共契约/生产/安全 |
+| 复杂度/不确定性 | 直接 | 多模块/有未知 | 新架构/并发/迁移 |
+| 可逆性 | 易回滚 | 需返工 | 不可逆/数据迁移/公开发布 |
+| 验证难度 | 自动化 | 部分手工 | UAT/无观测 |
+| 安全/合规 | 无 | 权限/数据 | 凭据/生产/审计/PII |
+
+总分 5–15：
+
+- 5–7：`low`
+- 8–10：`medium`
+- 11–13：`high`
+- 14–15：`critical`
+
+强制升级（任一命中至少 `high`）：
+
+- 凭据、权限、生产写、公共契约、不可逆数据迁移；
+- 跨交付/跨模块架构、安装器、agent prompt、平台适配；
+- `critical` 必须追加用户验收。
+
+工作量独立评估：`effort: S|M|L`（S≤半天，M 1–2 天，L>2 天或大面积文件）。大工作量不等于高风险；但 `effort=L` 且任一维度 ≥2 时至少 `medium`。
+
+评审路由：
+
+| 风险 | 评审方式 |
+|---|---|
+| `low` | manager 先做 review，再验收 |
+| `medium` | 独立 review 推荐；命中强制升级则必须 |
+| `high` | worker2 独立 review 必须，之后 manager 验收 |
+| `critical` | worker2 独立 review + 用户验收 |
+
+任务卡记录：
+
+```yaml
+effort: M
+risk:
+  level: high
+  score: 12
+  factors: {impact: 3, complexity: 3, reversibility: 1, verification: 2, security: 3}
+  rationale: "涉及安装器与权限边界"
+review:
+  mode: independent     # manager|independent|user
+  scope: [src/install/**, tests/install/**]
+  checklist: [requirements, design, contracts, tests, security, scope, maintainability]
+```
+
+### 7.15 任务提示词与评审回环
+
+`mf task prompt <id>` 按风险与角色输出明确下一步：
+
+- **低风险实现任务**：完成后 submit，等待 manager 评审和验收；不要自行找评审。
+- **中/高风险实现任务**：完成后 submit；manager 派 worker2 独立 review；评审通过后 manager 验收；不通过按 review-handoff 整改。
+- **评审任务**：
+  - 通过：写 `review.md`（PASS）+ `review-handoff.md`，submit 给 manager 验收；
+  - 不通过：写 `review.md`（NEEDS_REWORK）+ `review-handoff.md`，列出必须整改项（ID/文件/行/要求/验收方法），submit；manager 退回 worker1。
+- **返工任务**：只读原任务 bundle + `review.md`/`review-handoff.md`，按整改项修改，重新自验、更新开发记录和交接、submit；再次评审。
+
+评审者不能是实现者；manager 不把最终验收交给实现者；严重问题必须记录 `BUG-*`。
+
+### 7.16 Manager 与 Worker 的读取原则
+
+**Manager 热区（每次会话）**：
+
+- `state/current.json`
+- `project/PROJECT-PLAN.md`
+- `roadmap/ROADMAP.yaml`、`roadmap/R{current}/PLAN.md`
+- `requirements/INDEX.md`、`architecture/INDEX.md`
+- `knowledge/KNOWLEDGE.md`
+- `policies/CONTEXT-POLICY.yaml`
+- 当前阶段：`phases/P{current}/PLAN.md`、活跃任务索引、上一阶段 `HANDOFF-TO-P{current}.md`
+
+**Manager 按需**：任务引用的 REQ/SPEC/DESIGN、当前阶段验证/评审/缺陷详情。
+
+**Manager 冷区（默认不读）**：
+
+- 上一阶段/更早阶段的完整过程文档；
+- `archive/R{older}/`；
+- 未被任务引用的完整需求/架构/规格。
+
+只有 `mf context expand <path> --reason ...` 才读，并写 READ-LOG。阶段切换只读上一阶段 handoff；版本切换只读上一版本 handoff。
+
+**Worker 实现任务**：
+
+- `mf task show <id> --packet`：任务卡、引用的 REQ/SPEC/DESIGN 片段、标准、知识、`allowed_paths`、验收、交接模板；
+- 自己的任务 bundle（dev-record/handoff/evidence）；
+- 自己子项目的 `allowed_paths` 源码/测试。
+
+**Worker 评审任务**：
+
+- `mf task show <id> --review-packet`：任务卡、diff、dev-record、handoff、evidence、review 检查清单、review_scope；
+- 只读 review_scope 内的源码；
+- 不读完整契约、其他任务/阶段/版本、归档。
+
+**返工 Worker**：原任务 bundle + `review.md` + `review-handoff.md`。
+
+**禁止**：worker 读完整路标/需求/架构、其他子项目、归档；manager 读交付库源码；任何角色读历史版本除非显式 reason。
+
 ---
 
 ## 8. 状态与 CLI
@@ -1060,7 +1208,7 @@ mf bootstrap
 ~/.meta-flow/
 ├── manifest.yaml      # tool/template 版本、repo_url、source_dir
 ├── agents/            # manager / maintainer / worker
-└── templates/         # 16 份规范 + 17 份制品模板 + 根配置模板
+└── templates/         # 16 份规范 + 18 份制品模板 + 根配置模板
 ```
 
 不发布 PyPI；用户不需要 clone 源码。正式版本使用 Git tag + GitHub Release。

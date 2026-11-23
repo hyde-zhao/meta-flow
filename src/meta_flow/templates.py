@@ -230,6 +230,28 @@ P5 结束：`mf roadmap close` → 关闭报告 → 未完成项转 R2/backlog �
 
 `mf task show --packet` 只含任务卡、inputs 片段、allowed_paths、must_read/may_read/do_not_read、budget、packet_digest。
 
+## 工作区
+
+- 版本：`roadmap/R{n}/`
+- 阶段：`roadmap/R{n}/phases/P{m}/`
+- 任务：`.../tasks/T{id}/`
+- 阶段切换只读 `HANDOFF-TO-P{next}.md`；版本切换只读 `HANDOFF-TO-R{next}.md`。
+- 任务 bundle 是跨角色唯一接口。
+
+## Manager 读取
+
+- 热区：`state/current.json`、`PROJECT-PLAN`、`ROADMAP.yaml`、当前 `R/PLAN.md`、需求索引、架构索引、`KNOWLEDGE.md`、`CONTEXT-POLICY`。
+- 当前阶段：`phases/P{current}/PLAN.md`、活跃任务索引、上一阶段 handoff。
+- 按需：任务引用的 REQ/SPEC/DESIGN、当前阶段验证/评审/缺陷详情。
+- 冷区：上一阶段/更早阶段的完整过程、`archive/R{older}/`、未引用的完整文档；只有 `mf context expand --reason` 才读。
+
+## Worker 读取
+
+- 实现任务：`mf task show --packet` + 自己的任务 bundle + 自己子项目 `allowed_paths` 源码/测试。
+- 评审任务：`mf task show --review-packet` + review_scope 内源码；不读完整契约、其他任务/阶段/版本。
+- 返工：原任务 bundle + `review.md` + `review-handoff.md`。
+- 禁止读其他子项目、归档、完整路标/需求/架构。
+
 ## 热状态
 
 `current.json` 只存指针/计数；修订历史进 ledger；`HISTORY.md` 按需生成；超 8KB 由 `mf doctor` 报错。
@@ -811,30 +833,41 @@ state:
 archive:
   root: contracts/archive
   read_reason_required: true
+work_areas:
+  version: contracts/roadmap/R{roadmap}
+  phase: contracts/roadmap/R{roadmap}/phases/P{phase}
+  task: contracts/roadmap/R{roadmap}/phases/P{phase}/tasks/{task}
+  archive: contracts/archive/R{roadmap}
+  handoffs:
+    phase: HANDOFF-TO-P{next_phase}.md
+    version: HANDOFF-TO-R{next_roadmap}.md
 roles:
   manager:
-    must_read: [contracts/state/current.json, contracts/project/PROJECT-PLAN.md]
+    must_read:
+      - contracts/state/current.json
+      - contracts/project/PROJECT-PLAN.md
+      - contracts/roadmap/ROADMAP.yaml
+      - contracts/requirements/INDEX.md
+      - contracts/architecture/INDEX.md
+      - contracts/knowledge/KNOWLEDGE.md
     may_read:
-      - contracts/roadmap/**
+      - contracts/roadmap/current/**
       - contracts/requirements/**
       - contracts/architecture/**
       - contracts/specs/**
-      - contracts/tasks/**
-      - contracts/dev-records/**
-      - contracts/verification/**
-      - contracts/handoffs/**
-      - contracts/bugs/**
       - contracts/knowledge/**
     deny: [contracts/archive/**, deliveries/*/src/**]
+    phase_scope: current
     budget: {files: 12, bytes: 131072}
   worker:
     must_read: [contracts/state/current.json]
-    may_read: [task-packet]
+    may_read: [task-packet, review-packet]
     deny:
       - contracts/archive/**
       - contracts/roadmap/**
       - contracts/requirements/**
       - contracts/architecture/**
+    packet_only: true
     budget: {files: 10, bytes: 65536}
   maintainer:
     must_read: [mf.workspace.yaml, contracts/project.yaml]
@@ -1328,7 +1361,16 @@ allowed_paths:
   - tests/**
 forbidden:
   - contracts/**
-risk: medium
+effort: M
+risk:
+  level: medium            # low|medium|high|critical
+  score: 8                 # 5-15
+  factors: {impact: 2, complexity: 2, reversibility: 1, verification: 2, security: 1}
+  rationale: ...
+review:
+  mode: manager            # manager|independent|user
+  scope: []
+  checklist: [requirements, design, contracts, tests, security, scope, maintainability]
 authorization:
   network: false
   production_write: false
@@ -1445,6 +1487,40 @@ notes: ...
 | | | | | |
 
 ## 结论
+
+结论：PASS | NEEDS_REWORK | BLOCKED
+
+## 必须整改项
+
+| ID | 文件/行 | 要求 | 验收方法 |
+|---|---|---|---|
+| | | | |
+
+## 证据
+""",
+    "REVIEW-HANDOFF.md": """# REVIEW-HANDOFF <task-id>
+
+> reviewer:
+> date:
+> verdict: PASS | NEEDS_REWORK
+
+## 评审范围
+
+## 评审结论
+
+## 发现
+
+| ID | 严重级别 | 文件/行 | 问题 | 建议 |
+|---|---|---|---|---|
+| | | | | |
+
+## 必须整改项
+
+| ID | 文件/行 | 要求 | 验收方法 |
+|---|---|---|---|
+| | | | |
+
+## 复审要求
 
 ## 证据
 """,
