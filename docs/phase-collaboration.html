@@ -1193,7 +1193,7 @@
       <div class="rule-grid">
         <article class="rule-card">
           <h3>上下文边界</h3>
-          <p>worker 的上下文 = <code>task packet</code> + 自己的任务 bundle + <code>allowed_paths</code>。不是整个契约库，也不是别人的任务；CLI 角色守卫拒绝越权命令，submit 用 diff + 快照校验路径。</p>
+          <p>worker 的上下文 = <code>task packet</code> + 自己的任务 bundle + <code>allowed_paths</code>。不是整个契约库，也不是别人的任务；CLI 角色守卫与 PreToolUse hook 拦截越权命令/直接读写，submit 用 diff + 快照校验路径。</p>
         </article>
         <article class="rule-card">
           <h3>评审独立性</h3>

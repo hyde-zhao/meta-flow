@@ -131,6 +131,7 @@ def list_bugs(
     *,
     status: str | None = None,
     severity: str | None = None,
+    roadmap: str | None = None,
 ) -> list[dict[str, Any]]:
     contract = resolve_contract(project)
     items = []
@@ -142,6 +143,8 @@ def list_bugs(
         if status and data.get("status") != status:
             continue
         if severity and data.get("severity") != severity:
+            continue
+        if roadmap and data.get("roadmap") not in {None, roadmap}:
             continue
         items.append(data)
     return items

@@ -253,6 +253,17 @@ def create_task(
     task["wave"] = wave
     task["depends_on"] = depends_on
     task["fixes"] = fixes
+    if not task.get("packet_budget"):
+        try:
+            policy_data = yaml.safe_load(
+                (contract / "policies" / "CONTEXT-POLICY.yaml").read_text(encoding="utf-8")
+            )
+        except (OSError, yaml.YAMLError):
+            policy_data = {}
+        worker_budget = (
+            ((policy_data or {}).get("roles") or {}).get("worker") or {}
+        ).get("budget")
+        task["packet_budget"] = worker_budget or {"files": 10, "bytes": 65536}
 
     review_id = None
     if kind != "review" and with_review and mode in {"independent", "user"}:

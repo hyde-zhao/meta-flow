@@ -25,6 +25,8 @@ SECTION_TITLES = {
     "preferences": "沟通偏好",
     "lessons": "复盘",
 }
+HOT_SECTIONS = ("terms", "behaviors", "conventions", "preferences")
+MAX_HOT_BYTES = 8192
 
 
 class KnowledgeError(Exception):
@@ -130,23 +132,41 @@ def show_knowledge(project: str | Path, item_id: str) -> dict[str, Any]:
 def render(contract: Path) -> Path:
     data = _load(contract)
     lines = [
-        "# 项目知识",
+        "# 项目知识（热区摘要）",
         "",
-        "> 由 `mf knowledge render` 生成；结构化真相见 `KNOWLEDGE.yaml`。",
+        "> 由 `mf knowledge render` 生成；完整条目见 `KNOWLEDGE.yaml`，复盘见 `LESSONS.md`。",
         "",
     ]
-    for key, title in SECTION_TITLES.items():
-        lines.extend([f"## {title}", ""])
-        items = data.get(key) or []
+    for key in HOT_SECTIONS:
+        lines.extend([f"## {SECTION_TITLES[key]}", ""])
+        items = [
+            item
+            for item in data.get(key) or []
+            if item.get("status", "active") == "active"
+        ]
         if not items:
             lines.append("(none)")
         for item in items:
             context = f"（{item.get('context')}）" if item.get("context") else ""
             lines.append(f"- **{item.get('id')}**: {item.get('text')}{context}")
         lines.append("")
+    text = "\n".join(lines)
+    if len(text.encode("utf-8")) > MAX_HOT_BYTES:
+        suffix = "\n\n> 热区摘要超过 8KB，已截断；完整内容见 KNOWLEDGE.yaml。\n"
+        limit = MAX_HOT_BYTES - len(suffix.encode("utf-8"))
+        text = text.encode("utf-8")[:limit].decode("utf-8", errors="ignore") + suffix
     path = contract / "knowledge" / "KNOWLEDGE.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines), encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
+
+    lessons = data.get("lessons") or []
+    lesson_lines = ["# 复盘与经验（冷区）", ""]
+    if lessons:
+        for item in lessons:
+            lesson_lines.append(f"- **{item.get('id')}**: {item.get('text')}")
+    else:
+        lesson_lines.append("(none)")
+    (contract / "knowledge" / "LESSONS.md").write_text("\n".join(lesson_lines) + "\n", encoding="utf-8")
     return path
 
 
@@ -156,13 +176,13 @@ def packet_lines(
     limit: int = 12,
     delivery: str | None = None,
 ) -> list[str]:
-    """给任务包注入少量项目知识，按交付库过滤，避免无关上下文。"""
+    """给任务包注入少量热区知识，按交付库过滤，不回注复盘冷区。"""
     try:
         data = _load(contract)
     except KnowledgeError:
         return []
     lines = []
-    for key in ("terms", "behaviors", "conventions", "preferences", "lessons"):
+    for key in HOT_SECTIONS:
         for item in data.get(key) or []:
             if item.get("status", "active") != "active":
                 continue

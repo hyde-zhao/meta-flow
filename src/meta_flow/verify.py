@@ -117,6 +117,7 @@ def list_verifications(
     *,
     layer: str | None = None,
     result: str | None = None,
+    roadmap: str | None = None,
 ) -> list[dict[str, Any]]:
     contract = resolve_contract(project)
     items = []
@@ -125,6 +126,8 @@ def list_verifications(
         if layer and data.get("layer") != layer:
             continue
         if result and data.get("result") != result:
+            continue
+        if roadmap and data.get("roadmap") not in {None, roadmap}:
             continue
         items.append(data)
     return items

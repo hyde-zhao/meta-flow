@@ -609,7 +609,8 @@ def workspace_upgrade(root: str | Path, *, force: bool = False) -> dict[str, Any
         _write(contract / "policies" / "CONTEXT-POLICY.yaml", templates.CONTEXT_POLICY)
     else:
         policy_path = contract / "policies" / "CONTEXT-POLICY.yaml"
-        if "contracts/" in policy_path.read_text(encoding="utf-8"):
+        policy_text = policy_path.read_text(encoding="utf-8")
+        if "contracts/" in policy_text or "tiers:" not in policy_text:
             _write(policy_path, templates.CONTEXT_POLICY)
     roadmap_data = _load_optional_yaml(contract / "roadmap" / "ROADMAP.yaml") or {}
     for item in roadmap_data.get("roadmaps") or []:
@@ -856,6 +857,8 @@ def doctor(root: str | Path) -> list[str]:
             settings = {}
         if isinstance(settings, dict) and settings.get("agent") != "manager":
             errors.append("根 settings.json 的 agent 不是 manager")
+        if isinstance(settings, dict) and not _settings_has_hook(settings):
+            errors.append("根 settings.json 缺少 PreToolUse hook；运行 mf upgrade 修复")
 
     if (root / "contracts").exists():
         errors.append("根目录存在旧版 contracts/；请迁移或删除")
@@ -946,6 +949,8 @@ def doctor(root: str | Path) -> list[str]:
                 data = {}
             if isinstance(data, dict) and data.get("agent") != "worker":
                 errors.append(f"子项目 {item.get('id')} 默认 agent 不是 worker")
+            if isinstance(data, dict) and not _settings_has_hook(data):
+                errors.append(f"子项目 {item.get('id')} 缺少 PreToolUse hook；运行 mf upgrade 修复")
         if not (path / "delivery.yaml").is_file():
             errors.append(f"子项目 {item.get('id')} 缺少 delivery.yaml")
 
@@ -961,6 +966,19 @@ def _load_optional_yaml(path: Path) -> dict[str, Any] | None:
     except yaml.YAMLError:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _settings_has_hook(settings: dict[str, Any]) -> bool:
+    hooks = settings.get("hooks") or {}
+    for entry in hooks.get("PreToolUse") or []:
+        if not isinstance(entry, dict):
+            continue
+        if any(
+            isinstance(item, dict) and item.get("command") == "mf hook pretool"
+            for item in entry.get("hooks") or []
+        ):
+            return True
+    return False
 
 
 def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
@@ -1107,6 +1125,25 @@ def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
         worker_deny = [str(item) for item in ((policy_data.get("roles") or {}).get("worker") or {}).get("deny") or []]
         if not any("archive" in item for item in worker_deny):
             errors.append("CONTEXT-POLICY.yaml worker 未禁止 archive")
+        tiers = policy_data.get("tiers") or {}
+        if not tiers:
+            errors.append("CONTEXT-POLICY.yaml 缺少 hot/warm/cold tiers")
+        elif not any("archive" in str(item) for item in tiers.get("cold") or []):
+            errors.append("CONTEXT-POLICY.yaml cold 层未包含 archive")
+        for role_name in ("manager", "worker"):
+            budget = ((policy_data.get("roles") or {}).get(role_name) or {}).get("budget") or {}
+            if int(budget.get("bytes") or 0) > 131072:
+                errors.append(f"CONTEXT-POLICY.yaml {role_name} 读预算超过 128KB")
+
+    for relative, max_bytes in (
+        ("requirements/INDEX.md", 65536),
+        ("requirements/TRACE.md", 262144),
+        ("knowledge/KNOWLEDGE.md", 8192),
+        ("project/PROJECT-PLAN.md", 65536),
+    ):
+        path = contract / relative
+        if path.is_file() and path.stat().st_size > max_bytes:
+            errors.append(f"热区文档超过 {max_bytes} 字节: {relative}")
 
     for directory in (contract / "specs", contract / "architecture"):
         if not directory.is_dir():

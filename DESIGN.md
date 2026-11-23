@@ -253,7 +253,7 @@ mf task prompt 生成下一任务提示词
 
 1. **角色会话隔离**：根目录、`contracts/`、`deliveries/` 三个入口，各自只有自己的角色指令和读写白名单。
 2. **任务上下文隔离**：`mf task show --packet` 只返回任务卡 + 声明的契约片段 + 允许路径；`mf task submit` 把证据摘要和交接固化进契约库。
-3. **路径守卫**：CLI 角色守卫拦截越权命令；`mf task submit` 用 git diff + 工作树快照校验 `allowed_paths`/`forbidden`，越界拒绝。PreToolUse hook 作为 R1 的第二层 Read/Write 拦截。
+3. **路径守卫**：CLI 角色守卫拦截越权命令；`mf task submit` 用 git diff + 工作树快照校验 `allowed_paths`/`forbidden`，越界拒绝；安装时写入 PreToolUse hook（`mf hook pretool`）拦截越界 Read/Write/Edit。
 
 这三层比“多拆几个仓库”更有效地防止幻觉和上下文污染；仓库数量只解决 git/发布边界。
 
@@ -343,16 +343,18 @@ mf task prompt 生成下一任务提示词
 }
 ```
 
-- ≤8KB；修订历史只进 ledger；`HISTORY.md` 按需生成。
-- 缺失或过期时 `mf status` 从任务/路标/ledger 重建。
+- ≤8KB；截断时保留计数与 `active_tasks_total`，写 `state.truncate` 审计事件；完整列表从任务卡或 `mf task summary` 重建。
+- 修订历史只进 ledger；`HISTORY.md` 按需生成。
+- 缺失或损坏时从 ROADMAP/tasks/阶段 handoff 重建。
 - worker 视图按 delivery 过滤 `active_tasks`。
 
 #### 3.7.5 归档
 
-- `mf roadmap close R{n}` 把当前版本的 tasks/dev-records/verification/handoffs/bugs/phase plans/reports 移到 `contracts/archive/R{n}/`，生成 `INDEX.md`。
+- `mf roadmap close R{n}` 把当前版本的 tasks、phase plans/reports、verification、bugs、release 清单和需求快照迁入 `contracts/archive/R{n}/`，生成 `INDEX.md`。
 - 长期共享文档不移动，只更新 `status`/`roadmap`/`supersedes`。
 - 活动文档不得引用归档；`mf doctor` 检查。
-- 读归档用 `mf archive show R{n} --reason <reason>`，写 READ-LOG。
+- 读归档用 `mf archive show R{n} --reason <reason>`，写 READ-LOG；直接 Read 由 PreToolUse hook 拒绝。
+- 默认列表（需求/缺陷/验证）只读当前路标；历史用 `--all`。
 
 #### 3.7.6 读扩展
 
@@ -365,15 +367,16 @@ mf context expand <path> --reason <reason>
 允许的 reason：`packet_missing`、`field_conflict`、`schema_validation_failed`、`human_audit`、`summary_insufficient`。
 
 - 记录到 `READ-LOG.ndjson`：时间、角色、任务、路径、原因、字节数；不记录内容。
-- 归档、其他交付库、其他版本需要 manager 显式授权。
-- `mf doctor` 检查未授权读。
+- 单文件读取不得超过 CONTEXT-POLICY 的角色字节预算；archive 只允许 manager。
+- `mf context show` 显示热区文件大小、总量和预算。
+- `mf log` / `mf context log` 从文件尾部读取，不加载完整 ledger。
 
 #### 3.7.7 强制机制
 
-- **CLI**：`mf context`、`mf archive`、`mf status`；路径/预算校验。
-- **Hook**：SessionStart 注入角色 + 热状态 + 知识摘要；PreToolUse 拦截越界 Read/Write；PostToolUse 记录读扩展。
+- **CLI**：角色矩阵守卫；`mf context`、`mf archive`、`mf status`；路径/预算校验。
+- **Hook**：安装 `PreToolUse` → `mf hook pretool`；拦截越界 Read/Write/Edit，manager 直读 archive、worker 读完整契约/其他 bundle、越界写交付源码。
 - **Agent 提示**：read allowlist + “先 packet 后文档”。
-- **标准**：`CONTEXT.md`；策略：`contracts/policies/CONTEXT-POLICY.yaml`。
+- **标准**：`CONTEXT.md`；策略：`contracts/policies/CONTEXT-POLICY.yaml`；分层：hot / warm / cold。
 
 #### 3.7.8 参考与取舍
 

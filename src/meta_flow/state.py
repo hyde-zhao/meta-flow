@@ -89,11 +89,28 @@ def write_current(contract: Path, data: dict[str, Any]) -> dict[str, Any]:
     path = contract / "state" / "current.json"
     data["updated_at"] = _now()
     data["source_digest"] = _source_digest(contract, data)
+    original = {
+        "active_tasks": list(data.get("active_tasks") or []),
+        "active_leases": list(data.get("active_leases") or []),
+        "submitted_tasks": list(data.get("submitted_tasks") or []),
+        "ready_tasks": list(data.get("ready_tasks") or []),
+    }
     text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     if len(text.encode("utf-8")) > MAX_STATE_BYTES:
-        data["active_tasks"] = data.get("active_tasks", [])[:10]
-        data["active_leases"] = data.get("active_leases", [])[:10]
-        data["ready_tasks"] = data.get("ready_tasks", [])[:20]
+        data["active_tasks"] = original["active_tasks"][:10]
+        data["active_leases"] = original["active_leases"][:10]
+        data["submitted_tasks"] = original["submitted_tasks"][:10]
+        data["ready_tasks"] = original["ready_tasks"][:20]
+        data["active_tasks_total"] = len(original["active_tasks"])
+        data["truncated"] = True
+        text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    if len(text.encode("utf-8")) > MAX_STATE_BYTES:
+        data.pop("active_tasks", None)
+        data.pop("active_leases", None)
+        data.pop("submitted_tasks", None)
+        data.pop("ready_tasks", None)
+        data["truncated"] = True
+        data["references"] = "mf task summary"
         text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     if len(text.encode("utf-8")) > MAX_STATE_BYTES:
         raise StateError(
@@ -101,6 +118,21 @@ def write_current(contract: Path, data: dict[str, Any]) -> dict[str, Any]:
         )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+    omitted = {
+        key: len(values) - len(data.get(key) or [])
+        for key, values in original.items()
+        if len(data.get(key) or []) < len(values)
+    }
+    if omitted:
+        ledger_append(
+            contract,
+            {
+                "event": "state.truncate",
+                "reason": f"current.json > {MAX_STATE_BYTES}B",
+                "omitted": omitted,
+                "active_tasks": original["active_tasks"],
+            },
+        )
     return data
 
 
@@ -113,6 +145,26 @@ def ledger_append(contract: Path, event: dict[str, Any]) -> None:
     record = {"ts": _now(), "actor": actor, "role": role, **payload}
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def tail_lines(path: Path, limit: int = 50) -> list[str]:
+    """从文件尾部读取最近 N 行，避免 log/READ-LOG 全量载入。"""
+    if limit <= 0 or not path.is_file():
+        return []
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        data = b""
+        newlines = 0
+        while position > 0 and newlines <= limit:
+            step = min(8192, position)
+            position -= step
+            handle.seek(position)
+            chunk = handle.read(step)
+            data = chunk + data
+            newlines = data.count(b"\n")
+    text = data.decode("utf-8", errors="ignore")
+    return [line for line in text.splitlines() if line.strip()][-limit:]
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

@@ -188,6 +188,38 @@ def test_cli_planning_quality_smoke(tmp_path, monkeypatch, capsys):
     assert main(["doctor", "--path", root]) == 0
 
 
+def test_cli_req_list_scopes_current_roadmap(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    assert main(["install", "claude", "--project-dir", str(project), "--init-contract"]) == 0
+    root = str(project)
+    assert main(["req", "add", "--project-dir", root, "--title", "当前", "--acceptance", "ok"]) == 0
+    assert (
+        main(
+            [
+                "req",
+                "add",
+                "--project-dir",
+                root,
+                "--title",
+                "下一版",
+                "--roadmap",
+                "R2",
+                "--acceptance",
+                "ok",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert main(["req", "list", "--project-dir", root, "--json"]) == 0
+    current = json.loads(capsys.readouterr().out)
+    assert [item["id"] for item in current] == ["REQ-0001"]
+    assert main(["req", "list", "--project-dir", root, "--all", "--json"]) == 0
+    all_items = json.loads(capsys.readouterr().out)
+    assert [item["id"] for item in all_items] == ["REQ-0001", "REQ-0002"]
+
+
 def test_cli_install_status_uninstall(tmp_path, monkeypatch, capsys):
     _, project = _prepare(tmp_path, monkeypatch)
     assert main(["install", "claude", "--project-dir", str(project)]) == 0

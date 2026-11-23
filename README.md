@@ -4,7 +4,7 @@
 
 ## 状态
 
-**v0.1.0 / R0 重构中**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
+**v0.1.1 / R0 重构中**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
 
 ```text
 mf bootstrap
@@ -63,7 +63,7 @@ mf install claude --agent maintainer    # 装 maintainer + manager
 ├── .claude/
 │   ├── agents/manager.md
 │   ├── agents/maintainer.md   # 可选
-│   └── settings.json          # {"agent":"manager"}
+│   └── settings.json          # {"agent":"manager","hooks":{...}}
 └── .meta-flow/install.yaml
 ```
 
@@ -102,7 +102,7 @@ mf doctor
 └── frontend/                  # git 仓库：子项目
     ├── CLAUDE.md
     ├── .claude/agents/worker.md
-    ├── .claude/settings.json  # {"agent":"worker"}
+    ├── .claude/settings.json  # {"agent":"worker","hooks":{...}}
     ├── .meta-flow/install.yaml
     ├── delivery.yaml
     └── src/ tests/ release/
@@ -117,6 +117,33 @@ cd frontend && claude                 # worker（独立会话）
 ```
 
 子项目必须单独启动 Claude Code，才能读取它自己的 `.claude/settings.json`。
+
+## PreToolUse 守卫
+
+安装时会写入：
+
+```json
+{
+  "agent": "manager",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob",
+        "hooks": [{"type": "command", "command": "mf hook pretool"}]
+      }
+    ]
+  }
+}
+```
+
+`mf hook pretool` 根据 cwd / `MF_ROLE` 推导角色，并在工具层拦截：
+
+- manager 直接读 `archive/**`；直接读/写交付库 `src/**`、`tests/**`。
+- worker 读完整契约、其他任务 bundle、其他交付库。
+- worker 写非当前任务 bundle、`allowed_paths` 之外的交付源码。
+- 直接改 `state/**`、写 `archive/**`、maintainer 改项目契约。
+
+`--force` 只影响 CLI 技术校验；hook 对直接 Read/Write 的边界仍然生效。`mf uninstall` 会移除该 hook，保留其他自定义 hook。
 
 ## 维护者
 
@@ -280,13 +307,28 @@ mf log
 mf doctor
 ```
 
-- `state/current.json` 只存指针/计数，≤8KB；缺失或损坏时从 ROADMAP/tasks/ledger 重建；修订历史进 `ledger.ndjson`。
+- `state/current.json` 只存指针/计数，≤8KB；截断时写 `state.truncate` 审计事件并标记 `truncated`，完整列表用 `mf task summary`。
+- 缺失或损坏时从 ROADMAP/tasks/handoff 重建；修订历史进 `ledger.ndjson`。
 - 任务 start 写 lease，并检查依赖、同 wave 写冲突和 `owner`；`task release --force` 由 manager 回收。
-- `task submit` 用 git diff + untracked 校验 `allowed_paths`/`forbidden`，越界拒绝。
+- `task submit` 用 git diff + 工作树快照校验 `allowed_paths`/`forbidden`，越界拒绝。
 - `context expand` 和 `archive show` 必须带 reason；archive 只允许 manager，并写 `READ-LOG.ndjson`。
+- `context show` 显示热区文件大小、总量和 manager 8KB/128KB 预算；超出预算的整文件读取被拒绝。
 - worker 只能通过 `task show --packet` 获取上下文；任务包声明 read policy、预算和 `packet_digest`。
 - `task plan` 按 wave 分组并检查同一 wave 的 `allowed_paths` 冲突；`task start` 会拒绝未满足依赖或冲突任务。
-- `mf doctor` 校验需求 DoR、追踪、任务/依赖、BUG、知识、VR、路标/阶段、策略文件和 state 大小。
+- `mf req list` / `mf req trace` / `mf bug list` / `mf verify list` 默认只读当前路标；用 `--all` 查看历史。
+- `mf knowledge render` 生成热区 `KNOWLEDGE.md`（≤8KB）和冷区 `LESSONS.md`；任务包只注入热区知识。
+- `mf log` / `mf context log` 从文件尾部读取，避免全量载入 ledger/READ-LOG。
+- `mf doctor` 校验需求 DoR、追踪、任务/依赖、BUG、知识、VR、路标/阶段、策略文件、归档引用和 state 大小。
+
+### 热区 / 温区 / 冷区
+
+| 层 | 内容 | 读取方式 |
+|---|---|---|
+| 热 | `state/current.json`、ROADMAP、当前 R/阶段 PLAN、需求/架构 INDEX、`KNOWLEDGE.md`、上一阶段 handoff | manager 会话；`mf context show` 统计大小 |
+| 温 | 当前路标 REQ 详情、DESIGN/SPEC、当前阶段任务 bundle、当前版本 VR/BUG | 按 ID/任务包读取；默认列表当前路标 |
+| 冷 | `archive/R{n}/`（任务、阶段报告、VR、BUG、release、需求快照）、旧 lessons | 只能 `mf archive show --reason`；直接 Read 被 hook 拒绝 |
+
+版本关闭时，`roadmap close` 会把该版本的任务、阶段文档、VR、BUG、release 清单和需求快照迁入 `archive/R{n}/`。
 
 ## 卸载
 

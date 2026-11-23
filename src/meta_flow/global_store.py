@@ -14,7 +14,7 @@ import yaml
 from . import __version__, templates
 
 DEFAULT_REPO_URL = "git@github.com:hyde-zhao/meta-flow.git"
-TEMPLATE_VERSION = "2026-11-23"
+TEMPLATE_VERSION = "2026-11-23.1"
 
 
 class GlobalStoreError(Exception):

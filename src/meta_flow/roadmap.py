@@ -356,6 +356,28 @@ def close(
             shutil.move(str(path), str(snapshot))
     if state.get("release", {}).get("version") == target_version:
         state["release"]["manifest"] = f"archive/{roadmap_id}/release/RELEASE-{target_version}.yaml"
+    archive_requirements = [
+        req for req in _all_requirements(contract) if req.get("roadmap") == roadmap_id
+    ]
+    if archive_requirements:
+        req_dir = archive_dir / "requirements"
+        req_dir.mkdir(parents=True, exist_ok=True)
+        (req_dir / "REQUIREMENTS.yaml").write_text(
+            yaml.safe_dump(
+                {"schema": 1, "requirements": archive_requirements},
+                sort_keys=False,
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+        for req in archive_requirements:
+            name = f"{req.get('id')}.md"
+            source = contract / "requirements" / name
+            if source.is_file():
+                shutil.copy2(source, req_dir / name)
+        trace = contract / "requirements" / "TRACE.md"
+        if trace.is_file():
+            shutil.copy2(trace, req_dir / "TRACE.md")
     index_text = [
         f"# 归档索引 {roadmap_id}",
         "",

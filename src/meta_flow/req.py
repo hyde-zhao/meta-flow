@@ -184,15 +184,17 @@ def list_requirements(
     *,
     status: str | None = None,
     roadmap: str | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     contract = resolve_contract(project)
     items = _load(contract)["requirements"]
-    return [
+    filtered = [
         item
         for item in items
         if (status is None or item.get("status") == status)
         and (roadmap is None or item.get("roadmap") == roadmap)
     ]
+    return filtered[:limit] if limit is not None else filtered
 
 
 def show_requirement(project: str | Path, req_id: str) -> dict[str, Any]:
@@ -301,13 +303,15 @@ def trace_requirement(contract: Path, req_id: str) -> dict[str, Any]:
     }
 
 
-def trace(project: str | Path, req_id: str | None = None) -> dict[str, Any]:
+def trace(project: str | Path, req_id: str | None = None, *, roadmap: str | None = None) -> dict[str, Any]:
     contract = resolve_contract(project)
     if req_id:
         _, item = _find(contract, req_id)
         return {req_id: {"title": item.get("title"), **trace_requirement(contract, req_id)}}
     result = {}
     for item in _load(contract)["requirements"]:
+        if roadmap and item.get("roadmap") != roadmap:
+            continue
         rid = str(item.get("id"))
         result[rid] = {"title": item.get("title"), **trace_requirement(contract, rid)}
     write_trace_file(contract, result)

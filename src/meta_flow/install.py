@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from . import __version__, global_store, templates
+from .guard import HOOK_COMMAND, HOOK_MATCHER
 
 INSTALL_SCHEMA = 1
 INSTALL_REL = Path(".meta-flow/install.yaml")
@@ -88,6 +89,60 @@ def _install_file(project: Path, relative: Path, content: str, force: bool) -> d
     return {"path": str(relative), "digest": _digest_text(content)}
 
 
+def _ensure_hook(data: dict[str, Any]) -> None:
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        data["hooks"] = hooks
+    entries = hooks.setdefault("PreToolUse", [])
+    if not isinstance(entries, list):
+        entries = []
+        hooks["PreToolUse"] = entries
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        commands = entry.get("hooks") or []
+        if any(isinstance(item, dict) and item.get("command") == HOOK_COMMAND for item in commands):
+            entry["matcher"] = HOOK_MATCHER
+            entry["hooks"] = [{"type": "command", "command": HOOK_COMMAND}]
+            return
+    entries.append(
+        {
+            "matcher": HOOK_MATCHER,
+            "hooks": [{"type": "command", "command": HOOK_COMMAND}],
+        }
+    )
+
+
+def _remove_hook(data: dict[str, Any]) -> None:
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    entries = hooks.get("PreToolUse")
+    if not isinstance(entries, list):
+        return
+    kept = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            kept.append(entry)
+            continue
+        commands = [
+            item
+            for item in entry.get("hooks") or []
+            if not (isinstance(item, dict) and item.get("command") == HOOK_COMMAND)
+        ]
+        if not commands:
+            continue
+        entry["hooks"] = commands
+        kept.append(entry)
+    if kept:
+        hooks["PreToolUse"] = kept
+    else:
+        hooks.pop("PreToolUse", None)
+    if not hooks:
+        data.pop("hooks", None)
+
+
 def _merge_settings(
     project: Path,
     agent: str,
@@ -96,7 +151,9 @@ def _merge_settings(
     path = project / SETTINGS_REL
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.is_file():
-        path.write_text(json.dumps({"agent": agent}, ensure_ascii=False, indent=2) + "\n")
+        data = {"agent": agent}
+        _ensure_hook(data)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
         return (
             {"path": str(SETTINGS_REL), "agent": agent, "agent_before": None, "created": True},
             None,
@@ -116,6 +173,7 @@ def _merge_settings(
             f"{path} 已设置 agent={before!r}；使用 --force 覆盖为 {agent!r}"
         )
     data["agent"] = agent
+    _ensure_hook(data)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     return (
         {"path": str(SETTINGS_REL), "agent": agent, "agent_before": before, "created": False},
@@ -134,7 +192,12 @@ def _restore_settings(project: Path, info: dict[str, Any]) -> None:
         return
     if not isinstance(data, dict):
         return
+    _remove_hook(data)
     if data.get("agent") != info.get("agent"):
+        if data:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        elif info.get("created"):
+            path.unlink()
         return
     before = info.get("agent_before")
     if before is None:
@@ -483,6 +546,9 @@ def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str
         )
         info = _install_file(project, Path(".claude/agents") / f"{name}.md", content, force)
         updated.append(info["path"])
+
+    settings_info, _, _ = _merge_settings(project, role, force=force)
+    manifest["settings"] = settings_info
 
     if role == "manager":
         contract_dir = manifest.get("contract_dir")

@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from .state import read_current
+from .state import read_current, tail_lines
 from .workspace import detect_role, resolve_contract
 
 REASONS = (
@@ -76,8 +76,11 @@ def expand(
     if not target.is_file():
         raise ContextError(f"文件不存在: {target}")
     size = target.stat().st_size
-    if size > MAX_READ_BYTES:
-        raise ContextError(f"文件超过 {MAX_READ_BYTES} 字节，禁止整体读取: {size}")
+    policy_data = policy(contract)
+    role_budget = ((policy_data.get("roles") or {}).get(role) or {}).get("budget") or {}
+    max_read = min(MAX_READ_BYTES, int(role_budget.get("bytes") or MAX_READ_BYTES))
+    if size > max_read:
+        raise ContextError(f"文件 {size} 字节超过 {role} 读预算 {max_read}；拆分文档或按段读取")
     text = target.read_text(encoding="utf-8")
     _log(
         contract,
@@ -104,6 +107,9 @@ def hot_files(project: str | Path) -> dict[str, Any]:
     state = read_current(contract)
     roadmap_id = str(state.get("roadmap") or "R1")
     phase = str(state.get("phase") or "P1")
+    previous = None
+    if phase in {"P2", "P3", "P4", "P5"}:
+        previous = f"P{int(phase[1:]) - 1}"
     candidates = [
         "state/current.json",
         "project/PROJECT-PLAN.md",
@@ -116,11 +122,29 @@ def hot_files(project: str | Path) -> dict[str, Any]:
         f"roadmap/{roadmap_id}/phases/{phase}/PLAN.md",
         f"roadmap/{roadmap_id}/phases/{phase}/REPORT.md",
     ]
+    if previous:
+        candidates.append(f"roadmap/{roadmap_id}/phases/{previous}/HANDOFF-TO-{phase}.md")
     files = []
+    total_bytes = 0
     for relative in candidates:
         path = contract / relative
-        files.append({"path": relative, "exists": path.is_file()})
-    return {"roadmap": roadmap_id, "phase": phase, "phase_status": state.get("phase_status"), "files": files}
+        size = path.stat().st_size if path.is_file() else 0
+        total_bytes += size
+        files.append({"path": relative, "exists": path.is_file(), "bytes": size})
+    policy_data = policy(contract)
+    budget = ((policy_data.get("roles") or {}).get("manager") or {}).get("budget") or {
+        "files": 12,
+        "bytes": 131072,
+    }
+    return {
+        "roadmap": roadmap_id,
+        "phase": phase,
+        "phase_status": state.get("phase_status"),
+        "files": files,
+        "total_bytes": total_bytes,
+        "budget": budget,
+        "within_budget": total_bytes <= int(budget.get("bytes") or 131072),
+    }
 
 
 def _archive_dirs(contract: Path) -> list[Path]:
@@ -196,11 +220,8 @@ def archive_show(
 def read_log(project: str | Path, *, limit: int = 50) -> list[dict[str, Any]]:
     contract = resolve_contract(project)
     path = contract / "state" / "READ-LOG.ndjson"
-    if not path.is_file():
-        return []
-    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     items = []
-    for line in lines[-limit:]:
+    for line in tail_lines(path, limit):
         try:
             data = json.loads(line)
         except json.JSONDecodeError:

@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from . import __version__, bug, context, knowledge, req, roadmap, state, verify
+from . import __version__, bug, context, guard, knowledge, req, roadmap, state, verify
 from .global_store import (
     GlobalStoreError,
     bootstrap,
@@ -116,10 +116,15 @@ def _enforce_role(args: argparse.Namespace) -> None:
     command = str(getattr(args, "command", ""))
     action = str(getattr(args, "action", "") or "")
     role, _ = _effective_role(args)
+    if command == "hook":
+        return
     if command in {"role", "status", "doctor", "bootstrap"}:
         return
     if command in {"install", "uninstall", "upgrade"}:
-        if role not in {"manager", "maintainer", "unbound"}:
+        actor_role, _ = detect_role(Path.cwd())
+        if actor_role == "unbound":
+            actor_role = os.environ.get("MF_ROLE", "unbound")
+        if actor_role not in {"manager", "maintainer", "unbound"}:
             raise WorkspaceError("worker 不能安装/卸载/升级项目", 3)
         return
     if command == "dev":
@@ -216,6 +221,11 @@ def _print_workspace_status(data: dict[str, Any]) -> None:
         print(f"当前: {hot.get('roadmap')} / {hot.get('phase')} ({hot.get('phase_status') or '-'})")
         tasks = data.get("tasks") or {}
         print(f"任务: {tasks.get('counts') or {}}")
+        if hot.get("truncated"):
+            print(
+                f"state: 已截断（active_tasks_total={hot.get('active_tasks_total')}）；"
+                "完整列表用 mf task summary"
+            )
         for lease in hot.get("active_leases") or []:
             print(
                 f"  lease: {lease.get('task')} owner={lease.get('owner')} "
@@ -796,7 +806,7 @@ def _cmd_log(args: argparse.Namespace) -> int:
     if not path.is_file():
         print("没有 ledger")
         return 0
-    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()][-args.limit :]
+    lines = state.tail_lines(path, args.limit)
     if args.json:
         _print_json([json.loads(line) for line in lines if line.strip()])
         return 0
@@ -822,7 +832,15 @@ def _cmd_req_add(args: argparse.Namespace) -> int:
 
 
 def _cmd_req_list(args: argparse.Namespace) -> int:
-    items = req.list_requirements(args.project_dir, status=args.status, roadmap=args.roadmap)
+    roadmap = args.roadmap
+    if roadmap is None and not args.all:
+        roadmap = str(state.read_current(resolve_contract(args.project_dir)).get("roadmap") or "R1")
+    items = req.list_requirements(
+        args.project_dir,
+        status=args.status,
+        roadmap=roadmap,
+        limit=args.limit,
+    )
     if args.json:
         _print_json(items)
         return 0
@@ -839,6 +857,8 @@ def _cmd_req_list(args: argparse.Namespace) -> int:
                 title=item.get("title"),
             )
         )
+    if args.limit and len(items) >= args.limit:
+        print(f"已显示前 {args.limit} 条；用 --limit/--all 查看更多")
     return 0
 
 
@@ -865,7 +885,10 @@ def _cmd_req_update(args: argparse.Namespace) -> int:
 
 
 def _cmd_req_trace(args: argparse.Namespace) -> int:
-    data = req.trace(args.project_dir, args.req_id)
+    roadmap = args.roadmap
+    if roadmap is None and not args.all and args.req_id is None:
+        roadmap = str(state.read_current(resolve_contract(args.project_dir)).get("roadmap") or "R1")
+    data = req.trace(args.project_dir, args.req_id, roadmap=roadmap)
     if args.json:
         _print_json(data)
         return 0
@@ -1001,7 +1024,10 @@ def _cmd_bug_add(args: argparse.Namespace) -> int:
 
 
 def _cmd_bug_list(args: argparse.Namespace) -> int:
-    items = bug.list_bugs(args.project_dir, status=args.status, severity=args.severity)
+    roadmap = args.roadmap
+    if roadmap is None and not args.all:
+        roadmap = str(state.read_current(resolve_contract(args.project_dir)).get("roadmap") or "R1")
+    items = bug.list_bugs(args.project_dir, status=args.status, severity=args.severity, roadmap=roadmap)
     if args.json:
         _print_json(items)
         return 0
@@ -1116,7 +1142,15 @@ def _cmd_verify_record(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify_list(args: argparse.Namespace) -> int:
-    items = verify.list_verifications(args.project_dir, layer=args.layer, result=args.result)
+    roadmap = args.roadmap
+    if roadmap is None and not args.all:
+        roadmap = str(state.read_current(resolve_contract(args.project_dir)).get("roadmap") or "R1")
+    items = verify.list_verifications(
+        args.project_dir,
+        layer=args.layer,
+        result=args.result,
+        roadmap=roadmap,
+    )
     if args.json:
         _print_json(items)
         return 0
@@ -1175,7 +1209,12 @@ def _cmd_context_show(args: argparse.Namespace) -> int:
     print(f"当前: {data['roadmap']} / {data['phase']} ({data.get('phase_status')})")
     print("热文件:")
     for item in data["files"]:
-        print(f"  {'OK' if item['exists'] else 'missing'} {item['path']}")
+        size = f"{item['bytes']}B" if item.get("exists") else "missing"
+        print(f"  {'OK' if item['exists'] else 'MISS'} {item['path']} ({size})")
+    print(
+        f"热区总量: {data['total_bytes']}B / {data['budget'].get('bytes')}B "
+        f"({'OK' if data['within_budget'] else 'OVER'})"
+    )
     return 0
 
 
@@ -1250,6 +1289,10 @@ def _cmd_archive_show(args: argparse.Namespace) -> int:
             print(f"  {name}")
     return 0
 
+
+
+def _cmd_hook_pretool(args: argparse.Namespace) -> int:
+    return guard.run_hook()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1439,6 +1482,8 @@ def build_parser() -> argparse.ArgumentParser:
     req_list.add_argument("--project-dir", default=".")
     req_list.add_argument("--status")
     req_list.add_argument("--roadmap")
+    req_list.add_argument("--limit", type=int, default=50)
+    req_list.add_argument("--all", action="store_true", help="不按当前路标过滤")
     req_list.add_argument("--json", action="store_true")
     req_list.set_defaults(func=_cmd_req_list)
     req_show = req_sub.add_parser("show")
@@ -1457,6 +1502,8 @@ def build_parser() -> argparse.ArgumentParser:
     req_trace = req_sub.add_parser("trace")
     req_trace.add_argument("req_id", nargs="?")
     req_trace.add_argument("--project-dir", default=".")
+    req_trace.add_argument("--roadmap")
+    req_trace.add_argument("--all", action="store_true", help="追踪所有路标；默认当前路标")
     req_trace.add_argument("--json", action="store_true")
     req_trace.set_defaults(func=_cmd_req_trace)
     req_validate = req_sub.add_parser("validate")
@@ -1525,6 +1572,8 @@ def build_parser() -> argparse.ArgumentParser:
     bug_list.add_argument("--project-dir", default=".")
     bug_list.add_argument("--status")
     bug_list.add_argument("--severity")
+    bug_list.add_argument("--roadmap")
+    bug_list.add_argument("--all", action="store_true", help="不按当前路标过滤")
     bug_list.add_argument("--json", action="store_true")
     bug_list.set_defaults(func=_cmd_bug_list)
     bug_show = bug_sub.add_parser("show")
@@ -1592,6 +1641,8 @@ def build_parser() -> argparse.ArgumentParser:
     verify_list.add_argument("--project-dir", default=".")
     verify_list.add_argument("--layer", choices=list(verify.LAYERS))
     verify_list.add_argument("--result", choices=list(verify.RESULTS))
+    verify_list.add_argument("--roadmap")
+    verify_list.add_argument("--all", action="store_true", help="不按当前路标过滤")
     verify_list.add_argument("--json", action="store_true")
     verify_list.set_defaults(func=_cmd_verify_list)
     verify_show = verify_sub.add_parser("show")
@@ -1766,6 +1817,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_p.add_argument("--global", dest="global_scope", action="store_true")
     doctor_p.add_argument("--json", action="store_true")
     doctor_p.set_defaults(func=_cmd_doctor)
+
+    hook_p = sub.add_parser("hook", help="Claude Code hook 入口")
+    hook_sub = hook_p.add_subparsers(dest="action", required=True)
+    hook_pretool = hook_sub.add_parser("pretool", help="PreToolUse 角色/路径守卫")
+    hook_pretool.set_defaults(func=_cmd_hook_pretool)
 
     return parser
 

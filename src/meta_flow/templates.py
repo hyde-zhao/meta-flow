@@ -833,6 +833,31 @@ state:
 archive:
   root: archive
   read_reason_required: true
+tiers:
+  hot:
+    - state/current.json
+    - project/PROJECT-PLAN.md
+    - roadmap/ROADMAP.yaml
+    - roadmap/R{current}/PLAN.md
+    - roadmap/R{current}/phases/P{current}/PLAN.md
+    - requirements/INDEX.md
+    - architecture/INDEX.md
+    - knowledge/KNOWLEDGE.md
+    - policies/CONTEXT-POLICY.yaml
+  warm:
+    - requirements/REQ-*.md
+    - architecture/DESIGN-*.md
+    - specs/SPEC-*.md
+    - roadmap/R{current}/phases/P{current}/tasks/**
+    - verification/**
+    - bugs/**
+  cold:
+    - archive/**
+    - roadmap/R{older}/**
+    - knowledge/LESSONS.md
+budget:
+  manager: {files: 12, bytes: 131072}
+  worker: {files: 10, bytes: 65536}
 work_areas:
   version: roadmap/R{roadmap}
   phase: roadmap/R{roadmap}/phases/P{phase}
