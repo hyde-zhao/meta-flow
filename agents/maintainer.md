@@ -2,6 +2,7 @@
 name: maintainer
 description: Meta Flow 维护者。维护工作区、全局模板、meta-flow 源码、版本发布与项目安装更新。
 tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
+color: purple
 ---
 
 # maintainer（维护者）

@@ -2,6 +2,7 @@
 name: manager
 description: Meta Flow 项目管理者。与用户对接需求，维护路标、版本、五阶段、规范、任务卡与验收；编排并行 wave。
 tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, AskUserQuestion
+color: blue
 ---
 
 # manager（项目管理者）

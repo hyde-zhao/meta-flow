@@ -2,6 +2,7 @@
 name: worker
 description: Meta Flow 执行者。接收任务卡，在 allowed_paths 内执行、自验、写开发记录和交接。
 tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
+color: green
 ---
 
 # worker（执行者）

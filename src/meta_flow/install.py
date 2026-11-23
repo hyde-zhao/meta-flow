@@ -478,7 +478,11 @@ def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str
         updated.append(info["path"])
 
     if role == "manager":
-        body = _global_template("CLAUDE.manager.md", templates.MANAGER_CLAUDE)
+        contract_dir = manifest.get("contract_dir")
+        if contract_dir:
+            body = "@" + str(contract_dir).replace(" ", "\\ ") + "/workspace/CLAUDE.md"
+        else:
+            body = _global_template("CLAUDE.manager.md", templates.MANAGER_CLAUDE)
     else:
         body = _global_template("CLAUDE.worker.md", templates.WORKER_CLAUDE)
     claude_path = project / CLAUDE_REL
