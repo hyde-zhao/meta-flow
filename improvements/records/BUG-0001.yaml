@@ -1,0 +1,21 @@
+id: BUG-0001
+kind: bug
+title: 修正 workspace 根/contract 内角色推导，支持 maintainer 与首次 init
+status: open
+source_mfp: MFP-0001
+source_project: meta-flow
+acceptance:
+- id: A1
+  method: artifact
+  expect: 在 workspace 根以 maintainer 角色运行 mf dev status 成功（显式参数或 MF_ROLE 优先），或给出明确角色来源提示。
+- id: A2
+  method: artifact
+  expect: 新 manager 安装、无 workspace.yaml 时，mf workspace init 可直接运行，无需手工 MF_ROLE。
+- id: A3
+  method: artifact
+  expect: 新增/更新回归测试覆盖上述两条路径；mf doctor 与现有角色守卫测试通过。
+created_at: '2026-11-25T02:54:33.120300+00:00'
+resolution:
+  version: null
+  commit: null
+  note: null

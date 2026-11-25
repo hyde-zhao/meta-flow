@@ -1,0 +1,68 @@
+id: MFP-0004
+title: 统一 worker 安装产物：安装镜像不入库、交付元数据入库
+status: submitted
+priority: must
+category: change
+classification: change
+source:
+  project: meta-flow
+  role: manager
+  created_by: manager
+  created_at: '2026-11-25T02:54:07.054253+00:00'
+  mf_version: 0.1.1
+  platform: linux
+  agent: manager
+problem: mf install worker 生成 .claude/、CLAUDE.md、.meta-flow/、delivery.yaml、RELEASE-NOTES.md、USER-MANUAL.md
+  等文件；无入库策略；delivery.yaml 默认 1.0.0/R1 与存量 0.1.1/R0 不符。
+context:
+  scenario: meta-flow 自托管交付库安装 worker 后需要明确哪些文件入库。
+  reproduction:
+  - mf install worker --project-dir meta-flow --delivery meta-flow
+  - git status 显示 6 类未跟踪文件
+  - 查看 delivery.yaml，version=1.0.0、roadmap=R1
+  expected: 安装镜像（.claude/、CLAUDE.md、.meta-flow/）不入库；delivery.yaml、RELEASE-NOTES.md、USER-MANUAL.md
+    入库并反映 0.1.1/R0。
+  actual: 安装后 6 类未跟踪文件；delivery.yaml 默认 1.0.0/R1。
+  evidence:
+  - BUG-0004
+  - R0-P4-T005
+  - ADR-001
+  affected:
+  - .gitignore
+  - delivery.yaml
+  - RELEASE-NOTES.md
+  - USER-MANUAL.md
+  - CLAUDE.md
+  - .claude/
+  - .meta-flow/
+acceptance:
+- id: A1
+  method: artifact
+  expect: .gitignore 忽略安装镜像与缓存，且不误伤交付文档。
+- id: A2
+  method: artifact
+  expect: delivery.yaml、RELEASE-NOTES.md、USER-MANUAL.md 入库且反映 0.1.1/R0 基线。
+- id: A3
+  method: artifact
+  expect: 安装 worker 后 git status 无安装镜像；mf doctor 通过。
+testing_plan: uv run pytest tests/test_install.py tests/test_workspace.py；安装后 git
+  status 与 delivery.yaml 校验。
+rollback: 回滚 .gitignore/模板改动；保留安装器默认输出。
+privacy:
+  sanitized: true
+  removed: []
+source_record: null
+resolution:
+  version: null
+  commit: null
+  tests: []
+  verified_by: null
+  verified_at: null
+  note: null
+references:
+- BUG-0004
+- R0-P4-T005
+- ADR-001
+submitted_at: '2026-11-25T02:54:28.989346+00:00'
+inbox_ref: /home/hyde/.meta-flow/improvements/inbox/meta-flow/MFP-0004.yaml
+digest: sha256:b6d819ec7d95dc22489e12fcdab0405f336f23533bbf1fe23fff4e5c946bb3d1

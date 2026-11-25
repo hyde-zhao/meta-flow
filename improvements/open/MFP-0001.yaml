@@ -1,0 +1,65 @@
+id: MFP-0001
+title: 修正 workspace 根/contract 内角色推导，支持 maintainer 与首次 init
+status: accepted
+priority: must
+category: bug
+classification: bug
+source:
+  project: meta-flow
+  role: manager
+  created_by: manager
+  created_at: '2026-11-25T02:54:06.785504+00:00'
+  mf_version: 0.1.1
+  platform: linux
+  agent: manager
+problem: 在 workspace 根或 contract 内，CLI 依据 cwd 推导为 manager，导致 maintainer 无法运行 mf dev；首次
+  workspace init 时又没有 workspace.yaml，detect_role=unbound，必须手工 MF_ROLE=manager。
+context:
+  scenario: maintainer 在项目工作区根维护 meta-flow 源码；新项目首次初始化 contract。
+  reproduction:
+  - cd /home/hyde/projects/meta-flow && mf dev status
+  - mf install claude 后直接执行 mf workspace init --name demo --contract-dir demo-contract
+  expected: mf dev 允许 maintainer（显式角色或 MF_ROLE 优先）；workspace init 首次可识别 manager，无需手工环境变量。
+  actual: 报错 dev 命令只允许 maintainer / workspace 命令只允许 manager；MF_ROLE 被 detect_role
+    覆盖。
+  evidence:
+  - 'BUG-0001: workspace 根 mf dev 被 manager 拒绝'
+  - 'BUG-0003: 首次 init 需 MF_ROLE=manager'
+  - R0-P4-T001/T002/T004
+  affected:
+  - src/meta_flow/cli.py
+  - src/meta_flow/workspace.py
+  - src/meta_flow/install.py
+acceptance:
+- id: A1
+  method: artifact
+  expect: 在 workspace 根以 maintainer 角色运行 mf dev status 成功（显式参数或 MF_ROLE 优先），或给出明确角色来源提示。
+- id: A2
+  method: artifact
+  expect: 新 manager 安装、无 workspace.yaml 时，mf workspace init 可直接运行，无需手工 MF_ROLE。
+- id: A3
+  method: artifact
+  expect: 新增/更新回归测试覆盖上述两条路径；mf doctor 与现有角色守卫测试通过。
+testing_plan: uv run pytest tests/test_cli.py tests/test_workspace.py；CLI smoke：mf
+  dev status、mf workspace init。
+rollback: 回滚角色推导优先级改动；保留 MF_ROLE 兼容路径。
+privacy:
+  sanitized: true
+  removed: []
+source_record: BUG-0001
+resolution:
+  version: null
+  commit: null
+  tests: []
+  verified_by: null
+  verified_at: null
+  note: null
+references:
+- BUG-0001
+- BUG-0003
+- R0-P4-T001
+- R0-P4-T002
+- R0-P4-T004
+submitted_at: '2026-11-25T02:54:28.687931+00:00'
+inbox_ref: /home/hyde/.meta-flow/improvements/inbox/meta-flow/MFP-0001.yaml
+digest: sha256:5531834a57039608e044de2c148969bcc040603b49a6d379ecd29346d45e9198

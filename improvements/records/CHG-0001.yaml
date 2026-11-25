@@ -1,0 +1,21 @@
+id: CHG-0001
+kind: change
+title: 统一 worker 安装产物：安装镜像不入库、交付元数据入库
+status: open
+source_mfp: MFP-0004
+source_project: meta-flow
+acceptance:
+- id: A1
+  method: artifact
+  expect: .gitignore 忽略安装镜像与缓存，且不误伤交付文档。
+- id: A2
+  method: artifact
+  expect: delivery.yaml、RELEASE-NOTES.md、USER-MANUAL.md 入库且反映 0.1.1/R0 基线。
+- id: A3
+  method: artifact
+  expect: 安装 worker 后 git status 无安装镜像；mf doctor 通过。
+created_at: '2026-11-25T02:54:33.411754+00:00'
+resolution:
+  version: null
+  commit: null
+  note: null

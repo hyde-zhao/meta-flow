@@ -1,0 +1,63 @@
+id: MFP-0003
+title: maintainer 源码目录缺失时显式报错并引导
+status: accepted
+priority: must
+category: bug
+classification: bug
+source:
+  project: meta-flow
+  role: manager
+  created_by: manager
+  created_at: '2026-11-25T02:54:06.965369+00:00'
+  mf_version: 0.1.1
+  platform: linux
+  agent: manager
+problem: 全局 manifest.source_dir 默认指向 ~/.meta-flow/source，但 bootstrap/install 未 clone
+  或提示；source 缺失时 mf dev status exit 0 且 branch/commit 为空，update/install 失败，跨项目 maintainer
+  无法定位源码。
+context:
+  scenario: 新机器安装 mf 后直接以 maintainer 维护源码；多项目共用全局 manifest。
+  reproduction:
+  - mf bootstrap / mf install 后未 clone 源码
+  - 在 ~/.meta-flow 运行 mf dev status，source 指向不存在的目录且 exit 0
+  - 运行 mf dev update 或 mf dev install --yes 失败
+  expected: source_dir 指向真实源码，或缺失时 status 非零并提示 mf dev clone/--source。
+  actual: source_dir=/home/hyde/.meta-flow/source 不存在；status 静默 exit 0；update/install
+    失败。
+  evidence:
+  - BUG-0005
+  - R0-P4-T009
+  affected:
+  - src/meta_flow/global_store.py
+  - src/meta_flow/cli.py
+  - ~/.meta-flow/manifest.yaml
+acceptance:
+- id: A1
+  method: artifact
+  expect: mf dev status 在 source_dir 不存在时退出非零，并提示 mf dev clone 或 --source。
+- id: A2
+  method: artifact
+  expect: --source 与 manifest 修复后正确显示 branch/commit/dirty。
+- id: A3
+  method: artifact
+  expect: 回归测试覆盖缺失/有效/显式 --source 三种情况。
+testing_plan: uv run pytest tests/test_global_store.py tests/test_cli.py；CLI smoke：mf
+  dev status、mf dev update。
+rollback: 回滚 status 校验与提示逻辑；保留 --source 显式路径。
+privacy:
+  sanitized: true
+  removed: []
+source_record: BUG-0002
+resolution:
+  version: null
+  commit: null
+  tests: []
+  verified_by: null
+  verified_at: null
+  note: null
+references:
+- BUG-0005
+- R0-P4-T009
+submitted_at: '2026-11-25T02:54:28.890842+00:00'
+inbox_ref: /home/hyde/.meta-flow/improvements/inbox/meta-flow/MFP-0003.yaml
+digest: sha256:b04486eb4b4ea6f9654fcca868c21f858b3229098b32e45149143e3169839456

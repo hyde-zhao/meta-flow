@@ -1,0 +1,65 @@
+id: MFP-0005
+title: workspace link 后刷新安装 digest，并修正模板 doctor 参数
+status: accepted
+priority: should
+category: bug
+classification: bug
+source:
+  project: meta-flow
+  role: manager
+  created_by: manager
+  created_at: '2026-11-25T02:54:07.146161+00:00'
+  mf_version: 0.1.1
+  platform: linux
+  agent: manager
+problem: mf workspace link 重写根 CLAUDE.md/README 后未刷新 install.yaml 的 CLAUDE.md digest；维护者模板仍写
+  mf doctor --project，而 0.1.1 只支持 --path/--global。
+context:
+  scenario: workspace 初始化后运行 link/sync；maintainer 按模板执行体检命令。
+  reproduction:
+  - mf install claude && mf workspace link
+  - 比较 .meta-flow/install.yaml 中 CLAUDE.md digest 与实际文件
+  - 运行 mf doctor --project
+  expected: link 后 digest 与实际一致；模板使用 mf doctor --path/--global。
+  actual: digest 仍为 link 前内容；mf doctor --project 报 unrecognized arguments。
+  evidence:
+  - BUG-0007
+  - BUG-0008
+  - R0-P4-T011
+  affected:
+  - src/meta_flow/workspace.py
+  - src/meta_flow/install.py
+  - agents/maintainer.md
+  - src/meta_flow/templates.py
+acceptance:
+- id: A1
+  method: artifact
+  expect: mf workspace link 后 install.yaml 的 CLAUDE.md digest 与文件一致，uninstall 不误判
+    modified。
+- id: A2
+  method: artifact
+  expect: 维护者模板与全局 agent 使用 mf doctor --path 或 --global。
+- id: A3
+  method: artifact
+  expect: install/uninstall/link 回归测试通过。
+testing_plan: uv run pytest tests/test_install.py tests/test_workspace.py；CLI smoke：install
+  → link → uninstall。
+rollback: 回滚 digest 刷新与模板文本改动。
+privacy:
+  sanitized: true
+  removed: []
+source_record: BUG-0003
+resolution:
+  version: null
+  commit: null
+  tests: []
+  verified_by: null
+  verified_at: null
+  note: null
+references:
+- BUG-0007
+- BUG-0008
+- R0-P4-T011
+submitted_at: '2026-11-25T02:54:29.085622+00:00'
+inbox_ref: /home/hyde/.meta-flow/improvements/inbox/meta-flow/MFP-0005.yaml
+digest: sha256:f0e938c182ae5a6d2f50091f85a41b43e62f1249694157582d06e362b84f1c45
