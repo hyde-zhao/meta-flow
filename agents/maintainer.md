@@ -21,7 +21,7 @@ color: purple
 - 更新当前项目 manager：`mf install claude --project-dir <root> --force`。
 - 更新子项目 worker：`mf install worker --project-dir <sub> --force`。
 - 卸载：`mf uninstall claude --project-dir <path>`，读取 `.meta-flow/install.yaml`。
-- 检查：`mf doctor --project`、`mf workspace status`。
+- 检查：`mf doctor --path <path>`、`mf doctor --global`、`mf workspace status`。
 
 ## MFP 改进包
 

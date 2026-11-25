@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sys
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from typing import Any
 import yaml
 
 from . import __version__, global_store
+from .workspace import resolve_contract
 
 MFP_DIR = "improvements"
 LOCAL_DIR = Path(".meta-flow/improvements")
@@ -172,6 +174,26 @@ def new_improvement(
     data = _base_package(mfp_id, title, project_id, role)
     path = target / f"{mfp_id}.yaml"
     _dump(path, data)
+    if local:
+        # R10/R11：本地 MFP 受控通道写审计（不记录内容）
+        try:
+            contract = resolve_contract(project_path)
+            log_path = contract / "state" / "READ-LOG.ndjson"
+            record = {
+                "ts": _now(),
+                "event": "guard",
+                "actor": "worker",
+                "role": "worker",
+                "task": "无",
+                "tool": "mf improve new --local",
+                "decision": "allow",
+                "path": str(path),
+                "reason": "local-mfp",
+            }
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
     return path
 
 

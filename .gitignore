@@ -8,10 +8,9 @@ build/
 .pytest_cache/
 .ruff_cache/
 
-# Meta Flow runtime
-.metaflow/session-role.json
-.metaflow/*.lock
-contracts/state/current.json
+# Meta Flow runtime（本地状态，不入库；安装镜像块由 mf install 维护）
+.meta-flow/*.lock
+.meta-flow/session-role.json
 
 # >>> meta-flow install mirror >>>
 CLAUDE.md

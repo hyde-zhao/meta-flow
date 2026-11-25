@@ -8,7 +8,8 @@ import pytest
 
 from meta_flow.cli import main
 from meta_flow.install import install_root
-from meta_flow.workspace import workspace_init
+from meta_flow.task import create_task, start_task
+from meta_flow.workspace import workspace_add_project, workspace_init
 
 
 def _prepare(tmp_path, monkeypatch):
@@ -304,3 +305,145 @@ def test_cli_explicit_role_overrides_directory_for_workspace(tmp_path, monkeypat
     # 显式 MF_ROLE 优先于目录推导：maintainer 不能借 workspace 根执行 workspace 命令
     monkeypatch.setenv("MF_ROLE", "maintainer")
     assert main(["workspace", "status", "--project-dir", ".", "--json"]) == 3
+
+
+def _acceptance():
+    return [{"id": "A1", "method": "artifact", "expect": "完成"}]
+
+
+def test_cli_worker_task_scope_requires_project_dir(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    install_root(project)
+    workspace_init(project, "Demo")
+    workspace_add_project(project, "alpha", "alpha")
+    workspace_add_project(project, "beta", "beta")
+    create_task(
+        project, "alpha 任务", risk="low", delivery="alpha", acceptance=_acceptance()
+    )
+    create_task(
+        project, "beta 任务", risk="low", delivery="beta", acceptance=_acceptance()
+    )
+
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("MF_ROLE", "worker")
+    # 无交付根绑定且未提供 --project-dir：rc=3（MFP-0012 E1）
+    assert main(["task", "list", "--json"]) == 3
+    assert main(["task", "show", "R1-P1-T001", "--packet"]) == 3
+
+    # 显式 --project-dir 绑定 alpha：只看到/操作 alpha 的任务（E2）
+    capsys.readouterr()
+    assert main(["task", "list", "--project-dir", "alpha", "--json"]) == 0
+    items = json.loads(capsys.readouterr().out)
+    assert [item["id"] for item in items] == ["R1-P1-T001"]
+    assert main(["task", "show", "--project-dir", "alpha", "R1-P1-T001"]) == 0
+    assert main(["task", "show", "--project-dir", "alpha", "R1-P1-T002"]) == 3
+
+
+def test_cli_status_reports_context_boundary(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    install_root(project)
+    workspace_init(project, "Demo")
+    capsys.readouterr()
+    assert main(["status", "--path", str(project)]) == 0
+    out = capsys.readouterr().out
+    assert "上下文: manager 预算 12 文件/131072B" in out
+    assert "可读区:" in out
+    assert "评审门:" in out
+    assert "contract/tasks" not in out
+
+
+def test_cli_workspace_attach_smoke(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    install_root(project)
+    workspace_init(project, "Demo", roadmap="R0", phase="P4", version="1.0.0")
+    (project / ".meta-flow" / "workspace.yaml").unlink()
+    (project / "mf.workspace.yaml").unlink()
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "workspace",
+                "attach",
+                "--project-dir",
+                str(project),
+                "--name",
+                "Demo",
+                "--contract-dir",
+                "demo-contract",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "已接入契约库" in out
+    assert "R0/P4 @ 1.0.0" in out
+    assert main(["doctor", "--path", str(project)]) == 0
+
+
+def test_cli_worker_context_show_expand_scoped(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    install_root(project)
+    workspace_init(project, "Demo")
+    workspace_add_project(project, "alpha", "alpha")
+    create_task(
+        project,
+        "alpha 任务",
+        risk="low",
+        delivery="alpha",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    start_task(project / "alpha", "R1-P1-T001")
+    contract = project / "demo-contract"
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / "T001"
+    (bundle / "evidence").mkdir(parents=True, exist_ok=True)
+    large = bundle / "evidence" / "large.log"
+    large.write_text("x" * (70 * 1024), encoding="utf-8")
+
+    monkeypatch.chdir(project / "alpha")
+    monkeypatch.setenv("MF_ROLE", "worker")
+    capsys.readouterr()
+    assert main(["context", "show"]) == 0
+    assert "任务 bundle 文件" in capsys.readouterr().out
+    assert (
+        main(["context", "expand", str(large), "--reason", "packet_missing"]) == 0
+    )
+    assert "x" * 100 in capsys.readouterr().out
+
+    # deny 区不放宽
+    assert (
+        main(
+            ["context", "expand", "requirements/INDEX.md", "--reason", "packet_missing"]
+        )
+        != 0
+    )
+
+
+def test_cli_local_mfp_channel_and_guard_log_query(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    install_root(project)
+    workspace_init(project, "Demo")
+    workspace_add_project(project, "alpha", "alpha")
+
+    monkeypatch.chdir(project / "alpha")
+    monkeypatch.setenv("MF_ROLE", "worker")
+    capsys.readouterr()
+    assert main(["improve", "new", "--local", "--title", "本地改进"]) == 0
+    mfp = project / "alpha" / ".meta-flow" / "improvements" / "MFP-0001.yaml"
+    assert mfp.is_file()
+    log = project / "demo-contract" / "state" / "READ-LOG.ndjson"
+    assert "mf improve new --local" in log.read_text(encoding="utf-8")
+
+    # manager 可查询 guard 审计（tool/decision/task）
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("MF_ROLE", "manager")
+    capsys.readouterr()
+    assert main(["context", "log", "--project-dir", str(project), "--json"]) == 0
+    records = json.loads(capsys.readouterr().out)
+    assert any(item.get("tool") == "mf improve new --local" for item in records)

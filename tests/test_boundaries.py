@@ -251,6 +251,8 @@ def test_mf_role_maintainer_runs_dev_at_workspace_root(env, monkeypatch, capsys)
     assert main(["dev", "status", "--json"]) == 3
 
     # 显式 MF_ROLE=maintainer 优先于目录推导，workspace 根可运行 mf dev
+    # BUG-0005：source_dir 缺失时显式报错，这里提供有效源码目录验证角色优先级
+    (root.parent / "global" / "source" / ".git").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("MF_ROLE", "maintainer")
     capsys.readouterr()
     assert main(["dev", "status", "--json"]) == 0
@@ -267,6 +269,8 @@ def test_mf_role_priority_over_worker_directory(env, monkeypatch, capsys):
 
     assert main(["dev", "status", "--json"]) == 3
 
+    # BUG-0005：提供有效源码目录后验证 MF_ROLE=maintainer 的优先级
+    (root.parent / "global" / "source" / ".git").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("MF_ROLE", "maintainer")
     capsys.readouterr()
     assert main(["dev", "status", "--json"]) == 0

@@ -8,13 +8,14 @@ import pytest
 import yaml
 
 from meta_flow.global_store import bootstrap
-from meta_flow.install import install_root
+from meta_flow.install import install_root, load_install_manifest
 from meta_flow.workspace import (
     WorkspaceError,
     detect_role,
     doctor,
     doctor_global,
     workspace_add_project,
+    workspace_attach,
     workspace_init,
     workspace_link,
     workspace_status,
@@ -193,3 +194,100 @@ def test_workspace_upgrade_rebuilds_baseline_state(tmp_path, monkeypatch):
     assert current["roadmap"] == "R0"
     assert current["phase"] == "P1"
     assert current["version"] == "0.1.1"
+
+
+def test_workspace_attach_imports_existing_contract(tmp_path, monkeypatch):
+    home = tmp_path / "global"
+    monkeypatch.setenv("META_FLOW_HOME", str(home))
+    bootstrap()
+    root = tmp_path / "demo"
+    root.mkdir()
+    install_root(root)
+    workspace_init(root, "Demo", roadmap="R0", phase="P4", version="1.0.0")
+    contract = root / "demo-contract"
+    before = {
+        "plan": (contract / "project" / "PROJECT-PLAN.md").read_text(encoding="utf-8"),
+        "roadmap": (contract / "roadmap" / "ROADMAP.yaml").read_text(encoding="utf-8"),
+        "tasks": sorted(path.name for path in (contract / "roadmap").rglob("TASK.yaml")),
+    }
+
+    # 模拟存量项目：只有已 clone 的 contract，没有根工作区注册
+    (root / ".meta-flow" / "workspace.yaml").unlink()
+    (root / "mf.workspace.yaml").unlink()
+
+    result = workspace_attach(
+        root, "Demo", contract_dir="demo-contract", contract_remote="git@example/demo-contract.git"
+    )
+    assert result["contract_dir"] == str(contract)
+    assert (result["roadmap"], result["phase"], result["version"]) == ("R0", "P4", "1.0.0")
+    assert (root / ".meta-flow" / "workspace.yaml").is_file()
+    assert (root / "mf.workspace.yaml").is_file()
+    assert "@demo-contract/workspace/CLAUDE.md" in (root / "CLAUDE.md").read_text(
+        encoding="utf-8"
+    )
+    install_data = load_install_manifest(root)
+    assert install_data["contract_dir"] == "demo-contract"
+    # 不覆盖既有 contract 内容，不导入源码/实现
+    assert (contract / "project" / "PROJECT-PLAN.md").read_text(encoding="utf-8") == before["plan"]
+    assert (contract / "roadmap" / "ROADMAP.yaml").read_text(encoding="utf-8") == before["roadmap"]
+    assert sorted(path.name for path in (contract / "roadmap").rglob("TASK.yaml")) == before["tasks"]
+    assert doctor(root) == []
+
+    with pytest.raises(WorkspaceError, match="工作区已存在"):
+        workspace_attach(root, "Demo", contract_dir="demo-contract")
+
+
+def test_workspace_attach_conflicts_and_invalid_contract(tmp_path, monkeypatch):
+    home = tmp_path / "global"
+    monkeypatch.setenv("META_FLOW_HOME", str(home))
+    bootstrap()
+    root = tmp_path / "demo"
+    root.mkdir()
+    install_root(root)
+
+    with pytest.raises(WorkspaceError, match="不存在"):
+        workspace_attach(root, "Demo", contract_dir="missing-contract")
+
+    invalid = root / "not-contract"
+    invalid.mkdir()
+    with pytest.raises(WorkspaceError, match="不是已有 contract"):
+        workspace_attach(root, "Demo", contract_dir="not-contract")
+
+    workspace_init(root, "Demo")
+    (root / ".meta-flow" / "workspace.yaml").unlink()
+    with pytest.raises(WorkspaceError, match="冲突"):
+        workspace_attach(root, "Other", contract_dir="demo-contract")
+
+
+def test_workspace_link_refreshes_install_digest(ws):
+    root = ws["root"]
+    manifest_path = root / ".meta-flow" / "install.yaml"
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    claude = next(item for item in data["files"] if item["path"] == "CLAUDE.md")
+    claude["digest"] = "sha256:stale"
+    manifest_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    workspace_link(root)
+
+    refreshed = load_install_manifest(root)
+    entry = next(item for item in refreshed["files"] if item["path"] == "CLAUDE.md")
+    actual = "sha256:" + __import__("hashlib").sha256(
+        (root / "CLAUDE.md").read_bytes()
+    ).hexdigest()
+    assert entry["digest"] == actual
+
+
+def test_workspace_init_declares_version_major(tmp_path, monkeypatch):
+    home = tmp_path / "global"
+    monkeypatch.setenv("META_FLOW_HOME", str(home))
+    bootstrap()
+    root = tmp_path / "legacy"
+    root.mkdir()
+    install_root(root)
+    workspace_init(root, "Legacy App", roadmap="R0", phase="P4", version="1.0.0")
+    data = yaml.safe_load(
+        (root / "legacy-app-contract" / "roadmap" / "ROADMAP.yaml").read_text(encoding="utf-8")
+    )
+    item = data["roadmaps"][0]
+    assert item["version_major"] == 1
+    assert item["version_minor"] == 0

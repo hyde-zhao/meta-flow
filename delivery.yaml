@@ -1,10 +1,13 @@
 id: meta-flow
 version: 1.0.0
 roadmap: R0
+version_policy: declared
 responsibility: meta-flow 交付
 contracts: []
 artifacts: []
 docs:
   release_notes: RELEASE-NOTES.md
   user_manual: USER-MANUAL.md
+  design: DESIGN.md
+  readme: README.md
 repo: git@github.com:hyde-zhao/meta-flow.git

@@ -123,11 +123,11 @@ STANDARDS = {
 
 ## 映射
 
-| 路标 | 版本范围 | 首发 |
-|---|---|---|
-| R0 | 0.x.y | 0.1.0 |
-| R1 | 1.x.y | 1.0.0 |
-| R2 | 2.x.y | 2.0.0 |
+| 路标 | 默认版本范围 | 首发 | 声明方式 |
+|---|---|---|---|
+| R0 | 0.x.y | 0.1.0 | `version_major`/`version_range` 可声明项目映射（如 V1/R0=1.0.x） |
+| R1 | 1.x.y | 1.0.0 | 同上 |
+| R2 | 2.x.y | 2.0.0 | 同上 |
 
 ## 规则
 
@@ -137,7 +137,7 @@ STANDARDS = {
 - 阶段预发布：`alpha`（P3）、`beta`（P4）、`rc`（P5）。
 - 外部合同编号（如 `V01R01C00`）只写入发布说明，不作为内部真相。
 
-`mf release freeze` 校验路标编号与版本 MAJOR 一致。
+`mf release freeze` 默认按 `ROADMAP.yaml` 的 `version_major`（或 `version_range`）校验；未声明时才回退 `R{n}=MAJOR`。声明映射允许 R0/V1 1.0.x 这类项目版本策略；未声明的 MAJOR 不一致默认拒绝，`--force` 必须记录 `--reason`、`--approved-by` 与版本。
 """,
     "PROJECT.md": """# PROJECT — 项目计划与初始化规范
 
@@ -435,20 +435,22 @@ rejected → in_progress（返工）
 
 ## 开发记录
 
-每个任务写 `.metaflow/dev-records/<task>.md`：目标、设计引用、实现摘要、关键决策、变更文件、测试、偏差、限制、证据、handoff 引用。
+每个任务写任务 bundle 的 `dev-record.md`（canonical）：目标、设计引用、实现摘要、关键决策、变更文件、测试、偏差、限制、证据、handoff 引用。交付库本地副本路径统一为 `.meta-flow/dev-records/<task>.md`；`mf task submit` 优先读取 bundle `dev-record.md`，缺失时回退本地副本。
 
-`mf task submit` 固化到 `contracts/dev-records/`；manager 作为 L1 证据审核。
+`mf task submit` 固化到任务 bundle；manager 作为 L1 证据审核。
 
 ## worker 遵守
 
 - 读任务包、PROJECT-PLAN、相关 SPEC/DESIGN、TASK-CARD/DEVELOPMENT/VERIFICATION/ACCEPTANCE、KNOWLEDGE。
 - 只写 `allowed_paths`；不写契约库；不跨交付库。
+- 流程文件（handoff/dev-record/evidence）写入任务 bundle，由 packet 的 process paths 白名单授权，与 `allowed_paths`/`forbidden` 独立。
+- worker 无交付根绑定时，任务命令必须用 `--project-dir` 指定交付库（否则 rc=3）。
 - 先确认任务就绪；不清晰则 `BLOCKED`。
 - 完成实现 + 测试 + 开发记录 + 交接再提交。
 
 ## 交接
 
-完成后写 `.metaflow/handoffs/<task-id>.md`：
+完成后写任务 bundle 的 `handoff.md`（或交付库本地副本 `.meta-flow/handoffs/<task-id>.md`）：
 
 1. 完成摘要
 2. 变更文件
@@ -858,6 +860,12 @@ tiers:
 budget:
   manager: {files: 12, bytes: 131072}
   worker: {files: 10, bytes: 65536}
+packet_budget_tiers:
+  XS: {files: 8, bytes: 32768}
+  S: {files: 10, bytes: 65536}
+  M: {files: 30, bytes: 262144}
+  L: {files: 50, bytes: 524288}
+  XL: {files: 60, bytes: 1048576}
 work_areas:
   version: roadmap/R{roadmap}
   phase: roadmap/R{roadmap}/phases/P{phase}
@@ -913,9 +921,19 @@ roles:
       - delivery-source/**
 notes:
   - worker 只访问任务卡 allowed_paths 所在的交付库；其他交付库由 CLI 拒绝。
-  - worker 可以写自己的任务 bundle（dev-record/handoff/evidence），但不能写其他任务或契约基线。
+  - worker 可以写自己的任务 bundle（dev-record/handoff/evidence），但不能写其他任务或契约基线；流程路径由 packet process paths 显式授权。
+  - worker 无交付根绑定时必须用 --project-dir 指定交付库；未提供 rc=3，guard 同规则。
   - archive 读取必须带 reason、由 manager 执行，并写 READ-LOG。
-  - 任务包默认预算：10 个输入文件、64KB；超出则拆分任务。
+  - manager 边界输出必须给出预算（12 文件/128KB）、热/暖/冷分层与 expand --reason 约束；不得以“contract 全部可读”替代。
+  - 可读区按 work_areas 生成，只列存在区域，不列空遗留目录（如 contract/tasks/）。
+  - 任务包默认按 effort 使用 packet_budget_tiers；超出时用 mf context expand --reason 或拆分任务。
+  - worker 可用 mf context show/expand 查看/补读活动任务 bundle、评审目标或 allowed_paths（带 reason 写 READ-LOG）；契约基线 deny 区不放宽。
+  - guard hook 覆盖 Read/Write/Edit 与 Bash：shell 访问同样受契约/交付/读预算路径策略约束；展开 $HOME/环境变量并解析 sh -c/bash -c、eval、source/. 与进程替换，转义变量不得绕过，无法安全解析的路径保守拒绝；allow/deny（role/task/path/reason/tool）持久化到 READ-LOG，可用 mf context log 查询。
+  - guard deny 输出当前角色/任务/lease/allowed_paths 与合法通道；提交后不可直接编辑，返工需 manager reject 后 mf task start；本地 MFP 可写 .meta-flow/improvements/MFP-*.yaml 或 mf improve new --local（审计）。
+  - bundle 匹配使用完整任务 ID/contract 相对路径，跨 roadmap/phase 同名 Txxx 不误放行。
+  - review 任务提交只需 review.md + review-handoff.md；implement/fix 仍要求 handoff/dev-record。
+  - 高风险任务必须由未参与实现的独立 reviewer 评审；实现者不自验收；结论仅 PASS/PASS_WITH_RISK/NEEDS_REWORK/BLOCKED；PASS_WITH_RISK 记录风险与接受人。
+  - 并行任务按任务窗口隔离 diff：其他重叠任务 allowed_paths 内的变更不计入本任务；非活动/非重叠改动仍拒绝。
 """
 
 ARCHIVE_README = """# 归档
@@ -953,7 +971,8 @@ color: blue
 
 - 读取 `.meta-flow/install.yaml` 和 `~/.meta-flow/templates`。
 - 与用户确认项目名、contract 仓路径/远程、子项目列表。
-- 调用 `mf workspace init`、`mf workspace add-project`、`mf workspace link`、`mf doctor`。
+- 新项目：`mf workspace init`、`mf workspace add-project`、`mf workspace link`、`mf doctor`。
+- 已有 contract：`mf workspace attach --name <项目名> --contract-dir <contract>`，只导入注册/状态元数据，不覆盖 contract。
 - 不创建 `contracts/` 或 `deliveries/`；contract 仓名为 `<project>-contract`。
 
 ## 职责
@@ -993,6 +1012,18 @@ color: blue
 4. 不把未记录的风险、缺陷、纠正留在对话里。
 5. 每个任务卡后运行 `mf task prompt`，明确下一责任 agent（worker 或 manager）。
 
+## 上下文边界
+
+- 自家预算：12 文件/128KB；按热区（state/PROJECT-PLAN/ROADMAP/当前阶段 PLAN/索引/知识/策略）、暖区（需求/设计/SPEC/当前任务/验证/BUG）、冷区（archive/历史路标/LESSONS）分层读取。
+- 超出预算用 `mf context expand <path> --reason <reason>`，并写 READ-LOG；不得把“contract 全部可读”当作授权。
+- 可读区按 `work_areas` 生成，只列存在区域，不列空遗留目录（如 `contract/tasks/`）。
+
+## 评审门与责任链
+
+- 高风险任务派未参与实现的独立 reviewer；实现者不得自验收。
+- 结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 记录风险与接受人。
+- 每任务后运行 `mf task prompt <id>` 明确 next_owner（worker 或 manager）。
+
 ## 边界
 
 - 不读交付库源码；只读 `mf` 固化证据和 `delivery.yaml`。
@@ -1023,7 +1054,7 @@ color: purple
 - 更新当前项目 manager：`mf install claude --project-dir <root> --force`。
 - 更新子项目 worker：`mf install worker --project-dir <sub> --force`。
 - 卸载：`mf uninstall claude --project-dir <path>`，读取 `.meta-flow/install.yaml`。
-- 检查：`mf doctor --project`、`mf workspace status`。
+- 检查：`mf doctor --path <path>`、`mf doctor --global`、`mf workspace status`。
 
 ## MFP 改进包
 
@@ -1054,16 +1085,26 @@ color: green
 
 1. `mf task show <id> --packet`：只读任务包。
 2. 检查任务就绪；缺目标/输入/交付物/验收/路径/依赖时 BLOCKED。
-3. `mf task start <id>`。
-4. 只写任务卡 `allowed_paths`。
+3. `mf task start <id>`；无交付根绑定时用 `--project-dir <交付库>`。
+4. 只写任务卡 `allowed_paths`；流程文件写任务 bundle 的 dev-record/handoff/evidence（packet 中显式授权）。
 5. 自验 L1；任务卡要求时跑 L2 契约测试；不要声称 L3 通过。
-6. 写 `.meta-flow/dev-records/<task>.md` 和 `.meta-flow/handoffs/<task>.md`。
-7. `mf task submit <id> --handoff ...`。
+6. 写任务 bundle 的 `dev-record.md` 和 `handoff.md`（本地副本：`.meta-flow/dev-records/<task>.md`、`.meta-flow/handoffs/<task>.md`）。
+7. `mf task submit <id> --handoff ...`（review 任务只写 review.md + review-handoff.md，直接 submit）。
+
+超预算文件用 `mf context show` 查看活动任务 bundle，用
+`mf context expand <path> --reason packet_missing` 受控补读（写 READ-LOG）；不得借 shell
+绕过契约/交付/读预算边界（hook 覆盖 Bash，含变量、嵌套 shell、eval/source 与进程替换）。返工时读评审任务的 review.md /
+review-handoff.md 后只整改必须项。
+
+提交后不再直接编辑任务文件；如需再次返工，等 manager reject 后 `mf task start <id>`。
+提交后仍可写本地 `.meta-flow/improvements/MFP-*.yaml`（或 `mf improve new --local`），
+guard 会审计；其他越界写仍拒绝。
 
 ## 评审责任
 
 - 被指派 `kind: review` 时，你是独立评审者：只读、不改实现代码、不改验收标准。
 - 不得评审自己参与的任务；按 REVIEW 模板输出发现、结论、证据。
+- 结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 写风险与接受人。
 - 评审结论只作为 manager 决策输入，不代替 manager 验收。
 
 ## MFP 改进包
@@ -1107,6 +1148,7 @@ MANAGER_CLAUDE = """# Meta Flow 项目根（manager）
 
 ```bash
 mf workspace init --name <项目名> --contract-dir <项目名>-contract [--contract-remote <url>]
+# 已有 contract：mf workspace attach --name <项目名> --contract-dir <contract>
 mf workspace add-project --name <子项目> --path <子项目> [--remote <url>]
 mf workspace link
 mf doctor
@@ -1143,6 +1185,17 @@ mf doctor
 4. 不把未记录的风险、缺陷、纠正留在对话里。
 5. 每个任务卡后运行 `mf task prompt`，明确下一责任 agent（worker 或 manager）。
 
+## 上下文边界
+
+- 预算 12 文件/128KB；按热/暖/冷分层读取，超预算用 `mf context expand --reason` 并写 READ-LOG。
+- 不得以“contract 全部可读”替代预算与分层；可读区按 work_areas 生成，不列空遗留目录。
+
+## 评审门与责任链
+
+- 高风险任务由未参与实现的独立 reviewer 评审；实现者不自验收。
+- 结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 记录风险与接受人。
+- 每个任务后运行 `mf task prompt <id>` 明确 next_owner，不留空。
+
 ## 边界
 
 - 不读子项目源码；只读 `mf` 固化证据和 `delivery.yaml`。
@@ -1161,6 +1214,7 @@ MAINTAINER_CLAUDE = """# Meta Flow 项目根（maintainer）
 - `mf install claude --project-dir <root> --force` 更新 manager。
 - `mf install worker --project-dir <sub> --force` 更新 worker。
 - `mf uninstall claude --project-dir <path>` 读取 `.meta-flow/install.yaml`。
+- 检查：`mf doctor --path <path>`、`mf doctor --global`、`mf workspace status`。
 
 ## MFP 改进包
 
@@ -1182,14 +1236,19 @@ WORKER_CLAUDE = """# Meta Flow 子项目（worker）
 ## 执行
 
 - 只读 `mf task show <id> --packet` 与当前子项目源码。
-- 只写任务卡 `allowed_paths`。
+- 只写任务卡 `allowed_paths`；流程文件（dev-record/handoff/evidence）写任务 bundle，由 packet process paths 授权。
+- 无交付根绑定时任务命令用 `--project-dir <交付库>`，否则 rc=3。
+- 超预算文件用 `mf context expand <path> --reason packet_missing` 受控补读；不得借 shell 绕过边界（hook 覆盖 Bash 变量与嵌套 shell）。
+- review 任务只写 review.md + review-handoff.md，直接 `mf task submit`；返工读 review 输出后只改必须项。
+- 提交后不可直接编辑；再次返工需 manager reject 后 `mf task start <id>`。本地 `.meta-flow/improvements/MFP-*.yaml` 可写且审计。
 - 完成后写开发记录与交接，`mf task submit` 提交。
 - 不读完整契约库、其他子项目、历史归档。
 
 ## 评审责任
 
 - 被指派 `kind: review` 时，你是独立评审者：只读、不改实现代码。
-- 不得评审自己参与的任务；按 REVIEW 模板输出发现、结论、证据。
+- 不得评审自己参与的任务；结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED，PASS_WITH_RISK 写风险与接受人。
+- 按 REVIEW 模板输出发现、结论、证据。
 - 评审结论只作为 manager 决策输入，不代替 manager 验收。
 
 ## MFP 改进包

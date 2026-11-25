@@ -182,12 +182,15 @@ def task_summary(contract: Path) -> dict[str, Any]:
     active: list[str] = []
     leases: list[dict[str, Any]] = []
     submitted: list[str] = []
+    submitted_details: list[dict[str, Any]] = []
     ready: list[str] = []
+    all_tasks: dict[str, dict[str, Any]] = {}
     for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
         data = _load_yaml(path)
         status = str(data.get("status") or "draft")
         counts[status] = counts.get(status, 0) + 1
         task_id = str(data.get("id") or path.parent.name)
+        all_tasks[task_id] = data
         if status in {"in_progress"}:
             active.append(task_id)
             lease = data.get("lease") or {}
@@ -201,13 +204,26 @@ def task_summary(contract: Path) -> dict[str, Any]:
             )
         if status == "submitted":
             submitted.append(task_id)
+            submitted_details.append(
+                {
+                    "id": task_id,
+                    "kind": data.get("kind"),
+                    "reviewed_by_task": data.get("reviewed_by_task"),
+                    "review_status": None,
+                }
+            )
         if status == "ready":
             ready.append(task_id)
+    for detail in submitted_details:
+        review_id = detail.get("reviewed_by_task")
+        if review_id and str(review_id) in all_tasks:
+            detail["review_status"] = str(all_tasks[str(review_id)].get("status") or "")
     return {
         "counts": counts,
         "active_tasks": active[:20],
         "active_leases": leases[:20],
         "submitted_tasks": submitted[:20],
+        "submitted_details": submitted_details[:20],
         "ready_tasks": ready[:50],
     }
 
@@ -243,7 +259,27 @@ def refresh_current(contract: Path) -> dict[str, Any]:
     elif phase_status == "closed":
         data["next_action"] = {"type": "plan", "text": "规划下一路标"}
     elif summary["submitted_tasks"]:
-        data["next_action"] = {"type": "accept", "task": summary["submitted_tasks"][0]}
+        detail = (summary.get("submitted_details") or [{}])[0]
+        task_id = detail.get("id") or summary["submitted_tasks"][0]
+        review_id = detail.get("reviewed_by_task")
+        review_status = detail.get("review_status")
+        if detail.get("kind") == "review" or not review_id or review_status in {"accepted"}:
+            data["next_action"] = {"type": "accept", "task": task_id}
+        else:
+            # 评审门优先：实现任务已提交但独立评审尚未完成
+            data["next_action"] = {
+                "type": "review",
+                "task": review_id,
+                "parent_task": task_id,
+                "text": f"等待评审任务 {review_id}；通过后再验收 {task_id}",
+            }
+    elif summary["active_tasks"]:
+        # 存在在途任务与有效租约时，先跟进任务，不直接把 next_action 指向 fix_bug
+        data["next_action"] = {
+            "type": "follow_up_task",
+            "task": summary["active_tasks"][0],
+            "text": f"跟进 {summary['active_tasks'][0]}；等待 worker 提交，租约到期可回收",
+        }
     elif bugs:
         data["next_action"] = {"type": "fix_bug", "bug": bugs[0].get("id")}
     elif summary["ready_tasks"]:

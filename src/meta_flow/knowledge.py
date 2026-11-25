@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,7 @@ def add_knowledge(
         "text": text.strip(),
         "context": context,
         "source": source,
+        "project": _project_id(contract),
         "delivery": delivery,
         "status": "active",
         "created_at": _now(),
@@ -170,17 +172,61 @@ def render(contract: Path) -> Path:
     return path
 
 
+def _project_id(contract: Path) -> str | None:
+    path = contract / "workspace" / "mf.workspace.yaml"
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    project = data.get("project") or {}
+    return str(project.get("id") or "") or None
+
+
+_TASK_REF_RE = re.compile(r"(?<![A-Za-z0-9-])((?:R\d+-P\d+-)?T\d{3})(?![0-9])")
+_NAME_LIKE_RE = re.compile(r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)+)\b")
+
+
+def _task_refs(text: str) -> tuple[list[str], list[str]]:
+    refs = _TASK_REF_RE.findall(text)
+    full = [ref for ref in refs if ref.startswith("R")]
+    bare = [ref for ref in refs if not ref.startswith("R")]
+    return full, bare
+
+
+def _foreign_names(text: str, project_id: str | None, delivery: str | None) -> list[str]:
+    names = set(_NAME_LIKE_RE.findall(text.lower()))
+    names.discard(project_id or "")
+    names.discard(delivery or "")
+    # 常见工具/平台名不算“外部项目”
+    ignore = {"meta-flow", "meta-flow-contract", "dev-records", "meta-flow-dev"}
+    return sorted(name for name in names if name not in ignore)
+
+
 def packet_lines(
     contract: Path,
     *,
     limit: int = 12,
     delivery: str | None = None,
+    task: dict[str, Any] | None = None,
+    project_id: str | None = None,
 ) -> list[str]:
-    """给任务包注入少量热区知识，按交付库过滤，不回注复盘冷区。"""
+    """给任务包注入少量热区知识，按项目/交付库/任务相关性过滤。
+
+    MFP-0007 A1：同名任务 ID（如别的项目的 T013 与本任务 R0-P4-T013）
+    不得跨项目匹配；显式 project/delivery/roadmap 不匹配时跳过。
+    """
     try:
         data = _load(contract)
     except KnowledgeError:
         return []
+    project_id = project_id or _project_id(contract)
+    task_id = str((task or {}).get("id") or "")
+    task_roadmap = str((task or {}).get("roadmap") or "") or None
+    task_number = task_id.rsplit("-", 1)[-1] if task_id else ""
     lines = []
     for key in HOT_SECTIONS:
         for item in data.get(key) or []:
@@ -188,6 +234,34 @@ def packet_lines(
                 continue
             scoped_delivery = item.get("delivery")
             if scoped_delivery and delivery and str(scoped_delivery) != delivery:
+                continue
+            scoped_project = item.get("project")
+            if scoped_project and project_id and str(scoped_project) != project_id:
+                continue
+            scoped_roadmap = item.get("roadmap")
+            if scoped_roadmap and task_roadmap and str(scoped_roadmap) != task_roadmap:
+                continue
+            text = "\n".join(
+                str(item.get(field) or "")
+                for field in ("text", "context", "source")
+            )
+            full_refs, bare_refs = _task_refs(text)
+            if task_id:
+                # 显式完整任务 ID 指向别处：不注入
+                if full_refs and task_id not in full_refs:
+                    continue
+                if bare_refs and task_number and task_number in bare_refs:
+                    scoped = (
+                        (scoped_project and scoped_project == project_id)
+                        or (scoped_delivery and scoped_delivery == delivery)
+                        or task_id in full_refs
+                    )
+                    if not scoped:
+                        foreign = _foreign_names(text, project_id, delivery)
+                        if foreign:
+                            # 裸 Txxx + 外部项目名：判定为其他项目同名任务
+                            continue
+            elif bare_refs:
                 continue
             lines.append(f"- [{item.get('id')}] {item.get('text')}")
             if len(lines) >= limit:

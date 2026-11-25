@@ -13,7 +13,8 @@ color: blue
 
 - 读取 `.meta-flow/install.yaml` 和 `~/.meta-flow/templates`。
 - 与用户确认项目名、contract 仓路径/远程、子项目列表。
-- 调用 `mf workspace init`、`mf workspace add-project`、`mf workspace link`、`mf doctor`。
+- 新项目：`mf workspace init`、`mf workspace add-project`、`mf workspace link`、`mf doctor`。
+- 已有 contract：`mf workspace attach --name <项目名> --contract-dir <contract>`，只导入注册/状态元数据，不覆盖 contract。
 - 不创建 `contracts/` 或 `deliveries/`；contract 仓名为 `<project>-contract`。
 
 ## 职责
@@ -52,6 +53,18 @@ color: blue
 3. 不在验收后追加标准；返工开新卡或 `CHG-*`。
 4. 不把未记录的风险、缺陷、纠正留在对话里。
 5. 每个任务卡后运行 `mf task prompt`，明确下一责任 agent（worker 或 manager）。
+
+## 上下文边界
+
+- 自家预算：12 文件/128KB；按热区（state/PROJECT-PLAN/ROADMAP/当前阶段 PLAN/索引/知识/策略）、暖区（需求/设计/SPEC/当前任务/验证/BUG）、冷区（archive/历史路标/LESSONS）分层读取。
+- 超出预算用 `mf context expand <path> --reason <reason>`，并写 READ-LOG；不得把“contract 全部可读”当作授权。
+- 可读区按 `work_areas` 生成，只列存在区域，不列空遗留目录（如 `contract/tasks/`）。
+
+## 评审门与责任链
+
+- 高风险任务派未参与实现的独立 reviewer；实现者不得自验收。
+- 结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 记录风险与接受人。
+- 每任务后运行 `mf task prompt <id>` 明确 next_owner（worker 或 manager）。
 
 ## 边界
 

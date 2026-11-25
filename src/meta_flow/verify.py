@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -178,12 +179,37 @@ def open_blocking_bugs(contract: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _declared_major(roadmap: dict[str, Any], roadmap_id: str) -> tuple[int, str]:
+    """返回路标声明的项目版本 MAJOR 与声明来源。
+
+    优先 ROADMAP.yaml 的 version_major（项目版本策略），其次 version_range
+    （如 1.0.x / 1.x）；都没有时回退旧规则 R{n}=MAJOR。显式声明用于
+    R0/V1 1.0.x 这类项目映射（D2/MFP-0006）。
+    """
+    declared = roadmap.get("version_major")
+    if declared is not None:
+        try:
+            return int(declared), "version_major"
+        except (TypeError, ValueError):
+            pass
+    raw_range = str(roadmap.get("version_range") or "").strip()
+    match = re.match(r"^(\d+)(?:\.|\b)", raw_range)
+    if match:
+        return int(match.group(1)), "version_range"
+    try:
+        return int(str(roadmap_id).lstrip("R")), "roadmap_id"
+    except ValueError:
+        return 0, "default"
+
+
 def release_freeze(
     project: str | Path,
     *,
     version: str | None = None,
     note: str | None = None,
     force: bool = False,
+    reason: str | None = None,
+    approved_by: str | None = None,
 ) -> dict[str, Any]:
     contract = resolve_contract(project)
     state = read_current(contract)
@@ -194,13 +220,31 @@ def release_freeze(
         {},
     )
     version = version or str(roadmap.get("version_target") or "0.0.0")
-    try:
-        roadmap_major = int(roadmap_id.lstrip("R"))
-        version_major = int(version.split(".", 1)[0])
-    except ValueError:
-        roadmap_major = version_major = 0
-    if not force and roadmap_major != version_major:
-        raise VerifyError(f"路标 {roadmap_id} 与版本 {version} 的 MAJOR 不一致；用 --force 才能冻结")
+    version_match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?", str(version))
+    if version_match is None:
+        raise VerifyError(f"版本必须形如 x.y.z[-pre]: {version}")
+    version_major = int(version_match.group(1))
+    expected_major, declared_by = _declared_major(roadmap, roadmap_id)
+    override: dict[str, Any] | None = None
+    if version_major != expected_major:
+        if not force:
+            raise VerifyError(
+                f"路标 {roadmap_id} 声明版本 MAJOR={expected_major}（{declared_by}），"
+                f"与版本 {version} 不一致；用 --force --reason ... --approved-by ... 才能冻结"
+            )
+        if not reason or not approved_by:
+            raise VerifyError(
+                "MAJOR 不一致的 --force 冻结必须记录 --reason 与 --approved-by（可审计例外）"
+            )
+        override = {
+            "reason": reason,
+            "approved_by": approved_by,
+            "version": version,
+            "roadmap": roadmap_id,
+            "expected_major": expected_major,
+            "declared_by": declared_by,
+            "at": _now(),
+        }
     phase = str(state.get("phase") or "P1")
     phase_status = str(state.get("phase_status") or "")
     gate = state.get("last_phase_gate") or {}
@@ -285,6 +329,8 @@ def release_freeze(
             if bug.get("status") not in {"closed", "wontfix", "deferred"}
         ],
     }
+    if override is not None:
+        manifest["override"] = override
     path = contract / "release" / f"RELEASE-{version}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True), encoding="utf-8")
@@ -292,7 +338,17 @@ def release_freeze(
     state["release_status"] = "frozen"
     write_current(contract, state)
     refresh_current(contract)
-    ledger_append(contract, {"event": "release.freeze", "version": version, "roadmap": roadmap_id})
+    ledger_append(
+        contract,
+        {
+            "event": "release.freeze",
+            "version": version,
+            "roadmap": roadmap_id,
+            "force": bool(override),
+            "override_reason": reason if override else None,
+            "approved_by": approved_by if override else None,
+        },
+    )
     return {
         "version": version,
         "roadmap": roadmap_id,

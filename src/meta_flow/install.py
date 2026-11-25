@@ -301,6 +301,74 @@ def load_install_manifest(project: Path) -> dict[str, Any]:
     return data
 
 
+def refresh_install_files(project: str | Path) -> dict[str, Any]:
+    """刷新安装记录中根 CLAUDE.md 的 digest。
+
+    workspace init/link/attach 会重写根 CLAUDE.md（改为 @ 导入），但不应
+    顺带把用户改过的其他安装文件判为未修改；这里只同步 CLAUDE.md。
+    """
+    base = Path(project).expanduser().resolve()
+    path = base / INSTALL_REL
+    if not path.is_file():
+        return {"updated": [], "files": 0}
+    data = load_install_manifest(base)
+    files = [item for item in data.get("files") or [] if isinstance(item, dict)]
+    known = {str(item.get("path")) for item in files}
+    updated: list[str] = []
+    claude = base / CLAUDE_REL
+    if not claude.is_file():
+        return {"updated": [], "files": len(files)}
+    digest = _digest_file(claude)
+    if str(CLAUDE_REL) not in known:
+        files.append({"path": str(CLAUDE_REL), "digest": digest})
+        updated.append(str(CLAUDE_REL))
+    else:
+        for item in files:
+            if str(item.get("path")) != str(CLAUDE_REL):
+                continue
+            if item.get("digest") != digest:
+                item["digest"] = digest
+                updated.append(str(CLAUDE_REL))
+            break
+    if updated:
+        data["files"] = files
+        _write_manifest(base, data)
+    return {"updated": updated, "files": len(files)}
+
+
+def _delivery_baseline(contract_dir: str | Path | None) -> tuple[str, str]:
+    """worker 安装时从 contract 当前状态推导 delivery.yaml 的 version/roadmap。"""
+    if not contract_dir:
+        return "1.0.0", "R1"
+    contract = Path(contract_dir).expanduser().resolve()
+    current: dict[str, Any] = {}
+    state_path = contract / "state" / "current.json"
+    if state_path.is_file():
+        try:
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+            current = loaded if isinstance(loaded, dict) else {}
+        except json.JSONDecodeError:
+            current = {}
+    roadmap_data: dict[str, Any] = {}
+    roadmap_path = contract / "roadmap" / "ROADMAP.yaml"
+    if roadmap_path.is_file():
+        try:
+            loaded = yaml.safe_load(roadmap_path.read_text(encoding="utf-8")) or {}
+            roadmap_data = loaded if isinstance(loaded, dict) else {}
+        except yaml.YAMLError:
+            roadmap_data = {}
+    roadmaps = [
+        item for item in roadmap_data.get("roadmaps") or [] if isinstance(item, dict)
+    ]
+    active = next((item for item in roadmaps if item.get("status") == "active"), {})
+    selected = active or (roadmaps[-1] if roadmaps else {})
+    roadmap = str(current.get("roadmap") or selected.get("id") or "R1")
+    version = str(
+        current.get("version") or selected.get("version_target") or "1.0.0"
+    )
+    return version, roadmap
+
+
 def _git_init(path: Path) -> None:
     if (path / ".git").exists():
         return
@@ -463,12 +531,13 @@ def install_worker(
     settings_info, _, _ = _merge_settings(project, "worker", force)
 
     if not (project / "delivery.yaml").exists():
+        delivery_version, delivery_roadmap = _delivery_baseline(contract_dir)
         (project / "delivery.yaml").write_text(
             yaml.safe_dump(
                 {
                     "id": delivery,
-                    "version": "1.0.0",
-                    "roadmap": "R1",
+                    "version": delivery_version,
+                    "roadmap": delivery_roadmap,
                     "responsibility": f"{delivery} 交付",
                     "contracts": [],
                     "artifacts": [],

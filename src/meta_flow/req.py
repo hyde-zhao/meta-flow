@@ -256,11 +256,14 @@ def _scan_yaml_refs(directory: Path, key: str, req_id: str) -> list[dict[str, An
     return items
 
 
-def _scan_docs(directory: Path, req_id: str) -> list[str]:
+def _scan_docs(directory: Path, req_id: str, pattern: str = "*.md") -> list[str]:
     hits = []
     if not directory.is_dir():
         return hits
-    for path in sorted(directory.rglob("*.md")):
+    paths = directory.rglob(pattern) if pattern == "*.md" else directory.glob(pattern)
+    for path in sorted(paths):
+        if not path.is_file():
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
@@ -270,50 +273,106 @@ def _scan_docs(directory: Path, req_id: str) -> list[str]:
     return hits
 
 
-def trace_requirement(contract: Path, req_id: str) -> dict[str, Any]:
+def _dedupe_by_id(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    result = []
+    for item in items:
+        item_id = str(item.get("id") or "")
+        if item_id and item_id in seen:
+            continue
+        if item_id:
+            seen.add(item_id)
+        result.append(item)
+    return result
+
+
+def trace_requirement(
+    contract: Path,
+    req_id: str,
+    *,
+    roadmap: str | None = None,
+    include_archive: bool = False,
+) -> dict[str, Any]:
+    """追踪单个需求；默认只扫当前/活跃路标，不读 archive（BUG-0012）。"""
+    task_paths: list[Path] = []
+    if roadmap:
+        task_paths.extend(
+            (contract / "roadmap" / roadmap).glob("phases/*/tasks/T*/TASK.yaml")
+        )
+    else:
+        task_paths.extend((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml"))
+    if include_archive:
+        task_paths.extend((contract / "archive").glob("*/phases/*/tasks/T*/TASK.yaml"))
     tasks = []
-    task_paths = list((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml"))
-    task_paths.extend((contract / "archive").glob("*/phases/*/tasks/T*/TASK.yaml"))
     for path in sorted(task_paths):
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (yaml.YAMLError, OSError):
             continue
-        refs = ((data or {}).get("inputs") or {}).get("requirements") or []
+        if not isinstance(data, dict):
+            continue
+        refs = ((data.get("inputs") or {}).get("requirements")) or []
         if req_id in refs:
-            tasks.append({"id": data.get("id"), "status": data.get("status"), "risk": (data.get("risk") or {}).get("level")})
+            tasks.append(
+                {
+                    "id": data.get("id"),
+                    "status": data.get("status"),
+                    "risk": (data.get("risk") or {}).get("level"),
+                }
+            )
     verification = _scan_yaml_refs(contract / "verification", "requirement_refs", req_id)
     bugs = _scan_yaml_refs(contract / "bugs", "related_reqs", req_id)
-    for archive in sorted((contract / "archive").glob("*/verification")):
-        verification.extend(_scan_yaml_refs(archive, "requirement_refs", req_id))
-    for archive in sorted((contract / "archive").glob("*/bugs")):
-        bugs.extend(_scan_yaml_refs(archive, "related_reqs", req_id))
+    if include_archive:
+        for archive in sorted((contract / "archive").glob("*/verification")):
+            verification.extend(_scan_yaml_refs(archive, "requirement_refs", req_id))
+        for archive in sorted((contract / "archive").glob("*/bugs")):
+            bugs.extend(_scan_yaml_refs(archive, "related_reqs", req_id))
     return {
-        "specs": _scan_docs(contract / "specs", req_id),
+        # SPEC 只匹配 SPEC-*.md，避免把 INDEX.md/README.md 计为 SPEC
+        "specs": _scan_docs(contract / "specs", req_id, pattern="SPEC-*.md"),
         "designs": _scan_docs(contract / "architecture", req_id),
         "tasks": tasks,
         "verification": [
             {"id": item.get("id"), "result": item.get("result"), "layer": item.get("layer")}
-            for item in verification
+            for item in _dedupe_by_id(verification)
         ],
+        # BUG 按 id 去重（历史 archive 与 active 可能同名）
         "bugs": [
             {"id": item.get("id"), "status": item.get("status"), "severity": item.get("severity")}
-            for item in bugs
+            for item in _dedupe_by_id(bugs)
         ],
     }
 
 
-def trace(project: str | Path, req_id: str | None = None, *, roadmap: str | None = None) -> dict[str, Any]:
+def trace(
+    project: str | Path,
+    req_id: str | None = None,
+    *,
+    roadmap: str | None = None,
+    include_archive: bool = False,
+) -> dict[str, Any]:
     contract = resolve_contract(project)
     if req_id:
         _, item = _find(contract, req_id)
-        return {req_id: {"title": item.get("title"), **trace_requirement(contract, req_id)}}
+        return {
+            req_id: {
+                "title": item.get("title"),
+                **trace_requirement(
+                    contract, req_id, roadmap=roadmap, include_archive=include_archive
+                ),
+            }
+        }
     result = {}
     for item in _load(contract)["requirements"]:
         if roadmap and item.get("roadmap") != roadmap:
             continue
         rid = str(item.get("id"))
-        result[rid] = {"title": item.get("title"), **trace_requirement(contract, rid)}
+        result[rid] = {
+            "title": item.get("title"),
+            **trace_requirement(
+                contract, rid, roadmap=roadmap, include_archive=include_archive
+            ),
+        }
     write_trace_file(contract, result)
     return result
 

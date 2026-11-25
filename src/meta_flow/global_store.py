@@ -196,27 +196,34 @@ def dev_install(source: str | Path | None = None, yes: bool = False) -> Path:
 
 
 def dev_status(source: str | Path | None = None) -> dict[str, Any]:
-    """返回源码、全局工具与仓库信息。"""
+    """返回源码、全局工具与仓库信息；源码缺失/无效时显式报错（BUG-0005）。"""
     manifest = load_manifest()
     path = _source_dir(source)
+    if not path.exists():
+        raise GlobalStoreError(
+            f"源码目录不存在: {path}；运行 mf dev clone 或 mf dev status --source <源码目录>"
+        )
+    if not path.is_dir() or not (path / ".git").exists():
+        raise GlobalStoreError(
+            f"源码目录不是 git 仓库: {path}；运行 mf dev clone 或 --source 指向有效源码"
+        )
     status: dict[str, Any] = {
         "repo_url": manifest.get("repo_url"),
         "source_dir": str(path),
         "tool_version": manifest.get("tool_version"),
         "template_version": manifest.get("template_version"),
-        "source_exists": path.exists(),
+        "source_exists": True,
     }
-    if path.exists() and (path / ".git").exists():
-        branch = _run(["git", "-C", str(path), "branch", "--show-current"])
-        commit = _run(["git", "-C", str(path), "rev-parse", "--short", "HEAD"])
-        dirty = _run(["git", "-C", str(path), "status", "--porcelain"])
-        status.update(
-            {
-                "branch": branch.stdout.strip() if branch.returncode == 0 else None,
-                "commit": commit.stdout.strip() if commit.returncode == 0 else None,
-                "dirty": bool(dirty.stdout.strip()) if dirty.returncode == 0 else None,
-            }
-        )
+    branch = _run(["git", "-C", str(path), "branch", "--show-current"])
+    commit = _run(["git", "-C", str(path), "rev-parse", "--short", "HEAD"])
+    dirty = _run(["git", "-C", str(path), "status", "--porcelain"])
+    status.update(
+        {
+            "branch": branch.stdout.strip() if branch.returncode == 0 else None,
+            "commit": commit.stdout.strip() if commit.returncode == 0 else None,
+            "dirty": bool(dirty.stdout.strip()) if dirty.returncode == 0 else None,
+        }
+    )
     return status
 
 

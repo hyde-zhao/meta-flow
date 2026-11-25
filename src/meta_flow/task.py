@@ -27,6 +27,15 @@ DEFAULT_REVIEW = {
     "critical": "user",
 }
 CHECKLIST = ["requirements", "design", "contracts", "tests", "security", "scope", "maintainability"]
+# 任务包预算档位（MFP-0007 A4）：按 effort 提供匹配档位，TASK.yaml 的
+# packet_budget 显式值优先。
+PACKET_BUDGET_TIERS: dict[str, dict[str, int]] = {
+    "XS": {"files": 8, "bytes": 32768},
+    "S": {"files": 10, "bytes": 65536},
+    "M": {"files": 30, "bytes": 262144},
+    "L": {"files": 50, "bytes": 524288},
+    "XL": {"files": 60, "bytes": 1048576},
+}
 
 
 class TaskError(Exception):
@@ -50,6 +59,26 @@ def _lease_expired(data: dict[str, Any]) -> bool:
         return datetime.fromisoformat(str(raw)) <= datetime.now(UTC)
     except ValueError:
         return True
+
+
+def _packet_budget(contract: Path, effort: str) -> dict[str, int]:
+    """按任务 effort 选择任务包预算；CONTEXT-POLICY 可覆盖档位。"""
+    key = str(effort or "M").upper()
+    tiers = dict(PACKET_BUDGET_TIERS)
+    policy_path = contract / "policies" / "CONTEXT-POLICY.yaml"
+    if policy_path.is_file():
+        try:
+            policy_data = yaml.safe_load(policy_path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            policy_data = {}
+        if isinstance(policy_data, dict):
+            for name, value in (policy_data.get("packet_budget_tiers") or {}).items():
+                if isinstance(value, dict):
+                    tiers[str(name).upper()] = {
+                        "files": int(value.get("files", 10)),
+                        "bytes": int(value.get("bytes", 65536)),
+                    }
+    return tiers.get(key, tiers["M"])
 
 
 def _new_lease(owner: str = "worker", task_id: str | None = None, wave: str = "W1") -> dict[str, Any]:
@@ -155,7 +184,10 @@ def _task_data(
         "review_verdict": None,
         "inputs": inputs,
         "allowed_paths": allowed_paths,
-        "forbidden": ["contracts/**", "../**"],
+        # 流程写入路径独立于 allowed_paths/forbidden；bundle 内文件由 guard 白名单授权
+        "process_paths": ["handoff.md", "dev-record.md", "evidence/"],
+        # 只约束交付工作区路径；contract bundle 流程文件由 process_paths 白名单授权
+        "forbidden": ["contracts/**", "deliveries/**"],
         "deliverables": [],
         "acceptance": acceptance,
         "handoff": "required",
@@ -254,16 +286,8 @@ def create_task(
     task["depends_on"] = depends_on
     task["fixes"] = fixes
     if not task.get("packet_budget"):
-        try:
-            policy_data = yaml.safe_load(
-                (contract / "policies" / "CONTEXT-POLICY.yaml").read_text(encoding="utf-8")
-            )
-        except (OSError, yaml.YAMLError):
-            policy_data = {}
-        worker_budget = (
-            ((policy_data or {}).get("roles") or {}).get("worker") or {}
-        ).get("budget")
-        task["packet_budget"] = worker_budget or {"files": 10, "bytes": 65536}
+        # 按 effort 档位分配；显式 packet_budget 优先（MFP-0007 A4）
+        task["packet_budget"] = _packet_budget(contract, effort)
 
     review_id = None
     if kind != "review" and with_review and mode in {"independent", "user"}:
@@ -428,7 +452,7 @@ def start_task(
     return data
 
 
-def _capture_diff(project: Path, target: Path) -> None:
+def _capture_diff(project: Path, target: Path, *, paths: list[str] | None = None) -> None:
     inside = subprocess.run(
         ["git", "-C", str(project), "rev-parse", "--is-inside-work-tree"],
         capture_output=True,
@@ -439,17 +463,44 @@ def _capture_diff(project: Path, target: Path) -> None:
         return
     chunks = []
     for args in (["diff", "--binary"], ["diff", "--cached", "--binary"]):
+        command = ["git", "-C", str(project), *args]
+        if paths is not None:
+            command.extend(["--", *paths])
         result = subprocess.run(
-            ["git", "-C", str(project), *args],
+            command,
             capture_output=True,
             text=True,
             check=False,
         )
         if result.stdout.strip():
             chunks.append(result.stdout)
-    if chunks:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("\n".join(chunks), encoding="utf-8")
+    # 未跟踪新增文件不会出现在 git diff 中；按 owned 路径逐个生成 no-index diff，
+    # 保证 evidence/diff.patch 覆盖任务实际新增文件（R4）。
+    ls_args = ["ls-files", "--others", "--exclude-standard", "-z"]
+    if paths is not None:
+        ls_args.extend(["--", *paths])
+    for name in _git_names(project, ls_args):
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(project),
+                "diff",
+                "--no-index",
+                "--binary",
+                "--",
+                "/dev/null",
+                name,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.stdout.strip():
+            chunks.append(result.stdout)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # 即使无变更也固化空 diff，评审包可据此判断证据存在（R2）
+    target.write_text("\n".join(chunks), encoding="utf-8")
 
 
 def _git_names(project: Path, args: list[str]) -> list[str]:
@@ -557,23 +608,115 @@ def _snapshot_changes(project: Path, bundle: Path, exclude: Path | None = None) 
     return sorted(changed)
 
 
+def _parse_time(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+
+
+def _overlapping_tasks(contract: Path, current: dict[str, Any]) -> list[dict[str, Any]]:
+    """返回与本任务活动窗口重叠的其他任务（MFP-0011）。
+
+    并行任务在同一工作区各自 submit 时，按任务开始/提交时间判断重叠窗口，
+    只隔离重叠窗口内、属于其他任务 allowed_paths 的变更；历史任务与单任务
+    场景不做豁免，越界仍会被拒绝。
+    """
+    current_start = _parse_time(current.get("started_at"))
+    if current_start is None:
+        return []
+    current_end = _parse_time(current.get("submitted_at")) or datetime.now(UTC)
+    current_id = str(current.get("id") or "")
+    others: list[dict[str, Any]] = []
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        try:
+            data = _load(path)
+        except TaskError:
+            continue
+        if str(data.get("id") or "") == current_id:
+            continue
+        if data.get("status") not in {"in_progress", "submitted"}:
+            continue
+        other_start = _parse_time(data.get("started_at"))
+        if other_start is None:
+            continue
+        other_end = _parse_time(data.get("submitted_at")) or datetime.now(UTC)
+        if other_start < current_end and current_start < other_end:
+            others.append(data)
+    return others
+
+
+def _task_diff_paths(project: Path, data: dict[str, Any]) -> list[str] | None:
+    """任务证据 diff 的路径集合：所有 allowed 变更（不随返工快照重置）。
+
+    越界/并行归属仍由快照 + ownership 校验；证据 diff 必须覆盖任务全生命周期，
+    否则返工重提会漏掉返工前的已跟踪修改与未跟踪新增文件（R4）。
+    """
+    changed = _changed_files(project)
+    if changed is None:
+        return None
+    forbidden = [str(item) for item in data.get("forbidden") or []]
+    allowed = [str(item) for item in data.get("allowed_paths") or []]
+    paths = []
+    for path in changed:
+        if _matches(path, forbidden):
+            continue
+        if not _matches(path, allowed):
+            continue
+        paths.append(path)
+    return sorted(paths)
+
+
+def _partition_changes(
+    contract: Path,
+    project: Path,
+    data: dict[str, Any],
+    bundle: Path,
+    exclude: Path | None = None,
+) -> tuple[list[str] | None, dict[str, str], list[str]]:
+    """把本任务变更分为 owned / 其他并行任务归属 / 越界。
+
+    返回 (owned, attributed, violations)；非 git 工作区返回 (None, {}, [])。
+    """
+    changed = _changed_files(project, bundle, exclude)
+    if changed is None:
+        return None, {}, []
+    forbidden = [str(item) for item in data.get("forbidden") or []]
+    allowed = [str(item) for item in data.get("allowed_paths") or []]
+    others = _overlapping_tasks(contract, data)
+    owned: list[str] = []
+    attributed: dict[str, str] = {}
+    violations: list[str] = []
+    for path in changed:
+        if _matches(path, forbidden):
+            violations.append(f"{path} (forbidden)")
+            continue
+        if _matches(path, allowed):
+            owned.append(path)
+            continue
+        owner = None
+        for other in others:
+            other_allowed = [str(item) for item in other.get("allowed_paths") or []]
+            if other_allowed and _matches(path, other_allowed):
+                owner = str(other.get("id") or "")
+                break
+        if owner:
+            attributed[path] = owner
+        else:
+            violations.append(f"{path} (outside allowed_paths)")
+    return owned, attributed, violations
+
+
 def _validate_changed_paths(
+    contract: Path,
     project: Path,
     data: dict[str, Any],
     bundle: Path,
     exclude: Path | None = None,
 ) -> list[str]:
-    changed = _changed_files(project, bundle, exclude)
-    if changed is None:
-        return []
-    forbidden = [str(item) for item in data.get("forbidden") or []]
-    allowed = [str(item) for item in data.get("allowed_paths") or []]
-    violations = []
-    for path in changed:
-        if _matches(path, forbidden):
-            violations.append(f"{path} (forbidden)")
-        elif not _matches(path, allowed):
-            violations.append(f"{path} (outside allowed_paths)")
+    _, _, violations = _partition_changes(contract, project, data, bundle, exclude)
     return violations
 
 
@@ -603,8 +746,28 @@ def _glob_regex(pattern: str) -> re.Pattern[str]:
 
 
 def _matches(path: str, patterns: list[str]) -> bool:
-    normalized = path.replace("\\", "/").lstrip("./")
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
     return any(_glob_regex(str(pattern)).match(normalized) for pattern in patterns)
+
+
+def _process_file(
+    project: Path,
+    bundle: Path,
+    task_id: str,
+    explicit: str | Path | None,
+    name: str,
+    subdir: str,
+) -> Path:
+    """解析流程文件：显式参数 > 任务 bundle > 交付库 .meta-flow 本地副本。"""
+    if explicit:
+        return Path(explicit)
+    bundle_path = bundle / name
+    local_path = project / ".meta-flow" / subdir / f"{task_id}.md"
+    if bundle_path.is_file() or not local_path.is_file():
+        return bundle_path
+    return local_path
 
 
 def submit_task(
@@ -626,25 +789,53 @@ def submit_task(
     project_path = Path(project).expanduser().resolve()
     exclude = contract if contract.is_relative_to(project_path) else None
     bundle = path.parent
+    owned: list[str] | None = None
+    attributed: dict[str, str] = {}
     if data.get("kind") != "review":
-        violations = _validate_changed_paths(project_path, data, bundle, exclude)
+        owned, attributed, violations = _partition_changes(
+            contract, project_path, data, bundle, exclude
+        )
         if violations:
             raise TaskError(
                 "变更超出 allowed_paths/forbidden，拒绝提交：\n  - " + "\n  - ".join(violations)
             )
-    handoff_path = Path(handoff) if handoff else bundle / "handoff.md"
-    if not handoff_path.is_file() or not handoff_path.read_text(encoding="utf-8").strip():
-        raise TaskError(f"缺少有效交接文件: {handoff_path}")
-
+        if attributed:
+            # 任务级 diff 隔离：记录被隔离到其他并行任务的路径，便于评审复核
+            ownership = bundle / "evidence" / "ownership.json"
+            ownership.parent.mkdir(parents=True, exist_ok=True)
+            ownership.write_text(
+                json.dumps(
+                    {
+                        "task": task_id,
+                        "isolated_from": attributed,
+                        "owned": owned or [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
     if data.get("kind") == "review":
+        # MFP-0013：review 任务按 packet 指引只校验 review.md + review-handoff.md，
+        # 不要求 handoff.md；implement/fix 仍校验 handoff/dev-record。
         for name in ("review.md", "review-handoff.md"):
             item = bundle / name
             if not item.is_file() or not item.read_text(encoding="utf-8").strip():
                 raise TaskError(f"评审任务缺少 {name}")
-    elif data.get("dev_record") == "required":
-        dev_path = Path(dev_record) if dev_record else bundle / "dev-record.md"
-        if not dev_path.is_file() or not dev_path.read_text(encoding="utf-8").strip():
-            raise TaskError(f"缺少开发记录: {dev_path}")
+    else:
+        handoff_path = _process_file(
+            project_path, bundle, task_id, handoff, "handoff.md", "handoffs"
+        )
+        if not handoff_path.is_file() or not handoff_path.read_text(encoding="utf-8").strip():
+            raise TaskError(f"缺少有效交接文件: {handoff_path}")
+        if data.get("dev_record") == "required":
+            dev_path = _process_file(
+                project_path, bundle, task_id, dev_record, "dev-record.md", "dev-records"
+            )
+            if not dev_path.is_file() or not dev_path.read_text(encoding="utf-8").strip():
+                raise TaskError(f"缺少开发记录: {dev_path}")
 
     if data.get("kind") == "fix":
         fix_text = "\n".join(
@@ -657,7 +848,13 @@ def submit_task(
             raise TaskError("fix 任务缺少交接章节关键字: " + "、".join(missing))
 
     if data.get("kind") != "review":
-        _capture_diff(Path(project).expanduser().resolve(), bundle / "evidence" / "diff.patch")
+        # 证据 diff 覆盖任务全生命周期；越界/并行隔离仍由 owned + 快照校验
+        evidence_paths = _task_diff_paths(Path(project).expanduser().resolve(), data)
+        _capture_diff(
+            Path(project).expanduser().resolve(),
+            bundle / "evidence" / "diff.patch",
+            paths=evidence_paths,
+        )
 
     data["status"] = "submitted"
     data["submitted_at"] = _now()
@@ -715,7 +912,14 @@ def _read_review_verdict(bundle: Path) -> str | None:
 
 def _evidence_digest(bundle: Path) -> str:
     digest = hashlib.sha256()
-    for name in ("dev-record.md", "handoff.md", "review.md", "review-handoff.md", "evidence/diff.patch"):
+    for name in (
+        "dev-record.md",
+        "handoff.md",
+        "review.md",
+        "review-handoff.md",
+        "evidence/diff.patch",
+        "evidence/ownership.json",
+    ):
         path = bundle / name
         if path.is_file():
             digest.update(name.encode("utf-8"))
@@ -1000,7 +1204,7 @@ def _find_input(contract: Path, ref: str) -> tuple[Path, str] | None:
     if standards.is_file():
         return standards, standards.read_text(encoding="utf-8")
     candidates: list[Path] = []
-    for directory in ("requirements", "architecture", "specs"):
+    for directory in ("requirements", "architecture", "specs", "improvements"):
         base = contract / directory
         if not base.is_dir():
             continue
@@ -1025,11 +1229,108 @@ def _find_input(contract: Path, ref: str) -> tuple[Path, str] | None:
     return None
 
 
+_ENTRY_SKIP = {
+    ".git",
+    ".claude",
+    ".meta-flow",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+}
+
+
+def _project_id(contract: Path) -> str | None:
+    path = contract / "workspace" / "mf.workspace.yaml"
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    project = data.get("project") or {}
+    return str(project.get("id") or "") or None
+
+
+def _entry_index(
+    project: Path,
+    contract: Path,
+    allowed_paths: list[str],
+    *,
+    limit: int = 20,
+) -> tuple[list[str], int, int]:
+    """按 allowed_paths 前缀生成代码入口清单（MFP-0007 A4）。"""
+    roots: list[str] = []
+    for pattern in allowed_paths:
+        raw = str(pattern).replace("\\", "/").strip()
+        if not raw:
+            continue
+        prefix = raw.split("*", 1)[0].rstrip("/")
+        if not prefix or prefix in {".", "./"}:
+            continue
+        if prefix not in roots:
+            roots.append(prefix)
+    candidates: list[Path] = []
+    resolved_contract = contract.resolve()
+    for root in roots:
+        target = (project / root).resolve()
+        if not target.is_relative_to(project):
+            continue
+        if target == resolved_contract or resolved_contract in target.parents:
+            continue
+        if target.is_file():
+            candidates.append(target)
+        elif target.is_dir():
+            for path in sorted(target.rglob("*")):
+                if not path.is_file():
+                    continue
+                if any(part in _ENTRY_SKIP for part in path.relative_to(project).parts):
+                    continue
+                if path.resolve().is_relative_to(resolved_contract):
+                    continue
+                candidates.append(path)
+                if len(candidates) >= 500:
+                    break
+    unique = sorted({path.resolve() for path in candidates})
+    total_files = len(unique)
+    total_bytes = sum(path.stat().st_size for path in unique)
+    lines = []
+    for path in unique[:limit]:
+        relative = path.relative_to(project).as_posix()
+        lines.append(f"  - {relative} ({path.stat().st_size}B)")
+    if total_files > limit:
+        lines.append(f"  - ... 其余 {total_files - limit} 个文件见 mf context expand / 源码树")
+    return lines, total_files, total_bytes
+
+
 def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> str:
     contract = resolve_contract(project)
+    project_path = Path(project).expanduser().resolve()
     path, data = load_task(project, task_id)
     bundle = path.parent
-    budget = data.get("packet_budget") or {}
+    review_target_id: str | None = None
+    review_bundle = bundle
+    if review:
+        review_target_id = str(data.get("reviews") or "")
+        if not review_target_id:
+            raise TaskError(f"评审任务 {task_id} 缺少 reviews 目标，无法生成评审包")
+        target_path, _target_data = load_task(project, review_target_id)
+        review_bundle = target_path.parent
+    budget = data.get("packet_budget") or _packet_budget(
+        contract, str(data.get("effort") or "M")
+    )
+    if review and not data.get("packet_budget"):
+        # 评审包额外嵌入被评审证据，默认至少 M 档预算
+        review_budget = _packet_budget(contract, "M")
+        if int(review_budget.get("bytes", 0)) > int(budget.get("bytes", 0)):
+            budget = review_budget
     max_files = int(budget.get("files", 10))
     max_bytes = int(budget.get("bytes", 65536))
     input_refs = [
@@ -1038,13 +1339,34 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
         for ref in (refs if isinstance(refs, list) else [refs])
     ]
     if len(input_refs) > max_files:
-        raise TaskError(f"任务包输入文件数 {len(input_refs)} 超过预算 {max_files}")
+        raise TaskError(
+            f"任务包输入文件数 {len(input_refs)} 超过预算 {max_files}；"
+            "缩小 inputs、拆分任务或显式上调 TASK.yaml 的 packet_budget"
+        )
     lines = [f"# {'REVIEW PACKET' if review else 'TASK PACKET'} {task_id}", ""]
     lines.append("## Read policy")
     lines.append(f"- must_read: TASK.yaml, {', '.join(input_refs) or '(none)'}")
     lines.append("- may_read: 自己的任务 bundle、allowed_paths；评审任务另加 review_scope")
+    lines.append(
+        "- process_files: handoff.md / dev-record.md / evidence/ 由任务 bundle 白名单授权，"
+        "独立于 allowed_paths/forbidden"
+    )
     lines.append("- do_not_read: 其他任务、其他版本、archive、完整契约库")
-    lines.append(f"- budget: files={max_files}, bytes={max_bytes}")
+    lines.append(f"- budget: files={max_files}, bytes={max_bytes}（effort={data.get('effort')}）")
+    entry_lines, entry_files, entry_bytes = _entry_index(
+        project_path, contract, [str(item) for item in data.get("allowed_paths") or []]
+    )
+    if entry_lines:
+        lines.append("")
+        lines.append("## Code entry index")
+        lines.append("- 按 allowed_paths 前缀统计的相关源码/文档：")
+        lines.extend(entry_lines)
+        lines.append(f"- 合计: {entry_files} files / {entry_bytes}B")
+        lines.append(
+            "- 超预算提示: 使用 `mf context expand <path> --reason packet_missing` 分段读取"
+            "（worker 限任务 bundle/被评审 bundle/allowed_paths，写入 READ-LOG），"
+            "或拆分任务/在 TASK.yaml 上调 packet_budget"
+        )
     lines.append("")
     lines.append("## Task")
     lines.append("```yaml")
@@ -1077,11 +1399,35 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
 
     lines.append("")
     lines.append("## Project knowledge")
-    knowledge_lines = knowledge.packet_lines(contract, delivery=data.get("delivery"))
+    knowledge_lines = knowledge.packet_lines(
+        contract,
+        delivery=data.get("delivery"),
+        task=data,
+        project_id=_project_id(contract),
+    )
     if knowledge_lines:
         lines.extend(knowledge_lines)
     else:
         lines.append("(none)")
+    lines.append("")
+
+    lines.append("## Process paths (explicit)")
+    local_handoff = project_path / ".meta-flow" / "handoffs" / f"{task_id}.md"
+    local_dev = project_path / ".meta-flow" / "dev-records" / f"{task_id}.md"
+    if review:
+        lines.append(f"- review: {bundle / 'review.md'}")
+        lines.append(f"- review-handoff: {bundle / 'review-handoff.md'}")
+    else:
+        lines.append(f"- handoff: {bundle / 'handoff.md'}")
+        lines.append(f"- dev-record: {bundle / 'dev-record.md'}")
+    lines.append(f"- evidence: {bundle / 'evidence'}/")
+    if not review:
+        lines.append(f"- 本地副本（可选）: {local_handoff}")
+        lines.append(f"- 本地副本（可选）: {local_dev}")
+    lines.append(
+        "- 以上流程路径由任务 bundle 白名单显式授权，与 allowed_paths/forbidden 独立；"
+        "forbidden 仅约束交付工作区路径"
+    )
     lines.append("")
 
     lines.append("## Allowed paths")
@@ -1095,8 +1441,17 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
         lines.append("```")
     lines.append("")
     lines.append("## Handoff")
-    lines.append(f"- 写入: {bundle / 'handoff.md'}")
-    lines.append(f"- 提交: mf task submit {task_id} --handoff {bundle / 'handoff.md'}")
+    if review:
+        lines.append(f"- 写入: {bundle / 'review-handoff.md'}（另写 {bundle / 'review.md'}）")
+        lines.append(f"- 提交: mf task submit {task_id}")
+    else:
+        lines.append(f"- 写入: {bundle / 'handoff.md'}（开发记录 {bundle / 'dev-record.md'}）")
+        lines.append(
+            f"- 提交: mf task submit {task_id} --handoff {bundle / 'handoff.md'}"
+        )
+        lines.append(
+            f"- 本地副本可用: --handoff {local_handoff} --dev-record {local_dev}"
+        )
     lines.append("")
     lines.append("## Responsibility")
     lines.append(f"- next_owner: {data.get('next_owner')}")
@@ -1106,25 +1461,35 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
         lines.append(f"- review_task: {data['reviewed_by_task']}")
     if data.get("reviews"):
         lines.append(f"- reviews: {data['reviews']}")
+    lines.append(
+        "- review_gate: 高风险任务由未参与实现的独立 reviewer 评审；实现者不自验收；"
+        "结论仅 PASS|PASS_WITH_RISK|NEEDS_REWORK|BLOCKED；PASS_WITH_RISK 记录风险与接受人"
+    )
+    lines.append(
+        f"- next_step: 每任务结束运行 mf task prompt {task_id} 明确下一责任 agent"
+    )
 
     if review:
         lines.append("")
-        lines.append("## Implementation Dev Record")
-        dev = bundle / "dev-record.md"
-        lines.append(dev.read_text(encoding="utf-8") if dev.is_file() else "(missing)")
+        lines.append(f"## Implementation Dev Record ({review_target_id})")
+        dev = review_bundle / "dev-record.md"
+        if not dev.is_file() or not dev.read_text(encoding="utf-8").strip():
+            raise TaskError(f"评审包缺少被评审任务开发记录: {dev}")
+        lines.append(dev.read_text(encoding="utf-8"))
         lines.append("")
-        lines.append("## Implementation Handoff")
-        handoff = bundle / "handoff.md"
-        lines.append(handoff.read_text(encoding="utf-8") if handoff.is_file() else "(missing)")
+        lines.append(f"## Implementation Handoff ({review_target_id})")
+        handoff = review_bundle / "handoff.md"
+        if not handoff.is_file() or not handoff.read_text(encoding="utf-8").strip():
+            raise TaskError(f"评审包缺少被评审任务交接: {handoff}")
+        lines.append(handoff.read_text(encoding="utf-8"))
         lines.append("")
-        lines.append("## Diff")
-        diff = bundle / "evidence" / "diff.patch"
-        if diff.is_file():
-            lines.append("```diff")
-            lines.append(diff.read_text(encoding="utf-8")[:12000])
-            lines.append("```")
-        else:
-            lines.append("(no diff captured)")
+        lines.append(f"## Diff ({review_target_id})")
+        diff = review_bundle / "evidence" / "diff.patch"
+        if not diff.is_file():
+            raise TaskError(f"评审包缺少被评审任务 diff: {diff}")
+        lines.append("```diff")
+        lines.append(diff.read_text(encoding="utf-8")[:12000])
+        lines.append("```")
         lines.append("")
         lines.append("## Review Output")
         lines.append(f"- 评审意见: {bundle / 'review.md'}")
@@ -1135,7 +1500,9 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
     text += f"\npacket_digest: {digest}\n"
     if len(text.encode("utf-8")) > max_bytes:
         raise TaskError(
-            f"任务包 {len(text.encode('utf-8'))} 字节超过预算 {max_bytes}；缩小 inputs 或分批任务"
+            f"任务包 {len(text.encode('utf-8'))} 字节超过预算 {max_bytes}；"
+            "缩小 inputs、拆分任务，或使用 mf context expand <path> --reason packet_missing "
+            "分段读取后再生成任务包"
         )
     target = bundle / ("review-packet.md" if review else "packet.md")
     target.write_text(text, encoding="utf-8")
@@ -1191,8 +1558,10 @@ def prompt_text(project: str | Path, task_id: str) -> str:
             lines.extend(
                 [
                     f"你是独立评审者，不得是实现者。先运行：mf task show {task_id} --review-packet",
-                    "只读任务包、diff、开发记录、交接和 review_scope 内源码；不要修改实现代码。",
+                    "只读任务包、diff、开发记录、交接和 review_scope 内源码；不要修改实现代码或验收标准。",
                     f"在 {bundle / 'review.md'} 写评审意见，在 {bundle / 'review-handoff.md'} 写评审交接。",
+                    "结论只能是 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；"
+                    "PASS_WITH_RISK 必须写风险与接受人。",
                     "通过：结论 PASS，然后 mf task submit；由 manager 验收。",
                     "不通过：结论 NEEDS_REWORK，列出必须整改项（ID/文件/行/要求/验收方法），submit；manager 会退回 worker1。",
                 ]
@@ -1201,6 +1570,8 @@ def prompt_text(project: str | Path, task_id: str) -> str:
             lines.extend(
                 [
                     "先读取 review.md 和 review-handoff.md，只整改必须整改项。",
+                    f"编辑前先运行：mf task start {task_id}（取得 lease；无交付根绑定时加 --project-dir <交付库>）。",
+                    "提交后不可继续编辑；如需再次返工，由 manager reject 后重新 mf task start。",
                     f"完成后更新 {bundle / 'dev-record.md'} 和 {bundle / 'handoff.md'}，再 mf task submit。",
                     "等待复审和 manager 验收。",
                 ]
@@ -1222,6 +1593,10 @@ def prompt_text(project: str | Path, task_id: str) -> str:
         elif status == "submitted":
             if kind == "review":
                 lines.append(f"先读取 review.md / review-handoff.md，再 mf task accept {task_id}。")
+                lines.append(
+                    "评审门：确认评审者未参与实现；结论仅为 PASS/PASS_WITH_RISK/"
+                    "NEEDS_REWORK/BLOCKED；PASS_WITH_RISK 需风险与接受人。"
+                )
             elif review_id and review_task:
                 if review_task.get("status") == "submitted":
                     lines.append(f"先 accept review 任务 {review_id}，再验收 {task_id}。")
@@ -1244,4 +1619,6 @@ def prompt_text(project: str | Path, task_id: str) -> str:
             lines.append("任务已验收；规划并创建下一个任务卡。")
         else:
             lines.append(f"检查任务状态并决定 accept/reject：mf task show {task_id}。")
+    lines.append("")
+    lines.append(f"责任链：每任务后运行 mf task prompt {task_id}，明确 next_owner；实现者不得自验收。")
     return "\n".join(lines).rstrip() + "\n"

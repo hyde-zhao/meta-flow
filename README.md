@@ -4,13 +4,13 @@
 
 ## 状态
 
-**v0.1.1 / R0 重构中**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
+**v0.1.1 / R0 1.0.x 试运行**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
 
 ```text
 mf bootstrap
 mf install claude [--agent maintainer]
 mf install worker --project-dir <sub>
-mf workspace init/add-project/link/sync/status
+mf workspace init/attach/add-project/link/sync/status
 mf req add/list/show/update/trace/validate
 mf roadmap show/plan/close
 mf phase enter/review/exit
@@ -80,7 +80,11 @@ claude        # 默认 manager
 manager 与用户确认项目名、contract 仓路径/远程、子项目后执行：
 
 ```bash
-mf workspace init --name <项目名> --contract-dir <项目名>-contract [--contract-remote <url>]
+# 新项目
+mf workspace init --name <项目名> --contract-dir <项目名>-contract [--contract-remote <url>] \
+  [--roadmap R0 --phase P1 --version 1.0.0]
+# 已有 contract：接入并导入路标/阶段/版本/workspace 注册，不覆盖既有内容
+mf workspace attach --name <项目名> --contract-dir <项目名>-contract [--contract-remote <url>]
 mf workspace add-project --name frontend --path frontend [--remote <url>]
 mf workspace link
 mf doctor
@@ -128,7 +132,7 @@ cd frontend && claude                 # worker（独立会话）
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob",
+        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash",
         "hooks": [{"type": "command", "command": "mf hook pretool"}]
       }
     ]
@@ -142,6 +146,10 @@ cd frontend && claude                 # worker（独立会话）
 - worker 读完整契约、其他任务 bundle、其他交付库。
 - worker 写非当前任务 bundle、`allowed_paths` 之外的交付源码。
 - 直接改 `state/**`、写 `archive/**`、maintainer 改项目契约。
+- Bash 命令同样经过路径策略与审计：worker 不能借 shell 读契约基线/其他交付库或绕过读预算；写操作受 `allowed_paths` 约束（BUG-0014）。`$HOME`/环境变量会展开，`sh -c`/`bash -c` 会递归解析；`eval`、`source`/`.`、进程替换 `<(...)`/`>(...)` 与转义变量 `\$HOME` 同样纳入解析或保守拒绝；无法安全解析且涉及路径时 deny。
+- guard allow/deny 持久化到 READ-LOG（role/task/path/reason/tool），可用 `mf context log` 查询；拒绝信息包含当前任务/lease/allowed_paths 与合法通道。
+- 提交后不可直接编辑；返工需 manager reject 后 `mf task start`。本地 `.meta-flow/improvements/MFP-*.yaml` 是受控写入白名单（或 `mf improve new --local`），其他越界写仍拒绝。
+- bundle 匹配使用完整任务 ID/contract 相对路径；跨 roadmap/phase 的同尾号任务不会互相放行。
 
 `--force` 只影响 CLI 技术校验；hook 对直接 Read/Write 的边界仍然生效。`mf uninstall` 会移除该 hook，保留其他自定义 hook。
 
@@ -159,7 +167,7 @@ mf install worker --project-dir <sub> --force
 mf uninstall claude --project-dir <path>
 ```
 
-源码仓库地址记录在 `~/.meta-flow/manifest.yaml` 的 `repo_url`。commit 可用，push 必须用户显式授权。
+源码仓库地址记录在 `~/.meta-flow/manifest.yaml` 的 `repo_url`。commit 可用，push 必须用户显式授权。`mf dev status` 在 `source_dir` 缺失或不是 git 仓库时会显式报错，并提示 `mf dev clone` 或 `--source`。
 
 ## MFP 改进包
 
@@ -199,7 +207,7 @@ mf task show R1-P1-T001 --packet
 mf task start R1-P1-T001 --owner worker-1
 mf task submit R1-P1-T001 --handoff <bundle>/handoff.md
 
-# worker2 评审（review 任务，独立身份）
+# worker2 评审（review 任务，独立身份；只写 review.md + review-handoff.md）
 mf task show R1-P1-T002 --review-packet
 mf task start R1-P1-T002 --owner reviewer-2
 mf task submit R1-P1-T002
@@ -218,6 +226,21 @@ mf task accept R1-P1-T001 --verdict PASS
 - critical 任务必须记录用户验收 `--user-approved-by`。
 - 每个任务状态都有 `next_owner`；`mf task prompt` 明确下一责任 agent。
 - 角色守卫：manager 不能 `task start/submit`；worker 不能 `req/roadmap/phase/bug/verify/release/task accept`。
+- 任务包按 effort（XS/S/M/L/XL）分配预算，并预置 allowed_paths 前缀的代码入口清单；
+  超预算用 `mf context expand <path> --reason packet_missing` 或拆分任务。worker 可用
+  `mf context show/expand` 受控查看活动任务 bundle、评审目标或 allowed_paths，并写
+  READ-LOG。
+- 评审包（`--review-packet`）按 `reviews` 目标嵌入被评审任务的 dev-record、handoff 与
+  diff；证据缺失时显式报错，不再静默显示 missing。
+- review 任务提交只需 `review.md` + `review-handoff.md`；handoff/dev-record 要求仅适用于
+  implement/fix 任务（MFP-0013）。返工任务可读自己评审任务的 review 输出。
+- handoff/dev-record/evidence 由 packet 的 process paths 显式授权，独立于
+  `allowed_paths`/`forbidden`；`mf task submit` 支持 `.meta-flow/dev-records|handoffs`
+  本地副本。
+- 并行任务：提交时按任务活动窗口隔离其他并行任务的 diff；单任务越界仍拒绝，
+  非活动/非重叠改动不被静默计入；diff.patch 包含未跟踪新增文件。
+- worker 无交付根绑定时任务命令要求 `--project-dir <交付库>`，否则 rc=3；guard
+  同规则。
 
 ## 规划闭环
 
@@ -228,7 +251,8 @@ mf req list
 mf req show REQ-0001
 mf req update REQ-0001 --status verified
 mf req trace REQ-0001
-mf req trace                      # 生成 requirements/TRACE.md
+mf req trace                      # 生成 requirements/TRACE.md（当前路标，排除 archive）
+mf req trace --archive            # 审计历史：显式包含 archive
 
 # 路标/版本
 mf roadmap show
@@ -276,8 +300,13 @@ mf release show
 - `FAIL` 验证必须关联 `--bug`。
 - `PASS` 验证把关联 BUG 置为 `verifying`，最终关闭仍由 manager 执行 `mf bug close`。
 - `task accept` 会把 fix 任务关联 BUG 置为 `fixed`；manager 验证后再关闭。
-- `release freeze` 检查 P5 用户门禁、需求、任务、blocker/critical BUG 和版本 MAJOR，写 `release/RELEASE-<version>.yaml`；`published: false`。
-- 知识条目会按交付库过滤后注入任务包。
+- `release freeze` 检查 P5 用户门禁、需求、任务、blocker/critical BUG 与版本策略，
+  写 `release/RELEASE-<version>.yaml`；`published: false`。
+- 版本策略：优先读取 ROADMAP 的 `version_major`/`version_range` 声明映射（支持
+  R0/V1 1.0.x）；未声明的 MAJOR 不一致默认拒绝。`--force` 必须带
+  `--reason` 与 `--approved-by`，并写入发布清单 `override` 与 ledger。
+- 知识条目按交付库/项目/路标与任务相关性过滤后注入任务包，不跨项目匹配同名任务 ID。
+- 测试已隔离 cwd/MF_ROLE，工作区内与 `/tmp` 运行全量 pytest 结果一致。
 
 ## 控制闭环
 

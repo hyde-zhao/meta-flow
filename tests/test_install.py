@@ -196,3 +196,45 @@ def test_install_worker_writes_gitignore(mf_env):
 
     install_worker(sub, "frontend", workspace_root=project)
     assert (sub / ".gitignore").read_text(encoding="utf-8") == text
+
+
+def test_dev_status_missing_or_invalid_source_is_explicit(mf_env):
+    from meta_flow.global_store import GlobalStoreError, dev_status
+
+    with pytest.raises(GlobalStoreError, match="源码目录不存在"):
+        dev_status()
+    source = mf_env["home"] / "source"
+    source.mkdir(parents=True)
+    with pytest.raises(GlobalStoreError, match="不是 git 仓库"):
+        dev_status()
+    (source / ".git").mkdir()
+    data = dev_status()
+    assert data["source_exists"] is True
+
+    with pytest.raises(GlobalStoreError, match="--source"):
+        dev_status(source=mf_env["tmp"] / "missing-source")
+
+
+def test_install_worker_delivery_uses_contract_baseline(mf_env):
+    from meta_flow.workspace import workspace_init
+
+    project = mf_env["project"]
+    install_root(project)
+    workspace_init(project, "Legacy", roadmap="R0", phase="P4", version="1.0.0")
+    contract = project / "legacy-contract"
+    sub = project / "frontend"
+    result = install_worker(
+        sub, "frontend", workspace_root=project, contract_dir=contract
+    )
+    assert result["delivery"] == "frontend"
+    delivery = yaml.safe_load((sub / "delivery.yaml").read_text(encoding="utf-8"))
+    assert delivery["roadmap"] == "R0"
+    assert delivery["version"] == "1.0.0"
+
+
+def test_agent_templates_use_existing_doctor_flags():
+    from meta_flow import templates
+
+    for text in (templates.AGENT_MAINTAINER, templates.MAINTAINER_CLAUDE):
+        assert "mf doctor --project" not in text
+        assert "mf doctor --path" in text

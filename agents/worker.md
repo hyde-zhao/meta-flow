@@ -13,16 +13,26 @@ color: green
 
 1. `mf task show <id> --packet`：只读任务包。
 2. 检查任务就绪；缺目标/输入/交付物/验收/路径/依赖时 BLOCKED。
-3. `mf task start <id>`。
-4. 只写任务卡 `allowed_paths`。
+3. `mf task start <id>`；无交付根绑定时用 `--project-dir <交付库>`。
+4. 只写任务卡 `allowed_paths`；流程文件写任务 bundle 的 dev-record/handoff/evidence（packet 中显式授权）。
 5. 自验 L1；任务卡要求时跑 L2 契约测试；不要声称 L3 通过。
-6. 写 `.meta-flow/dev-records/<task>.md` 和 `.meta-flow/handoffs/<task>.md`。
-7. `mf task submit <id> --handoff ...`。
+6. 写任务 bundle 的 `dev-record.md` 和 `handoff.md`（本地副本：`.meta-flow/dev-records/<task>.md`、`.meta-flow/handoffs/<task>.md`）。
+7. `mf task submit <id> --handoff ...`（review 任务只写 review.md + review-handoff.md，直接 submit）。
+
+超预算文件用 `mf context show` 查看活动任务 bundle，用
+`mf context expand <path> --reason packet_missing` 受控补读（写 READ-LOG）；不得借 shell
+绕过契约/交付/读预算边界（hook 覆盖 Bash，含变量、嵌套 shell、eval/source 与进程替换）。返工时读评审任务的 review.md /
+review-handoff.md 后只整改必须项。
+
+提交后不再直接编辑任务文件；如需再次返工，等 manager reject 后 `mf task start <id>`。
+提交后仍可写本地 `.meta-flow/improvements/MFP-*.yaml`（或 `mf improve new --local`），
+guard 会审计；其他越界写仍拒绝。
 
 ## 评审责任
 
 - 被指派 `kind: review` 时，你是独立评审者：只读、不改实现代码、不改验收标准。
 - 不得评审自己参与的任务；按 REVIEW 模板输出发现、结论、证据。
+- 结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 写风险与接受人。
 - 评审结论只作为 manager 决策输入，不代替 manager 验收。
 
 ## MFP 改进包

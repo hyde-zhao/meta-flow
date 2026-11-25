@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import yaml
 
 from meta_flow import bug, context, knowledge, req, roadmap, state, verify
 from meta_flow.global_store import bootstrap
@@ -289,3 +290,97 @@ def test_context_expand_requires_reason(project_env):
     assert log[0]["event"] == "context.expand"
     assert log[0]["reason"] == "human_audit"
     assert json.loads(json.dumps(log[0]))["allowed"] is True
+
+
+def test_release_freeze_uses_declared_version_mapping(tmp_path, monkeypatch):
+    home = tmp_path / "global"
+    monkeypatch.setenv("META_FLOW_HOME", str(home))
+    bootstrap()
+    root = tmp_path / "legacy"
+    root.mkdir()
+    install_root(root)
+    workspace_init(root, "Legacy", roadmap="R0", phase="P5", version="1.0.0")
+    contract = root / "legacy-contract"
+    _move_to_p5(contract)
+
+    result = verify.release_freeze(root)
+    assert result["version"] == "1.0.0"
+    manifest = yaml.safe_load(
+        (contract / "release" / "RELEASE-1.0.0.yaml").read_text(encoding="utf-8")
+    )
+    assert "override" not in manifest
+
+    with pytest.raises(verify.VerifyError, match="MAJOR"):
+        verify.release_freeze(root, version="2.0.0")
+    with pytest.raises(verify.VerifyError, match="--reason"):
+        verify.release_freeze(root, version="2.0.0", force=True)
+
+    forced = verify.release_freeze(
+        root,
+        version="2.0.0",
+        force=True,
+        reason="用户批准的例外",
+        approved_by="product-owner",
+    )
+    assert forced["version"] == "2.0.0"
+    manifest = yaml.safe_load(
+        (contract / "release" / "RELEASE-2.0.0.yaml").read_text(encoding="utf-8")
+    )
+    assert manifest["override"]["reason"] == "用户批准的例外"
+    assert manifest["override"]["approved_by"] == "product-owner"
+    assert manifest["override"]["version"] == "2.0.0"
+
+
+def test_req_trace_excludes_archive_dedupes_and_filters_specs(project_env):
+    root, contract = project_env
+    req.add_requirement(root, "登录", priority="must", acceptance=["成功登录"], roadmap="R1")
+    create_task(
+        root,
+        "实现登录",
+        risk="low",
+        acceptance=_acceptance(),
+        inputs={"requirements": ["REQ-0001"]},
+    )
+
+    archive_task = contract / "archive" / "R0" / "phases" / "P4" / "tasks" / "T001"
+    archive_task.mkdir(parents=True)
+    (archive_task / "TASK.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "R0-P4-T001",
+                "status": "accepted",
+                "inputs": {"requirements": ["REQ-0001"]},
+                "risk": {"level": "low"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (contract / "specs" / "INDEX.md").write_text("REQ-0001 索引\n", encoding="utf-8")
+    (contract / "specs" / "SPEC-001.md").write_text("REQ-0001 规格\n", encoding="utf-8")
+    bugs_dir = contract / "bugs"
+    (bugs_dir / "BUG-0001.yaml").write_text(
+        yaml.safe_dump(
+            {"id": "BUG-0001", "status": "open", "severity": "major", "related_reqs": ["REQ-0001"]},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    archive_bugs = contract / "archive" / "R0" / "bugs"
+    archive_bugs.mkdir(parents=True)
+    (archive_bugs / "BUG-0001.yaml").write_text(
+        yaml.safe_dump(
+            {"id": "BUG-0001", "status": "closed", "severity": "major", "related_reqs": ["REQ-0001"]},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    traced = req.trace(root, roadmap="R1")["REQ-0001"]
+    assert [item["id"] for item in traced["tasks"]] == ["R1-P1-T001"]
+    assert traced["specs"] == ["specs/SPEC-001.md"]
+    assert [item["id"] for item in traced["bugs"]] == ["BUG-0001"]
+
+    all_traced = req.trace(root, roadmap="R1", include_archive=True)["REQ-0001"]
+    assert {item["id"] for item in all_traced["tasks"]} == {"R1-P1-T001", "R0-P4-T001"}
+    assert [item["id"] for item in all_traced["bugs"]] == ["BUG-0001"]

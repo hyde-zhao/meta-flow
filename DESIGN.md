@@ -101,7 +101,7 @@ v1 不再是一个“工作流产物工厂”，而是一个 **AI 项目操作�
 | 层 | 机制 | 作用 |
 |---|---|---|
 | 1 | 目录级 `CLAUDE.md` / `AGENTS.md` | 根目录 = maintainer；`contracts/` = manager；`deliveries/**` = worker。子目录文件显式声明父级角色不适用。 |
-| 2 | SessionStart hook | 读取 cwd，写 `.metaflow/session-role.json`，打印角色横幅；agent 第一条规则是读取它。 |
+| 2 | SessionStart hook | 读取 cwd，写 `.meta-flow/session-role.json`，打印角色横幅；agent 第一条规则是读取它。 |
 | 3 | CLI 强制 | `mf` 每个命令检查 cwd、`MF_ROLE`、路径白名单；越权命令拒绝。 |
 
 | 目录 | 默认角色 | 允许 | 禁止 |
@@ -194,6 +194,20 @@ R1 只实现 Claude Code 适配；R2 增加 DSH 与 Codex。角色定义、任�
 - 每个项目/子项目都有 `.meta-flow/install.yaml`，`mf uninstall claude` 按记录卸载。
 - meta-flow 自身只有一个交付物：CLI 包 + agents/templates；不使用 contract/子项目布局。
 
+### 3.1.1 接入已有 contract（workspace attach）
+
+`mf workspace init` 只适用于新建 contract。已有 contract（存量项目迁移）使用
+`mf workspace attach --name <项目> --contract-dir <contract>`：
+
+- 只导入 contract 的路标/阶段/版本/workspace 注册与子项目登记，生成根
+  `.meta-flow/workspace.yaml`、`mf.workspace.yaml`、CLAUDE/README 链接并登记
+  install.yaml；必要时补齐缺失的 `workspace/CLAUDE.md`、`workspace/README.md`、
+  `workspace/mf.workspace.yaml`、`.meta-flow/role.yaml`、`state/current.json`。
+- 不覆盖已有 contract 内容，不复制任何源码/实现；已注册项目 id/名称冲突、
+  根工作区已存在、目标不是 contract 时显式报错。
+- 接入后 `mf workspace link` 仍可重建根链接；`mf workspace attach` 不初始化
+  git、不添加 remote（contract 仓的 git 由原项目维护）。
+
 ### 3.2 契约库职责
 
 > 路径映射：本章旧称 `contracts/`，当前实现为 `<project>-contract/`；内部结构相同。
@@ -253,7 +267,17 @@ mf task prompt 生成下一任务提示词
 
 1. **角色会话隔离**：根目录、`contracts/`、`deliveries/` 三个入口，各自只有自己的角色指令和读写白名单。
 2. **任务上下文隔离**：`mf task show --packet` 只返回任务卡 + 声明的契约片段 + 允许路径；`mf task submit` 把证据摘要和交接固化进契约库。
-3. **路径守卫**：CLI 角色守卫拦截越权命令；`mf task submit` 用 git diff + 工作树快照校验 `allowed_paths`/`forbidden`，越界拒绝；安装时写入 PreToolUse hook（`mf hook pretool`）拦截越界 Read/Write/Edit。
+3. **路径守卫**：CLI 角色守卫拦截越权命令；`mf task submit` 用任务启动快照校验
+   `allowed_paths`/`forbidden`，越界拒绝；同一工作区并行任务按任务活动窗口隔离，
+   只把其他重叠任务 allowed_paths 内的变更排除出本任务 diff，单任务/非活动改动仍
+   拒绝；安装时写入 PreToolUse hook（`mf hook pretool`）拦截越界
+   Read/Write/Edit 与 Bash 路径访问；Bash 展开 `$HOME`/环境变量并递归解析
+   `sh -c`/`bash -c`、`eval`、`source`/`.` 与进程替换 `<(...)`/`>(...)`，转义变量
+   不得绕过；命中契约/交付/读预算时 deny；无法安全解析且涉及路径的读写保守拒绝；
+   allow/deny（role/task/path/reason/tool）写 READ-LOG 审计。
+   worker 提交后仍可写本地 `.meta-flow/improvements/MFP-*.yaml`（受控白名单/审计），
+   其他 deny 区不放宽。
+   worker 无交付根绑定时，任务命令必须用 `--project-dir` 指定交付库，guard 同规则。
 
 这三层比“多拆几个仓库”更有效地防止幻觉和上下文污染；仓库数量只解决 git/发布边界。
 
@@ -367,14 +391,22 @@ mf context expand <path> --reason <reason>
 允许的 reason：`packet_missing`、`field_conflict`、`schema_validation_failed`、`human_audit`、`summary_insufficient`。
 
 - 记录到 `READ-LOG.ndjson`：时间、角色、任务、路径、原因、字节数；不记录内容。
-- 单文件读取不得超过 CONTEXT-POLICY 的角色字节预算；archive 只允许 manager。
-- `mf context show` 显示热区文件大小、总量和预算。
+- expand 是预算外的受控补读：单文件不超过 256KB；worker 仅可 expand 活动任务
+  bundle、评审任务的目标 bundle、返工任务的 review 输出，或 allowed_paths/
+  review_scope 内交付文件；契约基线、其他任务与 archive 不因此放宽。
+- archive 只允许 manager。
+- `mf context show` 显示热区文件大小、总量和预算；worker 显示活动任务 bundle。
 - `mf log` / `mf context log` 从文件尾部读取，不加载完整 ledger。
 
 #### 3.7.7 强制机制
 
 - **CLI**：角色矩阵守卫；`mf context`、`mf archive`、`mf status`；路径/预算校验。
-- **Hook**：安装 `PreToolUse` → `mf hook pretool`；拦截越界 Read/Write/Edit，manager 直读 archive、worker 读完整契约/其他 bundle、越界写交付源码。
+- **Hook**：安装 `PreToolUse` → `mf hook pretool`；拦截越界 Read/Write/Edit/Bash，
+  manager 直读 archive、worker 读完整契约/其他 bundle、越界写交付源码；Bash 路径策略
+  与读预算同 Read，展开变量并递归解析嵌套 shell、eval/source/进程替换，无法安全解析
+  时保守拒绝；allow/deny 持久化 READ-LOG（role/task/path/reason/tool，命令脱敏），
+  可用 `mf context log` 查询。deny 输出角色/当前任务/lease/allowed_paths 与合法通道；
+  提交后编辑需 manager reject 后 `mf task start`。本地 MFP 是受控白名单。
 - **Agent 提示**：read allowlist + “先 packet 后文档”。
 - **标准**：`CONTEXT.md`；策略：`contracts/policies/CONTEXT-POLICY.yaml`；分层：hot / warm / cold。
 
@@ -481,6 +513,8 @@ roadmaps:
   - id: R1
     title: MVP
     status: active
+    version_major: 1       # 项目版本策略：声明后 release freeze 以它为准
+    version_minor: 0
     version_range: "1.x"
     version_target: "1.0.0"
     goal: ...
@@ -494,7 +528,10 @@ roadmaps:
     version_target: "2.0.0"
 ```
 
-`mf release freeze` 校验当前路标编号等于项目版本 MAJOR；不一致拒绝。
+`mf release freeze` 优先按 `version_major`（其次 `version_range`）校验；未声明时才回退
+`R{n}=MAJOR`。因此可以声明 R0 ↔ V1 1.0.x 这类项目映射；未声明的 MAJOR 不一致默认
+拒绝。`--force` 仅用于可审计例外，必须带 `--reason` 与 `--approved-by`，并把
+reason/approver/version 写入发布清单 `override` 与 ledger（BUG-0011/MFP-0006）。
 
 ### 4.3 外部版本映射
 
@@ -773,7 +810,10 @@ W3: T012 (frontend) blocked by T011
 
 ### 7.6 交接文件
 
-worker 在交付库写 `.metaflow/handoffs/<task-id>.md`，`mf task submit` 固化副本到 `contracts/handoffs/<task-id>.md`。
+canonical 位置是任务 bundle 的 `handoff.md` 与 `dev-record.md`；交付库本地副本统一为
+`.meta-flow/handoffs/<task-id>.md` 与 `.meta-flow/dev-records/<task-id>.md`，`mf task submit`
+优先读 bundle，缺失时回退本地副本。流程文件由任务包 `process paths` 白名单授权，
+与 `allowed_paths`/`forbidden` 独立；forbidden 只约束交付工作区路径。
 
 ```markdown
 # HANDOFF R1-P3-T013
@@ -795,7 +835,7 @@ worker 在交付库写 `.metaflow/handoffs/<task-id>.md`，`mf task submit` 固�
 1. **验收标准前置**：任务卡创建时写定，worker 不可修改。
 2. **可判定**：每项必须有 method / command / expect / evidence；主观描述必须转成 artifact 或 demonstration。
 3. **独立性**：worker 自验只作为提交证据；manager 必须独立重跑自动项、抽查证据。
-4. **范围校验**：`mf task submit` 用 git diff + 工作树快照比对 `allowed_paths`/`forbidden`，越界拒绝。
+4. **范围校验**：`mf task submit` 用任务启动快照比对 `allowed_paths`/`forbidden`，越界拒绝；并行任务按活动窗口隔离（其他重叠任务路径不计入本任务），单任务与非活动改动仍拒绝。
 5. **证据绑定**：每条结果绑定证据文件 digest；证据缺失或不可复现不得 PASS。
 6. **结论枚举**：`PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED`；`PASS_WITH_RISK` 必须写风险、影响和接受人。
 7. **不可事后加项**：验收中发现问题只能返工并开新卡或 `CHG-*`，不得临时追加标准。
@@ -821,7 +861,8 @@ worker 在交付库写 `.metaflow/handoffs/<task-id>.md`，`mf task submit` 固�
 第一步：运行 mf task show R1-P3-T014 --packet
 允许写：src/state/**, tests/state/**
 禁止：contracts/**、backend/**、其他任务路径
-完成后：mf task submit R1-P3-T014 --handoff .metaflow/handoffs/R1-P3-T014.md
+完成后：mf task submit R1-P3-T014 --handoff <contract-task-bundle>/handoff.md
+（本地副本：.meta-flow/handoffs/R1-P3-T014.md）
 ```
 
 manager 验收通过后，用 `mf task ready` 找解锁任务，再用 `mf task prompt` 生成下一条提示词。
@@ -920,7 +961,9 @@ contracts/knowledge/
 #### 读取与注入
 
 - manager 会话启动时读取 `KNOWLEDGE.md` 摘要。
-- `mf task show --packet` 注入与任务/交付库相关的术语和约定。
+- `mf task show --packet` 按交付库、项目、路标和任务相关性注入术语/约定；显式
+  `project`/`delivery`/`roadmap` 不匹配即跳过；裸任务 ID（如 T013）若同时出现外部
+  项目名，不与当前项目的同名任务匹配（MFP-0007 A1）。
 - SessionStart hook 打印最近纠正、开放 bug 摘要；hook 只做注入，不做语义捕获。
 
 #### 总结提炼
@@ -1071,8 +1114,8 @@ review:
 - **低风险实现任务**：完成后 submit，等待 manager 评审和验收；不要自行找评审。
 - **中/高风险实现任务**：完成后 submit；manager 派 worker2 独立 review；评审通过后 manager 验收；不通过按 review-handoff 整改。
 - **评审任务**：
-  - 通过：写 `review.md`（PASS）+ `review-handoff.md`，submit 给 manager 验收；
-  - 不通过：写 `review.md`（NEEDS_REWORK）+ `review-handoff.md`，列出必须整改项（ID/文件/行/要求/验收方法），submit；manager 退回 worker1。
+  - 通过：写 `review.md`（PASS）+ `review-handoff.md`，直接 `mf task submit <review-id>`（无需 handoff.md）；manager 验收；
+  - 不通过：写 `review.md`（NEEDS_REWORK）+ `review-handoff.md`，列出必须整改项（ID/文件/行/要求/验收方法），直接 submit；manager 退回 worker1。
 - **返工任务**：只读原任务 bundle + `review.md`/`review-handoff.md`，按整改项修改，重新自验、更新开发记录和交接、submit；再次评审。
 
 评审者不能是实现者；manager 不把最终验收交给实现者；严重问题必须记录 `BUG-*`。`mf task accept` 从 `review-handoff.md`/`review.md` 读取 verdict，manager 不能用 CLI 参数覆盖相反结论。
@@ -1107,11 +1150,15 @@ review:
 
 **Worker 评审任务**：
 
-- `mf task show <id> --review-packet`：任务卡、diff、dev-record、handoff、evidence、review 检查清单、review_scope；
+- `mf task show <id> --review-packet`：任务卡、被评审任务的 diff、dev-record、handoff、
+  evidence、review 检查清单、review_scope；证据缺失时命令显式报错；
+- 可读 `reviews` 目标 bundle（含 evidence），其他任务仍拒绝；
 - 只读 review_scope 内的源码；
+- 提交只需 `review.md` + `review-handoff.md`，无需 handoff.md；
 - 不读完整契约、其他任务/阶段/版本、归档。
 
-**返工 Worker**：原任务 bundle + `review.md` + `review-handoff.md`。
+**返工 Worker**：原任务 bundle + 自己的评审任务 `review.md`/`review-handoff.md`；
+只整改必须项，不扩大范围。
 
 **禁止**：worker 读完整路标/需求/架构、其他子项目、归档；manager 读交付库源码；任何角色读历史版本除非显式 reason。
 
@@ -1142,7 +1189,7 @@ review:
 |---|---|
 | 全局 | `mf bootstrap` |
 | 安装/卸载 | `mf install claude`、`mf install worker`、`mf uninstall claude` |
-| 工作区 | `mf workspace init`、`mf workspace add-project`、`mf workspace link`、`mf workspace sync`、`mf workspace status` |
+| 工作区 | `mf workspace init`、`mf workspace attach`、`mf workspace add-project`、`mf workspace link`、`mf workspace sync`、`mf workspace status` |
 | 维护 | `mf dev clone`、`mf dev update`、`mf dev install`、`mf dev status`、`mf upgrade` |
 | 改进包 | `mf improve new/list/show/validate/submit/import`、`mf dev improve import/list/update` |
 | 任务 | `mf task create/list/show/start/submit/accept/reject/prompt`（`--packet` / `--review-packet`） |
@@ -1165,7 +1212,10 @@ review:
 
 - `--json` 给 agent；默认表格给用户。
 - 安装/卸载按 `.meta-flow/install.yaml` 的 digest 判断文件是否被修改；被修改的文件默认跳过，`--force` 才删。
-- 退出码：0 成功，1 校验失败，2 角色/权限拒绝，3 状态冲突。
+- 退出码：0 成功，1 校验失败，2 角色/权限拒绝，3 状态冲突或作用域缺失（如 worker 无交付根绑定且未提供 `--project-dir`）。
+- `mf status` 输出 manager 上下文预算（12 文件/128KB）、热/暖/冷分层、expand `--reason` 约束、按 work_areas 生成的可读区与评审门/责任链；不以“contract 全部可读”替代。
+- `mf req trace` 默认只追踪当前路标并排除 archive；BUG 按 id 去重；SPEC 只匹配 `SPEC-*.md`；`--archive` 显式审计历史。
+- `mf release freeze` 使用 ROADMAP 的 `version_major`/`version_range` 声明映射；`--force` 必须带 `--reason` 与 `--approved-by` 并写入发布清单 override。
 
 ### 8.3 角色权限矩阵
 

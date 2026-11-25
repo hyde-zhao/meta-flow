@@ -69,6 +69,7 @@ from .workspace import (
     find_workspace_root,
     resolve_contract,
     workspace_add_project,
+    workspace_attach,
     workspace_init,
     workspace_link,
     workspace_status,
@@ -104,7 +105,16 @@ def _effective_role(args: argparse.Namespace) -> tuple[str, Path | None]:
     detected_role, detected_root = detect_role(Path.cwd())
     env_role = os.environ.get("MF_ROLE")
     if env_role in ROLE_VALUES:
-        return env_role, detected_root if detected_role == env_role else None
+        if detected_role == env_role:
+            return env_role, detected_root
+        # 无交付根绑定时允许 --project-dir/--path 显式绑定（MFP-0012）
+        for attr in ("project_dir", "path"):
+            raw = getattr(args, attr, None)
+            if raw:
+                candidate_role, candidate_root = detect_role(Path(raw))
+                if candidate_role == env_role:
+                    return env_role, candidate_root
+        return env_role, None
     if detected_role != "unbound":
         return detected_role, detected_root
     for attr in ("project_dir", "path"):
@@ -114,6 +124,26 @@ def _effective_role(args: argparse.Namespace) -> tuple[str, Path | None]:
             if candidate_role != "unbound":
                 return candidate_role, candidate_root
     return "unbound", None
+
+
+def _worker_task_scope(args: argparse.Namespace) -> tuple[str, Path | None, str | None]:
+    """解析任务命令的 worker 交付作用域（MFP-0012）。
+
+    worker 无交付根绑定时要求 --project-dir 指向交付库；否则拒绝跨交付操作。
+    """
+    role, root = _effective_role(args)
+    if role != "worker":
+        return role, root, None
+    if root is None:
+        raise WorkspaceError(
+            "worker 无交付根绑定；请用 --project-dir 指定交付库，或从交付库目录运行", 3
+        )
+    delivery = _worker_delivery(root)
+    if not delivery:
+        raise WorkspaceError(
+            f"交付库缺少 delivery.yaml，无法确定任务作用域: {root}", 3
+        )
+    return role, root, delivery
 
 
 def _enforce_role(args: argparse.Namespace) -> None:
@@ -136,8 +166,8 @@ def _enforce_role(args: argparse.Namespace) -> None:
     if command == "workspace":
         if role == "manager":
             return
-        if action == "init" and role == "unbound":
-            # 首次初始化时 workspace.yaml 尚不存在：已安装 manager/maintainer 的项目可直接 bootstrap
+        if action in {"init", "attach"} and role == "unbound":
+            # 首次初始化/接入时 workspace.yaml 尚不存在：已安装 manager/maintainer 的项目可直接 bootstrap
             project_dir = getattr(args, "project_dir", ".")
             if bootstrap_install_role(Path(str(project_dir or "."))) in {"manager", "maintainer"}:
                 return
@@ -168,6 +198,16 @@ def _enforce_role(args: argparse.Namespace) -> None:
                 return
             raise WorkspaceError("worker 只能使用 improve --local 创建/查看本地 MFP", 3)
         raise WorkspaceError("无法确定角色；请在工作区根/子项目运行或设置 MF_ROLE", 3)
+    if command == "context":
+        if role == "manager":
+            return
+        if role == "worker" and action in {"show", "expand"}:
+            # R1：worker 受控查看/展开自己的任务 bundle 或 allowed_paths；
+            # 具体范围由 context.expand/hot_files 再校验，deny 区不放宽
+            return
+        raise WorkspaceError(
+            "context 命令只允许 manager；worker 仅可 show/expand 自己的任务范围", 3
+        )
     if command in MANAGER_PROJECT_COMMANDS:
         if role != "manager":
             raise WorkspaceError(f"{command} 命令只允许 manager", 3)
@@ -190,12 +230,13 @@ def _worker_delivery(role_root: Path | None) -> str | None:
 
 
 def _ensure_worker_scope(args: argparse.Namespace, task: dict[str, Any]) -> None:
-    role, root = _effective_role(args)
+    role, _root, delivery = _worker_task_scope(args)
     if role != "worker":
         return
-    delivery = _worker_delivery(root)
-    if delivery and task.get("delivery") and task.get("delivery") != delivery:
-        raise WorkspaceError(f"worker 只能访问交付库 {delivery} 的任务", 3)
+    if task.get("delivery") and task.get("delivery") != delivery:
+        raise WorkspaceError(
+            f"worker 只能访问交付库 {delivery} 的任务", 3
+        )
 
 
 def _print_doctor(errors: list[str], as_json: bool) -> int:
@@ -239,6 +280,18 @@ def _print_workspace_status(data: dict[str, Any]) -> None:
                 f"wave={lease.get('wave')} expires={lease.get('expires_at')}"
             )
         print(f"下一动作: {hot.get('next_action') or '-'}")
+    boundary = data.get("context_boundary") or {}
+    if boundary:
+        budget = boundary.get("budget") or {}
+        tiers = "/".join(boundary.get("tiers") or []) or "hot/warm/cold"
+        print(
+            f"上下文: {boundary.get('role')} 预算 {budget.get('files')} 文件/"
+            f"{budget.get('bytes')}B；分层 {tiers}；expand 需 --reason（mf context expand）"
+        )
+        areas = boundary.get("read_areas") or []
+        print("可读区: " + (", ".join(areas) if areas else "-"))
+        if boundary.get("review_gate"):
+            print(f"评审门: {boundary['review_gate']}")
     subprojects = data.get("subprojects") or []
     if not subprojects:
         print("子项目: 无")
@@ -262,6 +315,39 @@ def _workspace_view(root: Path) -> dict[str, Any]:
         contract = resolve_contract(root)
         data["hot_state"] = state.refresh_current(contract)
         data["tasks"] = task_summary(root)
+        policy_data = context.policy(contract)
+        roles = policy_data.get("roles") or {}
+        manager_budget = (roles.get("manager") or {}).get("budget") or {
+            "files": 12,
+            "bytes": 131072,
+        }
+        tiers = list((policy_data.get("tiers") or {}).keys())
+        roadmap_id = str((data.get("hot_state") or {}).get("roadmap") or "")
+        read_areas = []
+        for relative in (
+            f"roadmap/{roadmap_id}" if roadmap_id else None,
+            "requirements",
+            "architecture",
+            "specs",
+            "knowledge",
+            "verification",
+            "bugs",
+        ):
+            if relative and (contract / relative).is_dir():
+                read_areas.append(relative)
+        data["context_boundary"] = {
+            "role": "manager",
+            "budget": {
+                "files": int(manager_budget.get("files", 12)),
+                "bytes": int(manager_budget.get("bytes", 131072)),
+            },
+            "tiers": tiers,
+            "read_areas": read_areas,
+            "expand_reason_required": True,
+            "review_gate": "高风险任务由未参与实现的独立 reviewer 评审；实现者不自验收；"
+            "结论 PASS|PASS_WITH_RISK|NEEDS_REWORK|BLOCKED；"
+            "PASS_WITH_RISK 记录风险与接受人；每任务后 mf task prompt 明确 next_owner",
+        }
     except WorkspaceError:
         pass
     return data
@@ -340,6 +426,25 @@ def _cmd_workspace_init(args: argparse.Namespace) -> int:
     )
     print(f"契约库: {result['contract_dir']}")
     print(f"基线: {result['roadmap']}/{result['phase']} @ {result['version']}")
+    print(f"CLAUDE.md 导入: {result['claude_import']}")
+    print(f"README 链接: {result['readme_link_mode']}")
+    return 0
+
+
+def _cmd_workspace_attach(args: argparse.Namespace) -> int:
+    result = workspace_attach(
+        args.project_dir,
+        args.name,
+        contract_dir=args.contract_dir,
+        contract_remote=args.contract_remote,
+        link_mode=args.link_mode,
+    )
+    print(f"已接入契约库: {result['contract_dir']}")
+    print(f"项目: {result['project_name']} ({result['project_id']})")
+    print(f"基线: {result['roadmap']}/{result['phase']} @ {result['version']}")
+    print(f"子项目登记: {len(result['subprojects'])}")
+    if result["created"]:
+        print("补齐注册文件: " + ", ".join(result["created"]))
     print(f"CLAUDE.md 导入: {result['claude_import']}")
     print(f"README 链接: {result['readme_link_mode']}")
     return 0
@@ -632,9 +737,12 @@ def _cmd_task_create(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_list(args: argparse.Namespace) -> int:
-    role, root = _effective_role(args)
-    delivery = _worker_delivery(root) if role == "worker" else None
-    items = list_tasks(args.project_dir, status=args.status, delivery=delivery)
+    role, _root, delivery = _worker_task_scope(args)
+    items = list_tasks(
+        args.project_dir,
+        status=args.status,
+        delivery=delivery if role == "worker" else None,
+    )
     if args.json:
         _print_json(items)
         return 0
@@ -656,6 +764,7 @@ def _cmd_task_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_show(args: argparse.Namespace) -> int:
+    _worker_task_scope(args)
     path, data = load_task(args.project_dir, args.task_id)
     _ensure_worker_scope(args, data)
     if args.packet:
@@ -672,6 +781,7 @@ def _cmd_task_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_start(args: argparse.Namespace) -> int:
+    _worker_task_scope(args)
     _, current = load_task(args.project_dir, args.task_id)
     _ensure_worker_scope(args, current)
     data = start_task(args.project_dir, args.task_id, owner=args.owner)
@@ -680,6 +790,7 @@ def _cmd_task_start(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_submit(args: argparse.Namespace) -> int:
+    _worker_task_scope(args)
     _, current = load_task(args.project_dir, args.task_id)
     _ensure_worker_scope(args, current)
     data = submit_task(
@@ -712,6 +823,7 @@ def _cmd_task_reject(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_prompt(args: argparse.Namespace) -> int:
+    _worker_task_scope(args)
     _, data = load_task(args.project_dir, args.task_id)
     _ensure_worker_scope(args, data)
     print(prompt_text(args.project_dir, args.task_id), end="")
@@ -900,7 +1012,12 @@ def _cmd_req_trace(args: argparse.Namespace) -> int:
     roadmap = args.roadmap
     if roadmap is None and not args.all and args.req_id is None:
         roadmap = str(state.read_current(resolve_contract(args.project_dir)).get("roadmap") or "R1")
-    data = req.trace(args.project_dir, args.req_id, roadmap=roadmap)
+    data = req.trace(
+        args.project_dir,
+        args.req_id,
+        roadmap=roadmap,
+        include_archive=args.archive,
+    )
     if args.json:
         _print_json(data)
         return 0
@@ -1196,11 +1313,15 @@ def _cmd_release_freeze(args: argparse.Namespace) -> int:
         version=args.version,
         note=args.note,
         force=args.force,
+        reason=args.reason,
+        approved_by=args.approved_by,
     )
     print(f"已冻结: {result['version']} ({result['roadmap']})")
     print(f"清单: {result['manifest']}")
     print(f"published: {result['published']}；冻结不等于发布")
     print(f"已知问题: {result['known_issues']}")
+    if args.force:
+        print(f"override: reason={args.reason or '-'} approved_by={args.approved_by or '-'}")
     return 0
 
 
@@ -1219,7 +1340,8 @@ def _cmd_context_show(args: argparse.Namespace) -> int:
         _print_json(data)
         return 0
     print(f"当前: {data['roadmap']} / {data['phase']} ({data.get('phase_status')})")
-    print("热文件:")
+    label = "任务 bundle 文件" if data.get("scope") == "task-bundle" else "热文件"
+    print(f"{label}:")
     for item in data["files"]:
         size = f"{item['bytes']}B" if item.get("exists") else "missing"
         print(f"  {'OK' if item['exists'] else 'MISS'} {item['path']} ({size})")
@@ -1249,12 +1371,16 @@ def _cmd_context_log(args: argparse.Namespace) -> int:
         return 0
     for item in items:
         print(
-            "{ts} {actor} {event} {path} reason={reason}".format(
+            "{ts} {actor} {event} {path} reason={reason} tool={tool} "
+            "decision={decision} task={task}".format(
                 ts=item.get("ts"),
                 actor=item.get("actor"),
                 event=item.get("event"),
                 path=item.get("path"),
                 reason=item.get("reason"),
+                tool=item.get("tool") or "-",
+                decision=item.get("decision") or "-",
+                task=item.get("task") or "-",
             )
         )
     return 0
@@ -1357,6 +1483,13 @@ def build_parser() -> argparse.ArgumentParser:
     ws_init.add_argument("--roadmap-title", help="路标标题（默认按 roadmap 推导）")
     ws_init.add_argument("--force", action="store_true")
     ws_init.set_defaults(func=_cmd_workspace_init)
+    ws_attach = workspace_sub.add_parser("attach", help="接入已有 contract 仓，不覆盖既有内容")
+    ws_attach.add_argument("--project-dir", default=".")
+    ws_attach.add_argument("--name", required=True)
+    ws_attach.add_argument("--contract-dir", required=True)
+    ws_attach.add_argument("--contract-remote")
+    ws_attach.add_argument("--link-mode", choices=["auto", "symlink", "copy"], default="auto")
+    ws_attach.set_defaults(func=_cmd_workspace_attach)
     ws_add = workspace_sub.add_parser("add-project")
     ws_add.add_argument("--project-dir", default=".")
     ws_add.add_argument("--name", required=True)
@@ -1520,6 +1653,11 @@ def build_parser() -> argparse.ArgumentParser:
     req_trace.add_argument("--project-dir", default=".")
     req_trace.add_argument("--roadmap")
     req_trace.add_argument("--all", action="store_true", help="追踪所有路标；默认当前路标")
+    req_trace.add_argument(
+        "--archive",
+        action="store_true",
+        help="同时扫描 archive（默认只追踪当前路标，避免旧任务/重复 BUG）",
+    )
     req_trace.add_argument("--json", action="store_true")
     req_trace.set_defaults(func=_cmd_req_trace)
     req_validate = req_sub.add_parser("validate")
@@ -1674,6 +1812,8 @@ def build_parser() -> argparse.ArgumentParser:
     release_freeze.add_argument("--version")
     release_freeze.add_argument("--note")
     release_freeze.add_argument("--force", action="store_true")
+    release_freeze.add_argument("--reason", help="--force 的可审计原因")
+    release_freeze.add_argument("--approved-by", dest="approved_by", help="--force 的批准人/记录")
     release_freeze.set_defaults(func=_cmd_release_freeze)
     release_show = release_sub.add_parser("show")
     release_show.add_argument("--project-dir", default=".")

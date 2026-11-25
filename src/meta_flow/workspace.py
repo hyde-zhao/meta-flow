@@ -471,6 +471,10 @@ def workspace_init(
                     "id": roadmap,
                     "title": roadmap_title,
                     "status": "active",
+                    # 显式声明项目版本映射：release freeze 优先使用 version_major，
+                    # 不在代码里把路标编号硬编码为 MAJOR（BUG-0011/MFP-0006）
+                    "version_major": int(major),
+                    "version_minor": int(minor),
                     "version_range": version_range,
                     "version_target": version_target,
                     "goal": "完成第一个可交付版本" if roadmap == "R1" else f"{roadmap} 基线接入",
@@ -572,6 +576,11 @@ def workspace_init(
 
     _git_init(contract)
     _git_remote_add(contract, contract_remote)
+    # workspace init 会重写根 CLAUDE.md（改为 @ 导入），必须同步安装记录 digest，
+    # 否则 uninstall 会把 CLAUDE.md 误判为 modified（BUG-0007）
+    from .install import refresh_install_files
+
+    refresh_install_files(root)
     return {
         "root": str(root),
         "contract_dir": str(contract),
@@ -579,6 +588,186 @@ def workspace_init(
         "roadmap": roadmap,
         "phase": phase,
         "version": version,
+        "claude_import": links["claude_import"],
+        "readme_link_mode": links["readme_link_mode"],
+    }
+
+
+def workspace_attach(
+    root: str | Path,
+    name: str,
+    *,
+    contract_dir: str | Path | None = None,
+    contract_remote: str | None = None,
+    link_mode: str = "auto",
+) -> dict[str, Any]:
+    """接入已有 contract 仓（D1-A/D3，BUG-0006）。
+
+    只导入 contract 的注册与状态元数据（路标、阶段、版本、workspace 注册、
+    子项目登记），生成根目录链接并登记安装记录；不复制、不改写已有 contract
+    内容，不导入任何源码/实现。已存在冲突元数据时显式报错。
+    """
+    root = Path(root).expanduser().resolve()
+    install_manifest = root / INSTALL_REL
+    if not install_manifest.is_file():
+        raise WorkspaceError(f"缺少项目安装记录: {install_manifest}；先运行 mf install claude")
+    install_data = _load_yaml(install_manifest)
+    if install_data.get("role") not in {"manager", "maintainer"}:
+        raise WorkspaceError("当前项目不是 manager/maintainer 安装")
+    if (root / LOCAL_WORKSPACE).is_file():
+        raise WorkspaceError(
+            f"工作区已存在: {root / LOCAL_WORKSPACE}；接入请使用 mf workspace link，"
+            "不要覆盖已有工作区注册"
+        )
+    if not contract_dir:
+        raise WorkspaceError("workspace attach 需要 --contract-dir 指定已有 contract")
+    if link_mode not in {"auto", "symlink", "copy"}:
+        raise WorkspaceError("link_mode 只能是 auto|symlink|copy")
+
+    raw = Path(contract_dir).expanduser()
+    contract = (root / raw).resolve() if not raw.is_absolute() else raw.resolve()
+    if not contract.is_relative_to(root):
+        raise WorkspaceError("contract 目录必须在项目根目录下，才能使用 @ 导入")
+    if not contract.is_dir():
+        raise WorkspaceError(f"contract 目录不存在: {contract}")
+    if contract == root:
+        raise WorkspaceError("contract 目录不能是项目根目录")
+
+    role_path = contract / CONTRACT_ROLE
+    if role_path.is_file():
+        role_data = _load_yaml(role_path)
+        if role_data.get("role") != "manager":
+            raise WorkspaceError(f"目标目录不是 manager contract: {contract}")
+    manifest_path = contract / "workspace" / WORKSPACE_MANIFEST
+    roadmap_path = contract / "roadmap" / "ROADMAP.yaml"
+    if not manifest_path.is_file() and not roadmap_path.is_file():
+        raise WorkspaceError(
+            f"目录不是已有 contract（缺少 workspace/{WORKSPACE_MANIFEST} 与 "
+            f"roadmap/ROADMAP.yaml）: {contract}"
+        )
+    if (contract / LOCAL_WORKSPACE).is_file():
+        raise WorkspaceError(f"目标 contract 内存在工作区注册，拒绝接入: {contract / LOCAL_WORKSPACE}")
+
+    project_id = slugify(name)
+    manifest_data = _load_optional_yaml(manifest_path)
+    subprojects: list[dict[str, Any]] = []
+    if manifest_data is not None:
+        project = manifest_data.get("project") or {}
+        registered_id = str(project.get("id") or "")
+        registered_name = str(project.get("name") or "")
+        if registered_id and registered_id != project_id:
+            raise WorkspaceError(
+                f"contract 已注册项目 id={registered_id}，与 --name={name} 冲突：不覆盖已有注册"
+            )
+        if registered_name and slugify(registered_name) != project_id:
+            raise WorkspaceError(
+                f"contract 已注册项目 name={registered_name}，与 --name={name} 冲突：不覆盖已有注册"
+            )
+        if registered_name:
+            name = registered_name
+        project_id = registered_id or project_id
+        contract_remote = contract_remote or (
+            str(project.get("contract_remote")) if project.get("contract_remote") else None
+        )
+        subprojects = [
+            dict(item)
+            for item in manifest_data.get("subprojects") or []
+            if isinstance(item, dict)
+        ]
+
+    workspace_dir = contract / "workspace"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    created: list[str] = []
+    if not (workspace_dir / "CLAUDE.md").is_file():
+        _write(
+            workspace_dir / "CLAUDE.md",
+            _read_or(root / "CLAUDE.md", templates.MANAGER_CLAUDE),
+        )
+        created.append("workspace/CLAUDE.md")
+    if not (workspace_dir / "README.md").is_file():
+        _write(
+            workspace_dir / "README.md",
+            _read_or(root / "README.md", templates.PROJECT_README),
+        )
+        created.append("workspace/README.md")
+    if manifest_data is None:
+        manifest_data = {
+            "schema": 1,
+            "project": {
+                "name": name,
+                "id": project_id,
+                "contract_dir": str(contract.relative_to(root)),
+                "contract_remote": contract_remote,
+                "link_mode": link_mode,
+            },
+            "subprojects": subprojects,
+            "template_version": global_store.load_manifest().get("template_version"),
+        }
+        _write_contract_manifest(contract, manifest_data)
+        created.append(f"workspace/{WORKSPACE_MANIFEST}")
+    if not role_path.is_file():
+        _write(contract / CONTRACT_ROLE, "role: manager\nworkspace_root: ..\n")
+        created.append(str(CONTRACT_ROLE))
+
+    state_path = contract / "state" / "current.json"
+    current: dict[str, Any] = {}
+    if state_path.is_file():
+        try:
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+            current = loaded if isinstance(loaded, dict) else {}
+        except json.JSONDecodeError as exc:
+            raise WorkspaceError(f"contract state/current.json 不是合法 JSON: {exc}") from exc
+    roadmap_data = _load_optional_yaml(roadmap_path) or {}
+    roadmaps = [
+        item for item in roadmap_data.get("roadmaps") or [] if isinstance(item, dict)
+    ]
+    active = next((item for item in roadmaps if item.get("status") == "active"), {})
+    selected = active or (roadmaps[-1] if roadmaps else {})
+    roadmap = str(current.get("roadmap") or selected.get("id") or "R1")
+    phase = str(current.get("phase") or "P1")
+    version = str(current.get("version") or selected.get("version_target") or "0.0.0")
+    if not state_path.is_file():
+        # 导入基线：为缺失状态的已有 contract 生成最小 current.json，不触碰其他内容
+        _write(
+            state_path,
+            _initial_state(project_id, roadmap=roadmap, phase=phase, version=version),
+        )
+        created.append("state/current.json")
+
+    local = {
+        "schema": 1,
+        "project_id": project_id,
+        "project_name": name,
+        "contract_dir": str(contract.relative_to(root)),
+        "contract_remote": contract_remote,
+        "readme_link_mode": link_mode,
+        "subprojects": subprojects,
+        "installed_at": _now(),
+        "attached_at": _now(),
+    }
+    _dump_yaml(root / LOCAL_WORKSPACE, local)
+    links = _refresh_root_links(root, contract, local)
+    local.update(links)
+    _dump_yaml(root / LOCAL_WORKSPACE, local)
+
+    install_data["contract_dir"] = str(contract.relative_to(root))
+    install_data["link_mode"] = links["readme_link_mode"]
+    install_data["updated_at"] = _now()
+    _dump_yaml(install_manifest, install_data)
+
+    from .install import refresh_install_files
+
+    refresh_install_files(root)
+    return {
+        "root": str(root),
+        "contract_dir": str(contract),
+        "project_id": project_id,
+        "project_name": name,
+        "roadmap": roadmap,
+        "phase": phase,
+        "version": version,
+        "subprojects": subprojects,
+        "created": created,
         "claude_import": links["claude_import"],
         "readme_link_mode": links["readme_link_mode"],
     }
@@ -774,6 +963,10 @@ def workspace_link(root: str | Path) -> dict[str, Any]:
     local.update(links)
     local["linked_at"] = _now()
     _dump_yaml(root / LOCAL_WORKSPACE, local)
+    # 根 CLAUDE.md 被重写后，同步 install.yaml digest（BUG-0007）
+    from .install import refresh_install_files
+
+    refresh_install_files(root)
     return {"root": str(root), **links}
 
 
