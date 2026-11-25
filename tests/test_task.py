@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from meta_flow.global_store import bootstrap
@@ -143,3 +145,49 @@ def test_packet_and_list(task_env):
     assert "REVIEW PACKET" in review_text
     items = list_tasks(root)
     assert items[0]["id"] == "R1-P1-T001"
+
+
+def test_submit_ignores_tool_caches_and_local_mfp(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    cache = root / ".pytest_cache" / "v" / "cache"
+    cache.mkdir(parents=True)
+    (cache / "nodeids").write_text("[]", encoding="utf-8")
+
+    create_task(root, "文档修正", risk="low", acceptance=_acceptance())
+    start_task(root, "R1-P1-T001")
+
+    (cache / "nodeids").write_text('["changed"]', encoding="utf-8")
+    (cache / "lastfailed").write_text("{}", encoding="utf-8")
+    ruff_cache = root / ".ruff_cache" / "0.17.6"
+    ruff_cache.mkdir(parents=True)
+    (ruff_cache / "cache").write_text("x", encoding="utf-8")
+    improvements = root / ".meta-flow" / "improvements"
+    improvements.mkdir(parents=True)
+    (improvements / "MFP-0001.yaml").write_text("id: MFP-0001\n", encoding="utf-8")
+
+    _write_worker_files(contract, "R1-P1-T001")
+    data = submit_task(root, "R1-P1-T001")
+    assert data["status"] == "submitted"
+
+
+def test_submit_ignores_legacy_snapshot_cache_entries(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    create_task(root, "文档修正", risk="low", acceptance=_acceptance())
+    start_task(root, "R1-P1-T001")
+
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / "T001"
+    snapshot = bundle / "evidence" / "worktree-start.json"
+    data = json.loads(snapshot.read_text(encoding="utf-8"))
+    data[".pytest_cache/v/cache/legacy"] = [1, 1]
+    data[".ruff_cache/0.17.6/legacy"] = [1, 1]
+    snapshot.write_text(json.dumps(data), encoding="utf-8")
+    (root / ".pytest_cache" / "v" / "cache").mkdir(parents=True)
+    (root / ".pytest_cache" / "v" / "cache" / "legacy").write_text("changed", encoding="utf-8")
+    (root / ".ruff_cache" / "0.17.6").mkdir(parents=True)
+    (root / ".ruff_cache" / "0.17.6" / "legacy").write_text("changed", encoding="utf-8")
+
+    _write_worker_files(contract, "R1-P1-T001")
+    data = submit_task(root, "R1-P1-T001")
+    assert data["status"] == "submitted"

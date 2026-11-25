@@ -490,7 +490,19 @@ def _changed_files(
     return sorted(names)
 
 
-_SNAPSHOT_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".mypy_cache"}
+_SNAPSHOT_SKIP = {
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".meta-flow",
+}
 
 
 def _worktree_snapshot(project: Path, exclude: Path | None = None) -> dict[str, list[int]]:
@@ -529,6 +541,11 @@ def _snapshot_changes(project: Path, bundle: Path, exclude: Path | None = None) 
         before = json.loads(snapshot_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+    before = {
+        str(path): meta
+        for path, meta in before.items()
+        if not any(part in _SNAPSHOT_SKIP for part in Path(str(path)).parts)
+    }
     after = _worktree_snapshot(project, exclude)
     changed = set()
     for path, meta in after.items():

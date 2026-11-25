@@ -19,6 +19,19 @@ INSTALL_REL = Path(".meta-flow/install.yaml")
 SETTINGS_REL = Path(".claude/settings.json")
 CLAUDE_REL = Path("CLAUDE.md")
 README_REL = Path("README.md")
+GITIGNORE_REL = Path(".gitignore")
+GITIGNORE_BLOCK_START = "# >>> meta-flow install mirror >>>"
+GITIGNORE_BLOCK_END = "# <<< meta-flow install mirror <<<"
+GITIGNORE_PATTERNS = (
+    "CLAUDE.md",
+    ".claude/",
+    ".meta-flow/",
+    "__pycache__/",
+    "*.py[cod]",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    "*.bak",
+)
 
 
 class InstallError(Exception):
@@ -221,6 +234,60 @@ def _write_manifest(project: Path, data: dict[str, Any]) -> Path:
     return path
 
 
+def _gitignore_block() -> str:
+    lines = [GITIGNORE_BLOCK_START, *GITIGNORE_PATTERNS, GITIGNORE_BLOCK_END]
+    return "\n".join(lines) + "\n"
+
+
+def _is_git_repo(project: Path) -> bool:
+    return (project / ".git").exists()
+
+
+def _apply_gitignore_block(text: str) -> str:
+    block = _gitignore_block()
+    if GITIGNORE_BLOCK_START in text and GITIGNORE_BLOCK_END in text:
+        before, rest = text.split(GITIGNORE_BLOCK_START, 1)
+        _, after = rest.split(GITIGNORE_BLOCK_END, 1)
+        after = after[1:] if after.startswith("\n") else after
+        return before + block + after
+    if not text.strip():
+        return block
+    prefix = text if text.endswith("\n") else text + "\n"
+    return prefix + "\n" + block
+
+
+def ensure_gitignore(project: Path) -> dict[str, Any]:
+    """git 仓库维护安装镜像忽略块；非 git 仓库跳过。"""
+    if not _is_git_repo(project):
+        return {"path": None, "updated": False, "skipped": "not-a-git-repo"}
+    target = project / GITIGNORE_REL
+    current = target.read_text(encoding="utf-8") if target.is_file() else ""
+    new_text = _apply_gitignore_block(current)
+    if new_text == current:
+        return {"path": str(GITIGNORE_REL), "updated": False, "skipped": None}
+    target.write_text(new_text, encoding="utf-8")
+    return {"path": str(GITIGNORE_REL), "updated": True, "skipped": None}
+
+
+def remove_gitignore(project: Path) -> dict[str, Any]:
+    """卸载时移除安装镜像忽略块，保留项目自定义规则。"""
+    target = project / GITIGNORE_REL
+    if not target.is_file():
+        return {"path": None, "removed": False}
+    text = target.read_text(encoding="utf-8")
+    if GITIGNORE_BLOCK_START not in text or GITIGNORE_BLOCK_END not in text:
+        return {"path": str(GITIGNORE_REL), "removed": False}
+    before, rest = text.split(GITIGNORE_BLOCK_START, 1)
+    _, after = rest.split(GITIGNORE_BLOCK_END, 1)
+    after = after[1:] if after.startswith("\n") else after
+    new_text = (before.rstrip() + "\n" + after.lstrip("\n")).strip()
+    if new_text:
+        target.write_text(new_text + "\n", encoding="utf-8")
+    else:
+        target.unlink()
+    return {"path": str(GITIGNORE_REL), "removed": True}
+
+
 def load_install_manifest(project: Path) -> dict[str, Any]:
     path = project / INSTALL_REL
     if not path.is_file():
@@ -332,6 +399,7 @@ def install_root(
         "settings": settings_info,
         "readme": {"path": str(README_REL), "created": readme_created},
     }
+    manifest["gitignore"] = ensure_gitignore(project)
     _write_manifest(project, manifest)
 
     result: dict[str, Any] = {
@@ -339,6 +407,7 @@ def install_root(
         "agents": agents,
         "install_manifest": str(project / INSTALL_REL),
         "contract": None,
+        "gitignore": manifest["gitignore"],
     }
     if init_contract:
         from .workspace import workspace_init
@@ -452,15 +521,16 @@ def install_worker(
         "settings": settings_info,
         "readme": {"path": str(README_REL), "created": readme_created},
     }
-    _write_manifest(project, manifest)
-
     _git_init(project)
     _git_remote_add(project, remote)
+    manifest["gitignore"] = ensure_gitignore(project)
+    _write_manifest(project, manifest)
 
     return {
         "project_dir": str(project),
         "delivery": delivery,
         "install_manifest": str(project / INSTALL_REL),
+        "gitignore": manifest["gitignore"],
     }
 
 
@@ -517,6 +587,9 @@ def uninstall_claude(
     if install_path.is_file():
         install_path.unlink()
         removed.append(str(INSTALL_REL))
+    gitignore = remove_gitignore(project)
+    if gitignore["removed"]:
+        removed.append(str(GITIGNORE_REL))
     if purge:
         for relative in (".meta-flow/workspace.yaml", "mf.workspace.yaml"):
             path = project / relative
@@ -527,7 +600,12 @@ def uninstall_claude(
     if meta_dir.is_dir() and not any(meta_dir.iterdir()):
         meta_dir.rmdir()
 
-    return {"project_dir": str(project), "removed": removed, "skipped": skipped}
+    return {
+        "project_dir": str(project),
+        "removed": removed,
+        "skipped": skipped,
+        "gitignore": gitignore,
+    }
 
 
 def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str, Any]:
@@ -574,5 +652,11 @@ def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str
         path = project / str(item.get("path", ""))
         if path.is_file():
             item["digest"] = _digest_file(path)
+    manifest["gitignore"] = ensure_gitignore(project)
     _write_manifest(project, manifest)
-    return {"project_dir": str(project), "updated": updated, "role": role}
+    return {
+        "project_dir": str(project),
+        "updated": updated,
+        "role": role,
+        "gitignore": manifest["gitignore"],
+    }

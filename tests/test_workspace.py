@@ -67,6 +67,23 @@ def test_add_project(ws):
     assert "frontend" in manifest
 
 
+def test_add_project_writes_gitignore(ws):
+    root = ws["root"]
+    assert not (root / ".gitignore").exists()
+
+    workspace_add_project(root, "frontend", "frontend")
+    gitignore = root / "frontend" / ".gitignore"
+    first = gitignore.read_text(encoding="utf-8")
+    for pattern in ("CLAUDE.md", ".claude/", ".meta-flow/"):
+        assert pattern in first
+
+    workspace_add_project(root, "frontend", "frontend")
+    assert gitignore.read_text(encoding="utf-8") == first
+
+    assert workspace_sync(root, check=True)["ok"]
+    assert doctor(root) == []
+
+
 def test_workspace_link_recreates(ws):
     root = ws["root"]
     (root / "CLAUDE.md").unlink()
