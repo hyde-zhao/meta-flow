@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from . import global_store, templates
+from .state import VALID_PHASES
 
 LOCAL_META = Path(".meta-flow")
 INSTALL_REL = LOCAL_META / "install.yaml"
@@ -29,6 +30,7 @@ _IMPROVEMENTS_README = (
 )
 _TEMPLATES_README = "# 项目模板\n\n本目录由 manager 维护，worker 只读。\n"
 _ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 class WorkspaceError(Exception):
@@ -137,6 +139,26 @@ def detect_role(start: Path) -> tuple[str, Path | None]:
     if workspace is not None:
         return "manager", workspace
     return "unbound", None
+
+
+def bootstrap_install_role(root: str | Path) -> str | None:
+    """workspace 元数据生成前，从安装记录推导可执行 workspace init 的角色。
+
+    仅当目标目录尚无 .meta-flow/workspace.yaml 且安装记录为 manager/maintainer
+    时返回角色；用于首次 init 免手工 MF_ROLE。
+    """
+    base = Path(root).expanduser().resolve()
+    if (base / LOCAL_WORKSPACE).is_file():
+        return None
+    install_path = base / INSTALL_REL
+    if not install_path.is_file():
+        return None
+    try:
+        data = _load_yaml(install_path)
+    except WorkspaceError:
+        return None
+    role = str(data.get("role") or "")
+    return role if role in {"manager", "maintainer"} else None
 
 
 def _load_local_workspace(root: Path) -> dict[str, Any]:
@@ -357,15 +379,36 @@ def workspace_init(
     contract_remote: str | None = None,
     link_mode: str = "auto",
     force: bool = False,
+    roadmap: str = "R1",
+    phase: str = "P1",
+    version: str = "1.0.0-alpha.1",
+    roadmap_title: str | None = None,
 ) -> dict[str, Any]:
-    """在已安装 manager 的项目根创建 contract 仓与 workspace 元数据。"""
+    """在已安装 manager 的项目根创建 contract 仓与 workspace 元数据。
+
+    可通过 roadmap/phase/version 声明既有基线（如存量 0.x 项目的 R0/P4/0.1.1），
+    避免固定生成 R1/P1 的失真状态。
+    """
     root = Path(root).expanduser().resolve()
     install_manifest = root / INSTALL_REL
     if not install_manifest.is_file():
         raise WorkspaceError(f"缺少项目安装记录: {install_manifest}；先运行 mf install claude")
     install_data = _load_yaml(install_manifest)
-    if install_data.get("role") != "manager":
-        raise WorkspaceError("当前项目不是 manager 安装")
+    if install_data.get("role") not in {"manager", "maintainer"}:
+        raise WorkspaceError("当前项目不是 manager/maintainer 安装")
+
+    if not re.fullmatch(r"R\d+", str(roadmap)):
+        raise WorkspaceError(f"roadmap 必须形如 R0/R1: {roadmap}")
+    if phase not in VALID_PHASES:
+        raise WorkspaceError(f"phase 必须是 {'/'.join(VALID_PHASES)}: {phase}")
+    version_match = _VERSION_RE.fullmatch(str(version))
+    if version_match is None:
+        raise WorkspaceError(f"version 必须形如 x.y.z 或 x.y.z-<pre>: {version}")
+    major, minor, patch = version_match.group(1), version_match.group(2), version_match.group(3)
+    version_target = f"{major}.{minor}.{patch}"
+    version_range = f"{major}.x"
+    if roadmap_title is None:
+        roadmap_title = "v1 MVP" if roadmap == "R1" else f"{roadmap} 基线"
 
     project_id = slugify(name)
     if contract_dir is None:
@@ -413,23 +456,24 @@ def workspace_init(
         _TEMPLATES_README,
     )
 
-    _write(contract / "project" / "PROJECT-PLAN.md", templates.PROJECT_PLAN)
-    _write(
-        contract / "project" / "INIT-CHECKLIST.md",
-        templates.ARTIFACT_TEMPLATES["INIT-CHECKLIST.md"],
+    project_plan = templates.PROJECT_PLAN.replace("roadmap: R1", f"roadmap: {roadmap}")
+    _write(contract / "project" / "PROJECT-PLAN.md", project_plan)
+    init_checklist = templates.ARTIFACT_TEMPLATES["INIT-CHECKLIST.md"].replace(
+        "R1 与 R1-PLAN", f"{roadmap} 与 {roadmap}-PLAN"
     )
+    _write(contract / "project" / "INIT-CHECKLIST.md", init_checklist)
     _dump_yaml(
         contract / "roadmap" / "ROADMAP.yaml",
         {
             "schema": 1,
             "roadmaps": [
                 {
-                    "id": "R1",
-                    "title": "v1 MVP",
+                    "id": roadmap,
+                    "title": roadmap_title,
                     "status": "active",
-                    "version_range": "1.x",
-                    "version_target": "1.0.0",
-                    "goal": "完成第一个可交付版本",
+                    "version_range": version_range,
+                    "version_target": version_target,
+                    "goal": "完成第一个可交付版本" if roadmap == "R1" else f"{roadmap} 基线接入",
                     "entry_criteria": ["需求基线确认"],
                     "exit_criteria": ["P5 发布通过"],
                     "non_goals": ["多交付库并行"],
@@ -438,12 +482,16 @@ def workspace_init(
         },
     )
     _write(
-        contract / "roadmap" / "R1" / "PLAN.md",
-        templates.ARTIFACT_TEMPLATES["ROADMAP-PLAN.md"].replace("R{n}", "R1"),
+        contract / "roadmap" / roadmap / "PLAN.md",
+        templates.ARTIFACT_TEMPLATES["ROADMAP-PLAN.md"].replace("R{n}", roadmap),
     )
-    for phase in ("P1", "P2", "P3", "P4", "P5"):
-        phase_plan = templates.ARTIFACT_TEMPLATES["PHASE-PLAN.md"].replace("R{n}", "R1").replace("P{n}", phase)
-        _write(contract / "roadmap" / "R1" / "phases" / phase / "PLAN.md", phase_plan)
+    for phase_id in VALID_PHASES:
+        phase_plan = (
+            templates.ARTIFACT_TEMPLATES["PHASE-PLAN.md"]
+            .replace("R{n}", roadmap)
+            .replace("P{n}", phase_id)
+        )
+        _write(contract / "roadmap" / roadmap / "phases" / phase_id / "PLAN.md", phase_plan)
     _dump_yaml(
         contract / "requirements" / "REQUIREMENTS.yaml",
         {"schema": 1, "requirements": []},
@@ -461,7 +509,10 @@ def workspace_init(
     _write(contract / "policies" / "CONTEXT-POLICY.yaml", templates.CONTEXT_POLICY)
     _write(contract / "state" / "ledger.ndjson", "")
     _write(contract / "state" / "READ-LOG.ndjson", "")
-    _write(contract / "state" / "current.json", _initial_state(project_id))
+    _write(
+        contract / "state" / "current.json",
+        _initial_state(project_id, roadmap=roadmap, phase=phase, version=version),
+    )
     _write(contract / "archive" / "README.md", templates.ARCHIVE_README)
     _write(contract / ".gitignore", "state/current.json\n.meta-flow/*.lock\n*.bak\n")
     _write(contract / CONTRACT_ROLE, "role: manager\nworkspace_root: ..\n")
@@ -525,26 +576,35 @@ def workspace_init(
         "root": str(root),
         "contract_dir": str(contract),
         "project_id": project_id,
+        "roadmap": roadmap,
+        "phase": phase,
+        "version": version,
         "claude_import": links["claude_import"],
         "readme_link_mode": links["readme_link_mode"],
     }
 
 
-def _initial_state(project_id: str) -> str:
+def _initial_state(
+    project_id: str,
+    *,
+    roadmap: str = "R1",
+    phase: str = "P1",
+    version: str = "1.0.0-alpha.1",
+) -> str:
     return (
         json.dumps(
             {
                 "schema": 1,
                 "project_id": project_id,
-                "roadmap": "R1",
-                "phase": "P1",
+                "roadmap": roadmap,
+                "phase": phase,
                 "phase_status": "active",
-                "version": "1.0.0-alpha.1",
+                "version": version,
                 "counts": {},
                 "active_tasks": [],
                 "next_action": {
                     "type": "plan",
-                    "text": "完成 P1 计划与 INIT-CHECKLIST",
+                    "text": f"完成 {phase} 计划与 INIT-CHECKLIST",
                 },
                 "updated_at": _now(),
             },
@@ -593,7 +653,22 @@ def workspace_upgrade(root: str | Path, *, force: bool = False) -> dict[str, Any
         _write(contract / "knowledge" / "KNOWLEDGE.md", templates.KNOWLEDGE_MD)
     state_path = contract / "state" / "current.json"
     if not state_path.is_file():
-        _write(state_path, _initial_state(str(local.get("project_id") or "project")))
+        upgrade_roadmap = _load_optional_yaml(contract / "roadmap" / "ROADMAP.yaml") or {}
+        roadmaps = [
+            item for item in upgrade_roadmap.get("roadmaps") or [] if isinstance(item, dict)
+        ]
+        active = next((item for item in roadmaps if item.get("status") == "active"), None)
+        selected = active or (roadmaps[-1] if roadmaps else {})
+        baseline_roadmap = str(selected.get("id") or "R1")
+        baseline_version = str(selected.get("version_target") or "1.0.0-alpha.1")
+        _write(
+            state_path,
+            _initial_state(
+                str(local.get("project_id") or "project"),
+                roadmap=baseline_roadmap,
+                version=baseline_version,
+            ),
+        )
     else:
         try:
             state_data = json.loads(state_path.read_text(encoding="utf-8"))

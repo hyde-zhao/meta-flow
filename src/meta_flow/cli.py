@@ -62,6 +62,7 @@ from .task import (
 from .workspace import (
     INSTALL_REL,
     WorkspaceError,
+    bootstrap_install_role,
     detect_role,
     doctor,
     doctor_global,
@@ -133,9 +134,14 @@ def _enforce_role(args: argparse.Namespace) -> None:
             raise WorkspaceError("dev 命令只允许 maintainer", 3)
         return
     if command == "workspace":
-        if role != "manager":
-            raise WorkspaceError("workspace 命令只允许 manager", 3)
-        return
+        if role == "manager":
+            return
+        if action == "init" and role == "unbound":
+            # 首次初始化时 workspace.yaml 尚不存在：已安装 manager/maintainer 的项目可直接 bootstrap
+            project_dir = getattr(args, "project_dir", ".")
+            if bootstrap_install_role(Path(str(project_dir or "."))) in {"manager", "maintainer"}:
+                return
+        raise WorkspaceError("workspace 命令只允许 manager", 3)
     if command == "task":
         worker_actions = {"list", "show", "prompt"}
         manager_actions = {"create", "accept", "reject", "release", "graph", "plan", "next", "summary"}
@@ -327,8 +333,13 @@ def _cmd_workspace_init(args: argparse.Namespace) -> int:
         contract_remote=args.contract_remote,
         link_mode=args.link_mode,
         force=args.force,
+        roadmap=args.roadmap,
+        phase=args.phase,
+        version=args.version,
+        roadmap_title=args.roadmap_title,
     )
     print(f"契约库: {result['contract_dir']}")
+    print(f"基线: {result['roadmap']}/{result['phase']} @ {result['version']}")
     print(f"CLAUDE.md 导入: {result['claude_import']}")
     print(f"README 链接: {result['readme_link_mode']}")
     return 0
@@ -1340,6 +1351,10 @@ def build_parser() -> argparse.ArgumentParser:
     ws_init.add_argument("--contract-dir")
     ws_init.add_argument("--contract-remote")
     ws_init.add_argument("--link-mode", choices=["auto", "symlink", "copy"], default="auto")
+    ws_init.add_argument("--roadmap", default="R1", help="初始路标 ID（如 R0/R1）")
+    ws_init.add_argument("--phase", choices=["P1", "P2", "P3", "P4", "P5"], default="P1")
+    ws_init.add_argument("--version", default="1.0.0-alpha.1", help="当前版本（x.y.z[-pre]）")
+    ws_init.add_argument("--roadmap-title", help="路标标题（默认按 roadmap 推导）")
     ws_init.add_argument("--force", action="store_true")
     ws_init.set_defaults(func=_cmd_workspace_init)
     ws_add = workspace_sub.add_parser("add-project")

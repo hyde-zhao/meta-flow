@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from meta_flow.cli import main
+from meta_flow.install import install_root
+from meta_flow.workspace import workspace_init
 
 
 def _prepare(tmp_path, monkeypatch):
@@ -243,3 +247,60 @@ def test_cli_doctor_global(tmp_path, monkeypatch):
 def test_cli_role_unbound(tmp_path, monkeypatch):
     _prepare(tmp_path, monkeypatch)
     assert main(["role", "--path", str(tmp_path / "empty")]) == 2
+
+
+@pytest.mark.parametrize("agent", ["manager", "maintainer"])
+def test_cli_workspace_init_bootstrap_without_mf_role(
+    tmp_path, monkeypatch, capsys, agent
+):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    install_root(project, agent=agent)
+    # 首次初始化时没有 workspace.yaml，且不依赖手工 MF_ROLE
+    monkeypatch.delenv("MF_ROLE", raising=False)
+    monkeypatch.chdir(project)
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "workspace",
+                "init",
+                "--project-dir",
+                ".",
+                "--name",
+                "Bootstrap App",
+                "--roadmap",
+                "R0",
+                "--phase",
+                "P4",
+                "--version",
+                "0.1.1",
+            ]
+        )
+        == 0
+    )
+    contract = project / "bootstrap-app-contract"
+    current = json.loads((contract / "state" / "current.json").read_text(encoding="utf-8"))
+    assert (current["roadmap"], current["phase"], current["version"]) == ("R0", "P4", "0.1.1")
+    assert main(["doctor", "--path", str(project)]) == 0
+
+    capsys.readouterr()
+    assert main(["status", "--path", str(project), "--json"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["project"]["id"] == "bootstrap-app"
+    assert status["contract"]["dir"] == str(contract)
+
+
+def test_cli_explicit_role_overrides_directory_for_workspace(tmp_path, monkeypatch, capsys):
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    install_root(project)
+    workspace_init(project, "Demo App")
+    monkeypatch.chdir(project)
+    monkeypatch.delenv("MF_ROLE", raising=False)
+    capsys.readouterr()
+    assert main(["workspace", "status", "--project-dir", ".", "--json"]) == 0
+
+    # 显式 MF_ROLE 优先于目录推导：maintainer 不能借 workspace 根执行 workspace 命令
+    monkeypatch.setenv("MF_ROLE", "maintainer")
+    assert main(["workspace", "status", "--project-dir", ".", "--json"]) == 3
