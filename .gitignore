@@ -12,3 +12,14 @@ build/
 .metaflow/session-role.json
 .metaflow/*.lock
 contracts/state/current.json
+
+# >>> meta-flow install mirror >>>
+CLAUDE.md
+.claude/
+.meta-flow/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.bak
+# <<< meta-flow install mirror <<<
