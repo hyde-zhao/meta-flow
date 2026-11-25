@@ -97,12 +97,15 @@ ROLE_VALUES = {"manager", "worker", "maintainer"}
 
 
 def _effective_role(args: argparse.Namespace) -> tuple[str, Path | None]:
-    role, root = detect_role(Path.cwd())
-    if role != "unbound":
-        return role, root
+    # 显式 MF_ROLE 优先于目录推导：maintainer 可在 workspace 根维护工具源码，
+    # 不被目录识别出的 manager 角色压制；角色与目录一致时保留目录 root，
+    # 保证 main() 注入 MF_ROLE 后 worker 的交付库作用域校验仍然生效
+    detected_role, detected_root = detect_role(Path.cwd())
     env_role = os.environ.get("MF_ROLE")
     if env_role in ROLE_VALUES:
-        return env_role, None
+        return env_role, detected_root if detected_role == env_role else None
+    if detected_role != "unbound":
+        return detected_role, detected_root
     for attr in ("project_dir", "path"):
         raw = getattr(args, attr, None)
         if raw:
@@ -121,9 +124,7 @@ def _enforce_role(args: argparse.Namespace) -> None:
     if command in {"role", "status", "doctor", "bootstrap"}:
         return
     if command in {"install", "uninstall", "upgrade"}:
-        actor_role, _ = detect_role(Path.cwd())
-        if actor_role == "unbound":
-            actor_role = os.environ.get("MF_ROLE", "unbound")
+        actor_role, _ = _effective_role(args)
         if actor_role not in {"manager", "maintainer", "unbound"}:
             raise WorkspaceError("worker 不能安装/卸载/升级项目", 3)
         return

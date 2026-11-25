@@ -127,10 +127,14 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     path = _hook_path(payload, cwd)
     if path is None:
         return None
-    role, role_root = detect_role(cwd)
-    if role == "unbound":
-        env_role = os.environ.get("MF_ROLE")
-        role = env_role if env_role in {"manager", "worker", "maintainer"} else "unbound"
+    detected_role, detected_root = detect_role(cwd)
+    env_role = os.environ.get("MF_ROLE")
+    if env_role in {"manager", "worker", "maintainer"}:
+        # 与 CLI 一致：显式 MF_ROLE 优先于目录推导
+        role = env_role
+        role_root = detected_root if detected_role == env_role else None
+    else:
+        role, role_root = detected_role, detected_root
     if role == "unbound":
         return None
     try:

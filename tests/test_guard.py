@@ -86,6 +86,19 @@ def test_guard_manager_archive_and_delivery_source(env):
     assert decision and "交付库源码" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_guard_mf_role_overrides_directory_role(env, monkeypatch):
+    root, contract, _ = env
+    requirement = contract / "requirements" / "INDEX.md"
+    # 目录推导为 manager：可读需求
+    assert guard.pretool_decision(_payload("Read", root, requirement)) is None
+
+    # 显式 MF_ROLE=maintainer 优先：maintainer 不读项目契约内容
+    monkeypatch.setenv("MF_ROLE", "maintainer")
+    decision = guard.pretool_decision(_payload("Read", root, requirement))
+    assert decision is not None
+    assert "maintainer" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_guard_worker_scope(env):
     root, contract, sub = env
     create_task(

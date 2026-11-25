@@ -20,7 +20,7 @@ from meta_flow.task import (
     start_task,
     submit_task,
 )
-from meta_flow.workspace import workspace_add_project, workspace_init
+from meta_flow.workspace import detect_role, workspace_add_project, workspace_init
 
 
 @pytest.fixture()
@@ -239,6 +239,78 @@ def test_role_guard_blocks_cross_role_commands(env, monkeypatch):
     assert main(["req", "add", "--title", "越权", "--acceptance", "x"]) == 3
     assert main(["task", "accept", "R1-P1-T001"]) == 3
     assert main(["task", "start", "R1-P1-T001"]) == 0
+
+
+def test_mf_role_maintainer_runs_dev_at_workspace_root(env, monkeypatch, capsys):
+    root, _ = env
+    # 目录本身仍按 manager 识别；修复只改变角色解析优先级
+    assert detect_role(root)[0] == "manager"
+    monkeypatch.chdir(root)
+
+    # 未显式声明时，manager 不能执行 maintainer 的 dev 命令
+    assert main(["dev", "status", "--json"]) == 3
+
+    # 显式 MF_ROLE=maintainer 优先于目录推导，workspace 根可运行 mf dev
+    monkeypatch.setenv("MF_ROLE", "maintainer")
+    capsys.readouterr()
+    assert main(["dev", "status", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["source_dir"]
+
+
+def test_mf_role_priority_over_worker_directory(env, monkeypatch, capsys):
+    root, _ = env
+    workspace_add_project(root, "frontend", "frontend")
+    sub = root / "frontend"
+    assert detect_role(sub)[0] == "worker"
+    monkeypatch.chdir(sub)
+
+    assert main(["dev", "status", "--json"]) == 3
+
+    monkeypatch.setenv("MF_ROLE", "maintainer")
+    capsys.readouterr()
+    assert main(["dev", "status", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["source_dir"]
+
+
+def test_worker_delivery_scope_preserved_with_mf_role(env, monkeypatch, capsys):
+    root, _ = env
+    workspace_add_project(root, "alpha", "alpha")
+    workspace_add_project(root, "beta", "beta")
+    create_task(
+        root,
+        "alpha 任务",
+        risk="low",
+        delivery="alpha",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    create_task(
+        root,
+        "beta 任务",
+        risk="low",
+        delivery="beta",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    monkeypatch.chdir(root / "alpha")
+
+    def assert_scope() -> None:
+        capsys.readouterr()
+        assert main(["task", "list", "--json"]) == 0
+        items = json.loads(capsys.readouterr().out)
+        assert [item["id"] for item in items] == ["R1-P1-T001"]
+        assert main(["task", "show", "R1-P1-T002", "--packet"]) == 3
+        assert main(["task", "start", "R1-P1-T002"]) == 3
+        assert main(["task", "submit", "R1-P1-T002", "--handoff", "handoff.md"]) == 3
+
+    # 无用户 MF_ROLE：main() 注入 worker 后交付库作用域仍生效
+    assert_scope()
+
+    # 显式 MF_ROLE=worker（与目录角色一致）同样保留交付库作用域
+    monkeypatch.setenv("MF_ROLE", "worker")
+    assert_scope()
 
 
 def test_state_rebuilds_from_roadmap_and_tasks(env):
