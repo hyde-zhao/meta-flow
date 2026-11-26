@@ -280,7 +280,7 @@ mf phase enter P3
 # P3 exit -> enter P4 -> exit --approved-by user -> enter P5
 # P5 exit --approved-by user
 
-mf release freeze                 # 需要 P5 已退出且有用户批准记录
+mf release freeze                 # 阶段策略：P3 结束后可发；P4/P5 修复随时可发；P1/P2 禁止
 mf roadmap close R1               # 需要 P5 退出 + 用户批准 + 已冻结
 ```
 
@@ -313,8 +313,11 @@ mf release show
 - `FAIL` 验证必须关联 `--bug`。
 - `PASS` 验证把关联 BUG 置为 `verifying`，最终关闭仍由 manager 执行 `mf bug close`。
 - `task accept` 会把 fix 任务关联 BUG 置为 `fixed`；manager 验证后再关闭。
-- `release freeze` 检查 P5 用户门禁、需求、任务、blocker/critical BUG 与版本策略，
-  写 `release/RELEASE-<version>.yaml`；`published: false`。
+- `release freeze` 按阶段策略检查：P1/P2 禁止冻结/发布；P3 active 仅允许
+  alpha/预发布；P3 阶段结束（exited/done）后允许正式发布；P4/P5 的修复/补丁
+  可随时冻结，不要求阶段结束或 P5 退出。同时检查需求、任务、blocker/critical
+  BUG 与版本策略，写 `release/RELEASE-<version>.yaml`；`published: false`。
+  阶段门属用户门禁，`--force` 不能绕过；版本/技术校验仍可用 `--force`。
 - 版本策略：优先读取 ROADMAP 的 `version_major`/`version_range` 声明映射（支持
   R0/V1 1.0.x）；未声明的 MAJOR 不一致默认拒绝。`--force` 必须带
   `--reason` 与 `--approved-by`，并写入发布清单 `override` 与 ledger。

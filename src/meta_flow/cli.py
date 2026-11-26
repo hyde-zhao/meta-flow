@@ -1364,6 +1364,9 @@ def _cmd_release_freeze(args: argparse.Namespace) -> int:
         approved_by=args.approved_by,
     )
     print(f"已冻结: {result['version']} ({result['roadmap']})")
+    stage = result.get("stage") or {}
+    if stage:
+        print(f"阶段: {stage.get('phase')}/{stage.get('phase_status')}")
     print(f"清单: {result['manifest']}")
     print(f"published: {result['published']}；冻结不等于发布")
     print(f"已知问题: {result['known_issues']}")
@@ -1863,7 +1866,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     release_p = sub.add_parser("release", help="版本冻结（不等于发布）")
     release_sub = release_p.add_subparsers(dest="action", required=True)
-    release_freeze = release_sub.add_parser("freeze")
+    release_freeze = release_sub.add_parser(
+        "freeze",
+        help=(
+            "按阶段策略冻结：P1/P2 禁止；P3 active 仅预发布；P3 结束后允许；"
+            "P4/P5 修复/补丁随时允许"
+        ),
+    )
     release_freeze.add_argument("--project-dir", default=".")
     release_freeze.add_argument("--version")
     release_freeze.add_argument("--note")

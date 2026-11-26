@@ -8,6 +8,7 @@ import subprocess
 import pytest
 import yaml
 
+from meta_flow import state
 from meta_flow.cli import main
 from meta_flow.install import install_root
 from meta_flow.task import (
@@ -831,3 +832,63 @@ def test_cli_task_review_rework_prompt_and_state(tmp_path, monkeypatch, capsys):
     assert task["status"] == "in_progress"
     assert task["lease"] is not None
     assert task["rework"]["lease"] == task["lease"]["expires_at"]
+
+
+def test_cli_release_freeze_stage_policy(tmp_path, monkeypatch, capsys):
+    """A2 CLI 证据：P1 禁止冻结；P4 active 修复可冻结（BUG-0016）。"""
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    assert (
+        main(["install", "claude", "--project-dir", str(project), "--init-contract"])
+        == 0
+    )
+    contract = project / "project-contract"
+
+    # P1 active：拒绝并提示阶段门；--force 也不能绕过
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "release",
+                "freeze",
+                "--project-dir",
+                str(project),
+                "--version",
+                "1.0.0",
+                "--force",
+                "--reason",
+                "尝试绕过",
+                "--approved-by",
+                "user",
+            ]
+        )
+        == 1
+    )
+    err = capsys.readouterr().err
+    assert "P1" in err
+    assert "不允许冻结发布" in err
+
+    # P4 active：修复/补丁随时可冻结
+    current = state.read_current(contract)
+    current.update({"phase": "P4", "phase_status": "active"})
+    state.write_current(contract, current)
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "release",
+                "freeze",
+                "--project-dir",
+                str(project),
+                "--version",
+                "1.0.1",
+                "--note",
+                "P4 patch",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "已冻结: 1.0.1" in out
+    assert "阶段: P4/active" in out
+    assert (contract / "release" / "RELEASE-1.0.1.yaml").is_file()

@@ -264,6 +264,9 @@ mf task accept R0-P1-T001 --verdict PASS
 - `mf req add/list/update/trace/validate`。`mf req trace` 默认只追踪当前路标，
   排除 archive、BUG 按 id 去重、SPEC 只匹配 `SPEC-*.md`；审计历史用
   `mf req trace --archive`。
+- `mf release freeze` 阶段策略：P1/P2 禁止冻结/发布；P3 active 仅允许
+  alpha/预发布，P3 阶段结束（exited/done）后允许正式发布；P4/P5 的修复/补丁
+  可随时冻结，不要求阶段结束或 P5 退出。阶段门属用户门禁，`--force` 不能绕过。
 - `mf release freeze`：优先使用 ROADMAP 声明的 `version_major`/`version_range`
   （支持 R0/V1 1.0.x）；未声明的 MAJOR 不一致默认拒绝；`--force` 必须带
   `--reason` 与 `--approved-by`，并写入发布清单 `override` 与 ledger。
@@ -284,6 +287,7 @@ mf task accept R0-P1-T001 --verdict PASS
 | 根 CLAUDE.md 被判 modified | 运行 `mf workspace link` 刷新 install digest；再 `mf doctor` |
 | `mf dev status` 报源码不存在 | 运行 `mf dev clone` 或 `--source <有效源码目录>` |
 | release freeze 拒绝 MAJOR | 在 ROADMAP 声明 `version_major`/`version_range`；例外用 `--force --reason --approved-by` |
+| release freeze 阶段被拒 | P1/P2 禁止发布；P3 active 仅 alpha/预发布，先 `mf phase exit` 再正式冻结；P4/P5 修复可直接冻结（阶段门不可 `--force` 绕过） |
 | 追踪矩阵出现旧任务/重复 BUG | 使用默认当前路标追踪；仅在审计时 `--archive` |
 | 工作区内 pytest 角色门失败 | 0.1.1 起测试已隔离 cwd/MF_ROLE；仍失败时检查是否自定义 fixture 设置了角色 |
 | worker 读到 >64KB 文件被拒 | 用 `mf context expand <path> --reason packet_missing`；常规 Read/cat 受预算限制 |

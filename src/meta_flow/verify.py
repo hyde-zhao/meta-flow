@@ -202,6 +202,47 @@ def _declared_major(roadmap: dict[str, Any], roadmap_id: str) -> tuple[int, str]
         return 0, "default"
 
 
+PRE_RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+-[0-9A-Za-z][0-9A-Za-z.+-]*$")
+
+
+def _is_prerelease(version: str) -> bool:
+    """x.y.z-alpha.1 / -rc2 等预发布；+build 元数据不算预发布。"""
+    core = str(version).split("+", 1)[0]
+    return PRE_RELEASE_RE.fullmatch(core) is not None
+
+
+def release_stage_policy(phase: str, phase_status: str, version: str) -> str | None:
+    """返回阶段门拒绝原因；None 表示允许冻结（standards/VERSION.md §6）。
+
+    - P1/P2：禁止冻结/发布；
+    - P3 active：仅允许 alpha/预发布；P3 exited/done：允许正式发布；
+    - P4/P5（active/exited/done）：修复/补丁可随时冻结，不要求阶段结束或
+      P5 退出（BUG-0016）；
+    - done/closed：路标已结束，沿用允许语义。
+    阶段门属用户门禁，--force 不可绕过。
+    """
+    current = str(phase or "P1")
+    status = str(phase_status or "")
+    if current in {"P1", "P2"}:
+        return (
+            f"阶段 {current}/{status or 'unknown'} 不允许冻结发布："
+            "P1/P2 为规划/设计阶段，发布需等 P3 阶段结束"
+        )
+    if current == "P3":
+        if status in {"exited", "done"}:
+            return None
+        if _is_prerelease(str(version)):
+            return None
+        return (
+            f"阶段 P3/{status or 'unknown'} 仅允许 alpha/预发布版本冻结："
+            f"{version} 不是预发布版本（如 x.y.z-alpha.1）；"
+            "正式版本需等 P3 阶段结束（mf phase exit）后再冻结"
+        )
+    if current in {"P4", "P5", "done", "closed"}:
+        return None
+    return f"阶段 {current}/{status or 'unknown'} 不允许冻结发布"
+
+
 def release_freeze(
     project: str | Path,
     *,
@@ -247,13 +288,10 @@ def release_freeze(
         }
     phase = str(state.get("phase") or "P1")
     phase_status = str(state.get("phase_status") or "")
-    gate = state.get("last_phase_gate") or {}
-    if phase != "P5" or phase_status not in {"exited", "done"}:
-        raise VerifyError(f"当前阶段 {phase}/{phase_status} 未完成 P5 退出，不能冻结发布")
-    if gate.get("phase") != "P5" or gate.get("roadmap") != roadmap_id:
-        raise VerifyError("缺少 P5 阶段退出记录，不能冻结发布")
-    if not gate.get("approved_by"):
-        raise VerifyError("P5 退出缺少用户批准记录，不能冻结发布")
+    stage_error = release_stage_policy(phase, phase_status, version)
+    if stage_error:
+        # 阶段门属用户门禁：--force 只能绕过技术校验，不能绕过阶段策略
+        raise VerifyError(stage_error)
 
     requirements = _requirements(contract)
     scoped_reqs = [req for req in requirements if req.get("roadmap") == roadmap_id]
@@ -293,6 +331,7 @@ def release_freeze(
         "project_version": version,
         "roadmap": roadmap_id,
         "roadmap_version_target": roadmap.get("version_target"),
+        "stage": {"phase": phase, "phase_status": phase_status},
         "frozen_at": _now(),
         "status": "frozen",
         "published": False,
@@ -352,6 +391,7 @@ def release_freeze(
     return {
         "version": version,
         "roadmap": roadmap_id,
+        "stage": {"phase": phase, "phase_status": phase_status},
         "manifest": str(path),
         "manifest_relative": str(path.relative_to(contract)),
         "published": False,

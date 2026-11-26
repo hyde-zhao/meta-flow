@@ -66,6 +66,11 @@ def _write_review(contract, review_id, verdict, scope, requires):
 
 
 def _move_to_p5(contract):
+    """把状态推到 P5 已退出，覆盖 roadmap.close 门。
+
+    新阶段策略下 P4/P5 的修复/补丁也可冻结（矩阵见 test_release.py），
+    这里保留 P5 退出路径用于 close 联调。
+    """
     current = state.read_current(contract)
     current.update(
         {
@@ -246,6 +251,7 @@ def test_verify_and_release_freeze(project_env):
     manifest = verify.show_release(root)
     assert manifest["status"] == "frozen"
     assert manifest["published"] is False
+    assert manifest["stage"] == {"phase": "P5", "phase_status": "exited"}
     assert (contract / "release" / "RELEASE-1.0.0.yaml").is_file()
 
     closed = roadmap.close(root, "R1")
@@ -459,6 +465,7 @@ def test_release_freeze_uses_declared_version_mapping(tmp_path, monkeypatch):
         (contract / "release" / "RELEASE-1.0.0.yaml").read_text(encoding="utf-8")
     )
     assert "override" not in manifest
+    assert manifest["stage"] == {"phase": "P5", "phase_status": "exited"}
 
     with pytest.raises(verify.VerifyError, match="MAJOR"):
         verify.release_freeze(root, version="2.0.0")

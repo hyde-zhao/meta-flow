@@ -6,7 +6,7 @@
 - 日期：2026-11-25（R0 试运行基线）
 - 路标：R0（P4 收口）
 - 契约版本：meta-flow-contract R0/P4
-- 状态：冻结候选，待 P5 用户发布门禁；冻结不等于发布
+- 状态：冻结候选；阶段策略：P1/P2 禁止，P3 结束后允许正式发布，P4/P5 修复/补丁可随时冻结；冻结不等于发布
 
 ## 范围
 
@@ -24,6 +24,10 @@ meta-flow V1/R0 1.0.x 试运行版本，覆盖安装/工作区/契约接入、�
 - 版本策略：`mf release freeze` 读取 ROADMAP 的 `version_major`/`version_range`
   声明映射（支持 R0/V1 1.0.x）；未声明的 MAJOR 不一致默认拒绝，`--force` 必须记录
   `--reason`、`--approved-by` 与版本（BUG-0011/MFP-0006）。
+- 发布阶段策略（BUG-0016）：`mf release freeze` 不再要求 P5 退出。P1/P2 禁止
+  冻结/发布；P3 active 仅允许 alpha/预发布，P3 阶段结束（exited/done）后允许正式
+  发布；P4/P5 的修复/补丁可随时冻结，不要求阶段结束或 P5 退出。阶段门属用户门禁，
+  `--force` 不能绕过；发布清单新增 `stage` 记录冻结时的阶段与状态。
 - 需求追踪：`mf req trace` 默认只追踪当前路标，排除 archive；BUG 按 id 去重；
   SPEC 只匹配 `SPEC-*.md`；新增 `--archive` 供审计（BUG-0012）。
 - 任务与评审：任务包按 effort 提供预算档位、代码入口清单与 `mf context expand`

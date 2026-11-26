@@ -83,15 +83,17 @@ def test_phase_cannot_skip_exit_or_gate(env):
         roadmap.phase_enter(root, "P5")
 
 
-def test_release_and_close_require_p5_gate(env):
+def test_release_stage_policy_and_close_require_p5_exit(env):
     root, _ = env
-    _set_state(root / "demo-contract", phase="P5", phase_status="active", gate=False)
-    with pytest.raises(verify.VerifyError):
-        verify.release_freeze(root, force=True)
+    contract = root / "demo-contract"
+    _set_state(contract, phase="P5", phase_status="active", gate=False)
+    # 新阶段策略：P5 active 的修复/补丁可随时冻结；roadmap.close 仍要求 P5 退出
+    result = verify.release_freeze(root, force=True)
+    assert result["version"] == "1.0.0"
     with pytest.raises(roadmap.RoadmapError):
         roadmap.close(root, "R1", force=True)
 
-    _set_state(root / "demo-contract", phase="P5", phase_status="exited", gate=True)
+    _set_state(contract, phase="P5", phase_status="exited", gate=True)
     with pytest.raises(verify.VerifyError):
         verify.release_freeze(root, version="2.0.0")  # 版本 MAJOR 不一致
 
