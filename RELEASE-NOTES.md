@@ -1,12 +1,32 @@
 # 发布说明
 
-## 版本
+## 1.0.1（R0/V1 P4 修复发布）
+
+- 版本：1.0.1（R0/V1）
+- 日期：2026-11-26
+- 路标：R0（P4）
+- 契约版本：meta-flow-contract R0/P4
+- 状态：已发布（用户批准 P4 修复发布；发布清单 `release/RELEASE-1.0.1.yaml`）
+- 变更：
+  - T017/T019/T021：P4 工具闭环、NEEDS_REWORK 自动重开、`mf task rework`、BUG-0015 部署覆盖修复；
+  - T023/BUG-0016：release freeze 阶段策略修正（P1/P2 禁发、P3 结束后可发、P4/P5 修复随时可发；`--force` 不绕过阶段门）；
+  - T014：L1/L3 验证通过；VR-0001..0003；L2 SPEC/规范复核仍待 M02/M03；
+  - 发布清单新增 `stage`。
+- 已知问题/未完成：
+  - T015 ptm-team 手动部署与 ptm-tde 验证；
+  - M02/M03：14/16 规范待复核、SPEC-001..005 未编写、`mf req trace specs=0`；L2 VR PASS_WITH_RISK；
+  - R5：upgrade 补建缺失 phase plan；
+  - MFP-0021..0027 工具缺口（maintainer）；
+  - 1.0.1 为 P4 修复发布，不替代 P4 退出/P5 门禁。
+- 升级/回滚：全局 mf 使用 T023 代码；回滚 1.0.0 时恢复 delivery.yaml/RELEASE-NOTES 与全局 mf。
+
+## 1.0.0（R0/V1 冻结候选，历史）
 
 - 版本：1.0.0（R0/V1）
 - 日期：2026-11-25（R0 试运行基线）
 - 路标：R0（P4 收口）
 - 契约版本：meta-flow-contract R0/P4
-- 状态：冻结候选；阶段策略：P1/P2 禁止，P3 结束后允许正式发布，P4/P5 修复/补丁可随时冻结；冻结不等于发布
+- 状态：历史冻结候选；1.0.1 为当前修复发布；原发布阶段策略已在 1.0.1 修正
 
 ## 范围
 
@@ -24,10 +44,7 @@ meta-flow V1/R0 1.0.x 试运行版本，覆盖安装/工作区/契约接入、�
 - 版本策略：`mf release freeze` 读取 ROADMAP 的 `version_major`/`version_range`
   声明映射（支持 R0/V1 1.0.x）；未声明的 MAJOR 不一致默认拒绝，`--force` 必须记录
   `--reason`、`--approved-by` 与版本（BUG-0011/MFP-0006）。
-- 发布阶段策略（BUG-0016）：`mf release freeze` 不再要求 P5 退出。P1/P2 禁止
-  冻结/发布；P3 active 仅允许 alpha/预发布，P3 阶段结束（exited/done）后允许正式
-  发布；P4/P5 的修复/补丁可随时冻结，不要求阶段结束或 P5 退出。阶段门属用户门禁，
-  `--force` 不能绕过；发布清单新增 `stage` 记录冻结时的阶段与状态。
+- 发布阶段策略（1.0.1 修复，BUG-0016；见上）：1.0.0 原流程要求 P5 退出；1.0.1 已按用户策略修正。
 - 需求追踪：`mf req trace` 默认只追踪当前路标，排除 archive；BUG 按 id 去重；
   SPEC 只匹配 `SPEC-*.md`；新增 `--archive` 供审计（BUG-0012）。
 - 任务与评审：任务包按 effort 提供预算档位、代码入口清单与 `mf context expand`
