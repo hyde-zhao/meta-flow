@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,7 @@ from .task import (
     rework_task,
     start_task,
     submit_task,
+    summary_text,
 )
 from .task import (
     summary as task_summary,
@@ -209,6 +211,15 @@ def _enforce_role(args: argparse.Namespace) -> None:
         raise WorkspaceError(
             "context 命令只允许 manager；worker 仅可 show/expand 自己的任务范围", 3
         )
+    if command == "bug":
+        # MFP-0024：worker 可只读活动任务关联的 BUG（具体关联在命令内校验并审计）
+        if role == "manager" or (role == "worker" and action == "show"):
+            return
+        raise WorkspaceError("bug 命令只允许 manager；worker 仅可 show 活动任务关联 BUG", 3)
+    if command == "state":
+        if role == "manager":
+            return
+        raise WorkspaceError("state 命令只允许 manager", 3)
     if command in MANAGER_PROJECT_COMMANDS:
         if role != "manager":
             raise WorkspaceError(f"{command} 命令只允许 manager", 3)
@@ -281,6 +292,13 @@ def _print_workspace_status(data: dict[str, Any]) -> None:
                 f"wave={lease.get('wave')} expires={lease.get('expires_at')}"
             )
         print(f"下一动作: {hot.get('next_action') or '-'}")
+    active = data.get("active_view") or {}
+    if active:
+        requirements = active.get("requirements") or {}
+        print(f"活跃需求: {requirements.get('counts') or {}}")
+        print(f"  活跃 REQ: {', '.join(requirements.get('active') or []) or '-'}")
+        print(f"  活跃 BUG: {', '.join(active.get('bugs') or []) or '-'}")
+        print(f"  活跃 MFP: {', '.join(active.get('mfps') or []) or '-'}")
     boundary = data.get("context_boundary") or {}
     if boundary:
         budget = boundary.get("budget") or {}
@@ -310,12 +328,49 @@ def _print_workspace_status(data: dict[str, Any]) -> None:
         )
 
 
+def _active_view(contract: Path) -> dict[str, Any]:
+    """活跃需求/规格/BUG/MFP 状态与证据摘要（MFP-0020 E3）；默认只看活跃。"""
+    roadmap = str(state.read_current(contract).get("roadmap") or "")
+    try:
+        requirements = req.list_requirements(contract)
+    except req.ReqError:
+        requirements = []
+    req_counts: dict[str, int] = {}
+    active_reqs = []
+    for item in requirements:
+        if item.get("roadmap") not in {None, roadmap}:
+            continue
+        status = str(item.get("status") or "")
+        req_counts[status] = req_counts.get(status, 0) + 1
+        if status not in {"released", "deferred", "rejected", "proposed"}:
+            active_reqs.append(f"{item.get('id')}({status})")
+    bugs = bug.list_bugs(contract, active_only=True, roadmap=roadmap or None)
+    try:
+        mfps = list_improvements(contract, scope="contract", active_only=True)
+    except ImproveError:
+        mfps = []
+    return {
+        "requirements": {
+            "counts": req_counts,
+            "active": active_reqs[:20],
+        },
+        "bugs": [
+            f"{item.get('id')}({item.get('severity')}/{item.get('status')})"
+            for item in bugs[:20]
+        ],
+        "mfps": [
+            f"{item.get('id')}({item.get('status')})" for item in mfps[:20]
+        ],
+    }
+
+
 def _workspace_view(root: Path) -> dict[str, Any]:
     data = workspace_status(root)
     try:
         contract = resolve_contract(root)
         data["hot_state"] = state.refresh_current(contract)
         data["tasks"] = task_summary(root)
+        data["active_view"] = _active_view(contract)
         policy_data = context.policy(contract)
         roles = policy_data.get("roles") or {}
         manager_budget = (roles.get("manager") or {}).get("budget") or {
@@ -593,7 +648,12 @@ def _cmd_improve_new(args: argparse.Namespace) -> int:
 
 def _cmd_improve_list(args: argparse.Namespace) -> int:
     scope = "inbox" if args.inbox else "local" if args.local else "contract"
-    items = list_improvements(args.project_dir, scope=scope, status=args.status)
+    items = list_improvements(
+        args.project_dir,
+        scope=scope,
+        status=args.status,
+        active_only=not getattr(args, "all", False),
+    )
     if args.json:
         _print_json(items)
         return 0
@@ -729,6 +789,9 @@ def _cmd_task_create(args: argparse.Namespace) -> int:
         wave=args.wave,
         depends_on=args.depends_on or [],
         fixes=args.fixes or [],
+        module=getattr(args, "module", None),
+        spec_ids=getattr(args, "spec_id", None) or [],
+        evidence=getattr(args, "evidence", None) or [],
         with_review=not args.no_review,
         from_data=from_data,
     )
@@ -746,6 +809,7 @@ def _cmd_task_list(args: argparse.Namespace) -> int:
         args.project_dir,
         status=args.status,
         delivery=delivery if role == "worker" else None,
+        active_only=not getattr(args, "all", False),
     )
     if args.json:
         _print_json(items)
@@ -780,6 +844,8 @@ def _cmd_task_show(args: argparse.Namespace) -> int:
     if args.json:
         _print_json(data)
     else:
+        print(summary_text(data))
+        print("")
         print(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
     return 0
 
@@ -803,6 +869,7 @@ def _cmd_task_submit(args: argparse.Namespace) -> int:
         handoff=args.handoff,
         dev_record=args.dev_record,
         owner=args.owner,
+        blocked=args.blocked,
     )
     print(f"{data['id']} -> {data['status']} (next={data['next_owner']})")
     return 0
@@ -965,12 +1032,51 @@ def _cmd_task_summary(args: argparse.Namespace) -> int:
             f"wave={lease.get('wave')} expires={lease.get('expires_at')}"
         )
     print(f"待验收: {', '.join(data['submitted_tasks']) or '-'}")
+    print(f"BLOCKED: {', '.join(data.get('blocked_tasks') or []) or '-'}")
     print(f"就绪: {', '.join(data['ready_tasks']) or '-'}")
     print(f"blocker/critical BUG: {data['open_bugs']}")
     if data["next"]:
         print("下一批:")
         for item in data["next"]:
             print(f"  {item['id']} wave={item['wave']} {item['title']}")
+    return 0
+
+
+def _cmd_state_show(args: argparse.Namespace) -> int:
+    contract = resolve_contract(args.project_dir)
+    data = state.read_current(contract)
+    issues = state.reconcile(contract)
+    if args.json:
+        _print_json({"ok": not issues, "issues": issues, "state": data})
+        return 0 if not issues else 1
+    print(f"当前: {data.get('roadmap')} / {data.get('phase')} ({data.get('phase_status')})")
+    print(f"counts: {data.get('counts') or {}}")
+    print(f"next_action: {data.get('next_action') or '-'}")
+    if issues:
+        print("状态对账: FAIL")
+        for issue in issues:
+            print(f"  - {issue}")
+        print("修复: mf state rebuild")
+        return 1
+    print("状态对账: OK")
+    return 0
+
+
+def _cmd_state_rebuild(args: argparse.Namespace) -> int:
+    contract = resolve_contract(args.project_dir)
+    data = state.rebuild(contract)
+    print(
+        f"state 已重建: counts={data.get('counts') or {}} "
+        f"active={len(data.get('active_tasks') or [])} "
+        f"leases={len(data.get('active_leases') or [])}"
+    )
+    issues = state.reconcile(contract)
+    if issues:
+        print("重建后仍有差异:")
+        for issue in issues:
+            print(f"  - {issue}")
+        return 1
+    print("状态对账: OK（ledger 已记录 state.rebuild）")
     return 0
 
 
@@ -1068,23 +1174,39 @@ def _cmd_req_trace(args: argparse.Namespace) -> int:
         roadmap=roadmap,
         include_archive=args.archive,
     )
+    check = getattr(args, "check", False)
+    issues = req.orphans(resolve_contract(args.project_dir), roadmap=roadmap) if check else []
     if args.json:
-        _print_json(data)
-        return 0
+        if check:
+            _print_json({"ok": not issues, "orphans": issues, "trace": data})
+        else:
+            _print_json(data)
+        return 0 if not issues else 1
     if args.req_id:
         print(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
     else:
         print("已写入: requirements/TRACE.md")
         for req_id, entry in data.items():
             print(
-                "{req} specs={specs} tasks={tasks} vr={vr} bugs={bugs}".format(
+                "{req} specs={specs} tasks={tasks} evidence={evidence} vr={vr} bugs={bugs} "
+                "improvements={improvements} releases={releases}".format(
                     req=req_id,
                     specs=len(entry.get("specs") or []),
                     tasks=len(entry.get("tasks") or []),
+                    evidence=len(entry.get("evidence") or []),
                     vr=len(entry.get("verification") or []),
                     bugs=len(entry.get("bugs") or []),
+                    improvements=len(entry.get("improvements") or []),
+                    releases=len(entry.get("releases") or []),
                 )
             )
+    if check:
+        if issues:
+            print("孤儿/未闭环检查: FAIL")
+            for issue in issues:
+                print(f"  - {issue}")
+            return 1
+        print("孤儿/未闭环检查: OK")
     return 0
 
 
@@ -1206,7 +1328,13 @@ def _cmd_bug_list(args: argparse.Namespace) -> int:
     roadmap = args.roadmap
     if roadmap is None and not args.all:
         roadmap = str(state.read_current(resolve_contract(args.project_dir)).get("roadmap") or "R1")
-    items = bug.list_bugs(args.project_dir, status=args.status, severity=args.severity, roadmap=roadmap)
+    items = bug.list_bugs(
+        args.project_dir,
+        status=args.status,
+        severity=args.severity,
+        roadmap=roadmap,
+        active_only=not getattr(args, "history", False),
+    )
     if args.json:
         _print_json(items)
         return 0
@@ -1226,6 +1354,29 @@ def _cmd_bug_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_bug_show(args: argparse.Namespace) -> int:
+    role, _root, delivery = _worker_task_scope(args)
+    if role == "worker":
+        contract = resolve_contract(args.project_dir)
+        linked = bug.linked_bug_ids(contract, delivery)
+        if args.bug_id not in linked:
+            raise bug.BugError(
+                f"worker 只能读取活动任务 fixes/inputs.bugs 关联的 BUG: {args.bug_id}", 3
+            )
+        log_path = contract / "state" / "READ-LOG.ndjson"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(UTC).isoformat(),
+            "event": "bug.show",
+            "actor": "worker",
+            "role": "worker",
+            "task": "active",
+            "tool": "mf bug show",
+            "decision": "allow",
+            "path": f"bugs/{args.bug_id}.yaml",
+            "reason": "task-linked-bug",
+        }
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     data = bug.show_bug(args.project_dir, args.bug_id)
     if args.json:
         _print_json(data)
@@ -1611,12 +1762,18 @@ def build_parser() -> argparse.ArgumentParser:
     task_create.add_argument("--wave", default="W1")
     task_create.add_argument("--depends-on", action="append")
     task_create.add_argument("--fixes", action="append", help="关联 BUG id")
+    task_create.add_argument("--module", help="主责模块（与规格-模块矩阵一致）")
+    task_create.add_argument("--spec-id", action="append", help="关联 SPEC id")
+    task_create.add_argument("--evidence", action="append", help="证据路径（机器字段）")
     task_create.add_argument("--no-review", action="store_true", help="不自动创建 review 任务")
     task_create.set_defaults(func=_cmd_task_create)
 
     task_list = task_sub.add_parser("list")
     task_list.add_argument("--project-dir", default=".")
     task_list.add_argument("--status")
+    task_list.add_argument(
+        "--all", action="store_true", help="包含 accepted/cancelled 等非活跃任务（默认只列活跃）"
+    )
     task_list.add_argument("--json", action="store_true")
     task_list.set_defaults(func=_cmd_task_list)
 
@@ -1650,6 +1807,9 @@ def build_parser() -> argparse.ArgumentParser:
     task_submit.add_argument("--handoff")
     task_submit.add_argument("--dev-record")
     task_submit.add_argument("--owner", help="worker 身份；也可设置 MF_WORKER_ID")
+    task_submit.add_argument(
+        "--blocked", action="store_true", help="BLOCKED 提交：转 manager 裁决，不推进评审"
+    )
     task_submit.set_defaults(func=_cmd_task_submit)
 
     task_accept = task_sub.add_parser("accept")
@@ -1743,6 +1903,11 @@ def build_parser() -> argparse.ArgumentParser:
     req_trace.add_argument("--roadmap")
     req_trace.add_argument("--all", action="store_true", help="追踪所有路标；默认当前路标")
     req_trace.add_argument(
+        "--check",
+        action="store_true",
+        help="孤儿/未闭环检查（REQ/SPEC/TASK/证据/VR/BUG/MFP/CHG）；有孤儿返回非零",
+    )
+    req_trace.add_argument(
         "--archive",
         action="store_true",
         help="同时扫描 archive（默认只追踪当前路标，避免旧任务/重复 BUG）",
@@ -1817,6 +1982,9 @@ def build_parser() -> argparse.ArgumentParser:
     bug_list.add_argument("--severity")
     bug_list.add_argument("--roadmap")
     bug_list.add_argument("--all", action="store_true", help="不按当前路标过滤")
+    bug_list.add_argument(
+        "--history", action="store_true", help="包含 closed/deferred/wontfix 等历史缺陷"
+    )
     bug_list.add_argument("--json", action="store_true")
     bug_list.set_defaults(func=_cmd_bug_list)
     bug_show = bug_sub.add_parser("show")
@@ -1976,6 +2144,16 @@ def build_parser() -> argparse.ArgumentParser:
     log_p.add_argument("--json", action="store_true")
     log_p.set_defaults(func=_cmd_log)
 
+    state_p = sub.add_parser("state", help="派生状态对账与重建（TASK.yaml+ledger 为真相）")
+    state_sub = state_p.add_subparsers(dest="action", required=True)
+    state_show = state_sub.add_parser("show", help="列出 state 与任务卡/ledger 的差异")
+    state_show.add_argument("--project-dir", default=".")
+    state_show.add_argument("--json", action="store_true")
+    state_show.set_defaults(func=_cmd_state_show)
+    state_rebuild = state_sub.add_parser("rebuild", help="从 TASK.yaml/ledger 重建 state 快照")
+    state_rebuild.add_argument("--project-dir", default=".")
+    state_rebuild.set_defaults(func=_cmd_state_rebuild)
+
     improve_p = sub.add_parser("improve", help="MFP 改进包")
     improve_sub = improve_p.add_subparsers(dest="action", required=True)
 
@@ -1990,6 +2168,9 @@ def build_parser() -> argparse.ArgumentParser:
     improve_scope.add_argument("--local", action="store_true")
     improve_scope.add_argument("--inbox", action="store_true")
     improve_list.add_argument("--status")
+    improve_list.add_argument(
+        "--all", action="store_true", help="包含 closed/verified 等非活跃 MFP（默认只列活跃）"
+    )
     improve_list.add_argument("--project-dir", default=".")
     improve_list.add_argument("--json", action="store_true")
     improve_list.set_defaults(func=_cmd_improve_list)

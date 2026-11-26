@@ -304,6 +304,7 @@ def trace_requirement(
     if include_archive:
         task_paths.extend((contract / "archive").glob("*/phases/*/tasks/T*/TASK.yaml"))
     tasks = []
+    evidence: list[str] = []
     for path in sorted(task_paths):
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -313,6 +314,7 @@ def trace_requirement(
             continue
         refs = ((data.get("inputs") or {}).get("requirements")) or []
         if req_id in refs:
+            task_id = str(data.get("id") or "")
             tasks.append(
                 {
                     "id": data.get("id"),
@@ -320,8 +322,20 @@ def trace_requirement(
                     "risk": (data.get("risk") or {}).get("level"),
                 }
             )
+            # 证据：任务 evidence 目录下的文件（MFP-0020 追踪链路）
+            evidence_dir = path.parent / "evidence"
+            if evidence_dir.is_dir():
+                for item in sorted(evidence_dir.rglob("*")):
+                    if item.is_file():
+                        evidence.append(
+                            f"{task_id}/evidence/{item.relative_to(evidence_dir).as_posix()}"
+                        )
     verification = _scan_yaml_refs(contract / "verification", "requirement_refs", req_id)
     bugs = _scan_yaml_refs(contract / "bugs", "related_reqs", req_id)
+    improvements = _scan_yaml_refs(contract / "improvements", "related_reqs", req_id)
+    improvements += _scan_yaml_refs(
+        contract / "improvements", "requirement_refs", req_id
+    )
     if include_archive:
         for archive in sorted((contract / "archive").glob("*/verification")):
             verification.extend(_scan_yaml_refs(archive, "requirement_refs", req_id))
@@ -332,6 +346,7 @@ def trace_requirement(
         "specs": _scan_docs(contract / "specs", req_id, pattern="SPEC-*.md"),
         "designs": _scan_docs(contract / "architecture", req_id),
         "tasks": tasks,
+        "evidence": evidence,
         "verification": [
             {"id": item.get("id"), "result": item.get("result"), "layer": item.get("layer")}
             for item in _dedupe_by_id(verification)
@@ -341,7 +356,40 @@ def trace_requirement(
             {"id": item.get("id"), "status": item.get("status"), "severity": item.get("severity")}
             for item in _dedupe_by_id(bugs)
         ],
+        "improvements": [
+            {
+                "id": item.get("id"),
+                "kind": item.get("kind") or item.get("source_record"),
+                "status": item.get("status"),
+            }
+            for item in _dedupe_by_id(improvements)
+        ],
+        "releases": _release_refs(contract, req_id),
     }
+
+
+def _release_refs(contract: Path, req_id: str) -> list[dict[str, Any]]:
+    items = []
+    for path in sorted((contract / "release").glob("RELEASE-*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (yaml.YAMLError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        ids = [
+            str(item.get("id"))
+            for item in data.get("requirements") or []
+            if isinstance(item, dict)
+        ]
+        if req_id in ids:
+            items.append(
+                {
+                    "version": data.get("project_version"),
+                    "status": data.get("status"),
+                }
+            )
+    return items
 
 
 def trace(
@@ -381,20 +429,31 @@ def write_trace_file(contract: Path, result: dict[str, Any]) -> Path:
     lines = [
         "# 追踪矩阵",
         "",
-        "> 由 `mf req trace` 生成。",
+        "> 由 `mf req trace` 生成；只保留活跃/索引，不复制全量。",
         "",
-        "| REQ | 标题 | SPEC | TASK | VR | BUG |",
-        "|---|---|---|---|---|---|",
+        "| REQ | 标题 | SPEC | TASK | 证据 | VR | BUG | MFP/CHG | RELEASE |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for req_id, entry in result.items():
         lines.append(
-            "| {req} | {title} | {specs} | {tasks} | {vr} | {bugs} |".format(
+            "| {req} | {title} | {specs} | {tasks} | {evidence} | {vr} | {bugs} | {improvements} | {releases} |".format(
                 req=req_id,
                 title=str(entry.get("title") or "").replace("|", "\\|"),
                 specs=", ".join(entry.get("specs") or []) or "-",
                 tasks=", ".join(f"{t['id']}({t.get('status')})" for t in entry.get("tasks") or []) or "-",
+                evidence=", ".join(entry.get("evidence") or []) or "-",
                 vr=", ".join(f"{v['id']}({v.get('result')})" for v in entry.get("verification") or []) or "-",
                 bugs=", ".join(f"{b['id']}({b.get('status')})" for b in entry.get("bugs") or []) or "-",
+                improvements=", ".join(
+                    f"{item['id']}({item.get('status')})"
+                    for item in entry.get("improvements") or []
+                )
+                or "-",
+                releases=", ".join(
+                    f"{item.get('version')}({item.get('status')})"
+                    for item in entry.get("releases") or []
+                )
+                or "-",
             )
         )
     path = contract / "requirements" / "TRACE.md"
@@ -420,6 +479,113 @@ def refresh_index(contract: Path) -> Path:
     path = contract / "requirements" / "INDEX.md"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+def orphans(contract: Path, *, roadmap: str | None = None) -> list[str]:
+    """追踪闭环孤儿检查（MFP-0020 E1）。
+
+    检查 REQ→SPEC→TASK→证据→VR→RELEASE 与 BUG/MFP/CHG 关联：
+    - REQ 无 SPEC/TASK/证据/VR；
+    - TASK 无 REQ/SPEC；
+    - 任务 accepted 但关联 BUG 未关闭；未关闭 BUG 无修复任务；
+    - MFP 无验收/实施证据；CHG 未闭环。
+    """
+    issues: list[str] = []
+    tasks: dict[str, dict[str, Any]] = {}
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (yaml.YAMLError, OSError):
+            continue
+        if isinstance(data, dict) and data.get("id"):
+            tasks[str(data["id"])] = data
+
+    bugs: dict[str, dict[str, Any]] = {}
+    for path in sorted((contract / "bugs").glob("BUG-*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (yaml.YAMLError, OSError):
+            continue
+        if isinstance(data, dict) and data.get("id"):
+            bugs[str(data["id"])] = data
+
+    for item in _load(contract)["requirements"]:
+        req_id = str(item.get("id") or "")
+        status = str(item.get("status") or "")
+        if roadmap and item.get("roadmap") != roadmap:
+            continue
+        if status in {"deferred", "rejected", "proposed", "accepted"}:
+            continue
+        entry = trace_requirement(contract, req_id, roadmap=roadmap)
+        if not entry["specs"]:
+            issues.append(f"{req_id} 无 SPEC 关联")
+        if not entry["tasks"]:
+            issues.append(f"{req_id} 无 TASK 关联")
+        if entry["tasks"] and not entry["evidence"]:
+            issues.append(f"{req_id} 关联任务无证据")
+        if status in {"verified", "released"} and not entry["verification"]:
+            issues.append(f"{req_id} 状态 {status} 但无 VR")
+
+    for task_id, data in tasks.items():
+        if data.get("status") == "cancelled":
+            continue
+        inputs = data.get("inputs") or {}
+        refs = inputs.get("requirements") or []
+        specs = inputs.get("specs") or data.get("spec_ids") or []
+        if not refs and not specs:
+            issues.append(f"任务 {task_id} 无 REQ/SPEC 关联")
+
+    for task_id, data in tasks.items():
+        if data.get("status") != "accepted":
+            continue
+        for bug_id in data.get("fixes") or []:
+            bug = bugs.get(str(bug_id))
+            if bug is None:
+                issues.append(f"任务 {task_id} fixes 不存在的 BUG {bug_id}")
+            elif bug.get("status") != "closed":
+                issues.append(f"任务 {task_id} 已 accepted 但 BUG {bug_id} 未关闭")
+
+    fix_refs = {
+        str(bug_id)
+        for data in tasks.values()
+        for bug_id in (data.get("fixes") or [])
+    }
+    for bug_id, bug in bugs.items():
+        status = str(bug.get("status") or "")
+        if status in {"closed", "deferred", "wontfix"}:
+            continue
+        if not bug.get("fix_task") and bug_id not in fix_refs:
+            issues.append(f"BUG {bug_id} 未关闭且无修复任务")
+
+    improvements_dir = contract / "improvements"
+    if improvements_dir.is_dir():
+        for path in sorted(improvements_dir.glob("MFP-*.yaml")):
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except (yaml.YAMLError, OSError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            status = str(data.get("status") or "draft")
+            if status in {"draft", "rejected", "deferred", "duplicate"}:
+                continue
+            if not data.get("acceptance"):
+                issues.append(f"{data.get('id') or path.stem} 无验收标准")
+            if status in {"implemented", "verified", "closed"}:
+                resolution = data.get("resolution") or {}
+                if not (resolution.get("version") or resolution.get("tests")):
+                    issues.append(f"{data.get('id') or path.stem} 无实施证据（version/tests）")
+
+    records_dir = improvements_dir / "records" if improvements_dir.is_dir() else None
+    if records_dir is not None and records_dir.is_dir():
+        for path in sorted(records_dir.glob("CHG-*.yaml")):
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except (yaml.YAMLError, OSError):
+                continue
+            if isinstance(data, dict) and data.get("status") not in {"done", "closed"}:
+                issues.append(f"{data.get('id') or path.stem} CHG 未闭环")
+    return issues
 
 
 def validate_all(project: str | Path) -> list[str]:

@@ -150,6 +150,41 @@ def _scope_allowed(relative: str, tasks: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _must_read_allowed(
+    relative: str, tasks: list[dict[str, Any]], contract: Path
+) -> bool:
+    """worker 可展开活动任务 packet 声明的 must_read 契约基线（MFP-0025）。
+
+    packet 的 must_read = TASK.yaml + inputs 引用；inputs 引用用与 packet
+    相同的 `_find_input` 解析，保证 expand 白名单与任务包一致。
+    """
+    from .task import _find_input  # 延迟导入，避免模块级循环
+
+    for task in tasks:
+        prefix = _task_bundle_prefix(task)
+        if prefix and _path_in_prefix(relative, prefix):
+            return True
+        inputs = task.get("inputs") or {}
+        if not isinstance(inputs, dict):
+            continue
+        refs: list[str] = []
+        for value in inputs.values():
+            if isinstance(value, list):
+                refs.extend(str(item) for item in value if item)
+            elif value:
+                refs.append(str(value))
+        for ref in refs:
+            found = _find_input(contract, ref)
+            if found is None:
+                continue
+            try:
+                if found[0].resolve() == (contract / relative).resolve():
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def _resolve_expand_target(
     project_path: Path, contract: Path, relative_path: str
 ) -> tuple[Path, str]:
@@ -207,10 +242,11 @@ def expand(
                 _bundle_allowed(relative, tasks)
                 or _review_target_allowed(relative, tasks)
                 or _review_output_allowed(relative, tasks)
+                or _must_read_allowed(relative, tasks, contract)
             ):
                 raise ContextError(
-                    "worker 只能展开自己的任务 bundle、评审任务的目标 bundle，"
-                    "或返工任务的评审输出；不能直接 expand 契约基线"
+                    "worker 只能展开自己的任务 bundle、评审任务的目标 bundle、"
+                    "返工任务的评审输出或任务包 must_read 契约基线；不能直接 expand 契约基线"
                 )
         elif role == "maintainer":
             if not relative.startswith(("workspace/", ".meta-flow/")):

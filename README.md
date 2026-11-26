@@ -4,7 +4,7 @@
 
 ## 状态
 
-**v1.0.1 / R0 1.0.x 试运行**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
+**v1.0.2 / R0 1.0.x 试运行**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
 
 ```text
 mf bootstrap
@@ -255,7 +255,15 @@ mf task accept R1-P1-T001 --verdict PASS
   implement/fix 任务（MFP-0013）。返工任务可读自己评审任务的 review 输出。
 - handoff/dev-record/evidence 由 packet 的 process paths 显式授权，独立于
   `allowed_paths`/`forbidden`；`mf task submit` 支持 `.meta-flow/dev-records|handoffs`
-  本地副本。
+  本地副本（仅当前任务，guard 放行并审计）。packet 的必须读取项（TASK.yaml/REQ/SPEC/
+  标准/BUG/MFP）可用 `mf context expand --reason packet_missing` 只读补读（READ-LOG）。
+- BLOCKED 流转（MFP-0026）：handoff 结论写 `BLOCKED` 或 `mf task submit --blocked`
+  时任务转 `blocked`、next_owner=manager，关联 review 保持 draft/ready 不推进；
+  manager 改卡/扩 allowed_paths 后 worker 用 `mf task start/rework` 重新开始。
+- 任务卡按机器需要最小化：支持 `module`、`spec_ids`、`verification`/`evidence`；
+  `mf task show` 输出人读摘要。`mf task list` 默认活跃，`--all` 含 accepted/cancelled。
+- review 任务可读取 review_scope 内任意大小文件（Read 或 `mf context expand`），
+  guard 不把 expand 误判为写入；review_scope 外仍拒绝。
 - 并行任务：提交时按任务活动窗口隔离其他并行任务的 diff；单任务越界仍拒绝，
   非活动/非重叠改动不被静默计入；diff.patch 包含未跟踪新增文件。
 - worker 无交付根绑定时任务命令要求 `--project-dir <交付库>`，否则 rc=3；guard
@@ -272,6 +280,7 @@ mf req update REQ-0001 --status verified
 mf req trace REQ-0001
 mf req trace                      # 生成 requirements/TRACE.md（当前路标，排除 archive）
 mf req trace --archive            # 审计历史：显式包含 archive
+mf req trace --check              # 孤儿/未闭环检查（REQ/SPEC/TASK/证据/VR/BUG/MFP/CHG/RELEASE），有孤儿返回 1
 
 # 路标/版本
 mf roadmap show
@@ -363,14 +372,19 @@ mf archive show R1 --reason human_audit
 
 # 状态、审计与自检
 mf status
+mf state show                     # 对账 TASK.yaml+ledger 与 state 派生快照
+mf state rebuild                  # 从 TASK.yaml/ledger 重建 state（幂等、保留 lease、审计）
 mf log
 mf doctor
 ```
 
-- `state/current.json` 只存指针/计数，≤8KB；截断时写 `state.truncate` 审计事件并标记 `truncated`，完整列表用 `mf task summary`。
+- `state/current.json` 只存指针/计数，≤8KB；TASK.yaml + ledger 是任务真相，state 是派生快照。
+  手工漂移由 `mf doctor` 对账报警，用 `mf state rebuild` 重建（幂等、保留活动任务/lease、写审计）；
+  截断时写 `state.truncate`，完整列表用 `mf task summary`。
 - 缺失或损坏时从 ROADMAP/tasks/handoff 重建；修订历史进 `ledger.ndjson`。
 - 任务 start 写 lease，并检查依赖、同 wave 写冲突和 `owner`；`task release --force` 由 manager 回收。
-- `task submit` 用 git diff + 工作树快照校验 `allowed_paths`/`forbidden`，越界拒绝。
+- `task submit` 用 git diff + 工作树快照校验 `allowed_paths`/`forbidden`，越界拒绝；
+  gitignored 构建产物与 task start 前已存在的未跟踪文件不阻塞提交（MFP-0030）。
 - `context expand` 和 `archive show` 必须带 reason；archive 只允许 manager，并写 `READ-LOG.ndjson`。
 - `context show` 显示热区文件大小、总量和 manager 8KB/128KB 预算；超出预算的整文件读取被拒绝。
 - worker 只能通过 `task show --packet` 获取上下文；任务包声明 read policy、预算和 `packet_digest`。

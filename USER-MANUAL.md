@@ -3,8 +3,8 @@
 ## 适用对象
 
 本手册面向使用 meta-flow 的项目 manager、worker 与 maintainer。版本按
-`x.y.z = V.R.patch` 管理：当前 V1/R0 = 1.0.x（工具版本 1.0.1），R1 =
-V1/R1 = 1.1.x。命令以 `mf` 1.0.1 为准；绑定声明见 contract 的
+`x.y.z = V.R.patch` 管理：当前 V1/R0 = 1.0.x（工具版本 1.0.2），R1 =
+V1/R1 = 1.1.x。命令以 `mf` 1.0.2 为准；绑定声明见 contract 的
 `roadmap/ROADMAP.yaml`（`version_major`/`version_range`）。
 版本单一来源：`pyproject.toml`、源码 `__version__`、`delivery.yaml`、
 `RELEASE-NOTES.md` 与发布清单必须一致，发布前用 `mf release check` 校验。
@@ -22,7 +22,7 @@ V1/R1 = 1.1.x。命令以 `mf` 1.0.1 为准；绑定声明见 contract 的
 
    同版本号源码迭代时，uv 可能复用缓存构建（MFP-0029），必须带
    `UV_NO_CACHE=1` 或 `uv tool install --force --reinstall .`；安装后确认
-   `mf --version` 输出源码版本（当前 1.0.1）。
+   `mf --version` 输出源码版本（当前 1.0.2）。
 
 2. 初始化全局模板库：
 
@@ -248,17 +248,31 @@ mf task accept R0-P1-T001 --verdict PASS
 - 返工任务可读自己评审任务的 review 输出，只整改必须项。
 - 任务包按 effort（XS/S/M/L/XL）选择预算档位；超出用
   `mf context expand <path> --reason packet_missing` 分段读取或拆分任务。worker 可
-  受控 show/expand 活动任务 bundle、评审目标与 allowed_paths。
+  受控 show/expand 活动任务 bundle、评审目标、allowed_paths 与任务包 must_read
+  契约基线（TASK.yaml/REQ/SPEC/标准/BUG/MFP，写 READ-LOG）；非 must_read 仍拒绝。
+- worker 可写任务包声明的本地副本 `.meta-flow/handoffs/<task>.md`、
+  `.meta-flow/dev-records/<task>.md`（仅当前任务）与 `.meta-flow/improvements/MFP-*.yaml`；
+  其他 `.meta-flow/**` 仍拒绝。
+- 提交后不可直接编辑；返工先由 manager reject，再 `mf task start <id>`。本地 MFP 写
+  `.meta-flow/improvements/MFP-*.yaml` 或 `mf improve new --local` 均受审计，其他
+  越界写仍拒绝。
+- `mf task submit --blocked`（或 handoff 结论写 `BLOCKED`）转 manager 裁决：任务状态为
+  `blocked`、next_owner=manager，关联 review 任务保持 draft/ready、不派给评审者；
+  manager 改卡/扩 allowed_paths 后 worker 用 `mf task start/rework` 重新开始。
+- `mf task show` 输出人读摘要（模块/规格/验收/责任），不再需要手工维护第二份状态；
+  任务卡支持 `module`、`spec_ids`、`verification`/`evidence` 机器字段。
+- `mf task list` 默认只列活跃任务（draft/ready/in_progress/submitted/blocked/rework/rejected），
+  `--all` 才含 accepted/cancelled；`mf bug list`/`mf improve list` 同理（`--history`/`--all`）。
 - `mf task submit` 只校验本任务变更：并行任务按活动窗口隔离；单任务越界仍拒绝；
-  evidence/diff.patch 包含未跟踪新增文件。
+  evidence/diff.patch 包含未跟踪新增文件。task start 前的未跟踪文件与 gitignored
+  构建产物（如 `*.egg-info/`）不阻塞提交；worker 可用 `git clean`/`rm` 清理自身构建产物。
+- 评审任务可读取 review_scope 内任意大小文件（Read 或 `mf context expand`），不受
+  64KB 预算限制；review_scope 外仍拒绝。
 - guard 覆盖 Bash：`$HOME`/环境变量会展开，`sh -c`/`bash -c` 会递归解析，
   `eval`/`source`/`.`/进程替换 `<(...)`/`>(...)` 与转义变量 `\$HOME` 同样受策略约束；
   无法安全解析且涉及路径时保守拒绝。allow/deny（role/task/path/reason/tool）持久化到
   READ-LOG，可用 `mf context log` 查询；deny 会给出当前任务/lease/allowed_paths 与
   合法通道。
-- 提交后不可直接编辑；返工先由 manager reject，再 `mf task start <id>`。本地 MFP 写
-  `.meta-flow/improvements/MFP-*.yaml` 或 `mf improve new --local` 均受审计，其他
-  越界写仍拒绝。
 - 任务 bundle 匹配使用完整任务 ID；跨 roadmap/phase 的同尾号任务不会互相放行。
 - worker 无交付根绑定时，在 workspace 根执行任务命令必须带 `--project-dir
   <交付库>`，否则 rc=3；从交付库目录运行或设置显式交付绑定后自动限定作用域。
@@ -270,6 +284,14 @@ mf task accept R0-P1-T001 --verdict PASS
 - `mf req add/list/update/trace/validate`。`mf req trace` 默认只追踪当前路标，
   排除 archive、BUG 按 id 去重、SPEC 只匹配 `SPEC-*.md`；审计历史用
   `mf req trace --archive`。
+- `mf req trace --check`（MFP-0020）：输出 REQ→SPEC→TASK→证据→VR→BUG/MFP/CHG→RELEASE
+  链路并检测孤儿：无 SPEC/TASK/证据/VR 的 REQ、无 REQ/SPEC 的 TASK、accepted 但
+  BUG 未关闭、未关闭且无修复任务的 BUG、MFP 无验收/实施证据、CHG 未闭环；有孤儿
+  返回 1。阶段门/发布门用 `--all --check` 做一次全量对账。
+- `mf state show/rebuild`（MFP-0018）：TASK.yaml + ledger 是任务真相，`state/current.json`
+  是派生快照。`mf doctor` 会做状态对账（counts/ready/submitted/lease/next_owner/
+  source_digest/ledger 最近事件）；不一致时运行 `mf state rebuild` 安全重建（保留活动
+  任务与 lease、幂等、ledger 记录 `state.rebuild`）。禁止手工编辑 state。
 - `mf release freeze` 阶段策略：P1/P2 禁止冻结/发布；P3 active 仅允许
   alpha/预发布，P3 阶段结束（exited/done）后允许正式发布；P4/P5 的修复/补丁
   可随时冻结，不要求阶段结束或 P5 退出。阶段门属用户门禁，`--force` 不能绕过。
@@ -314,4 +336,9 @@ mf task accept R0-P1-T001 --verdict PASS
 | 提交后需要修改文件 | 不能直接编辑；由 manager reject 后 `mf task start <id>`；本地 MFP 例外（`.meta-flow/improvements/MFP-*.yaml`） |
 | 看不到 guard 拦截原因/审计 | deny 信息含角色/任务/lease/allowed_paths；manager 用 `mf context log` 查询 allow/deny |
 | 任务提交提示越界但文件属于并行任务 | 确认两个任务都处于重叠活动窗口且 allowed_paths 不相交；非活动改动仍会被拒绝 |
+| 提交仍报 egg-info/构建产物越界 | 1.0.2 起提交快照排除 gitignored 与 start 前未跟踪文件；若仍报错，确认 `.gitignore` 规则并运行 `git status --ignored` 核对 |
+| `mf doctor` 报“状态对账” | state 派生快照过期：运行 `mf state rebuild`；不要手工编辑 `state/current.json` |
+| worker `mf bug show` 被拒 | 1.0.2 起只允许读取活动任务 `fixes`/`inputs.bugs` 关联的 BUG；非关联 BUG 由 manager 读取 |
+| `mf req trace --check` 返回 1 | 按输出逐项补 SPEC/TASK/证据/VR，关闭 BUG/MFP/CHG 或登记原因；仅审计历史时用 `--archive` |
+| 写 `.meta-flow/handoffs|dev-records/<task>.md` 被拒 | 1.0.2 起仅当前 in_progress 任务的本地副本可写；提交后需 manager 重开 |
 | 安装镜像被 git 跟踪 | 确认 `.gitignore` 含 `# >>> meta-flow install mirror >>>` 块；运行 `mf install/upgrade` 修复 |

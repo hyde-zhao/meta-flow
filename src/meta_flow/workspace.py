@@ -1223,6 +1223,10 @@ def doctor(root: str | Path) -> list[str]:
             errors.append(f"子项目 {item.get('id')} 缺少 delivery.yaml")
 
     _doctor_planning_data(contract, errors)
+    from .state import reconcile  # 延迟导入，避免模块级循环
+
+    for issue in reconcile(contract):
+        errors.append(f"状态对账: {issue}")
     return errors
 
 
@@ -1279,7 +1283,17 @@ def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
         errors.append(f"current.json phase 非法: {state.get('phase')}")
 
     tasks: dict[str, dict[str, Any]] = {}
-    valid_status = {"draft", "ready", "in_progress", "submitted", "accepted", "rejected", "cancelled"}
+    valid_status = {
+        "draft",
+        "ready",
+        "in_progress",
+        "submitted",
+        "blocked",
+        "accepted",
+        "rejected",
+        "rework",
+        "cancelled",
+    }
     for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
         data = _load_optional_yaml(path)
         if data is None:
@@ -1296,6 +1310,12 @@ def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
             errors.append(f"任务 {task_id} status 非法: {data.get('status')}")
         if data.get("next_owner") not in {"worker", "manager"}:
             errors.append(f"任务 {task_id} next_owner 非法: {data.get('next_owner')}")
+        if data.get("module") is not None and not str(data.get("module")).strip():
+            errors.append(f"任务 {task_id} module 为空")
+        if data.get("spec_ids") is not None and not isinstance(data.get("spec_ids"), list):
+            errors.append(f"任务 {task_id} spec_ids 必须是列表")
+        if data.get("evidence") is not None and not isinstance(data.get("evidence"), list):
+            errors.append(f"任务 {task_id} evidence 必须是列表")
         if path.parent.name != task_id.rsplit("-", 1)[-1]:
             errors.append(f"任务 {task_id} 与目录名不一致: {path.parent.name}")
     for task_id, data in tasks.items():

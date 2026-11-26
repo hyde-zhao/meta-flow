@@ -132,6 +132,7 @@ def list_bugs(
     status: str | None = None,
     severity: str | None = None,
     roadmap: str | None = None,
+    active_only: bool = False,
 ) -> list[dict[str, Any]]:
     contract = resolve_contract(project)
     items = []
@@ -141,6 +142,8 @@ def list_bugs(
         except BugError:
             continue
         if status and data.get("status") != status:
+            continue
+        if active_only and data.get("status") in {"closed", "deferred", "wontfix"}:
             continue
         if severity and data.get("severity") != severity:
             continue
@@ -154,6 +157,25 @@ def show_bug(project: str | Path, bug_id: str) -> dict[str, Any]:
     contract = resolve_contract(project)
     _, data = _find(contract, bug_id)
     return data
+
+
+def linked_bug_ids(contract: Path, delivery: str | None = None) -> set[str]:
+    """活动任务（in_progress）关联的 BUG：fixes + inputs.bugs（MFP-0024）。"""
+    ids: set[str] = set()
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        try:
+            data = _load(path)
+        except BugError:
+            continue
+        if data.get("status") != "in_progress":
+            continue
+        if delivery and data.get("delivery") and data.get("delivery") != delivery:
+            continue
+        ids.update(str(item) for item in data.get("fixes") or [] if item)
+        inputs = data.get("inputs") or {}
+        for item in inputs.get("bugs") or []:
+            ids.add(str(item))
+    return ids
 
 
 def update_bug(

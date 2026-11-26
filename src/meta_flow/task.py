@@ -20,6 +20,15 @@ from .workspace import load_current_state, resolve_contract
 TASK_ID_RE = re.compile(r"^(R\d+)-(P\d+)-T(\d{3})$")
 RISKS = ("low", "medium", "high", "critical")
 KINDS = ("implement", "design", "verify", "document", "review", "fix")
+ACTIVE_STATUSES = {
+    "draft",
+    "ready",
+    "in_progress",
+    "submitted",
+    "blocked",
+    "rework",
+    "rejected",
+}
 DEFAULT_REVIEW = {
     "low": "manager",
     "medium": "independent",
@@ -182,6 +191,11 @@ def _task_data(
         "reviews": reviews,
         "reviewed_by_task": None,
         "review_verdict": None,
+        # MFP-0020：任务卡最小机器字段（module/spec_ids/verification/evidence）
+        "module": None,
+        "spec_ids": [],
+        "verification": {},
+        "evidence": [],
         "inputs": inputs,
         "allowed_paths": allowed_paths,
         # 流程写入路径独立于 allowed_paths/forbidden；bundle 内文件由 guard 白名单授权
@@ -218,6 +232,10 @@ def create_task(
     wave: str = "W1",
     depends_on: list[str] | None = None,
     fixes: list[str] | None = None,
+    module: str | None = None,
+    spec_ids: list[str] | None = None,
+    verification: dict[str, Any] | None = None,
+    evidence: list[str] | None = None,
     with_review: bool = True,
     from_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -252,6 +270,12 @@ def create_task(
     wave = str(data.get("wave") or wave or "W1")
     depends_on = [str(item) for item in (data.get("depends_on") or depends_on or [])]
     fixes = [str(item) for item in (data.get("fixes") or fixes or [])]
+    module = str(data.get("module") or module or "") or None
+    spec_ids = [str(item) for item in (data.get("spec_ids") or spec_ids or [])]
+    if verification is None and isinstance(data.get("verification"), dict):
+        verification = data["verification"]
+    verification = verification or {}
+    evidence = [str(item) for item in (data.get("evidence") or evidence or [])]
 
     tasks_dir = contract / "roadmap" / roadmap / "phases" / phase / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -285,6 +309,10 @@ def create_task(
     task["wave"] = wave
     task["depends_on"] = depends_on
     task["fixes"] = fixes
+    task["module"] = module
+    task["spec_ids"] = spec_ids
+    task["verification"] = verification
+    task["evidence"] = evidence
     if not task.get("packet_budget"):
         # 按 effort 档位分配；显式 packet_budget 优先（MFP-0007 A4）
         task["packet_budget"] = _packet_budget(contract, effort)
@@ -355,6 +383,7 @@ def list_tasks(
     *,
     status: str | None = None,
     delivery: str | None = None,
+    active_only: bool = False,
 ) -> list[dict[str, Any]]:
     contract = resolve_contract(project)
     items = []
@@ -364,6 +393,8 @@ def list_tasks(
         except TaskError:
             continue
         if status and data.get("status") != status:
+            continue
+        if active_only and data.get("status") not in ACTIVE_STATUSES:
             continue
         if delivery and data.get("delivery") and data.get("delivery") != delivery:
             continue
@@ -376,6 +407,32 @@ def load_task(project: str | Path, task_id: str) -> tuple[Path, dict[str, Any]]:
     contract = resolve_contract(project)
     path = _task_path(contract, task_id)
     return path, _load(path)
+
+
+def summary_text(data: dict[str, Any]) -> str:
+    """生成任务人读摘要（MFP-0020）；不要求手工维护第二份状态。"""
+    risk = (data.get("risk") or {}).get("level") or "-"
+    acceptance = data.get("acceptance") or []
+    modules = data.get("module") or "-"
+    specs = ", ".join(str(item) for item in data.get("spec_ids") or []) or "-"
+    lease = data.get("lease") or {}
+    return "\n".join(
+        [
+            f"任务: {data.get('id')} [{data.get('status')}] kind={data.get('kind')} risk={risk}",
+            f"标题: {data.get('title')}",
+            f"模块/规格: {modules} / {specs}",
+            f"交付库: {data.get('delivery') or '-'} wave={data.get('wave') or '-'}",
+            f"责任: next_owner={data.get('next_owner')} lease={lease.get('expires_at') or '-'}",
+            f"验收: {len(acceptance)} 项"
+            + (
+                "（" + ", ".join(str(item.get('id')) for item in acceptance) + "）"
+                if acceptance
+                else ""
+            ),
+            f"关联: review={data.get('reviewed_by_task') or '-'} "
+            f"fixes={', '.join(str(item) for item in data.get('fixes') or []) or '-'}",
+        ]
+    )
 
 
 def _check_dependencies(contract: Path, task: dict[str, Any]) -> None:
@@ -676,21 +733,39 @@ _SNAPSHOT_SKIP = {
 }
 
 
+def _git_paths(project: Path, args: list[str]) -> set[str]:
+    return set(_git_names(project, args))
+
+
+def _ignored_paths(project: Path) -> set[str]:
+    """gitignored 未跟踪路径（构建产物等），不进入任务快照（MFP-0030）。"""
+    return _git_paths(project, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"])
+
+
+def _untracked_paths(project: Path) -> set[str]:
+    """task start 前已存在的未跟踪文件（不含 ignored）。"""
+    return _git_paths(project, ["ls-files", "--others", "--exclude-standard", "-z"])
+
+
 def _worktree_snapshot(project: Path, exclude: Path | None = None) -> dict[str, list[int]]:
     snapshot: dict[str, list[int]] = {}
     if not project.is_dir():
         return snapshot
+    ignored = _ignored_paths(project)
     resolved_exclude = exclude.resolve() if exclude else None
     for path in project.rglob("*"):
         if not path.is_file() or any(part in _SNAPSHOT_SKIP for part in path.parts):
             continue
         if resolved_exclude is not None and path.resolve().is_relative_to(resolved_exclude):
             continue
+        relative = str(path.relative_to(project))
+        if relative in ignored:
+            continue
         try:
             stat = path.stat()
         except OSError:
             continue
-        snapshot[str(path.relative_to(project))] = [stat.st_mtime_ns, stat.st_size]
+        snapshot[relative] = [stat.st_mtime_ns, stat.st_size]
         if len(snapshot) >= 5000:
             break
     return snapshot
@@ -700,6 +775,15 @@ def _save_worktree_snapshot(project: Path, target: Path, exclude: Path | None = 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(_worktree_snapshot(project, exclude), ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    # 记录 start 前已存在的未跟踪文件；提交时排除，避免既有构建产物阻塞（MFP-0030）
+    meta = {
+        "untracked": sorted(_untracked_paths(project)),
+        "ignored": sorted(_ignored_paths(project)),
+    }
+    target.with_name("worktree-start-meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, sort_keys=True),
         encoding="utf-8",
     )
 
@@ -717,14 +801,29 @@ def _snapshot_changes(project: Path, bundle: Path, exclude: Path | None = None) 
         for path, meta in before.items()
         if not any(part in _SNAPSHOT_SKIP for part in Path(str(path)).parts)
     }
+    # task start 前已存在的未跟踪文件与 gitignored 构建产物不阻塞提交（MFP-0030）
+    pre_untracked: set[str] = set()
+    meta_path = snapshot_path.with_name("worktree-start-meta.json")
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) or {}
+        except json.JSONDecodeError:
+            meta = {}
+        if isinstance(meta, dict):
+            pre_untracked = {str(item) for item in meta.get("untracked") or []}
     after = _worktree_snapshot(project, exclude)
+    ignored_now = _ignored_paths(project)
     changed = set()
     for path, meta in after.items():
         if path not in before or list(meta) != list(before[path]):
             changed.add(path)
     for path in before:
         if path not in after:
+            if path in ignored_now:
+                # 旧快照可能包含 gitignored 安装镜像/构建产物；当前已忽略，不算变更
+                continue
             changed.add(path)
+    changed -= pre_untracked
     return sorted(changed)
 
 
@@ -872,6 +971,22 @@ def _matches(path: str, patterns: list[str]) -> bool:
     return any(_glob_regex(str(pattern)).match(normalized) for pattern in patterns)
 
 
+BLOCKED_RE = re.compile(
+    r"(?im)^\s*(?:结论|verdict|status|状态)\s*[:：=]\s*BLOCKED\b|^\s*BLOCKED\b"
+)
+
+
+def _handoff_blocked(path: Path) -> bool:
+    """识别 handoff 结论为 BLOCKED（MFP-0026）。"""
+    if not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(BLOCKED_RE.search(text))
+
+
 def _process_file(
     project: Path,
     bundle: Path,
@@ -897,6 +1012,7 @@ def submit_task(
     handoff: str | Path | None = None,
     dev_record: str | Path | None = None,
     owner: str | None = None,
+    blocked: bool | None = None,
 ) -> dict[str, Any]:
     path, data = load_task(project, task_id)
     if data.get("status") != "in_progress":
@@ -957,7 +1073,15 @@ def submit_task(
             if not dev_path.is_file() or not dev_path.read_text(encoding="utf-8").strip():
                 raise TaskError(f"缺少开发记录: {dev_path}")
 
-    if data.get("kind") == "fix":
+    # MFP-0026：BLOCKED 提交转 manager 裁决，不推进独立评审。
+    # 显式 --blocked 优先；否则从 handoff 结论识别。
+    is_blocked = False
+    if data.get("kind") != "review":
+        is_blocked = (
+            bool(blocked) if blocked is not None else _handoff_blocked(handoff_path)
+        )
+
+    if data.get("kind") == "fix" and not is_blocked:
         fix_text = "\n".join(
             path.read_text(encoding="utf-8")
             for path in (bundle / "dev-record.md", handoff_path)
@@ -975,6 +1099,31 @@ def submit_task(
             bundle / "evidence" / "diff.patch",
             paths=evidence_paths,
         )
+
+    if is_blocked:
+        contract = resolve_contract(project)
+        data["status"] = "blocked"
+        data["submitted_at"] = _now()
+        if actor:
+            data["implemented_by"] = actor
+        data["next_owner"] = "manager"
+        data["lease"] = None
+        _save(path, data)
+        ledger_append(
+            contract,
+            {
+                "event": "task.blocked",
+                "task": task_id,
+                "next_owner": "manager",
+                "from": "in_progress",
+                "to": "blocked",
+                "evidence_digest": _evidence_digest(bundle),
+                "text": "worker BLOCKED 提交；请 manager 裁决改卡/扩 allowed_paths/CHG/新卡，"
+                "评审任务不自动推进",
+            },
+        )
+        refresh_current(contract)
+        return data
 
     data["status"] = "submitted"
     data["submitted_at"] = _now()
@@ -1378,7 +1527,7 @@ def reject_task(project: str | Path, task_id: str, reason: str) -> dict[str, Any
     if not reason.strip():
         raise TaskError("reject 必须给出原因")
     path, data = load_task(project, task_id)
-    if data.get("status") not in {"submitted", "in_progress", "rework"}:
+    if data.get("status") not in {"submitted", "in_progress", "rework", "blocked"}:
         raise TaskError(f"任务 {task_id} 当前状态 {data.get('status')} 不能 reject")
     previous = str(data.get("status"))
     review_id = data.get("reviewed_by_task")
@@ -1629,12 +1778,37 @@ def summary(project: str | Path) -> dict[str, Any]:
     return data
 
 
+def _bug_summary(contract: Path, bug_id: str) -> str | None:
+    """关联 BUG 只读摘要（MFP-0024）：不要求 worker 用 Bash/expand 绕行。"""
+    path = contract / "bugs" / f"{bug_id}.yaml"
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    evidence = data.get("evidence") or []
+    related = data.get("related_reqs") or []
+    lines = [
+        f"### {bug_id} {data.get('title') or ''}".rstrip(),
+        f"- severity/status: {data.get('severity')}/{data.get('status')}",
+        f"- related_reqs: {', '.join(str(item) for item in related) or '-'}",
+        f"- expected: {data.get('expected') or '-'}",
+        f"- actual: {data.get('actual') or '-'}",
+        f"- evidence: {', '.join(str(item) for item in evidence) or '-'}",
+        f"- fix_task: {data.get('fix_task') or '-'}",
+    ]
+    return "\n".join(lines)
+
+
 def _find_input(contract: Path, ref: str) -> tuple[Path, str] | None:
     standards = contract / "standards" / f"{ref}.md"
     if standards.is_file():
         return standards, standards.read_text(encoding="utf-8")
     candidates: list[Path] = []
-    for directory in ("requirements", "architecture", "specs", "improvements"):
+    for directory in ("requirements", "architecture", "specs", "improvements", "bugs"):
         base = contract / directory
         if not base.is_dir():
             continue
@@ -1777,6 +1951,11 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
     lines.append("## Read policy")
     lines.append(f"- must_read: TASK.yaml, {', '.join(input_refs) or '(none)'}")
     lines.append("- may_read: 自己的任务 bundle、allowed_paths；评审任务另加 review_scope")
+    if review:
+        lines.append(
+            "- review_scope 内任意大小文件可 Read 或 `mf context expand --reason packet_missing` "
+            "只读补读（写 READ-LOG）；review_scope 外仍拒绝"
+        )
     lines.append(
         "- process_files: handoff.md / dev-record.md / evidence/ 由任务 bundle 白名单授权，"
         "独立于 allowed_paths/forbidden"
@@ -1826,6 +2005,23 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
             lines.append("```")
     if not found_any:
         lines.append("(none)")
+    # MFP-0024：fix 任务 fixes / inputs.bugs 关联 BUG 只读摘要纳入任务包
+    bug_refs: list[str] = []
+    for ref in data.get("fixes") or []:
+        if str(ref) not in bug_refs:
+            bug_refs.append(str(ref))
+    for ref in (data.get("inputs") or {}).get("bugs") or []:
+        if str(ref) not in bug_refs:
+            bug_refs.append(str(ref))
+    if bug_refs:
+        lines.append("")
+        lines.append("## Linked BUGs")
+        for bug_id in bug_refs:
+            summary = _bug_summary(contract, bug_id)
+            if summary is None:
+                lines.append(f"- {bug_id}: 未找到")
+            else:
+                lines.append(summary)
 
     lines.append("")
     lines.append("## Project knowledge")
@@ -2003,6 +2199,8 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                 [
                     f"你是独立评审者，不得是实现者。先运行：mf task show {task_id} --review-packet",
                     "只读任务包、diff、开发记录、交接和 review_scope 内源码；不要修改实现代码或验收标准。",
+                    "review_scope 内任意大小文件可 Read 或 mf context expand --reason packet_missing 只读补读"
+                    "（写 READ-LOG）；review_scope 外仍拒绝。",
                     f"在 {bundle / 'review.md'} 写评审意见，在 {bundle / 'review-handoff.md'} 写评审交接。",
                     "结论只能是 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；"
                     "PASS_WITH_RISK 必须写风险与接受人。",
@@ -2054,6 +2252,8 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                 [
                     f"先运行：mf task show {task_id} --packet",
                     f"只写 allowed_paths；完成后写 {bundle / 'dev-record.md'} 和 {bundle / 'handoff.md'}，再 mf task submit。",
+                    "决策分级：D0/D1 不自行决定（写 BLOCKED/交接升级）；D2 技术决策记录结论；D3 留审计。",
+                    "任务粒度：只做可独立验证增量；跨模块规格由独立 verify 任务覆盖，不在单模块任务内假装覆盖。",
                 ]
             )
             if review_id:
@@ -2111,6 +2311,13 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                 lines.append(f"先完成 review，再 mf task accept {task_id} 或 mf task reject {task_id}。")
             if risk == "critical":
                 lines.append("critical 任务验收必须带 --user-approved-by <用户/记录>。")
+        elif status == "blocked":
+            lines.append("任务以 BLOCKED 提交；先读 handoff 的阻塞证据，再裁决：")
+            lines.append(
+                "1) 改卡/扩大 allowed_paths 后 worker 用 mf task start/rework 重新开始；"
+                "2) 开 CHG/BUG/MFP/新卡重排；3) mf task reject 并记录原因。"
+            )
+            lines.append("关联评审任务保持 draft/ready，不派给评审者；不得留空下一责任。")
         elif status == "accepted":
             lines.append("任务已验收；规划并创建下一个任务卡。")
         else:

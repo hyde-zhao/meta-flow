@@ -26,7 +26,14 @@ review-handoff.md 后只整改必须项。
 
 提交后不再直接编辑任务文件；如需再次返工，等 manager reject 后 `mf task start <id>`。
 提交后仍可写本地 `.meta-flow/improvements/MFP-*.yaml`（或 `mf improve new --local`），
-guard 会审计；其他越界写仍拒绝。
+guard 会审计；其他越界写仍拒绝。任务 BLOCKED 时用 `mf task submit --blocked`（或 handoff 结论写 BLOCKED）转 manager 裁决，不自动进入评审。
+
+## 决策与粒度
+
+- D0（需求语义/用户可见/重大影响/安全合规）与 D1（跨模块接口/数据模型/发布范围）不得自行决定，写进 BLOCKED/交接由 manager/用户升级。
+- D2 技术细节可自主决策，但在交接“关键决策”记录结论；D3 自动化操作留提交说明。
+- 只做“可独立验证的增量”；跨模块规格由独立 verify 任务验证，不在单模块任务内假装覆盖。
+- 任务包 must_read 可用 `mf context expand --reason packet_missing` 只读补读（写 READ-LOG）；本地副本 `.meta-flow/handoffs|dev-records/<task>.md` 可写（仅当前任务）。
 
 ## 评审责任
 

@@ -1,5 +1,42 @@
 # 发布说明
 
+## 1.0.2（R0/V1 P4 PATCH 发布）
+
+- 版本：1.0.2（R0/V1）
+- 日期：2026-11-26
+- 路标：R0（P4）
+- 契约版本：meta-flow-contract R0/P4
+- 状态：待发布（版本元数据已统一；release freeze、发布清单 `release/RELEASE-1.0.2.yaml`、
+  `git tag v1.0.2` 与 `git push` 待 manager/用户授权后执行）
+- 范围：T027 批处理（MFP-0016..0020、MFP-0024..0027、MFP-0030）、BUG-0017 与 T029 版本 bump。
+- 版本元数据（T029）：`pyproject.toml`、源码 `__version__`、`delivery.yaml` 与
+  `RELEASE-NOTES.md` 统一为 1.0.2。
+- 五阶段与模板（MFP-0016/0017/0019）：`PHASE.md` 每阶段补齐输入/输出/任务拆解规则/验证规则/退出条件；新增
+  规格-模块矩阵与决策日志模板；TASK-CARD DoR 增加“可独立验证增量”、acceptance 验证绑定与
+  BUG/MFP 自动化用例要求；P4 聚类验收 + 单条 REQ 状态双轨，P5 发布固定工作清单；
+  文档必要性矩阵、页数上限与热/暖/冷角色读写矩阵落地。
+- 状态对账（MFP-0018）：`mf doctor` 增加 TASK.yaml+ledger 与 state 的一致性检查；新增
+  `mf state show` / `mf state rebuild`（幂等、保留活动任务/lease、ledger 记录重建）。
+- 追踪闭环（MFP-0020）：`mf req trace` 输出 SPEC/TASK/证据/VR/BUG/MFP/CHG/RELEASE 链路；
+  `mf req trace --check` 检测孤儿并返回非零；任务卡支持 module/spec_ids/verification/evidence，
+  `mf task show` 生成人读摘要；task/bug/improve list 默认活跃，`--all`/`--history` 查历史。
+- 关联 BUG 读取（MFP-0024）：任务包嵌入 fixes/inputs.bugs 摘要；`mf bug show` 对活动任务关联
+  BUG 开放 worker 只读并写 READ-LOG，非关联 BUG 仍拒绝。
+- 读取/写入通道（MFP-0025/0027）：packet 声明的 `.meta-flow/handoffs|dev-records/<task>.md`
+  可写（仅当前任务）；must_read 契约基线可 `mf context expand` 只读补读；review_scope 内
+  任意大小文件可 Read/expand。
+- guard 只读 expand（BUG-0017）：`mf context expand ... --reason ...` 纯只读命令不再被
+  guard 误判为 Bash 写入；路径授权与 READ-LOG 由 `context.expand` 负责，非 review_scope/
+  越界路径仍拒绝并记录审计。
+- BLOCKED 流转（MFP-0026）：handoff 结论 BLOCKED 或 `mf task submit --blocked` 时任务转
+  `blocked`、next_owner=manager，不推进独立评审；manager 裁决后 worker 重新开始。
+- 提交快照（MFP-0030）：越界检查排除 gitignored 路径与 task start 前已存在的未跟踪文件；
+  `*.egg-info` 等构建产物不阻塞提交；worker 可清理自身构建产物。
+- 回归：全量 pytest 207 通过、ruff 通过、`mf doctor` 与 `workspace sync --check` 通过；
+  guard 负向用例（shell 变量/嵌套 shell/进程替换/越界写/跨项目）保持拒绝。
+- 升级/回滚：`UV_NO_CACHE=1 mf dev install --yes` 后确认 `mf --version` 输出 1.0.2；
+  回滚到 1.0.1 时恢复 delivery.yaml/RELEASE-NOTES 与全局 mf。
+
 ## 1.0.1（R0/V1 P4 修复发布）
 
 - 版本：1.0.1（R0/V1）

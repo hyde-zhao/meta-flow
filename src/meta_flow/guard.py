@@ -75,6 +75,11 @@ BASH_RUNTIME_PARTS = {
     "dist",
     "build",
 }
+
+
+def _runtime_part(part: str) -> bool:
+    """运行时/构建目录：清理或写入不视为源码越界（MFP-0030）。"""
+    return part in BASH_RUNTIME_PARTS or part.endswith(".egg-info")
 BASH_SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 MAX_SHELL_DEPTH = 4
 PROCESS_SUBST_RE = re.compile(r"[<>]\(([^()]*)\)")
@@ -412,7 +417,7 @@ def _local_mfp_write(relative: str) -> bool:
 
 def _delivery_write_allowed(relative: str, tasks: list[dict[str, Any]]) -> bool:
     parts = relative.replace("\\", "/").split("/")
-    if any(part in BASH_RUNTIME_PARTS for part in parts):
+    if any(_runtime_part(part) for part in parts):
         return True
     if _local_mfp_write(relative):
         return True
@@ -628,6 +633,55 @@ def _review_output_match(relative: str, tasks: list[dict[str, Any]]) -> dict[str
     return None
 
 
+def _review_scope_match(relative: str, tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """review 任务可只读 review.scope 内文件（MFP-0027，不误判写入/预算）。"""
+    for task in tasks:
+        if task.get("kind") != "review":
+            continue
+        scope = [str(item) for item in (task.get("review") or {}).get("scope") or []]
+        if scope and _matches(relative, scope):
+            return task
+    return None
+
+
+CONTROLLED_PREFIXES = {"sudo", "env", "command", "builtin", "nohup", "time"}
+
+
+def _readonly_expand(command: str) -> bool:
+    """识别纯只读的 `mf context expand ...` 命令（MFP-0025/0027）。
+
+    只读命令由 context.expand 自身做路径授权并写 READ-LOG；guard 不再把
+    路径参数误判为 Bash 写入。仅当首个可执行 token（允许 env/sudo 等受控
+    前缀与 VAR=value 赋值后）为 `mf`（或以 `/mf` 结尾的可执行路径）且紧接
+    `context expand` 时豁免；带 shell 操作符/重定向/替换/前置命令不豁免。
+    """
+    if any(
+        marker in command
+        for marker in ("&&", "||", ";", "|", ">", "<", "`", "$(", "\n", "\r", "&")
+    ):
+        return False
+    tokens = _bash_tokens(command)
+    index = 0
+    while index < len(tokens):
+        raw = tokens[index]
+        name = Path(raw.strip("'\"")).name
+        if name in CONTROLLED_PREFIXES:
+            index += 1
+            continue
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", raw):
+            index += 1
+            continue
+        break
+    if index >= len(tokens):
+        return False
+    if Path(tokens[index].strip("'\"")).name != "mf":
+        return False
+    rest = [
+        Path(token.strip("'\"")).name for token in tokens[index + 1 : index + 3]
+    ]
+    return rest == ["context", "expand"]
+
+
 def _manager_source_denied(path: Path, workspace_root: Path | None) -> bool:
     if workspace_root is None:
         return False
@@ -674,6 +728,20 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
     write_all = bool(write_paths) or _bash_write_heuristic(command)
     read_like = _bash_read_like(command)
     max_bytes = _read_budget(contract, role)
+    if role == "worker" and not write_all and _readonly_expand(command):
+        # 纯只读 expand：路径授权与 READ-LOG 由 context.expand 负责，
+        # 不把路径参数误判为 Bash 写入（MFP-0027）。
+        _audit_guard(
+            contract,
+            role=role,
+            task=audit_task,
+            tool="Bash",
+            decision="allow",
+            paths=[str(path) for path in paths],
+            command=command,
+            parsed=[str(path) for path in paths],
+        )
+        return None
     deny_reason: str | None = None
     audit_paths = [str(path) for path in paths]
     parsed_paths = audit_paths
@@ -751,8 +819,10 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
                 if write_all and not _delivery_write_allowed(relative, tasks):
                     deny_reason = f"worker Bash 写入不在任务 allowed_paths 内: {relative}"
                     continue
+                reviewed = _review_scope_match(relative, tasks)
                 if (
                     read_like
+                    and reviewed is None
                     and path.is_file()
                     and path.stat().st_size > max_bytes
                 ):
@@ -847,7 +917,22 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
 
     if tool in READ_TOOLS and path.is_file():
         max_bytes = _read_budget(contract, role)
-        if path.stat().st_size > max_bytes:
+        exempt = False
+        if role == "worker":
+            if path.is_relative_to(contract):
+                relative = path.relative_to(contract).as_posix()
+                if (
+                    _bundle_match(relative, tasks) is not None
+                    or _review_target_match(relative, tasks) is not None
+                    or _review_output_match(relative, tasks) is not None
+                ):
+                    exempt = True
+            elif role_root is not None and path.is_relative_to(role_root):
+                exempt = (
+                    _review_scope_match(path.relative_to(role_root).as_posix(), tasks)
+                    is not None
+                )
+        if not exempt and path.stat().st_size > max_bytes:
             return deny(
                 f"{path.name} 超过 {role} 读预算 {max_bytes}B；"
                 "请用 mf context expand <path> --reason packet_missing 分段读取"
@@ -904,18 +989,16 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
                 return deny(f"交付库缺少 delivery.yaml，无法确定任务作用域: {root}")
             if path.is_relative_to(root):
                 relative = path.relative_to(root).as_posix()
-                # R10：本地 MFP 是受控 write 白名单，提交后仍可写，带审计
-                if _local_mfp_write(relative):
-                    return allow()
                 for task in tasks:
                     if _matches(
                         relative, [str(item) for item in task.get("forbidden") or []]
                     ):
                         return deny(f"路径在任务 forbidden 内: {relative}")
-                    if _matches(
-                        relative, [str(item) for item in task.get("allowed_paths") or []]
-                    ):
-                        return allow()
+                # R10/MFP-0025/MFP-0030：本地 MFP、当前任务本地副本与
+                # 构建产物（gitignored 运行时目录）是受控 write 白名单，
+                # 带审计；其余仍只允许 allowed_paths。
+                if _delivery_write_allowed(relative, tasks):
+                    return allow()
                 return deny(
                     "worker 写入不在当前任务 allowed_paths 内；提交后不可编辑，"
                     "返工需 manager reject 后 mf task start <id>；"

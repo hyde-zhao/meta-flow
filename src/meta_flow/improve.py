@@ -202,6 +202,7 @@ def list_improvements(
     *,
     scope: str = "contract",
     status: str | None = None,
+    active_only: bool = False,
 ) -> list[dict[str, Any]]:
     project_path = Path(project).expanduser().resolve()
     project_id, _ = _project_meta(project_path)
@@ -220,6 +221,14 @@ def list_improvements(
         except ImproveError:
             continue
         if status and data.get("status") != status:
+            continue
+        if active_only and data.get("status") in {
+            "closed",
+            "verified",
+            "rejected",
+            "deferred",
+            "duplicate",
+        }:
             continue
         data["_path"] = str(path)
         items.append(data)

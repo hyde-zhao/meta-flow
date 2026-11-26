@@ -229,6 +229,7 @@ def task_summary(contract: Path) -> dict[str, Any]:
     submitted: list[str] = []
     submitted_details: list[dict[str, Any]] = []
     ready: list[str] = []
+    blocked: list[str] = []
     rework: list[str] = []
     stale_rework: list[str] = []
     all_tasks: dict[str, dict[str, Any]] = {}
@@ -264,6 +265,8 @@ def task_summary(contract: Path) -> dict[str, Any]:
             )
         if status == "ready":
             ready.append(task_id)
+        if status == "blocked":
+            blocked.append(task_id)
     for detail in submitted_details:
         review_id = detail.get("reviewed_by_task")
         if review_id and str(review_id) in all_tasks:
@@ -302,6 +305,7 @@ def task_summary(contract: Path) -> dict[str, Any]:
         "submitted_tasks": submitted[:20],
         "submitted_details": submitted_details[:20],
         "ready_tasks": ready[:50],
+        "blocked_tasks": blocked[:20],
         "rework_tasks": rework[:20],
         "stale_rework_tasks": stale_rework[:20],
     }
@@ -344,6 +348,14 @@ def refresh_current(contract: Path) -> dict[str, Any]:
             "task": rework_task_id,
             "text": f"review NEEDS_REWORK 已重开；worker 用 mf task rework {rework_task_id} 开始，"
             "整改项与 allowed_paths 见任务卡 rework",
+        }
+    elif summary.get("blocked_tasks"):
+        blocked_task_id = summary["blocked_tasks"][0]
+        data["next_action"] = {
+            "type": "blocked_decision",
+            "task": blocked_task_id,
+            "text": "worker BLOCKED 提交；manager 裁决：改卡/扩 allowed_paths 后 worker 重开，"
+            "或开 CHG/BUG/MFP/新卡；评审任务不自动推进",
         }
     elif summary["submitted_tasks"]:
         detail = (summary.get("submitted_details") or [{}])[0]
@@ -395,3 +407,162 @@ def refresh_current(contract: Path) -> dict[str, Any]:
     else:
         data["next_action"] = {"type": "plan", "text": "规划下一任务或阶段"}
     return write_current(contract, data)
+
+
+def _load_tasks(contract: Path) -> dict[str, dict[str, Any]]:
+    tasks: dict[str, dict[str, Any]] = {}
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        data = _load_yaml(path)
+        if data and data.get("id"):
+            tasks[str(data["id"])] = data
+    return tasks
+
+
+def _last_task_events(contract: Path, limit: int = 400) -> dict[str, dict[str, Any]]:
+    events: dict[str, dict[str, Any]] = {}
+    for line in tail_lines(contract / "state" / "ledger.ndjson", limit):
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if not str(data.get("event") or "").startswith("task."):
+            continue
+        task_id = data.get("task")
+        if task_id:
+            events[str(task_id)] = data
+    return events
+
+
+def reconcile(contract: Path) -> list[str]:
+    """对账 TASK.yaml（真相）+ ledger 与 state/current.json（派生快照）。"""
+    path = contract / "state" / "current.json"
+    if not path.is_file():
+        return ["state/current.json 缺失；运行 mf state rebuild 重建"]
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ["state/current.json 不是合法 JSON；运行 mf state rebuild 重建"]
+    if not isinstance(raw, dict):
+        return ["state/current.json 顶层必须是对象；运行 mf state rebuild 重建"]
+
+    issues: list[str] = []
+    summary = task_summary(contract)
+    tasks = _load_tasks(contract)
+    if raw.get("counts") != summary["counts"]:
+        issues.append(
+            f"state counts={raw.get('counts')} 与任务卡 counts={summary['counts']} 不一致"
+        )
+    for key, expected in (
+        ("ready_tasks", summary["ready_tasks"]),
+        ("active_tasks", summary["active_tasks"]),
+        ("submitted_tasks", summary["submitted_tasks"]),
+        ("blocked_tasks", summary["blocked_tasks"]),
+    ):
+        actual = {str(item) for item in expected}
+        listed = [str(item) for item in raw.get(key) or []]
+        stale = [item for item in listed if item not in actual]
+        if stale:
+            issues.append(f"state {key} 含过期/错误任务: {', '.join(stale)}")
+    state_leases = {
+        str(item.get("task"))
+        for item in raw.get("active_leases") or []
+        if isinstance(item, dict) and item.get("task")
+    }
+    task_leases = {lease["task"] for lease in summary["active_leases"]}
+    stale_leases = state_leases - task_leases
+    if stale_leases:
+        issues.append(
+            f"state active_leases 含非 in_progress 任务: {', '.join(sorted(stale_leases))}"
+        )
+
+    for task_id, data in tasks.items():
+        status = str(data.get("status") or "")
+        next_owner = str(data.get("next_owner") or "")
+        lease = data.get("lease") or {}
+        if status == "in_progress":
+            if not isinstance(lease, dict) or not lease.get("expires_at"):
+                issues.append(f"任务 {task_id} in_progress 但缺少 lease")
+            if next_owner != "worker":
+                issues.append(f"任务 {task_id} in_progress 但 next_owner={next_owner}")
+        elif lease:
+            issues.append(f"任务 {task_id} status={status} 但仍有 lease")
+        if status in {"accepted", "blocked"} and next_owner != "manager":
+            issues.append(f"任务 {task_id} status={status} 但 next_owner={next_owner}（应为 manager）")
+        if status == "submitted":
+            review = tasks.get(str(data.get("reviewed_by_task") or ""))
+            if data.get("kind") == "review":
+                expected = "manager"
+            elif review is not None and review.get("status") in {"ready", "in_progress"}:
+                # 实现任务已提交、独立评审未结束：下一责任是评审者（worker）
+                expected = "worker"
+            else:
+                expected = "manager"
+            if next_owner != expected:
+                issues.append(
+                    f"任务 {task_id} submitted 但 next_owner={next_owner}（应为 {expected}）"
+                )
+        if status == "draft" and next_owner != "manager":
+            issues.append(f"任务 {task_id} draft 但 next_owner={next_owner}（应为 manager）")
+        if status in {"ready", "in_progress", "rework", "rejected"} and next_owner != "worker":
+            issues.append(f"任务 {task_id} status={status} 但 next_owner={next_owner}（应为 worker）")
+
+    expected_digest = _source_digest(contract, raw)
+    recorded_digest = raw.get("source_digest")
+    if recorded_digest and recorded_digest != expected_digest:
+        issues.append("state source_digest 过期（任务卡/阶段已变化）；运行 mf state rebuild")
+
+    for task_id, event in _last_task_events(contract).items():
+        data = tasks.get(task_id)
+        if data is None:
+            continue
+        target = str(event.get("to") or "")
+        status = str(data.get("status") or "")
+        if target and target != status:
+            issues.append(
+                f"任务 {task_id} ledger 最近事件 to={target} 与 TASK.yaml status={status} 不一致"
+            )
+    return issues
+
+
+def rebuild(contract: Path) -> dict[str, Any]:
+    """从 TASK.yaml + ledger 重建 state 派生快照；幂等、保留活动任务/lease、审计。"""
+    before = read_current(contract)
+    # 手工改卡/漂移时以 TASK.yaml 为准：补一条 task.reconcile 审计事件，
+    # 使 ledger 最近事件与任务卡一致（MFP-0018 E1/E2）。
+    tasks = _load_tasks(contract)
+    for task_id, event in _last_task_events(contract).items():
+        task = tasks.get(task_id)
+        if task is None:
+            continue
+        target = str(event.get("to") or "")
+        status = str(task.get("status") or "")
+        if target and status and target != status:
+            ledger_append(
+                contract,
+                {
+                    "event": "task.reconcile",
+                    "task": task_id,
+                    "from": target,
+                    "to": status,
+                    "reason": "以 TASK.yaml 为准重建 state",
+                },
+            )
+    data = dict(before)
+    summary = task_summary(contract)
+    data.update(summary)
+    data["open_bugs"] = len(open_bugs(contract))
+    write_current(contract, data)
+    refreshed = refresh_current(contract)
+    ledger_append(
+        contract,
+        {
+            "event": "state.rebuild",
+            "from_counts": before.get("counts"),
+            "to_counts": refreshed.get("counts"),
+            "active_tasks": len(refreshed.get("active_tasks") or []),
+            "active_leases": len(refreshed.get("active_leases") or []),
+        },
+    )
+    return refreshed
