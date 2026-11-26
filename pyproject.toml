@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meta-flow"
-version = "0.1.1"
+version = "1.0.1"
 description = "Meta Flow — AI project operating system with spec-driven delivery"
 readme = "README.md"
 license = "MIT"

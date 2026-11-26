@@ -11,6 +11,7 @@
   - T017/T019/T021：P4 工具闭环、NEEDS_REWORK 自动重开、`mf task rework`、BUG-0015 部署覆盖修复；
   - T023/BUG-0016：release freeze 阶段策略修正（P1/P2 禁发、P3 结束后可发、P4/P5 修复随时可发；`--force` 不绕过阶段门）；
   - T014：L1/L3 验证通过；VR-0001..0003；L2 SPEC/规范复核仍待 M02/M03；
+  - 版本元数据同步：`pyproject.toml`/`mf --version` 为 1.0.1（MFP-0028 修正）；
   - 发布清单新增 `stage`。
 - 已知问题/未完成：
   - T015 ptm-team 手动部署与 ptm-tde 验证；

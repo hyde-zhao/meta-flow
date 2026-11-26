@@ -1,0 +1,67 @@
+id: MFP-0028
+title: 发布版本元数据未同步：1.0.1 的 pyproject version 仍为 0.1.1
+status: submitted
+priority: should
+category: feature
+classification: bug
+source:
+  project: meta-flow
+  role: manager
+  created_by: manager
+  created_at: '2026-11-26T07:21:45.977245+00:00'
+  mf_version: 0.1.1
+  platform: linux
+  agent: manager
+problem: '1.0.1 发布提交（1eed907 release: meta-flow 1.0.1）没有同步更新 pyproject.toml 的 version，
+
+  仍为 0.1.1。导致 mf --version、mf dev status 的 tool_version、各项目 install.yaml 与
+
+  ~/.meta-flow/manifest.yaml 的 tool_version、uv 工具环境 dist-info 全部显示 0.1.1，
+
+  用户无法从版本号确认已升级到 1.0.1，只能依赖行为差异判断。'
+context:
+  scenario: '2026-11-26 本机按 RELEASE-NOTES 升级 1.0.1：git 更新到 1eed907 后执行 mf dev install
+    --yes
+
+    与各项目 mf upgrade；升级成功但 mf --version 仍输出 0.1.1，install.yaml/manifest 的
+
+    tool_version 也为 0.1.1，需通过 mf task rework 存在等行为差异确认代码已是 1.0.1。'
+  reproduction:
+  - 在 1.0.1 源码（HEAD 1eed907）执行 mf dev install --yes。
+  - 执行 mf --version，输出 0.1.1。
+  - 查看 pyproject.toml，version 字段为 0.1.1；RELEASE-NOTES.md 声明 1.0.1。
+  expected: '发布版本号在 pyproject.toml、RELEASE-NOTES、git tag 与 release 清单四方一致；
+
+    升级后 mf --version 输出 1.0.1。'
+  actual: 源码版本元数据停留在 0.1.1，与 RELEASE-NOTES 的 1.0.1 不一致，版本号不可信。
+  evidence:
+  - pyproject.toml 第 7 行 version = "0.1.1"
+  - RELEASE-NOTES.md 标题：1.0.1（R0/V1 P4 修复发布）
+  - 'git log 1eed907 release: meta-flow 1.0.1 (R0/V1 P4 patch)'
+  - mf --version 输出 mf 0.1.1；site-packages 为 meta_flow-0.1.1.dist-info
+  affected:
+  - pyproject.toml
+  - 发布流程（release/RELEASE-1.0.1.yaml 与发布检查清单，缺版本一致性校验）
+  - mf --version / mf dev status / install.yaml / manifest tool_version / 升级校验逻辑
+acceptance:
+- 下一次版本发布时 pyproject.toml version 与 RELEASE-NOTES 声明一致，mf --version 输出该版本号。
+- 发布流程包含版本一致性校验（pyproject / RELEASE-NOTES / git tag / 发布清单），任一处不一致时 release 流程失败。
+- 对 1.0.1 的补正：在下一补丁发布中修正版本元数据；若仅修正文档则需在 RELEASE-NOTES 明确说明版本字符串沿用 0.1.1。
+testing_plan: '单元测试断言 pyproject version 与源码内版本常量/发布清单一致；
+
+  或新增 mf release check 在 CI 中校验。'
+rollback: 无数据影响，仅版本字符串修正，可直接回滚提交。
+privacy:
+  sanitized: true
+  removed: []
+source_record: null
+resolution:
+  version: null
+  commit: null
+  tests: []
+  verified_by: null
+  verified_at: null
+  note: null
+submitted_at: '2026-11-26T07:22:30.980844+00:00'
+inbox_ref: /home/hyde/.meta-flow/improvements/inbox/meta-flow/MFP-0028.yaml
+digest: sha256:197d8f7603c35aa29151aa7d13b9cb7f57491326b43da59b34dd8e693d5d10a1

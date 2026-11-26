@@ -1,0 +1,15 @@
+id: BUG-0004
+kind: bug
+title: 发布版本元数据未同步：1.0.1 的 pyproject version 仍为 0.1.1
+status: open
+source_mfp: MFP-0028
+source_project: meta-flow
+acceptance:
+- 下一次版本发布时 pyproject.toml version 与 RELEASE-NOTES 声明一致，mf --version 输出该版本号。
+- 发布流程包含版本一致性校验（pyproject / RELEASE-NOTES / git tag / 发布清单），任一处不一致时 release 流程失败。
+- 对 1.0.1 的补正：在下一补丁发布中修正版本元数据；若仅修正文档则需在 RELEASE-NOTES 明确说明版本字符串沿用 0.1.1。
+created_at: '2026-11-26T07:22:34.912344+00:00'
+resolution:
+  version: null
+  commit: null
+  note: null

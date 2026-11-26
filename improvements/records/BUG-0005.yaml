@@ -1,0 +1,15 @@
+id: BUG-0005
+kind: bug
+title: mf dev install 对同版本源码复用 uv 缓存，静默返回成功但代码未更新
+status: open
+source_mfp: MFP-0029
+source_project: meta-flow
+acceptance:
+- mf dev install --yes 在源码版本号不变但代码有变更时，全局工具仍更新到源码 HEAD（例如传 --reinstall 或等价强制重建缓存）。
+- 安装后自检：以子进程执行 mf --help/关键命令或比较构建标识，与源码不一致时非零退出并提示，不静默成功。
+- 回归用例：模拟版本号不变、源码新增命令的场景，断言安装后新命令可用（覆盖 --reinstall 参数或缓存失效逻辑）。
+created_at: '2026-11-26T07:22:36.781772+00:00'
+resolution:
+  version: null
+  commit: null
+  note: null
