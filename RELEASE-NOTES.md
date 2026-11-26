@@ -11,15 +11,25 @@
   - T017/T019/T021：P4 工具闭环、NEEDS_REWORK 自动重开、`mf task rework`、BUG-0015 部署覆盖修复；
   - T023/BUG-0016：release freeze 阶段策略修正（P1/P2 禁发、P3 结束后可发、P4/P5 修复随时可发；`--force` 不绕过阶段门）；
   - T014：L1/L3 验证通过；VR-0001..0003；L2 SPEC/规范复核仍待 M02/M03；
-  - 版本元数据同步：`pyproject.toml`/`mf --version` 为 1.0.1（MFP-0028 修正）；
+  - 版本元数据修正（MFP-0028/T025）：`pyproject.toml`、源码 `__version__`、
+    `mf --version`、`delivery.yaml` 与发布清单统一为 1.0.1；新增
+    `mf release check` 与 `release freeze` 版本一致性校验（pyproject/源码/
+    RELEASE-NOTES/清单/tag，不一致失败，不得静默 0.1.1）。修复前
+    `mf --version` 实际仍输出 0.1.1（源码版本常量未同步）。
   - 发布清单新增 `stage`。
 - 已知问题/未完成：
   - T015 ptm-team 手动部署与 ptm-tde 验证；
   - M02/M03：14/16 规范待复核、SPEC-001..005 未编写、`mf req trace specs=0`；L2 VR PASS_WITH_RISK；
   - R5：upgrade 补建缺失 phase plan；
   - MFP-0021..0027 工具缺口（maintainer）；
+  - MFP-0029：uv 在同版本号源码迭代时复用缓存，`mf dev install` 可能静默装旧代码；
+    CLI 已默认 `UV_NO_CACHE=1` 缓解，完整 `--reinstall` 与安装后自检待实施；
+  - v1.0.1 tag 指向的提交仍含旧版本元数据（pyproject/源码 0.1.1）；
+    T026 评审通过后由 manager 重打 tag 或按下一 patch 记录（MFP-0028）。
   - 1.0.1 为 P4 修复发布，不替代 P4 退出/P5 门禁。
-- 升级/回滚：全局 mf 使用 T023 代码；回滚 1.0.0 时恢复 delivery.yaml/RELEASE-NOTES 与全局 mf。
+- 升级/回滚：全局 mf 使用 1.0.1 代码：`UV_NO_CACHE=1 mf dev install --yes`
+  后确认 `mf --version` 输出 1.0.1，再执行项目/子项目 `mf upgrade`；回滚
+  1.0.0 时恢复 delivery.yaml/RELEASE-NOTES 与全局 mf。
 
 ## 1.0.0（R0/V1 冻结候选，历史）
 

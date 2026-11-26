@@ -892,3 +892,93 @@ def test_cli_release_freeze_stage_policy(tmp_path, monkeypatch, capsys):
     assert "已冻结: 1.0.1" in out
     assert "阶段: P4/active" in out
     assert (contract / "release" / "RELEASE-1.0.1.yaml").is_file()
+
+
+def test_cli_version_flag_matches_source_constant(capsys):
+    """MFP-0028：mf --version 输出来自源码版本常量，不得停留旧版本。"""
+    import meta_flow
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"mf {meta_flow.__version__}"
+
+
+def test_cli_release_check_detects_drift(tmp_path, monkeypatch, capsys):
+    """A2 CLI 证据：release check 一致时 0，源码版本漂移时非零并指出字段。"""
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    assert main(["install", "claude", "--project-dir", str(project), "--init-contract"]) == 0
+    contract = project / "project-contract"
+    current = state.read_current(contract)
+    current.update({"phase": "P4", "phase_status": "active"})
+    state.write_current(contract, current)
+
+    delivery = tmp_path / "delivery"
+    (delivery / "src" / "meta_flow").mkdir(parents=True)
+    source = delivery / "src" / "meta_flow" / "__init__.py"
+    source.write_text('__version__ = "1.0.1"\n', encoding="utf-8")
+    (delivery / "pyproject.toml").write_text(
+        '[project]\nname = "meta-flow"\nversion = "1.0.1"\n', encoding="utf-8"
+    )
+    (delivery / "delivery.yaml").write_text("id: meta-flow\nversion: '1.0.1'\n", encoding="utf-8")
+    (delivery / "RELEASE-NOTES.md").write_text(
+        "# 发布说明\n\n## 1.0.1（测试）\n", encoding="utf-8"
+    )
+
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "release",
+                "freeze",
+                "--project-dir",
+                str(project),
+                "--version",
+                "1.0.1",
+                "--source-dir",
+                str(delivery),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "release",
+                "check",
+                "--project-dir",
+                str(project),
+                "--version",
+                "1.0.1",
+                "--source-dir",
+                str(delivery),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True, data["errors"]
+
+    # MFP-0028 复发场景：源码版本常量仍是 0.1.1
+    source.write_text('__version__ = "0.1.1"\n', encoding="utf-8")
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "release",
+                "check",
+                "--project-dir",
+                str(project),
+                "--version",
+                "1.0.1",
+                "--source-dir",
+                str(delivery),
+            ]
+        )
+        == 1
+    )
+    err = capsys.readouterr().err
+    assert "source_version" in err

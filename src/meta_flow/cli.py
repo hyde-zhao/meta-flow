@@ -555,6 +555,9 @@ def _cmd_dev_update(args: argparse.Namespace) -> int:
 
 
 def _cmd_dev_install(args: argparse.Namespace) -> int:
+    # MFP-0029：uv 在 pyproject 版本号不变时会复用缓存构建，静默安装旧代码。
+    # 同版本源码迭代必须强制重建；完整修复（--reinstall 与安装后自检）见 MFP-0029。
+    os.environ.setdefault("UV_NO_CACHE", "1")
     source = dev_install(source=args.source, yes=args.yes)
     print(f"已从源码安装全局 mf: {source}")
     return 0
@@ -1362,6 +1365,7 @@ def _cmd_release_freeze(args: argparse.Namespace) -> int:
         force=args.force,
         reason=args.reason,
         approved_by=args.approved_by,
+        source_dir=args.source_dir,
     )
     print(f"已冻结: {result['version']} ({result['roadmap']})")
     stage = result.get("stage") or {}
@@ -1373,6 +1377,32 @@ def _cmd_release_freeze(args: argparse.Namespace) -> int:
     if args.force:
         print(f"override: reason={args.reason or '-'} approved_by={args.approved_by or '-'}")
     return 0
+
+
+def _cmd_release_check(args: argparse.Namespace) -> int:
+    result = verify.release_check(
+        args.project_dir,
+        version=args.version,
+        source_dir=args.source_dir,
+        require_tag=args.require_tag,
+    )
+    if args.json:
+        _print_json(result)
+    else:
+        status = "OK" if result["ok"] else "FAIL"
+        print(f"版本一致性: {status} ({result['version']})")
+        for item in result["checks"]:
+            if item.get("skipped"):
+                mark = "SKIP"
+            else:
+                mark = "OK" if item["ok"] else "FAIL"
+            actual = item.get("actual") if item.get("actual") is not None else "-"
+            print(f"  {mark} {item['name']}: {actual} (期望 {item['expected']})")
+            if item.get("detail"):
+                print(f"       {item['detail']}")
+        for error in result["errors"]:
+            print(f"错误: {error}", file=sys.stderr)
+    return 0 if result["ok"] else 1
 
 
 def _cmd_release_show(args: argparse.Namespace) -> int:
@@ -1876,10 +1906,28 @@ def build_parser() -> argparse.ArgumentParser:
     release_freeze.add_argument("--project-dir", default=".")
     release_freeze.add_argument("--version")
     release_freeze.add_argument("--note")
+    release_freeze.add_argument(
+        "--source-dir",
+        help="交付源码目录（版本一致性校验；默认探测当前目录与契约同级交付库）",
+    )
     release_freeze.add_argument("--force", action="store_true")
     release_freeze.add_argument("--reason", help="--force 的可审计原因")
     release_freeze.add_argument("--approved-by", dest="approved_by", help="--force 的批准人/记录")
     release_freeze.set_defaults(func=_cmd_release_freeze)
+    release_check_p = release_sub.add_parser(
+        "check", help="发布一致性校验（pyproject/源码版本/RELEASE-NOTES/清单/tag）"
+    )
+    release_check_p.add_argument("--project-dir", default=".")
+    release_check_p.add_argument("--version")
+    release_check_p.add_argument(
+        "--source-dir",
+        help="交付源码目录（默认探测当前目录与契约同级交付库）",
+    )
+    release_check_p.add_argument(
+        "--require-tag", action="store_true", help="要求 git tag v<version> 存在"
+    )
+    release_check_p.add_argument("--json", action="store_true")
+    release_check_p.set_defaults(func=_cmd_release_check)
     release_show = release_sub.add_parser("show")
     release_show.add_argument("--project-dir", default=".")
     release_show.add_argument("--version")

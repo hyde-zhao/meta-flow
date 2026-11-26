@@ -4,7 +4,7 @@
 
 ## 状态
 
-**v0.1.1 / R0 1.0.x 试运行**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
+**v1.0.1 / R0 1.0.x 试运行**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
 
 ```text
 mf bootstrap
@@ -19,7 +19,7 @@ mf task graph/plan/next/release/summary
 mf bug add/list/show/update/close
 mf knowledge add/list/show/render
 mf verify record/list/show
-mf release freeze/show
+mf release freeze/check/show
 mf context show/expand/log/policy
 mf archive list/show
 mf status / mf log / mf doctor
@@ -182,6 +182,12 @@ mf uninstall claude --project-dir <path>
 
 源码仓库地址记录在 `~/.meta-flow/manifest.yaml` 的 `repo_url`。commit 可用，push 必须用户显式授权。`mf dev status` 在 `source_dir` 缺失或不是 git 仓库时会显式报错，并提示 `mf dev clone` 或 `--source`。
 
+MFP-0029：uv 在 `pyproject.toml` 版本号不变时会复用缓存构建，`mf dev install`
+可能静默安装旧代码。CLI 已默认注入 `UV_NO_CACHE=1` 强制重建；同版本源码迭代后
+请用 `UV_NO_CACHE=1 mf dev install --yes` 并检查 `mf --version`，或在安装后运行
+`mf task --help` 等确认新命令存在。完整修复（`uv tool install --reinstall` 与
+安装后自检）见 MFP-0029。
+
 ## MFP 改进包
 
 manager 在 contract 仓创建工具改进包，提交到全局 inbox；worker 创建本地包，由 manager 导入；maintainer 读取并导入源码仓。
@@ -305,8 +311,9 @@ mf knowledge add --kind lesson --text "先写验收再实现"
 mf knowledge add --kind convention --text "前端统一用 pnpm" --delivery frontend
 mf knowledge render
 
-# 版本冻结（不等于发布）
+# 版本冻结与发布一致性（不等于发布）
 mf release freeze
+mf release check --source-dir ../meta-flow
 mf release show
 ```
 
@@ -318,6 +325,14 @@ mf release show
   可随时冻结，不要求阶段结束或 P5 退出。同时检查需求、任务、blocker/critical
   BUG 与版本策略，写 `release/RELEASE-<version>.yaml`；`published: false`。
   阶段门属用户门禁，`--force` 不能绕过；版本/技术校验仍可用 `--force`。
+- 版本一致性（MFP-0028）：冻结前校验交付库版本单源——`pyproject.toml`、
+  源码 `__version__`、`delivery.yaml`、`RELEASE-NOTES.md`、git tag 与发布清单
+  `release/RELEASE-<version>.yaml` 必须一致，任一处不一致时失败（不得静默沿用
+  旧版本号）。交付源码目录默认探测当前目录与契约同级交付库，也可显式
+  `--source-dir`。`mf release check [--require-tag] [--json]` 做发布前/后审计：
+  一致返回 0，不一致返回 1 并列出失败字段；`--require-tag` 要求 `v<version>`
+  tag 存在，且 tag 指向的 `pyproject.toml`/源码版本必须与目标版本一致。
+  版本一致性属技术校验，`--force` 不可绕过。
 - 版本策略：优先读取 ROADMAP 的 `version_major`/`version_range` 声明映射（支持
   R0/V1 1.0.x）；未声明的 MAJOR 不一致默认拒绝。`--force` 必须带
   `--reason` 与 `--approved-by`，并写入发布清单 `override` 与 ledger。

@@ -3,9 +3,11 @@
 ## 适用对象
 
 本手册面向使用 meta-flow 的项目 manager、worker 与 maintainer。版本按
-`x.y.z = V.R.patch` 管理：当前 V1/R0 = 1.0.x（工具版本仍为 0.1.1），R1 =
-V1/R1 = 1.1.x。命令以 `mf` 0.1.1 为准；绑定声明见 contract 的
+`x.y.z = V.R.patch` 管理：当前 V1/R0 = 1.0.x（工具版本 1.0.1），R1 =
+V1/R1 = 1.1.x。命令以 `mf` 1.0.1 为准；绑定声明见 contract 的
 `roadmap/ROADMAP.yaml`（`version_major`/`version_range`）。
+版本单一来源：`pyproject.toml`、源码 `__version__`、`delivery.yaml`、
+`RELEASE-NOTES.md` 与发布清单必须一致，发布前用 `mf release check` 校验。
 
 ## 安装与部署
 
@@ -14,9 +16,13 @@ V1/R1 = 1.1.x。命令以 `mf` 0.1.1 为准；绑定声明见 contract 的
    ```bash
    git clone git@github.com:hyde-zhao/meta-flow.git
    cd meta-flow
-   uv tool install --force .
+   UV_NO_CACHE=1 uv tool install --force .
    mf --version
    ```
+
+   同版本号源码迭代时，uv 可能复用缓存构建（MFP-0029），必须带
+   `UV_NO_CACHE=1` 或 `uv tool install --force --reinstall .`；安装后确认
+   `mf --version` 输出源码版本（当前 1.0.1）。
 
 2. 初始化全局模板库：
 
@@ -270,12 +276,21 @@ mf task accept R0-P1-T001 --verdict PASS
 - `mf release freeze`：优先使用 ROADMAP 声明的 `version_major`/`version_range`
   （支持 R0/V1 1.0.x）；未声明的 MAJOR 不一致默认拒绝；`--force` 必须带
   `--reason` 与 `--approved-by`，并写入发布清单 `override` 与 ledger。
+- `mf release check`（MFP-0028）：发布一致性校验——发布清单、`pyproject.toml`、
+  源码 `__version__`、`delivery.yaml`、`RELEASE-NOTES.md` 与 git tag 必须与目标
+  版本一致；不一致返回 1 并列出失败字段。`--source-dir` 指定交付源码目录（默认
+  探测当前目录与契约同级交付库）；`--require-tag` 要求 `v<version>` tag 存在且其
+  指向的版本文件一致。`mf release freeze` 冻结前也会执行交付库版本校验，不一致
+  时失败；版本一致性属技术校验，`--force` 不可绕过。
 
 ### 维护者
 
 - `mf dev status`：source_dir 缺失/非 git 时显式报错，引导 `mf dev clone` 或
   `--source`。
 - `mf dev clone/update/install --yes`；`mf dev improve import/list/update`。
+- MFP-0029：`mf dev install` 已默认注入 `UV_NO_CACHE=1`，避免同版本号复用旧
+  构建；安装后务必用 `mf --version` 与关键命令（如 `mf task --help`）确认全局
+  工具与源码 HEAD 一致。完整 `--reinstall` 与安装自检待 MFP-0029 实施。
 - `mf install/uninstall/upgrade`；push 与远程创建需用户授权。
 
 ## 故障排查
@@ -288,6 +303,8 @@ mf task accept R0-P1-T001 --verdict PASS
 | `mf dev status` 报源码不存在 | 运行 `mf dev clone` 或 `--source <有效源码目录>` |
 | release freeze 拒绝 MAJOR | 在 ROADMAP 声明 `version_major`/`version_range`；例外用 `--force --reason --approved-by` |
 | release freeze 阶段被拒 | P1/P2 禁止发布；P3 active 仅 alpha/预发布，先 `mf phase exit` 再正式冻结；P4/P5 修复可直接冻结（阶段门不可 `--force` 绕过） |
+| release freeze/check 报版本不一致 | 同步 `pyproject.toml`、源码 `__version__`、`delivery.yaml`、`RELEASE-NOTES.md` 与发布清单；tag 指向旧版本时重打 `v<version>`（MFP-0028） |
+| `mf --version` 仍是旧版本 | 源码 `__version__` 未更新，或全局工具未重装：`UV_NO_CACHE=1 mf dev install --yes`（MFP-0028/0029） |
 | 追踪矩阵出现旧任务/重复 BUG | 使用默认当前路标追踪；仅在审计时 `--archive` |
 | 工作区内 pytest 角色门失败 | 0.1.1 起测试已隔离 cwd/MF_ROLE；仍失败时检查是否自定义 fixture 设置了角色 |
 | worker 读到 >64KB 文件被拒 | 用 `mf context expand <path> --reason packet_missing`；常规 Read/cat 受预算限制 |
