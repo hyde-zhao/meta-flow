@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 import yaml
@@ -608,6 +609,76 @@ def test_cli_task_start_recovers_legacy_stale_rework(tmp_path, monkeypatch, caps
     assert task["review_verdict"] is None
 
 
+def test_cli_bootstrap_force_upgrade_force_preserve_contract(tmp_path, monkeypatch):
+    """BUG-0015 CLI 端到端：bootstrap --force 与 upgrade --force 不覆盖 contract。"""
+    home, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    assert (
+        main(["install", "claude", "--project-dir", str(project), "--init-contract"])
+        == 0
+    )
+    contract = project / "project-contract"
+    custom_standard = "# 项目自定义标准\n\n保持不动。\n"
+    custom_policy = "# 项目自定义策略\nschema: 1\ntiers:\n  hot:\n    - state/current.json\n"
+    custom_improvements = "# 项目自定义改进包说明\n"
+    (contract / "standards" / "CONTEXT.md").write_text(custom_standard, encoding="utf-8")
+    (contract / "policies" / "CONTEXT-POLICY.yaml").write_text(custom_policy, encoding="utf-8")
+    (contract / "improvements" / "README.md").write_text(custom_improvements, encoding="utf-8")
+    phase_plan = contract / "roadmap" / "R1" / "phases" / "P1" / "PLAN.md"
+
+    # 先做一次常规升级稳定 contract 状态，再提交基线，便于校验后无意外改动
+    assert main(["upgrade", "--project-dir", str(project)]) == 0
+    subprocess.run(["git", "-C", str(contract), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(contract),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "baseline",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    # bootstrap --force 只刷新全局模板库，不触碰 contract
+    assert main(["bootstrap", "--force"]) == 0
+    assert (contract / "standards" / "CONTEXT.md").read_text(encoding="utf-8") == custom_standard
+    assert (contract / "policies" / "CONTEXT-POLICY.yaml").read_text(encoding="utf-8") == custom_policy
+    assert (contract / "improvements" / "README.md").read_text(encoding="utf-8") == custom_improvements
+
+    # 模拟全局安装镜像模板更新后执行 upgrade --force
+    global_agent = home / "templates" / "agents" / "manager.md"
+    global_agent.parent.mkdir(parents=True, exist_ok=True)
+    global_agent.write_text("# 全局 agent 模板更新\n", encoding="utf-8")
+    mirror = project / ".claude" / "agents" / "manager.md"
+    old_mirror = mirror.read_text(encoding="utf-8")
+
+    assert main(["upgrade", "--project-dir", str(project), "--force"]) == 0
+
+    # contract 自定义内容保持不变，git status 无非预期改动
+    assert (contract / "standards" / "CONTEXT.md").read_text(encoding="utf-8") == custom_standard
+    assert (contract / "policies" / "CONTEXT-POLICY.yaml").read_text(encoding="utf-8") == custom_policy
+    assert (contract / "improvements" / "README.md").read_text(encoding="utf-8") == custom_improvements
+    assert phase_plan.is_file()
+    status = subprocess.run(
+        ["git", "-C", str(contract), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert status == ""
+
+    # 安装镜像仍然更新并保留备份
+    assert mirror.read_text(encoding="utf-8") == "# 全局 agent 模板更新\n"
+    assert mirror.with_suffix(mirror.suffix + ".bak").read_text(encoding="utf-8") == old_mirror
+
+
 def test_cli_local_mfp_channel_and_guard_log_query(tmp_path, monkeypatch, capsys):
     _, project = _prepare(tmp_path, monkeypatch)
     assert main(["bootstrap"]) == 0
@@ -631,3 +702,132 @@ def test_cli_local_mfp_channel_and_guard_log_query(tmp_path, monkeypatch, capsys
     assert main(["context", "log", "--project-dir", str(project), "--json"]) == 0
     records = json.loads(capsys.readouterr().out)
     assert any(item.get("tool") == "mf improve new --local" for item in records)
+
+
+def test_cli_task_review_rework_prompt_and_state(tmp_path, monkeypatch, capsys):
+    """T019 关键链路：review prompt 下一环节、NEEDS_REWORK 自动重开与 rework state。"""
+    _, project = _prepare(tmp_path, monkeypatch)
+    assert main(["bootstrap"]) == 0
+    install_root(project)
+    workspace_init(project, "Demo")
+    workspace_add_project(project, "alpha", "alpha")
+    result = create_task(
+        project,
+        "alpha 任务",
+        risk="medium",
+        delivery="alpha",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    contract = project / "demo-contract"
+    start_task(project, task_id)
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / "T001"
+    (bundle / "dev-record.md").write_text("# dev\n完成\n", encoding="utf-8")
+    (bundle / "handoff.md").write_text("# handoff\n完成\n", encoding="utf-8")
+    submit_task(project, task_id)
+    start_task(project, review_id)
+
+    # review in_progress：prompt 明确 reviewer 职责与 rework_scope 声明
+    capsys.readouterr()
+    assert main(["task", "prompt", "--project-dir", str(project), review_id]) == 0
+    out = capsys.readouterr().out
+    assert "kind: review" in out
+    assert "status: in_progress" in out
+    assert "responsible_agent: worker" in out
+    assert "review-handoff.md" in out
+    assert "rework_scope: in-scope|out-of-scope|disputed" in out
+
+    # review 在评审中：实现任务的 prompt 指向关联 review 任务（下一环节明确）
+    capsys.readouterr()
+    assert main(["task", "prompt", "--project-dir", str(project), task_id]) == 0
+    out = capsys.readouterr().out
+    assert f"review_task: {review_id}" in out
+    assert "kind: review" in out
+
+    review_bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / "T002"
+    (review_bundle / "review.md").write_text(
+        "# review\nverdict: NEEDS_REWORK\n", encoding="utf-8"
+    )
+    (review_bundle / "review-handoff.md").write_text(
+        "\n".join(
+            [
+                "# review handoff",
+                "> verdict: NEEDS_REWORK",
+                "> rework_scope: in-scope",
+                "> rework_requires: none",
+                "",
+                "## 必须整改项",
+                "",
+                "| ID | 文件/行 | 要求 | 验收方法 |",
+                "|---|---|---|---|",
+                "| R1 | src/app.py:1 | 整改 | pytest |",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    submit_task(project, review_id)
+
+    # review submitted：prompt 指向 manager 验收，不留在空泛“等待处理”
+    capsys.readouterr()
+    assert main(["task", "prompt", "--project-dir", str(project), review_id]) == 0
+    out = capsys.readouterr().out
+    assert "responsible_agent: manager" in out
+    assert "status: submitted" in out
+    assert f"mf task accept {review_id}" in out
+
+    # 评审已提交后：实现任务 prompt 明确先验收 review，再验收实现任务
+    capsys.readouterr()
+    assert main(["task", "prompt", "--project-dir", str(project), task_id]) == 0
+    out = capsys.readouterr().out
+    assert f"先 accept review 任务 {review_id}" in out
+    assert f"再验收 {task_id}" in out
+
+    monkeypatch.setenv("MF_ROLE", "manager")
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "task",
+                "accept",
+                "--project-dir",
+                str(project),
+                review_id,
+                "--verdict",
+                "NEEDS_REWORK",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "已自动重开" in out
+    assert f"mf task rework {task_id}" in out
+
+    # 重开后的 task prompt：next_owner=worker，明确只能用 mf task rework 开始
+    capsys.readouterr()
+    assert main(["task", "prompt", "--project-dir", str(project), task_id]) == 0
+    out = capsys.readouterr().out
+    assert "status: rework" in out
+    assert "next_owner: worker" in out
+    assert f"mf task rework {task_id}" in out
+    assert "task.rework" in out
+
+    _, task = load_task(project, task_id)
+    assert task["status"] == "rework"
+    assert task["next_owner"] == "worker"
+    assert task["lease"] is None
+    assert task["rework"]["review_task"] == review_id
+    assert "lease" in task["rework"]
+
+    # worker 通过 mf task rework 开始后进入 in_progress
+    monkeypatch.setenv("MF_ROLE", "worker")
+    capsys.readouterr()
+    assert main(["task", "rework", task_id, "--project-dir", str(project / "alpha")]) == 0
+    out = capsys.readouterr().out
+    assert "in_progress" in out
+    assert "manager 审计通知" in out
+    _, task = load_task(project, task_id)
+    assert task["status"] == "in_progress"
+    assert task["lease"] is not None
+    assert task["rework"]["lease"] == task["lease"]["expires_at"]

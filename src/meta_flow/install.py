@@ -678,7 +678,14 @@ def uninstall_claude(
 
 
 def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str, Any]:
-    """按当前全局模板更新项目安装文件。"""
+    """按当前全局模板更新项目安装镜像。
+
+    ``force`` 只覆盖安装镜像（``.claude/agents``、``CLAUDE.md`` 受管块、
+    ``.claude/settings.json`` hook）；contract 骨架同步只补缺失文件，不覆盖
+    contract 中项目自定义的 standards/templates/policies/README 与 phase plans
+    （BUG-0015）。需要强制刷新 contract 内容时必须走 manager 的评审/变更流程，
+    而不是安装升级。
+    """
     project = Path(project_dir).expanduser().resolve()
     manifest = load_install_manifest(project)
     global_store.bootstrap()
@@ -709,10 +716,13 @@ def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str
     current = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""
     claude_path.write_text(_replace_managed_block(current, role, body), encoding="utf-8")
 
+    contract_sync: dict[str, Any] | None = None
     if role == "manager" and (project / ".meta-flow" / "workspace.yaml").is_file():
         from .workspace import workspace_upgrade
 
-        workspace_upgrade(project, force=force)
+        # BUG-0015：contract 是项目公共真相，安装升级的 --force 不得覆盖其自定义
+        # 内容；骨架同步只补缺失文件（force=False）。
+        contract_sync = workspace_upgrade(project, force=False)
 
     manifest["tool_version"] = __version__
     manifest["template_version"] = global_store.load_manifest().get("template_version")
@@ -727,5 +737,6 @@ def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str
         "project_dir": str(project),
         "updated": updated,
         "role": role,
+        "contract": contract_sync,
         "gitignore": manifest["gitignore"],
     }

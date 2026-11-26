@@ -69,6 +69,19 @@ mf install claude --agent maintainer    # 装 maintainer + manager
 
 不创建 `contracts/` 或 `deliveries/`。
 
+### 更新与升级
+
+```bash
+mf bootstrap --force                         # 只刷新 ~/.meta-flow 全局模板库
+mf upgrade --project-dir <项目根> --force
+mf upgrade --project-dir <子项目> --force
+```
+
+`--force` 只覆盖安装镜像（`.claude/agents`、`CLAUDE.md` 受管块、settings hook），
+旧文件保留 `.bak`；contract 骨架只补缺失文件，不覆盖项目自定义的 standards/
+templates/policies/README 与 phase plans（BUG-0015）。contract 内容变更走
+manager 的评审/变更流程。
+
 ### 3. manager 初始化工作区
 
 在项目根启动：

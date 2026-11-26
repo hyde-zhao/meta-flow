@@ -15,6 +15,7 @@ from meta_flow.install import (
     install_root,
     install_worker,
     uninstall_claude,
+    upgrade_project,
 )
 
 
@@ -238,3 +239,114 @@ def test_agent_templates_use_existing_doctor_flags():
     for text in (templates.AGENT_MAINTAINER, templates.MAINTAINER_CLAUDE):
         assert "mf doctor --project" not in text
         assert "mf doctor --path" in text
+
+
+def _git_commit_all(path):
+    subprocess.run(
+        ["git", "-C", str(path), "add", "-A"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "baseline",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _git_status(path):
+    return subprocess.run(
+        ["git", "-C", str(path), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def test_upgrade_force_preserves_contract_and_refreshes_mirror(mf_env):
+    """BUG-0015：upgrade --force 只更新安装镜像，不覆盖 contract 自定义内容。"""
+    from meta_flow.workspace import workspace_init
+
+    home = mf_env["home"]
+    project = mf_env["project"]
+    install_root(project)
+    workspace_init(project, "Demo")
+    contract = project / "demo-contract"
+
+    custom_standard = "# 项目自定义标准\n\n不要覆盖。\n"
+    custom_policy = "# 项目自定义策略\nschema: 1\ntiers:\n  hot:\n    - state/current.json\n"
+    custom_improvements = "# 项目自定义改进包说明\n"
+    custom_phase_plan = "# R1-P2 项目自定义阶段计划\n"
+    (contract / "standards" / "CONTEXT.md").write_text(custom_standard, encoding="utf-8")
+    (contract / "policies" / "CONTEXT-POLICY.yaml").write_text(custom_policy, encoding="utf-8")
+    (contract / "improvements" / "README.md").write_text(custom_improvements, encoding="utf-8")
+    custom_plan_path = contract / "roadmap" / "R1" / "phases" / "P2" / "PLAN.md"
+    custom_plan_path.write_text(custom_phase_plan, encoding="utf-8")
+
+    # 基线：先完成一次常规同步，再提交 contract，便于校验升级后无意外改动
+    upgrade_project(project)
+    _git_commit_all(contract)
+
+    # 模拟全局模板更新（bootstrap --force 的等价效果）
+    global_agent = home / "templates" / "agents" / "manager.md"
+    global_agent.parent.mkdir(parents=True, exist_ok=True)
+    global_agent.write_text("# 全局 agent 模板更新\n", encoding="utf-8")
+    mirror = project / ".claude" / "agents" / "manager.md"
+    old_mirror = mirror.read_text(encoding="utf-8")
+
+    result = upgrade_project(project, force=True)
+
+    # contract 自定义内容保持不变，且 git status 无非预期改动
+    assert (contract / "standards" / "CONTEXT.md").read_text(encoding="utf-8") == custom_standard
+    assert (contract / "policies" / "CONTEXT-POLICY.yaml").read_text(encoding="utf-8") == custom_policy
+    assert (contract / "improvements" / "README.md").read_text(encoding="utf-8") == custom_improvements
+    assert custom_plan_path.read_text(encoding="utf-8") == custom_phase_plan
+    assert _git_status(contract) == ""
+
+    # 安装镜像仍然更新，并保留旧文件备份
+    assert mirror.read_text(encoding="utf-8") == "# 全局 agent 模板更新\n"
+    backup = mirror.with_suffix(mirror.suffix + ".bak")
+    assert backup.read_text(encoding="utf-8") == old_mirror
+
+    # 升级结果显式声明 contract 同步未使用 force
+    assert result["contract"] is not None
+    assert result["contract"]["force"] is False
+
+
+def test_upgrade_backfills_missing_contract_files_without_overwrite(mf_env):
+    """upgrade 同步只补缺失骨架文件，不覆盖已有自定义内容（BUG-0015）。"""
+    from meta_flow import templates
+    from meta_flow.workspace import workspace_init
+
+    project = mf_env["project"]
+    install_root(project)
+    workspace_init(project, "Demo")
+    contract = project / "demo-contract"
+    custom = "# 保留我\n"
+    (contract / "standards" / "CONTEXT.md").write_text(custom, encoding="utf-8")
+    (contract / "standards" / "VERSION.md").unlink()
+    (contract / "roadmap" / "R1" / "phases" / "P3" / "PLAN.md").unlink()
+    (contract / "improvements" / "README.md").unlink()
+
+    result = upgrade_project(project, force=True)
+
+    assert (contract / "standards" / "VERSION.md").read_text(
+        encoding="utf-8"
+    ) == templates.STANDARDS["VERSION.md"]
+    assert (contract / "roadmap" / "R1" / "phases" / "P3" / "PLAN.md").is_file()
+    assert (contract / "improvements" / "README.md").is_file()
+    assert (contract / "standards" / "CONTEXT.md").read_text(encoding="utf-8") == custom
+    assert result["contract"]["force"] is False

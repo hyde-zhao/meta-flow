@@ -36,6 +36,22 @@ V1/R1 = 1.1.x。命令以 `mf` 0.1.1 为准；绑定声明见 contract 的
    安装会生成 `.claude/`、`CLAUDE.md`、`.meta-flow/install.yaml`，并在 git 仓库
    维护安装镜像忽略块；非 git 目录跳过 `.gitignore`。安装镜像不入库。
 
+4. 更新与升级：
+
+   ```bash
+   mf bootstrap --force            # 刷新 ~/.meta-flow 全局模板库
+   mf upgrade --project-dir <项目根> --force
+   mf upgrade --project-dir <子项目> --force
+   mf doctor --path <项目根>
+   ```
+
+   `--force` 只覆盖项目安装镜像（`.claude/agents`、`CLAUDE.md` 受管块、
+   `.claude/settings.json` hook），旧文件保留 `.bak` 备份；contract 的
+   standards/templates/policies/improvements README 与 R1 phase plans 等只在
+   缺失时补建，**不会覆盖项目自定义内容**（BUG-0015）。`mf bootstrap --force`
+   同样只刷新 `~/.meta-flow` 全局模板，不触碰 contract。contract 内容变更走
+   manager 的评审/变更流程（`mf task`、`CHG-*`），不能用安装升级强制覆盖。
+
 ## 快速开始 1：全新项目
 
 目标：从空目录完成安装、工作区、manager 规划、worker 第一个任务与验收。

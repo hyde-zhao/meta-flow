@@ -54,6 +54,11 @@ meta-flow V1/R0 1.0.x 试运行版本，覆盖安装/工作区/契约接入、�
 - 返工第三轮（R13/F12）：Bash 路径策略将 `eval`、`source`/`.`、进程替换
   `<(...)`/`>(...)` 纳入递归解析或保守拒绝；转义变量 `\$HOME` 不得绕过；自有
   bundle/allowed 在可安全解析时仍允许；审计记录原始命令/parsed_paths/unsafe。
+- 安装升级边界（BUG-0015）：`mf upgrade --force` 只覆盖安装镜像（agent 文件、
+  `CLAUDE.md` 受管块、settings hook），不再把 `--force` 传给 contract 骨架同步；
+  contract 的 standards/templates/policies/improvements README 与 R1 phase plans
+  等自定义内容保持不变，仅补建缺失文件。`mf bootstrap --force` 仍只刷新
+  `~/.meta-flow` 全局模板库。
 
 ## 已知问题
 
