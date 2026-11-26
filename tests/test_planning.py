@@ -17,7 +17,9 @@ from meta_flow.task import (
     graph,
     next_tasks,
     plan_tasks,
+    reject_task,
     release_task,
+    rework_task,
     start_task,
     submit_task,
 )
@@ -38,6 +40,29 @@ def project_env(tmp_path, monkeypatch):
 
 def _acceptance():
     return [{"id": "A1", "method": "artifact", "expect": "完成"}]
+
+
+def _write_review(contract, review_id, verdict, scope, requires):
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / f"T{review_id[-3:]}"
+    (bundle / "review.md").write_text(f"# review\nverdict: {verdict}\n", encoding="utf-8")
+    (bundle / "review-handoff.md").write_text(
+        "\n".join(
+            [
+                "# review handoff",
+                f"> verdict: {verdict}",
+                f"> rework_scope: {scope}",
+                f"> rework_requires: {requires}",
+                "",
+                "## 必须整改项",
+                "",
+                "| ID | 文件/行 | 要求 | 验收方法 |",
+                "|---|---|---|---|",
+                "| R1 | src/a.py:1 | 整改 | pytest |",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def _move_to_p5(contract):
@@ -276,6 +301,131 @@ def test_task_orchestration_and_leases(project_env):
     submit_task(root, "R1-P1-T001")
     accept_task(root, "R1-P1-T001")
     assert next_tasks(root)[0]["id"] == "R1-P1-T002"
+
+
+def test_rework_state_next_owner_and_execute(project_env):
+    root, contract = project_env
+    result = create_task(
+        root, "返工状态", risk="medium", allowed_paths=["src/**"], acceptance=_acceptance()
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / "T001"
+    (bundle / "dev-record.md").write_text("# dev\n完成\n", encoding="utf-8")
+    (bundle / "handoff.md").write_text("# handoff\n完成\n", encoding="utf-8")
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review(contract, review_id, "NEEDS_REWORK", "in-scope", "none")
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["auto"] is True
+    current = state.refresh_current(contract)
+    assert task_id in current["rework_tasks"]
+    assert current["next_action"]["type"] == "execute_rework"
+    assert current["next_action"]["task"] == task_id
+    assert "mf task rework" in current["next_action"]["text"]
+    assert next_tasks(root)[0]["id"] == task_id
+
+    rework_task(root, task_id)
+    current = state.refresh_current(contract)
+    assert current["next_action"]["type"] == "follow_up_task"
+    assert current["next_action"]["task"] == task_id
+
+
+def test_rework_decision_state_requires_manager(project_env):
+    root, contract = project_env
+    result = create_task(
+        root, "高风险返工", risk="high", allowed_paths=["src/**"], acceptance=_acceptance()
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / "T001"
+    (bundle / "dev-record.md").write_text("# dev\n完成\n", encoding="utf-8")
+    (bundle / "handoff.md").write_text("# handoff\n完成\n", encoding="utf-8")
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review(contract, review_id, "NEEDS_REWORK", "in-scope", "none")
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["auto"] is False
+    current = state.refresh_current(contract)
+    assert current["next_action"]["type"] == "rework_decision"
+    assert current["next_action"]["task"] == task_id
+    assert current["next_action"]["review_task"] == review_id
+
+
+def test_rework_resubmit_state_resets_review_stage(project_env):
+    root, contract = project_env
+    result = create_task(
+        root, "复审状态", risk="medium", allowed_paths=["src/**"], acceptance=_acceptance()
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / "T001"
+    (bundle / "dev-record.md").write_text("# dev\n完成\n", encoding="utf-8")
+    (bundle / "handoff.md").write_text("# handoff\n完成\n", encoding="utf-8")
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review(contract, review_id, "NEEDS_REWORK", "in-scope", "none")
+    submit_task(root, review_id)
+    accept_task(root, review_id, verdict="NEEDS_REWORK")
+
+    rework_task(root, task_id)
+    (bundle / "dev-record.md").write_text("# dev\n返工完成\n", encoding="utf-8")
+    (bundle / "handoff.md").write_text("# handoff\n返工完成\n", encoding="utf-8")
+    submit_task(root, task_id)
+
+    current = state.refresh_current(contract)
+    assert current["next_action"]["type"] == "review"
+    assert current["next_action"]["task"] == review_id
+    detail = next(item for item in current["submitted_details"] if item["id"] == task_id)
+    assert detail["review_status"] == "ready"
+    assert detail["review_verdict"] is None
+    assert task_id not in current["rework_tasks"]
+
+
+def test_state_rework_flags_follow_review_current_state(project_env):
+    root, contract = project_env
+    result = create_task(
+        root, "R3 状态", risk="medium", allowed_paths=["src/**"], acceptance=_acceptance()
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / "T001"
+    (bundle / "dev-record.md").write_text("# dev\n完成\n", encoding="utf-8")
+    (bundle / "handoff.md").write_text("# handoff\n完成\n", encoding="utf-8")
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review(contract, review_id, "NEEDS_REWORK", "in-scope", "none")
+    submit_task(root, review_id)
+
+    # review submitted NEEDS_REWORK + manager 先 reject：可返工任务应被识别
+    reject_task(root, task_id, "manager 先退回")
+    current = state.refresh_current(contract)
+    assert task_id in current["rework_tasks"]
+    assert current["next_action"]["type"] == "execute_rework"
+    assert current["next_action"]["task"] == task_id
+
+    # review 被重置 ready 后旧 verdict 失效：state 指向 start 恢复而非 execute_rework
+    review_yaml = (
+        contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / f"T{review_id[-3:]}"
+        / "TASK.yaml"
+    )
+    review_data = yaml.safe_load(review_yaml.read_text(encoding="utf-8"))
+    review_data["status"] = "ready"
+    review_data["review_verdict"] = None
+    review_yaml.write_text(
+        yaml.safe_dump(review_data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    current = state.refresh_current(contract)
+    assert task_id not in current["rework_tasks"]
+    assert task_id in current["stale_rework_tasks"]
+    assert current["next_action"]["type"] == "recover_rework"
+    assert current["next_action"]["task"] == task_id
+    assert "mf task start" in current["next_action"]["text"]
 
 
 def test_context_expand_requires_reason(project_env):

@@ -373,7 +373,9 @@ P5 结束后：`mf roadmap close R{n}` → `mf roadmap plan R{n+1}`。
 
 ```text
 draft → ready → in_progress → submitted → accepted | rejected
-rejected → in_progress（返工）
+submitted → rework（review NEEDS_REWORK，整改项在原 acceptance/scope 内；自动/一键重开）
+rework → in_progress（worker 用 mf task rework 开始，记录 review/整改项/lease）
+rejected → rework | in_progress（manager 裁决返工；review NEEDS_REWORK 时必须用 mf task rework）
 ```
 
 ## 并行
@@ -495,7 +497,7 @@ rejected → in_progress（返工）
 
 ## 失败处理
 
-- `NEEDS_REWORK`：回到当前任务，开返工卡或原卡返工。
+- `NEEDS_REWORK`：回到当前任务；范围内整改项自动/一键重开为 `rework`，worker 用 `mf task rework <id>` 开始；范围外/新 acceptance/BUG/MFP/CHG 或争议由 manager 裁决。
 - `BLOCKED`：写最小阻塞证据，停止当前任务，不转做其他任务。
 - `PASS_WITH_RISK`：记录风险与接受人，进入后续决策。
 
@@ -929,7 +931,7 @@ notes:
   - 任务包默认按 effort 使用 packet_budget_tiers；超出时用 mf context expand --reason 或拆分任务。
   - worker 可用 mf context show/expand 查看/补读活动任务 bundle、评审目标或 allowed_paths（带 reason 写 READ-LOG）；契约基线 deny 区不放宽。
   - guard hook 覆盖 Read/Write/Edit 与 Bash：shell 访问同样受契约/交付/读预算路径策略约束；展开 $HOME/环境变量并解析 sh -c/bash -c、eval、source/. 与进程替换，转义变量不得绕过，无法安全解析的路径保守拒绝；allow/deny（role/task/path/reason/tool）持久化到 READ-LOG，可用 mf context log 查询。
-  - guard deny 输出当前角色/任务/lease/allowed_paths 与合法通道；提交后不可直接编辑，返工需 manager reject 后 mf task start；本地 MFP 可写 .meta-flow/improvements/MFP-*.yaml 或 mf improve new --local（审计）。
+  - guard deny 输出当前角色/任务/lease/allowed_paths 与合法通道；提交后不可直接编辑，NEEDS_REWORK 返工用 mf task rework（自动/一键重开或 manager 裁决后）；本地 MFP 可写 .meta-flow/improvements/MFP-*.yaml 或 mf improve new --local（审计）。
   - bundle 匹配使用完整任务 ID/contract 相对路径，跨 roadmap/phase 同名 Txxx 不误放行。
   - review 任务提交只需 review.md + review-handoff.md；implement/fix 仍要求 handoff/dev-record。
   - 高风险任务必须由未参与实现的独立 reviewer 评审；实现者不自验收；结论仅 PASS/PASS_WITH_RISK/NEEDS_REWORK/BLOCKED；PASS_WITH_RISK 记录风险与接受人。
@@ -988,6 +990,7 @@ color: blue
 - 你拥有评审门，但不等于你亲自做代码评审。
 - 高风险任务必须派 `kind: review` 给未参与实现的另一个 worker；评审者不能是实现者。
 - 审核 REVIEW 报告的发现、证据和结论；严重问题必须记录 `BUG-*`。
+- NEEDS_REWORK：整改项全部在原 acceptance/scope 内且非高风险时自动重开为 `rework`（worker 用 `mf task rework` 开始）；范围外/需要新 acceptance/BUG/MFP/CHG/争议/高风险由你裁决后再返工。
 - 最终验收由你决定，但不得交给实现者自验收；实现者自验只作 L1 证据。
 - 结论只能是 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 必须写风险与接受人。
 
@@ -1096,7 +1099,7 @@ color: green
 绕过契约/交付/读预算边界（hook 覆盖 Bash，含变量、嵌套 shell、eval/source 与进程替换）。返工时读评审任务的 review.md /
 review-handoff.md 后只整改必须项。
 
-提交后不再直接编辑任务文件；如需再次返工，等 manager reject 后 `mf task start <id>`。
+提交后不再直接编辑任务文件；review NEEDS_REWORK 且在范围内时可自动/一键重开，worker 用 `mf task rework <id>` 开始；范围外/高风险/争议等 manager 裁决后再返工。
 提交后仍可写本地 `.meta-flow/improvements/MFP-*.yaml`（或 `mf improve new --local`），
 guard 会审计；其他越界写仍拒绝。
 
@@ -1194,6 +1197,7 @@ mf doctor
 
 - 高风险任务由未参与实现的独立 reviewer 评审；实现者不自验收。
 - 结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 记录风险与接受人。
+- NEEDS_REWORK：范围内可自动/一键重开为 `rework`（worker 用 `mf task rework` 开始）；范围外/新 acceptance/BUG/MFP/CHG/争议/高风险由你裁决，不得留空。
 - 每个任务后运行 `mf task prompt <id>` 明确 next_owner，不留空。
 
 ## 边界
@@ -1239,8 +1243,8 @@ WORKER_CLAUDE = """# Meta Flow 子项目（worker）
 - 只写任务卡 `allowed_paths`；流程文件（dev-record/handoff/evidence）写任务 bundle，由 packet process paths 授权。
 - 无交付根绑定时任务命令用 `--project-dir <交付库>`，否则 rc=3。
 - 超预算文件用 `mf context expand <path> --reason packet_missing` 受控补读；不得借 shell 绕过边界（hook 覆盖 Bash 变量与嵌套 shell）。
-- review 任务只写 review.md + review-handoff.md，直接 `mf task submit`；返工读 review 输出后只改必须项。
-- 提交后不可直接编辑；再次返工需 manager reject 后 `mf task start <id>`。本地 `.meta-flow/improvements/MFP-*.yaml` 可写且审计。
+- review 任务只写 review.md + review-handoff.md，直接 `mf task submit`；返工读 review 输出后只改必须项；NEEDS_REWORK 返工用 `mf task rework <id>` 开始。
+- 提交后不可直接编辑；再次返工需 review NEEDS_REWORK 且 manager 裁决/自动重开后 `mf task rework <id>` 开始。本地 `.meta-flow/improvements/MFP-*.yaml` 可写且审计。
 - 完成后写开发记录与交接，`mf task submit` 提交。
 - 不读完整契约库、其他子项目、历史归档。
 
@@ -1471,7 +1475,7 @@ kind: implement            # implement|design|verify|document|review|fix
 delivery: app
 wave: W1
 depends_on: []
-status: draft             # draft|ready|in_progress|submitted|accepted|rejected|cancelled
+status: draft             # draft|ready|in_progress|submitted|accepted|rejected|rework|cancelled
 inputs:
   requirements: [REQ-0001]
   specs: [SPEC-001]
@@ -1588,6 +1592,9 @@ notes: ...
 > reviewer:
 > date:
 > scope:
+> verdict: PASS | PASS_WITH_RISK | NEEDS_REWORK | BLOCKED
+> rework_scope: in-scope | out-of-scope | disputed
+> rework_requires: none | acceptance,bug,mfp,chg
 
 ## 评审对象
 
@@ -1609,7 +1616,7 @@ notes: ...
 
 ## 结论
 
-结论：PASS | NEEDS_REWORK | BLOCKED
+结论：PASS | PASS_WITH_RISK | NEEDS_REWORK | BLOCKED
 
 ## 必须整改项
 
@@ -1623,7 +1630,9 @@ notes: ...
 
 > reviewer:
 > date:
-> verdict: PASS | NEEDS_REWORK
+> verdict: PASS | PASS_WITH_RISK | NEEDS_REWORK | BLOCKED
+> rework_scope: in-scope | out-of-scope | disputed
+> rework_requires: none | acceptance,bug,mfp,chg
 
 ## 评审范围
 
@@ -1642,6 +1651,12 @@ notes: ...
 | | | | |
 
 ## 复审要求
+
+## 下一步
+
+- 范围内整改：worker 用 `mf task rework <task-id>` 开始（manager 接受 review 后自动/一键重开）。
+- 范围外/新 acceptance/BUG/MFP/CHG/争议/高风险：manager 裁决后再返工。
+- 不得留空下一责任；与 verdict/rework_scope 保持一致。
 
 ## 证据
 """,

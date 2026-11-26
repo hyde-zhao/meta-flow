@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import yaml
 
 from meta_flow.global_store import bootstrap
 from meta_flow.install import install_root
@@ -17,6 +18,7 @@ from meta_flow.task import (
     packet_text,
     prompt_text,
     reject_task,
+    rework_task,
     start_task,
     submit_task,
 )
@@ -43,6 +45,37 @@ def _write_worker_files(contract, task_id):
     bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / f"T{task_id[-3:]}"
     (bundle / "dev-record.md").write_text("# dev\n实现完成\n", encoding="utf-8")
     (bundle / "handoff.md").write_text("# handoff\n完成\n", encoding="utf-8")
+    return bundle
+
+
+def _write_review_files(
+    contract,
+    review_id,
+    verdict,
+    *,
+    scope=None,
+    requires=None,
+    items=("R1",),
+):
+    bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / f"T{review_id[-3:]}"
+    (bundle / "review.md").write_text(f"# review\nverdict: {verdict}\n", encoding="utf-8")
+    lines = [f"# review handoff\n> verdict: {verdict}"]
+    if scope is not None:
+        lines.append(f"> rework_scope: {scope}")
+    if requires is not None:
+        lines.append(f"> rework_requires: {requires}")
+    lines.extend(
+        [
+            "",
+            "## 必须整改项",
+            "",
+            "| ID | 文件/行 | 要求 | 验收方法 |",
+            "|---|---|---|---|",
+        ]
+    )
+    for item in items:
+        lines.append(f"| {item} | src/app.py:1 | 整改 | pytest |")
+    (bundle / "review-handoff.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return bundle
 
 
@@ -134,6 +167,530 @@ def test_reject_resets_review(task_env):
     _, review = load_task(root, review_id)
     assert review["status"] == "ready"
     assert review["review_verdict"] is None
+
+
+def test_needs_rework_in_scope_auto_reopens_and_rework_starts(task_env):
+    from meta_flow import state
+
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "中风险返工",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+
+    start_task(root, review_id)
+    _write_review_files(
+        contract,
+        review_id,
+        "NEEDS_REWORK",
+        scope="in-scope",
+        requires="none",
+        items=("R1", "R2"),
+    )
+    submit_task(root, review_id)
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["review_verdict"] == "NEEDS_REWORK"
+    decision = accepted["rework_decision"]
+    assert decision["auto"] is True
+
+    _, task = load_task(root, task_id)
+    assert task["status"] == "rework"
+    assert task["next_owner"] == "worker"
+    rework = task["rework"]
+    assert rework["review_task"] == review_id
+    assert rework["items"] == ["R1", "R2"]
+    assert rework["allowed_paths"] == ["src/**"]
+    assert rework["decision"] == "auto"
+    assert rework["notify"] == ["manager"]
+
+    summary = state.task_summary(contract)
+    assert summary["rework_tasks"] == [task_id]
+    current = state.refresh_current(contract)
+    assert current["next_action"]["type"] == "execute_rework"
+    assert current["next_action"]["task"] == task_id
+
+    prompt = prompt_text(root, task_id)
+    assert "responsible_agent: worker" in prompt
+    assert f"mf task rework {task_id}" in prompt
+    with pytest.raises(TaskError, match="mf task rework"):
+        start_task(root, task_id)
+
+    started = rework_task(root, task_id)
+    assert started["status"] == "in_progress"
+    assert started["next_owner"] == "worker"
+    assert started["lease"]["owner"] == "worker"
+    assert started["rework"]["review_task"] == review_id
+    assert started["rework"]["items"] == ["R1", "R2"]
+    assert started["rework"]["allowed_paths"] == ["src/**"]
+    assert started["rework"]["lease"] == started["lease"]["expires_at"]
+
+    events = [
+        json.loads(line)
+        for line in (contract / "state" / "ledger.ndjson")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert any(
+        event.get("event") == "task.rework.open"
+        and event.get("task") == task_id
+        and event.get("review_task") == review_id
+        and event.get("decision") == "auto"
+        and event.get("notify") == ["manager"]
+        for event in events
+    )
+    assert any(
+        event.get("event") == "task.rework"
+        and event.get("task") == task_id
+        and event.get("review_task") == review_id
+        and event.get("lease")
+        and event.get("notify") == ["manager"]
+        for event in events
+    )
+
+
+def test_needs_rework_high_risk_keeps_manager_decision(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "高风险返工",
+        risk="high",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "NEEDS_REWORK", scope="in-scope", requires="none")
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    decision = accepted["rework_decision"]
+    assert decision["auto"] is False
+    assert "高风险" in (decision["reason"] or "")
+
+    _, task = load_task(root, task_id)
+    assert task["status"] == "submitted"
+    assert task["next_owner"] == "manager"
+    assert task["rework"]["decision"] == "manager"
+    assert task["rework"]["auto"] is False
+    assert "responsible_agent: manager" in prompt_text(root, task_id)
+    assert "裁决" in prompt_text(root, task_id)
+    with pytest.raises(TaskError, match="submitted"):
+        rework_task(root, task_id)
+
+
+def test_needs_rework_out_of_scope_blocked_until_manager_rejects(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "范围外返工",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(
+        contract, review_id, "NEEDS_REWORK", scope="out-of-scope", requires="chg"
+    )
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["auto"] is False
+    assert "CHG" in (accepted["rework_decision"]["reason"] or "")
+    with pytest.raises(TaskError, match="submitted"):
+        rework_task(root, task_id)
+
+    rejected = reject_task(root, task_id, "确认整改项后返工")
+    assert rejected["status"] == "rejected"
+    assert rejected["next_owner"] == "worker"
+    assert rejected["rework"]["decision"] == "manager"
+    _, review = load_task(root, review_id)
+    assert review["status"] == "accepted"
+    assert review["review_verdict"] == "NEEDS_REWORK"
+
+    prompt = prompt_text(root, task_id)
+    assert "responsible_agent: worker" in prompt
+    assert f"mf task rework {task_id}" in prompt
+    started = rework_task(root, task_id)
+    assert started["status"] == "in_progress"
+    assert started["rework"]["decision"] == "manager"
+
+
+@pytest.mark.parametrize(
+    ("scope", "requires"),
+    [("disputed", "none"), ("in-scope", "acceptance"), ("in-scope", "bug,mfp")],
+)
+def test_needs_rework_scope_or_new_requirements_blocks_auto(task_env, scope, requires):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "范围门",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "NEEDS_REWORK", scope=scope, requires=requires)
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["auto"] is False
+    _, task = load_task(root, task_id)
+    assert task["status"] == "submitted"
+    assert task["next_owner"] == "manager"
+    assert task["rework"]["decision"] == "manager"
+
+
+def test_needs_rework_missing_scope_declaration_requires_manager(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "缺范围声明",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "NEEDS_REWORK")
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["auto"] is False
+    assert "rework_requires" in (accepted["rework_decision"]["reason"] or "")
+    _, task = load_task(root, task_id)
+    assert task["status"] == "submitted"
+    assert task["next_owner"] == "manager"
+
+
+def test_rework_command_requires_needs_rework_verdict(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    create_task(root, "普通返工", risk="low", acceptance=_acceptance())
+    start_task(root, "R1-P1-T001")
+    _write_worker_files(contract, "R1-P1-T001")
+    submit_task(root, "R1-P1-T001")
+    reject_task(root, "R1-P1-T001", "普通验收不通过")
+
+    with pytest.raises(TaskError, match="NEEDS_REWORK|review 任务"):
+        rework_task(root, "R1-P1-T001")
+    # 旧路径兼容：无 review NEEDS_REWORK 的 rejected 任务仍用 mf task start
+    started = start_task(root, "R1-P1-T001")
+    assert started["status"] == "in_progress"
+
+    create_task(root, "提交中任务", risk="low", acceptance=_acceptance())
+    start_task(root, "R1-P1-T002")
+    _write_worker_files(contract, "R1-P1-T002")
+    submit_task(root, "R1-P1-T002")
+    with pytest.raises(TaskError, match="submitted"):
+        rework_task(root, "R1-P1-T002")
+
+
+def test_rework_resubmit_clears_stale_verdict_and_second_review_passes(task_env):
+    from meta_flow import state
+
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "二次复审",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "NEEDS_REWORK", scope="in-scope", requires="none")
+    submit_task(root, review_id)
+    accept_task(root, review_id, verdict="NEEDS_REWORK")
+
+    rework_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+
+    _, review = load_task(root, review_id)
+    assert review["status"] == "ready"
+    assert review["review_verdict"] is None
+    _, task = load_task(root, task_id)
+    assert task["status"] == "submitted"
+    assert task["review_verdict"] is None
+
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "PASS")
+    submit_task(root, review_id)
+
+    # 即使 review 卡片被旧值污染，prompt/state 也必须以最新 handoff 为准
+    review_yaml = (
+        contract
+        / "roadmap" / "R1" / "phases" / "P1" / "tasks" / f"T{review_id[-3:]}"
+        / "TASK.yaml"
+    )
+    review_data = yaml.safe_load(review_yaml.read_text(encoding="utf-8"))
+    review_data["review_verdict"] = "NEEDS_REWORK"
+    review_yaml.write_text(
+        yaml.safe_dump(review_data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    current = state.refresh_current(contract)
+    detail = next(item for item in current["submitted_details"] if item["id"] == task_id)
+    assert detail["review_status"] == "submitted"
+    assert detail["review_verdict"] == "PASS"
+    prompt = prompt_text(root, review_id)
+    assert "不会自动重开" not in prompt
+
+    accept_task(root, review_id, verdict="PASS")
+    _, task = load_task(root, task_id)
+    assert task["review_verdict"] == "PASS"
+    accepted = accept_task(root, task_id, verdict="PASS")
+    assert accepted["status"] == "accepted"
+
+
+def test_rework_resubmit_then_manager_reject_does_not_deadlock(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "复审前退回",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "NEEDS_REWORK", scope="in-scope", requires="none")
+    submit_task(root, review_id)
+    accept_task(root, review_id, verdict="NEEDS_REWORK")
+    rework_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+
+    rejected = reject_task(root, task_id, "复审前调整范围")
+    assert rejected["status"] == "rejected"
+    assert rejected["review_verdict"] is None
+    _, review = load_task(root, review_id)
+    assert review["status"] == "ready"
+    assert review["review_verdict"] is None
+
+    prompt = prompt_text(root, task_id)
+    assert "mf task start" in prompt
+    assert "mf task rework" not in prompt
+    started = start_task(root, task_id)
+    assert started["status"] == "in_progress"
+
+
+def test_rework_accepts_submitted_review_needs_rework(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "提交中评审返工",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "NEEDS_REWORK", scope="in-scope", requires="none")
+    submit_task(root, review_id)
+
+    rejected = reject_task(root, task_id, "manager 先退回返工")
+    assert rejected["status"] == "rejected"
+    assert rejected["rework"]["review_status"] == "submitted"
+    _, review = load_task(root, review_id)
+    assert review["status"] == "submitted"
+    assert review["review_verdict"] is None
+
+    from meta_flow import state
+
+    current = state.refresh_current(contract)
+    assert task_id in current["rework_tasks"]
+    assert current["next_action"]["type"] == "execute_rework"
+
+    started = rework_task(root, task_id)
+    assert started["status"] == "in_progress"
+    assert started["rework"]["review_status"] == "submitted"
+
+
+def test_accept_review_while_rework_in_progress_preserves_lease_and_metadata(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "先返工后接受",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "NEEDS_REWORK", scope="in-scope", requires="none")
+    submit_task(root, review_id)
+    reject_task(root, task_id, "manager 先退回返工")
+    rework_task(root, task_id)
+
+    _, before = load_task(root, task_id)
+    lease_before = dict(before["lease"])
+    started_at_before = before["started_at"]
+    rework_before = dict(before["rework"])
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    decision = accepted["rework_decision"]
+    assert decision["already_in_progress"] is True
+    assert decision["lease_valid"] is True
+
+    _, after = load_task(root, task_id)
+    assert after["status"] == "in_progress"
+    assert after["next_owner"] == "worker"
+    assert after["lease"] == lease_before
+    assert after["started_at"] == started_at_before
+    assert after["rework"]["items"] == rework_before["items"]
+    assert after["rework"]["allowed_paths"] == rework_before["allowed_paths"]
+    assert after["rework"]["lease"] == rework_before["lease"]
+    assert after["rework"]["started_at"] == rework_before["started_at"]
+    assert after["rework"]["decision"] == rework_before["decision"]
+    assert after["rework"]["review_status"] == "accepted"
+
+    events = [
+        json.loads(line)
+        for line in (contract / "state" / "ledger.ndjson")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert not any(
+        event.get("event") == "task.rework.decision_required"
+        and event.get("task") == task_id
+        for event in events
+    )
+    confirm = [
+        event
+        for event in events
+        if event.get("event") == "task.rework.confirm"
+        and event.get("task") == task_id
+    ]
+    assert confirm
+    assert confirm[-1]["lease"] == lease_before["expires_at"]
+    assert confirm[-1]["next_owner"] == "worker"
+
+    _write_worker_files(contract, task_id)
+    submitted = submit_task(root, task_id)
+    assert submitted["status"] == "submitted"
+
+
+def test_legacy_rejected_stale_verdict_recovers_with_start(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "旧卡恢复",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+
+    task_yaml = (
+        contract
+        / "roadmap" / "R1" / "phases" / "P1" / "tasks" / f"T{task_id[-3:]}"
+        / "TASK.yaml"
+    )
+    task_data = yaml.safe_load(task_yaml.read_text(encoding="utf-8"))
+    task_data.update(
+        {
+            "status": "rejected",
+            "review_verdict": "NEEDS_REWORK",
+            "lease": None,
+            "rework": {
+                "review_task": review_id,
+                "review_verdict": "NEEDS_REWORK",
+                "decision": "manager",
+                "auto": False,
+                "items": ["R1"],
+                "allowed_paths": ["src/**"],
+            },
+        }
+    )
+    task_yaml.write_text(
+        yaml.safe_dump(task_data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    review_yaml = (
+        contract
+        / "roadmap" / "R1" / "phases" / "P1" / "tasks" / f"T{review_id[-3:]}"
+        / "TASK.yaml"
+    )
+    review_data = yaml.safe_load(review_yaml.read_text(encoding="utf-8"))
+    review_data["status"] = "ready"
+    review_data["review_verdict"] = None
+    review_yaml.write_text(
+        yaml.safe_dump(review_data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TaskError, match="mf task start"):
+        rework_task(root, task_id)
+    from meta_flow import state
+
+    current = state.refresh_current(contract)
+    assert task_id not in current["rework_tasks"]
+    assert task_id in current["stale_rework_tasks"]
+    assert current["next_action"]["type"] == "recover_rework"
+    assert "mf task start" in current["next_action"]["text"]
+    started = start_task(root, task_id)
+    assert started["status"] == "in_progress"
+    _, task = load_task(root, task_id)
+    assert task["review_verdict"] is None
+    assert task["rework"]["stale"] is True
+    events = [
+        json.loads(line)
+        for line in (contract / "state" / "ledger.ndjson")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert any(
+        event.get("event") == "task.rework.stale" and event.get("task") == task_id
+        for event in events
+    )
 
 
 def test_packet_and_list(task_env):

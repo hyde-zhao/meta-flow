@@ -53,6 +53,7 @@ from .task import (
     prompt_text,
     reject_task,
     release_task,
+    rework_task,
     start_task,
     submit_task,
 )
@@ -175,7 +176,7 @@ def _enforce_role(args: argparse.Namespace) -> None:
     if command == "task":
         worker_actions = {"list", "show", "prompt"}
         manager_actions = {"create", "accept", "reject", "release", "graph", "plan", "next", "summary"}
-        if action in {"start", "submit"}:
+        if action in {"start", "submit", "rework"}:
             if role != "worker":
                 raise WorkspaceError(f"task {action} 只允许 worker", 3)
             return
@@ -183,7 +184,7 @@ def _enforce_role(args: argparse.Namespace) -> None:
             raise WorkspaceError(f"task {action} 只允许 worker/manager", 3)
         if action in manager_actions and role != "manager":
             raise WorkspaceError(f"task {action} 只允许 manager", 3)
-        if action not in worker_actions | manager_actions | {"start", "submit"}:
+        if action not in worker_actions | manager_actions | {"start", "submit", "rework"}:
             raise WorkspaceError(f"未知 task 动作: {action}", 3)
         return
     if command == "improve":
@@ -813,6 +814,52 @@ def _cmd_task_accept(args: argparse.Namespace) -> int:
         user_approved_by=args.user_approved_by,
     )
     print(f"{data['id']} -> {data['status']} (verdict={args.verdict})")
+    decision = data.get("rework_decision")
+    if isinstance(decision, dict):
+        if decision.get("already_in_progress"):
+            if decision.get("lease_valid"):
+                print(
+                    f"manager 审计通知: {decision['task']} 已在返工中（in_progress）；"
+                    "保留 next_owner=worker、lease 与 rework 元数据，worker 可继续 submit"
+                )
+            else:
+                print(
+                    f"manager 审计通知: {decision['task']} 处于 in_progress 但 lease 已失效；"
+                    "已保留 rework 元数据，请回收 lease 或让 worker 重新开始"
+                )
+        elif decision.get("auto"):
+            print(
+                f"manager 审计通知: 已自动重开 {decision['task']}"
+                f"（review={data['id']}，整改项={', '.join(decision.get('items') or []) or '-'}）；"
+                f"worker 用 mf task rework {decision['task']} 开始"
+            )
+        else:
+            print(
+                f"manager 审计通知: {decision['task']} 未自动重开（{decision.get('reason') or '-'}）；"
+                "请裁决后 mf task reject 退回，或开 CHG/BUG/MFP/新卡"
+            )
+        print(f"下一步: mf task prompt {decision['task']}")
+    return 0
+
+
+def _cmd_task_rework(args: argparse.Namespace) -> int:
+    _worker_task_scope(args)
+    _, current = load_task(args.project_dir, args.task_id)
+    _ensure_worker_scope(args, current)
+    data = rework_task(
+        args.project_dir,
+        args.task_id,
+        owner=args.owner,
+        note=args.note,
+    )
+    rework = data.get("rework") or {}
+    print(
+        f"{data['id']} -> {data['status']} "
+        f"(review={rework.get('review_task')}, next={data['next_owner']})"
+    )
+    print("整改项: " + (", ".join(rework.get("items") or []) or "-"))
+    print("manager 审计通知: ledger task.rework 已记录（含 review / 整改项 / lease）")
+    print(f"下一步: mf task prompt {data['id']}")
     return 0
 
 
@@ -1554,6 +1601,15 @@ def build_parser() -> argparse.ArgumentParser:
     task_start.add_argument("--project-dir", default=".")
     task_start.add_argument("--owner", help="worker 身份；也可设置 MF_WORKER_ID")
     task_start.set_defaults(func=_cmd_task_start)
+
+    task_rework = task_sub.add_parser(
+        "rework", help="开始 review NEEDS_REWORK 的返工（记录 review/整改项/lease）"
+    )
+    task_rework.add_argument("task_id")
+    task_rework.add_argument("--project-dir", default=".")
+    task_rework.add_argument("--owner", help="worker 身份；也可设置 MF_WORKER_ID")
+    task_rework.add_argument("--note", help="返工说明")
+    task_rework.set_defaults(func=_cmd_task_rework)
 
     task_submit = task_sub.add_parser("submit")
     task_submit.add_argument("task_id")

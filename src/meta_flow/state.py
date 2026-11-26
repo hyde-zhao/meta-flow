@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -177,6 +178,50 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+REVIEW_VERDICT_RE = re.compile(
+    r"verdict\s*[:=]\s*(PASS_WITH_RISK|PASS|NEEDS_REWORK|BLOCKED)", re.IGNORECASE
+)
+
+
+def _bundle_review_verdict(bundle: Path) -> str | None:
+    """读取 review-handoff/review 的最新结论，避免 state 使用卡片陈旧值。"""
+    for name in ("review-handoff.md", "review.md"):
+        path = bundle / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        match = REVIEW_VERDICT_RE.search(text)
+        if match:
+            return match.group(1).upper()
+        for verdict in ("PASS_WITH_RISK", "NEEDS_REWORK", "BLOCKED", "PASS"):
+            if verdict in text:
+                return verdict
+    return None
+
+
+def review_needs_rework(
+    review_task: dict[str, Any] | None,
+    review_bundle: Path | None,
+) -> bool:
+    """判断 review 当前是否处于 NEEDS_REWORK（task/state 统一口径）。
+
+    - review accepted 且 verdict=NEEDS_REWORK；
+    - 或 review submitted 且最新 review-handoff/review.md 为 NEEDS_REWORK。
+    review 已重置 ready 时旧 verdict 不算有效，避免误导 start/rework。
+    """
+    if review_task is None or review_bundle is None:
+        return False
+    if (
+        review_task.get("status") == "accepted"
+        and review_task.get("review_verdict") == "NEEDS_REWORK"
+    ):
+        return True
+    return (
+        review_task.get("status") == "submitted"
+        and _bundle_review_verdict(review_bundle) == "NEEDS_REWORK"
+    )
+
+
 def task_summary(contract: Path) -> dict[str, Any]:
     counts: dict[str, int] = {}
     active: list[str] = []
@@ -184,13 +229,17 @@ def task_summary(contract: Path) -> dict[str, Any]:
     submitted: list[str] = []
     submitted_details: list[dict[str, Any]] = []
     ready: list[str] = []
+    rework: list[str] = []
+    stale_rework: list[str] = []
     all_tasks: dict[str, dict[str, Any]] = {}
+    task_paths: dict[str, Path] = {}
     for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
         data = _load_yaml(path)
         status = str(data.get("status") or "draft")
         counts[status] = counts.get(status, 0) + 1
         task_id = str(data.get("id") or path.parent.name)
         all_tasks[task_id] = data
+        task_paths[task_id] = path.parent
         if status in {"in_progress"}:
             active.append(task_id)
             lease = data.get("lease") or {}
@@ -210,6 +259,7 @@ def task_summary(contract: Path) -> dict[str, Any]:
                     "kind": data.get("kind"),
                     "reviewed_by_task": data.get("reviewed_by_task"),
                     "review_status": None,
+                    "review_verdict": None,
                 }
             )
         if status == "ready":
@@ -217,7 +267,34 @@ def task_summary(contract: Path) -> dict[str, Any]:
     for detail in submitted_details:
         review_id = detail.get("reviewed_by_task")
         if review_id and str(review_id) in all_tasks:
-            detail["review_status"] = str(all_tasks[str(review_id)].get("status") or "")
+            review_data = all_tasks[str(review_id)]
+            review_status = str(review_data.get("status") or "")
+            detail["review_status"] = review_status
+            if review_status == "submitted":
+                # 评审已提交但未验收：以最新 handoff 为准，不读上一轮卡片 verdict
+                detail["review_verdict"] = _bundle_review_verdict(
+                    task_paths[str(review_id)]
+                ) or (str(review_data.get("review_verdict") or "") or None)
+            else:
+                detail["review_verdict"] = (
+                    str(review_data.get("review_verdict") or "") or None
+                )
+    # R3：与 task._review_task_needs_rework 统一口径，不信任目标卡历史 verdict
+    for task_id, data in all_tasks.items():
+        status = str(data.get("status") or "")
+        if status not in {"rework", "rejected"}:
+            continue
+        review_id = data.get("reviewed_by_task")
+        review_data = all_tasks.get(str(review_id)) if review_id else None
+        review_bundle = task_paths.get(str(review_id)) if review_id else None
+        if review_needs_rework(review_data, review_bundle):
+            rework.append(task_id)
+        elif (
+            status == "rework"
+            or data.get("review_verdict")
+            or isinstance(data.get("rework"), dict)
+        ):
+            stale_rework.append(task_id)
     return {
         "counts": counts,
         "active_tasks": active[:20],
@@ -225,6 +302,8 @@ def task_summary(contract: Path) -> dict[str, Any]:
         "submitted_tasks": submitted[:20],
         "submitted_details": submitted_details[:20],
         "ready_tasks": ready[:50],
+        "rework_tasks": rework[:20],
+        "stale_rework_tasks": stale_rework[:20],
     }
 
 
@@ -258,12 +337,33 @@ def refresh_current(contract: Path) -> dict[str, Any]:
             data["next_action"] = {"type": "enter_phase", "phase": next_phase}
     elif phase_status == "closed":
         data["next_action"] = {"type": "plan", "text": "规划下一路标"}
+    elif summary.get("rework_tasks"):
+        rework_task_id = summary["rework_tasks"][0]
+        data["next_action"] = {
+            "type": "execute_rework",
+            "task": rework_task_id,
+            "text": f"review NEEDS_REWORK 已重开；worker 用 mf task rework {rework_task_id} 开始，"
+            "整改项与 allowed_paths 见任务卡 rework",
+        }
     elif summary["submitted_tasks"]:
         detail = (summary.get("submitted_details") or [{}])[0]
         task_id = detail.get("id") or summary["submitted_tasks"][0]
         review_id = detail.get("reviewed_by_task")
         review_status = detail.get("review_status")
-        if detail.get("kind") == "review" or not review_id or review_status in {"accepted"}:
+        if (
+            detail.get("kind") != "review"
+            and review_status == "accepted"
+            and detail.get("review_verdict") == "NEEDS_REWORK"
+        ):
+            # 范围外/高风险/争议不自动重开，等 manager 裁决（MFP-0015 E2/E5）
+            data["next_action"] = {
+                "type": "rework_decision",
+                "task": task_id,
+                "review_task": review_id,
+                "text": "review NEEDS_REWORK 未自动重开；manager 裁决：reject 退回 worker 用 "
+                f"mf task rework {task_id}，或开 CHG/BUG/MFP/新卡",
+            }
+        elif detail.get("kind") == "review" or not review_id or review_status in {"accepted"}:
             data["next_action"] = {"type": "accept", "task": task_id}
         else:
             # 评审门优先：实现任务已提交但独立评审尚未完成
@@ -273,6 +373,14 @@ def refresh_current(contract: Path) -> dict[str, Any]:
                 "parent_task": task_id,
                 "text": f"等待评审任务 {review_id}；通过后再验收 {task_id}",
             }
+    elif summary.get("stale_rework_tasks"):
+        stale_task_id = summary["stale_rework_tasks"][0]
+        data["next_action"] = {
+            "type": "recover_rework",
+            "task": stale_task_id,
+            "text": "旧卡 review 已不在 NEEDS_REWORK；"
+            f"worker 用 mf task start {stale_task_id} 恢复（start 会清理陈旧 verdict）",
+        }
     elif summary["active_tasks"]:
         # 存在在途任务与有效租约时，先跟进任务，不直接把 next_action 指向 fix_bug
         data["next_action"] = {
