@@ -364,16 +364,27 @@ def switch_role(
 
 
 def describe(start: Path) -> dict[str, Any]:
-    """返回锚点/目录/环境推导结论，供 mf role 展示与复位建议。"""
+    """返回锚点/目录/环境推导结论，供 mf role 展示与复位建议。
+
+    A4：``mf role --json`` 必须可序列化；锚点中的 Path 统一转 str。
+    """
     from .workspace import detect_role
 
     path = Path(start).expanduser().resolve()
     detected, detected_root = detect_role(path)
     anchor = read_anchor(path)
+    anchor_view = (
+        {
+            key: (str(value) if isinstance(value, Path) else value)
+            for key, value in anchor.items()
+        }
+        if anchor is not None
+        else None
+    )
     return {
         "detected": detected,
         "detected_root": str(detected_root) if detected_root else None,
-        "anchor": anchor,
+        "anchor": anchor_view,
         "effective": anchor["role"] if anchor else detected,
         "source": "anchor" if anchor else "directory",
         "session_id": current_session_id(),

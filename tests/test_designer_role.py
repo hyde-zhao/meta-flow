@@ -549,3 +549,33 @@ def test_cli_design_task_role_flow(env, monkeypatch, capsys):
     assert main(["task", "accept", "R1-P1-T001", "--verdict", "PASS"]) == 0
     _, accepted = load_task(contract, "R1-P1-T001")
     assert accepted["status"] == "accepted"
+
+
+def test_role_json_with_anchor_is_serializable(env, monkeypatch, capsys):
+    """A4：存在会话锚点时 mf role --json 不得因 Path 崩溃。"""
+    root = env["root"]
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-json-a4")
+    roles.write_anchor(
+        "maintainer",
+        start=root,
+        source="session-start",
+        session_id="sid-json-a4",
+        cwd=root,
+        root=root,
+    )
+    capsys.readouterr()
+    assert main(["role", "--path", str(root), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["role"] == "maintainer"
+    assert data["source"] == "anchor"
+    assert data["session_id"] == "sid-json-a4"
+    assert isinstance(data["anchor"]["root"], str)
+    assert isinstance(data["anchor"]["session_id"], str)
+
+    # 无锚点（无会话标识、无 user-tty）时同样可序列化
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    capsys.readouterr()
+    assert main(["role", "--path", str(root), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["anchor"] is None
+    assert data["role"] == "manager"
