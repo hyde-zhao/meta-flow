@@ -673,3 +673,38 @@ def show_release(project: str | Path, version: str | None = None) -> dict[str, A
         raise VerifyError(f"发布清单不存在: {path}")
     data = _load_yaml(path)
     return data
+
+
+SECURITY_CARD_SECTIONS = (
+    "信任边界",
+    "攻击者能力",
+    "可证明的 fail_closed 范围",
+    "不可防范围（残余风险）",
+    "风险接受人",
+    "验证证据",
+)
+
+
+def security_card_check(path: str | Path) -> dict[str, Any]:
+    """校验安全卡模板/内容（MFP-0041 A1）。
+
+    fail_closed 只写可证明范围；必须写明不可防残余与风险接受人。
+    """
+    card = Path(path).expanduser()
+    if not card.is_file():
+        raise VerifyError(f"安全卡不存在: {card}")
+    text = card.read_text(encoding="utf-8")
+    errors: list[str] = []
+    for section in SECURITY_CARD_SECTIONS:
+        match = re.search(
+            rf"^##\s*{re.escape(section)}\s*$(.*?)(?=^##\s|\Z)",
+            text,
+            re.MULTILINE | re.DOTALL,
+        )
+        if match is None or not match.group(1).strip():
+            errors.append(f"缺少或为空: {section}")
+    if re.search(r"完全防|不可绕过|100%\s*(防护|安全)|绝对安全", text):
+        errors.append("fail_closed 只能写可证明范围，不得声称完全防护/不可绕过")
+    if re.search(r"接受人\s*[:：]\s*$", text, re.MULTILINE):
+        errors.append("风险接受人不能为空")
+    return {"ok": not errors, "path": str(card), "errors": errors}

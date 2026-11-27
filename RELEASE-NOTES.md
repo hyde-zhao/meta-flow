@@ -46,6 +46,18 @@
   - 范围外事项用 `needs: acceptance|bug|mfp|chg` 标注，不阻塞范围内返工；
     review→rework 链路、verdict、整改项与 next_owner 写入 ledger。
   - maintainer 可删除遗留角色锚点（清理降权），仍禁止创建/改写锚点内容。
+- 评审提交即回流（MFP-0038）：`rework_scope` 支持粗体/下划线/反引号；必须整改项支持
+  `### R4（in-scope）` 全角/无空格小节与表格；review 提交 `NEEDS_REWORK` 即触发目标
+  `rejected/rework`、`next_owner=实现 worker`，无需 manager accept；`rework_summary`
+  缺失拒绝提交；`MF_LEGACY_REWORK=1` 保留回滚通道。
+- 维护者复位与误伤修复（MFP-0039/REQ-0023）：新增 `mf role --reset`（仅 maintainer，
+  只清理 user-tty/当前会话/遗留锚点，写 `role.reset` ledger）；guard 只检查实际执行段，
+  提交消息含 anchor、`uv run meta_flow`、只读 grep 不再误拦；worker/manager 锚点
+  写入仍拒绝。
+- 安全卡与负向矩阵（MFP-0041 A1/A3）：新增 `SECURITY-CARD.md`、`NEGATIVE-MATRIX.md`
+  standards 模板与 `mf verify security-card` 校验（信任边界/攻击者能力/可证明
+  fail_closed/不可防残余/风险接受人）；负向矩阵覆盖入口×变形×shell×环境；验收规范
+  补充一任务一 commit（A4）与连续两轮同类绕过暂停（A6）。
 - 安全负向矩阵（R4/R5）：会话入口覆盖模块方式、subprocess 列表/拼接字符串、
   拆分锚点函数名，只读检索（grep/cat）保持豁免。
 - 全局 manifest 同步：`mf dev install` 成功后更新 `~/.meta-flow/manifest.yaml` 的

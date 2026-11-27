@@ -233,6 +233,10 @@ def _enforce_role(args: argparse.Namespace) -> None:
         if role == "manager":
             return
         raise WorkspaceError("state 命令只允许 manager", 3)
+    if command == "verify" and action == "security-card":
+        if role in {"manager", "designer", "maintainer", "unbound"}:
+            return
+        raise WorkspaceError("security-card 校验只允许 manager/designer/maintainer", 3)
     if command in MANAGER_PROJECT_COMMANDS:
         if role != "manager":
             raise WorkspaceError(f"{command} 命令只允许 manager", 3)
@@ -1570,6 +1574,19 @@ def _cmd_verify_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_verify_security_card(args: argparse.Namespace) -> int:
+    result = verify.security_card_check(args.path)
+    if args.json:
+        _print_json(result)
+    elif result["ok"]:
+        print(f"安全卡 OK: {result['path']}")
+    else:
+        print("安全卡校验失败:")
+        for error in result["errors"]:
+            print(f"  - {error}")
+    return 0 if result["ok"] else 1
+
+
 def _cmd_verify_show(args: argparse.Namespace) -> int:
     data = verify.show_verification(args.project_dir, args.vr_id)
     if args.json:
@@ -2194,6 +2211,10 @@ def build_parser() -> argparse.ArgumentParser:
     verify_show.add_argument("--project-dir", default=".")
     verify_show.add_argument("--json", action="store_true")
     verify_show.set_defaults(func=_cmd_verify_show)
+    verify_card = verify_sub.add_parser("security-card", help="校验安全卡（MFP-0041 A1）")
+    verify_card.add_argument("--path", required=True)
+    verify_card.add_argument("--json", action="store_true")
+    verify_card.set_defaults(func=_cmd_verify_security_card)
 
     release_p = sub.add_parser("release", help="版本冻结（不等于发布）")
     release_sub = release_p.add_subparsers(dest="action", required=True)

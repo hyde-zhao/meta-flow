@@ -719,3 +719,34 @@ def test_worker_manager_cannot_write_anchor_file(env, monkeypatch):
         monkeypatch.setenv("MF_ROLE", role)
         decision = guard.pretool_decision(_payload("Write", env["sub"], anchor))
         assert decision is not None
+
+
+@pytest.mark.parametrize(
+    ("category", "command"),
+    [
+        ("mf-cli", "mf hook session-start"),
+        ("sh-c", "sh -c 'mf hook session-start'"),
+        ("module", "python -m meta_flow.cli hook session-start"),
+        (
+            "subprocess-list",
+            "python -c \"import subprocess; "
+            "subprocess.run(['mf','hook','session-start'])\"",
+        ),
+        (
+            "alias-split",
+            "python -c \"from meta_flow import roles as r; "
+            "getattr(r,'write_'+'anchor')('x')\"",
+        ),
+        ("cd-chain", "cd . && mf hook session-start"),
+        (
+            "env-session",
+            "python -c \"from meta_flow.roles import write_anchor; "
+            "write_anchor('worker', start='.', source='session-start', "
+            "session_id='x')\"",
+        ),
+    ],
+)
+def test_a3_negative_matrix_entries_denied(env, monkeypatch, category, command):
+    """MFP-0041 A3：入口×变形×shell×环境矩阵中的真实入口均拒绝。"""
+    monkeypatch.setenv("MF_ROLE", "worker")
+    assert guard.pretool_decision(_bash(command, env["sub"])) is not None, category
