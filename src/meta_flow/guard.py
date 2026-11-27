@@ -760,6 +760,36 @@ def _is_anchor_path(path: Path) -> bool:
     )
 
 
+def _anchor_delete_command(command: str, write_paths: list[Path]) -> bool:
+    """maintainer 清理锚点：仅允许单一 rm/unlink 删除锚点文件（MFP-0037）。
+
+    删除锚点只会降权/清理，不构成伪造角色；创建/改写仍由 SessionStart 或
+    用户终端 ``mf role --as`` 独占。
+    """
+    if not write_paths or any(not _is_anchor_path(item) for item in write_paths):
+        return False
+    if any(
+        marker in command
+        for marker in ("&&", "||", ";", "|", ">", "<", "`", "$(", "\n", "\r", "&")
+    ):
+        return False
+    tokens = _bash_tokens(command)
+    index = 0
+    while index < len(tokens):
+        raw = tokens[index]
+        name = Path(raw.strip("'\"")).name
+        if name in CONTROLLED_PREFIXES:
+            index += 1
+            continue
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", raw):
+            index += 1
+            continue
+        break
+    if index >= len(tokens):
+        return False
+    return Path(tokens[index].strip("'\"")).name in {"rm", "unlink"}
+
+
 def _readonly_expand(command: str) -> bool:
     """识别纯只读的 `mf context expand ...` 命令（MFP-0025/0027）。
 
@@ -890,12 +920,16 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
     if write_all and any(_is_anchor_path(item) for item in write_paths):
         # 锚点只由 SessionStart hook / 用户终端 mf role --as 通过 CLI 写入；
         # 任何工具层直接写（含 manager 委托）都拒绝，防止伪造角色。
-        return _deny_with_hint(
-            "会话角色锚点只能由 SessionStart 或用户终端 mf role --as 写入",
-            contract=contract,
-            role=role,
-            role_root=role_root,
-        )
+        # MFP-0037：maintainer 是最高维护权限，允许删除遗留锚点（降权清理），
+        # 但仍禁止创建/改写锚点内容。
+        if not (role == "maintainer" and _anchor_delete_command(command, write_paths)):
+            return _deny_with_hint(
+                "会话角色锚点只能由 SessionStart 或用户终端 mf role --as 写入；"
+                "maintainer 仅可删除遗留锚点文件",
+                contract=contract,
+                role=role,
+                role_root=role_root,
+            )
     if role == "worker" and not write_all and _readonly_expand(command):
         # 纯只读 expand：路径授权与 READ-LOG 由 context.expand 负责，
         # 不把路径参数误判为 Bash 写入（MFP-0027）。

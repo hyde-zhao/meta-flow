@@ -39,6 +39,42 @@ def _payload(tool, cwd, path):
     return {"tool_name": tool, "cwd": str(cwd), "tool_input": {"file_path": str(path)}}
 
 
+def test_maintainer_can_delete_anchor_but_not_write(env, monkeypatch):
+    """MFP-0037：maintainer 可清理遗留锚点（删除），但仍不能创建/改写。"""
+    root, _, sub = env
+    anchor = root / ".meta-flow" / "session-roles" / "user-tty.yaml"
+    monkeypatch.setenv("MF_ROLE", "maintainer")
+
+    delete = {
+        "tool_name": "Bash",
+        "cwd": str(root),
+        "tool_input": {"command": f"rm -f {anchor}"},
+    }
+    assert guard.pretool_decision(delete) is None
+
+    write = {
+        "tool_name": "Bash",
+        "cwd": str(root),
+        "tool_input": {"command": f"echo hack > {anchor}"},
+    }
+    decision = guard.pretool_decision(write)
+    assert decision is not None
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "锚点" in reason
+
+    # worker 不能删除锚点（即使从自己的交付库执行）
+    monkeypatch.setenv("MF_ROLE", "worker")
+    worker_delete = {
+        "tool_name": "Bash",
+        "cwd": str(sub),
+        "tool_input": {"command": f"rm -f {anchor}"},
+    }
+    decision = guard.pretool_decision(worker_delete)
+    assert decision is not None
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "锚点" in reason
+
+
 def test_hook_installed_and_removed(env):
     root, contract, _ = env
     settings = json.loads((root / ".claude" / "settings.json").read_text(encoding="utf-8"))
