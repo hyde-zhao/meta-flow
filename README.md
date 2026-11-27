@@ -314,8 +314,11 @@ mf task accept R1-P1-T001 --verdict PASS
 - 子项目绑定（T033 A2）：`create` 必须绑定已注册 `delivery`；`cross_subproject`/`workspace`
   仅 manager 创建，cross 例外只读/测试、写拒绝；`mf task validate` 校验作用域、责任映射
   与安全字段。
-- 安全类任务（T033 A3）：`security.applies: true` 必须含威胁模型、负面不变量、
-  负向矩阵与 `fail_closed` 可证明范围；缺项时 create/start/validate/doctor 拒绝或警告。
+- 安全类任务（T033 A3/R3）：命中 guard/权限/白名单/路径策略/hook/发布门禁或声明
+  `security.applies: true` 的任务都必须含威胁模型、负面不变量、负向矩阵（每条含
+  `id/category/command/expected/evidence`）与 `fail_closed` 可证明范围；缺项时
+  create/start/validate/doctor 拒绝。CLI 用 `mf task create --security <file|yaml>`
+  写入安全字段；doctor 对历史任务缺项与矩阵覆盖不足输出 warning（退出码不变）。
 - review 任务可读取 review_scope 内任意大小文件（Read 或 `mf context expand`），
   guard 不把 expand 误判为写入；review_scope 外仍拒绝。
 - 并行任务：提交时按任务活动窗口隔离其他并行任务的 diff；单任务越界仍拒绝，

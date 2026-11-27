@@ -2069,7 +2069,7 @@ security:                  # 安全/guard/权限/白名单/路径策略/hook/发
   uncovered: []            # 不可防范围与理由
   risk_acceptor: null
   invariants: []
-  negative_matrix: []      # 入口×变形×shell×环境；含命令/期望/证据
+  negative_matrix: []      # 入口×变形×shell×环境；每条含 id/category/command/expected/evidence
   fail_closed: true        # 仅用于可证明范围
   fail_closed_scope: null
 allowed_paths:

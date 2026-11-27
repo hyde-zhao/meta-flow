@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -90,29 +91,68 @@ def _complete_security():
             {"id": "INV-2", "text": "无法判定时 fail-closed 拒绝"},
         ],
         "negative_matrix": [
-            {"id": "N1", "category": "命令首词", "command": "echo mf", "expected": "deny"},
-            {"id": "N2", "category": "前缀命令", "command": "cd x && mf", "expected": "deny"},
-            {"id": "N3", "category": "参数伪装", "command": "x mf context expand", "expected": "deny"},
-            {"id": "N4", "category": "操作符/替换", "command": "mf $(x)", "expected": "deny"},
-            {"id": "N5", "category": "跨项目", "command": "cat ../backend/src", "expected": "deny"},
-            {"id": "N6", "category": "越界", "command": "expand outside", "expected": "deny"},
+            {
+                "id": "N1",
+                "category": "命令首词",
+                "command": "echo mf",
+                "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
+            },
+            {
+                "id": "N2",
+                "category": "前缀命令",
+                "command": "cd x && mf",
+                "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
+            },
+            {
+                "id": "N3",
+                "category": "参数伪装",
+                "command": "x mf context expand",
+                "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
+            },
+            {
+                "id": "N4",
+                "category": "操作符/替换",
+                "command": "mf $(x)",
+                "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
+            },
+            {
+                "id": "N5",
+                "category": "跨项目",
+                "command": "cat ../backend/src",
+                "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
+            },
+            {
+                "id": "N6",
+                "category": "越界",
+                "command": "expand outside",
+                "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
+            },
             {
                 "id": "N7",
                 "category": "module/subprocess/list",
                 "command": "python -m meta_flow.cli",
                 "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
             },
             {
                 "id": "N8",
                 "category": "alias/importlib/getattr/拼接",
                 "command": "importlib + getattr + 拼接",
                 "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
             },
             {
                 "id": "N9",
                 "category": "cd/嵌套 shell/env/session_id",
                 "command": "cd x && sh -c; env; session_id",
                 "expected": "deny",
+                "evidence": "guard.pretool_decision 返回 deny",
             },
         ],
         "fail_closed": True,
@@ -148,9 +188,14 @@ def test_unbound_subproject_install_resolves_contract_and_task_commands(env, mon
         load_task(root, task_id)[1]["project_dir"] == str(frontend)
     )
 
+    from meta_flow.workspace import resolve_contract
+
+    assert resolve_contract(frontend) == env["contract"]
+
     monkeypatch.chdir(frontend)
-    assert main(["task", "prompt", task_id, "--project-dir", str(root)]) == 0
-    assert main(["task", "show", task_id, "--project-dir", str(root)]) == 0
+    # 不带 --project-dir：必须走 resolve_contract(frontend) 的父工作区回退。
+    assert main(["task", "prompt", task_id]) == 0
+    assert main(["task", "show", task_id]) == 0
 
 
 def test_mismatched_workspace_binding_is_rejected(env, tmp_path):
@@ -162,6 +207,34 @@ def test_mismatched_workspace_binding_is_rejected(env, tmp_path):
 
     with pytest.raises(WorkspaceError, match="不一致"):
         resolve_contract(frontend)
+
+
+def test_binding_to_other_valid_workspace_rejected(env, tmp_path):
+    """R1/R6：即使绑定指向另一个合法 workspace 也必须拒绝，guard fail-closed。"""
+    frontend = env["frontend"]
+    other = tmp_path / "other-valid"
+    other.mkdir()
+    install_root(other)
+    workspace_init(other, "Other")
+    install_worker(frontend, "frontend", workspace_root=other, force=True)
+
+    from meta_flow.workspace import resolve_contract
+
+    with pytest.raises(WorkspaceError, match="不一致"):
+        resolve_contract(frontend)
+
+    target = frontend / "src" / "main.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("print('front')\n", encoding="utf-8")
+    for tool in ("Write", "Read"):
+        decision = guard.pretool_decision(_payload(tool, frontend, target))
+        assert decision is not None, tool
+        assert (
+            "fail-closed" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+        ), tool
+    bash = guard.pretool_decision(_payload("Bash", frontend, command="echo hi"))
+    assert bash is not None
+    assert "fail-closed" in bash["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_guard_fails_closed_when_contract_unresolvable(tmp_path):
@@ -331,6 +404,118 @@ def test_cross_subproject_scope_requires_manager_and_fields(env):
         )
 
 
+def test_worker_task_validate_scope_checks_sibling_and_workspace_tasks(env, monkeypatch):
+    """R2：validate 与 show/start/submit 同规则检查 task 作用域。"""
+    root, frontend = env["root"], env["frontend"]
+    own = create_task(
+        root, "前端任务", risk="low", delivery="frontend", acceptance=_acceptance()
+    )["task"]
+    sibling = create_task(
+        root,
+        "后端任务",
+        risk="low",
+        delivery="backend",
+        actor_role="manager",
+        acceptance=_acceptance(),
+    )["task"]
+    workspace_task = create_task(
+        root,
+        "工作区任务",
+        risk="low",
+        scope_mode="workspace",
+        scope_justification="跨子项目同步",
+        actor_role="manager",
+        acceptance=_acceptance(),
+    )["task"]
+
+    monkeypatch.chdir(frontend)
+    assert main(["task", "validate", own]) == 0
+    assert main(["task", "validate", sibling]) == 3
+    assert main(["task", "validate", workspace_task]) == 3
+
+
+def test_worker_task_list_hides_workspace_and_unlisted_cross_tasks(
+    env, monkeypatch, capsys
+):
+    """R2：list 与 show/validate 一致，隐藏 workspace 与未声明项目的 cross 任务。"""
+    root, frontend = env["root"], env["frontend"]
+    own = create_task(
+        root, "前端任务", risk="low", delivery="frontend", acceptance=_acceptance()
+    )["task"]
+    sibling = create_task(
+        root,
+        "后端任务",
+        risk="low",
+        delivery="backend",
+        actor_role="manager",
+        acceptance=_acceptance(),
+    )["task"]
+    workspace_task = create_task(
+        root,
+        "工作区任务",
+        risk="low",
+        scope_mode="workspace",
+        scope_justification="跨子项目同步",
+        actor_role="manager",
+        acceptance=_acceptance(),
+    )["task"]
+    cross = create_task(
+        root,
+        "仅后端 cross 任务",
+        risk="low",
+        delivery="frontend",
+        scope_mode="cross_subproject",
+        scope_projects=["backend"],
+        scope_operations=["read"],
+        scope_justification="后端只读",
+        actor_role="manager",
+        acceptance=_acceptance(),
+    )["task"]
+
+    monkeypatch.chdir(frontend)
+    assert main(["task", "list", "--json"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    ids = {item["id"] for item in listed}
+    assert own in ids
+    assert sibling not in ids
+    assert workspace_task not in ids
+    assert cross not in ids
+
+
+def test_worker_task_commands_reject_other_workspace_contract(env, tmp_path, monkeypatch):
+    """R2/R6：--project-dir 指向另一合法 workspace contract 时拒绝。"""
+    frontend = env["frontend"]
+    other = tmp_path / "other-ws"
+    other.mkdir()
+    install_root(other)
+    workspace_init(other, "Other")
+    workspace_add_project(other, "frontend", "frontend")
+    other_contract = other / "other-contract"
+    other_task = create_task(
+        other_contract,
+        "其他工作区任务",
+        risk="low",
+        delivery="frontend",
+        actor_role="manager",
+        acceptance=_acceptance(),
+    )["task"]
+
+    monkeypatch.chdir(frontend)
+    for action in ("show", "validate"):
+        assert (
+            main(
+                [
+                    "task",
+                    action,
+                    other_task,
+                    "--project-dir",
+                    str(other_contract),
+                ]
+            )
+            == 3
+        )
+
+
 # ---------------------------------------------------------------------------
 # A3：安全类任务基线
 # ---------------------------------------------------------------------------
@@ -365,6 +550,137 @@ def test_security_task_missing_fields_rejected_at_create(env):
             security=incomplete,
             acceptance=_acceptance(),
         )
+
+
+def test_security_keyword_task_without_security_block_rejected(env):
+    """R3：命中 guard/权限/hook 等范围但未声明 security.applies 也拒绝。"""
+    root, _frontend = env["root"], env["frontend"]
+    with pytest.raises(TaskError, match="security.applies"):
+        create_task(
+            root,
+            "修复 guard 路径策略 hook 旁路",
+            risk="low",
+            delivery="frontend",
+            acceptance=_acceptance(),
+        )
+
+    result = create_task(
+        root,
+        "普通任务",
+        risk="low",
+        delivery="frontend",
+        acceptance=_acceptance(),
+    )
+    task_id = result["task"]
+    path, data = load_task(root, task_id)
+    data["title"] = "修复 guard 路径策略 hook 发布门禁旁路"
+    data["security"] = {}
+    data["status"] = "ready"
+    path.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+
+    validation = validate_task(root, task_id)
+    assert validation["ok"] is False
+    assert any("命中安全类范围" in item for item in validation["errors"])
+
+    from meta_flow.workspace import doctor
+
+    assert any("命中安全类范围" in item for item in doctor(root))
+    with pytest.raises(TaskError, match="拒绝 start"):
+        start_task(root, task_id)
+
+
+def test_cli_task_create_security_option(env, monkeypatch, tmp_path):
+    """R3：CLI --security 是写入安全字段的受控方式。"""
+    root = env["root"]
+    security_file = tmp_path / "security.yaml"
+    security_file.write_text(
+        yaml.safe_dump(_complete_security(), sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    assert (
+        main(
+            [
+                "task",
+                "create",
+                "--project-dir",
+                str(root),
+                "--title",
+                "修复 guard 路径策略",
+                "--risk",
+                "low",
+                "--delivery",
+                "frontend",
+                "--acceptance",
+                "完成",
+                "--security",
+                str(security_file),
+            ]
+        )
+        == 0
+    )
+
+
+def test_doctor_reports_historical_security_warnings(env, capsys):
+    """R5：历史安全任务缺项/矩阵覆盖不足为 doctor warning，rc 不变。"""
+    from meta_flow.workspace import doctor, doctor_warnings
+
+    root = env["root"]
+    result = create_task(
+        root,
+        "安全任务",
+        risk="low",
+        delivery="frontend",
+        security=_complete_security(),
+        acceptance=_acceptance(),
+    )
+    task_id = result["task"]
+    path, data = load_task(root, task_id)
+    data["security"]["threat_model"].pop("trust_boundary")
+    data["status"] = "accepted"
+    data["next_owner"] = "manager"
+    data["lease"] = None
+    path.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    from meta_flow.state import ledger_append, refresh_current
+
+    ledger_append(
+        env["contract"],
+        {
+            "event": "task.accept",
+            "task": task_id,
+            "from": "submitted",
+            "to": "accepted",
+        },
+    )
+    refresh_current(env["contract"])
+
+    assert doctor(root) == []
+    warnings = doctor_warnings(root)
+    assert any(task_id in item and "历史安全任务缺项" in item for item in warnings)
+
+    coverage = _complete_security()
+    coverage["negative_matrix"] = [coverage["negative_matrix"][0]]
+    coverage_task = create_task(
+        root,
+        "覆盖不足安全任务",
+        risk="low",
+        delivery="frontend",
+        security=coverage,
+        acceptance=_acceptance(),
+    )["task"]
+    assert any(
+        coverage_task in item and "覆盖不足" in item
+        for item in doctor_warnings(root)
+    )
+
+    assert main(["doctor", "--path", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "warning:" in out
+    assert task_id in out
 
 
 def test_security_task_validate_and_start_reject_incomplete(tmp_path, monkeypatch):
@@ -405,7 +721,13 @@ def test_security_matrix_coverage_warning_not_error(env):
     root = env["root"]
     security = _complete_security()
     security["negative_matrix"] = [
-        {"id": "N1", "category": "跨项目", "command": "cat ../backend", "expected": "deny"}
+        {
+            "id": "N1",
+            "category": "跨项目",
+            "command": "cat ../backend",
+            "expected": "deny",
+            "evidence": "guard.pretool_decision 返回 deny",
+        }
     ]
     result = create_task(
         root,

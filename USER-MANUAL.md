@@ -326,8 +326,12 @@ mf task accept R0-P1-T001 --verdict PASS
   子项目根解析。`cross_subproject`/`workspace` 仅 manager 可创建，cross 例外只读/测试，
   写拒绝。
 - 安全类任务（guard/权限/白名单/path 策略/hook/发布门禁或 `security.applies: true`）
-  必须写威胁模型、负面不变量、负向矩阵与 `fail_closed` 可证明范围；
-  `mf task validate <id>` 与 `mf doctor` 拒绝缺项，历史任务警告。
+  必须写威胁模型、负面不变量、负向矩阵（每条含 `id/category/command/expected/evidence`）
+  与 `fail_closed` 可证明范围；未声明 `security.applies: true` 但命中上述范围的卡同样
+  被 create/start/validate/doctor 拒绝。创建时用
+  `mf task create --security <security.yaml>` 写入安全字段；`mf task validate <id>`
+  与 `mf doctor` 拒绝活跃任务缺项，doctor 对历史任务缺项与矩阵覆盖不足输出
+  warning（退出码不变）。
 - worker 无交付根绑定时，`--project-dir <交付库>` 仍可用于显式绑定；若子项目
   `install.yaml` 丢失 `workspace_root` 但位于已注册工作区内，任务命令与 guard 按父
   工作区解析（不会跨工作区静默串库）；绑定与所在工作区不一致时拒绝并提示

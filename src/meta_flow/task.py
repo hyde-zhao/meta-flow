@@ -179,6 +179,36 @@ def _security_applies(data: dict[str, Any]) -> bool:
     return isinstance(security, dict) and bool(security.get("applies"))
 
 
+# TASK-CARD:53：命中 guard/权限/白名单/路径策略/hook/发布门禁的任务即使
+# 未声明 security.applies 也属于安全类任务（R3，防止自报制绕过）。
+SECURITY_REQUIRED_KEYWORDS = (
+    "guard",
+    "权限",
+    "白名单",
+    "路径策略",
+    "path policy",
+    "hook",
+    "发布门禁",
+    "release gate",
+    "permission",
+    "whitelist",
+    "security",
+    "安全",
+)
+
+
+def _security_required(data: dict[str, Any]) -> bool:
+    """任务是否命中安全类范围（含显式 security.applies: true）。"""
+    if _security_applies(data):
+        return True
+    if str(data.get("kind") or "") == "review":
+        return False
+    parts = [str(data.get("title") or ""), str(data.get("module") or "")]
+    parts.extend(str(item) for item in data.get("allowed_paths") or [])
+    text = " ".join(parts).lower()
+    return any(keyword.lower() in text for keyword in SECURITY_REQUIRED_KEYWORDS)
+
+
 def task_scope_errors(contract: str | Path, data: dict[str, Any]) -> list[str]:
     """校验任务子项目作用域（T033 A2）；兼容旧任务默认 single_subproject。"""
     scope = _task_scope(data)
@@ -267,12 +297,19 @@ def task_security_warnings(data: dict[str, Any]) -> list[str]:
 
 
 def task_security_errors(data: dict[str, Any]) -> list[str]:
-    """校验安全类任务卡字段（TASK-CARD/MFP-0033/T033 A3）。
+    """校验安全类任务卡字段（TASK-CARD/MFP-0033/T033 A3/R3）。
 
-    仅对 `security.applies: true` 生效；历史 accepted 任务由 doctor 跳过，
-    `mf task validate` 可显示警告。返回缺失/不满足项的人读说明。
+    命中 guard/权限/白名单/路径策略/hook/发布门禁的任务即使未声明
+    `security.applies: true` 也必须补齐安全字段；历史 accepted 任务由
+    doctor 转为 warning。返回缺失/不满足项的人读说明。
     """
     if not _security_applies(data):
+        if _security_required(data):
+            return [
+                "任务命中安全类范围（guard/权限/白名单/路径策略/hook/发布门禁），"
+                "必须声明 security.applies: true 并填写威胁模型/负面不变量/负向矩阵"
+                "（可用 mf task create --security <file|yaml>）"
+            ]
         return []
     security = data.get("security") or {}
     errors: list[str] = []
@@ -318,7 +355,7 @@ def task_security_errors(data: dict[str, Any]) -> list[str]:
             if not isinstance(item, dict):
                 errors.append("security.negative_matrix 条目必须是映射")
                 continue
-            for key in ("id", "category", "command", "expected"):
+            for key in ("id", "category", "command", "expected", "evidence"):
                 if not str(item.get(key) or "").strip():
                     errors.append(f"security.negative_matrix 条目缺少 {key}")
     if security.get("fail_closed") is not True:
@@ -577,12 +614,19 @@ def create_task(
     security_data = security if security is not None else data.get("security") or {}
     if security_data and not isinstance(security_data, dict):
         raise TaskError("security 必须是映射")
-    if security_data.get("applies"):
-        security_errors = task_security_errors({"security": security_data})
-        if security_errors:
-            raise TaskError(
-                "安全类任务缺少必要字段: " + "；".join(security_errors)
-            )
+    security_errors = task_security_errors(
+        {
+            "title": title,
+            "kind": kind,
+            "module": module,
+            "allowed_paths": allowed,
+            "security": security_data,
+        }
+    )
+    if security_errors:
+        raise TaskError(
+            "安全类任务缺少必要字段: " + "；".join(security_errors)
+        )
 
     # WP-F1/T033：责任主体与执行者分离（MFP-0035/ADR-007）。
     # design 默认 designer；implement/fix/document/verify 默认 worker；

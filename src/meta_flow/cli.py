@@ -71,6 +71,7 @@ from .workspace import (
     detect_role,
     doctor,
     doctor_global,
+    doctor_warnings,
     find_workspace_root,
     resolve_contract,
     workspace_add_project,
@@ -145,11 +146,28 @@ def _worker_task_scope(args: argparse.Namespace) -> tuple[str, Path | None, str 
     worker 无交付根绑定时要求 --project-dir 指向交付库；否则拒绝跨交付操作。
     """
     role, root = _effective_role(args)
-    if role != "worker":
+    if role not in {"worker", "designer"}:
+        return role, root, None
+    # R2：worker/designer 的任务命令只能操作本 workspace 的 contract，
+    # 防止 --project-dir 指向另一个合法 workspace 读取/操作同 delivery 任务卡。
+    if root is not None:
+        target = getattr(args, "project_dir", ".")
+        try:
+            own_contract = resolve_contract(root)
+            target_contract = resolve_contract(Path(str(target or ".")))
+        except WorkspaceError as exc:
+            raise WorkspaceError(f"任务命令契约解析失败: {exc}", 3) from exc
+        if target_contract != own_contract:
+            raise WorkspaceError(
+                f"{role} 的任务命令 --project-dir 必须指向本工作区 contract: "
+                f"{own_contract}（不接受 {target_contract}）",
+                3,
+            )
+    if role == "designer":
         return role, root, None
     if root is None:
         raise WorkspaceError(
-            "worker 无交付根绑定；请用 --project-dir 指定交付库，或从交付库目录运行", 3
+            "worker 无交付根绑定；请用 --project-dir 指定交付库，或从交付库运行", 3
         )
     delivery = _worker_delivery(root)
     if not delivery:
@@ -286,15 +304,35 @@ def _ensure_worker_scope(args: argparse.Namespace, task: dict[str, Any]) -> None
         )
 
 
-def _print_doctor(errors: list[str], as_json: bool) -> int:
+def _worker_task_visible(task: dict[str, Any], delivery: str | None) -> bool:
+    """worker list 可见性：workspace 任务仅 manager；cross 仅声明 projects。"""
+    scope = task.get("scope")
+    scope = scope if isinstance(scope, dict) else {}
+    mode = str(scope.get("mode") or "single_subproject")
+    if mode == "workspace":
+        return False
+    if mode == "cross_subproject":
+        projects = [str(item) for item in scope.get("projects") or []]
+        return delivery in projects
+    return not task.get("delivery") or task.get("delivery") == delivery
+
+
+def _print_doctor(
+    errors: list[str], as_json: bool, warnings: list[str] | None = None
+) -> int:
+    warnings = warnings or []
     if as_json:
-        _print_json({"ok": not errors, "errors": errors})
+        _print_json({"ok": not errors, "errors": errors, "warnings": warnings})
     elif errors:
         print("mf doctor: FAIL")
         for error in errors:
             print(f"  - {error}")
+        for warning in warnings:
+            print(f"  warning: {warning}")
     else:
         print("mf doctor: OK")
+        for warning in warnings:
+            print(f"  warning: {warning}")
     return 0 if not errors else 1
 
 
@@ -676,7 +714,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             root = path
         else:
             raise WorkspaceError("未找到工作区或项目安装", 2)
-    return _print_doctor(doctor(root), args.json)
+    return _print_doctor(doctor(root), args.json, doctor_warnings(root))
 
 
 def _cmd_dev_clone(args: argparse.Namespace) -> int:
@@ -845,6 +883,21 @@ def _cmd_dev_improve_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_security_arg(raw: str | None) -> dict[str, Any] | None:
+    """加载 `--security`：YAML/JSON 文件路径或内联 YAML/JSON（T033 R3）。"""
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    text = candidate.read_text(encoding="utf-8") if candidate.is_file() else raw
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise TaskError(f"--security 不是合法 YAML/JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise TaskError("--security 顶层必须是映射")
+    return data
+
+
 def _cmd_task_create(args: argparse.Namespace) -> int:
     from_data = None
     if args.from_file:
@@ -881,7 +934,7 @@ def _cmd_task_create(args: argparse.Namespace) -> int:
         scope_projects=getattr(args, "scope_project", None),
         scope_operations=getattr(args, "scope_operation", None),
         scope_justification=getattr(args, "scope_justification", None),
-        security=getattr(args, "security", None),
+        security=_load_security_arg(getattr(args, "security", None)),
         actor_role=_effective_role(args)[0],
         with_review=not args.no_review,
         from_data=from_data,
@@ -902,6 +955,8 @@ def _cmd_task_list(args: argparse.Namespace) -> int:
         delivery=delivery if role == "worker" else None,
         active_only=not getattr(args, "all", False),
     )
+    if role == "worker":
+        items = [item for item in items if _worker_task_visible(item, delivery)]
     if args.json:
         _print_json(items)
         return 0
@@ -942,6 +997,9 @@ def _cmd_task_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_task_validate(args: argparse.Namespace) -> int:
+    _worker_task_scope(args)
+    _, current = load_task(args.project_dir, args.task_id)
+    _ensure_worker_scope(args, current)
     result = validate_task(args.project_dir, args.task_id)
     if args.json:
         _print_json(result)
@@ -1945,6 +2003,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_create.add_argument(
         "--scope-justification", help="cross/workspace 作用域理由（必填）"
+    )
+    task_create.add_argument(
+        "--security",
+        help="安全字段 YAML/JSON 文件路径或内联内容；命中 guard/权限/白名单/"
+        "路径策略/hook/发布门禁的任务必须声明 security.applies: true 并填写完整",
     )
     task_create.add_argument("--risk", choices=["low", "medium", "high", "critical"], default="medium")
     task_create.add_argument("--effort", default="M")

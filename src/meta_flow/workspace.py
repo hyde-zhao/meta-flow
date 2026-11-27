@@ -213,21 +213,28 @@ def resolve_contract(project: str | Path) -> Path:
     if install.is_file():
         install_data = _load_yaml(install)
         parent = install_data.get("workspace_root")
+        # 子项目物理所在的父工作区（即使 install.yaml 绑定指向别处）。
+        # 绑定存在且与物理所在工作区不一致时拒绝，避免静默使用另一
+        # workspace 的 contract 授权本子项目读写（T033 R1）。
+        workspace = find_workspace_root(project_path)
         if parent:
             parent_path = Path(str(parent)).expanduser().resolve()
+            if (
+                workspace is not None
+                and workspace != project_path
+                and workspace != parent_path
+            ):
+                raise WorkspaceError(
+                    f"子项目安装记录 workspace_root={parent} 与所在工作区 {workspace} 不一致"
+                )
             parent_local = parent_path / LOCAL_WORKSPACE
             if parent_local.is_file():
                 return _contract_path(parent_path, _load_yaml(parent_local))
         # 绑定缺失/失效：若子项目位于已注册工作区内，按父工作区解析；
         # 但显式绑定了其他工作区时不回退（防止跨工作区静默串库）。
-        workspace = find_workspace_root(project_path)
         if workspace is not None and workspace != project_path:
             workspace_local = workspace / LOCAL_WORKSPACE
             if workspace_local.is_file():
-                if parent and Path(str(parent)).expanduser().resolve() != workspace:
-                    raise WorkspaceError(
-                        f"子项目安装记录 workspace_root={parent} 与所在工作区 {workspace} 不一致"
-                    )
                 return _contract_path(workspace, _load_yaml(workspace_local))
     raise WorkspaceError("当前目录不是 workspace、contract 或已安装子项目")
 
@@ -1187,6 +1194,41 @@ def doctor_global() -> list[str]:
     if not standards.is_dir() or len(list(standards.glob("*.md"))) < len(templates.STANDARDS):
         errors.append("全局 standards 模板不完整")
     return errors
+
+
+def doctor_warnings(root: str | Path) -> list[str]:
+    """doctor 非阻断提示（T033 R5）：历史安全任务缺项与负向矩阵覆盖不足。
+
+    活跃任务缺项仍由 doctor() 作为 error；这里只收集不改变退出码的
+    warning，覆盖 TASK-CARD 对历史/覆盖不足的提示要求。
+    """
+    root = Path(root).expanduser().resolve()
+    local_path = root / LOCAL_WORKSPACE
+    if not local_path.is_file():
+        return []
+    try:
+        contract = _contract_path(root, _load_yaml(local_path))
+    except WorkspaceError:
+        return []
+    from .task import ACTIVE_STATUSES, task_security_errors, task_security_warnings
+
+    warnings: list[str] = []
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        try:
+            data = _load_yaml(path)
+        except WorkspaceError:
+            continue
+        if data.get("kind") == "review":
+            continue
+        task_id = str(data.get("id") or path.parent.name)
+        errors = task_security_errors(data)
+        if errors and data.get("status") not in ACTIVE_STATUSES:
+            warnings.append(
+                f"任务 {task_id} 历史安全任务缺项: " + "；".join(errors)
+            )
+        for message in task_security_warnings(data):
+            warnings.append(f"任务 {task_id} {message}")
+    return warnings
 
 
 def _has_install_gitignore(path: Path) -> bool:
