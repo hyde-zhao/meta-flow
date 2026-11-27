@@ -61,10 +61,10 @@ privacy:
 source_record: CHG-0002
 resolution:
   version: 1.0.2
-  commit: null
+  commit: d61ab6a
   tests: []
   verified_by: null
-  verified_at: '2026-11-27T07:14:38.119366+00:00'
+  verified_at: '2026-11-27T07:15:26.868886+00:00'
   note: 234 passed, 1 xfailed；部署后 smoke：高风险自动回流 M1a/BUG-0018、worker 可直接 mf task rework、缺
     rework_summary 拒绝提交；回滚 --legacy-rework，安装备份 ~/.local/share/uv/tools/meta-flow.bak-1.0.2-20261127。
 submitted_at: '2026-11-27T06:57:41.395403+00:00'
