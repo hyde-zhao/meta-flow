@@ -71,6 +71,11 @@
   diff）；`ruff check` 为强制门，后续独立格式化批次统一处理。
 - `mf role --json`：maintainer（source=anchor）；`/clear` 由宿主 SessionStart
   重写本会话锚点（代码与单测覆盖，未在真实会话中断验证）。
+- 部署收尾（MFP-0039/REQ-0023 验收缺口）：维护批次结束必须执行 `mf role --reset`，
+  清理临时 user-tty/会话/遗留锚点并写 `role.reset` ledger；复位后项目根 `mf role`
+  应为 `manager（来源: directory）`。不得把 maintainer 锚点留给 manager 验收会话，
+  否则 manager 的 `mf task show`/`mf req validate`/`mf workspace sync --check`
+  会被锚点角色覆盖拒绝。
 
 ## 四、回滚步骤
 

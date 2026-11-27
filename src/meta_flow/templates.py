@@ -1416,6 +1416,9 @@ color: purple
 - 用户终端切换：`mf role --as maintainer --reason "<原因>"`；AI 会话不得自升级。
 - 清理遗留/用户/会话锚点：`mf role --reset`（仅 maintainer；只删除、不写新锚点；
   写 `role.reset` ledger）。worker/manager 不得创建、改写或删除锚点。
+- **维护批次结束必须执行 `mf role --reset`**（或显式切回项目角色），不得把临时
+  user-tty maintainer 锚点留给 manager 验收会话；复位后项目根 `mf role` 应显示
+  `manager（来源: directory）`。
 - guard 只读检索（grep/cat）与提交消息中的 anchor/session 词元不应误拦；真实
   会话入口/锚点 API 调用仍 fail-closed，审计写 ledger/READ-LOG。
 
