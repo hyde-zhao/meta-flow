@@ -79,6 +79,10 @@ V1/R1 = 1.1.x。命令以 `mf` 1.0.2 为准；绑定声明见 contract 的
   ```
 
   非 TTY 调用被拒绝（rc=3）并提示用户终端；切换写 `role.switch` ledger。
+- maintainer 复位：`mf role --reset` 清理 user-tty/当前会话/遗留锚点，只删除、不写新
+  锚点，写 `role.reset` ledger；仅 maintainer 会话可执行。worker/manager 不得创建、
+  改写或删除锚点。guard 对只读检索（grep/cat）与提交消息中的 anchor/session 词元
+  不误拦，真实会话入口/锚点 API 仍 fail-closed。
 - designer 工作区：contract 设计区。可写 `architecture/`、`specs/`、P2 设计包/规格、
   模块/接口文档与任务 bundle；可读子项目接口/源码（设计/验证范围）；禁止写子项目源码、
   需求/验收/发布。

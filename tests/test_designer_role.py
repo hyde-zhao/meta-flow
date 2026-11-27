@@ -618,3 +618,104 @@ def test_role_json_with_anchor_is_serializable(env, monkeypatch, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["anchor"] is None
     assert data["role"] == "manager"
+
+
+def test_role_reset_removes_all_anchor_kinds_and_audits(env, monkeypatch):
+    """MFP-0039：reset 只清理 user-tty/会话/遗留锚点，不写新锚点。"""
+    root = env["root"]
+    sub = env["sub"]
+    contract = env["contract"]
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s-reset")
+    roles.write_anchor(
+        "worker",
+        start=sub,
+        source="session-start",
+        cwd=sub,
+        session_id="s-reset",
+        root=sub,
+    )
+    roles.write_anchor(
+        "maintainer",
+        start=root,
+        source="user-tty",
+        cwd=root,
+        root=root,
+        stream=FakeTTY(),
+        out=FakeTTY(),
+    )
+    legacy = root / ".meta-flow" / "session-role.yaml"
+    legacy.write_text("role: manager\nroot: " + str(root) + "\n", encoding="utf-8")
+    assert roles.read_anchor(root, "s-reset") is not None
+
+    result = roles.reset_anchor(root, session_id="s-reset")
+    assert len(result["removed"]) == 3
+    assert roles.read_anchor(root, "s-reset") is None
+    assert not legacy.exists()
+    assert not (root / ".meta-flow" / "session-roles" / "user-tty.yaml").exists()
+    events = [
+        json.loads(line)
+        for line in (contract / "state" / "ledger.ndjson")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert any(
+        event.get("event") == "role.reset" and event.get("removed")
+        for event in events
+    )
+
+
+def test_role_reset_cli_requires_maintainer(env, monkeypatch, capsys):
+    """MFP-0039/REQ-0023：worker 不能 reset；maintainer 可清理。"""
+    root = env["root"]
+    monkeypatch.setenv("MF_ROLE", "worker")
+    capsys.readouterr()
+    assert main(["role", "--path", str(root), "--reset"]) == 3
+
+    anchor = root / ".meta-flow" / "session-roles" / "user-tty.yaml"
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    anchor.write_text("role: manager\nroot: " + str(root) + "\n", encoding="utf-8")
+    monkeypatch.setenv("MF_ROLE", "maintainer")
+    capsys.readouterr()
+    assert main(["role", "--path", str(root), "--reset"]) == 0
+    assert not anchor.exists()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git commit -m "fix(anchor): note uv run meta_flow"',
+        'git commit -m "docs: mf hook session-start anchor"',
+        "uv run python -m meta_flow.cli status",
+        'grep "mf hook session-start" README.md',
+    ],
+)
+def test_maintenance_commands_not_blocked_by_anchor_heuristics(
+    env, monkeypatch, command
+):
+    """MFP-0039/REQ-0023：提交消息/uv/只读 grep 不误拦。"""
+    monkeypatch.setenv("MF_ROLE", "worker")
+    assert guard.pretool_decision(_bash(command, env["sub"])) is None
+
+
+def test_real_anchor_and_hook_calls_still_denied(env, monkeypatch):
+    """MFP-0039：误伤修复后真实入口仍 fail-closed。"""
+    monkeypatch.setenv("MF_ROLE", "worker")
+    commands = [
+        "mf hook session-start",
+        "git commit -m ok && mf hook session-start",
+        "python -c \"from meta_flow.roles import write_anchor; "
+        "write_anchor('worker', start='.', source='session-start', session_id='x')\"",
+    ]
+    for command in commands:
+        assert guard.pretool_decision(_bash(command, env["sub"])) is not None
+
+
+def test_worker_manager_cannot_write_anchor_file(env, monkeypatch):
+    """MFP-0039：worker/manager 不得通过工具层创建/改写锚点。"""
+    root = env["root"]
+    anchor = root / ".meta-flow" / "session-roles" / "user-tty.yaml"
+    for role in ("worker", "manager"):
+        monkeypatch.setenv("MF_ROLE", role)
+        decision = guard.pretool_decision(_payload("Write", env["sub"], anchor))
+        assert decision is not None

@@ -714,78 +714,148 @@ INTERPRETER_RE = re.compile(r"\b(?:python[0-9.]*|uv|bash|sh|zsh|dash)\b", re.IGN
 _COMPACT_RE = re.compile(r"[\s'\"+_\[\](),;:`]+")
 
 
-def _first_executable_name(command: str) -> str | None:
-    tokens = _bash_tokens(command)
+_SHELL_SPLIT_RE = re.compile(r"(?:&&|\|\||;|\n|\r|\|)")
+_LAUNCHER_PREFIXES = {"command", "exec", "env", "sudo", "nohup", "time"}
+
+
+def _command_segments(command: str) -> list[str]:
+    """按 shell 操作符粗分命令段（引号内的 ; | && 不分割）。"""
+    segments: list[str] = []
+    buffer: list[str] = []
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            buffer.append(char)
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "'":
+            buffer.append(char)
+            escaped = True
+            index += 1
+            continue
+        if quote is not None:
+            buffer.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            buffer.append(char)
+            index += 1
+            continue
+        if command.startswith("&&", index) or command.startswith("||", index):
+            segment = "".join(buffer).strip()
+            if segment:
+                segments.append(segment)
+            buffer = []
+            index += 2
+            continue
+        if char in {";", "\n", "\r", "|"}:
+            segment = "".join(buffer).strip()
+            if segment:
+                segments.append(segment)
+            buffer = []
+            index += 1
+            continue
+        buffer.append(char)
+        index += 1
+    tail = "".join(buffer).strip()
+    if tail:
+        segments.append(tail)
+    return segments
+
+
+def _segment_program(segment: str) -> tuple[str, list[str]] | None:
+    tokens = _bash_tokens(segment)
     index = 0
     while index < len(tokens):
         raw = tokens[index]
         name = Path(raw.strip("'\"")).name
-        if name in CONTROLLED_PREFIXES:
+        if name in _LAUNCHER_PREFIXES or re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=.*", raw
+        ):
             index += 1
             continue
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", raw):
-            index += 1
-            continue
-        return name
+        return name, tokens[index + 1 :]
     return None
 
 
-def _session_hook_command(command: str) -> bool:
-    """识别任何形式的 SessionStart hook 调用（M1a/R4）。
+def _segment_runs_interpreter(name: str, rest: list[str]) -> bool:
+    """段首命令是否在执行解释器代码（而非把代码/词元当参数传给 git/grep）。"""
+    if re.fullmatch(r"python[0-9.]*", name):
+        return True
+    if name in BASH_SHELLS:
+        return True
+    if name == "uv":
+        if rest and rest[0] == "run" and len(rest) > 1:
+            return _segment_runs_interpreter(Path(rest[1]).name, rest[2:])
+        return False
+    if name in {"mf", "mf.exe", "meta_flow", "meta_flow.cli"}:
+        return True
+    return False
 
-    覆盖：
-    - ``mf hook session-start`` / ``cd ... && mf hook session-start`` / ``sh -c``；
-    - ``python -m meta_flow.cli hook session-start``；
-    - ``subprocess.run(['mf','hook','session-start'])`` 列表/引号/拼接形式；
-    - 解释器命令同时出现 hook/session/start 词元（fail-closed）。
-    纯只读命令（grep/cat 等，无命令替换/链式）豁免，避免误伤源码检索。
+
+def _session_hook_command(command: str) -> bool:
+    """识别实际执行段中的 SessionStart hook 调用（M1a/R4/R8）。
+
+    只检查解释器/uv/mf 执行段；``git commit -m`` 消息与只读 grep/cat
+    中的同名词元不算调用，避免误伤（MFP-0039/REQ-0023）。
     """
     lowered = command.lower()
     if not any(word in lowered for word in ("hook", "session-start", "sessionstart")):
         return False
-    first = _first_executable_name(command)
-    markers = ("&&", "||", ";", "|", "`", "$(", "\n", "\r")
-    if first in BASH_READ_COMMANDS and not any(marker in command for marker in markers):
-        return False
-    compacted = _COMPACT_RE.sub(" ", lowered)
-    if re.search(
-        r"\b(?:mf(?:\.exe)?|meta_flow(?:\.cli)?)\b\s+hook\s+session-?start\b",
-        compacted,
-    ):
-        return True
-    tokens = [Path(token.strip("'\"")).name for token in _bash_tokens(command)]
-    for index in range(len(tokens) - 2):
-        if (
-            tokens[index] in {"mf", "mf.exe"}
-            and tokens[index + 1] == "hook"
-            and tokens[index + 2] == "session-start"
-        ):
-            return True
-    # 解释器 + hook/session/start 词元（覆盖列表参数与拆分字符串）
-    if INTERPRETER_RE.search(command):
-        compact_words = re.sub(r"[\s'\"+_\[\](),;:`]+", "", lowered)
-        if ("hook" in compact_words and "session" in compact_words and "start" in compact_words):
+    for segment in _command_segments(command):
+        low = segment.lower()
+        if "hook" not in low and "session-start" not in low and "sessionstart" not in low:
+            continue
+        program = _segment_program(segment)
+        if program is None:
+            continue
+        name, rest = program
+        if name in BASH_READ_COMMANDS or name in {"git", "gh"}:
+            continue
+        if not _segment_runs_interpreter(name, rest):
+            continue
+        compact = re.sub(r"[\s'\"+_\[\](),;:`-]+", "", low)
+        if "hook" in compact and "session" in compact and "start" in compact:
             return True
     return False
 
 
 def _anchor_api_command(command: str) -> bool:
-    """识别解释器调用锚点 API（含别名/importlib/拼接拆分，fail-closed：R3/R5）。"""
-    if not INTERPRETER_RE.search(command):
-        return False
-    if ANCHOR_API_RE.search(command):
-        return True
-    lowered = command.lower()
-    compacted = _COMPACT_RE.sub("", lowered)
-    if any(
-        fragment in compacted
-        for fragment in ("sessionstart", "writeanchor", "switchrole")
-    ) and re.search(r"\b(?:meta_flow|getattr|importlib|roles)\b", lowered):
-        return True
-    return bool(
-        re.search(r"\b(?:meta_flow|getattr|importlib)\b", lowered)
-        and re.search(r"anchor|session|switch", lowered)
-    )
+    """识别解释器/uv/mf 段调用锚点 API（含别名/importlib/拼接拆分）。
+
+    只看实际执行段（MFP-0039/REQ-0023）；提交消息或只读检索里的
+    ``anchor``/``session`` 词元不再触发 fail-closed。
+    """
+    for segment in _command_segments(command):
+        program = _segment_program(segment)
+        if program is None:
+            continue
+        name, rest = program
+        if name in BASH_READ_COMMANDS or name in {"git", "gh"}:
+            continue
+        if not _segment_runs_interpreter(name, rest):
+            continue
+        if ANCHOR_API_RE.search(segment):
+            return True
+        lowered = segment.lower()
+        compacted = _COMPACT_RE.sub("", lowered)
+        if any(
+            fragment in compacted
+            for fragment in ("sessionstart", "writeanchor", "switchrole")
+        ) and re.search(r"\b(?:meta_flow|getattr|importlib|roles)\b", lowered):
+            return True
+        if re.search(r"\b(?:meta_flow|getattr|importlib)\b", lowered) and re.search(
+            r"anchor|session|switch", lowered
+        ):
+            return True
+    return False
 
 
 def _is_anchor_path(path: Path) -> bool:

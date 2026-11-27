@@ -569,7 +569,21 @@ def _cmd_workspace_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_role(args: argparse.Namespace) -> int:
+    reset = bool(getattr(args, "reset", False))
     as_role = getattr(args, "as_role", None)
+    if reset and as_role:
+        raise WorkspaceError("--reset 与 --as 不能同时使用", 3)
+    if reset:
+        effective, _ = _effective_role(args)
+        if effective != "maintainer":
+            raise WorkspaceError("mf role --reset 只允许 maintainer 会话执行", 3)
+        data = roles.reset_anchor(Path(args.path))
+        if args.json:
+            _print_json(data)
+        else:
+            print(f"角色锚点已清理: {data['root']}")
+            print(f"移除: {', '.join(data['removed']) if data['removed'] else '无'}")
+        return 0
     if as_role:
         data = roles.switch_role(
             as_role,
@@ -2378,6 +2392,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--as",
         dest="as_role",
         help="切换角色：manager|designer|worker|maintainer 或短名 mgr/dsg/wkr/mnt",
+    )
+    role_p.add_argument(
+        "--reset",
+        action="store_true",
+        help="清理 user-tty/当前会话/遗留锚点（不写新锚点，仅 maintainer）",
     )
     role_p.add_argument("--reason", help="切换原因（写入 ledger role.switch）")
     role_p.set_defaults(func=_cmd_role)

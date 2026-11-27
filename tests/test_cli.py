@@ -784,12 +784,13 @@ def test_cli_task_review_rework_prompt_and_state(tmp_path, monkeypatch, capsys):
     assert "status: submitted" in out
     assert f"mf task accept {review_id}" in out
 
-    # 评审已提交后：实现任务 prompt 明确先验收 review，再验收实现任务
+    # 评审已提交后：NEEDS_REWORK 在 submit 时自动回流，实现任务 prompt 直接指向返工
     capsys.readouterr()
     assert main(["task", "prompt", "--project-dir", str(project), task_id]) == 0
     out = capsys.readouterr().out
-    assert f"先 accept review 任务 {review_id}" in out
-    assert f"再验收 {task_id}" in out
+    assert "status: rework" in out
+    assert "next_owner: worker" in out
+    assert f"mf task rework {task_id}" in out
 
     monkeypatch.setenv("MF_ROLE", "manager")
     capsys.readouterr()

@@ -363,6 +363,51 @@ def switch_role(
     return data
 
 
+def reset_anchor(
+    start: Path,
+    *,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """清理 user-tty/当前会话/遗留锚点，不写新锚点（MFP-0039）。
+
+    仅供 maintainer 运维复位使用；worker/manager 由 CLI 角色门拒绝。
+    """
+    root = workspace_root_for(start)
+    if root is None:
+        raise RoleError("未找到工作区/契约根；无法清理角色锚点")
+    sid = current_session_id(session_id)
+    candidates = [
+        root / ANCHOR_DIR / USER_ANCHOR_NAME,
+        root / LEGACY_ANCHOR_REL,
+    ]
+    if sid is not None:
+        candidates.append(_session_file(root, sid))
+    removed: list[str] = []
+    for path in candidates:
+        if path.is_file():
+            path.unlink()
+            removed.append(str(path))
+    from . import state
+    from .workspace import resolve_contract
+
+    try:
+        contract = resolve_contract(root)
+    except Exception:
+        contract = None
+    if contract is not None:
+        state.ledger_append(
+            contract,
+            {
+                "event": "role.reset",
+                "root": str(root),
+                "session_id": sid,
+                "removed": removed,
+                "by": "maintainer",
+            },
+        )
+    return {"root": str(root), "session_id": sid, "removed": removed}
+
+
 def describe(start: Path) -> dict[str, Any]:
     """返回锚点/目录/环境推导结论，供 mf role 展示与复位建议。
 

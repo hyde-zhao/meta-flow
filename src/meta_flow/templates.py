@@ -1346,6 +1346,27 @@ color: purple
 - 卸载：`mf uninstall claude --project-dir <path>`，读取 `.meta-flow/install.yaml`。
 - 检查：`mf doctor --path <path>`、`mf doctor --global`、`mf workspace status`。
 
+## 稳定会话入口与锚点清理
+
+- 维护会话优先从全局主目录（`~/.meta-flow`）或源码目录启动；cwd 漂移用 `mf role`
+  查看 effective role 与来源。
+- 用户终端切换：`mf role --as maintainer --reason "<原因>"`；AI 会话不得自升级。
+- 清理遗留/用户/会话锚点：`mf role --reset`（仅 maintainer；只删除、不写新锚点；
+  写 `role.reset` ledger）。worker/manager 不得创建、改写或删除锚点。
+- guard 只读检索（grep/cat）与提交消息中的 anchor/session 词元不应误拦；真实
+  会话入口/锚点 API 调用仍 fail-closed，审计写 ledger/READ-LOG。
+
+## 维护批次部署与回滚
+
+- 部署前备份全局工具并记录版本/sha256：
+  `~/.local/share/uv/tools/meta-flow.bak-<version>-<date>`。
+- `UV_NO_CACHE=1 mf dev install --yes`；`mf --version` 与 `mf dev status` 必须为
+  `tool: <version>`，`~/.meta-flow/manifest.yaml` 的 tool_version 同步。
+- 真实 hook 回归：新会话 SessionStart/PreToolUse、`mf role --json`、`mf doctor
+  --global|--path`；项目/子项目安装记录 tool_version 一致。
+- 回滚：恢复备份或旧 wheel，核对 manifest/安装记录版本；不 push、不全局发布，
+  除非用户显式授权。
+
 ## MFP 改进包
 
 - 读取全局 inbox：`mf improve list --inbox`、`mf improve show <id> --inbox`。
@@ -1527,6 +1548,8 @@ MAINTAINER_CLAUDE = """# Meta Flow 项目根（maintainer）
 - `mf dev improve import <project>/<MFP> --kind ...` 导入源码；已实现用 `--already-implemented` 记录 BUG/REQ/CHG 并关闭。
 - 未实现 MFP 进入源码 `improvements/open/`，实施并 `mf dev improve update` 更新状态。
 - 不改写提出者的验收标准；不自动 push。
+- meta-flow 工具/安装/锚点维护由 maintainer 执行；需要维护批次时移交 maintainer，
+  不在项目任务中直接改工具源码或角色锚点。
 
 ## 边界
 
