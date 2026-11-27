@@ -524,7 +524,8 @@ def test_needs_rework_missing_summary_rejected_at_submit(task_env):
     assert task["next_owner"] == "manager"
 
 
-def test_needs_rework_legacy_switch_keeps_manager_gate(task_env):
+def test_needs_rework_legacy_switch_keeps_manager_gate(task_env, monkeypatch):
+    monkeypatch.setenv("MF_LEGACY_REWORK", "1")
     root = task_env["root"]
     contract = task_env["contract"]
     result = create_task(
@@ -1243,3 +1244,156 @@ def test_rework_diff_keeps_original_task_changes(task_env):
     diff = (bundle / "evidence" / "diff.patch").read_text(encoding="utf-8")
     assert "src/first.py" in diff
     assert "src/second.py" in diff
+
+
+def _ledger_events(contract):
+    return [
+        json.loads(line)
+        for line in (contract / "state" / "ledger.ndjson")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+
+
+def _prepare_review(task_env, risk="medium"):
+    root, contract = task_env["root"], task_env["contract"]
+    result = create_task(
+        root,
+        "提交即回流",
+        risk=risk,
+        review_mode="independent",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    return root, contract, task_id, review_id
+
+
+@pytest.mark.parametrize("risk", ["low", "medium", "high"])
+def test_review_submit_needs_rework_auto_routes_without_manager(task_env, risk):
+    """MFP-0038：review 提交 NEEDS_REWORK 即回流，高/中/低风险一致。"""
+    root, contract, task_id, review_id = _prepare_review(task_env, risk)
+    _write_review_files(
+        contract,
+        review_id,
+        "NEEDS_REWORK",
+        scope="in-scope",
+        requires="none",
+        items=("R1",),
+    )
+    submitted = submit_task(root, review_id)
+    decision = submitted["rework_decision"]
+    assert decision["auto"] is True
+    _, task = load_task(root, task_id)
+    assert task["status"] == "rework"
+    assert task["next_owner"] == "worker"
+    assert task["rework"]["review_task"] == review_id
+
+    # manager accept 仅确认 verdict，不重复开单/重置状态
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["already_routed"] is True
+    _, task_after = load_task(root, task_id)
+    assert task_after["status"] == "rework"
+    events = _ledger_events(contract)
+    assert (
+        sum(
+            1
+            for event in events
+            if event.get("event") == "task.rework.auto"
+            and event.get("task") == task_id
+        )
+        == 1
+    )
+    assert any(
+        event.get("event") == "review.verdict"
+        and event.get("review_task") == review_id
+        and event.get("auto") is True
+        for event in events
+    )
+
+
+@pytest.mark.parametrize(
+    "scope_line",
+    [
+        "> **rework_scope**: in-scope",
+        "> __rework_scope__: in-scope",
+        "> `rework_scope`: in-scope",
+    ],
+)
+def test_rework_scope_wrapped_formats_route(task_env, scope_line):
+    """MFP-0038：rework_scope 支持粗体/下划线/反引号。"""
+    root, contract, task_id, review_id = _prepare_review(task_env)
+    bundle = _write_review_files(
+        contract,
+        review_id,
+        "NEEDS_REWORK",
+        scope="in-scope",
+        requires="none",
+        items=("R1",),
+    )
+    handoff = bundle / "review-handoff.md"
+    handoff.write_text(
+        handoff.read_text(encoding="utf-8").replace(
+            "> rework_scope: in-scope", scope_line
+        ),
+        encoding="utf-8",
+    )
+    submitted = submit_task(root, review_id)
+    assert submitted["rework_decision"]["auto"] is True
+    _, task = load_task(root, task_id)
+    assert task["status"] == "rework"
+
+
+@pytest.mark.parametrize(
+    ("items_markdown", "expected"),
+    [
+        (["### R4（in-scope）整改", "### M1a(in-scope) 修复"], ["R4", "M1a"]),
+        (
+            [
+                "| ID | 文件 | 要求 | 验收 |",
+                "|---|---|---|---|",
+                "| R4（in-scope） | src/app.py | 整改 | pytest |",
+            ],
+            ["R4"],
+        ),
+    ],
+)
+def test_rework_items_fullwidth_and_table(task_env, items_markdown, expected):
+    """MFP-0038：必须整改项支持全角/无空格小节与表格。"""
+    root, contract, task_id, review_id = _prepare_review(task_env)
+    _write_review_files(
+        contract,
+        review_id,
+        "NEEDS_REWORK",
+        scope="in-scope",
+        requires="none",
+        items_markdown="\n".join(items_markdown),
+    )
+    submitted = submit_task(root, review_id)
+    decision = submitted["rework_decision"]
+    assert decision["auto"] is True
+    assert decision["items"][: len(expected)] == expected
+    _, task = load_task(root, task_id)
+    assert task["status"] == "rework"
+
+
+def test_review_submit_needs_rework_requires_summary(task_env):
+    """MFP-0038：NEEDS_REWORK 缺 rework_summary 时不得提交。"""
+    root, contract, task_id, review_id = _prepare_review(task_env)
+    _write_review_files(
+        contract,
+        review_id,
+        "NEEDS_REWORK",
+        scope="in-scope",
+        requires="none",
+        summary={},
+    )
+    with pytest.raises(TaskError, match="rework_summary"):
+        submit_task(root, review_id)
+    _, task = load_task(root, task_id)
+    assert task["status"] == "submitted"

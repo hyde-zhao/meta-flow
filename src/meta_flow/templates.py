@@ -2125,6 +2125,10 @@ notes: ...
 > verdict: PASS | PASS_WITH_RISK | NEEDS_REWORK | BLOCKED
 > rework_scope: in-scope | out-of-scope | disputed
 > rework_requires: none | acceptance,bug,mfp,chg
+> rework_summary.reason:
+> rework_summary.risk:
+> rework_summary.impact:
+> rework_summary.expectation:
 
 ## 评审对象
 
@@ -2150,6 +2154,8 @@ notes: ...
 
 ## 必须整改项
 
+表格或小节二选一；小节写作 `### R4（in-scope）<要求>`，全角/半角括号均可。
+
 | ID | 文件/行 | 要求 | 验收方法 |
 |---|---|---|---|
 | | | | |
@@ -2163,6 +2169,10 @@ notes: ...
 > verdict: PASS | PASS_WITH_RISK | NEEDS_REWORK | BLOCKED
 > rework_scope: in-scope | out-of-scope | disputed
 > rework_requires: none | acceptance,bug,mfp,chg
+> rework_summary.reason:
+> rework_summary.risk:
+> rework_summary.impact:
+> rework_summary.expectation:
 
 ## 评审范围
 
@@ -2176,6 +2186,8 @@ notes: ...
 
 ## 必须整改项
 
+表格或小节二选一；小节写作 `### R4（in-scope）<要求>`，全角/半角括号均可。
+
 | ID | 文件/行 | 要求 | 验收方法 |
 |---|---|---|---|
 | | | | |
@@ -2184,8 +2196,9 @@ notes: ...
 
 ## 下一步
 
-- 范围内整改：worker 用 `mf task rework <task-id>` 开始（manager 接受 review 后自动/一键重开）。
-- 范围外/新 acceptance/BUG/MFP/CHG/争议/高风险：manager 裁决后再返工。
+- 范围内整改：评审提交 NEEDS_REWORK 后工具自动回流（目标 rejected/rework），worker 用 `mf task rework <task-id>` 开始；manager accept 只确认 verdict。
+- 范围外/新 acceptance/BUG/MFP/CHG/争议：在 `rework_requires` 标注并开单，不阻塞范围内返工。
+- NEEDS_REWORK 必须写 `rework_summary` 人话说明（原因/风险/影响/期望），缺失不得提交。
 - 不得留空下一责任；与 verdict/rework_scope 保持一致。
 
 ## 证据

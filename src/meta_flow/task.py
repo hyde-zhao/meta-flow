@@ -1275,6 +1275,25 @@ def submit_task(
             "evidence_digest": _evidence_digest(bundle),
         },
     )
+    if data.get("kind") == "review":
+        review_verdict = _read_review_verdict(bundle)
+        # MFP-0038：review 提交即触发目标回流，不等 manager accept。
+        # MF_LEGACY_REWORK=1 保留旧 manager 裁决门一版（回滚通道）。
+        if (
+            review_verdict == "NEEDS_REWORK"
+            and os.environ.get("MF_LEGACY_REWORK") != "1"
+        ):
+            rework_decision = _route_rework_from_review(
+                project,
+                task_id,
+                path,
+                data,
+                review_verdict,
+                trigger="submit",
+            )
+            if rework_decision is not None:
+                data["rework_decision"] = rework_decision
+                _save(path, data)
     refresh_current(resolve_contract(project))
     return data
 
@@ -1299,30 +1318,34 @@ def _read_review_verdict(bundle: Path) -> str | None:
     return None
 
 
+_WRAP_RE = r"(?:\*\*|__|`)?"
+
+
 REWORK_SCOPE_RE = re.compile(
-    r"^\s*(?:>\s*|[-*]\s*)?rework_scope\s*[:=]\s*(in-scope|out-of-scope|disputed)\s*$",
+    rf"^\s*(?:>\s*|[-*]\s*)?{_WRAP_RE}rework_scope{_WRAP_RE}\s*[:=]\s*"
+    rf"{_WRAP_RE}(in-scope|out-of-scope|disputed){_WRAP_RE}\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 REWORK_REQUIRES_RE = re.compile(
-    r"^\s*(?:>\s*|[-*]\s*)?rework_requires\s*[:=]\s*(.*?)\s*$",
+    rf"^\s*(?:>\s*|[-*]\s*)?{_WRAP_RE}rework_requires{_WRAP_RE}\s*[:=]\s*(.*?)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 REWORK_ITEMS_RE = re.compile(
-    r"^\s*(?:>\s*|[-*]\s*)?rework_items\s*[:=]\s*(.*?)\s*$",
+    rf"^\s*(?:>\s*|[-*]\s*)?{_WRAP_RE}rework_items{_WRAP_RE}\s*[:=]\s*(.*?)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _REWORK_SECTION_RE = re.compile(
     r"^##\s*必须整改项\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL
 )
 _REWORK_ITEM_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_.][A-Za-z0-9]+)*")
-# 支持 R1、R1a、M1a、BUG-0018、CHG-0004、T035 等整改项 ID（MFP-0037）
+# 支持 R1、R1a、M1a、BUG-0018、CHG-0004、T035 等整改项 ID（MFP-0037/0038）
 _REWORK_ITEM_TOKEN_RE = re.compile(
     r"^([A-Za-z]{1,6}[A-Za-z0-9]*(?:-\d{1,4})?(?:\d{1,4}[A-Za-z]?)?)"
-    r"(?=[\s:：、,，.。)）]|$)"
+    r"(?=[\s:：、,，.。)）（(]|$)"
 )
 _REWORK_HEADING_RE = re.compile(r"^#{3,6}\s+(\S+)")
 REWORK_SUMMARY_RE = re.compile(
-    r"^\s*(?:>\s*|[-*]\s*)?rework_summary\s*[:=]\s*(.*?)\s*$",
+    rf"^\s*(?:>\s*|[-*]\s*)?{_WRAP_RE}rework_summary{_WRAP_RE}\s*[:=]\s*(.*?)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _REWORK_SUMMARY_DOTTED_RE = re.compile(
@@ -1389,11 +1412,9 @@ def _read_rework_scope(bundle: Path) -> dict[str, Any]:
                     continue
                 if _REWORK_ITEM_ID_RE.fullmatch(cell):
                     items.append(cell)
-            elif raw.startswith("#"):
-                # MFP-0037：支持 `### M1a 问题` / `### BUG-0018 ...` 小节标题
-                heading = _REWORK_HEADING_RE.match(raw)
-                if heading:
-                    token = _REWORK_ITEM_TOKEN_RE.match(heading.group(1))
+                else:
+                    # MFP-0038：表格首列允许 `R4（in-scope）` 等括号说明
+                    token = _REWORK_ITEM_TOKEN_RE.match(cell)
                     if token:
                         items.append(token.group(1))
             elif raw.startswith(("-", "*")):
@@ -1403,6 +1424,17 @@ def _read_rework_scope(bundle: Path) -> dict[str, Any]:
                 token = _REWORK_ITEM_TOKEN_RE.match(body)
                 if token:
                     items.append(token.group(1))
+    # MFP-0038：支持 `### R4（in-scope）` / `### R4(in-scope)` 小节（全角括号/无空格）
+    for line in text.splitlines():
+        raw = line.strip()
+        if not raw.startswith("#"):
+            continue
+        heading = _REWORK_HEADING_RE.match(raw)
+        if heading is None:
+            continue
+        token = _REWORK_ITEM_TOKEN_RE.match(heading.group(1))
+        if token:
+            items.append(token.group(1))
     deduped = list(dict.fromkeys(item for item in items if item))
     return {
         "scope": scope_match.group(1).lower() if scope_match else None,
@@ -1577,6 +1609,197 @@ def _evidence_digest(bundle: Path) -> str:
     return digest.hexdigest()[:16]
 
 
+def _route_rework_from_review(
+    project: str | Path,
+    review_id: str,
+    review_bundle: Path,
+    review_data: dict[str, Any],
+    verdict: str,
+    *,
+    legacy_rework: bool = False,
+    trigger: str = "submit",
+) -> dict[str, Any] | None:
+    """按评审结论处理目标实现任务；review submit/accept 共用（MFP-0038）。
+
+    NEEDS_REWORK 范围门通过时，目标直接 rejected/rework、next_owner=实现
+    worker，不依赖 manager accept；已开始的返工只确认，不回退状态。
+    """
+    target_id = review_data.get("reviews")
+    if not target_id:
+        return None
+    target_path, target = load_task(project, str(target_id))
+    target["review_verdict"] = verdict
+    matched_rework = _active_rework_review(target, review_id)
+    if matched_rework is not None:
+        lease_valid = not _lease_expired(target)
+        matched_rework["review_status"] = "accepted"
+        matched_rework["review_verdict"] = verdict
+        matched_rework["review_accepted_at"] = _now()
+        target["next_owner"] = "worker" if lease_valid else "manager"
+        lease = target.get("lease") if isinstance(target.get("lease"), dict) else {}
+        decision = {
+            "task": str(target_id),
+            "auto": False,
+            "already_in_progress": True,
+            "lease_valid": lease_valid,
+            "verdict": verdict,
+            "reason": None,
+            "items": matched_rework.get("items") or [],
+            "allowed_paths": matched_rework.get("allowed_paths") or [],
+            "status": target.get("status"),
+            "next_owner": target.get("next_owner"),
+            "lease": lease.get("expires_at"),
+            "decision": matched_rework.get("decision"),
+        }
+        _save(target_path, target)
+        ledger_append(
+            resolve_contract(project),
+            {
+                "event": "task.rework.confirm",
+                "task": str(target_id),
+                "review_task": review_id,
+                "verdict": verdict,
+                "status": decision["status"],
+                "next_owner": decision["next_owner"],
+                "lease": decision["lease"],
+                "lease_valid": lease_valid,
+                "decision": decision["decision"],
+                "notify": ["manager"],
+                "trigger": trigger,
+                "from": "in_progress",
+                "to": "in_progress",
+            },
+        )
+        return decision
+
+    existing = target.get("rework")
+    if (
+        isinstance(existing, dict)
+        and str(existing.get("review_task") or "") == str(review_id)
+        and target.get("status") == "rework"
+    ):
+        # submit 已自动回流；accept 仅确认 verdict，不重复开单/计数
+        _save(target_path, target)
+        return {
+            "task": str(target_id),
+            "auto": bool(existing.get("auto")),
+            "already_routed": True,
+            "verdict": verdict,
+            "reason": existing.get("reason"),
+            "items": existing.get("items") or [],
+            "allowed_paths": existing.get("allowed_paths") or [],
+            "status": target.get("status"),
+            "next_owner": target.get("next_owner"),
+            "risk_level": str((target.get("risk") or {}).get("level") or ""),
+            "requires": existing.get("requires") or [],
+            "rework_summary": existing.get("rework_summary") or {},
+            "summary_missing": existing.get("summary_missing") or [],
+        }
+
+    if verdict != "NEEDS_REWORK":
+        target["next_owner"] = "manager"
+        _save(target_path, target)
+        return None
+
+    target["next_owner"] = "manager"
+    scope = _read_rework_scope(review_bundle.parent)
+    summary, summary_missing = _read_rework_summary(review_bundle.parent)
+    plan = _rework_plan(
+        target,
+        scope,
+        summary_missing=summary_missing,
+        legacy=legacy_rework,
+    )
+    target["rework"] = {
+        "review_task": review_id,
+        "review_verdict": verdict,
+        "scope": scope.get("scope"),
+        "requires": scope.get("requires") or [],
+        "items": scope.get("items") or [],
+        "allowed_paths": list(target.get("allowed_paths") or []),
+        "rework_summary": summary,
+        "summary_missing": summary_missing,
+        "decision": "auto" if plan["auto"] else "manager",
+        "auto": plan["auto"],
+        "reason": plan["reason"],
+        "opened_at": _now() if plan["auto"] else None,
+        "notify": ["manager"],
+        "lease": None,
+    }
+    if plan["auto"]:
+        target["status"] = "rework"
+        target["next_owner"] = "worker"
+    _save(target_path, target)
+
+    decision = {
+        "task": str(target_id),
+        "auto": plan["auto"],
+        "reason": plan["reason"],
+        "items": target["rework"]["items"],
+        "allowed_paths": target["rework"]["allowed_paths"],
+        "status": target.get("status"),
+        "next_owner": target.get("next_owner"),
+        "risk_level": str((target.get("risk") or {}).get("level") or ""),
+        "requires": target["rework"]["requires"],
+        "rework_summary": summary,
+        "summary_missing": summary_missing,
+    }
+    contract = resolve_contract(project)
+    if decision["auto"]:
+        # 自动回流链路：submitted → rejected（范围门通过）→ rework
+        ledger_append(
+            contract,
+            {
+                "event": "task.reject",
+                "task": str(target_id),
+                "reason": "review NEEDS_REWORK：整改项在范围内，自动回流",
+                "review_task": review_id,
+                "auto": True,
+                "trigger": trigger,
+                "from": "submitted",
+                "to": "rejected",
+            },
+        )
+        ledger_append(
+            contract,
+            {
+                "event": "task.rework.auto",
+                "task": str(target_id),
+                "review_task": review_id,
+                "verdict": verdict,
+                "risk_level": decision.get("risk_level"),
+                "items": decision["items"],
+                "allowed_paths": decision["allowed_paths"],
+                "requires": decision.get("requires") or [],
+                "next_owner": decision.get("next_owner"),
+                "decision": "auto",
+                "notify": ["manager"],
+                "trigger": trigger,
+                "from": "rejected",
+                "to": "rework",
+            },
+        )
+    ledger_append(
+        contract,
+        {
+            "event": "task.rework.open"
+            if decision["auto"]
+            else "task.rework.decision_required",
+            "task": str(target_id),
+            "review_task": review_id,
+            "decision": "auto" if decision["auto"] else "manager",
+            "reason": decision["reason"],
+            "items": decision["items"],
+            "allowed_paths": decision["allowed_paths"],
+            "notify": ["manager"],
+            "trigger": trigger,
+            "from": "rejected" if decision["auto"] else "submitted",
+            "to": "rework" if decision["auto"] else "submitted",
+        },
+    )
+    return decision
+
+
 def accept_task(
     project: str | Path,
     task_id: str,
@@ -1603,157 +1826,19 @@ def accept_task(
         data["next_owner"] = "manager"
         data["accepted_at"] = _now()
         data["acceptance_note"] = note
-        target_path: Path | None = None
-        target: dict[str, Any] | None = None
-        rework_decision: dict[str, Any] | None = None
-        if data.get("reviews"):
-            target_path, target = load_task(project, str(data["reviews"]))
-            target["review_verdict"] = verdict
-            matched_rework = _active_rework_review(target, task_id)
-            if matched_rework is not None:
-                # R4：目标已由 worker 开始返工；保留 status/lease/started_at/
-                # rework items/allowed_paths，只补充本次 review 接受信息。
-                lease_valid = not _lease_expired(target)
-                matched_rework["review_status"] = "accepted"
-                matched_rework["review_verdict"] = verdict
-                matched_rework["review_accepted_at"] = _now()
-                target["next_owner"] = "worker" if lease_valid else "manager"
-                data["rework_target"] = str(data["reviews"])
-                lease = target.get("lease") if isinstance(target.get("lease"), dict) else {}
-                rework_decision = {
-                    "task": str(data["reviews"]),
-                    "auto": False,
-                    "already_in_progress": True,
-                    "lease_valid": lease_valid,
-                    "verdict": verdict,
-                    "reason": None,
-                    "items": matched_rework.get("items") or [],
-                    "allowed_paths": matched_rework.get("allowed_paths") or [],
-                    "status": target.get("status"),
-                    "next_owner": target.get("next_owner"),
-                    "lease": lease.get("expires_at"),
-                    "decision": matched_rework.get("decision"),
-                }
-            elif verdict == "NEEDS_REWORK":
-                target["next_owner"] = "manager"
-                scope = _read_rework_scope(path.parent)
-                summary, summary_missing = _read_rework_summary(path.parent)
-                plan = _rework_plan(
-                    target,
-                    scope,
-                    summary_missing=summary_missing,
-                    legacy=legacy_rework,
-                )
-                target["rework"] = {
-                    "review_task": task_id,
-                    "review_verdict": verdict,
-                    "scope": scope.get("scope"),
-                    "requires": scope.get("requires") or [],
-                    "items": scope.get("items") or [],
-                    "allowed_paths": list(target.get("allowed_paths") or []),
-                    "rework_summary": summary,
-                    "summary_missing": summary_missing,
-                    "decision": "auto" if plan["auto"] else "manager",
-                    "auto": plan["auto"],
-                    "reason": plan["reason"],
-                    "opened_at": _now() if plan["auto"] else None,
-                    "notify": ["manager"],
-                    "lease": None,
-                }
-                if plan["auto"]:
-                    target["status"] = "rework"
-                    target["next_owner"] = "worker"
-                data["rework_target"] = str(data["reviews"])
-                rework_decision = {
-                    "task": str(data["reviews"]),
-                    "auto": plan["auto"],
-                    "reason": plan["reason"],
-                    "items": target["rework"]["items"],
-                    "allowed_paths": target["rework"]["allowed_paths"],
-                    "status": target.get("status"),
-                    "next_owner": target.get("next_owner"),
-                    "risk_level": str(
-                        (target.get("risk") or {}).get("level") or ""
-                    ),
-                    "requires": target["rework"]["requires"],
-                    "rework_summary": summary,
-                    "summary_missing": summary_missing,
-                }
-            else:
-                target["next_owner"] = "manager"
+        rework_decision = _route_rework_from_review(
+            project,
+            task_id,
+            path,
+            data,
+            verdict,
+            legacy_rework=legacy_rework,
+            trigger="accept",
+        )
+        if rework_decision is not None and data.get("reviews"):
+            data["rework_target"] = str(data["reviews"])
         _save(path, data)
-        if target_path is not None and target is not None:
-            _save(target_path, target)
-        if rework_decision is not None:
-            contract = resolve_contract(project)
-            if rework_decision.get("already_in_progress"):
-                ledger_append(
-                    contract,
-                    {
-                        "event": "task.rework.confirm",
-                        "task": rework_decision["task"],
-                        "review_task": task_id,
-                        "verdict": verdict,
-                        "status": rework_decision.get("status"),
-                        "next_owner": rework_decision.get("next_owner"),
-                        "lease": rework_decision.get("lease"),
-                        "lease_valid": rework_decision.get("lease_valid"),
-                        "decision": rework_decision.get("decision"),
-                        "notify": ["manager"],
-                        "from": "in_progress",
-                        "to": "in_progress",
-                    },
-                )
-            else:
-                if rework_decision["auto"]:
-                    # 自动回流链路：submitted → rejected（范围门通过）→ rework
-                    ledger_append(
-                        contract,
-                        {
-                            "event": "task.reject",
-                            "task": rework_decision["task"],
-                            "reason": "review NEEDS_REWORK：整改项在范围内，自动回流",
-                            "review_task": task_id,
-                            "auto": True,
-                            "from": "submitted",
-                            "to": "rejected",
-                        },
-                    )
-                    ledger_append(
-                        contract,
-                        {
-                            "event": "task.rework.auto",
-                            "task": rework_decision["task"],
-                            "review_task": task_id,
-                            "verdict": verdict,
-                            "risk_level": rework_decision.get("risk_level"),
-                            "items": rework_decision["items"],
-                            "allowed_paths": rework_decision["allowed_paths"],
-                            "requires": rework_decision.get("requires") or [],
-                            "next_owner": rework_decision.get("next_owner"),
-                            "decision": "auto",
-                            "notify": ["manager"],
-                            "from": "rejected",
-                            "to": "rework",
-                        },
-                    )
-                ledger_append(
-                    contract,
-                    {
-                        "event": "task.rework.open"
-                        if rework_decision["auto"]
-                        else "task.rework.decision_required",
-                        "task": rework_decision["task"],
-                        "review_task": task_id,
-                        "decision": "auto" if rework_decision["auto"] else "manager",
-                        "reason": rework_decision["reason"],
-                        "items": rework_decision["items"],
-                        "allowed_paths": rework_decision["allowed_paths"],
-                        "notify": ["manager"],
-                        "from": "rejected" if rework_decision["auto"] else "submitted",
-                        "to": "rework" if rework_decision["auto"] else "submitted",
-                    },
-                )
+        # 回流/确认 ledger 由 _route_rework_from_review 记录（MFP-0038）
         ledger_append(
             resolve_contract(project),
             {
@@ -1761,14 +1846,11 @@ def accept_task(
                 "review_task": task_id,
                 "task": str(data.get("reviews") or "") or None,
                 "verdict": verdict,
-                "risk_level": str(
-                    ((target or {}).get("risk") or {}).get("level") or ""
-                )
-                or None,
+                "risk_level": (rework_decision or {}).get("risk_level"),
                 "auto": bool(rework_decision.get("auto"))
                 if isinstance(rework_decision, dict)
                 else False,
-                "next_owner": (target or {}).get("next_owner"),
+                "next_owner": (rework_decision or {}).get("next_owner"),
                 "from": "submitted",
                 "to": "accepted",
             },
