@@ -607,17 +607,102 @@ def _worker_delivery(root: Path | None) -> str | None:
     return str(data.get("id")) if data.get("id") else None
 
 
+def _task_scope_mode(task: dict[str, Any]) -> str:
+    scope = task.get("scope")
+    scope = scope if isinstance(scope, dict) else {}
+    return str(scope.get("mode") or "single_subproject")
+
+
+def _task_scope_projects(task: dict[str, Any]) -> list[str]:
+    scope = task.get("scope")
+    scope = scope if isinstance(scope, dict) else {}
+    return [str(item) for item in scope.get("projects") or []]
+
+
+def _task_scope_operations(task: dict[str, Any]) -> list[str]:
+    scope = task.get("scope")
+    scope = scope if isinstance(scope, dict) else {}
+    return [str(item) for item in scope.get("operations") or []]
+
+
 def _active_tasks(contract: Path, delivery: str | None) -> list[dict[str, Any]]:
     items = []
     for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
         task = _load_yaml(path)
         if task.get("status") != "in_progress":
             continue
-        if delivery and task.get("delivery") and task.get("delivery") != delivery:
+        mode = _task_scope_mode(task)
+        # workspace 作用域由 manager 执行，不进入 worker guard 任务集。
+        if mode == "workspace":
             continue
+        if delivery:
+            if mode == "cross_subproject":
+                if delivery not in _task_scope_projects(task):
+                    continue
+            elif task.get("delivery") and task.get("delivery") != delivery:
+                continue
         task["_bundle"] = path.parent
         items.append(task)
     return items
+
+
+def _cross_project_read_allowed(
+    path: Path,
+    tasks: list[dict[str, Any]],
+    workspace_root: Path | None,
+) -> bool:
+    """cross_subproject 任务只读/测试例外：声明项目内读取放行，写仍拒绝。"""
+    if workspace_root is None:
+        return False
+    local_path = workspace_root / ".meta-flow" / "workspace.yaml"
+    if not local_path.is_file():
+        return False
+    local = _load_yaml(local_path)
+    allowed_projects: set[str] = set()
+    for task in tasks:
+        if _task_scope_mode(task) != "cross_subproject":
+            continue
+        operations = set(_task_scope_operations(task))
+        if not operations & {"read", "test"}:
+            continue
+        allowed_projects.update(_task_scope_projects(task))
+    if not allowed_projects:
+        return False
+    for item in local.get("subprojects") or []:
+        sub_id = str(item.get("id") or "")
+        if sub_id not in allowed_projects:
+            continue
+        sub = (workspace_root / str(item.get("path") or "")).resolve()
+        if path == sub or sub in path.parents:
+            return True
+    return False
+
+
+def _cross_project_write_denied(
+    path: Path,
+    tasks: list[dict[str, Any]],
+    workspace_root: Path | None,
+) -> bool:
+    """cross_subproject 例外任务对声明项目的写入一律拒绝。"""
+    if workspace_root is None:
+        return False
+    local_path = workspace_root / ".meta-flow" / "workspace.yaml"
+    if not local_path.is_file():
+        return False
+    local = _load_yaml(local_path)
+    projects: set[str] = set()
+    for task in tasks:
+        if _task_scope_mode(task) == "cross_subproject":
+            projects.update(_task_scope_projects(task))
+    if not projects:
+        return False
+    for item in local.get("subprojects") or []:
+        if str(item.get("id") or "") not in projects:
+            continue
+        sub = (workspace_root / str(item.get("path") or "")).resolve()
+        if path == sub or sub in path.parents:
+            return True
+    return False
 
 
 def _designer_tasks(contract: Path) -> list[dict[str, Any]]:
@@ -999,13 +1084,23 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
     command = str(tool_input.get("command") or "") if isinstance(tool_input, dict) else ""
     if not command.strip():
         return None
+    paths, write_paths, unsafe = _bash_extract(command, cwd)
     try:
         contract = resolve_contract(role_root or cwd)
     except Exception:
         contract = None
     workspace_root = find_workspace_root(role_root or cwd)
-    paths, write_paths, unsafe = _bash_extract(command, cwd)
     if contract is None:
+        if role in {"worker", "designer", "manager"}:
+            return _deny_with_hint(
+                "无法解析 contract/工作区绑定（install.yaml 的 workspace_root 缺失、"
+                "目录不在工作区或绑定不一致）；guard 对 Bash fail-closed。"
+                "请从工作区根/子项目目录运行；子项目绑定漂移由 manager 运行 "
+                "mf install worker --workspace-root <根> --contract-dir <contract> 修复",
+                contract=None,
+                role=role,
+                role_root=role_root,
+            )
         return None
     delivery = _worker_delivery(role_root) if role == "worker" else None
     tasks: list[dict[str, Any]] = []
@@ -1176,7 +1271,17 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
                     )
                 continue
             if workspace_root is not None and path.is_relative_to(workspace_root):
-                deny_reason = "worker 不读/写其他交付库或工作区"
+                if _cross_project_write_denied(path, tasks, workspace_root):
+                    deny_reason = (
+                        "cross_subproject 任务对声明子项目只读/测试，写拒绝: "
+                        f"{path}"
+                    )
+                elif not write_all and _cross_project_read_allowed(
+                    path, tasks, workspace_root
+                ):
+                    continue
+                else:
+                    deny_reason = "worker 不读/写其他交付库或工作区"
             continue
         if role == "manager":
             if _manager_source_denied(path, workspace_root):
@@ -1223,6 +1328,16 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
         contract = None
     workspace_root = find_workspace_root(role_root or cwd)
     if contract is None:
+        if role in {"worker", "designer", "manager"}:
+            return _deny_with_hint(
+                "无法解析 contract/工作区绑定（install.yaml 的 workspace_root 缺失、"
+                "目录不在工作区或绑定不一致）；guard fail-closed，拒绝工具调用。"
+                "请从工作区根/子项目目录运行；子项目绑定漂移由 manager 运行 "
+                "mf install worker --workspace-root <根> --contract-dir <contract> 修复",
+                contract=None,
+                role=role,
+                role_root=role_root,
+            )
         return None
     delivery = _worker_delivery(role_root) if role == "worker" else None
     tasks: list[dict[str, Any]] = []
@@ -1372,6 +1487,10 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
                     "review NEEDS_REWORK 自动回流后用 mf task rework <id> 开始；"
                     "本地 MFP 可写 .meta-flow/improvements/MFP-*.yaml"
                 )
+            if _cross_project_write_denied(path, tasks, workspace_root):
+                return deny(
+                    "cross_subproject 任务对声明子项目只读/测试；写入一律拒绝"
+                )
             return deny("worker 只能写自己的交付库")
         if role == "manager":
             if _manager_source_denied(path, workspace_root):
@@ -1440,6 +1559,8 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
         if not delivery:
             return deny(f"交付库缺少 delivery.yaml，无法确定任务作用域: {root}")
         if path.is_relative_to(root):
+            return allow()
+        if _cross_project_read_allowed(path, tasks, workspace_root):
             return allow()
         return deny("worker 不读其他交付库")
     if role == "manager":

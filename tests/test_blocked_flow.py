@@ -38,7 +38,9 @@ def _write_handoff(contract, task_id, text):
 
 def test_blocked_submit_routes_to_manager_and_keeps_review_draft(tmp_path, monkeypatch):
     root, contract, _sub = _env(tmp_path, monkeypatch)
-    result = create_task(root, "高风险改动", risk="high", acceptance=_acceptance())
+    result = create_task(
+        root, "高风险改动", risk="high", delivery="frontend", acceptance=_acceptance()
+    )
     task_id, review_id = result["task"], result["review_task"]
     start_task(root, task_id)
     _write_handoff(
@@ -77,14 +79,18 @@ def test_blocked_submit_routes_to_manager_and_keeps_review_draft(tmp_path, monke
 
 def test_submit_blocked_flag_and_normal_submit(tmp_path, monkeypatch):
     root, contract, _sub = _env(tmp_path, monkeypatch)
-    create_task(root, "普通任务", risk="low", acceptance=_acceptance())
+    create_task(
+        root, "普通任务", risk="low", delivery="frontend", acceptance=_acceptance()
+    )
     start_task(root, "R1-P1-T001")
     _write_handoff(contract, "R1-P1-T001", "# handoff\n完成\n")
     data = submit_task(root, "R1-P1-T001", blocked=True)
     assert data["status"] == "blocked"
     assert data["next_owner"] == "manager"
 
-    create_task(root, "正常任务", risk="low", acceptance=_acceptance())
+    create_task(
+        root, "正常任务", risk="low", delivery="frontend", acceptance=_acceptance()
+    )
     start_task(root, "R1-P1-T002")
     _write_handoff(contract, "R1-P1-T002", "# handoff\n完成\n")
     normal = submit_task(root, "R1-P1-T002")

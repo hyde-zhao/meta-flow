@@ -15,7 +15,12 @@ import yaml
 
 from . import bug, knowledge, roles
 from .state import ledger_append, refresh_current, review_needs_rework, task_summary
-from .workspace import load_current_state, resolve_contract
+from .workspace import (
+    delivery_project_dir,
+    load_current_state,
+    registered_subprojects,
+    resolve_contract,
+)
 
 TASK_ID_RE = re.compile(r"^(R\d+)-(P\d+)-T(\d{3})$")
 RISKS = ("low", "medium", "high", "critical")
@@ -36,6 +41,21 @@ DEFAULT_REVIEW = {
     "critical": "user",
 }
 CHECKLIST = ["requirements", "design", "contracts", "tests", "security", "scope", "maintainability"]
+SCOPE_MODES = ("single_subproject", "cross_subproject", "workspace")
+SCOPE_OPERATIONS = {"read", "test", "release", "sync", "doctor"}
+# TASK-CARD/MFP-0033：安全类任务负向矩阵必须覆盖的攻击面分组。
+SECURITY_MATRIX_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("命令首词", ("命令首词", "首词", "首个可执行", "first token")),
+    ("前缀命令", ("前缀命令", "前缀", "前置命令", "prefix")),
+    ("参数伪装", ("参数伪装", "参数", "argument")),
+    ("操作符/替换", ("操作符", "替换", "substitution", "&&", "$(")),
+    ("跨项目", ("跨项目", "跨子项目", "其他子项目", "cross")),
+    ("越界", ("越界", "越出", "outside")),
+    ("module/subprocess/list", ("module", "subprocess", "list", "列表", "python -m")),
+    ("alias/importlib/getattr/拼接", ("alias", "importlib", "getattr", "拼接")),
+    ("cd/嵌套 shell/env/session_id", ("cd", "嵌套", "nested", "env", "环境变量", "session_id")),
+)
+SECURITY_NEGATIVE_WORDS = ("不", "禁", "拒绝", "不得", "不能", "only", "仅")
 # 任务包预算档位（MFP-0007 A4）：按 effort 提供匹配档位，TASK.yaml 的
 # packet_budget 显式值优先。
 PACKET_BUDGET_TIERS: dict[str, dict[str, int]] = {
@@ -143,6 +163,215 @@ def _next_num(tasks_dir: Path) -> int:
     return max(numbers, default=0) + 1
 
 
+def _task_scope(data: dict[str, Any]) -> dict[str, Any]:
+    scope = data.get("scope")
+    scope = scope if isinstance(scope, dict) else {}
+    return {
+        "mode": str(scope.get("mode") or "single_subproject"),
+        "projects": [str(item) for item in scope.get("projects") or []],
+        "operations": [str(item) for item in scope.get("operations") or []],
+        "justification": scope.get("justification"),
+    }
+
+
+def _security_applies(data: dict[str, Any]) -> bool:
+    security = data.get("security")
+    return isinstance(security, dict) and bool(security.get("applies"))
+
+
+def task_scope_errors(contract: str | Path, data: dict[str, Any]) -> list[str]:
+    """校验任务子项目作用域（T033 A2）；兼容旧任务默认 single_subproject。"""
+    scope = _task_scope(data)
+    mode = scope["mode"]
+    errors: list[str] = []
+    if mode not in SCOPE_MODES:
+        return [f"scope.mode 非法: {mode}"]
+    registered = registered_subprojects(contract)
+    known = {
+        item["id"] for item in registered
+    } | {
+        str(item.get("delivery") or item["id"]) for item in registered
+    }
+    delivery = str(data.get("delivery") or "").strip()
+    if mode == "single_subproject":
+        if not delivery:
+            # 兼容未注册子项目的单项目/历史工作区、design/review 合同层任务；
+            # 注册了子项目的实现类任务必须绑定。
+            if registered and data.get("kind") not in {"design", "review"}:
+                errors.append("single_subproject 任务必须绑定 delivery")
+        elif known and delivery not in known:
+            errors.append(
+                f"delivery={delivery} 未注册；已注册子项目: {', '.join(sorted(known))}"
+            )
+    elif mode == "cross_subproject":
+        if not scope["projects"]:
+            errors.append("cross_subproject 任务必须声明 scope.projects")
+        unknown = [item for item in scope["projects"] if known and item not in known]
+        if unknown:
+            errors.append(f"scope.projects 含未注册子项目: {', '.join(unknown)}")
+        if not scope["operations"]:
+            errors.append("cross_subproject 任务必须声明 scope.operations")
+        invalid = [item for item in scope["operations"] if item not in SCOPE_OPERATIONS]
+        if invalid:
+            errors.append(f"scope.operations 非法: {', '.join(invalid)}")
+        if not str(scope["justification"] or "").strip():
+            errors.append("cross_subproject 任务必须写 scope.justification")
+    elif mode == "workspace":
+        if not str(scope["justification"] or "").strip():
+            errors.append("workspace 任务必须写 scope.justification")
+    for field in ("project_dir", "allowed_paths_base"):
+        raw = data.get(field)
+        if raw and not Path(str(raw)).expanduser().is_dir():
+            errors.append(f"{field} 不是有效目录: {raw}")
+    return errors
+
+
+def task_security_warnings(data: dict[str, Any]) -> list[str]:
+    """安全类任务的非阻断项：负向矩阵攻击面覆盖不足/含正向期望。
+
+    历史任务与新框架任务（如 WP-F2F3 流程安全）可能不覆盖全部 shell 攻击面；
+    按 TASK-CARD“缺项时 validate/doctor 警告或拒绝”，作为 warning 输出。
+    """
+    if not _security_applies(data):
+        return []
+    security = data.get("security") or {}
+    matrix = security.get("negative_matrix")
+    if not isinstance(matrix, list) or not matrix:
+        return []
+    warnings: list[str] = []
+    text = " ".join(
+        " ".join(
+            str(item.get(key) or "")
+            for key in ("id", "category", "command", "expected", "evidence")
+        )
+        if isinstance(item, dict)
+        else str(item)
+        for item in matrix
+    ).lower()
+    missing = [
+        label
+        for label, keywords in SECURITY_MATRIX_GROUPS
+        if not any(keyword.lower() in text for keyword in keywords)
+    ]
+    if missing:
+        warnings.append("security.negative_matrix 覆盖不足: " + "、".join(missing))
+    for item in matrix:
+        if not isinstance(item, dict):
+            continue
+        expected = str(item.get("expected") or "").strip().lower()
+        if expected in {"allow", "permit", "放行"}:
+            warnings.append(
+                f"security.negative_matrix.{item.get('id') or '?'} 期望为 allow（负向矩阵应为拒绝）"
+            )
+    return warnings
+
+
+def task_security_errors(data: dict[str, Any]) -> list[str]:
+    """校验安全类任务卡字段（TASK-CARD/MFP-0033/T033 A3）。
+
+    仅对 `security.applies: true` 生效；历史 accepted 任务由 doctor 跳过，
+    `mf task validate` 可显示警告。返回缺失/不满足项的人读说明。
+    """
+    if not _security_applies(data):
+        return []
+    security = data.get("security") or {}
+    errors: list[str] = []
+    threat = security.get("threat_model")
+    if not isinstance(threat, dict):
+        errors.append("security.threat_model 缺失")
+        threat = {}
+    for key, label in (
+        ("assets", "资产"),
+        ("attackers", "攻击者"),
+        ("entry_points", "入口"),
+        ("trust_boundary", "信任边界"),
+        ("attacker_capabilities", "攻击者能力"),
+    ):
+        value = threat.get(key)
+        if not isinstance(value, list) or not [item for item in value if str(item).strip()]:
+            errors.append(f"security.threat_model.{key}（{label}）为空")
+    uncovered = security.get("uncovered")
+    if not isinstance(uncovered, list) or not [
+        item for item in uncovered if str(item).strip()
+    ]:
+        errors.append("security.uncovered 必须明确不可防范围")
+    if not str(security.get("risk_acceptor") or "").strip():
+        errors.append("security.risk_acceptor 缺失")
+    invariants = security.get("invariants")
+    if not isinstance(invariants, list) or not invariants:
+        errors.append("security.invariants 至少一条负面不变量")
+    else:
+        texts = " ".join(
+            str(item.get("text") if isinstance(item, dict) else item)
+            for item in invariants
+        )
+        if not any(word in texts for word in SECURITY_NEGATIVE_WORDS):
+            errors.append("security.invariants 缺少负面不变量（不得/拒绝/不能等）")
+        for item in invariants:
+            if isinstance(item, dict) and not str(item.get("id") or "").strip():
+                errors.append("security.invariants 条目缺少 id")
+    matrix = security.get("negative_matrix")
+    if not isinstance(matrix, list) or not matrix:
+        errors.append("security.negative_matrix 为空")
+    else:
+        for item in matrix:
+            if not isinstance(item, dict):
+                errors.append("security.negative_matrix 条目必须是映射")
+                continue
+            for key in ("id", "category", "command", "expected"):
+                if not str(item.get(key) or "").strip():
+                    errors.append(f"security.negative_matrix 条目缺少 {key}")
+    if security.get("fail_closed") is not True:
+        errors.append("security.fail_closed 必须为 true（仅限可证明范围）")
+    if not str(security.get("fail_closed_scope") or "").strip():
+        errors.append("security.fail_closed_scope 缺失（写明可证明范围）")
+    return errors
+
+
+def _bind_task_delivery(
+    contract: str | Path,
+    delivery: str | None,
+    mode: str,
+    cwd: Path,
+    *,
+    kind: str = "implement",
+) -> tuple[str | None, Path | None]:
+    """解析/自动绑定任务 delivery 与工作目录（T033 A2）。"""
+    registered = registered_subprojects(contract)
+    known = {
+        item["id"] for item in registered
+    } | {
+        str(item.get("delivery") or item["id"]) for item in registered
+    }
+    if delivery:
+        if known and delivery not in known:
+            raise TaskError(
+                f"未知子项目 delivery={delivery}；已注册: {', '.join(sorted(known))}"
+            )
+        return delivery, delivery_project_dir(contract, delivery)
+    if kind in {"design", "review"}:
+        # design 在设计区/合同层执行，review 继承目标；不强制子项目工作目录。
+        return None, None
+    if mode != "single_subproject":
+        return None, None
+    if not registered:
+        # 兼容单项目/历史工作区：未注册子项目时保留旧行为。
+        return None, None
+    cwd_path = cwd.expanduser().resolve()
+    matches = [
+        item
+        for item in registered
+        if cwd_path == item["path"] or item["path"] in cwd_path.parents
+    ]
+    if matches:
+        selected = max(matches, key=lambda item: len(Path(item["path"]).parts))
+        return selected["id"], Path(selected["path"])
+    raise TaskError(
+        "未指定 --delivery，且当前目录不在已注册子项目内；"
+        f"已注册子项目: {', '.join(sorted(known))}"
+    )
+
+
 def _task_data(
     task_id: str,
     title: str,
@@ -177,6 +406,15 @@ def _task_data(
         "roadmap": roadmap,
         "phase": phase,
         "delivery": delivery,
+        "scope": {
+            "mode": "single_subproject",
+            "projects": [],
+            "operations": [],
+            "justification": None,
+        },
+        "project_dir": None,
+        "allowed_paths_base": None,
+        "security": {},
         "wave": "W1",
         "depends_on": [],
         "fixes": [],
@@ -244,6 +482,13 @@ def create_task(
     owner_role: str | None = None,
     executor_role: str | None = None,
     owner_confirmed_by: str | None = None,
+    scope_mode: str | None = None,
+    scope_projects: list[str] | None = None,
+    scope_operations: list[str] | None = None,
+    scope_justification: str | None = None,
+    security: dict[str, Any] | None = None,
+    actor_role: str | None = None,
+    cwd: str | Path | None = None,
     with_review: bool = True,
     from_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -284,6 +529,60 @@ def create_task(
         verification = data["verification"]
     verification = verification or {}
     evidence = [str(item) for item in (data.get("evidence") or evidence or [])]
+
+    # T033 A2：任务必须绑定子项目作用域；旧任务缺 scope 时按 single_subproject 兼容。
+    raw_scope = data.get("scope")
+    raw_scope = raw_scope if isinstance(raw_scope, dict) else {}
+    scope_mode_value = str(
+        scope_mode or raw_scope.get("mode") or "single_subproject"
+    )
+    projects = [
+        str(item)
+        for item in (scope_projects or raw_scope.get("projects") or [])
+    ]
+    operations = [
+        str(item)
+        for item in (scope_operations or raw_scope.get("operations") or [])
+    ]
+    justification = scope_justification or raw_scope.get("justification")
+    if scope_mode_value not in SCOPE_MODES:
+        raise TaskError(f"scope.mode 只能是 {'|'.join(SCOPE_MODES)}")
+    if scope_mode_value != "single_subproject" and actor_role not in {None, "manager"}:
+        raise TaskError("cross_subproject/workspace 作用域只能由 manager 创建")
+    delivery, project_dir = _bind_task_delivery(
+        contract,
+        delivery,
+        scope_mode_value,
+        Path(cwd) if cwd is not None else Path.cwd(),
+        kind=kind,
+    )
+    scope_data = {
+        "mode": scope_mode_value,
+        "projects": projects,
+        "operations": operations,
+        "justification": justification,
+    }
+    scope_probe = {
+        "delivery": delivery,
+        "kind": kind,
+        "scope": scope_data,
+        "project_dir": str(project_dir) if project_dir else None,
+        "allowed_paths_base": str(project_dir) if project_dir else None,
+    }
+    scope_errors = task_scope_errors(contract, scope_probe)
+    if scope_errors:
+        raise TaskError("任务子项目作用域不完整: " + "；".join(scope_errors))
+
+    # T033 A3：安全类任务在创建时即拒绝缺威胁模型/负向矩阵的卡。
+    security_data = security if security is not None else data.get("security") or {}
+    if security_data and not isinstance(security_data, dict):
+        raise TaskError("security 必须是映射")
+    if security_data.get("applies"):
+        security_errors = task_security_errors({"security": security_data})
+        if security_errors:
+            raise TaskError(
+                "安全类任务缺少必要字段: " + "；".join(security_errors)
+            )
 
     # WP-F1/T033：责任主体与执行者分离（MFP-0035/ADR-007）。
     # design 默认 designer；implement/fix/document/verify 默认 worker；
@@ -358,6 +657,10 @@ def create_task(
     task["spec_ids"] = spec_ids
     task["verification"] = verification
     task["evidence"] = evidence
+    task["scope"] = scope_data
+    task["project_dir"] = str(project_dir) if project_dir else None
+    task["allowed_paths_base"] = str(project_dir) if project_dir else None
+    task["security"] = security_data
     task["owner_role"] = requested_owner
     task["executor_role"] = requested_executor
     if owner_confirmation is not None:
@@ -399,6 +702,9 @@ def create_task(
         )
         review_task["depends_on"] = [task_id]
         review_task["wave"] = wave
+        review_task["scope"] = scope_data
+        review_task["project_dir"] = task["project_dir"]
+        review_task["allowed_paths_base"] = task["allowed_paths_base"]
         _save(_task_path(contract, review_id), review_task)
         task["reviewed_by_task"] = review_id
 
@@ -441,6 +747,51 @@ def create_task(
     }
 
 
+def validate_task(project: str | Path, task_id: str) -> dict[str, Any]:
+    """校验任务卡作用域、责任映射与安全字段（T033 A2/A3）。
+
+    活跃任务缺项为 error；已 accepted/cancelled 的历史任务为 warning，
+    与 TASK-CARD“历史任务警告并登记”一致。
+    """
+    contract = resolve_contract(project)
+    _path, data = load_task(project, task_id)
+    active = data.get("status") in ACTIVE_STATUSES
+    errors: list[str] = []
+    warnings: list[str] = []
+    scope_messages = task_scope_errors(contract, data)
+    security_messages = (
+        task_security_errors(data) if data.get("kind") != "review" else []
+    )
+    security_warnings = (
+        task_security_warnings(data) if data.get("kind") != "review" else []
+    )
+    owner = data.get("owner_role")
+    executor = data.get("executor_role")
+    mapping: list[str] = []
+    if owner is not None and owner not in roles.ROLE_NAMES:
+        mapping.append(f"owner_role 非法: {owner}")
+    if executor is not None and executor not in roles.ROLE_NAMES:
+        mapping.append(f"executor_role 非法: {executor}")
+    if (
+        data.get("kind") == "design"
+        and executor is not None
+        and owner
+        and owner != "designer"
+        and not data.get("owner_confirmation")
+    ):
+        mapping.append("design 责任主体非 designer 但缺少 manager 确认审计")
+    for message in scope_messages + security_messages + mapping:
+        (errors if active else warnings).append(message)
+    warnings.extend(security_warnings)
+    return {
+        "task": task_id,
+        "status": data.get("status"),
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
 def list_tasks(
     project: str | Path,
     *,
@@ -472,19 +823,41 @@ def load_task(project: str | Path, task_id: str) -> tuple[Path, dict[str, Any]]:
     return path, _load(path)
 
 
-def summary_text(data: dict[str, Any]) -> str:
+def _task_display_dirs(
+    contract: str | Path | None, data: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """返回任务显示用的工作目录与 allowed_paths 基准（旧任务动态回退）。"""
+    base = data.get("allowed_paths_base") or data.get("project_dir")
+    project_dir = data.get("project_dir") or base
+    if not base and contract is not None:
+        path = delivery_project_dir(contract, str(data.get("delivery") or "") or None)
+        if path is not None:
+            base = str(path)
+            project_dir = project_dir or base
+    return (str(project_dir) if project_dir else None, str(base) if base else None)
+
+
+def summary_text(data: dict[str, Any], contract: str | Path | None = None) -> str:
     """生成任务人读摘要（MFP-0020）；不要求手工维护第二份状态。"""
     risk = (data.get("risk") or {}).get("level") or "-"
     acceptance = data.get("acceptance") or []
     modules = data.get("module") or "-"
     specs = ", ".join(str(item) for item in data.get("spec_ids") or []) or "-"
     lease = data.get("lease") or {}
+    project_dir, base = _task_display_dirs(contract, data)
+    scope = _task_scope(data)
+    scope_text = scope["mode"]
+    if scope["projects"]:
+        scope_text += " [" + ", ".join(scope["projects"]) + "]"
     return "\n".join(
         [
             f"任务: {data.get('id')} [{data.get('status')}] kind={data.get('kind')} risk={risk}",
             f"标题: {data.get('title')}",
             f"模块/规格: {modules} / {specs}",
             f"交付库: {data.get('delivery') or '-'} wave={data.get('wave') or '-'}",
+            f"子项目: delivery={data.get('delivery') or '-'} scope={scope_text}",
+            f"工作目录: {project_dir or '-'}",
+            f"allowed_paths 基准: {base or '-'}",
             f"责任: next_owner={data.get('next_owner')} "
             f"owner_role={data.get('owner_role') or '-'} "
             f"executor_role={data.get('executor_role') or '-'} "
@@ -559,6 +932,14 @@ def start_task(
 ) -> dict[str, Any]:
     path, data = load_task(project, task_id)
     _ensure_task_actor(task_id, data)
+    if data.get("kind") != "review":
+        # T033 A3：安全类任务缺威胁模型/负向矩阵不得进入实施。
+        security_errors = task_security_errors(data)
+        if security_errors:
+            raise TaskError(
+                "安全类任务缺少必要字段，拒绝 start（先 mf task validate）: "
+                + "；".join(security_errors)
+            )
     status = data.get("status")
     stale_event: dict[str, Any] | None = None
     if status in {"rework", "rejected"}:
@@ -2176,6 +2557,17 @@ def _bug_summary(contract: Path, bug_id: str) -> str | None:
 
 
 def _find_input(contract: Path, ref: str) -> tuple[Path, str] | None:
+    # 先按 contract 相对路径精确解析（standards/templates/ADR 等任意目录），
+    # 避免模糊匹配把 `standards/TASK-CARD.md` 解析成引用它的 CHG 文档。
+    raw = Path(ref)
+    if not raw.is_absolute():
+        direct = (contract / raw).resolve()
+        contract_root = contract.resolve()
+        if (
+            (direct == contract_root or contract_root in direct.parents)
+            and direct.is_file()
+        ):
+            return direct, direct.read_text(encoding="utf-8")
     standards = contract / "standards" / f"{ref}.md"
     if standards.is_file():
         return standards, standards.read_text(encoding="utf-8")
@@ -2456,6 +2848,14 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
     lines.append(f"- owner_role: {data.get('owner_role') or '-'}")
     lines.append(f"- executor_role: {data.get('executor_role') or '-'}")
     lines.append(f"- delivery: {data.get('delivery') or '-'}")
+    scope = _task_scope(data)
+    scope_text = scope["mode"]
+    if scope["projects"]:
+        scope_text += " [" + ", ".join(scope["projects"]) + "]"
+    lines.append(f"- scope: {scope_text}")
+    project_dir, base = _task_display_dirs(contract, data)
+    lines.append(f"- project_dir: {project_dir or '-'}")
+    lines.append(f"- allowed_paths_base: {base or '-'}")
     lines.append(f"- risk: {(data.get('risk') or {}).get('level')}")
     lines.append(f"- review_mode: {(data.get('review') or {}).get('mode')}")
     if data.get("reviewed_by_task"):
@@ -2569,6 +2969,8 @@ def prompt_text(project: str | Path, task_id: str) -> str:
         f"owner_role: {data.get('owner_role') or '-'}",
         f"executor_role: {data.get('executor_role') or '-'}",
         f"delivery: {data.get('delivery') or '-'}",
+        f"project_dir: {_task_display_dirs(resolve_contract(project), data)[0] or '-'}",
+        f"allowed_paths_base: {_task_display_dirs(resolve_contract(project), data)[1] or '-'}",
         "",
     ]
     if owner == "worker":

@@ -111,6 +111,7 @@ mf doctor --path .
 
 检查点：
 
+- `mf role` 显示 manager（来源 directory/anchor）；`mf status` 显示 R0/P1 与子项目 backend；
 - `<项目根>/CLAUDE.md` 只含 `@示例项目-contract/workspace/CLAUDE.md` 导入行；
 - `<项目根>/README.md` 指向 contract 的 workspace README；
 - contract 内 `roadmap/ROADMAP.yaml` 含 `version_major`、`version_target`；
@@ -123,8 +124,9 @@ mf req add --title "用户可登录" --priority must --acceptance "登录成功"
 mf roadmap show
 mf phase enter P1
 mf task create --title "实现登录接口" --kind implement --risk high \
-  --allowed-path "src/**" --allowed-path "tests/**" \
+  --delivery backend --allowed-path "src/**" --allowed-path "tests/**" \
   --acceptance "接口返回 200" --acceptance "失败用例覆盖"
+mf task validate R0-P1-T001
 mf task prompt R0-P1-T001
 ```
 
@@ -140,8 +142,9 @@ mf task show R0-P1-T001 --packet
 mf task start R0-P1-T001
 ```
 
-任务包给出 allowed_paths、验收、预算、代码入口、process paths（handoff /
-dev-record / evidence）。worker 只改 allowed_paths 内文件；完成后写：
+任务包给出 `delivery`、`project_dir`、`allowed_paths` 基准、验收、预算、代码入口、
+process paths（handoff / dev-record / evidence）。worker 只改本子项目 allowed_paths
+内文件；完成后写：
 
 ```text
 <contract>/roadmap/R0/phases/P1/tasks/T001/dev-record.md
@@ -241,15 +244,16 @@ mf doctor --path .
    mf doctor --path .
    ```
 
-检查点：`mf doctor` OK、`mf workspace sync --check` OK；交付仓 git status 只含
-交付文档与源码，不出现 CLAUDE.md/.claude/.meta-flow；contract 原内容未被覆盖。
+检查点：`mf doctor` OK、`mf workspace sync --check` OK；交付仓 `git status` 只含
+交付文档与源码，不出现 CLAUDE.md/.claude/.meta-flow；contract 原内容未被覆盖；
+`mf role` 在根为 manager、在子项目为 worker。
 
 ### 4. 首个任务与验收
 
 ```bash
 mf task plan
 mf task create --title "迁移后回归基线" --risk medium \
-  --allowed-path "tests/**" --acceptance "全量测试通过"
+  --delivery backend --allowed-path "tests/**" --acceptance "全量测试通过"
 mf task prompt R0-P1-T001
 cd backend
 mf task show R0-P1-T001 --packet
@@ -294,7 +298,8 @@ mf task accept R0-P1-T001 --verdict PASS
 - worker 可写任务包声明的本地副本 `.meta-flow/handoffs/<task>.md`、
   `.meta-flow/dev-records/<task>.md`（仅当前任务）与 `.meta-flow/improvements/MFP-*.yaml`；
   其他 `.meta-flow/**` 仍拒绝。
-- 提交后不可直接编辑；返工先由 manager reject，再 `mf task start <id>`。本地 MFP 写
+- 提交后不可直接编辑；review 结论 NEEDS_REWORK 后实现 worker 直接
+  `mf task rework <id>` 开始返工（CHG-0004，不经 manager 范围裁决）。本地 MFP 写
   `.meta-flow/improvements/MFP-*.yaml` 或 `mf improve new --local` 均受审计，其他
   越界写仍拒绝。
 - `mf task submit --blocked`（或 handoff 结论写 `BLOCKED`）转 manager 裁决：任务状态为
@@ -315,8 +320,18 @@ mf task accept R0-P1-T001 --verdict PASS
   READ-LOG，可用 `mf context log` 查询；deny 会给出当前任务/lease/allowed_paths 与
   合法通道。
 - 任务 bundle 匹配使用完整任务 ID；跨 roadmap/phase 的同尾号任务不会互相放行。
-- worker 无交付根绑定时，在 workspace 根执行任务命令必须带 `--project-dir
-  <交付库>`，否则 rc=3；从交付库目录运行或设置显式交付绑定后自动限定作用域。
+- 任务必须绑定子项目：`mf task create --delivery <子项目>`；在子项目 cwd 内可自动
+  绑定，未注册/无法绑定时拒绝并列出已注册子项目。任务卡、prompt、packet 显示
+  `delivery`、`project_dir`、`allowed_paths_base` 与 `scope`；`allowed_paths` 相对
+  子项目根解析。`cross_subproject`/`workspace` 仅 manager 可创建，cross 例外只读/测试，
+  写拒绝。
+- 安全类任务（guard/权限/白名单/path 策略/hook/发布门禁或 `security.applies: true`）
+  必须写威胁模型、负面不变量、负向矩阵与 `fail_closed` 可证明范围；
+  `mf task validate <id>` 与 `mf doctor` 拒绝缺项，历史任务警告。
+- worker 无交付根绑定时，`--project-dir <交付库>` 仍可用于显式绑定；若子项目
+  `install.yaml` 丢失 `workspace_root` 但位于已注册工作区内，任务命令与 guard 按父
+  工作区解析（不会跨工作区静默串库）；绑定与所在工作区不一致时拒绝并提示
+  `mf install worker --workspace-root <根> --contract-dir <contract>` 修复。
 - 评审结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；高风险任务由未参与
   实现的 reviewer 评审，实现者不得自验收。
 

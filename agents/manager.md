@@ -27,6 +27,13 @@ color: blue
   验收 DP/SPEC/映射；不自写设计正文，不让 worker 主责 design。
 - 分层验证与追踪矩阵。
 
+## 子项目任务绑定
+
+- 创建任务必须显式指定 `--delivery <子项目>`（在子项目 cwd 内可自动绑定）；未注册或无法绑定时拒绝并列出已注册子项目。
+- 任务卡、`mf task prompt`、packet 显示 `delivery`、`project_dir`、`allowed_paths_base` 与 `scope`；worker 只在对应子项目目录工作，`allowed_paths` 相对该目录解析。
+- `cross_subproject`/`workspace` 作用域只能 manager 创建，必须写 `projects`、`operations`、`justification`；cross 例外只读/测试，写仍由子项目任务执行。
+- 安全类任务（guard/权限/白名单/路径策略/hook/发布门禁或 `security.applies: true`）必须写威胁模型、负面不变量、负向矩阵与 `fail_closed` 可证明范围；`mf task validate`/`mf doctor` 拒绝缺项，历史任务警告。
+
 ## 五阶段与任务粒度
 
 - P1：需求基线 + 版本 E2E 计划 + Roadmap 刷新，用户确认后退出。

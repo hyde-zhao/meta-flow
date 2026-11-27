@@ -196,7 +196,12 @@ def _contract_path(root: Path, local: dict[str, Any]) -> Path:
 
 
 def resolve_contract(project: str | Path) -> Path:
-    """从 workspace、contract 或已安装子项目解析 contract 根。"""
+    """从 workspace、contract 或已安装子项目解析 contract 根。
+
+    T033 A1/A2：子项目 `install.yaml` 缺少 `workspace_root`（例如重装时未带
+    `--workspace-root`）时，回退到所在的父工作区解析 contract，避免任务命令
+    /guard 因绑定元数据漂移而不可用；绑定存在但不一致时不静默切换。
+    """
     project_path = Path(project).expanduser().resolve()
     local = project_path / LOCAL_WORKSPACE
     if local.is_file():
@@ -213,7 +218,71 @@ def resolve_contract(project: str | Path) -> Path:
             parent_local = parent_path / LOCAL_WORKSPACE
             if parent_local.is_file():
                 return _contract_path(parent_path, _load_yaml(parent_local))
+        # 绑定缺失/失效：若子项目位于已注册工作区内，按父工作区解析；
+        # 但显式绑定了其他工作区时不回退（防止跨工作区静默串库）。
+        workspace = find_workspace_root(project_path)
+        if workspace is not None and workspace != project_path:
+            workspace_local = workspace / LOCAL_WORKSPACE
+            if workspace_local.is_file():
+                if parent and Path(str(parent)).expanduser().resolve() != workspace:
+                    raise WorkspaceError(
+                        f"子项目安装记录 workspace_root={parent} 与所在工作区 {workspace} 不一致"
+                    )
+                return _contract_path(workspace, _load_yaml(workspace_local))
     raise WorkspaceError("当前目录不是 workspace、contract 或已安装子项目")
+
+
+def registered_subprojects(contract: str | Path) -> list[dict[str, Any]]:
+    """返回 contract 所属工作区已注册子项目（含绝对路径）。
+
+    优先读工作区根 `.meta-flow/workspace.yaml`；无工作区根时退回 contract 的
+    `workspace/mf.workspace.yaml`（只登记、不解析路径时可能为空）。
+    """
+    contract_path = Path(contract).expanduser().resolve()
+    root = find_workspace_root(contract_path)
+    entries: list[dict[str, Any]] = []
+    base: Path | None = None
+    local_path = root / LOCAL_WORKSPACE if root is not None else None
+    if local_path is not None and local_path.is_file():
+        data = _load_yaml(local_path)
+        entries = list(data.get("subprojects") or [])
+        base = root
+    else:
+        manifest = contract_path / "workspace" / WORKSPACE_MANIFEST
+        if manifest.is_file():
+            data = _load_yaml(manifest)
+            entries = list(data.get("subprojects") or [])
+            base = contract_path.parent
+    result: list[dict[str, Any]] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        sub_id = str(item.get("id") or "").strip()
+        raw_path = str(item.get("path") or "").strip()
+        if not sub_id or not raw_path or base is None:
+            continue
+        path = Path(raw_path).expanduser()
+        absolute = path.resolve() if path.is_absolute() else (base / path).resolve()
+        result.append(
+            {
+                "id": sub_id,
+                "path": absolute,
+                "delivery": item.get("delivery") or sub_id,
+            }
+        )
+    return result
+
+
+def delivery_project_dir(contract: str | Path, delivery: str | None) -> Path | None:
+    """按 delivery/子项目 id 解析 worker 工作目录（未注册返回 None）。"""
+    if not delivery:
+        return None
+    for item in registered_subprojects(contract):
+        if item["id"] == delivery or item.get("delivery") == delivery:
+            path = Path(item["path"])
+            if path.is_dir():
+                return path
+    return None
 
 
 def load_current_state(contract: str | Path) -> dict[str, Any]:
@@ -1120,6 +1189,18 @@ def doctor_global() -> list[str]:
     return errors
 
 
+def _has_install_gitignore(path: Path) -> bool:
+    """REQ-0013：git 仓库的 .gitignore 必须包含受控安装镜像块。"""
+    gitignore = path / ".gitignore"
+    if not gitignore.is_file():
+        return False
+    text = gitignore.read_text(encoding="utf-8")
+    return (
+        ">>> meta-flow install mirror >>>" in text
+        and "<<< meta-flow install mirror <<<" in text
+    )
+
+
 def doctor(root: str | Path) -> list[str]:
     """校验项目、workspace、contract 与子项目安装。"""
     root = Path(root).expanduser().resolve()
@@ -1154,6 +1235,10 @@ def doctor(root: str | Path) -> list[str]:
         errors.append("根目录存在旧版 contracts/；请迁移或删除")
     if (root / "deliveries").exists():
         errors.append("根目录存在旧版 deliveries/；请迁移或删除")
+    if (root / ".git").is_dir() and not _has_install_gitignore(root):
+        errors.append(
+            "根 git 仓库 .gitignore 缺少受控安装镜像块（运行 mf install claude --force 修复）"
+        )
 
     local_path = root / LOCAL_WORKSPACE
     if not local_path.is_file():
@@ -1253,6 +1338,28 @@ def doctor(root: str | Path) -> list[str]:
             continue
         if sub_data.get("role") != "worker":
             errors.append(f"子项目 {item.get('id')} 安装角色不是 worker")
+        bound_root = sub_data.get("workspace_root")
+        if bound_root:
+            if Path(str(bound_root)).expanduser().resolve() != root:
+                errors.append(
+                    f"子项目 {item.get('id')} workspace_root 与当前工作区不一致: {bound_root}"
+                )
+        elif find_workspace_root(path) != root:
+            errors.append(f"子项目 {item.get('id')} 安装记录缺少 workspace_root 且不在工作区内")
+        bound_contract = sub_data.get("contract_dir")
+        if bound_contract and Path(str(bound_contract)).expanduser().resolve() != contract:
+            errors.append(
+                f"子项目 {item.get('id')} contract_dir 与当前 contract 不一致: {bound_contract}"
+            )
+        delivery_id = item.get("delivery") or item.get("id")
+        delivery_file = path / "delivery.yaml"
+        if delivery_file.is_file():
+            delivery_data = _load_optional_yaml(delivery_file) or {}
+            if str(delivery_data.get("id") or "") != str(delivery_id):
+                errors.append(
+                    f"子项目 {item.get('id')} delivery.yaml id 与注册 delivery 不一致: "
+                    f"{delivery_data.get('id')}"
+                )
         if not (path / ".claude" / "agents" / "worker.md").is_file():
             errors.append(f"子项目 {item.get('id')} 缺少 worker agent")
         sub_settings = path / ".claude" / "settings.json"
@@ -1270,6 +1377,11 @@ def doctor(root: str | Path) -> list[str]:
                 errors.append(f"子项目 {item.get('id')} 缺少 PreToolUse hook；运行 mf upgrade 修复")
         if not (path / "delivery.yaml").is_file():
             errors.append(f"子项目 {item.get('id')} 缺少 delivery.yaml")
+        if (path / ".git").is_dir() and not _has_install_gitignore(path):
+            errors.append(
+                f"子项目 {item.get('id')} .gitignore 缺少受控安装镜像块"
+                "（运行 mf install worker --force 修复）"
+            )
 
     _doctor_planning_data(contract, errors)
     from .state import reconcile  # 延迟导入，避免模块级循环
@@ -1386,6 +1498,22 @@ def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
             errors.append(f"任务 {task_id} evidence 必须是列表")
         if path.parent.name != task_id.rsplit("-", 1)[-1]:
             errors.append(f"任务 {task_id} 与目录名不一致: {path.parent.name}")
+        if data.get("status") in {
+            "draft",
+            "ready",
+            "in_progress",
+            "submitted",
+            "blocked",
+            "rejected",
+            "rework",
+        }:
+            from .task import task_scope_errors, task_security_errors
+
+            for message in task_scope_errors(contract, data):
+                errors.append(f"任务 {task_id} {message}")
+            if data.get("kind") != "review":
+                for message in task_security_errors(data):
+                    errors.append(f"任务 {task_id} {message}")
     for task_id, data in tasks.items():
         for dep in data.get("depends_on") or []:
             if str(dep) not in tasks:

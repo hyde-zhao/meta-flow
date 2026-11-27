@@ -1276,6 +1276,13 @@ color: blue
   验收 DP/SPEC/映射；不自写设计正文，不让 worker 主责 design。
 - 分层验证与追踪矩阵。
 
+## 子项目任务绑定
+
+- 创建任务必须显式指定 `--delivery <子项目>`（在子项目 cwd 内可自动绑定）；未注册或无法绑定时拒绝并列出已注册子项目。
+- 任务卡、`mf task prompt`、packet 显示 `delivery`、`project_dir`、`allowed_paths_base` 与 `scope`；worker 只在对应子项目目录工作，`allowed_paths` 相对该目录解析。
+- `cross_subproject`/`workspace` 作用域只能 manager 创建，必须写 `projects`、`operations`、`justification`；cross 例外只读/测试，写仍由子项目任务执行。
+- 安全类任务（guard/权限/白名单/路径策略/hook/发布门禁或 `security.applies: true`）必须写威胁模型、负面不变量、负向矩阵与 `fail_closed` 可证明范围；`mf task validate`/`mf doctor` 拒绝缺项，历史任务警告。
+
 ## 五阶段与任务粒度
 
 - P1：需求基线 + 版本 E2E 计划 + Roadmap 刷新，用户确认后退出。
@@ -1484,6 +1491,12 @@ guard 会审计；其他越界写仍拒绝。任务 BLOCKED 时用 `mf task subm
 - 只做“可独立验证的增量”；跨模块规格由独立 verify 任务验证，不在单模块任务内假装覆盖。
 - design 任务责任主体是 designer；worker 不得冒充 designer 或执行 design 主责任务。
 - 角色切换只在用户终端 `mf role --as <role> --reason <原因>`；AI 会话不得自升级。
+
+## 子项目绑定与安全基线
+
+- 任务必须绑定子项目；只读写自己子项目的 `allowed_paths` 与任务 bundle。`cross_subproject` 任务只按声明做只读/测试，写入一律拒绝；不得读取兄弟子项目源码或交付文档。
+- 安全类任务先核对威胁模型、负面不变量与负向矩阵，先写负例再实现；L1 证据必须含正/负例表与攻击面矩阵（命令、期望、实际输出/退出码），不得用高层条目替代。
+- 任务卡缺子项目/安全字段时按 BLOCKED 处理，不自行补验收或扩大范围。
 
 ## 评审责任
 
@@ -2027,7 +2040,14 @@ title: ...
 kind: implement            # implement|design|verify|document|review|fix
 owner_role: worker         # 责任主体：design=designer；implement/fix/document/verify=worker；非默认需 manager 显式确认
 executor_role: worker      # 执行者：design=designer；其他=worker；review=独立评审者
-delivery: app
+delivery: app              # single_subproject 必填；在子项目 cwd 可自动绑定
+scope:
+  mode: single_subproject  # single_subproject|cross_subproject|workspace
+  projects: []             # cross/workspace：涉及子项目 id
+  operations: []           # cross/workspace：read|test|release|sync|doctor
+  justification: null      # cross/workspace 必填
+project_dir: /abs/app      # 由 mf 按 delivery 解析并显示；勿手写本机路径
+allowed_paths_base: /abs/app
 module: core               # 主责模块（P3 起，与规格-模块矩阵一致）
 spec_ids: [SPEC-001]       # 关联规格；跨模块规格须另有独立 verify 任务
 wave: W1
@@ -2038,6 +2058,20 @@ inputs:
   specs: [SPEC-001]
   design: [DESIGN-001]
   standards: [TASK-CARD, DEVELOPMENT, VERIFICATION, ACCEPTANCE]
+security:                  # 安全/guard/权限/白名单/路径策略/hook/发布门禁任务必填
+  applies: false
+  threat_model:
+    assets: []
+    attackers: []
+    entry_points: []
+    trust_boundary: []
+    attacker_capabilities: []
+  uncovered: []            # 不可防范围与理由
+  risk_acceptor: null
+  invariants: []
+  negative_matrix: []      # 入口×变形×shell×环境；含命令/期望/证据
+  fail_closed: true        # 仅用于可证明范围
+  fail_closed_scope: null
 allowed_paths:
   - src/**
   - tests/**

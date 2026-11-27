@@ -1168,18 +1168,33 @@ review:
 
 ### 8.1 文件真相与派生状态
 
-| 类型 | 文件 | 是否 tracked | 说明 |
-|---|---|---|---|
-| 项目元数据 | `contracts/project.yaml` | 是 | 当前路标/阶段、交付库注册表 |
-| 路标 | `contracts/roadmap/ROADMAP.yaml` | 是 | R0/R1/R2 |
-| 需求 | `contracts/requirements/REQUIREMENTS.yaml` | 是 | REQ + CHG |
-| 任务 | `contracts/tasks/R{n}/P{n}/T{id}.yaml` | 是 | 每任务一文件 |
-| 验收 | `contracts/verification/<task>/` | 是 | 证据 manifest + 摘要 |
-| 交接 | `contracts/handoffs/<task>.md` | 是 | 由 mf 固化 |
-| 事件 | `contracts/state/ledger.ndjson` | 是 | 追加式审计 |
-| 当前状态 | `contracts/state/current.json` | 否 | 派生缓存，可重建 |
+当前布局为“项目根容器 + contract 仓 + 子项目仓”（REQ-0009/ADR-001；旧
+`contracts/`、`deliveries/` 名称已废弃）：
 
-`mf status` 在 `current.json` 缺失或过期时，从任务/路标/ledger 重建。
+| 类型 | 文件/目录 | 归属 | 是否 tracked | 说明 |
+|---|---|---|---|---|
+| 项目元数据 | `workspace/mf.workspace.yaml`（contract） | contract | 是 | 项目 id/名称、contract 与子项目注册的 canonical 副本 |
+| 工作区注册 | `<root>/mf.workspace.yaml`、`<root>/.meta-flow/workspace.yaml` | 项目根（容器） | 否 | 由 `mf workspace` 生成/刷新，不入库 |
+| 路标 | `roadmap/ROADMAP.yaml` | contract | 是 | R0/R1/R2 与版本映射 |
+| 需求/变更 | `requirements/REQUIREMENTS.yaml`、`requirements/changes/CHG-*.md` | contract | 是 | 需求真相与变更记录 |
+| 设计/架构/规格 | `architecture/`、`specs/` | contract | 是 | contract 是设计真相；`specs/` 为 P2 过程文档过渡位置 |
+| 任务/评审 | `roadmap/R{n}/phases/{P}/tasks/T*/` | contract | 是 | 每任务一 bundle：TASK.yaml、dev-record、handoff、evidence、review |
+| 验证/BUG/知识 | `verification/`、`bugs/` 或 `roadmap/R{n}/bugs/`、`knowledge/` | contract | 是 | VR、BUG 热区与知识 |
+| 审计 | `state/ledger.ndjson`、`state/READ-LOG.ndjson` | contract | 是 | 追加式事件与读取审计 |
+| 当前状态 | `state/current.json` | contract | 否 | 派生缓存，可由 `mf state` 从 TASK/ledger 重建 |
+| 源码/测试 | `src/`、`tests/`（子项目根） | 子项目 | 是 | 实现与测试只进交付仓 |
+| 交付文档 | `delivery.yaml`、`RELEASE-NOTES.md`、`USER-MANUAL.md`、`DESIGN.md`、`README.md` | 子项目 | 是 | `DESIGN.md` 为 contract 设计的交付摘要/指针（是否删除由 REQ-0009 D1 决策） |
+| 安装镜像 | `CLAUDE.md`、`.claude/`、`.meta-flow/install.yaml`、`.claude/settings.json` | 项目根/子项目本地 | 否 | 受控 `.gitignore` 块覆盖，不入库 |
+| 全局模板 | `~/.meta-flow/` | 用户全局 | — | agent/模板库，由 `mf bootstrap`/`mf dev install` 维护 |
+
+边界规则：
+
+- contract 仓是需求/设计/任务/验证/状态真相；项目根只是工作区容器，不是 git 仓。
+- 子项目只放实现与交付文档；不复制 contract 设计正文（`DESIGN.md` 仅摘要/指针）。
+- 安装镜像（`.claude/`、`.meta-flow/install.yaml` 等）由 `mf install`/`mf upgrade`
+  管理，必须被受控 `.gitignore` 块覆盖；`git status` 不应出现。
+- `state/current.json` 是派生缓存；`TASK.yaml` + ledger 为真相，可重建。
+- 超预算读取走 `mf context expand --reason` 并写 READ-LOG；archive 默认不读。
 
 ### 8.2 命令集
 

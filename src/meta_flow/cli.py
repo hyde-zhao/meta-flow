@@ -59,6 +59,7 @@ from .task import (
     start_task,
     submit_task,
     summary_text,
+    validate_task,
 )
 from .task import (
     summary as task_summary,
@@ -185,7 +186,7 @@ def _enforce_role(args: argparse.Namespace) -> None:
                 return
         raise WorkspaceError("workspace 命令只允许 manager", 3)
     if command == "task":
-        worker_actions = {"list", "show", "prompt"}
+        worker_actions = {"list", "show", "prompt", "validate"}
         manager_actions = {"create", "accept", "reject", "release", "graph", "plan", "next", "summary"}
         if action in {"start", "submit", "rework"}:
             if role not in {"worker", "designer"}:
@@ -266,6 +267,18 @@ def _ensure_worker_scope(args: argparse.Namespace, task: dict[str, Any]) -> None
             raise WorkspaceError("designer 只能访问 design 任务（owner_role=designer）", 3)
         return
     if role != "worker":
+        return
+    scope = task.get("scope")
+    scope = scope if isinstance(scope, dict) else {}
+    mode = str(scope.get("mode") or "single_subproject")
+    if mode == "workspace":
+        raise WorkspaceError("workspace 作用域任务仅 manager 可执行/访问", 3)
+    if mode == "cross_subproject":
+        projects = [str(item) for item in scope.get("projects") or []]
+        if delivery not in projects:
+            raise WorkspaceError(
+                f"cross_subproject 任务只允许声明子项目执行: {', '.join(projects)}", 3
+            )
         return
     if task.get("delivery") and task.get("delivery") != delivery:
         raise WorkspaceError(
@@ -864,6 +877,12 @@ def _cmd_task_create(args: argparse.Namespace) -> int:
         owner_role=getattr(args, "owner_role", None),
         executor_role=getattr(args, "executor_role", None),
         owner_confirmed_by=getattr(args, "owner_confirmed_by", None),
+        scope_mode=getattr(args, "scope_mode", None),
+        scope_projects=getattr(args, "scope_project", None),
+        scope_operations=getattr(args, "scope_operation", None),
+        scope_justification=getattr(args, "scope_justification", None),
+        security=getattr(args, "security", None),
+        actor_role=_effective_role(args)[0],
         with_review=not args.no_review,
         from_data=from_data,
     )
@@ -916,10 +935,24 @@ def _cmd_task_show(args: argparse.Namespace) -> int:
     if args.json:
         _print_json(data)
     else:
-        print(summary_text(data))
+        print(summary_text(data, resolve_contract(args.project_dir)))
         print("")
         print(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
     return 0
+
+
+def _cmd_task_validate(args: argparse.Namespace) -> int:
+    result = validate_task(args.project_dir, args.task_id)
+    if args.json:
+        _print_json(result)
+        return 0 if result.get("ok") else 1
+    print(f"任务: {result['task']} status={result.get('status')}")
+    for message in result.get("warnings") or []:
+        print(f"  warning: {message}")
+    for message in result.get("errors") or []:
+        print(f"  error: {message}")
+    print("mf task validate: OK" if result.get("ok") else "mf task validate: FAIL")
+    return 0 if result.get("ok") else 1
 
 
 def _cmd_task_start(args: argparse.Namespace) -> int:
@@ -1897,6 +1930,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="非默认责任主体的 manager 显式确认人/记录（写 ledger）",
     )
     task_create.add_argument("--delivery")
+    task_create.add_argument(
+        "--scope-mode",
+        choices=["single_subproject", "cross_subproject", "workspace"],
+        help="子项目作用域；cross/workspace 仅 manager",
+    )
+    task_create.add_argument(
+        "--scope-project", action="append", help="cross/workspace 涉及子项目 id（可重复）"
+    )
+    task_create.add_argument(
+        "--scope-operation",
+        action="append",
+        help="cross/workspace 操作：read|test|release|sync|doctor（可重复）",
+    )
+    task_create.add_argument(
+        "--scope-justification", help="cross/workspace 作用域理由（必填）"
+    )
     task_create.add_argument("--risk", choices=["low", "medium", "high", "critical"], default="medium")
     task_create.add_argument("--effort", default="M")
     task_create.add_argument("--review-mode", choices=["manager", "independent", "user"])
@@ -1930,6 +1979,14 @@ def build_parser() -> argparse.ArgumentParser:
     task_packet.add_argument("--review-packet", action="store_true")
     task_show.add_argument("--json", action="store_true")
     task_show.set_defaults(func=_cmd_task_show)
+
+    task_validate = task_sub.add_parser(
+        "validate", help="校验任务卡作用域/责任映射/安全字段（T033 A2/A3）"
+    )
+    task_validate.add_argument("task_id")
+    task_validate.add_argument("--project-dir", default=".")
+    task_validate.add_argument("--json", action="store_true")
+    task_validate.set_defaults(func=_cmd_task_validate)
 
     task_start = task_sub.add_parser("start")
     task_start.add_argument("task_id")

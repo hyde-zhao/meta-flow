@@ -216,6 +216,7 @@ def test_design_task_actor_rules(env, monkeypatch):
         root,
         "实现任务",
         risk="low",
+        delivery="frontend",
         allowed_paths=["src/**"],
         acceptance=_acceptance(),
     )

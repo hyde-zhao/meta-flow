@@ -15,7 +15,7 @@ mf workspace init/attach/add-project/link/sync/status
 mf req add/list/show/update/trace/validate
 mf roadmap show/plan/close
 mf phase enter/review/exit
-mf task create/list/show/start/submit/accept/reject/prompt
+mf task create/list/show/validate/start/submit/accept/reject/prompt
 mf task graph/plan/next/release/summary
 mf bug add/list/show/update/close
 mf knowledge add/list/show/render
@@ -255,8 +255,11 @@ mf dev improve update MFP-0001 --status verified --version 0.1.2 --commit def456
 ## 任务与评审
 
 ```bash
-# manager 创建任务；中高风险会自动生成 review 任务
-mf task create --title "实现 X" --risk high --acceptance "命令 mf X 成功"
+# manager 创建任务；必须绑定子项目（子项目 cwd 内可自动绑定）；
+# 中高风险会自动生成 review 任务
+mf task create --title "实现 X" --risk high --delivery backend \
+  --allowed-path "src/**" --acceptance "命令 mf X 成功"
+mf task validate R1-P1-T001
 
 # 查看下一步责任 agent（worker 或 manager）
 mf task prompt R1-P1-T001
@@ -281,7 +284,8 @@ mf task accept R1-P1-T001 --verdict PASS
 - 低风险：manager 先 review，再验收。
 - 中/高风险：worker2 独立 review，之后 manager 验收；高风险不能降级为 manager 自审或 `--no-review`。
 - 评审结论从 `review-handoff.md` / `review.md` 读取；manager 不能用 `--verdict` 覆盖相反结论。
-- 评审不通过：`review-handoff.md` 列出必须整改项，manager 退回 worker1；返工后复审。
+- 评审不通过：`review-handoff.md` 用“人话”列出原因/风险/影响/期望与必须整改项；
+  实现 worker 直接 `mf task rework <id>` 返工（CHG-0004，不经 manager 范围裁决），返工后复审。
 - critical 任务必须记录用户验收 `--user-approved-by`。
 - 每个任务状态都有 `next_owner`；`mf task prompt` 明确下一责任 agent。
 - 角色守卫：manager 不能 `task start/submit`；worker 不能 `req/roadmap/phase/bug/verify/release/task accept`；
@@ -305,13 +309,21 @@ mf task accept R1-P1-T001 --verdict PASS
   时任务转 `blocked`、next_owner=manager，关联 review 保持 draft/ready 不推进；
   manager 改卡/扩 allowed_paths 后 worker 用 `mf task start/rework` 重新开始。
 - 任务卡按机器需要最小化：支持 `module`、`spec_ids`、`verification`/`evidence`；
-  `mf task show` 输出人读摘要。`mf task list` 默认活跃，`--all` 含 accepted/cancelled。
+  `mf task show` 输出人读摘要并显示 `delivery`/`project_dir`/`allowed_paths_base`/`scope`。
+  `mf task list` 默认活跃，`--all` 含 accepted/cancelled。
+- 子项目绑定（T033 A2）：`create` 必须绑定已注册 `delivery`；`cross_subproject`/`workspace`
+  仅 manager 创建，cross 例外只读/测试、写拒绝；`mf task validate` 校验作用域、责任映射
+  与安全字段。
+- 安全类任务（T033 A3）：`security.applies: true` 必须含威胁模型、负面不变量、
+  负向矩阵与 `fail_closed` 可证明范围；缺项时 create/start/validate/doctor 拒绝或警告。
 - review 任务可读取 review_scope 内任意大小文件（Read 或 `mf context expand`），
   guard 不把 expand 误判为写入；review_scope 外仍拒绝。
 - 并行任务：提交时按任务活动窗口隔离其他并行任务的 diff；单任务越界仍拒绝，
   非活动/非重叠改动不被静默计入；diff.patch 包含未跟踪新增文件。
-- worker 无交付根绑定时任务命令要求 `--project-dir <交付库>`，否则 rc=3；guard
-  同规则。
+- worker 无交付根绑定时任务命令要求 `--project-dir <交付库>`，否则 rc=3；若子项目
+  `install.yaml` 丢失 `workspace_root` 但位于已注册工作区内，按父工作区解析；绑定与
+  所在工作区不一致时拒绝。guard 在无法解析 contract 时对 worker/designer/manager
+  fail-closed。
 
 ## 规划闭环
 
