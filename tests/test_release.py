@@ -317,3 +317,29 @@ def test_release_check_detects_wrong_tag_content(env, tmp_path):
     assert result["ok"] is False
     failed = {item["name"] for item in result["checks"] if not item["ok"]}
     assert "git_tag_source_version" in failed
+
+
+def test_dev_install_syncs_global_manifest_tool_version(tmp_path, monkeypatch):
+    """1.0.3：mf dev install 后全局 manifest 的 tool_version/source_dir 同步。"""
+    from meta_flow import global_store
+
+    monkeypatch.setenv("META_FLOW_HOME", str(tmp_path / "global"))
+    global_store.bootstrap()
+    source = tmp_path / "source"
+    (source / "src" / "meta_flow").mkdir(parents=True)
+    (source / "pyproject.toml").write_text(
+        '[project]\nname = "meta-flow"\nversion = "9.9.9"\n', encoding="utf-8"
+    )
+    (source / "src" / "meta_flow" / "__init__.py").write_text(
+        '__version__ = "9.9.9"\n', encoding="utf-8"
+    )
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(global_store, "_run", lambda args, cwd=None: Result())
+    global_store.dev_install(source=source, yes=True)
+    manifest = global_store.load_manifest()
+    assert manifest["tool_version"] == "9.9.9"
+    assert manifest["source_dir"] == str(source)

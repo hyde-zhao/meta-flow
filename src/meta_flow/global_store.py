@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -184,6 +185,17 @@ def dev_update(source: str | Path | None = None) -> Path:
     return path
 
 
+def _source_version(path: Path) -> str | None:
+    """读取源码 ``__version__``，用于同步全局 manifest 工具版本。"""
+    init = path / "src" / "meta_flow" / "__init__.py"
+    try:
+        text = init.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'__version__\s*=\s*"([^"]+)"', text)
+    return match.group(1) if match else None
+
+
 def dev_install(source: str | Path | None = None, yes: bool = False) -> Path:
     """从本地源码安装/更新全局 mf 工具。"""
     if not yes:
@@ -194,6 +206,13 @@ def dev_install(source: str | Path | None = None, yes: bool = False) -> Path:
     result = _run(["uv", "tool", "install", "--force", str(path)])
     if result.returncode != 0:
         raise GlobalStoreError(f"uv tool install 失败: {result.stderr.strip()}")
+    version = _source_version(path)
+    if version and manifest_path().is_file():
+        manifest = load_manifest()
+        manifest["tool_version"] = version
+        manifest["source_dir"] = str(path)
+        manifest["updated_at"] = _now()
+        _dump_yaml(manifest_path(), manifest)
     return path
 
 

@@ -90,6 +90,21 @@ def _global_template(name: str, fallback: str) -> str:
         return fallback
 
 
+def _workspace_claude_import(project: Path) -> str | None:
+    """升级安装时保留工作区根 CLAUDE.md 的 contract 导入（不覆盖为内联模板）。"""
+    local = project / ".meta-flow" / "workspace.yaml"
+    if not local.is_file():
+        return None
+    try:
+        data = yaml.safe_load(local.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    value = str(data.get("claude_import") or "").strip()
+    return value or None
+
+
 def _install_file(project: Path, relative: Path, content: str, force: bool) -> dict[str, Any]:
     target = project / relative
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -459,7 +474,9 @@ def install_root(
         content = _global_template(f"agents/{name}.md", getattr(templates, f"AGENT_{name.upper()}"))
         files.append(_install_file(project, Path(".claude/agents") / f"{name}.md", content, force))
 
-    manager_body = _global_template("CLAUDE.manager.md", templates.MANAGER_CLAUDE)
+    manager_body = _workspace_claude_import(project) or _global_template(
+        "CLAUDE.manager.md", templates.MANAGER_CLAUDE
+    )
     claude_path = project / CLAUDE_REL
     existed = claude_path.exists()
     current = claude_path.read_text(encoding="utf-8") if existed else ""

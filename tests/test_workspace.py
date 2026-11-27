@@ -88,6 +88,15 @@ def test_add_project_writes_gitignore(ws):
     assert doctor(root) == []
 
 
+def test_reinstall_preserves_workspace_claude_import(ws):
+    """1.0.3：升级安装不得把工作区根 CLAUDE.md 覆盖为内联模板。"""
+    root = ws["root"]
+    install_root(root, force=True)
+    text = (root / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "workspace/CLAUDE.md" in text
+    assert "默认 agent" not in text
+
+
 def test_workspace_link_recreates(ws):
     root = ws["root"]
     (root / "CLAUDE.md").unlink()

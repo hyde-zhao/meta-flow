@@ -48,7 +48,11 @@
   - maintainer 可删除遗留角色锚点（清理降权），仍禁止创建/改写锚点内容。
 - 安全负向矩阵（R4/R5）：会话入口覆盖模块方式、subprocess 列表/拼接字符串、
   拆分锚点函数名，只读检索（grep/cat）保持豁免。
-- 验证：全量 pytest 238 通过、ruff 通过、`mf doctor` OK；安全负向矩阵 N1–N6 覆盖见
+- 全局 manifest 同步：`mf dev install` 成功后更新 `~/.meta-flow/manifest.yaml` 的
+  `tool_version`/`source_dir`/`updated_at`，`mf dev status` 不再显示旧版本。
+- 升级安装保留工作区导入：已存在 `.meta-flow/workspace.yaml` 时，`mf install claude
+  --force` 继续写 `@<项目>-contract/workspace/CLAUDE.md` 导入，不覆盖为内联模板。
+- 验证：全量 pytest 240 通过、ruff 通过、`mf doctor` OK；安全负向矩阵 N1–N6 覆盖见
   tests/test_designer_role.py。
 - 升级/回滚：`UV_NO_CACHE=1 mf dev install --yes` 后确认 `mf --version` 输出 1.0.3；
   项目根与子项目 `mf install ... --force` 同步模板；回滚恢复 delivery.yaml/
