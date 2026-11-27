@@ -60,13 +60,13 @@ privacy:
   removed: []
 source_record: CHG-0002
 resolution:
-  version: 1.0.2
-  commit: d61ab6a
+  version: 1.0.3
+  commit: 4fa95e8
   tests: []
   verified_by: null
-  verified_at: '2026-11-27T07:15:26.868886+00:00'
-  note: 234 passed, 1 xfailed；部署后 smoke：高风险自动回流 M1a/BUG-0018、worker 可直接 mf task rework、缺
-    rework_summary 拒绝提交；回滚 --legacy-rework，安装备份 ~/.local/share/uv/tools/meta-flow.bak-1.0.2-20261127。
+  verified_at: '2026-11-27T09:27:45.744830+00:00'
+  note: 1.0.3 维护批次收尾：240 passed（1 xfailed）；全局 mf 与项目/子项目安装升级 1.0.3；mf doctor OK；会话锚点/返工链路
+    smoke 通过
 submitted_at: '2026-11-27T06:57:41.395403+00:00'
 inbox_ref: /home/hyde/.meta-flow/improvements/inbox/meta-flow/MFP-0037.yaml
 digest: sha256:5902d45f1be693c0330ec40a16dbbd66b5fb0bbb28d3913b25e19a939cd9c99e
