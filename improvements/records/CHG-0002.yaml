@@ -1,0 +1,23 @@
+id: CHG-0002
+kind: change
+title: 评审 NEEDS_REWORK 直接回流实现 worker（免 manager 门）+ 评审人话返工说明
+status: done
+source_mfp: MFP-0037
+source_project: meta-flow
+acceptance:
+- 所有风险级别评审 `NEEDS_REWORK` 后实现任务自动进入 rejected/rework，`next_owner=实现 worker`；无需 manager
+  accept/reject。
+- review-handoff/review 必须包含 `rework_summary`（原因/风险/问题影响/期望结果）；缺失时评审不得 submit 或目标不得自动回流，并给出补齐提示；保留独立评审/人工判断，不把说明降级为模板套话。
+- 必须整改项支持小节/表格两种写法；不得因格式误判“未列出”。
+- 范围外事项标注（needs: acceptance/bug/mfp/chg）不阻塞范围内返工；manager 另开单；ledger 记录 review→rework
+    链路、verdict、items、next_owner。
+- 负向：PASS/PASS_WITH_RISK 不触发返工；BLOCKED 不自动返工；worker 不得编辑 submitted；实现者不得自验收。
+- 回归：T019/T020 返工链路、T035/T036 场景、高/中/低风险任务各一条；`mf task prompt`/`mf state` 指引与实际命令一致。
+- 部署：不创建任务卡；maintainer 直接改 `src/meta_flow` + tests，测试通过后临时部署全局 `mf`；部署前备份/记录版本，部署后回归
+  T035/T036 与真实 hook。
+created_at: '2026-11-27T07:14:26.823086+00:00'
+resolution:
+  version: 1.0.2
+  commit: null
+  note: 234 passed, 1 xfailed；部署后 smoke：高风险自动回流 M1a/BUG-0018、worker 可直接 mf task rework、缺
+    rework_summary 拒绝提交；回滚 --legacy-rework，安装备份 ~/.local/share/uv/tools/meta-flow.bak-1.0.2-20261127。

@@ -1,5 +1,41 @@
 # 发布说明
 
+## 1.0.3（未发布，R0/V1 P4 框架重设计 WP-F1/T035）
+
+- 版本：1.0.3（待发布；当前交付元数据仍为 1.0.2，发布时统一 bump）
+- 路标：R0（P4）
+- 范围：WP-F1 designer 角色/工作区/设计包与责任映射（SPEC-FRAMEWORK R1/R4；
+  T033 A1 角色锚定先落地）。
+- designer 角色：
+  - 新增 `agents/designer.md`、`CLAUDE.designer.md` 全局模板与
+    `mf install designer --project-dir <contract>`（`role: designer`）。
+  - 角色短名 manager/designer/worker/maintainer；别名 `mgr/dsg/wkr/mnt` 与
+    `meta-*` 命名空间。
+  - 工作区权限：可写 contract `architecture/`、`specs/`、P2 设计包/规格与
+    `templates/DESIGN-PACKAGE.md`；子项目源码只读；禁止写需求/验收/发布。
+  - 设计包模板 `templates/DESIGN-PACKAGE.md`：信息流、子项目/职责/接口、模块/功能/
+    接口、REQ/MFP→SPEC→子项目/模块映射、跨子项目验证计划、预研计划、manager 设计验收。
+- 责任主体与执行者（MFP-0035）：
+  - 任务卡新增 `owner_role`/`executor_role`；`kind: design` 默认 designer，
+    implement/fix/document/verify 默认 worker，review 由独立评审者执行。
+  - 非默认主责需 manager `--owner-confirmed-by` 显式确认并写
+    `task.owner.confirm` ledger；worker 不得冒充 designer，designer 只能执行 design。
+  - `mf task prompt/packet` 显示 owner_role/executor_role/delivery。
+- 角色锚定（T033 A1）：
+  - SessionStart hook `mf hook session-start` 按宿主会话写
+    `.meta-flow/session-roles/<session_id>.yaml`（按会话隔离，`/clear` 只重写本会话）；
+    用户终端 `mf role --as` 写 `session-roles/user-tty.yaml`，按更新时间优先。
+  - SessionStart 锚点必须绑定 `session_id`（payload 或 `CLAUDE_CODE_SESSION_ID`），
+    缺失时拒绝写入；无 `session_id` 读取时不回退共享会话锚点（fail-closed）。
+  - guard/CLI 使用当前会话锚点，cwd 漂移不改变 effective role；`MF_ROLE=designer/manager`
+    不能由 worker/manager 会话通过环境变量提权。
+  - guard 对任意形式 `mf hook session-start`（含 cd/嵌套 shell/引号）与
+    `roles.session_start/write_anchor` 解释器调用 fail-closed；锚点文件工具层直接写拒绝。
+  - `mf role` 显示来源（anchor/directory）、会话标识与复位建议；`mf role --as <role>
+    --reason` 仅用户终端可用（非 TTY 拒绝，rc=3），写 `role.switch` ledger。
+- 验证：全量 pytest 220 通过、ruff 通过、`mf doctor` OK；安全负向矩阵 N1–N6 覆盖见
+  T035 evidence 与 tests/test_designer_role.py。
+
 ## 1.0.2（R0/V1 P4 PATCH 发布）
 
 - 版本：1.0.2（R0/V1）

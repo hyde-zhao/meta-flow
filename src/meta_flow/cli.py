@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from . import __version__, bug, context, guard, knowledge, req, roadmap, state, verify
+from . import __version__, bug, context, guard, knowledge, req, roadmap, roles, state, verify
 from .global_store import (
     GlobalStoreError,
     bootstrap,
@@ -35,6 +35,7 @@ from .improve import (
 )
 from .install import (
     InstallError,
+    install_designer,
     install_root,
     install_worker,
     load_install_manifest,
@@ -98,18 +99,26 @@ MANAGER_PROJECT_COMMANDS = {
     "archive",
     "log",
 }
-ROLE_VALUES = {"manager", "worker", "maintainer"}
+ROLE_VALUES = {"manager", "designer", "worker", "maintainer"}
 
 
 def _effective_role(args: argparse.Namespace) -> tuple[str, Path | None]:
+    # 会话锚点优先：SessionStart/用户终端切换写入，抵御 cwd 漂移（T033 A1）
+    anchor = roles.read_anchor(Path.cwd())
+    if anchor is not None:
+        return anchor["role"], anchor["root"]
     # 显式 MF_ROLE 优先于目录推导：maintainer 可在 workspace 根维护工具源码，
     # 不被目录识别出的 manager 角色压制；角色与目录一致时保留目录 root，
-    # 保证 main() 注入 MF_ROLE 后 worker 的交付库作用域校验仍然生效
+    # 保证 main() 注入 MF_ROLE 后 worker 的交付库作用域校验仍然生效。
+    # designer/manager 不能由环境变量提权：必须与目录或锚点一致（fail-closed）。
     detected_role, detected_root = detect_role(Path.cwd())
-    env_role = os.environ.get("MF_ROLE")
+    env_role = roles.normalize_role(os.environ.get("MF_ROLE"))
     if env_role in ROLE_VALUES:
         if detected_role == env_role:
             return env_role, detected_root
+        if env_role in {"designer", "manager"}:
+            env_role = None
+    if env_role in {"worker", "maintainer"}:
         # 无交付根绑定时允许 --project-dir/--path 显式绑定（MFP-0012）
         for attr in ("project_dir", "path"):
             raw = getattr(args, attr, None)
@@ -179,11 +188,11 @@ def _enforce_role(args: argparse.Namespace) -> None:
         worker_actions = {"list", "show", "prompt"}
         manager_actions = {"create", "accept", "reject", "release", "graph", "plan", "next", "summary"}
         if action in {"start", "submit", "rework"}:
-            if role != "worker":
-                raise WorkspaceError(f"task {action} 只允许 worker", 3)
+            if role not in {"worker", "designer"}:
+                raise WorkspaceError(f"task {action} 只允许 worker/designer", 3)
             return
-        if action in worker_actions and role not in {"worker", "manager"}:
-            raise WorkspaceError(f"task {action} 只允许 worker/manager", 3)
+        if action in worker_actions and role not in {"worker", "designer", "manager"}:
+            raise WorkspaceError(f"task {action} 只允许 worker/designer/manager", 3)
         if action in manager_actions and role != "manager":
             raise WorkspaceError(f"task {action} 只允许 manager", 3)
         if action not in worker_actions | manager_actions | {"start", "submit", "rework"}:
@@ -196,13 +205,17 @@ def _enforce_role(args: argparse.Namespace) -> None:
             if action in {"list", "show"} and (args.inbox if hasattr(args, "inbox") else False):
                 return
             raise WorkspaceError("maintainer 只能通过 dev improve 维护源码", 3)
+        if role == "designer":
+            if action in {"new", "list", "show", "validate"}:
+                return
+            raise WorkspaceError("designer 只能创建/查看/校验设计改进包", 3)
         if role == "worker":
             if action in {"new", "list", "show", "validate"} and getattr(args, "local", False):
                 return
             raise WorkspaceError("worker 只能使用 improve --local 创建/查看本地 MFP", 3)
         raise WorkspaceError("无法确定角色；请在工作区根/子项目运行或设置 MF_ROLE", 3)
     if command == "context":
-        if role == "manager":
+        if role in {"manager", "designer"}:
             return
         if role == "worker" and action in {"show", "expand"}:
             # R1：worker 受控查看/展开自己的任务 bundle 或 allowed_paths；
@@ -243,6 +256,11 @@ def _worker_delivery(role_root: Path | None) -> str | None:
 
 def _ensure_worker_scope(args: argparse.Namespace, task: dict[str, Any]) -> None:
     role, _root, delivery = _worker_task_scope(args)
+    if role == "designer":
+        executor = str(task.get("executor_role") or task.get("owner_role") or "worker")
+        if executor != "designer":
+            raise WorkspaceError("designer 只能访问 design 任务（owner_role=designer）", 3)
+        return
     if role != "worker":
         return
     if task.get("delivery") and task.get("delivery") != delivery:
@@ -551,14 +569,47 @@ def _cmd_workspace_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_role(args: argparse.Namespace) -> int:
-    role, path = detect_role(Path(args.path))
+    as_role = getattr(args, "as_role", None)
+    if as_role:
+        data = roles.switch_role(
+            as_role,
+            getattr(args, "reason", "") or "",
+            cwd=Path(args.path),
+        )
+        if args.json:
+            _print_json(data)
+        else:
+            print(f"角色: {data['role']}（锚点已更新，source=user-tty；ledger role.switch）")
+            print(f"路径: {data['root']}")
+        return 0
+    info = roles.describe(Path(args.path))
+    anchor = info["anchor"]
+    effective = info["effective"]
     if args.json:
-        _print_json({"role": role, "path": str(path) if path else None})
+        _print_json(
+            {
+                "role": effective,
+                "source": info["source"],
+                "detected": info["detected"],
+                "detected_root": info["detected_root"],
+                "session_id": info.get("session_id"),
+                "anchor": anchor,
+            }
+        )
     else:
-        print(f"角色: {role}")
-        if path:
-            print(f"路径: {path}")
-    return 0 if role != "unbound" else 2
+        print(f"角色: {effective}（来源: {info['source']}）")
+        root = anchor["root"] if anchor else info["detected_root"]
+        if root:
+            print(f"路径: {root}")
+        if (
+            anchor is not None
+            and info["detected"] not in {"unbound", effective}
+        ):
+            print(
+                f"提示: 当前目录推导为 {info['detected']}，会话锚点为 {effective}；"
+                f"如需复位请在用户终端运行 mf role --as {info['detected']} --reason \"<原因>\""
+            )
+    return 0 if effective != "unbound" else 2
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -792,6 +843,9 @@ def _cmd_task_create(args: argparse.Namespace) -> int:
         module=getattr(args, "module", None),
         spec_ids=getattr(args, "spec_id", None) or [],
         evidence=getattr(args, "evidence", None) or [],
+        owner_role=getattr(args, "owner_role", None),
+        executor_role=getattr(args, "executor_role", None),
+        owner_confirmed_by=getattr(args, "owner_confirmed_by", None),
         with_review=not args.no_review,
         from_data=from_data,
     )
@@ -882,6 +936,7 @@ def _cmd_task_accept(args: argparse.Namespace) -> int:
         verdict=args.verdict,
         note=args.note,
         user_approved_by=args.user_approved_by,
+        legacy_rework=args.legacy_rework,
     )
     print(f"{data['id']} -> {data['status']} (verdict={args.verdict})")
     decision = data.get("rework_decision")
@@ -899,14 +954,16 @@ def _cmd_task_accept(args: argparse.Namespace) -> int:
                 )
         elif decision.get("auto"):
             print(
-                f"manager 审计通知: 已自动重开 {decision['task']}"
-                f"（review={data['id']}，整改项={', '.join(decision.get('items') or []) or '-'}）；"
+                f"manager 审计通知: 已自动回流 {decision['task']}"
+                f"（review={data['id']}，risk={decision.get('risk_level') or '-'}，"
+                f"整改项={', '.join(decision.get('items') or []) or '-'}）；"
                 f"worker 用 mf task rework {decision['task']} 开始"
             )
         else:
             print(
-                f"manager 审计通知: {decision['task']} 未自动重开（{decision.get('reason') or '-'}）；"
-                "请裁决后 mf task reject 退回，或开 CHG/BUG/MFP/新卡"
+                f"manager 审计通知: {decision['task']} 未自动回流"
+                f"（{decision.get('reason') or '-'}）；"
+                "请补齐 rework_summary/范围声明后重开，或按范围外开 CHG/BUG/MFP/新卡"
             )
         print(f"下一步: mf task prompt {decision['task']}")
     return 0
@@ -928,7 +985,7 @@ def _cmd_task_rework(args: argparse.Namespace) -> int:
         f"(review={rework.get('review_task')}, next={data['next_owner']})"
     )
     print("整改项: " + (", ".join(rework.get("items") or []) or "-"))
-    print("manager 审计通知: ledger task.rework 已记录（含 review / 整改项 / lease）")
+    print("ledger task.rework 已记录（含 review / 整改项 / lease）；manager 仅审计")
     print(f"下一步: mf task prompt {data['id']}")
     return 0
 
@@ -1664,6 +1721,44 @@ def _cmd_hook_pretool(args: argparse.Namespace) -> int:
     return guard.run_hook()
 
 
+def _cmd_hook_session_start(args: argparse.Namespace) -> int:
+    import json as _json
+
+    try:
+        payload = _json.load(sys.stdin)
+    except _json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    # M1b：SessionStart 必须携带宿主会话标识；缺失时不写共享锚点（fail-closed）
+    if payload.get("hook_event_name") not in (None, "SessionStart"):
+        return 0
+    session_id = str(payload.get("session_id") or "").strip() or None
+    if session_id is None:
+        return 0
+    cwd = Path(str(payload.get("cwd") or Path.cwd()))
+    roles.session_start(
+        cwd,
+        session_id=session_id,
+        source=str(payload.get("source") or "startup"),
+    )
+    return 0
+
+
+def _cmd_install_designer(args: argparse.Namespace) -> int:
+    result = install_designer(
+        args.project_dir,
+        workspace_root=args.workspace_root,
+        force=args.force,
+    )
+    print(f"已安装 designer 到: {result['project_dir']}")
+    print(f"agents: {', '.join(result['agents'])}")
+    print(f"安装记录: {result['install_manifest']}")
+    return 0
+
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mf", description="Meta Flow — AI 项目操作系统")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -1691,6 +1786,11 @@ def build_parser() -> argparse.ArgumentParser:
     install_worker_p.add_argument("--remote")
     install_worker_p.add_argument("--force", action="store_true")
     install_worker_p.set_defaults(func=_cmd_install_worker)
+    install_designer_p = install_sub.add_parser("designer", help="安装 contract designer")
+    install_designer_p.add_argument("--project-dir", default=".")
+    install_designer_p.add_argument("--workspace-root")
+    install_designer_p.add_argument("--force", action="store_true")
+    install_designer_p.set_defaults(func=_cmd_install_designer)
 
     uninstall_p = sub.add_parser("uninstall", help="按 .meta-flow/install.yaml 卸载")
     uninstall_sub = uninstall_p.add_subparsers(dest="target", required=True)
@@ -1750,6 +1850,20 @@ def build_parser() -> argparse.ArgumentParser:
     task_create.add_argument("--from", dest="from_file")
     task_create.add_argument(
         "--kind", choices=["implement", "design", "verify", "document", "review", "fix"], default="implement"
+    )
+    task_create.add_argument(
+        "--owner-role",
+        choices=["manager", "designer", "worker", "maintainer"],
+        help="责任主体；design 默认 designer，其他默认 worker",
+    )
+    task_create.add_argument(
+        "--executor-role",
+        choices=["manager", "designer", "worker", "maintainer"],
+        help="执行者；默认同 owner_role",
+    )
+    task_create.add_argument(
+        "--owner-confirmed-by",
+        help="非默认责任主体的 manager 显式确认人/记录（写 ledger）",
     )
     task_create.add_argument("--delivery")
     task_create.add_argument("--risk", choices=["low", "medium", "high", "critical"], default="medium")
@@ -1822,6 +1936,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_accept.add_argument("--note")
     task_accept.add_argument("--user-approved-by", help="critical 任务的用户验收记录")
+    task_accept.add_argument(
+        "--legacy-rework",
+        action="store_true",
+        help="旧行为：高风险/新验收保留 manager 裁决（一版回滚开关）",
+    )
     task_accept.set_defaults(func=_cmd_task_accept)
 
     task_reject = task_sub.add_parser("reject")
@@ -2252,9 +2371,15 @@ def build_parser() -> argparse.ArgumentParser:
     upgrade_p.add_argument("--force", action="store_true")
     upgrade_p.set_defaults(func=_cmd_upgrade)
 
-    role_p = sub.add_parser("role", help="显示当前目录角色")
+    role_p = sub.add_parser("role", help="显示/切换角色（切换仅限用户终端）")
     role_p.add_argument("--path", default=".")
     role_p.add_argument("--json", action="store_true")
+    role_p.add_argument(
+        "--as",
+        dest="as_role",
+        help="切换角色：manager|designer|worker|maintainer 或短名 mgr/dsg/wkr/mnt",
+    )
+    role_p.add_argument("--reason", help="切换原因（写入 ledger role.switch）")
     role_p.set_defaults(func=_cmd_role)
 
     status_p = sub.add_parser("status", help="显示工作区或安装状态")
@@ -2272,6 +2397,10 @@ def build_parser() -> argparse.ArgumentParser:
     hook_sub = hook_p.add_subparsers(dest="action", required=True)
     hook_pretool = hook_sub.add_parser("pretool", help="PreToolUse 角色/路径守卫")
     hook_pretool.set_defaults(func=_cmd_hook_pretool)
+    hook_session = hook_sub.add_parser(
+        "session-start", help="SessionStart 写角色锚点（/clear 后重写）"
+    )
+    hook_session.set_defaults(func=_cmd_hook_session_start)
 
     return parser
 
@@ -2311,6 +2440,7 @@ def main(argv: list[str] | None = None) -> int:
         verify.VerifyError,
         context.ContextError,
         state.StateError,
+        roles.RoleError,
     ) as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return getattr(exc, "code", 1)

@@ -467,6 +467,8 @@ def test_cli_task_rework_and_manager_audit(tmp_path, monkeypatch, capsys):
                 "> verdict: NEEDS_REWORK",
                 "> rework_scope: in-scope",
                 "> rework_requires: none",
+                "> rework_summary: {reason: 验收未满足, risk: 返工风险, "
+                "impact: 交付不达标, expectation: 整改后达标}",
                 "",
                 "## 必须整改项",
                 "",
@@ -485,7 +487,7 @@ def test_cli_task_rework_and_manager_audit(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
     assert main(["task", "accept", review_id, "--verdict", "NEEDS_REWORK"]) == 0
     out = capsys.readouterr().out
-    assert "自动重开" in out
+    assert "自动回流" in out
     assert f"mf task rework {task_id}" in out
 
     # rework 只允许 worker；manager 不得开始
@@ -496,7 +498,7 @@ def test_cli_task_rework_and_manager_audit(tmp_path, monkeypatch, capsys):
     assert main(["task", "rework", task_id, "--project-dir", "alpha"]) == 0
     out = capsys.readouterr().out
     assert "in_progress" in out
-    assert "manager 审计通知" in out
+    assert "ledger task.rework 已记录" in out
     _, task = load_task(project, task_id)
     assert task["status"] == "in_progress"
     assert task["rework"]["review_task"] == review_id
@@ -536,6 +538,8 @@ def test_cli_task_accept_while_rework_in_progress(tmp_path, monkeypatch, capsys)
                 "> verdict: NEEDS_REWORK",
                 "> rework_scope: in-scope",
                 "> rework_requires: none",
+                "> rework_summary: {reason: 验收未满足, risk: 返工风险, "
+                "impact: 交付不达标, expectation: 整改后达标}",
                 "",
                 "## 必须整改项",
                 "",
@@ -557,7 +561,7 @@ def test_cli_task_accept_while_rework_in_progress(tmp_path, monkeypatch, capsys)
     assert main(["task", "accept", review_id, "--verdict", "NEEDS_REWORK"]) == 0
     out = capsys.readouterr().out
     assert "已在返工中" in out
-    assert "未自动重开" not in out
+    assert "未自动回流" not in out
     _, task = load_task(project, task_id)
     assert task["status"] == "in_progress"
     assert task["next_owner"] == "worker"
@@ -706,7 +710,7 @@ def test_cli_local_mfp_channel_and_guard_log_query(tmp_path, monkeypatch, capsys
 
 
 def test_cli_task_review_rework_prompt_and_state(tmp_path, monkeypatch, capsys):
-    """T019 关键链路：review prompt 下一环节、NEEDS_REWORK 自动重开与 rework state。"""
+    """T019 关键链路：review prompt 下一环节、NEEDS_REWORK 自动回流与 rework state。"""
     _, project = _prepare(tmp_path, monkeypatch)
     assert main(["bootstrap"]) == 0
     install_root(project)
@@ -757,6 +761,8 @@ def test_cli_task_review_rework_prompt_and_state(tmp_path, monkeypatch, capsys):
                 "> verdict: NEEDS_REWORK",
                 "> rework_scope: in-scope",
                 "> rework_requires: none",
+                "> rework_summary: {reason: 验收未满足, risk: 返工风险, "
+                "impact: 交付不达标, expectation: 整改后达标}",
                 "",
                 "## 必须整改项",
                 "",
@@ -802,7 +808,7 @@ def test_cli_task_review_rework_prompt_and_state(tmp_path, monkeypatch, capsys):
         == 0
     )
     out = capsys.readouterr().out
-    assert "已自动重开" in out
+    assert "已自动回流" in out
     assert f"mf task rework {task_id}" in out
 
     # 重开后的 task prompt：next_owner=worker，明确只能用 mf task rework 开始
@@ -827,7 +833,7 @@ def test_cli_task_review_rework_prompt_and_state(tmp_path, monkeypatch, capsys):
     assert main(["task", "rework", task_id, "--project-dir", str(project / "alpha")]) == 0
     out = capsys.readouterr().out
     assert "in_progress" in out
-    assert "manager 审计通知" in out
+    assert "ledger task.rework 已记录" in out
     _, task = load_task(project, task_id)
     assert task["status"] == "in_progress"
     assert task["lease"] is not None

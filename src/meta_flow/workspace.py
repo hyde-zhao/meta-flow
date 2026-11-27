@@ -123,12 +123,34 @@ def find_subproject_root(start: Path) -> Path | None:
     return None
 
 
+def find_designer_root(start: Path) -> Path | None:
+    """designer 安装在 contract 目录：install.yaml role=designer（T035）。"""
+    current = _as_dir(start).resolve()
+    for candidate in (current, *current.parents):
+        path = candidate / INSTALL_REL
+        if path.is_file():
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except yaml.YAMLError:
+                data = {}
+            if isinstance(data, dict) and data.get("role") == "designer":
+                return candidate
+    return None
+
+
 def detect_role(start: Path) -> tuple[str, Path | None]:
-    """根据目录推导角色。"""
+    """根据目录推导角色。
+
+    designer 安装于 contract 目录时优先识别；随后才是 contract→manager、
+    子项目→worker、workspace→manager。锚点/显式 MF_ROLE 由 CLI/guard 叠加。
+    """
     current = _as_dir(start).resolve()
     home = global_store.global_home()
     if current == home or home in current.parents:
         return "maintainer", home
+    designer = find_designer_root(current)
+    if designer is not None:
+        return "designer", designer
     contract = find_contract_root(current)
     if contract is not None:
         return "manager", contract
@@ -1089,7 +1111,7 @@ def doctor_global() -> list[str]:
             data = {}
         if not data.get("repo_url"):
             errors.append("全局 manifest 缺少 repo_url")
-    for name in ("manager", "maintainer", "worker"):
+    for name in ("manager", "designer", "maintainer", "worker"):
         if not (home / "agents" / f"{name}.md").is_file():
             errors.append(f"缺少全局 agent: agents/{name}.md")
     standards = home / "templates" / "standards"
@@ -1142,6 +1164,33 @@ def doctor(root: str | Path) -> list[str]:
         contract = _contract_path(root, local)
     except WorkspaceError as exc:
         return errors + [str(exc)]
+
+    designer_install = contract / INSTALL_REL
+    if designer_install.is_file():
+        try:
+            designer_data = _load_yaml(designer_install)
+        except WorkspaceError as exc:
+            errors.append(str(exc))
+        else:
+            if designer_data.get("role") != "designer":
+                errors.append("contract 安装角色不是 designer")
+            if not (contract / ".claude" / "agents" / "designer.md").is_file():
+                errors.append("contract 缺少 designer agent")
+            designer_settings = contract / ".claude" / "settings.json"
+            if not designer_settings.is_file():
+                errors.append("contract 缺少 designer settings.json")
+            else:
+                try:
+                    designer_settings_data = json.loads(
+                        designer_settings.read_text(encoding="utf-8")
+                    )
+                except json.JSONDecodeError:
+                    errors.append("contract designer settings.json 非法")
+                else:
+                    if designer_settings_data.get("agent") != "designer":
+                        errors.append("contract settings.json 的 agent 不是 designer")
+                    if not _settings_has_hook(designer_settings_data):
+                        errors.append("contract settings.json 缺少 PreToolUse hook")
 
     for relative in (
         "workspace/CLAUDE.md",
@@ -1308,8 +1357,27 @@ def _doctor_planning_data(contract: Path, errors: list[str]) -> None:
         tasks[task_id] = data
         if data.get("status") not in valid_status:
             errors.append(f"任务 {task_id} status 非法: {data.get('status')}")
-        if data.get("next_owner") not in {"worker", "manager"}:
+        if data.get("next_owner") not in {"worker", "designer", "manager"}:
             errors.append(f"任务 {task_id} next_owner 非法: {data.get('next_owner')}")
+        for field in ("owner_role", "executor_role"):
+            value = data.get(field)
+            if value is not None and value not in {
+                "manager",
+                "designer",
+                "worker",
+                "maintainer",
+            }:
+                errors.append(f"任务 {task_id} {field} 非法: {value}")
+        if (
+            data.get("kind") == "design"
+            and data.get("executor_role") is not None
+            and data.get("owner_role")
+            and data.get("owner_role") != "designer"
+            and not data.get("owner_confirmation")
+        ):
+            errors.append(
+                f"任务 {task_id} design 责任主体非 designer 但缺少 manager 确认审计"
+            )
         if data.get("module") is not None and not str(data.get("module")).strip():
             errors.append(f"任务 {task_id} module 为空")
         if data.get("spec_ids") is not None and not isinstance(data.get("spec_ids"), list):

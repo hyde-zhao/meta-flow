@@ -2,7 +2,7 @@
 
 ## 适用对象
 
-本手册面向使用 meta-flow 的项目 manager、worker 与 maintainer。版本按
+本手册面向使用 meta-flow 的项目 manager、designer、worker 与 maintainer。版本按
 `x.y.z = V.R.patch` 管理：当前 V1/R0 = 1.0.x（工具版本 1.0.2），R1 =
 V1/R1 = 1.1.x。命令以 `mf` 1.0.2 为准；绑定声明见 contract 的
 `roadmap/ROADMAP.yaml`（`version_major`/`version_range`）。
@@ -31,16 +31,20 @@ V1/R1 = 1.1.x。命令以 `mf` 1.0.2 为准；绑定声明见 contract 的
    mf doctor --global
    ```
 
-3. 在项目根安装 manager（可选同时安装 maintainer）：
+3. 在项目根安装 manager（可选同时安装 maintainer）；在 contract 安装 designer：
 
    ```bash
    mf install claude --project-dir <项目根>
    # 或
    mf install claude --project-dir <项目根> --agent maintainer
+   # designer 安装在契约库（设计区）
+   mf install designer --project-dir <项目根>/<项目名>-contract
    ```
 
    安装会生成 `.claude/`、`CLAUDE.md`、`.meta-flow/install.yaml`，并在 git 仓库
    维护安装镜像忽略块；非 git 目录跳过 `.gitignore`。安装镜像不入库。
+   designer 安装会写 `role: designer`，`mf upgrade --project-dir <contract> --force`
+   可更新 designer agent。
 
 4. 更新与升级：
 
@@ -57,6 +61,32 @@ V1/R1 = 1.1.x。命令以 `mf` 1.0.2 为准；绑定声明见 contract 的
    缺失时补建，**不会覆盖项目自定义内容**（BUG-0015）。`mf bootstrap --force`
    同样只刷新 `~/.meta-flow` 全局模板，不触碰 contract。contract 内容变更走
    manager 的评审/变更流程（`mf task`、`CHG-*`），不能用安装升级强制覆盖。
+
+## 角色锚点与 designer
+
+- 会话锚点：`<workspace>/.meta-flow/session-roles/<session_id>.yaml`。SessionStart hook
+  按宿主会话写本会话锚点，`/clear` 只重写本会话；不同会话互不覆盖。用户终端
+  `mf role --as` 写 `session-roles/user-tty.yaml`（人工切换，按更新时间优先，本会话
+  下一次 SessionStart 覆盖）。无 `session_id` 时不回退共享会话锚点（fail-closed）；
+  user-tty 锚点仅用户终端可写（`write_anchor(source="user-tty")` 非 TTY 拒绝）；
+  guard/CLI 优先使用锚点，cwd 漂移不改变角色。
+- 用户终端切换角色（AI 会话不得自升级）：
+
+  ```bash
+  mf role                                  # 显示 effective role/来源/复位建议
+  mf role --as designer --reason "设计工作包"
+  mf role --as mgr --reason "回到 manager"  # 短名 mgr/dsg/wkr/mnt
+  ```
+
+  非 TTY 调用被拒绝（rc=3）并提示用户终端；切换写 `role.switch` ledger。
+- designer 工作区：contract 设计区。可写 `architecture/`、`specs/`、P2 设计包/规格、
+  模块/接口文档与任务 bundle；可读子项目接口/源码（设计/验证范围）；禁止写子项目源码、
+  需求/验收/发布。
+- 设计任务：`mf task create --kind design ...` 默认 `owner_role=executor_role=designer`，
+  `mf task prompt` 显示 `owner_role`/`executor_role`/`delivery`；worker 不得 start/submit
+  design 任务；非 designer 主责需 manager `--owner-confirmed-by` 显式确认并写 ledger。
+- 设计包模板：`contract/templates/DESIGN-PACKAGE.md`，包含信息流、子项目/职责/接口、
+  模块/功能/接口、REQ/MFP→SPEC→子项目/模块映射、跨子项目验证、预研计划与设计验收。
 
 ## 快速开始 1：全新项目
 
@@ -242,6 +272,12 @@ mf task accept R0-P1-T001 --verdict PASS
 ### 任务与评审
 
 - `mf task create/start/submit/prompt/show --packet/--review-packet`。
+- 责任主体与执行者：`kind: design` 默认 `owner_role=designer`/`executor_role=designer`；
+  implement/fix/document/verify 默认 worker；review 由独立评审者执行。非默认主责需
+  `--owner-confirmed-by` 并写 `task.owner.confirm` ledger；worker 不得冒充 designer，
+  designer 只能执行 design 任务。
+- 角色锚点：`mf role` 显示来源；`mf role --as <role> --reason <text>` 仅用户终端可用，
+  非 TTY 拒绝；SessionStart 每次会话/`/clear` 重写锚点。
 - 评审包按 `reviews` 目标嵌入被评审任务的 dev-record/handoff/diff；证据缺失显式报错。
 - review 任务提交只需 `review.md` + `review-handoff.md`；implement/fix 仍要求
   handoff/dev-record。
@@ -320,6 +356,11 @@ mf task accept R0-P1-T001 --verdict PASS
 | 现象 | 处理 |
 |---|---|
 | `角色: unbound` | 在 workspace 根/contract/子项目运行，或显式 `MF_ROLE`；首次 init/attach 由安装角色 bootstrap |
+| cwd 在子项目但角色显示 manager/worker 不符 | 查看 `mf role` 来源；会话锚点由 SessionStart 写入。用户终端 `mf role --as <role> --reason <原因>` 重置，`/clear` 会按会话目录重写 |
+| `mf role --as` 报非 TTY | 只允许用户在终端执行；AI Bash 工具不能切换角色（防自升级） |
+| designer 写文件被拒 | designer 只能写 `architecture/`、`specs/`、P2 设计包与任务 bundle；子项目源码/需求/发布禁止写入 |
+| design 任务 worker start 被拒 | design 责任主体是 designer；worker 不得冒充；manager 派 designer 任务并等待 designer 会话 |
+| `mf install designer` 被拒 | 目标目录必须是 contract（含 `.meta-flow/role.yaml` 或 `workspace/`）；设计区安装不写交付库 |
 | worker 任务命令 rc=3 | 无交付根绑定：加 `--project-dir <交付库>` 或进入交付库目录 |
 | 根 CLAUDE.md 被判 modified | 运行 `mf workspace link` 刷新 install digest；再 `mf doctor` |
 | `mf dev status` 报源码不存在 | 运行 `mf dev clone` 或 `--source <有效源码目录>` |

@@ -367,13 +367,14 @@ def refresh_current(contract: Path) -> dict[str, Any]:
             and review_status == "accepted"
             and detail.get("review_verdict") == "NEEDS_REWORK"
         ):
-            # 范围外/高风险/争议不自动重开，等 manager 裁决（MFP-0015 E2/E5）
+            # 未自动回流（缺 rework_summary/范围声明或范围外），manager 补齐或开单
             data["next_action"] = {
                 "type": "rework_decision",
                 "task": task_id,
                 "review_task": review_id,
-                "text": "review NEEDS_REWORK 未自动重开；manager 裁决：reject 退回 worker 用 "
-                f"mf task rework {task_id}，或开 CHG/BUG/MFP/新卡",
+                "text": "review NEEDS_REWORK 未自动回流（缺 rework_summary/范围声明或范围外）；"
+                "manager 补齐说明或开 CHG/BUG/MFP/新卡后，worker 用 "
+                f"mf task rework {task_id} 开始",
             }
         elif detail.get("kind") == "review" or not review_id or review_status in {"accepted"}:
             data["next_action"] = {"type": "accept", "task": task_id}
@@ -480,11 +481,14 @@ def reconcile(contract: Path) -> list[str]:
     for task_id, data in tasks.items():
         status = str(data.get("status") or "")
         next_owner = str(data.get("next_owner") or "")
+        executor = str(
+            data.get("executor_role") or data.get("owner_role") or "worker"
+        )
         lease = data.get("lease") or {}
         if status == "in_progress":
             if not isinstance(lease, dict) or not lease.get("expires_at"):
                 issues.append(f"任务 {task_id} in_progress 但缺少 lease")
-            if next_owner != "worker":
+            if next_owner != executor:
                 issues.append(f"任务 {task_id} in_progress 但 next_owner={next_owner}")
         elif lease:
             issues.append(f"任务 {task_id} status={status} 但仍有 lease")
@@ -505,8 +509,10 @@ def reconcile(contract: Path) -> list[str]:
                 )
         if status == "draft" and next_owner != "manager":
             issues.append(f"任务 {task_id} draft 但 next_owner={next_owner}（应为 manager）")
-        if status in {"ready", "in_progress", "rework", "rejected"} and next_owner != "worker":
-            issues.append(f"任务 {task_id} status={status} 但 next_owner={next_owner}（应为 worker）")
+        if status in {"ready", "in_progress", "rework", "rejected"} and next_owner != executor:
+            issues.append(
+                f"任务 {task_id} status={status} 但 next_owner={next_owner}（应为 {executor}）"
+            )
 
     expected_digest = _source_digest(contract, raw)
     recorded_digest = raw.get("source_digest")

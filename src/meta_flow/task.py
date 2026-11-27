@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from . import bug, knowledge
+from . import bug, knowledge, roles
 from .state import ledger_append, refresh_current, review_needs_rework, task_summary
 from .workspace import load_current_state, resolve_contract
 
@@ -161,13 +161,18 @@ def _task_data(
     inputs: dict[str, Any],
     status: str,
     next_owner: str,
+    owner_role: str | None = None,
+    executor_role: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": task_id,
         "title": title,
         "kind": kind,
         "status": status,
-        "owner_role": "worker",
+        "owner_role": owner_role or ("designer" if kind == "design" else "worker"),
+        "executor_role": executor_role
+        or owner_role
+        or ("designer" if kind == "design" else "worker"),
         "next_owner": next_owner,
         "roadmap": roadmap,
         "phase": phase,
@@ -236,6 +241,9 @@ def create_task(
     spec_ids: list[str] | None = None,
     verification: dict[str, Any] | None = None,
     evidence: list[str] | None = None,
+    owner_role: str | None = None,
+    executor_role: str | None = None,
+    owner_confirmed_by: str | None = None,
     with_review: bool = True,
     from_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -277,6 +285,41 @@ def create_task(
     verification = verification or {}
     evidence = [str(item) for item in (data.get("evidence") or evidence or [])]
 
+    # WP-F1/T033：责任主体与执行者分离（MFP-0035/ADR-007）。
+    # design 默认 designer；implement/fix/document/verify 默认 worker；
+    # review 由独立评审者（worker 身份）执行。非默认主责需 manager 显式确认。
+    default_owner = "designer" if kind == "design" else "worker"
+    requested_owner = str(data.get("owner_role") or owner_role or default_owner)
+    requested_executor = str(
+        data.get("executor_role") or executor_role or requested_owner
+    )
+    if requested_owner not in roles.ROLE_NAMES:
+        raise TaskError(
+            f"owner_role 只能是 {'|'.join(roles.ROLE_NAMES)}: {requested_owner}"
+        )
+    if requested_executor not in roles.ROLE_NAMES:
+        raise TaskError(
+            f"executor_role 只能是 {'|'.join(roles.ROLE_NAMES)}: {requested_executor}"
+        )
+    confirmed_by = str(
+        data.get("owner_confirmed_by") or owner_confirmed_by or ""
+    ).strip()
+    owner_confirmation = None
+    if requested_owner != default_owner:
+        if not confirmed_by:
+            raise TaskError(
+                f"{kind} 任务责任主体默认为 {default_owner}；"
+                f"改为 {requested_owner} 需 manager 显式确认（--owner-confirmed-by <manager/记录>）"
+            )
+        owner_confirmation = {
+            "kind": kind,
+            "owner_role": requested_owner,
+            "executor_role": requested_executor,
+            "confirmed_by": confirmed_by,
+        }
+    if requested_executor == "designer" and requested_owner != "designer":
+        raise TaskError("designer 执行者只能对应 designer 责任主体")
+
     tasks_dir = contract / "roadmap" / roadmap / "phases" / phase / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
     num = _next_num(tasks_dir)
@@ -285,7 +328,7 @@ def create_task(
     (bundle / "evidence").mkdir(parents=True, exist_ok=True)
 
     status = "ready" if acceptance else "draft"
-    next_owner = "worker" if status == "ready" else "manager"
+    next_owner = requested_owner if status == "ready" else "manager"
     task = _task_data(
         task_id,
         title,
@@ -303,6 +346,8 @@ def create_task(
         inputs=inputs,
         status=status,
         next_owner=next_owner,
+        owner_role=requested_owner,
+        executor_role=requested_executor,
     )
     if isinstance(data.get("risk"), dict):
         task["risk"].update(data["risk"])
@@ -313,6 +358,10 @@ def create_task(
     task["spec_ids"] = spec_ids
     task["verification"] = verification
     task["evidence"] = evidence
+    task["owner_role"] = requested_owner
+    task["executor_role"] = requested_executor
+    if owner_confirmation is not None:
+        task["owner_confirmation"] = owner_confirmation
     if not task.get("packet_budget"):
         # 按 effort 档位分配；显式 packet_budget 优先（MFP-0007 A4）
         task["packet_budget"] = _packet_budget(contract, effort)
@@ -365,8 +414,22 @@ def create_task(
             "to": status,
             "wave": wave,
             "risk": risk,
+            "owner_role": requested_owner,
+            "executor_role": requested_executor,
         },
     )
+    if owner_confirmation is not None:
+        ledger_append(
+            contract,
+            {
+                "event": "task.owner.confirm",
+                "task": task_id,
+                "kind": kind,
+                "owner_role": requested_owner,
+                "executor_role": requested_executor,
+                "confirmed_by": confirmed_by,
+            },
+        )
     refresh_current(contract)
     return {
         "task": task_id,
@@ -422,7 +485,10 @@ def summary_text(data: dict[str, Any]) -> str:
             f"标题: {data.get('title')}",
             f"模块/规格: {modules} / {specs}",
             f"交付库: {data.get('delivery') or '-'} wave={data.get('wave') or '-'}",
-            f"责任: next_owner={data.get('next_owner')} lease={lease.get('expires_at') or '-'}",
+            f"责任: next_owner={data.get('next_owner')} "
+            f"owner_role={data.get('owner_role') or '-'} "
+            f"executor_role={data.get('executor_role') or '-'} "
+            f"lease={lease.get('expires_at') or '-'}",
             f"验收: {len(acceptance)} 项"
             + (
                 "（" + ", ".join(str(item.get('id')) for item in acceptance) + "）"
@@ -464,6 +530,27 @@ def _check_wave_conflicts(contract: Path, task: dict[str, Any]) -> None:
             )
 
 
+def _actor_role() -> str:
+    """当前执行者角色（CLI main 会注入 MF_ROLE；直接 API 默认 worker）。"""
+    return roles.normalize_role(os.environ.get("MF_ROLE")) or "worker"
+
+
+def _ensure_task_actor(task_id: str, data: dict[str, Any]) -> None:
+    """design 任务只能由 designer 执行；designer 只能执行 design 任务。"""
+    role = _actor_role()
+    executor = str(data.get("executor_role") or data.get("owner_role") or "worker")
+    if executor == "designer":
+        if role != "designer":
+            raise TaskError(
+                f"design 任务 {task_id} 的执行者是 designer；{role} 不得冒充 designer"
+                "（请在用户终端 mf role --as designer --reason <原因>）"
+            )
+    elif role == "designer":
+        raise TaskError(
+            f"任务 {task_id} 的执行者是 {executor}；designer 只能执行 design 任务"
+        )
+
+
 def start_task(
     project: str | Path,
     task_id: str,
@@ -471,6 +558,7 @@ def start_task(
     owner: str | None = None,
 ) -> dict[str, Any]:
     path, data = load_task(project, task_id)
+    _ensure_task_actor(task_id, data)
     status = data.get("status")
     stale_event: dict[str, Any] | None = None
     if status in {"rework", "rejected"}:
@@ -488,7 +576,9 @@ def start_task(
             previous = status
             if status == "rework":
                 data["status"] = "rejected"
-            data["next_owner"] = "worker"
+            data["next_owner"] = str(
+                data.get("executor_role") or data.get("owner_role") or "worker"
+            )
             data["lease"] = None
             reason = "关联 review 已不在 NEEDS_REWORK；start 清理陈旧 verdict"
             _clear_stale_rework(data, reason)
@@ -526,10 +616,11 @@ def start_task(
             path.parent / "evidence" / "worktree-start.json",
             exclude,
         )
+    executor = str(data.get("executor_role") or data.get("owner_role") or "worker")
     data["status"] = "in_progress"
-    data["next_owner"] = "worker"
+    data["next_owner"] = executor
     data["started_at"] = _now()
-    lease = _new_lease(owner or "worker", task_id, str(data.get("wave") or "W1"))
+    lease = _new_lease(owner or executor, task_id, str(data.get("wave") or "W1"))
     data["lease"] = lease
     _save(path, data)
     ledger_append(
@@ -553,11 +644,14 @@ def rework_task(
     lease。worker 不得直接从 submitted 编辑/开始。
     """
     path, data = load_task(project, task_id)
+    _ensure_task_actor(task_id, data)
     status = str(data.get("status"))
     if status == "submitted":
         raise TaskError(
             f"任务 {task_id} 处于 submitted；worker 不得直接开始；"
-            "manager 需先接受 review 并裁决/退回"
+            "review 接受后 NEEDS_REWORK 会自动回流（所有风险级别）；"
+            "若未自动回流，等 reviewer 补齐 rework_summary/范围声明，"
+            "或由 manager 处理范围外事项"
         )
     if status not in {"rework", "rejected"}:
         raise TaskError(f"任务 {task_id} 当前状态 {status} 不能 rework")
@@ -582,8 +676,13 @@ def rework_task(
         exclude,
     )
     scope = _read_rework_scope(review_path.parent)
+    summary, summary_missing = _read_rework_summary(review_path.parent)
     existing = data.get("rework") if isinstance(data.get("rework"), dict) else {}
-    lease = _new_lease(owner or "worker", task_id, str(data.get("wave") or "W1"))
+    lease = _new_lease(
+        owner or str(data.get("executor_role") or data.get("owner_role") or "worker"),
+        task_id,
+        str(data.get("wave") or "W1"),
+    )
     items = existing.get("items") or scope.get("items") or []
     data["rework"] = {
         "review_task": str(review_id),
@@ -593,6 +692,8 @@ def rework_task(
         "requires": existing.get("requires") or scope.get("requires") or [],
         "items": items,
         "allowed_paths": list(data.get("allowed_paths") or []),
+        "rework_summary": existing.get("rework_summary") or summary,
+        "summary_missing": existing.get("summary_missing") or summary_missing,
         "decision": existing.get("decision") or "manager",
         "auto": bool(existing.get("auto")),
         "reason": existing.get("reason"),
@@ -604,7 +705,9 @@ def rework_task(
         "note": note or existing.get("note"),
     }
     data["status"] = "in_progress"
-    data["next_owner"] = "worker"
+    data["next_owner"] = str(
+        data.get("executor_role") or data.get("owner_role") or "worker"
+    )
     data["started_at"] = _now()
     data["lease"] = lease
     _save(path, data)
@@ -1015,6 +1118,7 @@ def submit_task(
     blocked: bool | None = None,
 ) -> dict[str, Any]:
     path, data = load_task(project, task_id)
+    _ensure_task_actor(task_id, data)
     if data.get("status") != "in_progress":
         raise TaskError(f"任务 {task_id} 当前状态 {data.get('status')} 不能 submit")
     lease = data.get("lease") or {}
@@ -1060,6 +1164,17 @@ def submit_task(
             item = bundle / name
             if not item.is_file() or not item.read_text(encoding="utf-8").strip():
                 raise TaskError(f"评审任务缺少 {name}")
+        # MFP-0037：NEEDS_REWORK 必须写人话返工说明，缺失拒绝提交。
+        if _read_review_verdict(bundle) == "NEEDS_REWORK":
+            _, summary_missing = _read_rework_summary(bundle)
+            if summary_missing:
+                raise TaskError(
+                    "review-handoff.md 结论 NEEDS_REWORK 时必须包含 rework_summary "
+                    "人话说明：reason（返工原因）、risk（风险）、impact（问题影响）、"
+                    "expectation（期望结果）；当前缺少 "
+                    + ", ".join(summary_missing)
+                    + "。补齐后再 mf task submit。"
+                )
     else:
         handoff_path = _process_file(
             project_path, bundle, task_id, handoff, "handoff.md", "handoffs"
@@ -1199,10 +1314,42 @@ REWORK_ITEMS_RE = re.compile(
 _REWORK_SECTION_RE = re.compile(
     r"^##\s*必须整改项\s*$(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL
 )
-_REWORK_ITEM_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*")
+_REWORK_ITEM_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_.][A-Za-z0-9]+)*")
+# 支持 R1、R1a、M1a、BUG-0018、CHG-0004、T035 等整改项 ID（MFP-0037）
 _REWORK_ITEM_TOKEN_RE = re.compile(
-    r"^([A-Za-z]{1,4}\d{1,4})(?=[^A-Za-z0-9]|$)"
+    r"^([A-Za-z]{1,6}[A-Za-z0-9]*(?:-\d{1,4})?(?:\d{1,4}[A-Za-z]?)?)"
+    r"(?=[\s:：、,，.。)）]|$)"
 )
+_REWORK_HEADING_RE = re.compile(r"^#{3,6}\s+(\S+)")
+REWORK_SUMMARY_RE = re.compile(
+    r"^\s*(?:>\s*|[-*]\s*)?rework_summary\s*[:=]\s*(.*?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_REWORK_SUMMARY_DOTTED_RE = re.compile(
+    r"^\s*(?:>\s*|[-*]\s*)?rework_summary[._]"
+    r"(reason|risk|impact|expectation|原因|问题影响|影响|期望结果|期望)"
+    r"\s*[:：=]\s*(.*?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+REWORK_SUMMARY_FIELD_RE = re.compile(
+    r"^\s*(?:>\s*|[-*]\s*)?(?:rework_summary[._])?"
+    r"(reason|risk|impact|expectation|原因|问题影响|影响|期望结果|期望)"
+    r"\s*[:：=]\s*(.*?)\s*$",
+    re.IGNORECASE,
+)
+_REWORK_SUMMARY_KEYS = ("reason", "risk", "impact", "expectation")
+_REWORK_SUMMARY_ALIASES = {
+    "reason": "reason",
+    "原因": "reason",
+    "risk": "risk",
+    "风险": "risk",
+    "impact": "impact",
+    "影响": "impact",
+    "问题影响": "impact",
+    "expectation": "expectation",
+    "期望": "expectation",
+    "期望结果": "expectation",
+}
 
 
 def _split_rework_list(raw: str) -> list[str]:
@@ -1217,9 +1364,10 @@ def _split_rework_list(raw: str) -> list[str]:
 
 
 def _read_rework_scope(bundle: Path) -> dict[str, Any]:
-    """解析 review-handoff 的整改范围声明（MFP-0015）。
+    """解析 review-handoff 的整改范围声明（MFP-0015/MFP-0037）。
 
-    缺少声明时按“需 manager 裁决”处理，绝不自动重开。
+    缺少 rework_scope 或非 in-scope 时不自动回流；rework_requires 仅标注
+    范围外事项，由 manager 另开单，不阻塞范围内返工。
     """
     path = bundle / "review-handoff.md"
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
@@ -1241,8 +1389,17 @@ def _read_rework_scope(bundle: Path) -> dict[str, Any]:
                     continue
                 if _REWORK_ITEM_ID_RE.fullmatch(cell):
                     items.append(cell)
+            elif raw.startswith("#"):
+                # MFP-0037：支持 `### M1a 问题` / `### BUG-0018 ...` 小节标题
+                heading = _REWORK_HEADING_RE.match(raw)
+                if heading:
+                    token = _REWORK_ITEM_TOKEN_RE.match(heading.group(1))
+                    if token:
+                        items.append(token.group(1))
             elif raw.startswith(("-", "*")):
                 body = raw.lstrip("-* ").strip().strip("`*_ ")
+                if body.startswith("[") and "]" in body:
+                    body = body.split("]", 1)[1].strip().strip("`*_ ")
                 token = _REWORK_ITEM_TOKEN_RE.match(body)
                 if token:
                     items.append(token.group(1))
@@ -1255,20 +1412,101 @@ def _read_rework_scope(bundle: Path) -> dict[str, Any]:
     }
 
 
-def _rework_plan(data: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
-    """判断 review NEEDS_REWORK 是否满足自动重开条件（MFP-0015 E1/E2）。"""
+def _clean_summary_value(raw: str) -> str:
+    value = str(raw or "").strip().strip("`*_").strip()
+    if not value or value.lower() in {"-", "none", "n/a", "todo", "待补", "待定"}:
+        return ""
+    if value.startswith("{") and value.endswith("}"):
+        return ""
+    if value.startswith("<") and value.endswith(">"):
+        return ""
+    return value
+
+
+def _read_rework_summary(bundle: Path) -> tuple[dict[str, str], list[str]]:
+    """解析 review-handoff/review 的人话返工说明（MFP-0037）。
+
+    支持 inline 映射（``rework_summary: {reason: ..., risk: ...}``）、
+    ``rework_summary:`` 后的缩进键值块，以及 ``rework_summary.reason: ...``
+    独立行；中英文键名均可。返回 (字段值, 缺失字段列表)。
+    """
+    values: dict[str, str] = {}
+
+    def record(name: str, raw: str) -> None:
+        key = _REWORK_SUMMARY_ALIASES.get(str(name or "").strip().lower())
+        value = _clean_summary_value(raw)
+        if key and value:
+            values.setdefault(key, value)
+
+    for name in ("review-handoff.md", "review.md"):
+        path = bundle / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for match in _REWORK_SUMMARY_DOTTED_RE.finditer(text):
+            record(match.group(1), match.group(2))
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            match = REWORK_SUMMARY_RE.match(line)
+            if not match:
+                continue
+            tail = match.group(1).strip()
+            if tail.startswith("{"):
+                for part in re.split(r"[,，;；]\s*", tail.strip("{}")):
+                    field = REWORK_SUMMARY_FIELD_RE.match(part)
+                    if field:
+                        record(field.group(1), field.group(2))
+                continue
+            for follow in lines[index + 1 :]:
+                if not follow.strip():
+                    break
+                stripped = follow.lstrip()
+                if not (
+                    follow.startswith((" ", "\t"))
+                    or stripped.startswith((">", "-", "*"))
+                ):
+                    break
+                field = REWORK_SUMMARY_FIELD_RE.match(follow)
+                if field:
+                    record(field.group(1), field.group(2))
+    missing = [key for key in _REWORK_SUMMARY_KEYS if not values.get(key)]
+    return values, missing
+
+
+def _rework_plan(
+    data: dict[str, Any],
+    scope: dict[str, Any],
+    *,
+    summary_missing: list[str] | None = None,
+    legacy: bool = False,
+) -> dict[str, Any]:
+    """判断 review NEEDS_REWORK 是否满足自动回流条件（MFP-0037）。
+
+    新流程：所有风险级别直接回流实现 worker；``rework_requires``（needs）
+    只做范围外标注，由 manager 另开单，不阻塞范围内返工。
+    ``legacy=True`` 保留旧 manager 裁决门一版（高风险/新验收需 manager）。
+    """
     reasons: list[str] = []
     risk = str((data.get("risk") or {}).get("level") or "")
-    if risk in {"high", "critical"}:
-        reasons.append("高风险/关键任务保留 manager 裁决")
+    if legacy:
+        if risk in {"high", "critical"}:
+            reasons.append("高风险/关键任务保留 manager 裁决（--legacy-rework）")
+        if not scope.get("requires_declared"):
+            reasons.append("review-handoff 未声明 rework_requires（--legacy-rework）")
+        elif scope.get("requires"):
+            reasons.append(
+                "需要新验收/BUG/MFP/CHG（--legacy-rework）: "
+                + ", ".join(scope["requires"])
+            )
     if str(data.get("status")) not in {"submitted", "rejected"}:
-        reasons.append(f"任务状态 {data.get('status')} 不自动重开")
+        reasons.append(f"任务状态 {data.get('status')} 不自动回流")
     if scope.get("scope") != "in-scope":
-        reasons.append("整改项未声明全部在原 acceptance/scope 内")
-    if not scope.get("requires_declared"):
-        reasons.append("review-handoff 未声明 rework_requires")
-    elif scope.get("requires"):
-        reasons.append("需要新验收/BUG/MFP/CHG: " + ", ".join(scope["requires"]))
+        reasons.append("整改项未声明全部在原 acceptance/scope 内（rework_scope: in-scope）")
+    if summary_missing:
+        reasons.append(
+            "review-handoff 缺少 rework_summary 人话说明: "
+            + ", ".join(summary_missing)
+        )
     if not scope.get("items"):
         reasons.append("review-handoff 未列出必须整改项")
     return {"auto": not reasons, "reason": "；".join(reasons) or None}
@@ -1346,6 +1584,7 @@ def accept_task(
     verdict: str = "PASS",
     note: str | None = None,
     user_approved_by: str | None = None,
+    legacy_rework: bool = False,
 ) -> dict[str, Any]:
     path, data = load_task(project, task_id)
     if data.get("status") != "submitted":
@@ -1398,7 +1637,13 @@ def accept_task(
             elif verdict == "NEEDS_REWORK":
                 target["next_owner"] = "manager"
                 scope = _read_rework_scope(path.parent)
-                plan = _rework_plan(target, scope)
+                summary, summary_missing = _read_rework_summary(path.parent)
+                plan = _rework_plan(
+                    target,
+                    scope,
+                    summary_missing=summary_missing,
+                    legacy=legacy_rework,
+                )
                 target["rework"] = {
                     "review_task": task_id,
                     "review_verdict": verdict,
@@ -1406,6 +1651,8 @@ def accept_task(
                     "requires": scope.get("requires") or [],
                     "items": scope.get("items") or [],
                     "allowed_paths": list(target.get("allowed_paths") or []),
+                    "rework_summary": summary,
+                    "summary_missing": summary_missing,
                     "decision": "auto" if plan["auto"] else "manager",
                     "auto": plan["auto"],
                     "reason": plan["reason"],
@@ -1425,6 +1672,12 @@ def accept_task(
                     "allowed_paths": target["rework"]["allowed_paths"],
                     "status": target.get("status"),
                     "next_owner": target.get("next_owner"),
+                    "risk_level": str(
+                        (target.get("risk") or {}).get("level") or ""
+                    ),
+                    "requires": target["rework"]["requires"],
+                    "rework_summary": summary,
+                    "summary_missing": summary_missing,
                 }
             else:
                 target["next_owner"] = "manager"
@@ -1453,17 +1706,35 @@ def accept_task(
                 )
             else:
                 if rework_decision["auto"]:
-                    # 自动重开链路：submitted → rejected（范围门通过）→ rework
+                    # 自动回流链路：submitted → rejected（范围门通过）→ rework
                     ledger_append(
                         contract,
                         {
                             "event": "task.reject",
                             "task": rework_decision["task"],
-                            "reason": "review NEEDS_REWORK：整改项在范围内，自动重开",
+                            "reason": "review NEEDS_REWORK：整改项在范围内，自动回流",
                             "review_task": task_id,
                             "auto": True,
                             "from": "submitted",
                             "to": "rejected",
+                        },
+                    )
+                    ledger_append(
+                        contract,
+                        {
+                            "event": "task.rework.auto",
+                            "task": rework_decision["task"],
+                            "review_task": task_id,
+                            "verdict": verdict,
+                            "risk_level": rework_decision.get("risk_level"),
+                            "items": rework_decision["items"],
+                            "allowed_paths": rework_decision["allowed_paths"],
+                            "requires": rework_decision.get("requires") or [],
+                            "next_owner": rework_decision.get("next_owner"),
+                            "decision": "auto",
+                            "notify": ["manager"],
+                            "from": "rejected",
+                            "to": "rework",
                         },
                     )
                 ledger_append(
@@ -1483,6 +1754,25 @@ def accept_task(
                         "to": "rework" if rework_decision["auto"] else "submitted",
                     },
                 )
+        ledger_append(
+            resolve_contract(project),
+            {
+                "event": "review.verdict",
+                "review_task": task_id,
+                "task": str(data.get("reviews") or "") or None,
+                "verdict": verdict,
+                "risk_level": str(
+                    ((target or {}).get("risk") or {}).get("level") or ""
+                )
+                or None,
+                "auto": bool(rework_decision.get("auto"))
+                if isinstance(rework_decision, dict)
+                else False,
+                "next_owner": (target or {}).get("next_owner"),
+                "from": "submitted",
+                "to": "accepted",
+            },
+        )
         ledger_append(
             resolve_contract(project),
             {"event": "task.accept", "task": task_id, "kind": "review", "verdict": verdict, "from": "submitted", "to": "accepted"},
@@ -2081,6 +2371,9 @@ def packet_text(project: str | Path, task_id: str, *, review: bool = False) -> s
     lines.append("")
     lines.append("## Responsibility")
     lines.append(f"- next_owner: {data.get('next_owner')}")
+    lines.append(f"- owner_role: {data.get('owner_role') or '-'}")
+    lines.append(f"- executor_role: {data.get('executor_role') or '-'}")
+    lines.append(f"- delivery: {data.get('delivery') or '-'}")
     lines.append(f"- risk: {(data.get('risk') or {}).get('level')}")
     lines.append(f"- review_mode: {(data.get('review') or {}).get('mode')}")
     if data.get("reviewed_by_task"):
@@ -2175,7 +2468,7 @@ def prompt_text(project: str | Path, task_id: str) -> str:
     if status == "draft":
         owner = "manager"
     elif status in {"ready", "in_progress", "rejected", "rework"}:
-        owner = "worker"
+        owner = str(data.get("executor_role") or data.get("owner_role") or "worker")
     elif status == "submitted":
         if kind != "review" and review_task and review_task.get("status") in {"ready", "in_progress"}:
             owner = "worker"
@@ -2191,6 +2484,9 @@ def prompt_text(project: str | Path, task_id: str) -> str:
         f"status: {status}",
         f"risk: {risk}",
         f"next_owner: {data.get('next_owner')}",
+        f"owner_role: {data.get('owner_role') or '-'}",
+        f"executor_role: {data.get('executor_role') or '-'}",
+        f"delivery: {data.get('delivery') or '-'}",
         "",
     ]
     if owner == "worker":
@@ -2205,11 +2501,15 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                     "结论只能是 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；"
                     "PASS_WITH_RISK 必须写风险与接受人。",
                     "通过：结论 PASS，然后 mf task submit；由 manager 验收。",
-                    "不通过：结论 NEEDS_REWORK，列出必须整改项（ID/文件/行/要求/验收方法），submit；manager 会退回 worker1。",
-                    "NEEDS_REWORK 时必须在 review-handoff.md 声明 rework_scope: in-scope|out-of-scope|disputed "
-                    "与 rework_requires: none|acceptance,bug,mfp,chg；范围外/需要新验收、BUG、MFP、CHG 或存在争议时不得标 in-scope。",
-                    "review-handoff.md 必须写明下一环节：范围内为 worker 直接重做（mf task rework），"
-                    "范围外/高风险/争议为 manager 裁决；不得留空。",
+                    "不通过：结论 NEEDS_REWORK，列出必须整改项（ID/文件/行/要求/验收方法），submit；"
+                    "manager 接受 review 后，实现任务自动回流 worker 返工（所有风险级别），无需 manager 退回。",
+                    "NEEDS_REWORK 时必须写 rework_summary 人话说明：reason（返工原因）、risk（风险）、"
+                    "impact（问题影响）、expectation（期望结果）；缺失会被拒绝提交。",
+                    "必须整改项可用表格或 `### R1/M1a/BUG-0018 ...` 小节；"
+                    "review-handoff.md 声明 rework_scope: in-scope|out-of-scope|disputed；"
+                    "范围外事项用 rework_requires: acceptance,bug,mfp,chg 标注，"
+                    "manager 另开单，不阻塞范围内返工。",
+                    "下一环节写 worker 直接重做（mf task rework）；不得留空。",
                 ]
             )
         elif status == "rework":
@@ -2223,7 +2523,7 @@ def prompt_text(project: str | Path, task_id: str) -> str:
             else:
                 lines.extend(
                     [
-                        "review 结论 NEEDS_REWORK，整改项在原验收/范围内，已由 manager 自动重开。",
+                        "review 结论 NEEDS_REWORK，整改项在原验收/范围内，已自动回流（所有风险级别）。",
                         "先读取 review.md 和 review-handoff.md，只整改必须整改项。",
                         f"运行 mf task rework {task_id} 开始（记录 review id、整改项、allowed_paths 与 lease；不要用 mf task start）。",
                         "worker 不得从 submitted 直接开始；提交后不可继续编辑。",
@@ -2237,12 +2537,12 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                 [
                     "先读取 review.md 和 review-handoff.md，只整改必须整改项。",
                     (
-                        f"review 结论 NEEDS_REWORK 已由 manager 裁决返工；运行 mf task rework {task_id} 开始"
+                        f"review 结论 NEEDS_REWORK 已回流返工；运行 mf task rework {task_id} 开始"
                         "（记录 review id、整改项、allowed_paths 与 lease；不要用 mf task start）。"
                         if needs_rework
                         else f"编辑前先运行：mf task start {task_id}（取得 lease；无交付根绑定时加 --project-dir <交付库>）。"
                     ),
-                    "提交后不可继续编辑；再次返工需 manager 裁决/退回后重新开始。",
+                    "提交后不可继续编辑；再次返工需评审/验收结论明确后重新开始。",
                     f"完成后更新 {bundle / 'dev-record.md'} 和 {bundle / 'handoff.md'}，再 mf task submit。",
                     "等待复审和 manager 验收。",
                 ]
@@ -2260,6 +2560,17 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                 lines.append(f"提交后 manager 会推进 review 任务 {review_id}；不要自行验收。")
             else:
                 lines.append("提交后由 manager 评审并验收；不要自行验收。")
+    elif owner == "designer":
+        lines.extend(
+            [
+                f"你是 designer（设计责任主体）。先运行：mf task show {task_id} --packet",
+                "只写 contract 设计区（architecture/、specs/、P2 设计包）与任务 bundle；不写子项目源码。",
+                "输出设计包 DP/SPEC/映射/跨子项目验证与预研计划；design 任务不写生产源码。",
+                "决策分级：D0/D1 不自行决定（写 BLOCKED/交接升级）；D2 技术决策记录结论。",
+                f"完成后更新 {bundle / 'dev-record.md'} 和 {bundle / 'handoff.md'}，再 mf task submit。",
+                "提交后由 manager 验收设计；不要自行验收；角色切换请在用户终端执行 mf role --as。",
+            ]
+        )
     else:
         if status == "draft":
             lines.append("任务卡缺验收标准；先补全 acceptance，再置为 ready。")
@@ -2273,15 +2584,19 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                     "NEEDS_REWORK/BLOCKED；PASS_WITH_RISK 需风险与接受人。"
                 )
                 if recorded_verdict == "NEEDS_REWORK" or rework_scope.get("scope"):
-                    if rework_scope.get("scope") == "in-scope" and not rework_scope.get("requires"):
+                    _, summary_missing = _read_rework_summary(bundle)
+                    if (
+                        rework_scope.get("scope") == "in-scope"
+                        and not summary_missing
+                    ):
                         lines.append(
-                            "NEEDS_REWORK：范围内整改项在低/中风险任务上会自动重开；"
-                            "高风险/范围外/争议保留 manager 裁决。"
+                            "NEEDS_REWORK：范围内整改项会自动回流实现 worker（所有风险级别）；"
+                            "rework_requires 标注的范围外事项由你另开单，不阻塞返工。"
                         )
                     else:
                         lines.append(
-                            "NEEDS_REWORK：rework_scope/rework_requires 声明为范围外或缺失，不会自动重开；"
-                            "接受 review 后需由你裁决（reject 退回或开 CHG/BUG/MFP/新卡）。"
+                            "NEEDS_REWORK：缺少 rework_summary 或 rework_scope 非 in-scope，不会自动回流；"
+                            "让 reviewer 补齐说明后重开，或按范围外流程处理（开 CHG/BUG/MFP/新卡）。"
                         )
             elif review_id and review_task:
                 if review_task.get("status") == "submitted":
@@ -2291,12 +2606,12 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                         lines.append(f"review 已通过；mf task accept {task_id} --verdict PASS。")
                     elif review_task.get("review_verdict") == "NEEDS_REWORK":
                         lines.append(
-                            "review 结论 NEEDS_REWORK；范围外/高风险/争议未自动重开，manager 需裁决："
+                            "review 结论 NEEDS_REWORK；未自动回流（范围外/缺说明），manager 需处理："
                         )
                         lines.append(
-                            f"退回返工：mf task reject {task_id} --reason ...，"
-                            f"worker 用 mf task rework {task_id} 开始；"
-                            "或开 CHG/BUG/MFP/新卡后重排。"
+                            f"让 reviewer 补齐 rework_summary/范围声明后重开，或 "
+                            f"mf task reject {task_id} --reason ... 让 worker 用 "
+                            f"mf task rework {task_id} 开始；范围外事项开 CHG/BUG/MFP/新卡。"
                         )
                     else:
                         lines.append(

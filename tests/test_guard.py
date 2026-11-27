@@ -421,8 +421,8 @@ def test_guard_deny_includes_task_lease_allowed_and_protocol(env, monkeypatch):
     assert "task=R1-P1-T001" in reason
     assert "lease=" in reason
     assert "allowed=src/**" in reason
-    assert "mf task start" in reason
-    assert "manager reject" in reason
+    assert "mf task rework" in reason
+    assert "不阻塞返工" in reason
 
     bundle = _task_bundle(contract, "R1-P1-T001")
     (bundle / "dev-record.md").write_text("# dev\n完成\n", encoding="utf-8")
@@ -433,8 +433,8 @@ def test_guard_deny_includes_task_lease_allowed_and_protocol(env, monkeypatch):
     )
     reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
     assert "task=无" in reason
-    assert "mf task start" in reason
-    assert "manager reject" in reason
+    assert "mf task rework" in reason
+    assert "不阻塞返工" in reason
 
     reject_task(root, "R1-P1-T001", "补证据")
     from meta_flow.task import prompt_text
@@ -538,6 +538,14 @@ def test_guard_bundle_match_uses_full_task_id(env, monkeypatch):
     decision = guard.pretool_decision(_payload("Read", sub, fake))
     assert decision is not None
     assert "bundle" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_bash_write_heuristic_ignores_fd_dup_but_keeps_redirects():
+    assert guard._bash_write_heuristic("wc -l src/main.py 2>&1") is False
+    assert guard._bash_write_heuristic("command >&2") is False
+    assert guard._bash_write_heuristic("echo x > out.txt") is True
+    assert guard._bash_write_heuristic("echo x 2> err.txt") is True
+    assert guard._bash_write_heuristic("echo x >> out.txt") is True
 
 
 def test_guard_bash_blocks_eval_source_and_process_substitution(env, monkeypatch):

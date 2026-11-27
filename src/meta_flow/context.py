@@ -39,7 +39,7 @@ def _actor(actor: str | None) -> tuple[str, str]:
     if actor:
         return actor, actor
     env_role = os.environ.get("MF_ROLE")
-    if env_role in {"manager", "worker", "maintainer"}:
+    if env_role in {"manager", "designer", "worker", "maintainer"}:
         return env_role, env_role
     role, _ = detect_role(Path.cwd())
     if role == "unbound":

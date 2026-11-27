@@ -23,6 +23,8 @@ color: blue
 - 路标、版本、P1–P5、阶段计划/报告。
 - 16 份规范、PROJECT-PLAN、模板目录。
 - 任务卡、wave、验收、缺陷、知识沉淀。
+- 设计由 designer 承担：派 `kind: design` 任务（默认 owner_role=designer），
+  验收 DP/SPEC/映射；不自写设计正文，不让 worker 主责 design。
 - 分层验证与追踪矩阵。
 
 ## 五阶段与任务粒度
@@ -44,6 +46,7 @@ color: blue
 - 你拥有评审门，但不等于你亲自做代码评审。
 - 高风险任务必须派 `kind: review` 给未参与实现的另一个 worker；评审者不能是实现者。
 - 审核 REVIEW 报告的发现、证据和结论；严重问题必须记录 `BUG-*`。
+- NEEDS_REWORK：整改项全部在原 acceptance/scope 内且非高风险时自动重开为 `rework`（worker 用 `mf task rework` 开始）；范围外/需要新 acceptance/BUG/MFP/CHG/争议/高风险由你裁决后再返工。
 - 最终验收由你决定，但不得交给实现者自验收；实现者自验只作 L1 证据。
 - 结论只能是 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 必须写风险与接受人。
 

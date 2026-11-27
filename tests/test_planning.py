@@ -52,6 +52,8 @@ def _write_review(contract, review_id, verdict, scope, requires):
                 f"> verdict: {verdict}",
                 f"> rework_scope: {scope}",
                 f"> rework_requires: {requires}",
+                "> rework_summary: {reason: 验收未满足, risk: 返工风险, "
+                "impact: 交付不达标, expectation: 整改后达标}",
                 "",
                 "## 必须整改项",
                 "",
@@ -342,7 +344,7 @@ def test_rework_state_next_owner_and_execute(project_env):
 def test_rework_decision_state_requires_manager(project_env):
     root, contract = project_env
     result = create_task(
-        root, "高风险返工", risk="high", allowed_paths=["src/**"], acceptance=_acceptance()
+        root, "范围外返工", risk="high", allowed_paths=["src/**"], acceptance=_acceptance()
     )
     task_id, review_id = result["task"], result["review_task"]
     start_task(root, task_id)
@@ -351,7 +353,7 @@ def test_rework_decision_state_requires_manager(project_env):
     (bundle / "handoff.md").write_text("# handoff\n完成\n", encoding="utf-8")
     submit_task(root, task_id)
     start_task(root, review_id)
-    _write_review(contract, review_id, "NEEDS_REWORK", "in-scope", "none")
+    _write_review(contract, review_id, "NEEDS_REWORK", "out-of-scope", "none")
     submit_task(root, review_id)
 
     accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")

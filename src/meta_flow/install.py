@@ -32,6 +32,8 @@ GITIGNORE_PATTERNS = (
     ".ruff_cache/",
     "*.bak",
 )
+SESSION_HOOK_COMMAND = "mf hook session-start"
+SESSION_HOOK_MATCHER = "startup|resume|clear|compact"
 
 
 class InstallError(Exception):
@@ -118,40 +120,68 @@ def _ensure_hook(data: dict[str, Any]) -> None:
         if any(isinstance(item, dict) and item.get("command") == HOOK_COMMAND for item in commands):
             entry["matcher"] = HOOK_MATCHER
             entry["hooks"] = [{"type": "command", "command": HOOK_COMMAND}]
-            return
-    entries.append(
-        {
-            "matcher": HOOK_MATCHER,
-            "hooks": [{"type": "command", "command": HOOK_COMMAND}],
-        }
-    )
+            break
+    else:
+        entries.append(
+            {
+                "matcher": HOOK_MATCHER,
+                "hooks": [{"type": "command", "command": HOOK_COMMAND}],
+            }
+        )
+    # T033 A1：SessionStart 按宿主会话目录重写角色锚点；/clear 后不残留旧角色
+    session_entries = hooks.setdefault("SessionStart", [])
+    if not isinstance(session_entries, list):
+        session_entries = []
+        hooks["SessionStart"] = session_entries
+    for entry in session_entries:
+        if not isinstance(entry, dict):
+            continue
+        commands = entry.get("hooks") or []
+        if any(
+            isinstance(item, dict) and item.get("command") == SESSION_HOOK_COMMAND
+            for item in commands
+        ):
+            entry["matcher"] = SESSION_HOOK_MATCHER
+            entry["hooks"] = [{"type": "command", "command": SESSION_HOOK_COMMAND}]
+            break
+    else:
+        session_entries.append(
+            {
+                "matcher": SESSION_HOOK_MATCHER,
+                "hooks": [{"type": "command", "command": SESSION_HOOK_COMMAND}],
+            }
+        )
 
 
 def _remove_hook(data: dict[str, Any]) -> None:
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         return
-    entries = hooks.get("PreToolUse")
-    if not isinstance(entries, list):
-        return
-    kept = []
-    for entry in entries:
-        if not isinstance(entry, dict):
+    for event in ("PreToolUse", "SessionStart"):
+        entries = hooks.get(event)
+        if not isinstance(entries, list):
+            continue
+        kept = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                kept.append(entry)
+                continue
+            commands = [
+                item
+                for item in entry.get("hooks") or []
+                if not (
+                    isinstance(item, dict)
+                    and item.get("command") in {HOOK_COMMAND, SESSION_HOOK_COMMAND}
+                )
+            ]
+            if not commands:
+                continue
+            entry["hooks"] = commands
             kept.append(entry)
-            continue
-        commands = [
-            item
-            for item in entry.get("hooks") or []
-            if not (isinstance(item, dict) and item.get("command") == HOOK_COMMAND)
-        ]
-        if not commands:
-            continue
-        entry["hooks"] = commands
-        kept.append(entry)
-    if kept:
-        hooks["PreToolUse"] = kept
-    else:
-        hooks.pop("PreToolUse", None)
+        if kept:
+            hooks[event] = kept
+        else:
+            hooks.pop(event, None)
     if not hooks:
         data.pop("hooks", None)
 
@@ -603,6 +633,73 @@ def install_worker(
     }
 
 
+def install_designer(
+    contract_dir: str | Path,
+    *,
+    workspace_root: str | Path | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """在 contract 目录安装 designer（设计区，只读子项目源码、不写源码）。"""
+    contract = Path(contract_dir).expanduser().resolve()
+    if not contract.is_dir():
+        raise InstallError(f"contract 目录不存在: {contract}")
+    if not ((contract / ".meta-flow" / "role.yaml").is_file() or (contract / "workspace").is_dir()):
+        raise InstallError(f"目标目录不是 contract（缺少 .meta-flow/role.yaml 或 workspace/）: {contract}")
+    existing = contract / INSTALL_REL
+    if existing.is_file():
+        old = load_install_manifest(contract)
+        if old.get("role") != "designer":
+            raise InstallError(f"{contract} 已安装为 {old.get('role')}，不能覆盖为 designer")
+
+    if workspace_root is None:
+        from .workspace import find_workspace_root
+
+        found = find_workspace_root(contract)
+        workspace_root = found if found is not None else None
+
+    files: list[dict[str, Any]] = []
+    content = _global_template("agents/designer.md", templates.AGENT_DESIGNER)
+    files.append(
+        _install_file(contract, Path(".claude/agents/designer.md"), content, force)
+    )
+
+    designer_body = _global_template("CLAUDE.designer.md", templates.DESIGNER_CLAUDE)
+    claude_path = contract / CLAUDE_REL
+    current = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""
+    claude_path.write_text(
+        _replace_managed_block(current, "designer", designer_body),
+        encoding="utf-8",
+    )
+    files.append({"path": str(CLAUDE_REL), "digest": _digest_file(claude_path)})
+
+    settings_info, _, _ = _merge_settings(contract, "designer", force)
+    manifest = {
+        "schema": INSTALL_SCHEMA,
+        "role": "designer",
+        "project_dir": str(contract),
+        "workspace_root": str(Path(workspace_root).expanduser().resolve())
+        if workspace_root
+        else None,
+        "contract_dir": str(contract),
+        "agents": ["designer"],
+        "tool_version": __version__,
+        "template_version": global_store.load_manifest().get("template_version"),
+        "installed_at": _now(),
+        "files": files,
+        "claude": {"path": str(CLAUDE_REL), "managed_role": "designer"},
+        "settings": settings_info,
+    }
+    manifest["gitignore"] = ensure_gitignore(contract)
+    _write_manifest(contract, manifest)
+    return {
+        "project_dir": str(contract),
+        "contract_dir": str(contract),
+        "agents": ["designer"],
+        "install_manifest": str(contract / INSTALL_REL),
+        "gitignore": manifest["gitignore"],
+    }
+
+
 def uninstall_claude(
     project_dir: str | Path,
     *,
@@ -710,6 +807,8 @@ def upgrade_project(project_dir: str | Path, *, force: bool = False) -> dict[str
             body = "@" + str(contract_dir).replace(" ", "\\ ") + "/workspace/CLAUDE.md"
         else:
             body = _global_template("CLAUDE.manager.md", templates.MANAGER_CLAUDE)
+    elif role == "designer":
+        body = _global_template("CLAUDE.designer.md", templates.DESIGNER_CLAUDE)
     else:
         body = _global_template("CLAUDE.worker.md", templates.WORKER_CLAUDE)
     claude_path = project / CLAUDE_REL

@@ -1,0 +1,71 @@
+id: MFP-0037
+title: 评审 NEEDS_REWORK 直接回流实现 worker（免 manager 门）+ 评审人话返工说明
+status: submitted
+priority: should
+category: feature
+classification: undecided
+source:
+  project: meta-flow
+  role: manager
+  created_by: manager
+  created_at: '2026-11-27T06:22:01.855192+00:00'
+  mf_version: 1.0.2
+  platform: linux
+  agent: manager
+problem: 评审 NEEDS_REWORK 后，工具仍要求 manager 裁决/退回：高风险任务提示“保留 manager 裁决”， review-handoff
+  的必须整改项若用小节而非固定表格会被判“未列出”；实现 worker 不能直接返工，与用户 2026-11-27 新流程“评审不通过直接在实施的 worker
+  返工，不需要经过 manager”冲突。评审产出也缺少强制 的“人话”返工说明（原因/风险/影响/期望）。
+context:
+  scenario: T036 独立评审 T035 结论 NEEDS_REWORK（M1a 锚点提权、M1b 运行时来源绑定、M2 多会话锚点覆盖）； worker1
+    为实现者，T035 处于 submitted。按新流程应由 worker1 直接返工。
+  reproduction:
+  - '`mf task accept R0-P4-T036 --verdict NEEDS_REWORK` 输出：高风险/关键任务保留 manager 裁决；整改项未声明全部在
+    原 acceptance/scope；review-handoff 未列出必须整改项。T035 仍为 submitted，需 manager reject。'
+  - T036 review-handoff 使用 `### M1a/M1b/M2` 小节列整改项，工具未识别为“必须整改项”表格。
+  - '`mf task rework R0-P4-T035` 由 manager 执行返回“只允许 worker”；worker 需在 manager reject
+    后才能开始。'
+  expected: review 结论 NEEDS_REWORK 时，实现任务直接进入 rejected/rework，next_owner=实现 worker；
+    reviewer 的返工说明必填且用人话写原因/风险/问题影响/期望结果；**所有风险级别**同样直接回流；范围外事项标注但不阻塞范围内返工； 全程 ledger
+    审计；无需 manager 裁决/退回。用户决定：不创建独立任务卡，由 maintainer 直接修改工具并临时部署。
+  actual: 工具要求 manager 裁决/退回；高风险不自动重开；review-handoff 整改项解析依赖固定格式；reviewer 人话说明非必填；worker
+    不能直接从 submitted 返工。
+  evidence:
+  - state/ledger.ndjson task.rework.decision_required（T035/T036）
+  - roadmap/R0/phases/P4/tasks/T036/review-handoff.md；review.md
+  - requirements/changes/CHG-0004.md
+  affected:
+  - src/meta_flow/task.py（review accept 后自动回流/高风险策略）
+  - src/meta_flow/guard.py（_worker_hint 文案）
+  - src/meta_flow/state.py（rework 提示）
+  - templates/REVIEW.md、templates/REVIEW-HANDOFF.md、standards/ACCEPTANCE.md、standards/VERIFICATION.md、standards/TASK-CARD.md
+  - 评审/返工 prompt 与 ledger 事件
+acceptance:
+- 所有风险级别评审 `NEEDS_REWORK` 后实现任务自动进入 rejected/rework，`next_owner=实现 worker`；无需 manager
+  accept/reject。
+- review-handoff/review 必须包含 `rework_summary`（原因/风险/问题影响/期望结果）；缺失时评审不得 submit 或目标不得自动回流，并给出补齐提示；保留独立评审/人工判断，不把说明降级为模板套话。
+- 必须整改项支持小节/表格两种写法；不得因格式误判“未列出”。
+- 范围外事项标注（needs: acceptance/bug/mfp/chg）不阻塞范围内返工；manager 另开单；ledger 记录 review→rework
+    链路、verdict、items、next_owner。
+- 负向：PASS/PASS_WITH_RISK 不触发返工；BLOCKED 不自动返工；worker 不得编辑 submitted；实现者不得自验收。
+- 回归：T019/T020 返工链路、T035/T036 场景、高/中/低风险任务各一条；`mf task prompt`/`mf state` 指引与实际命令一致。
+- 部署：不创建任务卡；maintainer 直接改 `src/meta_flow` + tests，测试通过后临时部署全局 `mf`；部署前备份/记录版本，部署后回归
+  T035/T036 与真实 hook。
+testing_plan: 单测覆盖 review accept NEEDS_REWORK 自动回流（高/中/低风险）、review-handoff 人话字段与两种整改项格式、范围外标注；集成测试
+  T035/T036 夹具；负向覆盖 PASS/BLOCKED/越权编辑；临时部署后跑 `mf task prompt`/`mf state` 与真实 hook
+  smoke。
+rollback: 保留旧 manager 裁决开关（配置/--legacy-rework）一版；ledger 可回放；部署前备份全局 mf 安装；异常回退到机械
+  reject + worker rework。
+privacy:
+  sanitized: true
+  removed: []
+source_record: null
+resolution:
+  version: null
+  commit: null
+  tests: []
+  verified_by: null
+  verified_at: null
+  note: null
+submitted_at: '2026-11-27T06:57:41.395403+00:00'
+inbox_ref: /home/hyde/.meta-flow/improvements/inbox/meta-flow/MFP-0037.yaml
+digest: sha256:5902d45f1be693c0330ec40a16dbbd66b5fb0bbb28d3913b25e19a939cd9c99e

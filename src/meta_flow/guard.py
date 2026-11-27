@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from . import roles
 from .workspace import detect_role, find_workspace_root, resolve_contract
 
 HOOK_COMMAND = "mf hook pretool"
@@ -141,13 +142,33 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _resolve_role(cwd: Path) -> tuple[str, Path | None]:
+def _resolve_role(cwd: Path, session_id: str | None = None) -> tuple[str, Path | None]:
+    """解析 effective role：会话锚点 > 显式 MF_ROLE（受控）> 目录推导。
+
+    T033 A1：锚点由 SessionStart/TTY 用户切换写入，用来抵御 cwd 漂移；
+    ``MF_ROLE=designer`` 不得由 worker/manager 会话通过环境变量伪造，
+    只有目录/锚点本身是 designer 时才生效（fail-closed）。
+    """
     detected_role, detected_root = detect_role(cwd)
-    env_role = os.environ.get("MF_ROLE")
-    if env_role in {"manager", "worker", "maintainer"}:
-        # 与 CLI 一致：显式 MF_ROLE 优先于目录推导
-        return env_role, detected_root if detected_role == env_role else None
-    return detected_role, detected_root
+    anchor = roles.read_anchor(cwd, session_id)
+    if anchor is not None:
+        return anchor["role"], anchor["root"]
+    env_role = roles.normalize_role(os.environ.get("MF_ROLE"))
+    if env_role:
+        if env_role == detected_role:
+            return env_role, detected_root
+        if env_role == "designer":
+            # designer 必须来自目录安装或锚点，环境变量不能提权
+            pass
+        elif env_role in {"worker", "maintainer"}:
+            # 显式降权/维护角色：保持原有语义，但 root 只在与目录一致时绑定
+            return env_role, None
+        elif env_role == "manager":
+            # manager 只允许与目录推导一致，避免 worker 会话借 MF_ROLE 提权
+            pass
+    if detected_role != "unbound":
+        return detected_role, detected_root
+    return "unbound", None
 
 
 def _bash_tokens(command: str) -> list[str]:
@@ -288,6 +309,8 @@ def _bash_extract(
                 unsafe = True
             else:
                 base = _resolve_token_path(raw, base)
+                # M1a：cd 目标也纳入作用域校验，防止借 cd 逃逸路径检查
+                paths.append(base)
             expect_command = False
             index += 2
             continue
@@ -382,8 +405,20 @@ def _bash_read_like(command: str) -> bool:
     return bool(names & BASH_READ_COMMANDS)
 
 
+def _has_redirect_write(command: str) -> bool:
+    """检测写文件重定向；``2>&1``/``>&2`` 等 fd 复制不算写。"""
+    for match in re.finditer(r"\d?>>?", command):
+        tail = command[match.end() : match.end() + 1]
+        if tail == "&":
+            continue
+        if tail.isdigit() and command[match.start() : match.end()].startswith(">"):
+            continue
+        return True
+    return False
+
+
 def _bash_write_heuristic(command: str) -> bool:
-    if re.search(r"\d?>>?", command):
+    if _has_redirect_write(command):
         return True
     if re.search(r"(open\(|write_text|\.write\(|--output|--out\b|tee\b)", command):
         return True
@@ -450,7 +485,8 @@ def _path_under_known_delivery(path: Path, workspace_root: Path | None) -> bool:
 def _read_budget(contract: Path, role: str) -> int:
     policy_data = _load_yaml(contract / "policies" / "CONTEXT-POLICY.yaml")
     budget = ((policy_data.get("roles") or {}).get(role) or {}).get("budget") or {}
-    return int(budget.get("bytes") or (131072 if role == "manager" else 65536))
+    default = 131072 if role in {"manager", "designer"} else 65536
+    return int(budget.get("bytes") or default)
 
 
 def _sanitize_command(command: str) -> str:
@@ -480,7 +516,9 @@ def _worker_hint(contract: Path, role_root: Path | None) -> str:
     return (
         f"[role=worker task={task_id} lease={lease} allowed={allowed}; "
         "合法通道: mf task show --packet / mf context show|expand；"
-        "提交后不可编辑，返工需 manager reject 后 mf task start <id>；"
+        "提交后不可编辑；review NEEDS_REWORK 会自动回流，用 mf task rework <id> 开始；"
+        "范围外事项用 needs: acceptance|bug|mfp|chg 标注，manager 另开单，不阻塞返工；"
+        "角色切换请在用户终端 mf role --as <role> --reason <原因>；"
         "本地 MFP 用 mf improve new --local 或写 .meta-flow/improvements/MFP-*.yaml]"
     )
 
@@ -494,6 +532,11 @@ def _deny_with_hint(
 ) -> dict[str, Any]:
     if role == "worker" and contract is not None:
         reason = f"{reason}；{_worker_hint(contract, role_root)}"
+    elif role == "designer":
+        reason = (
+            f"{reason}；[role=designer；设计区写 architecture/specs/P2；"
+            "角色切换请在用户终端运行 mf role --as <role> --reason <原因>]"
+        )
     elif role:
         reason = f"{reason}；[role={role}]"
     return _deny(reason)
@@ -577,6 +620,22 @@ def _active_tasks(contract: Path, delivery: str | None) -> list[dict[str, Any]]:
     return items
 
 
+def _designer_tasks(contract: Path) -> list[dict[str, Any]]:
+    """designer 活动 design 任务（用于放行任务 bundle 的流程文件写入）。"""
+    items = []
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        task = _load_yaml(path)
+        if task.get("status") != "in_progress":
+            continue
+        if task.get("kind") != "design" and task.get("owner_role") != "designer":
+            continue
+        if str(task.get("owner_role") or "designer") != "designer":
+            continue
+        task["_bundle"] = path.parent
+        items.append(task)
+    return items
+
+
 def _task_bundle_prefix(task: dict[str, Any]) -> str:
     task_id = str(task.get("id") or "")
     parts = task_id.split("-")
@@ -647,6 +706,60 @@ def _review_scope_match(relative: str, tasks: list[dict[str, Any]]) -> dict[str,
 CONTROLLED_PREFIXES = {"sudo", "env", "command", "builtin", "nohup", "time"}
 
 
+ANCHOR_API_RE = re.compile(
+    r"\b(?:session_start|write_anchor|switch_role)\b",
+    re.IGNORECASE,
+)
+
+
+def _session_hook_command(command: str) -> bool:
+    """识别任何形式的 ``mf hook session-start``（含 cd/嵌套 shell/引号）。
+
+    M1a：不能只检查首个命令；``cd contract && mf hook session-start``、
+    ``sh -c '... mf hook session-start'`` 等都必须 fail-closed。
+    """
+    if "session-start" not in command:
+        return False
+    if re.search(r"\bmf(?:\.exe)?\b[^\n]*?\bhook\s+session-start\b", command):
+        return True
+    tokens = [Path(token.strip("'\"")).name for token in _bash_tokens(command)]
+    for index in range(len(tokens) - 2):
+        if (
+            tokens[index] in {"mf", "mf.exe"}
+            and tokens[index + 1] == "hook"
+            and tokens[index + 2] == "session-start"
+        ):
+            return True
+    return False
+
+
+def _anchor_api_command(command: str) -> bool:
+    """识别解释器调用锚点 API（含别名/importlib/字符串拼接变形，fail-closed）。"""
+    interpreter = re.search(
+        r"\b(?:python[0-9.]*|uv|bash|sh|zsh|dash)\b", command
+    )
+    if not interpreter:
+        return False
+    if ANCHOR_API_RE.search(command):
+        return True
+    # 变形调用：meta_flow + anchor/session/switch 片段（如 getattr(r,'write_'+'anchor')）
+    return bool(
+        re.search(r"\bmeta_flow\b", command)
+        and re.search(r"anchor|session_start|switch_role", command, re.IGNORECASE)
+    )
+
+
+def _is_anchor_path(path: Path) -> bool:
+    """会话锚点文件（legacy 单文件与 per-session 目录）。"""
+    if path.name == "session-role.yaml" and path.parent.name == ".meta-flow":
+        return True
+    return (
+        path.parent.name == "session-roles"
+        and path.suffix.lower() == ".yaml"
+        and ".meta-flow" in path.parts
+    )
+
+
 def _readonly_expand(command: str) -> bool:
     """识别纯只读的 `mf context expand ...` 命令（MFP-0025/0027）。
 
@@ -682,6 +795,23 @@ def _readonly_expand(command: str) -> bool:
     return rest == ["context", "expand"]
 
 
+def _maintainer_source_roots() -> list[Path]:
+    """maintainer 可维护的 meta-flow 源码仓库（全局 manifest.source_dir）。"""
+    home = Path(os.environ.get("META_FLOW_HOME", Path.home() / ".meta-flow"))
+    roots: list[Path] = []
+    manifest = home / "manifest.yaml"
+    if manifest.is_file():
+        try:
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+        except (yaml.YAMLError, OSError):
+            data = {}
+        raw = data.get("source_dir") if isinstance(data, dict) else None
+        if raw:
+            roots.append(Path(str(raw)).expanduser().resolve())
+    roots.append((home / "source").resolve())
+    return roots
+
+
 def _manager_source_denied(path: Path, workspace_root: Path | None) -> bool:
     if workspace_root is None:
         return False
@@ -695,6 +825,26 @@ def _manager_source_denied(path: Path, workspace_root: Path | None) -> bool:
     return False
 
 
+DESIGNER_CONTRACT_FILES = {"templates/DESIGN-PACKAGE.md"}
+
+
+def _designer_contract_write(relative: str) -> bool:
+    """designer 可写 contract 设计区：architecture/、specs/、P2 设计包、DP 模板。"""
+    rel = relative.replace("\\", "/").lstrip("/")
+    if rel.startswith(("architecture/", "specs/")):
+        return True
+    if rel in DESIGNER_CONTRACT_FILES:
+        return True
+    parts = rel.split("/")
+    return (
+        len(parts) >= 4
+        and parts[0] == "roadmap"
+        and re.fullmatch(r"R\d+", parts[1]) is not None
+        and parts[2] == "phases"
+        and parts[3] == "P2"
+    )
+
+
 def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
     """Bash 路径策略与审计（BUG-0014/R7/R8/R10/R11）。
 
@@ -703,7 +853,7 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
     deny。契约/交付/读预算 deny 区不放宽；本地 `.meta-flow/improvements/MFP-*.yaml`
     作为受控 write 白名单（带审计）。允许/拒绝持久化到 READ-LOG。
     """
-    role, role_root = _resolve_role(cwd)
+    role, role_root = _resolve_role(cwd, payload.get("session_id"))
     if role == "unbound":
         return None
     tool_input = payload.get("tool_input") or {}
@@ -719,15 +869,33 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
     if contract is None:
         return None
     delivery = _worker_delivery(role_root) if role == "worker" else None
-    tasks = (
-        _active_tasks(contract, delivery)
-        if role == "worker" and delivery
-        else []
-    )
+    tasks: list[dict[str, Any]] = []
+    if role == "worker" and delivery:
+        tasks = _active_tasks(contract, delivery)
+    elif role == "designer":
+        tasks = _designer_tasks(contract)
     audit_task = str(tasks[0].get("id")) if tasks else "无"
     write_all = bool(write_paths) or _bash_write_heuristic(command)
     read_like = _bash_read_like(command)
     max_bytes = _read_budget(contract, role)
+    if _session_hook_command(command) or _anchor_api_command(command):
+        # 防止 AI 通过 Bash 手动触发 SessionStart 锚点写入或直接调用锚点 API
+        return _deny_with_hint(
+            "SessionStart hook / 锚点写入 API 只能由宿主 SessionStart 或用户终端 "
+            "mf role --as 调用，不能通过 Bash/解释器手动执行",
+            contract=contract,
+            role=role,
+            role_root=role_root,
+        )
+    if write_all and any(_is_anchor_path(item) for item in write_paths):
+        # 锚点只由 SessionStart hook / 用户终端 mf role --as 通过 CLI 写入；
+        # 任何工具层直接写（含 manager 委托）都拒绝，防止伪造角色。
+        return _deny_with_hint(
+            "会话角色锚点只能由 SessionStart 或用户终端 mf role --as 写入",
+            contract=contract,
+            role=role,
+            role_root=role_root,
+        )
     if role == "worker" and not write_all and _readonly_expand(command):
         # 纯只读 expand：路径授权与 READ-LOG 由 context.expand 负责，
         # 不把路径参数误判为 Bash 写入（MFP-0027）。
@@ -770,6 +938,27 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
                     continue
                 deny_reason = "maintainer 不改/读契约项目内容"
                 continue
+            if role == "designer":
+                if relative.startswith("archive/") and not write_all:
+                    deny_reason = "designer 不直接访问 archive/**；历史只读用 mf archive show --reason"
+                    continue
+                own_design_task = _bundle_match(relative, tasks)
+                if (
+                    write_all
+                    and not _designer_contract_write(relative)
+                    and not (
+                        own_design_task is not None
+                        and _contract_process_write(relative)
+                    )
+                ):
+                    deny_reason = f"designer 只能写 contract 设计区/本任务流程文件: {relative}"
+                    continue
+                if read_like and path.is_file() and path.stat().st_size > max_bytes:
+                    deny_reason = (
+                        f"{path.name} 超过 designer 读预算 {max_bytes}B；"
+                        "请用 mf context expand <path> --reason packet_missing"
+                    )
+                continue
             if role == "worker":
                 if role_root is None:
                     deny_reason = (
@@ -809,6 +998,18 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
                         "请用 mf context expand <path> --reason packet_missing"
                     )
                 continue
+        if role == "designer":
+            if write_all:
+                deny_reason = (
+                    "designer 只能写 contract 设计区；不能写子项目源码/交付库"
+                )
+                continue
+            if read_like and path.is_file() and path.stat().st_size > max_bytes:
+                deny_reason = (
+                    f"{path.name} 超过 designer 读预算 {max_bytes}B；"
+                    "请用 mf context expand <path> --reason packet_missing"
+                )
+            continue
         if role == "worker":
             if role_root is None:
                 if workspace_root is not None and path.is_relative_to(workspace_root):
@@ -870,7 +1071,7 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     path = _hook_path(payload, cwd)
     if path is None:
         return None
-    role, role_root = _resolve_role(cwd)
+    role, role_root = _resolve_role(cwd, payload.get("session_id"))
     if role == "unbound":
         return None
     try:
@@ -881,11 +1082,11 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
     if contract is None:
         return None
     delivery = _worker_delivery(role_root) if role == "worker" else None
-    tasks = (
-        _active_tasks(contract, delivery)
-        if role == "worker" and delivery
-        else []
-    )
+    tasks: list[dict[str, Any]] = []
+    if role == "worker" and delivery:
+        tasks = _active_tasks(contract, delivery)
+    elif role == "designer":
+        tasks = _designer_tasks(contract)
     audit_task = str(tasks[0].get("id")) if tasks else "无"
 
     def display(item: Path) -> str:
@@ -939,6 +1140,10 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             )
 
     if tool in WRITE_TOOLS:
+        if _is_anchor_path(path):
+            return deny(
+                "会话角色锚点只能由 SessionStart 或用户终端 mf role --as 写入"
+            )
         if path.is_relative_to(contract):
             relative = path.relative_to(contract).as_posix()
             if relative.startswith("archive/"):
@@ -947,6 +1152,20 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
                 return deny("state 由 mf 派生写入，禁止直接改")
             if role == "maintainer":
                 return deny("maintainer 不改项目契约")
+            if role == "designer":
+                if relative.startswith("archive/"):
+                    return deny("archive 只读；designer 不直接写归档")
+                if _designer_contract_write(relative):
+                    return allow()
+                if (
+                    _bundle_match(relative, tasks) is not None
+                    and _contract_process_write(relative)
+                ):
+                    return allow()
+                return deny(
+                    "designer 只能写 contract 设计区/本任务流程文件；"
+                    "角色切换请在用户终端运行 mf role --as <role> --reason <原因>"
+                )
             if role == "worker":
                 if role_root is None:
                     return deny(
@@ -961,7 +1180,8 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
                 if task is None:
                     return deny(
                         "worker 只能写自己 in_progress 任务的 bundle；"
-                        "提交后不可编辑，返工需 manager reject 后 mf task start <id>"
+                        "提交后不可编辑；review NEEDS_REWORK 后用 mf task rework <id> 开始，"
+                        "不要用 mf task start"
                     )
                 allowed = [
                     "dev-record.md",
@@ -978,6 +1198,11 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
                     return deny("manager 不直接改交付库源码")
                 return allow()
             return deny("当前角色不能写契约库")
+        if role == "designer":
+            return deny(
+                "designer 只能写 contract 设计区（architecture/specs/P2）；"
+                "不能写子项目源码或交付库"
+            )
         if role == "worker":
             root = role_root
             if root is None:
@@ -1000,8 +1225,8 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
                 if _delivery_write_allowed(relative, tasks):
                     return allow()
                 return deny(
-                    "worker 写入不在当前任务 allowed_paths 内；提交后不可编辑，"
-                    "返工需 manager reject 后 mf task start <id>；"
+                    "worker 写入不在当前任务 allowed_paths 内；提交后不可编辑；"
+                    "review NEEDS_REWORK 自动回流后用 mf task rework <id> 开始；"
                     "本地 MFP 可写 .meta-flow/improvements/MFP-*.yaml"
                 )
             return deny("worker 只能写自己的交付库")
@@ -1014,6 +1239,9 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
                 os.environ.get("META_FLOW_HOME", Path.home() / ".meta-flow")
             ).resolve()
             if path.is_relative_to(global_root):
+                return allow()
+            # MFP-0037：maintainer 需要维护 manifest.source_dir 指向的工具源码仓库
+            if any(path.is_relative_to(root) for root in _maintainer_source_roots()):
                 return allow()
             return deny("maintainer 只维护 meta-flow 源码/全局模板")
         return allow()
@@ -1050,6 +1278,10 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             return deny(
                 "worker 只能读任务包/自己的 bundle、评审目标或返工评审输出"
             )
+        if role == "designer":
+            if relative.startswith("archive/"):
+                return deny("archive 只允许通过 mf archive show --reason 读取")
+            return allow()
         if role == "maintainer":
             if relative.startswith(("workspace/", ".meta-flow/")):
                 return allow()

@@ -56,6 +56,8 @@ def _write_review_files(
     scope=None,
     requires=None,
     items=("R1",),
+    summary=None,
+    items_markdown=None,
 ):
     bundle = contract / "roadmap" / "R1" / "phases" / "P1" / "tasks" / f"T{review_id[-3:]}"
     (bundle / "review.md").write_text(f"# review\nverdict: {verdict}\n", encoding="utf-8")
@@ -64,17 +66,30 @@ def _write_review_files(
         lines.append(f"> rework_scope: {scope}")
     if requires is not None:
         lines.append(f"> rework_requires: {requires}")
-    lines.extend(
-        [
-            "",
-            "## 必须整改项",
-            "",
-            "| ID | 文件/行 | 要求 | 验收方法 |",
-            "|---|---|---|---|",
-        ]
-    )
-    for item in items:
-        lines.append(f"| {item} | src/app.py:1 | 整改 | pytest |")
+    if verdict == "NEEDS_REWORK":
+        values = summary if summary is not None else {
+            "reason": "整改项未满足验收",
+            "risk": "不整改则验收无法通过",
+            "impact": "交付不满足验收标准",
+            "expectation": "整改后满足验收并可复审",
+        }
+        lines.append("> rework_summary:")
+        for key in ("reason", "risk", "impact", "expectation"):
+            value = values.get(key)
+            if value:
+                lines.append(f">   {key}: {value}")
+    lines.extend(["", "## 必须整改项", ""])
+    if items_markdown is not None:
+        lines.extend(items_markdown.splitlines())
+    else:
+        lines.extend(
+            [
+                "| ID | 文件/行 | 要求 | 验收方法 |",
+                "|---|---|---|---|",
+            ]
+        )
+        for item in items:
+            lines.append(f"| {item} | src/app.py:1 | 整改 | pytest |")
     (bundle / "review-handoff.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return bundle
 
@@ -248,6 +263,23 @@ def test_needs_rework_in_scope_auto_reopens_and_rework_starts(task_env):
         for event in events
     )
     assert any(
+        event.get("event") == "task.rework.auto"
+        and event.get("task") == task_id
+        and event.get("review_task") == review_id
+        and event.get("verdict") == "NEEDS_REWORK"
+        and event.get("risk_level") == "medium"
+        and event.get("items") == ["R1", "R2"]
+        and event.get("next_owner") == "worker"
+        for event in events
+    )
+    assert any(
+        event.get("event") == "review.verdict"
+        and event.get("review_task") == review_id
+        and event.get("verdict") == "NEEDS_REWORK"
+        and event.get("auto") is True
+        for event in events
+    )
+    assert any(
         event.get("event") == "task.rework"
         and event.get("task") == task_id
         and event.get("review_task") == review_id
@@ -257,13 +289,14 @@ def test_needs_rework_in_scope_auto_reopens_and_rework_starts(task_env):
     )
 
 
-def test_needs_rework_high_risk_keeps_manager_decision(task_env):
+@pytest.mark.parametrize("risk", ["high", "critical"])
+def test_needs_rework_high_risk_auto_reopens_for_worker(task_env, risk):
     root = task_env["root"]
     contract = task_env["contract"]
     result = create_task(
         root,
         "高风险返工",
-        risk="high",
+        risk=risk,
         allowed_paths=["src/**"],
         acceptance=_acceptance(),
     )
@@ -277,18 +310,18 @@ def test_needs_rework_high_risk_keeps_manager_decision(task_env):
 
     accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
     decision = accepted["rework_decision"]
-    assert decision["auto"] is False
-    assert "高风险" in (decision["reason"] or "")
+    assert decision["auto"] is True
+    assert decision["risk_level"] == risk
 
     _, task = load_task(root, task_id)
-    assert task["status"] == "submitted"
-    assert task["next_owner"] == "manager"
-    assert task["rework"]["decision"] == "manager"
-    assert task["rework"]["auto"] is False
-    assert "responsible_agent: manager" in prompt_text(root, task_id)
-    assert "裁决" in prompt_text(root, task_id)
-    with pytest.raises(TaskError, match="submitted"):
-        rework_task(root, task_id)
+    assert task["status"] == "rework"
+    assert task["next_owner"] == "worker"
+    assert task["rework"]["decision"] == "auto"
+    assert task["rework"]["auto"] is True
+    assert "responsible_agent: worker" in prompt_text(root, task_id)
+    started = rework_task(root, task_id)
+    assert started["status"] == "in_progress"
+    assert started["rework"]["decision"] == "auto"
 
 
 def test_needs_rework_out_of_scope_blocked_until_manager_rejects(task_env):
@@ -313,7 +346,7 @@ def test_needs_rework_out_of_scope_blocked_until_manager_rejects(task_env):
 
     accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
     assert accepted["rework_decision"]["auto"] is False
-    assert "CHG" in (accepted["rework_decision"]["reason"] or "")
+    assert "in-scope" in (accepted["rework_decision"]["reason"] or "")
     with pytest.raises(TaskError, match="submitted"):
         rework_task(root, task_id)
 
@@ -333,11 +366,8 @@ def test_needs_rework_out_of_scope_blocked_until_manager_rejects(task_env):
     assert started["rework"]["decision"] == "manager"
 
 
-@pytest.mark.parametrize(
-    ("scope", "requires"),
-    [("disputed", "none"), ("in-scope", "acceptance"), ("in-scope", "bug,mfp")],
-)
-def test_needs_rework_scope_or_new_requirements_blocks_auto(task_env, scope, requires):
+@pytest.mark.parametrize("scope", ["disputed", "out-of-scope"])
+def test_needs_rework_non_in_scope_scope_blocks_auto(task_env, scope):
     root = task_env["root"]
     contract = task_env["contract"]
     result = create_task(
@@ -352,7 +382,7 @@ def test_needs_rework_scope_or_new_requirements_blocks_auto(task_env, scope, req
     _write_worker_files(contract, task_id)
     submit_task(root, task_id)
     start_task(root, review_id)
-    _write_review_files(contract, review_id, "NEEDS_REWORK", scope=scope, requires=requires)
+    _write_review_files(contract, review_id, "NEEDS_REWORK", scope=scope, requires="none")
     submit_task(root, review_id)
 
     accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
@@ -361,6 +391,36 @@ def test_needs_rework_scope_or_new_requirements_blocks_auto(task_env, scope, req
     assert task["status"] == "submitted"
     assert task["next_owner"] == "manager"
     assert task["rework"]["decision"] == "manager"
+
+
+@pytest.mark.parametrize("requires", ["acceptance", "bug,mfp", "chg"])
+def test_needs_rework_out_of_scope_needs_do_not_block_auto(task_env, requires):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "范围外标注",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(
+        contract, review_id, "NEEDS_REWORK", scope="in-scope", requires=requires
+    )
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["auto"] is True
+    assert accepted["rework_decision"]["requires"] == requires.split(",")
+    _, task = load_task(root, task_id)
+    assert task["status"] == "rework"
+    assert task["next_owner"] == "worker"
+    assert task["rework"]["notify"] == ["manager"]
 
 
 def test_needs_rework_missing_scope_declaration_requires_manager(task_env):
@@ -383,10 +443,137 @@ def test_needs_rework_missing_scope_declaration_requires_manager(task_env):
 
     accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
     assert accepted["rework_decision"]["auto"] is False
-    assert "rework_requires" in (accepted["rework_decision"]["reason"] or "")
+    assert "rework_scope" in (accepted["rework_decision"]["reason"] or "")
     _, task = load_task(root, task_id)
     assert task["status"] == "submitted"
     assert task["next_owner"] == "manager"
+
+
+def test_needs_rework_section_items_parsed(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "小节格式整改项",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(
+        contract,
+        review_id,
+        "NEEDS_REWORK",
+        scope="in-scope",
+        requires="none",
+        items_markdown=(
+            "### M1a 锚点提权\n\n说明\n\n"
+            "### M1b 运行时来源绑定\n\n说明\n\n"
+            "### BUG-0018 锚点安全\n\n说明\n\n"
+            "### 一般说明\n"
+        ),
+    )
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["auto"] is True
+    assert accepted["rework_decision"]["items"] == ["M1a", "M1b", "BUG-0018"]
+
+
+def test_needs_rework_missing_summary_rejected_at_submit(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "缺返工说明",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(
+        contract,
+        review_id,
+        "NEEDS_REWORK",
+        scope="in-scope",
+        requires="none",
+        summary={"reason": "只写原因"},
+    )
+    with pytest.raises(TaskError, match="rework_summary"):
+        submit_task(root, review_id)
+
+    # 旧卡兼容：说明缺失时不自动回流，并给出补齐提示
+    path, review = load_task(root, review_id)
+    review["status"] = "submitted"
+    path.write_text(
+        yaml.safe_dump(review, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK")
+    assert accepted["rework_decision"]["auto"] is False
+    assert "rework_summary" in (accepted["rework_decision"]["reason"] or "")
+    _, task = load_task(root, task_id)
+    assert task["status"] == "submitted"
+    assert task["next_owner"] == "manager"
+
+
+def test_needs_rework_legacy_switch_keeps_manager_gate(task_env):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "旧行为回滚",
+        risk="high",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, "NEEDS_REWORK", scope="in-scope", requires="none")
+    submit_task(root, review_id)
+
+    accepted = accept_task(root, review_id, verdict="NEEDS_REWORK", legacy_rework=True)
+    assert accepted["rework_decision"]["auto"] is False
+    assert "legacy-rework" in (accepted["rework_decision"]["reason"] or "")
+    _, task = load_task(root, task_id)
+    assert task["status"] == "submitted"
+    assert task["next_owner"] == "manager"
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "PASS_WITH_RISK", "BLOCKED"])
+def test_needs_rework_negative_verdicts_do_not_reopen(task_env, verdict):
+    root = task_env["root"]
+    contract = task_env["contract"]
+    result = create_task(
+        root,
+        "非返工结论",
+        risk="medium",
+        allowed_paths=["src/**"],
+        acceptance=_acceptance(),
+    )
+    task_id, review_id = result["task"], result["review_task"]
+    start_task(root, task_id)
+    _write_worker_files(contract, task_id)
+    submit_task(root, task_id)
+    start_task(root, review_id)
+    _write_review_files(contract, review_id, verdict, scope="in-scope", requires="none")
+    submit_task(root, review_id)
+
+    accept_task(root, review_id, verdict=verdict)
+    _, task = load_task(root, task_id)
+    assert task["status"] == "submitted"
+    assert task["next_owner"] == "manager"
+    assert task.get("rework") is None
 
 
 def test_rework_command_requires_needs_rework_verdict(task_env):

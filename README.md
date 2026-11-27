@@ -1,6 +1,6 @@
 # Meta Flow
 
-> AI 项目操作系统：三个角色、契约库与多仓交付、规格驱动。
+> AI 项目操作系统：角色（manager/designer/worker/maintainer）、契约库与多仓交付、规格驱动。
 
 ## 状态
 
@@ -9,6 +9,7 @@
 ```text
 mf bootstrap
 mf install claude [--agent maintainer]
+mf install designer --project-dir <contract>
 mf install worker --project-dir <sub>
 mf workspace init/attach/add-project/link/sync/status
 mf req add/list/show/update/trace/validate
@@ -26,6 +27,8 @@ mf status / mf log / mf doctor
 mf uninstall claude
 mf dev clone/update/install/status
 mf role/status/doctor
+mf role --as <role> --reason <text>   # 仅用户终端
+mf hook pretool / mf hook session-start
 ```
 
 ## 安装
@@ -42,8 +45,8 @@ mf bootstrap
 ```text
 ~/.meta-flow/
 ├── manifest.yaml      # tool/template 版本、repo_url、source_dir
-├── agents/            # manager / maintainer / worker
-└── templates/         # 16 份规范 + 18 份制品模板 + 根配置模板
+├── agents/            # manager / designer / maintainer / worker
+└── templates/         # 16 份规范 + 19 份制品模板 + 根配置模板
 ```
 
 ### 2. 项目安装
@@ -52,6 +55,7 @@ mf bootstrap
 cd <项目根>
 mf install claude                       # 只装 manager
 mf install claude --agent maintainer    # 装 maintainer + manager
+mf install designer --project-dir <contract>   # 在契约库装 designer（设计区）
 ```
 
 写入：
@@ -65,6 +69,12 @@ mf install claude --agent maintainer    # 装 maintainer + manager
 │   ├── agents/maintainer.md   # 可选
 │   └── settings.json          # {"agent":"manager","hooks":{...}}
 └── .meta-flow/install.yaml
+
+<项目名>-contract/
+├── .claude/agents/designer.md
+├── .claude/settings.json      # {"agent":"designer","hooks":{...}}
+├── CLAUDE.md                  # designer 受管块
+└── .meta-flow/install.yaml    # role: designer
 ```
 
 不创建 `contracts/` 或 `deliveries/`。
@@ -130,10 +140,33 @@ mf doctor
 ```bash
 cd <项目根> && claude                 # manager
 claude --agent maintainer             # maintainer
+cd <项目名>-contract && claude        # designer（设计区）
 cd frontend && claude                 # worker（独立会话）
 ```
 
 子项目必须单独启动 Claude Code，才能读取它自己的 `.claude/settings.json`。
+SessionStart hook 会按宿主会话目录写角色锚点；用户终端可用
+`mf role --as <role> --reason <text>` 切换角色（非 TTY 拒绝，`/clear` 不残留）。
+
+## 角色锚点与责任主体
+
+- 会话锚点：`<workspace>/.meta-flow/session-roles/<session_id>.yaml`（按会话隔离）。
+  SessionStart hook 按宿主会话写本会话锚点；用户终端 `mf role --as` 写
+  `session-roles/user-tty.yaml`（人工切换，按更新时间优先，下一次本会话 SessionStart
+  覆盖）。不同会话互不覆盖；无 `session_id` 时不回退到共享会话锚点（fail-closed）。
+  user-tty 锚点仅用户终端可写：`write_anchor(source="user-tty")` 非 TTY 一律拒绝，
+  AI/解释器不能写全局人工切换锚点。
+- 会话绑定：锚点由宿主 SessionStart 的 `session_id` 或 `CLAUDE_CODE_SESSION_ID`
+  绑定；guard 使用当前会话 ID 读取；AI 会话不能通过 `MF_ROLE` 环境变量提权。
+- `mf role` 显示 effective role、来源（anchor/directory）与复位建议；worker 不能借
+  `MF_ROLE` 环境变量冒充 designer/manager。
+- 任务责任主体与执行者分离：`kind: design` 默认 `owner_role=designer` /
+  `executor_role=designer`，其他默认 worker；非默认主责需 manager
+  `--owner-confirmed-by` 显式确认并写 ledger。
+- designer 只写 contract 设计区（`architecture/`、`specs/`、P2 设计包、
+  `templates/DESIGN-PACKAGE.md`）与任务 bundle；子项目源码只读、禁止写入。
+- 设计包模板 `templates/DESIGN-PACKAGE.md`：信息流、子项目/职责/接口、模块/接口、
+  REQ/MFP→SPEC→子项目/模块映射、跨子项目验证、预研计划与 manager 设计验收。
 
 ## PreToolUse 守卫
 
@@ -148,14 +181,21 @@ cd frontend && claude                 # worker（独立会话）
         "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash",
         "hooks": [{"type": "command", "command": "mf hook pretool"}]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [{"type": "command", "command": "mf hook session-start"}]
+      }
     ]
   }
 }
 ```
 
-`mf hook pretool` 根据 cwd / `MF_ROLE` 推导角色，并在工具层拦截：
+`mf hook pretool` 根据会话锚点 / cwd / `MF_ROLE` 推导角色，并在工具层拦截：
 
 - manager 直接读 `archive/**`；直接读/写交付库 `src/**`、`tests/**`。
+- designer 写非设计区（需求/验收/发布/子项目源码）或读 `archive/**`。
 - worker 读完整契约、其他任务 bundle、其他交付库。
 - worker 写非当前任务 bundle、`allowed_paths` 之外的交付源码。
 - 直接改 `state/**`、写 `archive/**`、maintainer 改项目契约。
@@ -244,7 +284,11 @@ mf task accept R1-P1-T001 --verdict PASS
 - 评审不通过：`review-handoff.md` 列出必须整改项，manager 退回 worker1；返工后复审。
 - critical 任务必须记录用户验收 `--user-approved-by`。
 - 每个任务状态都有 `next_owner`；`mf task prompt` 明确下一责任 agent。
-- 角色守卫：manager 不能 `task start/submit`；worker 不能 `req/roadmap/phase/bug/verify/release/task accept`。
+- 角色守卫：manager 不能 `task start/submit`；worker 不能 `req/roadmap/phase/bug/verify/release/task accept`；
+  designer 只能执行 `kind: design`（owner_role=designer）任务，不能执行 implement/fix/review。
+- 设计任务：manager `mf task create --kind design ...`；worker 不得冒充 designer；
+  designer 在 contract 写 DP/SPEC，manager 验收设计；非 designer 主责需
+  `--owner-confirmed-by` 并写 ledger。
 - 任务包按 effort（XS/S/M/L/XL）分配预算，并预置 allowed_paths 前缀的代码入口清单；
   超预算用 `mf context expand <path> --reason packet_missing` 或拆分任务。worker 可用
   `mf context show/expand` 受控查看活动任务 bundle、评审目标或 allowed_paths，并写

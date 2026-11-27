@@ -202,6 +202,12 @@ P5 结束：`mf roadmap close` → 关闭报告 → 未完成项转 R2/backlog �
 
 模板 `contracts/templates/DESIGN.md`。必含：上下文、模块、接口、数据、流程、异常、非功能、方案对比、风险、ADR、测试策略、迁移/回滚。
 
+## 设计包 DP（designer）
+
+模板 `contracts/templates/DESIGN-PACKAGE.md`。必含：信息流、子项目/职责/交互/接口、
+模块/功能/接口、REQ/MFP→SPEC→子项目/模块映射、跨子项目验证计划、预研计划、
+风险/决策与 manager 设计验收。每条 REQ 至少一个 SPEC，无孤儿。
+
 ## ADR
 
 模板 `contracts/templates/ADR.md`。决策、背景、备选、后果、状态。
@@ -397,6 +403,11 @@ P5 结束后：`mf roadmap close R{n}` → `mf roadmap plan R{n+1}`。
 
 - `id`：`R{路标}-P{阶段}-T{序号}`。
 - `kind`：`implement|design|verify|document|review|fix`。
+- `owner_role` / `executor_role`：责任主体与执行者分离；`design` 默认
+  `owner_role=designer`/`executor_role=designer`，`implement|fix|document|verify`
+  默认 `worker`，`review` 由未参与实现的独立评审者（worker 身份）执行。非默认主责需
+  manager 显式确认（`--owner-confirmed-by`）并写 ledger；worker 不得冒充 designer，
+  designer 只能执行 design 任务。
 - `delivery`：所属交付库。
 - `module`：主责模块（P3 起；跨模块规格填主责模块）。
 - `spec_ids`：关联规格，可多个；跨模块规格必须另有独立验证任务。
@@ -424,6 +435,16 @@ P5 结束后：`mf roadmap close R{n}` → `mf roadmap plan R{n+1}`。
 11. 无未决澄清问题。
 
 不满足不得 `ready`；worker 可 `BLOCKED` 并指出缺项。模板：`contracts/templates/TASK.yaml`。
+
+## 责任主体与执行者映射
+
+| kind | owner_role | executor_role | 说明 |
+|---|---|---|---|
+| design | designer | designer | manager 派发设计工作包；manager 验收 |
+| implement/fix/document/verify | worker | worker | 子项目实现/自验 |
+| review | worker | worker | 未参与实现的独立评审者 |
+
+缺省由工具按 kind 推导；非默认主责必须 manager 显式确认并审计。
 
 ## 状态机
 
@@ -1035,6 +1056,7 @@ tiers:
     - knowledge/LESSONS.md
 budget:
   manager: {files: 12, bytes: 131072}
+  designer: {files: 12, bytes: 131072}
   worker: {files: 10, bytes: 65536}
 packet_budget_tiers:
   XS: {files: 8, bytes: 32768}
@@ -1086,6 +1108,33 @@ roles:
       - other-tasks/**
     packet_only: true
     budget: {files: 10, bytes: 65536}
+  designer:
+    must_read:
+      - state/current.json
+      - requirements/INDEX.md
+      - architecture/INDEX.md
+      - policies/CONTEXT-POLICY.yaml
+    may_read:
+      - requirements/**
+      - architecture/**
+      - specs/**
+      - roadmap/current/**
+      - knowledge/**
+      - verification/**
+      - bugs/**
+      - delivery-source/**（只读，设计/验证范围）
+    write:
+      - architecture/**
+      - specs/**
+      - roadmap/*/phases/P2/**
+      - templates/DESIGN-PACKAGE.md
+    deny:
+      - archive/**
+      - delivery-source-write/**
+      - requirements-write/**
+      - release/**
+    phase_scope: current
+    budget: {files: 12, bytes: 131072}
   maintainer:
     must_read: [workspace/mf.workspace.yaml, workspace/CLAUDE.md]
     deny:
@@ -1109,6 +1158,9 @@ notes:
   - bundle 匹配使用完整任务 ID/contract 相对路径，跨 roadmap/phase 同名 Txxx 不误放行。
   - review 任务提交只需 review.md + review-handoff.md；implement/fix 仍要求 handoff/dev-record。
   - 高风险任务必须由未参与实现的独立 reviewer 评审；实现者不自验收；结论仅 PASS/PASS_WITH_RISK/NEEDS_REWORK/BLOCKED；PASS_WITH_RISK 记录风险与接受人。
+  - 责任主体与执行者分离：design 默认 owner_role/executor_role=designer，非默认主责需 manager 显式确认并审计；worker 不得冒充 designer，designer 只能执行 design 任务。
+  - 角色锚点由 SessionStart 按宿主会话目录重写；用户终端可 mf role --as <role> --reason 切换并写 ledger；非 TTY 拒绝，/clear 不残留旧角色。
+  - designer 只写 contract 设计区（architecture/specs/P2/DP 模板）与任务 bundle；子项目源码只读、禁止写入。
   - 并行任务按任务窗口隔离 diff：其他重叠任务 allowed_paths 内的变更不计入本任务；非活动/非重叠改动仍拒绝。
 """
 
@@ -1157,6 +1209,8 @@ color: blue
 - 路标、版本、P1–P5、阶段计划/报告。
 - 16 份规范、PROJECT-PLAN、模板目录。
 - 任务卡、wave、验收、缺陷、知识沉淀。
+- 设计由 designer 承担：派 `kind: design` 任务（默认 owner_role=designer），
+  验收 DP/SPEC/映射；不自写设计正文，不让 worker 主责 design。
 - 分层验证与追踪矩阵。
 
 ## 五阶段与任务粒度
@@ -1222,6 +1276,51 @@ color: blue
 - 历史归档默认不读；`mf archive show --reason` 才读。
 - 高风险动作和 git push 必须用户授权。
 """
+AGENT_DESIGNER = """---
+name: designer
+description: Meta Flow 设计者。在 contract 设计区负责设计包 DP、SPEC、信息流/架构/模块/接口与跨子项目验证；不写生产源码。
+tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash
+color: cyan
+---
+
+# designer（设计者）
+
+你是 contract 设计区的默认 agent，角色是 meta-designer（短名 designer/dsg）。
+
+## 工作区与权限
+
+- 工作区：contract 设计区；只写 `architecture/`、`specs/`、P2 设计包/规格、模块/接口文档与任务 bundle。
+- 可读：contract 需求/设计/规格/知识；子项目接口与源码（设计/验证范围，只读）。
+- 禁止：写子项目源码/交付库；写需求、验收、发布；改验收标准。
+
+## 职责
+
+- 接收 manager 派发的设计工作包（REQ/MFP/约束/范围），输出设计计划与问题清单。
+- 设计包 DP：信息流、子项目/职责/交互/接口、模块/功能/接口、REQ/MFP→SPEC→子项目/模块映射、跨子项目验证计划、预研计划。
+- 每条 REQ 至少一个 SPEC；无孤儿；跨子项目规格单设验证。
+- 跨子项目工作包验证：记录接口/E2E/证据；失败返回子项目/决策点；通过后交 manager 最终验收。
+- manager 验收设计：PASS / NEEDS_REWORK；designer 不自验收。
+
+## 执行
+
+1. `mf task prompt <id>` 确认自己和设计任务；`mf task show <id> --packet` 只读任务包。
+2. `mf task start <id>` 取得 lease；只写任务 allowed_paths 与 bundle 流程文件。
+3. 输出 DP/SPEC/映射/预研计划；写 dev-record/handoff/evidence，`mf task submit`。
+4. 缺输入/目标/验收/路径/依赖时 BLOCKED，不猜；D0/D1 升级 manager/user，D2 记关键决策。
+
+## 角色与下一责任
+
+- 角色切换只在用户终端 `mf role --as designer --reason <原因>`；AI 会话不得自升级。
+- design 任务责任主体是 designer；worker 不得冒充，manager 不得以委托模式替代独立设计。
+- 完成后运行 `mf task prompt <id>` 明确下一责任（manager 验收或评审者）。
+
+## 边界
+
+- 不写生产源码；不修改需求、路标、验收标准。
+- 不读历史归档（`mf archive show --reason` 仅 manager）。
+- 技能流程见 `architecture/SKILLS.md`；角色提示词只定义身份/权限/工作区。
+"""
+
 AGENT_MAINTAINER = """---
 name: maintainer
 description: Meta Flow 维护者。维护工作区、全局模板、meta-flow 源码、版本发布与项目安装更新。
@@ -1296,6 +1395,8 @@ guard 会审计；其他越界写仍拒绝。任务 BLOCKED 时用 `mf task subm
 - D0（需求语义/用户可见/重大影响/安全合规）与 D1（跨模块接口/数据模型/发布范围）不得自行决定，写进 BLOCKED/交接由 manager/用户升级。
 - D2 技术细节可自主决策，但在交接“关键决策”记录结论；D3 自动化操作留提交说明。
 - 只做“可独立验证的增量”；跨模块规格由独立 verify 任务验证，不在单模块任务内假装覆盖。
+- design 任务责任主体是 designer；worker 不得冒充 designer 或执行 design 主责任务。
+- 角色切换只在用户终端 `mf role --as <role> --reason <原因>`；AI 会话不得自升级。
 
 ## 评审责任
 
@@ -1433,6 +1534,24 @@ MAINTAINER_CLAUDE = """# Meta Flow 项目根（maintainer）
 - 不修改交付库源码。
 - 不自动 push、不自动创建远程仓库。
 """
+DESIGNER_CLAUDE = """# Meta Flow 契约库设计区（designer）
+
+你是 contract 设计区的默认 agent，角色是 **meta-designer**。
+
+## 身份与权限
+
+- 工作区：contract；写 `architecture/`、`specs/`、P2 设计包/规格、模块/接口文档与任务 bundle。
+- 只读子项目接口/源码（设计与验证范围）；禁止写子项目源码/交付库。
+- 禁止改需求、路标、验收标准、发布；manager 负责需求与验收。
+
+## 设计流程
+
+1. 读取 manager 派发的设计工作包与任务包。
+2. 输出 DP/SPEC/映射表/跨子项目验证计划/预研计划。
+3. 每条 REQ 至少一个 SPEC，无孤儿；designer 不自验收。
+4. 角色锚点由 SessionStart 写入；用户终端可用 `mf role --as designer --reason <原因>` 切换。
+"""
+
 WORKER_CLAUDE = """# Meta Flow 子项目（worker）
 
 你是当前子项目的默认 agent，角色是 **meta-worker**。
@@ -1504,7 +1623,84 @@ claude --agent maintainer  # 维护者（如果已安装）
 MANAGED_BLOCK_START = "<!-- meta-flow:{role}:start -->"
 MANAGED_BLOCK_END = "<!-- meta-flow:{role}:end -->"
 
+DESIGN_PACKAGE = """# DP-<域>-001 <标题>
+
+> status: draft            # draft|accepted|needs-rework
+> owner: designer
+> related_reqs: [REQ-0001]
+> related_specs: [SPEC-<域>-001]
+> related_work_packages: [WP-001]
+> manager_verdict:          # PASS|PASS_WITH_RISK|NEEDS_REWORK（manager 验收填写）
+
+## 1. 设计输入与问题清单
+
+- 输入：REQ/MFP/约束/现有架构/接口。
+- 开放问题与决策点（D0/D1 升级；D2 记录结论）：
+
+| ID | 问题 | 级别 | 选项/建议 | 结论 | 影响 |
+|---|---|---|---|---|---|
+| Q1 | | D2 | | | |
+
+## 2. 信息流
+
+说明 REQ/MFP/BUG 的接收、状态、产出与关闭证据；引用 `INFO-FLOWS.md`。
+
+## 3. 子项目/职责/交互/接口
+
+| 子项目 | 职责 | 上游/下游 | 交互/接口 | 契约/错误码 |
+|---|---|---|---|---|
+| | | | | |
+
+## 4. 模块/功能/接口
+
+| 模块 | 功能 | 接口/事件 | 数据契约 | 备注 |
+|---|---|---|---|---|
+| | | | | |
+
+## 5. 映射表（REQ/MFP → SPEC → 子项目/模块）
+
+| 来源 | SPEC | 子项目/模块 | 验证任务 | 状态 |
+|---|---|---|---|---|
+| REQ-0001 | SPEC-<域>-001 | <sub>/<module> | | |
+
+检查：每条 REQ 至少一个 SPEC；无孤儿 SPEC/模块；跨子项目规格有独立验证。
+
+## 6. 跨子项目验证计划
+
+| 验证项 | 涉及子项目 | 接口/E2E | 证据 | 结果 |
+|---|---|---|---|---|
+| | | | | |
+
+## 7. 预研计划（如需要）
+
+| 问题 | 方法 | 时间盒 | 退出条件 | 结论 |
+|---|---|---|---|---|
+| | | | | |
+
+## 8. 风险与决策
+
+| 风险 | 影响 | 缓解 | 决策 |
+|---|---|---|---|
+| | | | |
+
+## 9. 设计验收（manager）
+
+- [ ] DP 含信息流、子项目/职责/交互/接口、模块/功能/接口
+- [ ] 映射表完整：REQ/MFP→SPEC→子项目/模块，无孤儿
+- [ ] 跨子项目验证计划可执行
+- [ ] 预研计划（如需要）明确
+- [ ] 结论 PASS / PASS_WITH_RISK / NEEDS_REWORK（PASS_WITH_RISK 写接受人）
+
+## 10. 追踪
+
+- 继承文档：`architecture/`、`architecture/MODULES.md`
+- 规格：`specs/`
+- 工作包/任务：
+- 阶段：P2
+"""
+
 ARTIFACT_TEMPLATES = {
+    "DESIGN-PACKAGE.md": DESIGN_PACKAGE,
     "PROJECT-PLAN.md": PROJECT_PLAN,
     "BUG.yaml": BUG_TEMPLATE,
     "INIT-CHECKLIST.md": """# 项目初始化检查清单
@@ -1740,6 +1936,8 @@ ARTIFACT_TEMPLATES = {
     "TASK.yaml": """id: R1-P3-T001
 title: ...
 kind: implement            # implement|design|verify|document|review|fix
+owner_role: worker         # 责任主体：design=designer；implement/fix/document/verify=worker；非默认需 manager 显式确认
+executor_role: worker      # 执行者：design=designer；其他=worker；review=独立评审者
 delivery: app
 module: core               # 主责模块（P3 起，与规格-模块矩阵一致）
 spec_ids: [SPEC-001]       # 关联规格；跨模块规格须另有独立 verify 任务

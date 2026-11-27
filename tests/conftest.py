@@ -13,6 +13,6 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolate_cwd_and_role(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    for name in ("MF_ROLE", "MF_WORKER_ID", "MF_ACTOR"):
+    for name in ("MF_ROLE", "MF_WORKER_ID", "MF_ACTOR", "CLAUDE_CODE_SESSION_ID"):
         monkeypatch.delenv(name, raising=False)
     yield

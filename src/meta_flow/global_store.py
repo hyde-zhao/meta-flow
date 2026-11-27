@@ -87,6 +87,7 @@ def bootstrap(repo_url: str | None = None, force: bool = False) -> Path:
 
     for name, content in {
         "manager": templates.AGENT_MANAGER,
+        "designer": templates.AGENT_DESIGNER,
         "maintainer": templates.AGENT_MAINTAINER,
         "worker": templates.AGENT_WORKER,
     }.items():
@@ -100,6 +101,7 @@ def bootstrap(repo_url: str | None = None, force: bool = False) -> Path:
 
     for name, content in {
         "CLAUDE.manager.md": templates.MANAGER_CLAUDE,
+        "CLAUDE.designer.md": templates.DESIGNER_CLAUDE,
         "CLAUDE.maintainer.md": templates.MAINTAINER_CLAUDE,
         "CLAUDE.worker.md": templates.WORKER_CLAUDE,
         "README.project.md": templates.PROJECT_README,
@@ -127,7 +129,7 @@ def bootstrap(repo_url: str | None = None, force: bool = False) -> Path:
             "source_dir": old.get("source_dir") or str(home / "source"),
             "installed_at": old.get("installed_at") or _now(),
             "updated_at": _now(),
-            "agents": ["manager", "maintainer", "worker"],
+            "agents": ["manager", "designer", "maintainer", "worker"],
         },
     )
     return home
