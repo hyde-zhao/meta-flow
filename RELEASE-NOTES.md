@@ -1,11 +1,15 @@
 # 发布说明
 
-## 1.0.3（未发布，R0/V1 P4 框架重设计 WP-F1/T035）
+## 1.0.3（R0/V1 P4 维护发布）
 
-- 版本：1.0.3（待发布；当前交付元数据仍为 1.0.2，发布时统一 bump）
+- 版本：1.0.3（R0/V1）
+- 日期：2026-11-27
 - 路标：R0（P4）
+- 状态：维护批次完成（版本元数据统一为 1.0.3；全局 `mf` 与项目安装已升级；
+  `git tag` 与 `git push` 待用户授权后执行）。
 - 范围：WP-F1 designer 角色/工作区/设计包与责任映射（SPEC-FRAMEWORK R1/R4；
-  T033 A1 角色锚定先落地）。
+  T033 A1 角色锚定先落地）；维护批次含评审返工直达 worker（MFP-0037）与
+  锚点诊断序列化修复（A4）。
 - designer 角色：
   - 新增 `agents/designer.md`、`CLAUDE.designer.md` 全局模板与
     `mf install designer --project-dir <contract>`（`role: designer`）。
@@ -32,9 +36,23 @@
   - guard 对任意形式 `mf hook session-start`（含 cd/嵌套 shell/引号）与
     `roles.session_start/write_anchor` 解释器调用 fail-closed；锚点文件工具层直接写拒绝。
   - `mf role` 显示来源（anchor/directory）、会话标识与复位建议；`mf role --as <role>
-    --reason` 仅用户终端可用（非 TTY 拒绝，rc=3），写 `role.switch` ledger。
-- 验证：全量 pytest 220 通过、ruff 通过、`mf doctor` OK；安全负向矩阵 N1–N6 覆盖见
-  T035 evidence 与 tests/test_designer_role.py。
+    --reason` 仅用户终端可用（非 TTY 拒绝，rc=3），写 `role.switch` ledger；
+    `mf role --json` 锚点路径统一序列化为字符串（A4）。
+- 评审返工直达（MFP-0037）：
+  - 评审 `NEEDS_REWORK` 后实现任务自动进入 `rejected`/rework，`next_owner=实现 worker`，
+    所有风险级别同样直接回流，无需 manager 裁决/退回。
+  - review/review-handoff 必须包含 `rework_summary`（原因/风险/问题影响/期望结果），
+    缺失时不得提交；必须整改项支持小节/表格两种写法。
+  - 范围外事项用 `needs: acceptance|bug|mfp|chg` 标注，不阻塞范围内返工；
+    review→rework 链路、verdict、整改项与 next_owner 写入 ledger。
+  - maintainer 可删除遗留角色锚点（清理降权），仍禁止创建/改写锚点内容。
+- 安全负向矩阵（R4/R5）：会话入口覆盖模块方式、subprocess 列表/拼接字符串、
+  拆分锚点函数名，只读检索（grep/cat）保持豁免。
+- 验证：全量 pytest 238 通过、ruff 通过、`mf doctor` OK；安全负向矩阵 N1–N6 覆盖见
+  tests/test_designer_role.py。
+- 升级/回滚：`UV_NO_CACHE=1 mf dev install --yes` 后确认 `mf --version` 输出 1.0.3；
+  项目根与子项目 `mf install ... --force` 同步模板；回滚恢复 delivery.yaml/
+  RELEASE-NOTES 与全局 mf 1.0.2。
 
 ## 1.0.2（R0/V1 P4 PATCH 发布）
 
