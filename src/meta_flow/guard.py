@@ -710,17 +710,48 @@ ANCHOR_API_RE = re.compile(
     r"\b(?:session_start|write_anchor|switch_role)\b",
     re.IGNORECASE,
 )
+INTERPRETER_RE = re.compile(r"\b(?:python[0-9.]*|uv|bash|sh|zsh|dash)\b", re.IGNORECASE)
+_COMPACT_RE = re.compile(r"[\s'\"+_\[\](),;:`]+")
+
+
+def _first_executable_name(command: str) -> str | None:
+    tokens = _bash_tokens(command)
+    index = 0
+    while index < len(tokens):
+        raw = tokens[index]
+        name = Path(raw.strip("'\"")).name
+        if name in CONTROLLED_PREFIXES:
+            index += 1
+            continue
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", raw):
+            index += 1
+            continue
+        return name
+    return None
 
 
 def _session_hook_command(command: str) -> bool:
-    """识别任何形式的 ``mf hook session-start``（含 cd/嵌套 shell/引号）。
+    """识别任何形式的 SessionStart hook 调用（M1a/R4）。
 
-    M1a：不能只检查首个命令；``cd contract && mf hook session-start``、
-    ``sh -c '... mf hook session-start'`` 等都必须 fail-closed。
+    覆盖：
+    - ``mf hook session-start`` / ``cd ... && mf hook session-start`` / ``sh -c``；
+    - ``python -m meta_flow.cli hook session-start``；
+    - ``subprocess.run(['mf','hook','session-start'])`` 列表/引号/拼接形式；
+    - 解释器命令同时出现 hook/session/start 词元（fail-closed）。
+    纯只读命令（grep/cat 等，无命令替换/链式）豁免，避免误伤源码检索。
     """
-    if "session-start" not in command:
+    lowered = command.lower()
+    if not any(word in lowered for word in ("hook", "session-start", "sessionstart")):
         return False
-    if re.search(r"\bmf(?:\.exe)?\b[^\n]*?\bhook\s+session-start\b", command):
+    first = _first_executable_name(command)
+    markers = ("&&", "||", ";", "|", "`", "$(", "\n", "\r")
+    if first in BASH_READ_COMMANDS and not any(marker in command for marker in markers):
+        return False
+    compacted = _COMPACT_RE.sub(" ", lowered)
+    if re.search(
+        r"\b(?:mf(?:\.exe)?|meta_flow(?:\.cli)?)\b\s+hook\s+session-?start\b",
+        compacted,
+    ):
         return True
     tokens = [Path(token.strip("'\"")).name for token in _bash_tokens(command)]
     for index in range(len(tokens) - 2):
@@ -730,22 +761,30 @@ def _session_hook_command(command: str) -> bool:
             and tokens[index + 2] == "session-start"
         ):
             return True
+    # 解释器 + hook/session/start 词元（覆盖列表参数与拆分字符串）
+    if INTERPRETER_RE.search(command):
+        compact_words = re.sub(r"[\s'\"+_\[\](),;:`]+", "", lowered)
+        if ("hook" in compact_words and "session" in compact_words and "start" in compact_words):
+            return True
     return False
 
 
 def _anchor_api_command(command: str) -> bool:
-    """识别解释器调用锚点 API（含别名/importlib/字符串拼接变形，fail-closed）。"""
-    interpreter = re.search(
-        r"\b(?:python[0-9.]*|uv|bash|sh|zsh|dash)\b", command
-    )
-    if not interpreter:
+    """识别解释器调用锚点 API（含别名/importlib/拼接拆分，fail-closed：R3/R5）。"""
+    if not INTERPRETER_RE.search(command):
         return False
     if ANCHOR_API_RE.search(command):
         return True
-    # 变形调用：meta_flow + anchor/session/switch 片段（如 getattr(r,'write_'+'anchor')）
+    lowered = command.lower()
+    compacted = _COMPACT_RE.sub("", lowered)
+    if any(
+        fragment in compacted
+        for fragment in ("sessionstart", "writeanchor", "switchrole")
+    ) and re.search(r"\b(?:meta_flow|getattr|importlib|roles)\b", lowered):
+        return True
     return bool(
-        re.search(r"\bmeta_flow\b", command)
-        and re.search(r"anchor|session_start|switch_role", command, re.IGNORECASE)
+        re.search(r"\b(?:meta_flow|getattr|importlib)\b", lowered)
+        and re.search(r"anchor|session|switch", lowered)
     )
 
 

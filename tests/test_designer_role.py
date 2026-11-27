@@ -507,6 +507,45 @@ def test_r2_real_session_id_direct_api_should_not_escalate(env, monkeypatch):
     assert roles.read_anchor(contract, "s-real") is None
 
 
+def test_r4_module_and_list_session_hook_denied(env, monkeypatch):
+    _root, _contract, sub = env["root"], env["contract"], env["sub"]
+    monkeypatch.setenv("MF_ROLE", "worker")
+    commands = [
+        "python -m meta_flow.cli hook session-start",
+        "sh -c 'python -m meta_flow.cli hook session-start'",
+        "bash -c 'python -m meta_flow.cli hook session-start'",
+        "python -c \"import subprocess; subprocess.run(['mf','hook','session-start'])\"",
+        "python -c \"import subprocess; subprocess.run(['meta_flow.cli','hook','session-start'])\"",
+        "python -c \"from meta_flow.cli import main; main(['hook','session-start'])\"",
+        "python -c \"import subprocess; subprocess.run(['mf','hook','session'+'-start'])\"",
+    ]
+    for command in commands:
+        decision = guard.pretool_decision(_bash(command, sub))
+        assert decision is not None, command
+    # 纯只读检索不误伤
+    assert (
+        guard.pretool_decision(_bash('grep "hook session-start" README.md', sub))
+        is None
+    )
+    # 未写入有效锚点
+    assert roles.read_anchor(sub, "s-real") is None
+
+
+def test_r5_split_anchor_function_name_denied(env, monkeypatch):
+    _root, _contract, sub = env["root"], env["contract"], env["sub"]
+    monkeypatch.setenv("MF_ROLE", "worker")
+    commands = [
+        "python3 -c \"from meta_flow import roles as r; getattr(r,'session_'+'start')('.')\"",
+        "python3 -c \"from meta_flow import roles as r; getattr(r,'switch'+'_role')('manager','x')\"",
+        "python3 -c \"import importlib; m=importlib.import_module('meta_flow.roles'); getattr(m,'write_'+'anchor')('designer', start='.', source='user-tty')\"",
+        "python3 -c \"from meta_flow import roles as r; getattr(r, 'sess'+'ion'+'start')('.')\"",
+    ]
+    for command in commands:
+        decision = guard.pretool_decision(_bash(command, sub))
+        assert decision is not None, command
+    assert roles.read_anchor(sub, "s-real") is None
+
+
 def test_cli_design_task_role_flow(env, monkeypatch, capsys):
     root, contract, _sub = env["root"], env["contract"], env["sub"]
     install_designer(contract, workspace_root=root)
