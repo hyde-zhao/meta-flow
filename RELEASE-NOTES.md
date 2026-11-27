@@ -6,7 +6,8 @@
 - 日期：2026-11-27
 - 路标：R0（P4）
 - 状态：维护批次完成（版本元数据统一为 1.0.3；全局 `mf` 与项目安装已升级；
-  `git tag` 与 `git push` 待用户授权后执行）。
+  部署证据/备份 sha256/回滚见 `docs/MAINTENANCE-1.0.3.md`；`git tag` 与 `git push`
+  待用户授权后执行）。
 - 范围：WP-F1 designer 角色/工作区/设计包与责任映射（SPEC-FRAMEWORK R1/R4；
   T033 A1 角色锚定先落地）；维护批次含评审返工直达 worker（MFP-0037）与
   锚点诊断序列化修复（A4）。
@@ -64,8 +65,8 @@
   `tool_version`/`source_dir`/`updated_at`，`mf dev status` 不再显示旧版本。
 - 升级安装保留工作区导入：已存在 `.meta-flow/workspace.yaml` 时，`mf install claude
   --force` 继续写 `@<项目>-contract/workspace/CLAUDE.md` 导入，不覆盖为内联模板。
-- 验证：全量 pytest 240 通过、ruff 通过、`mf doctor` OK；安全负向矩阵 N1–N6 覆盖见
-  tests/test_designer_role.py。
+- 验证：全量 pytest 268 通过、ruff 通过、`mf doctor` OK；安全负向矩阵 N1–N6 覆盖见
+  tests/test_designer_role.py。部署证据与回滚见 `docs/MAINTENANCE-1.0.3.md`。
 - 升级/回滚：`UV_NO_CACHE=1 mf dev install --yes` 后确认 `mf --version` 输出 1.0.3；
   项目根与子项目 `mf install ... --force` 同步模板；回滚恢复 delivery.yaml/
   RELEASE-NOTES 与全局 mf 1.0.2。
