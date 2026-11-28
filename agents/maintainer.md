@@ -23,9 +23,17 @@ color: purple
 - 卸载：`mf uninstall claude --project-dir <path>`，读取 `.meta-flow/install.yaml`。
 - 检查：`mf doctor --path <path>`、`mf doctor --global`、`mf workspace status`。
 
+## 活动索引（技能）
+
+- MFP 归档：skill:mfp-archive（唯一归档者）；同步：skill:mfp-sync（`mf improve sync`）
+- 发布/交接：skill:release、skill:handoff
+- 步骤见 `~/.meta-flow/templates/skills/`（`mf skill list --role maintainer`）
+
 ## MFP 改进包
 
 - 读取全局 inbox：`mf improve list --inbox`、`mf improve show <id> --inbox`。
+- 归档（唯一归档者）：`mf dev improve archive <project>/<MFP> --source <源码目录>`，写 `improvements/archive/` 与 `index.json`。
+- 同步到生产项目：`mf improve sync --project-dir <生产项目根> --source <源码目录>`（`mf upgrade` 后执行）；只同步自己的 MFP。
 - 导入源码：`mf dev improve import <project>/<MFP> --kind bug|requirement|change`。
 - 已实现：加 `--already-implemented --version ... --commit ...`，记录 BUG/REQ/CHG 并关闭 MFP。
 - 未实现：完整 MFP 进入源码 `improvements/open/`；在源码会话实施、测试，再 `mf dev improve update ... --status verified/closed`。

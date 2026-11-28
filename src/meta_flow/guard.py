@@ -625,11 +625,22 @@ def _task_scope_operations(task: dict[str, Any]) -> list[str]:
     return [str(item) for item in scope.get("operations") or []]
 
 
+def _current_roadmap(contract: Path) -> str:
+    """当前路标（版本隔离：worker 只能访问当前 R 的任务/过程文档）。"""
+    data = _load_yaml(contract / "state" / "current.json")
+    return str(data.get("roadmap") or "") if isinstance(data, dict) else ""
+
+
 def _active_tasks(contract: Path, delivery: str | None) -> list[dict[str, Any]]:
     items = []
+    current = _current_roadmap(contract)
     for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
         task = _load_yaml(path)
         if task.get("status") != "in_progress":
+            continue
+        # 版本隔离（REQ-0020/DOCUMENT-MODEL §1）：worker 只读当前 R；
+        # 旧 R 的在途任务不应继续放行其 bundle/过程文档。
+        if current and str(task.get("roadmap") or "") and str(task.get("roadmap")) != current:
             continue
         mode = _task_scope_mode(task)
         # workspace 作用域由 manager 执行，不进入 worker guard 任务集。

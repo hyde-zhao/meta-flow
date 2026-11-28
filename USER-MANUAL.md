@@ -365,6 +365,30 @@ mf task accept R0-P1-T001 --verdict PASS
   指向的版本文件一致。`mf release freeze` 冻结前也会执行交付库版本校验，不一致
   时失败；版本一致性属技术校验，`--force` 不可绕过。
 
+### 工作包、技能与信息流（R0/P4 T038）
+
+- 工作包：`mf work create/task/start/decision/verify/accept/list/show`。每子项目每设计
+  周期一个工作包；只在需要人工决策/必要独立验证时拆任务；默认不按任务生成 review，
+  工作包完成做子项目最终验证，再由 manager 验收（CHG-0005）。
+- 决策点：`mf work decision` 写问题/影响/选项/建议/级别/owner 并暂停工作包；决策后
+  `--decision-id` 记录并恢复。D0/D1 只能由 manager 记录用户确认（`--confirmed-by` +
+  `--note`），D2 仅 manager，worker/designer 不得代记；工作包/设计包按子项目 + 当前 R 隔离。
+- 设计包：`mf design create`（designer）/`mf design accept`（manager），位于
+  `roadmap/R{n}/phases/P2/design/`。
+- 技能：`mf skill list/show/validate`；角色提示词只定义身份/权限/工作区，活动步骤在
+  `~/.meta-flow/templates/skills/`（`mf bootstrap` 从源码安装时部署）。
+- 文档模型：`mf docs check/summary`；SPEC 目标 `roadmap/R{n}/phases/P2/specs/`，
+  legacy `specs/` 兼容读取；worker 只读当前 R（guard/packet/CLI 强制）。
+- MFP：本地 ID `MFP-<project>-<seq>`；`mf improve triage`（manager 评估）、
+  `mf dev improve archive`（maintainer 唯一归档）、`mf improve sync`（同步到生产项目
+  `.meta-flow/improvements/state.json`）。
+- BUG 两层：external 关闭必须 `--confirmed-by <用户> --note <意见>`，新 schema 仅
+  `pending_user_close` 可关（无 flow 历史 BUG 保留 fixed/verifying 兼容）；verification
+  必须由同子项目非修复者 viewer 关闭（`--by`，fix_owner 必填，同一宿主会话不能自验
+  自关），不得自验自关；closed 默认不可见，查询需
+  `--include-closed --authorized-by --reason` 并写 READ-LOG（同子项目当前 R closed
+  verification 对 worker 只读可见）；`mf bug audit` 审计绕过 CLI 的状态篡改。
+
 ### 维护者
 
 - `mf dev status`：source_dir 缺失/非 git 时显式报错，引导 `mf dev clone` 或

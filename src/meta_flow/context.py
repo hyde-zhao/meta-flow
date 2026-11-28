@@ -67,14 +67,29 @@ def _worker_delivery(root: Path | None) -> str | None:
     return str(data.get("id")) if isinstance(data, dict) and data.get("id") else None
 
 
+def _current_roadmap(contract: Path) -> str:
+    path = contract / "state" / "current.json"
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    return str(data.get("roadmap") or "") if isinstance(data, dict) else ""
+
+
 def _in_progress_tasks(contract: Path, delivery: str | None) -> list[dict[str, Any]]:
     tasks: list[dict[str, Any]] = []
+    current = _current_roadmap(contract)
     for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except (yaml.YAMLError, OSError):
             continue
         if not isinstance(data, dict) or data.get("status") != "in_progress":
+            continue
+        # 版本隔离：worker 只读当前 R；旧 R 在途任务不再进入 expand 白名单。
+        if current and str(data.get("roadmap") or "") and str(data.get("roadmap")) != current:
             continue
         if delivery and data.get("delivery") != delivery:
             continue

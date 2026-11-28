@@ -252,6 +252,62 @@ mf dev improve update MFP-0001 --status verified --version 0.1.2 --commit def456
 
 已实现的 MFP 记录为 `BUG/REQ/CHG` 并关闭；未实现的完整包进入源码 `improvements/open/`，由 meta-flow 源码会话实施。
 
+### 信息流闭环（REQ-0018）
+
+- MFP 本地 ID：`MFP-<project>-<seq>`（如 `MFP-demo-0001`）；只有 meta-flow maintainer 可归档/同步。
+- `mf improve triage <id> --decision accepted|rejected|deferred [--reason] [--next-step design|direct]`
+- `mf dev improve archive <project>/<MFP> --source <源码目录>`（写 `improvements/archive/` + `index.json`）
+- `mf improve sync --project-dir <生产项目根> --source <源码目录>`（显示 resolved/rejected/accepted-not-resolved/deferred）
+- REQ 评估：`mf req triage <REQ> --decision accepted --next-step design|direct`
+- BUG 两层：
+  - external：`mf bug add` → `mf bug fix` → `mf bug verify` → `pending_user_close` →
+    `mf bug close <id> --confirmed-by <用户> --note <意见>`（缺确认人拒绝；新 schema
+    仅 `pending_user_close` 可关，`fixed/verifying` 直关仅限 T038 前无 flow 历史 BUG）
+  - verification：`mf bug add --flow verification --subproject <sub>` → `mf bug fix` →
+    非修复者 `mf bug verify --by <viewer>` → `mf bug close --by <viewer>`；
+    fix_owner 必须存在，同一宿主会话（fix_session/viewer_session）不能自验自关
+  - 升级：`mf bug escalate <id> --reason <跨项目/接口/外部可见/安全/需求级>`
+  - closed 默认不可见；查询需 `--include-closed --authorized-by <用户> --reason <理由>` 并写 READ-LOG；
+    同子项目当前 R 的 closed verification BUG 对 worker 只读可见
+  - 审计：`mf bug audit` 检查绕过 CLI 的状态篡改（缺确认/缺 viewer 证据/新 schema legacy_close）
+
+## 工作包与技能（REQ-0019/REQ-0020，CHG-0005）
+
+```bash
+# manager：每子项目每设计周期一个工作包；只在需要决策/独立验证时拆任务
+mf work create --subproject backend --requirement REQ-0001 --spec SPEC-001 \
+  --allowed-path "src/**" --acceptance "命令成功"
+mf work task WP-01 --type implement --goal "实现登录" --acceptance "测试通过"
+mf work decision WP-01 --problem "接口 A/B" --impact "M4" --option A --recommendation A \
+  --level D1 --decision-owner user
+mf work decision WP-01 --decision-id T2 --decision A --decided-by <用户/manager> \
+  --confirmed-by <用户> --note "用户确认意见"      # D0/D1 需用户确认
+mf work verify WP-01 --result PASS --evidence evidence/l1.txt   # 子项目最终验证
+mf work accept WP-01 --verdict PASS                              # manager 验收
+
+# 设计包（designer 产出，manager 验收）
+mf design create --title "登录设计" --requirement REQ-0001 --spec SPEC-001 --subproject backend
+mf design accept DP-R1-01 --verdict PASS --note "设计通过"
+
+# 技能与文档模型
+mf skill list --role worker
+mf skill show verification
+mf skill validate
+mf docs check            # 继承/过程文档、SPEC P2 兼容、版本隔离
+mf docs summary
+```
+
+- 默认不按任务机械生成 review 任务：worker 自验 → 工作包/批次完成做子项目最终验证 →
+  manager 验收；仅安全/角色/guard/权限、跨子项目接口/E2E、用户可见/UAT、高风险不可逆、
+  manager/designer 判定必要时才追加独立评审（CHG-0005）。
+- 决策点：D0/D1 只能由 manager 记录用户确认（`--confirmed-by` + `--note`）；D2 仅
+  manager；D3 自动并审计；worker/designer 不得代记用户/manager 决策。
+- worker 的工作包/设计包命令按子项目 + 当前 R 隔离；跨子项目/其他 R 读写拒绝（rc=3）。
+- 角色提示词只定义身份/权限/工作区；活动步骤见 `mf skill`（安装于
+  `~/.meta-flow/templates/skills/` 或项目 `contract/skills/`）。
+- 文档模型：架构/标准/知识/模板为继承文档；DP/SPEC/WP/TASK/VR/BUG/RELEASE 为过程文档；
+  SPEC 目标 `roadmap/R{n}/phases/P2/specs/`（legacy `specs/` 兼容读取）；worker 只读当前 R。
+
 ## 任务与评审
 
 ```bash

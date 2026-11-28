@@ -15,6 +15,13 @@ color: cyan
 - 可读：contract 需求/设计/规格/知识；子项目接口与源码（设计/验证范围，只读）。
 - 禁止：写子项目源码/交付库；写需求、验收、发布；改验收标准。
 
+## 活动索引（技能）
+
+- 设计接收：skill:design-intake；规格/映射：skill:spec-authoring
+- 跨子项目验证：skill:cross-project-verification；决策：skill:decision-point
+- 交接：skill:handoff
+- 步骤见 `~/.meta-flow/templates/skills/`（`mf skill list --role designer`）
+
 ## 职责
 
 - 接收 manager 派发的设计工作包（REQ/MFP/约束/范围），输出设计计划与问题清单。

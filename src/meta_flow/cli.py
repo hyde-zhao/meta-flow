@@ -12,7 +12,23 @@ from typing import Any
 
 import yaml
 
-from . import __version__, bug, context, guard, knowledge, req, roadmap, roles, state, verify
+from . import (
+    __version__,
+    bug,
+    context,
+    design,
+    docmodel,
+    guard,
+    improve,
+    knowledge,
+    req,
+    roadmap,
+    roles,
+    skills,
+    state,
+    verify,
+    work,
+)
 from .global_store import (
     GlobalStoreError,
     bootstrap,
@@ -85,6 +101,9 @@ from .workspace import (
 
 def _print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+# T038: WP-F2F3 新命令（work/design/skill/docs）在下方按模块接入
 
 
 GLOBAL_COMMANDS = {"bootstrap", "install", "uninstall", "dev", "upgrade", "role", "status", "doctor"}
@@ -219,20 +238,53 @@ def _enforce_role(args: argparse.Namespace) -> None:
         return
     if command == "improve":
         if role == "manager":
+            if action == "sync":
+                raise WorkspaceError("MFP 同步只允许 meta-flow maintainer", 3)
             return
         if role == "maintainer":
-            if action in {"list", "show"} and (args.inbox if hasattr(args, "inbox") else False):
+            # meta-flow maintainer：归档只走 dev improve archive；同步/状态只读
+            if action in {"sync", "state", "list", "show", "validate"}:
                 return
-            raise WorkspaceError("maintainer 只能通过 dev improve 维护源码", 3)
+            raise WorkspaceError("maintainer 只能同步 MFP 或用 dev improve 归档源码", 3)
         if role == "designer":
-            if action in {"new", "list", "show", "validate"}:
+            if action in {"new", "list", "show", "validate", "state"}:
                 return
             raise WorkspaceError("designer 只能创建/查看/校验设计改进包", 3)
         if role == "worker":
+            if action == "state":
+                return
             if action in {"new", "list", "show", "validate"} and getattr(args, "local", False):
                 return
             raise WorkspaceError("worker 只能使用 improve --local 创建/查看本地 MFP", 3)
         raise WorkspaceError("无法确定角色；请在工作区根/子项目运行或设置 MF_ROLE", 3)
+    if command == "work":
+        if role == "manager":
+            return
+        if role in {"worker", "designer"}:
+            if action in {"list", "show", "start", "task", "decision", "verify"}:
+                return
+            raise WorkspaceError(f"{role} 不能创建工作包/验收（仅 manager）", 3)
+        raise WorkspaceError("work 命令只允许 manager/worker/designer", 3)
+    if command == "design":
+        if role == "designer" and action in {"create", "list", "show"}:
+            return
+        if role == "manager" and action in {"accept", "list", "show"}:
+            return
+        if role == "worker" and action in {"list", "show"}:
+            return
+        raise WorkspaceError("design 命令：designer create/list/show；manager accept/list/show", 3)
+    if command == "skill":
+        if role in {"manager", "designer", "worker", "maintainer"} and action in {
+            "list",
+            "show",
+            "validate",
+        }:
+            return
+        raise WorkspaceError("skill 命令只读（list/show/validate）", 3)
+    if command == "docs":
+        if role in {"manager", "designer"}:
+            return
+        raise WorkspaceError("docs 命令只允许 manager/designer", 3)
     if command == "context":
         if role in {"manager", "designer"}:
             return
@@ -244,10 +296,19 @@ def _enforce_role(args: argparse.Namespace) -> None:
             "context 命令只允许 manager；worker 仅可 show/expand 自己的任务范围", 3
         )
     if command == "bug":
-        # MFP-0024：worker 可只读活动任务关联的 BUG（具体关联在命令内校验并审计）
-        if role == "manager" or (role == "worker" and action == "show"):
+        # REQ-0018：manager 管理 external；worker 只走 verification 同子项目闭环。
+        if role == "manager":
             return
-        raise WorkspaceError("bug 命令只允许 manager；worker 仅可 show 活动任务关联 BUG", 3)
+        if role == "worker":
+            if action in {"show", "list", "fix", "verify", "close", "escalate"}:
+                return
+            if action == "add":
+                # worker 只能开 verification BUG；具体 flow 在命令内校验
+                return
+            raise WorkspaceError(
+                "worker 只能 list/show/fix/verify/close/escalate 本子项目 verification BUG", 3
+            )
+        raise WorkspaceError("bug 命令只允许 manager；worker 仅限 verification flow", 3)
     if command == "state":
         if role == "manager":
             return
@@ -301,6 +362,21 @@ def _ensure_worker_scope(args: argparse.Namespace, task: dict[str, Any]) -> None
     if task.get("delivery") and task.get("delivery") != delivery:
         raise WorkspaceError(
             f"worker 只能访问交付库 {delivery} 的任务", 3
+        )
+    # 版本隔离（REQ-0020/DOCUMENT-MODEL）：worker 只访问当前 R 过程文档。
+    try:
+        current_roadmap = str(
+            state.read_current(resolve_contract(args.project_dir)).get("roadmap") or ""
+        )
+    except WorkspaceError:
+        current_roadmap = ""
+    if (
+        current_roadmap
+        and task.get("roadmap")
+        and str(task.get("roadmap")) != current_roadmap
+    ):
+        raise WorkspaceError(
+            f"版本隔离：worker 只能访问当前路标 {current_roadmap} 的任务", 3
         )
 
 
@@ -957,6 +1033,16 @@ def _cmd_task_list(args: argparse.Namespace) -> int:
     )
     if role == "worker":
         items = [item for item in items if _worker_task_visible(item, delivery)]
+        # 版本隔离：worker 只列当前 R 的任务
+        current = str(
+            state.read_current(resolve_contract(args.project_dir)).get("roadmap") or ""
+        )
+        if current:
+            items = [
+                item
+                for item in items
+                if not item.get("roadmap") or str(item.get("roadmap")) == current
+            ]
     if args.json:
         _print_json(items)
         return 0
@@ -1471,6 +1557,17 @@ def _cmd_phase_exit(args: argparse.Namespace) -> int:
 
 
 def _cmd_bug_add(args: argparse.Namespace) -> int:
+    role, root, delivery = _worker_task_scope(args)
+    flow = getattr(args, "flow", "external")
+    subproject = getattr(args, "subproject", None)
+    if role == "worker":
+        if flow != "verification":
+            raise bug.BugError("worker 只能记录 verification BUG（同子项目）；external BUG 由 manager 登记", 3)
+        if subproject and str(subproject) != str(delivery):
+            raise bug.BugError(
+                f"worker 只能登记本子项目 verification BUG: {delivery}", 3
+            )
+        subproject = delivery
     item = bug.add_bug(
         args.project_dir,
         args.title,
@@ -1478,29 +1575,107 @@ def _cmd_bug_add(args: argparse.Namespace) -> int:
         phase=args.phase,
         task=args.task,
         verification=args.verification,
-        delivery=args.delivery,
+        delivery=args.delivery or (delivery if role == "worker" else None),
         related_reqs=args.requirement or [],
         environment=args.environment or "",
         steps=args.steps or "",
         expected=args.expected or "",
         actual=args.actual or "",
         evidence=args.evidence or [],
+        flow=flow,
+        scope=getattr(args, "scope", "same_subproject"),
+        subproject=subproject,
+        found_by=getattr(args, "found_by", None) or role,
     )
-    print(f"缺陷: {item['id']} ({item['severity']}, {item['status']})")
+    print(f"缺陷: {item['id']} ({item['flow']}, {item['severity']}, {item['status']})")
     return 0
 
 
+def _read_log_append(contract: Path, record: dict[str, Any]) -> None:
+    log_path = contract / "state" / "READ-LOG.ndjson"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"ts": datetime.now(UTC).isoformat(), **record}
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
 def _cmd_bug_list(args: argparse.Namespace) -> int:
+    role, _root, delivery = _worker_task_scope(args)
+    contract = resolve_contract(args.project_dir)
+    current = str(state.read_current(contract).get("roadmap") or "")
     roadmap = args.roadmap
     if roadmap is None and not args.all:
-        roadmap = str(state.read_current(resolve_contract(args.project_dir)).get("roadmap") or "R1")
+        roadmap = current or "R1"
+    include_closed = bool(getattr(args, "include_closed", False))
+    subproject = getattr(args, "subproject", None)
+    if role == "worker":
+        subproject = None  # 在下方按严格 own-subproject 过滤，避免宽松匹配
+    if include_closed:
+        reason = str(getattr(args, "reason", None) or "").strip()
+        authorized_by = str(getattr(args, "authorized_by", None) or "").strip()
+        if not reason or not authorized_by:
+            raise bug.BugError("查询 closed BUG 必须提供用户授权 --authorized-by 与 --reason", 3)
+        if authorized_by.lower() in bug.CONFIRMER_ROLE_WORDS:
+            raise bug.BugError("closed BUG 查询授权人不能是角色/系统身份", 3)
+        _read_log_append(
+            contract,
+            {
+                "event": "bug.list.closed",
+                "actor": role,
+                "role": role,
+                "tool": "mf bug list",
+                "decision": "allow",
+                "path": "bugs/*",
+                "reason": reason,
+                "authorized_by": authorized_by,
+            },
+        )
+    elif role == "manager" and getattr(args, "history", False):
+        # manager 历史查询留审计（不需要用户授权，但保留口径）
+        _read_log_append(
+            contract,
+            {
+                "event": "bug.list.closed",
+                "actor": role,
+                "role": role,
+                "tool": "mf bug list",
+                "decision": "allow",
+                "path": "bugs/*",
+                "reason": "manager-history",
+            },
+        )
     items = bug.list_bugs(
         args.project_dir,
         status=args.status,
         severity=args.severity,
         roadmap=roadmap,
-        active_only=not getattr(args, "history", False),
+        active_only=False
+        if role == "worker"
+        else (not getattr(args, "history", False)) and not include_closed,
+        flow=getattr(args, "flow", None),
+        subproject=subproject,
+        include_closed=include_closed,
     )
+    if role == "worker":
+        visible = []
+        for item in items:
+            own = item.get("subproject") == delivery or item.get("delivery") == delivery
+            if not own:
+                continue
+            if current and item.get("roadmap") not in {None, current}:
+                continue
+            if item.get("status") in bug.OPEN_STATUSES:
+                visible.append(item)
+            elif (
+                item.get("flow") == "verification"
+                and item.get("status") == "closed"
+                and item.get("roadmap") == current
+            ):
+                # REQ-0018 AC4 / INFO-FLOWS §4.6：同子项目当前 R closed verification 只读可见
+                visible.append(item)
+            elif include_closed and item.get("status") in bug.CLOSED_STATUSES:
+                visible.append(item)
+        items = visible
     if args.json:
         _print_json(items)
         return 0
@@ -1509,10 +1684,11 @@ def _cmd_bug_list(args: argparse.Namespace) -> int:
         return 0
     for item in items:
         print(
-            "{id} {severity} {status} {title}".format(
+            "{id} {severity} {status} {flow} {title}".format(
                 id=item.get("id"),
                 severity=item.get("severity"),
                 status=item.get("status"),
+                flow=item.get("flow", "external"),
                 title=item.get("title"),
             )
         )
@@ -1523,26 +1699,42 @@ def _cmd_bug_show(args: argparse.Namespace) -> int:
     role, _root, delivery = _worker_task_scope(args)
     if role == "worker":
         contract = resolve_contract(args.project_dir)
+        current = str(state.read_current(contract).get("roadmap") or "")
+        data = bug.show_bug(args.project_dir, args.bug_id)
         linked = bug.linked_bug_ids(contract, delivery)
-        if args.bug_id not in linked:
+        same_subproject = (
+            (data.get("subproject") == delivery or data.get("delivery") == delivery)
+            and (not current or data.get("roadmap") in {None, current})
+        )
+        open_own = same_subproject and data.get("status") in bug.OPEN_STATUSES
+        closed_verification = (
+            same_subproject
+            and data.get("flow") == "verification"
+            and data.get("status") == "closed"
+            and data.get("roadmap") == current
+        )
+        if args.bug_id not in linked and not open_own and not closed_verification:
             raise bug.BugError(
-                f"worker 只能读取活动任务 fixes/inputs.bugs 关联的 BUG: {args.bug_id}", 3
+                f"worker 只能读取活动任务关联、本子项目 open 或同子项目 closed verification BUG: {args.bug_id}",
+                3,
             )
-        log_path = contract / "state" / "READ-LOG.ndjson"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        record = {
-            "ts": datetime.now(UTC).isoformat(),
-            "event": "bug.show",
-            "actor": "worker",
-            "role": "worker",
-            "task": "active",
-            "tool": "mf bug show",
-            "decision": "allow",
-            "path": f"bugs/{args.bug_id}.yaml",
-            "reason": "task-linked-bug",
-        }
-        with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        _read_log_append(
+            contract,
+            {
+                "event": "bug.show",
+                "actor": "worker",
+                "role": "worker",
+                "task": "active",
+                "tool": "mf bug show",
+                "decision": "allow",
+                "path": f"bugs/{args.bug_id}.yaml",
+                "reason": "task-linked-bug"
+                if args.bug_id in linked
+                else "same-subproject-verification"
+                if closed_verification
+                else "same-subproject-open",
+            },
+        )
     data = bug.show_bug(args.project_dir, args.bug_id)
     if args.json:
         _print_json(data)
@@ -1560,20 +1752,128 @@ def _cmd_bug_update(args: argparse.Namespace) -> int:
         fix_task=args.fix_task,
         root_cause=args.root_cause,
         resolution=args.resolution,
+        fix_owner=getattr(args, "fix_owner", None),
     )
     print(f"{data['id']} -> {data['status']} ({data['severity']})")
     return 0
 
 
-def _cmd_bug_close(args: argparse.Namespace) -> int:
-    data = bug.close_bug(
+def _cmd_bug_fix(args: argparse.Namespace) -> int:
+    role, _root, delivery = _worker_task_scope(args)
+    data = bug.show_bug(args.project_dir, args.bug_id)
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if role == "worker":
+        if data.get("flow") != "verification":
+            raise bug.BugError("worker 只能修复 verification BUG；external BUG 由 manager 分派", 3)
+        if data.get("subproject") and data.get("subproject") != delivery:
+            raise bug.BugError("verification BUG 只允许同子项目 worker 修复", 3)
+    fix_owner = args.by or (session if role == "worker" else None)
+    if role == "worker" and not fix_owner:
+        raise bug.BugError(
+            "worker 修复 verification BUG 必须提供 --by 或宿主会话标识（不得用子项目名代替身份）", 3
+        )
+    data = bug.update_bug(
         args.project_dir,
         args.bug_id,
-        verification=args.verification,
-        resolution=args.resolution,
+        status="fixed" if args.fixed else "in_fix",
+        fix_task=args.task,
+        fix_owner=str(fix_owner) if fix_owner else None,
+        fix_session=session if role == "worker" else None,
     )
-    print(f"{data['id']} -> {data['status']}")
+    print(f"{data['id']} -> {data['status']} (fix_owner={data.get('fix_owner') or '-'})")
     return 0
+
+
+def _cmd_bug_verify(args: argparse.Namespace) -> int:
+    role, _root, delivery = _worker_task_scope(args)
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    by = args.by or (session if role == "worker" else None)
+    if role == "worker" and not by:
+        raise bug.BugError(
+            "worker 验证必须提供 --by 或宿主会话标识（不得用子项目名代替身份）", 3
+        )
+    data = bug.verify_bug(
+        args.project_dir,
+        args.bug_id,
+        by=str(by or ""),
+        evidence=args.evidence or [],
+        subproject=delivery if role == "worker" else getattr(args, "subproject", None),
+        viewer_session=session if role == "worker" else None,
+    )
+    print(
+        f"{data['id']} -> {data['status']} (verified_by={data.get('verified_by')})"
+    )
+    return 0
+
+
+def _cmd_bug_escalate(args: argparse.Namespace) -> int:
+    role, _root, _delivery = _worker_task_scope(args)
+    data = bug.escalate_bug(
+        args.project_dir,
+        args.bug_id,
+        reason=args.reason,
+        escalated_by=args.by or role,
+    )
+    print(f"{data['id']} -> {data['status']} (flow={data.get('flow')}, scope={data.get('scope')})")
+    return 0
+
+
+def _cmd_bug_close(args: argparse.Namespace) -> int:
+    role, _root, delivery = _worker_task_scope(args)
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    data = bug.show_bug(args.project_dir, args.bug_id)
+    by = args.by
+    if role == "worker":
+        if data.get("flow") != "verification":
+            raise bug.BugError("worker 不得关闭 external BUG；需用户确认后由 manager 关闭", 3)
+        by = by or session
+        if not by:
+            raise bug.BugError(
+                "worker 关闭 verification BUG 必须提供 --by 或宿主会话标识", 3
+            )
+    if data.get("flow") == "verification":
+        closed = bug.close_bug(
+            args.project_dir,
+            args.bug_id,
+            verification=args.verification,
+            resolution=args.resolution,
+            by=by,
+            evidence=args.evidence or [],
+            subproject=delivery if role == "worker" else args.subproject,
+            viewer_session=session if role == "worker" else None,
+        )
+    else:
+        if role == "worker":
+            raise bug.BugError("external BUG 关闭只允许 manager 执行", 3)
+        closed = bug.close_bug(
+            args.project_dir,
+            args.bug_id,
+            verification=args.verification,
+            resolution=args.resolution,
+            confirmed_by=args.confirmed_by,
+            note=args.note,
+        )
+    print(
+        f"{closed['id']} -> {closed['status']} "
+        f"(closure_type={closed.get('closure_type')}, "
+        f"confirmed_by={(closed.get('confirmation') or {}).get('confirmed_by') or '-'})"
+    )
+    return 0
+
+
+def _cmd_bug_audit(args: argparse.Namespace) -> int:
+    contract = resolve_contract(args.project_dir)
+    issues = bug.audit_bugs(contract)
+    if args.json:
+        _print_json({"ok": not issues, "issues": issues})
+    else:
+        if issues:
+            print("BUG 状态审计: FAIL")
+            for issue in issues:
+                print(f"  - {issue}")
+        else:
+            print("BUG 状态审计: OK")
+    return 0 if not issues else 1
 
 
 def _cmd_knowledge_add(args: argparse.Namespace) -> int:
@@ -1879,6 +2179,422 @@ def _cmd_install_designer(args: argparse.Namespace) -> int:
     return 0
 
 
+
+
+def _cmd_improve_triage(args: argparse.Namespace) -> int:
+    data = improve.triage_improvement(
+        args.project_dir,
+        args.mfp_id,
+        decision=args.decision,
+        reason=args.reason,
+        next_step=args.next_step,
+        target=args.target,
+        actor_role=_effective_role(args)[0],
+    )
+    print(f"{data['id']} -> {data['status']} (next_step={data.get('triage', {}).get('next_step') or '-'})")
+    return 0
+
+
+def _cmd_improve_sync(args: argparse.Namespace) -> int:
+    data = improve.sync_improvements(
+        args.project_dir,
+        from_path=args.from_path,
+        source=args.source,
+        actor_role=_effective_role(args)[0],
+    )
+    if args.json:
+        _print_json(data)
+        return 0
+    print(f"MFP 同步: {improve.sync_state_path(args.project_dir)}")
+    for mfp_id, entry in sorted((data.get("mfps") or {}).items()):
+        print(
+            "{id} {status} target={target} version={version}".format(
+                id=mfp_id,
+                status=entry.get("status"),
+                target=entry.get("target") or "-",
+                version=(entry.get("resolution") or {}).get("version") or "-",
+            )
+        )
+    return 0
+
+
+def _cmd_improve_state(args: argparse.Namespace) -> int:
+    data = improve.load_sync_state(args.project_dir)
+    if args.json:
+        _print_json(data)
+        return 0
+    print(f"last_sync: {data.get('last_sync') or '-'}")
+    for mfp_id, entry in sorted((data.get("mfps") or {}).items()):
+        print(f"{mfp_id} {entry.get('status')} {entry.get('title') or ''}".rstrip())
+    return 0
+
+
+def _cmd_dev_improve_archive(args: argparse.Namespace) -> int:
+    result = improve.archive_improvement(
+        args.ref, source=args.source, actor_role=_effective_role(args)[0]
+    )
+    print(f"MFP: {result['mfp']}")
+    print(f"archive: {result['archive']}")
+    print(f"index: {result['index']}")
+    return 0
+
+
+def _cmd_dev_improve_index(args: argparse.Namespace) -> int:
+    data = improve.archive_index(args.source)
+    if args.json:
+        _print_json(data)
+        return 0
+    print(f"updated_at: {data.get('updated_at') or '-'}")
+    for item in data.get("mfps") or []:
+        print(
+            "{id} {status} {source_project} {title}".format(
+                id=item.get("id"),
+                status=item.get("status"),
+                source_project=item.get("source_project") or "-",
+                title=item.get("title") or "",
+            )
+        )
+    return 0
+
+
+def _work_actor(args: argparse.Namespace) -> tuple[str, str | None]:
+    """work/design 命令的 actor 角色与子项目（worker 隔离用）。"""
+    role, _root, delivery = _worker_task_scope(args)
+    return role, delivery
+
+
+def _cmd_work_create(args: argparse.Namespace) -> int:
+    data = work.create_work_package(
+        args.project_dir,
+        args.subproject,
+        title=args.title,
+        design_package=args.design_package,
+        requirements=args.requirement or [],
+        mfps=args.mfp or [],
+        specs=args.spec or [],
+        design_refs=args.design_ref or [],
+        interface_refs=args.interface_ref or [],
+        must_read=args.must_read or [],
+        allowed_paths=args.allowed_path or [],
+        budget=_load_budget(args.budget),
+        acceptance=[
+            {"id": f"A{index}", "method": "artifact", "expect": text}
+            for index, text in enumerate(args.acceptance or [], start=1)
+        ],
+        phase=args.phase,
+        actor_role=_effective_role(args)[0],
+    )
+    print(f"工作包: {data['id']} ({data['status']})")
+    print(f"path: {data['_path']}")
+    return 0
+
+
+def _load_budget(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    data = yaml.safe_load(raw)
+    if not isinstance(data, dict):
+        raise work.WorkError("--budget 必须是 YAML/JSON 映射")
+    return data
+
+
+def _cmd_work_add_task(args: argparse.Namespace) -> int:
+    decision = None
+    if args.type == "decision":
+        decision = {
+            "problem": args.problem,
+            "impact": args.impact,
+            "options": args.option or [],
+            "recommendation": args.recommendation,
+            "level": args.level,
+            "owner": args.decision_owner,
+        }
+    role, delivery = _work_actor(args)
+    task = work.add_task(
+        args.project_dir,
+        args.wp_id,
+        task_type=args.type,
+        goal=args.goal,
+        acceptance=args.acceptance or [],
+        verification=args.verification,
+        context=args.context or [],
+        decision=decision,
+        verifies=args.verifies or [],
+        actor_role=role,
+        actor_delivery=delivery,
+    )
+    print(f"任务: {task['id']} ({task['type']})")
+    return 0
+
+
+def _cmd_work_start(args: argparse.Namespace) -> int:
+    role, delivery = _work_actor(args)
+    data = work.start_work_package(
+        args.project_dir, args.wp_id, actor_role=role, actor_delivery=delivery
+    )
+    print(f"{data['id']} -> {data['status']}")
+    return 0
+
+
+def _cmd_work_decision(args: argparse.Namespace) -> int:
+    role, delivery = _work_actor(args)
+    if args.decision_id:
+        data = work.record_decision(
+            args.project_dir,
+            args.wp_id,
+            args.decision_id,
+            decision=args.decision,
+            decided_by=args.decided_by or role,
+            actor_role=role,
+            confirmed_by=getattr(args, "confirmed_by", None),
+            note=getattr(args, "note", None),
+            actor_delivery=delivery,
+        )
+        print(f"{data['id']} 决策已记录 ({args.decision_id})")
+        return 0
+    task = work.request_decision(
+        args.project_dir,
+        args.wp_id,
+        problem=args.problem,
+        impact=args.impact,
+        options=args.option or [],
+        recommendation=args.recommendation,
+        level=args.level,
+        owner=args.decision_owner,
+        actor_role=role,
+        actor_delivery=delivery,
+    )
+    print(f"决策点: {task['id']} (owner={args.decision_owner}, level={args.level})")
+    return 0
+
+
+def _cmd_work_verify(args: argparse.Namespace) -> int:
+    role, delivery = _work_actor(args)
+    if args.result:
+        _, current = work.find_work_package(
+            args.project_dir, args.wp_id, actor_role=role, actor_delivery=delivery
+        )
+        if current.get("status") == "in_progress":
+            work.start_verification(
+                args.project_dir,
+                args.wp_id,
+                verifier=args.verifier or role,
+                actor_role=role,
+                actor_delivery=delivery,
+            )
+        data = work.record_verification(
+            args.project_dir,
+            args.wp_id,
+            result=args.result,
+            evidence=args.evidence or [],
+            notes=args.notes,
+            actor_role=role,
+            actor_delivery=delivery,
+        )
+    else:
+        data = work.start_verification(
+            args.project_dir,
+            args.wp_id,
+            verifier=args.verifier or role,
+            actor_role=role,
+            actor_delivery=delivery,
+        )
+    print(f"{data['id']} -> {data['status']}")
+    return 0
+
+
+def _cmd_work_accept(args: argparse.Namespace) -> int:
+    data = work.accept_work_package(
+        args.project_dir,
+        args.wp_id,
+        verdict=args.verdict,
+        note=args.note,
+        actor_role=_effective_role(args)[0],
+    )
+    print(f"{data['id']} -> {data['status']} (verdict={args.verdict})")
+    return 0
+
+
+def _cmd_work_list(args: argparse.Namespace) -> int:
+    role, delivery = _work_actor(args)
+    items = work.list_work_packages(
+        args.project_dir,
+        subproject=args.subproject,
+        status=args.status,
+        actor_role=role,
+        actor_delivery=delivery,
+    )
+    if args.json:
+        _print_json(items)
+        return 0
+    if not items:
+        print("没有工作包")
+        return 0
+    for item in items:
+        print(
+            "{id} {status} {subproject} {title}".format(
+                id=item.get("id"),
+                status=item.get("status"),
+                subproject=item.get("subproject"),
+                title=item.get("title"),
+            )
+        )
+    return 0
+
+
+def _cmd_work_show(args: argparse.Namespace) -> int:
+    role, delivery = _work_actor(args)
+    _, data = work.find_work_package(
+        args.project_dir, args.wp_id, actor_role=role, actor_delivery=delivery
+    )
+    if args.json:
+        _print_json(data)
+    else:
+        print(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    return 0
+
+
+def _cmd_design_create(args: argparse.Namespace) -> int:
+    data = design.create_design(
+        args.project_dir,
+        args.title,
+        requirements=args.requirement or [],
+        mfps=args.mfp or [],
+        specs=args.spec or [],
+        subprojects=args.subproject or [],
+        scope=args.scope or "",
+        non_goals=args.non_goal or [],
+        interfaces=args.interface or [],
+        mapping=args.mapping or [],
+        pre_research=args.pre_research or [],
+        actor_role=_effective_role(args)[0],
+    )
+    print(f"设计包: {data['id']} ({data['status']})")
+    print(f"path: {data['_path']}")
+    return 0
+
+
+def _cmd_design_accept(args: argparse.Namespace) -> int:
+    data = design.accept_design(
+        args.project_dir,
+        args.dp_id,
+        verdict=args.verdict,
+        note=args.note,
+        actor_role=_effective_role(args)[0],
+    )
+    print(f"{data['id']} -> {data['status']} (verdict={args.verdict})")
+    return 0
+
+
+def _cmd_design_list(args: argparse.Namespace) -> int:
+    role, delivery = _work_actor(args)
+    items = design.list_designs(
+        args.project_dir, status=args.status, actor_role=role, actor_delivery=delivery
+    )
+    if args.json:
+        _print_json(items)
+        return 0
+    if not items:
+        print("没有设计包")
+        return 0
+    for item in items:
+        print(f"{item.get('id')} {item.get('status')} {item.get('title')}")
+    return 0
+
+
+def _cmd_design_show(args: argparse.Namespace) -> int:
+    role, delivery = _work_actor(args)
+    path, meta = design.find_design(
+        args.project_dir, args.dp_id, actor_role=role, actor_delivery=delivery
+    )
+    if args.json:
+        meta.pop("_body", None)
+        _print_json(meta)
+    else:
+        print(path.read_text(encoding="utf-8"))
+    return 0
+
+
+def _cmd_skill_list(args: argparse.Namespace) -> int:
+    items = skills.discover_skills(args.project_dir)
+    if args.role:
+        items = [item for item in items if args.role in item["roles"]]
+    if args.json:
+        _print_json(
+            [
+                {
+                    "name": item["name"],
+                    "roles": item["roles"],
+                    "trigger": item["trigger"],
+                    "path": str(item["path"]),
+                }
+                for item in items
+            ]
+        )
+        return 0
+    if not items:
+        print("没有技能")
+        return 0
+    for item in items:
+        print(
+            "{name} [{roles}] {trigger}".format(
+                name=item["name"],
+                roles=", ".join(item["roles"]),
+                trigger=item["trigger"] or "-",
+            )
+        )
+    return 0
+
+
+def _cmd_skill_show(args: argparse.Namespace) -> int:
+    data = skills.show_skill(args.project_dir, args.name)
+    if args.json:
+        _print_json(data)
+    else:
+        print(data["body"])
+    return 0
+
+
+def _cmd_skill_validate(args: argparse.Namespace) -> int:
+    results = skills.validate_skills(args.project_dir)
+    errors = [item for item in results if item["errors"]]
+    if args.json:
+        _print_json({"ok": not errors, "results": results})
+    else:
+        for item in results:
+            if item["errors"]:
+                print(f"FAIL {item['name']}: " + "；".join(item["errors"]))
+            else:
+                print(f"OK {item['name']}")
+    return 0 if not errors else 1
+
+
+def _cmd_docs_check(args: argparse.Namespace) -> int:
+    contract = resolve_contract(args.project_dir)
+    issues = docmodel.check(contract, roadmap=args.roadmap)
+    if args.json:
+        _print_json({"ok": not issues, "issues": issues})
+    else:
+        if issues:
+            print("文档模型检查: FAIL")
+            for issue in issues:
+                print(f"  - {issue}")
+        else:
+            print("文档模型检查: OK")
+    return 0 if not issues else 1
+
+
+def _cmd_docs_summary(args: argparse.Namespace) -> int:
+    contract = resolve_contract(args.project_dir)
+    data = docmodel.summary(contract)
+    if args.json:
+        _print_json(data)
+    else:
+        print(f"当前路标: {data['current_roadmap']}")
+        print(f"继承文档文件: {data['inherit_files']}")
+        print(f"过程文档文件: {data['process_files']}")
+        print(f"SPEC: {len(data['specs'])}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2245,16 +2961,30 @@ def build_parser() -> argparse.ArgumentParser:
     bug_add.add_argument("--expected")
     bug_add.add_argument("--actual")
     bug_add.add_argument("--evidence", action="append")
+    bug_add.add_argument(
+        "--flow", choices=list(bug.FLOWS), default="external",
+        help="external（试运行/用户可见）/ verification（同子项目实施期）",
+    )
+    bug_add.add_argument("--scope", choices=list(bug.SCOPES), default="same_subproject")
+    bug_add.add_argument("--subproject", help="verification flow 的同子项目")
+    bug_add.add_argument("--found-by")
     bug_add.set_defaults(func=_cmd_bug_add)
     bug_list = bug_sub.add_parser("list")
     bug_list.add_argument("--project-dir", default=".")
     bug_list.add_argument("--status")
     bug_list.add_argument("--severity")
     bug_list.add_argument("--roadmap")
+    bug_list.add_argument("--flow", choices=list(bug.FLOWS))
+    bug_list.add_argument("--subproject")
     bug_list.add_argument("--all", action="store_true", help="不按当前路标过滤")
     bug_list.add_argument(
         "--history", action="store_true", help="包含 closed/deferred/wontfix 等历史缺陷"
     )
+    bug_list.add_argument(
+        "--include-closed", action="store_true", help="查询 closed BUG（需用户授权 + reason）"
+    )
+    bug_list.add_argument("--authorized-by", help="closed 查询的用户授权人")
+    bug_list.add_argument("--reason", help="closed 查询理由（写 READ-LOG）")
     bug_list.add_argument("--json", action="store_true")
     bug_list.set_defaults(func=_cmd_bug_list)
     bug_show = bug_sub.add_parser("show")
@@ -2268,15 +2998,45 @@ def build_parser() -> argparse.ArgumentParser:
     bug_update.add_argument("--status", choices=list(bug.STATUSES))
     bug_update.add_argument("--severity", choices=list(bug.SEVERITIES))
     bug_update.add_argument("--fix-task")
+    bug_update.add_argument("--fix-owner")
     bug_update.add_argument("--root-cause")
     bug_update.add_argument("--resolution")
     bug_update.set_defaults(func=_cmd_bug_update)
+    bug_fix = bug_sub.add_parser("fix", help="进入修复/标记 fixed（verification flow 供 worker）")
+    bug_fix.add_argument("bug_id")
+    bug_fix.add_argument("--project-dir", default=".")
+    bug_fix.add_argument("--task")
+    bug_fix.add_argument("--by", help="修复者身份（默认 worker 子项目）")
+    bug_fix.add_argument("--fixed", action="store_true", help="直接标记 fixed")
+    bug_fix.set_defaults(func=_cmd_bug_fix)
+    bug_verify = bug_sub.add_parser("verify", help="独立验证（external→pending_user_close；verification→verified）")
+    bug_verify.add_argument("bug_id")
+    bug_verify.add_argument("--project-dir", default=".")
+    bug_verify.add_argument("--by", help="验证者/viewer（verification flow 必填且非修复者）")
+    bug_verify.add_argument("--subproject")
+    bug_verify.add_argument("--evidence", action="append")
+    bug_verify.set_defaults(func=_cmd_bug_verify)
+    bug_escalate = bug_sub.add_parser("escalate", help="verification → external（跨项目/接口/外部可见/安全/需求级）")
+    bug_escalate.add_argument("bug_id")
+    bug_escalate.add_argument("--project-dir", default=".")
+    bug_escalate.add_argument("--reason", required=True)
+    bug_escalate.add_argument("--by")
+    bug_escalate.set_defaults(func=_cmd_bug_escalate)
     bug_close = bug_sub.add_parser("close")
     bug_close.add_argument("bug_id")
     bug_close.add_argument("--project-dir", default=".")
     bug_close.add_argument("--verification", required=True)
     bug_close.add_argument("--resolution")
+    bug_close.add_argument("--confirmed-by", help="external：用户确认人（必填）")
+    bug_close.add_argument("--note", help="external：用户确认意见（必填）")
+    bug_close.add_argument("--by", help="verification：同子项目非修复者 viewer")
+    bug_close.add_argument("--subproject")
+    bug_close.add_argument("--evidence", action="append")
     bug_close.set_defaults(func=_cmd_bug_close)
+    bug_audit = bug_sub.add_parser("audit", help="状态一致性审计（直接改状态/绕过 CLI 的痕迹）")
+    bug_audit.add_argument("--project-dir", default=".")
+    bug_audit.add_argument("--json", action="store_true")
+    bug_audit.set_defaults(func=_cmd_bug_audit)
 
     knowledge_p = sub.add_parser("knowledge", help="项目知识/纠正记录")
     knowledge_sub = knowledge_p.add_subparsers(dest="action", required=True)
@@ -2475,6 +3235,180 @@ def build_parser() -> argparse.ArgumentParser:
     improve_import.add_argument("--project-dir", default=".")
     improve_import.set_defaults(func=_cmd_improve_import)
 
+    improve_triage = improve_sub.add_parser("triage", help="manager 评估 MFP（接收/拒绝/延期）")
+    improve_triage.add_argument("mfp_id")
+    improve_triage.add_argument("--project-dir", default=".")
+    improve_triage.add_argument(
+        "--decision", choices=list(improve.TRIAGE_DECISIONS), required=True
+    )
+    improve_triage.add_argument("--reason")
+    improve_triage.add_argument("--next-step", choices=["design", "direct"])
+    improve_triage.add_argument("--target")
+    improve_triage.set_defaults(func=_cmd_improve_triage)
+
+    improve_sync = improve_sub.add_parser("sync", help="把归档 resolution 同步到生产项目 state.json")
+    improve_sync.add_argument("--project-dir", default=".")
+    improve_sync.add_argument("--from", dest="from_path", help="归档 index.json 路径")
+    improve_sync.add_argument("--source", help="meta-flow 源码目录（默认全局 manifest.source_dir）")
+    improve_sync.add_argument("--json", action="store_true")
+    improve_sync.set_defaults(func=_cmd_improve_sync)
+
+    improve_state = improve_sub.add_parser("state", help="查看生产项目 MFP 同步状态")
+    improve_state.add_argument("--project-dir", default=".")
+    improve_state.add_argument("--json", action="store_true")
+    improve_state.set_defaults(func=_cmd_improve_state)
+
+    work_p = sub.add_parser("work", help="工作包/任务区间/决策点/验证流（REQ-0019）")
+    work_sub = work_p.add_subparsers(dest="action", required=True)
+    work_create = work_sub.add_parser("create", help="manager 每子项目每设计周期创建工作包")
+    work_create.add_argument("--project-dir", default=".")
+    work_create.add_argument("--subproject", required=True)
+    work_create.add_argument("--title")
+    work_create.add_argument("--design-package")
+    work_create.add_argument("--requirement", action="append")
+    work_create.add_argument("--mfp", action="append")
+    work_create.add_argument("--spec", action="append")
+    work_create.add_argument("--design-ref", action="append")
+    work_create.add_argument("--interface-ref", action="append")
+    work_create.add_argument("--must-read", action="append")
+    work_create.add_argument("--allowed-path", action="append")
+    work_create.add_argument("--budget", help='YAML/JSON: {"files": 60, "bytes": 1048576}')
+    work_create.add_argument("--acceptance", action="append")
+    work_create.add_argument("--phase", default="P3")
+    work_create.set_defaults(func=_cmd_work_create)
+
+    work_task = work_sub.add_parser("task", help="添加工作包任务（仅在需要决策/独立验证时拆分）")
+    work_task.add_argument("wp_id")
+    work_task.add_argument("--project-dir", default=".")
+    work_task.add_argument("--type", choices=list(work.TASK_TYPES), required=True)
+    work_task.add_argument("--goal", required=True)
+    work_task.add_argument("--acceptance", action="append")
+    work_task.add_argument("--verification", choices=list(work.VERIFICATION_MODES), default="none")
+    work_task.add_argument("--context", action="append")
+    work_task.add_argument("--verifies", action="append")
+    work_task.add_argument("--problem")
+    work_task.add_argument("--impact")
+    work_task.add_argument("--option", action="append")
+    work_task.add_argument("--recommendation")
+    work_task.add_argument("--level", choices=list(work.DECISION_LEVELS))
+    work_task.add_argument("--decision-owner", choices=list(work.DECISION_OWNERS), default="manager")
+    work_task.set_defaults(func=_cmd_work_add_task)
+
+    work_start = work_sub.add_parser("start")
+    work_start.add_argument("wp_id")
+    work_start.add_argument("--project-dir", default=".")
+    work_start.set_defaults(func=_cmd_work_start)
+
+    work_decision = work_sub.add_parser("decision", help="提交/记录决策点（阻塞工作包）")
+    work_decision.add_argument("wp_id")
+    work_decision.add_argument("--project-dir", default=".")
+    work_decision.add_argument("--decision-id", help="记录已有决策点结果")
+    work_decision.add_argument("--decision")
+    work_decision.add_argument("--decided-by")
+    work_decision.add_argument("--confirmed-by", help="D0/D1 用户确认人（manager 记录）")
+    work_decision.add_argument("--note", help="D0/D1 用户确认意见")
+    work_decision.add_argument("--problem")
+    work_decision.add_argument("--impact")
+    work_decision.add_argument("--option", action="append")
+    work_decision.add_argument("--recommendation")
+    work_decision.add_argument("--level", choices=list(work.DECISION_LEVELS), default="D2")
+    work_decision.add_argument("--decision-owner", choices=list(work.DECISION_OWNERS), default="manager")
+    work_decision.set_defaults(func=_cmd_work_decision)
+
+    work_verify = work_sub.add_parser("verify", help="子项目最终验证（start/record）")
+    work_verify.add_argument("wp_id")
+    work_verify.add_argument("--project-dir", default=".")
+    work_verify.add_argument("--result", choices=["PASS", "PASS_WITH_RISK", "NEEDS_REWORK", "BLOCKED"])
+    work_verify.add_argument("--evidence", action="append")
+    work_verify.add_argument("--notes")
+    work_verify.add_argument("--verifier")
+    work_verify.set_defaults(func=_cmd_work_verify)
+
+    work_accept = work_sub.add_parser("accept", help="manager 验收工作包")
+    work_accept.add_argument("wp_id")
+    work_accept.add_argument("--project-dir", default=".")
+    work_accept.add_argument(
+        "--verdict", choices=["PASS", "PASS_WITH_RISK", "NEEDS_REWORK", "BLOCKED"], default="PASS"
+    )
+    work_accept.add_argument("--note")
+    work_accept.set_defaults(func=_cmd_work_accept)
+
+    work_list = work_sub.add_parser("list")
+    work_list.add_argument("--project-dir", default=".")
+    work_list.add_argument("--subproject")
+    work_list.add_argument("--status", choices=list(work.WORK_STATUSES))
+    work_list.add_argument("--json", action="store_true")
+    work_list.set_defaults(func=_cmd_work_list)
+
+    work_show = work_sub.add_parser("show")
+    work_show.add_argument("wp_id")
+    work_show.add_argument("--project-dir", default=".")
+    work_show.add_argument("--json", action="store_true")
+    work_show.set_defaults(func=_cmd_work_show)
+
+    design_p = sub.add_parser("design", help="设计包 DP（designer 产出/manager 验收）")
+    design_sub = design_p.add_subparsers(dest="action", required=True)
+    design_create = design_sub.add_parser("create")
+    design_create.add_argument("--project-dir", default=".")
+    design_create.add_argument("--title", required=True)
+    design_create.add_argument("--requirement", action="append")
+    design_create.add_argument("--mfp", action="append")
+    design_create.add_argument("--spec", action="append")
+    design_create.add_argument("--subproject", action="append")
+    design_create.add_argument("--scope")
+    design_create.add_argument("--non-goal", action="append")
+    design_create.add_argument("--interface", action="append")
+    design_create.add_argument("--mapping", action="append")
+    design_create.add_argument("--pre-research", action="append")
+    design_create.set_defaults(func=_cmd_design_create)
+    design_accept = design_sub.add_parser("accept")
+    design_accept.add_argument("dp_id")
+    design_accept.add_argument("--project-dir", default=".")
+    design_accept.add_argument(
+        "--verdict", choices=list(design.DESIGN_VERDICTS), required=True
+    )
+    design_accept.add_argument("--note")
+    design_accept.set_defaults(func=_cmd_design_accept)
+    design_list = design_sub.add_parser("list")
+    design_list.add_argument("--project-dir", default=".")
+    design_list.add_argument("--status", choices=list(design.DESIGN_STATUSES))
+    design_list.add_argument("--json", action="store_true")
+    design_list.set_defaults(func=_cmd_design_list)
+    design_show = design_sub.add_parser("show")
+    design_show.add_argument("dp_id")
+    design_show.add_argument("--project-dir", default=".")
+    design_show.add_argument("--json", action="store_true")
+    design_show.set_defaults(func=_cmd_design_show)
+
+    skill_p = sub.add_parser("skill", help="角色技能索引（提示词只定义身份/权限）")
+    skill_sub = skill_p.add_subparsers(dest="action", required=True)
+    skill_list = skill_sub.add_parser("list")
+    skill_list.add_argument("--project-dir", default=".")
+    skill_list.add_argument("--role")
+    skill_list.add_argument("--json", action="store_true")
+    skill_list.set_defaults(func=_cmd_skill_list)
+    skill_show = skill_sub.add_parser("show")
+    skill_show.add_argument("name")
+    skill_show.add_argument("--project-dir", default=".")
+    skill_show.add_argument("--json", action="store_true")
+    skill_show.set_defaults(func=_cmd_skill_show)
+    skill_validate = skill_sub.add_parser("validate")
+    skill_validate.add_argument("--project-dir", default=".")
+    skill_validate.add_argument("--json", action="store_true")
+    skill_validate.set_defaults(func=_cmd_skill_validate)
+
+    docs_p = sub.add_parser("docs", help="文档模型与版本隔离检查（REQ-0020）")
+    docs_sub = docs_p.add_subparsers(dest="action", required=True)
+    docs_check = docs_sub.add_parser("check")
+    docs_check.add_argument("--project-dir", default=".")
+    docs_check.add_argument("--roadmap")
+    docs_check.add_argument("--json", action="store_true")
+    docs_check.set_defaults(func=_cmd_docs_check)
+    docs_summary = docs_sub.add_parser("summary")
+    docs_summary.add_argument("--project-dir", default=".")
+    docs_summary.add_argument("--json", action="store_true")
+    docs_summary.set_defaults(func=_cmd_docs_summary)
+
     dev_p = sub.add_parser("dev", help="meta-flow 源码维护（maintainer）")
     dev_sub = dev_p.add_subparsers(dest="action", required=True)
     dev_clone_p = dev_sub.add_parser("clone")
@@ -2520,6 +3454,18 @@ def build_parser() -> argparse.ArgumentParser:
     di_update.add_argument("--note")
     di_update.add_argument("--source")
     di_update.set_defaults(func=_cmd_dev_improve_update)
+
+    di_archive = dev_improve_sub.add_parser(
+        "archive", help="meta-flow maintainer 唯一归档者（inbox → improvements/archive/）"
+    )
+    di_archive.add_argument("ref", help="<project>/<MFP> 或唯一的 MFP id")
+    di_archive.add_argument("--source")
+    di_archive.set_defaults(func=_cmd_dev_improve_archive)
+
+    di_index = dev_improve_sub.add_parser("index", help="查看归档索引 improvements/archive/index.json")
+    di_index.add_argument("--source")
+    di_index.add_argument("--json", action="store_true")
+    di_index.set_defaults(func=_cmd_dev_improve_index)
 
     upgrade_p = sub.add_parser("upgrade", help="按全局模板更新项目安装")
     upgrade_p.add_argument("--project-dir", default=".")
@@ -2596,11 +3542,15 @@ def main(argv: list[str] | None = None) -> int:
         req.ReqError,
         roadmap.RoadmapError,
         bug.BugError,
+        design.DesignError,
+        docmodel.DocModelError,
         knowledge.KnowledgeError,
+        skills.SkillError,
         verify.VerifyError,
         context.ContextError,
         state.StateError,
         roles.RoleError,
+        work.WorkError,
     ) as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return getattr(exc, "code", 1)

@@ -1228,6 +1228,10 @@ def doctor_warnings(root: str | Path) -> list[str]:
             )
         for message in task_security_warnings(data):
             warnings.append(f"任务 {task_id} {message}")
+    # REQ-0020：文档模型/SPEC P2 兼容/版本隔离提示（非阻断，不破坏 doctor 退出码）
+    from . import docmodel
+
+    warnings.extend(f"文档模型: {issue}" for issue in docmodel.check(contract))
     return warnings
 
 

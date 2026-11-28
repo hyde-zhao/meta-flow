@@ -381,5 +381,12 @@ def test_verify_pass_does_not_close_bug(env):
         bugs=[bug_item["id"]],
     )
     assert bug.show_bug(root, bug_item["id"])["status"] == "verifying"
-    closed = bug.close_bug(root, bug_item["id"], verification="manager 确认")
+    bug.verify_bug(root, bug_item["id"], by="verifier")
+    closed = bug.close_bug(
+        root,
+        bug_item["id"],
+        verification="manager 确认",
+        confirmed_by="alice",
+        note="用户确认关闭",
+    )
     assert closed["status"] == "closed"

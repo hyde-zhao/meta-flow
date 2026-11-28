@@ -12,18 +12,25 @@ from .state import ledger_append
 from .workspace import resolve_contract
 
 REQ_PATH = "requirements/REQUIREMENTS.yaml"
+# SPEC-FRAMEWORK R2 状态机 + 历史兼容状态（迁移期可读）。
 REQ_STATUSES = (
     "proposed",
     "accepted",
+    "in_design",
+    "specified",
+    "in_implementation",
+    "verified",
+    "released",
+    "closed",
+    # legacy（兼容 1.0.3 及更早需求文档）
     "in_roadmap",
     "in_progress",
     "designed",
     "implemented",
-    "verified",
-    "released",
     "deferred",
     "rejected",
 )
+TRIAGE_DECISIONS = ("accepted", "rejected", "deferred")
 PRIORITIES = ("must", "should", "could", "wont")
 
 
@@ -205,6 +212,54 @@ def show_requirement(project: str | Path, req_id: str) -> dict[str, Any]:
     return result
 
 
+def triage_requirement(
+    project: str | Path,
+    req_id: str,
+    *,
+    decision: str,
+    reason: str | None = None,
+    next_step: str | None = None,
+    decided_by: str = "manager",
+) -> dict[str, Any]:
+    """manager 评估需求：接收/拒绝/延期，明确下一步（设计/直接开发）。"""
+    contract = resolve_contract(project)
+    if decision not in TRIAGE_DECISIONS:
+        raise ReqError(f"decision 只能是 {'|'.join(TRIAGE_DECISIONS)}")
+    if decision == "accepted" and next_step not in {"design", "direct", None}:
+        raise ReqError("next_step 只能是 design|direct")
+    if decision == "accepted" and next_step is None:
+        raise ReqError("接收需求必须明确下一步 --next-step design|direct")
+    if decision in {"rejected", "deferred"} and not str(reason or "").strip():
+        raise ReqError(f"{decision} 必须写理由 --reason")
+    data, item = _find(contract, req_id)
+    item["status"] = decision
+    item["assessment"] = {
+        "decision": decision,
+        "reason": reason,
+        "next_step": next_step,
+        "decided_by": decided_by,
+        "decided_at": _now(),
+    }
+    item["updated_at"] = _now()
+    errors = validate_dor(item)
+    if errors:
+        raise ReqError("；".join(errors))
+    _save(contract, data)
+    _write_requirement_doc(contract, item)
+    refresh_index(contract)
+    ledger_append(
+        contract,
+        {
+            "event": "req.triaged",
+            "req": req_id,
+            "decision": decision,
+            "next_step": next_step,
+            "reason": reason,
+        },
+    )
+    return item
+
+
 def update_requirement(
     project: str | Path,
     req_id: str,
@@ -271,6 +326,13 @@ def _scan_docs(directory: Path, req_id: str, pattern: str = "*.md") -> list[str]
         if req_id in text:
             hits.append(str(path.relative_to(directory.parent)))
     return hits
+
+
+def _spec_refs(contract: Path, req_id: str, roadmap: str | None = None) -> list[str]:
+    """SPEC 引用：legacy specs/ 与 P2 specs 合并（REQ-0020 兼容迁移）。"""
+    from . import docmodel
+
+    return docmodel.spec_refs(contract, req_id, roadmap=roadmap)
 
 
 def _dedupe_by_id(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -342,8 +404,8 @@ def trace_requirement(
         for archive in sorted((contract / "archive").glob("*/bugs")):
             bugs.extend(_scan_yaml_refs(archive, "related_reqs", req_id))
     return {
-        # SPEC 只匹配 SPEC-*.md，避免把 INDEX.md/README.md 计为 SPEC
-        "specs": _scan_docs(contract / "specs", req_id, pattern="SPEC-*.md"),
+        # SPEC 兼容读取 legacy specs/ 与 roadmap/R{n}/phases/P2/specs/（REQ-0020）
+        "specs": _spec_refs(contract, req_id, roadmap),
         "designs": _scan_docs(contract / "architecture", req_id),
         "tasks": tasks,
         "evidence": evidence,

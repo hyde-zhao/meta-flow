@@ -196,7 +196,17 @@ def test_bug_lifecycle(project_env):
         bug.close_bug(root, "BUG-0001", verification="未修复")
 
     bug.update_bug(root, "BUG-0001", status="fixed", fix_task="R1-P1-T001")
-    closed = bug.close_bug(root, "BUG-0001", verification="回归通过")
+    # R1：新 schema external BUG 不能从 fixed 直关，必须 verified → pending_user_close → 用户确认
+    with pytest.raises(bug.BugError):
+        bug.close_bug(root, "BUG-0001", verification="未确认")
+    bug.verify_bug(root, "BUG-0001", by="verifier")
+    closed = bug.close_bug(
+        root,
+        "BUG-0001",
+        verification="回归通过",
+        confirmed_by="alice",
+        note="用户确认关闭",
+    )
     assert closed["status"] == "closed"
     assert bug.open_blockers(root) == []
 

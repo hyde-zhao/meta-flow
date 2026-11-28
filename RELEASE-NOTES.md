@@ -1,5 +1,35 @@
 # 发布说明
 
+## 未发布（R0/P4 WP-F2F3 / T038）
+
+- 信息流闭环（REQ-0018）：
+  - REQ 评估：`mf req triage`（accepted/rejected/deferred + 下一步 design|direct）；
+    状态机补充 `in_design/specified/in_implementation/closed`（legacy 兼容）。
+  - MFP：本地 ID `MFP-<project>-<seq>`；`mf improve triage`；maintainer 唯一归档
+    `mf dev improve archive`（`improvements/archive/` + `index.json`）；`mf improve sync`
+    写生产项目 `.meta-flow/improvements/state.json`（resolved/rejected/
+    accepted-not-resolved/deferred）；非 maintainer 归档/同步拒绝（rc=3）；ID/ref 白名单
+    拒绝路径穿越；accepted 必须给 next_step design|direct。
+  - BUG 两层（T039 返工收紧）：external 新 schema 仅 `pending_user_close` 可关，
+    必须用户确认（`--confirmed-by` + `--note`，角色/系统身份拒绝）；`fixed/verifying`
+    直关仅限 T038 前无 flow 历史 BUG；verification `open→in_fix→fixed→verified→closed`，
+    fix_owner 必填，非修复者 viewer 关闭（`closure_type=viewer`），同一宿主会话
+    （fix_session/viewer_session）不能自验自关；`mf bug escalate` 升级 external；
+    closed 默认不可见，worker 用户授权查询写 READ-LOG；closed verification 同子项目
+    当前 R 只读可见；`mf bug audit` 检测状态篡改/新 schema legacy_close。
+- 工作包（REQ-0019/CHG-0005）：`mf work create/task/start/decision/verify/accept`；
+  工作包 schema/上下文/决策点/子项目最终验证/manager 验收；默认不按任务生成 review。
+  - 决策：D0/D1 仅 manager 记录用户确认（`--confirmed-by`+`--note`），D2 仅 manager，
+    worker/designer 不得代记；工作包/设计包按子项目 + 当前 R 隔离。
+  - 工作包引用 design_package 时必须存在、已验收且同 R。
+- 设计包：`mf design create/accept`（P2 `design/`）。
+- 文档模型与技能（REQ-0020）：`mf skill list/show/validate` + `templates/skills/`
+  （17 个技能模板）；`mf docs check/summary`；SPEC P2 兼容读取（legacy `specs/`
+  仍工作）；worker 仅当前 R（guard/context/CLI 版本隔离）。
+- 兼容：不改变既有任务卡/评审/自动 review 行为；新增命令与字段均为增量；
+  local MFP ID 从 `MFP-0001` 调整为 `MFP-<project>-0001`（REQ-0018）。
+- 版本号与发布门禁待 manager/P5 决定（本段不代表已发布）。
+
 ## 1.0.3（R0/V1 P4 维护发布）
 
 - 版本：1.0.3（R0/V1）

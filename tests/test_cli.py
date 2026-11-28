@@ -695,7 +695,7 @@ def test_cli_local_mfp_channel_and_guard_log_query(tmp_path, monkeypatch, capsys
     monkeypatch.setenv("MF_ROLE", "worker")
     capsys.readouterr()
     assert main(["improve", "new", "--local", "--title", "本地改进"]) == 0
-    mfp = project / "alpha" / ".meta-flow" / "improvements" / "MFP-0001.yaml"
+    mfp = project / "alpha" / ".meta-flow" / "improvements" / "MFP-demo-0001.yaml"
     assert mfp.is_file()
     log = project / "demo-contract" / "state" / "READ-LOG.ndjson"
     assert "mf improve new --local" in log.read_text(encoding="utf-8")

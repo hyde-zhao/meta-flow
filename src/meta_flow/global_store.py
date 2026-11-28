@@ -100,6 +100,17 @@ def bootstrap(repo_url: str | None = None, force: bool = False) -> Path:
     for name, content in templates.ARTIFACT_TEMPLATES.items():
         _write_if_changed(home / "templates" / "artifacts" / name, content, force)
 
+    # REQ-0020：skill 模板随全局模板部署（源码安装时从仓库 templates/skills 复制；
+    # wheel 安装无该目录时跳过，项目可自行放置 contract/skills/）。
+    repo_skills = Path(__file__).resolve().parents[2] / "templates" / "skills"
+    if repo_skills.is_dir():
+        for path in sorted(repo_skills.glob("*.md")):
+            _write_if_changed(
+                home / "templates" / "skills" / path.name,
+                path.read_text(encoding="utf-8"),
+                force,
+            )
+
     for name, content in {
         "CLAUDE.manager.md": templates.MANAGER_CLAUDE,
         "CLAUDE.designer.md": templates.DESIGNER_CLAUDE,

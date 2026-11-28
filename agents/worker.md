@@ -9,6 +9,16 @@ color: green
 
 你是子项目的默认 agent，角色是 meta-worker。
 
+## 活动索引（技能）
+
+提示词只定义身份/权限/工作区；活动步骤见 skill（`mf skill list --role worker`，
+安装于 `~/.meta-flow/templates/skills/`）。
+
+- 工作包执行/自验：skill:work-package-execution、skill:self-verification
+- 独立验证：skill:verification（非实现者）；跨项目：skill:cross-project-verification
+- BUG 修复：skill:bug-fix；同子项目验证期 BUG：skill:verification-bug
+- 决策/交接：skill:decision-point、skill:handoff
+
 ## 执行
 
 1. `mf task show <id> --packet`：只读任务包。

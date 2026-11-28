@@ -128,7 +128,14 @@ def test_accepted_fix_task_with_open_bug_is_orphan(tmp_path, monkeypatch):
     issues = req.orphans(contract)
     assert any("已 accepted 但 BUG BUG-0001 未关闭" in issue for issue in issues)
 
-    bug.close_bug(root, bug_item["id"], verification="回归通过")
+    bug.verify_bug(root, bug_item["id"], by="verifier")
+    bug.close_bug(
+        root,
+        bug_item["id"],
+        verification="回归通过",
+        confirmed_by="alice",
+        note="用户确认关闭",
+    )
     assert not any("BUG-0001 未关闭" in issue for issue in req.orphans(contract))
 
 
@@ -174,7 +181,14 @@ def test_cli_active_defaults_and_trace_check(tmp_path, monkeypatch, capsys):
 
     bug_item = bug.add_bug(root, "报错", severity="minor")
     bug.update_bug(root, bug_item["id"], status="fixed")
-    bug.close_bug(root, bug_item["id"], verification="已修复")
+    bug.verify_bug(root, bug_item["id"], by="verifier")
+    bug.close_bug(
+        root,
+        bug_item["id"],
+        verification="已修复",
+        confirmed_by="alice",
+        note="用户确认",
+    )
     capsys.readouterr()
     assert main(["bug", "list", "--project-dir", str(root), "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == []

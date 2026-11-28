@@ -18,9 +18,26 @@ from .workspace import resolve_contract
 MFP_DIR = "improvements"
 LOCAL_DIR = Path(".meta-flow/improvements")
 RECORD_KINDS = {"bug": "BUG", "requirement": "REQ", "change": "CHG"}
+SAFE_MFP_ID_RE = re.compile(r"^MFP-(?:[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-)?\d{4}$")
+SAFE_PROJECT_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$")
 SENSITIVE_RE = re.compile(
     r"(?i)(password|passwd|api[_-]?key|secret|token|BEGIN [A-Z ]*PRIVATE KEY)"
 )
+
+
+def _safe_mfp_id(value: str) -> str:
+    """MFP ID 白名单：拒绝路径分隔/穿越（N3 归档安全面，R8）。"""
+    mfp_id = str(value or "").strip()
+    if not SAFE_MFP_ID_RE.fullmatch(mfp_id):
+        raise ImproveError(f"MFP ID 非法: {value!r}；必须形如 MFP-<project>-<seq>|MFP-<seq>", 3)
+    return mfp_id
+
+
+def _safe_project(value: str) -> str:
+    project = str(value or "").strip()
+    if not SAFE_PROJECT_RE.fullmatch(project) or project in {".", ".."}:
+        raise ImproveError(f"MFP 来源项目名非法: {value!r}", 3)
+    return project
 
 
 class ImproveError(Exception):
@@ -67,6 +84,23 @@ def _next_id(directory: Path, prefix: str = "MFP") -> str:
         if (match := pattern.fullmatch(path.name))
     ]
     return f"{prefix}-{max(numbers, default=0) + 1:04d}"
+
+
+def _slug(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "-", value.strip()).strip("-").lower()
+    return cleaned or "project"
+
+
+def _next_local_id(directory: Path, project_id: str) -> str:
+    """生产项目本地 MFP ID：``MFP-<project>-<seq>``（INFO-FLOWS §3.2）。"""
+    slug = _slug(project_id)
+    pattern = re.compile(rf"^MFP-{re.escape(slug)}-(\d{{4}})\.yaml$")
+    numbers = [
+        int(match.group(1))
+        for path in directory.glob(f"MFP-{slug}-*.yaml")
+        if (match := pattern.fullmatch(path.name))
+    ]
+    return f"MFP-{slug}-{max(numbers, default=0) + 1:04d}"
 
 
 def _project_meta(project: Path) -> tuple[str, Path | None]:
@@ -170,7 +204,7 @@ def new_improvement(
     project_id, _ = _project_meta(project_path)
     target = local_dir(project_path) if local else contract_dir(project_path)
     target.mkdir(parents=True, exist_ok=True)
-    mfp_id = _next_id(target)
+    mfp_id = _next_local_id(target, project_id) if local else _next_id(target)
     data = _base_package(mfp_id, title, project_id, role)
     path = target / f"{mfp_id}.yaml"
     _dump(path, data)
@@ -241,6 +275,7 @@ def find_improvement(
     *,
     scope: str = "contract",
 ) -> Path:
+    mfp_id = _safe_mfp_id(mfp_id)
     project_path = Path(project).expanduser().resolve()
     project_id, _ = _project_meta(project_path)
     directory = (
@@ -299,7 +334,11 @@ def validate_improvement(data: dict[str, Any]) -> list[str]:
 
 def submit_improvement(project: str | Path, mfp_id: str) -> Path:
     project_path = Path(project).expanduser().resolve()
-    path = find_improvement(project_path, mfp_id)
+    try:
+        path = find_improvement(project_path, mfp_id)
+    except ImproveError:
+        # 生产项目本地 MFP（.meta-flow/improvements）也可直接提交到全局 inbox
+        path = find_improvement(project_path, mfp_id, scope="local")
     data = _load(path)
     errors = validate_improvement(data)
     if errors:
@@ -325,7 +364,10 @@ def import_improvement(project: str | Path, source: str | Path) -> Path:
     target_dir = contract_dir(project_path)
     target_dir.mkdir(parents=True, exist_ok=True)
     mfp_id = str(data.get("id") or _next_id(target_dir))
-    if not re.fullmatch(r"MFP-\d{4}", mfp_id) or (target_dir / f"{mfp_id}.yaml").exists():
+    # 兼容本地项目 ID ``MFP-<project>-<seq>`` 与 meta-flow 内部 ``MFP-<seq>``
+    if not re.fullmatch(r"MFP-(?:[A-Za-z0-9]+-)?\d{4}", mfp_id) or (
+        target_dir / f"{mfp_id}.yaml"
+    ).exists():
         mfp_id = _next_id(target_dir)
         data["id"] = mfp_id
     data["imported_from"] = str(source_path)
@@ -349,15 +391,19 @@ def _source_root(source: str | Path | None) -> Path:
 
 def _find_inbox(ref: str) -> Path:
     inbox = global_store.global_home() / MFP_DIR / "inbox"
-    if "/" in ref:
-        project, mfp_id = ref.split("/", 1)
+    raw = str(ref or "").strip()
+    if "/" in raw:
+        project, mfp_part = raw.split("/", 1)
+        project = _safe_project(project)
+        mfp_id = _safe_mfp_id(mfp_part)
         path = inbox / project / f"{mfp_id}.yaml"
         if not path.is_file():
             raise ImproveError(f"找不到 inbox 改进包: {path}")
         return path
-    matches = list(inbox.glob(f"*/{ref}.yaml"))
+    mfp_id = _safe_mfp_id(raw)
+    matches = list(inbox.glob(f"*/{mfp_id}.yaml"))
     if len(matches) != 1:
-        raise ImproveError(f"改进包引用不唯一或不存在: {ref}；请使用 <project>/<MFP>")
+        raise ImproveError(f"改进包引用不唯一或不存在: {raw}；请使用 <project>/<MFP>")
     return matches[0]
 
 
@@ -503,3 +549,255 @@ def source_update(
             )
             _dump(record_path, record)
     return target
+
+
+def _archive_dir(source_root: Path) -> Path:
+    return source_root / MFP_DIR / "archive"
+
+
+def _index_path(source_root: Path) -> Path:
+    return _archive_dir(source_root) / "index.json"
+
+
+def _write_index(source_root: Path, entries: dict[str, dict[str, Any]]) -> Path:
+    path = _index_path(source_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": 1,
+        "updated_at": _now(),
+        "mfps": [entries[key] for key in sorted(entries)],
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def archive_index(source: str | Path | None = None) -> dict[str, Any]:
+    """读取 meta-flow 归档索引 ``improvements/archive/index.json``。"""
+    source_root = _source_root(source)
+    path = _index_path(source_root)
+    if not path.is_file():
+        return {"schema": 1, "updated_at": None, "mfps": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ImproveError(f"{path} 不是合法 JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ImproveError(f"{path} 顶层必须是映射")
+    data.setdefault("mfps", [])
+    return data
+
+
+def archive_improvement(
+    ref: str,
+    *,
+    source: str | Path | None = None,
+    actor_role: str = "maintainer",
+) -> dict[str, Any]:
+    """meta-flow maintainer 唯一归档者：inbox → 源码仓 ``improvements/archive/``。
+
+    生产项目中的 manager/designer/worker/生产 maintainer 调用一律拒绝（N3）。
+    """
+    if actor_role != "maintainer":
+        raise ImproveError(
+            "MFP 归档只允许 meta-flow maintainer；生产项目角色与生产 maintainer 不得归档/同步",
+            3,
+        )
+    source_root = _source_root(source)
+    data = _load(_find_inbox(ref))
+    errors = validate_improvement(data)
+    if errors:
+        raise ImproveError("改进包不完整: " + "; ".join(errors))
+    mfp_id = _safe_mfp_id(str(data.get("id") or ""))
+    target = _archive_dir(source_root) / f"{mfp_id}.yaml"
+    data["status"] = "archived"
+    data["archived_at"] = _now()
+    data["archive_ref"] = f"{MFP_DIR}/archive/{mfp_id}.yaml"
+    _dump(target, data)
+    index = archive_index(source_root)
+    entries = {
+        str(item.get("id")): item
+        for item in index.get("mfps") or []
+        if isinstance(item, dict) and item.get("id")
+    }
+    entries[mfp_id] = {
+        "id": mfp_id,
+        "source_project": (data.get("source") or {}).get("project"),
+        "title": data.get("title"),
+        "status": data.get("status"),
+        "decision": data.get("decision") or data.get("classification"),
+        "reason": data.get("decision_note") or data.get("reason"),
+        "target": data.get("target"),
+        "resolution": data.get("resolution"),
+        "archive_ref": data["archive_ref"],
+        "updated_at": _now(),
+    }
+    index_path = _write_index(source_root, entries)
+    return {
+        "mfp": mfp_id,
+        "archive": str(target),
+        "index": str(index_path),
+        "status": data["status"],
+    }
+
+
+TRIAGE_DECISIONS = ("accepted", "rejected", "deferred")
+
+
+def triage_improvement(
+    project: str | Path,
+    mfp_id: str,
+    *,
+    decision: str,
+    reason: str | None = None,
+    next_step: str | None = None,
+    target: str | None = None,
+    actor_role: str = "manager",
+    scope: str = "contract",
+) -> dict[str, Any]:
+    """meta-flow manager 评估 MFP：接收/拒绝/延期，写理由与下一步。"""
+    if actor_role != "manager":
+        raise ImproveError("MFP 评估只允许 meta-flow manager", 3)
+    if decision not in TRIAGE_DECISIONS:
+        raise ImproveError(f"decision 只能是 {'|'.join(TRIAGE_DECISIONS)}")
+    if decision == "accepted" and next_step not in {"design", "direct"}:
+        raise ImproveError("accepted 必须给下一步 --next-step design|direct（INFO-FLOWS §3.5）")
+    if decision in {"rejected", "deferred"} and not str(reason or "").strip():
+        raise ImproveError(f"{decision} 必须写理由 reason")
+    path = find_improvement(project, mfp_id, scope=scope)
+    data = _load(path)
+    data["status"] = decision
+    data["target"] = target or data.get("target")
+    data["triage"] = {
+        "decision": decision,
+        "reason": reason,
+        "next_step": next_step,
+        "target": data.get("target"),
+        "decided_by": "manager",
+        "decided_at": _now(),
+    }
+    _dump(path, data)
+    from .state import ledger_append
+
+    ledger_append(
+        resolve_contract(Path(project).expanduser().resolve()),
+        {
+            "event": "mfp.triaged",
+            "mfp": mfp_id,
+            "decision": decision,
+            "next_step": next_step,
+            "reason": reason,
+            "target": data.get("target"),
+        },
+    )
+    return data
+
+
+SYNC_STATUS_MAP = {
+    "resolved": "resolved",
+    "closed": "resolved",
+    "verified": "resolved",
+    "rejected": "rejected",
+    "deferred": "deferred",
+    "accepted": "accepted-not-resolved",
+    "in_design": "in_design",
+    "in_implementation": "in_implementation",
+    "triaged": "triaged",
+    "archived": "archived",
+}
+
+
+def production_root(project: str | Path) -> Path:
+    project_path = Path(project).expanduser().resolve()
+    _project_id, root = _project_meta(project_path)
+    return root or project_path
+
+
+def sync_state_path(project: str | Path) -> Path:
+    return production_root(project) / LOCAL_DIR / "state.json"
+
+
+def load_sync_state(project: str | Path) -> dict[str, Any]:
+    path = sync_state_path(project)
+    if not path.is_file():
+        return {"schema": 1, "last_sync": None, "mfps": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ImproveError(f"{path} 不是合法 JSON: {exc}") from exc
+    return data if isinstance(data, dict) else {"schema": 1, "mfps": {}}
+
+
+def sync_improvements(
+    project: str | Path,
+    *,
+    from_path: str | Path | None = None,
+    source: str | Path | None = None,
+    actor_role: str = "maintainer",
+) -> dict[str, Any]:
+    """meta-flow maintainer 把归档索引同步到生产项目 ``state.json``。
+
+    显示 resolved/rejected/accepted-not-resolved/deferred/in_design/
+    in_implementation；生产项目只读自己的 MFP 状态。
+    """
+    if actor_role != "maintainer":
+        raise ImproveError("MFP 同步只允许 meta-flow maintainer", 3)
+    if from_path is not None:
+        path = Path(from_path).expanduser().resolve()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ImproveError(f"{path} 不是合法 JSON: {exc}") from exc
+        if isinstance(payload, dict):
+            entries = payload.get("mfps") or []
+        elif isinstance(payload, list):
+            entries = payload
+        else:
+            raise ImproveError(f"{path} 顶层必须是映射或列表")
+    else:
+        entries = archive_index(source).get("mfps") or []
+    state = {
+        "schema": 1,
+        "last_sync": _now(),
+        "mf_version": __version__,
+        "mfps": {},
+    }
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        raw = str(entry.get("status") or "")
+        display = SYNC_STATUS_MAP.get(raw, raw)
+        resolution = entry.get("resolution") or {}
+        if display == "accepted-not-resolved" and resolution:
+            display = "resolved"
+        state["mfps"][str(entry["id"])] = {
+            "status": display,
+            "raw_status": raw,
+            "title": entry.get("title"),
+            "decision": entry.get("decision"),
+            "reason": entry.get("reason"),
+            "target": entry.get("target"),
+            "resolution": resolution,
+            "synced_at": _now(),
+        }
+    path = sync_state_path(project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    try:
+        contract = resolve_contract(Path(project).expanduser().resolve())
+        from .state import ledger_append
+
+        ledger_append(
+            contract,
+            {
+                "event": "mfp.synced",
+                "project": production_root(project).name,
+                "count": len(state["mfps"]),
+            },
+        )
+    except Exception:
+        pass
+    return state
