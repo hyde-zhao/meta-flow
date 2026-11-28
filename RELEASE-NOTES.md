@@ -1,34 +1,103 @@
 # 发布说明
 
-## 未发布（R0/P4 WP-F2F3 / T038）
+## 1.1.0（R1/V1 发布候选）
 
-- 信息流闭环（REQ-0018）：
-  - REQ 评估：`mf req triage`（accepted/rejected/deferred + 下一步 design|direct）；
-    状态机补充 `in_design/specified/in_implementation/closed`（legacy 兼容）。
-  - MFP：本地 ID `MFP-<project>-<seq>`；`mf improve triage`；maintainer 唯一归档
-    `mf dev improve archive`（`improvements/archive/` + `index.json`）；`mf improve sync`
-    写生产项目 `.meta-flow/improvements/state.json`（resolved/rejected/
-    accepted-not-resolved/deferred）；非 maintainer 归档/同步拒绝（rc=3）；ID/ref 白名单
-    拒绝路径穿越；accepted 必须给 next_step design|direct。
-  - BUG 两层（T039 返工收紧）：external 新 schema 仅 `pending_user_close` 可关，
-    必须用户确认（`--confirmed-by` + `--note`，角色/系统身份拒绝）；`fixed/verifying`
-    直关仅限 T038 前无 flow 历史 BUG；verification `open→in_fix→fixed→verified→closed`，
-    fix_owner 必填，非修复者 viewer 关闭（`closure_type=viewer`），同一宿主会话
-    （fix_session/viewer_session）不能自验自关；`mf bug escalate` 升级 external；
-    closed 默认不可见，worker 用户授权查询写 READ-LOG；closed verification 同子项目
-    当前 R 只读可见；`mf bug audit` 检测状态篡改/新 schema legacy_close。
-- 工作包（REQ-0019/CHG-0005）：`mf work create/task/start/decision/verify/accept`；
-  工作包 schema/上下文/决策点/子项目最终验证/manager 验收；默认不按任务生成 review。
-  - 决策：D0/D1 仅 manager 记录用户确认（`--confirmed-by`+`--note`），D2 仅 manager，
-    worker/designer 不得代记；工作包/设计包按子项目 + 当前 R 隔离。
-  - 工作包引用 design_package 时必须存在、已验收且同 R。
-- 设计包：`mf design create/accept`（P2 `design/`）。
-- 文档模型与技能（REQ-0020）：`mf skill list/show/validate` + `templates/skills/`
-  （17 个技能模板）；`mf docs check/summary`；SPEC P2 兼容读取（legacy `specs/`
-  仍工作）；worker 仅当前 R（guard/context/CLI 版本隔离）。
-- 兼容：不改变既有任务卡/评审/自动 review 行为；新增命令与字段均为增量；
-  local MFP ID 从 `MFP-0001` 调整为 `MFP-<project>-0001`（REQ-0018）。
-- 版本号与发布门禁待 manager/P5 决定（本段不代表已发布）。
+- 版本：1.1.0（V1/R1）
+- 日期：2026-11-28
+- 路标：R1（P5）；契约版本：meta-flow-contract R1/P5
+- 状态：发布候选（P5 文档定稿、版本元数据已统一为 1.1.0：`pyproject.toml`、源码
+  `__version__`、`delivery.yaml` 与本节一致）。`mf release freeze`、发布清单、
+  `git tag v1.1.0` 与 `git push` 待 manager/用户授权后执行。
+- 范围（R1，REQ-0024–0027）：上下文/guard 与归档/maintainer 权限（REQ-0024）、
+  需求/活规格/版本流程（REQ-0025）、任务编排与自动评审（REQ-0026）、
+  文档/证据/过程记录（REQ-0027）；含 CHG-0009/CHG-0010 变更。
+  DSH/试点验证移出 R1，不随本版本交付。
+- 同版本首发 R0/P4 未发布成果（T038，REQ-0018/0019/0020）：信息流闭环、工作包、
+  设计包、技能与文档模型（原“未发布（R0/P4 WP-F2F3 / T038）”段落并入本版本）。
+- 安全修复（T010/BUG-0001，N14）：MFP `source_import`/`source_update` 的内容 id/ref
+  路径穿越已修复——拒绝 `../`、绝对路径、路径分隔符、空/保留名与 symlink 目录/目标，
+  inbox/open/closed/records 写入限定在 `improvements/` 内；完整链路
+  submit→inbox→import deny 有负例回归。T008 Round 2 独立复验 80/80 N14 断言、
+  无 escaped 文件；T011 独立评审 PASS。
+- 流程与版本工具（T006）：
+  - 需求/活规格/版本流程（REQ-0024/0025）：`mf req trace` 无孤儿；`mf roadmap sizing`
+    （VU/effort/confidence 建议，不自动分类）；`mf roadmap classify`（用户 TTY 显式决定
+    flow_profile，写 VERSION/SIZING/ledger）；`mf phase show` 显示 required/merged_into/skipped；
+    TASK 增补 `estimate/slice/verify`（legacy 缺项 warning）。
+  - 自动编排（REQ-0026）：`mf task review dispatch`（Claude Code first；新 session/不同 owner；
+    spawn-requested/fallback-manual，ledger `review.spawn`/`orchestration.fallback`，不伪装执行）；
+    设计评审=manager、实现/verify 评审=独立 worker；同 session/owner/实现者拒绝；
+    `rework_count` 第 3 次 NEEDS_REWORK 停止自动并升级 manager/user；3 次尝试未果必须研究
+    官方/GitHub/论坛并留证（缺证 submit 拒绝）；`mf task withdraw`（下游未处理自撤回，
+    review draft/ready 取消/挂起，已处理拒绝）。
+  - 上下文/guard（REQ-0024/MFP-0021/0023/0047）：`mf context expand --start/--end/--max-bytes`
+    分段读取 + READ-LOG；`2>&1`/`2>/dev/null` 不再误判写入；只读 `mf context expand/show`、
+    `mf archive show` 白名单；`fail-closed` 仍覆盖前缀/操作符/嵌套 shell/替换。
+  - 归档与 maintainer（REQ-0024/MFP-0051/DP-ARCH/ROLE）：archive 默认 deny；
+    `mf archive authorize/revoke/show/export`（用户 TTY grant：role/roadmap/scope/purpose/TTL/
+    bytes/files/one-shot；export 到 inputs/ 带 digest/SOURCES）；maintainer root（meta-flow 内
+    读写执行，非阻断审计；防自升级）；外部动作（git push/merge/tag、发布/部署、网络、真实安装）
+    仍需用户 TTY `mf maintainer authorize-external` 短时授权。
+  - 文档/证据/过程（REQ-0027/MFP-0046）：安全卡 v2（schema/compat/evidence，活跃 fail-closed、
+    历史 warning、design 豁免）；`mf doctor docs|process`（front matter/入口行数/重复 ID/
+    篇幅/孤儿/rounds/open findings）；VR E1 `items[]`（command/environment/result_digest/
+    reuse_of/retention）与 `mf verify index`（evidence debt）；`mf bug show --packet`。
+- 框架信息流与工作包（R0/P4 T038，随 1.1.0 首发）：
+  - 信息流闭环（REQ-0018）：
+    - REQ 评估：`mf req update --status accepted|deferred|rejected`；design/direct 由
+      后续设计包/工作包选择；状态机补充 `in_design/specified/in_implementation/closed`
+      （legacy 兼容）。
+    - MFP：本地 ID `MFP-<project>-<seq>`；`mf improve triage`；maintainer 唯一归档
+      `mf dev improve archive`（`improvements/archive/` + `index.json`）；`mf improve sync`
+      写生产项目 `.meta-flow/improvements/state.json`（resolved/rejected/
+      accepted-not-resolved/deferred）；非 maintainer 归档/同步拒绝（rc=3）；ID/ref 白名单
+      拒绝路径穿越（1.1.0 起含 T010/BUG-0001 内容 id/ref 校验）；accepted 必须给
+      next_step design|direct。
+    - BUG 两层（T039 返工收紧）：external 新 schema 仅 `pending_user_close` 可关，
+      必须用户确认（`--confirmed-by` + `--note`，角色/系统身份拒绝）；`fixed/verifying`
+      直关仅限 T038 前无 flow 历史 BUG；verification `open→in_fix→fixed→verified→closed`，
+      fix_owner 必填，非修复者 viewer 关闭（`closure_type=viewer`），同一宿主会话
+      （fix_session/viewer_session）不能自验自关；`mf bug escalate` 升级 external；
+      closed 默认不可见，worker 用户授权查询写 READ-LOG；closed verification 同子项目
+      当前 R 只读可见；`mf bug audit` 检测状态篡改/新 schema legacy_close。
+  - 工作包（REQ-0019/CHG-0005）：`mf work create/task/start/decision/verify/accept`；
+    工作包 schema/上下文/决策点/子项目最终验证/manager 验收；默认不按任务生成 review。
+    - 决策：D0/D1 仅 manager 记录用户确认（`--confirmed-by`+`--note`），D2 仅 manager，
+      worker/designer 不得代记；工作包/设计包按子项目 + 当前 R 隔离。
+    - 工作包引用 design_package 时必须存在、已验收且同 R。
+  - 设计包：`mf design create/accept`（P2 `design/`）。
+  - 文档模型与技能（REQ-0020）：`mf skill list/show/validate` + `templates/skills/`
+    （17 个技能模板）；`mf docs check/summary`；SPEC P2 兼容读取（legacy `specs/`
+    仍工作）；worker 仅当前 R（guard/context/CLI 版本隔离）。
+  - 兼容：不改变既有任务卡/评审/自动 review 行为；新增命令与字段均为增量；
+    local MFP ID 从 `MFP-0001` 调整为 `MFP-<project>-0001`（REQ-0018）。
+- 兼容与迁移：
+  - 旧任务/旧 VR/根 specs 缺新字段只 warning；新/活跃任务 fail-closed；不追溯 R0。
+  - 版本：R0 1.0.x → R1 1.1.x；R0 任务/阶段/VR/BUG/release 留在 `archive/R0/`，
+    worker 只读当前 R；R0 关闭后的归档与交接按既有流程执行。
+  - R1 起始：ROADMAP 声明 `version_major`/`version_range`（1.1.x）；用户终端
+    `mf roadmap classify R1 --flow ... --decided-by user --reason ...` 固化 flow_profile；
+    `mf phase show` 确认阶段 required/merged/skipped；旧任务缺 `estimate/slice/verify`
+    只 warning。
+- 已知问题：
+  - A3 真实部署/真实 hook 复验 BLOCKED → G5：未提供用户/maintainer 部署授权，全局 `mf`
+    仍为 1.0.3；SessionStart/PreToolUse、archive/maintainer 门、外部动作授权留发布门
+    G5 复验。
+  - MFP-0052：launcher 包装残余仍可绕过外部动作授权（静态 guard 非 OS 边界；已接受，
+    后续硬化）。
+  - MFP-0053：MFP 残余观察——Unicode 数字 id 仍限 `improvements/open/`；symlink 拒绝前
+    可能有 improvements 内部分写入；`submit_improvement` 未校验 workspace `project_id`。
+  - docs debt：`mf doctor docs` 仍有 27 条 legacy 文档问题（F3/F5）；docs 迁移/R2 收尾。
+  - R0 1.0.3 维护批次遗留 B14（由 R0 维护记录跟踪，不随 R1 关闭）。
+- 验证：T008 Round 2 独立验证 PASS_WITH_RISK（366 passed/1 xfailed、定向安全 147、
+  R1 flow 25、T033/T038/T039/T040 回归 209 passed/1 xfailed；ruff/doctor/doctor process/
+  skill 通过）；T011 独立评审 PASS；T009 manager 验证评审 PASS_WITH_RISK。
+- 升级/回滚：
+  - 升级：`UV_NO_CACHE=1 uv tool install --force .`（或 `mf dev install --yes`）后确认
+    `mf --version` 输出 1.1.0；项目根/contract/子项目执行 `mf upgrade ... --force`，
+    再 `mf doctor --path <根>` 与 `mf workspace sync --check`。
+  - 回滚：`uv tool install --force` 回到 1.0.x 源码；项目侧恢复 `.meta-flow/install.yaml`
+    与全局模板快照，contract 按 git 历史回退。
 
 ## 1.0.3（R0/V1 P4 维护发布）
 

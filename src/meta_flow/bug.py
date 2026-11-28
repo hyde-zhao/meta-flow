@@ -281,6 +281,67 @@ def show_bug(project: str | Path, bug_id: str) -> dict[str, Any]:
     return data
 
 
+def bug_packet(project: str | Path, bug_id: str) -> dict[str, Any]:
+    """BUG 修复包：只含修复所需最小上下文（DP-CTX-01 §6.3）。
+
+    复现/期望/实际/环境/关联 REQ/SPEC/TASK/修复范围/回归命令/证据/历史；
+    不塞完整契约或全代码库。
+    """
+    contract = resolve_contract(project)
+    data = show_bug(project, bug_id)
+    fix_tasks = []
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        try:
+            task = _load(path)
+        except BugError:
+            continue
+        if bug_id in [str(item) for item in task.get("fixes") or []] or str(
+            task.get("id") or ""
+        ) == str(data.get("fix_task") or ""):
+            fix_tasks.append(
+                {
+                    "id": task.get("id"),
+                    "status": task.get("status"),
+                    "allowed_paths": task.get("allowed_paths") or [],
+                    "verify": task.get("verify"),
+                    "delivery": task.get("delivery"),
+                }
+            )
+    verify_commands = data.get("verify") or {}
+    if not verify_commands and fix_tasks:
+        verify_commands = {
+            "command": fix_tasks[0].get("verify"),
+            "regression": data.get("regression") or [],
+        }
+    return {
+        "bug": bug_id,
+        "flow": data.get("flow") or "external",
+        "scope": data.get("scope") or "same_subproject",
+        "subproject": data.get("subproject") or data.get("delivery"),
+        "severity": data.get("severity"),
+        "status": data.get("status"),
+        "roadmap": data.get("roadmap"),
+        "reproduction": data.get("reproduction") or data.get("steps"),
+        "expected": data.get("expected"),
+        "actual": data.get("actual"),
+        "environment": data.get("environment"),
+        "related": {
+            "requirements": data.get("related_reqs") or data.get("requirements") or [],
+            "spec": data.get("related_specs") or data.get("spec") or [],
+            "tasks": [item["id"] for item in fix_tasks],
+        },
+        "fix_scope": {
+            "allowed_paths": fix_tasks[0]["allowed_paths"] if fix_tasks else [],
+            "fix_task": data.get("fix_task"),
+            "fix_owner": data.get("fix_owner"),
+        },
+        "verify": verify_commands,
+        "attempts": data.get("attempts") or [],
+        "history": data.get("history") or [],
+        "note": "最小上下文：缺信息用 mf context expand --reason packet_missing；仍缺 BLOCKED",
+    }
+
+
 def linked_bug_ids(contract: Path, delivery: str | None = None) -> set[str]:
     """活动任务（in_progress）关联的 BUG：fixes + inputs.bugs（MFP-0024）。"""
     ids: set[str] = set()

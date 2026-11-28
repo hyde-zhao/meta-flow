@@ -30,13 +30,23 @@ color: green
 7. `mf task submit <id> --handoff ...`（review 任务只写 review.md + review-handoff.md，直接 submit）。
 
 超预算文件用 `mf context show` 查看活动任务 bundle，用
-`mf context expand <path> --reason packet_missing` 受控补读（写 READ-LOG）；不得借 shell
+`mf context expand <path> --reason packet_missing` 受控补读（写 READ-LOG）；
+大文件用 `--start/--end/--max-bytes` 分段（超段/非法区间拒绝），不得借 shell
 绕过契约/交付/读预算边界（hook 覆盖 Bash，含变量、嵌套 shell、eval/source 与进程替换）。返工时读评审任务的 review.md /
 review-handoff.md 后只整改必须项。
 
 提交后不再直接编辑任务文件；review NEEDS_REWORK 且在范围内时可自动/一键重开，worker 用 `mf task rework <id>` 开始；范围外/高风险/争议等 manager 裁决后再返工。
+提交后、下游未处理时（review 仍 draft/ready、父任务未验收、依赖未开始）可
+`mf task withdraw <id> --reason ...` 撤回补充后重新 submit；已处理一律拒绝。
+同一任务第 3 次 NEEDS_REWORK 会停止自动循环并升级 manager/user，不得继续自动返工。
 提交后仍可写本地 `.meta-flow/improvements/MFP-*.yaml`（或 `mf improve new --local`），
 guard 会审计；其他越界写仍拒绝。任务 BLOCKED 时用 `mf task submit --blocked`（或 handoff 结论写 BLOCKED）转 manager 裁决，不自动进入评审。
+
+## 问题定位（3 次尝试规则）
+
+- 任务卡记录 `attempt_count`/`attempts`（尝试内容与结果）与 blockers。
+- 3 次仍未解决：禁止猜测；必须查官方文档/规范/RFC、项目/依赖 GitHub issues/discussions/源码、
+  知名论坛/社区（记录 URL/版本/结论），写入 dev-record/handoff 后再 BLOCKED；缺研究证据会被 submit 拒绝。
 
 ## 决策与粒度
 
@@ -54,8 +64,11 @@ guard 会审计；其他越界写仍拒绝。任务 BLOCKED 时用 `mf task subm
 
 ## 评审责任
 
-- 被指派 `kind: review` 时，你是独立评审者：只读、不改实现代码、不改验收标准。
-- 不得评审自己参与的任务；按 REVIEW 模板输出发现、结论、证据。
+- 被指派 `kind: review`（实现/verify 任务）时，你是独立评审者：只读、不改实现代码、不改验收标准。
+- 评审者必须是未参与实现的独立 worker：不同 owner、不同 session_id（`/clear` 不算独立）；
+  同 session/owner 会被 `mf task start` 拒绝。
+- 设计文档/规格评审由 manager 承担，worker 不得冒充 manager 评审设计。
+- 不得评审自己参与的任务；按 REVIEW 模板输出发现、结论、证据；review 多轮在同一记录 `rounds[]` 累积。
 - 结论仅 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；PASS_WITH_RISK 写风险与接受人。
 - 评审结论只作为 manager 决策输入，不代替 manager 验收。
 

@@ -6,6 +6,10 @@ from meta_flow import templates, verify
 
 VALID = """# SECURITY-CARD demo
 
+## 安全卡版本
+
+schema: 2（安全卡 v2）
+
 ## 信任边界
 
 受保护资产：contract/任务文件；信任宿主会话标识与 OS 用户边界。
@@ -30,7 +34,7 @@ VALID = """# SECURITY-CARD demo
 
 ## 验证证据
 
-- tests/test_designer_role.py
+- pytest tests/test_designer_role.py
 """
 
 
@@ -61,4 +65,22 @@ def test_security_templates_registered():
     assert "SECURITY-CARD.md" in templates.STANDARDS
     assert "NEGATIVE-MATRIX.md" in templates.STANDARDS
     assert "不可防范围" in templates.STANDARDS["SECURITY-CARD.md"]
+    assert "schema: 2" in templates.STANDARDS["SECURITY-CARD.md"]
     assert "入口" in templates.STANDARDS["NEGATIVE-MATRIX.md"]
+
+
+def test_security_card_v2_requires_version_section(tmp_path):
+    card = tmp_path / "SECURITY-CARD.md"
+    legacy = VALID.replace("## 安全卡版本\n\nschema: 2（安全卡 v2）\n\n", "")
+    card.write_text(legacy, encoding="utf-8")
+    result = verify.security_card_check(card)
+    assert result["ok"] is False
+    assert any("安全卡版本" in error for error in result["errors"])
+
+
+def test_security_card_v2_requires_executable_evidence(tmp_path):
+    card = tmp_path / "SECURITY-CARD.md"
+    card.write_text(VALID.replace("- pytest tests/test_designer_role.py", "- 见测试文件"), encoding="utf-8")
+    result = verify.security_card_check(card)
+    assert result["ok"] is False
+    assert any("可执行证据" in error for error in result["errors"])

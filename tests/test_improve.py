@@ -7,6 +7,7 @@ import yaml
 
 from meta_flow.global_store import bootstrap
 from meta_flow.improve import (
+    ImproveError,
     import_improvement,
     list_improvements,
     new_improvement,
@@ -159,3 +160,126 @@ def test_sensitive_info_rejected(mfp_env):
     data = _fill(path, problem="token=abc123")
     errors = validate_improvement(data)
     assert any("敏感信息" in error for error in errors)
+
+
+# ---------------------------------------------------------------- N14 路径穿越（T010）
+
+
+def _package(root, **overrides):
+    path = new_improvement(root, "路径校验包")
+    return _fill(path, **overrides)
+
+
+def _write_inbox(home, data, *, name="MFP-0001", project="demo"):
+    inbox = home / "improvements" / "inbox" / project
+    inbox.mkdir(parents=True, exist_ok=True)
+    path = inbox / f"{name}.yaml"
+    path.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../../escaped", "/tmp/x", "a/b", "a\\b", "..", ".", "", "MFP-0001/../../x"],
+)
+def test_source_import_rejects_unsafe_content_id(mfp_env, tmp_path, bad_id):
+    data = _package(mfp_env["root"], id=bad_id)
+    _write_inbox(mfp_env["home"], data)
+    source = _source(tmp_path)
+    with pytest.raises(ImproveError):
+        source_import("demo/MFP-0001", source=source, kind="requirement")
+    assert not [p for p in tmp_path.rglob("escaped*") if p.is_file()]
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["../etc/passwd", "demo/../../x", "/tmp/MFP-0001", "demo/..%2f", "demo/../MFP-0001"],
+)
+def test_source_import_rejects_unsafe_ref(mfp_env, tmp_path, ref):
+    source = _source(tmp_path)
+    with pytest.raises(ImproveError):
+        source_import(ref, source=source, kind="requirement")
+
+
+def test_source_import_rejects_symlink_escape(mfp_env, tmp_path):
+    data = _package(mfp_env["root"])
+    _write_inbox(mfp_env["home"], data)
+    source = _source(tmp_path)
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (source / "improvements").mkdir()
+    (source / "improvements" / "open").symlink_to(outside_dir)
+    with pytest.raises(ImproveError):
+        source_import("demo/MFP-0001", source=source, kind="requirement")
+    assert list(outside_dir.iterdir()) == []
+
+    # 目标文件为符号链接同样拒绝，且不覆盖链接目标
+    (source / "improvements" / "open").unlink()
+    (source / "improvements" / "open").mkdir()
+    outside_file = tmp_path / "outside.yaml"
+    outside_file.write_text("original", encoding="utf-8")
+    (
+        source / "improvements" / "open" / "MFP-0001.yaml"
+    ).symlink_to(outside_file)
+    with pytest.raises(ImproveError):
+        source_import("demo/MFP-0001", source=source, kind="requirement")
+    assert outside_file.read_text(encoding="utf-8") == "original"
+
+
+def test_source_import_chain_rejects_traversal(mfp_env, tmp_path):
+    path = new_improvement(mfp_env["root"], "链路穿越")
+    _fill(path, id="../../escaped2")
+    submit_improvement(mfp_env["root"], "MFP-0001")
+    source = _source(tmp_path)
+    with pytest.raises(ImproveError):
+        source_import("MFP-0001", source=source, kind="requirement")
+    assert not [p for p in tmp_path.rglob("escaped2*") if p.is_file()]
+    assert not [p for p in tmp_path.rglob("escaped*") if p.is_file()]
+
+
+def test_source_import_missing_id_uses_inbox_filename(mfp_env, tmp_path):
+    data = _package(mfp_env["root"])
+    data.pop("id", None)
+    _write_inbox(mfp_env["home"], data, name="MFP-0007")
+    source = _source(tmp_path)
+    result = source_import("demo/MFP-0007", source=source, kind="requirement")
+    assert result["mfp"] == "MFP-0007"
+    assert (source / "improvements" / "open" / "MFP-0007.yaml").is_file()
+
+
+def test_source_update_rejects_unsafe_id(mfp_env, tmp_path):
+    data = _package(mfp_env["root"])
+    source = _source(tmp_path)
+    open_dir = source / "improvements" / "open"
+    open_dir.mkdir(parents=True)
+    (open_dir / "MFP-0001.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    evil = source / "improvements" / "evil.yaml"
+    evil.write_text("original", encoding="utf-8")
+    for bad_id in ("../evil", "/tmp/x", "a/b", "..", ""):
+        with pytest.raises(ImproveError):
+            source_update(bad_id, "verified", source=source)
+    assert evil.read_text(encoding="utf-8") == "original"
+    # 合法更新行为不变
+    target = source_update("MFP-0001", "verified", source=source)
+    assert target.parent.name == "closed"
+    assert (source / "improvements" / "closed" / "MFP-0001.yaml").is_file()
+
+
+def test_source_update_rejects_unsafe_record_ref(mfp_env, tmp_path):
+    data = _package(mfp_env["root"], source_record="../../evil-record")
+    source = _source(tmp_path)
+    open_dir = source / "improvements" / "open"
+    open_dir.mkdir(parents=True)
+    (open_dir / "MFP-0001.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    outside = tmp_path / "evil-record.yaml"
+    outside.write_text("original", encoding="utf-8")
+    with pytest.raises(ImproveError):
+        source_update("MFP-0001", "verified", source=source)
+    assert outside.read_text(encoding="utf-8") == "original"
+    assert not (source / "improvements" / "closed" / "evil-record.yaml").exists()

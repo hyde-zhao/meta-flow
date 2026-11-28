@@ -467,7 +467,10 @@ def install_root(
 
     if agent not in {"manager", "maintainer"}:
         raise InstallError("根目录只支持 --agent manager 或 --agent maintainer")
-    agents = ["manager", "maintainer"] if agent == "maintainer" else ["manager"]
+    agents = ["manager", "maintainer", "reviewer"] if agent == "maintainer" else [
+        "manager",
+        "reviewer",
+    ]
 
     files: list[dict[str, Any]] = []
     for name in agents:
@@ -559,6 +562,12 @@ def install_worker(
     files: list[dict[str, Any]] = []
     content = _global_template("agents/worker.md", templates.AGENT_WORKER)
     files.append(_install_file(project, Path(".claude/agents/worker.md"), content, force))
+    reviewer_content = _global_template("agents/reviewer.md", templates.AGENT_REVIEWER)
+    files.append(
+        _install_file(
+            project, Path(".claude/agents/reviewer.md"), reviewer_content, force
+        )
+    )
 
     worker_body = _global_template("CLAUDE.worker.md", templates.WORKER_CLAUDE)
     claude_path = project / CLAUDE_REL

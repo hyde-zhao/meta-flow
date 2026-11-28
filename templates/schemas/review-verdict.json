@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "meta-flow/review-verdict.json",
+  "title": "Meta Flow review verdict",
+  "type": "object",
+  "required": ["verdict", "findings", "next"],
+  "properties": {
+    "verdict": {
+      "enum": ["PASS", "PASS_WITH_RISK", "NEEDS_REWORK", "BLOCKED"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "issue", "expectation"],
+        "properties": {
+          "id": {"type": "string"},
+          "severity": {
+            "enum": ["blocker", "high", "medium", "low", "info"]
+          },
+          "file": {"type": "string"},
+          "line": {"type": "integer"},
+          "issue": {"type": "string"},
+          "expectation": {"type": "string"}
+        }
+      }
+    },
+    "rework_summary": {
+      "type": "object",
+      "properties": {
+        "reason": {"type": "string"},
+        "risk": {"type": "string"},
+        "impact": {"type": "string"},
+        "expectation": {"type": "string"}
+      }
+    },
+    "next": {
+      "enum": ["worker 直接重做", "manager 验收", "human decision"]
+    }
+  }
+}

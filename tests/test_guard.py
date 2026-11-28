@@ -134,11 +134,10 @@ def test_guard_mf_role_overrides_directory_role(env, monkeypatch):
     # 目录推导为 manager：可读需求
     assert guard.pretool_decision(_payload("Read", root, requirement)) is None
 
-    # 显式 MF_ROLE=maintainer 优先：maintainer 不读项目契约内容
+    # 显式 MF_ROLE=maintainer 优先：maintainer root 可读契约（DP-ROLE-01）
     monkeypatch.setenv("MF_ROLE", "maintainer")
     decision = guard.pretool_decision(_payload("Read", root, requirement))
-    assert decision is not None
-    assert "maintainer" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert decision is None
 
 
 def test_guard_worker_scope(env):

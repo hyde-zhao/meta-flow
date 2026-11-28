@@ -44,6 +44,7 @@ def test_bootstrap_creates_store(mf_env):
     assert (home / "agents" / "manager.md").is_file()
     assert (home / "agents" / "maintainer.md").is_file()
     assert (home / "agents" / "worker.md").is_file()
+    assert (home / "agents" / "reviewer.md").is_file()
     assert (home / "templates" / "standards" / "CONTEXT.md").is_file()
     manifest = yaml.safe_load((home / "manifest.yaml").read_text(encoding="utf-8"))
     assert manifest["repo_url"]
@@ -53,8 +54,9 @@ def test_bootstrap_creates_store(mf_env):
 def test_install_manager(mf_env):
     project = mf_env["project"]
     result = install_root(project)
-    assert result["agents"] == ["manager"]
+    assert result["agents"] == ["manager", "reviewer"]
     assert (project / ".claude" / "agents" / "manager.md").is_file()
+    assert (project / ".claude" / "agents" / "reviewer.md").is_file()
     assert (project / "CLAUDE.md").is_file()
     assert "meta-flow:manager:start" in (project / "CLAUDE.md").read_text(encoding="utf-8")
     settings = json.loads((project / ".claude" / "settings.json").read_text(encoding="utf-8"))
@@ -67,9 +69,10 @@ def test_install_manager(mf_env):
 def test_install_maintainer_includes_manager(mf_env):
     project = mf_env["project"]
     result = install_root(project, agent="maintainer")
-    assert result["agents"] == ["manager", "maintainer"]
+    assert result["agents"] == ["manager", "maintainer", "reviewer"]
     assert (project / ".claude" / "agents" / "manager.md").is_file()
     assert (project / ".claude" / "agents" / "maintainer.md").is_file()
+    assert (project / ".claude" / "agents" / "reviewer.md").is_file()
 
 
 def test_install_refuses_existing_agent(mf_env):
@@ -87,6 +90,7 @@ def test_install_worker(mf_env):
     result = install_worker(sub, "frontend", workspace_root=project)
     assert result["delivery"] == "frontend"
     assert (sub / ".claude" / "agents" / "worker.md").is_file()
+    assert (sub / ".claude" / "agents" / "reviewer.md").is_file()
     assert (sub / "delivery.yaml").is_file()
     assert (sub / "CLAUDE.md").is_file()
     settings = json.loads((sub / ".claude" / "settings.json").read_text(encoding="utf-8"))

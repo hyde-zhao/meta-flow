@@ -91,6 +91,7 @@ def bootstrap(repo_url: str | None = None, force: bool = False) -> Path:
         "designer": templates.AGENT_DESIGNER,
         "maintainer": templates.AGENT_MAINTAINER,
         "worker": templates.AGENT_WORKER,
+        "reviewer": templates.AGENT_REVIEWER,
     }.items():
         _write_if_changed(home / "agents" / f"{name}.md", content, force)
 
@@ -107,6 +108,16 @@ def bootstrap(repo_url: str | None = None, force: bool = False) -> Path:
         for path in sorted(repo_skills.glob("*.md")):
             _write_if_changed(
                 home / "templates" / "skills" / path.name,
+                path.read_text(encoding="utf-8"),
+                force,
+            )
+
+    # 自动评审 verdict schema（T6-M5）：源码安装从 templates/schemas 复制。
+    repo_schemas = Path(__file__).resolve().parents[2] / "templates" / "schemas"
+    if repo_schemas.is_dir():
+        for path in sorted(repo_schemas.glob("*.json")):
+            _write_if_changed(
+                home / "schemas" / path.name,
                 path.read_text(encoding="utf-8"),
                 force,
             )

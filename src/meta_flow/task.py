@@ -293,6 +293,11 @@ def task_security_warnings(data: dict[str, Any]) -> list[str]:
             warnings.append(
                 f"security.negative_matrix.{item.get('id') or '?'} 期望为 allow（负向矩阵应为拒绝）"
             )
+    if security.get("schema") != 2 or security.get("compat") != "v2":
+        warnings.append(
+            "安全卡 v2 迁移提示：建议 security.schema: 2 与 compat: v2"
+            "（活跃任务 fail-closed 字段已校验；历史任务仅 warning，见 MIGRATION-R1）"
+        )
     return warnings
 
 
@@ -304,6 +309,9 @@ def task_security_errors(data: dict[str, Any]) -> list[str]:
     doctor 转为 warning。返回缺失/不满足项的人读说明。
     """
     if not _security_applies(data):
+        if str(data.get("kind") or "") == "design":
+            # M3/MIGRATION-R1：design 任务用可验证引用或豁免，不强制安全卡 v2。
+            return []
         if _security_required(data):
             return [
                 "任务命中安全类范围（guard/权限/白名单/路径策略/hook/发布门禁），"
@@ -362,6 +370,29 @@ def task_security_errors(data: dict[str, Any]) -> list[str]:
         errors.append("security.fail_closed 必须为 true（仅限可证明范围）")
     if not str(security.get("fail_closed_scope") or "").strip():
         errors.append("security.fail_closed_scope 缺失（写明可证明范围）")
+    # 安全卡 v2（MFP-0046 / SPEC-005 R4）：活跃任务 fail-closed。
+    schema = security.get("schema")
+    compat = security.get("compat")
+    if schema != 2 or compat != "v2":
+        errors.append(
+            "安全卡 v2 未完成：活跃安全任务必须 security.schema: 2 且 compat: v2"
+            f"（当前 schema={schema!r}, compat={compat!r}）；"
+            "历史 accepted/cancelled 由 validate 转为 warning，manager 按 MIGRATION-R1 补卡"
+        )
+    matrix = security.get("negative_matrix")
+    matrix_evidence = (
+        isinstance(matrix, list)
+        and matrix
+        and all(str(item.get("evidence") or "").strip() for item in matrix if isinstance(item, dict))
+    )
+    evidence = security.get("evidence")
+    evidence_ok = isinstance(evidence, list) and any(
+        str(item).strip() for item in evidence
+    )
+    if not evidence_ok and not matrix_evidence:
+        errors.append(
+            "security.evidence 为空（安全卡 v2 要求可执行证据：测试节点/命令/矩阵证据）"
+        )
     return errors
 
 
@@ -457,6 +488,10 @@ def _task_data(
         "fixes": [],
         "lease": None,
         "effort": effort,
+        # SPEC-R1-VERSION V1/V2/V8：VU/工作量估计、切片与 verify 命令（legacy 可缺省）
+        "estimate": {},
+        "slice": None,
+        "verify": None,
         "risk": {
             "level": risk,
             "score": None,
@@ -528,6 +563,9 @@ def create_task(
     cwd: str | Path | None = None,
     with_review: bool = True,
     from_data: dict[str, Any] | None = None,
+    estimate: dict[str, Any] | None = None,
+    slice: str | None = None,
+    verify: str | None = None,
 ) -> dict[str, Any]:
     """创建任务卡；中高风险自动创建独立 review 任务。"""
     contract = resolve_contract(project)
@@ -566,6 +604,21 @@ def create_task(
         verification = data["verification"]
     verification = verification or {}
     evidence = [str(item) for item in (data.get("evidence") or evidence or [])]
+    estimate_data = estimate if estimate is not None else data.get("estimate") or {}
+    if not isinstance(estimate_data, dict):
+        raise TaskError("estimate 必须是映射: {vu, effort_hours, confidence}")
+    if estimate_data:
+        try:
+            if int(estimate_data.get("vu") or 0) <= 0:
+                raise TaskError("estimate.vu 必须是正整数")
+            if float(estimate_data.get("effort_hours") or 0) <= 0:
+                raise TaskError("estimate.effort_hours 必须大于 0")
+        except (TypeError, ValueError) as exc:
+            raise TaskError("estimate.vu/effort_hours 必须是数字") from exc
+        if str(estimate_data.get("confidence") or "low") not in {"low", "medium", "high"}:
+            raise TaskError("estimate.confidence 只能是 low|medium|high")
+    slice_value = str(data.get("slice") or slice or "") or None
+    verify_value = str(data.get("verify") or verify or "") or None
 
     # T033 A2：任务必须绑定子项目作用域；旧任务缺 scope 时按 single_subproject 兼容。
     raw_scope = data.get("scope")
@@ -701,6 +754,9 @@ def create_task(
     task["spec_ids"] = spec_ids
     task["verification"] = verification
     task["evidence"] = evidence
+    task["estimate"] = estimate_data
+    task["slice"] = slice_value
+    task["verify"] = verify_value
     task["scope"] = scope_data
     task["project_dir"] = str(project_dir) if project_dir else None
     task["allowed_paths_base"] = str(project_dir) if project_dir else None
@@ -719,6 +775,7 @@ def create_task(
         review_id = f"{roadmap}-{phase}-T{review_num:03d}"
         review_bundle = _bundle(contract, review_id)
         (review_bundle / "evidence").mkdir(parents=True, exist_ok=True)
+        review_executor = "manager" if kind == "design" else "worker"
         review_task = _task_data(
             review_id,
             f"Review {task_id}: {title}",
@@ -743,7 +800,10 @@ def create_task(
             inputs={"tasks": [task_id]},
             status="draft",
             next_owner="manager",
+            owner_role=review_executor,
+            executor_role=review_executor,
         )
+        review_task["review"]["reviewer_role"] = review_executor
         review_task["depends_on"] = [task_id]
         review_task["wave"] = wave
         review_task["scope"] = scope_data
@@ -827,6 +887,19 @@ def validate_task(project: str | Path, task_id: str) -> dict[str, Any]:
     for message in scope_messages + security_messages + mapping:
         (errors if active else warnings).append(message)
     warnings.extend(security_warnings)
+    if active and data.get("kind") in {"implement", "fix", "verify"}:
+        missing = [
+            label
+            for label, value in (
+                ("estimate", data.get("estimate")),
+                ("verify", data.get("verify")),
+            )
+            if not value
+        ]
+        if missing:
+            warnings.append(
+                "正式实施任务缺 " + ", ".join(missing) + "（SPEC-R1-VERSION V1/V8；legacy warning）"
+            )
     return {
         "task": task_id,
         "status": data.get("status"),
@@ -968,6 +1041,48 @@ def _ensure_task_actor(task_id: str, data: dict[str, Any]) -> None:
         )
 
 
+def reviewer_role(target: dict[str, Any]) -> str:
+    """评审责任主体按被评审对象推导（DP-ORCH-01 / SPEC-R1-PROCESS R2）。
+
+    - 设计文档/规格（kind=design）评审 = manager（manager 设计评审正例）；
+    - 实现/verify/fix 评审 = 未参与实现的独立 worker（D2 只约束实现/verify）。
+    """
+    if str(target.get("kind") or "") == "design":
+        return "manager"
+    return "worker"
+
+
+def _review_identity(owner: str | None = None, session_id: str | None = None) -> dict[str, Any]:
+    return {
+        "owner": str(owner or os.environ.get("MF_WORKER_ID") or "").strip() or None,
+        "session_id": roles.current_session_id(session_id),
+    }
+
+
+def _review_independence_errors(
+    target: dict[str, Any],
+    *,
+    owner: str | None = None,
+    session_id: str | None = None,
+) -> list[str]:
+    """实现/verify 评审独立性：非实现者、不同会话；身份缺失 fail-closed。"""
+    identity = _review_identity(owner, session_id)
+    errors: list[str] = []
+    implemented_by = str(target.get("implemented_by") or "").strip()
+    implemented_session = str(target.get("implemented_session_id") or "").strip()
+    if implemented_by and identity["owner"] == implemented_by:
+        errors.append(f"评审者 {identity['owner']} 是实现者，不能自评审")
+    if implemented_session:
+        if not identity["session_id"]:
+            errors.append(
+                "被评审任务记录了实现会话，但评审者缺少 session_id（fail-closed）："
+                "请在独立会话运行，或由宿主提供 CLAUDE_CODE_SESSION_ID"
+            )
+        elif identity["session_id"] == implemented_session:
+            errors.append("评审者与实现者是同一会话（/clear 不改变 session_id），不算独立")
+    return errors
+
+
 def start_task(
     project: str | Path,
     task_id: str,
@@ -1025,9 +1140,34 @@ def start_task(
         _, target = load_task(project, str(data["reviews"]))
         if target.get("status") != "submitted":
             raise TaskError(f"被评审任务 {data['reviews']} 尚未 submitted")
-        actor = owner or os.environ.get("MF_WORKER_ID")
-        if actor and actor not in {"worker"} and target.get("implemented_by") == actor:
-            raise TaskError(f"评审者 {actor} 不能评审自己实现的任务 {data['reviews']}")
+        expected = reviewer_role(target)
+        actor_role = _actor_role()
+        if actor_role != expected:
+            raise TaskError(
+                f"评审角色错误：{target.get('kind')} 任务 {data['reviews']} 的评审执行者应为 "
+                f"{expected}，当前角色 {actor_role}；设计文档/规格评审=manager，"
+                "实现/verify 评审=未参与实现的独立 worker"
+            )
+        if expected == "worker":
+            independence_errors = _review_independence_errors(
+                target, owner=owner, session_id=os.environ.get("CLAUDE_CODE_SESSION_ID")
+            )
+            if independence_errors:
+                raise TaskError("；".join(independence_errors))
+        review = data.get("review") if isinstance(data.get("review"), dict) else {}
+        identity = _review_identity(owner)
+        review["independence"] = {
+            "reviewer_role": expected,
+            "owner": identity["owner"],
+            "session_id": identity["session_id"],
+            "implemented_by": target.get("implemented_by"),
+            "implemented_session_id": target.get("implemented_session_id"),
+            "checked_at": _now(),
+        }
+        data["review"] = review
+        if expected == "manager":
+            # 设计评审由 manager 执行；记录 manager 身份供审计
+            data["reviewed_by"] = identity["owner"] or "manager"
     contract = resolve_contract(project)
     _check_dependencies(contract, data)
     _check_wave_conflicts(contract, data)
@@ -1154,6 +1294,247 @@ def rework_task(
         },
     )
     refresh_current(contract)
+    return data
+
+
+def withdraw_task(
+    project: str | Path,
+    task_id: str,
+    *,
+    reason: str,
+    owner: str | None = None,
+) -> dict[str, Any]:
+    """提交后自撤回（DP-ORCH-01 §3.5 / SPEC-R1-PROCESS R12）。
+
+    仅当下游尚未处理：review 任务仍为 draft/ready、父任务未验收、依赖未开始。
+    撤回 submitted→in_progress（作者 lease），取消/挂起未开始的 review，
+    保留证据并追加 withdraw 记录；已处理一律拒绝（改用 rework/CHG/BUG/新任务）。
+    """
+    path, data = load_task(project, task_id)
+    _ensure_task_actor(task_id, data)
+    if data.get("status") != "submitted":
+        raise TaskError(
+            f"任务 {task_id} 当前状态 {data.get('status')} 不能 withdraw；"
+            "只有 submitted 且下游未处理时可以撤回"
+        )
+    if not str(reason or "").strip():
+        raise TaskError("withdraw 必须提供 --reason")
+    role = _actor_role()
+    executor = str(data.get("executor_role") or data.get("owner_role") or "worker")
+    if role != executor and role != "maintainer":
+        raise TaskError(
+            f"任务 {task_id} 执行者是 {executor}；{role} 不得撤回他人在审/已处理任务"
+        )
+    actor = str(owner or os.environ.get("MF_WORKER_ID") or "").strip() or None
+    implemented_by = str(data.get("implemented_by") or "")
+    if (
+        implemented_by
+        and not actor
+        and role != "maintainer"
+    ):
+        raise TaskError(
+            "withdraw 需要 --owner（或 MF_WORKER_ID）与提交者一致，"
+            "防止同子项目其他 worker 代撤回"
+        )
+    if (
+        actor
+        and implemented_by
+        and actor != implemented_by
+        and role != "maintainer"
+    ):
+        raise TaskError(
+            f"任务 {task_id} 由 {implemented_by} 提交；{actor} 不得代撤回"
+        )
+    contract = resolve_contract(project)
+    blockers: list[str] = []
+    review_paths: list[tuple[Path, dict[str, Any]]] = []
+    review_ids: set[str] = set()
+    if data.get("reviewed_by_task"):
+        review_ids.add(str(data["reviewed_by_task"]))
+    for other_path in sorted(
+        (contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")
+    ):
+        try:
+            other = _load(other_path)
+        except TaskError:
+            continue
+        if other.get("kind") == "review" and str(other.get("reviews") or "") == task_id:
+            review_ids.add(str(other.get("id") or ""))
+    for review_id in sorted(review_ids):
+        if not review_id:
+            continue
+        review_path, review = load_task(project, review_id)
+        status = str(review.get("status") or "")
+        if status in {"in_progress", "submitted", "accepted", "rejected"}:
+            blockers.append(
+                f"关联评审任务 {review_id} 已处理（{status}），不得 withdraw；改用 rework/CHG/BUG/新任务"
+            )
+        else:
+            review_paths.append((review_path, review))
+    for other_path in sorted(
+        (contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")
+    ):
+        try:
+            other = _load(other_path)
+        except TaskError:
+            continue
+        if task_id in [str(item) for item in other.get("depends_on") or []]:
+            status = str(other.get("status") or "")
+            if status in {"in_progress", "submitted", "accepted"}:
+                blockers.append(
+                    f"依赖任务 {other.get('id')} 已开始（{status}），不得 withdraw"
+                )
+    if data.get("user_approved_by") or data.get("accepted_at"):
+        blockers.append("任务已有用户/manager 门禁记录，不得 withdraw")
+    for review in (data.get("review_verdict"), data.get("acceptance_verdict")):
+        if review in {"PASS", "PASS_WITH_RISK"}:
+            blockers.append("任务已有评审/验收结论，不得 withdraw；改用 rework/CHG/BUG/新任务")
+            break
+    if blockers:
+        raise TaskError("；".join(blockers))
+    for review_path, review in review_paths:
+        review["status"] = "cancelled"
+        review["cancelled_by_withdraw"] = task_id
+        review["cancelled_at"] = _now()
+        _save(review_path, review)
+        ledger_append(
+            contract,
+            {
+                "event": "review.cancelled",
+                "review_task": review.get("id"),
+                "task": task_id,
+                "reason": "task.withdraw 下游未处理",
+                "from": "draft/ready",
+                "to": "cancelled",
+            },
+        )
+    count = int(data.get("withdraw_count") or 0) + 1
+    withdrawals = data.get("withdrawals")
+    withdrawals = list(withdrawals) if isinstance(withdrawals, list) else []
+    withdrawals.append(
+        {"reason": str(reason).strip(), "at": _now(), "by": role, "count": count}
+    )
+    lease = _new_lease(
+        owner or executor, task_id, str(data.get("wave") or "W1")
+    )
+    data["status"] = "in_progress"
+    data["next_owner"] = executor
+    data["withdraw_count"] = count
+    data["withdrawals"] = withdrawals
+    data["withdrawn_at"] = _now()
+    data["lease"] = lease
+    data["started_at"] = _now()
+    _save(path, data)
+    ledger_append(
+        contract,
+        {
+            "event": "task.withdraw",
+            "task": task_id,
+            "reason": str(reason).strip(),
+            "withdraw_count": count,
+            "cancelled_reviews": [review.get("id") for _, review in review_paths],
+            "lease": lease["expires_at"],
+            "from": "submitted",
+            "to": "in_progress",
+        },
+    )
+    refresh_current(contract)
+    return data
+
+
+def dispatch_review(
+    project: str | Path,
+    task_id: str,
+    *,
+    host: str = "claude-code",
+    owner: str | None = None,
+    session_id: str | None = None,
+    reason: str | None = None,
+    fallback: bool = False,
+) -> dict[str, Any]:
+    """自动 review 派发（REQ-0026 / DP-ORCH-01 §3.2，R1 原型命令面）。
+
+    mf 只记录 dispatch 请求与独立性证据（spawn-requested / fallback-manual），
+    实际宿主会话由 Claude Code 拉起；不得伪装已执行。宿主自带的 subagent
+    执行结果仍通过 mf task start/submit 走同一状态机。
+    """
+    review_path, data = load_task(project, task_id)
+    if data.get("kind") != "review":
+        raise TaskError(f"{task_id} 不是 review 任务；dispatch 只接受评审任务")
+    target_id = str(data.get("reviews") or "")
+    if not target_id:
+        raise TaskError(f"评审任务 {task_id} 未关联被评审任务")
+    _, target = load_task(project, target_id)
+    if target.get("status") != "submitted":
+        raise TaskError(f"被评审任务 {target_id} 尚未 submitted，不能派发评审")
+    if host not in {"claude-code", "manual"}:
+        raise TaskError("host 只能是 claude-code|manual（R1 不支持 DSH/Agent Team）")
+    expected = reviewer_role(target)
+    if fallback or host == "manual":
+        data["dispatch"] = {
+            "host": "manual",
+            "spawn_state": "fallback-manual",
+            "owner": owner,
+            "session_id": session_id,
+            "reason": reason or "宿主不可用/未授权，回退手动评审",
+            "at": _now(),
+            "reviewer_role": expected,
+        }
+        _save(review_path, data)
+        ledger_append(
+            resolve_contract(project),
+            {
+                "event": "orchestration.fallback",
+                "review_task": task_id,
+                "task": target_id,
+                "host": "manual",
+                "reason": data["dispatch"]["reason"],
+                "reviewer_role": expected,
+            },
+        )
+        return data
+    identity = _review_identity(owner, session_id)
+    if not identity["owner"] or not identity["session_id"]:
+        raise TaskError(
+            "自动评审 dispatch 必须提供 --owner 与 --session-id（新会话/不同 owner）"
+        )
+    if expected == "worker":
+        errors = _review_independence_errors(
+            target, owner=identity["owner"], session_id=identity["session_id"]
+        )
+        if errors:
+            raise TaskError("；".join(errors))
+    elif str(identity["owner"]) in {"", None}:
+        raise TaskError("manager 设计评审必须提供 manager owner")
+    data["dispatch"] = {
+        "host": host,
+        "spawn_state": "spawn-requested",
+        "owner": identity["owner"],
+        "session_id": identity["session_id"],
+        "reason": reason,
+        "at": _now(),
+        "reviewer_role": expected,
+        "verdict_schema": "~/.meta-flow/schemas/review-verdict.json",
+        "note": "mf 只记录派发请求；宿主拉起后仍用 mf task start/submit，禁止伪装已执行",
+    }
+    data["host"] = host
+    data["review_session_id"] = identity["session_id"]
+    data["review_owner"] = identity["owner"]
+    _save(review_path, data)
+    ledger_append(
+        resolve_contract(project),
+        {
+            "event": "review.spawn",
+            "review_task": task_id,
+            "task": target_id,
+            "host": host,
+            "owner": identity["owner"],
+            "session_id": identity["session_id"],
+            "reviewer_role": expected,
+            "spawn_state": "spawn-requested",
+            "reason": reason,
+        },
+    )
     return data
 
 
@@ -1642,10 +2023,46 @@ def submit_task(
 
     if is_blocked:
         contract = resolve_contract(project)
+        attempts = data.get("attempts") if isinstance(data.get("attempts"), list) else []
+        attempt_count = int(
+            data.get("attempt_count")
+            if data.get("attempt_count") is not None
+            else len(attempts)
+        )
+        if data.get("attempt_count") is not None and attempt_count != len(attempts):
+            raise TaskError(
+                f"attempt_count={attempt_count} 与 attempts 条目数 {len(attempts)} 不一致；"
+                "请如实记录尝试内容/结果"
+            )
+        if attempt_count >= 3:
+            research_text = "\n".join(
+                item.read_text(encoding="utf-8")
+                for item in (
+                    bundle / "dev-record.md",
+                    bundle / "handoff.md",
+                )
+                if item.is_file()
+            ).lower()
+            research_groups = {
+                "官方文档/规范/RFC": ("官方", "规范", "rfc", "官方文档"),
+                "GitHub issues/discussions/源码": ("github",),
+                "知名论坛/社区": ("论坛", "stack overflow", "社区", "discussion"),
+            }
+            missing = [
+                label
+                for label, keywords in research_groups.items()
+                if not any(word in research_text for word in keywords)
+            ]
+            if missing:
+                raise TaskError(
+                    f"attempt_count={attempt_count}（3 次仍未解决）必须附研究证据，"
+                    "禁止猜测继续；缺少: " + "、".join(missing)
+                )
         data["status"] = "blocked"
         data["submitted_at"] = _now()
         if actor:
             data["implemented_by"] = actor
+        data["implemented_session_id"] = roles.current_session_id()
         data["next_owner"] = "manager"
         data["lease"] = None
         _save(path, data)
@@ -1670,15 +2087,29 @@ def submit_task(
     if actor:
         if data.get("kind") == "review":
             data["reviewed_by"] = actor
+            data["reviewed_session_id"] = roles.current_session_id()
         else:
             data["implemented_by"] = actor
+            data["implemented_session_id"] = roles.current_session_id()
     if data.get("kind") == "review":
         data["next_owner"] = "manager"
     elif data.get("reviewed_by_task"):
         data["next_owner"] = "worker"
         review_path, review_task = load_task(project, str(data["reviewed_by_task"]))
         review_task["status"] = "ready"
-        review_task["next_owner"] = "worker"
+        review_task["next_owner"] = reviewer_role(data)
+        review_task["dispatch"] = {
+            "host": "claude-code",
+            "spawn_state": "spawn-requested",
+            "requested_at": _now(),
+            "owner": None,
+            "session_id": None,
+            "reviewer_role": reviewer_role(data),
+            "note": (
+                "mf task submit 自动触发派发请求；宿主未拉起前保持 "
+                "spawn-requested，不得伪装已执行"
+            ),
+        }
         # R1：新一轮复审开始前清理上一轮 verdict，避免 prompt/state 读陈旧值
         review_task["review_verdict"] = None
         review_task["accepted_at"] = None
@@ -2034,6 +2465,25 @@ def _evidence_digest(bundle: Path) -> str:
     return digest.hexdigest()[:16]
 
 
+def _record_review_round(
+    review_data: dict[str, Any], verdict: str, *, rework_count: Any = None
+) -> None:
+    """同一 review 记录 rounds[]；多轮不新建文件（DP-PROC-01）。"""
+    rounds = review_data.get("rounds")
+    rounds = list(rounds) if isinstance(rounds, list) else []
+    number = len(rounds) + 1
+    rounds.append(
+        {
+            "round": number,
+            "verdict": verdict,
+            "rework_count": int(rework_count) if rework_count is not None else None,
+            "at": _now(),
+        }
+    )
+    review_data["rounds"] = rounds
+    review_data["round"] = number
+
+
 def _route_rework_from_review(
     project: str | Path,
     review_id: str,
@@ -2123,18 +2573,59 @@ def _route_rework_from_review(
 
     if verdict != "NEEDS_REWORK":
         target["next_owner"] = "manager"
+        _record_review_round(review_data, verdict, rework_count=target.get("rework_count"))
         _save(target_path, target)
         return None
+
+    existing = target.get("rework")
+    if (
+        isinstance(existing, dict)
+        and str(existing.get("review_task") or "") == str(review_id)
+        and target.get("status") == "blocked"
+        and existing.get("escalated")
+    ):
+        # 第 3 次已升级人工：accept 复审不重复计数/自动 spawn，只确认升级状态
+        _save(target_path, target)
+        return {
+            "task": str(target_id),
+            "auto": False,
+            "escalated": True,
+            "already_escalated": True,
+            "verdict": verdict,
+            "reason": existing.get("reason"),
+            "items": existing.get("items") or [],
+            "allowed_paths": existing.get("allowed_paths") or [],
+            "status": target.get("status"),
+            "next_owner": target.get("next_owner"),
+            "risk_level": str((target.get("risk") or {}).get("level") or ""),
+            "requires": existing.get("requires") or [],
+            "rework_summary": existing.get("rework_summary") or {},
+            "summary_missing": existing.get("summary_missing") or [],
+            "rework_count": target.get("rework_count"),
+        }
 
     target["next_owner"] = "manager"
     scope = _read_rework_scope(review_bundle.parent)
     summary, summary_missing = _read_rework_summary(review_bundle.parent)
+    previous_count = int(target.get("rework_count") or 0)
+    rework_count = previous_count + 1
+    target["rework_count"] = rework_count
+    _record_review_round(review_data, verdict, rework_count=rework_count)
+    escalated = rework_count >= 3
     plan = _rework_plan(
         target,
         scope,
         summary_missing=summary_missing,
         legacy=legacy_rework,
     )
+    if escalated:
+        plan = {
+            "auto": False,
+            "reason": (
+                f"第 {rework_count} 次 NEEDS_REWORK：停止自动循环，升级 manager/user；"
+                "需输出轮次摘要/根因假设/选项，人工决定前不再自动 spawn reviewer"
+            ),
+        }
     target["rework"] = {
         "review_task": review_id,
         "review_verdict": verdict,
@@ -2147,6 +2638,8 @@ def _route_rework_from_review(
         "decision": "auto" if plan["auto"] else "manager",
         "auto": plan["auto"],
         "reason": plan["reason"],
+        "rework_count": rework_count,
+        "escalated": escalated,
         "opened_at": _now() if plan["auto"] else None,
         "notify": ["manager"],
         "lease": None,
@@ -2154,6 +2647,9 @@ def _route_rework_from_review(
     if plan["auto"]:
         target["status"] = "rework"
         target["next_owner"] = "worker"
+    elif escalated:
+        target["status"] = "blocked"
+        target["next_owner"] = "manager"
     _save(target_path, target)
 
     decision = {
@@ -2168,6 +2664,8 @@ def _route_rework_from_review(
         "requires": target["rework"]["requires"],
         "rework_summary": summary,
         "summary_missing": summary_missing,
+        "rework_count": rework_count,
+        "escalated": escalated,
     }
     contract = resolve_contract(project)
     if decision["auto"]:
@@ -2219,9 +2717,25 @@ def _route_rework_from_review(
             "notify": ["manager"],
             "trigger": trigger,
             "from": "rejected" if decision["auto"] else "submitted",
-            "to": "rework" if decision["auto"] else "submitted",
+            "to": "rework" if decision["auto"] else (
+                "blocked" if decision["escalated"] else "submitted"
+            ),
         },
     )
+    if decision["escalated"]:
+        ledger_append(
+            contract,
+            {
+                "event": "review.rework.escalate",
+                "task": str(target_id),
+                "review_task": review_id,
+                "rework_count": decision["rework_count"],
+                "rounds": review_data.get("rounds") or [],
+                "reason": decision["reason"],
+                "next_owner": "manager",
+                "notify": ["manager", "user"],
+            },
+        )
     return decision
 
 
@@ -3088,6 +3602,23 @@ def prompt_text(project: str | Path, task_id: str) -> str:
                 lines.append(f"提交后 manager 会推进 review 任务 {review_id}；不要自行验收。")
             else:
                 lines.append("提交后由 manager 评审并验收；不要自行验收。")
+    elif owner == "manager" and kind == "review" and status in {
+        "ready",
+        "in_progress",
+        "rejected",
+    }:
+        lines.extend(
+            [
+                f"你是设计文档/规格评审者（manager；REQ-0024/DP-ORCH-01）。先运行：mf task show {task_id} --review-packet",
+                "设计评审=manager；实现/verify 评审=独立 worker。评审者不得是作者/实现者。",
+                "只读评审：不得修改设计正文、实现代码或验收标准；不读 archive（除非用户 grant/maintainer）。",
+                "评审检查：需求/设计/契约/测试/安全/范围/可维护性；D2 只约束实现评审，设计评审不套用实现独立性规则。",
+                f"在 {bundle / 'review.md'} 写评审意见，在 {bundle / 'review-handoff.md'} 写评审交接。",
+                "结论只能是 PASS / PASS_WITH_RISK / NEEDS_REWORK / BLOCKED；"
+                "PASS_WITH_RISK 必须写风险与接受人；NEEDS_REWORK 写原因/风险/影响/期望与必须整改项。",
+                "完成后 mf task submit；由 manager 验收评审记录并推进设计整改。",
+            ]
+        )
     elif owner == "designer":
         lines.extend(
             [

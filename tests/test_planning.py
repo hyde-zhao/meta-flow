@@ -171,12 +171,26 @@ def test_roadmap_phase_close_and_archive(project_env):
     assert (contract / "archive" / "R1" / "LESSONS-R1.md").is_file()
     assert state.read_current(contract)["roadmap"] == "R2"
 
-    archives = context.archive_list(root)
+    grant = context.authorize_archive(
+        root,
+        role="manager",
+        roadmap="R1",
+        scope=["**"],
+        purpose="human_audit",
+        tty=True,
+    )
+    archives = context.archive_list(root, actor="manager")
     assert archives[0]["roadmap"] == "R1"
-    shown = context.archive_show(root, "R1", reason="human_audit")
+    shown = context.archive_show(
+        root,
+        "R1",
+        reason="human_audit",
+        actor="manager",
+        grant_id=grant["grant_id"],
+    )
     assert shown["index"]
     log = context.read_log(root)
-    assert any(item.get("event") == "archive.show" for item in log)
+    assert any(item.get("event") == "archive.read" for item in log)
 
 
 def test_bug_lifecycle(project_env):

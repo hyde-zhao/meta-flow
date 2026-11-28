@@ -4,7 +4,7 @@
 
 ## 状态
 
-**v1.0.2 / R0 1.0.x 试运行**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
+**v1.1.0 / R1 1.1.x（P5 发布候选）**。当前已实现安装、工作区、MFP、规划闭环、质量闭环与控制闭环：
 
 ```text
 mf bootstrap
@@ -13,17 +13,20 @@ mf install designer --project-dir <contract>
 mf install worker --project-dir <sub>
 mf workspace init/attach/add-project/link/sync/status
 mf req add/list/show/update/trace/validate
-mf roadmap show/plan/close
-mf phase enter/review/exit
+mf roadmap show/plan/close/sizing/classify
+mf phase show/enter/review/exit
 mf task create/list/show/validate/start/submit/accept/reject/prompt
 mf task graph/plan/next/release/summary
-mf bug add/list/show/update/close
+mf task withdraw                         # 提交后自撤回（下游未处理）
+mf task review dispatch <review-id> ...  # 自动 reviewer（spawn-requested/fallback）
+mf bug add/list/show --packet/update/close
 mf knowledge add/list/show/render
-mf verify record/list/show
+mf verify record/list/show/index
 mf release freeze/check/show
-mf context show/expand/log/policy
-mf archive list/show
-mf status / mf log / mf doctor
+mf context show/expand/log/policy        # expand 支持 --start/--end/--max-bytes 分段
+mf archive list/show/authorize/revoke/export  # 默认 deny，需用户 TTY grant
+mf maintainer authorize-external --action '<动作>' --reason '<原因>'
+mf status / mf log / mf doctor [docs|process]
 mf uninstall claude
 mf dev clone/update/install/status
 mf role/status/doctor
@@ -31,14 +34,22 @@ mf role --as <role> --reason <text>   # 仅用户终端
 mf hook pretool / mf hook session-start
 ```
 
+1.1.0 聚焦 R1 范围（REQ-0024–0027：上下文/guard、需求/版本流程、任务编排/自动评审、
+文档/证据/过程）与 T010/BUG-0001 N14 安全修复；DSH/试点移出 R1。R0 1.0.x 历史见
+[RELEASE-NOTES](RELEASE-NOTES.md)。
+
 ## 安装
 
 ### 1. 全局模板库
 
 ```bash
-uv tool install git+ssh://git@github.com/hyde-zhao/meta-flow@main
+UV_NO_CACHE=1 uv tool install --force git+ssh://git@github.com/hyde-zhao/meta-flow@main
+mf --version        # 应为 1.1.0
 mf bootstrap
 ```
+
+> 1.1.0 为 R1 发布候选；发布后可用 `@v1.1.0` 安装。同版本号源码迭代必须带
+> `UV_NO_CACHE=1` 或 `--reinstall`（MFP-0029）。
 
 生成 `~/.meta-flow/`：
 
@@ -258,13 +269,16 @@ mf dev improve update MFP-0001 --status verified --version 0.1.2 --commit def456
 - `mf improve triage <id> --decision accepted|rejected|deferred [--reason] [--next-step design|direct]`
 - `mf dev improve archive <project>/<MFP> --source <源码目录>`（写 `improvements/archive/` + `index.json`）
 - `mf improve sync --project-dir <生产项目根> --source <源码目录>`（显示 resolved/rejected/accepted-not-resolved/deferred）
-- REQ 评估：`mf req triage <REQ> --decision accepted --next-step design|direct`
+- REQ 评估：`mf req update <REQ> --status accepted|deferred|rejected`；
+  design/direct 由后续设计包/工作包选择
 - BUG 两层：
   - external：`mf bug add` → `mf bug fix` → `mf bug verify` → `pending_user_close` →
-    `mf bug close <id> --confirmed-by <用户> --note <意见>`（缺确认人拒绝；新 schema
+    `mf bug close <id> --verification <VR-id> --confirmed-by <用户> --note <意见>`
+    （`--verification` 必填；缺确认人拒绝；新 schema
     仅 `pending_user_close` 可关，`fixed/verifying` 直关仅限 T038 前无 flow 历史 BUG）
-  - verification：`mf bug add --flow verification --subproject <sub>` → `mf bug fix` →
-    非修复者 `mf bug verify --by <viewer>` → `mf bug close --by <viewer>`；
+  - verification：`mf bug add --flow verification --subproject <sub>` → `mf bug fix <id>` →
+    非修复者 `mf bug verify <id> --by <viewer>` →
+    `mf bug close <id> --verification <VR-id> --by <viewer>`；
     fix_owner 必须存在，同一宿主会话（fix_session/viewer_session）不能自验自关
   - 升级：`mf bug escalate <id> --reason <跨项目/接口/外部可见/安全/需求级>`
   - closed 默认不可见；查询需 `--include-closed --authorized-by <用户> --reason <理由>` 并写 READ-LOG；
@@ -384,6 +398,44 @@ mf task accept R1-P1-T001 --verdict PASS
   所在工作区不一致时拒绝。guard 在无法解析 contract 时对 worker/designer/manager
   fail-closed。
 
+## R1 流程重构（REQ-0024/0025/0026/0027）
+
+```bash
+# VU/工作量与版本流程（建议不自动分类；用户 TTY 决定）
+mf roadmap sizing R1
+mf roadmap classify R1 --flow program --decided-by user --reason "单阶段重构"  # 用户终端
+mf phase show                       # required/merged_into/skipped
+mf task create --estimate "{vu: 2, effort_hours: 3, confidence: medium}" --verify "pytest ..."
+
+# 任务提交后自撤回（下游未处理；review draft/ready 取消/挂起）
+mf task withdraw R1-P1-T001 --reason "补充证据"
+
+# 自动评审（实现/verify=独立 worker；设计=manager）；第 3 次 NEEDS_REWORK 升级人工
+mf task review dispatch R1-P1-T002 --host claude-code --owner reviewer-2 --session-id <uuid>
+
+# 分段上下文（超预算/大文件；写 READ-LOG）
+mf context expand src/app.py --reason packet_missing --start 0 --end 65536
+
+# 归档默认 deny：用户 TTY 授权后 manager/designer 读取/导出；maintainer root 免 grant
+mf archive authorize --role manager --roadmap R0 --scope "phases/P4/tasks/T048/**" \
+  --purpose human_audit --ttl-minutes 30
+mf archive show R0 --reason human_audit --grant ARC-xxxx
+mf archive export --grant ARC-xxxx --to roadmap/R1/inputs/archive-r0
+
+# maintainer 外部动作仍需用户 TTY 短时授权
+mf maintainer authorize-external --action "git push" --reason "发布前推送"
+
+# 文档/过程检查与证据索引
+mf doctor docs / mf doctor process
+mf verify index
+```
+
+- 评审独立性：同 session/owner/实现者拒绝；`/clear` 不改变 session_id。
+- 安全卡 v2：`security.schema: 2` / `compat: v2` / 可执行 evidence；活跃 fail-closed，
+  历史任务 warning。
+- 证据 E0–E3：VR `items[]`（command/environment/result_digest/reuse_of/retention）；
+  PASS 摘要+digest，FAIL/BLOCKED/高风险保留原始；`mf verify index` 列出 evidence debt。
+
 ## 规划闭环
 
 ```bash
@@ -427,7 +479,8 @@ mf verify list --layer implementation
 # 缺陷
 mf bug add --title "登录报错" --severity major --requirement REQ-0001
 mf bug update BUG-0001 --status fixed --fix-task R1-P1-T001
-mf bug close BUG-0001 --verification "回归通过"
+mf bug close BUG-0001 --verification "回归通过" \
+  --confirmed-by <用户> --note "用户确认关闭"
 
 # 知识（可限定交付库）
 mf knowledge add --kind term --text "契约库=项目公共规范和计划"
@@ -483,7 +536,7 @@ mf context show
 mf context expand requirements/REQ-0001.md --reason human_audit
 mf context log
 mf archive list
-mf archive show R1 --reason human_audit
+mf archive show R1 --reason human_audit --grant <id>
 
 # 状态、审计与自检
 mf status
@@ -515,7 +568,7 @@ mf doctor
 |---|---|---|
 | 热 | `state/current.json`、ROADMAP、当前 R/阶段 PLAN、需求/架构 INDEX、`KNOWLEDGE.md`、上一阶段 handoff | manager 会话；`mf context show` 统计大小 |
 | 温 | 当前路标 REQ 详情、DESIGN/SPEC、当前阶段任务 bundle、当前版本 VR/BUG | 按 ID/任务包读取；默认列表当前路标 |
-| 冷 | `archive/R{n}/`（任务、阶段报告、VR、BUG、release、需求快照）、旧 lessons | 只能 `mf archive show --reason`；直接 Read 被 hook 拒绝 |
+| 冷 | `archive/R{n}/`（任务、阶段报告、VR、BUG、release、需求快照）、旧 lessons | 只能 `mf archive show <R> --reason <原因> --grant <id>`；直接 Read 被 hook 拒绝 |
 
 版本关闭时，`roadmap close` 会把该版本的任务、阶段文档、VR、BUG、release 清单和需求快照迁入 `archive/R{n}/`。
 

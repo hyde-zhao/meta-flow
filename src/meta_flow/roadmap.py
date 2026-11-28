@@ -18,10 +18,55 @@ PHASE_NAMES = {
     "P1": "计划",
     "P2": "设计",
     "P3": "实施",
-    "P4": "试运行",
+    "P4": "验证/验收",
     "P5": "发布",
 }
 GATED_PHASES = {"P1", "P2", "P4", "P5"}
+FLOW_PROFILES = ("large", "small", "bugfix", "patch", "program")
+PHASE_MODES = ("required", "merged_into", "skipped")
+
+# SPEC-R1-VERSION V3：profile → phase_plan 默认（可被 VERSION.yaml 覆盖）。
+DEFAULT_PHASE_PLANS: dict[str, dict[str, dict[str, Any]]] = {
+    "large": {
+        "P1": {"mode": "required"},
+        "P2": {"mode": "required"},
+        "P3": {"mode": "required"},
+        "P4": {"mode": "required"},
+        "P5": {"mode": "required"},
+    },
+    "small": {
+        "P1": {"mode": "required"},
+        "P2": {"mode": "merged_into", "target": "P1"},
+        "P3": {"mode": "required"},
+        "P4": {"mode": "merged_into", "target": "P3"},
+        "P5": {"mode": "required"},
+    },
+    "bugfix": {
+        "P1": {"mode": "skipped"},
+        "P2": {"mode": "skipped"},
+        "P3": {"mode": "required"},
+        "P4": {"mode": "required"},
+        "P5": {"mode": "required"},
+    },
+    "patch": {
+        "P1": {"mode": "skipped"},
+        "P2": {"mode": "skipped"},
+        "P3": {"mode": "skipped"},
+        "P4": {"mode": "required"},
+        "P5": {"mode": "required"},
+    },
+    "program": {
+        "P1": {"mode": "required"},
+        "P2": {"mode": "merged_into", "target": "P1"},
+        "P3": {"mode": "merged_into", "target": "P1"},
+        "P4": {"mode": "merged_into", "target": "P1"},
+        "P5": {"mode": "required"},
+    },
+}
+# SPEC-R1-VERSION V2：effort band（仅建议，不做机器分类）。
+EFFORT_BANDS = {"S": 0.5, "M": 1.5, "L": 3.0, "XL": 6.0}
+SIZING_SMALL = {"vu_count": 10, "effort_hours": 40, "cross_module": False}
+SIZING_LARGE = {"vu_count": 30, "effort_hours": 120}
 
 
 class RoadmapError(Exception):
@@ -187,6 +232,263 @@ def _open_blocking_bugs(contract: Path) -> list[dict[str, Any]]:
         ) in {"blocker", "critical"}:
             items.append(data)
     return items
+
+
+def _version_meta_path(contract: Path, roadmap_id: str) -> Path:
+    return contract / "roadmap" / roadmap_id / "VERSION.yaml"
+
+
+def _sizing_path(contract: Path, roadmap_id: str) -> Path:
+    return contract / "roadmap" / roadmap_id / "SIZING.yaml"
+
+
+def version_meta(contract: Path, roadmap_id: str) -> dict[str, Any]:
+    return _load_yaml(_version_meta_path(contract, roadmap_id))
+
+
+def phase_plan(contract: Path, roadmap_id: str) -> dict[str, Any]:
+    """返回 profile 与阶段计划：VERSION.yaml 显式值与默认计划合并。
+
+    缺省/旧版本按 large 处理（MIGRATION-R1 §3）；空阶段不建任务/报告。
+    """
+    meta = version_meta(contract, roadmap_id)
+    profile = str(meta.get("flow_profile") or "large")
+    if profile not in FLOW_PROFILES:
+        profile = "large"
+    plan = DEFAULT_PHASE_PLANS[profile]
+    explicit = meta.get("phase_plan")
+    if isinstance(explicit, dict):
+        plan = {**plan, **{str(k): v for k, v in explicit.items() if isinstance(v, dict)}}
+    normalized: dict[str, dict[str, Any]] = {}
+    for phase in PHASES:
+        entry = plan.get(phase) if isinstance(plan.get(phase), dict) else {"mode": "required"}
+        mode = str(entry.get("mode") or "required")
+        if mode not in PHASE_MODES:
+            mode = "required"
+        item = {"mode": mode}
+        if mode == "merged_into":
+            item["target"] = str(entry.get("target") or "P1")
+        if entry.get("note"):
+            item["note"] = entry["note"]
+        normalized[phase] = item
+    return {
+        "roadmap": roadmap_id,
+        "flow_profile": profile,
+        "phase_plan": normalized,
+        "decision": meta.get("decision") or {},
+        "source": "VERSION.yaml" if meta else "default(large)",
+    }
+
+
+def _next_required_phase(meta: dict[str, Any], current: str) -> str | None:
+    """按 phase_plan 找下一个 required 阶段（program/small 跳过 merged/skipped）。"""
+    plan = meta.get("phase_plan") or {}
+    start = PHASES.index(current) + 1 if current in PHASES else 0
+    for phase in PHASES[start:]:
+        if str((plan.get(phase) or {}).get("mode") or "required") == "required":
+            return phase
+    return None
+
+
+def sizing(project: str | Path, roadmap_id: str) -> dict[str, Any]:
+    """汇总 VU/effort/风险并给出 large/small/split 建议；不自动分类。"""
+    contract = resolve_contract(project)
+    tasks = [
+        task
+        for task in _version_tasks(contract, roadmap_id)
+        if str(task.get("status") or "") != "cancelled"
+    ]
+    vu_count = 0
+    effort_hours = 0.0
+    confidence_levels: list[str] = []
+    cross_module = False
+    high_risk = False
+    for task in tasks:
+        estimate = task.get("estimate") if isinstance(task.get("estimate"), dict) else {}
+        try:
+            vu_count += int(estimate.get("vu") or 1)
+        except (TypeError, ValueError):
+            vu_count += 1
+        try:
+            effort_hours += float(
+                estimate.get("effort_hours")
+                or EFFORT_BANDS.get(str(task.get("effort") or "M"), 1.5)
+            )
+        except (TypeError, ValueError):
+            effort_hours += EFFORT_BANDS.get(str(task.get("effort") or "M"), 1.5)
+        confidence = str(estimate.get("confidence") or "low")
+        if confidence in {"low", "medium", "high"}:
+            confidence_levels.append(confidence)
+        if str((task.get("risk") or {}).get("level") or "") in {"high", "critical"}:
+            high_risk = True
+        if task.get("module") and "/" in str(task.get("module")):
+            cross_module = True
+    confidence = (
+        min(confidence_levels, key=["low", "medium", "high"].index)
+        if confidence_levels
+        else "low"
+    )
+    if (
+        vu_count > SIZING_LARGE["vu_count"]
+        or effort_hours > SIZING_LARGE["effort_hours"]
+        or cross_module
+        or high_risk
+    ):
+        suggestion = "large"
+    elif (
+        vu_count <= SIZING_SMALL["vu_count"]
+        and effort_hours <= SIZING_SMALL["effort_hours"]
+        and not cross_module
+    ):
+        suggestion = "small"
+    else:
+        suggestion = "split"
+    meta = phase_plan(contract, roadmap_id)
+    data = {
+        "roadmap": roadmap_id,
+        "task_count": len(tasks),
+        "estimate": {
+            "vu_count": vu_count,
+            "effort_hours": round(effort_hours, 1),
+            "confidence": confidence,
+            "cross_module": cross_module,
+            "high_risk": high_risk,
+        },
+        "suggestion": suggestion,
+        "flow_profile": meta["flow_profile"],
+        "phase_plan": meta["phase_plan"],
+        "decision": meta.get("decision") or {},
+        "note": "阈值仅建议；版本流程必须由用户在版本门显式决定（mf roadmap classify）",
+    }
+    return data
+
+
+def classify(
+    project: str | Path,
+    roadmap_id: str,
+    *,
+    flow: str,
+    decided_by: str,
+    reason: str,
+    tty: bool | None = None,
+    stream: Any | None = None,
+    out: Any | None = None,
+) -> dict[str, Any]:
+    """用户显式决定版本流程 profile（TTY/结构化确认）；不自动分类。"""
+    contract = resolve_contract(project)
+    if flow not in FLOW_PROFILES:
+        raise RoadmapError(f"flow 只能是 {'|'.join(FLOW_PROFILES)}")
+    if decided_by != "user":
+        raise RoadmapError("版本流程必须由用户显式决定：--decided-by user（不得 manager/AI 自决）")
+    if not str(reason or "").strip():
+        raise RoadmapError("classify 必须提供 --reason")
+    from . import roles
+
+    if tty is None:
+        tty = roles.is_tty(stream, out)
+    if not tty:
+        raise RoadmapError(
+            "版本流程决策只能在用户终端执行（非 TTY 拒绝）；"
+            "请在用户终端运行 mf roadmap classify ... --decided-by user",
+            3,
+        )
+    data, item = _find_roadmap(contract, roadmap_id)
+    meta = version_meta(contract, roadmap_id)
+    plan = DEFAULT_PHASE_PLANS[flow]
+    now = _now()
+    decision = {
+        "flow": flow,
+        "flow_profile": flow,
+        "decided_by": "user",
+        "decided_at": now,
+        "rationale": str(reason).strip(),
+    }
+    meta.update(
+        {
+            "schema": meta.get("schema") or 1,
+            "version": meta.get("version") or roadmap_id,
+            "flow_profile": flow,
+            "phase_plan": plan,
+            "decision": decision,
+        }
+    )
+    meta.setdefault("version_target", item.get("version_target"))
+    _save_yaml(_version_meta_path(contract, roadmap_id), meta)
+    sizing_data = _load_yaml(_sizing_path(contract, roadmap_id))
+    sizing_data.update(
+        {
+            "schema": sizing_data.get("schema") or 1,
+            "version": sizing_data.get("version") or roadmap_id,
+            "flow_profile": flow,
+            "phase_plan_ref": str(_version_meta_path(contract, roadmap_id).relative_to(contract)),
+            "decision": {
+                "decided_by": "user",
+                "decided_at": now,
+                "note": str(reason).strip(),
+            },
+        }
+    )
+    _save_yaml(_sizing_path(contract, roadmap_id), sizing_data)
+    ledger_append(
+        contract,
+        {
+            "event": "roadmap.classify",
+            "roadmap": roadmap_id,
+            "flow": flow,
+            "flow_profile": flow,
+            "decided_by": "user",
+            "reason": str(reason).strip(),
+        },
+    )
+    return {
+        "roadmap": roadmap_id,
+        "flow_profile": flow,
+        "phase_plan": plan,
+        "decision": decision,
+        "version": str(_version_meta_path(contract, roadmap_id)),
+        "sizing": str(_sizing_path(contract, roadmap_id)),
+    }
+
+
+def phase_view(project: str | Path) -> dict[str, Any]:
+    """显示 P1–P5 的 required/merged_into/skipped 与当前状态（mf phase show）。"""
+    contract = resolve_contract(project)
+    state = read_current(contract)
+    roadmap_id = str(state.get("roadmap") or "R1")
+    current = str(state.get("phase") or "P1")
+    meta = phase_plan(contract, roadmap_id)
+    rows = []
+    current_index = PHASES.index(current) if current in PHASES else -1
+    for index, phase in enumerate(PHASES):
+        entry = meta["phase_plan"][phase]
+        if phase == current:
+            status = str(state.get("phase_status") or "active")
+        elif entry["mode"] == "merged_into":
+            status = f"merged_into {entry.get('target')}"
+        elif entry["mode"] == "skipped":
+            status = "skipped"
+        elif current_index >= 0 and index < current_index:
+            status = "passed"
+        else:
+            status = "pending"
+        rows.append(
+            {
+                "phase": phase,
+                "name": PHASE_NAMES[phase],
+                "mode": entry["mode"],
+                "target": entry.get("target"),
+                "status": status,
+                "required": entry["mode"] == "required",
+            }
+        )
+    return {
+        "roadmap": roadmap_id,
+        "current": current,
+        "current_status": state.get("phase_status"),
+        "flow_profile": meta["flow_profile"],
+        "source": meta["source"],
+        "phases": rows,
+    }
 
 
 def _bad_requirements(contract: Path, roadmap_id: str) -> list[dict[str, Any]]:
@@ -467,10 +769,20 @@ def phase_enter(project: str | Path, phase: str) -> dict[str, Any]:
         return {"roadmap": roadmap_id, "phase": phase, "plan": str(plan_path), "status": "active"}
     if current not in PHASES:
         raise RoadmapError(f"当前阶段非法: {current}")
-    current_index = PHASES.index(current)
-    target_index = PHASES.index(phase)
-    if target_index != current_index + 1:
-        raise RoadmapError(f"只能进入下一阶段：当前 {current}，不能进入 {phase}")
+    meta = phase_plan(contract, roadmap_id)
+    expected = _next_required_phase(meta, current)
+    entry = meta["phase_plan"].get(phase) or {}
+    if entry.get("mode") != "required":
+        raise RoadmapError(
+            f"{phase} 在 {meta['flow_profile']} profile 下为 {entry.get('mode')}"
+            f"（merged_into {entry.get('target') or '-'}/skipped），不单独进入/建任务/报告；"
+            "设计产物按文档类型存 P2 目录，见 VERSION.yaml phase_plan"
+        )
+    if phase != expected:
+        raise RoadmapError(
+            f"只能进入下一 required 阶段：当前 {current}（{meta['flow_profile']}），"
+            f"下一阶段是 {expected or '无（当前为最后 required 阶段）'}，不能进入 {phase}"
+        )
     if status != "exited":
         raise RoadmapError(f"必须先执行 mf phase exit 完成 {current} 并记录门禁，才能进入 {phase}")
     gate = state.get("last_phase_gate") or {}
@@ -633,8 +945,8 @@ def phase_exit(
         raise RoadmapError(f"{phase} 退出需要用户门禁：--approved-by <用户/记录>")
 
     report = phase_review(project)
-    index = PHASES.index(phase)
-    next_phase = PHASES[index + 1] if index + 1 < len(PHASES) else None
+    meta = phase_plan(contract, roadmap_id)
+    next_phase = _next_required_phase(meta, phase)
     handoff_path = None
     if next_phase:
         handoff = [

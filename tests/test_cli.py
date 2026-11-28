@@ -312,9 +312,9 @@ def test_cli_explicit_role_overrides_directory_for_workspace(tmp_path, monkeypat
     capsys.readouterr()
     assert main(["workspace", "status", "--project-dir", ".", "--json"]) == 0
 
-    # 显式 MF_ROLE 优先于目录推导：maintainer 不能借 workspace 根执行 workspace 命令
+    # 显式 MF_ROLE=maintainer：maintainer root 可执行 workspace 命令（DP-ROLE-01）
     monkeypatch.setenv("MF_ROLE", "maintainer")
-    assert main(["workspace", "status", "--project-dir", ".", "--json"]) == 3
+    assert main(["workspace", "status", "--project-dir", ".", "--json"]) == 0
 
 
 def _acceptance():

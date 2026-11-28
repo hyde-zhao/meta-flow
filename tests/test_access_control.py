@@ -77,6 +77,9 @@ def _payload(tool, cwd, path=None, command=None):
 def _complete_security():
     return {
         "applies": True,
+        "schema": 2,
+        "compat": "v2",
+        "evidence": ["tests/test_access_control.py::test_security_task_complete_fields_pass"],
         "threat_model": {
             "assets": ["contract 真相"],
             "attackers": ["越权 worker"],
@@ -775,7 +778,11 @@ def test_agent_templates_require_subproject_and_security():
     from meta_flow import templates
 
     root = Path(__file__).resolve().parents[1]
-    for name, const in (("worker", templates.AGENT_WORKER), ("manager", templates.AGENT_MANAGER)):
+    for name, const in (
+        ("worker", templates.AGENT_WORKER),
+        ("manager", templates.AGENT_MANAGER),
+        ("reviewer", templates.AGENT_REVIEWER),
+    ):
         repo = (root / "agents" / f"{name}.md").read_text(encoding="utf-8")
         assert repo.strip() == const.strip()
     worker = (root / "agents" / "worker.md").read_text(encoding="utf-8")
@@ -790,8 +797,11 @@ def test_agent_templates_require_subproject_and_security():
 def test_user_manual_quickstarts_and_binding_checkpoints():
     root = Path(__file__).resolve().parents[1]
     text = (root / "USER-MANUAL.md").read_text(encoding="utf-8")
-    assert "## 快速开始 1：全新项目" in text
-    assert "## 快速开始 2：迁移项目" in text
+    # R1 1.1.0 手册按框架重写：快速开始改为 §3（3.1 全新 / 3.2 迁移 / 3.3 R0→R1）。
+    assert "## 3. 快速开始" in text
+    assert "### 3.1 全新项目：从需求到发布" in text
+    assert "### 3.2 迁移已有项目" in text
+    assert "### 3.3 R0 → R1 迁移" in text
     assert "--delivery backend" in text
     assert "mf task validate" in text
     assert "mf role" in text and "mf doctor" in text

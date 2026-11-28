@@ -342,7 +342,23 @@ def test_worker_cannot_read_archive(env):
         context.expand(root, "archive/R1/INDEX.md", reason="human_audit", actor="worker")
     with pytest.raises(context.ContextError):
         context.archive_show(root, "R1", reason="human_audit", actor="worker")
-    result = context.archive_show(root, "R1", reason="human_audit", actor="manager")
+    with pytest.raises(context.ContextError):
+        context.archive_show(root, "R1", reason="human_audit", actor="manager")
+    grant = context.authorize_archive(
+        root,
+        role="manager",
+        roadmap="R1",
+        scope=["**"],
+        purpose="human_audit",
+        tty=True,
+    )
+    result = context.archive_show(
+        root,
+        "R1",
+        reason="human_audit",
+        actor="manager",
+        grant_id=grant["grant_id"],
+    )
     assert result["bytes"] > 0
 
 

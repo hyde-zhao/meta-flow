@@ -153,6 +153,38 @@ def check(contract: Path, *, roadmap: str | None = None) -> list[str]:
             issues.append(
                 f"版本隔离: {data.get('id')} 属于 {version}（当前 {current}）但状态为 {status}"
             )
+
+    # flow_profile/phase_plan（SPEC-R1-VERSION V3/V8）：非法 profile/mode 报 issue；
+    # merged/skipped 阶段不要求报告/任务。
+    version_path = contract / "roadmap" / current / "VERSION.yaml"
+    if version_path.is_file():
+        try:
+            import yaml
+
+            meta = yaml.safe_load(version_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            meta = {}
+        if isinstance(meta, dict):
+            profile = meta.get("flow_profile")
+            if profile is not None and profile not in {
+                "large",
+                "small",
+                "bugfix",
+                "patch",
+                "program",
+            }:
+                issues.append(f"VERSION.yaml flow_profile 非法: {profile}")
+            plan = meta.get("phase_plan")
+            if plan is not None and not isinstance(plan, dict):
+                issues.append("VERSION.yaml phase_plan 必须是 P1–P5 映射")
+            elif isinstance(plan, dict):
+                for phase, entry in plan.items():
+                    if phase not in {"P1", "P2", "P3", "P4", "P5"}:
+                        issues.append(f"phase_plan 含未知阶段: {phase}")
+                        continue
+                    mode = (entry or {}).get("mode") if isinstance(entry, dict) else None
+                    if mode not in {"required", "merged_into", "skipped"}:
+                        issues.append(f"phase_plan.{phase}.mode 非法: {mode}")
     return issues
 
 
@@ -183,3 +215,173 @@ def summary(contract: Path) -> dict[str, Any]:
         "register_files": registers,
         "specs": [path.relative_to(contract).as_posix() for path in specs],
     }
+
+
+ENTRY_FILES = ("CLAUDE.md", "AGENTS.md", "workspace/CLAUDE.md")
+ENTRY_MAX_LINES = 100
+FRONT_MATTER_REQUIRED = ("id", "type", "status", "owner", "updated_at")
+# 过程记录篇幅预算（行；DP-PROC-01 §6）
+PROCESS_BUDGETS = {
+    "handoff.md": 60,
+    "dev-record.md": 200,
+    "review.md": 120,
+    "review-handoff.md": 20,
+}
+
+
+def _front_matter(path: Path) -> dict[str, Any] | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    parts = text.split("\n---", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        import yaml
+
+        data = yaml.safe_load(parts[0].removeprefix("---")) or {}
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def docs_check(contract: Path, *, roadmap: str | None = None) -> list[str]:
+    """双标准文档检查：front matter/入口行数/重复 ID/过程位置（REQ-0027）。"""
+    issues = check(contract, roadmap=roadmap)
+    for relative in ENTRY_FILES:
+        path = contract / relative
+        if not path.is_file():
+            continue
+        try:
+            lines = len(path.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            continue
+        if lines > ENTRY_MAX_LINES:
+            issues.append(
+                f"入口文件 {relative} 超过 {ENTRY_MAX_LINES} 行（当前 {lines}）："
+                "只做导航/规则，细节放分层文档"
+            )
+    targets: list[Path] = []
+    targets.extend(sorted((contract / "roadmap").glob("*/phases/P2/specs/SPEC-*.md")))
+    targets.extend(sorted((contract / "specs").glob("SPEC-*.md")))
+    architecture = contract / "architecture"
+    if architecture.is_dir():
+        targets.extend(sorted(architecture.rglob("*.md")))
+    seen: dict[str, str] = {}
+    for path in targets:
+        relative = path.relative_to(contract).as_posix()
+        # 过程模板/索引/研究记录不强制 front matter（非长期真相或生成物）
+        if path.name in {"INDEX.md"} or "adr/drafts" in relative:
+            continue
+        front = _front_matter(path)
+        if front is None:
+            issues.append(f"缺少 YAML front matter（legacy warning）: {relative}")
+            continue
+        missing = [
+            key for key in FRONT_MATTER_REQUIRED if not str(front.get(key) or "").strip()
+        ]
+        if missing:
+            issues.append(f"front matter 缺字段 {', '.join(missing)}: {relative}")
+        doc_id = str(front.get("id") or "")
+        if doc_id:
+            if doc_id in seen:
+                issues.append(f"重复文档 ID {doc_id}: {seen[doc_id]} 与 {relative}")
+            else:
+                seen[doc_id] = relative
+    return issues
+
+
+def process_check(contract: Path, *, roadmap: str | None = None) -> list[str]:
+    """过程记录检查：篇幅/字段/孤儿/rounds/open findings（DP-PROC-01 §6）。
+
+    两遍扫描：先收集全部任务，再检查引用，避免 T006→T007 这类 forward
+    review 被误判孤儿；draft/ready 评审（目标未提交）属正常前置状态，不报错。
+    """
+    issues: list[str] = []
+    current = roadmap or current_roadmap(contract)
+    tasks: dict[str, dict[str, Any]] = {}
+    bundles: dict[str, Path] = {}
+    for path in sorted((contract / "roadmap").glob("*/phases/*/tasks/T*/TASK.yaml")):
+        try:
+            import yaml
+
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            continue
+        if not isinstance(data, dict) or not data.get("id"):
+            continue
+        if roadmap and str(data.get("roadmap") or "") not in {"", current}:
+            continue
+        task_id = str(data["id"])
+        tasks[task_id] = data
+        bundles[task_id] = path.parent
+    for task_id, data in tasks.items():
+        if str(data.get("status") or "") in {"accepted", "cancelled"}:
+            continue
+        bundle = bundles[task_id]
+        for name, limit in PROCESS_BUDGETS.items():
+            item = bundle / name
+            if not item.is_file():
+                continue
+            try:
+                lines = len(
+                    [
+                        line
+                        for line in item.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    ]
+                )
+            except OSError:
+                continue
+            if lines > limit:
+                issues.append(
+                    f"{task_id}/{name} 超过篇幅预算 {limit} 行（当前 {lines}）；"
+                    "引用证据/VR，不复制长日志（DP-PROC-01）"
+                )
+        if data.get("kind") == "review":
+            target = str(data.get("reviews") or "")
+            status = str(data.get("status") or "")
+            if not target or target not in tasks:
+                issues.append(f"{task_id} 评审任务缺少有效的 reviews 目标")
+            elif status == "in_progress" and str(
+                tasks[target].get("status") or ""
+            ) not in {"submitted", "accepted"}:
+                issues.append(
+                    f"{task_id} 评审已开始，但目标 {target} 状态为 "
+                    f"{tasks[target].get('status')}（应为 submitted/accepted）"
+                )
+            rounds = data.get("rounds")
+            if rounds is not None and not isinstance(rounds, list):
+                issues.append(f"{task_id} review.rounds 必须是列表")
+            elif isinstance(rounds, list) and not rounds and status in {
+                "submitted",
+                "accepted",
+            }:
+                issues.append(f"{task_id} review.rounds 为空（提交/接受时应记录轮次）")
+            if (
+                status == "accepted"
+                and data.get("review_verdict") == "NEEDS_REWORK"
+                and int(data.get("rework_count") or 0) >= 2
+                and not isinstance(rounds, list)
+            ):
+                issues.append(
+                    f"{task_id} 多轮 NEEDS_REWORK 缺 rounds[]（DP-PROC-01 同一记录累积）"
+                )
+            review_md = bundle / "review.md"
+            if (
+                status == "accepted"
+                and review_md.is_file()
+                and any(
+                    marker in review_md.read_text(encoding="utf-8")
+                    for marker in ("| open |", "status: open", "未关闭")
+                )
+            ):
+                issues.append(f"{task_id} 已接受但仍有 open findings（关闭或标注回归）")
+        else:
+            review_id = str(data.get("reviewed_by_task") or "")
+            if review_id and review_id not in tasks:
+                issues.append(f"{task_id} 关联 review {review_id} 不存在（孤儿引用）")
+    return issues

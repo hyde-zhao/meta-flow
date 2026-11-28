@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -287,6 +287,110 @@ def is_tty(stream: Any | None = None, out: Any | None = None) -> bool:
         return bool(stream.isatty() and out.isatty())
     except (AttributeError, ValueError):
         return False
+
+
+EXTERNAL_AUTH_REL = Path(".meta-flow") / "external-authorizations.yaml"
+
+
+def external_auth_path(start: Path) -> Path | None:
+    root = workspace_root_for(start)
+    return root / EXTERNAL_AUTH_REL if root is not None else None
+
+
+def authorize_external(
+    action: str,
+    reason: str,
+    *,
+    cwd: Path | None = None,
+    stream: Any | None = None,
+    out: Any | None = None,
+    ttl_minutes: int = 10,
+    tty: bool | None = None,
+) -> dict[str, Any]:
+    """用户 TTY 显式授权 maintainer 外部/不可逆动作（DP-ROLE-01 §7.1）。
+
+    授权短时有效（默认 10 分钟），写入工作区
+    ``.meta-flow/external-authorizations.yaml`` 并记 ledger；guard 读取后放行
+    匹配动作，过期/未授权仍 fail-closed。非 TTY（AI/解释器）一律拒绝。
+    """
+    if not str(action or "").strip():
+        raise RoleError("必须提供 --action（如 git push / network / install）")
+    if not str(reason or "").strip():
+        raise RoleError("外部动作授权必须提供 --reason，并写入 ledger")
+    if ttl_minutes <= 0 or ttl_minutes > 120:
+        raise RoleError("--ttl-minutes 必须在 1..120 之间")
+    if tty is None:
+        tty = is_tty(stream, out)
+    if not tty:
+        raise RoleError(
+            "外部动作授权只能由用户在终端执行（非 TTY 拒绝）；"
+            "请在用户终端运行 mf maintainer authorize-external "
+            "--action '<动作>' --reason '<原因>'",
+            3,
+        )
+    path = Path(cwd or Path.cwd())
+    root = workspace_root_for(path)
+    if root is None:
+        raise RoleError("未找到工作区/契约根；无法写外部动作授权")
+    target = root / EXTERNAL_AUTH_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, OSError):
+        data = {}
+    items = data.get("authorizations") if isinstance(data, dict) else None
+    items = items if isinstance(items, list) else []
+    now = datetime.now(UTC)
+    items = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and _parse_iso(item.get("expires_at")) is not None
+        and _parse_iso(item.get("expires_at")) > now
+    ]
+    entry = {
+        "action": str(action).strip(),
+        "reason": str(reason).strip(),
+        "approved_by": "user",
+        "approved_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=ttl_minutes)).isoformat(),
+        "workspace_root": str(root),
+    }
+    items.append(entry)
+    target.write_text(
+        yaml.safe_dump(
+            {"schema": 1, "authorizations": items}, sort_keys=False, allow_unicode=True
+        ),
+        encoding="utf-8",
+    )
+    from . import state
+    from .workspace import resolve_contract
+
+    try:
+        contract = resolve_contract(root)
+    except Exception:
+        contract = None
+    if contract is not None:
+        state.ledger_append(
+            contract,
+            {
+                "event": "maintainer.external_authorize",
+                "action": entry["action"],
+                "reason": entry["reason"],
+                "expires_at": entry["expires_at"],
+                "by": "user",
+                "role": "maintainer",
+            },
+        )
+    return entry
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or ""))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def switch_role(

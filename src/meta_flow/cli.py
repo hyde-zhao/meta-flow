@@ -62,6 +62,7 @@ from .task import (
     TaskError,
     accept_task,
     create_task,
+    dispatch_review,
     graph,
     list_tasks,
     load_task,
@@ -76,6 +77,7 @@ from .task import (
     submit_task,
     summary_text,
     validate_task,
+    withdraw_task,
 )
 from .task import (
     summary as task_summary,
@@ -202,7 +204,11 @@ def _enforce_role(args: argparse.Namespace) -> None:
     role, _ = _effective_role(args)
     if command == "hook":
         return
-    if command in {"role", "status", "doctor", "bootstrap"}:
+    if role == "maintainer":
+        # DP-ROLE-01 / D0-M1=A：maintainer 在 meta-flow 内是 root，不受任务/
+        # lease/allowed_paths/角色门限制；外部动作由 guard 授权门单独约束。
+        return
+    if command in {"role", "status", "doctor", "bootstrap", "maintainer"}:
         return
     if command in {"install", "uninstall", "upgrade"}:
         actor_role, _ = _effective_role(args)
@@ -229,6 +235,14 @@ def _enforce_role(args: argparse.Namespace) -> None:
             if role not in {"worker", "designer"}:
                 raise WorkspaceError(f"task {action} 只允许 worker/designer", 3)
             return
+        if action == "withdraw":
+            if role in {"worker", "designer", "manager"}:
+                return
+            raise WorkspaceError("task withdraw 只允许作者/执行角色 worker/designer/manager", 3)
+        if action == "dispatch":
+            if role in {"worker", "designer", "manager"}:
+                return
+            raise WorkspaceError("task review dispatch 只允许 worker/designer/manager", 3)
         if action in worker_actions and role not in {"worker", "designer", "manager"}:
             raise WorkspaceError(f"task {action} 只允许 worker/designer/manager", 3)
         if action in manager_actions and role != "manager":
@@ -317,6 +331,14 @@ def _enforce_role(args: argparse.Namespace) -> None:
         if role in {"manager", "designer", "maintainer", "unbound"}:
             return
         raise WorkspaceError("security-card 校验只允许 manager/designer/maintainer", 3)
+    if command == "archive":
+        if role in {"manager", "designer"}:
+            # 默认 deny；authorize/revoke 由 TTY 校验，show/export 由 grant 校验
+            return
+        raise WorkspaceError(
+            "archive 只允许 manager/designer（默认 deny，需用户 grant）；worker 不得读取",
+            3,
+        )
     if command in MANAGER_PROJECT_COMMANDS:
         if role != "manager":
             raise WorkspaceError(f"{command} 命令只允许 manager", 3)
@@ -757,6 +779,23 @@ def _cmd_role(args: argparse.Namespace) -> int:
     return 0 if effective != "unbound" else 2
 
 
+def _cmd_maintainer_authorize_external(args: argparse.Namespace) -> int:
+    data = roles.authorize_external(
+        args.action_name,
+        getattr(args, "reason", "") or "",
+        cwd=Path(getattr(args, "path", ".") or "."),
+        ttl_minutes=int(getattr(args, "ttl_minutes", 10) or 10),
+    )
+    if getattr(args, "json", False):
+        _print_json(data)
+    else:
+        print(
+            f"外部动作已授权: {data['action']}（approved_by=user，"
+            f"有效期至 {data['expires_at']}；ledger maintainer.external_authorize）"
+        )
+    return 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     path = Path(args.path).expanduser().resolve()
     root = find_workspace_root(path)
@@ -781,6 +820,23 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
+    scope = getattr(args, "scope", None)
+    if scope in {"docs", "process"}:
+        contract = resolve_contract(Path(args.path))
+        issues = (
+            docmodel.docs_check(contract)
+            if scope == "docs"
+            else docmodel.process_check(contract)
+        )
+        if args.json:
+            _print_json({"scope": scope, "ok": not issues, "issues": issues})
+        elif issues:
+            print(f"doctor {scope}: FAIL（{len(issues)} 项 warning/error）")
+            for issue in issues:
+                print(f"  - {issue}")
+        else:
+            print(f"doctor {scope}: OK")
+        return 0 if not issues else 1
     if args.global_scope:
         return _print_doctor(doctor_global(), args.json)
     path = Path(args.path).expanduser().resolve()
@@ -985,6 +1041,12 @@ def _cmd_task_create(args: argparse.Namespace) -> int:
         {"id": f"A{index}", "method": "artifact", "expect": text}
         for index, text in enumerate(args.acceptance or [], start=1)
     ]
+    estimate_data = None
+    if getattr(args, "estimate", None):
+        parsed = yaml.safe_load(args.estimate)
+        if not isinstance(parsed, dict):
+            raise TaskError("--estimate 必须是映射，如 '{vu: 2, effort_hours: 3, confidence: medium}'")
+        estimate_data = parsed
     result = create_task(
         args.project_dir,
         args.title or "",
@@ -1014,6 +1076,9 @@ def _cmd_task_create(args: argparse.Namespace) -> int:
         actor_role=_effective_role(args)[0],
         with_review=not args.no_review,
         from_data=from_data,
+        estimate=estimate_data,
+        slice=getattr(args, "slice", None),
+        verify=getattr(args, "verify", None),
     )
     print(f"任务: {result['task']} ({result['status']}, risk={result['risk']})")
     if result.get("review_task"):
@@ -1182,6 +1247,45 @@ def _cmd_task_rework(args: argparse.Namespace) -> int:
     print("整改项: " + (", ".join(rework.get("items") or []) or "-"))
     print("ledger task.rework 已记录（含 review / 整改项 / lease）；manager 仅审计")
     print(f"下一步: mf task prompt {data['id']}")
+    return 0
+
+
+def _cmd_task_withdraw(args: argparse.Namespace) -> int:
+    _worker_task_scope(args)
+    _, current = load_task(args.project_dir, args.task_id)
+    _ensure_worker_scope(args, current)
+    data = withdraw_task(
+        args.project_dir,
+        args.task_id,
+        reason=args.reason,
+        owner=args.owner,
+    )
+    print(
+        f"{data['id']} -> {data['status']} "
+        f"(withdraw_count={data.get('withdraw_count')}, next={data['next_owner']})"
+    )
+    print("ledger task.withdraw 已记录；review（draft/ready）已取消/挂起；证据保留")
+    print(f"补充后重新运行: mf task submit {data['id']}")
+    return 0
+
+
+def _cmd_task_review_dispatch(args: argparse.Namespace) -> int:
+    data = dispatch_review(
+        args.project_dir,
+        args.task_id,
+        host=args.host,
+        owner=args.owner,
+        session_id=args.session_id,
+        reason=args.reason,
+        fallback=args.fallback,
+    )
+    dispatch = data.get("dispatch") or {}
+    print(
+        f"{data['id']} dispatch={dispatch.get('spawn_state')} "
+        f"host={dispatch.get('host')} owner={dispatch.get('owner') or '-'} "
+        f"role={dispatch.get('reviewer_role')}"
+    )
+    print("ledger 已记录（review.spawn / orchestration.fallback）；实际执行走 mf task start/submit")
     return 0
 
 
@@ -1528,6 +1632,62 @@ def _cmd_roadmap_close(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_roadmap_sizing(args: argparse.Namespace) -> int:
+    data = roadmap.sizing(args.project_dir, args.roadmap_id)
+    if args.json:
+        _print_json(data)
+        return 0
+    estimate = data["estimate"]
+    print(
+        f"{data['roadmap']} profile={data['flow_profile']} "
+        f"tasks={data['task_count']} VU={estimate['vu_count']} "
+        f"effort={estimate['effort_hours']}h confidence={estimate['confidence']} "
+        f"suggestion={data['suggestion']}"
+    )
+    print(data["note"])
+    return 0
+
+
+def _cmd_roadmap_classify(args: argparse.Namespace) -> int:
+    data = roadmap.classify(
+        args.project_dir,
+        args.roadmap_id,
+        flow=args.flow,
+        decided_by=args.decided_by,
+        reason=args.reason,
+    )
+    if args.json:
+        _print_json(data)
+        return 0
+    print(
+        f"{data['roadmap']} flow_profile={data['flow_profile']} "
+        f"(decided_by=user, {data['decision']['decided_at']})"
+    )
+    for phase, entry in data["phase_plan"].items():
+        hint = f" -> {entry.get('target')}" if entry.get("target") else ""
+        print(f"  {phase}: {entry['mode']}{hint}")
+    print(f"VERSION: {data['version']}；SIZING: {data['sizing']}")
+    return 0
+
+
+def _cmd_phase_show(args: argparse.Namespace) -> int:
+    data = roadmap.phase_view(args.project_dir)
+    if args.json:
+        _print_json(data)
+        return 0
+    print(
+        f"{data['roadmap']} current={data['current']}/{data['current_status']} "
+        f"flow_profile={data['flow_profile']}（{data['source']}）"
+    )
+    for item in data["phases"]:
+        target = f" -> {item['target']}" if item.get("target") else ""
+        print(
+            f"  {item['phase']} {item['name']}: {item['mode']}{target} "
+            f"[{item['status']}]"
+        )
+    return 0
+
+
 def _cmd_phase_enter(args: argparse.Namespace) -> int:
     result = roadmap.phase_enter(args.project_dir, args.phase)
     print(f"{result['roadmap']}-{result['phase']} -> active")
@@ -1735,7 +1895,10 @@ def _cmd_bug_show(args: argparse.Namespace) -> int:
                 else "same-subproject-open",
             },
         )
-    data = bug.show_bug(args.project_dir, args.bug_id)
+    if getattr(args, "packet", False):
+        data = bug.bug_packet(args.project_dir, args.bug_id)
+    else:
+        data = bug.show_bug(args.project_dir, args.bug_id)
     if args.json:
         _print_json(data)
     else:
@@ -1932,8 +2095,37 @@ def _cmd_verify_record(args: argparse.Namespace) -> int:
         bugs=args.bug or [],
         verifier=args.verifier,
         notes=args.notes or "",
+        command=getattr(args, "command", None),
+        environment=(
+            yaml.safe_load(args.environment) if getattr(args, "environment", None) else None
+        ),
+        result_digest=getattr(args, "result_digest", None),
+        artifacts=getattr(args, "artifact", None) or None,
+        reuse_of=getattr(args, "reuse_of", None),
+        risk=getattr(args, "risk", None),
+        retention_class=getattr(args, "retention", None),
     )
     print(f"验证记录: {item['id']} ({item['layer']}, {item['result']})")
+    return 0
+
+
+def _cmd_verify_index(args: argparse.Namespace) -> int:
+    data = verify.evidence_index(args.project_dir)
+    if args.json:
+        _print_json(data)
+        return 0
+    summary = data["summary"]
+    print(
+        f"证据索引: total={summary.get('total', 0)} PASS={summary.get('PASS', 0)} "
+        f"PASS_WITH_RISK={summary.get('PASS_WITH_RISK', 0)} "
+        f"FAIL={summary.get('FAIL', 0)} BLOCKED={summary.get('BLOCKED', 0)}"
+    )
+    if data["evidence_debt"]:
+        print("evidence debt:")
+        for issue in data["evidence_debt"]:
+            print(f"  - {issue}")
+    else:
+        print("evidence debt: 无")
     return 0
 
 
@@ -2068,8 +2260,18 @@ def _cmd_context_expand(args: argparse.Namespace) -> int:
         args.path,
         reason=args.reason,
         actor=args.actor,
+        start=args.start,
+        end=args.end,
+        max_bytes=args.max_bytes,
     )
-    print(f"# {data['path']} ({data['bytes']} bytes, reason={data['reason']})")
+    header = f"# {data['path']} ({data['bytes']} bytes, reason={data['reason']}"
+    if data.get("segmented"):
+        header += (
+            f", segment={data['start']}..{data['end']}"
+            f"/{data['total_bytes']}"
+        )
+    header += ")"
+    print(header)
     print(data["text"], end="" if data["text"].endswith("\n") else "\n")
     return 0
 
@@ -2106,15 +2308,18 @@ def _cmd_context_policy(args: argparse.Namespace) -> int:
 
 
 def _cmd_archive_list(args: argparse.Namespace) -> int:
-    items = context.archive_list(args.project_dir)
+    items = context.archive_list(args.project_dir, actor=args.actor)
     if args.json:
         _print_json(items)
         return 0
     if not items:
-        print("没有归档")
+        print("没有归档（或没有有效 grant）")
         return 0
     for item in items:
-        print(f"{item['roadmap']} files={item['files']} index={item['index']}")
+        print(
+            f"{item['roadmap']} files={item['files']} index={item['index']} "
+            f"grant={item.get('grant_id') or '-'}"
+        )
     return 0
 
 
@@ -2124,17 +2329,72 @@ def _cmd_archive_show(args: argparse.Namespace) -> int:
         args.roadmap_id,
         reason=args.reason,
         actor=args.actor,
+        grant_id=getattr(args, "grant", None),
+        path=getattr(args, "path", None),
     )
     if args.json:
         _print_json(data)
         return 0
-    print(f"归档: {data['path']} (reason={data['reason']})")
+    print(
+        f"归档: {data['path']} (reason={data['reason']}, "
+        f"grant={data.get('grant_id') or 'maintainer'})"
+    )
     if data.get("index"):
         print(data["index"], end="")
     if data.get("files"):
         print("\n文件:")
         for name in data["files"]:
             print(f"  {name}")
+    return 0
+
+
+def _cmd_archive_authorize(args: argparse.Namespace) -> int:
+    data = context.authorize_archive(
+        args.project_dir,
+        role=args.role,
+        roadmap=args.roadmap,
+        scope=args.scope,
+        purpose=args.purpose,
+        ttl_minutes=args.ttl_minutes,
+        max_bytes=args.max_bytes,
+        max_files=args.max_files,
+        one_shot=not args.multi_use,
+    )
+    if args.json:
+        _print_json(data)
+    else:
+        print(
+            f"grant: {data['grant_id']} role={data['role']} roadmap={data['roadmap']} "
+            f"scope={', '.join(data['scope'])} purpose={data['purpose']} "
+            f"expires={data['expires_at']}"
+        )
+    return 0
+
+
+def _cmd_archive_revoke(args: argparse.Namespace) -> int:
+    data = context.revoke_archive(args.project_dir, args.grant_id)
+    if args.json:
+        _print_json(data)
+    else:
+        print(f"grant 已撤销: {data['grant_id']}")
+    return 0
+
+
+def _cmd_archive_export(args: argparse.Namespace) -> int:
+    data = context.archive_export(
+        args.project_dir,
+        grant_id=args.grant,
+        roadmap=getattr(args, "roadmap", None),
+        to=args.to,
+        actor=args.actor,
+    )
+    if args.json:
+        _print_json(data)
+    else:
+        print(
+            f"已导出 {len(data['files'])} 文件到 {data['to']} "
+            f"(digest={data['digest']}, manifest={data['manifest']})"
+        )
     return 0
 
 
@@ -2727,6 +2987,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_create.add_argument("--risk", choices=["low", "medium", "high", "critical"], default="medium")
     task_create.add_argument("--effort", default="M")
+    task_create.add_argument(
+        "--estimate",
+        help="VU/工作量估计 YAML/JSON，如 '{vu: 2, effort_hours: 3, confidence: medium}'",
+    )
+    task_create.add_argument("--slice", help="纵向切片/Story（SPEC-R1-VERSION V7）")
+    task_create.add_argument(
+        "--verify", help="可复核验收命令（如 pytest tests/x.py::test_y）"
+    )
     task_create.add_argument("--review-mode", choices=["manager", "independent", "user"])
     task_create.add_argument("--reviews", help="review 任务对应的实现/设计任务 ID")
     task_create.add_argument("--review-scope", action="append")
@@ -2781,6 +3049,34 @@ def build_parser() -> argparse.ArgumentParser:
     task_rework.add_argument("--owner", help="worker 身份；也可设置 MF_WORKER_ID")
     task_rework.add_argument("--note", help="返工说明")
     task_rework.set_defaults(func=_cmd_task_rework)
+
+    task_withdraw = task_sub.add_parser(
+        "withdraw",
+        help="提交后自撤回（下游未处理；submitted→in_progress，review 取消/挂起）",
+    )
+    task_withdraw.add_argument("task_id")
+    task_withdraw.add_argument("--project-dir", default=".")
+    task_withdraw.add_argument("--reason", required=True)
+    task_withdraw.add_argument("--owner", help="提交者身份；也可设置 MF_WORKER_ID")
+    task_withdraw.set_defaults(func=_cmd_task_withdraw)
+
+    task_review = task_sub.add_parser("review", help="评审编排（自动 review dispatch）")
+    task_review_sub = task_review.add_subparsers(dest="action", required=True)
+    task_review_dispatch = task_review_sub.add_parser(
+        "dispatch", help="派发独立 reviewer（spawn-requested/fallback，不伪装已执行）"
+    )
+    task_review_dispatch.add_argument("task_id")
+    task_review_dispatch.add_argument("--project-dir", default=".")
+    task_review_dispatch.add_argument(
+        "--host", choices=["claude-code", "manual"], default="claude-code"
+    )
+    task_review_dispatch.add_argument("--owner", help="reviewer 身份（新 session/不同 owner）")
+    task_review_dispatch.add_argument("--session-id", help="reviewer 新会话 id")
+    task_review_dispatch.add_argument("--reason", help="派发/回退原因")
+    task_review_dispatch.add_argument(
+        "--fallback", action="store_true", help="宿主不可用：回退手动评审"
+    )
+    task_review_dispatch.set_defaults(func=_cmd_task_review_dispatch)
 
     task_submit = task_sub.add_parser("submit")
     task_submit.add_argument("task_id")
@@ -2928,9 +3224,30 @@ def build_parser() -> argparse.ArgumentParser:
     roadmap_close.add_argument("--note")
     roadmap_close.add_argument("--force", action="store_true")
     roadmap_close.set_defaults(func=_cmd_roadmap_close)
+    roadmap_sizing = roadmap_sub.add_parser(
+        "sizing", help="汇总 VU/effort/风险并给出 large/small/split 建议（不自动分类）"
+    )
+    roadmap_sizing.add_argument("roadmap_id")
+    roadmap_sizing.add_argument("--project-dir", default=".")
+    roadmap_sizing.add_argument("--json", action="store_true")
+    roadmap_sizing.set_defaults(func=_cmd_roadmap_sizing)
+    roadmap_classify = roadmap_sub.add_parser(
+        "classify", help="用户 TTY 显式决定版本 flow_profile（写 VERSION/SIZING/ledger）"
+    )
+    roadmap_classify.add_argument("roadmap_id")
+    roadmap_classify.add_argument("--project-dir", default=".")
+    roadmap_classify.add_argument("--flow", choices=list(roadmap.FLOW_PROFILES), required=True)
+    roadmap_classify.add_argument("--decided-by", default="user")
+    roadmap_classify.add_argument("--reason", required=True)
+    roadmap_classify.add_argument("--json", action="store_true")
+    roadmap_classify.set_defaults(func=_cmd_roadmap_classify)
 
-    phase_p = sub.add_parser("phase", help="五阶段进入/评审/退出")
+    phase_p = sub.add_parser("phase", help="五阶段进入/评审/退出（按 flow_profile 显示）")
     phase_sub = phase_p.add_subparsers(dest="action", required=True)
+    phase_show = phase_sub.add_parser("show", help="显示 required/merged_into/skipped 与状态")
+    phase_show.add_argument("--project-dir", default=".")
+    phase_show.add_argument("--json", action="store_true")
+    phase_show.set_defaults(func=_cmd_phase_show)
     phase_enter = phase_sub.add_parser("enter")
     phase_enter.add_argument("phase", choices=list(roadmap.PHASES))
     phase_enter.add_argument("--project-dir", default=".")
@@ -2991,6 +3308,9 @@ def build_parser() -> argparse.ArgumentParser:
     bug_show.add_argument("bug_id")
     bug_show.add_argument("--project-dir", default=".")
     bug_show.add_argument("--json", action="store_true")
+    bug_show.add_argument(
+        "--packet", action="store_true", help="最小修复上下文包（复现/期望/关联/范围/回归）"
+    )
     bug_show.set_defaults(func=_cmd_bug_show)
     bug_update = bug_sub.add_parser("update")
     bug_update.add_argument("bug_id")
@@ -3077,7 +3397,20 @@ def build_parser() -> argparse.ArgumentParser:
     verify_record.add_argument("--bug", action="append")
     verify_record.add_argument("--verifier", default="meta-manager")
     verify_record.add_argument("--notes")
+    verify_record.add_argument("--command", help="可复现验证命令（E1）")
+    verify_record.add_argument("--environment", help="环境摘要 YAML/JSON，如 '{python: 3.12}'")
+    verify_record.add_argument("--result-digest", help="结果摘要 digest（sha256:...）")
+    verify_record.add_argument("--artifact", action="append", help="证据工件路径（可重复）")
+    verify_record.add_argument("--reuse-of", help="复用既有 VR（fingerprint/命令一致）")
+    verify_record.add_argument("--risk", choices=["low", "medium", "high", "critical"])
+    verify_record.add_argument("--retention", choices=["permanent", "12m", "3y"])
     verify_record.set_defaults(func=_cmd_verify_record)
+    verify_index = verify_sub.add_parser(
+        "index", help="生成证据索引 E1/E2 与 evidence debt"
+    )
+    verify_index.add_argument("--project-dir", default=".")
+    verify_index.add_argument("--json", action="store_true")
+    verify_index.set_defaults(func=_cmd_verify_index)
     verify_list = verify_sub.add_parser("list")
     verify_list.add_argument("--project-dir", default=".")
     verify_list.add_argument("--layer", choices=list(verify.LAYERS))
@@ -3147,6 +3480,15 @@ def build_parser() -> argparse.ArgumentParser:
     context_expand.add_argument("--project-dir", default=".")
     context_expand.add_argument("--reason", choices=list(context.REASONS), required=True)
     context_expand.add_argument("--actor", help="默认从当前目录/MF_ROLE 推导")
+    context_expand.add_argument(
+        "--start", type=int, default=None, help="分段读取起始字节偏移（0 基）"
+    )
+    context_expand.add_argument(
+        "--end", type=int, default=None, help="分段读取结束字节偏移（不含）"
+    )
+    context_expand.add_argument(
+        "--max-bytes", type=int, default=None, help="单段最大字节数；超过拒绝"
+    )
     context_expand.set_defaults(func=_cmd_context_expand)
     context_log = context_sub.add_parser("log")
     context_log.add_argument("--project-dir", default=".")
@@ -3158,10 +3500,11 @@ def build_parser() -> argparse.ArgumentParser:
     context_policy.add_argument("--json", action="store_true")
     context_policy.set_defaults(func=_cmd_context_policy)
 
-    archive_p = sub.add_parser("archive", help="归档查询（必须 reason）")
+    archive_p = sub.add_parser("archive", help="归档查询（默认 deny，需用户 grant）")
     archive_sub = archive_p.add_subparsers(dest="action", required=True)
     archive_list = archive_sub.add_parser("list")
     archive_list.add_argument("--project-dir", default=".")
+    archive_list.add_argument("--actor", help="默认从当前目录/MF_ROLE 推导")
     archive_list.add_argument("--json", action="store_true")
     archive_list.set_defaults(func=_cmd_archive_list)
     archive_show = archive_sub.add_parser("show")
@@ -3169,8 +3512,43 @@ def build_parser() -> argparse.ArgumentParser:
     archive_show.add_argument("--project-dir", default=".")
     archive_show.add_argument("--reason", choices=list(context.REASONS), required=True)
     archive_show.add_argument("--actor", help="默认从当前目录/MF_ROLE 推导")
+    archive_show.add_argument("--grant", help="用户授权 grant id（默认 deny）")
+    archive_show.add_argument("--path", help="仅读取 scope 内指定文件")
     archive_show.add_argument("--json", action="store_true")
     archive_show.set_defaults(func=_cmd_archive_show)
+    archive_authorize = archive_sub.add_parser(
+        "authorize", help="用户 TTY 显式授权 manager/designer 读取归档"
+    )
+    archive_authorize.add_argument("--project-dir", default=".")
+    archive_authorize.add_argument("--role", choices=list(context.ARCHIVE_GRANT_ROLES), required=True)
+    archive_authorize.add_argument("--roadmap", required=True)
+    archive_authorize.add_argument(
+        "--scope", action="append", required=True, help="相对 archive/R{n}/ 的路径或 glob；可重复"
+    )
+    archive_authorize.add_argument("--purpose", choices=list(context.ARCHIVE_PURPOSES), required=True)
+    archive_authorize.add_argument("--ttl-minutes", type=int, default=30)
+    archive_authorize.add_argument("--max-bytes", type=int, default=262144)
+    archive_authorize.add_argument("--max-files", type=int, default=50)
+    archive_authorize.add_argument(
+        "--multi-use", action="store_true", help="默认 one-shot；--multi-use 允许多次读取"
+    )
+    archive_authorize.add_argument("--json", action="store_true")
+    archive_authorize.set_defaults(func=_cmd_archive_authorize)
+    archive_revoke = archive_sub.add_parser("revoke", help="用户 TTY 撤销 grant")
+    archive_revoke.add_argument("grant_id")
+    archive_revoke.add_argument("--project-dir", default=".")
+    archive_revoke.add_argument("--json", action="store_true")
+    archive_revoke.set_defaults(func=_cmd_archive_revoke)
+    archive_export = archive_sub.add_parser("export", help="按 grant 导出归档副本到 inputs/")
+    archive_export.add_argument("--project-dir", default=".")
+    archive_export.add_argument("--grant", help="用户授权 grant id（manager/designer 必填）")
+    archive_export.add_argument(
+        "--roadmap", help="maintainer root 无 grant 导出时指明来源（如 R0）"
+    )
+    archive_export.add_argument("--to", required=True, help="contract 内 inputs/ 目录")
+    archive_export.add_argument("--actor", help="默认从当前目录/MF_ROLE 推导")
+    archive_export.add_argument("--json", action="store_true")
+    archive_export.set_defaults(func=_cmd_archive_export)
 
     log_p = sub.add_parser("log", help="查看 ledger 审计日志")
     log_p.add_argument("--project-dir", default=".")
@@ -3488,14 +3866,40 @@ def build_parser() -> argparse.ArgumentParser:
     role_p.add_argument("--reason", help="切换原因（写入 ledger role.switch）")
     role_p.set_defaults(func=_cmd_role)
 
+    maintainer_p = sub.add_parser(
+        "maintainer", help="maintainer root 运维（外部动作授权等）"
+    )
+    maintainer_sub = maintainer_p.add_subparsers(dest="action", required=True)
+    maintainer_auth = maintainer_sub.add_parser(
+        "authorize-external",
+        help="用户 TTY 短时授权 maintainer 执行外部/不可逆动作",
+    )
+    maintainer_auth.add_argument(
+        "--action",
+        dest="action_name",
+        required=True,
+        help="动作，如 'git push' / network / install / deploy",
+    )
+    maintainer_auth.add_argument("--reason", required=True)
+    maintainer_auth.add_argument("--ttl-minutes", type=int, default=10)
+    maintainer_auth.add_argument("--path", default=".")
+    maintainer_auth.add_argument("--json", action="store_true")
+    maintainer_auth.set_defaults(func=_cmd_maintainer_authorize_external)
+
     status_p = sub.add_parser("status", help="显示工作区或安装状态")
     status_p.add_argument("--path", default=".")
     status_p.add_argument("--json", action="store_true")
     status_p.set_defaults(func=_cmd_status)
 
-    doctor_p = sub.add_parser("doctor", help="校验全局/项目/工作区")
+    doctor_p = sub.add_parser("doctor", help="校验全局/项目/工作区/文档/过程记录")
     doctor_p.add_argument("--path", default=".")
     doctor_p.add_argument("--global", dest="global_scope", action="store_true")
+    doctor_p.add_argument(
+        "scope",
+        nargs="?",
+        choices=["docs", "process"],
+        help="docs: 双标准/front matter/入口行数；process: handoff/review rounds/篇幅",
+    )
     doctor_p.add_argument("--json", action="store_true")
     doctor_p.set_defaults(func=_cmd_doctor)
 

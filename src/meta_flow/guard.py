@@ -406,12 +406,14 @@ def _bash_read_like(command: str) -> bool:
 
 
 def _has_redirect_write(command: str) -> bool:
-    """检测写文件重定向；``2>&1``/``>&2`` 等 fd 复制不算写。"""
+    """检测写文件重定向；``2>&1``/``>&2``/``2>/dev/null`` 不算写。"""
     for match in re.finditer(r"\d?>>?", command):
-        tail = command[match.end() : match.end() + 1]
-        if tail == "&":
+        tail = command[match.end() :].lstrip()
+        if tail.startswith("&"):
             continue
-        if tail.isdigit() and command[match.start() : match.end()].startswith(">"):
+        if tail.startswith("/dev/null"):
+            continue
+        if tail[:1].isdigit() and command[match.start() : match.end()].startswith(">"):
             continue
         return True
     return False
@@ -965,6 +967,11 @@ def _is_anchor_path(path: Path) -> bool:
     )
 
 
+def _is_external_auth_path(path: Path) -> bool:
+    """外部动作授权文件只能由用户 TTY（mf maintainer authorize-external）写入。"""
+    return path.name == "external-authorizations.yaml" and ".meta-flow" in path.parts
+
+
 def _anchor_delete_command(command: str, write_paths: list[Path]) -> bool:
     """maintainer 清理锚点：仅允许单一 rm/unlink 删除锚点文件（MFP-0037）。
 
@@ -995,13 +1002,23 @@ def _anchor_delete_command(command: str, write_paths: list[Path]) -> bool:
     return Path(tokens[index].strip("'\"")).name in {"rm", "unlink"}
 
 
-def _readonly_expand(command: str) -> bool:
-    """识别纯只读的 `mf context expand ...` 命令（MFP-0025/0027）。
+READONLY_MF_PREFIXES = (
+    ("context", "expand"),
+    ("context", "show"),
+    ("archive", "show"),
+    # export 会写 contract inputs/，但由 context.archive_export 校验 grant、
+    # inputs/ 白名单、字节/文件上限并写 ledger；guard 不再叠加路径误判。
+    ("archive", "export"),
+)
 
-    只读命令由 context.expand 自身做路径授权并写 READ-LOG；guard 不再把
+
+def _readonly_mf_command(command: str) -> bool:
+    """识别纯只读的 `mf context expand/show`、`mf archive show` 命令。
+
+    只读命令由 context/archive 自身做路径授权并写 READ-LOG；guard 不再把
     路径参数误判为 Bash 写入。仅当首个可执行 token（允许 env/sudo 等受控
     前缀与 VAR=value 赋值后）为 `mf`（或以 `/mf` 结尾的可执行路径）且紧接
-    `context expand` 时豁免；带 shell 操作符/重定向/替换/前置命令不豁免。
+    白名单子命令时豁免；带 shell 操作符/重定向/替换/前置命令不豁免。
     """
     if any(
         marker in command
@@ -1027,7 +1044,11 @@ def _readonly_expand(command: str) -> bool:
     rest = [
         Path(token.strip("'\"")).name for token in tokens[index + 1 : index + 3]
     ]
-    return rest == ["context", "expand"]
+    return tuple(rest) in READONLY_MF_PREFIXES
+
+
+# 向后兼容旧名（T038 测试/调用）；语义扩展为 context expand/show、archive show。
+_readonly_expand = _readonly_mf_command
 
 
 def _maintainer_source_roots() -> list[Path]:
@@ -1045,6 +1066,241 @@ def _maintainer_source_roots() -> list[Path]:
             roots.append(Path(str(raw)).expanduser().resolve())
     roots.append((home / "source").resolve())
     return roots
+
+
+EXTERNAL_PROGRAMS = {
+    "gh": "network",
+    "ssh": "network",
+    "scp": "network",
+    "sftp": "network",
+    "rsync": "network",
+    "curl": "network",
+    "wget": "network",
+    "aria2c": "network",
+    "http": "network",
+    "https": "network",
+    "httpie": "network",
+    "nc": "network",
+    "netcat": "network",
+    "telnet": "network",
+    "socat": "network",
+    "ftp": "network",
+    "docker": "deploy",
+    "kubectl": "deploy",
+    "terraform": "deploy",
+    "ansible": "deploy",
+    "ansible-playbook": "deploy",
+    "deploy": "deploy",
+    "aws": "credentials",
+    "gcloud": "credentials",
+    "az": "credentials",
+    "uvx": "install",
+    "pipx": "install",
+    "npx": "install",
+    "pip": "install",
+    "pip3": "install",
+    "npm": "install",
+    "pnpm": "install",
+    "yarn": "install",
+    "poetry": "install",
+    "conda": "install",
+}
+EXTERNAL_GIT_SUBCOMMANDS = {
+    "push",
+    "merge",
+    "tag",
+    "fetch",
+    "pull",
+    "clone",
+    "remote",
+    "submodule",
+}
+EXTERNAL_UV_SUBCOMMANDS = {"tool", "pip", "python", "add", "sync"}
+EXTERNAL_MF_ACTIONS = {"install", "uninstall", "upgrade", "bootstrap"}
+# git 全局选项中的取值选项：跳过其参数，避免 `git -C . push` / `-c k=v push` 绕过。
+GIT_VALUE_OPTIONS = {
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--exec-path",
+    "--config-env",
+    "--super-prefix",
+    "--shallow-file",
+}
+PY_EXTERNAL_KEYWORDS = (
+    "pip install",
+    "pip3 install",
+    "pip download",
+    "python -m pip",
+    "subprocess",
+    "os.system",
+    "os.popen",
+    "urlopen",
+    "requests.",
+    "http://",
+    "https://",
+    "git push",
+    "git tag",
+    "git merge",
+)
+
+
+def _program_at(tokens: list[str]) -> tuple[int, str, list[str]] | None:
+    """返回首个可执行 token 的下标/名称/剩余参数（跳过 env/sudo/VAR=value）。"""
+    index = 0
+    while index < len(tokens):
+        raw = tokens[index]
+        name = Path(raw.strip("'\"")).name
+        if name in _LAUNCHER_PREFIXES or re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=.*", raw
+        ):
+            index += 1
+            continue
+        return index, name, tokens[index + 1 :]
+    return None
+
+
+def _git_external_action(rest: list[str]) -> str | None:
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token == "--":
+            if index + 1 < len(rest):
+                sub = rest[index + 1]
+                return f"git {sub}" if sub in EXTERNAL_GIT_SUBCOMMANDS else None
+            return None
+        if token in GIT_VALUE_OPTIONS:
+            index += 2
+            continue
+        if any(token.startswith(f"{option}=") for option in GIT_VALUE_OPTIONS if option.startswith("--")):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        return f"git {token}" if token in EXTERNAL_GIT_SUBCOMMANDS else None
+    return None
+
+
+def _python_external_action(rest: list[str]) -> str | None:
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token == "-m" and index + 1 < len(rest):
+            module = Path(rest[index + 1].strip("'\"")).name.lower()
+            if module in {"pip", "pip3", "uv", "pipx", "poetry", "conda"}:
+                return "install"
+            return None
+        if token in {"-c"} and index + 1 < len(rest):
+            code = " ".join(rest[index + 1 :]).lower()
+            if any(keyword in code for keyword in PY_EXTERNAL_KEYWORDS):
+                # 解释器内联脚本无法静态判定：涉及外部动作关键字时 fail-closed
+                return "python -c 外部动作"
+            return None
+        if token.startswith("-"):
+            index += 1
+            continue
+        return None
+    return None
+
+
+def _external_action(
+    command: str, *, depth: int = 0, seen: set[str] | None = None
+) -> str | None:
+    """识别 maintainer 的外部/不可逆动作（DP-ROLE-01 §7.1）。
+
+    覆盖 git 全局选项/包装器（-C/-c/--git-dir/--work-tree）、sh/bash -c、
+    python -m pip、pipx/uvx/npx、nc/telnet 等；无法静态判定的内联脚本
+    涉及外部关键字时 fail-closed。这些动作不随 maintainer root 自动授权。
+    """
+    if seen is None:
+        seen = set()
+    if depth > MAX_SHELL_DEPTH or command in seen:
+        return "无法判定的嵌套外部动作"
+    seen.add(command)
+    for segment in _command_segments(command):
+        tokens = _bash_tokens(segment)
+        program = _program_at(tokens)
+        if program is None:
+            continue
+        index, name, rest = program
+        if name in BASH_SHELLS:
+            nested = _nested_shell_parts(tokens, index)
+            if nested is not None:
+                nested_command, next_index = nested
+                if next_index < len(tokens):
+                    # `bash -c git push`（无引号）只取下一个 token 会漏掉参数
+                    nested_command = " ".join(tokens[next_index - 1 :])
+                action = _external_action(
+                    nested_command, depth=depth + 1, seen=seen
+                )
+                if action is not None:
+                    return action
+            continue
+        if name in {"python", "python3"} or re.fullmatch(r"python[0-9.]*", name):
+            action = _python_external_action(rest)
+            if action is not None:
+                return action
+            continue
+        if name == "git":
+            action = _git_external_action(rest)
+            if action is not None:
+                return action
+            continue
+        if name in EXTERNAL_PROGRAMS:
+            if name in {"npm", "pnpm", "yarn"}:
+                sub = next((item for item in rest if not item.startswith("-")), "")
+                if sub in {"install", "i", "add", "ci"}:
+                    return "install"
+                continue
+            return EXTERNAL_PROGRAMS[name]
+        if name == "uv" and rest:
+            first = next((item for item in rest if not item.startswith("-")), "")
+            if first == "tool" or first in EXTERNAL_UV_SUBCOMMANDS:
+                return "install"
+        elif name == "mf" and rest:
+            action = next((item for item in rest if not item.startswith("-")), "")
+            if action in EXTERNAL_MF_ACTIONS:
+                return f"mf {action}"
+    return None
+
+
+def _external_authorization_valid(workspace_root: Path | None, action: str) -> bool:
+    """读取用户 TTY 写入的短时授权（`.meta-flow/external-authorizations.yaml`）。"""
+    if workspace_root is None:
+        return False
+    path = workspace_root / ".meta-flow" / "external-authorizations.yaml"
+    if not path.is_file():
+        return False
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, OSError):
+        return False
+    items = data.get("authorizations") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return False
+    now = datetime.now(UTC)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("approved_by") or "") != "user":
+            continue
+        granted = str(item.get("action") or "")
+        if granted != action and not (action.startswith(granted) or granted.startswith(action)):
+            continue
+        expires = str(item.get("expires_at") or "")
+        try:
+            deadline = datetime.fromisoformat(expires)
+        except ValueError:
+            continue
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if deadline <= now:
+            continue
+        return True
+    return False
 
 
 def _manager_source_denied(path: Path, workspace_root: Path | None) -> bool:
@@ -1120,6 +1376,31 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
     elif role == "designer":
         tasks = _designer_tasks(contract)
     audit_task = str(tasks[0].get("id")) if tasks else "无"
+    if role == "maintainer":
+        # D0-M1=A：maintainer 在 meta-flow 内不受流程限制，但外部/不可逆动作
+        # （push/merge/tag、发布/部署、网络、真实安装、凭据）仍需用户显式授权。
+        external = _external_action(command)
+        if external is not None and not _external_authorization_valid(
+            workspace_root, external
+        ):
+            _audit_guard(
+                contract,
+                role=role,
+                task=audit_task,
+                tool="Bash",
+                decision="deny",
+                command=command,
+                reason=f"外部动作 {external} 未获用户授权",
+            )
+            return _deny_with_hint(
+                f"maintainer 外部动作（{external}）需要用户显式授权："
+                "请在用户终端运行 mf maintainer authorize-external "
+                f"--action \"{external}\" --reason <原因>（短时有效），"
+                "或由用户直接在终端执行；无授权 BLOCKED，不得静默执行",
+                contract=contract,
+                role=role,
+                role_root=role_root,
+            )
     write_all = bool(write_paths) or _bash_write_heuristic(command)
     read_like = _bash_read_like(command)
     max_bytes = _read_budget(contract, role)
@@ -1145,9 +1426,17 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
                 role=role,
                 role_root=role_root,
             )
-    if role == "worker" and not write_all and _readonly_expand(command):
-        # 纯只读 expand：路径授权与 READ-LOG 由 context.expand 负责，
-        # 不把路径参数误判为 Bash 写入（MFP-0027）。
+    if write_all and any(_is_external_auth_path(item) for item in write_paths):
+        return _deny_with_hint(
+            "外部动作授权只能由用户在终端运行 mf maintainer authorize-external 写入；"
+            "AI/工具层不得伪造",
+            contract=contract,
+            role=role,
+            role_root=role_root,
+        )
+    if not write_all and _readonly_mf_command(command):
+        # 纯只读 expand/show：路径授权、grant 校验与 READ-LOG 由
+        # context/archive 命令负责，不把路径参数误判为 Bash 写入（MFP-0025/0027/0051）。
         _audit_guard(
             contract,
             role=role,
@@ -1183,13 +1472,15 @@ def _bash_decision(payload: dict[str, Any], cwd: Path) -> dict[str, Any] | None:
                     deny_reason = f"manager Bash 不能直接访问 {relative}"
                 continue
             if role == "maintainer":
-                if relative.startswith(("workspace/", ".meta-flow/")) and not write_all:
-                    continue
-                deny_reason = "maintainer 不改/读契约项目内容"
+                # maintainer root：contract/delivery/workspace/archive 读写执行，
+                # 仅保留锚点写入限制（角色来源防伪造）与非阻断审计。
                 continue
             if role == "designer":
                 if relative.startswith("archive/") and not write_all:
-                    deny_reason = "designer 不直接访问 archive/**；历史只读用 mf archive show --reason"
+                    deny_reason = (
+                        "designer 不直接访问 archive/**；默认 deny，用户 grant 后 "
+                        "用 mf archive show/export --grant"
+                    )
                     continue
                 own_design_task = _bundle_match(relative, tasks)
                 if (
@@ -1413,14 +1704,20 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             return deny(
                 "会话角色锚点只能由 SessionStart 或用户终端 mf role --as 写入"
             )
+        if _is_external_auth_path(path):
+            return deny(
+                "外部动作授权只能由用户在终端运行 mf maintainer authorize-external 写入"
+            )
         if path.is_relative_to(contract):
             relative = path.relative_to(contract).as_posix()
+            if role == "maintainer":
+                # DP-ROLE-01：root 可写 contract/archive/state（直接改派生状态
+                # 允许但写审计；锚点/外部授权文件已在上面单独拒绝）。
+                return allow()
             if relative.startswith("archive/"):
                 return deny("archive 只读；写入请通过版本关闭流程")
             if relative.startswith("state/"):
                 return deny("state 由 mf 派生写入，禁止直接改")
-            if role == "maintainer":
-                return deny("maintainer 不改项目契约")
             if role == "designer":
                 if relative.startswith("archive/"):
                     return deny("archive 只读；designer 不直接写归档")
@@ -1516,7 +1813,10 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             # MFP-0037：maintainer 需要维护 manifest.source_dir 指向的工具源码仓库
             if any(path.is_relative_to(root) for root in _maintainer_source_roots()):
                 return allow()
-            return deny("maintainer 只维护 meta-flow 源码/全局模板")
+            # DP-ROLE-01：maintainer root 可读写 contract/delivery/workspace。
+            if role_root is not None and path.is_relative_to(role_root):
+                return allow()
+            return allow()
         return allow()
 
     # Read / Grep / Glob
@@ -1524,7 +1824,7 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
         relative = path.relative_to(contract).as_posix()
         if role == "manager":
             if relative.startswith("archive/"):
-                return deny("archive 只允许通过 mf archive show --reason 读取")
+                return deny("archive 默认 deny；用户 grant 后用 mf archive show/export --grant")
             return allow()
         if role == "worker":
             if relative == "state/current.json":
@@ -1553,12 +1853,10 @@ def pretool_decision(payload: dict[str, Any]) -> dict[str, Any] | None:
             )
         if role == "designer":
             if relative.startswith("archive/"):
-                return deny("archive 只允许通过 mf archive show --reason 读取")
+                return deny("archive 默认 deny；用户 grant 后用 mf archive show/export --grant")
             return allow()
         if role == "maintainer":
-            if relative.startswith(("workspace/", ".meta-flow/")):
-                return allow()
-            return deny("maintainer 不读项目需求/设计/任务内容")
+            return allow()
         return allow()
     if role == "worker":
         root = role_root

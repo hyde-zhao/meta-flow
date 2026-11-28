@@ -40,6 +40,44 @@ def _safe_project(value: str) -> str:
     return project
 
 
+SAFE_RECORD_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _safe_record_ref(value: str) -> str:
+    """MFP 记录引用白名单：拒绝路径分隔/穿越（N14）。"""
+    ref = str(value or "").strip()
+    if not SAFE_RECORD_REF_RE.fullmatch(ref) or ".." in ref:
+        raise ImproveError(f"MFP 记录引用非法: {value!r}", 3)
+    return ref
+
+
+def _mfp_subdir(source_root: Path, name: str, *, create: bool = False) -> Path:
+    """返回 improvements/<name>，拒绝符号链接/越界目录（N14）。"""
+    base = (source_root / MFP_DIR).resolve()
+    directory = source_root / MFP_DIR / name
+    if directory.is_symlink():
+        raise ImproveError(f"MFP 目录不得为符号链接: {directory}", 3)
+    if not directory.resolve(strict=False).is_relative_to(base):
+        raise ImproveError(f"MFP 目录越界: {directory}", 3)
+    if directory.exists() and not directory.is_dir():
+        raise ImproveError(f"MFP 目录不是目录: {directory}", 3)
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _mfp_file(directory: Path, filename: str) -> Path:
+    """返回 directory/filename，拒绝分隔符/符号链接/嵌套逃逸（N14）。"""
+    if not filename or filename in {".", ".."} or "/" in filename or "\\" in filename:
+        raise ImproveError(f"MFP 文件名非法: {filename!r}", 3)
+    target = directory / filename
+    if target.is_symlink():
+        raise ImproveError(f"MFP 文件不得为符号链接: {target}", 3)
+    if not target.resolve(strict=False).is_relative_to(directory.resolve()):
+        raise ImproveError(f"MFP 文件路径越界: {target}", 3)
+    return target
+
+
 class ImproveError(Exception):
     """改进包操作失败。"""
 
@@ -418,7 +456,8 @@ def source_import(
     note: str | None = None,
 ) -> dict[str, Any]:
     """把全局 inbox 的 MFP 导入 meta-flow 源码仓并分类。"""
-    data = _load(_find_inbox(ref))
+    inbox_path = _find_inbox(ref)
+    data = _load(inbox_path)
     classification = kind or data.get("classification") or "undecided"
     if classification not in {"bug", "requirement", "change", "undecided"}:
         raise ImproveError("classification 只能是 bug|requirement|change|undecided")
@@ -426,17 +465,25 @@ def source_import(
         raise ImproveError("已实现的 MFP 必须指定 --kind bug|requirement|change")
 
     source_root = _source_root(source)
-    for sub in ("inbox", "open", "closed", "records"):
-        (source_root / MFP_DIR / sub).mkdir(parents=True, exist_ok=True)
-    mfp_id = str(data.get("id") or "MFP-0001")
-    (source_root / MFP_DIR / "inbox" / f"{mfp_id}.yaml").write_text(
-        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
-    )
+    if "id" in data:
+        mfp_id = _safe_mfp_id(str(data.get("id") or ""))
+    else:
+        # 兼容历史包：无 id 时沿用 inbox 文件名（_find_inbox 已校验 ref）
+        mfp_id = _safe_mfp_id(inbox_path.stem)
+    if data.get("source_record") is not None:
+        data["source_record"] = _safe_record_ref(str(data.get("source_record")))
+    dirs = {
+        "inbox": _mfp_subdir(source_root, "inbox", create=True),
+        "open": _mfp_subdir(source_root, "open", create=True),
+        "closed": _mfp_subdir(source_root, "closed", create=True),
+        "records": _mfp_subdir(source_root, "records", create=True),
+    }
+    _dump(_mfp_file(dirs["inbox"], f"{mfp_id}.yaml"), data)
 
     record_id = None
     if classification != "undecided":
         prefix = RECORD_KINDS[classification]
-        record_id = _next_id(source_root / MFP_DIR / "records", prefix)
+        record_id = _next_id(dirs["records"], prefix)
         data["source_record"] = record_id
         data["classification"] = classification
         record = {
@@ -454,7 +501,7 @@ def source_import(
                 "note": note,
             },
         }
-        _dump(source_root / MFP_DIR / "records" / f"{record_id}.yaml", record)
+        _dump(_mfp_file(dirs["records"], f"{record_id}.yaml"), record)
 
     if already_implemented:
         data["status"] = "closed"
@@ -467,10 +514,10 @@ def source_import(
                 "verified_at": _now(),
             }
         )
-        destination = source_root / MFP_DIR / "closed" / f"{mfp_id}.yaml"
+        destination = _mfp_file(dirs["closed"], f"{mfp_id}.yaml")
     else:
         data["status"] = "accepted"
-        destination = source_root / MFP_DIR / "open" / f"{mfp_id}.yaml"
+        destination = _mfp_file(dirs["open"], f"{mfp_id}.yaml")
     _dump(destination, data)
     return {
         "source": str(source_root),
@@ -515,14 +562,21 @@ def source_update(
     note: str | None = None,
 ) -> Path:
     source_root = _source_root(source)
+    mfp_id = _safe_mfp_id(mfp_id)
+    open_dir = _mfp_subdir(source_root, "open", create=True)
+    closed_dir = _mfp_subdir(source_root, "closed", create=True)
+    records_dir = _mfp_subdir(source_root, "records")
     candidates = [
-        source_root / MFP_DIR / "open" / f"{mfp_id}.yaml",
-        source_root / MFP_DIR / "closed" / f"{mfp_id}.yaml",
+        _mfp_file(open_dir, f"{mfp_id}.yaml"),
+        _mfp_file(closed_dir, f"{mfp_id}.yaml"),
     ]
     path = next((item for item in candidates if item.is_file()), None)
     if path is None:
         raise ImproveError(f"源码仓找不到 MFP: {mfp_id}")
     data = _load(path)
+    record_ref = data.get("source_record")
+    if record_ref is not None:
+        record_ref = _safe_record_ref(str(record_ref))
     data["status"] = status
     resolution = data.setdefault("resolution", {})
     if version is not None:
@@ -533,14 +587,14 @@ def source_update(
         resolution["note"] = note
     if status in {"verified", "closed"}:
         resolution["verified_at"] = _now()
-        target = source_root / MFP_DIR / "closed" / path.name
+        target = _mfp_file(closed_dir, path.name)
     else:
-        target = source_root / MFP_DIR / "open" / path.name
+        target = _mfp_file(open_dir, path.name)
     _dump(target, data)
     if target != path:
         path.unlink()
-    if data.get("source_record"):
-        record_path = source_root / MFP_DIR / "records" / f"{data['source_record']}.yaml"
+    if record_ref:
+        record_path = _mfp_file(records_dir, f"{record_ref}.yaml")
         if record_path.is_file():
             record = _load(record_path)
             record["status"] = "done" if status in {"verified", "closed"} else status

@@ -65,6 +65,14 @@ def record_verification(
     bugs: list[str] | None = None,
     verifier: str = "meta-manager",
     notes: str = "",
+    command: str | None = None,
+    environment: dict[str, Any] | None = None,
+    result_digest: str | None = None,
+    artifacts: list[Any] | None = None,
+    reuse_of: str | None = None,
+    risk: str | None = None,
+    retention_class: str | None = None,
+    items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     contract = resolve_contract(project)
     if layer not in LAYERS:
@@ -75,10 +83,50 @@ def record_verification(
         raise VerifyError("验证记录必须有 scope")
     if result == "FAIL" and not bugs:
         raise VerifyError("FAIL 验证记录必须关联至少一个 BUG")
+    if risk is not None and risk not in {"low", "medium", "high", "critical"}:
+        raise VerifyError("risk 只能是 low|medium|high|critical")
+    if retention_class is not None and retention_class not in {"permanent", "12m", "3y"}:
+        raise VerifyError("retention_class 只能是 permanent|12m|3y")
+    if result in {"FAIL", "BLOCKED"} and not evidence and not items and not artifacts:
+        raise VerifyError(
+            "FAIL/BLOCKED 必须保留原始证据（evidence/artifacts/items）；PASS 才可只留摘要+digest"
+        )
+    reused: dict[str, Any] | None = None
+    if reuse_of:
+        reused = show_verification(project, reuse_of)
+        if reused.get("result") not in {"PASS", "PASS_WITH_RISK"}:
+            raise VerifyError(f"只能复用 PASS/PASS_WITH_RISK 的验证结论: {reuse_of}")
+        if (
+            command
+            and reused.get("command")
+            and command != reused.get("command")
+        ):
+            raise VerifyError("命令漂移不得复用（fingerprint/command 必须一致）")
     state = read_current(contract)
     vr_id = _next_vr(contract)
+    evidence_items = items or [
+        {
+            "id": f"{vr_id}-E1",
+            "requirement_refs": requirement_refs or [],
+            "spec": design_refs or [],
+            "task_refs": task_refs or [],
+            "method": method,
+            "command": command,
+            "environment": environment or {},
+            "result": result,
+            "result_digest": result_digest,
+            "artifacts": artifacts or evidence or [],
+            "reuse_of": reuse_of,
+            "risk": risk or ("high" if result in {"FAIL", "BLOCKED"} else "low"),
+            "retention": {
+                "class": retention_class
+                or ("permanent" if result in {"PASS", "PASS_WITH_RISK"} else "3y")
+            },
+        }
+    ]
     item = {
         "id": vr_id,
+        "schema": 2,
         "layer": layer,
         "scope": scope,
         "roadmap": str(state.get("roadmap") or "R1"),
@@ -88,6 +136,12 @@ def record_verification(
         "task_refs": task_refs or [],
         "method": method,
         "result": result,
+        "command": command,
+        "environment": environment or {},
+        "result_digest": result_digest,
+        "reuse_of": reuse_of,
+        "fingerprint": (reused or {}).get("fingerprint") if reused else None,
+        "items": evidence_items,
         "evidence": evidence or [],
         "bugs": bugs or [],
         "verifier": verifier,
@@ -141,6 +195,67 @@ def show_verification(project: str | Path, vr_id: str) -> dict[str, Any]:
         if item.get("id") == vr_id:
             return item
     raise VerifyError(f"验证记录不存在: {vr_id}")
+
+
+def evidence_index(project: str | Path) -> dict[str, Any]:
+    """生成证据索引（E1/E2）与 evidence debt（DP-EVID-01 §5–§6）。"""
+    contract = resolve_contract(project)
+    state = read_current(contract)
+    items = []
+    debt: list[str] = []
+    summary = {"total": 0, "PASS": 0, "PASS_WITH_RISK": 0, "FAIL": 0, "BLOCKED": 0}
+    for record in list_verifications(project):
+        result = str(record.get("result") or "")
+        vr_id = str(record.get("id") or "")
+        summary["total"] = summary.get("total", 0) + 1
+        if result in summary:
+            summary[result] = summary.get(result, 0) + 1
+        e1_items = record.get("items") if isinstance(record.get("items"), list) else []
+        digest = record.get("result_digest")
+        if not digest:
+            digests = [item.get("result_digest") for item in e1_items if isinstance(item, dict)]
+            digest = digests[0] if digests else None
+        raw_required = result in {"FAIL", "BLOCKED"} or str(record.get("risk") or "") in {
+            "high",
+            "critical",
+        }
+        if raw_required and not record.get("evidence") and not e1_items:
+            debt.append(f"{vr_id}: {result}/high-risk 缺原始证据")
+        if result in {"PASS", "PASS_WITH_RISK"} and not digest:
+            debt.append(f"{vr_id}: PASS 缺 result_digest（无法复用/审计）")
+        items.append(
+            {
+                "id": vr_id,
+                "result": result,
+                "layer": record.get("layer"),
+                "scope": record.get("scope"),
+                "requirement_refs": record.get("requirement_refs") or [],
+                "task_refs": record.get("task_refs") or [],
+                "command": record.get("command"),
+                "result_digest": digest,
+                "reuse_of": record.get("reuse_of"),
+                "evidence_items": len(e1_items),
+                "retention": [
+                    (item.get("retention") or {}).get("class")
+                    for item in e1_items
+                    if isinstance(item, dict)
+                ],
+            }
+        )
+    return {
+        "schema": 1,
+        "roadmap": str(state.get("roadmap") or "R1"),
+        "items": items,
+        "summary": summary,
+        "evidence_debt": debt,
+    }
+
+
+def evidence_debt(contract: Path) -> list[str]:
+    try:
+        return list(evidence_index(contract).get("evidence_debt") or [])
+    except VerifyError:
+        return []
 
 
 def _requirements(contract: Path) -> list[dict[str, Any]]:
@@ -676,6 +791,7 @@ def show_release(project: str | Path, version: str | None = None) -> dict[str, A
 
 
 SECURITY_CARD_SECTIONS = (
+    "安全卡版本",
     "信任边界",
     "攻击者能力",
     "可证明的 fail_closed 范围",
@@ -686,9 +802,10 @@ SECURITY_CARD_SECTIONS = (
 
 
 def security_card_check(path: str | Path) -> dict[str, Any]:
-    """校验安全卡模板/内容（MFP-0041 A1）。
+    """校验安全卡模板/内容（MFP-0041 A1；v2 见 MFP-0046/SPEC-005 R4）。
 
-    fail_closed 只写可证明范围；必须写明不可防残余与风险接受人。
+    fail_closed 只写可证明范围；必须写明不可防残余与风险接受人；
+    v2 要求 schema/版本标记与可执行验证证据（测试节点/命令/digest）。
     """
     card = Path(path).expanduser()
     if not card.is_file():
@@ -703,6 +820,20 @@ def security_card_check(path: str | Path) -> dict[str, Any]:
         )
         if match is None or not match.group(1).strip():
             errors.append(f"缺少或为空: {section}")
+    if not re.search(r"(schema\s*[:：]\s*2|card_version\s*[:：]\s*2|安全卡\s*v2)", text):
+        errors.append("安全卡 v2 需要版本标记（schema: 2 / card_version: 2 / 安全卡 v2）")
+    evidence_match = re.search(
+        r"^##\s*验证证据\s*$(.*?)(?=^##\s|\Z)", text, re.MULTILINE | re.DOTALL
+    )
+    if evidence_match is not None:
+        evidence = evidence_match.group(1)
+        executable = re.search(
+            r"(pytest|tests?/|python|mf\s|https?://|CI|命令|digest|sha256)",
+            evidence,
+            re.IGNORECASE,
+        )
+        if executable is None:
+            errors.append("验证证据必须包含可执行证据（pytest 节点/命令/CI/digest），不能只写文件名")
     if re.search(r"完全防|不可绕过|100%\s*(防护|安全)|绝对安全", text):
         errors.append("fail_closed 只能写可证明范围，不得声称完全防护/不可绕过")
     if re.search(r"接受人\s*[:：]\s*$", text, re.MULTILINE):
